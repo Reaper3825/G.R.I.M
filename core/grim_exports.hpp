@@ -10,13 +10,13 @@
 // Forward declarations with exports
 class NLP;
 namespace GRIM {
-    class MemoryStorage;
+    class UnifiedMemoryStorage;
 }
-struct SystemInfo;
 struct LocationInfo;
 struct Intent;
 struct Timer;
 class ConsoleHistory;
+namespace GRIM::MMO { struct HardwareInventory; }
 
 namespace nlohmann {
     template<typename... Args>
@@ -27,8 +27,8 @@ namespace nlohmann {
 // Exported global variables
 extern "C" {
     GRIM_EXPORT_SYMBOL NLP g_nlp;
-    GRIM_EXPORT_SYMBOL GRIM::MemoryStorage g_memoryStorage;
-    GRIM_EXPORT_SYMBOL SystemInfo g_systemInfo;
+    GRIM_EXPORT_SYMBOL GRIM::UnifiedMemoryStorage g_memoryStorage;
+    GRIM_EXPORT_SYMBOL GRIM::MMO::HardwareInventory g_hardwareInventory;
     GRIM_EXPORT_SYMBOL LocationInfo g_location;
     GRIM_EXPORT_SYMBOL Intent g_lastIntent;
     GRIM_EXPORT_SYMBOL std::filesystem::path g_currentDir;
@@ -43,7 +43,6 @@ extern "C" {
 extern "C" {
     GRIM_EXPORT_SYMBOL std::string getResourcePath();
     GRIM_EXPORT_SYMBOL CommandResult reloadNlpRules();
-    GRIM_EXPORT_SYMBOL SystemInfo detectSystem();
     GRIM_EXPORT_SYMBOL std::string resolveBackendURL();
     GRIM_EXPORT_SYMBOL CommandResult ai_process(const std::string& input);
     GRIM_EXPORT_SYMBOL void logPhaseInternal(const std::string& file, const std::string& phase, bool success);

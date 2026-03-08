@@ -33,6 +33,7 @@
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
+#include "../../Shared/VerboseLogging.hpp"  // Compile-time diagnostic guards (Issue #151)
 #include "../../../../../control/ai_config_paths.hpp"  // For resolveGrimRoot()
 
 #include <iostream>
@@ -851,22 +852,89 @@ std::string formatGradientComponents(const GRIM::GradNorm::GradMetrics& gm, bool
     return comp_msg.str();
 }
 
+/**
+ * getScheduledLearningRate - Cosine annealing with linear warmup + telemetry modulation
+ *
+ * Schedule:
+ *   step < warmup_steps: lr = base_lr * (step+1) / warmup_steps  (linear warmup)
+ *   step >= warmup_steps: lr = min_lr + 0.5*(base_lr - min_lr)*(1 + cos(π * progress))
+ *     where progress = (step - warmup_steps) / (total_steps - warmup_steps)
+ *
+ * Telemetry modulation (when lattice provided):
+ *   - Reads loss trend (delta_bar) from level 2, stream LOSS
+ *   - Reads gradient volatility (v_sigma) from level 0, stream GRAD_NORM_MEAN
+ *   - Strong downward loss trend (delta_bar < -0.3) → slow decay by 0.85x progress
+ *   - High gradient volatility (v_sigma > 0.5) → advance decay by 1.15x progress
+ *   - Both effects are smooth and bounded to prevent oscillation
+ *
+ * @param step Current global training step
+ * @param base_lr Peak learning rate (from config)
+ * @param min_lr Floor learning rate (from config)
+ * @param warmup_steps Number of linear warmup steps
+ * @param total_steps Total training steps (epochs * batches_per_epoch)
+ * @param stability_overrides_enabled If true, return base_lr unconditionally
+ * @param lattice TelemetryLattice handle (nullptr = pure cosine, no modulation)
+ */
 float getScheduledLearningRate(
     int step,
     float base_lr,
+    float min_lr,
     int warmup_steps,
-    bool stability_overrides_enabled) {
+    int total_steps,
+    bool stability_overrides_enabled,
+    GRIM::Telemetry::TelemetryLattice* lattice) {
     
     if (stability_overrides_enabled) {
         return base_lr;
     }
     
+    // Linear warmup
     if (step < warmup_steps) {
-        return base_lr * (static_cast<float>(step + 1) / warmup_steps);
+        return base_lr * (static_cast<float>(step + 1) / static_cast<float>(warmup_steps));
     }
     
-    // Constant LR after warmup
-    return base_lr;
+    // Cosine annealing: progress ∈ [0, 1]
+    const int decay_steps = total_steps - warmup_steps;
+    if (decay_steps <= 0) {
+        return base_lr;  // No room for decay
+    }
+    
+    float progress = static_cast<float>(step - warmup_steps) / static_cast<float>(decay_steps);
+    
+    // Telemetry modulation: adjust effective progress based on training dynamics
+    if (lattice) {
+        GRIM::Telemetry::TelemetryVector vec2_loss{};
+        GRIM::Telemetry::TelemetryVector vec0_grad{};
+        
+        // Batched read: 1 sync instead of 2 (use readTelemetryBatched for 3, but we only need 2)
+        GRIM::Telemetry::readTelemetryVector(lattice, 2,
+            static_cast<int>(GRIM::Telemetry::MetricStream::LOSS), &vec2_loss);
+        GRIM::Telemetry::readTelemetryVector(lattice, 0,
+            static_cast<int>(GRIM::Telemetry::MetricStream::GRAD_NORM_MEAN), &vec0_grad);
+        
+        // Trend-aware: if loss is actively decreasing, slow the decay (keep higher LR)
+        // delta_bar < -0.3 means strong downward trend over 4-step window
+        if (vec2_loss.delta_bar < -0.3f) {
+            // Scale factor: map delta_bar from [-1, -0.3] to [0.85, 1.0]
+            const float trend_strength = std::clamp((-vec2_loss.delta_bar - 0.3f) / 0.7f, 0.0f, 1.0f);
+            progress *= (1.0f - 0.15f * trend_strength);  // Slow progress by up to 15%
+        }
+        
+        // Volatility-aware: if gradients are unstable, advance decay (lower LR faster)
+        // v_sigma > 0.5 means volatility-of-volatility is high → regime instability
+        if (vec0_grad.v_sigma > 0.5f) {
+            const float vol_strength = std::clamp((vec0_grad.v_sigma - 0.5f) / 1.0f, 0.0f, 1.0f);
+            progress *= (1.0f + 0.15f * vol_strength);  // Advance progress by up to 15%
+        }
+        
+        // Clamp progress to [0, 1] after modulation
+        progress = std::clamp(progress, 0.0f, 1.0f);
+    }
+    
+    // Cosine schedule: lr = min_lr + 0.5*(base_lr - min_lr)*(1 + cos(π * progress))
+    constexpr float PI = 3.14159265358979323846f;
+    const float cosine_factor = 0.5f * (1.0f + std::cos(PI * progress));
+    return min_lr + (base_lr - min_lr) * cosine_factor;
 }
 
 bool isBatchQuarantined(
@@ -2126,6 +2194,7 @@ BatchResult processBatch(
     }
     
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
+    if constexpr (GRIM::VerboseLogging::ENABLE_TRAINING_SIGNAL_DIAGNOSTICS) {
     {
         const auto& ts = ctx.model->getTrainingState();
         if (ts.autograd_intermediates.hasLogits() && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
@@ -2417,6 +2486,7 @@ BatchResult processBatch(
             }
         }
     }
+    } // if constexpr ENABLE_TRAINING_SIGNAL_DIAGNOSTICS (BATCH_PRED_DIST)
     
     if (forward_call_count <= 3) {
         ctx.logging.logger->log("[GradTrace] POST-autogradTrainingStep call #" + std::to_string(forward_call_count) + 
@@ -2467,6 +2537,7 @@ BatchResult processBatch(
     // ========================================================================
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
     // ========================================================================
+    if constexpr (GRIM::VerboseLogging::ENABLE_TRAINING_SIGNAL_DIAGNOSTICS) {
     {
         const auto& ts = ctx.model->getTrainingState();
         if (ts.autograd_intermediates.hasLogits() && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
@@ -3074,6 +3145,7 @@ BatchResult processBatch(
             }
         }
     }
+    } // if constexpr ENABLE_TRAINING_SIGNAL_DIAGNOSTICS (LogitSignal + hidden norms + rho + cosine + LMHeadNorm)
     
     if (!std::isfinite(result.loss)) {
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));
@@ -3644,8 +3716,8 @@ BatchResult processBatch(
             if (enc) {
                 exportBuffer((prefix + "qkv_grads").c_str(), enc->attnWqkv().grad_data(), enc->attnWqkv().numel());
                 exportBuffer((prefix + "wo_grads").c_str(), enc->attnWo().grad_data(), enc->attnWo().numel());
-                exportBuffer((prefix + "ffn_w1_grads").c_str(), enc->ffnW1().grad_data(), enc->ffnW1().numel());
-                exportBuffer((prefix + "ffn_w2_grads").c_str(), enc->ffnW2().grad_data(), enc->ffnW2().numel());
+                exportBuffer((prefix + "ffn_w_gate_up_grads").c_str(), enc->ffnWGateUp().grad_data(), enc->ffnWGateUp().numel());
+                exportBuffer((prefix + "ffn_w_down_grads").c_str(), enc->ffnWDown().grad_data(), enc->ffnWDown().numel());
             } else {
                 printf("[GradExport] SKIP layer %d: encoder layer is null\n", layer);
             }
@@ -3983,8 +4055,10 @@ BatchResult processBatch(
     // Learning rate computation (accum_steps already computed above)
     auto lr_start = std::chrono::steady_clock::now();
     const float scheduled_lr = Internal::getScheduledLearningRate(
-        ctx.global_step, hp.learning_rate, hp.warmup_steps, 
-        ctx.config.stability.enabled);
+        ctx.global_step, hp.learning_rate, hp.min_lr, hp.warmup_steps,
+        ctx.derived_schedule.total_training_steps,
+        ctx.config.stability.enabled,
+        (ctx.telemetry.enabled && ctx.telemetry.lattice) ? ctx.telemetry.lattice : nullptr);
     
     result.learning_rate = scheduled_lr;
     
@@ -4368,7 +4442,7 @@ BatchResult processBatch(
         // ========================================================================
         float pre_w277_rms = 0.0f;
         float pre_w277_mean = 0.0f;
-        {
+        if constexpr (GRIM::VerboseLogging::ENABLE_TOKEN277_TRACKING) {
             const auto& ts = ctx.model->getTrainingState();
             const auto& cfg = ctx.model->getConfig();
             cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
@@ -4389,7 +4463,7 @@ BatchResult processBatch(
                 pre_w277_rms = std::sqrt(sq_sum / static_cast<float>(cfg.d_model));
                 pre_w277_mean = sum / static_cast<float>(cfg.d_model);
             }
-        }
+        } // if constexpr ENABLE_TOKEN277_TRACKING (PRE-OPT)
         
         // ════════════════════════════════════════════════════════════════════
         // RUNTIME tie_embeddings pointer verification (every batch)
@@ -4495,7 +4569,7 @@ BatchResult processBatch(
         // POST-OPTIMIZER Token 277 Weight Delta (Issue #36.5)
         // Track how much weight row 277 changed after optimizer step
         // ========================================================================
-        {
+        if constexpr (GRIM::VerboseLogging::ENABLE_TOKEN277_TRACKING) {
             const auto& ts = ctx.model->getTrainingState();
             const auto& cfg = ctx.model->getConfig();
             cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
@@ -4537,7 +4611,7 @@ BatchResult processBatch(
                 
                 ctx.logging.logger->log(msg.str());
             }
-        }
+        } // if constexpr ENABLE_TOKEN277_TRACKING (POST-OPT)
         
         if (pre_sample.valid && post_sample.valid) {
             const float update_rms = GRIM::Diagnostics::computeUpdateRms(pre_sample, post_sample);
@@ -5039,6 +5113,10 @@ bool executePhase2(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Warmup steps: ") + std::to_string(hp.warmup_steps), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Target learning rate: ") + std::to_string(hp.learning_rate), ctx.global_step);
+    EmitModuleInfo(ModuleId::Training, std::string("  Min learning rate: ") + std::to_string(hp.min_lr), ctx.global_step);
+    EmitModuleInfo(ModuleId::Training, std::string("  LR schedule: cosine decay over ") + 
+        std::to_string(ctx.derived_schedule.total_training_steps) + " steps" +
+        (ctx.telemetry.enabled ? " (telemetry-modulated)" : ""), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, 
         std::string("  Dynamic LR: ") + (hp.dynamic_lr_enabled ? "enabled" : "disabled"), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, 

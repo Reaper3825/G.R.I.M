@@ -77,7 +77,7 @@ UnifiedMemoryObject UnifiedMemoryObject::fromJSON(const std::string& jsonStr) {
     
  obj.source = fromString(j.value("source", "grim.internal"), SourceNames, SourceType::GRIM_INTERNAL);
     obj.type = fromString(j.value("type", "fact"), TypeNames, TypeTag::FACT);
- obj.intent = fromString(j.value("intent", "inform"), IntentNames, IntentType::INFORM);
+ obj.intent = fromString(j.value("intent", "inform"), IntentNames, MemoryIntent::INFORM);
     obj.context = fromString(j.value("context", "conversation"), ContextNames, ContextType::CONVERSATION);
     obj.comm_type = fromString(j.value("comm_type", "unknown"), CommTypeNames, CommType::UNKNOWN);
     obj.modality = fromString(j.value("modality", "text"), ModalityNames, Modality::TEXT);
@@ -165,7 +165,7 @@ UnifiedMemoryObject UnifiedMemoryObject::fromFlatBuffer(const uint8_t* data, siz
 
     obj.source = static_cast<SourceType>(record->source());
     obj.type = static_cast<TypeTag>(record->type());
-    obj.intent = static_cast<IntentType>(record->intent());
+    obj.intent = static_cast<MemoryIntent>(record->intent());
     obj.context = static_cast<ContextType>(record->context());
     obj.comm_type = static_cast<CommType>(record->comm_type());
     obj.modality = static_cast<Modality>(record->modality());
@@ -371,7 +371,7 @@ void UnifiedMemoryStorage::loadFromFlatBuffer() {
      obj.timestamp = record->timestamp();
         obj.source = static_cast<SourceType>(record->source());
             obj.type = static_cast<TypeTag>(record->type());
-            obj.intent = static_cast<IntentType>(record->intent());
+            obj.intent = static_cast<MemoryIntent>(record->intent());
  obj.context = static_cast<ContextType>(record->context());
          obj.comm_type = static_cast<CommType>(record->comm_type());
             obj.modality = static_cast<Modality>(record->modality());
@@ -623,7 +623,7 @@ void UnifiedMemoryStorage::storeLearnedCommand(const std::string& phrase, const 
   obj.timestamp = std::time(nullptr);
     obj.source = SourceType::USER_TEXT;
     obj.type = TypeTag::LEARNED_COMMAND;
-    obj.intent = IntentType::INFORM;
+    obj.intent = MemoryIntent::INFORM;
     obj.context = ContextType::COMMAND_LEARNING;
     obj.raw = phrase;
     obj.normalized = action;

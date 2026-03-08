@@ -9,11 +9,11 @@
 #include "logger.hpp"
 #include "commands/commands_core.hpp"
 #include "commands/commands_ai.hpp"
-#include "memory/memory_storage.hpp"
-#include "memory/context_manager.hpp"
+#include "memory/unified_memory.hpp"
 #include "nlp/nlp.hpp"
 #include "voice/voice_speak.hpp"
-#include "system_detect.hpp"
+#include "../MMO/Core/HardwareInventory.hpp"
+#include "../MMO/Core/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
 #include "console_history.hpp"
 #include "timer.hpp"
 #include "popup_ui/popup_ui.hpp"
@@ -46,8 +46,8 @@
 // External globals
 extern std::unordered_map<std::string, CommandFunc> commandMap;
 extern NLP g_nlp;
-extern GRIM::MemoryStorage g_memoryStorage;
-extern SystemInfo g_systemInfo;
+extern GRIM::UnifiedMemoryStorage g_memoryStorage;
+extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 extern ConsoleHistory history;
 extern std::vector<Timer> timers;
 
@@ -196,6 +196,20 @@ static GrimResult api_register_command(const char* command_name, GrimCommandHand
         
         return result;
     };
+
+    // Phase 0.25: Sync plugin command into ToolRegistry
+    {
+        GRIM::MMO::ToolDescriptor desc;
+        desc.tool_id        = cmd_name;
+        desc.display_name   = cmd_name;
+        desc.provider_type  = GRIM::MMO::ToolProviderType::Plugin;
+        desc.provider_name  = s_current_plugin_context.name;
+        desc.description    = "Plugin command: " + cmd_name;
+        desc.category       = "plugin";
+        desc.permission_bits = s_current_plugin_context.permissions;
+        desc.is_informational = false;
+        GRIM::MMO::ToolRegistry::instance().registerTool(desc);
+    }
     
     LOG_DEBUG("PluginAPI", "Command registered: " + cmd_name);
     return GRIM_OK;
@@ -218,6 +232,9 @@ static GrimResult api_unregister_command(const char* command_name) {
     
     // Remove from our tracking
     s_commands.erase(it);
+
+    // Phase 0.25: Remove from ToolRegistry
+    GRIM::MMO::ToolRegistry::instance().unregisterTool(cmd_name);
     
     LOG_DEBUG("PluginAPI", "Command unregistered: " + cmd_name);
     return GRIM_OK;
@@ -916,10 +933,9 @@ static const char* api_get_system_info(const char* key) {
     std::string key_str = key;
     
     if (key_str == "os") {
-        return allocateString(g_systemInfo.osName);  // Use osName instead of os
+        return allocateString(g_hardwareInventory.os_name);
     } else if (key_str == "cpu") {
-        // SystemInfo doesn't have a 'cpu' string field, return cores info instead
-        return allocateString(std::to_string(g_systemInfo.cpuCores) + " cores");
+        return allocateString(std::to_string(g_hardwareInventory.cpu_cores) + " cores");
     }
     
 return nullptr;
@@ -1264,6 +1280,9 @@ void cleanupPluginContext(const std::string& plugin_name) {
             ++it;
         }
     }
+
+    // Phase 0.25: Atomic ToolRegistry cleanup for this plugin
+    GRIM::MMO::ToolRegistry::instance().unregisterByProvider(plugin_name);
     
     // Remove all event subscriptions from this plugin
     for (auto it = s_event_subscriptions.begin(); it != s_event_subscriptions.end();) {

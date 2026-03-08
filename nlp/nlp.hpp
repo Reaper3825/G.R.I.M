@@ -5,13 +5,12 @@
 #include <memory>
 #include <unordered_map>
 #include "intent.hpp"
-#include "memory/memory_storage.hpp"
+#include "memory/unified_memory.hpp"
 
 // Forward declare to avoid heavy include
 struct CommandResult;
 
 namespace GRIM {
-    class MemoryStorage;
     namespace RL {
         nlohmann::json getAction(const nlohmann::json& observation);
     }
@@ -61,8 +60,8 @@ public:
                      const std::vector<std::string>& slotNames = {});
     
     // ✅ NEW: Memory integration
-    void loadLearnedRules(GRIM::MemoryStorage& storage);
-    void saveLearnedRules(GRIM::MemoryStorage& storage);
+    void loadLearnedRules(GRIM::UnifiedMemoryStorage& storage);
+    void saveLearnedRules(GRIM::UnifiedMemoryStorage& storage);
     
     // ✅ NEW: RL feedback integration
     void recordSuccess(const std::string& intent, const std::string& input);

@@ -1,5 +1,5 @@
 #pragma once
-#include "memory_manager.hpp"
+#include "unified_memory.hpp"
 #include <vector>
 #include <string>
 #include <optional>
@@ -22,17 +22,17 @@ struct RouteDecision {
 class MemoryRouter {
 public:
     // Route a MemoryObject based on its metadata
-    static RouteDecision evaluate(const MemoryObject& obj);
+    static RouteDecision evaluate(const UnifiedMemoryObject& obj);
 
     // Optional: actually perform routing (stubbed for now)
-    static void dispatch(const MemoryObject& obj);
+    static void dispatch(const UnifiedMemoryObject& obj);
 
 private:
     // Internal helpers
-    static bool isFact(const MemoryObject& obj);
-    static bool isCommand(const MemoryObject& obj);
-    static bool isEvent(const MemoryObject& obj);
-    static bool isLowConfidence(const MemoryObject& obj);
+    static bool isFact(const UnifiedMemoryObject& obj);
+    static bool isCommand(const UnifiedMemoryObject& obj);
+    static bool isEvent(const UnifiedMemoryObject& obj);
+    static bool isLowConfidence(const UnifiedMemoryObject& obj);
 };
 
 } // namespace GRIM

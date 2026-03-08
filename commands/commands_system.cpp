@@ -1,41 +1,43 @@
 #include "commands/commands_system.hpp"
-#include "commands/command_registry.hpp"  // ✅ NEW
-#include "system_detect.hpp"
+#include "../MMO/Core/ToolRegistry.hpp"
+#include "../MMO/Core/HardwareInventory.hpp"
 #include "resources.hpp"
 #include "error_manager.hpp"
 #include "logger.hpp"
 #include "nlp/nlp.hpp"
-#include "memory/memory_storage.hpp"
+#include "memory/unified_memory.hpp"
+#include <algorithm>
 #include <sstream>
 #include <vector>
 
 // Externals
 extern ConsoleHistory history;
-extern GRIM::MemoryStorage g_memoryStorage;
+extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 
 CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {
     LOG_DEBUG("Command", "Dispatch: system_info");
 
-    SystemInfo sys = detectSystem();
+    auto inv = GRIM::MMO::detectHardware();
 
     std::ostringstream output;
     output << "[System Info]\n";
-    output << "OS         : " << sys.osName << " (" << sys.arch << ")\n";
-    output << "CPU Cores  : " << sys.cpuCores << "\n";
-    output << "RAM        : " << sys.ramMB << " MB\n";
+    output << "OS         : " << inv.os_name << " (" << inv.arch << ")\n";
+    output << "CPU Cores  : " << inv.cpu_cores << "\n";
+    output << "RAM        : " << inv.ram_total_mb << " MB\n";
 
-    if (sys.hasGPU) {
-        std::string gpuLine = sys.gpuName + " (" + std::to_string(sys.gpuCount) + " device(s))";
+    if (inv.hasGPU()) {
+        std::string gpuName = inv.gpus.empty() ? "Unknown" : inv.gpus[0].name;
+        std::string gpuLine = gpuName + " (" + std::to_string(inv.gpu_count) + " device(s))";
         output << "GPU        : " << gpuLine << "\n";
 
-        if (sys.hasCUDA)  output << "CUDA       : Supported\n";
-        if (sys.hasMetal) output << "Metal      : Supported\n";
-        if (sys.hasROCm)  output << "ROCm       : Supported\n";
+        if (inv.hasCUDA())  output << "CUDA       : Supported\n";
+        if (inv.hasMetal()) output << "Metal      : Supported\n";
+        if (inv.hasROCm())  output << "ROCm       : Supported\n";
     } else {
         output << "GPU        : None detected\n";
     }
 
-    output << "Suggested Whisper model: " << sys.suggestedModel << "\n";
+    output << "Suggested Whisper model: " << inv.suggested_whisper_model << "\n";
 
     return {
         true,                               // success
@@ -468,7 +470,7 @@ CommandResult cmdListTools(const std::string& arg) {
     
     if (arg.empty()) {
         // List all tools
-        auto tools = GRIM::CommandRegistry::getAllTools();
+        auto tools = GRIM::MMO::ToolRegistry::instance().getAllTools();
         
         if (tools.empty()) {
             return {
@@ -484,7 +486,7 @@ CommandResult cmdListTools(const std::string& arg) {
         output << "[Registered Tools - " << tools.size() << " total]\n\n";
         
         // Group by category
-        std::unordered_map<std::string, std::vector<GRIM::CommandRegistry::ToolMetadata>> byCategory;
+        std::unordered_map<std::string, std::vector<GRIM::MMO::ToolDescriptor>> byCategory;
         for (const auto& tool : tools) {
             byCategory[tool.category].push_back(tool);
         }
@@ -492,7 +494,7 @@ CommandResult cmdListTools(const std::string& arg) {
         for (const auto& [category, categoryTools] : byCategory) {
             output << "[" << category << "]\n";
             for (const auto& tool : categoryTools) {
-                output << "  " << tool.name;
+                output << "  " << tool.tool_id;
                 if (!tool.aliases.empty()) {
                     output << " (aliases: ";
                     for (size_t i = 0; i < tool.aliases.size(); ++i) {
@@ -508,7 +510,7 @@ CommandResult cmdListTools(const std::string& arg) {
         }
     } else {
         // List tools in specific category
-        auto tools = GRIM::CommandRegistry::getToolsByCategory(arg);
+        auto tools = GRIM::MMO::ToolRegistry::instance().getByCategory(arg);
         
         if (tools.empty()) {
             return {
@@ -523,7 +525,7 @@ CommandResult cmdListTools(const std::string& arg) {
         
         output << "[" << arg << " tools - " << tools.size() << " total]\n\n";
         for (const auto& tool : tools) {
-            output << "  " << tool.name << ": " << tool.description << "\n";
+            output << "  " << tool.tool_id << ": " << tool.description << "\n";
         }
     }
     
@@ -551,7 +553,7 @@ CommandResult cmdToolInfo(const std::string& arg) {
         };
     }
     
-    auto toolOpt = GRIM::CommandRegistry::getTool(arg);
+    auto toolOpt = GRIM::MMO::ToolRegistry::instance().getTool(arg);
     if (!toolOpt.has_value()) {
         return {
             false,
@@ -566,10 +568,10 @@ CommandResult cmdToolInfo(const std::string& arg) {
     const auto& tool = toolOpt.value();
     std::ostringstream output;
     
-    output << "[Tool: " << tool.name << "]\n\n";
+    output << "[Tool: " << tool.tool_id << "]\n\n";
     output << "Description: " << tool.description << "\n";
     output << "Category   : " << tool.category << "\n";
-    output << "Type       : " << (tool.isInformational ? "Information" : "Action") << "\n";
+    output << "Type       : " << (tool.is_informational ? "Information" : "Action") << "\n";
     output << "Usage      : " << tool.usage << "\n";
     
     if (!tool.aliases.empty()) {
@@ -607,8 +609,8 @@ CommandResult cmdToolInfo(const std::string& arg) {
     }
     
     output << "\nUsage Stats:\n";
-    output << "  Total uses  : " << tool.usageCount << "\n";
-    output << "  Success rate: " << static_cast<int>(tool.successRate * 100) << "%\n";
+    output << "  Total uses  : " << tool.usage_count << "\n";
+    output << "  Success rate: " << static_cast<int>(tool.success_rate * 100) << "%\n";
     
     return {
         true,
@@ -623,7 +625,16 @@ CommandResult cmdToolInfo(const std::string& arg) {
 CommandResult cmdToolStats(const std::string& arg) {
     LOG_DEBUG("Command", "Dispatch: tool_stats");
     
-    auto stats = GRIM::CommandRegistry::getUsageStats();
+    auto allTools = GRIM::MMO::ToolRegistry::instance().getAllTools();
+    
+    // Filter to tools with usage
+    std::vector<GRIM::MMO::ToolDescriptor> stats;
+    for (const auto& t : allTools) {
+        if (t.usage_count > 0) stats.push_back(t);
+    }
+    // Sort by usage count descending
+    std::sort(stats.begin(), stats.end(),
+              [](const auto& a, const auto& b) { return a.usage_count > b.usage_count; });
     
     if (stats.empty()) {
         return {
@@ -645,11 +656,11 @@ CommandResult cmdToolStats(const std::string& arg) {
     for (const auto& stat : stats) {
         if (count++ >= limit) break;
         
-        output << count << ". " << stat.name << "\n";
-        output << "   Uses: " << stat.totalUses 
-               << " (Success: " << stat.successCount
-               << ", Fail: " << stat.failureCount << ")\n";
-        output << "   Success Rate: " << static_cast<int>(stat.successRate * 100) << "%\n\n";
+        output << count << ". " << stat.tool_id << "\n";
+        output << "   Uses: " << stat.usage_count 
+               << " (Success: " << stat.success_count
+               << ", Fail: " << stat.failure_count << ")\n";
+        output << "   Success Rate: " << static_cast<int>(stat.success_rate * 100) << "%\n\n";
     }
     
     return {

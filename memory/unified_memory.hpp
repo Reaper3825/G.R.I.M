@@ -53,7 +53,7 @@ enum class TypeTag : uint8_t {
     PREDICTION = 7
 };
 
-enum class IntentType : uint8_t {
+enum class MemoryIntent : uint8_t {
     INFORM = 0,
     ASK = 1,
     SET_PREF = 2,
@@ -93,15 +93,15 @@ namespace SourceTagCompat {
     constexpr SourceType GrimInternal = SourceType::GRIM_INTERNAL;
 }
 
-// Map old IntentTag to new IntentType
-using IntentTag = IntentType;
+// Map old IntentTag to new MemoryIntent
+using IntentTag = MemoryIntent;
 namespace IntentTagCompat {
-    constexpr IntentType Inform = IntentType::INFORM;
-    constexpr IntentType Ask = IntentType::ASK;
-    constexpr IntentType SetPref = IntentType::SET_PREF;
-    constexpr IntentType Correct = IntentType::CORRECT;
-    constexpr IntentType StatusUpdate = IntentType::STATUS_UPDATE;
-  constexpr IntentType Query = IntentType::QUERY;
+    constexpr MemoryIntent Inform = MemoryIntent::INFORM;
+    constexpr MemoryIntent Ask = MemoryIntent::ASK;
+    constexpr MemoryIntent SetPref = MemoryIntent::SET_PREF;
+    constexpr MemoryIntent Correct = MemoryIntent::CORRECT;
+    constexpr MemoryIntent StatusUpdate = MemoryIntent::STATUS_UPDATE;
+  constexpr MemoryIntent Query = MemoryIntent::QUERY;
 }
 
 // Map old ContextTag to new ContextType
@@ -142,13 +142,13 @@ static const std::unordered_map<TypeTag, std::string> TypeNames = {
     {TypeTag::PREDICTION, "prediction"}
 };
 
-static const std::unordered_map<IntentType, std::string> IntentNames = {
-    {IntentType::INFORM, "inform"},
-    {IntentType::ASK, "ask"},
-    {IntentType::SET_PREF, "set_pref"},
-    {IntentType::CORRECT, "correct"},
-    {IntentType::STATUS_UPDATE, "status_update"},
-    {IntentType::QUERY, "query"}
+static const std::unordered_map<MemoryIntent, std::string> IntentNames = {
+    {MemoryIntent::INFORM, "inform"},
+    {MemoryIntent::ASK, "ask"},
+    {MemoryIntent::SET_PREF, "set_pref"},
+    {MemoryIntent::CORRECT, "correct"},
+    {MemoryIntent::STATUS_UPDATE, "status_update"},
+    {MemoryIntent::QUERY, "query"}
 };
 
 static const std::unordered_map<ContextType, std::string> ContextNames = {
@@ -203,7 +203,7 @@ public:
     // Classification
     SourceType source = SourceType::GRIM_INTERNAL;
     TypeTag type = TypeTag::FACT;
-    IntentType intent = IntentType::INFORM;
+    MemoryIntent intent = MemoryIntent::INFORM;
     ContextType context = ContextType::CONVERSATION;
     CommType comm_type = CommType::UNKNOWN;
     Modality modality = Modality::TEXT;
@@ -229,7 +229,7 @@ public:
     // Constructors
     UnifiedMemoryObject() = default;
     
-    UnifiedMemoryObject(SourceType src, TypeTag t, IntentType i, ContextType c,
+    UnifiedMemoryObject(SourceType src, TypeTag t, MemoryIntent i, ContextType c,
      const std::string& rawInput, float conf = 1.0f)
         : source(src), type(t), intent(i), context(c),
           confidence(conf), raw(rawInput), normalized(rawInput) {
@@ -310,8 +310,8 @@ public:
     // Type-specific queries
     std::optional<UnifiedMemoryObject> findLearnedCommand(const std::string& phrase);
     std::vector<UnifiedMemoryObject> getAllLearnedCommands();
-  std::vector<UnifiedMemoryObject> getByType(TypeTag type);
- std::vector<UnifiedMemoryObject> getBySource(SourceType source);
+    std::vector<UnifiedMemoryObject> getByType(TypeTag type);
+    std::vector<UnifiedMemoryObject> getBySource(SourceType source);
     
     // Specialized storage
     void storeLearnedCommand(const std::string& phrase, const std::string& action, float confidence = 1.0f);

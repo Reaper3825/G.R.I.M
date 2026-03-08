@@ -154,6 +154,7 @@ struct TrainingHyperparameters {
     int single_batch_overfit_max_steps;
     std::string batch_strategy;
     float learning_rate;
+    float min_lr;  // Minimum LR for cosine decay (floor)
     float weight_decay;
     float grad_clip_norm;
     bool per_token_grad_scale;
@@ -317,6 +318,10 @@ struct TrainingHyperparameters {
     // with learnable scalars (initialized to layer_scale_init, typically 0.1)
     bool use_layer_scale;
     float layer_scale_init;
+    
+    // QK-norm: Per-head RMSNorm on Q and K before RoPE (Gemma-2 style)
+    // Bounds attention logit magnitudes, prevents entropy collapse
+    bool qk_norm_enabled;
     
     // Hardcoded Hidden States Diagnostic (Issue #42) - NO DEFAULTS
     // When enabled, replaces encoder output with synthetic patterns to isolate
@@ -610,7 +615,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
     static const std::vector<std::string> REQUIRED = {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
-        "batch_strategy", "learning_rate", "weight_decay",
+        "batch_strategy", "learning_rate", "min_lr", "weight_decay",
         "per_token_grad_scale", "warmup_steps", "max_seq_len", "min_seq_valid_tokens", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention", "min_seq_len_for_flash",
@@ -780,6 +785,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.gradient_accumulation_steps, trainConfig, "gradient_accumulation_steps");
     assignTrainingField(params.batch_strategy, trainConfig, "batch_strategy");
     assignTrainingField(params.learning_rate, trainConfig, "learning_rate");
+    assignTrainingField(params.min_lr, trainConfig, "min_lr");
     assignTrainingField(params.weight_decay, trainConfig, "weight_decay");
     assignTrainingField(params.grad_clip_norm, trainConfig, "gradient_clip");
     assignTrainingField(params.grad_clip_norm, trainConfig, "grad_clip_norm");
@@ -1167,6 +1173,14 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         const auto& ls = *it;
         params.use_layer_scale = ls.value("enabled", false);
         params.layer_scale_init = ls.value("init_value", 0.1f);
+    }
+    
+    // QK-norm: Per-head RMSNorm applied to Q and K after QKV projection, before RoPE.
+    // Bounds attention logit magnitudes, prevents entropy collapse in deeper models.
+    params.qk_norm_enabled = false;   // Default: disabled (standard unscaled Q/K)
+    if (auto it = trainConfig.find("qk_norm"); it != trainConfig.end() && it->is_object()) {
+        const auto& qkn = *it;
+        params.qk_norm_enabled = qkn.value("enabled", false);
     }
     
     // Hardcoded Hidden States Diagnostic (Issue #42)

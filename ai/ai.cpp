@@ -1,9 +1,15 @@
 #include "ai.hpp"
 #include "voice/voice.hpp"
 #include "voice/voice_speak.hpp"  // ✅ For Voice::speak()
+#include "bootstrap/bootstrap.hpp"  // MMO orchestrator globals
+#include "../MMO/Core/SessionContextManager.hpp"
+#include "../MMO/Core/ToolRegistry.hpp"
+#include "../MMO/Core/ActionPolicyRegistry.hpp"
+#include "nlp/NlpAnnotation.hpp"
+#include "nlp/RouterMetadataBuilder.hpp"
+#include "memory/context_snapshot.hpp"
 #include "resources.hpp"
 #include "commands/commands_core.hpp"
-#include "commands/command_registry.hpp"  // ✅ NEW: Command registry
 #include "error_manager.hpp"
 #include "logger.hpp"
 #include "personality_manager.hpp"
@@ -11,7 +17,7 @@
 #include "task_planner.hpp"     // ✅ Multi-step task planning
 #include "nlp/nlp.hpp"  // ✅ For NLP integration
 #include "fast_classifier.hpp"  // ✅ For teaching classifier
-#include "system_detect.hpp"  // ✅ For location context
+#include "location.hpp"  // ✅ For location context
 #include "helpers/grim_input.hpp"  // ✅ For parseInput
 #include "grim_backend.hpp"  // ✅ Native GRIM model backend (external reference)
 #include <cpr/cpr.h>
@@ -143,26 +149,95 @@ std::string resolveBackendURL() {
 // =========================================================
 // Session management for KV cache reuse
 // =========================================================
-static std::vector<nlohmann::json> g_conversationHistory;
 static std::string g_currentModel;  // Track model to detect changes
 static bool g_modelWarmedUp = false;  // Track if model is loaded
-static bool g_systemPromptAdded = false;  // Track if system prompt is in history
+
+static constexpr const char* kDefaultSessionId = "default";
 
 void clearConversationHistory() {
-    g_conversationHistory.clear();
-    g_systemPromptAdded = false;
+    auto& scm = GRIM::MMO::SessionContextManager::instance();
+    scm.clearHistory(kDefaultSessionId);
     LOG_DEBUG("AI", "Conversation history cleared");
+}
+
+// Helper: ensure system prompt + user message are in session history,
+// trim to max_messages, and return the messages as JSON array.
+static nlohmann::json prepareConversationMessages(
+    const std::string& prompt,
+    const std::string& session_id = kDefaultSessionId)
+{
+    auto& scm = GRIM::MMO::SessionContextManager::instance();
+
+    // Add system prompt once
+    if (aiConfig.contains("personality")) {
+        auto personality = aiConfig["personality"];
+        if (personality.value("use_custom_prompt", false)) {
+            std::string sys = personality.value("custom_prompt",
+                "You are GRIM. Be brief and direct.");
+            scm.setSystemPrompt(session_id, sys);
+        }
+    }
+
+    // Add user message and trim
+    scm.addMessage(session_id, "user", prompt);
+    size_t max_hist = aiConfig.value("conversation_history_size", 10);
+    scm.trimHistory(session_id, max_hist);
+
+    // Build JSON messages array
+    auto msgs = scm.getMessages(session_id);
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& m : msgs) {
+        arr.push_back({{"role", m.role}, {"content", m.content}});
+    }
+    return arr;
 }
 
 std::future<std::string> callAIAsync(const std::string& prompt) {
     return std::async(std::launch::async, [prompt]() -> std::string {
+        // ── MMO path: route through orchestrator when enabled ──
+        if (g_orchestrator) {
+            auto& registry = GRIM::MMO::ModelRegistry::instance();
+            if (registry.isEnabled()) {
+                // Produce NlpAnnotation for structured routing
+                auto& scm = GRIM::MMO::SessionContextManager::instance();
+                GRIM::ContextSnapshot snapshot = scm.legacySnapshot("default");
+                GRIM::NlpAnnotation annotation = GRIM::annotate(prompt, snapshot);
+
+                // Build router metadata envelope
+                auto& toolReg = GRIM::MMO::ToolRegistry::instance();
+                GRIM::RouterMetadataBuilder builder;
+                builder.setAnnotation(annotation)
+                       .setContext(snapshot)
+                       .setToolSummary(toolReg.generateCompactPrompt());
+                GRIM::RouterMetadata meta = builder.build();
+
+                GRIM::MMO::RequestContext ctx;
+                ctx.request_id = std::to_string(
+                    std::chrono::steady_clock::now().time_since_epoch().count());
+                ctx.prompt = prompt;
+                ctx.metadata_json = meta.toJson().dump();
+                ctx.tool_registry_version = toolReg.version();
+
+                auto result = g_orchestrator->generate(ctx);
+                if (result.success) {
+                    return result.response;
+                }
+                LOG_ERROR("AI", "MMO orchestrator failed: " + result.error);
+                if (registry.mode() == "enforced") {
+                    return "[AI] Orchestrator error: " + result.error;
+                }
+                // shadow mode: fall through to legacy path
+                LOG_DEBUG("AI", "MMO shadow mode — falling back to legacy backend");
+            }
+        }
+
         std::string backend = resolveBackendURL();
         std::string model   = aiConfig.value("default_model", "llama3.1:8b");
 
         LOG_DEBUG("AI", "callAIAsync backend=" + backend + " model=" + model);
 
         try {
-            // ✅ NATIVE GRIM-TEXT BACKEND (HTTP Server)
+            // ✅ NATIVE GRIM-TEXT BACKEND `(HTTP Server)
             if (backend == "grim_native") {
                 model = "grim-text";  // Override model name for grim-text server
                 
@@ -170,49 +245,16 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                 if (g_currentModel != model) {
                     g_currentModel = model;
                     g_modelWarmedUp = false;
-                    g_systemPromptAdded = false;
+                    clearConversationHistory();
                     LOG_DEBUG("AI", "Model changed to " + model + ", warmup needed");
                 }
                 
-                // Add system prompt once
-                if (!g_systemPromptAdded && aiConfig.contains("personality")) {
-                    auto personality = aiConfig["personality"];
-                    if (personality.value("use_custom_prompt", false)) {
-                        std::string systemPrompt = personality.value("custom_prompt", 
-                            "You are GRIM. Be brief and direct.");
-                        
-                        nlohmann::json systemMsg = nlohmann::json::object();
-                        systemMsg["role"] = "system";
-                        systemMsg["content"] = systemPrompt;
-                        
-                        g_conversationHistory.insert(g_conversationHistory.begin(), systemMsg);
-                        g_systemPromptAdded = true;
-                        LOG_DEBUG("AI", "System prompt cached for grim-text");
-                    }
-                }
-                
-                // Add user message to history
-                nlohmann::json userMsg = nlohmann::json::object();
-                userMsg["role"] = "user";
-                userMsg["content"] = prompt;
-                g_conversationHistory.push_back(userMsg);
-                
-                // Trim history
-                size_t maxHistory = aiConfig.value("conversation_history_size", 10);
-                size_t systemMsgCount = g_systemPromptAdded ? 1 : 0;
-                
-                if (g_conversationHistory.size() > (maxHistory + systemMsgCount)) {
-                    size_t toErase = g_conversationHistory.size() - (maxHistory + systemMsgCount);
-                    g_conversationHistory.erase(
-                        g_conversationHistory.begin() + systemMsgCount,
-                        g_conversationHistory.begin() + systemMsgCount + toErase
-                    );
-                }
+                nlohmann::json messages = prepareConversationMessages(prompt);
                 
                 // Build request body (Ollama-compatible format)
                 nlohmann::json requestBody = {
                     {"model", model},
-                    {"messages", g_conversationHistory},
+                    {"messages", messages},
                     {"stream", false},
                     {"max_tokens", aiConfig.value("max_tokens", 256)},
                     {"temperature", aiConfig.value("temperature", 0.8f)}
@@ -243,11 +285,9 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                     
                     std::string response = j["message"]["content"].get<std::string>();
                     
-                    // Add assistant response to history
-                    nlohmann::json assistantMsg = nlohmann::json::object();
-                    assistantMsg["role"] = "assistant";
-                    assistantMsg["content"] = response;
-                    g_conversationHistory.push_back(assistantMsg);
+                    // Record assistant response in session history
+                    auto& scm = GRIM::MMO::SessionContextManager::instance();
+                    scm.addMessage(kDefaultSessionId, "assistant", response);
                     
                     if (response.empty()) {
                         LOG_ERROR("AI", "grim-text returned empty response");
@@ -262,50 +302,15 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
             }
             
             if (backend == "ollama") {
-                // ✅ LATENCY FIX: Model warmup detection
+                // Model warmup detection
                 if (g_currentModel != model) {
                     g_currentModel = model;
                     g_modelWarmedUp = false;
-                    g_systemPromptAdded = false;
+                    clearConversationHistory();
                     LOG_DEBUG("AI", "Model changed to " + model + ", warmup needed");
                 }
                 
-                // ✅ LATENCY FIX: Add system prompt ONCE and keep it cached
-                if (!g_systemPromptAdded && aiConfig.contains("personality")) {
-                    auto personality = aiConfig["personality"];
-                    if (personality.value("use_custom_prompt", false)) {
-                        std::string systemPrompt = personality.value("custom_prompt", 
-                            "You are GRIM. Be brief and direct.");
-                        
-                        // Create system message as proper JSON object
-                        nlohmann::json systemMsg = nlohmann::json::object();
-                        systemMsg["role"] = "system";
-                        systemMsg["content"] = systemPrompt;
-                        
-                        g_conversationHistory.insert(g_conversationHistory.begin(), systemMsg);
-                        g_systemPromptAdded = true;
-                        LOG_DEBUG("AI", "System prompt cached in conversation history");
-                    }
-                }
-                
-                // Add user message to history
-                nlohmann::json userMsg = nlohmann::json::object();
-                userMsg["role"] = "user";
-                userMsg["content"] = prompt;
-                g_conversationHistory.push_back(userMsg);
-                
-                // Trim history based on config (keep recent context + system prompt)
-                size_t maxHistory = aiConfig.value("conversation_history_size", 10);
-                size_t systemMsgCount = g_systemPromptAdded ? 1 : 0;
-                
-                if (g_conversationHistory.size() > (maxHistory + systemMsgCount)) {
-                    // Keep system message, trim from position 1 onwards
-                    size_t toErase = g_conversationHistory.size() - (maxHistory + systemMsgCount);
-                    g_conversationHistory.erase(
-                        g_conversationHistory.begin() + systemMsgCount,
-                        g_conversationHistory.begin() + systemMsgCount + toErase
-                    );
-                }
+                nlohmann::json messages = prepareConversationMessages(prompt);
                 
                 // Build optimized request with configurable performance parameters
                 nlohmann::json options = {
@@ -316,11 +321,11 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                     {"top_p", 0.9},
                     {"repeat_penalty", 1.1},
                     {"num_thread", 8},
-                    {"num_gpu", 99},              // ✅ NEW: Use all available GPU layers
-                    {"num_batch", 512},           // ✅ NEW: Batch size for prompt processing
-                    {"use_mmap", true},           // ✅ NEW: Memory-map model for faster loading
-                    {"use_mlock", false},         // ✅ NEW: Don't lock in RAM (can cause issues)
-                    {"low_vram", false}           // ✅ NEW: We have enough VRAM
+                    {"num_gpu", 99},
+                    {"num_batch", 512},
+                    {"use_mmap", true},
+                    {"use_mlock", false},
+                    {"low_vram", false}
                 };
                 
                 // Override with user config if present
@@ -332,10 +337,10 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                 
                 nlohmann::json requestBody = {
                     {"model", model}, 
-                    {"messages", g_conversationHistory},
+                    {"messages", messages},
                     {"stream", false},
                     {"options", options},
-                    {"keep_alive", "30m"}  // ✅ NEW: Keep model loaded for 30 minutes
+                    {"keep_alive", "30m"}
                 };
                 
                 auto start = std::chrono::high_resolution_clock::now();
@@ -344,7 +349,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                     cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/chat" },
                     cpr::Header{{"Content-Type","application/json"}},
                     cpr::Body{ requestBody.dump() },
-                    cpr::Timeout{60000}  // ✅ NEW: 60s timeout for first warmup
+                    cpr::Timeout{60000}
                 );
                 
                 auto end = std::chrono::high_resolution_clock::now();
@@ -368,11 +373,9 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                     
                     std::string response = j["message"]["content"].get<std::string>();
                     
-                    // Add assistant response to history for context
-                    nlohmann::json assistantMsg = nlohmann::json::object();
-                    assistantMsg["role"] = "assistant";
-                    assistantMsg["content"] = response;
-                    g_conversationHistory.push_back(assistantMsg);
+                    // Record assistant response in session history
+                    auto& scm = GRIM::MMO::SessionContextManager::instance();
+                    scm.addMessage(kDefaultSessionId, "assistant", response);
                     
                     if (response.empty()) {
                         LOG_ERROR("AI", "Ollama returned empty response field. Full JSON: " + resp.text.substr(0, 500));
@@ -382,7 +385,6 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                     return response;
                 }
                 
-                // ✅ NEW: Log the actual error message from Ollama
                 LOG_ERROR("AI", "Ollama HTTP " + std::to_string(resp.status_code) + ": " + resp.text);
                 LOG_DEBUG("AI", "Request body was: " + requestBody.dump().substr(0, 500));
                 return "[AI] Backend call failed";
@@ -563,7 +565,7 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
         }
 
         // ✅ NEW: Add available commands context for AI
-        std::string availableCommands = GRIM::CommandRegistry::generateCompactPrompt();
+        std::string availableCommands = GRIM::MMO::ToolRegistry::instance().generateCompactPrompt();
         
         std::string prompt =
             "You are GRIM. Respond with ONLY valid JSON, no markdown, no explanations.\n\n"
@@ -718,20 +720,71 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                 }
                 
                 // ✅ NEW: Actually execute the suggested command using dispatchCommand
-                LOG_DEBUG("AI", "Executing AI-suggested command: " + suggested);
+                // Gate through ActionPolicyRegistry (Training Wheels)
+                LOG_DEBUG("AI", "Evaluating policy for command: " + suggested);
                 
-                // Parse command and argument
                 auto [cmd, arg] = GRIMInput::parseInput(suggested);
+
+                // Produce NlpAnnotation for confidence signals
+                auto& scmPolicy = GRIM::MMO::SessionContextManager::instance();
+                GRIM::ContextSnapshot policySnapshot = scmPolicy.legacySnapshot("default");
+                GRIM::NlpAnnotation policyAnn = GRIM::annotate(input, policySnapshot);
+
+                GRIM::MMO::ActionProposal proposal;
+                proposal.tool_id            = cmd;
+                proposal.args_json          = arg;
+                proposal.router_confidence  = policyAnn.confidence_summary.overall;
+                proposal.parse_certainty    = policyAnn.confidence_summary.intent_confidence;
+                proposal.memory_match_quality   = 1.0f;
+                proposal.referent_resolution    = policyAnn.references.empty() ? 1.0f : 0.6f;
+                proposal.grounding_coverage     = policyAnn.confidence_summary.entity_confidence;
+                proposal.tool_preconditions     = 1.0f;
+                proposal.historical_success     = 1.0f;
+
+                auto decision = GRIM::MMO::ActionPolicyRegistry::instance().evaluate(proposal);
+
+                if (decision.verdict == GRIM::MMO::PolicyVerdict::Deny) {
+                    LOG_DEBUG("AI", "Policy DENIED command: " + cmd + " (" + decision.reason + ")");
+                    result.message = "[AI] Action denied: " + decision.reason;
+                    result.voice   = "I can't do that right now.";
+                    result.success = false;
+                    return result;
+                }
+
+                if (decision.verdict != GRIM::MMO::PolicyVerdict::Allow) {
+                    // Verification required — present prompt to user
+                    LOG_DEBUG("AI", "Policy VERIFY for: " + cmd + " (" + decision.reason + ")");
+
+                    auto& sessionCtx = GRIM::MMO::SessionContextManager::instance();
+                    GRIM::MMO::PendingInteraction pending;
+                    pending.kind             = GRIM::MMO::PendingKind::Confirmation;
+                    pending.original_command = suggested;
+                    pending.prompt_shown     = decision.verification_prompt;
+                    pending.created_at       = std::chrono::steady_clock::now();
+                    sessionCtx.setPending("default", pending);
+
+                    result.message  = decision.verification_prompt;
+                    result.voice    = decision.verification_prompt;
+                    result.category = "verification";
+                    result.success  = true;
+                    result.errorCode = "ERR_NONE";
+                    return result;
+                }
+
+                // Policy allows — execute
+                LOG_DEBUG("AI", "Policy ALLOW — executing: " + suggested);
                 
-                // Execute the command through the normal dispatch
                 extern CommandResult dispatchCommand(const std::string&, const std::string&);
                 CommandResult cmdResult = dispatchCommand(cmd, arg);
                 
-                // Record analytics if successful
+                // Record analytics in both registries
+                auto& toolReg = GRIM::MMO::ToolRegistry::instance();
                 if (cmdResult.success) {
-                    GRIM::CommandRegistry::recordSuccess(cmd);
+                    toolReg.recordSuccess(cmd);
+                    GRIM::MMO::ActionPolicyRegistry::instance().recordOutcome(cmd, policyAnn.confidence_summary.overall, true);
                 } else {
-                    GRIM::CommandRegistry::recordFailure(cmd);
+                    toolReg.recordFailure(cmd);
+                    GRIM::MMO::ActionPolicyRegistry::instance().recordOutcome(cmd, policyAnn.confidence_summary.overall, false);
                 }
                 
                 // Mark that it was AI-inferred

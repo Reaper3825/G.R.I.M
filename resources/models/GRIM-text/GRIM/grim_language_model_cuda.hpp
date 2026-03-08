@@ -184,6 +184,10 @@ struct EncoderConfig {
     // When false, only the LM head centering (center_hidden_states) helps prevent mode collapse.
     bool center_encoder_residuals = false;
     
+    // QK-norm: per-head RMSNorm on Q and K after QKV projection, before RoPE.
+    // Bounds attention logits by decoupling magnitude from direction.
+    bool qk_norm_enabled = false;
+    
     // Bias control - when false, encoder layers skip bias addition (b_qkv, b_o not used)
     bool use_bias = true;
     
@@ -316,6 +320,9 @@ struct LanguageModelConfig {
     // with learnable scalars (initialized to layer_scale_init, typically 0.1)
     bool use_layer_scale = false;         // Enable LayerScale (gated residual scaling)
     float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
+    
+    // QK-norm: per-head RMSNorm on Q and K after QKV projection, before RoPE
+    bool qk_norm_enabled = false;
     
     bool use_gpu = true;
     bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency

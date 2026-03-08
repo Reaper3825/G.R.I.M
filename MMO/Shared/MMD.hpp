@@ -1,41 +1,87 @@
-// Multi-Model Orchestration (MMO) - Shared MMD Definitions
-// Model Metadata (MMD) Header
+// Multi-Model Orchestration (MMO) - Model Metadata Contracts
+// Shared types for model descriptors, transport envelopes,
+// and sub-model output contracts.
 //======================================================//
 #pragma once
-#include <cstddef>
+
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <unordered_map>
-#include <chrono>
-#include <ctime>
-#include <iomanip>
-#include <sstream>
 
-namespace GRIM {
-namespace MMO {
-    class MMD {
-        ~MMD() = default;
-    public:
+namespace GRIM::MMO {
 
+// =========================================================
+// Backend type — how the body connects to this model
+// =========================================================
+enum class BackendType : uint8_t {
+    GrimTextServer = 0,   // grim_text_server.exe (HTTP, one process per model)
+    LlamaCpp       = 1,   // llama.cpp server
+    Ollama         = 2,   // Ollama API
+    External       = 3    // arbitrary HTTP endpoint
+};
 
-    struct ModelInfo {
-        std::string ID;
-        std::string name;
-        std::string Version;
-        std::string Subject;
-        std::string Description;
-        std::string model_path;
-        std::string Date_Created;
-        std::string Date_Modified;
-        std::vector<std::string> SubjectTags;
-        float Usage_Weight;
-    };
+// =========================================================
+// ModelInfo — describes one model (router or sub-model)
+//
+// Router-only fields: lora_path, hard_copy_path
+// Sub-models MUST leave those empty; ModelRegistry validates.
+// =========================================================
+struct ModelInfo {
+    std::string id;
+    std::string name;
+    std::string version;
+    std::string subject;
+    std::string description;
+    std::string model_path;         // weights file or directory
+    BackendType backend_type   = BackendType::GrimTextServer;
+    std::string url;                // host:port or full URL
+    std::vector<std::string> subject_tags;
+    float       usage_weight   = 0.0f;
 
-    std::vector<std::string> getSubjectTags(std::string RawInput);
-    std::vector<std::string> SubjectTags;
+    // Router-only — personalization bridge
+    std::string lora_path;
+    std::string hard_copy_path;
 
-    };
-    
-}// MMO
-} // namespace GRIM
+    // Estimated resource footprint (used by ResourceCoordinator)
+    long        estimated_ram_mb  = 0;
+    long        estimated_vram_mb = 0;
+};
+
+// =========================================================
+// Transport envelope — body → model (route or synthesize step)
+// Every request carries these fields.
+// =========================================================
+struct RequestEnvelope {
+    uint32_t    schema_version = 1;
+    std::string request_id;
+    std::string session_id;
+    std::string turn_id;
+    std::string target_model_id;
+    std::string task;
+    std::string scope;
+    std::string constraints;
+    std::string output_schema;
+    int         max_length     = 0;
+    std::string payload;
+};
+
+// =========================================================
+// Sub-model output envelope — model → body
+// =========================================================
+enum class ResponseStatus : uint8_t {
+    Ok     = 0,
+    Refuse = 1,
+    Error  = 2
+};
+
+struct ResponseEnvelope {
+    uint32_t       schema_version = 1;
+    std::string    request_id;
+    std::string    target_model_id;
+    ResponseStatus status         = ResponseStatus::Error;
+    std::string    result;         // when status == Ok
+    std::string    refusal;        // when status == Refuse
+    std::string    error;          // when status == Error
+};
+
+} // namespace GRIM::MMO

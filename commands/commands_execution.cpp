@@ -1,7 +1,7 @@
 #include "commands_execution.hpp"
 #include "commands_core.hpp"
 #include "logger.hpp"
-#include "memory/memory_storage.hpp"
+#include "memory/unified_memory.hpp"
 #include "memory/memory_router.hpp"
 #include "Reward_Learning/grim_rl.hpp"
 #include "nlp/nlp.hpp"
@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <ctime>
 
-extern GRIM::MemoryStorage g_memoryStorage;
+extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 extern nlohmann::json longTermMemory;
 extern NLP g_nlp;
 extern std::unordered_map<std::string, CommandFunc> commandMap;
@@ -79,13 +79,13 @@ CommandResult tryRLInference(const std::string& cmd, const std::string& arg)
 void recordUnknownCommand(const std::string& cmd, const std::string& arg)
 {
     try {
-        GRIM::MemoryObject unknown;
-        unknown.id = GRIM::MemoryObject::generateUUID();
-        unknown.timestamp = std::time(nullptr);
-        unknown.source = GRIM::SourceTag::UserText;
-        unknown.type = GRIM::TypeTag::UnknownCommand;
-        unknown.intent = GRIM::IntentTag::Query;
-        unknown.context = GRIM::ContextTag::Conversation;
+        GRIM::UnifiedMemoryObject unknown;
+        unknown.id = GRIM::UnifiedMemoryObject::generateID();
+        unknown.timestamp = static_cast<uint64_t>(std::time(nullptr));
+        unknown.source = GRIM::SourceType::USER_TEXT;
+        unknown.type = GRIM::TypeTag::UNKNOWN_COMMAND;
+        unknown.intent = GRIM::MemoryIntent::QUERY;
+        unknown.context = GRIM::ContextType::CONVERSATION;
         unknown.raw = cmd + (arg.empty() ? "" : " " + arg);
         unknown.normalized = normalizeWord(cmd);
         unknown.confidence = 0.4f;

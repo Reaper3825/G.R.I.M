@@ -205,13 +205,16 @@ ValidationResult runValidation(TrainingContext& ctx);
 namespace Internal {
 
 /**
- * @brief Get scheduled learning rate with warmup, constant after warmup
+ * @brief Get scheduled learning rate with warmup + cosine decay + telemetry modulation
  */
 float getScheduledLearningRate(
     int step,
     float base_lr,
+    float min_lr,
     int warmup_steps,
-    bool stability_overrides_enabled);
+    int total_steps,
+    bool stability_overrides_enabled,
+    GRIM::Telemetry::TelemetryLattice* lattice = nullptr);
 
 /**
  * @brief Check if a batch should be skipped due to quarantine

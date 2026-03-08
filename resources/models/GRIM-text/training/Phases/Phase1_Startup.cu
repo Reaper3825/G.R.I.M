@@ -948,8 +948,12 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.use_layer_scale = hp.use_layer_scale;
     model_config.layer_scale_init = hp.layer_scale_init;
     
+    // QK-norm: per-head RMSNorm on Q and K (Gemma-2 style)
+    model_config.qk_norm_enabled = hp.qk_norm_enabled;
+    
     logger.log("LayerScale: enabled=" + std::string(model_config.use_layer_scale ? "true" : "false") +
-              ", init=" + std::to_string(model_config.layer_scale_init));
+              ", init=" + std::to_string(model_config.layer_scale_init) +
+              " | QK-norm: " + std::string(model_config.qk_norm_enabled ? "ENABLED" : "disabled"));
     
     // Hardcoded Hidden States Diagnostic (Issue #42)
     model_config.hardcoded_hidden_pattern = static_cast<GRIM::LanguageModelConfig::HardcodedPattern>(hp.hardcoded_hidden_pattern);

@@ -1,13 +1,13 @@
 #include "commands_question.hpp"
-#include "command_registry.hpp"  // ✅ NEW: For tool knowledge
+#include "../MMO/Core/ToolRegistry.hpp"
 #include "response_manager.hpp"
 #include "logger.hpp"
-#include "memory/memory_storage.hpp" 
+#include "memory/unified_memory.hpp" 
 #include "ai/ai.hpp" 
 #include "perception/perception.hpp" 
 #include "perception/perception_context.hpp" // ✅ NEW: Context-aware perception
 #include "external_collector/osit.hpp" 
-#include "system_detect.hpp" 
+#include "location.hpp" 
 #include <algorithm>
 #include <sstream>
 #include <map>  // ✅ NEW: For category grouping
@@ -16,7 +16,7 @@
 #include <nlohmann/json.hpp>
 
 // External references
-extern GRIM::MemoryStorage g_memoryStorage;
+extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 
 namespace GRIM {
 
@@ -133,7 +133,7 @@ QuestionResult QuestionHandler::searchUserMemory(const std::string& question) {
         return result;
     }
     
-    std::vector<MemoryObject> candidateMemories;
+    std::vector<UnifiedMemoryObject> candidateMemories;
     
     // Search memory storage by keywords
     for (const auto& keyword : keywords) {
@@ -142,7 +142,7 @@ QuestionResult QuestionHandler::searchUserMemory(const std::string& question) {
         for (const auto& mem : memories) {
             // Check if this memory could answer the question
             // Look for fact-type memories with high confidence
-            if (mem.type == TypeTag::Fact || mem.type == TypeTag::Command) {
+            if (mem.type == TypeTag::FACT || mem.type == TypeTag::COMMAND) {
                 candidateMemories.push_back(mem);
             }
         }
@@ -152,14 +152,14 @@ QuestionResult QuestionHandler::searchUserMemory(const std::string& question) {
     for (const auto& keyword : keywords) {
         auto tagMemories = g_memoryStorage.getByTag(keyword);
         for (const auto& mem : tagMemories) {
-            if (mem.type == TypeTag::Fact) {
+            if (mem.type == TypeTag::FACT) {
                 candidateMemories.push_back(mem);
             }
         }
     }
     
     // Find the best matching memory
-    MemoryObject bestMatch;
+    UnifiedMemoryObject bestMatch;
     bool foundMatch = false;
     
     for (const auto& mem : candidateMemories) {
@@ -188,9 +188,9 @@ QuestionResult QuestionHandler::searchUserMemory(const std::string& question) {
         }
         
         result.answer = oss.str();
-        result.references.push_back(bestMatch.id);
+        result.references.push_back(std::to_string(bestMatch.id));
         
-        LOG_DEBUG("QuestionHandler", "Found answer in user memory: " + bestMatch.id + 
+        LOG_DEBUG("QuestionHandler", "Found answer in user memory: " + std::to_string(bestMatch.id) + 
                   " (confidence: " + std::to_string(result.confidence) + ")");
     } else {
         LOG_DEBUG("QuestionHandler", "No matching memories found");
@@ -263,13 +263,13 @@ QuestionResult QuestionHandler::searchBaseMemory(const std::string& question) {
         auto memories = g_memoryStorage.search(keyword, 10);
         for (const auto& mem : memories) {
             // Only return memories stored by GRIM itself
-            if (mem.source == SourceTag::GrimInternal && mem.confidence > result.confidence) {
+            if (mem.source == SourceType::GRIM_INTERNAL && mem.confidence > result.confidence) {
                 result.answered = true;
                 result.answer = mem.raw;
                 result.confidence = mem.confidence;
-                result.references.push_back(mem.id);
+                result.references.push_back(std::to_string(mem.id));
                 
-                LOG_DEBUG("QuestionHandler", "Found in base memory: " + mem.id);
+                LOG_DEBUG("QuestionHandler", "Found in base memory: " + std::to_string(mem.id));
             }
         }
     }
@@ -297,22 +297,22 @@ QuestionResult QuestionHandler::searchFieldMemory(const std::string& question) {
         return result;
     }
     
-    std::vector<MemoryObject> candidateMemories;
+    std::vector<UnifiedMemoryObject> candidateMemories;
     
     for (const auto& keyword : keywords) {
         auto memories = g_memoryStorage.search(keyword, 10);
         for (const auto& mem : memories) {
             // Look for informational memories (events, status updates, etc.)
-            if (mem.type == TypeTag::Event || 
-                mem.type == TypeTag::Status || 
-                mem.type == TypeTag::Summary) {
+            if (mem.type == TypeTag::EVENT || 
+                mem.type == TypeTag::STATUS || 
+                mem.type == TypeTag::SUMMARY) {
                 candidateMemories.push_back(mem);
             }
         }
     }
     
     // Find best match
-    MemoryObject bestMatch;
+    UnifiedMemoryObject bestMatch;
     bool foundMatch = false;
     
     for (const auto& mem : candidateMemories) {
@@ -326,18 +326,18 @@ QuestionResult QuestionHandler::searchFieldMemory(const std::string& question) {
     if (foundMatch) {
         result.answered = true;
         result.answer = bestMatch.raw;
-        result.references.push_back(bestMatch.id);
+        result.references.push_back(std::to_string(bestMatch.id));
         
         // Add context based on memory type
         std::string typeContext;
         switch (bestMatch.type) {
-            case TypeTag::Event:
+            case TypeTag::EVENT:
                 typeContext = " (from past events)";
                 break;
-            case TypeTag::Status:
+            case TypeTag::STATUS:
                 typeContext = " (from system status)";
                 break;
-            case TypeTag::Summary:
+            case TypeTag::SUMMARY:
                 typeContext = " (from summaries)";
                 break;
             default:
@@ -348,7 +348,7 @@ QuestionResult QuestionHandler::searchFieldMemory(const std::string& question) {
             result.answer += typeContext;
         }
         
-        LOG_DEBUG("QuestionHandler", "Found in field memory: " + bestMatch.id + 
+        LOG_DEBUG("QuestionHandler", "Found in field memory: " + std::to_string(bestMatch.id) + 
                   " (type: " + toString(bestMatch.type, TypeNames) + ")");
     } else {
         LOG_DEBUG("QuestionHandler", "No field memory found");
@@ -643,7 +643,7 @@ QuestionResult QuestionHandler::searchToolKnowledge(const std::string& question)
     std::transform(lowerQ.begin(), lowerQ.end(), lowerQ.begin(), ::tolower);
     
     // Get all registered tools
-    auto allTools = GRIM::CommandRegistry::getAllTools();
+    auto allTools = GRIM::MMO::ToolRegistry::instance().getAllTools();
     
     // Check what type of question this is
     if (lowerQ.find("how many") != std::string::npos || 
@@ -665,7 +665,7 @@ QuestionResult QuestionHandler::searchToolKnowledge(const std::string& question)
         // Group by category
         std::map<std::string, std::vector<std::string>> byCategory;
         for (const auto& tool : allTools) {
-            byCategory[tool.category].push_back(tool.name + ": " + tool.description);
+            byCategory[tool.category].push_back(tool.tool_id + ": " + tool.description);
         }
         
         for (const auto& [category, tools] : byCategory) {
@@ -693,16 +693,16 @@ QuestionResult QuestionHandler::searchToolKnowledge(const std::string& question)
         std::ostringstream answer;
         answer << "I can help you with:\n\n";
         
-        auto categories = GRIM::CommandRegistry::getCategories();
+        auto categories = GRIM::MMO::ToolRegistry::instance().getCategories();
         for (const auto& category : categories) {
-            auto categoryTools = GRIM::CommandRegistry::getToolsByCategory(category);
+            auto categoryTools = GRIM::MMO::ToolRegistry::instance().getByCategory(category);
             answer << "**" << category << "** (" << categoryTools.size() << " tools): ";
             
             // List first few examples
             int count = 0;
             for (const auto& tool : categoryTools) {
                 if (count > 0) answer << ", ";
-                answer << tool.name;
+                answer << tool.tool_id;
                 if (++count >= 3) break;
             }
             if (categoryTools.size() > 3) {
@@ -719,9 +719,9 @@ QuestionResult QuestionHandler::searchToolKnowledge(const std::string& question)
     // Check if asking about a specific capability
     for (const auto& tool : allTools) {
         // Check if tool name or description matches question keywords
-        if (lowerQ.find(tool.name) != std::string::npos ||
+        if (lowerQ.find(tool.tool_id) != std::string::npos ||
             tool.description.find(question) != std::string::npos) {
-            result.answer = "Yes, I can help with that. Use the '" + tool.name + 
+            result.answer = "Yes, I can help with that. Use the '" + tool.tool_id + 
                           "' command: " + tool.description;
             return result;
         }
@@ -980,10 +980,12 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
     std::transform(lowerQ.begin(), lowerQ.end(), lowerQ.begin(), ::tolower);
     
     // Create memory object
-    MemoryObject memory;
-    memory.source = SourceTag::GrimInternal;  // GRIM learned this
-    memory.intent = IntentTag::Inform;
-    memory.context = ContextTag::Conversation;
+    UnifiedMemoryObject memory;
+    memory.id = UnifiedMemoryObject::generateID();
+    memory.timestamp = static_cast<uint64_t>(std::time(nullptr));
+    memory.source = SourceType::GRIM_INTERNAL;  // GRIM learned this
+    memory.intent = MemoryIntent::INFORM;
+    memory.context = ContextType::CONVERSATION;
     memory.confidence = result.confidence;
     
     // Determine memory type and content based on question type
@@ -995,7 +997,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         lowerQ.find("i'm ") != std::string::npos) {
         
         // Personal fact about user
-        memory.type = TypeTag::Fact;
+        memory.type = TypeTag::FACT;
         memory.raw = result.answer;
         memory.normalized = result.answer;
         
@@ -1009,7 +1011,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         
     } else if (result.source == AnswerSource::ExternalKnowledge) {
         // External knowledge learned
-        memory.type = TypeTag::Fact;
+        memory.type = TypeTag::FACT;
         memory.raw = "Q: " + question + "\nA: " + result.answer;
         memory.normalized = result.answer;
         
@@ -1024,7 +1026,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         
     } else if (result.source == AnswerSource::OSINT) {
         // OSINT result
-        memory.type = TypeTag::Event;  // OSINT lookups are events
+        memory.type = TypeTag::EVENT;  // OSINT lookups are events
         memory.raw = "OSINT: " + question + " -> " + result.answer;
         memory.normalized = result.answer;
         
@@ -1038,7 +1040,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         
     } else if (result.source == AnswerSource::Vision) {
         // Vision analysis
-        memory.type = TypeTag::Event;
+        memory.type = TypeTag::EVENT;
         memory.raw = "Vision: " + result.answer;
         memory.normalized = result.answer;
         memory.tags.push_back("vision");
@@ -1050,7 +1052,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
     // Store in long-term memory with high confidence
     try {
         g_memoryStorage.storeLongTerm(memory);
-        LOG_DEBUG("QuestionHandler", "Successfully stored context memory: " + memory.id);
+        LOG_DEBUG("QuestionHandler", "Successfully stored context memory: " + std::to_string(memory.id));
     } catch (const std::exception& e) {
         LOG_ERROR("QuestionHandler", "Failed to store memory: " + std::string(e.what()));
     }

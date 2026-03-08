@@ -46,6 +46,7 @@ struct GPUGrimEncoder::Impl {
         enc_cfg.use_bias = config.use_bias;
         enc_cfg.dropout_rate = config.dropout_rate;
         enc_cfg.attention_dropout = config.attention_dropout;
+        enc_cfg.qk_norm_enabled = config.qk_norm_enabled;
 
         for (int i = 0; i < config.num_layers; ++i) {
             // Pattern B: Layer self-allocates and Xavier-inits its own weights.

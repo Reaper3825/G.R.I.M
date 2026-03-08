@@ -9,7 +9,7 @@
 #pragma comment(lib, "Shcore.lib")
 #endif
 
-extern SystemInfo g_systemInfo; // From system_detect
+extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
 namespace GRIM {
 namespace Perception {
@@ -30,22 +30,22 @@ MultiMonitorManager::MultiMonitorManager()
 
 MultiMonitorManager::~MultiMonitorManager() = default;
 
-bool MultiMonitorManager::init(const SystemInfo* sysInfo) {
+bool MultiMonitorManager::init(const GRIM::MMO::HardwareInventory* inventory) {
     LOG_DEBUG("MultiMonitor", "Initializing multi-monitor manager");
     
-    // Use provided system info or global
-    const SystemInfo& info = sysInfo ? *sysInfo : g_systemInfo;
+    // Use provided inventory or global
+    const GRIM::MMO::HardwareInventory& inv = inventory ? *inventory : g_hardwareInventory;
     
-    if (!info.hasMonitor || info.monitorCount == 0) {
-        LOG_DEBUG("MultiMonitor", "No monitors detected in system info");
+    if (inv.monitor_count == 0) {
+        LOG_DEBUG("MultiMonitor", "No monitors detected in hardware inventory");
         return false;
     }
     
     pImpl->monitors.clear();
     
-    // Convert system MonitorInfo to ExtendedMonitorInfo
-    for (int i = 0; i < static_cast<int>(info.monitors.size()); ++i) {
-        const auto& mon = info.monitors[i];
+    // Convert MMO::MonitorInfo to ExtendedMonitorInfo
+    for (int i = 0; i < static_cast<int>(inv.monitors.size()); ++i) {
+        const auto& mon = inv.monitors[i];
         
         ExtendedMonitorInfo extended;
         // Copy base MonitorInfo fields
@@ -53,7 +53,7 @@ bool MultiMonitorManager::init(const SystemInfo* sysInfo) {
         extended.y = mon.y;
         extended.width = mon.width;
         extended.height = mon.height;
-        extended.isPrimary = mon.isPrimary;
+        extended.is_primary = mon.is_primary;
         
         // Add extended fields
         extended.monitorIndex = i;
@@ -62,8 +62,8 @@ bool MultiMonitorManager::init(const SystemInfo* sysInfo) {
     }
     
     // Store virtual desktop bounds
-    pImpl->totalVirtualWidth = info.totalScreenWidth;
-    pImpl->totalVirtualHeight = info.totalScreenHeight;
+    pImpl->totalVirtualWidth = inv.virtual_desktop_w;
+    pImpl->totalVirtualHeight = inv.virtual_desktop_h;
     
     // Calculate virtual bounds (min/max of all monitor positions)
     if (!pImpl->monitors.empty()) {
@@ -151,7 +151,7 @@ std::vector<ExtendedMonitorInfo> MultiMonitorManager::getMonitors() const {
 
 ExtendedMonitorInfo MultiMonitorManager::getPrimaryMonitor() const {
     for (const auto& mon : pImpl->monitors) {
-        if (mon.isPrimary) {
+        if (mon.is_primary) {
             return mon;
         }
     }
@@ -243,7 +243,7 @@ cv::Mat MultiMonitorManager::captureMonitor(int monitorIndex) const {
 
 cv::Mat MultiMonitorManager::capturePrimaryMonitor() const {
     for (size_t i = 0; i < pImpl->monitors.size(); ++i) {
-        if (pImpl->monitors[i].isPrimary) {
+        if (pImpl->monitors[i].is_primary) {
             return captureMonitor(static_cast<int>(i));
         }
     }
@@ -364,7 +364,7 @@ std::string MultiMonitorManager::getMonitorSummary() const {
     ss << "Virtual desktop: " << pImpl->totalVirtualWidth << "x" << pImpl->totalVirtualHeight << "\n\n";
     
     for (const auto& mon : pImpl->monitors) {
-        ss << "Monitor " << mon.monitorIndex << (mon.isPrimary ? " [PRIMARY]" : "") << ":\n";
+        ss << "Monitor " << mon.monitorIndex << (mon.is_primary ? " [PRIMARY]" : "") << ":\n";
         
         if (!mon.friendlyName.empty()) {
             ss << "  Name: " << mon.friendlyName << "\n";

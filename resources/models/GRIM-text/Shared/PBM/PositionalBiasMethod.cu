@@ -666,7 +666,7 @@ void launchRoPERotationGQA_backward(
     int rotary_dim,
     cudaStream_t stream
 ) {
-    // ISSUE #119 FIX: The caller (RoPEGradFn in TensorContract_GPU.cu) intentionally
+    // ISSUE rgb(9, 255, 0) FIX: The caller (RoPEGradFn in TensorContract_GPU.cu) intentionally
     // passes nullptr for one of grad_Q or grad_K because Q and K have independent
     // gradient paths in the autograd system. We should allow processing either one
     // individually. The validation should only fail if BOTH are null.

@@ -3,7 +3,7 @@
 #include "multi_monitor.hpp" // ✅ Multi-monitor support
 #include "vision_ai.hpp"      // ✅ Vision AI integration
 #include "logger.hpp"         // ✅ For logging functions
-#include "memory/memory_storage.hpp" // ✅ For memory integration
+#include "memory/unified_memory.hpp" // ✅ For memory integration
 #include "core/input/InputController.hpp" // ✅ Input control integration
 #include "ai.hpp" // For global aiConfig
 #include <sstream>
@@ -25,7 +25,7 @@
 #include <opencv2/opencv.hpp>
 
 // External reference to global memory storage
-extern GRIM::MemoryStorage g_memoryStorage;
+extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 
 // External reference to global aiConfig
 extern nlohmann::json aiConfig;
@@ -1299,11 +1299,13 @@ void PerceptionContextManager::storeContextInMemory(const VisualContext& ctx, co
     }
     
     try {
-        MemoryObject memory;
-        memory.source = SourceTag::GrimInternal;
-        memory.intent = IntentTag::Inform;        // ✅ Using Inform instead of Observe
-        memory.context = ContextTag::Monitor;     // ✅ Using Monitor instead of Environment
-        memory.type = TypeTag::Event;
+        UnifiedMemoryObject memory;
+        memory.id = UnifiedMemoryObject::generateID();
+        memory.timestamp = static_cast<uint64_t>(std::time(nullptr));
+        memory.source = SourceType::GRIM_INTERNAL;
+        memory.intent = MemoryIntent::INFORM;        // ✅ Using Inform instead of Observe
+        memory.context = ContextType::MONITOR;     // ✅ Using Monitor instead of Environment
+        memory.type = TypeTag::EVENT;
         memory.confidence = 0.8f;
         
         // Build memory content
@@ -1375,7 +1377,7 @@ void PerceptionContextManager::storeContextInMemory(const VisualContext& ctx, co
         // Store in long-term memory
         g_memoryStorage.storeLongTerm(memory);
         
-        LOG_DEBUG("PerceptionContext", "Stored visual context in memory: " + memory.id);
+        LOG_DEBUG("PerceptionContext", "Stored visual context in memory: " + std::to_string(memory.id));
         
     } catch (const std::exception& e) {
         LOG_ERROR("PerceptionContext", std::string("Failed to store context in memory: ") + e.what());

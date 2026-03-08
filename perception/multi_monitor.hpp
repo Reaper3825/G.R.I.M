@@ -2,7 +2,7 @@
 #include <vector>
 #include <string>
 #include <opencv2/core.hpp>
-#include "system_detect.hpp" // Use existing monitor detection
+#include "../MMO/Core/HardwareInventory.hpp" // Use new hardware inventory
 
 #ifdef _WIN32
 #include <windows.h>
@@ -12,7 +12,7 @@ namespace GRIM {
 namespace Perception {
 
 // Extended monitor info with perception-specific details
-struct ExtendedMonitorInfo : public ::MonitorInfo {
+struct ExtendedMonitorInfo : public GRIM::MMO::MonitorInfo {
     int monitorIndex;          // 0-based index
     std::string deviceName;    // e.g., "\\\\.\\DISPLAY1"
     std::string friendlyName;  // e.g., "Dell U2719D"
@@ -31,10 +31,10 @@ public:
     MultiMonitorManager();
     ~MultiMonitorManager();
     
-    // Initialize using system detection data
-    bool init(const SystemInfo* sysInfo = nullptr);
+    // Initialize using hardware inventory data
+    bool init(const GRIM::MMO::HardwareInventory* inventory = nullptr);
     
-    // Get all detected monitors (from system_detect)
+    // Get all detected monitors
     std::vector<ExtendedMonitorInfo> getMonitors() const;
     
     // Get specific monitor

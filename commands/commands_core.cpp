@@ -2,8 +2,9 @@
 #include "commands_execution.hpp"
 #include "commands_feedback.hpp"
 #include "commands_ai.hpp"
-#include "commands_question.hpp"  // ✅ NEW: Question handling
-#include "command_registry.hpp"   // ✅ NEW: Command registry
+#include "commands_question.hpp"
+#include "../MMO/Core/ToolRegistry.hpp"
+#include "../MMO/Core/SessionContextManager.hpp"
 #include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice/voice_speak.hpp"
@@ -13,9 +14,8 @@
 #include "error_manager.hpp"
 #include "ai/ai.hpp"
 #include "ai/intent_gate.hpp"
-#include "ai/fast_classifier.hpp"  // ✅ NEW: For updateWeights()
-#include "memory/context_manager.hpp"
-#include "memory/memory_manager.hpp"
+#include "ai/fast_classifier.hpp"
+#include "memory/unified_memory.hpp"
 #include "Reward_Learning/grim_rl.hpp"
 #include "ai/personality_manager.hpp"
 #include "ai/proactive_dialogue.hpp"
@@ -23,7 +23,7 @@
 #include "helpers/color.hpp"
 #include <crtdbg.h>
 #include "helpers/grim_input.hpp"
-#include <algorithm>  // ✅ NEW: For std::transform
+#include <algorithm>
 
 #define CHECK_HEAP() _CrtCheckMemory()
 
@@ -32,12 +32,14 @@ using Voice::speak;
 // ====================================================
 // External access functions
 // ====================================================
+static const std::string kDefaultSession = "default";
+
 bool hasPendingFeedback() {
-    return GRIM::Feedback::hasPending();
+    return GRIM::MMO::SessionContextManager::instance().getPending(kDefaultSession).has_value();
 }
 
 void setVoiceCommand(bool isVoice) {
-    GRIM::Feedback::setVoiceCommand(isVoice);
+    GRIM::MMO::SessionContextManager::instance().setVoiceCommand(kDefaultSession, isVoice);
 }
 
 extern nlohmann::json longTermMemory;
@@ -79,17 +81,17 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         try {
             CommandResult result = it->second(arg);
             
-            // ✅ NEW: Record command usage analytics
+            // Record command usage analytics
             if (result.success) {
-                GRIM::CommandRegistry::recordSuccess(cmd);
+                GRIM::MMO::ToolRegistry::instance().recordSuccess(cmd);
             } else {
-                GRIM::CommandRegistry::recordFailure(cmd);
+                GRIM::MMO::ToolRegistry::instance().recordFailure(cmd);
             }
             
             return result;
         } catch (const std::exception& e) {
             LOG_ERROR("Dispatch", "Exception in command \"" + cmd + "\": " + e.what());
-            GRIM::CommandRegistry::recordFailure(cmd);  // ✅ Record failure
+            GRIM::MMO::ToolRegistry::instance().recordFailure(cmd);
             return CommandResult{
                 false,
                 "[Error] Exception while running command: " + cmd,
@@ -132,11 +134,14 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
                      "\" (score=" + std::to_string(confidence) + ")");
             
             std::string question = "Did you mean \"" + suggestedCmd + "\"?";
-            GRIM::ContextManager::setPendingIntent({ "open_app", "TypeTag:App", std::chrono::steady_clock::now() });
+            auto& scm = GRIM::MMO::SessionContextManager::instance();
+            scm.setPending(kDefaultSession, {
+                GRIM::MMO::PendingKind::Clarification,
+                cmd + (arg.empty() ? "" : " " + arg),
+                "TypeTag:App", question, "", {}, 120
+            });
             history.push(question, Colors::Yellow.toUInt());
             Voice::speak(question, "clarify");
-            
-            GRIM::Feedback::setPendingClarification(cmd + (arg.empty() ? "" : " " + arg));
             
             return CommandResult{
                 true,
@@ -224,7 +229,8 @@ void handleCommand(const std::string& line)
     // ✅ NEW: Intent Classification - Route to command or banter pipeline
     // ====================================================
     try {
-        GRIM::ContextSnapshot ctx = GRIM::ContextManager::getSnapshot();
+        auto& scm = GRIM::MMO::SessionContextManager::instance();
+        GRIM::ContextSnapshot ctx = scm.legacySnapshot(kDefaultSession);
         GRIM::IntentResult intentResult = GRIM::IntentGate::decide(line, ctx);
         
         LOG_DEBUG("HandleCommand", "Intent classified as: " + GRIM::intentTypeToString(intentResult.type) + 
@@ -339,8 +345,9 @@ void handleCommand(const std::string& line)
         }
         
         // Set multi-command context to suppress feedback during batch processing
-        bool wasMultiContext = GRIM::Feedback::isMultiCommandContext();
-        GRIM::Feedback::setMultiCommandContext(true);
+        auto& scm = GRIM::MMO::SessionContextManager::instance();
+        bool wasMultiContext = scm.isMultiCommandContext(kDefaultSession);
+        scm.setMultiCommandContext(kDefaultSession, true);
         
         // Process each command sequentially
         for (const auto& cmd : commands)
@@ -349,15 +356,18 @@ void handleCommand(const std::string& line)
         }
         
         // Restore context flag
-        GRIM::Feedback::setMultiCommandContext(wasMultiContext);
+        scm.setMultiCommandContext(kDefaultSession, wasMultiContext);
         
         // Only ask for feedback once after ALL commands complete
-        if (!wasMultiContext && !GRIM::Feedback::hasPending())
+        if (!wasMultiContext && !scm.getPending(kDefaultSession).has_value())
         {
             std::string ask = "I processed " + std::to_string(commands.size()) + " commands. Was that correct?";
             history.push(ask, Colors::Cyan.toUInt());
             Voice::speak(ask, "feedback");
-            GRIM::Feedback::setPending(line); // Store the full multi-command line
+            scm.setPending(kDefaultSession, {
+                GRIM::MMO::PendingKind::Confirmation,
+                line, "", ask, "", {}, 120
+            });
             LOG_DEBUG("Feedback", "Opened feedback prompt for multi-command batch");
         }
         
@@ -367,51 +377,62 @@ void handleCommand(const std::string& line)
     auto [cmdRaw, arg] = GRIMInput::parseInput(line);
     // [GRIM CONTEXT] Attempt to resolve contextual references (like "that app")
     if (arg == "that app" || arg == "the app" || arg == "it") {
-        auto ctx = GRIM::ContextManager::recallContextByType("App");
-        if (ctx.has_value()) {
-            arg = ctx->raw;
+        auto& scm = GRIM::MMO::SessionContextManager::instance();
+        auto ref = scm.resolveReference(kDefaultSession, arg);
+        if (ref.has_value()) {
+            arg = ref->value;
             LOG_DEBUG("Context", "Resolved pronoun → " + arg);
         } else {
-            std::string ask = "Which app did you mean?";
-            history.push(ask, Colors::Cyan.toUInt());
-            Voice::speak(ask, "clarify");
+            // Fallback to context memory recall
+            auto ctx = scm.recallContextByType(kDefaultSession, "App");
+            if (ctx.has_value()) {
+                arg = ctx->raw;
+                LOG_DEBUG("Context", "Resolved pronoun via context recall → " + arg);
+            } else {
+                std::string ask = "Which app did you mean?";
+                history.push(ask, Colors::Cyan.toUInt());
+                Voice::speak(ask, "clarify");
 
-            GRIM::ContextManager::setPendingIntent({ "open_app", "TypeTag:App", std::chrono::steady_clock::now() });
-            return;
+                scm.setPending(kDefaultSession, {
+                    GRIM::MMO::PendingKind::MissingSlot,
+                    "open_app", "TypeTag:App", ask, "", {}, 120
+                });
+                return;
+            }
         }
     }
 
     LOG_TRACE("HandleCommand", "Parsed → cmdRaw=\"" + cmdRaw + "\" arg=\"" + arg + "\"");
 
-    // === Clarification handler ===
-    if (GRIM::Feedback::hasPendingClarification())
+    // === Pending interaction handler (clarification, feedback, missing slot) ===
     {
-        std::string originalInput = GRIM::Feedback::getPendingClarification().value();
-        if (GRIM::Feedback::processClarificationResponse(originalInput, line)) {
-            return; // Clarification was handled
+        auto& scm = GRIM::MMO::SessionContextManager::instance();
+        auto pending = scm.getPending(kDefaultSession);
+        if (pending.has_value()) {
+            if (pending->kind == GRIM::MMO::PendingKind::Clarification) {
+                if (GRIM::Feedback::processClarificationResponse(pending->original_command, line)) {
+                    scm.clearPending(kDefaultSession);
+                    return;
+                }
+            }
+            else if (pending->kind == GRIM::MMO::PendingKind::MissingSlot) {
+                LOG_DEBUG("Context", "Pending missing-slot active → " + pending->original_command);
+                scm.clearPending(kDefaultSession);
+                handleCommand(pending->original_command + " " + line);
+                return;
+            }
+            else if (pending->kind == GRIM::MMO::PendingKind::Confirmation ||
+                     pending->kind == GRIM::MMO::PendingKind::FollowUp) {
+                std::string originalCmd = pending->original_command;
+                if (GRIM::Feedback::processFeedbackResponse(originalCmd, line)) {
+                    scm.clearPending(kDefaultSession);
+                    return;
+                }
+                scm.clearPending(kDefaultSession);
+            }
         }
     }
-    // [GRIM CONTEXT] If user responded to a pending intent, resume the command
-    auto pending = GRIM::ContextManager::getPendingIntent();
-    if (pending.has_value()) {
-        LOG_DEBUG("Context", "Pending intent active → " + pending->command);
-        GRIM::ContextManager::clearPendingIntent();
 
-        // Treat this response as argument to the original command
-        handleCommand(pending->command + " " + line);
-        return;
-    }
-
-
-    // === Feedback handler ===
-    if (GRIM::Feedback::hasPending())
-    {
-        std::string originalCmd = GRIM::Feedback::getPending().value();
-        if (GRIM::Feedback::processFeedbackResponse(originalCmd, line)) {
-            return; // Feedback was handled, don't process as new command
-        }
-        // If returned false, continue processing as new command
-    }
 
     // ====================================================
     // Normal execution flow
@@ -424,7 +445,7 @@ void handleCommand(const std::string& line)
             cmdRaw,
             arg,
             longTermMemory,
-            GRIM::ContextManager::getCurrentMood()))
+            GRIM::MMO::SessionContextManager::instance().legacySnapshot(kDefaultSession).currentMood))
     {
         cmdRaw = *suggestion;
     }
@@ -517,20 +538,20 @@ void handleCommand(const std::string& line)
     history.push(finalText, (result.color.a << 24) | (result.color.b << 16) | (result.color.g << 8) | result.color.r);
     // [GRIM CONTEXT] Record successful command context
     if (result.success) {
-    GRIM::MemoryObject contextObj;
-    contextObj.id = GRIM::MemoryObject::generateUUID();
-    contextObj.timestamp = std::time(nullptr);
-    contextObj.source = GRIM::SourceTag::GrimInternal;      // or UserText if command came from user
-    contextObj.type = GRIM::TypeTag::Command;               // identifies it as a command
-    contextObj.intent = GRIM::IntentTag::Inform;          // or Query depending on use
-    contextObj.context = GRIM::ContextTag::Conversation;  // most similar to “Session”
-    contextObj.raw = cmdRaw;                                // actual command string
-    contextObj.normalized = GRIMInput::normalizeCommand(cmdRaw);
-    contextObj.confidence = 1.0f;
-    contextObj.tags = {"context_command", "session"};
+        GRIM::UnifiedMemoryObject contextObj;
+        contextObj.id = GRIM::UnifiedMemoryObject::generateID();
+        contextObj.timestamp = static_cast<uint64_t>(std::time(nullptr));
+        contextObj.source = GRIM::SourceType::GRIM_INTERNAL;
+        contextObj.type = GRIM::TypeTag::COMMAND;
+        contextObj.intent = GRIM::MemoryIntent::INFORM;
+        contextObj.context = GRIM::ContextType::CONVERSATION;
+        contextObj.raw = cmdRaw;
+        contextObj.normalized = GRIMInput::normalizeCommand(cmdRaw);
+        contextObj.confidence = 1.0f;
+        contextObj.tags = {"context_command", "session"};
 
-    GRIM::ContextManager::rememberContextObject(contextObj);
-}
+        GRIM::MMO::SessionContextManager::instance().rememberContextObject(kDefaultSession, contextObj);
+    }
 
 
 
@@ -540,31 +561,36 @@ void handleCommand(const std::string& line)
         Voice::speak(result.voice, result.category.empty() ? "routine" : result.category);
 
     // Request feedback for successful voice commands
-    if (!GRIM::Feedback::isMultiCommandContext() && !GRIM::Feedback::hasPending() && 
-        result.success && result.category != "conversation" && result.category != "cancellation" && 
-        result.category != "banter" && GRIM::Feedback::isVoiceCommand())
     {
-        std::string ask = "Was that what you wanted?";
-        history.push(ask, Colors::Cyan.toUInt());
-        Voice::speak(ask, "feedback");
-        GRIM::Feedback::setPending(cmdRaw);
-        LOG_DEBUG("Feedback", "Opened feedback prompt for command: " + cmdRaw);
-    }
-    else if (!result.success && result.errorCode != "ERR_UNKNOWN_CMD" && GRIM::Feedback::isVoiceCommand())
-    {
-        LOG_DEBUG("Feedback", "Skipping feedback for failed command: " + cmdRaw + " (" + result.errorCode + ")");
-        
-        // Only give "Ready" notification for actual application/system errors
-        if (result.errorCode == "ERR_APP_NO_ARGUMENT" || 
-            result.errorCode == "ERR_APP_LAUNCH_FAILED" ||
-            result.errorCode == "ERR_FS_MISSING_DIR" ||
-            result.errorCode == "ERR_FS_DIR_NOT_FOUND") {
-            Voice::speak("Ready.", "routine");
+        auto& scm = GRIM::MMO::SessionContextManager::instance();
+        if (!scm.isMultiCommandContext(kDefaultSession) && !scm.getPending(kDefaultSession).has_value() && 
+            result.success && result.category != "conversation" && result.category != "cancellation" && 
+            result.category != "banter" && scm.isVoiceCommand(kDefaultSession))
+        {
+            std::string ask = "Was that what you wanted?";
+            history.push(ask, Colors::Cyan.toUInt());
+            Voice::speak(ask, "feedback");
+            scm.setPending(kDefaultSession, {
+                GRIM::MMO::PendingKind::Confirmation,
+                cmdRaw, "", ask, "", {}, 120
+            });
+            LOG_DEBUG("Feedback", "Opened feedback prompt for command: " + cmdRaw);
         }
+        else if (!result.success && result.errorCode != "ERR_UNKNOWN_CMD" && scm.isVoiceCommand(kDefaultSession))
+        {
+            LOG_DEBUG("Feedback", "Skipping feedback for failed command: " + cmdRaw + " (" + result.errorCode + ")");
+            
+            if (result.errorCode == "ERR_APP_NO_ARGUMENT" || 
+                result.errorCode == "ERR_APP_LAUNCH_FAILED" ||
+                result.errorCode == "ERR_FS_MISSING_DIR" ||
+                result.errorCode == "ERR_FS_DIR_NOT_FOUND") {
+                Voice::speak("Ready.", "routine");
+            }
+        }
+        
+        // Reset voice flag for next command
+        scm.setVoiceCommand(kDefaultSession, false);
     }
-    
-    // Reset voice flag for next command
-    GRIM::Feedback::setVoiceCommand(false);
 
     // Post-command RL feedback
     GRIM::RewardLearning::sendCommandFeedback(
@@ -573,12 +599,12 @@ void handleCommand(const std::string& line)
         0.0f,
         (result.success ? 0.5f : -0.5f),
         0.2f,
-        GRIM::ContextManager::getCurrentMood());
+        GRIM::MMO::SessionContextManager::instance().legacySnapshot(kDefaultSession).currentMood);
 
     // Update context and personality
-    GRIM::ContextManager::recordUsage(cmdRaw);
+    GRIM::MMO::SessionContextManager::instance().recordUsage(kDefaultSession, cmdRaw);
     GRIM::PersonalityManager::updateAfterCommand(result.success);
     GRIM::DialogueProactive::checkAfterCommand(line, result);
-    GRIM::ContextManager::decayOldContext(60); // decay context older than 60s
+    GRIM::MMO::SessionContextManager::instance().decayOldContext(kDefaultSession, 60);
     LOG_TRACE("HandleCommand", "END");
 }

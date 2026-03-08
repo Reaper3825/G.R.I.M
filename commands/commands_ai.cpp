@@ -1,7 +1,7 @@
 #include "commands_ai.hpp"
 #include "response_manager.hpp"
 #include "error_manager.hpp"
-#include "system_detect.hpp"
+#include "../MMO/Core/HardwareInventory.hpp"
 #include "aliases.hpp"
 #include "nlp/nlp.hpp"
 #include "ai/ai.hpp"
@@ -14,7 +14,7 @@
 #endif
 
 extern nlohmann::json aiConfig;
-extern SystemInfo g_systemInfo;
+extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
 static std::string trim(const std::string& s) {
     auto start = s.find_first_not_of(" \t\n\r");
@@ -24,10 +24,10 @@ static std::string trim(const std::string& s) {
 }
 
 static std::string autoSelectBackend() {
-    if (g_systemInfo.hasGPU && (g_systemInfo.hasCUDA || g_systemInfo.hasROCm || g_systemInfo.hasMetal)) {
+    if (g_hardwareInventory.hasGPU() && (g_hardwareInventory.hasCUDA() || g_hardwareInventory.hasROCm() || g_hardwareInventory.hasMetal())) {
         return "localai";
     }
-    if (g_systemInfo.osName == "Linux" || g_systemInfo.osName == "macOS") {
+    if (g_hardwareInventory.os_name == "Linux" || g_hardwareInventory.os_name == "macOS") {
         return "ollama";
     }
     return "openai";

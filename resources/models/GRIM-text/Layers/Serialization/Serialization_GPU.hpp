@@ -66,10 +66,10 @@ struct SerializationEncoderLayerReadView {
 	DeviceReadView attn_b_qkv;
 	DeviceReadView attn_w_o;
 	DeviceReadView attn_b_o;
-	DeviceReadView ffn_w1;
-	DeviceReadView ffn_b1;
-	DeviceReadView ffn_w2;
-	DeviceReadView ffn_b2;
+	DeviceReadView ffn_w_gate_up;
+	DeviceReadView ffn_b_gate_up;
+	DeviceReadView ffn_w_down;
+	DeviceReadView ffn_b_down;
 	DeviceReadView rms1_gamma;
 	DeviceReadView rms2_gamma;
 	DeviceReadView rms_post_attn_gamma;  // Issue #148: REMOVED from model, kept for old checkpoint compat (always null)
@@ -83,10 +83,10 @@ struct SerializationEncoderLayerWriteView {
 	DeviceWriteView attn_b_qkv;
 	DeviceWriteView attn_w_o;
 	DeviceWriteView attn_b_o;
-	DeviceWriteView ffn_w1;
-	DeviceWriteView ffn_b1;
-	DeviceWriteView ffn_w2;
-	DeviceWriteView ffn_b2;
+	DeviceWriteView ffn_w_gate_up;
+	DeviceWriteView ffn_b_gate_up;
+	DeviceWriteView ffn_w_down;
+	DeviceWriteView ffn_b_down;
 	DeviceWriteView rms1_gamma;
 	DeviceWriteView rms2_gamma;
 	DeviceWriteView rms_post_attn_gamma;  // Issue #148: REMOVED from model, kept for old checkpoint compat (always null)

@@ -4,19 +4,19 @@
 
 namespace GRIM {
 
-bool MemoryRouter::isFact(const MemoryObject& obj) {
-    return obj.type == TypeTag::Fact || obj.intent == IntentTag::SetPref;
+bool MemoryRouter::isFact(const UnifiedMemoryObject& obj) {
+    return obj.type == TypeTag::FACT || obj.intent == MemoryIntent::SET_PREF;
 }
 
-bool MemoryRouter::isCommand(const MemoryObject& obj) {
-    return obj.type == TypeTag::Command || obj.intent == IntentTag::Query;
+bool MemoryRouter::isCommand(const UnifiedMemoryObject& obj) {
+    return obj.type == TypeTag::COMMAND || obj.intent == MemoryIntent::QUERY;
 }
 
-bool MemoryRouter::isEvent(const MemoryObject& obj) {
-    return obj.type == TypeTag::Event || obj.intent == IntentTag::StatusUpdate;
+bool MemoryRouter::isEvent(const UnifiedMemoryObject& obj) {
+    return obj.type == TypeTag::EVENT || obj.intent == MemoryIntent::STATUS_UPDATE;
 }
 
-bool MemoryRouter::isLowConfidence(const MemoryObject& obj) {
+bool MemoryRouter::isLowConfidence(const UnifiedMemoryObject& obj) {
     return obj.confidence < 0.55f;
 }
 
@@ -24,7 +24,7 @@ bool MemoryRouter::isLowConfidence(const MemoryObject& obj) {
 // Evaluate where to send this MemoryObject
 // ===============================================
 
-RouteDecision MemoryRouter::evaluate(const MemoryObject& obj) {
+RouteDecision MemoryRouter::evaluate(const UnifiedMemoryObject& obj) {
     RouteDecision result;
     result.priority = obj.confidence;
 
@@ -67,7 +67,7 @@ RouteDecision MemoryRouter::evaluate(const MemoryObject& obj) {
 // Dispatch (placeholder for integration later)
 // ===============================================
 
-void MemoryRouter::dispatch(const MemoryObject& obj) {
+void MemoryRouter::dispatch(const UnifiedMemoryObject& obj) {
     RouteDecision decision = evaluate(obj);
 
     switch (decision.target) {

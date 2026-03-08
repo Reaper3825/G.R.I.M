@@ -232,7 +232,7 @@ void LanguageModel::initTrainingState() {
     // AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
     // ═══════════════════════════════════════════════════════════════
     // FFN/Attention/RMSNorm gradients flow through encoder's Tensor& accessors:
-    //   - enc->ffnW1().grad_data(), enc->ffnW2().grad_data()
+    //   - enc->ffnWGateUp().grad_data(), enc->ffnWDown().grad_data()
     //   - enc->attnWqkv().grad_data(), enc->attnWo().grad_data()
     //   - enc->rms1Gamma().grad_data(), enc->rms2Gamma().grad_data()
     // Allocated via ensure_grad() in EncodingLayer::allocateWeights().

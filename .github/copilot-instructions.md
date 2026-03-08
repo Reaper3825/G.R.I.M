@@ -4,6 +4,29 @@
 
 ---
 
+## 🔵 MANDATORY: Refactor Companion Docs Must Be Updated
+
+**Whenever you refactor, replace, split, rename, or delete a system/module boundary, you MUST update that system's companion document in the same change.**
+
+For MMO work, the companion document is:
+
+- `multimodelorchestrationintegration.codoc.md`
+
+If no companion document exists for the system being refactored, create one.
+
+Minimum required update:
+
+- what changed
+- what now owns the concern
+- canonical integration points / hook points
+- migrated consumers
+- deleted legacy paths
+- validation status / remaining gaps
+
+If code changed but the companion doc did not, the refactor is incomplete.
+
+---
+
 ## 🔴 CRITICAL: FORBIDDEN CODE PATTERNS (Rule 20 - Fail Loud)
 
 **NEVER generate these patterns. If you see them, DELETE THEM:**
@@ -32,6 +55,24 @@
 - `if (args.` (optional parameter check) → require parameter
 - `else {` (compatibility branch) → delete the else clause
 - `catch` (exception handler) → ensure it re-throws or exits, never swallows
+
+## ☣️ ABSURD BUT IMPORTANT: COMPATIBILITY SHIMS ARE HOW SYSTEMS DIE
+
+**Agents: DO NOT keep backwards compatibility paths. DO NOT add compatibility shims. DO NOT leave “temporary” dual-path adapters behind.**
+
+If you are tempted to preserve the old path “just in case,” imagine welding a refrigerator, a piano, and a concrete parking barrier onto a race car, then wondering why it loses every race after the system scales.
+
+That is what compatibility shims do.
+
+- No legacy path + new path living side by side
+- No adapter whose only job is to protect stale callers forever
+- No “we can remove this later” migration wrappers
+- No feature flags whose real purpose is avoiding cleanup
+- No compatibility branches that quietly drag on performance, reasoning, maintenance, or debugging
+
+**Preferred rule:** update callers, delete the obsolete path, and fail loudly if something still depends on it.
+
+Short-term breakage is cheaper than permanent architectural sludge.
 
 **Why:** Silent failures waste weeks debugging. If code is wrong, crash immediately with clear error. Backwards compatibility hides bugs and creates maintenance debt.
 
@@ -108,6 +149,7 @@ Training plateau bug under investigation. The docs above track what has been ver
 ## Project Overview
 
 GRIM-text is a custom transformer model with:
+- **SwiGLU FFN** - Fused gate-up projection [d_model, 2*d_ff] with SiLU gating, avoids autograd fan-out
 - Flash Attention v2, cuBLAS, custom fused CUDA kernels
 - **ScratchBlock Reasoning Layer** - Structured reasoning with atom detection (numbers, URLs, emails, paths, dates, code literals)
 - **Unigram + Byte Fallback Tokenizer** - High-quality subword segmentation with 100% UTF-8 coverage
@@ -160,9 +202,9 @@ Remove-Item -Recurse -Force build\CMakeFiles\grim_training_kernels.dir
 
 Entry point is `train_gpu.cu` → `executePhase1()` → `executePhase2()` → `executePhase3()`. Data flows via `TrainingContext` struct (no globals).
 
-- **Phase 1: Startup** ([Phase1_Startup.cu](resources/models/GRIM-text/training/Phases/Phase1_Startup.cu)) - config, tokenizer, data loading, model init, optimizer setup
-- **Phase 2: Training Loop** ([Phase2_TrainingLoop.cu](resources/models/GRIM-text/training/Phases/Phase2_TrainingLoop.cu)) - batching, forward/backward, gradient clipping, validation, checkpointing
-- **Phase 3: Cleanup** ([Phase3_Cleanup.cu](resources/models/GRIM-text/training/Phases/Phase3_Cleanup.cu)) - final checkpoint, training summary, resource cleanup
+- **Phase 1: Startup** ([Phase1_Startup.cu](../resources/models/GRIM-text/training/Phases/Phase1_Startup.cu)) - config, tokenizer, data loading, model init, optimizer setup
+- **Phase 2: Training Loop** ([Phase2_TrainingLoop.cu](../resources/models/GRIM-text/training/Phases/Phase2_TrainingLoop.cu)) - batching, forward/backward, gradient clipping, validation, checkpointing
+- **Phase 3: Cleanup** ([Phase3_Cleanup.cu](../resources/models/GRIM-text/training/Phases/Phase3_Cleanup.cu)) - final checkpoint, training summary, resource cleanup
 
 If modifying training logic, edit the appropriate phase file, not `train_gpu.cu`.
 
@@ -258,9 +300,9 @@ NEVER clip components jointly when one dominates L2 norm — it crushes the smal
 - **LayerScale init_value = 1.0** in `ai_config.json`. Value 0.1 causes catastrophic gradient vanishing through encoder layers.
 - **`per_token_grad_scale=true` is REQUIRED**: Gradient RMS ~1e-6 with ~3000 tokens is CORRECT. Disabling causes 3000x effective LR explosion.
 - **ScratchBlock backward**: Uses `grad_output_tap` on `DropoutGradFn` — set tap before `loss_tensor.backward()`, then pass captured gradient to ScratchBlock backward. Do NOT check `has_grad()` on dropout outputs (always false for non-leaf tensors).
-- **FFN Post-GELU Cache**: `EncodingLayer::forward()` MUST write post-GELU activations to `args.cache_ffn_output` via `cudaMemcpyAsync` after `ffn_->forward()`. Forgetting this fills the cache with garbage → corrupted W2 gradients.
+- **FFN Post-SwiGLU Cache**: `EncodingLayer::forward()` MUST write post-SwiGLU activations to `args.cache_ffn_output` via `cudaMemcpyAsync` after `ffn_->forward()`. Forgetting this fills the cache with garbage → corrupted W_down gradients.
 - **ScratchBlock Buffer Desync**: After `autograd::add(emb, pos_emb)`, copy `ts->cached_embeddings` back to `ctx.embedding_tensor.data` after ScratchBlock forward. Layer 0 will receive stale pre-ScratchBlock data otherwise.
-- **Encoder Bias Autograd**: Use `autograd::broadcast_add()` for all bias additions (b_qkv, b_o, b1, b2). Raw `launchFFNBiasAdd` bypasses autograd → zero bias gradients.
+- **Encoder Bias Autograd**: Use `autograd::broadcast_add()` for all bias additions (b_qkv, b_o, b_gate_up, b_down). Raw `launchFFNBiasAdd` bypasses autograd → zero bias gradients.
 - **Encoder Activation Centering**: Center cached activations (`cached_ln1_output`, `cached_ffn_input`, etc.) BEFORE weight gradient GEMMs to eliminate systematic gradient bias from non-zero mean.
 - **Hidden State Centering**: Apply BOTH column centering (`Σ_t h[t,d] = 0`) AND row centering (`Σ_d h[t,d] = 0`) before LM head. Column alone reduces cosine correlation; row eliminates gradient sign flips from non-zero row sums.
 
@@ -279,6 +321,14 @@ NEVER clip components jointly when one dominates L2 norm — it crushes the smal
 - **Mean reduction double-application**: Loss backward already scales by `1/N`. Do NOT apply additional `1/tokens` scaling in parameter gradient kernels (RMSNorm gamma, etc.).
 - **LibTorch gradient comparisons**: Only valid when baseline uses IDENTICAL config (d_model, num_layers, num_heads, batch_tokens). Different configs produce inherently different gradient magnitudes.
 
+### SwiGLU FFN Architecture
+
+- **Fused W_gate_up [d_model, 2*d_ff]**: Single matmul produces gate and up projections concatenated. The autograd system's `applied` guard on GradFn prevents fan-out (one tensor consumed by two ops loses gradients from the second path). Fused projection keeps the autograd chain linear.
+- **SwiGLU activation**: `output[d] = SiLU(gate_up[d]) * gate_up[d_ff + d]` where `SiLU(x) = x * sigmoid(x)`. Input shape [tokens, 2*d_ff] → output shape [tokens, d_ff].
+- **Weight naming**: W_gate_up / b_gate_up / W_down / b_down (replacing old W1/b1/W2/b2)
+- **Old GELU MLP checkpoints are incompatible** — must retrain after switching to SwiGLU
+- **Parameter count**: SwiGLU uses 3 projections (gate, up, down) vs GELU MLP's 2 (up, down). At same d_ff, params increase ~50%. For parity, set d_ff = (2/3) * original_d_ff.
+
 ### Deleted Code — Do Not Recreate
 
 - `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` — replaced by `AutogradLoss.cu`
@@ -287,6 +337,8 @@ NEVER clip components jointly when one dominates L2 norm — it crushes the smal
 - Value extraction head (`value_extraction_weight_`, `value_extraction_bias_`) — deleted (Issue #142). ScratchBlock is a reasoning layer, not scalar regression.
 - `rms_post_attn_gamma_`, `rms_post_ffn_gamma_` — sandwich norm deleted (Issue #148)
 - GPU delegate system (`Shared/Delegate/Delegate.hpp`) — zero registered callbacks, deleted per Rule 26
+- `GeluGradFn` / `autograd::gelu()` / `kernel_gelu_forward` / `kernel_gelu_backward` — replaced by SwiGLU (SwiGLUFusedGradFn / autograd::swiglu_fused())
+- Old FFN weights `W1_/b1_/W2_/b2_` naming — replaced by `W_gate_up_/b_gate_up_/W_down_/b_down_`
 
 ---
 

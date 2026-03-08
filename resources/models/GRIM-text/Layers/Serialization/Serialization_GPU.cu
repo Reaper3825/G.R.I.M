@@ -192,14 +192,14 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
         }
 
         const auto* fb_ffn = fb_layer->ffn();
-        std::vector<float> h_W1(fb_ffn->w1_data()->begin(), fb_ffn->w1_data()->end());
-        std::vector<float> h_b1(fb_ffn->b1_data()->begin(), fb_ffn->b1_data()->end());
-        std::vector<float> h_W2(fb_ffn->w2_data()->begin(), fb_ffn->w2_data()->end());
-        std::vector<float> h_b2(fb_ffn->b2_data()->begin(), fb_ffn->b2_data()->end());
-        if (!upload_device_vector(h_W1, layer_view.ffn_w1, "ffn.W1") ||
-            !upload_device_vector(h_b1, layer_view.ffn_b1, "ffn.b1") ||
-            !upload_device_vector(h_W2, layer_view.ffn_w2, "ffn.W2") ||
-            !upload_device_vector(h_b2, layer_view.ffn_b2, "ffn.b2")) {
+        std::vector<float> h_W_gate_up(fb_ffn->w_gate_up_data()->begin(), fb_ffn->w_gate_up_data()->end());
+        std::vector<float> h_b_gate_up(fb_ffn->b_gate_up_data()->begin(), fb_ffn->b_gate_up_data()->end());
+        std::vector<float> h_W_down(fb_ffn->w_down_data()->begin(), fb_ffn->w_down_data()->end());
+        std::vector<float> h_b_down(fb_ffn->b_down_data()->begin(), fb_ffn->b_down_data()->end());
+        if (!upload_device_vector(h_W_gate_up, layer_view.ffn_w_gate_up, "ffn.W_gate_up") ||
+            !upload_device_vector(h_b_gate_up, layer_view.ffn_b_gate_up, "ffn.b_gate_up") ||
+            !upload_device_vector(h_W_down, layer_view.ffn_w_down, "ffn.W_down") ||
+            !upload_device_vector(h_b_down, layer_view.ffn_b_down, "ffn.b_down")) {
             return false;
         }
 
@@ -462,23 +462,23 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             static_cast<uint32_t>(cfg.num_kv_heads),  // GQA: num_kv_heads
             true);
 
-        std::vector<float> h_W1;
-        std::vector<float> h_b1;
-        std::vector<float> h_W2;
-        std::vector<float> h_b2;
-        if (!download_into(h_W1, layer_view.ffn_w1, "ffn.W1") ||
-            !download_into(h_b1, layer_view.ffn_b1, "ffn.b1") ||
-            !download_into(h_W2, layer_view.ffn_w2, "ffn.W2") ||
-            !download_into(h_b2, layer_view.ffn_b2, "ffn.b2")) {
+        std::vector<float> h_W_gate_up;
+        std::vector<float> h_b_gate_up;
+        std::vector<float> h_W_down;
+        std::vector<float> h_b_down;
+        if (!download_into(h_W_gate_up, layer_view.ffn_w_gate_up, "ffn.W_gate_up") ||
+            !download_into(h_b_gate_up, layer_view.ffn_b_gate_up, "ffn.b_gate_up") ||
+            !download_into(h_W_down, layer_view.ffn_w_down, "ffn.W_down") ||
+            !download_into(h_b_down, layer_view.ffn_b_down, "ffn.b_down")) {
             return false;
         }
 
         auto fb_ffn = GRIMTransformer::CreateFFNWeights(
             builder,
-            builder.CreateVector(h_W1),
-            builder.CreateVector(h_b1),
-            builder.CreateVector(h_W2),
-            builder.CreateVector(h_b2),
+            builder.CreateVector(h_W_gate_up),
+            builder.CreateVector(h_b_gate_up),
+            builder.CreateVector(h_W_down),
+            builder.CreateVector(h_b_down),
             static_cast<uint32_t>(cfg.d_model),
             static_cast<uint32_t>(cfg.d_ff));
 
@@ -574,7 +574,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 builder,
                 builder.CreateVector(sb_atom_emb),
                 builder.CreateVector(sb_atom_proj),
-                0,  // text_feature_projection — eliminated, empty for schema compat
                 static_cast<uint32_t>(sb_view.num_atom_types),
                 static_cast<uint32_t>(sb_view.atom_embedding_dim),
                 static_cast<uint32_t>(sb_view.d_model),

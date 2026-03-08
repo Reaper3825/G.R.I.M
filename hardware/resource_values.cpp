@@ -1,6 +1,6 @@
 #include "resource_values.hpp"
 #include "logger.hpp"
-#include "system_detect.hpp"
+#include "../MMO/Core/HardwareInventory.hpp"
 #include <algorithm>
 #include <cstdlib>
 
@@ -46,9 +46,9 @@ void ResourceMonitor::initialize() {
     
     LOG_DEBUG("ResourceMonitor", "Initializing resource monitor...");
     
-    // Check if GPU is available from system info
-    extern SystemInfo g_systemInfo;
-    gpuAvailable = g_systemInfo.hasGPU;
+    // Check if GPU is available from hardware inventory
+    extern GRIM::MMO::HardwareInventory g_hardwareInventory;
+    gpuAvailable = g_hardwareInventory.hasGPU();
     
 #ifdef _WIN32
     // Initialize CPU monitoring
@@ -189,10 +189,10 @@ void ResourceMonitor::sampleGpuUsage() {
     size_t totalGpuMB = 0;
     size_t usedGpuMB = 0;
     
-    extern SystemInfo g_systemInfo;
+    extern GRIM::MMO::HardwareInventory g_hardwareInventory;
     
 #ifdef WHISPER_USE_CUDA
-    if (gpuAvailable && g_systemInfo.hasCUDA) {
+    if (gpuAvailable && g_hardwareInventory.hasCUDA()) {
         size_t free_mem = 0, total_mem = 0;
         cudaError_t err = cudaMemGetInfo(&free_mem, &total_mem);
         

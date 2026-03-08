@@ -2,8 +2,8 @@
 #include "commands_core.hpp"
 #include "commands_execution.hpp"
 #include "logger.hpp"
-#include "memory/memory_storage.hpp"
-#include "memory/context_manager.hpp"
+#include "memory/unified_memory.hpp"
+#include "../MMO/Core/SessionContextManager.hpp"
 #include "ai/ai_rl.hpp"
 #include "helpers/grim_input.hpp"
 #include "response_manager.hpp"
@@ -14,40 +14,65 @@
 #include <algorithm>
 #include <cctype>
 
-extern GRIM::MemoryStorage g_memoryStorage;
+extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 #define history getConsoleHistory()
+
+static const std::string kDefaultSession = "default";
 
 namespace GRIM {
 namespace Feedback {
 
 // ====================================================
-// State variables
+// State variables — delegated to SessionContextManager
 // ====================================================
-static std::optional<std::string> g_pendingClarifyCmd;
-static std::optional<std::string> g_pendingFeedbackCmd;
-static bool g_isMultiCommandContext = false;
-static bool g_isVoiceCommand = false;
+bool hasPending() { return GRIM::MMO::SessionContextManager::instance().getPending(kDefaultSession).has_value(); }
+bool hasPendingClarification() {
+    auto p = GRIM::MMO::SessionContextManager::instance().getPending(kDefaultSession);
+    return p.has_value() && p->kind == GRIM::MMO::PendingKind::Clarification;
+}
 
-// ====================================================
-// Getters/Setters
-// ====================================================
-bool hasPending() { return g_pendingFeedbackCmd.has_value(); }
-bool hasPendingClarification() { return g_pendingClarifyCmd.has_value(); }
+void setPending(const std::string& command) {
+    GRIM::MMO::SessionContextManager::instance().setPending(kDefaultSession, {
+        GRIM::MMO::PendingKind::Confirmation,
+        command, "", "", "", {}, 120
+    });
+}
+void setPendingClarification(const std::string& command) {
+    GRIM::MMO::SessionContextManager::instance().setPending(kDefaultSession, {
+        GRIM::MMO::PendingKind::Clarification,
+        command, "", "", "", {}, 120
+    });
+}
 
-void setPending(const std::string& command) { g_pendingFeedbackCmd = command; }
-void setPendingClarification(const std::string& command) { g_pendingClarifyCmd = command; }
+void clearPending() { GRIM::MMO::SessionContextManager::instance().clearPending(kDefaultSession); }
+void clearPendingClarification() { GRIM::MMO::SessionContextManager::instance().clearPending(kDefaultSession); }
 
-void clearPending() { g_pendingFeedbackCmd.reset(); }
-void clearPendingClarification() { g_pendingClarifyCmd.reset(); }
+std::optional<std::string> getPending() {
+    auto p = GRIM::MMO::SessionContextManager::instance().getPending(kDefaultSession);
+    if (p.has_value() && p->kind != GRIM::MMO::PendingKind::Clarification)
+        return p->original_command;
+    return std::nullopt;
+}
+std::optional<std::string> getPendingClarification() {
+    auto p = GRIM::MMO::SessionContextManager::instance().getPending(kDefaultSession);
+    if (p.has_value() && p->kind == GRIM::MMO::PendingKind::Clarification)
+        return p->original_command;
+    return std::nullopt;
+}
 
-std::optional<std::string> getPending() { return g_pendingFeedbackCmd; }
-std::optional<std::string> getPendingClarification() { return g_pendingClarifyCmd; }
+void setVoiceCommand(bool isVoice) {
+    GRIM::MMO::SessionContextManager::instance().setVoiceCommand(kDefaultSession, isVoice);
+}
+bool isVoiceCommand() {
+    return GRIM::MMO::SessionContextManager::instance().isVoiceCommand(kDefaultSession);
+}
 
-void setVoiceCommand(bool isVoice) { g_isVoiceCommand = isVoice; }
-bool isVoiceCommand() { return g_isVoiceCommand; }
-
-void setMultiCommandContext(bool isMulti) { g_isMultiCommandContext = isMulti; }
-bool isMultiCommandContext() { return g_isMultiCommandContext; }
+void setMultiCommandContext(bool isMulti) {
+    GRIM::MMO::SessionContextManager::instance().setMultiCommandContext(kDefaultSession, isMulti);
+}
+bool isMultiCommandContext() {
+    return GRIM::MMO::SessionContextManager::instance().isMultiCommandContext(kDefaultSession);
+}
 
 // ====================================================
 // Helper functions
@@ -235,7 +260,7 @@ bool processFeedbackResponse(const std::string& originalCmd, const std::string& 
             LOG_DEBUG("Feedback", "Explicit feedback recorded: " + std::string(isPositive ? "positive" : "negative"));
             
             if (isPositive) {
-                GRIM::ContextManager::recordUsage(originalCmd);
+                GRIM::MMO::SessionContextManager::instance().recordUsage(kDefaultSession, originalCmd);
             }
         } catch (const std::exception& e) {
             LOG_ERROR("Feedback", std::string("Error sending feedback to RL: ") + e.what());
@@ -296,7 +321,7 @@ bool processFeedbackResponse(const std::string& originalCmd, const std::string& 
             GRIM::RL::getAction(fb);
             
             CommandExecution::storeLearnedCommand(normalizedResponse, originalCmd, finalConfidence);
-            GRIM::ContextManager::recordUsage(originalCmd);
+            GRIM::MMO::SessionContextManager::instance().recordUsage(kDefaultSession, originalCmd);
         } catch (const std::exception& e) {
             LOG_ERROR("Feedback", std::string("Error recording implicit feedback: ") + e.what());
         }

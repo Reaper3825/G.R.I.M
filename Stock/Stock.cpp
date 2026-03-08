@@ -7,14 +7,14 @@ namespace GRIM {
 // ============================================
 // Convert StockData → MemoryObject
 // ============================================
-MemoryObject StockData::toMemoryObject() const {
-    MemoryObject obj;
-    obj.id = MemoryObject::generateUUID();
-    obj.timestamp = std::time(nullptr);
-    obj.source = SourceTag::SystemMonitor;
-    obj.type = TypeTag::Fact;
-    obj.intent = IntentTag::Inform;
-    obj.context = ContextTag::Environment;
+UnifiedMemoryObject StockData::toMemoryObject() const {
+    UnifiedMemoryObject obj;
+    obj.id = UnifiedMemoryObject::generateID();
+    obj.timestamp = static_cast<uint64_t>(std::time(nullptr));
+    obj.source = SourceType::SYSTEM_SW;
+    obj.type = TypeTag::FACT;
+    obj.intent = MemoryIntent::INFORM;
+    obj.context = ContextType::MONITOR;
     obj.confidence = 1.0f;
 
     obj.raw = "Stock update for " + name;
@@ -41,7 +41,7 @@ void Stock::addEntry(int id, const StockData& data) {
     stockLog[id] = data;
 
     // Convert to GRIM memory object
-    MemoryObject m = data.toMemoryObject();
+    UnifiedMemoryObject m = data.toMemoryObject();
 
     // Dispatch to memory router
     MemoryRouter router;

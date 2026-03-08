@@ -2,7 +2,7 @@
 #include "fast_classifier.hpp"
 #include "lm_intent.hpp"
 #include "logger.hpp"
-#include "memory/context_manager.hpp"
+#include "memory/context_snapshot.hpp"
 #include "nlp/nlp.hpp"  // ? Access NLP for success rates
 #include <unordered_map>
 #include <optional>

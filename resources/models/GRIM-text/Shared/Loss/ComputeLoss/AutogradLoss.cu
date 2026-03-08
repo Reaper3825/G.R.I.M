@@ -9,6 +9,7 @@
 #include "AutogradLoss.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
 #include "../../EquationLogging/EquationLogging.hpp"
+#include "../../VerboseLogging.hpp"  // Compile-time diagnostic guards (Issue #151)
 #include <cuda_runtime.h>
 #include <cassert>
 #include <sstream>
@@ -1060,11 +1061,13 @@ struct NLLLossGradFn : public GradFn {
             stream
         );
         
-        cudaError_t err = cudaStreamSynchronize(stream);
+        // Issue #152: Removed cudaStreamSynchronize error-check here.
+        // Same-stream kernel ordering guarantees grad_log_probs_buffer is written
+        // before the next kernel (LogSoftmaxGradFn::apply) reads it.
+        // Errors will surface at the next natural sync point (loss D2H readback).
+        cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            fprintf(stderr, "[NLLLossGradFn] CUDA error after NLL backward: %s\n",
-                    cudaGetErrorString(err));
-            throw std::runtime_error(std::string("[NLLLossGradFn] CUDA error: ") + cudaGetErrorString(err));
+            throw std::runtime_error(std::string("[NLLLossGradFn] CUDA error after NLL backward launch: ") + cudaGetErrorString(err));
         }
         
         // ── Step 2: Diagnostic — sample grad_log_probs at TARGET columns of valid tokens ──
@@ -1073,7 +1076,7 @@ struct NLLLossGradFn : public GradFn {
         // (b) with plain CE (no smoothing), only grad[target] is non-zero — a contiguous
         // block mostly reads the 50,375 zero entries. Now we read the TARGET column of
         // each sampled valid token, which is where the actual gradient lives.
-        {
+        if constexpr (GRIM::VerboseLogging::ENABLE_LOSS_BACKWARD_SAMPLING) {
             // Copy targets to host to find valid positions
             const int sample_max = std::min(200, num_tokens);
             std::vector<int> h_targets(sample_max);
@@ -1106,7 +1109,7 @@ struct NLLLossGradFn : public GradFn {
                << "  EXPECTED |grad[t,target[t]]|=1/N=" << expected_target_grad << "\n"
                << "  ACTUAL max=" << mx << " rms=" << rms << " (sampled " << valid_sampled << " valid target entries)";
             EQ_LOG("NLL-BWD-OUT", eq.str(), 0, -1, 0, GRIM::EquationPhase::LOSS_BACKWARD);
-        }
+        } // if constexpr ENABLE_LOSS_BACKWARD_SAMPLING (NLL-BWD-OUT)
         
         // ── Step 3: Chain to LogSoftmaxGradFn → computes grad w.r.t. raw logits ──
         // LogSoftmaxGradFn::apply() does:

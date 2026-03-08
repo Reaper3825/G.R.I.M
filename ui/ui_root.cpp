@@ -1,9 +1,9 @@
 #include "ui_root.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
-#include "system_detect.hpp"
+#include "../MMO/Core/HardwareInventory.hpp"
 
-extern SystemInfo g_systemInfo;
+extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
 void UIRoot::init(HWND hwnd, uint32_t width, uint32_t height)
 {
@@ -337,16 +337,16 @@ UIRoot::MonitorRect UIRoot::getMonitorRectAt(const Vec2& point) const
     rect.origin = {0.0f, 0.0f};
     rect.size = {static_cast<float>(m_width), static_cast<float>(m_height)};
 
-    if (g_systemInfo.monitors.empty())
+    if (g_hardwareInventory.monitors.empty())
         return rect;
 
     Vec2 screenPoint{
-        point.x + static_cast<float>(g_systemInfo.virtualOriginX),
-        point.y + static_cast<float>(g_systemInfo.virtualOriginY)
+        point.x + static_cast<float>(g_hardwareInventory.virtual_origin_x),
+        point.y + static_cast<float>(g_hardwareInventory.virtual_origin_y)
     };
 
-    const MonitorInfo* chosen = nullptr;
-    for (const auto& monitor : g_systemInfo.monitors)
+    const GRIM::MMO::MonitorInfo* chosen = nullptr;
+    for (const auto& monitor : g_hardwareInventory.monitors)
     {
         float x1 = static_cast<float>(monitor.x);
         float y1 = static_cast<float>(monitor.y);
@@ -363,9 +363,9 @@ UIRoot::MonitorRect UIRoot::getMonitorRectAt(const Vec2& point) const
 
     if (!chosen)
     {
-        for (const auto& monitor : g_systemInfo.monitors)
+        for (const auto& monitor : g_hardwareInventory.monitors)
         {
-            if (monitor.isPrimary)
+            if (monitor.is_primary)
             {
                 chosen = &monitor;
                 break;
@@ -374,12 +374,12 @@ UIRoot::MonitorRect UIRoot::getMonitorRectAt(const Vec2& point) const
 
         if (!chosen)
         {
-            chosen = &g_systemInfo.monitors.front();
+            chosen = &g_hardwareInventory.monitors.front();
         }
     }
 
-    rect.origin.x = static_cast<float>(chosen->x - g_systemInfo.virtualOriginX);
-    rect.origin.y = static_cast<float>(chosen->y - g_systemInfo.virtualOriginY);
+    rect.origin.x = static_cast<float>(chosen->x - g_hardwareInventory.virtual_origin_x);
+    rect.origin.y = static_cast<float>(chosen->y - g_hardwareInventory.virtual_origin_y);
     rect.size.x = static_cast<float>(chosen->width);
     rect.size.y = static_cast<float>(chosen->height);
     return rect;

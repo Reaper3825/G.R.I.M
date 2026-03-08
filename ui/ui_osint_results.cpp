@@ -2,7 +2,6 @@
 #include "overlay_renderer.hpp"
 #include "logger.hpp"
 #include "core/input_parser.hpp"  // For InputState
-#include "system_detect.hpp"  // For g_systemInfo
 #include <fstream>
 #include <filesystem>
 #include <nlohmann/json.hpp>

@@ -281,6 +281,7 @@ void LanguageModel::initGPU() {
         enc_config.layer_scale_init = cfg.layer_scale_init;
         enc_config.center_encoder_residuals = cfg.center_encoder_residuals;
         enc_config.use_bias = cfg.use_bias;
+        enc_config.qk_norm_enabled = cfg.qk_norm_enabled;
 
         // Pattern B: Enable layer self-allocation. Encoder layers allocate and Xavier-init
         // their own weights in the constructor. No god object involved.

@@ -36,5 +36,23 @@ constexpr bool ENABLE_EXPENSIVE_DIAGNOSTICS = false;   ///< Rule 21 argmax analy
 // during Issue #76/#84 debugging but are catastrophic for training throughput.
 constexpr bool ENABLE_FA_EQUATION_DIAGNOSTICS = false;  ///< [FA-FWD-*], [ATTN_SCORE_EQUATION]
 
+// Training signal diagnostics — sync D2H copies of logits, hidden states, and weight rows
+// every batch for argmax distribution, logit statistics, hidden cosine, rho buildup, and
+// LM head row norms. Includes 500+ individual cudaMemcpy calls for weight row sampling
+// (~50ms) plus ~20MB of logit D2H copies. Total overhead: ~70-80ms per batch.
+// Tags: BATCH_PRED_DIST, [LogitSignal], [HiddenCosine], [RHO_BUILDUP_EQUATION], [LMHeadNorm]
+constexpr bool ENABLE_TRAINING_SIGNAL_DIAGNOSTICS = false;
+
+// Token 277 (collapse token) weight tracking — two sync D2H copies per optimizer step
+// (pre and post) to track ||W[277]|| delta. ~2ms per step.
+// Tags: [Token277] PRE-OPT, [Token277] POST-OPT
+constexpr bool ENABLE_TOKEN277_TRACKING = false;
+
+// NLL loss backward gradient sampling — 200 individual sizeof(float) cudaMemcpy D2H
+// calls in a tight loop to sample grad_log_probs at target columns. Each is an implicit
+// pipeline drain. Total overhead: ~20ms per backward pass.
+// Tags: [NLL-BWD-OUT]
+constexpr bool ENABLE_LOSS_BACKWARD_SAMPLING = false;
+
 } // namespace VerboseLogging
 } // namespace GRIM

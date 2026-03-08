@@ -42,6 +42,8 @@ file(GLOB DataCollection_SOURCES "DataCollection/*.cpp")
 file(GLOB DataCollection_HEADERS "DataCollection/*.hpp")
 file(GLOB hardware_SOURCES "hardware/*.cpp")
 file(GLOB hardware_HEADERS "hardware/*.hpp")
+file(GLOB_RECURSE MMO_SOURCES "MMO/*.cpp")
+file(GLOB_RECURSE MMO_HEADERS "MMO/*.hpp")
 # Exclude standalone entry point files (these have main() functions)
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_data_collection\\.cpp$")
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "merge_checkpoints\\.cpp$")
@@ -64,7 +66,7 @@ set(GRIM_SOURCES
     response_manager.cpp
     error_manager.cpp
     logger.cpp
-    system_detect.cpp
+    location.cpp
     ${COMMAND_SOURCES}
     ${POPUP_UI_SOURCES}
     ${DEVICE_SETUPS_SOURCES}
@@ -86,6 +88,7 @@ set(GRIM_SOURCES
     ${GRIM_GPU_SOURCES}
     ${DataCollection_SOURCES}
     ${hardware_SOURCES}
+    ${MMO_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -98,7 +101,7 @@ set(GRIM_HEADERS
     response_manager.hpp
     error_manager.hpp
     logger.hpp
-    system_detect.hpp
+    location.hpp
     ${COMMAND_HEADERS}
     ${POPUP_UI_HEADERS}
     ${DEVICE_SETUPS_HEADERS}
@@ -119,4 +122,5 @@ set(GRIM_HEADERS
     ${REWARD_LEARNING_HEADERS}
     ${DataCollection_HEADERS}
     ${hardware_HEADERS}
+    ${MMO_HEADERS}
 )

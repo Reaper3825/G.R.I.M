@@ -1,8 +1,8 @@
 #include "proactive_dialogue.hpp"
 #include "response_manager.hpp"
 #include "voice/voice_speak.hpp"
-#include "memory/context_manager.hpp"
-#include "memory/memory_storage.hpp"
+#include "../MMO/Core/SessionContextManager.hpp"
+#include "memory/unified_memory.hpp"
 #include "personality_manager.hpp"
 #include "logger.hpp"
 #include "console_history.hpp"
@@ -61,7 +61,7 @@ void checkAfterCommand(const std::string& input, const CommandResult& result) {
     }
 
     // 4. Comment on behavioral pattern
-    if (proactiveText.empty() && ContextManager::usageCount("system") > 5) {
+    if (proactiveText.empty() && GRIM::MMO::SessionContextManager::instance().usageCount("default", "system") > 5) {
         if (personality.mood == Mood::Playful) {
             proactiveText = "You're on a roll with system commands! I could automate some if you want!";
         } else {

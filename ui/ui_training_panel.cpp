@@ -14,7 +14,7 @@
 #include "ui_graph.hpp"
 #include "overlay_renderer.hpp"
 #include "logger.hpp"
-#include "system_detect.hpp"
+#include "../MMO/Core/HardwareInventory.hpp"
 #include "ai/training_server_manager.hpp"
 #include "resources.hpp"
 #include "control/ai_config_paths.hpp"
@@ -25,7 +25,7 @@
 
 using namespace GRIMText;
 
-extern SystemInfo g_systemInfo;
+extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
 UITrainingPanel::UITrainingPanel()
     : UIPanel("GRIM-text Training Control", true),
@@ -1290,18 +1290,21 @@ void UITrainingPanel::updateHardwareInfo() {
     std::stringstream ss;
     
     // GPU info
-    if (g_systemInfo.hasGPU && g_systemInfo.hasCUDA) {
-        ss << "GPU: " << g_systemInfo.gpuName << " (" << g_systemInfo.gpuVRAM_MB << " MB VRAM)\n";
+    if (g_hardwareInventory.hasGPU() && g_hardwareInventory.hasCUDA()) {
+        std::string gpuName = g_hardwareInventory.gpus.empty() ? "Unknown" : g_hardwareInventory.gpus[0].name;
+        long vramMB = g_hardwareInventory.gpus.empty() ? 0 : g_hardwareInventory.gpus[0].vram_mb;
+        ss << "GPU: " << gpuName << " (" << vramMB << " MB VRAM)\n";
         ss << "CUDA: Available\n";
-    } else if (g_systemInfo.hasGPU) {
-        ss << "GPU: " << g_systemInfo.gpuName << " (No CUDA)\n";
+    } else if (g_hardwareInventory.hasGPU()) {
+        std::string gpuName = g_hardwareInventory.gpus.empty() ? "Unknown" : g_hardwareInventory.gpus[0].name;
+        ss << "GPU: " << gpuName << " (No CUDA)\n";
     } else {
         ss << "GPU: None (CPU training only)\n";
     }
     
     // CPU/RAM
-    ss << "CPU: " << g_systemInfo.cpuCores << " cores\n";
-    ss << "RAM: " << g_systemInfo.ramMB << " MB";
+    ss << "CPU: " << g_hardwareInventory.cpu_cores << " cores\n";
+    ss << "RAM: " << g_hardwareInventory.ram_total_mb << " MB";
     
     hardwareInfo = ss.str();
 }
@@ -1313,17 +1316,18 @@ void UITrainingPanel::calculateTrainingEstimate() {
     float timePerBatch = 1.0f; // Base time in seconds per batch
     
     // Adjust based on GPU availability
-    if (g_systemInfo.hasGPU && g_systemInfo.hasCUDA) {
+    if (g_hardwareInventory.hasGPU() && g_hardwareInventory.hasCUDA()) {
         // CUDA GPU - much faster than CPU
         // RTX 3080 Ti class: ~0.1-0.3s per batch for typical transformer training
         timePerBatch = 0.15f;
         
+        long vramMB = g_hardwareInventory.gpus.empty() ? 0 : g_hardwareInventory.gpus[0].vram_mb;
         // Adjust for VRAM (more VRAM = can handle larger batches/models efficiently)
-        if (g_systemInfo.gpuVRAM_MB >= 12000) {
+        if (vramMB >= 12000) {
             timePerBatch *= 0.8f; // High-end GPU (RTX 3080 Ti, 4080, etc)
-        } else if (g_systemInfo.gpuVRAM_MB >= 8000) {
+        } else if (vramMB >= 8000) {
             timePerBatch *= 0.9f; // Mid-high GPU
-        } else if (g_systemInfo.gpuVRAM_MB >= 4000) {
+        } else if (vramMB >= 4000) {
             timePerBatch *= 1.1f; // Mid-range GPU (slower)
         }
     } else {
@@ -1331,9 +1335,9 @@ void UITrainingPanel::calculateTrainingEstimate() {
         timePerBatch = 8.0f;
         
         // Adjust for CPU cores
-        if (g_systemInfo.cpuCores >= 16) {
+        if (g_hardwareInventory.cpu_cores >= 16) {
             timePerBatch *= 0.6f;
-        } else if (g_systemInfo.cpuCores >= 8) {
+        } else if (g_hardwareInventory.cpu_cores >= 8) {
             timePerBatch *= 0.75f;
         }
     }

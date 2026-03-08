@@ -5,8 +5,7 @@
 #include "logger.hpp"
 #include "wake/wake_key.hpp"
 #include "wake/wake_voice.hpp"
-#include "memory/memory_storage.hpp"
-#include "memory/context_manager.hpp"
+#include "memory/unified_memory.hpp"
 #include "ai/ai_rl.hpp"
 #include "ai/intent_gate.hpp"
 #include "ai/task_planner.hpp" 
@@ -21,7 +20,6 @@
 #include "helpers/key.hpp"
 #include "helpers/cerr_suppressor.hpp"
 #include "net/websocket_server.hpp"
-#include "system_detect.hpp"
 #include "ui/ui_root.hpp"
 #include "ui/console_panel.hpp"
 #include "ui/ui_settings_menu.hpp"
@@ -43,12 +41,13 @@
 
 #define CHECK_HEAP() _CrtCheckMemory()
 
-GRIM::MemoryStorage g_memoryStorage;
+GRIM::UnifiedMemoryStorage g_memoryStorage;
 static GRIM::WebSocketServer wsServer;
 namespace fs = std::filesystem;
 
-// External system info (defined in bootstrap.cpp)
-extern SystemInfo g_systemInfo;
+// External hardware inventory (defined in bootstrap.cpp)
+#include "MMO/Core/HardwareInventory.hpp"
+extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
 // Global training panel for commands
 std::shared_ptr<UITrainingPanel> g_trainingPanel;
@@ -64,6 +63,34 @@ BOOL WINAPI consoleHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT || signal == CTRL_BREAK_EVENT) {
         LOG_PHASE("Shutdown signal received, cleaning up...", true);
         g_shutdownRequested = true;
+
+        // Stop idle-tick thread first
+        stopMMOIdleTick();
+
+        // Tear down MMO orchestration layer (top-down)
+        if (g_orchestrator) {
+            g_orchestrator->shutdown();
+            delete g_orchestrator;
+            g_orchestrator = nullptr;
+        }
+        if (g_memoryFacade) {
+            delete g_memoryFacade;
+            g_memoryFacade = nullptr;
+        }
+        if (g_modelLoader) {
+            g_modelLoader->unloadAll();
+            delete g_modelLoader;
+            g_modelLoader = nullptr;
+        }
+        if (g_resourceCoordinator) {
+            delete g_resourceCoordinator;
+            g_resourceCoordinator = nullptr;
+        }
+        if (g_resourceSignal) {
+            g_resourceSignal->stop();
+            delete g_resourceSignal;
+            g_resourceSignal = nullptr;
+        }
         
         // Stop all child processes
         LOG_DEBUG("Shutdown", "Stopping GRIM-text servers...");
@@ -85,6 +112,34 @@ void signalHandler(int signal) {
     if (signal == SIGINT || signal == SIGTERM) {
         LOG_PHASE("Shutdown signal received, cleaning up...", true);
         g_shutdownRequested = true;
+
+        // Stop idle-tick thread first
+        stopMMOIdleTick();
+
+        // Tear down MMO orchestration layer (top-down)
+        if (g_orchestrator) {
+            g_orchestrator->shutdown();
+            delete g_orchestrator;
+            g_orchestrator = nullptr;
+        }
+        if (g_memoryFacade) {
+            delete g_memoryFacade;
+            g_memoryFacade = nullptr;
+        }
+        if (g_modelLoader) {
+            g_modelLoader->unloadAll();
+            delete g_modelLoader;
+            g_modelLoader = nullptr;
+        }
+        if (g_resourceCoordinator) {
+            delete g_resourceCoordinator;
+            g_resourceCoordinator = nullptr;
+        }
+        if (g_resourceSignal) {
+            g_resourceSignal->stop();
+            delete g_resourceSignal;
+            g_resourceSignal = nullptr;
+        }
         
         // Stop all child processes
         GRIM::stopGRIMTextServer();
@@ -183,8 +238,14 @@ int main(int argc, char* argv[])
     // 4.   Memory system
     // ======================================================
     g_memoryStorage.initialize("D:/G.R.I.M/data/memories.fb");
-    GRIM::ContextManager::setMemoryStorage(&g_memoryStorage);
     LOG_PHASE("Memory system initialized", true);
+
+    // Wire MemoryFacade into the MMO orchestrator (memory init is after bootstrap)
+    g_memoryFacade = new GRIM::MMO::MemoryFacade(g_memoryStorage);
+    if (g_orchestrator) {
+        g_orchestrator->setMemoryFacade(g_memoryFacade);
+    }
+    LOG_PHASE("MemoryFacade wired to orchestrator", true);
     
     // ======================================================
     // 5.   Initialize TTS pre-cache in background
@@ -265,10 +326,8 @@ int main(int argc, char* argv[])
     LOG_DEBUG("Main", "Virtual screen: " + std::to_string(virtualWidth) + "x" + 
               std::to_string(virtualHeight) + " at (" + 
               std::to_string(virtualX) + "," + std::to_string(virtualY) + ")");
-    g_systemInfo.virtualOriginX = virtualX;
-    g_systemInfo.virtualOriginY = virtualY;
-    g_systemInfo.totalScreenWidth = virtualWidth;
-    g_systemInfo.totalScreenHeight = virtualHeight;
+    // Virtual screen dims already captured in g_hardwareInventory during bootstrap.
+    // If changed at runtime (hot-plug), re-detect would be needed.
 
     GRIMWindow* overlayWin = WindowManager::createOverlay("overlay", virtualWidth, virtualHeight, true);
     if (!overlayWin) {

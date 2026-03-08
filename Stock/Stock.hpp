@@ -2,7 +2,7 @@
 #include <string>
 #include <map>
 #include <chrono>
-#include "memory/memory_manager.hpp"
+#include "memory/unified_memory.hpp"
 #include "memory/memory_router.hpp"
 
 namespace GRIM {
@@ -32,8 +32,8 @@ struct StockData {
     // Sentiment/meta
     int sentimentScore = 0; // -100 to +100
 
-    // Convert to a MemoryObject for GRIM memory system
-    MemoryObject toMemoryObject() const;
+    // Convert to a UnifiedMemoryObject for GRIM memory system
+    UnifiedMemoryObject toMemoryObject() const;
 };
 
 class Stock {

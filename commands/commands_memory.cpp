@@ -1,12 +1,12 @@
 #include "commands_memory.hpp"
 #include "response_manager.hpp"
 #include "error_manager.hpp"
-#include "memory/memory_storage.hpp"
+#include "memory/unified_memory.hpp"
 #include "logger.hpp"
 #include <string>
 
 // Externals
-extern GRIM::MemoryStorage g_memoryStorage;
+extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 
 // ====================================================
 // [Memory] Remember a fact or key/value pair
@@ -53,13 +53,13 @@ CommandResult cmdRemember(const std::string& arg) {
         }
     }
 
-    GRIM::MemoryObject obj;
-    obj.id         = GRIM::MemoryObject::generateUUID();
-    obj.timestamp  = std::time(nullptr);
-    obj.source     = GRIM::SourceTag::GrimInternal;
-    obj.type       = GRIM::TypeTag::Fact;
-    obj.intent     = GRIM::IntentTag::Inform;
-    obj.context    = GRIM::ContextTag::Conversation;
+    GRIM::UnifiedMemoryObject obj;
+    obj.id         = GRIM::UnifiedMemoryObject::generateID();
+    obj.timestamp  = static_cast<uint64_t>(std::time(nullptr));
+    obj.source     = GRIM::SourceType::GRIM_INTERNAL;
+    obj.type       = GRIM::TypeTag::FACT;
+    obj.intent     = GRIM::MemoryIntent::INFORM;
+    obj.context    = GRIM::ContextType::CONVERSATION;
     obj.confidence = 0.98f;
     obj.raw        = fullText;
     obj.normalized = "remember " + fullText;

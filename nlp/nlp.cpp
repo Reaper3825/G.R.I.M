@@ -281,7 +281,7 @@ rules.push_back(rule);
 // ====================================================
 // Load learned rules from memory storage
 // ====================================================
-void NLP::loadLearnedRules(GRIM::MemoryStorage& storage) {
+void NLP::loadLearnedRules(GRIM::UnifiedMemoryStorage& storage) {
     // TODO: Implement when memory storage API is available
     (void)storage;
 }
@@ -289,7 +289,7 @@ void NLP::loadLearnedRules(GRIM::MemoryStorage& storage) {
 // ====================================================
 // Save learned rules to memory storage
 // ====================================================
-void NLP::saveLearnedRules(GRIM::MemoryStorage& storage) {
+void NLP::saveLearnedRules(GRIM::UnifiedMemoryStorage& storage) {
     // TODO: Implement when memory storage API is available
     (void)storage;
 }

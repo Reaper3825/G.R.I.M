@@ -191,10 +191,10 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
         assignRead(view.attn_w_o, enc->attnWo().data, d_model * d_model);
         assignRead(view.attn_b_o, enc->attnBo().data, d_model);
-        assignRead(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
-        assignRead(view.ffn_b1, enc->ffnB1().data, d_ff);
-        assignRead(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
-        assignRead(view.ffn_b2, enc->ffnB2().data, d_model);
+        assignRead(view.ffn_w_gate_up, enc->ffnWGateUp().data, d_model * 2 * d_ff);
+        assignRead(view.ffn_b_gate_up, enc->ffnBGateUp().data, 2 * d_ff);
+        assignRead(view.ffn_w_down, enc->ffnWDown().data, d_ff * d_model);
+        assignRead(view.ffn_b_down, enc->ffnBDown().data, d_model);
         assignRead(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignRead(view.rms2_gamma, enc->rms2Gamma().data, d_model);
         // Issue #148: Sandwich norm gammas REMOVED — not saved to checkpoint
@@ -298,7 +298,7 @@ bool LanguageModel::load(const std::string& path) {
     const std::size_t d_ff = static_cast<std::size_t>(config_.d_ff);
     
     // GQA dimensions for W_qkv sizing - MUST match save() calculation!
-    // BUG FIX Issue #24: load() was using MHA formula (d_model * 3) but save() uses GQA formula
+
     const int head_dim = config_.head_dim;  // Use pre-computed value from config
     const int kv_dim = config_.num_kv_heads * head_dim;
     const int total_qkv_dim = config_.d_model + 2 * kv_dim;  // Q + K + V with GQA
@@ -315,10 +315,10 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
         assignWrite(view.attn_w_o, enc->attnWo().data, d_model * d_model);
         assignWrite(view.attn_b_o, enc->attnBo().data, d_model);
-        assignWrite(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
-        assignWrite(view.ffn_b1, enc->ffnB1().data, d_ff);
-        assignWrite(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
-        assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
+        assignWrite(view.ffn_w_gate_up, enc->ffnWGateUp().data, d_model * 2 * d_ff);
+        assignWrite(view.ffn_b_gate_up, enc->ffnBGateUp().data, 2 * d_ff);
+        assignWrite(view.ffn_w_down, enc->ffnWDown().data, d_ff * d_model);
+        assignWrite(view.ffn_b_down, enc->ffnBDown().data, d_model);
         assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
         // Issue #148: Sandwich norm gammas REMOVED — not loaded from checkpoint

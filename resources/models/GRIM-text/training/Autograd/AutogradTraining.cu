@@ -960,10 +960,10 @@ BackwardResult executeAutogradBackward(
                 enc->attnBqkv().zero_grad(ctx.stream);
                 enc->attnWo().zero_grad(ctx.stream);
                 enc->attnBo().zero_grad(ctx.stream);
-                enc->ffnW1().zero_grad(ctx.stream);
-                enc->ffnB1().zero_grad(ctx.stream);
-                enc->ffnW2().zero_grad(ctx.stream);
-                enc->ffnB2().zero_grad(ctx.stream);
+                enc->ffnWGateUp().zero_grad(ctx.stream);
+                enc->ffnBGateUp().zero_grad(ctx.stream);
+                enc->ffnWDown().zero_grad(ctx.stream);
+                enc->ffnBDown().zero_grad(ctx.stream);
                 enc->layerScale1().zero_grad(ctx.stream);
                 enc->layerScale2().zero_grad(ctx.stream);
             }
@@ -1112,10 +1112,10 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             check(enc->attnBqkv(), "attnBqkv");
             check(enc->attnWo(), "attnWo");
             check(enc->attnBo(), "attnBo");
-            check(enc->ffnW1(), "ffnW1");
-            check(enc->ffnB1(), "ffnB1");
-            check(enc->ffnW2(), "ffnW2");
-            check(enc->ffnB2(), "ffnB2");
+            check(enc->ffnWGateUp(), "ffnWGateUp");
+            check(enc->ffnBGateUp(), "ffnBGateUp");
+            check(enc->ffnWDown(), "ffnWDown");
+            check(enc->ffnBDown(), "ffnBDown");
             check(enc->layerScale1(), "layerScale1");
             check(enc->layerScale2(), "layerScale2");
         }

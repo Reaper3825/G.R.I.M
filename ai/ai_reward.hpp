@@ -2,7 +2,6 @@
 #include <string>
 #include <unordered_map>
 #include "commands_core.hpp"    // for CommandResult
-#include "context_manager.hpp"  // optional: for mood/context data
 
 struct RewardBreakdown {
     float baseReward = 0.0f;
