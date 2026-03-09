@@ -407,6 +407,24 @@ void LanguageModel::initGPU() {
             std::cout << "✓ NumericHead layer created (d_model=" << cfg.d_model << " -> 2)\n";
         }
 
+        // Multi-token prediction (MTP) auxiliary heads: K independent linear heads (not tied to embedding)
+        if (cfg.mtp_enabled && cfg.mtp_k > 0) {
+            mtp_heads_.resize(static_cast<size_t>(cfg.mtp_k));
+            for (int k = 0; k < cfg.mtp_k; ++k) {
+                auto& head = mtp_heads_[static_cast<size_t>(k)];
+                head.weight = Tensor::zeros({cfg.vocab_size, cfg.d_model}, primary_stream, "mtp_head_" + std::to_string(k) + ".weight");
+                head.weight.requires_grad_();
+                head.weight.ensure_grad();
+                const uint64_t mtp_seed = training_state_.weight_init_seed + 3 + static_cast<uint64_t>(k);
+                Tensor::xavier_uniform_(head.weight, mtp_seed, primary_stream);
+                head.bias = Tensor::zeros({cfg.vocab_size}, primary_stream, "mtp_head_" + std::to_string(k) + ".bias");
+                head.bias.requires_grad_();
+                head.bias.ensure_grad();
+            }
+            std::cout << "✓ MTP " << cfg.mtp_k << " auxiliary heads created (alpha=" << cfg.mtp_alpha
+                      << ", warmup_steps=" << cfg.mtp_alpha_warmup_steps << ")\n";
+        }
+
         std::cout << "✓ GPU encoder initialized with " << cfg.num_layers << " layers\n";
         std::cout << "  - Attention: GPU-accelerated\n";
         std::cout << "  - FFN: GPU-accelerated with fused GELU\n";

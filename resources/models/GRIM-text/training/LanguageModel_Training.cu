@@ -238,6 +238,15 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D4b: numeric head registered\n"); fflush(stderr);
     }
 
+    // Multi-token prediction (MTP) auxiliary heads
+    const int mtp_k = (config_.mtp_enabled ? config_.mtp_k : 0);
+    for (int k = 0; k < mtp_k; ++k) {
+        MTPHead* head = getMtpHead(k);
+        if (!head || !head->weight.data || !head->weight.has_grad()) continue;
+        registerTensor("mtp_head_" + std::to_string(k) + "_weight", head->weight, ParamGroupType::MTP);
+        tryRegisterBias("mtp_head_" + std::to_string(k) + "_bias", head->bias, ParamGroupType::MTP);
+    }
+
     // Final RMSNorm (between encoder output and LM head) — no weight decay
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
             (void*)lm_head_layer_->finalRmsGamma().data, (int)lm_head_layer_->finalRmsGamma().has_grad(),

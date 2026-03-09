@@ -302,6 +302,13 @@
                 "synchronize_after_kernels": true
             },
 
+            "multi_token_prediction": {
+                "enabled": true,
+                "k": 3,
+                "alpha": 0.2,
+                "alpha_warmup_steps": 500
+            },
+
             "prediction_comparison": {
                 "enabled": false,
                 "interval": 100,
@@ -361,7 +368,7 @@
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.1,
+            "attention_dropout": 0.125,
             "dropout_rate": 0.1,
             "residual_dropout_rate": 0.1,
             "force_rebuild_vocab": false,

@@ -59,6 +59,20 @@ const GPUGrimEncoder& LanguageModel::getGpuEncoder() const {
     return *gpu_encoder_;
 }
 
+LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) {
+    if (k < 0 || k >= static_cast<int>(mtp_heads_.size())) {
+        return nullptr;
+    }
+    return &mtp_heads_[k];
+}
+
+const LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) const {
+    if (k < 0 || k >= static_cast<int>(mtp_heads_.size())) {
+        return nullptr;
+    }
+    return &mtp_heads_[k];
+}
+
 //======================================================//
 
 namespace {

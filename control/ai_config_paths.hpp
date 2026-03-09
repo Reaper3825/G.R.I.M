@@ -320,6 +320,12 @@ struct TrainingHyperparameters {
     bool disable_async_frees;
     bool synchronize_after_kernels;
     
+    // Multi-token prediction (MTP) - auxiliary heads for trajectory learning
+    bool mtp_enabled = false;
+    int mtp_k = 0;
+    float mtp_alpha = 0.2f;
+    int mtp_alpha_warmup_steps = 500;
+
     // Prediction comparison - NO DEFAULTS
     bool prediction_comparison_enabled;
     int prediction_comparison_interval;
@@ -1135,6 +1141,15 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.synchronize_after_kernels = cuda_exec.value("synchronize_after_kernels", params.synchronize_after_kernels);
     }
     
+    // Load multi_token_prediction (MTP) configuration
+    if (auto it = trainConfig.find("multi_token_prediction"); it != trainConfig.end() && it->is_object()) {
+        const auto& mtp = *it;
+        params.mtp_enabled = mtp.value("enabled", params.mtp_enabled);
+        params.mtp_k = mtp.value("k", params.mtp_k);
+        params.mtp_alpha = mtp.value("alpha", params.mtp_alpha);
+        params.mtp_alpha_warmup_steps = mtp.value("alpha_warmup_steps", params.mtp_alpha_warmup_steps);
+    }
+
     // Load prediction comparison configuration
     if (auto it = trainConfig.find("prediction_comparison"); it != trainConfig.end() && it->is_object()) {
         const auto& pred_cmp = *it;

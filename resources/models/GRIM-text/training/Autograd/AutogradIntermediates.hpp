@@ -48,7 +48,8 @@ struct AutogradIntermediates {
     Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
     Tensor numeric_head_output;        // [total_tokens, 2] - (log_magnitude, sign_logit)
     Tensor loss_tensor;                // Scalar loss driving backward
-    
+    std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward
+
     // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
     // ═══════════════════════════════════════════════════════════════════════════
@@ -63,6 +64,7 @@ struct AutogradIntermediates {
         logits_tensor = Tensor();
         numeric_head_output = Tensor();
         loss_tensor = Tensor();
+        mtp_logits_tensors.clear();
     }
     
     /** Check if intermediates are populated (forward has run) */

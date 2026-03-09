@@ -6,6 +6,9 @@
 #include <iostream>
 #include <mutex>
 #include <sstream>
+#include <cstdint>
+#include <cstring>
+#include <cuda_runtime.h>
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 #include "../training/schemas/grim_transformer_model_generated.h"
@@ -270,7 +273,38 @@ bool LanguageModel::save(const std::string& path) {
     EmitModuleInfo(ModuleId::Checkpoint, "Calling SerializationLayer::save()");
     bool result = layer.save(request);
     EmitModuleInfo(ModuleId::Checkpoint, std::string("SerializationLayer::save() returned ") + (result ? "true" : "false"));
-    return result;
+    if (!result) return false;
+
+    // MTP heads: save to sidecar <path>.mtp (checkpoint has no MTP in FlatBuffer schema)
+    if (config_.mtp_enabled && getMtpK() > 0) {
+        const std::string mtp_path = path + ".mtp";
+        std::ofstream ofs(mtp_path, std::ios::binary);
+        if (!ofs) {
+            EmitModuleError(ModuleId::Checkpoint, "[save] Failed to open MTP sidecar: " + mtp_path);
+            return false;
+        }
+        const uint32_t K = static_cast<uint32_t>(getMtpK());
+        ofs.write(reinterpret_cast<const char*>(&K), sizeof(K));
+        const std::size_t weight_elems = static_cast<std::size_t>(config_.vocab_size) * static_cast<std::size_t>(config_.d_model);
+        const std::size_t bias_elems = static_cast<std::size_t>(config_.vocab_size);
+        std::vector<float> h_buf(std::max(weight_elems, bias_elems));
+        for (uint32_t k = 0; k < K; ++k) {
+            LanguageModel::MTPHead* head = getMtpHead(static_cast<int>(k));
+            if (!head || !head->weight.data || !head->bias.data) continue;
+            if (cudaMemcpy(h_buf.data(), head->weight.data, weight_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+                EmitModuleError(ModuleId::Checkpoint, "[save] MTP head " + std::to_string(k) + " weight D2H failed");
+                return false;
+            }
+            ofs.write(reinterpret_cast<const char*>(h_buf.data()), weight_elems * sizeof(float));
+            if (cudaMemcpy(h_buf.data(), head->bias.data, bias_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+                EmitModuleError(ModuleId::Checkpoint, "[save] MTP head " + std::to_string(k) + " bias D2H failed");
+                return false;
+            }
+            ofs.write(reinterpret_cast<const char*>(h_buf.data()), bias_elems * sizeof(float));
+        }
+        EmitModuleInfo(ModuleId::Checkpoint, "[save] MTP sidecar written: " + mtp_path + " (K=" + std::to_string(K) + ")");
+    }
+    return true;
 }
 
 bool LanguageModel::load(const std::string& path) {
@@ -402,7 +436,41 @@ bool LanguageModel::load(const std::string& path) {
                     static_cast<std::size_t>(config_.d_model));
     }
 
-    return layer.load(request);
+    bool result = layer.load(request);
+    if (!result) return false;
+
+    // MTP heads: load from sidecar <path>.mtp if present and config has MTP enabled
+    if (config_.mtp_enabled && getMtpK() > 0) {
+        const std::string mtp_path = path + ".mtp";
+        std::ifstream ifs(mtp_path, std::ios::binary);
+        if (ifs) {
+            uint32_t file_k = 0;
+            if (!ifs.read(reinterpret_cast<char*>(&file_k), sizeof(file_k)) || file_k != static_cast<uint32_t>(getMtpK())) {
+                EmitModuleInfo(ModuleId::Checkpoint, "[load] MTP sidecar K mismatch or read failed — using freshly initialized MTP heads");
+            } else {
+                const std::size_t weight_elems = static_cast<std::size_t>(config_.vocab_size) * static_cast<std::size_t>(config_.d_model);
+                const std::size_t bias_elems = static_cast<std::size_t>(config_.vocab_size);
+                std::vector<float> h_buf(std::max(weight_elems, bias_elems));
+                bool ok = true;
+                for (uint32_t k = 0; k < file_k && ok; ++k) {
+                    LanguageModel::MTPHead* head = getMtpHead(static_cast<int>(k));
+                    if (!head || !head->weight.data || !head->bias.data) { ok = false; break; }
+                    if (!ifs.read(reinterpret_cast<char*>(h_buf.data()), weight_elems * sizeof(float))) { ok = false; break; }
+                    if (cudaMemcpy(head->weight.data, h_buf.data(), weight_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) { ok = false; break; }
+                    if (!ifs.read(reinterpret_cast<char*>(h_buf.data()), bias_elems * sizeof(float))) { ok = false; break; }
+                    if (cudaMemcpy(head->bias.data, h_buf.data(), bias_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) { ok = false; break; }
+                }
+                if (ok) {
+                    EmitModuleInfo(ModuleId::Checkpoint, "[load] MTP sidecar loaded: " + mtp_path + " (K=" + std::to_string(file_k) + ")");
+                } else {
+                    EmitModuleInfo(ModuleId::Checkpoint, "[load] MTP sidecar read/copy failed — using freshly initialized MTP heads");
+                }
+            }
+        } else {
+            EmitModuleInfo(ModuleId::Checkpoint, "[load] No MTP sidecar — using freshly initialized MTP heads");
+        }
+    }
+    return true;
 }
 
 } // namespace GRIM

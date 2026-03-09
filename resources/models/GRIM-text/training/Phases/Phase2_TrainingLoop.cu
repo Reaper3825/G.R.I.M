@@ -4303,7 +4303,8 @@ BatchResult processBatch(
                             g.type == GRIM::ParamGroupType::FFN ||
                             g.type == GRIM::ParamGroupType::RMSNORM ||
                             g.type == GRIM::ParamGroupType::SCRATCHBLOCK ||
-                            g.type == GRIM::ParamGroupType::NUMERIC_HEAD) {
+                            g.type == GRIM::ParamGroupType::NUMERIC_HEAD ||
+                            g.type == GRIM::ParamGroupType::MTP) {
                             launchScaleGradients(g.grads(), static_cast<int>(g.size()), enc_clip_coef, clip_stream);
                         }
                     }
@@ -4749,6 +4750,25 @@ EpochResult runEpoch(
             ctx.logging.logger->log("[Step " + std::to_string(ctx.global_step) + "] " +
                                     Internal::formatMetric("loss", batch_result.loss) + " " +
                                     Internal::formatMetric("lr", batch_result.learning_rate, 8));
+            // MTP diagnostics: per-head loss, acc, loss_ratio, alpha_effective, L_total
+            {
+                auto& ts = ctx.model->getTrainingState();
+                if (ts.mtp_diagnostics.valid && !ts.mtp_diagnostics.head_loss.empty()) {
+                    const float L0 = ts.mtp_diagnostics.L0_main > 0.0f ? ts.mtp_diagnostics.L0_main : batch_result.loss;
+                    std::ostringstream mtp_log;
+                    for (size_t i = 0; i < ts.mtp_diagnostics.head_loss.size(); ++i) {
+                        const float Lk = ts.mtp_diagnostics.head_loss[i];
+                        const float acc = i < ts.mtp_diagnostics.head_acc.size() ? ts.mtp_diagnostics.head_acc[i] : 0.0f;
+                        const float ratio = (L0 > 0.0f) ? (Lk / L0) : 0.0f;
+                        mtp_log << "[MTP_EQUATION] head_k=" << (i + 1) << ": loss=" << Internal::formatScalar(Lk, 4)
+                                << " acc=" << Internal::formatScalar(acc, 2) << "%"
+                                << " loss_ratio=" << Internal::formatScalar(ratio, 4) << " ";
+                    }
+                    mtp_log << "alpha_effective=" << Internal::formatScalar(ts.mtp_diagnostics.alpha_effective, 4)
+                            << " L_total=" << Internal::formatScalar(ts.mtp_diagnostics.L_total, 4);
+                    ctx.logging.logger->log(mtp_log.str());
+                }
+            }
             if (ctx.config.hyperparameters.guess_aux_enabled &&
                 state.guess_cache_ready && !state.guess_cache_faulted) {
                 const GRIMTS::GuessCacheTelemetry telemetry = GRIMTS::GetCacheTelemetry(false);

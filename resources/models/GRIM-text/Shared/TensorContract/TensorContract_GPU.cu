@@ -3915,6 +3915,65 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     return result;
 }
 
+// ScaleScalarGradFn: backward for scale_scalar; passes scale * grad_output to input
+struct ScaleScalarGradFn : public GradFn {
+    std::shared_ptr<GradFn> input_grad_fn;
+    TensorContract::TensorShape input_shape;
+    float scale = 0.0f;
+    ScaleScalarGradFn() { op_name = "scale_scalar"; }
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied) return;
+        applied = true;
+        if (!input_grad_fn || !input_grad_fn->op_name) return;
+        if (!grad_output.data || grad_output.numel() < 1) return;
+        float h_grad = 0.0f;
+        cudaMemcpyAsync(&h_grad, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        const float scaled = scale * h_grad;
+        float* d_scaled = nullptr;
+        cudaMalloc(&d_scaled, sizeof(float));
+        cudaMemcpyAsync(d_scaled, &scaled, sizeof(float), cudaMemcpyHostToDevice, stream);
+        Tensor view;
+        view.data = d_scaled;
+        view.shape = input_shape;
+        view.owns_data = false;
+        view.stream = stream;
+        input_grad_fn->apply(view, stream);
+        queueForDeferredCleanup(d_scaled);
+    }
+};
+
+Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::scale_scalar: stream is NULL");
+    }
+    if (t.numel() != 1) {
+        throw std::invalid_argument("autograd::scale_scalar: input must be scalar (1 element), got " + std::to_string(t.numel()));
+    }
+    float h_val = 0.0f;
+    cudaMemcpyAsync(&h_val, t.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    const float scaled_val = scale * h_val;
+    float* d_out = nullptr;
+    cudaMalloc(&d_out, sizeof(float));
+    cudaMemcpyAsync(d_out, &scaled_val, sizeof(float), cudaMemcpyHostToDevice, stream);
+    Tensor result;
+    result.data = d_out;
+    result.owns_data = true;
+    result.shape = TensorContract::TensorShape::make_BSM(1, 1);
+    result.is_leaf = false;
+    result.requires_grad = t.requires_grad;
+    result.stream = stream;
+    if (t.requires_grad && t.grad_fn) {
+        auto grad_fn = std::make_shared<ScaleScalarGradFn>();
+        grad_fn->input_grad_fn = t.grad_fn;
+        grad_fn->input_shape = t.shape;
+        grad_fn->scale = scale;
+        result.grad_fn = grad_fn;
+    }
+    return result;
+}
+
 /**
  * autograd::broadcast_add - Add bias to tensor with broadcasting: output = input + bias
  * 

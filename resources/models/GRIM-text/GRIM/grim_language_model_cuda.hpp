@@ -340,7 +340,7 @@ struct LanguageModelConfig {
     bool lm_head_center_hidden_states = false;  // Center encoder output before projection
     bool project_out_pc1 = false;              // Project out PC1 direction before LM head (Issue #149)
     int  pc1_power_iters = 5;                  // Power iteration steps for PC1 estimation
-    bool center_logits = true;                 // Center logits per position (row-wise, mean→0)
+    bool center_logits = false;                 // Center logits per position (row-wise, mean→0)
     bool center_encoder_residuals = false;        // Center residuals INSIDE encoder layers. Prevents ρ buildup from causal attention prefix averaging.
                                                      // Gradient cost: negligible ((1-1/n_tokens)^24 ≈ 0.996 for n≈6000).
     
@@ -360,6 +360,12 @@ struct LanguageModelConfig {
     
     GenerationConfig generation;
     ActivationQuantizationConfig activation_quantization;
+
+    // Multi-token prediction (MTP) - auxiliary heads for trajectory learning (Gloeckle et al. 2024)
+    bool mtp_enabled = false;
+    int mtp_k = 0;                    // Number of auxiliary future-prediction heads (2-4)
+    float mtp_alpha = 0.2f;           // MTP loss coefficient
+    int mtp_alpha_warmup_steps = 500; // Steps to linearly warm up alpha from 0 to mtp_alpha
 };
 
 // GPU Configuration - FULL definition (source of truth)
@@ -673,6 +679,15 @@ public:
     // Numeric Head layer access (nullptr when disabled)
     NumericHeadLayer* getNumericHeadLayer() { return numeric_head_layer_.get(); }
     const NumericHeadLayer* getNumericHeadLayer() const { return numeric_head_layer_.get(); }
+
+    // Multi-token prediction (MTP) auxiliary heads - one weight + bias per head (indices 0..mtp_k-1)
+    struct MTPHead {
+        Tensor weight;  // [vocab_size, d_model] same layout as LM head
+        Tensor bias;    // [vocab_size]
+    };
+    int getMtpK() const { return config_.mtp_enabled ? config_.mtp_k : 0; }
+    MTPHead* getMtpHead(int k);
+    const MTPHead* getMtpHead(int k) const;
     
     // Scratch pool configuration (pinned memory transfers)
     void configureScratchPool(bool enabled);
@@ -733,6 +748,9 @@ private:
 
     // Numeric Head layer (predicts log-magnitude + sign for <NUM> tokens)
     std::unique_ptr<NumericHeadLayer> numeric_head_layer_;
+
+    // Multi-token prediction (MTP) auxiliary heads - K independent linear heads (not tied to embedding)
+    std::vector<MTPHead> mtp_heads_;
 #endif
 };
 

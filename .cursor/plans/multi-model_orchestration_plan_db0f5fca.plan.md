@@ -371,7 +371,7 @@ Blending those together would make routing, referent resolution, and action poli
   - canonical entity id/value
   - entity type (`app`, `file`, `path`, `url`, `person`, `window`, etc.)
   - source turn, confidence, expiry/TTL
-- `**PendingInteraction**`
+- `**PendingInteraction`**
   - `kind = missing_slot | clarification | confirmation | correction | follow_up`
   - original proposal / missing fields / prompt shown to user
   - expiry and session ownership
@@ -528,7 +528,7 @@ If the goal is **modular**, **performance-light**, and still feature-complete en
 
 1. `**HardwareInventory`** — immutable startup snapshot
 2. `**ResourceSignal`** — one shared live snapshot publisher
-3. `**ResourceCoordinator**` — admission / reservation / pressure authority
+3. `**ResourceCoordinator`** — admission / reservation / pressure authority
 4. **resource-aware consumers** — `ModelLoader`, process manager, plugin/tool loader, perception manager
 
 That is enough. Do **not** start with a sprawling micro-framework of ten resource subsystems.
