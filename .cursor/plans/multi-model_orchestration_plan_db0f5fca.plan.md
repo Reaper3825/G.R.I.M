@@ -367,7 +367,7 @@ Blending those together would make routing, referent resolution, and action poli
   - `nlp_annotation_summary`
   - `router_tags`, `memory_tags`, `risk_tags`
   - selected route / proposed command / final outcome
-- `**ReferentBinding**`
+- `**ReferentBinding`**
   - canonical entity id/value
   - entity type (`app`, `file`, `path`, `url`, `person`, `window`, etc.)
   - source turn, confidence, expiry/TTL
@@ -527,7 +527,7 @@ If the goal is **modular**, **performance-light**, and still feature-complete en
 #### Module split
 
 1. `**HardwareInventory`** — immutable startup snapshot
-2. `**ResourceSignal**` — one shared live snapshot publisher
+2. `**ResourceSignal`** — one shared live snapshot publisher
 3. `**ResourceCoordinator**` — admission / reservation / pressure authority
 4. **resource-aware consumers** — `ModelLoader`, process manager, plugin/tool loader, perception manager
 
@@ -1108,7 +1108,7 @@ flowchart LR
 - Add `nlp/NlpAnnotation.hpp/.cpp` and `nlp/RouterMetadataBuilder.hpp/.cpp` so the new NLP contract exists before routing code starts depending on it.
 - Refactor `bootstrap/bootstrap.cpp` into explicit phases: config bootstrap, hardware inventory capture, resource signal start, subsystem registration, and optional warmup scheduling. It should stop acting as an all-in-one startup catch-all.
 - Extend `GRIMTextServerManager` into a model-keyed process manager. Startup is invalid if two models claim the same port, executable, or identity.
-- Generalize `core/plugin_manager.*` so DLL hot reload is synchronized with ToolRegistry updates and model-visible tool-surface invalidation.
+- Generalize `core/plugin_manager.`* so DLL hot reload is synchronized with ToolRegistry updates and model-visible tool-surface invalidation.
 - Add `mmo.mode = "shadow" | "enforced"`. Shadow mode may log routing/synthesis decisions for comparison, but it must never execute shadow actions or mutate memory/LoRA differently from the live path.
 
 ---
@@ -1440,7 +1440,7 @@ flowchart TD
 - **Tool gap planner** — `MMO/Core/ToolGapPlanner.hpp`, `MMO/Core/ToolGapPlanner.cpp` (structured tool-gap proposals, user-confirmed tool creation flow, and retry semantics).
 - **NLP annotation core** — `nlp/NlpAnnotation.hpp`, `nlp/NlpAnnotation.cpp` (canonical annotation payload shared by memory + router metadata).
 - **NLP metadata builder** — `nlp/RouterMetadataBuilder.hpp`, `nlp/RouterMetadataBuilder.cpp` (builds router-facing metadata from annotations + context).
-- **NLP taggers** — `nlp/EntityTagger.`*, `nlp/MemoryTagger.*`, and compatibility wrappers around current `nlp/nlp.*`, `ai/intent_gate.*`, and `ai/fast_classifier.*`.
+- **NLP taggers** — `nlp/EntityTagger.`*, `nlp/MemoryTagger.`*, and compatibility wrappers around current `nlp/nlp.*`, `ai/intent_gate.*`, and `ai/fast_classifier.*`.
 - **Backend interface** — `ai/backends/IGenerationBackend.hpp`, router backend (precomposed in → route response; synthesize(sub_model_outputs) → final structured response), sub-model backends (frozen bricks, composed_generation in only).
 - **MMD** — `MMO/Shared/MMD.hpp` (existing), `MMO/Shared/MMD.cpp` (`getSubjectTags`).
 - **Registry** — `MMO/Core/ModelRegistry.hpp`, `MMO/Core/ModelRegistry.cpp` (router + sub_models, router-only `lora_path` / `hard_copy_path`).
@@ -1448,7 +1448,7 @@ flowchart TD
 - **ModelLoader** — `MMO/Core/ModelLoader.hpp`, `MMO/Core/ModelLoader.cpp` (use-degrading state machine, resource-aware load/unload driven by ResourceCoordinator).
 - **Process manager** — Generalize `ai/grim_text_server_manager.`* into a model-keyed process manager for router + sub-model servers.
 - **Bootstrap / detection** — refactor `bootstrap/bootstrap.cpp` into phased startup orchestration and evolve `system_detect.hpp/.cpp` into the static hardware inventory detector rather than the entire resource story.
-- **UI host** — refactor `ui/ui_root.`*, `ui/ui_panel.*`, and `popup_ui/*` so built-in panels and popup windows register into one modular UI-surface model instead of staying as manual startup wiring.
+- **UI host** — refactor `ui/ui_root.`*, `ui/ui_panel.`*, and `popup_ui/*` so built-in panels and popup windows register into one modular UI-surface model instead of staying as manual startup wiring.
 - **Plugin manager** — generalize `core/plugin_manager.`* so DLL hot reload is synchronized with ToolRegistry updates and tool-surface invalidation.
 - **Orchestrator** — `MMO/Core/Orchestrator.hpp`, `MMO/Core/Orchestrator.cpp` (memory retrieval + precompose, including split physical/digital visual context → router → sub-model with only composed_generation → synthesize).
 - **Memory façade** — `MMO/Core/MemoryFacade.hpp`, `MMO/Core/MemoryFacade.cpp` (adapter over `MemoryStorage`, `UnifiedMemoryStorage`, `ContextManager`, `MemoryRouter`).

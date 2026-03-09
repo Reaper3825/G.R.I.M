@@ -81,7 +81,16 @@ Flash Attention backward workspace (per layer, batch=8, seqlen=1024, n_heads=12,
 
 ## Sum vs reported 40 GB
 
-Device total: 40,441 MB (from log: "Memory: 40441 MB"). Accounted total: **11.98 GiB**. Difference **~29 GB** not attributed here (likely cuBLAS/cuDNN workspace, fragmentation, or other allocators).
+Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts for **11.98 GiB** of *tracked* allocations (params, buffers, first-batch autograd + FA). So **40,441 MB − 11.98 GiB ≈ 28–29 GiB is unaccounted**: we do not attribute it to any buffer in this doc. Likely sources include CUDA allocator reserved/fragmentation, cuBLAS/cuDNN workspace, and other runtime pools. Until we measure or instrument those, the gap remains unexplained.
+
+---
+
+## Observed snapshots (from logs)
+
+| When | Log line | Interpretation |
+|------|----------|----------------|
+| Pre-validation checkpoint | `GPU memory: 37197 MB free / 40441 MB total` | **37,197 MB = ~37.2 GiB used**; remaining capacity = 40,441 − 37,197 = **3,244 MB = ~3.2 GiB free**. Steady state between steps (autograd intermediates cleared). So at that moment ~37 GiB was in use; we only account for ~12 GiB of it. |
+| Peak (first fwd/bwd) | — | We *account* for **~11.98 GiB**; actual device *used* at peak is not logged here. If at peak the driver reports e.g. 35–37 GiB used, we still only explain ~12 GiB; the rest is the same unaccounted ~28 GiB. |
 
 ---
 

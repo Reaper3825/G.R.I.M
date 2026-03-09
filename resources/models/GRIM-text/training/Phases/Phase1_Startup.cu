@@ -1096,6 +1096,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
 
+    // Build parameter groups for optimizer and grad-norm (required even when logit_update_trace is off).
+    // Otherwise Phase2 allocateGradNormScratch gets max_groups=0 and fails.
+    model->buildParameterGroups();
+
     // ═══════════════════════════════════════════════════════════════
     // tie_embeddings pointer verification (Step C: non-negotiable truth)
     // Log raw pointers, ownership, and optimizer group count

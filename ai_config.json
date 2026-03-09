@@ -101,7 +101,7 @@
                 "do_sample": true,
                 "enable_scratchblock_reasoning": true
             },
-            "epochs": 1,
+            "epochs": 5,
             "seed": 1,
             "batch_size": 8,
             "gradient_accumulation_steps": 2,
@@ -228,7 +228,7 @@
                     "epsilon": 0.1
                 },
                 "focal": {
-                    "enabled": true,
+                    "enabled": false,
                     "gamma": 0.0,
                     "alpha": 1.0
                 },
@@ -311,7 +311,7 @@
             },
 
             "logit_update_trace": {
-                "enabled": true,
+                "enabled": false,
                 "interval": 50
             },
 
@@ -374,7 +374,7 @@
                 "center_encoder_residuals": true
             },
             "layer_scale": {
-                "enabled": true,  
+                "enabled": false,  
                 "init_value": 1.0  
             },
             "hardcoded_hidden_states": {

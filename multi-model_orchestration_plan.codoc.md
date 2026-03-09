@@ -264,7 +264,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 **Config contract**
 - `ModelLoaderConfig` struct: `load_timeout_ms` (30000), `idle_ttl_ms` (60000), `hot_ttl_cap_ms` (300000), `use_degrade_step_ms` (5000)
-- Future: loaded from `ai_config.json` → `mmo.model_loader`
+- Loaded from `ai_config.json` → `mmo.model_loader` in `bootstrapMMOLayer()` (see §26)
 
 **Current consumers**
 - `Orchestrator` — calls `ensureLoaded` + `markInUse`/`markIdle` around request dispatch
@@ -317,7 +317,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 **Config contract**
 - `OrchestratorConfig` struct: `route_timeout_ms` (10000), `generate_timeout_ms` (30000), `synthesize_timeout_ms` (10000), `max_submodels_per_request` (1)
-- Future: loaded from `ai_config.json` → `mmo.orchestrator`
+- Loaded from `ai_config.json` → `mmo.orchestrator` in `bootstrapMMOLayer()` (see §26)
 
 **Current consumers**
 - `callAIAsync()` in `ai/ai.cpp` — MMO branch at top of async lambda; routes through `g_orchestrator->generate()` when registry is enabled, falls back to legacy `resolveBackendURL()` in shadow mode on failure, returns error string in enforced mode on failure
@@ -347,7 +347,8 @@ If a refactor changes code but not this document, the refactor is incomplete.
 | Model metadata envelopes | `MMO/Shared/MMD.hpp` | shared by registry / router / orchestrator |
 | Model registry | `ModelRegistry` | `ModelRegistry::instance()` / `loadFromConfig()` |
 | Model lifecycle / residency | `ModelLoader` | `ensureLoaded()` / `markInUse()` / `markIdle()` / `tickIdleTimers()` |
-| Request orchestration | `Orchestrator` | `generate(OrchestratorRequest)` |
+| Request orchestration | `Orchestrator` | `generate(RequestContext)` |
+| Backend dispatch | `IGenerationBackend` impls | `Orchestrator::callBackend()` → `backends_[model_id]->generate()` |
 | Memory retrieval / write surface | `MemoryFacade` | `MemoryFacade::instance()` |
 | Session interaction state | `SessionContextManager` | `SessionContextManager::instance()` |
 | Unified tool registry | `ToolRegistry` | `ToolRegistry::instance()` |
@@ -428,9 +429,9 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - None (uses `UnifiedMemoryStorage` config)
 
 **Current consumers**
-- `bootstrap/bootstrap.cpp` — owns `g_memoryFacade` pointer
-- `main.cpp` — deletes during shutdown
-- Future: `Orchestrator` context composition, `SessionContextManager` context enrichment
+- `main.cpp` — creates `g_memoryFacade` after memory system init; deletes during shutdown
+- `Orchestrator` — receives via `setMemoryFacade()` in `main.cpp`
+- Future: `SessionContextManager` context enrichment
 
 **Legacy replaced**
 - `ContextManager::getSnapshot()` bridge call → `SessionContextManager::legacySnapshot()`
@@ -477,7 +478,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `tick(session_id)` — expire stale referents and pending interactions
 
 **Replaces**
-- `memory/context_manager.hpp` static singletons: `recentContext`, `pendingIntent`, `ContextSnapshot`
+- `memory/context_manager.hpp` and `memory/context_manager.cpp` — **DELETED**. `ContextSnapshot` struct extracted to `memory/context_snapshot.hpp`.
 - `commands/commands_feedback.cpp` globals: `g_pendingClarifyCmd`, `g_pendingFeedbackCmd`, `g_isMultiCommandContext`, `g_isVoiceCommand`
 - Fragmented clarification/confirmation state across free functions
 - `ContextManager::getSnapshot()` / `rememberContextObject()` / `decayOldContext()` / `recordUsage()` / `getCurrentMood()` / `usageCount()` in all consumers
@@ -611,11 +612,386 @@ If a refactor changes code but not this document, the refactor is incomplete.
 **Status**
 - Implemented; bootstrap configuration wired; `ai_interpret()` gate active; calibration feedback loop connected
 
+### 17. Contracts (Phase 0)
+
+**What changed**
+- New `MMO/Core/Contracts.hpp` — `ContractError` enum, `ContractViolation` struct, envelope validators, envelope builders, `ComposedGenerationSpec` struct, render/parse functions
+- New `MMO/Core/Contracts.cpp` — implementation of all validation and builder logic
+
+**Owns**
+- `ContractError` enum (17 structured error codes: MissingRequestId through SynthesisRefused)
+- `ContractViolation` struct (code + field + human-readable message)
+- `validateRequest(RequestEnvelope)` → optional violation (checks request_id, session_id, target_model_id, task, payload)
+- `validateResponse(ResponseEnvelope, expected_request_id, expected_target_model_id)` → optional violation (checks schema_version, request_id/target_model_id correlation, non-empty result on Ok)
+- `buildRouteRequest()` / `buildGenerateRequest()` / `buildSynthesizeRequest()` — envelope construction with Rule 20 throws on missing required fields
+- `ComposedGenerationSpec` struct — TASK/SCOPE/ALLOWED_ASSUMPTIONS/OUTPUT_SCHEMA/REFUSE_IF/STYLE/MAX_LENGTH/injected_context
+- `renderComposedGeneration()` — spec → tagged text
+- `parseComposedGeneration()` — tagged text → optional spec
+
+**Does not own**
+- Transport envelope types (those live in `MMO/Shared/MMD.hpp`)
+- HTTP dispatch (that's `Orchestrator::callBackend()`)
+- Route decision parsing (that's `ModelRouter`)
+
+**Canonical hook points**
+- `validateRequest(env)` / `validateResponse(env, rid, mid)` — call before sending / after receiving
+- `buildRouteRequest()` / `buildGenerateRequest()` / `buildSynthesizeRequest()` — construct validated envelopes
+- `renderComposedGeneration(spec)` / `parseComposedGeneration(text)` — structured prompt template
+
+**Current consumers**
+- None yet — `Orchestrator` has its own `buildRouteEnvelope` / `buildGenerateEnvelope` / `buildSynthesizeEnvelope` private methods that should migrate to use these
+
+**Legacy replaced**
+- `Orchestrator::buildRouteEnvelope()` etc. will be replaced by `Contracts::buildRouteRequest()` etc. in a future migration
+
+**Status**
+- Implemented; not yet integrated into Orchestrator
+
+### 18. RequestContext (Phase 0)
+
+**What changed**
+- New `MMO/Core/RequestContext.hpp` — `TurnSummary` struct, `RequestContext` struct
+
+**Owns**
+- `TurnSummary` struct — minimal turn record for cross-boundary transfer (turn_id, role, text, token_count)
+- `RequestContext` struct — immutable per-request snapshot: correlation IDs (request_id, session_id, turn_id), prompt, system_prompt, metadata_json, deadline, recent_turns, tool_registry_version
+- `hasDeadline()` / `remainingMs()` helpers
+
+**Does not own**
+- Session lifecycle (owned by ContextManager / body main loop)
+- Turn storage (reads from session authority, does not write)
+- Metadata generation (receives pre-built metadata_json from RouterMetadataBuilder)
+
+**Canonical hook points**
+- Callers construct `RequestContext` before calling `Orchestrator::generate()`
+- Orchestrator passes fields to envelope builders as needed
+- `tool_registry_version` enables cached tool-summary invalidation
+
+**Current consumers**
+- None yet — `OrchestratorRequest` currently serves this role; will be replaced/extended by `RequestContext`
+
+**Legacy replaced**
+- `OrchestratorRequest` fields (request_id, session_id, turn_id, prompt, system_prompt, metadata_json) duplicated in `RequestContext` — migration will unify
+
+**Status**
+- Implemented; not yet integrated
+
+### 19. IGenerationBackend (Phase 1.1)
+
+**What changed**
+- New directory `ai/backends/`
+- New `ai/backends/IGenerationBackend.hpp` — `GenerationOptions`, `HistoryEntry`, `GenerationResult` structs, `IGenerationBackend` interface
+
+**Owns**
+- `GenerationOptions` struct — per-call inference parameters (max_tokens, temperature, top_p, top_k, metadata_json, tool_summary, timeout_ms)
+- `HistoryEntry` struct — single conversation turn for multi-turn generation
+- `GenerationResult` struct — success/error + generated text + tokens_used
+- `IGenerationBackend` interface — `generate()`, `generateWithHistory()`, `isAvailable()`, `getBackendId()`, `getBackendType()`
+
+**Does not own**
+- HTTP transport implementation (each concrete backend provides its own)
+- Model loading/unloading (ModelLoader responsibility)
+- LoRA loading (separate pipeline)
+- Weight writes of any kind (all backends are read-only)
+
+**Canonical hook points**
+- `backend->generate(prompt, options)` — single-turn generation
+- `backend->generateWithHistory(prompt, history, options)` — multi-turn
+- `backend->isAvailable()` — health check before dispatching
+- `backend->getBackendType()` — matches `BackendType` enum from MMD.hpp
+
+**Future implementations**
+- `LlamaCppBackend` — llama.cpp server for sub-models
+- `ExternalBackend` — arbitrary HTTP endpoints
+
+**Concrete implementations**
+- `GrimNativeBackend` — see §23
+- `OllamaBackend` — see §24
+
+**Current consumers**
+- `Orchestrator::callBackend()` — dispatches through registered `IGenerationBackend` instances; falls back to direct HTTP only if no backend registered for the model
+- `bootstrap/bootstrap.cpp` — `createBackendForModel()` factory creates concrete backends; `registerBackendsForModels()` registers them on the orchestrator for router + all sub-models
+
+**Legacy replaced**
+- `Orchestrator::callBackend()` direct cpr HTTP dispatch now gated behind backend registry lookup — direct HTTP is the fallback path, not the primary path
+
+**Status**
+- Interface defined; GrimNativeBackend and OllamaBackend implemented; Orchestrator dispatch wired; LlamaCpp/External pending
+
+### 20. ModelRouter (Phase 1.3)
+
+**What changed**
+- Replaced empty stub `MMO/Router/ModelRouter.hpp` with full type definitions
+- New `MMO/Router/ModelRouter.cpp` — JSON parsing implementation
+
+**Owns**
+- `RouteConfidence` struct — overall, user_intent, domain_match float scores
+- `ParsedRouteResult` struct — success flag, RouteDecision, confidence scores, refusal, error
+- `ModelRouter::parseRouteResponse(ResponseEnvelope)` — extracts RouteDecision from router envelope
+- `ModelRouter::parseRouteJson(string)` — parses raw JSON router response
+
+**Does not own**
+- Route intelligence (grim-text model provides all routing logic)
+- Model selection policy (body-side; ModelRouter only parses)
+- HTTP transport (Orchestrator / backend handles that)
+- ComposedGeneration template structure (Contracts.hpp owns that)
+
+**Canonical hook points**
+- `ModelRouter::parseRouteResponse(response)` → `ParsedRouteResult`
+- `ModelRouter::parseRouteJson(json_text)` → `ParsedRouteResult`
+- Expected router JSON: `{ "sub_model_id": "...", "composed_generation": "...", "confidence": 0.92, "diagnostics": {...} }`
+
+**Current consumers**
+- None yet — `Orchestrator::parseRouteResponse()` currently does its own parsing; will migrate to use `ModelRouter`
+
+**Legacy replaced**
+- `Orchestrator::parseRouteResponse()` private method will be replaced
+
+**Status**
+- Implemented; not yet integrated into Orchestrator
+
+### 21. ToolGapPlanner (Phase 0)
+
+**What changed**
+- New `MMO/Core/ToolGapPlanner.hpp` — `ToolGapReason` enum, `ProposedToolSpec`, `ToolGapProposal`, `ToolGapDecision` enum, `ToolGapPlanner` class
+- New `MMO/Core/ToolGapPlanner.cpp` — evaluation, parsing, and rationale formatting
+
+**Owns**
+- `ToolGapReason` enum (NoMatchingCapability, CapabilityMismatch, PermissionInsufficient, PolicyBlocked)
+- `ProposedToolSpec` struct — minimal new-tool specification for user review
+- `ToolGapProposal` struct — missing_capability, reason, closest_tool context, proposed_spec, rationale, original_request_id
+- `ToolGapDecision` enum (Pending, Approved, Rejected, Deferred)
+- `ToolGapPlanner::evaluate(capability, request_id)` — checks ToolRegistry for matching capability; returns proposal if nothing fits
+- `ToolGapPlanner::parseProposedSpec(json)` — parses model-emitted JSON into `ProposedToolSpec`
+- `ToolGapPlanner::formatRationale(proposal)` — generates user-visible explanation
+- `findClosestTool()` — keyword/tag heuristic for nearest-miss context
+
+**Does not own**
+- Tool creation / scaffolding (separate build pipeline)
+- Plugin compilation or hot-loading (PluginManager responsibility)
+- ToolRegistry mutations (only reads)
+- User interaction for approval (caller manages UI)
+- Reward assignment for tool-gap detection (training pipeline)
+
+**Canonical hook points**
+- `planner.evaluate(capability, request_id)` → `optional<ToolGapProposal>`
+- `ToolGapPlanner::parseProposedSpec(json)` → `ProposedToolSpec`
+- `ToolGapPlanner::formatRationale(proposal)` → user-visible string
+- On approval: caller takes `ProposedToolSpec` → scaffold → build → `PluginManager::loadPlugin()` → `ToolRegistry::registerBatch()`
+
+**Current consumers**
+- None yet — will be consumed by synthesize-step handling in Orchestrator when router returns a tool-gap signal
+
+**Legacy replaced**
+- No previous tool-gap detection existed — this is new
+
+**Status**
+- Implemented; not yet integrated
+
+### 22. Orchestrator migration to Contracts / ModelRouter / RequestContext
+
+**What changed**
+- `MMO/Core/Orchestrator.hpp` — full rewrite:
+  - Deleted `OrchestratorRequest` struct (replaced by `RequestContext`)
+  - Deleted `RouteDecision` struct (moved to `Contracts.hpp`)
+  - Deleted private methods: `buildRouteEnvelope`, `buildGenerateEnvelope`, `buildSynthesizeEnvelope`, `parseRouteResponse`, `validateCorrelation`
+  - Added `ModelRouter router_` member
+  - Added private `buildRouterScope(const RequestContext&)` helper for memory enrichment
+  - `generate()` now takes `const RequestContext& ctx` instead of `const OrchestratorRequest&`
+- `MMO/Core/Orchestrator.cpp` — full rewrite:
+  - `generate()` uses Contracts builders: `buildRouteRequest()`, `buildGenerateRequest()`, `buildSynthesizeRequest()`
+  - Validates every envelope with `validateRequest()` before sending
+  - Validates every response with `validateResponse()` (replaces hand-rolled `validateCorrelation`)
+  - Route parsing delegated to `router_.parseRouteResponse()` (ModelRouter)
+  - Memory enrichment extracted to `buildRouterScope()` (preserves `memory_->retrieveForPrompt()` logic)
+  - `callBackend()` unchanged (IGenerationBackend migration is Phase 1.1)
+- `MMO/Core/Contracts.hpp` — `RouteDecision` struct added (moved from Orchestrator.hpp)
+- `MMO/Router/ModelRouter.hpp` — include changed from `Orchestrator.hpp` to `Contracts.hpp` (breaks circular dependency)
+- `ai/ai.cpp` — caller migrated from `OrchestratorRequest` to `RequestContext`
+
+**Owns**
+- `Orchestrator` class — orchestration flow (route → generate → synthesize)
+- `buildRouterScope()` — memory enrichment scope JSON for route requests
+- `callBackend()` — HTTP dispatch to model servers (temporary; future IGenerationBackend)
+
+**Does not own**
+- Envelope construction (Contracts: `buildRouteRequest`, `buildGenerateRequest`, `buildSynthesizeRequest`)
+- Envelope/response validation (Contracts: `validateRequest`, `validateResponse`)
+- Route response parsing (ModelRouter: `parseRouteResponse`)
+- Request context creation (caller creates `RequestContext`)
+- Memory retrieval (MemoryFacade)
+
+**Canonical hook points**
+- `orchestrator.generate(RequestContext)` → `OrchestratorResult`
+- `orchestrator.setMemoryFacade(MemoryFacade*)` — late-bind memory
+- `orchestrator.shutdown()` — unloads all models
+- Contracts builders/validators called at every envelope boundary
+- ModelRouter called once per route response
+
+**Current consumers**
+- `ai/ai.cpp::callAIAsync()` — sole caller, creates `RequestContext` with request_id + prompt
+
+**Legacy replaced**
+- `OrchestratorRequest` struct → `RequestContext`
+- `RouteDecision` in Orchestrator.hpp → `RouteDecision` in Contracts.hpp
+- `buildRouteEnvelope()` → `buildRouterScope()` + `buildRouteRequest()`
+- `buildGenerateEnvelope()` → `buildGenerateRequest()`
+- `buildSynthesizeEnvelope()` → `buildSynthesizeRequest()`
+- `parseRouteResponse()` → `ModelRouter::parseRouteResponse()`
+- `validateCorrelation()` → `Contracts::validateResponse()`
+
+**Status**
+- Fully implemented; compile verification pending
+
 ## Next systems to document when touched
 
-Add an entry here when any of these are refactored:
+- IGenerationBackend concrete implementations (LlamaCppBackend, ExternalBackend)
+- ToolTrainingParser (Phase 1.0)
+- ToolGapPlanner integration into synthesize-step handling
 - UI surface registry / emotion presentation controller
-- model-keyed process manager
+- Model-keyed process manager
+
+### 13. Bootstrap phase separation (Phase 0.1)
+
+**What changed**
+- Refactored `runBootstrapChecks()` from one monolithic function into 5 named phase functions
+
+**Owns**
+- `bootstrapConfigAndStatics(argc, argv)` — Phase 1: config, aliases, fonts
+- `bootstrapHardwareAndResources()` — Phase 2: hardware inventory, location, ResourceSignal, ResourceCoordinator
+- `bootstrapSubsystems()` — Phase 3: voice (Coqui), RL bridge, GRIM-text server
+- `bootstrapMMOLayer()` — Phase 4: ModelRegistry, ModelLoader, Orchestrator, ToolRegistry seed, ActionPolicyRegistry, SessionContextManager
+- `bootstrapWarmup()` — Phase 5: Ollama warmup, Whisper preload
+- `runBootstrapChecks(argc, argv)` — public orchestrator that calls phases 1-5 in sequence
+- `stopMMOIdleTick()` — stops the background idle-tick thread
+
+**Does not own**
+- Individual subsystem internals (each phase delegates to its own system)
+- Shutdown teardown (owned by `main.cpp` signal handlers)
+
+**Canonical hook points**
+- `runBootstrapChecks(argc, argv)` — sole public entry point
+- Each phase function is `static` (internal linkage, not callable externally)
+
+**Status**
+- Implemented; no behavioral change, purely structural
+
+### 14. Plugin → ToolRegistry sync (Phase 0.25)
+
+**What changed**
+- `core/plugin_api_impl.cpp` now includes `MMO/Core/ToolRegistry.hpp`
+- `api_register_command()` — after registering in `s_commands` and `commandMap`, also builds a `ToolDescriptor` (provider_type=Plugin, provider_name=plugin_name, permission_bits from plugin context) and registers in `ToolRegistry::instance()`
+- `api_unregister_command()` — after removing from maps, calls `ToolRegistry::instance().unregisterTool(cmd_name)`
+- `cleanupPluginContext()` — calls `ToolRegistry::instance().unregisterByProvider(plugin_name)` for atomic batch cleanup after per-command removal from `s_commands`/`commandMap`
+
+**Owns**
+- Plugin ↔ ToolRegistry synchronization at the command registration boundary
+
+**Does not own**
+- ToolRegistry lifecycle (singleton, bootstrapped independently)
+- Plugin lifecycle / hot-reload detection (owned by `PluginManager`)
+- Command execution dispatch (owned by `commands_core.cpp`)
+
+**Canonical hook points**
+- `api_register_command()` — registers tool descriptor
+- `api_unregister_command()` — unregisters individual tool
+- `cleanupPluginContext()` — atomic batch unregister via `unregisterByProvider()`
+- `PluginManager::checkForHotReload()` — triggers unload→reload which flows through the above hooks
+
+**Current consumers**
+- Any plugin that calls `api->register_command()` now automatically appears in ToolRegistry
+- Hot-reload (file timestamp change) triggers unload→cleanup→reload→re-register cycle, keeping ToolRegistry in sync
+
+**Legacy replaced**
+- Plugin commands were previously invisible to ToolRegistry (only visible through `s_commands` and `commandMap`)
+- Bootstrap's CommandRegistry seed already handled built-in tools; plugin tools were the gap
+
+**Status**
+- Implemented; ToolRegistry version counter increments on every plugin load/unload/reload
+
+### 15. NlpAnnotation (Phase 0.5)
+
+**What changed**
+- New `nlp/NlpAnnotation.hpp` — canonical `NlpAnnotation` struct replacing `Intent` as the authoritative NLP output
+- New `nlp/NlpAnnotation.cpp` — `annotate()` function that wraps `NLP::parse()`, `IntentGate::decide()`, `FastClassifier::evaluate()` into the new payload
+
+**Owns**
+- `Entity` struct — recognized semantic spans (type-aligned with GRIM-text atom concepts)
+- `Ambiguity` struct — unresolved competing interpretations
+- `UtterancePriors` struct — cheap command/question/banter probabilities
+- `ConfidenceSummary` struct — aggregate annotation quality signal
+- `NlpAnnotation` struct — full payload: raw/normalized text, language, utterance priors, entities, action affordances, candidate tool tokens, tool context hints, memory/router/context/risk tags, references, ambiguities, confidence summary, legacy compatibility fields
+- `annotate(raw_input, context)` — main entry point producing `NlpAnnotation` from existing NLP infrastructure
+- Regex-based entity extraction (URL, email, path, number — aligned with GRIM-text atoms)
+- Regex-based affordance detection (open, search, navigate, edit, delete, create, copy, move, close)
+- Regex-based reference detection (pronouns and deictics)
+- Regex-based context tag detection (coding, filesystem, web, system, ui, voice)
+- Regex-based risk tag detection (destructive, system, network, credential_sensitive)
+
+**Does not own**
+- NLP rule management (still `NLP` class in `nlp/nlp.hpp`)
+- Intent classification weights (still `FastClassifier` + `IntentGate`)
+- Command dispatch or execution (annotation only — no executable coupling)
+- Memory storage or retrieval (annotation provides tags consumed by `MemoryFacade`)
+
+**Canonical hook points**
+- `GRIM::annotate(raw_input, context)` — produces `NlpAnnotation`
+- Legacy compatibility: `legacy_intent_name`, `legacy_category`, `legacy_matched` fields populated from `NLP::parse()` output
+
+**Current consumers**
+- None yet — newly created; will be consumed by `RouterMetadataBuilder`, `SessionContextManager::beginTurn()`, `MemoryFacade` tagging, and `Orchestrator` context composition
+- `Intent` remains usable for legacy consumers during migration
+
+**Integrated call sites**
+- `ai/ai.cpp::callAIAsync()` — calls `GRIM::annotate(prompt, snapshot)` before building `RequestContext`; annotation feeds into `RouterMetadataBuilder`
+- `ai/ai.cpp::ai_interpret()` — calls `GRIM::annotate(input, snapshot)` to derive real confidence signals for `ActionProposal` (replaces hardcoded 0.7f)
+
+**Legacy replaced**
+- `Intent` is now a secondary output; `NlpAnnotation` is the canonical payload
+- Hardcoded `proposal.router_confidence = 0.7f` → `policyAnn.confidence_summary.overall`
+- Hardcoded `proposal.parse_certainty = 1.0f` → `policyAnn.confidence_summary.intent_confidence`
+- Hardcoded `referent_resolution = 1.0f` → conditional on `policyAnn.references.empty()`
+- Hardcoded `grounding_coverage = 1.0f` → `policyAnn.confidence_summary.entity_confidence`
+- Hardcoded `0.7f` in `recordOutcome()` calls → `policyAnn.confidence_summary.overall`
+
+**Status**
+- Implemented; integrated into `callAIAsync` and `ai_interpret`
+
+### 16. RouterMetadataBuilder (Phase 0.5)
+
+**What changed**
+- New `nlp/RouterMetadataBuilder.hpp` — `RouterMetadata` struct + `RouterMetadataBuilder` builder
+- New `nlp/RouterMetadataBuilder.cpp` — builds JSON-serializable metadata envelope for the router model
+
+**Owns**
+- `RouterMetadata` struct — the envelope sent to grim-text router: raw/normalized input, serialized NlpAnnotation, serialized ContextSnapshot, memory tags, tool summary, visual context (physical + digital), risk tags, action policy hints, confidence snapshot
+- `RouterMetadata::toJson()` — full JSON serialization
+- `RouterMetadataBuilder` — fluent builder: `setAnnotation()`, `setContext()`, `setToolSummary()`, `setPhysicalVisualContext()`, `setDigitalVisualContext()`, `setActionPolicyHints()`, `build()`
+- NlpAnnotation → JSON serialization (all fields: entities, tags, ambiguities, confidence, legacy)
+- ContextSnapshot → JSON serialization (recent intents/commands, mood, depth, etc.)
+
+**Does not own**
+- NLP analysis (delegates to `NlpAnnotation`)
+- Context state management (reads from `ContextSnapshot`)
+- Tool registry content (receives compact prompt string)
+- Visual context capture (receives pre-built JSON from perception subsystem)
+- Action policy evaluation (receives pre-built hints)
+- HTTP transport to router (consumed by `Orchestrator`)
+
+**Canonical hook points**
+- `RouterMetadataBuilder().setAnnotation(ann).setContext(ctx).setToolSummary(prompt).build()` — produces `RouterMetadata`
+- `RouterMetadata::toJson()` — serializes for HTTP payload to router model
+- Builder throws `std::runtime_error` if annotation or context are not set (Rule 20: fail loud)
+
+**Current consumers**
+- `ai/ai.cpp::callAIAsync()` — builds `RouterMetadata` from `NlpAnnotation` + `ContextSnapshot` + `ToolRegistry::generateCompactPrompt()`, serializes to JSON for `RequestContext::metadata_json`
+- `Orchestrator::buildRouterScope()` — receives pre-built metadata via `ctx.metadata_json`, merges with memory retrieval results
+
+**Legacy replaced**
+- Orchestrator previously sent raw prompt text as scope; now receives structured `RouterMetadata` JSON envelope
+
+**Status**
+- Implemented; integrated into `callAIAsync` → Orchestrator pipeline
 
 ## Required update checklist for future agents
 
@@ -627,3 +1003,134 @@ When refactoring a system, append or update the relevant section in this file wi
 5. migrated consumers
 6. deleted legacy paths
 7. validation performed
+
+### 23. GrimNativeBackend (`MMO/Backends/GrimNativeBackend.hpp`, `MMO/Backends/GrimNativeBackend.cpp`)
+
+**What changed**
+- New concrete `IGenerationBackend` for grim_text_server.exe
+
+**Owns**
+- HTTP transport to grim_text_server `/api/chat` endpoint using Ollama-compatible JSON format
+- Model name forced to `"grim-text"` regardless of config model_id
+- Health check via GET `/api/tags`
+- Single-turn and multi-turn generation (history mapped to messages array)
+- Timeout enforcement via cpr::Timeout
+- Backend ID format: `"grim_text:{model_id}"`
+
+**Does not own**
+- grim_text_server process lifecycle (ModelLoader + StartCallback)
+- Model loading/unloading decisions
+- LoRA or fine-tune management
+- Response envelope parsing (caller's concern)
+
+**Canonical hook points**
+- `backend->generate(prompt, options)` — single-turn
+- `backend->generateWithHistory(prompt, history, options)` — multi-turn
+- `backend->isAvailable()` — HTTP health check
+- `backend->getBackendId()` — `"grim_text:{model_id}"`
+- `backend->getBackendType()` — `BackendType::GrimTextServer`
+
+**Current consumers**
+- `bootstrap/bootstrap.cpp` — `createBackendForModel()` creates for `BackendType::GrimTextServer`
+- `Orchestrator` — dispatches through `IGenerationBackend` interface via `callBackend()`
+
+**Status**
+- Implemented; registered at bootstrap; Orchestrator dispatch wired
+
+### 24. OllamaBackend (`MMO/Backends/OllamaBackend.hpp`, `MMO/Backends/OllamaBackend.cpp`)
+
+**What changed**
+- New concrete `IGenerationBackend` for Ollama API sub-models
+
+**Owns**
+- HTTP transport to Ollama `/api/chat` endpoint
+- Ollama-specific options: `num_predict`, `temperature`, `top_p`, `top_k`
+- `keep_alive: "30m"` for model residency
+- Separate `ollama_model` name (e.g., `"llama3.1:8b"`) from MMO `model_id`
+- Health check via GET `/api/tags`
+- Single-turn and multi-turn generation
+- Backend ID format: `"ollama:{model_id}"`
+
+**Does not own**
+- Ollama server lifecycle
+- Model pull/download
+- LoRA management
+- Response envelope parsing
+
+**Canonical hook points**
+- `backend->generate(prompt, options)` — single-turn
+- `backend->generateWithHistory(prompt, history, options)` — multi-turn
+- `backend->isAvailable()` — HTTP health check
+- `backend->getBackendId()` — `"ollama:{model_id}"`
+- `backend->getBackendType()` — `BackendType::Ollama`
+
+**Config contract**
+- `model_path` in `ModelInfo` is used as `ollama_model` name
+- `url` in `ModelInfo` is the Ollama server URL (e.g., `http://localhost:11434`)
+
+**Current consumers**
+- `bootstrap/bootstrap.cpp` — `createBackendForModel()` creates for `BackendType::Ollama`
+- `Orchestrator` — dispatches through `IGenerationBackend` interface via `callBackend()`
+
+**Status**
+- Implemented; registered at bootstrap; Orchestrator dispatch wired
+
+### 25. callBackend → IGenerationBackend dispatch (Phase 1.1 wiring)
+
+**What changed**
+- `Orchestrator::callBackend()` migrated from direct-HTTP-only to backend registry dispatch
+- `Orchestrator.hpp` — added `backends_` member (`unordered_map<string, unique_ptr<IGenerationBackend>>`), `registerBackend()`, `resultToEnvelope()`
+- `Orchestrator.cpp` — `callBackend()` now checks `backends_` first, dispatches via `backend->generate()`, converts result via `resultToEnvelope()`; direct HTTP is fallback only
+- `bootstrap/bootstrap.cpp` — `createBackendForModel()` factory + registration loop for router and all sub-models
+
+**Owns**
+- Backend registry on Orchestrator (`backends_` map)
+- `registerBackend(model_id, backend)` — stores backends
+- `resultToEnvelope()` — converts `GenerationResult` to `ResponseEnvelope` (parses structured JSON if present, wraps raw text otherwise)
+- Backend dispatch priority: registered backend → direct HTTP fallback
+
+**Does not own**
+- Concrete backend implementations (see §23, §24)
+- Backend factory logic (bootstrap owns `createBackendForModel()`)
+- Model lifecycle (ModelLoader)
+
+**Canonical hook points**
+- `orchestrator.registerBackend(model_id, backend)` — called during bootstrap
+- `callBackend()` — internal, checks `backends_[model_id]` before HTTP fallback
+
+**Legacy replaced**
+- `callBackend()` was direct cpr HTTP only → now gated behind backend registry
+
+**Status**
+- Implemented; all configured models get backends registered at bootstrap
+
+### 26. Config loading from ai_config.json (Phase 3 wiring)
+
+**What changed**
+- `ai_config.json` — added `mmo.model_loader` section (load_timeout_ms, idle_ttl_ms, hot_ttl_cap_ms, use_degrade_step_ms)
+- `ai_config.json` — added `mmo.orchestrator` section (route_timeout_ms, generate_timeout_ms, synthesize_timeout_ms, max_submodels_per_request)
+- `ai_config.json` — added top-level `training_wheels` section (enabled, risk_threshold, min_confidence_floor, uncalibrated_router_confidence, calibration_min_samples, per_category_thresholds)
+- `bootstrap/bootstrap.cpp` — `bootstrapMMOLayer()` now reads `aiConfig["mmo"]["model_loader"]` into `ModelLoaderConfig` fields and `aiConfig["mmo"]["orchestrator"]` into `OrchestratorConfig` fields instead of using hardcoded defaults
+
+**Owns**
+- Config JSON schema for `mmo.model_loader`, `mmo.orchestrator`, and `training_wheels`
+- Bootstrap config reading logic (JSON → struct field mapping)
+
+**Does not own**
+- Config struct definitions (ModelLoaderConfig in ModelLoader.hpp, OrchestratorConfig in Orchestrator.hpp, ActionPolicyConfig in ActionPolicyRegistry.hpp)
+- Config validation beyond JSON field presence
+
+**Canonical hook points**
+- `aiConfig["mmo"]["model_loader"]` → `ModelLoaderConfig` fields
+- `aiConfig["mmo"]["orchestrator"]` → `OrchestratorConfig` fields
+- `aiConfig["training_wheels"]` → `ActionPolicyConfig` (already wired previously)
+
+**Current consumers**
+- `bootstrap/bootstrap.cpp::bootstrapMMOLayer()` — sole reader
+
+**Legacy replaced**
+- Hardcoded default `ModelLoaderConfig loaderCfg;` and `OrchestratorConfig orchCfg;` — now config-driven with same defaults as fallback
+
+**Status**
+- Implemented; build verified
+e
