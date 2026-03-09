@@ -615,6 +615,8 @@ public:
     // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
     const std::vector<ParameterGroup>& parameterGroups() const { return parameter_groups_; }
     std::vector<ParameterGroup>& parameterGroups() { return parameter_groups_; }
+    // Build parameter groups for optimizer (must be called during init so Phase2 grad-norm has max_groups > 0)
+    void buildParameterGroups();
 #endif
 
     const UpdateProbeResult& updateProbe() const { return update_probe_result_; }
@@ -692,8 +694,6 @@ private:
     // forwardInit, forwardStep) copy their data to cached tensors then call this.
     Vector executeInferenceForward_(int seq_len);
 
-    void buildParameterGroups();  // Build parameter groups for optimizer
-    
     LanguageModelConfig config_;
     std::unique_ptr<GrimEmbeddingStack> embedder_;
     
