@@ -1076,7 +1076,7 @@ LossResult computeAutogradLoss(
                 true
             );
             logits_k = autograd::broadcast_add(logits_k, head->bias, ctx.stream);
-            intermediates.mtp_logits_tensors.push_back(logits_k);
+            intermediates.mtp_logits_tensors.push_back(std::move(logits_k));
             Tensor loss_k = autograd::unified_loss(
                 intermediates.mtp_logits_tensors.back(),
                 reinterpret_cast<const int*>(ts->mtp_shifted_targets_tensor.data),
