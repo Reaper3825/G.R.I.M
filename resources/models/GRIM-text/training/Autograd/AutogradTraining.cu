@@ -55,7 +55,7 @@ constexpr int kBlockSize = 256;
 
 // Thin wrapper around shared launchScaleGradients (GradientCC_GPU)
 // Accepts size_t for convenience since .numel() returns size_t
-inline void scaleGradBuffer(float* data, size_t n, float scale, cudaStream_t stream) {
+[[maybe_unused]] inline void scaleGradBuffer(float* data, size_t n, float scale, cudaStream_t stream) {
     if (!data || n == 0) {
         return;
     }
@@ -966,27 +966,6 @@ static void computeNumericLossAsync(
     *d_count_out = d_count;
 }
 
-static float computeNumericLoss(
-    const Tensor& numeric_head_output,
-    const float* cached_numeric_values,
-    const int* cached_targets,
-    int total_tokens,
-    int num_token_id,
-    cudaStream_t stream
-) {
-    float h_loss = 0.0f;
-    int h_count = 0;
-    float* d_loss = nullptr;
-    int* d_count = nullptr;
-    computeNumericLossAsync(numeric_head_output, cached_numeric_values, cached_targets,
-                            total_tokens, num_token_id, stream,
-                            &h_loss, &h_count, &d_loss, &d_count);
-    cudaStreamSynchronize(stream);
-    cudaFree(d_loss);
-    cudaFree(d_count);
-    return (h_count > 0) ? h_loss / static_cast<float>(h_count) : 0.0f;
-}
-
 //======================================================================
 // Autograd Loss Computation
 //======================================================================
@@ -1226,8 +1205,8 @@ BackwardResult executeAutogradBackward(
 //======================================================================
 
 bool verifyGradientsAreConnected(AutogradContext& ctx) {
-    auto* ts = ctx.training_state;
-    const auto* cfg = ctx.config;
+    (void)ctx.training_state;
+    (void)ctx.config;
     bool ok = true;
     
     // The autograd system stores gradients in Tensor.grad_ fields (shared_ptr<Tensor>)
@@ -1426,7 +1405,7 @@ LossResult autogradTrainingStep(
         cudaMemcpyHostToDevice, stream));
     
     // Atom mask + text features
-    constexpr int kTextFeatureDim = Batching::BatchPayload::kTextFeatureDim;
+    (void)Batching::BatchPayload::kTextFeatureDim;  // reserved for validation
     if (training_state.cached_token_atom_mask.data) {
         CUDA_CHECK(cudaMemcpyAsync(
             reinterpret_cast<uint8_t*>(training_state.cached_token_atom_mask.data),

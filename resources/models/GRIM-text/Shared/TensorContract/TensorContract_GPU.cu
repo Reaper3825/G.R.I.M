@@ -82,22 +82,12 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 // Global stream for async cleanup - initialized on first use
 static cudaStream_t g_cleanup_stream = nullptr;
 
-// Static cuBLAS handle for autograd operations (LayerScaleGradFn etc.)
-// Avoids creating/destroying handles per backward call (Issue #ownership-audit)
-static cublasHandle_t g_autograd_cublas_handle = nullptr;
+// cuBLAS for autograd is the handle from TrainingState/InferenceState; layers call
+// set_autograd_cublas_handle() and autograd matmul uses get_autograd_cublas_handle() (thread-local).
 
 void initCleanupStream() {
     if (g_cleanup_stream == nullptr) {
         cudaStreamCreate(&g_cleanup_stream);
-    }
-}
-
-static void initAutogradCublasHandle() {
-    if (g_autograd_cublas_handle == nullptr) {
-        cublasStatus_t status = cublasCreate(&g_autograd_cublas_handle);
-        if (status != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("Failed to create autograd cuBLAS handle, status=" + std::to_string(static_cast<int>(status)));
-        }
     }
 }
 
@@ -239,13 +229,10 @@ void flushDeferredCleanup() {
     }
 }
 
-// Destroy all module-static GPU resources (cleanup stream + cuBLAS handle)
-// Call during process shutdown after all GPU work is complete
+// Destroy module-static GPU resources (cleanup stream only).
+// cuBLAS handle is owned by TrainingState/InferenceState and destroyed there.
+// Call during process shutdown after all GPU work is complete.
 void shutdownAutogradResources() {
-    if (g_autograd_cublas_handle) {
-        cublasDestroy(g_autograd_cublas_handle);
-        g_autograd_cublas_handle = nullptr;
-    }
     if (g_cleanup_stream) {
         cudaStreamSynchronize(g_cleanup_stream);
         cudaStreamDestroy(g_cleanup_stream);
@@ -1463,7 +1450,7 @@ __global__ void kernel_elementwise_mul_backward(
 
 // Element-wise add backward: grad_a = grad_out, grad_b = grad_out
 // (Gradient just passes through to both inputs)
-__global__ void kernel_add_backward(
+__global__ __attribute__((unused)) void kernel_add_backward(
     const float* grad_output,
     float* grad_a,
     float* grad_b,
@@ -5966,31 +5953,7 @@ Tensor reshape_bhsd_to_flat(
 // 2. Calls qkv_out->grad_fn->apply() to continue the chain to W_qkv
 // ═══════════════════════════════════════════════════════════════════════════
 
-// CUDA kernel to split QKV: [tokens, qkv_dim] -> Q[tokens, d_model], K[tokens, kv_dim], V[tokens, kv_dim]
-__global__ void kernel_split_qkv(
-    const float* __restrict__ qkv,     // [tokens, qkv_dim] where qkv_dim = d_model + 2*kv_dim
-    float* __restrict__ Q,              // [tokens, d_model]
-    float* __restrict__ K,              // [tokens, kv_dim]
-    float* __restrict__ V,              // [tokens, kv_dim]
-    int tokens, int d_model, int kv_dim
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total_qkv_dim = d_model + 2 * kv_dim;
-    const int total_q_elems = tokens * d_model;
-    const int total_kv_elems = tokens * kv_dim;
-    
-    // Q elements: idx in [0, tokens * d_model)
-    if (idx < total_q_elems) {
-        const int token = idx / d_model;
-        const int col = idx % d_model;
-        Q[idx] = qkv[token * total_qkv_dim + col];
-    }
-    
-    // K elements: idx in [0, tokens * kv_dim)
-    // Separate kernel launch or just use offset
-}
-
-// One kernel: split qkv [tokens, qkv_dim] -> Q_bsm, K_bsm, V_bsm (same logic as before).
+// One kernel: split qkv [tokens, qkv_dim] -> Q_bsm, K_bsm, V_bsm.
 // Uses 1D grid only (blocks_split, 256) so launch is valid on all drivers; 2D grid
 // and 768 threads/block can trigger "invalid argument".
 __global__ void kernel_split_qkv_all(

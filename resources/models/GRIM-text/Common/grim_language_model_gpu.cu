@@ -64,10 +64,10 @@ const GPUGrimEncoder& LanguageModel::getGpuEncoder() const {
 namespace {
 
 // Production constants - using centralized HyperParameters (Rule 20)
-constexpr float kNegInf = HyperParameters::NEG_INF_ATTENTION;
-constexpr float kProbabilityFloor = HyperParameters::PROBABILITY_FLOOR;
-constexpr float kSoftmaxClipThreshold = HyperParameters::SOFTMAX_CLIP_THRESHOLD;
-constexpr float kTemperatureEpsilon = HyperParameters::EPSILON_TEMPERATURE;
+[[maybe_unused]] constexpr float kNegInf = HyperParameters::NEG_INF_ATTENTION;
+[[maybe_unused]] constexpr float kProbabilityFloor = HyperParameters::PROBABILITY_FLOOR;
+[[maybe_unused]] constexpr float kSoftmaxClipThreshold = HyperParameters::SOFTMAX_CLIP_THRESHOLD;
+[[maybe_unused]] constexpr float kTemperatureEpsilon = HyperParameters::EPSILON_TEMPERATURE;
 constexpr uint32_t kMaxReasonableVocabSize = HyperParameters::MAX_REASONABLE_VOCAB_SIZE;
 
 int detectVocabSizeFromBinary(const std::string& path) {

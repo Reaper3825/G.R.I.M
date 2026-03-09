@@ -30,7 +30,7 @@ inline void cudaFail(cudaError_t err, const char* where) {
     }
 }
 
-inline void cudaFailLast(const char* where) {
+[[maybe_unused]] inline void cudaFailLast(const char* where) {
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string(where) + ": " + cudaGetErrorString(err));
