@@ -308,6 +308,7 @@ bool LanguageModel::save(const std::string& path) {
 }
 
 bool LanguageModel::load(const std::string& path) {
+    using namespace GRIM::Logging;
     SerializationLayer layer(SerializationConfig{});
     SerializationLoadRequest request{};
     request.path = path;

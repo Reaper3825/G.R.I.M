@@ -412,12 +412,14 @@ void LanguageModel::initGPU() {
             mtp_heads_.resize(static_cast<size_t>(cfg.mtp_k));
             for (int k = 0; k < cfg.mtp_k; ++k) {
                 auto& head = mtp_heads_[static_cast<size_t>(k)];
-                head.weight = Tensor::zeros({cfg.vocab_size, cfg.d_model}, primary_stream, "mtp_head_" + std::to_string(k) + ".weight");
+                const std::string w_name = "mtp_head_" + std::to_string(k) + ".weight";
+                const std::string b_name = "mtp_head_" + std::to_string(k) + ".bias";
+                head.weight = Tensor::zeros({cfg.vocab_size, cfg.d_model}, primary_stream, w_name.c_str());
                 head.weight.requires_grad_();
                 head.weight.ensure_grad();
                 const uint64_t mtp_seed = training_state_.weight_init_seed + 3 + static_cast<uint64_t>(k);
                 Tensor::xavier_uniform_(head.weight, mtp_seed, primary_stream);
-                head.bias = Tensor::zeros({cfg.vocab_size}, primary_stream, "mtp_head_" + std::to_string(k) + ".bias");
+                head.bias = Tensor::zeros({cfg.vocab_size}, primary_stream, b_name.c_str());
                 head.bias.requires_grad_();
                 head.bias.ensure_grad();
             }
