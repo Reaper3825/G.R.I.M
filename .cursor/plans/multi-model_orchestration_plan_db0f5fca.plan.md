@@ -69,8 +69,8 @@ This should become the **primary action path**. Commands and plugins are not sep
 
 The good news: the repo already has the beginnings of this.
 
-- `commands/command_registry.*` already defines `ToolMetadata`, AI prompt generation, persistence, and usage analytics.
-- `core/plugin_manager.*` already supports DLL discovery and hot reload by file change.
+- `commands/command_registry.`* already defines `ToolMetadata`, AI prompt generation, persistence, and usage analytics.
+- `core/plugin_manager.`* already supports DLL discovery and hot reload by file change.
 - `core/plugin_api.hpp` already exposes command registration, permissions, and reload hooks for plugins.
 
 The bad news: these pieces are **not yet one authoritative system**. A hardened MMO plan needs one canonical **ToolRegistry** that the model, action policy, hot-swap manager, and training pipeline all share.
@@ -310,7 +310,7 @@ If both memory backends are queried independently from orchestration code, relev
 
 This is arguably the **most important body-side component** in MMO. Right now the code has pieces of context, but not a real context authority:
 
-- `memory/context_manager.cpp` keeps static process-wide state (`recentContext`, one `PendingIntent`, and a raw `MemoryStorage*`).
+- `memory/context_manager.cpp` keeps static process-wide state (`recentContext`, one `PendingIntent`, and a raw `MemoryStorage`*).
 - `ContextSnapshot` only exposes a tiny projection: recent intents, recent commands, mood, conversation depth, `lastNlpCategory`, consecutive commands, and last command time.
 - `commands_feedback.cpp` separately owns `g_pendingClarifyCmd` and `g_pendingFeedbackCmd`, so clarification/confirmation state is split away from the main context system.
 - `commands/commands_core.cpp` still resolves references with hardcoded cases like `"that app"` / `"it"`, which means referent tracking is not truly centralized.
@@ -375,12 +375,12 @@ Blending those together would make routing, referent resolution, and action poli
   - `kind = missing_slot | clarification | confirmation | correction | follow_up`
   - original proposal / missing fields / prompt shown to user
   - expiry and session ownership
-- `**ActionEpisode**`
+- `**ActionEpisode`**
   - proposed command/plugin
   - `GC_action_risk`, `GC_action_confidence`
   - whether the user rejected/corrected it
   - final accepted action and outcome
-- `**ContextSnapshotV2**`
+- `**ContextSnapshotV2`**
   - the compact projection consumed by `FastClassifier`, router metadata builder, memory retrieval, and Training Wheels.
 
 #### `ContextSnapshotV2` must include more than the current snapshot
@@ -515,7 +515,7 @@ The important separation-of-concerns rule is: **bootstrap builds the inventory a
 
 ### Design rules
 
-- `system_detect.*` should become primarily the **static inventory detector**.
+- `system_detect.`* should become primarily the **static inventory detector**.
 - Live resource monitoring should move to a separate service, not be hidden inside `detectSystem()`.
 - `bootstrap/bootstrap.cpp` should orchestrate phases, not own per-subsystem runtime policy.
 - ModelLoader and future tool loaders should consult the shared resource coordinator/signal rather than probing hardware independently on each use.

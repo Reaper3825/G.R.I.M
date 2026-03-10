@@ -154,7 +154,7 @@ struct TrainingHyperparameters {
     int single_batch_overfit_max_steps;
     std::string batch_strategy;
     float learning_rate;
-    float min_lr;  // Minimum LR for cosine decay (floor)
+    // min_lr removed: cosine_decay_min_lr (from cosine_decay.min_lr) is the authoritative floor
     float weight_decay;
     float grad_clip_norm;
     bool per_token_grad_scale;
@@ -582,7 +582,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
     static const std::vector<std::string> REQUIRED = {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
-        "batch_strategy", "learning_rate", "min_lr", "weight_decay",
+        "batch_strategy", "learning_rate", "weight_decay",
         "per_token_grad_scale", "warmup_steps", "max_seq_len", "min_seq_valid_tokens", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention", "min_seq_len_for_flash",
@@ -729,7 +729,6 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.gradient_accumulation_steps, trainConfig, "gradient_accumulation_steps");
     assignTrainingField(params.batch_strategy, trainConfig, "batch_strategy");
     assignTrainingField(params.learning_rate, trainConfig, "learning_rate");
-    assignTrainingField(params.min_lr, trainConfig, "min_lr");
     assignTrainingField(params.weight_decay, trainConfig, "weight_decay");
     assignTrainingField(params.grad_clip_norm, trainConfig, "gradient_clip");
     assignTrainingField(params.grad_clip_norm, trainConfig, "grad_clip_norm");

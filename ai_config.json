@@ -2,7 +2,7 @@
     "api_keys": {
         "azure": "",
         "elevenlabs": "",
-        "huggingface": "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",
+        "huggingface": "TODO",
         "openai": ""
     },
     "backend": "grim_native",
@@ -17,7 +17,6 @@
     "grim_text_url": "http://127.0.0.1:11435",
     "localai_url": "http://127.0.0.1:8080/v1",
     "max_tokens": 256,
-    "model_path": "resources/models/GRIM-text/training/checkpoints/model_embeddings.npy",
     "ollama_options": {
         "low_vram": false,
         "num_batch": 512,
@@ -50,31 +49,7 @@
     },
     "personality": {
         "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
-        "use_custom_prompt": true
-    },
-    "mmo": {
-        "enabled": false,
-        "mode": "shadow",
-        "router": {
-            "backend_type": "grim_text_server",
-            "description": "Primary router and synthesizer model",
-            "estimated_ram_mb": 0,
-            "estimated_vram_mb": 0,
-            "hard_copy_path": "",
-            "id": "grim-text-router",
-            "lora_path": "",
-            "model_path": "resources/models/GRIM-text/grim_text.bin",
-            "name": "GRIM-text Router",
-            "subject": "routing",
-            "subject_tags": [
-                "general",
-                "routing",
-                "synthesis"
-            ],
-            "url": "http://127.0.0.1:11435",
-            "version": "1.0"
-        },
-        "sub_models": []
+        "use_custom_prompt": false
     },
     "silence_threshold": 0.02,
     "silence_timeout_ms": 4000,
@@ -149,7 +124,6 @@
             "use_gpu": true,
             "use_flash_attention": true,
             "min_seq_len_for_flash": 256,
-            "use_mixed_precision": true,
             "single_batch": {
                 "enabled": false,
                 "max_steps": 1000
@@ -416,46 +390,10 @@
             "hardcoded_hidden_states": {
                 "enabled": false,
                 "pattern": "random_centered",
-                "log_every_n_batches": 1,
-                "patterns": {
-                    "random_centered": "Random normal with mean=0 (tests Issue #37 fix)",
-                    "orthogonal_w277": "Orthogonal to W[277] (should give logit[277]≈0)",
-                    "aligned_w277": "Aligned with W[277] (should give high logit[277])",
-                    "constant_uniform": "Constant [1/√768] (tests row sum bias Issue #40)",
-                    "zero_mean_sine": "Sine wave with zero mean (tests centering robustness)"
-                }
+                "log_every_n_batches": 1
             },
-            "guess_cache": {
-                "enabled": false,
-                "initial_capacity": 32768,
-                "min_capacity": 1024,
-                "max_capacity": 8192,
-                "grow_threshold": 0.85,
-                "shrink_threshold": 0.25,
-                "grow_factor": 2.0,
-                "shrink_factor": 0.1,
-                "evict_window": 32,
-                "staleness_decay_rate": 0.01,
-                "variance_weight": 0.3,
-                "frequency_weight": 0.2,
-                "diversity_weight": 0.25,
-                "recency_weight": 0.25,
-                "enable_diversity_tracking": true,
-                "diversity_bloom_bits": 131072,
-                "diversity_hash_functions": 4,
-                "diversity_penalty": 0.15,
-                "confidence_floor": 0.01,
-                "confidence_ceiling": 0.999,
-                "confidence_adaptation_rate": 0.01,
-                "momentum_floor": 0.55,
-                "momentum_ceiling": 0.995,
-                "staleness_grace_period": 0.25,
-                "enable_async_transfers": true,
-                "pinned_buffer_size": 16384,
-                "num_streams": 4,
-                "enable_histograms": false,
-                "histogram_bins": 32,
-                "telemetry_sample_interval": 25
+            "qk_norm": {
+                "enabled": false
             }
         },
         "server_host": "127.0.0.1",
