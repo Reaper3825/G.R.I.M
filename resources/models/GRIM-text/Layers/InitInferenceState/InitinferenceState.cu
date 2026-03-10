@@ -130,7 +130,18 @@ void LanguageModel::initInferenceState() {
         numeric_head_layer_ = std::make_unique<NumericHeadLayer>(nh_cfg, /*seed=*/0, primary_stream);
         std::cout << "  ✓ NumericHeadLayer initialized (inference, d_model=" << cfg.d_model << ")" << std::endl;
     }
-    
+
+    // MTP heads (inference: allocate so load() can fill from .mtp sidecar; not used in forward)
+    if (cfg.mtp_enabled && cfg.mtp_k > 0) {
+        mtp_heads_.resize(static_cast<size_t>(cfg.mtp_k));
+        for (int k = 0; k < cfg.mtp_k; ++k) {
+            auto& head = mtp_heads_[static_cast<size_t>(k)];
+            head.weight = Tensor::zeros({cfg.vocab_size, cfg.d_model}, primary_stream, ("mtp_inf_" + std::to_string(k) + "_w").c_str());
+            head.bias = Tensor::zeros({cfg.vocab_size}, primary_stream, ("mtp_inf_" + std::to_string(k) + "_b").c_str());
+        }
+        std::cout << "  ✓ MTP " << cfg.mtp_k << " heads allocated (weights loaded from .mtp if present)" << std::endl;
+    }
+
     // 3b. Allocate minimal activation caches
     const size_t max_batch_size = static_cast<size_t>(std::max(1, cfg.max_cached_batch));
     const size_t max_seq_len_cache = static_cast<size_t>(std::max(1, std::min(cfg.max_seq_len, cfg.max_cached_seq_len)));
