@@ -1193,7 +1193,10 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
     buildTrie();
     
     std::cout << "[UnigramLM] Loaded " << pieces_.size() << " pieces from binary: " << vocab_path << std::endl;
-    std::cout << "[UnigramLM] Total vocab size (with bytes+atoms): " << total_vocab_size << std::endl;
+    std::cout << "[UnigramLM] Embedding vocab size: " << total_vocab_size
+              << " (" << NUM_SPECIAL_TOKENS << " special + " << BYTE_VOCAB_SIZE << " bytes + "
+              << ATOM_VOCAB_SIZE << " atom type placeholders + "
+              << pieces_.size() << " unigram pieces)" << std::endl;
     return true;
 }
 
@@ -1259,8 +1262,11 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format) const
     }
     
     bin_file.close();
-    std::cout << "[UnigramLM] Saved binary vocab (" << total_vocab_size 
-              << " total tokens) to " << bin_path << std::endl;
+    std::cout << "[UnigramLM] Saved binary vocab (" << total_vocab_size
+              << " embedding vocab = " << NUM_SPECIAL_TOKENS << " special + "
+              << BYTE_VOCAB_SIZE << " bytes + " << ATOM_VOCAB_SIZE
+              << " atom type placeholders + " << pieces_.size()
+              << " unigram pieces) to " << bin_path << std::endl;
     
     // Optional: Save text format (.txt) for human readability
     if (save_text_format) {

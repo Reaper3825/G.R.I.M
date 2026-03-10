@@ -35,6 +35,7 @@
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/LMHead/lm_head_GPU.hpp"
+#include "../Layers/NumericHead/numeric_head_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -184,10 +185,6 @@ struct EncoderConfig {
     // When false, only the LM head centering (center_hidden_states) helps prevent mode collapse.
     bool center_encoder_residuals = false;
     
-    // QK-norm: per-head RMSNorm on Q and K after QKV projection, before RoPE.
-    // Bounds attention logits by decoupling magnitude from direction.
-    bool qk_norm_enabled = false;
-    
     // Bias control - when false, encoder layers skip bias addition (b_qkv, b_o not used)
     bool use_bias = true;
     
@@ -320,9 +317,6 @@ struct LanguageModelConfig {
     // with learnable scalars (initialized to layer_scale_init, typically 0.1)
     bool use_layer_scale = false;         // Enable LayerScale (gated residual scaling)
     float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
-    
-    // QK-norm: per-head RMSNorm on Q and K after QKV projection, before RoPE
-    bool qk_norm_enabled = false;
     
     bool use_gpu = true;
     bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency
@@ -549,15 +543,20 @@ public:
     std::vector<GeneratedSequence> generate(const std::vector<int>& prompt_tokens,
                                             const std::vector<float>& prompt_numeric_values,
                                             const std::vector<uint8_t>& prompt_atom_mask,
-                                            const GenerationConfig* gen_config = nullptr);
+                                            const GenerationConfig* gen_config = nullptr,
+                                            std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
+                                            const std::vector<uint32_t>& prompt_atom_entry_ids = {});
     GeneratedSequence generateStream(const std::vector<int>& prompt_tokens,
                                      const std::vector<float>& prompt_numeric_values,
                                      const std::vector<uint8_t>& prompt_atom_mask,
                                      GenerationStreamCallback callback,
-                                     const GenerationConfig* gen_config = nullptr);
+                                     const GenerationConfig* gen_config = nullptr,
+                                     std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
+                                     const std::vector<uint32_t>& prompt_atom_entry_ids = {});
     
     // Training
-    float computeLossBatch(const GRIM::Batching::BatchPayload& payload);
+    float computeLossBatch(const GRIM::Batching::BatchPayload& payload,
+                           bool is_training = true);
     
     // =========================================================================
     // INCREMENTAL GENERATION API (KV-Cache Autoregressive)
@@ -580,6 +579,11 @@ public:
     // Appends new token to cached sequence and recomputes full forward pass
     Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask);
     
+    // Reconstruct the predicted numeric value from the cached numeric head
+    // output produced by the most recent forward pass. Call AFTER sampling
+    // a <NUM> token and BEFORE forwardStep appends the next token.
+    float predictNumericValue() const;
+
     // Clear KV cache (call before starting new generation)
     void resetKVCache();
     
@@ -663,6 +667,10 @@ public:
     // LM Head layer access (Pattern B: persistent, self-allocating)
     LMHeadLayer* getLmHeadLayer() { return lm_head_layer_.get(); }
     const LMHeadLayer* getLmHeadLayer() const { return lm_head_layer_.get(); }
+
+    // Numeric Head layer access (nullptr when disabled)
+    NumericHeadLayer* getNumericHeadLayer() { return numeric_head_layer_.get(); }
+    const NumericHeadLayer* getNumericHeadLayer() const { return numeric_head_layer_.get(); }
     
     // Scratch pool configuration (pinned memory transfers)
     void configureScratchPool(bool enabled);
@@ -673,7 +681,9 @@ public:
                                           const std::vector<float>& prompt_numeric_values,
                                           const std::vector<uint8_t>& prompt_atom_mask,
                                           const GenerationConfig& cfg,
-                                          GenerationStreamCallback* stream_callback = nullptr);
+                                          GenerationStreamCallback* stream_callback = nullptr,
+                                          std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
+                                          const std::vector<uint32_t>& prompt_atom_entry_ids = {});
     
 private:
     // Core inference forward: assumes data already in cached_* tensors.
@@ -720,6 +730,9 @@ private:
 
     // LM Head layer (Pattern B: persistent, self-allocating, owns final_rms_gamma)
     std::unique_ptr<LMHeadLayer> lm_head_layer_;
+
+    // Numeric Head layer (predicts log-magnitude + sign for <NUM> tokens)
+    std::unique_ptr<NumericHeadLayer> numeric_head_layer_;
 #endif
 };
 

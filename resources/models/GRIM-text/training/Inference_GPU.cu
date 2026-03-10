@@ -17,6 +17,7 @@
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "Autograd/AutogradTraining.hpp"
+#include "../Layers/NumericHead/numeric_head_GPU.hpp"
 
 namespace GRIM {
 
@@ -48,6 +49,7 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
         getEmbeddingLayer(),
         getLmHeadLayer(),
         getScratchBlockLayer(),
+        getNumericHeadLayer(),
         training_state_.cublas_handle,
         stream,
         1,          // batch_size = 1 for inference
@@ -73,7 +75,19 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
                     training_state_.cached_logits_tensor.data + last_token_offset,
                     config_.vocab_size * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
+
+    // Cache last-token numeric head output (2 floats) for predictNumericValue()
+    if (training_state_.autograd_intermediates.numeric_head_output.data) {
+        const size_t num_offset = static_cast<size_t>(seq_len - 1) * 2;
+        cudaMemcpyAsync(training_state_.cached_numeric_pred,
+                        training_state_.autograd_intermediates.numeric_head_output.data + num_offset,
+                        2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    }
     cudaStreamSynchronize(stream);
+
+    // Free all autograd intermediates — inference never runs backward.
+    // Without this, grad_fn chains and cached tensors leak across generation steps.
+    training_state_.autograd_intermediates.clear();
 
     return logits;
 }
@@ -182,6 +196,15 @@ void LanguageModel::resetKVCache() {
 //======================================================//
 int LanguageModel::getKVCacheLength() const {
     return training_state_.kv_cache_len;
+}
+
+//======================================================//
+//  predictNumericValue - Read cached numeric head output
+//======================================================//
+float LanguageModel::predictNumericValue() const {
+    return NumericHeadLayer::reconstruct(
+        training_state_.cached_numeric_pred[0],
+        training_state_.cached_numeric_pred[1]);
 }
 
 } // namespace GRIM

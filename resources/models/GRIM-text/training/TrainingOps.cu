@@ -17,7 +17,6 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
-#include "../Common/grim_scale_buffer.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "module_logger.hpp"
@@ -395,6 +394,18 @@ void LanguageModel::initGPU() {
             std::cout << "✓ LM Head layer created ("
                       << (cfg.tie_embeddings ? "tied to embedding" : "separate weights")
                       << ", final_rms_gamma owned, bias=" << (cfg.use_bias ? "yes" : "no") << ")\n";
+        }
+
+        // NumericHead layer: d_model -> 2 (log-magnitude + sign logit)
+        {
+            NumericHeadConfig nh_config;
+            nh_config.d_model = cfg.d_model;
+            nh_config.stream = primary_stream;
+            nh_config.cublas_handle = training_state_.cublas_handle;
+
+            const uint64_t nh_seed = training_state_.weight_init_seed + 2;
+            numeric_head_layer_ = std::make_unique<NumericHeadLayer>(nh_config, nh_seed, primary_stream);
+            std::cout << "✓ NumericHead layer created (d_model=" << cfg.d_model << " -> 2)\n";
         }
 
         std::cout << "✓ GPU encoder initialized with " << cfg.num_layers << " layers\n";

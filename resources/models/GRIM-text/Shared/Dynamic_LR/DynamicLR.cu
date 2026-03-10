@@ -146,7 +146,7 @@ void DynamicLRController::setRuntimeLimits(float min_lr, float max_lr) {
     runtime_max_lr_ = std::max(max_lr, runtime_min_lr_ * 1.05f);
 }
 
-float DynamicLRController::update(float grad_norm, float loss, float scheduled_lr_ceiling) {
+float DynamicLRController::update(float grad_rms, float loss, float scheduled_lr_ceiling) {
     diagnostics_ = {};
     diagnostics_.applied_learning_rate = current_lr_;
     diagnostics_.proposed_learning_rate = current_lr_;
@@ -186,7 +186,7 @@ float DynamicLRController::update(float grad_norm, float loss, float scheduled_l
         return current_lr_;
     }
 
-    if (!isFinite(grad_norm) || !isFinite(loss)) {
+    if (!isFinite(grad_rms) || !isFinite(loss)) {
         clampAndCommit(runtime_min_lr_,
                        DynamicLRDiagnostics::AdjustmentReason::InvalidSample);
         smoothed_grad_norm_ = config_.upper_grad_norm;
@@ -197,7 +197,7 @@ float DynamicLRController::update(float grad_norm, float loss, float scheduled_l
         return current_lr_;
     }
 
-    applySmoothing(grad_norm, loss);
+    applySmoothing(grad_rms, loss);
     refreshAdaptiveParameters();
     updateBandScaling();
 
@@ -252,12 +252,12 @@ float DynamicLRController::update(float grad_norm, float loss, float scheduled_l
     return current_lr_;
 }
 
-void DynamicLRController::applySmoothing(float grad_norm, float loss) {
+void DynamicLRController::applySmoothing(float grad_rms, float loss) {
     const float smoothing = std::clamp(current_smoothing_, 0.0f, 0.99f);
     if (step_ <= 1 || !isFinite(smoothed_grad_norm_)) {
-        smoothed_grad_norm_ = grad_norm;
+        smoothed_grad_norm_ = grad_rms;
     } else {
-        smoothed_grad_norm_ = smoothing * smoothed_grad_norm_ + (1.0f - smoothing) * grad_norm;
+        smoothed_grad_norm_ = smoothing * smoothed_grad_norm_ + (1.0f - smoothing) * grad_rms;
     }
 
     if (step_ <= 1 || !isFinite(smoothed_loss_)) {
@@ -662,13 +662,13 @@ void EmitLog(LogLevel level, std::string_view message) {
 
 void LogAdjustment(float base_lr, float proposed_lr, float applied_lr,
                    DynamicLRDiagnostics::AdjustmentReason reason,
-                   float grad_norm, float loss) {
+                   float grad_rms, float loss) {
     std::ostringstream msg;
     msg << "[DynamicLR] base=" << FormatFloat(base_lr, 8)
         << " proposed=" << FormatFloat(proposed_lr, 8)
         << " applied=" << FormatFloat(applied_lr, 8)
         << " reason=" << ReasonToString(reason)
-        << " grad_norm=" << FormatFloat(grad_norm, 4)
+        << " grad_rms=" << FormatFloat(grad_rms, 4)
         << " loss=" << FormatFloat(loss, 4);
     EmitLog(LogLevel::Info, msg.str());
 }

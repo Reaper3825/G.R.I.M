@@ -10,6 +10,8 @@
 #include <random>
 #include <filesystem>
 #include <optional>
+#include <unordered_map>
+#include "../Common/grim_model_serialization_version.hpp"
 #include "../Shared/DynaSeqs/DynaSeq_GPU.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"  // For kTextFeatureDim
 
@@ -173,10 +175,10 @@ private:
         
         vocab_size_ = vocab_size; // Store vocab size from file
         
-        // GRMT v8 required — atom_flags side channel
-        if (version != 8) {
+        // GRMT format version must match GRMT_FORMAT_VERSION (single source of truth in grim_model_serialization_version.hpp)
+        if (version != GRIM::GRMT_FORMAT_VERSION) {
             std::cerr << "[DataLoader] FATAL: Unsupported GRMT version " << version
-                      << " (required: 8). Delete .grmt files and regenerate training data." << std::endl;
+                      << " (required: " << GRIM::GRMT_FORMAT_VERSION << "). Delete .grmt files and regenerate training data." << std::endl;
             return false;
         }
 
@@ -264,6 +266,52 @@ private:
             std::cerr << "[DataLoader] Sanitized " << nonfinite_total
                       << " non-finite numeric values across " << nonfinite_sequences
                       << " sequences (mask cleared)" << std::endl;
+        }
+
+        // Atom side-channel diagnostics: report what's actually in the GRMT
+        size_t total_tokens_loaded = 0;
+        size_t atom_tokens_total = 0;
+        size_t atom_sequences = 0;
+        std::unordered_map<int, size_t> atom_type_counts;
+        size_t atom_entries_total = 0;
+        for (const auto& seq : sequences_) {
+            total_tokens_loaded += seq.token_ids.size();
+            bool seq_has_atoms = false;
+            for (size_t j = 0; j < seq.token_ids.size(); ++j) {
+                if (j < seq.token_atom_mask.size() && seq.token_atom_mask[j]) {
+                    atom_tokens_total++;
+                    seq_has_atoms = true;
+                    atom_type_counts[seq.token_ids[j]]++;
+                }
+                if (j < seq.atom_entry_ids.size() &&
+                    seq.atom_entry_ids[j] != GRIM::Tokenizer::kAtomEntryNone) {
+                    atom_entries_total++;
+                }
+            }
+            if (seq_has_atoms) atom_sequences++;
+        }
+        std::cerr << "[DataLoader] Atom side-channel stats:" << std::endl
+                  << "  Total tokens: " << total_tokens_loaded << std::endl
+                  << "  Atom tokens: " << atom_tokens_total
+                  << " (" << (total_tokens_loaded > 0
+                      ? (100.0 * atom_tokens_total / total_tokens_loaded) : 0.0)
+                  << "% of tokens)" << std::endl
+                  << "  Sequences with atoms: " << atom_sequences
+                  << "/" << sequences_.size() << std::endl
+                  << "  AtomTable entries reconstructed: " << atom_entries_total << std::endl;
+        if (!atom_type_counts.empty()) {
+            std::cerr << "  Atom type breakdown:" << std::endl;
+            for (const auto& [tid, count] : atom_type_counts) {
+                auto type = GRIM::Tokenizer::tokenIdToAtomType(tid);
+                std::cerr << "    " << GRIM::Tokenizer::atomTypeName(type)
+                          << " (token " << tid << "): " << count << std::endl;
+            }
+        }
+        if (atom_tokens_total == 0) {
+            std::cerr << "[DataLoader] WARNING: Zero atom tokens in GRMT! "
+                      << "Atom detection may not have been enabled during encoding. "
+                      << "Delete .grmt files and regenerate with scratch_block_reasoning.enabled=true"
+                      << std::endl;
         }
       
         catalog_dirty_ = true;

@@ -68,6 +68,7 @@ struct alignas(64) GradMetrics {
     float ffn_sum_sq = 0.0f;            // FFN = 3
     float rmsnorm_sum_sq = 0.0f;        // RMSNORM = 4
     float scratchblock_sum_sq = 0.0f;   // SCRATCHBLOCK = 5
+    float numeric_head_sum_sq = 0.0f;   // NUMERIC_HEAD = 6
     
     // Per-type element counts (for RMS computation)
     int embedding_count = 0;
@@ -76,6 +77,7 @@ struct alignas(64) GradMetrics {
     int ffn_count = 0;
     int rmsnorm_count = 0;
     int scratchblock_count = 0;
+    int numeric_head_count = 0;
     
     uint32_t has_nan = 0;
     uint32_t has_inf = 0;
@@ -115,6 +117,28 @@ struct GradNormScratch {
  * Call once during training setup. Returns null on failure (logged).
  */
 GradNormScratch* allocateGradNormScratch(size_t max_groups, cudaStream_t stream);
+
+/**
+ * Launch gradient norm kernels and async D2H copy (no sync).
+ * Caller must cudaStreamSynchronize(stream) then measureGradientNormsFinalize() before reading h_metrics.
+ * Use this to overlap CPU work (e.g. logging) with GPU work.
+ */
+GradNormStatus measureGradientNormsLaunch(
+    const GRIM::ParameterGroup* groups,
+    size_t num_groups,
+    GradNormScratch* scratch,
+    cudaStream_t stream
+);
+
+/**
+ * Finalize metrics on CPU after D2H has completed (call after sync).
+ * Reads scratch->h_partial_sums, writes scratch->h_metrics.
+ */
+GradNormStatus measureGradientNormsFinalize(
+    const GRIM::ParameterGroup* groups,
+    size_t num_groups,
+    GradNormScratch* scratch
+);
 
 /**
  * Measure gradient norms for all parameter groups.

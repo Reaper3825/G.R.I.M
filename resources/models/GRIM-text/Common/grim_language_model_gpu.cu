@@ -122,6 +122,10 @@ int detectVocabSizeFromBinary(const std::string& path) {
     if (!file.read(reinterpret_cast<char*>(&byte_fallback), sizeof(byte_fallback))) {
         return -1;
     }
+    (void)max_length;
+    (void)nfkc;
+    (void)lower;
+    (void)byte_fallback;
 
     uint32_t vocab_size = 0;
     if (!file.read(reinterpret_cast<char*>(&vocab_size), sizeof(vocab_size))) {
@@ -618,7 +622,9 @@ std::vector<GeneratedSequence> LanguageModel::generate(
     const std::vector<int>& prompt_tokens,
     const std::vector<float>& prompt_numeric_values,
     const std::vector<uint8_t>& prompt_atom_mask,
-    const GenerationConfig* gen_config)
+    const GenerationConfig* gen_config,
+    std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
+    const std::vector<uint32_t>& prompt_atom_entry_ids)
 {
 #ifdef USE_CUDA
     if (config_.use_gpu && gpu_encoder_) {
@@ -630,14 +636,15 @@ std::vector<GeneratedSequence> LanguageModel::generate(
         std::vector<GeneratedSequence> outputs;
         outputs.reserve(sequences);
         for (int i = 0; i < sequences; ++i) {
-            // Each sequence gets a unique seed offset for reproducibility
             GenerationConfig seq_cfg = cfg;
             if (seq_cfg.seed != 0) seq_cfg.seed += i;
             outputs.push_back(generateSequenceGPU(prompt_tokens,
                                                   prompt_numeric_values,
                                                   prompt_atom_mask,
                                                   seq_cfg,
-                                                  nullptr));
+                                                  nullptr,
+                                                  prompt_atom_table,
+                                                  prompt_atom_entry_ids));
         }
         return outputs;
     }
@@ -650,7 +657,9 @@ GeneratedSequence LanguageModel::generateStream(
     const std::vector<float>& prompt_numeric_values,
     const std::vector<uint8_t>& prompt_atom_mask,
     GenerationStreamCallback callback,
-    const GenerationConfig* gen_config)
+    const GenerationConfig* gen_config,
+    std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
+    const std::vector<uint32_t>& prompt_atom_entry_ids)
 {
 #ifdef USE_CUDA
     if (config_.use_gpu && gpu_encoder_) {
@@ -659,7 +668,9 @@ GeneratedSequence LanguageModel::generateStream(
                                    prompt_numeric_values,
                                    prompt_atom_mask,
                                    cfg,
-                                   &callback);
+                                   &callback,
+                                   prompt_atom_table,
+                                   prompt_atom_entry_ids);
     }
 #endif
     throw std::runtime_error("LanguageModel::generateStream requires GPU initialization");
@@ -670,12 +681,19 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                                      const std::vector<float>& prompt_numeric_values,
                                                      const std::vector<uint8_t>& prompt_atom_mask,
                                                      const GenerationConfig& cfg,
-                                                     GenerationStreamCallback* stream_callback) {
+                                                     GenerationStreamCallback* stream_callback,
+                                                     std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
+                                                     const std::vector<uint32_t>& prompt_atom_entry_ids) {
     GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
     sequence.token_numeric_values = prompt_numeric_values;
     sequence.token_atom_mask = prompt_atom_mask;
-    sequence.atom_entry_ids.assign(prompt_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
+    sequence.context_atom_table = prompt_atom_table;
+    if (!prompt_atom_entry_ids.empty() && prompt_atom_entry_ids.size() == prompt_tokens.size()) {
+        sequence.atom_entry_ids = prompt_atom_entry_ids;
+    } else {
+        sequence.atom_entry_ids.assign(prompt_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
+    }
     
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("generateSequenceGPU requires initialized GPU encoder");
@@ -775,27 +793,21 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         }
         
         // =====================================================================
-        // ScratchBlock Reasoning: Classify generated token for atom metadata
+        // ScratchBlock Reasoning: numeric head prediction for <NUM> tokens
         //
-        // During training, the tokenizer produces atom_mask and numeric_values
-        // alongside token_ids. During autoregressive generation, we must
-        // reconstruct this metadata for each generated token so that
-        // ScratchBlock's atom detection kernel receives correct input.
-        //
-        // Atom tokens live in range [ATOM_TOKEN_OFFSET, UNIGRAM_VOCAB_OFFSET).
-        // The atom type is encoded as: type = token_id - ATOM_TOKEN_OFFSET.
-        // For atom tokens, we set atom_mask=1 so ScratchBlock activates.
+        // The numeric head ran alongside the LM head in the same forward pass
+        // that produced these logits. Its last-token output is already cached
+        // in training_state_.cached_numeric_pred[2] (D2H copy happened in
+        // executeInferenceForward_). We read it BEFORE forwardStep appends
+        // the new token, because the cached prediction corresponds to the
+        // hidden state that produced the sampled token.
         // =====================================================================
         float token_numeric_value = 0.0f;
         uint8_t token_atom_mask_val = 0;
-        
+
         if (scratchblock_active && GRIM::Tokenizer::isAtomToken(sample.token_id)) {
-            // This generated token IS an atom placeholder — tell ScratchBlock
             token_atom_mask_val = 1;
-            // Numeric value is extracted at tokenization time and stored in
-            // the sequence; for generated atoms we don't have the original
-            // text, so we leave numeric_value=0. The ScratchBlock layer uses
-            // atom type embeddings (from the token ID) as the primary signal.
+            token_numeric_value = predictNumericValue();
         }
         
         // Check for EOS BEFORE processing next step

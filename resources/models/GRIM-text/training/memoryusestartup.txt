@@ -1,0 +1,269 @@
+[2026-03-05 21:29:01] ========================================
+[2026-03-05 21:29:01]   GRIM-text Training Session
+[2026-03-05 21:29:01]   Session ID: 1772764141805190106
+[2026-03-05 21:29:01] ========================================
+[2026-03-05 21:29:01] Previous equation_log.csv exists, creating: resources/models/GRIM-text/training/logs/equation_log_20260305_212901.csv
+[2026-03-05 21:29:01] EquationLogger disabled (enable=false) - no equation diagnostics, no D2H sync overhead
+[2026-03-05 21:29:01] PyTorch verification: DISABLED (compile with -DGRIM_PYTORCH_VERIFY to enable)
+[2026-03-05 21:29:01] Loading tokenizer configuration...
+[UnigramLM] Loaded 2250 pieces from binary: resources/models/GRIM-text/training/data/vocab.bin
+[UnigramLM] Embedding vocab size: 2512 (4 special + 256 bytes + 2 atom type placeholders + 2250 unigram pieces)
+[2026-03-05 21:29:01] ✓ Loaded 2512 tokens (2250 pieces)
+[2026-03-05 21:29:01] [DEBUG] Starting training data load...
+[2026-03-05 21:29:01] Loading training data...
+[DataLoader] GRMT version 9
+[DataLoader] Sequences: 10597
+[DataLoader] Vocab size: 2512
+[DataLoader] Atom side-channel stats:
+  Total tokens: 36118293
+  Atom tokens: 1387525 (3.84161% of tokens)
+  Sequences with atoms: 10595/10597
+  AtomTable entries reconstructed: 1387525
+  Atom type breakdown:
+    NUM (token 261): 1387525
+[2026-03-05 21:29:05] ✓ Loaded 10597 sequences
+[2026-03-05 21:29:07] [Data] Boundary tokens: added_bos=10597 added_eos=10597 (controlled by config flags)
+[2026-03-05 21:29:09] Sliding window (train): 9322 long sequences expanded into 38606 windows (BOS prepended to 29284 mid-sequence windows)
+[2026-03-05 21:29:09] [Data] train: Padded 9524 sequences to max_seq_len=1024 (pad_id=1)
+[2026-03-05 21:29:09] Sliding window (val): 1042 long sequences expanded into 4295 windows (BOS prepended to 3253 mid-sequence windows)
+[2026-03-05 21:29:09] [Data] val: Padded 1058 sequences to max_seq_len=1024 (pad_id=1)
+[2026-03-05 21:29:09] [FILTER] train: Removed 161 sequences with < 10 valid tokens
+[2026-03-05 21:29:09] [FILTER] val: Removed 16 sequences with < 10 valid tokens
+[2026-03-05 21:29:09] Train sequences: 38661
+[2026-03-05 21:29:09] Val sequences: 4296
+[2026-03-05 21:29:09] ✓ Vocab size validated: tokenizer and training data match (2512 tokens)
+[2026-03-05 21:29:09] [ConfigAdjust] micro_validation_min_step 500 -> 2000
+[2026-03-05 21:29:09] [ConfigAdjust] soft_restart_max_step_window 50 -> 4833
+[2026-03-05 21:29:09] [ConfigAdjust] soft_restart_cooldown_steps 200 -> 4833
+[2026-03-05 21:29:09] Initializing production-grade RNG system...
+[2026-03-05 21:29:09] ✓ RNG mode: DETERMINISTIC (seed=1)
+[2026-03-05 21:29:10] ✓ CUDA RNG initialized (seed=2001)
+[2026-03-05 21:29:10] RNG seed hierarchy:
+  base_seed  = 1 (master)
+  data_seed  = 1 (CPU shuffling)
+  init_seed  = 1001 (weight initialization)
+  cuda_seed  = 2001 (GPU dropout/sampling)
+To reproduce this run, set ai_config.json: training.config.seed = 1
+[2026-03-05 21:29:10] ✓ RNG system initialized
+[2026-03-05 21:29:10] Initializing model with xavier_seed=1001...
+[2026-03-05 21:29:10] Flash attention: enabled=true, min_seq_len=256
+[2026-03-05 21:29:10] ScratchBlock reasoning: enabled=true, atom_embedding_dim=96, max_atoms=8192, atom_scale=1.000000
+[2026-03-05 21:29:10] LM Head centering: center_hidden_states=true, project_out_pc1=false, pc1_power_iters=5, center_logits=false, center_encoder_residuals=true
+[2026-03-05 21:29:10] LayerScale: enabled=true, init=1.000000
+[2026-03-05 21:29:10] Cache allocation: batch=8, seq_len=1024, tokens=8192
+[2026-03-05 21:29:10] Model architecture: d_model=768, num_layers=12, num_heads=12, d_ff=3072, max_seq_len=1024
+[2026-03-05 21:29:10] Initializing CUDA device context...
+[2026-03-05 21:29:10] ✓ CUDA device initialized: NVIDIA A100-SXM4-40GB
+[PBM] Initializing Hybrid ALiBi+RoPE...
+[PBM-ALIBI-ISSUE76] max_seq_len=1024 d_min=32 target_bias=8 base_m_max=0.25 base_m_min=0.0078125 scale=0.03125 => m_max=0.0078125 m_min=0.000244141
+[PBM-ALIBI-ISSUE76] At position 1024:
+    Head 0 (strongest): bias = -0.0078125 * 1024 = -8
+    Head 11 (weakest): bias = -0.000244141 * 1024 = -0.25
+[PBM] ✓ Hybrid ALiBi+RoPE initialized successfully
+    ALiBi: 12 heads, slopes @ 0x149c57200000
+    RoPE:  rotary_dim=64, inv_freq @ 0x149c57200200
+[2026-03-05 21:29:10] [StreamController][INFO] Initializing StreamController...
+[2026-03-05 21:29:10] [StreamController][INFO] StreamController initialized: primary=yes
+[2026-03-05 21:29:10] ✓ StreamController initialized
+[2026-03-05 21:29:10] Initializing cuBLAS handle...
+✓ cuBLAS handle bound to Primary stream with Tensor Core acceleration
+[2026-03-05 21:29:10] ✓ cuBLAS handle initialized with Tensor Core acceleration
+[2026-03-05 21:29:10] Initializing RoPE (required before encoder construction)...
+[PBM] Initializing Hybrid ALiBi+RoPE...
+[PBM-ALIBI-ISSUE76] max_seq_len=1024 d_min=32 target_bias=8 base_m_max=0.25 base_m_min=0.0078125 scale=0.03125 => m_max=0.0078125 m_min=0.000244141
+[PBM-ALIBI-ISSUE76] At position 1024:
+    Head 0 (strongest): bias = -0.0078125 * 1024 = -8
+    Head 11 (weakest): bias = -0.000244141 * 1024 = -0.25
+[PBM] ALiBi slopes computed (context-aware scaling):
+    max_seq_len=1024, d_min=32, target_bias=8
+    m_max=0.0078125 (head 0), m_min=0.000244141 (head 11)
+    head[0] slope=-0.0078125
+    head[1] slope=-0.00570109
+    head[2] slope=-0.00416032
+    head[3] slope=-0.00303595
+    ... (8 more heads)
+[PBM] RoPE inverse frequencies computed (context-aware NTK scaling):
+    rotary_dim=64, max_seq_len=1024
+    base_theta=10000, effective_theta=10000, manual_scaling=1
+    inv_freq[0]=1
+    inv_freq[1]=0.749894
+    inv_freq[2]=0.562341
+    inv_freq[3]=0.421697
+    ... (28 more frequencies)
+[PBM] ✓ Hybrid ALiBi+RoPE initialized successfully
+    ALiBi: 12 heads, slopes @ 0x149c57220800
+    RoPE:  rotary_dim=64, inv_freq @ 0x149c57220a00
+✓ PBM (Hybrid ALiBi+RoPE) initialized:
+    ALiBi: 12 heads with slopes
+    RoPE:  head_dim=64, rotary_dim=64, theta=10000
+[2026-03-05 21:29:10] ✓ RoPE initialized
+[2026-03-05 21:29:10] Storing autograd weight init seed...
+[INFO] TrainingState: autograd seed stored (seed=1001). All weights managed by Pattern B layers.
+[2026-03-05 21:29:10] ✓ Autograd seed stored (weight_init_seed=1001)
+[2026-03-05 21:29:10] Initializing GPU encoder...
+[initGPU] Entry, use_gpu=true
+[initGPU] Initializing GPU-accelerated transformer layers...
+✓ CUDA Device initialized: NVIDIA A100-SXM4-40GB
+  - Compute capability: 8.0
+  - Memory: 40441 MB
+[initGPU] Layers will self-allocate weights (seed=1001, residual_scale=0.204124)
+✓ Encoder using TrainingState primary stream (handle=0x25be7e60, stream=0x33bf3a0)
+[gridForCount] device 0 maxGridDimX=2147483647, using maxGridBlocks1D=65534
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[768,3072], W1=[768,3072], W2=[3072,768], residual_scale=0.204124
+[EncodingLayer] Self-allocated weights (Pattern B): qkv=[1280,768] W_o=[768,768] FFN=[768,3072→3072,768] residual_scale=0.204124 +LayerScale
+✓ 12 encoder layers self-allocated weights
+[EmbeddingLayer] Token weights: [2512, 768] Xavier seed=1001
+[EmbeddingLayer] Position weights: SKIPPED (ALIBI_ROPE uses attention-based encoding)
+✓ Embedding layer created (vocab=2512, d_model=768, pos_emb=none)
+[LMHeadLayer] Weights INDEPENDENT: [2512, 768] Xavier seed=1002
+[LMHeadLayer] Bias: [2512] initialized to zeros
+[LMHeadLayer] Final RMSNorm gamma: [768] initialized to 1.0 (eps=1.0e-05)
+[LMHeadLayer] Initialized: owns_weights=true, has_bias=true, has_rms_norm=true
+✓ LM Head layer created (separate weights, final_rms_gamma owned, bias=yes)
+[NumericHeadLayer] Initialized: d_model=768, weights=[2, 768], Xavier seed=1003
+✓ NumericHead layer created (d_model=768 -> 2)
+✓ GPU encoder initialized with 12 layers
+  - Attention: GPU-accelerated
+  - FFN: GPU-accelerated with fused GELU
+  - Layer Norm: GPU-accelerated
+⚡ Enabling Flash Attention 2...
+✓ Flash Attention enabled (min_seq_len=256)
+[2026-03-05 21:29:10] ✓ GPU encoder fully initialized
+[2026-03-05 21:29:10] Initializing TrainingState (grad buffers, activation caches)...
+✓ StreamController already initialized
+✓ Using pre-initialized cuBLAS handle
+[DEBUG-INIT-1] After cuBLAS, before PBM check
+✓ PBM (Hybrid ALiBi+RoPE) pre-initialized
+[DEBUG-INIT-2] After PBM, before autograd check.
+[DEBUG-INIT-4] autograd initialized, checking layer pointers...
+[DEBUG-INIT-4a] About to read embedding tokenWeights().data...
+[DEBUG-INIT-4b] emb_data=0x149c05400000
+[DEBUG-INIT-4c] About to read embedding tokenWeights().grad_data()...
+[DEBUG-INIT-4d] emb_grad=0x149c02000000
+[DEBUG-INIT-4e] No position embeddings (ALiBi/RoPE mode)
+[DEBUG-INIT-4i] About to read lm_head_layer_->weights().data...
+[DEBUG-INIT-4j] lm_data=0x149c02800000
+[DEBUG-INIT-4k] About to read lm_head_layer_->weights().grad_data()...
+[DEBUG-INIT-4l] lm_grad=0x149c03000000
+✓ Embeddings initialized via EmbeddingLayer (Pattern B ownership)
+  tokenWeights.data=0x149c05400000 grad=0x149c02000000
+  positionWeights.data=0 grad=0
+  lm_head weights.data=0x149c02800000 grad=0x149c03000000
+GQA Configuration: num_heads=12 num_kv_heads=4 (heads_per_kv_group=3)
+📊 Allocating activation caches for max_tokens=8192 (batch=8, seq_len=1024)
+✓ Allocated cached_logits [8192 x 2512] LOGITS layout
+✓ Allocated token IDs cache (Tensor API) [8192]
+✓ Allocated token numeric values cache (Tensor API)
+✓ Allocated token atom mask cache (Tensor API)
+✓ Allocated token text features cache (Tensor API)
+✓ Allocated token atom flags cache (Tensor API)
+✓ Allocated atom mask + text feature + atom flags buffers (0 MB)
+✓ Allocated grad_logits_tensor [8192 x 2512] LOGITS layout
+📐 Issue #43: Allocated centering scratch tensor (96 MB)
+✓ Scratch block pool initialized (2 blocks × 262144 bytes (65536 tokens) = 0.50 MB pinned memory)
+🧠 Initializing ScratchBlock reasoning layer...
+✓ ScratchBlock reasoning layer initialized (d_model=768, atom_dim=96, max_atoms=8192)
+✓ Verified: Autograd seed initialized (from Phase1_Startup)
+✓ Training state initialized with full gradient buffers
+[InitTrainingState] max_cached_batch=8 max_cached_seq_len=1024 max_cached_tokens=8192 max_logit_tokens=8192
+[2026-03-05 21:29:10] ✓ TrainingState fully initialized
+[2026-03-05 21:29:10] [TieEmbeddingsVerify] config.tie_embeddings=false lm_owns_weights=true
+  emb_weight_ptr=0x149c05400000 lm_weight_ptr=0x149c02800000 SAME=NO
+  emb_grad_ptr=0x149c02000000 lm_grad_ptr=0x149c03000000 SAME=NO
+  optimizer_groups: emb_buffer=0 lm_buffer=0 total=0
+[initializeModel] DIAG: About to call configureUpdateProbe('lm_head_weight')...
+[configureUpdateProbe] ENTER group='lm_head_weight' sample_elems=1024
+[configureUpdateProbe] parameter_groups_ is empty, calling buildParameterGroups()
+[buildParameterGroups] ENTER
+[buildParameterGroups] cfg: num_layers=12 num_heads=12 head_dim=64 num_kv_heads=4 d_model=768 vocab=2512 tie=0
+[buildParameterGroups] position_embedding skipped (sinusoidal/fixed, not learned)
+[buildParameterGroups] DIAG-A: about to register LM head
+[buildParameterGroups] DIAG-B: LM head done, starting 12 layers
+[buildParameterGroups] DIAG-D: all 12 layers done, registering scratchblock/final_rms
+[buildParameterGroups] DIAG-D0: scratch_block_layer_=0x9ecc4190
+[buildParameterGroups] DIAG-D0a: isEnabled=1
+[buildParameterGroups] DIAG-D1: atom_type_embeddings data=0x149c57346c00 grad=1 numel=96
+[buildParameterGroups] DIAG-D1: registered OK
+[buildParameterGroups] DIAG-D2: atom_projection data=0x149c57347000 grad=1 numel=73728
+[buildParameterGroups] DIAG-D2: registered OK
+[buildParameterGroups] DIAG-D4: scratchblock done
+[buildParameterGroups] DIAG-D4b: numeric head registered
+[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=0x149c57291c00 grad=1 numel=768
+[buildParameterGroups] DIAG-D5: registered OK
+[buildParameterGroups] DIAG-E: 152 groups registered, allocating optimizer states
+[buildParameterGroups] DIAG-F: optimizer states allocated (m=152 v=152), binding tensors
+[buildParameterGroups] DIAG-G: all bindings done
+[buildParameterGroups] TOTAL: 152 groups (emb=1, attn=48, ffn=48, rms=49, other=6)
+[configureUpdateProbe] buildParameterGroups() returned, groups=152
+[configureUpdateProbe] EXIT: group_index=1 sample_elems=1024 probe_group_size=1929216
+[initializeModel] DIAG: configureUpdateProbe returned
+[2026-03-05 21:29:10] [LogitTrace] update_probe enabled group='lm_head_weight'
+[initializeModel] DIAG: About to configure scratch blocks (pool_init=1)
+[2026-03-05 21:29:10] ✓ Scratch blocks enabled (4 blocks, sized from max_cached_tokens)
+[2026-03-05 21:29:10] [LossConfig] startup: label_smoothing=ON focal=ON distill=off pref=off entropy_reg=off ent_lambda=0 class_balanced=ON cb_beta=0.5
+[2026-03-05 21:29:10] ✓ All 12 encoder layers verified
+[2026-03-05 21:29:10] Found checkpoint: resources/models/GRIM-text/checkpoints/checkpoint_epoch_3.bin
+[2026-03-05 21:29:10] [Checkpoint][ERR] [load] Invalid FlatBuffer
+[2026-03-05 21:29:10] ⚠ Failed to load checkpoint, starting fresh
+[2026-03-05 21:29:10] ✓ Model initialized
+[2026-03-05 21:29:10] Initializing optimizer state...
+[2026-03-05 21:29:10] ✓ Gradient accumulation configured: 2 steps (effective batch = 16)
+[2026-03-05 21:29:10] ✓ Optimizer state initialized
+[2026-03-05 21:29:10] [CLASS_BALANCED] β=0.5 total_targets=32507155 seen_tokens=2154 unseen_tokens=358 max_weight=5701.5
+[2026-03-05 21:29:10] [CLASS_BALANCED] Lowest weights (most frequent): tok36(w=1.76,cnt=10550615) tok261(w=5.09,cnt=1255800) tok48(w=6.21,cnt=844144) tok50(w=6.46,cnt=779891) tok267(w=8.92,cnt=408544) tok105(w=9.04,cnt=397358) tok262(w=9.12,cnt=390598) tok104(w=10.38,cnt=301553) tok45(w=10.50,cnt=294722) tok44(w=10.54,cnt=292389) 
+[2026-03-05 21:29:10] [CLASS_BALANCED] Highest weights (rarest seen): tok2381(w=5701.50,cnt=1) tok2384(w=5701.50,cnt=1) tok2400(w=5701.50,cnt=1) tok2410(w=5701.50,cnt=1) tok2416(w=5701.50,cnt=1) tok2422(w=5701.50,cnt=1) tok2460(w=5701.50,cnt=1) tok2465(w=5701.50,cnt=1) tok2491(w=5701.50,cnt=1) tok2511(w=5701.50,cnt=1) 
+[2026-03-05 21:29:10] [CLASS_BALANCED] Dynamic range: max/min weight ratio = 3248.2x
+[Telemetry] Lattice initialized: 8 levels, 5 streams, GPU-resident (Pattern B)
+[2026-03-05 21:29:10] ✓ Telemetry lattice: 8 levels, 5 streams, GPU-resident
+[2026-03-05 21:29:10] [DEBUG] ctx->config.max_seq_len = 1024
+[2026-03-05 21:29:10] Telemetry control: DISABLED (monitoring only)
+[2026-03-05 21:29:10] [GuessCache][INFO] Guess cache disabled (guess_aux.enabled=false)
+[2026-03-05 21:29:10] Epoch 1/1
+[2026-03-05 21:29:10] [Shuffle] Randomizing train catalog for epoch 1
+[2026-03-05 21:29:10] Created 4833 dynamic batches
+[2026-03-05 21:29:10] [Batching] Token budget: 8192
+[2026-03-05 21:29:10] [Batching] Strategy: GREEDY (forced - Issue #90)
+[2026-03-05 21:29:10] [Batching] Batch size range: 5-8
+[2026-03-05 21:29:10] [Batching] Packing efficiency: 100%
+[2026-03-05 21:29:10] [Batch 1/4833] size=8 len=1024-1024 eff=100% accum_steps=2
+[2026-03-05 21:29:10] [GradTrace] FIRST_BATCH: Checking initial model state...
+[WARNING] getModelStats formula drift detected: actual=107798346 estimate=79522096 (26.2307%)
+  Embedding: actual=1929216 est=1929216
+  Pos Embed: actual=0 est=0
+  Encoder:   actual=103937402 est=75661152
+  LM Head:   actual=1931728 est=1931728
+[2026-03-05 21:29:10] [GradTrace] FIRST_BATCH: total_params=107798346 embedding_params=1929216 encoder_params=103937402 lm_head_params=1931728
+[2026-03-05 21:29:10] [GradTrace] BATCH_INFO batch=1 seqs=[15233,27532,33716,660,21893,4443,2621,15033] lens=[1024,1024,1024,1024,1024,1024,1024,1024]
+[2026-03-05 21:29:10] 
+[BOUNDARY_DIAGNOSTIC] ========================================
+[BOUNDARY_DIAGNOSTIC] Batch 1 CROSSING BOUNDARY
+[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=1024 ***
+[BOUNDARY_DIAGNOSTIC] max_seq_len=1024 total_tokens=8192 batch_size=8
+[BOUNDARY_DIAGNOSTIC] MODEL CONFIG:
+  d_model=768
+  max_seq_len=1024
+  num_heads=12
+  num_layers=12
+  vocab_size=2512

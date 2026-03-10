@@ -9,18 +9,16 @@
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
-#include "../EquationLogging/EquationLogging.hpp"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
 #include <curand_kernel.h>  // Issue #107: Philox PRNG for Xavier init
 #include <device_launch_parameters.h>
-#include <cassert>
 #include <cstdio>
-#include <cstdlib>
 #include <sstream>
 #include <cmath>
 #include <cfloat>
+#include <cstdint>
 #include <algorithm>
 #include <mutex>
 #include <vector>
@@ -271,9 +269,24 @@ constexpr int WARP_SIZE = GRIM::HyperParameters::CUDA_WARP_SIZE;
 #define TC_CUDA_CHECK(call) do { \
     cudaError_t err = (call); \
     if (err != cudaSuccess) { \
-        throw ContractViolation(std::string("CUDA error in TensorContract: ") + cudaGetErrorString(err)); \
+        std::ostringstream oss; \
+        oss << "CUDA error in TensorContract: " << cudaGetErrorString(err) \
+            << " (code=" << static_cast<int>(err) << ")" \
+            << " | call=" << #call \
+            << " | file=" << __FILE__ << ":" << __LINE__ \
+            << " | " << getCurrentGradFnContext(); \
+        throw TensorContract::ContractViolation(oss.str()); \
     } \
 } while(0)
+
+// Grid dimensions for 1D kernels: cap grid.x at 65535 to avoid cudaErrorInvalidValue.
+inline dim3 gridFor1D(size_t n, int block_size) {
+    if (n == 0) return dim3(1, 1, 1);
+    const int blocks = static_cast<int>((n + block_size - 1) / block_size);
+    constexpr int kMax = 65535;
+    if (blocks <= kMax) return dim3(blocks, 1, 1);
+    return dim3(kMax, (blocks + kMax - 1) / kMax, 1);
+}
 
 //======================================================//
 //  TensorView Implementation
@@ -421,11 +434,12 @@ size_t compute_buffer_size(const TensorShape& shape) {
 //  CUDA Kernels - Basic Operations
 //======================================================//
 
-__global__ void kernel_add(const float* __restrict__ a, 
+__global__ void kernel_add(const float* __restrict__ a,
                            const float* __restrict__ b,
                            float* __restrict__ dst,
                            size_t n) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = a[idx] + b[idx];
     }
@@ -435,32 +449,25 @@ __global__ void kernel_scale(const float* __restrict__ src,
                              float alpha,
                              float* __restrict__ dst,
                              size_t n) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = alpha * src[idx];
     }
 }
 
-// Issue #152: Device-pointer variant — reads scalar from GPU memory, no D2H copy needed.
-// Used by layer_scale() forward to eliminate 24× pipeline drains per forward pass.
-__global__ void kernel_scale_device_scalar(const float* __restrict__ src,
-                                           const float* __restrict__ scale_ptr,
-                                           float* __restrict__ dst,
-                                           size_t n) {
-    const float alpha = scale_ptr[0];  // Broadcast read, L1-cached after first warp
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        dst[idx] = alpha * src[idx];
-    }
-}
-
+//======================================================//
+//  GQA split/merge kernels live in TensorConversion.cu
+//  (single source of truth for all conversion operations)
+//======================================================
 
 //======================================================//
 //  CUDA Kernels - Basic Operations (for TensorContract API)
 //======================================================//
 
 __global__ void kernel_zero(float* dst, size_t n) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = 0.0f;
     }
@@ -476,9 +483,7 @@ void zero(TensorView& tensor, cudaStream_t stream) {
     }
     
     size_t n = tensor.size_elements();
-    int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    
-    kernel_zero<<<blocks, BLOCK_SIZE, 0, stream>>>(tensor.ptr, n);
+    kernel_zero<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(tensor.ptr, n);
     TC_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -501,9 +506,7 @@ void add(const TensorView& a, const TensorView& b, TensorView& dst, cudaStream_t
     }
     
     size_t n = a.size_elements();
-    int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    
-    kernel_add<<<blocks, BLOCK_SIZE, 0, stream>>>(a.ptr, b.ptr, dst.ptr, n);
+    kernel_add<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(a.ptr, b.ptr, dst.ptr, n);
     TC_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -511,9 +514,7 @@ void scale(const TensorView& src, float alpha, TensorView& dst, cudaStream_t str
     validate_conversion(src, dst, "scale");
     
     size_t n = src.size_elements();
-    int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    
-    kernel_scale<<<blocks, BLOCK_SIZE, 0, stream>>>(src.ptr, alpha, dst.ptr, n);
+    kernel_scale<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(src.ptr, alpha, dst.ptr, n);
     TC_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -696,8 +697,10 @@ namespace GRIM {
 //======================================================//
 
 // Kernel: Zero-initialize tensor (outside anonymous namespace so visible everywhere in GRIM)
+// Supports 2D grid when block count exceeds device maxGridDim[0] (e.g. 65535 on older GPUs)
 __global__ void kernel_zero_autograd(float* data, size_t count) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         data[idx] = 0.0f;
     }
@@ -715,7 +718,8 @@ namespace {
 // projection inflation (actual_row_norm=24.1 vs expected=0.86). Philox is a
 // counter-based PRNG with excellent statistical properties used by PyTorch/TensorFlow.
 __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, uint64_t seed) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx >= count) return;
     
     // Initialize Philox4_32_10 state - each thread gets unique sequence via idx
@@ -729,18 +733,8 @@ __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, ui
 
 // Kernel: Accumulate gradient (dst += src * scale)
 __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t count, float scale) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        dst[idx] += src[idx] * scale;
-    }
-}
-
-// Issue #152: Device-pointer variant — reads scale from GPU memory for backward.
-// Used by LayerScaleGradFn to eliminate D2H scale readback in forward.
-__global__ void kernel_accumulate_grad_device_scalar(float* dst, const float* src, size_t count,
-                                                      const float* __restrict__ scale_ptr) {
-    const float scale = scale_ptr[0];  // Broadcast read, L1-cached
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         dst[idx] += src[idx] * scale;
     }
@@ -771,6 +765,53 @@ __global__ void kernel_dot_accumulate_scalar(float* dst, const float* a, const f
 }
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
+constexpr int kMaxGridBlocks1DFallback = 65534;  // Fallback when device query fails or reports 65535 (some drivers reject exactly 65535)
+
+// Returns the device's max blocks per grid dimension (x). Queried at runtime via cudaDeviceGetAttribute.
+// Cached per process; uses fallback if query fails (e.g. before CUDA init).
+inline int getMaxGridBlocks1D() {
+    static int cached = -1;
+    if (cached < 0) {
+        int device = 0;
+        if (cudaGetDevice(&device) != cudaSuccess) {
+            cached = kMaxGridBlocks1DFallback;
+            fprintf(stderr, "[gridForCount] cudaGetDevice failed, using maxGridBlocks1D=%d\n", cached);
+        } else {
+            int max_x = 0;
+            if (cudaDeviceGetAttribute(&max_x, cudaDevAttrMaxGridDimX, device) != cudaSuccess) {
+                cached = kMaxGridBlocks1DFallback;
+                fprintf(stderr, "[gridForCount] cudaDeviceGetAttribute failed, using maxGridBlocks1D=%d\n", cached);
+            } else {
+                cached = (max_x > 65534) ? 65534 : max_x;
+                fprintf(stderr, "[gridForCount] device %d maxGridDimX=%d, using maxGridBlocks1D=%d\n", device, max_x, cached);
+            }
+        }
+    }
+    return cached;
+}
+
+// CUDA limits: gridDim.y and gridDim.z are 65535 (2^16-1) on all architectures.
+constexpr int kMaxGridDimY = 65535;
+
+// Returns grid dimensions for count elements; uses 2D grid when blocks exceeds device max per dimension.
+// Ensures grid.y <= kMaxGridDimY to avoid cudaErrorInvalidValue (invalid argument).
+inline dim3 gridForCount(size_t count) {
+    // CUDA kernel launches with grid.x == 0 are invalid.
+    // Treat empty tensors as a legal no-op launch configuration.
+    if (count == 0) {
+        return dim3(1, 1, 1);
+    }
+    const int blocks = static_cast<int>((count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE);
+    const int max1d = getMaxGridBlocks1D();
+    if (blocks <= max1d)
+        return dim3(blocks, 1, 1);
+    int gy = (blocks + max1d - 1) / max1d;
+    if (gy <= kMaxGridDimY)
+        return dim3(max1d, gy, 1);
+    // grid.y would exceed 65535: switch to grid.x = ceil(blocks/65535), grid.y = 65535
+    int gx = (blocks + kMaxGridDimY - 1) / kMaxGridDimY;
+    return dim3(gx, kMaxGridDimY, 1);
+}
 
 }  // anonymous namespace
 
@@ -851,14 +892,15 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
         "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
         (void*)t.data, bytes, name ? name : "unnamed");
     
-    // Zero-initialize
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count);
-    
-    cudaError_t kernelErr = cudaGetLastError();
-    
-    if (kernelErr != cudaSuccess) {
-        throw std::runtime_error(std::string("Tensor::zeros: kernel launch failed: ") + cudaGetErrorString(kernelErr));
+    // Zero-initialize using cudaMemsetAsync (avoids kernel launch grid limits for large tensors).
+    // 0.0f has all-zero bytes, so byte-wise memset is correct.
+    err = cudaMemsetAsync(t.data, 0, bytes, stream);
+    if (err != cudaSuccess) {
+        cudaFree(t.data);
+        t.data = nullptr;
+        throw std::runtime_error(std::string("Tensor::zeros cudaMemsetAsync failed for ") +
+                                 (name ? name : "unnamed") + ": " + cudaGetErrorString(err) +
+                                 " (count=" + std::to_string(count) + ")");
     }
     
     // NOTE: Don't sync here - let caller control sync point
@@ -898,11 +940,7 @@ Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cuda
     }
     
     if (!shape.is_valid()) {
-        std::string detail = std::string("Tensor::empty: invalid shape for '") + (name ? name : "unknown") + "' layout=";
-        if (shape.layout == TensorContract::Layout::UNKNOWN) detail += "UNKNOWN";
-        else if (shape.is_2d_layout()) detail += "2D(rows=" + std::to_string(shape.flat.rows) + ",cols=" + std::to_string(shape.flat.cols) + ")";
-        else if (shape.is_4d()) detail += "4D(batch=" + std::to_string(shape.multi.batch) + ",heads=" + std::to_string(shape.multi.heads) + ",seq=" + std::to_string(shape.multi.seq) + ",head_dim=" + std::to_string(shape.multi.head_dim) + ")";
-        throw std::invalid_argument(detail);
+        throw std::invalid_argument("Tensor::empty: invalid shape");
     }
     
     Tensor t;
@@ -1027,8 +1065,7 @@ void Tensor::xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream) {
     
     float scale = std::sqrt(6.0f / (fan_in + fan_out));
     
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_xavier_uniform<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, scale, seed);
+    kernel_xavier_uniform<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, scale, seed);
     
     t.version++;
 }
@@ -1091,8 +1128,7 @@ void Tensor::zero_grad(cudaStream_t exec_stream) {
     
     cudaStream_t s = exec_stream ? exec_stream : stream;
     const size_t count = shape.total_elements();
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, count);
+    kernel_zero_autograd<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, count);
 }
 
 void Tensor::accumulate_grad(const float* incoming_grad, size_t count, float scale, cudaStream_t exec_stream) {
@@ -1109,9 +1145,7 @@ void Tensor::accumulate_grad(const float* incoming_grad, size_t count, float sca
     }
     
     cudaStream_t s = exec_stream ? exec_stream : stream;
-    
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, incoming_grad, count, scale);
+    kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, incoming_grad, count, scale);
 }
 
 Tensor Tensor::detach() const {
@@ -1263,7 +1297,8 @@ __global__ void kernel_gelu_forward(
     float* __restrict__ output,
     size_t count
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         const float x = input[idx];
         const float c = 0.7978845608f;  // sqrt(2/pi)
@@ -1345,7 +1380,8 @@ __global__ void kernel_gelu_backward(
     float* grad_input,
     size_t count
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         const float x = input[idx];
         const float c = 0.7978845608f;  // sqrt(2/pi)
@@ -1364,60 +1400,64 @@ __global__ void kernel_gelu_backward(
     }
 }
 
-// SwiGLU fused forward: output[t,d] = SiLU(gate_up[t,d]) * gate_up[t, d_ff+d]
-// where SiLU(x) = x * sigmoid(x)
-// Input gate_up is [tokens, 2*d_ff] — first half is gate, second half is up
-// Output is [tokens, d_ff]
-__global__ void kernel_swiglu_fused_forward(
-    const float* __restrict__ gate_up,  // [tokens, 2*d_ff]
-    float* __restrict__ output,         // [tokens, d_ff]
-    int tokens,
-    int d_ff
+// SiLU forward: y = x * sigmoid(x)
+__global__ void kernel_silu_forward(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    size_t count
 ) {
-    const int idx = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const int total = tokens * d_ff;
-    if (idx < total) {
-        const int t = idx / d_ff;
-        const int d = idx % d_ff;
-        const int stride = 2 * d_ff;
-        const float gate = gate_up[t * stride + d];           // first half
-        const float up   = gate_up[t * stride + d_ff + d];    // second half
-        const float sig  = 1.0f / (1.0f + expf(-gate));
-        output[idx] = gate * sig * up;  // SiLU(gate) * up
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        const float x = input[idx];
+        const float sig = 1.0f / (1.0f + expf(-x));
+        output[idx] = x * sig;
     }
 }
 
-// SwiGLU fused backward:
-// Forward: out = SiLU(gate) * up  where gate = input[:, :d_ff], up = input[:, d_ff:]
-// Backward:
-//   grad_gate = grad_out * up * SiLU'(gate)
-//             = grad_out * up * (sigmoid(gate) + gate * sigmoid(gate) * (1 - sigmoid(gate)))
-//             = grad_out * up * sigmoid(gate) * (1 + gate * (1 - sigmoid(gate)))
-//   grad_up   = grad_out * SiLU(gate) = grad_out * gate * sigmoid(gate)
-__global__ void kernel_swiglu_fused_backward(
-    const float* __restrict__ grad_output,  // [tokens, d_ff]
-    const float* __restrict__ gate_up,      // [tokens, 2*d_ff] cached input
-    float* __restrict__ grad_gate_up,       // [tokens, 2*d_ff]
-    int tokens,
-    int d_ff
+// SiLU backward: grad_x = grad_y * silu'(x)
+// silu'(x) = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+__global__ void kernel_silu_backward(
+    const float* grad_output,
+    const float* input,
+    float* grad_input,
+    size_t count
 ) {
-    const int idx = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const int total = tokens * d_ff;
-    if (idx < total) {
-        const int t = idx / d_ff;
-        const int d = idx % d_ff;
-        const int stride = 2 * d_ff;
-        const float gate = gate_up[t * stride + d];
-        const float up   = gate_up[t * stride + d_ff + d];
-        const float sig  = 1.0f / (1.0f + expf(-gate));
-        const float g    = grad_output[idx];
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        const float x = input[idx];
+        const float sig = 1.0f / (1.0f + expf(-x));
+        const float dsilu = sig * (1.0f + x * (1.0f - sig));
+        grad_input[idx] = grad_output[idx] * dsilu;
+    }
+}
 
-        // grad_gate = g * up * sig * (1 + gate * (1 - sig))
-        const float dsilu = sig * (1.0f + gate * (1.0f - sig));
-        grad_gate_up[t * stride + d]          = g * up * dsilu;
+// Element-wise multiply forward: output = a ⊙ b
+__global__ void kernel_elementwise_mul_forward(
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    float* __restrict__ output,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        output[idx] = a[idx] * b[idx];
+    }
+}
 
-        // grad_up = g * gate * sig = g * SiLU(gate)
-        grad_gate_up[t * stride + d_ff + d]   = g * gate * sig;
+// Element-wise multiply backward for input A: grad_a = grad_output ⊙ b
+__global__ void kernel_elementwise_mul_backward(
+    const float* grad_output,
+    const float* other,
+    float* grad_self,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        grad_self[idx] = grad_output[idx] * other[idx];
     }
 }
 
@@ -1541,164 +1581,6 @@ __global__ void kernel_rmsnorm_backward(
         if (grad_gamma) {
             atomicAdd(&grad_gamma[i], dy[i] * x[i] * inv_rms);
         }
-    }
-}
-
-//======================================================//
-// QK-RMSNorm forward: y[row,d] = alpha[h] * x[row,d] / rms(x[row,:])
-// Input is BHSD tensor flattened to [B*H*S, D].
-// Each block processes one row = one (b,h,s) position.
-// h = (row_idx / seq_len) % num_heads
-//======================================================//
-__global__ void kernel_qk_rms_norm_forward(
-    const float* __restrict__ input,    // [total_rows, head_dim] where total_rows = B*H*S
-    const float* __restrict__ alpha,    // [num_heads] learnable per-head scales
-    float* __restrict__ output,         // [total_rows, head_dim]
-    int total_rows,
-    int head_dim,
-    int seq_len,
-    int num_heads,
-    float eps
-) {
-    const int row_idx = blockIdx.x;
-    if (row_idx >= total_rows) return;
-    
-    extern __shared__ float shared[];
-    
-    // Compute head index from row index: layout is [B, H, S, D]
-    // row_idx = b * (H * S) + h * S + s
-    const int h = (row_idx / seq_len) % num_heads;
-    
-    const float* x = input + static_cast<size_t>(row_idx) * head_dim;
-    float* y = output + static_cast<size_t>(row_idx) * head_dim;
-    const float a = alpha[h];
-    
-    // Step 1: Compute sum of squares
-    float local_sum_sq = 0.0f;
-    for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
-        local_sum_sq += x[i] * x[i];
-    }
-    
-    // Warp reduction
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        local_sum_sq += __shfl_down_sync(0xffffffff, local_sum_sq, offset);
-    }
-    
-    // Block reduction via shared memory
-    if (threadIdx.x % 32 == 0) {
-        shared[threadIdx.x / 32] = local_sum_sq;
-    }
-    __syncthreads();
-    
-    __shared__ float s_inv_rms;
-    if (threadIdx.x == 0) {
-        float total = 0.0f;
-        const int num_warps = blockDim.x / 32;
-        for (int i = 0; i < num_warps; i++) {
-            total += shared[i];
-        }
-        float rms_sq = total / head_dim + eps;
-        s_inv_rms = rsqrtf(rms_sq);
-    }
-    __syncthreads();
-    
-    const float inv_rms = s_inv_rms;
-    
-    // Step 2: Normalize and scale by per-head alpha
-    for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
-        y[i] = a * x[i] * inv_rms;
-    }
-}
-
-//======================================================//
-// QK-RMSNorm backward:
-// Forward: y = alpha[h] * x / rms(x)
-// Backward: grad_x and grad_alpha (atomicAdd across rows sharing same head)
-//   grad_x[d] = alpha * inv_rms * (grad_y[d] - x[d] * dot / (D * rms²))
-//   grad_alpha[h] += inv_rms * sum_d(grad_y[d] * x[d])
-// where dot = alpha * sum_d(grad_y[d] * x[d])
-//======================================================//
-__global__ void kernel_qk_rms_norm_backward(
-    const float* __restrict__ grad_output,  // [total_rows, head_dim]
-    const float* __restrict__ input,        // [total_rows, head_dim] cached input
-    const float* __restrict__ alpha,        // [num_heads]
-    float* __restrict__ grad_input,         // [total_rows, head_dim]
-    float* __restrict__ grad_alpha,         // [num_heads] accumulated via atomicAdd
-    int total_rows,
-    int head_dim,
-    int seq_len,
-    int num_heads,
-    float eps
-) {
-    const int row_idx = blockIdx.x;
-    if (row_idx >= total_rows) return;
-    
-    extern __shared__ float shared[];
-    float* s_warp_vals = shared;
-    
-    const int h = (row_idx / seq_len) % num_heads;
-    const float a = alpha[h];
-    
-    const float* x = input + static_cast<size_t>(row_idx) * head_dim;
-    const float* dy = grad_output + static_cast<size_t>(row_idx) * head_dim;
-    float* dx = grad_input + static_cast<size_t>(row_idx) * head_dim;
-    
-    const int num_warps = blockDim.x / 32;
-    
-    // Step 1: Compute sum(x^2) for RMS
-    float local_sum_sq = 0.0f;
-    for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
-        local_sum_sq += x[i] * x[i];
-    }
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        local_sum_sq += __shfl_down_sync(0xffffffff, local_sum_sq, offset);
-    }
-    if (threadIdx.x % 32 == 0) s_warp_vals[threadIdx.x / 32] = local_sum_sq;
-    __syncthreads();
-    
-    __shared__ float s_rms_sq, s_inv_rms;
-    if (threadIdx.x == 0) {
-        float total = 0.0f;
-        for (int i = 0; i < num_warps; i++) total += s_warp_vals[i];
-        s_rms_sq = total / head_dim + eps;
-        s_inv_rms = rsqrtf(s_rms_sq);
-    }
-    __syncthreads();
-    
-    const float inv_rms = s_inv_rms;
-    const float rms_sq = s_rms_sq;
-    
-    // Step 2: Compute dot = sum(dy * x) for chain rule
-    float local_dot = 0.0f;
-    for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
-        local_dot += dy[i] * x[i];
-    }
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        local_dot += __shfl_down_sync(0xffffffff, local_dot, offset);
-    }
-    if (threadIdx.x % 32 == 0) s_warp_vals[threadIdx.x / 32] = local_dot;
-    __syncthreads();
-    
-    __shared__ float s_dot;
-    if (threadIdx.x == 0) {
-        float total = 0.0f;
-        for (int i = 0; i < num_warps; i++) total += s_warp_vals[i];
-        s_dot = total;
-    }
-    __syncthreads();
-    
-    const float dot = s_dot;
-    
-    // Step 3: Compute grad_input and accumulate grad_alpha
-    // grad_x[d] = alpha * inv_rms * (dy[d] - x[d] * alpha * dot / (D * rms²))
-    const float scale = a * dot / (head_dim * rms_sq);
-    for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
-        dx[i] = a * inv_rms * (dy[i] - x[i] * scale);
-    }
-    
-    // grad_alpha[h] += inv_rms * dot (accumulated across all rows with same head)
-    if (grad_alpha && threadIdx.x == 0) {
-        atomicAdd(&grad_alpha[h], inv_rms * dot);
     }
 }
 
@@ -1908,7 +1790,8 @@ __global__ void kernel_dropout_forward(
     float scale,                // 1.0 / (1.0 - dropout_prob)
     size_t count
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         // Inverted dropout: scale up kept values so expected value unchanged
         output[idx] = input[idx] * (mask[idx] ? scale : 0.0f);
@@ -1923,7 +1806,8 @@ __global__ void kernel_generate_dropout_mask(
     float dropout_prob,         // Probability of dropping (e.g., 0.1)
     uint64_t seed
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         // Initialize Philox RNG per-element with unique sequence
         curandStatePhilox4_32_10_t state;
@@ -1946,7 +1830,8 @@ __global__ void kernel_dropout_backward(
     float scale,                // 1.0 / (1.0 - dropout_prob)
     size_t count
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         grad_input[idx] = grad_output[idx] * (mask[idx] ? scale : 0.0f);
     }
@@ -2088,20 +1973,19 @@ struct LayerScaleGradFn : public GradFn {
     size_t element_count = 0;
     
     // Scale param info (shape [1])
-    // Issue #152: Store device pointer instead of CPU float to avoid D2H sync in forward
-    float* scale_param_data = nullptr;  // Device pointer to scale_param[0]
-    float* scale_grad = nullptr;        // Points to scale_param's grad
+    float scale_value = 1.0f;     // Cached scale value for backward
+    float* scale_grad = nullptr;  // Points to scale_param's grad
     
     bool applied = false;
     
     LayerScaleGradFn() { op_name = "layer_scale"; }
     
-    void capture_inputs(Tensor& input, Tensor& scale_param, cudaStream_t stream) {
+    void capture_inputs(Tensor& input, Tensor& scale_param, float cached_scale_value, cudaStream_t stream) {
         input_shape = input.shape;
         element_count = input.numel();
         
-        // Issue #152: Store device pointer — backward kernel reads scale on-device
-        scale_param_data = scale_param.data;
+        // Use cached scale value (already read from GPU in layer_scale forward)
+        scale_value = cached_scale_value;
         
         // Copy shared_ptr to input's grad_fn
         input_grad_fn = input.grad_fn;
@@ -2152,16 +2036,11 @@ struct LayerScaleGradFn : public GradFn {
         applied = true;
         
         const size_t n = element_count;
-        const int blocks = (n + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
-        // 1. grad_input = grad_output * scale_param[0]  (broadcast, read on device)
-        // Issue #152: Use device-pointer kernel — no CPU float needed
+        // 1. grad_input = grad_output * scale_value  (broadcast)
         if (input_grad && grad_output.data) {
-            if (!scale_param_data) {
-                throw std::runtime_error("LayerScaleGradFn::apply: scale_param_data is NULL");
-            }
-            kernel_accumulate_grad_device_scalar<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                input_grad, grad_output.data, n, scale_param_data);
+            kernel_accumulate_grad<<<gridForCount(n), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                input_grad, grad_output.data, n, scale_value);
         }
         
         // 2. grad_scale = sum(grad_output * input_data)  (dot product → scalar)
@@ -2701,15 +2580,14 @@ struct AddGradFn : public GradFn {
         }
         
         const size_t count = grad_output.numel();
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // Accumulate gradients to both inputs using stored grad pointers
         if (a_requires_grad && grad_a) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_a, grad_output.data, count, 1.0f);
         }
         if (b_requires_grad && grad_b) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_b, grad_output.data, count, 1.0f);
         }
 
@@ -2929,11 +2807,10 @@ struct BiasAddGradFn : public GradFn {
         }
         
         const size_t count = grad_output.numel();
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // Backward for input: grad_input = grad_output (pass-through, no shape change)
         if (input_requires_grad && grad_input) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_input, grad_output.data, count, 1.0f);
         }
         
@@ -3100,10 +2977,9 @@ struct GeluGradFn : public GradFn {
             throw std::runtime_error("GeluGradFn::apply: size mismatch - grad_output.numel()=" + 
                                      std::to_string(count) + " cached_size=" + std::to_string(cached_size));
         }
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // TAPE-BASED: Write directly to stored grad buffer
-        kernel_gelu_backward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        kernel_gelu_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
             grad_output.data, cached_input, input_grad, count);
         trackKernelLaunch("kernel_gelu_backward", stream);
 
@@ -3127,39 +3003,33 @@ struct GeluGradFn : public GradFn {
 };
 
 /**
- * SwiGLUFusedGradFn - Backward for fused SwiGLU gate activation
- * Forward: output[t,d] = SiLU(gate_up[t,d]) * gate_up[t, d_ff+d]
- *   where gate_up is [tokens, 2*d_ff] — first half gate, second half up
- *   SiLU(x) = x * sigmoid(x)
+ * SiluGradFn - Backward for SiLU activation
+ * Forward: y = silu(x) = x * sigmoid(x)
+ * Backward: grad_x = grad_y * sigmoid(x) * (1 + x * (1 - sigmoid(x)))
  *
- * Backward:
- *   grad_gate[t,d] = grad_out[t,d] * up * (sigmoid(gate) * (1 + gate * (1 - sigmoid(gate))))
- *   grad_up[t,d]   = grad_out[t,d] * SiLU(gate) = grad_out[t,d] * gate * sigmoid(gate)
- *
- * TAPE-BASED: References cached gate_up input, DOES NOT store Tensor*
- * NOTE: Input shape [tokens, 2*d_ff] → output shape [tokens, d_ff] (halved)
+ * MEMORY OPTIMIZATION: Uses non-owning cache reference instead of copying.
+ * Safe because ForwardIntermediates (Issue #56) guarantees the source tensor
+ * persists until after backward completes.
  */
-struct SwiGLUFusedGradFn : public GradFn {
+struct SiluGradFn : public GradFn {
     bool input_requires_grad = false;
     float* input_grad = nullptr;
     std::shared_ptr<float> owned_input_grad;
-    TensorContract::TensorShape input_shape;  // [tokens, 2*d_ff]
+    TensorContract::TensorShape input_shape;
     std::shared_ptr<GradFn> input_grad_fn;
-    std::shared_ptr<float> owned_cache;
-    const float* cached_gate_up = nullptr;  // Points to owned_cache.get()
-    size_t cached_size = 0;                 // Total elements in gate_up (tokens * 2 * d_ff)
-    int d_ff = 0;                           // Half-width for gate/up split
-    
-    SwiGLUFusedGradFn() { op_name = "swiglu_fused"; }
-    
+    const float* cached_input = nullptr;
+    size_t cached_size = 0;
+
+    SiluGradFn() { op_name = "silu"; }
+
     void capture_input(Tensor& x, cudaStream_t stream) {
         input_requires_grad = x.requires_grad;
         input_shape = x.shape;
         input_grad_fn = x.grad_fn;
-        
+
         if (input_requires_grad) {
-            x.ensure_grad();
             if (x.is_leaf) {
+                x.ensure_grad();
                 input_grad = x.grad_data();
             } else {
                 const size_t x_numel = x.numel();
@@ -3171,64 +3041,37 @@ struct SwiGLUFusedGradFn : public GradFn {
             }
         }
     }
-    
-    void set_cache_copy(const float* external_cache, size_t size, int d_ff_val, cudaStream_t stream) {
-        if (!external_cache) {
-            throw std::runtime_error("SwiGLUFusedGradFn::set_cache_copy: external_cache is NULL - caller MUST provide cache");
+
+    void set_cache_ref(const float* data, size_t size) {
+        if (!data) {
+            throw std::runtime_error("SiluGradFn::set_cache_ref: data is NULL");
         }
+        cached_input = data;
         cached_size = size;
-        d_ff = d_ff_val;
-        
-        float* buffer = nullptr;
-        cudaMalloc(&buffer, size * sizeof(float));
-        cudaMemcpyAsync(buffer, external_cache, size * sizeof(float),
-                        cudaMemcpyDeviceToDevice, stream);
-        owned_cache = std::shared_ptr<float>(buffer, [](float* p) {
-            queueForDeferredCleanup(p);
-        });
-        cached_gate_up = owned_cache.get();
-        AG_TRACE("[SwiGLUFusedGradFn] Copied cache: %zu floats to %p, d_ff=%d\n", size, (void*)cached_gate_up, d_ff);
     }
-    
+
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        setCurrentGradFnOp("swiglu_fused", this);
-        
-        if (applied) {
-            return;
-        }
+        setCurrentGradFnOp("silu", this);
+        if (applied) return;
         applied = true;
-        
-        if (!input_requires_grad) {
-            return;
-        }
+
+        if (!input_requires_grad) return;
         if (!input_grad) {
-            throw std::runtime_error("SwiGLUFusedGradFn::apply: input_grad is NULL - capture_input() must be called first");
+            throw std::runtime_error("SiluGradFn::apply: input_grad is NULL");
         }
-        if (!cached_gate_up) {
-            throw std::runtime_error("SwiGLUFusedGradFn::apply: cached_gate_up is NULL - set_cache_copy() must be called first");
+        if (!cached_input) {
+            throw std::runtime_error("SiluGradFn::apply: cached_input is NULL");
         }
-        if (d_ff <= 0) {
-            throw std::runtime_error("SwiGLUFusedGradFn::apply: d_ff is 0 - set_cache_copy() must be called with valid d_ff");
+
+        const size_t count = grad_output.numel();
+        if (count != cached_size) {
+            throw std::runtime_error("SiluGradFn::apply: size mismatch");
         }
-        
-        // grad_output is [tokens, d_ff], input_grad is [tokens, 2*d_ff]
-        const size_t out_count = grad_output.numel();
-        const auto& out_dims = grad_output.shape.as_2d();
-        const int tokens = out_dims.rows;
-        
-        if (static_cast<size_t>(tokens) * 2 * d_ff != cached_size) {
-            throw std::runtime_error("SwiGLUFusedGradFn::apply: size mismatch - tokens*2*d_ff=" +
-                                     std::to_string(static_cast<size_t>(tokens) * 2 * d_ff) +
-                                     " cached_size=" + std::to_string(cached_size));
-        }
-        
-        const int blocks = (static_cast<int>(out_count) + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-        
-        kernel_swiglu_fused_backward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_output.data, cached_gate_up, input_grad, tokens, d_ff);
-        trackKernelLaunch("kernel_swiglu_fused_backward", stream);
-        
-        // CONTINUE AUTOGRAD CHAIN
+
+        kernel_silu_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, cached_input, input_grad, count);
+        trackKernelLaunch("kernel_silu_backward", stream);
+
         if (input_grad_fn) {
             Tensor view;
             view.data = input_grad; view.shape = input_shape;
@@ -3236,14 +3079,134 @@ struct SwiGLUFusedGradFn : public GradFn {
             input_grad_fn->apply(view, stream);
         }
     }
-    
+
     void release_saved() override {
         GradFn::release_saved();
-        cached_gate_up = nullptr;
+        cached_input = nullptr;
         cached_size = 0;
-        d_ff = 0;
         input_grad = nullptr;
         input_grad_fn.reset();
+    }
+};
+
+/**
+ * ElementwiseMulGradFn - Backward for element-wise multiply (Hadamard product)
+ * Forward: y = a ⊙ b
+ * Backward: grad_a = grad_y ⊙ b, grad_b = grad_y ⊙ a
+ *
+ * MEMORY OPTIMIZATION: Uses non-owning cache references instead of copying.
+ * Safe because ForwardIntermediates (Issue #56) guarantees both input tensors
+ * persist until after backward completes.
+ */
+struct ElementwiseMulGradFn : public GradFn {
+    bool a_requires_grad = false;
+    bool b_requires_grad = false;
+    float* a_grad = nullptr;
+    float* b_grad = nullptr;
+    std::shared_ptr<float> owned_a_grad;
+    std::shared_ptr<float> owned_b_grad;
+    TensorContract::TensorShape a_shape;
+    TensorContract::TensorShape b_shape;
+    std::shared_ptr<GradFn> a_grad_fn;
+    std::shared_ptr<GradFn> b_grad_fn;
+
+    const float* cached_a = nullptr;
+    const float* cached_b = nullptr;
+    size_t cached_size = 0;
+
+    ElementwiseMulGradFn() { op_name = "elementwise_mul"; }
+
+    void capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
+        a_requires_grad = a.requires_grad;
+        b_requires_grad = b.requires_grad;
+        a_shape = a.shape;
+        b_shape = b.shape;
+        a_grad_fn = a.grad_fn;
+        b_grad_fn = b.grad_fn;
+
+        if (a_requires_grad) {
+            if (a.is_leaf) {
+                a.ensure_grad();
+                a_grad = a.grad_data();
+            } else {
+                const size_t n = a.numel();
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
+                owned_a_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                a_grad = owned_a_grad.get();
+            }
+        }
+        if (b_requires_grad) {
+            if (b.is_leaf) {
+                b.ensure_grad();
+                b_grad = b.grad_data();
+            } else {
+                const size_t n = b.numel();
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
+                owned_b_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                b_grad = owned_b_grad.get();
+            }
+        }
+    }
+
+    void set_cache_refs(const float* a_data, const float* b_data, size_t size) {
+        cached_size = size;
+        if (a_requires_grad && b_data) cached_b = b_data;
+        if (b_requires_grad && a_data) cached_a = a_data;
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("elementwise_mul", this);
+        if (applied) return;
+        applied = true;
+
+        const size_t count = grad_output.numel();
+
+        if (a_requires_grad) {
+            if (!a_grad || !cached_b) {
+                throw std::runtime_error("ElementwiseMulGradFn::apply: a_grad or cached_b is NULL");
+            }
+            kernel_elementwise_mul_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_output.data, cached_b, a_grad, count);
+            trackKernelLaunch("kernel_elementwise_mul_backward_a", stream);
+
+            if (a_grad_fn) {
+                Tensor view;
+                view.data = a_grad; view.shape = a_shape;
+                view.owns_data = false; view.stream = stream;
+                a_grad_fn->apply(view, stream);
+            }
+        }
+
+        if (b_requires_grad) {
+            if (!b_grad || !cached_a) {
+                throw std::runtime_error("ElementwiseMulGradFn::apply: b_grad or cached_a is NULL");
+            }
+            kernel_elementwise_mul_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_output.data, cached_a, b_grad, count);
+            trackKernelLaunch("kernel_elementwise_mul_backward_b", stream);
+
+            if (b_grad_fn) {
+                Tensor view;
+                view.data = b_grad; view.shape = b_shape;
+                view.owns_data = false; view.stream = stream;
+                b_grad_fn->apply(view, stream);
+            }
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        cached_a = nullptr;
+        cached_b = nullptr;
+        cached_size = 0;
+        a_grad = nullptr;
+        b_grad = nullptr;
+        a_grad_fn.reset();
+        b_grad_fn.reset();
     }
 };
 
@@ -3475,153 +3438,6 @@ struct RMSNormGradFn : public GradFn {
         }
         input_grad = nullptr;
         gamma_grad_ptr = nullptr;
-        input_grad_fn.reset();
-    }
-};
-
-/**
- * QKRMSNormGradFn - Backward for per-head QK-RMSNorm (Issue #QKNorm)
- * Forward: y[row,d] = alpha[h] * x[row,d] / rms(x[row,:])
- * Used for normalizing Q and K projections before attention.
- * Follows same ownership patterns as RMSNormGradFn (Issues #51, #126).
- */
-struct QKRMSNormGradFn : public GradFn {
-    bool input_requires_grad = false;
-    bool alpha_requires_grad = false;
-    
-    // Owned copies (Issue #51: external cache may be freed before backward)
-    std::shared_ptr<float> owned_input_cache;
-    const float* cached_input = nullptr;
-    size_t cached_size = 0;
-    
-    // Alpha (persistent tensor from EncodingLayer — pointer is stable)
-    const float* alpha_data = nullptr;
-    float* alpha_grad_ptr = nullptr;
-    
-    // Owned gradient buffer for input (Issue #126: input may be temporary)
-    float* input_grad = nullptr;
-    bool owns_input_grad = false;
-    
-    // Chain continuation
-    std::shared_ptr<GradFn> input_grad_fn;
-    TensorContract::TensorShape input_shape;
-    
-    // Geometry
-    int total_rows = 0;
-    int head_dim = 0;
-    int seq_len = 0;
-    int num_heads = 0;
-    float eps = 1e-6f;
-    
-    QKRMSNormGradFn() { op_name = "qk_rms_norm"; }
-    
-    ~QKRMSNormGradFn() override {
-        if (owns_input_grad && input_grad) {
-            cudaFree(input_grad);
-            owns_input_grad = false;
-            input_grad = nullptr;
-        }
-    }
-    
-    void capture_inputs(Tensor& x, Tensor& alpha_tensor, int rows, int hdim, int slen, int nheads, float epsilon, cudaStream_t stream) {
-        input_requires_grad = x.requires_grad;
-        alpha_requires_grad = alpha_tensor.requires_grad;
-        input_shape = x.shape;
-        total_rows = rows;
-        head_dim = hdim;
-        seq_len = slen;
-        num_heads = nheads;
-        eps = epsilon;
-        
-        // Capture input's grad_fn for chain continuation
-        input_grad_fn = x.grad_fn;
-        
-        // Copy alpha data pointer (EncodingLayer owns alpha — pointer is stable)
-        alpha_data = alpha_tensor.data;
-        
-        // Allocate owned input_grad buffer (Issue #126)
-        if (input_requires_grad) {
-            const size_t grad_size = x.shape.total_elements();
-            cudaError_t err = cudaMalloc(&input_grad, grad_size * sizeof(float));
-            if (err != cudaSuccess) {
-                throw std::runtime_error("QKRMSNormGradFn: Failed to allocate input_grad buffer");
-            }
-            cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream);
-            owns_input_grad = true;
-        }
-        
-        if (alpha_requires_grad) {
-            alpha_tensor.ensure_grad();
-            alpha_grad_ptr = alpha_tensor.grad_data();
-        }
-    }
-    
-    // Copy cached input to owned buffer (Issue #51)
-    void set_cache_copy(const float* external_cache, size_t size, cudaStream_t stream) {
-        if (!external_cache) {
-            throw std::runtime_error("QKRMSNormGradFn::set_cache_copy: external_cache is NULL");
-        }
-        cached_size = size;
-        
-        float* buffer = nullptr;
-        cudaMalloc(&buffer, size * sizeof(float));
-        cudaMemcpyAsync(buffer, external_cache, size * sizeof(float),
-                       cudaMemcpyDeviceToDevice, stream);
-        
-        owned_input_cache = std::shared_ptr<float>(buffer, [](float* p) {
-            queueForDeferredCleanup(p);
-        });
-        cached_input = owned_input_cache.get();
-    }
-    
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        setCurrentGradFnOp("qk_rms_norm", this);
-        
-        if (applied) return;
-        applied = true;
-        
-        if (!cached_input) {
-            throw std::runtime_error("QKRMSNormGradFn::apply: cached_input is NULL - set_cache_copy() must be called first");
-        }
-        if (!alpha_data) {
-            throw std::runtime_error("QKRMSNormGradFn::apply: alpha_data is NULL");
-        }
-        if (head_dim <= 0 || total_rows <= 0) {
-            throw std::runtime_error("QKRMSNormGradFn::apply: invalid geometry head_dim=" +
-                std::to_string(head_dim) + " total_rows=" + std::to_string(total_rows));
-        }
-        
-        const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32 + 1) * sizeof(float);
-        
-        if (input_requires_grad && input_grad) {
-            kernel_qk_rms_norm_backward<<<total_rows, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
-                grad_output.data, cached_input, alpha_data,
-                input_grad, alpha_grad_ptr,
-                total_rows, head_dim, seq_len, num_heads, eps);
-            trackKernelLaunch("kernel_qk_rms_norm_backward", stream);
-            
-            // Continue autograd chain
-            if (input_grad_fn && input_grad_fn->op_name) {
-                Tensor view;
-                view.data = input_grad;
-                view.shape = input_shape;
-                view.owns_data = false;
-                view.stream = stream;
-                input_grad_fn->apply(view, stream);
-            }
-        }
-    }
-    
-    void release_saved() override {
-        GradFn::release_saved();
-        cached_input = nullptr;
-        cached_size = 0;
-        if (owns_input_grad && input_grad) {
-            queueForDeferredCleanup(input_grad);
-            owns_input_grad = false;
-        }
-        input_grad = nullptr;
-        alpha_grad_ptr = nullptr;
         input_grad_fn.reset();
     }
 };
@@ -3938,8 +3754,7 @@ struct DropoutGradFn : public GradFn {
             throw std::runtime_error("DropoutGradFn::apply: grad_output.data is NULL");
         }
         
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-        kernel_dropout_backward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        kernel_dropout_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
             grad_output.data, saved_mask, input_grad, scale, count);
         trackKernelLaunch("kernel_dropout_backward", stream);
 
@@ -4045,15 +3860,14 @@ struct ResidualAddGradFn : public GradFn {
         
         // Both inputs receive the same gradient (d(x+r)/dx = 1, d(x+r)/dr = 1)
         const size_t count = grad_output.numel();
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         if (input_requires_grad && input_grad) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 input_grad, grad_output.data, count, 1.0f);
         }
         
         if (residual_requires_grad && residual_grad) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 residual_grad, grad_output.data, count, 1.0f);
         }
 
@@ -4199,10 +4013,9 @@ Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
     // Forward: y = gelu(x)
     // gelu(x) = x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     const size_t count = x.numel();
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
     
     // Launch GELU forward kernel
-    kernel_gelu_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
+    kernel_gelu_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
     
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (x.requires_grad) {
@@ -4220,64 +4033,77 @@ Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
 }
 
 /**
- * autograd::swiglu_fused - Fused SwiGLU gate activation with automatic differentiation
+ * autograd::silu - SiLU (Swish) activation with automatic differentiation
  *
- * Computes: output[t,d] = SiLU(gate_up[t,d]) * gate_up[t, d_ff+d]
- * where gate_up is [tokens, 2*d_ff] — first half is "gate", second half is "up"
  * SiLU(x) = x * sigmoid(x)
  *
- * This fused approach avoids fan-out in the autograd graph: a single matmul
- * produces gate_up, then this op splits and combines in one kernel.
+ * TAPE-BASED: Requires caller to provide cache pointer.
+ * Does NOT allocate internal copy of input.
  *
- * TAPE-BASED: Caches the full gate_up input for backward.
- *
- * @param gate_up Input tensor [tokens, 2*d_ff] — fused gate and up projections
- * @param d_ff    The hidden dimension (half of gate_up's column count)
- * @param stream  CUDA stream
- * @param input_cache External cache pointer for gate_up (needed for backward)
- * @return Output tensor [tokens, d_ff] with SwiGLU applied
+ * @param x Input tensor
+ * @param stream CUDA stream
+ * @param input_cache External cache pointer for input (needed for backward).
+ *                    Must point to valid memory until backward() is called.
+ * @return Output tensor with SiLU applied
  */
-Tensor swiglu_fused(const Tensor& gate_up, int d_ff, cudaStream_t stream, const float* input_cache) {
+Tensor silu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
     if (stream == nullptr || stream == 0) {
-        throw std::runtime_error("autograd::swiglu_fused: stream is NULL - caller MUST provide valid stream");
+        throw std::runtime_error("autograd::silu: stream is NULL - caller MUST provide valid stream");
     }
-    if (!gate_up.shape.is_2d_layout()) {
-        throw std::runtime_error("autograd::swiglu_fused: input must be 2D [tokens, 2*d_ff]");
-    }
-    
-    const auto& dims = gate_up.shape.as_2d();
-    const int tokens = dims.rows;
-    const int cols = dims.cols;
-    
-    if (cols != 2 * d_ff) {
-        throw std::runtime_error("autograd::swiglu_fused: input cols=" + std::to_string(cols) +
-                                 " but expected 2*d_ff=" + std::to_string(2 * d_ff));
-    }
-    
-    // Output shape: [tokens, d_ff]
-    auto out_shape = TensorContract::TensorShape::make_BSM(tokens, d_ff);
-    
-    Tensor result = Tensor::empty(out_shape, gate_up.requires_grad, stream, "swiglu_fused_result");
-    
-    // Forward: output = SiLU(gate) * up
-    const int total_elements = tokens * d_ff;
-    const int blocks = (total_elements + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    
-    kernel_swiglu_fused_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        gate_up.data, result.data, tokens, d_ff);
-    trackKernelLaunch("kernel_swiglu_fused_forward", stream);
-    
-    // Set up backward
-    if (gate_up.requires_grad) {
+
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "silu_result");
+
+    const size_t count = x.numel();
+    kernel_silu_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
+
+    if (x.requires_grad) {
         result.is_leaf = false;
-        auto grad_fn = std::make_shared<SwiGLUFusedGradFn>();
-        grad_fn->capture_input(const_cast<Tensor&>(gate_up), stream);
-        
-        const float* effective_cache = input_cache ? input_cache : gate_up.data;
-        grad_fn->set_cache_copy(effective_cache, gate_up.numel(), d_ff, stream);
+        auto grad_fn = std::make_shared<SiluGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
+
+        const float* effective_cache = input_cache ? input_cache : x.data;
+        grad_fn->set_cache_ref(effective_cache, count);
         result.grad_fn = grad_fn;
     }
-    
+
+    return result;
+}
+
+/**
+ * autograd::elementwise_mul - Element-wise (Hadamard) product with automatic differentiation
+ *
+ * Forward: y = a ⊙ b
+ * Backward: grad_a = grad_y ⊙ b, grad_b = grad_y ⊙ a
+ *
+ * @param a First input tensor
+ * @param b Second input tensor (same shape as a)
+ * @param stream CUDA stream
+ * @return Output tensor with element-wise product
+ */
+Tensor elementwise_mul(const Tensor& a, const Tensor& b, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::elementwise_mul: stream is NULL");
+    }
+    if (a.numel() != b.numel()) {
+        throw std::runtime_error("autograd::elementwise_mul: size mismatch a.numel()=" +
+                                 std::to_string(a.numel()) + " b.numel()=" + std::to_string(b.numel()));
+    }
+
+    const bool needs_grad = a.requires_grad || b.requires_grad;
+    Tensor result = Tensor::empty(a.shape, needs_grad, stream, "emul_result");
+
+    const size_t count = a.numel();
+    kernel_elementwise_mul_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        a.data, b.data, result.data, count);
+
+    if (needs_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<ElementwiseMulGradFn>();
+        grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
+        grad_fn->set_cache_refs(a.data, b.data, count);
+        result.grad_fn = grad_fn;
+    }
+
     return result;
 }
 
@@ -4339,76 +4165,6 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
 // Production training uses ComputeLossBatch.cu -> autograd::unified_loss() which
 // properly computes loss AND backward with correct 1/N scaling (Issue #58 fix).
 // Issue #142: cross_entropy_loss() also deleted (was thin wrapper around unified_loss).
-
-/**
- * autograd::qk_rms_norm - Per-head RMSNorm for Q/K projections with automatic differentiation
- *
- * Forward: y[row,d] = alpha[h] * x[row,d] / rms(x[row,:])
- * Input is treated as [B, H, S, D] flattened to [B*H*S, D].
- *
- * TAPE-BASED: Caches input for backward pass.
- *
- * @param bhsd_input Input tensor [total_rows, head_dim] where total_rows = B*H*S
- * @param alpha      Per-head learnable scale [num_heads]
- * @param num_heads  Number of heads
- * @param seq_len    Sequence length (needed to derive head index from row)
- * @param head_dim   Dimension per head
- * @param eps        Epsilon for numerical stability
- * @param stream     CUDA stream
- * @return Normalized tensor with same shape
- */
-Tensor qk_rms_norm(Tensor& bhsd_input, Tensor& alpha, int num_heads, int seq_len, int head_dim,
-                   float eps, cudaStream_t stream) {
-    if (stream == nullptr || stream == 0) {
-        throw std::runtime_error("autograd::qk_rms_norm: stream is NULL - caller MUST provide valid stream");
-    }
-    if (!bhsd_input.data) {
-        throw std::runtime_error("autograd::qk_rms_norm: bhsd_input.data is NULL");
-    }
-    if (!alpha.data) {
-        throw std::runtime_error("autograd::qk_rms_norm: alpha.data is NULL");
-    }
-    if (num_heads <= 0 || seq_len <= 0 || head_dim <= 0) {
-        throw std::runtime_error("autograd::qk_rms_norm: invalid geometry num_heads=" +
-            std::to_string(num_heads) + " seq_len=" + std::to_string(seq_len) +
-            " head_dim=" + std::to_string(head_dim));
-    }
-    
-    const size_t total_elements = bhsd_input.shape.total_elements();
-    const int total_rows = static_cast<int>(total_elements / head_dim);
-    
-    if (total_rows <= 0 || total_elements != static_cast<size_t>(total_rows) * head_dim) {
-        throw std::runtime_error("autograd::qk_rms_norm: input size " + std::to_string(total_elements) +
-            " not divisible by head_dim=" + std::to_string(head_dim));
-    }
-    
-    Tensor result = Tensor::empty(bhsd_input.shape,
-                                  bhsd_input.requires_grad || alpha.requires_grad,
-                                  stream, "qk_rms_norm_result");
-    
-    // Forward kernel
-    const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32 + 1) * sizeof(float);
-    kernel_qk_rms_norm_forward<<<total_rows, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
-        bhsd_input.data, alpha.data, result.data,
-        total_rows, head_dim, seq_len, num_heads, eps);
-    trackKernelLaunch("kernel_qk_rms_norm_forward", stream);
-    
-    // Set up backward
-    if (result.requires_grad) {
-        result.is_leaf = false;
-        auto grad_fn = std::make_shared<QKRMSNormGradFn>();
-        grad_fn->capture_inputs(bhsd_input, alpha, total_rows, head_dim, seq_len, num_heads, eps, stream);
-        
-        // Copy input to owned buffer for backward (Issue #51)
-        grad_fn->set_cache_copy(bhsd_input.data, total_elements, stream);
-        result.grad_fn = grad_fn;
-    }
-    
-    AG_TRACE("[autograd::qk_rms_norm] rows=%d head_dim=%d num_heads=%d seq_len=%d requires_grad=%d\n",
-             total_rows, head_dim, num_heads, seq_len, result.requires_grad);
-    
-    return result;
-}
 
 Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cudaStream_t stream, float embedding_scale) {
     if (!weight.shape.is_2d_layout()) {
@@ -4502,24 +4258,44 @@ Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStrea
         }
         return result;
     }
+
+    if (p < 0.0f || p >= 1.0f) {
+        throw std::invalid_argument(
+            "autograd::dropout: dropout probability p must be in [0, 1), got " +
+            std::to_string(p));
+    }
     
     const size_t count = x.numel();
+    if (count == 0) {
+        // Empty tensor: dropout is a no-op, keep gradient identity edge.
+        if (x.requires_grad) {
+            result.is_leaf = false;
+            auto grad_fn = std::make_shared<AddGradFn>();
+            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);
+            result.grad_fn = grad_fn;
+        }
+        return result;
+    }
     const float scale = 1.0f / (1.0f - p);
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
     
     // Allocate mask on device
     uint8_t* mask = nullptr;
-    cudaMalloc(&mask, count * sizeof(uint8_t));
+    TC_CUDA_CHECK(cudaMalloc(&mask, count * sizeof(uint8_t)));
+    if (!x.data || !result.data || !mask) {
+        throw std::runtime_error("autograd::dropout: null buffer(s) before kernel launch");
+    }
     
     // Generate random mask: 1 = keep (with prob 1-p), 0 = drop (with prob p)
-    kernel_generate_dropout_mask<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+    kernel_generate_dropout_mask<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         mask, count, p, seed);
     trackKernelLaunch("kernel_generate_dropout_mask", stream);
+    TC_CUDA_CHECK(cudaGetLastError());
     
     // Forward: y = x * mask * scale
-    kernel_dropout_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+    kernel_dropout_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         x.data, mask, result.data, scale, count);
     trackKernelLaunch("kernel_dropout_forward", stream);
+    TC_CUDA_CHECK(cudaGetLastError());
     
     // Set up backward - ISSUE #48: capture stable data
     if (x.requires_grad) {
@@ -4584,23 +4360,25 @@ Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream) {
         throw std::runtime_error("layer_scale: scale_param is NULL");
     }
     
+    // Read scale value from GPU
+    float scale_value = 1.0f;
+    cudaMemcpyAsync(&scale_value, scale_param.data, sizeof(float), 
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
     const bool track_grad = x.requires_grad || scale_param.requires_grad;
     Tensor result = Tensor::empty(x.shape, track_grad, stream, "layer_scale_result");
     
-    // Issue #152: Forward computation entirely on device — no D2H copy, no sync.
-    // kernel_scale_device_scalar reads scale_param[0] directly from GPU memory.
-    // Eliminates 24× pipeline drains per forward pass (2 per layer × 12 layers).
-    const size_t n = x.numel();
-    const int blocks = (n + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    TensorContract::kernel_scale_device_scalar<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        x.data, scale_param.data, result.data, n);
-    { cudaError_t err = cudaGetLastError(); if (err != cudaSuccess) throw std::runtime_error(std::string("CUDA error in layer_scale: ") + cudaGetErrorString(err)); }
+    // Forward: y = x * scale_value  (broadcast)
+    TensorContract::TensorView x_view(const_cast<float*>(x.data), x.shape);
+    TensorContract::TensorView out_view(result.data, result.shape);
+    TensorContract::scale(x_view, scale_value, out_view, stream);
     
     // Set up backward
     if (track_grad) {
         result.is_leaf = false;
         auto grad_fn = std::make_shared<LayerScaleGradFn>();
-        grad_fn->capture_inputs(const_cast<Tensor&>(x), scale_param, stream);
+        grad_fn->capture_inputs(const_cast<Tensor&>(x), scale_param, scale_value, stream);
         result.grad_fn = grad_fn;
     }
     
@@ -4968,13 +4746,11 @@ struct MatMulGradFn : public GradFn {
     std::shared_ptr<GradFn> a_grad_fn;   // Chain continuation for A
     std::shared_ptr<GradFn> b_grad_fn;   // Chain continuation for B
     
-    // ISSUE #51 FIX: Own copies of cached data to prevent dangling pointers
-    // Previously: stored non-owning pointers that became stale when input tensors freed
-    // Now: copy to owned buffers that persist for backward pass
-    std::shared_ptr<float> owned_cache_a;  // Owned GPU memory copy of A (for grad_B)
-    std::shared_ptr<float> owned_cache_b;  // Owned GPU memory copy of B (for grad_A)
-    const float* cached_a = nullptr;  // Points to owned_cache_a.get() after set_cache_copy()
-    const float* cached_b = nullptr;  // Points to owned_cache_b.get() after set_cache_copy()
+    // TAPE-BASED cache contract:
+    // - cached_a/cached_b are external pointers managed by caller lifecycle.
+    // - MatMulGradFn validates non-null requirements but does not allocate/copy caches.
+    const float* cached_a = nullptr;  // External A cache (for grad_B)
+    const float* cached_b = nullptr;  // External B cache (for grad_A)
     int M = 0, K = 0, N = 0;   // Dimensions
     cublasHandle_t cublas_handle = nullptr;
     bool transpose_b = false;  // Was B transposed in forward?
@@ -5054,9 +4830,8 @@ struct MatMulGradFn : public GradFn {
         }
     }
     
-    // ISSUE #51 FIX: Copy cache data to owned buffers (not just store pointers)
-    // This prevents the SGEMM "illegal value" errors caused by dangling pointers
-    // when input tensors are freed before backward() runs.
+    // Bind external cache pointers for backward.
+    // Contract: caller owns cache lifetime through backward execution.
     void set_cache_copy(const float* a_cache, const float* b_cache, int m, int k, int n, 
                         cublasHandle_t handle, cudaStream_t stream, bool transB = false) {
         transpose_b = transB;
@@ -5064,47 +4839,20 @@ struct MatMulGradFn : public GradFn {
         cublas_handle = handle;
         cache_stream = stream;
         
-        // Copy cache A if needed for grad_B computation
-        if (b_requires_grad && a_cache) {
-            // A is [M, K] row-major
-            const size_t a_size = static_cast<size_t>(m) * k;
-            float* buffer_a = nullptr;
-            cudaMalloc(&buffer_a, a_size * sizeof(float));
-            // Issue #57: Use SYNCHRONOUS copy to ensure source data isn't freed before copy completes
-            // The source tensor destructor runs on CPU and can free memory while async copy is in flight
-            cudaMemcpy(buffer_a, a_cache, a_size * sizeof(float), cudaMemcpyDeviceToDevice);
-            
-            // Wrap in shared_ptr with DEFERRED cleanup deleter (Issue #53)
-            // Instead of calling cudaFree directly (which blocks), queue for later cleanup
-            owned_cache_a = std::shared_ptr<float>(buffer_a, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            cached_a = owned_cache_a.get();
-        }
+        if (b_requires_grad) cached_a = a_cache;
         
-        // Copy cache B if needed for grad_A computation
-        if (a_requires_grad && b_cache) {
-            // B is [K, N] or [N, K] depending on transpose_b
-            const size_t b_size = transB ? static_cast<size_t>(n) * k : static_cast<size_t>(k) * n;
-            float* buffer_b = nullptr;
-            cudaMalloc(&buffer_b, b_size * sizeof(float));
-            // Issue #57: Use SYNCHRONOUS copy to ensure source data isn't freed before copy completes
-            cudaMemcpy(buffer_b, b_cache, b_size * sizeof(float), cudaMemcpyDeviceToDevice);
-            
-            // Wrap in shared_ptr with DEFERRED cleanup deleter (Issue #53)
-            // Instead of calling cudaFree directly (which blocks), queue for later cleanup
-            owned_cache_b = std::shared_ptr<float>(buffer_b, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            cached_b = owned_cache_b.get();
-        }
+        if (a_requires_grad) cached_b = b_cache;
         
         // Validate that required caches are set
         if (a_requires_grad && !cached_b) {
-            throw std::runtime_error("MatMulGradFn::set_cache_copy: b_cache is NULL but input_a requires grad");
+            throw std::runtime_error(
+                "MatMulGradFn::set_cache_copy: b_cache is NULL but input_a requires grad "
+                "(A.grad=true requires B cache for grad_A)");
         }
         if (b_requires_grad && !cached_a) {
-            throw std::runtime_error("MatMulGradFn::set_cache_copy: a_cache is NULL but input_b requires grad");
+            throw std::runtime_error(
+                "MatMulGradFn::set_cache_copy: a_cache is NULL but input_b requires grad "
+                "(B.grad=true requires A cache for grad_B)");
         }
     }
     
@@ -5506,12 +5254,32 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
         // ISSUE #55 FIX: Pass stream for async allocation of owned grad buffers
         grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
         
-        // TAPE-BASED: Use external caches or the tensor data directly
-        // If cache not provided, assume the tensor data persists (e.g., weights)
-        // ISSUE #51 FIX: Copy caches to owned buffers instead of storing dangling pointers
-        // If cache not provided, use the tensor data directly (assumes weights persist)
-        const float* effective_a_cache = a_cache ? a_cache : a.data;
+        // TAPE-BASED cache contract:
+        // - grad_B requires A cache. Enforce explicit a_cache so missing plumbing fails loud.
+        // - grad_A may still use persistent B.data when b_cache is omitted (weights typically persist).
+        const float* effective_a_cache = a_cache;
         const float* effective_b_cache = b_cache ? b_cache : b.data;
+        
+        // Null check: grad_B = A^T @ grad_C requires cached A; grad_A = grad_C @ B^T requires cached B
+        if (grad_fn->b_requires_grad && !effective_a_cache) {
+            throw std::runtime_error(
+                "autograd::matmul: Missing required a_cache for grad_B path. "
+                "input_b requires grad, so caller MUST pass explicit a_cache (forward A activation) to matmul. "
+                "This is a cache-plumbing contract failure, not a fallback path. "
+                "Context: A.name=" + std::string(a.name ? a.name : "<unnamed>") +
+                " A.data=" + std::to_string(reinterpret_cast<uintptr_t>(a.data)) +
+                " a_cache=" + std::to_string(reinterpret_cast<uintptr_t>(a_cache)) +
+                " B.name=" + std::string(b.name ? b.name : "<unnamed>") +
+                " B.data=" + std::to_string(reinterpret_cast<uintptr_t>(b.data)) +
+                " shape(A)=[" + std::to_string(M) + "," + std::to_string(K) + "]"
+                " shape(B)=[" + std::to_string(b_shape.rows) + "," + std::to_string(b_shape.cols) + "]"
+                " transpose_b=" + std::to_string(transpose_b ? 1 : 0));
+        }
+        if (grad_fn->a_requires_grad && !effective_b_cache) {
+            throw std::runtime_error(
+                "autograd::matmul: Cannot compute grad for input_a - weight/b cache is NULL. "
+                "Second input tensor has null data.");
+        }
         
         grad_fn->set_cache_copy(effective_a_cache, effective_b_cache, M, K, N, handle, stream, transpose_b);
         result.grad_fn = grad_fn;
@@ -5555,25 +5323,21 @@ __global__ void kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32(
     const int kv_h = (idx / (head_dim * seq_len)) % num_kv_heads;
     const int b = idx / (head_dim * seq_len * num_kv_heads);
     
-    // GQA grouping: heads_per_kv_group = num_heads / num_kv_heads
+    // ISSUE #85 FIX: The correct GQA gradient is the plain SUM of per-query-head contributions
+    // (chain rule: dL/dK = sum over grouped Q heads). The previous 1/sqrt scaling halved the
+    // effective K/V learning rate. Upstream FA2 uses at::sum_out without any scaling.
     const int heads_per_kv_group = num_heads / num_kv_heads;
-    
-    // Balance Q/K/V gradient magnitude: scale so ||dK||, ||dV|| match ||dQ|| per head.
-    // sum has norm ~ sqrt(heads_per_kv_group) * single-head norm → use 1/sqrt to match.
-    const float gqa_grad_scale = 1.0f / sqrtf(static_cast<float>(heads_per_kv_group));
-    
-    // Sum gradients from all Q heads in this KV group
+
     float sum = 0.0f;
     for (int g = 0; g < heads_per_kv_group; ++g) {
         const int q_head = kv_h * heads_per_kv_group + g;
-        // Source layout: [B, S, num_heads, D] = b*S*H*D + s*H*D + h*D + d
         const size_t src_idx = (static_cast<size_t>(b) * seq_len * num_heads * head_dim) +
                                (static_cast<size_t>(s) * num_heads * head_dim) +
                                (static_cast<size_t>(q_head) * head_dim) + d;
         sum += __bfloat162float(src[src_idx]);
     }
-    
-    dst[idx] = sum * gqa_grad_scale;
+
+    dst[idx] = sum;
 }
 
 /**
@@ -5785,8 +5549,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
                 dq_bf16, grad_q_fp32, batch_size, seq_len, num_heads, head_dim, stream);
             
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
-            const int acc_blocks = (q_elems + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-            kernel_accumulate_grad<<<acc_blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(q_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 q_grad, grad_q_fp32, q_elems, 1.0f);
             cudaFreeAsync(grad_q_fp32, stream);
         }
@@ -5800,8 +5563,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
                 dk_bf16, grad_k_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
-            const int acc_blocks = (kv_elems + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-            kernel_accumulate_grad<<<acc_blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(kv_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 k_grad, grad_k_fp32, kv_elems, 1.0f);
             cudaFreeAsync(grad_k_fp32, stream);
         }
@@ -5815,8 +5577,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
                 dv_bf16, grad_v_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
             // Scale = 1.0 (no normalization needed)
-            const int acc_blocks = (kv_elems + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-            kernel_accumulate_grad<<<acc_blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(kv_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 v_grad, grad_v_fp32, kv_elems, 1.0f);
             cudaFreeAsync(grad_v_fp32, stream);
         }
@@ -6229,7 +5990,9 @@ __global__ void kernel_split_qkv(
     // Separate kernel launch or just use offset
 }
 
-// More efficient: one kernel that handles all elements
+// One kernel: split qkv [tokens, qkv_dim] -> Q_bsm, K_bsm, V_bsm (same logic as before).
+// Uses 1D grid only (blocks_split, 256) so launch is valid on all drivers; 2D grid
+// and 768 threads/block can trigger "invalid argument".
 __global__ void kernel_split_qkv_all(
     const float* __restrict__ qkv,     // [tokens, qkv_dim]
     float* __restrict__ Q,              // [tokens, d_model]
@@ -6237,24 +6000,21 @@ __global__ void kernel_split_qkv_all(
     float* __restrict__ V,              // [tokens, kv_dim]
     int tokens, int d_model, int kv_dim
 ) {
-    const int token = blockIdx.x;
-    const int col = threadIdx.x;
+    const int max_cols = (d_model >= kv_dim) ? d_model : kv_dim;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int token = idx / max_cols;
+    const int col = idx % max_cols;
     if (token >= tokens) return;
     
     const int total_qkv_dim = d_model + 2 * kv_dim;
     const float* row = qkv + token * total_qkv_dim;
     
-    // Copy Q columns [0, d_model)
     if (col < d_model) {
         Q[token * d_model + col] = row[col];
     }
-    
-    // Copy K columns [d_model, d_model + kv_dim)
     if (col < kv_dim) {
         K[token * kv_dim + col] = row[d_model + col];
     }
-    
-    // Copy V columns [d_model + kv_dim, end)
     if (col < kv_dim) {
         V[token * kv_dim + col] = row[d_model + kv_dim + col];
     }
@@ -6460,15 +6220,38 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor K_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_K_bsm");
     Tensor V_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_V_bsm");
     
-    // Forward: split qkv_out into Q, K, V (BSM layout)
-    const int threads = std::max(d_model, kv_dim);
-    kernel_split_qkv_all<<<tokens, threads, 0, stream>>>(
+    // Inference-only: drain stale CUDA error from earlier in this layer (rms_norm, matmul,
+    // broadcast_add) or from no_grad_layer_storage.clear() in the loop. Without this,
+    // cudaGetLastError() after the launch reports that stale error and we throw incorrectly.
+    (void)cudaGetLastError();
+    
+    // Forward: split qkv_out into Q, K, V (BSM layout) — 1D grid only for driver compatibility
+    constexpr int kSplitBlockSize = 256;
+    const int max_cols = std::max(d_model, kv_dim);
+    const int total_threads = tokens * max_cols;
+    const int blocks_split = (total_threads + kSplitBlockSize - 1) / kSplitBlockSize;
+    kernel_split_qkv_all<<<blocks_split, kSplitBlockSize, 0, stream>>>(
         qkv_out.data, Q_bsm.data, K_bsm.data, V_bsm.data, tokens, d_model, kv_dim);
+    {
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            throw std::runtime_error("split_and_reshape_qkv: kernel_split_qkv_all launch failed: " +
+                std::string(cudaGetErrorString(err)) +
+                " (blocks=" + std::to_string(blocks_split) + " block=" + std::to_string(kSplitBlockSize) + ")");
+        }
+    }
     
     // Reshape BSM -> BHSD using TensorConversion (handles block sizing internally)
     TensorConversion::convert_BSM_to_BHSD(Q_bsm.data, Q_bhsd.data, batch, seq, num_heads, head_dim, stream);
     TensorConversion::convert_BSM_to_BHSD(K_bsm.data, K_bhsd.data, batch, seq, num_kv_heads, head_dim, stream);
     TensorConversion::convert_BSM_to_BHSD(V_bsm.data, V_bhsd.data, batch, seq, num_kv_heads, head_dim, stream);
+    {
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            throw std::runtime_error("split_and_reshape_qkv: BSM_to_BHSD conversion failed: " +
+                std::string(cudaGetErrorString(err)));
+        }
+    }
     
     // Q_bsm, K_bsm, V_bsm will be freed automatically when they go out of scope (RAII)
     

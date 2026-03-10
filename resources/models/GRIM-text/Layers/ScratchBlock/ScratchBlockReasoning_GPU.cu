@@ -16,10 +16,8 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <device_launch_parameters.h>
-#include <cstring>
 #include <cmath>
 #include <algorithm>
-#include <chrono>
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
@@ -41,10 +39,9 @@ __device__ __forceinline__ int ClampNumAtoms(const int* num_atoms, int max_atoms
     return (n > max_atoms) ? max_atoms : n;
 }
 
-// Numeric atom types: INTEGER=2, FLOAT=3, HEX=4, BINARY=5
-// Must match AtomType enum in Unigram.hpp
+// ATOM_NUM=1 is the only atom type
 __device__ __forceinline__ bool isNumericAtomType(int atom_type) {
-    return atom_type >= 2 && atom_type <= 5;
+    return atom_type == 1;
 }
 
 //======================================================//
@@ -105,12 +102,9 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     int token_id = token_ids[token_pos];
     int atom_type = (token_id - ATOM_TOKEN_START) % NUM_ATOM_TYPES;
 
-    // UNIFIED: Read packed numeric value and flags for ALL atom types.
-    // AtomTable packs dates as YYYYMMDD, times as HHMMSScc, IPs as packed octets, etc.
-    // Non-atom tokens have 0.0f / 0 which produces zero contribution in value dims.
     float numeric_val = token_numeric_values ? token_numeric_values[token_pos] : 0.0f;
     uint32_t flags = token_atom_flags ? token_atom_flags[token_pos] : 0u;
-    bool has_value = (numeric_val != 0.0f) && isfinite(numeric_val);
+    bool has_value = (atom_mask[token_pos] != 0) && isfinite(numeric_val);
     bool has_flags = (flags != 0u);
 
     // Base embedding from type
@@ -463,18 +457,23 @@ Tensor scratch_block_inject(
 {
     const auto& cfg = layer.config();
 
-    // Rule 20: No fallbacks
+    // Rule 20: No fallbacks — require all pointers so we fail fast and surface missing buffers (e.g. inference path).
     if (!input.data) throw std::runtime_error("scratch_block_inject: input.data is NULL");
     if (!token_ids)  throw std::runtime_error("scratch_block_inject: token_ids is NULL");
     if (!stream)     throw std::runtime_error("scratch_block_inject: stream is NULL");
-    if (!numeric_values) {
-        throw std::runtime_error("scratch_block_inject: numeric_values is NULL");
-    }
+    if (!numeric_values) throw std::runtime_error("scratch_block_inject: numeric_values is NULL");
+    if (!atom_mask)  throw std::runtime_error("scratch_block_inject: atom_mask is NULL");
+    if (!text_features) throw std::runtime_error("scratch_block_inject: text_features is NULL");
+    if (!atom_flags) throw std::runtime_error("scratch_block_inject: atom_flags is NULL");
 
     // Create output tensor (copy of input — injection is additive in-place)
     const size_t data_bytes = static_cast<size_t>(total_tokens) * cfg.d_model * sizeof(float);
     Tensor output;
-    cudaMalloc(&output.data, data_bytes);
+    cudaError_t alloc_err = cudaMalloc(&output.data, data_bytes);
+    if (alloc_err != cudaSuccess || !output.data) {
+        throw std::runtime_error("scratch_block_inject: cudaMalloc failed: " +
+                                 std::string(cudaGetErrorString(alloc_err)));
+    }
     cudaMemcpyAsync(output.data, input.data, data_bytes, cudaMemcpyDeviceToDevice, stream);
     output.shape = input.shape;
     output.owns_data = true;
@@ -697,12 +696,14 @@ void ScratchBlockLayer::runForwardKernels(
     cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), stream);
 
     const int detect_block = 256;
-    const int detect_grid = (total_tokens + detect_block - 1) / detect_block;
-    kernelDetectAtomTokens<<<detect_grid, detect_block, 0, stream>>>(
-        token_ids, total_tokens,
-        d_atom_positions_, d_num_atoms_,
-        config_.max_atoms,
-        config_.atom_token_start, config_.atom_token_end);
+    const int detect_grid = total_tokens > 0 ? (total_tokens + detect_block - 1) / detect_block : 0;
+    if (detect_grid > 0) {
+        kernelDetectAtomTokens<<<detect_grid, detect_block, 0, stream>>>(
+            token_ids, total_tokens,
+            d_atom_positions_, d_num_atoms_,
+            config_.max_atoms,
+            config_.atom_token_start, config_.atom_token_end);
+    }
 
     const int atom_blocks = std::min(config_.max_atoms, total_tokens);
     if (atom_blocks <= 0) return;

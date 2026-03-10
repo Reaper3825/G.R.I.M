@@ -132,32 +132,18 @@ __global__ void kernelMarkStructuralBoundaries(
 //======================================================//
 
     struct UniByte::DetectorState {
-        // Pre-built Aho-Corasick automata for O(n) prefix detection
-        AhoCorasick url_prefixes;       // http://, https://, ftp://, etc.
-        AhoCorasick email_indicator;    // @ symbol as email hint
-        AhoCorasick number_prefixes;    // 0x, 0b for hex/binary
+        AhoCorasick url_prefixes;       // kept empty (non-numeric atoms removed)
+        AhoCorasick email_indicator;    // kept empty
+        AhoCorasick number_prefixes;    // 0x, 0b for hex/binary -> ATOM_NUM
         
         DetectorState() {
-            // URL prefixes (case insensitive)
-            url_prefixes.setCaseInsensitive(true);
-            url_prefixes.addPattern("http://", AtomType::ATOM_URL);
-            url_prefixes.addPattern("https://", AtomType::ATOM_URL);
-            url_prefixes.addPattern("ftp://", AtomType::ATOM_URL);
-            url_prefixes.addPattern("ftps://", AtomType::ATOM_URL);
-            url_prefixes.addPattern("ws://", AtomType::ATOM_URL);
-            url_prefixes.addPattern("wss://", AtomType::ATOM_URL);
-            url_prefixes.addPattern("file://", AtomType::ATOM_URL);
             url_prefixes.build();
-            
-            // Email indicator (@ symbol triggers full email validation)
-            email_indicator.addPattern("@", AtomType::ATOM_EMAIL);
             email_indicator.build();
             
-            // Number prefixes for hex/binary
-            number_prefixes.addPattern("0x", AtomType::ATOM_HEX);
-            number_prefixes.addPattern("0X", AtomType::ATOM_HEX);
-            number_prefixes.addPattern("0b", AtomType::ATOM_BINARY);
-            number_prefixes.addPattern("0B", AtomType::ATOM_BINARY);
+            number_prefixes.addPattern("0x", AtomType::ATOM_NUM);
+            number_prefixes.addPattern("0X", AtomType::ATOM_NUM);
+            number_prefixes.addPattern("0b", AtomType::ATOM_NUM);
+            number_prefixes.addPattern("0B", AtomType::ATOM_NUM);
             number_prefixes.build();
         }
     };
@@ -318,149 +304,26 @@ std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) c
     // Phase 1: Aho-Corasick prefix detection (O(n) single pass)
     //--------------------------------------------------//
     
-    // Detect URLs via prefix matching + manual extent finding
-    if (config_.detect_urls) {
-        auto url_hits = detector_->url_prefixes.search(text);
-        for (const auto& hit : url_hits) {
-            // Extend from prefix to find full URL
-            size_t end = hit.end;
-            while (end < text.size()) {
-                char c = text[end];
-                // URL continues until whitespace or certain punctuation
-                if (std::isspace(c) || c == '<' || c == '>' || c == '"' || c == '\'' || c == ')') {
-                    break;
-                }
-                ++end;
-            }
-            // Trim trailing punctuation
-            while (end > hit.end && (text[end-1] == '.' || text[end-1] == ',' || text[end-1] == ';')) {
-                --end;
-            }
-            if (end > hit.end) {
-                spans.push_back(makeSpan(hit.start, end, AtomType::ATOM_URL));
-            }
-        }
-    }
-    
-    // Detect emails via @ indicator + bidirectional extent finding
-    if (config_.detect_emails) {
-        auto email_hits = detector_->email_indicator.search(text);
-        for (const auto& hit : email_hits) {
-            // hit.start is position of '@'
-            size_t at_pos = hit.start;
-            
-            // Find local part (before @)
-            size_t local_start = at_pos;
-            while (local_start > 0) {
-                char c = text[local_start - 1];
-                if (std::isalnum(c) || c == '.' || c == '_' || c == '-' || c == '+') {
-                    --local_start;
-                } else {
-                    break;
-                }
-            }
-            
-            // Find domain part (after @)
-            size_t domain_end = at_pos + 1;
-            bool has_dot = false;
-            while (domain_end < text.size()) {
-                char c = text[domain_end];
-                if (std::isalnum(c) || c == '-') {
-                    ++domain_end;
-                } else if (c == '.') {
-                    has_dot = true;
-                    ++domain_end;
-                } else {
-                    break;
-                }
-            }
-            
-            // Validate: must have local part, domain with dot, and reasonable length
-            if (local_start < at_pos && has_dot && domain_end > at_pos + 2) {
-                spans.push_back(makeSpan(local_start, domain_end, AtomType::ATOM_EMAIL));
-            }
-        }
-    }
+    // Non-numeric atom types removed: URLs, emails, dates, times, IPs, paths
+    // all fall through to regular byte/unigram tokenization now.
     
     //--------------------------------------------------//
-    // Phase 2: Linear scan for patterns without good prefixes
-    //--------------------------------------------------//
-    
-    // Detect dates (YYYY-MM-DD or MM/DD/YYYY formats)
-    if (config_.detect_dates) {
-        for (size_t i = 0; i < text.size(); ) {
-            size_t end;
-            if (Detector::detectDate(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_DATE));
-                i = end;
-            } else {
-                ++i;
-            }
-        }
-    }
-    
-    // Detect times (HH:MM:SS or H:MM am/pm)
-    if (config_.detect_dates) {  // Reuse date flag for times
-        for (size_t i = 0; i < text.size(); ) {
-            size_t end;
-            if (Detector::detectTime(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_TIME));
-                i = end;
-            } else {
-                ++i;
-            }
-        }
-    }
-    
-    // Detect IP addresses (N.N.N.N where 0 <= N <= 255)
-    if (config_.detect_urls) {  // Reuse URL flag for IPs
-        for (size_t i = 0; i < text.size(); ) {
-            size_t end;
-            if (Detector::detectIPAddress(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_IP_ADDRESS));
-                i = end;
-            } else {
-                ++i;
-            }
-        }
-    }
-    
-    // Detect file paths (/unix/path or C:\windows\path)
-    if (config_.detect_paths) {
-        for (size_t i = 0; i < text.size(); ) {
-            size_t end;
-            if (Detector::detectPath(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_PATH));
-                i = end;
-            } else {
-                ++i;
-            }
-        }
-    }
-    
-    //--------------------------------------------------//
-    // Phase 3: Number detection with Aho-Corasick prefix hints
+    // Number detection with Aho-Corasick prefix hints
     //--------------------------------------------------//
     
     if (config_.detect_numbers) {
-        // Use Aho-Corasick to find hex/binary prefixes (0x, 0b) in O(n)
         auto num_prefix_hits = detector_->number_prefixes.search(text);
         
-        // First pass: process hex/binary from prefix hits
-        // NOTE: Overlaps handled by final deduplication pass (no need for processed[] array)
         for (const auto& hit : num_prefix_hits) {
             size_t end;
-            if (hit.atom_type == AtomType::ATOM_HEX && Detector::detectHex(text, hit.start, end)) {
-                spans.push_back(makeSpan(hit.start, end, AtomType::ATOM_HEX));
-            } else if (hit.atom_type == AtomType::ATOM_BINARY && Detector::detectBinary(text, hit.start, end)) {
-                spans.push_back(makeSpan(hit.start, end, AtomType::ATOM_BINARY));
+            if (Detector::detectHex(text, hit.start, end)) {
+                spans.push_back(makeSpan(hit.start, end, AtomType::ATOM_NUM));
+            } else if (Detector::detectBinary(text, hit.start, end)) {
+                spans.push_back(makeSpan(hit.start, end, AtomType::ATOM_NUM));
             }
         }
         
-        // Second pass: scan for integers/floats (no good prefix for these)
-        // Skip positions that could overlap with hex/binary hits (0x..., 0b...)
         for (size_t i = 0; i < text.size(); ) {
-            // Skip hex/binary prefixes (these were handled in first pass)
             if (i + 1 < text.size() && text[i] == '0' && 
                 (text[i+1] == 'x' || text[i+1] == 'X' || text[i+1] == 'b' || text[i+1] == 'B')) {
                 ++i;
@@ -469,16 +332,14 @@ std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) c
             
             size_t end;
             
-            // Try float first (must come before integer to avoid partial match)
             if (Detector::detectFloat(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_FLOAT));
+                spans.push_back(makeSpan(i, end, AtomType::ATOM_NUM));
                 i = end;
                 continue;
             }
             
-            // Try integer
             if (Detector::detectInteger(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_INTEGER));
+                spans.push_back(makeSpan(i, end, AtomType::ATOM_NUM));
                 i = end;
                 continue;
             }
@@ -622,108 +483,40 @@ inline uint16_t floatToFp16(float value) {
 }
 
 // Encode text features for an atom token into 16-dim FP16 vector
+// With single ATOM_NUM type, features focus on numeric magnitude/structure.
 void encodeAtomTextFeatures(
     AtomType atom_type,
     const std::string_view raw_text,
     const AtomValue* parsed,
     uint16_t* out_features  // [kTextFeatureDim]
 ) {
-    // Zero-initialize
     for (int i = 0; i < kTextFeatureDim; ++i) {
         out_features[i] = floatToFp16(0.0f);
     }
     
-    // Compute category and sub-type
-    int category = 0;
-    int subtype = 0;
+    if (atom_type != AtomType::ATOM_NUM) return;
     
-    switch (atom_type) {
-        // NUMERIC category (0)
-        case AtomType::ATOM_INTEGER:
-            category = 0; subtype = 0; break;
-        case AtomType::ATOM_FLOAT:
-            category = 0; subtype = 1; break;
-        case AtomType::ATOM_HEX:
-            category = 0; subtype = 2; break;
-        case AtomType::ATOM_BINARY:
-            category = 0; subtype = 3; break;
-        
-        // TEMPORAL category (1)
-        case AtomType::ATOM_DATE:
-            category = 1; subtype = 0; break;
-        case AtomType::ATOM_TIME:
-            category = 1; subtype = 1; break;
-        
-        // STRUCTURAL category (2)
-        case AtomType::ATOM_URL:
-            category = 2; subtype = 0; break;
-        case AtomType::ATOM_EMAIL:
-            category = 2; subtype = 1; break;
-        case AtomType::ATOM_PATH:
-            category = 2; subtype = 2; break;
-        case AtomType::ATOM_IP_ADDRESS:
-            category = 2; subtype = 3; break;
-        
-        // STRING category (3)
-        case AtomType::ATOM_STRING_LITERAL:
-            category = 3; subtype = 0; break;
-        case AtomType::ATOM_IDENTIFIER:
-            category = 3; subtype = 1; break;
-        case AtomType::ATOM_REGEX:
-            category = 3; subtype = 2; break;
-        case AtomType::ATOM_EQUATION:
-            category = 3; subtype = 3; break;
-        case AtomType::ATOM_EXPRESSION:
-            category = 3; subtype = 4; break;
-        
-        default:
-            category = 3; subtype = 7; break;
-    }
-    
-    // Dims [0-3]: Category one-hot encoding
-    out_features[category] = floatToFp16(1.0f);
-    
-    // Dims [4-7]: Sub-type encoding (soft encoding for related types)
-    out_features[4 + (subtype % 4)] = floatToFp16(0.8f);
+    // Dim 0: numeric category indicator
+    out_features[0] = floatToFp16(1.0f);
     
     // Dims [8-11]: Length/magnitude features
     float len_f = static_cast<float>(raw_text.size());
-    out_features[8] = floatToFp16(std::min(len_f / 100.0f, 1.0f));  // Normalized length
-    out_features[9] = floatToFp16(std::log2f(len_f + 1.0f) / 10.0f);  // Log length
+    out_features[8] = floatToFp16(std::min(len_f / 100.0f, 1.0f));
+    out_features[9] = floatToFp16(std::log2f(len_f + 1.0f) / 10.0f);
     
-    // Add category-specific magnitude features
     if (parsed) {
         if (auto* int_val = std::get_if<AtomInteger>(parsed)) {
             float log_mag = std::log2f(std::abs(static_cast<float>(int_val->value)) + 1.0f);
-            out_features[10] = floatToFp16(std::min(log_mag / 32.0f, 1.0f));  // Log magnitude
-            out_features[11] = floatToFp16(int_val->value < 0 ? 1.0f : 0.0f);  // Sign bit
+            out_features[10] = floatToFp16(std::min(log_mag / 32.0f, 1.0f));
+            out_features[11] = floatToFp16(int_val->value < 0 ? 1.0f : 0.0f);
         } else if (auto* float_val = std::get_if<AtomFloat>(parsed)) {
             float log_mag = std::log2f(std::abs(static_cast<float>(float_val->value)) + 1.0f);
             out_features[10] = floatToFp16(std::min(log_mag / 32.0f, 1.0f));
             out_features[11] = floatToFp16(float_val->has_exponent ? 1.0f : 0.0f);
-        } else if (auto* url_val = std::get_if<AtomURL>(parsed)) {
-            out_features[10] = floatToFp16(url_val->scheme == "https" ? 1.0f : 0.5f);
-            out_features[11] = floatToFp16(!url_val->query.empty() ? 1.0f : 0.0f);
-        } else if (auto* date_val = std::get_if<AtomDate>(parsed)) {
-            out_features[10] = floatToFp16(static_cast<float>(date_val->year - 1900) / 200.0f);
-            out_features[11] = floatToFp16(static_cast<float>(date_val->month) / 12.0f);
-        } else if (auto* time_val = std::get_if<AtomTime>(parsed)) {
-            out_features[10] = floatToFp16(static_cast<float>(time_val->hour) / 24.0f);
-            out_features[11] = floatToFp16(static_cast<float>(time_val->minute) / 60.0f);
-        } else if (auto* path_val = std::get_if<AtomPath>(parsed)) {
-            out_features[10] = floatToFp16(path_val->is_absolute ? 1.0f : 0.0f);
-            out_features[11] = floatToFp16(path_val->is_windows ? 1.0f : 0.0f);
-        } else if (auto* ip_val = std::get_if<AtomIP>(parsed)) {
-            out_features[10] = floatToFp16(static_cast<float>(ip_val->octets[0]) / 255.0f);
-            out_features[11] = floatToFp16(ip_val->is_valid ? 1.0f : 0.0f);
-        } else if (auto* id_val = std::get_if<AtomIdentifier>(parsed)) {
-            out_features[10] = floatToFp16(static_cast<float>(id_val->style) / 4.0f);
-            out_features[11] = floatToFp16(0.5f);
         }
     }
     
-    // Dims [12-15]: Structure-specific semantic features
-    // Character composition analysis
+    // Dims [12-14]: Character composition
     int digit_count = 0, alpha_count = 0, special_count = 0;
     for (char c : raw_text) {
         if (std::isdigit(static_cast<unsigned char>(c))) ++digit_count;
@@ -735,17 +528,9 @@ void encodeAtomTextFeatures(
     out_features[13] = floatToFp16(static_cast<float>(alpha_count) / total);
     out_features[14] = floatToFp16(static_cast<float>(special_count) / total);
     
-    // Has common separator characters
-    bool has_slash = raw_text.find('/') != std::string_view::npos;
-    bool has_colon = raw_text.find(':') != std::string_view::npos;
+    // Dim 15: has decimal point
     bool has_dot = raw_text.find('.') != std::string_view::npos;
-    bool has_at = raw_text.find('@') != std::string_view::npos;
-    out_features[15] = floatToFp16(
-        (has_slash ? 0.25f : 0.0f) + 
-        (has_colon ? 0.25f : 0.0f) + 
-        (has_dot ? 0.25f : 0.0f) + 
-        (has_at ? 0.25f : 0.0f)
-    );
+    out_features[15] = floatToFp16(has_dot ? 1.0f : 0.0f);
 }
 
 }  // anonymous namespace
@@ -877,7 +662,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
                 packed_flags = entry->flags;
                 // For numeric atoms, prefer the direct parser result if AtomTable
                 // re-packed it differently (float precision preservation)
-                if (Tokenizer::isNumericAtom(span.atom_type) && numeric_value != 0.0f) {
+                if (Tokenizer::isNumericAtom(span.atom_type) && has_parsed) {
                     packed_numeric = numeric_value;
                 }
             }
@@ -1092,21 +877,8 @@ std::string UniByte::tokenToString(int token_id) const {
         return byte_encoder_.tokenToString(token_id);
     } else if (isAtomToken(token_id)) {
         AtomType type = tokenIdToAtomType(token_id);
-        switch (type) {
-            case AtomType::ATOM_INTEGER: return "<INT>";
-            case AtomType::ATOM_FLOAT: return "<FLOAT>";
-            case AtomType::ATOM_HEX: return "<HEX>";
-            case AtomType::ATOM_BINARY: return "<BIN>";
-            case AtomType::ATOM_URL: return "<URL>";
-            case AtomType::ATOM_EMAIL: return "<EMAIL>";
-            case AtomType::ATOM_PATH: return "<PATH>";
-            case AtomType::ATOM_DATE: return "<DATE>";
-            case AtomType::ATOM_TIME: return "<TIME>";
-            case AtomType::ATOM_IP_ADDRESS: return "<IP>";
-            case AtomType::ATOM_STRING_LITERAL: return "<STR>";
-            case AtomType::ATOM_IDENTIFIER: return "<ID>";
-            default: return "<ATOM>";
-        }
+        if (type == AtomType::ATOM_NUM) return "<NUM>";
+        return "<ATOM>";
     } else if (isUnigramToken(token_id)) {
         const UnigramPiece* piece = unigram_.getPiece(token_id);
         if (piece) {

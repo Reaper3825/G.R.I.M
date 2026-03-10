@@ -55,6 +55,8 @@ struct BatchPayload {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // GEOMETRY (computed ONCE during buildBatchPayload)
+    // Single source of truth for per-batch seq_len: downstream code must use
+    // payload.batch_size, payload.max_seq_len, payload.total_tokens, etc. — not config.
     // ═══════════════════════════════════════════════════════════════════════════
     int batch_size = 0;                      // number of sequences
     int max_seq_len = 0;                     // longest sequence (pad target)

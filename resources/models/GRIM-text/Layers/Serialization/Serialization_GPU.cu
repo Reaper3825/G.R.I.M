@@ -1,11 +1,9 @@
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <sstream>
 #include <vector>
 
@@ -192,14 +190,17 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
         }
 
         const auto* fb_ffn = fb_layer->ffn();
-        std::vector<float> h_W_gate_up(fb_ffn->w_gate_up_data()->begin(), fb_ffn->w_gate_up_data()->end());
-        std::vector<float> h_b_gate_up(fb_ffn->b_gate_up_data()->begin(), fb_ffn->b_gate_up_data()->end());
-        std::vector<float> h_W_down(fb_ffn->w_down_data()->begin(), fb_ffn->w_down_data()->end());
-        std::vector<float> h_b_down(fb_ffn->b_down_data()->begin(), fb_ffn->b_down_data()->end());
-        if (!upload_device_vector(h_W_gate_up, layer_view.ffn_w_gate_up, "ffn.W_gate_up") ||
-            !upload_device_vector(h_b_gate_up, layer_view.ffn_b_gate_up, "ffn.b_gate_up") ||
-            !upload_device_vector(h_W_down, layer_view.ffn_w_down, "ffn.W_down") ||
-            !upload_device_vector(h_b_down, layer_view.ffn_b_down, "ffn.b_down")) {
+        std::vector<float> h_W_gate;
+        if (fb_ffn->w_gate_data()) {
+            h_W_gate.assign(fb_ffn->w_gate_data()->begin(), fb_ffn->w_gate_data()->end());
+        }
+        std::vector<float> h_W1(fb_ffn->w1_data()->begin(), fb_ffn->w1_data()->end());
+        std::vector<float> h_W2(fb_ffn->w2_data()->begin(), fb_ffn->w2_data()->end());
+        std::vector<float> h_b2(fb_ffn->b2_data()->begin(), fb_ffn->b2_data()->end());
+        if ((!h_W_gate.empty() && !upload_device_vector(h_W_gate, layer_view.ffn_w_gate, "ffn.W_gate")) ||
+            !upload_device_vector(h_W1, layer_view.ffn_w1, "ffn.W1") ||
+            !upload_device_vector(h_W2, layer_view.ffn_w2, "ffn.W2") ||
+            !upload_device_vector(h_b2, layer_view.ffn_b2, "ffn.b2")) {
             return false;
         }
 
@@ -293,9 +294,28 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
         // Old checkpoints may contain value_extraction_weight/bias — silently ignore them.
         // The extraction head has been removed from the architecture.
         
-        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] ScratchBlock: atom_types=", 
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] ScratchBlock: atom_types=",
                                             fb_scratch_block->num_atom_types(),
                                             " atom_dim=", fb_scratch_block->atom_embedding_dim()));
+    }
+
+    // Load NumericHead weights (optional — missing in old checkpoints)
+    const auto* fb_numeric_head = model_fb->numeric_head();
+    if (fb_numeric_head && fb_numeric_head->projection_data() && request.numeric_head.weights.ptr) {
+        std::vector<float> nh_weights(fb_numeric_head->projection_data()->begin(),
+                                      fb_numeric_head->projection_data()->end());
+        if (!upload_device_vector(nh_weights, request.numeric_head.weights, "NumericHead weights")) {
+            return false;
+        }
+        if (fb_numeric_head->bias_data() && request.numeric_head.bias.ptr) {
+            std::vector<float> nh_bias(fb_numeric_head->bias_data()->begin(),
+                                       fb_numeric_head->bias_data()->end());
+            if (!upload_device_vector(nh_bias, request.numeric_head.bias, "NumericHead bias")) {
+                return false;
+            }
+        }
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] NumericHead: d_model=",
+                                            fb_numeric_head->d_model()));
     }
 
     // Issue #33: Load final RMSNorm gamma (normalizes encoder output before LM head)
@@ -385,6 +405,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_rms_gamma = 0;
     bool use_rms = true;
 
+    GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] Downloading weights: embeddings + ", cfg.num_layers, " encoder layers (GPU->CPU)..."));
+
     if (cfg.use_gpu && request.sources.gpu_embedding.token_embeddings.ptr) {
         auto token_embed_data = download_device_vector(request.sources.gpu_embedding.token_embeddings, "token embeddings");
         if (token_embed_data.empty() && request.sources.gpu_embedding.token_embeddings.count > 0) {
@@ -432,6 +454,9 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     };
 
     for (int layer_idx = 0; layer_idx < cfg.num_layers; ++layer_idx) {
+        if (layer_idx % 6 == 0 || layer_idx == cfg.num_layers - 1) {
+            GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] Downloading encoder layer ", layer_idx + 1, "/", cfg.num_layers));
+        }
         const auto& layer_view = request.sources.encoder_layers[layer_idx];
 
         std::vector<float> h_W_qkv;
@@ -462,25 +487,26 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             static_cast<uint32_t>(cfg.num_kv_heads),  // GQA: num_kv_heads
             true);
 
-        std::vector<float> h_W_gate_up;
-        std::vector<float> h_b_gate_up;
-        std::vector<float> h_W_down;
-        std::vector<float> h_b_down;
-        if (!download_into(h_W_gate_up, layer_view.ffn_w_gate_up, "ffn.W_gate_up") ||
-            !download_into(h_b_gate_up, layer_view.ffn_b_gate_up, "ffn.b_gate_up") ||
-            !download_into(h_W_down, layer_view.ffn_w_down, "ffn.W_down") ||
-            !download_into(h_b_down, layer_view.ffn_b_down, "ffn.b_down")) {
+        std::vector<float> h_W_gate;
+        std::vector<float> h_W1;
+        std::vector<float> h_W2;
+        std::vector<float> h_b2;
+        if (!download_into(h_W_gate, layer_view.ffn_w_gate, "ffn.W_gate") ||
+            !download_into(h_W1, layer_view.ffn_w1, "ffn.W1") ||
+            !download_into(h_W2, layer_view.ffn_w2, "ffn.W2") ||
+            !download_into(h_b2, layer_view.ffn_b2, "ffn.b2")) {
             return false;
         }
 
         auto fb_ffn = GRIMTransformer::CreateFFNWeights(
             builder,
-            builder.CreateVector(h_W_gate_up),
-            builder.CreateVector(h_b_gate_up),
-            builder.CreateVector(h_W_down),
-            builder.CreateVector(h_b_down),
+            builder.CreateVector(h_W1),
+            0,
+            builder.CreateVector(h_W2),
+            builder.CreateVector(h_b2),
             static_cast<uint32_t>(cfg.d_model),
-            static_cast<uint32_t>(cfg.d_ff));
+            static_cast<uint32_t>(cfg.d_ff),
+            builder.CreateVector(h_W_gate));
 
         std::vector<float> h_rms1_gamma;
         std::vector<float> h_rms2_gamma;
@@ -574,6 +600,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 builder,
                 builder.CreateVector(sb_atom_emb),
                 builder.CreateVector(sb_atom_proj),
+                0,  // text_feature_projection — eliminated, empty for schema compat
                 static_cast<uint32_t>(sb_view.num_atom_types),
                 static_cast<uint32_t>(sb_view.atom_embedding_dim),
                 static_cast<uint32_t>(sb_view.d_model),
@@ -582,6 +609,22 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] ScratchBlock: atom_emb=",
                                                 sb_atom_emb.size(), " atom_proj=", sb_atom_proj.size()));
         }
+    }
+
+    // Save NumericHead weights
+    flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> fb_numeric_head = 0;
+    const auto& nh_view = request.sources.numeric_head;
+    if (nh_view.enabled && nh_view.weights.ptr) {
+        auto nh_weights = download_device_vector(nh_view.weights, "NumericHead weights");
+        auto nh_bias = download_device_vector(nh_view.bias, "NumericHead bias");
+        fb_numeric_head = GRIMTransformer::CreateNumericHeadWeights(
+            builder,
+            builder.CreateVector(nh_weights),
+            builder.CreateVector(nh_bias),
+            static_cast<uint32_t>(nh_view.d_model),
+            true);
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] NumericHead: weights=",
+                                            nh_weights.size(), " bias=", nh_bias.size()));
     }
 
     // Issue #33: Save final RMSNorm gamma (normalizes encoder output before LM head)
@@ -623,7 +666,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_embeddings,
         fb_encoder_layers,
         fb_lm_head,
-        0,                   // numeric_head removed - not used
+        fb_numeric_head,
         fb_scratch_block,
         fb_final_rms_gamma,  // Issue #33: Final RMSNorm gamma
         0,                   // loss_weighting (not used)
@@ -634,6 +677,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         timestamp);
 
     builder.Finish(fb_model, "GRMT");
+
+    GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] Writing checkpoint to disk (", builder.GetSize() / (1024 * 1024), " MB)..."));
 
     const std::string final_path = request.path;
     const std::string temp_path = final_path + config_.temp_suffix;

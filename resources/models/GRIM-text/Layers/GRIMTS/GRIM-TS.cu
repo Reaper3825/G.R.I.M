@@ -63,6 +63,18 @@ PinnedBuffers g_pinned{};
 // Primary stream reference (set during initialization)
 cudaStream_t g_primary_stream = nullptr;
 
+// Per-slot spin locks (allocated internally if not provided via buffers)
+int* g_slot_locks_owned = nullptr;
+
+// Pre-allocated device staging buffers for async ops
+GuessMetadata* g_device_staging_meta = nullptr;
+float* g_device_staging_rewards = nullptr;
+std::size_t g_device_staging_capacity = 0;
+
+// Bloom filter operation counter for periodic decay
+std::atomic<std::uint64_t> g_bloom_op_counter{0};
+constexpr std::uint64_t kBloomDecayInterval = 4096;
+
 bool g_initialized = false;
 
 //==============================================================================
@@ -85,7 +97,8 @@ struct CacheStatsMoment {
     float stale_events = 0.0f;
     float confidence_sum = 0.0f;
     float diversity_sum = 0.0f;
-    float reward_sq_sum = 0.0f;  // For variance calculation
+    float reward_sum = 0.0f;
+    float reward_sq_sum = 0.0f;
     unsigned int updates = 0;
     unsigned int hits = 0;
     unsigned int misses = 0;
@@ -139,15 +152,11 @@ __device__ __forceinline__ std::uint64_t AtomicExchKey(std::uint64_t* ptr,
                       static_cast<unsigned long long>(value));
 }
 
-// Device-side timestamp baseline (set from host at init)
-__device__ float d_timestamp_baseline = 0.0f;
-__device__ float d_clock_scale = 1e-9f;  // Adjusted per-GPU at init
+// Host-driven monotonic step counter — deterministic across SMs unlike clock64()
+__device__ float d_current_step = 0.0f;
 
 __device__ __forceinline__ float CurrentTimestampDevice() {
-    // Returns seconds since cache initialization
-    // clock64() is cycles, d_clock_scale converts to seconds based on actual GPU clock
-    const double ticks = static_cast<double>(clock64());
-    return static_cast<float>(ticks * d_clock_scale) - d_timestamp_baseline;
+    return d_current_step;
 }
 
 __device__ __forceinline__ float Clamp01(float value) {
@@ -198,6 +207,33 @@ __device__ __forceinline__ bool BloomQuery(const std::uint32_t* bloom, std::size
 }
 
 //==============================================================================
+// Per-Slot Spin Lock (protects Welford accumulators from concurrent updates)
+//==============================================================================
+
+__device__ __forceinline__ void SlotLock(int* locks, int slot_index) {
+    while (atomicCAS(&locks[slot_index], 0, 1) != 0) {
+        // Spin — bounded by eviction window contention
+    }
+    __threadfence();
+}
+
+__device__ __forceinline__ void SlotUnlock(int* locks, int slot_index) {
+    __threadfence();
+    atomicExch(&locks[slot_index], 0);
+}
+
+//==============================================================================
+// Bloom Filter Decay Kernel (prevents saturation by halving bit counts)
+//==============================================================================
+
+__global__ void DecayBloomKernel(std::uint32_t* bloom, std::size_t word_count) {
+    const unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < word_count) {
+        bloom[tid] = (bloom[tid] >> 1) & 0x55555555u;
+    }
+}
+
+//==============================================================================
 // EMA and Reward Processing
 //==============================================================================
 
@@ -205,7 +241,7 @@ __device__ float AdaptiveMomentum(float base_momentum, float confidence,
                                    float momentum_floor, float momentum_ceiling) {
     const float base_clamped = ClampRange(base_momentum, momentum_floor, momentum_ceiling);
     const float conf = Clamp01(confidence);
-    const float adaptive = momentum_floor + (momentum_ceiling - momentum_floor) * conf;
+    const float adaptive = momentum_ceiling - (momentum_ceiling - momentum_floor) * conf;
     const float blended = 0.5f * (base_clamped + adaptive);
     return ClampRange(blended, momentum_floor, momentum_ceiling);
 }
@@ -221,7 +257,9 @@ __device__ bool ApplyStalenessDecay(GuessRecord& record, float now,
     stats.ema_reward *= decay;
     stats.cumulative_reward *= decay;
     stats.normalized_last *= decay;
-    stats.update_streak = 0;  // Reset streak on staleness
+    stats.reward_mean *= decay;
+    stats.reward_m2 *= decay * decay;
+    stats.update_streak = 0;
     return true;
 }
 
@@ -247,6 +285,7 @@ __device__ void AccumulateCacheTelemetry(const GuessRecord& record,
     atomicAdd(&d_cache_moment.ema_sum, record.stats.ema_reward);
     atomicAdd(&d_cache_moment.confidence_sum, record.metadata.confidence);
     atomicAdd(&d_cache_moment.diversity_sum, record.stats.diversity_score);
+    atomicAdd(&d_cache_moment.reward_sum, reward);
     atomicAdd(&d_cache_moment.reward_sq_sum, reward * reward);
     atomicAdd(&d_cache_moment.updates, 1u);
     if (stale_event) {
@@ -273,6 +312,11 @@ __device__ void InitializeRecord(GuessRecord& record, const GuessMetadata& metad
     record.stats.created_ts = now;
     record.stats.diversity_score = 1.0f;
     record.stats.eviction_priority = 128;
+    // Warm-start Welford with a unit-variance prior to prevent normalization spikes
+    // on the first few updates after a reset or fresh insertion
+    record.stats.reward_mean = 0.5f;
+    record.stats.reward_m2 = 1.0f;
+    record.stats.total_attempts = 2;
 }
 
 //==============================================================================
@@ -656,12 +700,17 @@ __global__ void ApplyRewardKernel(const GuessMetadata* metadata_batch,
     }
 
     const bool is_hit = slot.existing;
+    if (state.slot_locks) {
+        SlotLock(state.slot_locks, slot.index);
+    }
     ApplyRewardInPlace(record, reward_batch[tid], momentum,
                        cfg.staleness_grace_period, cfg.staleness_decay_rate,
                        cfg.momentum_floor, cfg.momentum_ceiling, is_hit);
-    
     if (out_stats) {
         out_stats[tid] = record.stats;
+    }
+    if (state.slot_locks) {
+        SlotUnlock(state.slot_locks, slot.index);
     }
 }
 
@@ -852,10 +901,41 @@ bool InitializeGuessCache(const CacheConfig& config,
     h_cache_state.size = buffers.size;
     h_cache_state.keys = buffers.keys;
     h_cache_state.evict_cursor = buffers.evict_cursor;
-    h_cache_state.diversity_bloom = buffers.diversity_bloom;  // Can be null if diversity disabled
+    h_cache_state.diversity_bloom = buffers.diversity_bloom;
     h_cache_state.calibration_offset = buffers.calibration_offset;
     h_cache_state.capacity = buffers.capacity;
     h_cache_state.bloom_size = buffers.bloom_words;
+    
+    // Allocate per-slot spin locks if not provided by buffers
+    if (buffers.slot_locks) {
+        h_cache_state.slot_locks = buffers.slot_locks;
+    } else {
+        cudaError_t lock_err = cudaMalloc(&g_slot_locks_owned, buffers.capacity * sizeof(int));
+        if (lock_err != cudaSuccess) {
+            throw std::runtime_error(std::string("[FATAL] GRIMTS::InitializeGuessCache: cudaMalloc slot_locks failed! error=") +
+                    cudaGetErrorString(lock_err));
+        }
+        cudaMemsetAsync(g_slot_locks_owned, 0, buffers.capacity * sizeof(int), primary_stream);
+        h_cache_state.slot_locks = g_slot_locks_owned;
+    }
+    
+    // Allocate device staging buffers for async ops (avoids cudaMalloc in hot path)
+    if (config.enable_async_transfers && config.pinned_buffer_size > 0) {
+        g_device_staging_capacity = config.pinned_buffer_size;
+        cudaError_t s_err = cudaMalloc(&g_device_staging_meta, g_device_staging_capacity * sizeof(GuessMetadata));
+        if (s_err != cudaSuccess) {
+            g_device_staging_capacity = 0;
+            fprintf(stderr, "[WARN] GRIMTS: Failed to allocate device staging meta, async ops will fall back to sync\n");
+        } else {
+            s_err = cudaMalloc(&g_device_staging_rewards, g_device_staging_capacity * sizeof(float));
+            if (s_err != cudaSuccess) {
+                cudaFree(g_device_staging_meta);
+                g_device_staging_meta = nullptr;
+                g_device_staging_capacity = 0;
+                fprintf(stderr, "[WARN] GRIMTS: Failed to allocate device staging rewards, async ops will fall back to sync\n");
+            }
+        }
+    }
     
     // Copy to device constant memory
     cudaError_t err = cudaMemcpyToSymbol(d_cache_state, &h_cache_state, sizeof(h_cache_state));
@@ -864,23 +944,9 @@ bool InitializeGuessCache(const CacheConfig& config,
                 cudaGetErrorString(err));
     }
     
-    // Issue 1 FIX: Calibrate device timestamp
-    // Get GPU clock rate and set scale factor for proper time measurement
-    int device = 0;
-    cudaGetDevice(&device);
-    cudaDeviceProp props;
-    cudaGetDeviceProperties(&props, device);
-    // props.clockRate is in kHz, convert to scale: 1 / (clockRate * 1000) = seconds per tick
-    float clock_scale = 1.0f / (static_cast<float>(props.clockRate) * 1000.0f);
-    err = cudaMemcpyToSymbol(d_clock_scale, &clock_scale, sizeof(float));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "[WARN] GRIMTS: Failed to set clock scale, using default\n");
-    }
-    // Set baseline to current clock64() value so timestamps start at ~0
-    // We need a kernel to read clock64() and set baseline
-    // For simplicity, set baseline to 0 - first timestamp will establish relative time
-    float baseline = 0.0f;
-    cudaMemcpyToSymbol(d_timestamp_baseline, &baseline, sizeof(float));
+    // Initialize step counter to 0
+    float initial_step = 0.0f;
+    cudaMemcpyToSymbol(d_current_step, &initial_step, sizeof(float));
     
     SyncKernelConfig();
     ResetCacheTelemetry();
@@ -933,6 +999,13 @@ void ShutdownGuessCache() {
     g_single_meta_buffer = nullptr;
     g_single_reward_buffer = nullptr;
     
+    // Free internally owned buffers (not owned by TrainingState)
+    SafeCudaFree(g_slot_locks_owned);
+    SafeCudaFree(g_device_staging_meta);
+    SafeCudaFree(g_device_staging_rewards);
+    g_device_staging_capacity = 0;
+    g_bloom_op_counter.store(0, std::memory_order_relaxed);
+    
     fprintf(stderr, "[DEBUG] ShutdownGuessCache - about to clear h_cache_state...\n");
     h_cache_state = {};
     fprintf(stderr, "[DEBUG] ShutdownGuessCache - about to copy to symbol...\n");
@@ -971,9 +1044,16 @@ void ResetGuessCache(cudaStream_t stream) {
                         h_cache_state.bloom_size * sizeof(std::uint32_t), stream);
     }
     
+    if (h_cache_state.slot_locks) {
+        cudaMemsetAsync(h_cache_state.slot_locks, 0,
+                        h_cache_state.capacity * sizeof(int), stream);
+    }
+    
     float zero_cal = 0.0f;
     cudaMemcpyAsync(h_cache_state.calibration_offset, &zero_cal, sizeof(float),
                     cudaMemcpyHostToDevice, stream);
+    
+    g_bloom_op_counter.store(0, std::memory_order_relaxed);
     
     fprintf(stderr, "[DEBUG] ResetGuessCache - about to call ResetCacheTelemetry\n");
     ResetCacheTelemetry();
@@ -1004,6 +1084,11 @@ void UpdateConfig(const CacheConfig& config) {
         g_config = config;
     }
     SyncKernelConfig();
+}
+
+void AdvanceStep(float step) {
+    if (!g_initialized) return;
+    cudaMemcpyToSymbol(d_current_step, &step, sizeof(float));
 }
 
 //==============================================================================
@@ -1100,10 +1185,9 @@ GuessCacheTelemetry GetCacheTelemetry(bool include_histograms) {
         telemetry.average_confidence = h_cache_moment.confidence_sum / denom;
         telemetry.diversity_score = h_cache_moment.diversity_sum / denom;
         
-        // Compute reward variance
-        float mean_sq = h_cache_moment.reward_sq_sum / denom;
-        float sq_mean = telemetry.average_ema * telemetry.average_ema;
-        telemetry.reward_variance = mean_sq - sq_mean;
+        const float mean_r = h_cache_moment.reward_sum / denom;
+        const float mean_r2 = h_cache_moment.reward_sq_sum / denom;
+        telemetry.reward_variance = std::max(0.0f, mean_r2 - mean_r * mean_r);
     }
     
     // Get calibration offset
@@ -1185,6 +1269,18 @@ cudaError_t CacheGuessBatchGPU(const GuessMetadata* device_metadata,
         return cudaSuccess;
     }
     
+    // Periodic bloom decay to prevent saturation
+    if (h_cache_state.diversity_bloom && h_cache_state.bloom_size > 0) {
+        std::uint64_t ops = g_bloom_op_counter.fetch_add(count, std::memory_order_relaxed);
+        if (ops / kBloomDecayInterval != (ops + count) / kBloomDecayInterval) {
+            constexpr unsigned int kDecayBlock = 256;
+            const unsigned int decay_grid = static_cast<unsigned int>(
+                (h_cache_state.bloom_size + kDecayBlock - 1) / kDecayBlock);
+            DecayBloomKernel<<<decay_grid, kDecayBlock, 0, stream>>>(
+                h_cache_state.diversity_bloom, h_cache_state.bloom_size);
+        }
+    }
+    
     constexpr unsigned int kBlockSize = 128;
     const unsigned int grid = static_cast<unsigned int>((count + kBlockSize - 1) / kBlockSize);
     CacheGuessKernel<<<grid, kBlockSize, 0, stream>>>(device_metadata, count);
@@ -1244,32 +1340,21 @@ AsyncOperationHandle CacheGuessBatchAsync(const GuessMetadata* host_metadata,
         return handle;
     }
     
-    if (count > g_pinned.capacity) {
+    if (count > g_pinned.capacity || count > g_device_staging_capacity || !g_device_staging_meta) {
         return handle;
     }
     
-    // Use primary stream
     handle.stream = g_primary_stream;
-    handle.is_valid = false;  // No completion event tracking
+    handle.is_valid = false;
     
-    // Copy to pinned memory
     std::memcpy(g_pinned.pinned_meta, host_metadata, count * sizeof(GuessMetadata));
     
-    // Allocate device buffer and copy
-    GuessMetadata* device_meta = nullptr;
-    if (cudaMalloc(&device_meta, count * sizeof(GuessMetadata)) != cudaSuccess) {
-        return handle;
-    }
-    
-    cudaMemcpyAsync(device_meta, g_pinned.pinned_meta, count * sizeof(GuessMetadata),
+    cudaMemcpyAsync(g_device_staging_meta, g_pinned.pinned_meta, count * sizeof(GuessMetadata),
                     cudaMemcpyHostToDevice, g_primary_stream);
     
     constexpr unsigned int kBlockSize = 128;
     const unsigned int grid = static_cast<unsigned int>((count + kBlockSize - 1) / kBlockSize);
-    CacheGuessKernel<<<grid, kBlockSize, 0, g_primary_stream>>>(device_meta, count);
-    
-    // Schedule cleanup
-    cudaFreeAsync(device_meta, g_primary_stream);
+    CacheGuessKernel<<<grid, kBlockSize, 0, g_primary_stream>>>(g_device_staging_meta, count);
     
     handle.is_valid = true;
     return handle;
@@ -1284,41 +1369,26 @@ AsyncOperationHandle ApplyRewardBatchAsync(const GuessMetadata* host_metadata,
         return handle;
     }
     
-    if (count > g_pinned.capacity) {
+    if (count > g_pinned.capacity || count > g_device_staging_capacity ||
+        !g_device_staging_meta || !g_device_staging_rewards) {
         return handle;
     }
     
     handle.stream = g_primary_stream;
-    handle.is_valid = false;  // No completion event tracking
+    handle.is_valid = false;
     
-    // Copy to pinned memory
     std::memcpy(g_pinned.pinned_meta, host_metadata, count * sizeof(GuessMetadata));
     std::memcpy(g_pinned.pinned_rewards, host_rewards, count * sizeof(float));
     
-    // Allocate device buffers
-    GuessMetadata* device_meta = nullptr;
-    float* device_rewards = nullptr;
-    if (cudaMalloc(&device_meta, count * sizeof(GuessMetadata)) != cudaSuccess) {
-        return handle;
-    }
-    if (cudaMalloc(&device_rewards, count * sizeof(float)) != cudaSuccess) {
-        // Issue 4 FIX: Use async free on the stream to avoid race with pending ops
-        cudaFreeAsync(device_meta, g_primary_stream);
-        return handle;
-    }
-    
-    cudaMemcpyAsync(device_meta, g_pinned.pinned_meta, count * sizeof(GuessMetadata),
+    cudaMemcpyAsync(g_device_staging_meta, g_pinned.pinned_meta, count * sizeof(GuessMetadata),
                     cudaMemcpyHostToDevice, g_primary_stream);
-    cudaMemcpyAsync(device_rewards, g_pinned.pinned_rewards, count * sizeof(float),
+    cudaMemcpyAsync(g_device_staging_rewards, g_pinned.pinned_rewards, count * sizeof(float),
                     cudaMemcpyHostToDevice, g_primary_stream);
     
     constexpr unsigned int kBlockSize = 128;
     const unsigned int grid = static_cast<unsigned int>((count + kBlockSize - 1) / kBlockSize);
-    ApplyRewardKernel<<<grid, kBlockSize, 0, g_primary_stream>>>(device_meta, device_rewards,
+    ApplyRewardKernel<<<grid, kBlockSize, 0, g_primary_stream>>>(g_device_staging_meta, g_device_staging_rewards,
                                                                momentum, count, nullptr);
-    
-    cudaFreeAsync(device_meta, g_primary_stream);
-    cudaFreeAsync(device_rewards, g_primary_stream);
     
     handle.is_valid = true;
     return handle;

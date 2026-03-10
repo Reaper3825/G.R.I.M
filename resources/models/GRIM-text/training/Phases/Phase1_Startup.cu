@@ -24,12 +24,10 @@
 // MUST be first - defines GRIM_CONFIG_AI_CONFIG_PATHS_HPP_INCLUDED
 #include "../../../../../control/ai_config_paths.hpp"
 
-#include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
-#include "../../Layers/GRIMTS/GRIM-TS.hpp"
 
 #include <nlohmann/json.hpp>
 #include <iostream>
@@ -199,8 +197,17 @@ namespace Internal {
 StartupConfig loadConfiguration(int argc, char** argv) {
     StartupConfig config;
     
-    // Load ai_config.json snapshot
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    // Resolve config path: --config overrides default ai_config.json discovery
+    std::string config_path = "ai_config.json";
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--config" && i + 1 < argc) {
+            config_path = argv[++i];
+            break;
+        }
+    }
+    
+    // Load ai_config.json snapshot (or path from --config, e.g. model_config.json)
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot(config_path);
     if (!snapshot) {
         throw std::runtime_error("FATAL: ai_config.json not found or unreadable");
     }
@@ -435,7 +442,6 @@ StartupConfig loadConfiguration(int argc, char** argv) {
                                      std::to_string(config.stability.batch_size) + " (must be > 0)");
         }
         config.hyperparameters.batch_size = config.stability.batch_size;
-        config.hyperparameters.dynamic_lr_min = config.stability.lr_min;
         if (config.stability.clip_per_token > 0.0f) {
             config.hyperparameters.grad_clip_norm = config.stability.clip_per_token;
         }
@@ -451,9 +457,11 @@ StartupConfig loadConfiguration(int argc, char** argv) {
         else if (arg == "--batch-size" && i + 1 < argc) config.hyperparameters.batch_size = std::atoi(argv[++i]);
         else if (arg == "--lr" && i + 1 < argc) config.hyperparameters.learning_rate = std::atof(argv[++i]);
         else if (arg == "--save-test") config.save_test_mode = true;
+        else if (arg == "--config" && i + 1 < argc) { ++i; }  // consumed above for loadAiConfigSnapshot
         else if (arg == "--help") {
             std::cout << "Usage: " << argv[0] << " [options]\n";
             std::cout << "Options:\n";
+            std::cout << "  --config <path>    Config file (ai_config.json or model_config.json)\n";
             std::cout << "  --data <path>      Training data path\n";
             std::cout << "  --vocab <path>     Vocabulary path\n";
             std::cout << "  --output <path>    Output model path\n";
@@ -1255,56 +1263,6 @@ OptimizerContext initializeOptimizer(
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
     ctx.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
     
-    // Dynamic LR controller
-    GRIM::DynamicLR::DynamicLRConfig lr_cfg;
-    lr_cfg.base_learning_rate = hp.learning_rate;
-    lr_cfg.min_learning_rate = hp.dynamic_lr_min;
-    lr_cfg.max_learning_rate = hp.dynamic_lr_max;
-    lr_cfg.increase_factor = hp.dynamic_lr_increase_factor;
-    lr_cfg.decrease_factor = hp.dynamic_lr_decrease_factor;
-    lr_cfg.upper_grad_norm = hp.dynamic_lr_upper_grad_norm;
-    lr_cfg.lower_grad_norm = hp.dynamic_lr_lower_grad_norm;
-    lr_cfg.max_loss_jump = hp.dynamic_lr_max_loss_jump;
-    lr_cfg.smoothing = hp.dynamic_lr_smoothing;
-    lr_cfg.cooldown_steps = hp.dynamic_lr_cooldown_steps;
-    lr_cfg.warmup_steps = hp.dynamic_lr_warmup_steps;
-    lr_cfg.max_step_up_ratio = hp.dynamic_lr_max_step_up_ratio;
-    lr_cfg.max_step_down_ratio = hp.dynamic_lr_max_step_down_ratio;
-    lr_cfg.auto_band = hp.dynamic_lr_auto_band;
-    lr_cfg.band_sigma = hp.dynamic_lr_band_sigma;
-    lr_cfg.band_floor = hp.dynamic_lr_band_floor;
-    lr_cfg.band_ceiling = hp.dynamic_lr_band_ceiling;
-    lr_cfg.band_min_samples = hp.dynamic_lr_band_min_samples;
-    lr_cfg.band_min_span = hp.dynamic_lr_band_min_span;
-    lr_cfg.adaptive_smoothing = hp.dynamic_lr_adaptive_smoothing;
-    lr_cfg.smoothing_min = hp.dynamic_lr_smoothing_min;
-    lr_cfg.smoothing_max = hp.dynamic_lr_smoothing_max;
-    lr_cfg.variance_reference = hp.dynamic_lr_variance_reference;
-    lr_cfg.adaptive_cooldown = hp.dynamic_lr_adaptive_cooldown;
-    lr_cfg.cooldown_min = hp.dynamic_lr_cooldown_min;
-    lr_cfg.cooldown_max = hp.dynamic_lr_cooldown_max;
-    lr_cfg.adaptive_loss = hp.dynamic_lr_adaptive_loss;
-    lr_cfg.loss_sigma = hp.dynamic_lr_loss_sigma;
-    lr_cfg.loss_min_samples = hp.dynamic_lr_loss_min_samples;
-    lr_cfg.loss_floor = hp.dynamic_lr_loss_floor;
-    lr_cfg.guard_logging = hp.dynamic_lr_guard_logging;
-    lr_cfg.guard_floor_steps = hp.dynamic_lr_guard_floor_steps;
-    lr_cfg.guard_grad_multiplier = hp.dynamic_lr_guard_grad_multiplier;
-    lr_cfg.guard_loss_patience = hp.dynamic_lr_guard_loss_patience;
-    lr_cfg.guard_loss_multiplier = hp.dynamic_lr_guard_loss_multiplier;
-    lr_cfg.baseline_capture_steps = hp.dynamic_lr_baseline_capture_steps;
-    lr_cfg.baseline_drift = hp.dynamic_lr_baseline_drift;
-    lr_cfg.momentum_interval = hp.dynamic_lr_momentum_interval;
-    lr_cfg.momentum_gain = hp.dynamic_lr_momentum_gain;
-    lr_cfg.momentum_decay = hp.dynamic_lr_momentum_decay;
-    lr_cfg.safety_interval = hp.dynamic_lr_safety_interval;
-    lr_cfg.safety_gain = hp.dynamic_lr_safety_gain;
-    lr_cfg.safety_scale = hp.dynamic_lr_safety_scale;
-    
-    ctx.dynamic_lr_controller = GRIM::DynamicLR::DynamicLRController(lr_cfg);
-    ctx.dynamic_lr_controller.setRuntimeLimits(hp.dynamic_lr_min, hp.dynamic_lr_max);
-    ctx.dynamic_lr_controller.setEnabled(hp.dynamic_lr_enabled);
-    
     // Gradient accumulation now tracked directly via hyperparameters
     // ctx.optimizer.current_micro_step is reset at start of each accumulation window
     const int accum_steps = std::max(1, hp.gradient_accumulation_steps);
@@ -1434,7 +1392,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         }
     }
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing logging...", 0);
-    ctx->logging = Internal::initializeLogging(ctx->config.paths);
+        ctx->logging = Internal::initializeLogging(ctx->config.paths);
     
     // Create standard module log formatter (Rule 21: centralized logging setup)
     auto log_fn = [logger = ctx->logging.logger.get()](const std::string& msg) {
@@ -1492,9 +1450,9 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             ctx->logging.logger->log("Previous equation_log.csv exists, creating: " + eq_log_path);
         }
         
-        bool eq_init_ok = GRIM::getEquationLogger().initialize(eq_log_path);
+        bool eq_init_ok = GRIM::getEquationLogger().initialize(eq_log_path, false);  // Disabled: avoids GPU sync + D2H on hot path
         if (eq_init_ok) {
-            ctx->logging.logger->log("✓ EquationLogger initialized: " + eq_log_path);
+            ctx->logging.logger->log("EquationLogger disabled (enable=false) - no equation diagnostics, no D2H sync overhead");
         } else {
             ctx->logging.logger->log("[WARNING] EquationLogger initialization failed - equation diagnostics disabled");
         }
@@ -1860,10 +1818,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->telemetry.config.hyperparams.strict_mode = true; // Fail loud (Rule 20: no compatibility shims)
     ctx->telemetry.config.stream = ctx->model->getTrainingState().stream_ctrl.getPrimaryStream(); // Use same stream as training
     
-    ctx->telemetry.lattice = GRIM::Telemetry::initTelemetryLattice(ctx->telemetry.config);
-    if (!ctx->telemetry.lattice) {
-        throw std::runtime_error("FATAL: Failed to initialize telemetry lattice");
-    }
+    ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(ctx->telemetry.config);
     ctx->logging.logger->log("✓ Telemetry lattice: 8 levels, 5 streams, GPU-resident");
     
     // 11b. Initialize telemetry control (GPU-native kernel-based control)
@@ -1934,10 +1889,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         ctx->telemetry.control_config.plateau_noise_enabled = false;      // No plateau noise
         ctx->telemetry.control_config.moderate_grad_scale = 1.0f;         // No gradient scaling
     }
-    
-    ctx->telemetry.controller = std::make_unique<GRIM::Telemetry::TelemetryControl>(ctx->telemetry.control_config);
-    ctx->telemetry.controller->initGPU();  // No stream caching (Rule 22)
-    ctx->logging.logger->log("✓ Telemetry control: GPU-native (plateau noise injection built-in)");
     
     // 12. Check GPU memory
     size_t free_mem, total_mem;

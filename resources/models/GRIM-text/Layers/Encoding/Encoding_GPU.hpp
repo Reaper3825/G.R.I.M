@@ -72,11 +72,6 @@ struct EncodingConfig {
     // Bias control - when false, skip bias addition in attention projections (b_qkv, b_o)
     bool use_bias = true;
     
-    // QK-norm: per-head RMSNorm on Q and K after QKV projection, before RoPE.
-    // When enabled, normalizes Q[b,h,s,:] and K[b,hk,s,:] by their RMS then scales
-    // by learned per-head alpha (initialized to 1.0). Bounds attention logit magnitudes.
-    bool qk_norm_enabled = false;
-    
     // Attention
     bool causal_mask = true;
     float softmax_temperature = 1.0f;
@@ -232,15 +227,15 @@ public:
     // Attention weights/biases
     Tensor& attnWqkv() { return W_qkv_; }
     Tensor& attnBqkv() { return b_qkv_; }
-    Tensor& attnWo() { return W_o_; } 
+    Tensor& attnWo() { return W_o_; }
     Tensor& attnBo() { return b_o_; }
     
-    // FFN weights/biases (delegates to FeedForwardLayer — SwiGLU)
+    // FFN weights (delegates to FeedForwardLayer, SwiGLU)
     // Rule 20: ffn_ MUST be initialized - crash if null
-    Tensor& ffnWGateUp() { return ffn_->W_gate_up(); }
-    Tensor& ffnBGateUp() { return ffn_->b_gate_up(); }
-    Tensor& ffnWDown() { return ffn_->W_down(); }
-    Tensor& ffnBDown() { return ffn_->b_down(); }
+    Tensor& ffnWGate() { return ffn_->W_gate(); }
+    Tensor& ffnW1() { return ffn_->W1(); }
+    Tensor& ffnW2() { return ffn_->W2(); }
+    Tensor& ffnB2() { return ffn_->b2(); }
     
     // Direct access to FFN layer (for autograd forward)
     FeedForwardLayer* getFfnLayer() { return ffn_.get(); }
@@ -248,10 +243,6 @@ public:
     // LayerScale (Issue #109)
     Tensor& layerScale1() { return layer_scale1_; }
     Tensor& layerScale2() { return layer_scale2_; }
-    
-    // QK-norm per-head alpha (Dehghani et al. 2023)
-    Tensor& attnAlphaQ() { return alpha_q_; }
-    Tensor& attnAlphaK() { return alpha_k_; }
     
     //--------------------------------------------------
     // Flash Attention Control
@@ -308,11 +299,6 @@ private:
     //   residual2 = residual1 + layer_scale2 * ffn_output
     Tensor layer_scale1_;  // [1] scalar for attention
     Tensor layer_scale2_;  // [1] scalar for FFN
-    
-    // QK-norm per-head learnable scales (Issue #QKNorm)
-    // Initialized to 1.0 so initial behavior = standard RMSNorm
-    Tensor alpha_q_;       // [num_heads] per-query-head scale
-    Tensor alpha_k_;       // [num_kv_heads] per-KV-head scale
 };
 
 } // namespace GRIM

@@ -25,6 +25,8 @@
 #include "../../GRIM/grim_language_model_cuda.hpp"
 // ScratchBlock for autograd forward path
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
+// NumericHead for numeric prediction
+#include "../../Layers/NumericHead/numeric_head_GPU.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -56,10 +58,11 @@ struct ForwardResult {
  * Contains decomposed loss components for logging and gradient weighting.
  */
 struct LossResult {
-    float loss_value = 0.0f;         // Text cross-entropy loss
+    float loss_value = 0.0f;         // Combined loss (text + numeric)
     float text_loss = 0.0f;          // Raw text cross-entropy loss
-    float weight_text = 1.0f;        // Always 1.0 (single loss path)
-    int valid_tokens = 0;            // Number of valid (non-padding) tokens
+    float numeric_loss = 0.0f;       // Numeric head loss (log-mag Huber + sign BCE)
+    float weight_text = 1.0f;
+    int valid_tokens = 0;
     bool success = false;
     std::string error_message;
 };
@@ -69,7 +72,7 @@ struct LossResult {
  */
 struct BackwardResult {
     bool success = false;
-    float grad_norm = 0.0f;         // Total gradient norm
+    float grad_rms = 0.0f;         // Total gradient RMS
     std::string error_message;
 };
 
@@ -102,6 +105,7 @@ struct AutogradContext {
     // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
+    NumericHeadLayer*  numeric_head = nullptr;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PARAMETERS
@@ -115,6 +119,8 @@ struct AutogradContext {
     float grad_scale = 1.0f;
     uint64_t step = 0;
     bool is_training = true;
+    /** When true, encoder layers skip QKV_EQUATION D2H + fprintf (gradient accumulation micro-batches) */
+    bool skip_equation_logging = false;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LOSS CONFIGURATION
@@ -150,6 +156,7 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
+    NumericHeadLayer* numeric_head,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
@@ -168,6 +175,7 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
+    NumericHeadLayer* numeric_head,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     int batch_size,

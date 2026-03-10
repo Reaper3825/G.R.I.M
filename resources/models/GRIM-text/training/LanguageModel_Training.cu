@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <cstdlib>
 #include <set>
@@ -40,7 +41,6 @@
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../../control/ai_config_paths.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 namespace GRIM {
@@ -183,11 +183,11 @@ void LanguageModel::buildParameterGroups() {
         registerTensor(prefix + "_wo_weight",   enc->attnWo(),   ParamGroupType::ATTENTION, layer);
         tryRegisterBias(prefix + "_wo_bias",    enc->attnBo(),   ParamGroupType::ATTENTION, layer);
         
-        // FFN weights/biases (SwiGLU)
-        registerTensor(prefix + "_ffn_w_gate_up", enc->ffnWGateUp(), ParamGroupType::FFN, layer);
-        tryRegisterBias(prefix + "_ffn_b_gate_up", enc->ffnBGateUp(), ParamGroupType::FFN, layer);
-        registerTensor(prefix + "_ffn_w_down", enc->ffnWDown(), ParamGroupType::FFN, layer);
-        tryRegisterBias(prefix + "_ffn_b_down", enc->ffnBDown(), ParamGroupType::FFN, layer);
+        // FFN weights (SwiGLU: W_gate, W1, W2, b2)
+        registerTensor(prefix + "_ffn_w_gate", enc->ffnWGate(), ParamGroupType::FFN, layer);
+        registerTensor(prefix + "_ffn_w1", enc->ffnW1(), ParamGroupType::FFN, layer);
+        registerTensor(prefix + "_ffn_w2", enc->ffnW2(), ParamGroupType::FFN, layer);
+        tryRegisterBias(prefix + "_ffn_b2", enc->ffnB2(), ParamGroupType::FFN, layer);
         
         // RMSNorm gamma (pre-norm) — no weight decay
         registerNonDecayTensor(prefix + "_rms1_gamma", enc->rms1Gamma(), ParamGroupType::RMSNORM, layer);
@@ -229,6 +229,13 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D4: scratchblock done\n"); fflush(stderr);
     } else {
         fprintf(stderr, "[buildParameterGroups] DIAG-D-SKIP: scratchblock not enabled\n"); fflush(stderr);
+    }
+
+    // NumericHead parameters
+    if (numeric_head_layer_) {
+        registerTensor("numeric_head_weights", numeric_head_layer_->weights(), ParamGroupType::NUMERIC_HEAD);
+        registerNonDecayTensor("numeric_head_bias", numeric_head_layer_->bias(), ParamGroupType::NUMERIC_HEAD);
+        fprintf(stderr, "[buildParameterGroups] DIAG-D4b: numeric head registered\n"); fflush(stderr);
     }
 
     // Final RMSNorm (between encoder output and LM head) — no weight decay

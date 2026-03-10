@@ -1,6 +1,5 @@
 #include "TeacherLogits_GPU.hpp"
 
-#include <algorithm>
 #include <sstream>
 
 namespace GRIM::TeacherLogits {

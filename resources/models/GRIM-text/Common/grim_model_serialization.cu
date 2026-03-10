@@ -2,17 +2,16 @@
 #define USE_CUDA
 #endif
 
-#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <mutex>
-#include <cstring>
 #include <sstream>
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 #include "../training/schemas/grim_transformer_model_generated.h"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/Serialization/Serialization_GPU.hpp"
+#include "../Shared/UnigramByte/Unigram.hpp"
 #include "grim_model_serialization_version.hpp"
 
 
@@ -134,6 +133,7 @@ bool LanguageModel::save(const std::string& path) {
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
     if (config_.use_gpu && embedding_layer_ && embedding_layer_->tokenWeights().data) {
+        EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: GPU");
         EmitModuleInfo(ModuleId::Checkpoint, "Using EmbeddingLayer token weights (vocab=" + std::to_string(config_.vocab_size) + ", d_model=" + std::to_string(config_.d_model) + ")");
         assignRead(request.sources.gpu_embedding.token_embeddings,
                    embedding_layer_->tokenWeights().data,
@@ -148,6 +148,7 @@ bool LanguageModel::save(const std::string& path) {
             request.sources.gpu_embedding.has_rms_norm = true;
         }
     } else {
+        EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: CPU");
         EmitModuleInfo(ModuleId::Checkpoint, "Using CPU embedder snapshot");
         request.sources.cpu_embedding = snapshotCpuEmbedding(getEmbedderPtr());
         if (request.sources.cpu_embedding.token_data.empty()) {
@@ -191,10 +192,10 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
         assignRead(view.attn_w_o, enc->attnWo().data, d_model * d_model);
         assignRead(view.attn_b_o, enc->attnBo().data, d_model);
-        assignRead(view.ffn_w_gate_up, enc->ffnWGateUp().data, d_model * 2 * d_ff);
-        assignRead(view.ffn_b_gate_up, enc->ffnBGateUp().data, 2 * d_ff);
-        assignRead(view.ffn_w_down, enc->ffnWDown().data, d_ff * d_model);
-        assignRead(view.ffn_b_down, enc->ffnBDown().data, d_model);
+        assignRead(view.ffn_w_gate, enc->ffnWGate().data, d_model * d_ff);
+        assignRead(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
+        assignRead(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
+        assignRead(view.ffn_b2, enc->ffnB2().data, d_model);
         assignRead(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignRead(view.rms2_gamma, enc->rms2Gamma().data, d_model);
         // Issue #148: Sandwich norm gammas REMOVED — not saved to checkpoint
@@ -214,26 +215,29 @@ bool LanguageModel::save(const std::string& path) {
     request.sources.lm_head.bias.count = lm_head_layer_->bias().data ? static_cast<std::size_t>(config_.vocab_size) : 0;
 
     // Process ScratchBlock weights (if enabled)
+    // Use the layer's actual tensor sizes so copy count never exceeds allocation.
+    // ScratchBlock allocates with HyperParameters::NUM_ATOM_TYPES, not Tokenizer::kAtomTypeCount.
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
-        constexpr int kNumAtomTypes = 16;  // AtomType enum size
-        const int atom_emb_dim = config_.scratch_block_atom_embedding_dim;
+        Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
+        Tensor& ap = scratch_block_layer_->atomProjection();
         
         request.sources.scratch_block.enabled = true;
-        request.sources.scratch_block.num_atom_types = kNumAtomTypes;
-        request.sources.scratch_block.atom_embedding_dim = atom_emb_dim;
         request.sources.scratch_block.d_model = config_.d_model;
         request.sources.scratch_block.atom_scale = config_.scratch_block_atom_scale;
         
-        if (scratch_block_layer_->atomTypeEmbeddings().data) {
-            request.sources.scratch_block.atom_type_embeddings.ptr = scratch_block_layer_->atomTypeEmbeddings().data;
-            request.sources.scratch_block.atom_type_embeddings.count = 
-                static_cast<std::size_t>(kNumAtomTypes * atom_emb_dim);
+        if (ate.data && ate.shape.is_2d_layout()) {
+            const size_t ate_numel = ate.numel();
+            const int num_atom_types = ate.shape.as_2d().rows;
+            const int atom_emb_dim = ate.shape.as_2d().cols;
+            request.sources.scratch_block.atom_type_embeddings.ptr = ate.data;
+            request.sources.scratch_block.atom_type_embeddings.count = ate_numel;
+            request.sources.scratch_block.num_atom_types = num_atom_types;
+            request.sources.scratch_block.atom_embedding_dim = atom_emb_dim;
         }
         
-        if (scratch_block_layer_->atomProjection().data) {
-            request.sources.scratch_block.atom_projection.ptr = scratch_block_layer_->atomProjection().data;
-            request.sources.scratch_block.atom_projection.count = 
-                static_cast<std::size_t>(atom_emb_dim * config_.d_model);
+        if (ap.data && ap.shape.is_2d_layout()) {
+            request.sources.scratch_block.atom_projection.ptr = ap.data;
+            request.sources.scratch_block.atom_projection.count = ap.numel();
         }
         
         // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
@@ -241,6 +245,18 @@ bool LanguageModel::save(const std::string& path) {
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ScratchBlock (atom_emb=" + 
                        std::to_string(request.sources.scratch_block.atom_type_embeddings.count) +
                        ", atom_proj=" + std::to_string(request.sources.scratch_block.atom_projection.count) + ")");
+    }
+
+    // NumericHead weights
+    if (numeric_head_layer_) {
+        request.sources.numeric_head.enabled = true;
+        request.sources.numeric_head.d_model = config_.d_model;
+        request.sources.numeric_head.weights.ptr = numeric_head_layer_->weights().data;
+        request.sources.numeric_head.weights.count = static_cast<std::size_t>(2 * config_.d_model);
+        request.sources.numeric_head.bias.ptr = numeric_head_layer_->bias().data;
+        request.sources.numeric_head.bias.count = 2;
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing NumericHead weights (d_model=" +
+                       std::to_string(config_.d_model) + ")");
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head) — owned by LMHeadLayer
@@ -298,7 +314,7 @@ bool LanguageModel::load(const std::string& path) {
     const std::size_t d_ff = static_cast<std::size_t>(config_.d_ff);
     
     // GQA dimensions for W_qkv sizing - MUST match save() calculation!
-
+    // BUG FIX Issue #24: load() was using MHA formula (d_model * 3) but save() uses GQA formula
     const int head_dim = config_.head_dim;  // Use pre-computed value from config
     const int kv_dim = config_.num_kv_heads * head_dim;
     const int total_qkv_dim = config_.d_model + 2 * kv_dim;  // Q + K + V with GQA
@@ -315,10 +331,10 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
         assignWrite(view.attn_w_o, enc->attnWo().data, d_model * d_model);
         assignWrite(view.attn_b_o, enc->attnBo().data, d_model);
-        assignWrite(view.ffn_w_gate_up, enc->ffnWGateUp().data, d_model * 2 * d_ff);
-        assignWrite(view.ffn_b_gate_up, enc->ffnBGateUp().data, 2 * d_ff);
-        assignWrite(view.ffn_w_down, enc->ffnWDown().data, d_ff * d_model);
-        assignWrite(view.ffn_b_down, enc->ffnBDown().data, d_model);
+        assignWrite(view.ffn_w_gate, enc->ffnWGate().data, d_model * d_ff);
+        assignWrite(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
+        assignWrite(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
+        assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
         assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
         // Issue #148: Sandwich norm gammas REMOVED — not loaded from checkpoint
@@ -348,27 +364,35 @@ bool LanguageModel::load(const std::string& path) {
     request.lm_head.expect_bias = config_.use_bias;
 
     // Set up ScratchBlock weight destinations (if enabled)
+    // Use the layer's actual tensor sizes so load size matches saved checkpoint (same as save path).
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
-        constexpr int kNumAtomTypes = 17;
-        const int atom_emb_dim = config_.scratch_block_atom_embedding_dim;
+        Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
+        Tensor& ap = scratch_block_layer_->atomProjection();
         
-        if (scratch_block_layer_->atomTypeEmbeddings().data) {
-            assignWrite(request.scratch_block.atom_type_embeddings,
-                        scratch_block_layer_->atomTypeEmbeddings().data,
-                        static_cast<std::size_t>(kNumAtomTypes * atom_emb_dim));
+        if (ate.data) {
+            assignWrite(request.scratch_block.atom_type_embeddings, ate.data, ate.numel());
+            if (ate.shape.is_2d_layout()) {
+                request.scratch_block.num_atom_types = ate.shape.as_2d().rows;
+                request.scratch_block.atom_embedding_dim = ate.shape.as_2d().cols;
+            }
         }
-        
-        if (scratch_block_layer_->atomProjection().data) {
-            assignWrite(request.scratch_block.atom_projection,
-                        scratch_block_layer_->atomProjection().data,
-                        static_cast<std::size_t>(atom_emb_dim * config_.d_model));
+        if (ap.data) {
+            assignWrite(request.scratch_block.atom_projection, ap.data, ap.numel());
         }
         
         // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
         // Old checkpoints may contain text_feature_projection — silently ignored on load.
-        
-        request.scratch_block.num_atom_types = kNumAtomTypes;
-        request.scratch_block.atom_embedding_dim = atom_emb_dim;
+    }
+
+    // NumericHead weight destinations
+    if (numeric_head_layer_) {
+        assignWrite(request.numeric_head.weights,
+                    numeric_head_layer_->weights().data,
+                    static_cast<std::size_t>(2 * config_.d_model));
+        assignWrite(request.numeric_head.bias,
+                    numeric_head_layer_->bias().data,
+                    2);
+        request.numeric_head.d_model = config_.d_model;
     }
 
     // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer

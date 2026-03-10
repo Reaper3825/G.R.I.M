@@ -39,8 +39,8 @@ ctx.telemetry.lattice = GRIM::Telemetry::initTelemetryLattice(ctx.telemetry.conf
 // In Phase2_TrainingLoop.cu (already integrated)
 float observations[5] = {
     result.loss,                                    // Stream 0
-    result.grad_norm,                              // Stream 1
-    result.normalized_grad_norm,                   // Stream 2
+    result.grad_rms,                               // Stream 1
+    result.normalized_grad_rms,                    // Stream 2
     result.learning_rate,                          // Stream 3
     static_cast<float>(result.tokens_processed)    // Stream 4
 };

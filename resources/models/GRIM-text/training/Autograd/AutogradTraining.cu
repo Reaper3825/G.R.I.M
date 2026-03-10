@@ -7,14 +7,16 @@
 
 // MUST include full definition of GPUGrimEncoder for method calls
 #include "../../GRIM/grim_language_model_cuda.hpp"
-// RMSNorm_Kernel_GPU.hpp removed - using autograd::rms_norm in TensorContract_GPU instead
 #include "../../Layers/grim_layer_gpu.hpp"
-#include "../../Layers/Encoding/Encoding_GPU.hpp"             // EncodingLayer forward/accessors
-#include "../../Layers/LMHead/lm_head_GPU.hpp"                // LMHeadLayer (consolidated LM head)
-#include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"     // ScratchBlockLayer
+#include "../../Layers/Encoding/Encoding_GPU.hpp"
+#include "../../Layers/LMHead/lm_head_GPU.hpp"
+#include "../../Layers/NumericHead/numeric_head_GPU.hpp"
+#include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
-#include "../../Shared/Gradients/GradientCC_GPU.hpp"          // launchScaleGradients
+#include "../../Shared/Gradients/GradientCC_GPU.hpp"
+#include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/UnigramByte/Unigram.hpp"
 
 #include <iostream>
 #include <cmath>
@@ -105,6 +107,7 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
+    NumericHeadLayer* numeric_head,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
@@ -119,6 +122,7 @@ AutogradContext initAutogradContext(
     ctx.embedding_layer = embedding_layer;
     ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
+    ctx.numeric_head = numeric_head;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.payload = &payload;
@@ -142,6 +146,7 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
+    NumericHeadLayer* numeric_head,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     int batch_size,
@@ -157,6 +162,7 @@ AutogradContext initAutogradContext(
     ctx.embedding_layer = embedding_layer;
     ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
+    ctx.numeric_head = numeric_head;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.payload = nullptr;  // No payload for inference
@@ -180,7 +186,16 @@ AutogradContext initAutogradContext(
 ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ForwardResult result{};
     result.success = false;
-    
+
+    // Skip QKV_EQUATION D2H + fprintf on gradient-accumulation micro-batches (same weights, duplicate output)
+    struct EquationLoggingScope {
+        bool& ref;
+        bool prev;
+        explicit EquationLoggingScope(bool skip) : ref(GRIM::getEquationLoggingSkipThisPassRef()), prev(ref) { ref = skip; }
+        ~EquationLoggingScope() { ref = prev; }
+    };
+    EquationLoggingScope eq_scope(ctx.skip_equation_logging);
+
     // Rule 20: Fail loud
     ctx.validate("executeAutogradForward");
     
@@ -218,7 +233,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     if (!emb_weights.data) {
         throw std::runtime_error("AutogradForward: embedding token_weights.data is NULL");
     }
-    emb_weights.requires_grad = true;
+    emb_weights.requires_grad = ctx.is_training;
     
     // Rule 20: Fail loud on invalid shape - EmbeddingLayer constructor MUST initialize correctly
     if (!emb_weights.shape.is_valid()) {
@@ -269,7 +284,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             throw std::runtime_error(
                 "AutogradForward: positional_encoding=NONE requires position_weights.data, but it is NULL");
         }
-        pos_weights.requires_grad = true;
+        pos_weights.requires_grad = ctx.is_training;
         
         // Ensure position embedding weights have correct shape [max_seq_len, d_model]
         if (!pos_weights.shape.is_valid()) {
@@ -343,7 +358,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
         AG_INFO("Step 1.5: Running ScratchBlock injection...");
-        
+        // Drain stale error from embedding/dropout so we only report ScratchBlock failures
+        (void)cudaGetLastError();
+
         intermediates.embedding_tensor = autograd::scratch_block_inject(
             intermediates.embedding_tensor,
             *ctx.scratch_block,
@@ -354,13 +371,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
             total_tokens,
             ctx.stream);
-        
+
         cudaError_t cuda_err = cudaGetLastError();
         if (cuda_err != cudaSuccess) {
-            throw std::runtime_error("AutogradForward: ScratchBlock CUDA error: " + 
+            throw std::runtime_error("AutogradForward: ScratchBlock CUDA error: " +
                                      std::string(cudaGetErrorString(cuda_err)));
         }
-        
+
         AG_INFO("Step 1.5: ScratchBlock complete");
     }
     
@@ -498,64 +515,116 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     const int num_layers = ctx.gpu_encoder->getNumLayers();
     intermediates.encoder_layer_outputs.clear();
-    intermediates.encoder_layer_outputs.reserve(num_layers);
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  Issue #56: Keep all intermediate tensors alive until backward completes.
-    // ═══════════════════════════════════════════════════════════════════════════
     intermediates.layer_intermediates.layers.clear();
-    intermediates.layer_intermediates.layers.reserve(num_layers);
-    
     intermediates.embedding_tensor.is_leaf = false;
     
-    AG_INFO("Step 2: Running " << num_layers << " encoder layers with autograd...");
-    AG_INFO("  embedding_tensor.grad_fn=" << (void*)intermediates.embedding_tensor.grad_fn.get() 
-            << " requires_grad=" << intermediates.embedding_tensor.requires_grad);
+    float* encoder_output = nullptr;
     
-    for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
-        auto* enc_layer = ctx.gpu_encoder->getLayer(layer_idx);
-        if (!enc_layer) {
-            throw std::runtime_error("AutogradForward: Encoder layer " + std::to_string(layer_idx) + " is NULL");
+    if (!ctx.is_training) {
+        // ═══════════════════════════════════════════════════════════════════════
+        //  NO-GRAD (validation): Do not store full autograd graph.
+        //  Reuse a single layer's intermediates and one running tensor so we use
+        //  O(1) memory instead of O(num_layers) — avoids training-level memory.
+        // ═══════════════════════════════════════════════════════════════════════
+        ForwardIntermediates no_grad_layer_storage;
+        Tensor running;
+        AG_INFO("Step 2: Running " << num_layers << " encoder layers (no_grad, validation)...");
+        
+        for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+            auto* enc_layer = ctx.gpu_encoder->getLayer(layer_idx);
+            if (!enc_layer) {
+                throw std::runtime_error("AutogradForward: Encoder layer " + std::to_string(layer_idx) + " is NULL");
+            }
+            // Sync before clear so we never free Q/K buffers while previous layer's
+            // kernels (RoPE, etc.) are still in flight — avoids illegal memory access.
+            if (layer_idx > 0) {
+                cudaError_t sync_err = cudaStreamSynchronize(ctx.stream);
+                if (sync_err != cudaSuccess) {
+                    throw std::runtime_error("AutogradForward(no_grad): cudaStreamSynchronize failed after layer " +
+                        std::to_string(layer_idx - 1) + ": " + cudaGetErrorString(sync_err));
+                }
+            }
+            no_grad_layer_storage.clear();
+            Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
+            running = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, no_grad_layer_storage, ctx.step, layer_idx);
+            // Encoder returns a non-owning view of no_grad_layer_storage.output. That storage
+            // is cleared next iteration (or destroyed when the loop exits). So running would
+            // become a dangling pointer for the next layer OR for post-encoder use (final RMS,
+            // LM head) — root cause of inference illegal memory access. Always make running own
+            // a copy so we never hold a pointer into no_grad_layer_storage.
+            {
+                Tensor owned = Tensor::empty(running.shape, false, ctx.stream, "no_grad_layer_output");
+                const size_t bytes = static_cast<size_t>(running.shape.total_elements()) * sizeof(float);
+                cudaError_t cp_err = cudaMemcpyAsync(owned.data, running.data, bytes, cudaMemcpyDeviceToDevice, ctx.stream);
+                if (cp_err != cudaSuccess) {
+                    throw std::runtime_error("AutogradForward(no_grad): copy layer output failed: " +
+                        std::string(cudaGetErrorString(cp_err)));
+                }
+                // Ensure copy completes before next iteration's clear() (or storage destructor) frees the source.
+                cudaError_t sync_err = cudaStreamSynchronize(ctx.stream);
+                if (sync_err != cudaSuccess) {
+                    throw std::runtime_error("AutogradForward(no_grad): sync after layer output copy failed: " +
+                        std::string(cudaGetErrorString(sync_err)));
+                }
+                running = std::move(owned);
+            }
         }
         
-        // ═══════════════════════════════════════════════════════════════════════
-        //  Issue #56 FIX: Create intermediates storage and pass to forward()
-        //  
-        //  forward() stores all intermediate tensors in this struct instead of
-        //  local variables. This keeps the autograd graph alive until backward.
-        // ═══════════════════════════════════════════════════════════════════════
-        intermediates.layer_intermediates.layers.emplace_back();
-        ForwardIntermediates& layer_storage = intermediates.layer_intermediates.layers.back();
-        
-        // First layer uses embedding_tensor directly (preserves grad_fn chain)
-        // Subsequent layers use previous layer output
-        Tensor& layer_input = (layer_idx == 0) 
-            ? intermediates.embedding_tensor 
-            : intermediates.encoder_layer_outputs.back();
-        
-        // Run layer forward with intermediates storage
-        // Pass ctx.step for per-step attention/sublayer dropout seed generation
-        // Sublayer dropout (post-attn-projection, post-FFN, FFN-activation) is now
-        // handled INSIDE the encoder layer, matching standard transformer architecture.
-        Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage, ctx.step, layer_idx);
-        
-        // Residual-stream dropout: applied to each layer's output BEFORE it becomes
-        // input to the next layer. This disrupts correlated direction buildup (ρ) across
-        // the residual stream that sublayer dropout alone cannot prevent.
-        // Seed varies by step AND layer to produce independent masks per layer per step.
-        if (cfg->residual_dropout_rate > 0.0f && ctx.is_training) {
-            const uint64_t residual_drop_seed = ctx.step * 2654435761ULL + 7000 + static_cast<uint64_t>(layer_idx) * 131;
-            layer_output = autograd::dropout(layer_output, cfg->residual_dropout_rate,
-                                             residual_drop_seed, ctx.is_training, ctx.stream);
+        // Surface any device error from the encoder loop before we use encoder_output.
+        {
+            cudaError_t enc_sync = cudaStreamSynchronize(ctx.stream);
+            if (enc_sync != cudaSuccess) {
+                throw std::runtime_error("AutogradForward(no_grad): CUDA error after encoder layers: " +
+                    std::string(cudaGetErrorString(enc_sync)) + " (illegal access usually means a kernel wrote/read out of bounds)");
+            }
         }
         
-        intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
+        encoder_output = running.data;
+        intermediates.encoder_output_tensor = std::move(running);
+        intermediates.encoder_output_tensor.requires_grad = false;
+        intermediates.encoder_output_tensor.grad_fn.reset();
+        intermediates.encoder_output_tensor.stream = ctx.stream;
+        AG_INFO("Step 2: All " << num_layers << " encoder layers complete (no_grad)");
+    } else {
+        // ═══════════════════════════════════════════════════════════════════════
+        //  Issue #56: Keep all intermediate tensors alive until backward completes.
+        // ═══════════════════════════════════════════════════════════════════════
+        intermediates.encoder_layer_outputs.reserve(num_layers);
+        intermediates.layer_intermediates.layers.reserve(num_layers);
+        
+        AG_INFO("Step 2: Running " << num_layers << " encoder layers with autograd...");
+        AG_INFO("  embedding_tensor.grad_fn=" << (void*)intermediates.embedding_tensor.grad_fn.get()
+                << " requires_grad=" << intermediates.embedding_tensor.requires_grad);
+        
+        for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+            auto* enc_layer = ctx.gpu_encoder->getLayer(layer_idx);
+            if (!enc_layer) {
+                throw std::runtime_error("AutogradForward: Encoder layer " + std::to_string(layer_idx) + " is NULL");
+            }
+            
+            intermediates.layer_intermediates.layers.emplace_back();
+            ForwardIntermediates& layer_storage = intermediates.layer_intermediates.layers.back();
+            
+            Tensor& layer_input = (layer_idx == 0)
+                ? intermediates.embedding_tensor
+                : intermediates.encoder_layer_outputs.back();
+            
+            Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage, ctx.step, layer_idx);
+            
+            if (cfg->residual_dropout_rate > 0.0f && ctx.is_training) {
+                const uint64_t residual_drop_seed = ctx.step * 2654435761ULL + 7000 + static_cast<uint64_t>(layer_idx) * 131;
+                layer_output = autograd::dropout(layer_output, cfg->residual_dropout_rate,
+                                                 residual_drop_seed, ctx.is_training, ctx.stream);
+            }
+            
+            intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
+        }
+        
+        AG_INFO("Step 2: All " << num_layers << " encoder layers complete");
+        encoder_output = intermediates.encoder_layer_outputs.back().data;
     }
     
-    AG_INFO("Step 2: All " << num_layers << " encoder layers complete");
-    
-    // Final encoder output is the last layer's output
-    float* encoder_output = intermediates.encoder_layer_outputs.back().data;
+    // Final encoder output pointer for LM head and diagnostics
     result.encoder_output = encoder_output;
     
     // Copy to scratch buffer for diagnostics and inference
@@ -582,18 +651,24 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     //  Autograd graph built inside forward() - backward handled automatically.
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // Create encoder output tensor from last layer output (preserves grad_fn chain)
-    Tensor encoder_output_tensor = Tensor::from_ptr(
-        encoder_output,
-        TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
-        false,
-        true,
-        "encoder_output_for_lmhead"
-    );
-    encoder_output_tensor.is_leaf = false;
-    encoder_output_tensor.stream = ctx.stream;
-    encoder_output_tensor.grad_fn = intermediates.encoder_layer_outputs.back().grad_fn;
-    
+    // When training: create encoder output tensor from last layer (preserves grad_fn chain).
+    // When validation (no_grad): intermediates.encoder_output_tensor already set in no_grad path above.
+    if (ctx.is_training) {
+        const bool lmhead_track_grad = true;
+        Tensor encoder_output_tensor = Tensor::from_ptr(
+            encoder_output,
+            TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
+            false,
+            lmhead_track_grad,
+            "encoder_output_for_lmhead"
+        );
+        encoder_output_tensor.is_leaf = false;
+        encoder_output_tensor.stream = ctx.stream;
+        encoder_output_tensor.grad_fn = intermediates.encoder_layer_outputs.back().grad_fn;
+        intermediates.encoder_output_tensor = std::move(encoder_output_tensor);
+    }
+    // else: no_grad path already set intermediates.encoder_output_tensor and cleared grad_fn
+
     // Update persistent LM head with current stream/cublas (may differ between train/inference)
     ctx.lm_head->setStream(ctx.stream);
     ctx.lm_head->setCublasHandle(ctx.cublas_handle);
@@ -605,10 +680,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     }
     
     // Forward pass: builds autograd graph through RMSNorm → centering → matmul → bias
-    Tensor logits_tensor = ctx.lm_head->forward(encoder_output_tensor, intermediates.centered_encoder_output);
-    
-    // Store raw encoder output (pre-RMSNorm) in intermediates for backward chain
-    intermediates.encoder_output_tensor = std::move(encoder_output_tensor);
+    Tensor logits_tensor = ctx.lm_head->forward(intermediates.encoder_output_tensor, intermediates.centered_encoder_output);
     
     // Copy centered data to scratch buffer for diagnostics (Issue #115)
     if (cfg->lm_head_center_hidden_states && ts->centering_scratch_tensor.data && intermediates.centered_encoder_output.data) {
@@ -781,6 +853,15 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Move the autograd tensor to intermediates (preserves grad_fn chain)
     intermediates.logits_tensor = std::move(logits_tensor);
     
+    // Numeric head: compute alongside LM head from same encoder output
+    if (ctx.numeric_head) {
+        ctx.numeric_head->setStream(ctx.stream);
+        ctx.numeric_head->setCublasHandle(ctx.cublas_handle);
+        Tensor numeric_pred = ctx.numeric_head->forward(
+            intermediates.encoder_output_tensor, total_tokens, ctx.stream);
+        intermediates.numeric_head_output = std::move(numeric_pred);
+    }
+    
     AG_INFO("Forward complete: logits shape=[" << total_tokens << ", " << cfg->vocab_size << "]");
     
     result.success = true;
@@ -803,6 +884,107 @@ autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts, const
     lc.class_balanced_enabled = opts.class_balanced_enabled;
     lc.d_class_weights     = opts.class_balanced_enabled ? d_class_weights : nullptr;
     return lc;
+}
+
+//======================================================================
+// Numeric Loss Kernel and Host Wrapper
+//======================================================================
+
+__global__ void kernelNumericLoss(
+    const float* __restrict__ numeric_head_output,  // [total_tokens, 2]
+    const float* __restrict__ numeric_values,        // [total_tokens]
+    const int*   __restrict__ targets,               // [total_tokens] pre-shifted
+    int total_tokens,
+    int num_token_id,
+    float* __restrict__ loss_out,
+    int*   __restrict__ atom_count_out
+) {
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= total_tokens) return;
+
+    if (targets[t] < 0 || targets[t] != num_token_id) return;
+
+    if (t + 1 >= total_tokens) return;
+    float V = numeric_values[t + 1];
+
+    if (!isfinite(V)) return;
+
+    float y_pred = numeric_head_output[t * 2 + 0];
+    float s_pred = numeric_head_output[t * 2 + 1];
+
+    float abs_v = fminf(fabsf(V), 1e15f);
+    float y_target = log1pf(abs_v);
+    float s_target = (V >= 0.0f) ? 1.0f : 0.0f;
+
+    // Smooth L1 / Huber (delta = 1.0)
+    float diff = y_pred - y_target;
+    float abs_diff = fabsf(diff);
+    float mag_loss = (abs_diff < 1.0f) ? 0.5f * diff * diff : abs_diff - 0.5f;
+
+    // BCEWithLogits
+    float x = s_pred;
+    float s = s_target;
+    float sign_loss = fmaxf(x, 0.0f) - s * x + log1pf(expf(-fabsf(x)));
+
+    atomicAdd(loss_out, mag_loss + sign_loss);
+    atomicAdd(atom_count_out, 1);
+}
+
+// Launches numeric loss kernel and issues async D2H copies; caller must sync and free d_loss/d_count.
+static void computeNumericLossAsync(
+    const Tensor& numeric_head_output,
+    const float* cached_numeric_values,
+    const int* cached_targets,
+    int total_tokens,
+    int num_token_id,
+    cudaStream_t stream,
+    float* h_loss_out,
+    int* h_count_out,
+    float** d_loss_out,
+    int** d_count_out
+) {
+    float* d_loss = nullptr;
+    int*   d_count = nullptr;
+    cudaMalloc(&d_loss, sizeof(float));
+    cudaMalloc(&d_count, sizeof(int));
+    cudaMemsetAsync(d_loss, 0, sizeof(float), stream);
+    cudaMemsetAsync(d_count, 0, sizeof(int), stream);
+
+    const int block = 256;
+    const int grid = (total_tokens + block - 1) / block;
+    kernelNumericLoss<<<grid, block, 0, stream>>>(
+        numeric_head_output.data,
+        cached_numeric_values,
+        cached_targets,
+        total_tokens,
+        num_token_id,
+        d_loss, d_count);
+
+    cudaMemcpyAsync(h_loss_out, d_loss, sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(h_count_out, d_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    *d_loss_out = d_loss;
+    *d_count_out = d_count;
+}
+
+static float computeNumericLoss(
+    const Tensor& numeric_head_output,
+    const float* cached_numeric_values,
+    const int* cached_targets,
+    int total_tokens,
+    int num_token_id,
+    cudaStream_t stream
+) {
+    float h_loss = 0.0f;
+    int h_count = 0;
+    float* d_loss = nullptr;
+    int* d_count = nullptr;
+    computeNumericLossAsync(numeric_head_output, cached_numeric_values, cached_targets,
+                            total_tokens, num_token_id, stream,
+                            &h_loss, &h_count, &d_loss, &d_count);
+    cudaStreamSynchronize(stream);
+    cudaFree(d_loss);
+    cudaFree(d_count);
+    return (h_count > 0) ? h_loss / static_cast<float>(h_count) : 0.0f;
 }
 
 //======================================================================
@@ -876,32 +1058,59 @@ LossResult computeAutogradLoss(
     // Move loss tensor to intermediates (TrainingState owns it during backward)
     intermediates.loss_tensor = std::move(loss_tensor);
     
-    // Copy scalar loss to host
+    // Issue both loss D2H copies before a single sync (batch sync for text + numeric)
     float text_loss = 0.0f;
-    cudaMemcpyAsync(&text_loss, intermediates.loss_tensor.data, sizeof(float), 
+    cudaMemcpyAsync(&text_loss, intermediates.loss_tensor.data, sizeof(float),
                     cudaMemcpyDeviceToHost, ctx.stream);
+
+    float numeric_h_loss = 0.0f;
+    int numeric_h_count = 0;
+    float* d_numeric_loss = nullptr;
+    int* d_numeric_count = nullptr;
+    const bool have_numeric = (ctx.numeric_head && intermediates.numeric_head_output.data);
+    if (have_numeric) {
+        const int num_token_id = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
+        computeNumericLossAsync(
+            intermediates.numeric_head_output,
+            ts->cached_token_numeric_values.data,
+            reinterpret_cast<const int*>(ts->cached_targets_tensor.data),
+            total_tokens,
+            num_token_id,
+            ctx.stream,
+            &numeric_h_loss, &numeric_h_count,
+            &d_numeric_loss, &d_numeric_count);
+    }
+
     cudaStreamSynchronize(ctx.stream);
-    
+
+    if (have_numeric) {
+        cudaFree(d_numeric_loss);
+        cudaFree(d_numeric_count);
+    }
+
     if (!std::isfinite(text_loss)) {
         throw std::runtime_error("computeAutogradLoss: text_loss is non-finite (" + std::to_string(text_loss) + ")");
     }
-    
+
     result.text_loss = text_loss;
     result.valid_tokens = valid_tokens;
     ts->cached_loss_value = text_loss;
     ts->cached_text_loss = text_loss;
     ts->cached_valid_tokens = valid_tokens;
-    
-    // Loss is pure text CE — numeric head DELETED (Issue #143: ScratchBlock handles numeric reasoning)
-    result.loss_value = text_loss;
+
+    float numeric_loss = (numeric_h_count > 0) ? numeric_h_loss / static_cast<float>(numeric_h_count) : 0.0f;
+
+    constexpr float kNumericLossWeight = 0.1f;
+    result.numeric_loss = numeric_loss;
+    result.loss_value = text_loss + kNumericLossWeight * numeric_loss;
     result.weight_text = 1.0f;
     
-    if (!std::isfinite(text_loss)) {
-        throw std::runtime_error("computeAutogradLoss: text_loss is non-finite (" 
-            + std::to_string(text_loss) + ")");
+    if (!std::isfinite(result.loss_value)) {
+        throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (text=" 
+            + std::to_string(text_loss) + " numeric=" + std::to_string(numeric_loss) + ")");
     }
     
-    AG_INFO("Loss computed: text_ce=" << text_loss << " valid_tokens=" << valid_tokens);
+    AG_INFO("Loss computed: text_ce=" << text_loss << " numeric=" << numeric_loss << " valid_tokens=" << valid_tokens);
     
     result.success = true;
     return result;
@@ -917,7 +1126,7 @@ BackwardResult executeAutogradBackward(
 ) {
     BackwardResult result{};
     result.success = false;
-    result.grad_norm = 0.0f;
+    result.grad_rms = 0.0f;
     
     ctx.validate("executeAutogradBackward");
     
@@ -960,10 +1169,10 @@ BackwardResult executeAutogradBackward(
                 enc->attnBqkv().zero_grad(ctx.stream);
                 enc->attnWo().zero_grad(ctx.stream);
                 enc->attnBo().zero_grad(ctx.stream);
-                enc->ffnWGateUp().zero_grad(ctx.stream);
-                enc->ffnBGateUp().zero_grad(ctx.stream);
-                enc->ffnWDown().zero_grad(ctx.stream);
-                enc->ffnBDown().zero_grad(ctx.stream);
+                enc->ffnWGate().zero_grad(ctx.stream);
+                enc->ffnW1().zero_grad(ctx.stream);
+                enc->ffnW2().zero_grad(ctx.stream);
+                enc->ffnB2().zero_grad(ctx.stream);
                 enc->layerScale1().zero_grad(ctx.stream);
                 enc->layerScale2().zero_grad(ctx.stream);
             }
@@ -973,6 +1182,12 @@ BackwardResult executeAutogradBackward(
         if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
             ctx.scratch_block->atomTypeEmbeddings().zero_grad(ctx.stream);
             ctx.scratch_block->atomProjection().zero_grad(ctx.stream);
+        }
+
+        // Numeric head parameters
+        if (ctx.numeric_head) {
+            ctx.numeric_head->weights().zero_grad(ctx.stream);
+            ctx.numeric_head->bias().zero_grad(ctx.stream);
         }
     }
     
@@ -1112,10 +1327,10 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             check(enc->attnBqkv(), "attnBqkv");
             check(enc->attnWo(), "attnWo");
             check(enc->attnBo(), "attnBo");
-            check(enc->ffnWGateUp(), "ffnWGateUp");
-            check(enc->ffnBGateUp(), "ffnBGateUp");
-            check(enc->ffnWDown(), "ffnWDown");
-            check(enc->ffnBDown(), "ffnBDown");
+            check(enc->ffnWGate(), "ffnWGate");
+            check(enc->ffnW1(), "ffnW1");
+            check(enc->ffnW2(), "ffnW2");
+            check(enc->ffnB2(), "ffnB2");
             check(enc->layerScale1(), "layerScale1");
             check(enc->layerScale2(), "layerScale2");
         }
@@ -1162,6 +1377,7 @@ LossResult autogradTrainingStep(
     EmbeddingLayer* embedding_layer = model.getEmbeddingLayer();
     LMHeadLayer* lm_head = model.getLmHeadLayer();
     ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
+    NumericHeadLayer* numeric_head = model.getNumericHeadLayer();
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1250,6 +1466,7 @@ LossResult autogradTrainingStep(
         embedding_layer,
         lm_head,
         scratch_block,
+        numeric_head,
         training_state.cublas_handle,
         stream,
         payload,
@@ -1258,7 +1475,8 @@ LossResult autogradTrainingStep(
         true
     );
     ctx.loss_config = buildLossConfig(model.getLossOptions(), training_state.d_class_weights);
-    
+    ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on accumulation micro-batches
+
     // ═══════════════════════════════════════════════════════════════════════════
     // FORWARD → LOSS → BACKWARD
     // ═══════════════════════════════════════════════════════════════════════════

@@ -18,7 +18,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <iostream>
 
 namespace GRIM::Telemetry {
 
@@ -720,9 +719,9 @@ ControlDecision TelemetryControl::evaluate(
             cudaGetErrorString(err));
     }
     
-    // Extract device pointers from lattice (lattice struct is on host, but contains device pointers)
-    const LatticeLevelState* d_lattice_levels = lattice->levels;
-    const int num_lattice_streams = lattice->config.num_streams;
+    // Extract device pointers from lattice (Pattern B: public accessors)
+    const LatticeLevelState* d_lattice_levels = lattice->levels();
+    const int num_lattice_streams = lattice->config().num_streams;
     
     // Launch kernel with device pointers (not host struct pointer!)
     launchControlDecisionKernel(d_lattice_levels, num_lattice_streams, d_config_, d_state_, d_input_, d_decision_, stream);

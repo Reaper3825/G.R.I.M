@@ -65,8 +65,8 @@ constexpr float kGradSpikeLrFraction = 0.10f;
 struct BatchResult {
     int batch_idx = 0;
     float loss = 0.0f;
-    float grad_norm = 0.0f;
-    float normalized_grad_norm = 0.0f;
+    float grad_rms = 0.0f;
+    float normalized_grad_rms = 0.0f;
     float learning_rate = 0.0f;
     int sequences_processed = 0;
     int tokens_processed = 0;
@@ -138,8 +138,8 @@ struct TrainingLoopState {
     // Prediction comparison counter
     int prediction_comparison_good_batch_counter = 0;
     
-    // Last gradient norm for growth detection
-    float last_grad_norm = 0.0f;
+    // Last gradient RMS for growth detection
+    float last_grad_rms = 0.0f;
 
     // Last optimizer step that emitted a sample
     int last_sample_step = -1;
@@ -260,7 +260,7 @@ bool handleGradientSpike(
     TrainingContext& ctx,
     TrainingLoopState& state,
     const GRIM::Batching::BatchAssignment& batch,
-    float preclip_grad_norm,
+    float preclip_grad_rms,
     float preclip_norm_grad,
     float batch_loss,
     const GRIM::TNC::ClipSelection& clip_selection,

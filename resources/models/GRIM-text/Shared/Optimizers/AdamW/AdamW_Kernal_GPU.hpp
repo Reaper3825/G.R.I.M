@@ -41,12 +41,16 @@ void launchAdamWKernel(ParameterGroup& group,
 
 /// Run one AdamW optimizer step across all parameter groups.
 /// Applies depth-aware upsilon regularization to weight decay.
+/// When embedding_freeze_after_step >= 0 and step >= that threshold,
+/// EMBEDDING-type groups are skipped. When tie_embeddings=true the embedding
+/// buffer is registered as LM_HEAD "embedding_lm_head_tied"; that group is also skipped.
 /// Rule 20: Throws if any group has missing optimizer state.
 void launchAdamWStep(std::vector<ParameterGroup>& groups,
                      float learning_rate,
                      float weight_decay,
                      int step,
-                     cudaStream_t stream);
+                     cudaStream_t stream,
+                     int embedding_freeze_after_step = -1);
 
 /// Zero all first-moment (m) and second-moment (v) buffers.
 /// Used by soft restart to reset optimizer state.

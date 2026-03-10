@@ -6,56 +6,69 @@
 
 #include "flatbuffers/flatbuffers.h"
 
-// Ensure the included flatbuffers.h is the same version as when this file was
-// generated, otherwise it may not be compatible.
-static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
-              FLATBUFFERS_VERSION_MINOR == 2 &&
-              FLATBUFFERS_VERSION_REVISION == 10,
+// Ensure the included flatbuffers.h is compatible.
+// Generated with flatc 25.2.10; accept 24.12+ and 25.x (vcpkg default varies by clone).
+static_assert((FLATBUFFERS_VERSION_MAJOR == 24 && FLATBUFFERS_VERSION_MINOR >= 12) ||
+              (FLATBUFFERS_VERSION_MAJOR == 25),
              "Non-compatible flatbuffers version included");
 
 namespace GRIMTransformer {
 
 struct Matrix;
 struct MatrixBuilder;
+struct MatrixT;
 
 struct Vector;
 struct VectorBuilder;
+struct VectorT;
 
 struct RMSNormWeights;
 struct RMSNormWeightsBuilder;
+struct RMSNormWeightsT;
 
 struct AttentionWeights;
 struct AttentionWeightsBuilder;
+struct AttentionWeightsT;
 
 struct FFNWeights;
 struct FFNWeightsBuilder;
+struct FFNWeightsT;
 
 struct EncoderLayerWeights;
 struct EncoderLayerWeightsBuilder;
+struct EncoderLayerWeightsT;
 
 struct EmbeddingWeights;
 struct EmbeddingWeightsBuilder;
+struct EmbeddingWeightsT;
 
 struct LMHeadWeights;
 struct LMHeadWeightsBuilder;
+struct LMHeadWeightsT;
 
 struct NumericHeadWeights;
 struct NumericHeadWeightsBuilder;
+struct NumericHeadWeightsT;
 
 struct ScratchBlockWeights;
 struct ScratchBlockWeightsBuilder;
+struct ScratchBlockWeightsT;
 
 struct ModelConfig;
 struct ModelConfigBuilder;
+struct ModelConfigT;
 
 struct LossWeightingWeights;
 struct LossWeightingWeightsBuilder;
+struct LossWeightingWeightsT;
 
 struct TrainingMetadata;
 struct TrainingMetadataBuilder;
+struct TrainingMetadataT;
 
 struct TransformerModel;
 struct TransformerModelBuilder;
+struct TransformerModelT;
 
 enum PositionalEncodingType : uint8_t {
   PositionalEncodingType_NONE = 0,
@@ -93,7 +106,15 @@ inline const char *EnumNamePositionalEncodingType(PositionalEncodingType e) {
   return EnumNamesPositionalEncodingType()[index];
 }
 
+struct MatrixT : public ::flatbuffers::NativeTable {
+  typedef Matrix TableType;
+  std::vector<float> data{};
+  uint32_t rows = 0;
+  uint32_t cols = 0;
+};
+
 struct Matrix FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef MatrixT NativeTableType;
   typedef MatrixBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_DATA = 4,
@@ -117,6 +138,9 @@ struct Matrix FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint32_t>(verifier, VT_COLS, 4) &&
            verifier.EndTable();
   }
+  MatrixT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(MatrixT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<Matrix> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const MatrixT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct MatrixBuilder {
@@ -169,7 +193,15 @@ inline ::flatbuffers::Offset<Matrix> CreateMatrixDirect(
       cols);
 }
 
+::flatbuffers::Offset<Matrix> CreateMatrix(::flatbuffers::FlatBufferBuilder &_fbb, const MatrixT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct VectorT : public ::flatbuffers::NativeTable {
+  typedef Vector TableType;
+  std::vector<float> data{};
+};
+
 struct Vector FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef VectorT NativeTableType;
   typedef VectorBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_DATA = 4
@@ -183,6 +215,9 @@ struct Vector FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVector(data()) &&
            verifier.EndTable();
   }
+  VectorT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(VectorT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<Vector> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const VectorT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct VectorBuilder {
@@ -221,7 +256,16 @@ inline ::flatbuffers::Offset<Vector> CreateVectorDirect(
       data__);
 }
 
+::flatbuffers::Offset<Vector> CreateVector(::flatbuffers::FlatBufferBuilder &_fbb, const VectorT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct RMSNormWeightsT : public ::flatbuffers::NativeTable {
+  typedef RMSNormWeights TableType;
+  std::vector<float> gamma{};
+  float epsilon = 1e-5f;
+};
+
 struct RMSNormWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef RMSNormWeightsT NativeTableType;
   typedef RMSNormWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_GAMMA = 4,
@@ -240,6 +284,9 @@ struct RMSNormWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<float>(verifier, VT_EPSILON, 4) &&
            verifier.EndTable();
   }
+  RMSNormWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(RMSNormWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<RMSNormWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const RMSNormWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct RMSNormWeightsBuilder {
@@ -285,7 +332,30 @@ inline ::flatbuffers::Offset<RMSNormWeights> CreateRMSNormWeightsDirect(
       epsilon);
 }
 
+::flatbuffers::Offset<RMSNormWeights> CreateRMSNormWeights(::flatbuffers::FlatBufferBuilder &_fbb, const RMSNormWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct AttentionWeightsT : public ::flatbuffers::NativeTable {
+  typedef AttentionWeights TableType;
+  std::vector<float> w_qkv_data{};
+  std::vector<float> b_qkv_data{};
+  std::vector<float> w_q_data{};
+  std::vector<float> b_q_data{};
+  std::vector<float> w_k_data{};
+  std::vector<float> b_k_data{};
+  std::vector<float> w_v_data{};
+  std::vector<float> b_v_data{};
+  std::vector<float> w_o_data{};
+  std::vector<float> b_o_data{};
+  std::vector<float> alpha_q{};
+  std::vector<float> alpha_k{};
+  uint32_t d_model = 0;
+  uint32_t num_heads = 0;
+  uint32_t num_kv_heads = 0;
+  bool fuse_qkv = false;
+};
+
 struct AttentionWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef AttentionWeightsT NativeTableType;
   typedef AttentionWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_W_QKV_DATA = 4,
@@ -385,6 +455,9 @@ struct AttentionWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_FUSE_QKV, 1) &&
            verifier.EndTable();
   }
+  AttentionWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(AttentionWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<AttentionWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const AttentionWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct AttentionWeightsBuilder {
@@ -540,27 +613,42 @@ inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeightsDirect(
       fuse_qkv);
 }
 
+::flatbuffers::Offset<AttentionWeights> CreateAttentionWeights(::flatbuffers::FlatBufferBuilder &_fbb, const AttentionWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct FFNWeightsT : public ::flatbuffers::NativeTable {
+  typedef FFNWeights TableType;
+  std::vector<float> w1_data{};
+  std::vector<float> b1_data{};
+  std::vector<float> w2_data{};
+  std::vector<float> b2_data{};
+  uint32_t d_model = 0;
+  uint32_t d_ff = 0;
+  std::vector<float> w_gate_data{};
+};
+
 struct FFNWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef FFNWeightsT NativeTableType;
   typedef FFNWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_W_GATE_UP_DATA = 4,
-    VT_B_GATE_UP_DATA = 6,
-    VT_W_DOWN_DATA = 8,
-    VT_B_DOWN_DATA = 10,
+    VT_W1_DATA = 4,
+    VT_B1_DATA = 6,
+    VT_W2_DATA = 8,
+    VT_B2_DATA = 10,
     VT_D_MODEL = 12,
-    VT_D_FF = 14
+    VT_D_FF = 14,
+    VT_W_GATE_DATA = 16
   };
-  const ::flatbuffers::Vector<float> *w_gate_up_data() const {
-    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_GATE_UP_DATA);
+  const ::flatbuffers::Vector<float> *w1_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W1_DATA);
   }
-  const ::flatbuffers::Vector<float> *b_gate_up_data() const {
-    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_GATE_UP_DATA);
+  const ::flatbuffers::Vector<float> *b1_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B1_DATA);
   }
-  const ::flatbuffers::Vector<float> *w_down_data() const {
-    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_DOWN_DATA);
+  const ::flatbuffers::Vector<float> *w2_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W2_DATA);
   }
-  const ::flatbuffers::Vector<float> *b_down_data() const {
-    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_DOWN_DATA);
+  const ::flatbuffers::Vector<float> *b2_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B2_DATA);
   }
   uint32_t d_model() const {
     return GetField<uint32_t>(VT_D_MODEL, 0);
@@ -568,43 +656,54 @@ struct FFNWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t d_ff() const {
     return GetField<uint32_t>(VT_D_FF, 0);
   }
+  const ::flatbuffers::Vector<float> *w_gate_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_GATE_DATA);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
-           VerifyOffsetRequired(verifier, VT_W_GATE_UP_DATA) &&
-           verifier.VerifyVector(w_gate_up_data()) &&
-           VerifyOffsetRequired(verifier, VT_B_GATE_UP_DATA) &&
-           verifier.VerifyVector(b_gate_up_data()) &&
-           VerifyOffsetRequired(verifier, VT_W_DOWN_DATA) &&
-           verifier.VerifyVector(w_down_data()) &&
-           VerifyOffsetRequired(verifier, VT_B_DOWN_DATA) &&
-           verifier.VerifyVector(b_down_data()) &&
+           VerifyOffsetRequired(verifier, VT_W1_DATA) &&
+           verifier.VerifyVector(w1_data()) &&
+           VerifyOffset(verifier, VT_B1_DATA) &&
+           verifier.VerifyVector(b1_data()) &&
+           VerifyOffsetRequired(verifier, VT_W2_DATA) &&
+           verifier.VerifyVector(w2_data()) &&
+           VerifyOffsetRequired(verifier, VT_B2_DATA) &&
+           verifier.VerifyVector(b2_data()) &&
            VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
            VerifyField<uint32_t>(verifier, VT_D_FF, 4) &&
+           VerifyOffset(verifier, VT_W_GATE_DATA) &&
+           verifier.VerifyVector(w_gate_data()) &&
            verifier.EndTable();
   }
+  FFNWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(FFNWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<FFNWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct FFNWeightsBuilder {
   typedef FFNWeights Table;
   ::flatbuffers::FlatBufferBuilder &fbb_;
   ::flatbuffers::uoffset_t start_;
-  void add_w_gate_up_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_up_data) {
-    fbb_.AddOffset(FFNWeights::VT_W_GATE_UP_DATA, w_gate_up_data);
+  void add_w1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w1_data) {
+    fbb_.AddOffset(FFNWeights::VT_W1_DATA, w1_data);
   }
-  void add_b_gate_up_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_gate_up_data) {
-    fbb_.AddOffset(FFNWeights::VT_B_GATE_UP_DATA, b_gate_up_data);
+  void add_b1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b1_data) {
+    fbb_.AddOffset(FFNWeights::VT_B1_DATA, b1_data);
   }
-  void add_w_down_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_down_data) {
-    fbb_.AddOffset(FFNWeights::VT_W_DOWN_DATA, w_down_data);
+  void add_w2_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w2_data) {
+    fbb_.AddOffset(FFNWeights::VT_W2_DATA, w2_data);
   }
-  void add_b_down_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_down_data) {
-    fbb_.AddOffset(FFNWeights::VT_B_DOWN_DATA, b_down_data);
+  void add_b2_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b2_data) {
+    fbb_.AddOffset(FFNWeights::VT_B2_DATA, b2_data);
   }
   void add_d_model(uint32_t d_model) {
     fbb_.AddElement<uint32_t>(FFNWeights::VT_D_MODEL, d_model, 0);
   }
   void add_d_ff(uint32_t d_ff) {
     fbb_.AddElement<uint32_t>(FFNWeights::VT_D_FF, d_ff, 0);
+  }
+  void add_w_gate_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_data) {
+    fbb_.AddOffset(FFNWeights::VT_W_GATE_DATA, w_gate_data);
   }
   explicit FFNWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -613,55 +712,79 @@ struct FFNWeightsBuilder {
   ::flatbuffers::Offset<FFNWeights> Finish() {
     const auto end = fbb_.EndTable(start_);
     auto o = ::flatbuffers::Offset<FFNWeights>(end);
-    fbb_.Required(o, FFNWeights::VT_W_GATE_UP_DATA);
-    fbb_.Required(o, FFNWeights::VT_B_GATE_UP_DATA);
-    fbb_.Required(o, FFNWeights::VT_W_DOWN_DATA);
-    fbb_.Required(o, FFNWeights::VT_B_DOWN_DATA);
+    fbb_.Required(o, FFNWeights::VT_W1_DATA);
+    fbb_.Required(o, FFNWeights::VT_W2_DATA);
+    fbb_.Required(o, FFNWeights::VT_B2_DATA);
     return o;
   }
 };
 
 inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_up_data = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_gate_up_data = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_down_data = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_down_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w2_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b2_data = 0,
     uint32_t d_model = 0,
-    uint32_t d_ff = 0) {
+    uint32_t d_ff = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_data = 0) {
   FFNWeightsBuilder builder_(_fbb);
+  builder_.add_w_gate_data(w_gate_data);
   builder_.add_d_ff(d_ff);
   builder_.add_d_model(d_model);
-  builder_.add_b_down_data(b_down_data);
-  builder_.add_w_down_data(w_down_data);
-  builder_.add_b_gate_up_data(b_gate_up_data);
-  builder_.add_w_gate_up_data(w_gate_up_data);
+  builder_.add_b2_data(b2_data);
+  builder_.add_w2_data(w2_data);
+  builder_.add_b1_data(b1_data);
+  builder_.add_w1_data(w1_data);
   return builder_.Finish();
 }
 
 inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeightsDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    const std::vector<float> *w_gate_up_data = nullptr,
-    const std::vector<float> *b_gate_up_data = nullptr,
-    const std::vector<float> *w_down_data = nullptr,
-    const std::vector<float> *b_down_data = nullptr,
+    const std::vector<float> *w1_data = nullptr,
+    const std::vector<float> *b1_data = nullptr,
+    const std::vector<float> *w2_data = nullptr,
+    const std::vector<float> *b2_data = nullptr,
     uint32_t d_model = 0,
-    uint32_t d_ff = 0) {
-  auto w_gate_up_data__ = w_gate_up_data ? _fbb.CreateVector<float>(*w_gate_up_data) : 0;
-  auto b_gate_up_data__ = b_gate_up_data ? _fbb.CreateVector<float>(*b_gate_up_data) : 0;
-  auto w_down_data__ = w_down_data ? _fbb.CreateVector<float>(*w_down_data) : 0;
-  auto b_down_data__ = b_down_data ? _fbb.CreateVector<float>(*b_down_data) : 0;
+    uint32_t d_ff = 0,
+    const std::vector<float> *w_gate_data = nullptr) {
+  auto w1_data__ = w1_data ? _fbb.CreateVector<float>(*w1_data) : 0;
+  auto b1_data__ = b1_data ? _fbb.CreateVector<float>(*b1_data) : 0;
+  auto w2_data__ = w2_data ? _fbb.CreateVector<float>(*w2_data) : 0;
+  auto b2_data__ = b2_data ? _fbb.CreateVector<float>(*b2_data) : 0;
+  auto w_gate_data__ = w_gate_data ? _fbb.CreateVector<float>(*w_gate_data) : 0;
   return GRIMTransformer::CreateFFNWeights(
       _fbb,
-      w_gate_up_data__,
-      b_gate_up_data__,
-      w_down_data__,
-      b_down_data__,
+      w1_data__,
+      b1_data__,
+      w2_data__,
+      b2_data__,
       d_model,
-      d_ff);
+      d_ff,
+      w_gate_data__);
 }
 
+::flatbuffers::Offset<FFNWeights> CreateFFNWeights(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct EncoderLayerWeightsT : public ::flatbuffers::NativeTable {
+  typedef EncoderLayerWeights TableType;
+  std::unique_ptr<GRIMTransformer::AttentionWeightsT> attention{};
+  std::unique_ptr<GRIMTransformer::FFNWeightsT> ffn{};
+  std::unique_ptr<GRIMTransformer::RMSNormWeightsT> rms1{};
+  std::unique_ptr<GRIMTransformer::RMSNormWeightsT> rms2{};
+  std::vector<float> layer_scale1{};
+  std::vector<float> layer_scale2{};
+  std::unique_ptr<GRIMTransformer::RMSNormWeightsT> rms_post_attn{};
+  std::unique_ptr<GRIMTransformer::RMSNormWeightsT> rms_post_ffn{};
+  uint32_t layer_id = 0;
+  EncoderLayerWeightsT() = default;
+  EncoderLayerWeightsT(const EncoderLayerWeightsT &o);
+  EncoderLayerWeightsT(EncoderLayerWeightsT&&) FLATBUFFERS_NOEXCEPT = default;
+  EncoderLayerWeightsT &operator=(EncoderLayerWeightsT o) FLATBUFFERS_NOEXCEPT;
+};
+
 struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef EncoderLayerWeightsT NativeTableType;
   typedef EncoderLayerWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ATTENTION = 4,
@@ -722,6 +845,9 @@ struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
            VerifyField<uint32_t>(verifier, VT_LAYER_ID, 4) &&
            verifier.EndTable();
   }
+  EncoderLayerWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(EncoderLayerWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<EncoderLayerWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const EncoderLayerWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct EncoderLayerWeightsBuilder {
@@ -820,7 +946,21 @@ inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeightsDirec
       layer_id);
 }
 
+::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeights(::flatbuffers::FlatBufferBuilder &_fbb, const EncoderLayerWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct EmbeddingWeightsT : public ::flatbuffers::NativeTable {
+  typedef EmbeddingWeights TableType;
+  std::vector<float> token_embeddings{};
+  std::vector<float> positional_encodings{};
+  std::vector<float> rms_gamma{};
+  uint32_t vocab_size = 0;
+  uint32_t d_model = 0;
+  uint32_t max_seq_len = 0;
+  bool use_rms_norm = false;
+};
+
 struct EmbeddingWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef EmbeddingWeightsT NativeTableType;
   typedef EmbeddingWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_TOKEN_EMBEDDINGS = 4,
@@ -866,6 +1006,9 @@ struct EmbeddingWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_USE_RMS_NORM, 1) &&
            verifier.EndTable();
   }
+  EmbeddingWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(EmbeddingWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<EmbeddingWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const EmbeddingWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct EmbeddingWeightsBuilder {
@@ -948,7 +1091,20 @@ inline ::flatbuffers::Offset<EmbeddingWeights> CreateEmbeddingWeightsDirect(
       use_rms_norm);
 }
 
+::flatbuffers::Offset<EmbeddingWeights> CreateEmbeddingWeights(::flatbuffers::FlatBufferBuilder &_fbb, const EmbeddingWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct LMHeadWeightsT : public ::flatbuffers::NativeTable {
+  typedef LMHeadWeights TableType;
+  std::vector<float> projection_data{};
+  std::vector<float> bias_data{};
+  uint32_t d_model = 0;
+  uint32_t vocab_size = 0;
+  bool tie_embeddings = false;
+  bool use_bias = false;
+};
+
 struct LMHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef LMHeadWeightsT NativeTableType;
   typedef LMHeadWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_PROJECTION_DATA = 4,
@@ -988,6 +1144,9 @@ struct LMHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_USE_BIAS, 1) &&
            verifier.EndTable();
   }
+  LMHeadWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(LMHeadWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<LMHeadWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct LMHeadWeightsBuilder {
@@ -1061,7 +1220,18 @@ inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeightsDirect(
       use_bias);
 }
 
+::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct NumericHeadWeightsT : public ::flatbuffers::NativeTable {
+  typedef NumericHeadWeights TableType;
+  std::vector<float> projection_data{};
+  std::vector<float> bias_data{};
+  uint32_t d_model = 0;
+  bool use_bias = false;
+};
+
 struct NumericHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef NumericHeadWeightsT NativeTableType;
   typedef NumericHeadWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_PROJECTION_DATA = 4,
@@ -1091,6 +1261,9 @@ struct NumericHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table
            VerifyField<uint8_t>(verifier, VT_USE_BIAS, 1) &&
            verifier.EndTable();
   }
+  NumericHeadWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(NumericHeadWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<NumericHeadWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct NumericHeadWeightsBuilder {
@@ -1150,11 +1323,27 @@ inline ::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeightsDirect(
       use_bias);
 }
 
+::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct ScratchBlockWeightsT : public ::flatbuffers::NativeTable {
+  typedef ScratchBlockWeights TableType;
+  std::vector<float> atom_type_embeddings{};
+  std::vector<float> atom_projection{};
+  std::vector<float> text_feature_projection{};
+  uint32_t num_atom_types = 0;
+  uint32_t atom_embedding_dim = 0;
+  uint32_t d_model = 0;
+  float atom_scale = 0.0f;
+  bool enabled = false;
+};
+
 struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ScratchBlockWeightsT NativeTableType;
   typedef ScratchBlockWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ATOM_TYPE_EMBEDDINGS = 4,
     VT_ATOM_PROJECTION = 6,
+    VT_TEXT_FEATURE_PROJECTION = 8,
     VT_NUM_ATOM_TYPES = 14,
     VT_ATOM_EMBEDDING_DIM = 16,
     VT_D_MODEL = 18,
@@ -1166,6 +1355,9 @@ struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
   }
   const ::flatbuffers::Vector<float> *atom_projection() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ATOM_PROJECTION);
+  }
+  const ::flatbuffers::Vector<float> *text_feature_projection() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_TEXT_FEATURE_PROJECTION);
   }
   uint32_t num_atom_types() const {
     return GetField<uint32_t>(VT_NUM_ATOM_TYPES, 0);
@@ -1188,6 +1380,8 @@ struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
            verifier.VerifyVector(atom_type_embeddings()) &&
            VerifyOffset(verifier, VT_ATOM_PROJECTION) &&
            verifier.VerifyVector(atom_projection()) &&
+           VerifyOffset(verifier, VT_TEXT_FEATURE_PROJECTION) &&
+           verifier.VerifyVector(text_feature_projection()) &&
            VerifyField<uint32_t>(verifier, VT_NUM_ATOM_TYPES, 4) &&
            VerifyField<uint32_t>(verifier, VT_ATOM_EMBEDDING_DIM, 4) &&
            VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
@@ -1195,6 +1389,9 @@ struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
            VerifyField<uint8_t>(verifier, VT_ENABLED, 1) &&
            verifier.EndTable();
   }
+  ScratchBlockWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(ScratchBlockWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<ScratchBlockWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ScratchBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct ScratchBlockWeightsBuilder {
@@ -1206,6 +1403,9 @@ struct ScratchBlockWeightsBuilder {
   }
   void add_atom_projection(::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_projection) {
     fbb_.AddOffset(ScratchBlockWeights::VT_ATOM_PROJECTION, atom_projection);
+  }
+  void add_text_feature_projection(::flatbuffers::Offset<::flatbuffers::Vector<float>> text_feature_projection) {
+    fbb_.AddOffset(ScratchBlockWeights::VT_TEXT_FEATURE_PROJECTION, text_feature_projection);
   }
   void add_num_atom_types(uint32_t num_atom_types) {
     fbb_.AddElement<uint32_t>(ScratchBlockWeights::VT_NUM_ATOM_TYPES, num_atom_types, 0);
@@ -1237,6 +1437,7 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_type_embeddings = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_projection = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> text_feature_projection = 0,
     uint32_t num_atom_types = 0,
     uint32_t atom_embedding_dim = 0,
     uint32_t d_model = 0,
@@ -1247,6 +1448,7 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(
   builder_.add_d_model(d_model);
   builder_.add_atom_embedding_dim(atom_embedding_dim);
   builder_.add_num_atom_types(num_atom_types);
+  builder_.add_text_feature_projection(text_feature_projection);
   builder_.add_atom_projection(atom_projection);
   builder_.add_atom_type_embeddings(atom_type_embeddings);
   builder_.add_enabled(enabled);
@@ -1257,6 +1459,7 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeightsDirec
     ::flatbuffers::FlatBufferBuilder &_fbb,
     const std::vector<float> *atom_type_embeddings = nullptr,
     const std::vector<float> *atom_projection = nullptr,
+    const std::vector<float> *text_feature_projection = nullptr,
     uint32_t num_atom_types = 0,
     uint32_t atom_embedding_dim = 0,
     uint32_t d_model = 0,
@@ -1264,10 +1467,12 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeightsDirec
     bool enabled = false) {
   auto atom_type_embeddings__ = atom_type_embeddings ? _fbb.CreateVector<float>(*atom_type_embeddings) : 0;
   auto atom_projection__ = atom_projection ? _fbb.CreateVector<float>(*atom_projection) : 0;
+  auto text_feature_projection__ = text_feature_projection ? _fbb.CreateVector<float>(*text_feature_projection) : 0;
   return GRIMTransformer::CreateScratchBlockWeights(
       _fbb,
       atom_type_embeddings__,
       atom_projection__,
+      text_feature_projection__,
       num_atom_types,
       atom_embedding_dim,
       d_model,
@@ -1275,7 +1480,30 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeightsDirec
       enabled);
 }
 
+::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ScratchBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct ModelConfigT : public ::flatbuffers::NativeTable {
+  typedef ModelConfig TableType;
+  uint32_t vocab_size = 0;
+  uint32_t d_model = 0;
+  uint32_t num_layers = 0;
+  uint32_t num_heads = 0;
+  uint32_t num_kv_heads = 0;
+  uint32_t d_ff = 0;
+  uint32_t max_seq_len = 0;
+  float dropout_rate = 0.1f;
+  float attention_dropout = 0.1f;
+  GRIMTransformer::PositionalEncodingType positional_encoding = GRIMTransformer::PositionalEncodingType_ALIBI_ROPE;
+  bool use_alibi = false;
+  bool causal_mask = true;
+  bool use_pre_norm = true;
+  bool fuse_qkv = true;
+  bool tie_embeddings = true;
+  bool use_bias = true;
+};
+
 struct ModelConfig FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ModelConfigT NativeTableType;
   typedef ModelConfigBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_VOCAB_SIZE = 4,
@@ -1363,6 +1591,9 @@ struct ModelConfig FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_USE_BIAS, 1) &&
            verifier.EndTable();
   }
+  ModelConfigT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(ModelConfigT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<ModelConfig> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ModelConfigT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct ModelConfigBuilder {
@@ -1466,7 +1697,16 @@ inline ::flatbuffers::Offset<ModelConfig> CreateModelConfig(
   return builder_.Finish();
 }
 
+::flatbuffers::Offset<ModelConfig> CreateModelConfig(::flatbuffers::FlatBufferBuilder &_fbb, const ModelConfigT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct LossWeightingWeightsT : public ::flatbuffers::NativeTable {
+  typedef LossWeightingWeights TableType;
+  float log_var_text = 0.0f;
+  float log_var_numeric = 0.0f;
+};
+
 struct LossWeightingWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef LossWeightingWeightsT NativeTableType;
   typedef LossWeightingWeightsBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_LOG_VAR_TEXT = 4,
@@ -1484,6 +1724,9 @@ struct LossWeightingWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tab
            VerifyField<float>(verifier, VT_LOG_VAR_NUMERIC, 4) &&
            verifier.EndTable();
   }
+  LossWeightingWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(LossWeightingWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<LossWeightingWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LossWeightingWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct LossWeightingWeightsBuilder {
@@ -1517,7 +1760,26 @@ inline ::flatbuffers::Offset<LossWeightingWeights> CreateLossWeightingWeights(
   return builder_.Finish();
 }
 
+::flatbuffers::Offset<LossWeightingWeights> CreateLossWeightingWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LossWeightingWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct TrainingMetadataT : public ::flatbuffers::NativeTable {
+  typedef TrainingMetadata TableType;
+  std::string optimizer{};
+  float learning_rate = 0.0f;
+  uint32_t batch_size = 0;
+  uint32_t num_epochs = 0;
+  uint64_t training_steps = 0;
+  float final_train_loss = 0.0f;
+  float final_val_loss = 0.0f;
+  float best_val_loss = 0.0f;
+  float gradient_norm = 0.0f;
+  uint64_t timestamp = 0;
+  uint64_t training_duration_seconds = 0;
+  std::string model_name{};
+};
+
 struct TrainingMetadata FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef TrainingMetadataT NativeTableType;
   typedef TrainingMetadataBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_OPTIMIZER = 4,
@@ -1587,6 +1849,9 @@ struct TrainingMetadata FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(model_name()) &&
            verifier.EndTable();
   }
+  TrainingMetadataT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(TrainingMetadataT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<TrainingMetadata> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TrainingMetadataT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct TrainingMetadataBuilder {
@@ -1702,7 +1967,32 @@ inline ::flatbuffers::Offset<TrainingMetadata> CreateTrainingMetadataDirect(
       model_name__);
 }
 
+::flatbuffers::Offset<TrainingMetadata> CreateTrainingMetadata(::flatbuffers::FlatBufferBuilder &_fbb, const TrainingMetadataT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+struct TransformerModelT : public ::flatbuffers::NativeTable {
+  typedef TransformerModel TableType;
+  uint32_t version = 0;
+  std::unique_ptr<GRIMTransformer::ModelConfigT> config{};
+  std::unique_ptr<GRIMTransformer::EmbeddingWeightsT> embeddings{};
+  std::vector<std::unique_ptr<GRIMTransformer::EncoderLayerWeightsT>> encoder_layers{};
+  std::unique_ptr<GRIMTransformer::LMHeadWeightsT> lm_head{};
+  std::unique_ptr<GRIMTransformer::NumericHeadWeightsT> numeric_head{};
+  std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT> scratch_block{};
+  std::vector<float> final_rms_gamma{};
+  std::unique_ptr<GRIMTransformer::LossWeightingWeightsT> loss_weighting{};
+  std::unique_ptr<GRIMTransformer::TrainingMetadataT> training_metadata{};
+  uint32_t checksum_crc32 = 0;
+  uint64_t checksum_xxhash64 = 0;
+  uint64_t creation_timestamp = 0;
+  uint64_t last_modified_timestamp = 0;
+  TransformerModelT() = default;
+  TransformerModelT(const TransformerModelT &o);
+  TransformerModelT(TransformerModelT&&) FLATBUFFERS_NOEXCEPT = default;
+  TransformerModelT &operator=(TransformerModelT o) FLATBUFFERS_NOEXCEPT;
+};
+
 struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef TransformerModelT NativeTableType;
   typedef TransformerModelBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_VERSION = 4,
@@ -1790,6 +2080,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_LAST_MODIFIED_TIMESTAMP, 8) &&
            verifier.EndTable();
   }
+  TransformerModelT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(TransformerModelT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<TransformerModel> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct TransformerModelBuilder {
@@ -1923,6 +2216,712 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       last_modified_timestamp);
 }
 
+::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+inline MatrixT *Matrix::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<MatrixT>(new MatrixT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void Matrix::UnPackTo(MatrixT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = data(); if (_e) { _o->data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->data[_i] = _e->Get(_i); } } else { _o->data.resize(0); } }
+  { auto _e = rows(); _o->rows = _e; }
+  { auto _e = cols(); _o->cols = _e; }
+}
+
+inline ::flatbuffers::Offset<Matrix> Matrix::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const MatrixT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateMatrix(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<Matrix> CreateMatrix(::flatbuffers::FlatBufferBuilder &_fbb, const MatrixT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const MatrixT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _data = _fbb.CreateVector(_o->data);
+  auto _rows = _o->rows;
+  auto _cols = _o->cols;
+  return GRIMTransformer::CreateMatrix(
+      _fbb,
+      _data,
+      _rows,
+      _cols);
+}
+
+inline VectorT *Vector::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<VectorT>(new VectorT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void Vector::UnPackTo(VectorT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = data(); if (_e) { _o->data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->data[_i] = _e->Get(_i); } } else { _o->data.resize(0); } }
+}
+
+inline ::flatbuffers::Offset<Vector> Vector::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const VectorT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateVector(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<Vector> CreateVector(::flatbuffers::FlatBufferBuilder &_fbb, const VectorT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const VectorT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _data = _fbb.CreateVector(_o->data);
+  return GRIMTransformer::CreateVector(
+      _fbb,
+      _data);
+}
+
+inline RMSNormWeightsT *RMSNormWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<RMSNormWeightsT>(new RMSNormWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void RMSNormWeights::UnPackTo(RMSNormWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = gamma(); if (_e) { _o->gamma.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->gamma[_i] = _e->Get(_i); } } else { _o->gamma.resize(0); } }
+  { auto _e = epsilon(); _o->epsilon = _e; }
+}
+
+inline ::flatbuffers::Offset<RMSNormWeights> RMSNormWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const RMSNormWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateRMSNormWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<RMSNormWeights> CreateRMSNormWeights(::flatbuffers::FlatBufferBuilder &_fbb, const RMSNormWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const RMSNormWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _gamma = _fbb.CreateVector(_o->gamma);
+  auto _epsilon = _o->epsilon;
+  return GRIMTransformer::CreateRMSNormWeights(
+      _fbb,
+      _gamma,
+      _epsilon);
+}
+
+inline AttentionWeightsT *AttentionWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<AttentionWeightsT>(new AttentionWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void AttentionWeights::UnPackTo(AttentionWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = w_qkv_data(); if (_e) { _o->w_qkv_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_qkv_data[_i] = _e->Get(_i); } } else { _o->w_qkv_data.resize(0); } }
+  { auto _e = b_qkv_data(); if (_e) { _o->b_qkv_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_qkv_data[_i] = _e->Get(_i); } } else { _o->b_qkv_data.resize(0); } }
+  { auto _e = w_q_data(); if (_e) { _o->w_q_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_q_data[_i] = _e->Get(_i); } } else { _o->w_q_data.resize(0); } }
+  { auto _e = b_q_data(); if (_e) { _o->b_q_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_q_data[_i] = _e->Get(_i); } } else { _o->b_q_data.resize(0); } }
+  { auto _e = w_k_data(); if (_e) { _o->w_k_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_k_data[_i] = _e->Get(_i); } } else { _o->w_k_data.resize(0); } }
+  { auto _e = b_k_data(); if (_e) { _o->b_k_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_k_data[_i] = _e->Get(_i); } } else { _o->b_k_data.resize(0); } }
+  { auto _e = w_v_data(); if (_e) { _o->w_v_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_v_data[_i] = _e->Get(_i); } } else { _o->w_v_data.resize(0); } }
+  { auto _e = b_v_data(); if (_e) { _o->b_v_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_v_data[_i] = _e->Get(_i); } } else { _o->b_v_data.resize(0); } }
+  { auto _e = w_o_data(); if (_e) { _o->w_o_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_o_data[_i] = _e->Get(_i); } } else { _o->w_o_data.resize(0); } }
+  { auto _e = b_o_data(); if (_e) { _o->b_o_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_o_data[_i] = _e->Get(_i); } } else { _o->b_o_data.resize(0); } }
+  { auto _e = alpha_q(); if (_e) { _o->alpha_q.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->alpha_q[_i] = _e->Get(_i); } } else { _o->alpha_q.resize(0); } }
+  { auto _e = alpha_k(); if (_e) { _o->alpha_k.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->alpha_k[_i] = _e->Get(_i); } } else { _o->alpha_k.resize(0); } }
+  { auto _e = d_model(); _o->d_model = _e; }
+  { auto _e = num_heads(); _o->num_heads = _e; }
+  { auto _e = num_kv_heads(); _o->num_kv_heads = _e; }
+  { auto _e = fuse_qkv(); _o->fuse_qkv = _e; }
+}
+
+inline ::flatbuffers::Offset<AttentionWeights> AttentionWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const AttentionWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateAttentionWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeights(::flatbuffers::FlatBufferBuilder &_fbb, const AttentionWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const AttentionWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _w_qkv_data = _o->w_qkv_data.size() ? _fbb.CreateVector(_o->w_qkv_data) : 0;
+  auto _b_qkv_data = _o->b_qkv_data.size() ? _fbb.CreateVector(_o->b_qkv_data) : 0;
+  auto _w_q_data = _o->w_q_data.size() ? _fbb.CreateVector(_o->w_q_data) : 0;
+  auto _b_q_data = _o->b_q_data.size() ? _fbb.CreateVector(_o->b_q_data) : 0;
+  auto _w_k_data = _o->w_k_data.size() ? _fbb.CreateVector(_o->w_k_data) : 0;
+  auto _b_k_data = _o->b_k_data.size() ? _fbb.CreateVector(_o->b_k_data) : 0;
+  auto _w_v_data = _o->w_v_data.size() ? _fbb.CreateVector(_o->w_v_data) : 0;
+  auto _b_v_data = _o->b_v_data.size() ? _fbb.CreateVector(_o->b_v_data) : 0;
+  auto _w_o_data = _fbb.CreateVector(_o->w_o_data);
+  auto _b_o_data = _fbb.CreateVector(_o->b_o_data);
+  auto _alpha_q = _o->alpha_q.size() ? _fbb.CreateVector(_o->alpha_q) : 0;
+  auto _alpha_k = _o->alpha_k.size() ? _fbb.CreateVector(_o->alpha_k) : 0;
+  auto _d_model = _o->d_model;
+  auto _num_heads = _o->num_heads;
+  auto _num_kv_heads = _o->num_kv_heads;
+  auto _fuse_qkv = _o->fuse_qkv;
+  return GRIMTransformer::CreateAttentionWeights(
+      _fbb,
+      _w_qkv_data,
+      _b_qkv_data,
+      _w_q_data,
+      _b_q_data,
+      _w_k_data,
+      _b_k_data,
+      _w_v_data,
+      _b_v_data,
+      _w_o_data,
+      _b_o_data,
+      _alpha_q,
+      _alpha_k,
+      _d_model,
+      _num_heads,
+      _num_kv_heads,
+      _fuse_qkv);
+}
+
+inline FFNWeightsT *FFNWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<FFNWeightsT>(new FFNWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void FFNWeights::UnPackTo(FFNWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = w1_data(); if (_e) { _o->w1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w1_data[_i] = _e->Get(_i); } } else { _o->w1_data.resize(0); } }
+  { auto _e = b1_data(); if (_e) { _o->b1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b1_data[_i] = _e->Get(_i); } } else { _o->b1_data.resize(0); } }
+  { auto _e = w2_data(); if (_e) { _o->w2_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w2_data[_i] = _e->Get(_i); } } else { _o->w2_data.resize(0); } }
+  { auto _e = b2_data(); if (_e) { _o->b2_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b2_data[_i] = _e->Get(_i); } } else { _o->b2_data.resize(0); } }
+  { auto _e = d_model(); _o->d_model = _e; }
+  { auto _e = d_ff(); _o->d_ff = _e; }
+  { auto _e = w_gate_data(); if (_e) { _o->w_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_gate_data[_i] = _e->Get(_i); } } else { _o->w_gate_data.resize(0); } }
+}
+
+inline ::flatbuffers::Offset<FFNWeights> FFNWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateFFNWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const FFNWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _w1_data = _fbb.CreateVector(_o->w1_data);
+  auto _b1_data = _o->b1_data.size() ? _fbb.CreateVector(_o->b1_data) : 0;
+  auto _w2_data = _fbb.CreateVector(_o->w2_data);
+  auto _b2_data = _fbb.CreateVector(_o->b2_data);
+  auto _d_model = _o->d_model;
+  auto _d_ff = _o->d_ff;
+  auto _w_gate_data = _o->w_gate_data.size() ? _fbb.CreateVector(_o->w_gate_data) : 0;
+  return GRIMTransformer::CreateFFNWeights(
+      _fbb,
+      _w1_data,
+      _b1_data,
+      _w2_data,
+      _b2_data,
+      _d_model,
+      _d_ff,
+      _w_gate_data);
+}
+
+inline EncoderLayerWeightsT::EncoderLayerWeightsT(const EncoderLayerWeightsT &o)
+      : attention((o.attention) ? new GRIMTransformer::AttentionWeightsT(*o.attention) : nullptr),
+        ffn((o.ffn) ? new GRIMTransformer::FFNWeightsT(*o.ffn) : nullptr),
+        rms1((o.rms1) ? new GRIMTransformer::RMSNormWeightsT(*o.rms1) : nullptr),
+        rms2((o.rms2) ? new GRIMTransformer::RMSNormWeightsT(*o.rms2) : nullptr),
+        layer_scale1(o.layer_scale1),
+        layer_scale2(o.layer_scale2),
+        rms_post_attn((o.rms_post_attn) ? new GRIMTransformer::RMSNormWeightsT(*o.rms_post_attn) : nullptr),
+        rms_post_ffn((o.rms_post_ffn) ? new GRIMTransformer::RMSNormWeightsT(*o.rms_post_ffn) : nullptr),
+        layer_id(o.layer_id) {
+}
+
+inline EncoderLayerWeightsT &EncoderLayerWeightsT::operator=(EncoderLayerWeightsT o) FLATBUFFERS_NOEXCEPT {
+  std::swap(attention, o.attention);
+  std::swap(ffn, o.ffn);
+  std::swap(rms1, o.rms1);
+  std::swap(rms2, o.rms2);
+  std::swap(layer_scale1, o.layer_scale1);
+  std::swap(layer_scale2, o.layer_scale2);
+  std::swap(rms_post_attn, o.rms_post_attn);
+  std::swap(rms_post_ffn, o.rms_post_ffn);
+  std::swap(layer_id, o.layer_id);
+  return *this;
+}
+
+inline EncoderLayerWeightsT *EncoderLayerWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<EncoderLayerWeightsT>(new EncoderLayerWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void EncoderLayerWeights::UnPackTo(EncoderLayerWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = attention(); if (_e) { if(_o->attention) { _e->UnPackTo(_o->attention.get(), _resolver); } else { _o->attention = std::unique_ptr<GRIMTransformer::AttentionWeightsT>(_e->UnPack(_resolver)); } } else if (_o->attention) { _o->attention.reset(); } }
+  { auto _e = ffn(); if (_e) { if(_o->ffn) { _e->UnPackTo(_o->ffn.get(), _resolver); } else { _o->ffn = std::unique_ptr<GRIMTransformer::FFNWeightsT>(_e->UnPack(_resolver)); } } else if (_o->ffn) { _o->ffn.reset(); } }
+  { auto _e = rms1(); if (_e) { if(_o->rms1) { _e->UnPackTo(_o->rms1.get(), _resolver); } else { _o->rms1 = std::unique_ptr<GRIMTransformer::RMSNormWeightsT>(_e->UnPack(_resolver)); } } else if (_o->rms1) { _o->rms1.reset(); } }
+  { auto _e = rms2(); if (_e) { if(_o->rms2) { _e->UnPackTo(_o->rms2.get(), _resolver); } else { _o->rms2 = std::unique_ptr<GRIMTransformer::RMSNormWeightsT>(_e->UnPack(_resolver)); } } else if (_o->rms2) { _o->rms2.reset(); } }
+  { auto _e = layer_scale1(); if (_e) { _o->layer_scale1.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->layer_scale1[_i] = _e->Get(_i); } } else { _o->layer_scale1.resize(0); } }
+  { auto _e = layer_scale2(); if (_e) { _o->layer_scale2.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->layer_scale2[_i] = _e->Get(_i); } } else { _o->layer_scale2.resize(0); } }
+  { auto _e = rms_post_attn(); if (_e) { if(_o->rms_post_attn) { _e->UnPackTo(_o->rms_post_attn.get(), _resolver); } else { _o->rms_post_attn = std::unique_ptr<GRIMTransformer::RMSNormWeightsT>(_e->UnPack(_resolver)); } } else if (_o->rms_post_attn) { _o->rms_post_attn.reset(); } }
+  { auto _e = rms_post_ffn(); if (_e) { if(_o->rms_post_ffn) { _e->UnPackTo(_o->rms_post_ffn.get(), _resolver); } else { _o->rms_post_ffn = std::unique_ptr<GRIMTransformer::RMSNormWeightsT>(_e->UnPack(_resolver)); } } else if (_o->rms_post_ffn) { _o->rms_post_ffn.reset(); } }
+  { auto _e = layer_id(); _o->layer_id = _e; }
+}
+
+inline ::flatbuffers::Offset<EncoderLayerWeights> EncoderLayerWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const EncoderLayerWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateEncoderLayerWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeights(::flatbuffers::FlatBufferBuilder &_fbb, const EncoderLayerWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const EncoderLayerWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _attention = _o->attention ? CreateAttentionWeights(_fbb, _o->attention.get(), _rehasher) : 0;
+  auto _ffn = _o->ffn ? CreateFFNWeights(_fbb, _o->ffn.get(), _rehasher) : 0;
+  auto _rms1 = _o->rms1 ? CreateRMSNormWeights(_fbb, _o->rms1.get(), _rehasher) : 0;
+  auto _rms2 = _o->rms2 ? CreateRMSNormWeights(_fbb, _o->rms2.get(), _rehasher) : 0;
+  auto _layer_scale1 = _o->layer_scale1.size() ? _fbb.CreateVector(_o->layer_scale1) : 0;
+  auto _layer_scale2 = _o->layer_scale2.size() ? _fbb.CreateVector(_o->layer_scale2) : 0;
+  auto _rms_post_attn = _o->rms_post_attn ? CreateRMSNormWeights(_fbb, _o->rms_post_attn.get(), _rehasher) : 0;
+  auto _rms_post_ffn = _o->rms_post_ffn ? CreateRMSNormWeights(_fbb, _o->rms_post_ffn.get(), _rehasher) : 0;
+  auto _layer_id = _o->layer_id;
+  return GRIMTransformer::CreateEncoderLayerWeights(
+      _fbb,
+      _attention,
+      _ffn,
+      _rms1,
+      _rms2,
+      _layer_scale1,
+      _layer_scale2,
+      _rms_post_attn,
+      _rms_post_ffn,
+      _layer_id);
+}
+
+inline EmbeddingWeightsT *EmbeddingWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<EmbeddingWeightsT>(new EmbeddingWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void EmbeddingWeights::UnPackTo(EmbeddingWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = token_embeddings(); if (_e) { _o->token_embeddings.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->token_embeddings[_i] = _e->Get(_i); } } else { _o->token_embeddings.resize(0); } }
+  { auto _e = positional_encodings(); if (_e) { _o->positional_encodings.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->positional_encodings[_i] = _e->Get(_i); } } else { _o->positional_encodings.resize(0); } }
+  { auto _e = rms_gamma(); if (_e) { _o->rms_gamma.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->rms_gamma[_i] = _e->Get(_i); } } else { _o->rms_gamma.resize(0); } }
+  { auto _e = vocab_size(); _o->vocab_size = _e; }
+  { auto _e = d_model(); _o->d_model = _e; }
+  { auto _e = max_seq_len(); _o->max_seq_len = _e; }
+  { auto _e = use_rms_norm(); _o->use_rms_norm = _e; }
+}
+
+inline ::flatbuffers::Offset<EmbeddingWeights> EmbeddingWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const EmbeddingWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateEmbeddingWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<EmbeddingWeights> CreateEmbeddingWeights(::flatbuffers::FlatBufferBuilder &_fbb, const EmbeddingWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const EmbeddingWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _token_embeddings = _fbb.CreateVector(_o->token_embeddings);
+  auto _positional_encodings = _o->positional_encodings.size() ? _fbb.CreateVector(_o->positional_encodings) : 0;
+  auto _rms_gamma = _o->rms_gamma.size() ? _fbb.CreateVector(_o->rms_gamma) : 0;
+  auto _vocab_size = _o->vocab_size;
+  auto _d_model = _o->d_model;
+  auto _max_seq_len = _o->max_seq_len;
+  auto _use_rms_norm = _o->use_rms_norm;
+  return GRIMTransformer::CreateEmbeddingWeights(
+      _fbb,
+      _token_embeddings,
+      _positional_encodings,
+      _rms_gamma,
+      _vocab_size,
+      _d_model,
+      _max_seq_len,
+      _use_rms_norm);
+}
+
+inline LMHeadWeightsT *LMHeadWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<LMHeadWeightsT>(new LMHeadWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void LMHeadWeights::UnPackTo(LMHeadWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = projection_data(); if (_e) { _o->projection_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->projection_data[_i] = _e->Get(_i); } } else { _o->projection_data.resize(0); } }
+  { auto _e = bias_data(); if (_e) { _o->bias_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->bias_data[_i] = _e->Get(_i); } } else { _o->bias_data.resize(0); } }
+  { auto _e = d_model(); _o->d_model = _e; }
+  { auto _e = vocab_size(); _o->vocab_size = _e; }
+  { auto _e = tie_embeddings(); _o->tie_embeddings = _e; }
+  { auto _e = use_bias(); _o->use_bias = _e; }
+}
+
+inline ::flatbuffers::Offset<LMHeadWeights> LMHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateLMHeadWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const LMHeadWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _projection_data = _o->projection_data.size() ? _fbb.CreateVector(_o->projection_data) : 0;
+  auto _bias_data = _o->bias_data.size() ? _fbb.CreateVector(_o->bias_data) : 0;
+  auto _d_model = _o->d_model;
+  auto _vocab_size = _o->vocab_size;
+  auto _tie_embeddings = _o->tie_embeddings;
+  auto _use_bias = _o->use_bias;
+  return GRIMTransformer::CreateLMHeadWeights(
+      _fbb,
+      _projection_data,
+      _bias_data,
+      _d_model,
+      _vocab_size,
+      _tie_embeddings,
+      _use_bias);
+}
+
+inline NumericHeadWeightsT *NumericHeadWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<NumericHeadWeightsT>(new NumericHeadWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void NumericHeadWeights::UnPackTo(NumericHeadWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = projection_data(); if (_e) { _o->projection_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->projection_data[_i] = _e->Get(_i); } } else { _o->projection_data.resize(0); } }
+  { auto _e = bias_data(); if (_e) { _o->bias_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->bias_data[_i] = _e->Get(_i); } } else { _o->bias_data.resize(0); } }
+  { auto _e = d_model(); _o->d_model = _e; }
+  { auto _e = use_bias(); _o->use_bias = _e; }
+}
+
+inline ::flatbuffers::Offset<NumericHeadWeights> NumericHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateNumericHeadWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const NumericHeadWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _projection_data = _o->projection_data.size() ? _fbb.CreateVector(_o->projection_data) : 0;
+  auto _bias_data = _o->bias_data.size() ? _fbb.CreateVector(_o->bias_data) : 0;
+  auto _d_model = _o->d_model;
+  auto _use_bias = _o->use_bias;
+  return GRIMTransformer::CreateNumericHeadWeights(
+      _fbb,
+      _projection_data,
+      _bias_data,
+      _d_model,
+      _use_bias);
+}
+
+inline ScratchBlockWeightsT *ScratchBlockWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<ScratchBlockWeightsT>(new ScratchBlockWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void ScratchBlockWeights::UnPackTo(ScratchBlockWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = atom_type_embeddings(); if (_e) { _o->atom_type_embeddings.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->atom_type_embeddings[_i] = _e->Get(_i); } } else { _o->atom_type_embeddings.resize(0); } }
+  { auto _e = atom_projection(); if (_e) { _o->atom_projection.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->atom_projection[_i] = _e->Get(_i); } } else { _o->atom_projection.resize(0); } }
+  { auto _e = text_feature_projection(); if (_e) { _o->text_feature_projection.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->text_feature_projection[_i] = _e->Get(_i); } } else { _o->text_feature_projection.resize(0); } }
+  { auto _e = num_atom_types(); _o->num_atom_types = _e; }
+  { auto _e = atom_embedding_dim(); _o->atom_embedding_dim = _e; }
+  { auto _e = d_model(); _o->d_model = _e; }
+  { auto _e = atom_scale(); _o->atom_scale = _e; }
+  { auto _e = enabled(); _o->enabled = _e; }
+}
+
+inline ::flatbuffers::Offset<ScratchBlockWeights> ScratchBlockWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ScratchBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateScratchBlockWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ScratchBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ScratchBlockWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _atom_type_embeddings = _o->atom_type_embeddings.size() ? _fbb.CreateVector(_o->atom_type_embeddings) : 0;
+  auto _atom_projection = _o->atom_projection.size() ? _fbb.CreateVector(_o->atom_projection) : 0;
+  auto _text_feature_projection = _o->text_feature_projection.size() ? _fbb.CreateVector(_o->text_feature_projection) : 0;
+  auto _num_atom_types = _o->num_atom_types;
+  auto _atom_embedding_dim = _o->atom_embedding_dim;
+  auto _d_model = _o->d_model;
+  auto _atom_scale = _o->atom_scale;
+  auto _enabled = _o->enabled;
+  return GRIMTransformer::CreateScratchBlockWeights(
+      _fbb,
+      _atom_type_embeddings,
+      _atom_projection,
+      _text_feature_projection,
+      _num_atom_types,
+      _atom_embedding_dim,
+      _d_model,
+      _atom_scale,
+      _enabled);
+}
+
+inline ModelConfigT *ModelConfig::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<ModelConfigT>(new ModelConfigT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void ModelConfig::UnPackTo(ModelConfigT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = vocab_size(); _o->vocab_size = _e; }
+  { auto _e = d_model(); _o->d_model = _e; }
+  { auto _e = num_layers(); _o->num_layers = _e; }
+  { auto _e = num_heads(); _o->num_heads = _e; }
+  { auto _e = num_kv_heads(); _o->num_kv_heads = _e; }
+  { auto _e = d_ff(); _o->d_ff = _e; }
+  { auto _e = max_seq_len(); _o->max_seq_len = _e; }
+  { auto _e = dropout_rate(); _o->dropout_rate = _e; }
+  { auto _e = attention_dropout(); _o->attention_dropout = _e; }
+  { auto _e = positional_encoding(); _o->positional_encoding = _e; }
+  { auto _e = use_alibi(); _o->use_alibi = _e; }
+  { auto _e = causal_mask(); _o->causal_mask = _e; }
+  { auto _e = use_pre_norm(); _o->use_pre_norm = _e; }
+  { auto _e = fuse_qkv(); _o->fuse_qkv = _e; }
+  { auto _e = tie_embeddings(); _o->tie_embeddings = _e; }
+  { auto _e = use_bias(); _o->use_bias = _e; }
+}
+
+inline ::flatbuffers::Offset<ModelConfig> ModelConfig::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ModelConfigT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateModelConfig(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<ModelConfig> CreateModelConfig(::flatbuffers::FlatBufferBuilder &_fbb, const ModelConfigT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ModelConfigT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _vocab_size = _o->vocab_size;
+  auto _d_model = _o->d_model;
+  auto _num_layers = _o->num_layers;
+  auto _num_heads = _o->num_heads;
+  auto _num_kv_heads = _o->num_kv_heads;
+  auto _d_ff = _o->d_ff;
+  auto _max_seq_len = _o->max_seq_len;
+  auto _dropout_rate = _o->dropout_rate;
+  auto _attention_dropout = _o->attention_dropout;
+  auto _positional_encoding = _o->positional_encoding;
+  auto _use_alibi = _o->use_alibi;
+  auto _causal_mask = _o->causal_mask;
+  auto _use_pre_norm = _o->use_pre_norm;
+  auto _fuse_qkv = _o->fuse_qkv;
+  auto _tie_embeddings = _o->tie_embeddings;
+  auto _use_bias = _o->use_bias;
+  return GRIMTransformer::CreateModelConfig(
+      _fbb,
+      _vocab_size,
+      _d_model,
+      _num_layers,
+      _num_heads,
+      _num_kv_heads,
+      _d_ff,
+      _max_seq_len,
+      _dropout_rate,
+      _attention_dropout,
+      _positional_encoding,
+      _use_alibi,
+      _causal_mask,
+      _use_pre_norm,
+      _fuse_qkv,
+      _tie_embeddings,
+      _use_bias);
+}
+
+inline LossWeightingWeightsT *LossWeightingWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<LossWeightingWeightsT>(new LossWeightingWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void LossWeightingWeights::UnPackTo(LossWeightingWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = log_var_text(); _o->log_var_text = _e; }
+  { auto _e = log_var_numeric(); _o->log_var_numeric = _e; }
+}
+
+inline ::flatbuffers::Offset<LossWeightingWeights> LossWeightingWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LossWeightingWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateLossWeightingWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<LossWeightingWeights> CreateLossWeightingWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LossWeightingWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const LossWeightingWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _log_var_text = _o->log_var_text;
+  auto _log_var_numeric = _o->log_var_numeric;
+  return GRIMTransformer::CreateLossWeightingWeights(
+      _fbb,
+      _log_var_text,
+      _log_var_numeric);
+}
+
+inline TrainingMetadataT *TrainingMetadata::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<TrainingMetadataT>(new TrainingMetadataT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void TrainingMetadata::UnPackTo(TrainingMetadataT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = optimizer(); if (_e) _o->optimizer = _e->str(); }
+  { auto _e = learning_rate(); _o->learning_rate = _e; }
+  { auto _e = batch_size(); _o->batch_size = _e; }
+  { auto _e = num_epochs(); _o->num_epochs = _e; }
+  { auto _e = training_steps(); _o->training_steps = _e; }
+  { auto _e = final_train_loss(); _o->final_train_loss = _e; }
+  { auto _e = final_val_loss(); _o->final_val_loss = _e; }
+  { auto _e = best_val_loss(); _o->best_val_loss = _e; }
+  { auto _e = gradient_norm(); _o->gradient_norm = _e; }
+  { auto _e = timestamp(); _o->timestamp = _e; }
+  { auto _e = training_duration_seconds(); _o->training_duration_seconds = _e; }
+  { auto _e = model_name(); if (_e) _o->model_name = _e->str(); }
+}
+
+inline ::flatbuffers::Offset<TrainingMetadata> TrainingMetadata::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TrainingMetadataT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateTrainingMetadata(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<TrainingMetadata> CreateTrainingMetadata(::flatbuffers::FlatBufferBuilder &_fbb, const TrainingMetadataT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const TrainingMetadataT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _optimizer = _o->optimizer.empty() ? 0 : _fbb.CreateString(_o->optimizer);
+  auto _learning_rate = _o->learning_rate;
+  auto _batch_size = _o->batch_size;
+  auto _num_epochs = _o->num_epochs;
+  auto _training_steps = _o->training_steps;
+  auto _final_train_loss = _o->final_train_loss;
+  auto _final_val_loss = _o->final_val_loss;
+  auto _best_val_loss = _o->best_val_loss;
+  auto _gradient_norm = _o->gradient_norm;
+  auto _timestamp = _o->timestamp;
+  auto _training_duration_seconds = _o->training_duration_seconds;
+  auto _model_name = _o->model_name.empty() ? 0 : _fbb.CreateString(_o->model_name);
+  return GRIMTransformer::CreateTrainingMetadata(
+      _fbb,
+      _optimizer,
+      _learning_rate,
+      _batch_size,
+      _num_epochs,
+      _training_steps,
+      _final_train_loss,
+      _final_val_loss,
+      _best_val_loss,
+      _gradient_norm,
+      _timestamp,
+      _training_duration_seconds,
+      _model_name);
+}
+
+inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
+      : version(o.version),
+        config((o.config) ? new GRIMTransformer::ModelConfigT(*o.config) : nullptr),
+        embeddings((o.embeddings) ? new GRIMTransformer::EmbeddingWeightsT(*o.embeddings) : nullptr),
+        lm_head((o.lm_head) ? new GRIMTransformer::LMHeadWeightsT(*o.lm_head) : nullptr),
+        numeric_head((o.numeric_head) ? new GRIMTransformer::NumericHeadWeightsT(*o.numeric_head) : nullptr),
+        scratch_block((o.scratch_block) ? new GRIMTransformer::ScratchBlockWeightsT(*o.scratch_block) : nullptr),
+        final_rms_gamma(o.final_rms_gamma),
+        loss_weighting((o.loss_weighting) ? new GRIMTransformer::LossWeightingWeightsT(*o.loss_weighting) : nullptr),
+        training_metadata((o.training_metadata) ? new GRIMTransformer::TrainingMetadataT(*o.training_metadata) : nullptr),
+        checksum_crc32(o.checksum_crc32),
+        checksum_xxhash64(o.checksum_xxhash64),
+        creation_timestamp(o.creation_timestamp),
+        last_modified_timestamp(o.last_modified_timestamp) {
+  encoder_layers.reserve(o.encoder_layers.size());
+  for (const auto &encoder_layers_ : o.encoder_layers) { encoder_layers.emplace_back((encoder_layers_) ? new GRIMTransformer::EncoderLayerWeightsT(*encoder_layers_) : nullptr); }
+}
+
+inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLATBUFFERS_NOEXCEPT {
+  std::swap(version, o.version);
+  std::swap(config, o.config);
+  std::swap(embeddings, o.embeddings);
+  std::swap(encoder_layers, o.encoder_layers);
+  std::swap(lm_head, o.lm_head);
+  std::swap(numeric_head, o.numeric_head);
+  std::swap(scratch_block, o.scratch_block);
+  std::swap(final_rms_gamma, o.final_rms_gamma);
+  std::swap(loss_weighting, o.loss_weighting);
+  std::swap(training_metadata, o.training_metadata);
+  std::swap(checksum_crc32, o.checksum_crc32);
+  std::swap(checksum_xxhash64, o.checksum_xxhash64);
+  std::swap(creation_timestamp, o.creation_timestamp);
+  std::swap(last_modified_timestamp, o.last_modified_timestamp);
+  return *this;
+}
+
+inline TransformerModelT *TransformerModel::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<TransformerModelT>(new TransformerModelT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = version(); _o->version = _e; }
+  { auto _e = config(); if (_e) { if(_o->config) { _e->UnPackTo(_o->config.get(), _resolver); } else { _o->config = std::unique_ptr<GRIMTransformer::ModelConfigT>(_e->UnPack(_resolver)); } } else if (_o->config) { _o->config.reset(); } }
+  { auto _e = embeddings(); if (_e) { if(_o->embeddings) { _e->UnPackTo(_o->embeddings.get(), _resolver); } else { _o->embeddings = std::unique_ptr<GRIMTransformer::EmbeddingWeightsT>(_e->UnPack(_resolver)); } } else if (_o->embeddings) { _o->embeddings.reset(); } }
+  { auto _e = encoder_layers(); if (_e) { _o->encoder_layers.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->encoder_layers[_i]) { _e->Get(_i)->UnPackTo(_o->encoder_layers[_i].get(), _resolver); } else { _o->encoder_layers[_i] = std::unique_ptr<GRIMTransformer::EncoderLayerWeightsT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->encoder_layers.resize(0); } }
+  { auto _e = lm_head(); if (_e) { if(_o->lm_head) { _e->UnPackTo(_o->lm_head.get(), _resolver); } else { _o->lm_head = std::unique_ptr<GRIMTransformer::LMHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->lm_head) { _o->lm_head.reset(); } }
+  { auto _e = numeric_head(); if (_e) { if(_o->numeric_head) { _e->UnPackTo(_o->numeric_head.get(), _resolver); } else { _o->numeric_head = std::unique_ptr<GRIMTransformer::NumericHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->numeric_head) { _o->numeric_head.reset(); } }
+  { auto _e = scratch_block(); if (_e) { if(_o->scratch_block) { _e->UnPackTo(_o->scratch_block.get(), _resolver); } else { _o->scratch_block = std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->scratch_block) { _o->scratch_block.reset(); } }
+  { auto _e = final_rms_gamma(); if (_e) { _o->final_rms_gamma.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->final_rms_gamma[_i] = _e->Get(_i); } } else { _o->final_rms_gamma.resize(0); } }
+  { auto _e = loss_weighting(); if (_e) { if(_o->loss_weighting) { _e->UnPackTo(_o->loss_weighting.get(), _resolver); } else { _o->loss_weighting = std::unique_ptr<GRIMTransformer::LossWeightingWeightsT>(_e->UnPack(_resolver)); } } else if (_o->loss_weighting) { _o->loss_weighting.reset(); } }
+  { auto _e = training_metadata(); if (_e) { if(_o->training_metadata) { _e->UnPackTo(_o->training_metadata.get(), _resolver); } else { _o->training_metadata = std::unique_ptr<GRIMTransformer::TrainingMetadataT>(_e->UnPack(_resolver)); } } else if (_o->training_metadata) { _o->training_metadata.reset(); } }
+  { auto _e = checksum_crc32(); _o->checksum_crc32 = _e; }
+  { auto _e = checksum_xxhash64(); _o->checksum_xxhash64 = _e; }
+  { auto _e = creation_timestamp(); _o->creation_timestamp = _e; }
+  { auto _e = last_modified_timestamp(); _o->last_modified_timestamp = _e; }
+}
+
+inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateTransformerModel(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const TransformerModelT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _version = _o->version;
+  auto _config = _o->config ? CreateModelConfig(_fbb, _o->config.get(), _rehasher) : 0;
+  auto _embeddings = _o->embeddings ? CreateEmbeddingWeights(_fbb, _o->embeddings.get(), _rehasher) : 0;
+  auto _encoder_layers = _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>> (_o->encoder_layers.size(), [](size_t i, _VectorArgs *__va) { return CreateEncoderLayerWeights(*__va->__fbb, __va->__o->encoder_layers[i].get(), __va->__rehasher); }, &_va );
+  auto _lm_head = _o->lm_head ? CreateLMHeadWeights(_fbb, _o->lm_head.get(), _rehasher) : 0;
+  auto _numeric_head = _o->numeric_head ? CreateNumericHeadWeights(_fbb, _o->numeric_head.get(), _rehasher) : 0;
+  auto _scratch_block = _o->scratch_block ? CreateScratchBlockWeights(_fbb, _o->scratch_block.get(), _rehasher) : 0;
+  auto _final_rms_gamma = _o->final_rms_gamma.size() ? _fbb.CreateVector(_o->final_rms_gamma) : 0;
+  auto _loss_weighting = _o->loss_weighting ? CreateLossWeightingWeights(_fbb, _o->loss_weighting.get(), _rehasher) : 0;
+  auto _training_metadata = _o->training_metadata ? CreateTrainingMetadata(_fbb, _o->training_metadata.get(), _rehasher) : 0;
+  auto _checksum_crc32 = _o->checksum_crc32;
+  auto _checksum_xxhash64 = _o->checksum_xxhash64;
+  auto _creation_timestamp = _o->creation_timestamp;
+  auto _last_modified_timestamp = _o->last_modified_timestamp;
+  return GRIMTransformer::CreateTransformerModel(
+      _fbb,
+      _version,
+      _config,
+      _embeddings,
+      _encoder_layers,
+      _lm_head,
+      _numeric_head,
+      _scratch_block,
+      _final_rms_gamma,
+      _loss_weighting,
+      _training_metadata,
+      _checksum_crc32,
+      _checksum_xxhash64,
+      _creation_timestamp,
+      _last_modified_timestamp);
+}
+
 inline const GRIMTransformer::TransformerModel *GetTransformerModel(const void *buf) {
   return ::flatbuffers::GetRoot<GRIMTransformer::TransformerModel>(buf);
 }
@@ -1969,6 +2968,18 @@ inline void FinishSizePrefixedTransformerModelBuffer(
     ::flatbuffers::FlatBufferBuilder &fbb,
     ::flatbuffers::Offset<GRIMTransformer::TransformerModel> root) {
   fbb.FinishSizePrefixed(root, TransformerModelIdentifier());
+}
+
+inline std::unique_ptr<GRIMTransformer::TransformerModelT> UnPackTransformerModel(
+    const void *buf,
+    const ::flatbuffers::resolver_function_t *res = nullptr) {
+  return std::unique_ptr<GRIMTransformer::TransformerModelT>(GetTransformerModel(buf)->UnPack(res));
+}
+
+inline std::unique_ptr<GRIMTransformer::TransformerModelT> UnPackSizePrefixedTransformerModel(
+    const void *buf,
+    const ::flatbuffers::resolver_function_t *res = nullptr) {
+  return std::unique_ptr<GRIMTransformer::TransformerModelT>(GetSizePrefixedTransformerModel(buf)->UnPack(res));
 }
 
 }  // namespace GRIMTransformer

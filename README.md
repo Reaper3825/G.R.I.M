@@ -153,10 +153,3 @@ Author / maintainer: see repository metadata (commits). For questions, open an i
 - Add CI that builds the project on Linux/macOS/Windows and runs basic smoke tests.
 
 ---
-
-If you'd like, I can also:
-- add badges (build / license / coverage),
-- include a short runnable example, or
-- generate a `CONTRIBUTING.md` and `LICENSE` for the repo.
-
-Thanks for building GRIM — tell me which follow-ups you'd like and I'll implement them.

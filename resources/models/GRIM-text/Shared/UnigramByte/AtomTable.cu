@@ -87,10 +87,7 @@ __global__ void kernelUnpackAtomNumerics(
     uint32_t type = types[idx];
     float val = numeric_values[idx];
     
-    // Check if integer type
-    bool is_int = (type == static_cast<uint32_t>(AtomType::ATOM_INTEGER) ||
-                   type == static_cast<uint32_t>(AtomType::ATOM_HEX) ||
-                   type == static_cast<uint32_t>(AtomType::ATOM_BINARY));
+    bool is_int = (type == static_cast<uint32_t>(AtomType::ATOM_NUM));
     
     is_integer[idx] = is_int;
     output_floats[idx] = val;
@@ -493,26 +490,8 @@ std::string_view trimWhitespace(std::string_view text) {
 }
 
 bool needsSerialization(AtomType type) {
-    switch (type) {
-        // These types benefit from normalized serialization
-        case AtomType::ATOM_URL:           // Normalize scheme/host
-        case AtomType::ATOM_EMAIL:         // Normalize case
-        case AtomType::ATOM_STRING_LITERAL: // Unescape sequences
-            return true;
-        
-        // These types: raw_text == parsed representation
-        case AtomType::ATOM_INTEGER:
-        case AtomType::ATOM_FLOAT:
-        case AtomType::ATOM_HEX:
-        case AtomType::ATOM_BINARY:
-        case AtomType::ATOM_DATE:
-        case AtomType::ATOM_TIME:
-        case AtomType::ATOM_IP_ADDRESS:
-        case AtomType::ATOM_PATH:
-        case AtomType::ATOM_IDENTIFIER:
-        default:
-            return false;  // Skip serialization - use raw_text
-    }
+    (void)type;
+    return false;
 }
 } // anonymous namespace
 
@@ -772,47 +751,18 @@ ParseResult AtomTable::parseAtom(AtomType type, const std::string& text) {
         parse_text = &trimmed_storage;
     }
 
-    switch (type) {
-        case AtomType::ATOM_INTEGER:
-            return parseInteger(*parse_text);
-            
-        case AtomType::ATOM_FLOAT:
-            return parseFloat(*parse_text);
-            
-        case AtomType::ATOM_HEX:
-            return parseHex(*parse_text);
-            
-        case AtomType::ATOM_BINARY:
-            return parseBinary(*parse_text);
-            
-        case AtomType::ATOM_URL:
-            return parseURL(*parse_text);
-            
-        case AtomType::ATOM_EMAIL:
-            return parseEmail(*parse_text);
-            
-        case AtomType::ATOM_PATH:
-            return parsePath(*parse_text);
-            
-        case AtomType::ATOM_DATE:
-            return parseDate(*parse_text);
-            
-        case AtomType::ATOM_TIME:
-            return parseTime(*parse_text);
-            
-        case AtomType::ATOM_IP_ADDRESS:
-            return parseIP(*parse_text);
-            
-        case AtomType::ATOM_STRING_LITERAL:
-            return parseStringLiteral(*parse_text);
-            
-        case AtomType::ATOM_IDENTIFIER:
-            return parseIdentifier(*parse_text);
-            
-        default:
-            // Return as generic
-            return ParseResult{true, AtomGeneric{*parse_text}, ""};
+    if (type == AtomType::ATOM_NUM) {
+        // Try integer first, then float, then hex, then binary
+        auto int_result = parseInteger(*parse_text);
+        if (int_result.success) return int_result;
+        auto float_result = parseFloat(*parse_text);
+        if (float_result.success) return float_result;
+        auto hex_result = parseHex(*parse_text);
+        if (hex_result.success) return hex_result;
+        auto bin_result = parseBinary(*parse_text);
+        if (bin_result.success) return bin_result;
     }
+    return ParseResult{true, AtomGeneric{*parse_text}, ""};
 }
 
 //--------------------------------------------------//
@@ -1623,32 +1573,8 @@ bool AtomTable::hasNumericValue(AtomType type) {
 //--------------------------------------------------//
 
 AtomCategory AtomTable::getCategoryForType(AtomType type) {
-    switch (type) {
-        case AtomType::ATOM_INTEGER:
-        case AtomType::ATOM_FLOAT:
-        case AtomType::ATOM_HEX:
-        case AtomType::ATOM_BINARY:
-            return AtomCategory::NUMERIC;
-            
-        case AtomType::ATOM_DATE:
-        case AtomType::ATOM_TIME:
-            return AtomCategory::TEMPORAL;
-            
-        case AtomType::ATOM_URL:
-        case AtomType::ATOM_EMAIL:
-        case AtomType::ATOM_PATH:
-        case AtomType::ATOM_IP_ADDRESS:
-            return AtomCategory::STRUCTURAL;
-            
-        case AtomType::ATOM_STRING_LITERAL:
-            return AtomCategory::STRING;
-            
-        case AtomType::ATOM_IDENTIFIER:
-            return AtomCategory::IDENTIFIER;
-            
-        default:
-            return AtomCategory::GENERIC;
-    }
+    if (type == AtomType::ATOM_NUM) return AtomCategory::NUMERIC;
+    return AtomCategory::GENERIC;
 }
 
 uint64_t AtomTable::computeHash(const AtomEntry& entry) const {
@@ -1725,34 +1651,6 @@ void AtomTable::packNumericValue(AtomEntry& entry, const AtomValue& parsed) {
         else if constexpr (std::is_same_v<T, AtomFloat>) {
             entry.numeric_value = static_cast<float>(arg.value);
             entry.flags = (arg.has_exponent ? 1 : 0) | (arg.exponent << 8);
-        }
-        else if constexpr (std::is_same_v<T, AtomURL>) {
-            entry.flags = arg.port > 0 ? arg.port : 0;
-        }
-        else if constexpr (std::is_same_v<T, AtomPath>) {
-            entry.flags = (arg.is_absolute ? 1 : 0) | (arg.is_windows ? 2 : 0);
-        }
-        else if constexpr (std::is_same_v<T, AtomDate>) {
-            entry.numeric_value = static_cast<float>(
-                arg.year * 10000 + arg.month * 100 + arg.day);
-            entry.flags = static_cast<uint32_t>(arg.format);
-        }
-        else if constexpr (std::is_same_v<T, AtomTime>) {
-            entry.numeric_value = static_cast<float>(
-                arg.hour * 10000 + arg.minute * 100 + arg.second);
-            entry.flags = (arg.is_24h ? 0 : 1) | (arg.is_pm ? 2 : 0);
-        }
-        else if constexpr (std::is_same_v<T, AtomIP>) {
-            uint32_t ip_val = (arg.octets[0] << 24) | (arg.octets[1] << 16) |
-                             (arg.octets[2] << 8) | arg.octets[3];
-            entry.numeric_value = static_cast<float>(ip_val);
-            entry.flags = arg.is_valid ? 1 : 0;
-        }
-        else if constexpr (std::is_same_v<T, AtomString>) {
-            entry.flags = (arg.quote_char == '"' ? 1 : 0) | (arg.has_escapes ? 2 : 0);
-        }
-        else if constexpr (std::is_same_v<T, AtomIdentifier>) {
-            entry.flags = static_cast<uint32_t>(arg.style);
         }
     }, parsed);
 }

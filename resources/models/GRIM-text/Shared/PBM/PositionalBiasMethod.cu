@@ -612,6 +612,19 @@ void launchRoPERotationGQA(
     const int threads_per_block = 256;
     const int blocks_seq = (seq_len + threads_per_block - 1) / threads_per_block;
     
+    // Drain any stale CUDA error from prior unchecked operations (split_qkv,
+    // BSM_to_BHSD conversions, cudaFree from temp tensor RAII destructors).
+    // Without this drain, cudaGetLastError() after the kernel launch reports
+    // the stale error, falsely blaming the RoPE kernel.
+    {
+        cudaError_t stale = cudaGetLastError();
+        if (stale != cudaSuccess) {
+            std::cerr << kTag << " WARNING: drained stale CUDA error before RoPE launch: "
+                      << cudaGetErrorString(stale)
+                      << " (code=" << static_cast<int>(stale) << ")" << std::endl;
+        }
+    }
+    
     // Launch for Q (with num_q_heads)
     {
         dim3 grid(blocks_seq, num_q_heads, batch_size);
@@ -623,10 +636,13 @@ void launchRoPERotationGQA(
             true  // Q pass
         );
         
-        // Check Q kernel launch immediately (Rule: per-kernel error check)
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            std::cerr << kTag << " Q rotation kernel launch error: " << cudaGetErrorString(err) << std::endl;
+            std::cerr << kTag << " Q rotation kernel launch error: " << cudaGetErrorString(err)
+                      << " (grid=(" << blocks_seq << "," << num_q_heads << "," << batch_size
+                      << ") block=" << threads_per_block
+                      << " seq=" << seq_len << " head_dim=" << head_dim
+                      << " rotary=" << rotary_dim << ")" << std::endl;
             return;
         }
     }
@@ -642,10 +658,12 @@ void launchRoPERotationGQA(
             false  // K pass
         );
         
-        // Check K kernel launch immediately
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            std::cerr << kTag << " K rotation kernel launch error: " << cudaGetErrorString(err) << std::endl;
+            std::cerr << kTag << " K rotation kernel launch error: " << cudaGetErrorString(err)
+                      << " (grid=(" << blocks_seq << "," << num_kv_heads << "," << batch_size
+                      << ") block=" << threads_per_block
+                      << " seq=" << seq_len << ")" << std::endl;
         }
     }
 }
@@ -692,6 +710,16 @@ void launchRoPERotationGQA_backward(
     const int threads_per_block = 256;
     const int blocks_seq = (seq_len + threads_per_block - 1) / threads_per_block;
     
+    // Drain stale CUDA errors (same rationale as forward launch)
+    {
+        cudaError_t stale = cudaGetLastError();
+        if (stale != cudaSuccess) {
+            std::cerr << kTag << " WARNING: drained stale CUDA error before RoPE backward: "
+                      << cudaGetErrorString(stale)
+                      << " (code=" << static_cast<int>(stale) << ")" << std::endl;
+        }
+    }
+    
     // ISSUE #119 FIX: Only launch kernel if the corresponding gradient pointer is valid.
     // The caller passes nullptr for one of grad_Q/grad_K to process them separately.
     // The kernel uses is_q_pass to select which pointer to dereference, so the other
@@ -708,7 +736,6 @@ void launchRoPERotationGQA_backward(
             true  // grad_Q pass
         );
         
-        // Check grad_Q kernel launch immediately (Rule: per-kernel error check)
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             std::cerr << kTag << " grad_Q backward kernel launch error: " << cudaGetErrorString(err) << std::endl;
@@ -727,7 +754,6 @@ void launchRoPERotationGQA_backward(
             false  // grad_K pass
         );
         
-        // Check grad_K kernel launch immediately
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             std::cerr << kTag << " grad_K backward kernel launch error: " << cudaGetErrorString(err) << std::endl;

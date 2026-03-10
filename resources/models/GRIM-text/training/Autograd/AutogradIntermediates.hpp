@@ -46,6 +46,7 @@ struct AutogradIntermediates {
     Tensor encoder_output_tensor;      // [total_tokens, d_model] - after final RMSNorm
     Tensor centered_encoder_output;    // [total_tokens, d_model] - Issue #127
     Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
+    Tensor numeric_head_output;        // [total_tokens, 2] - (log_magnitude, sign_logit)
     Tensor loss_tensor;                // Scalar loss driving backward
     
     // ═══════════════════════════════════════════════════════════════════════════
@@ -60,6 +61,7 @@ struct AutogradIntermediates {
         encoder_output_tensor = Tensor();
         centered_encoder_output = Tensor();
         logits_tensor = Tensor();
+        numeric_head_output = Tensor();
         loss_tensor = Tensor();
     }
     

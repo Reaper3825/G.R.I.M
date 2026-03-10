@@ -153,7 +153,7 @@ GradNormScratch* allocateGradNormScratch(size_t max_groups, cudaStream_t stream)
     return s;
 }
 
-GradNormStatus measureGradientNorms(
+GradNormStatus measureGradientNormsLaunch(
     const GRIM::ParameterGroup* groups,
     size_t num_groups,
     GradNormScratch* scratch,
@@ -199,7 +199,7 @@ GradNormStatus measureGradientNorms(
         return GradNormStatus::KERNEL_LAUNCH_FAILED;
     }
 
-    // Phase 2: D2H copy of per-group sum-of-squares
+    // Phase 2: D2H copy of per-group sum-of-squares (caller must sync and then call Finalize)
     err = cudaMemcpyAsync(scratch->h_partial_sums, scratch->d_partial_sums,
                           num_groups * sizeof(float), cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
@@ -207,20 +207,29 @@ GradNormStatus measureGradientNorms(
         return GradNormStatus::CUDA_ERROR;
     }
 
-    // Phase 3: Sync stream (wait for all GPU work + D2H to complete)
-    err = cudaStreamSynchronize(stream);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "[GradNorm] FATAL: cudaStreamSynchronize failed: %s\n", cudaGetErrorString(err));
-        return GradNormStatus::CUDA_ERROR;
+    return GradNormStatus::SUCCESS;
+}
+
+GradNormStatus measureGradientNormsFinalize(
+    const GRIM::ParameterGroup* groups,
+    size_t num_groups,
+    GradNormScratch* scratch
+) {
+    if (!scratch || !scratch->h_partial_sums || !scratch->h_metrics) {
+        return GradNormStatus::NOT_INITIALIZED;
+    }
+    if (!groups || num_groups == 0) {
+        return GradNormStatus::INVALID_PARAM;
     }
 
     // Phase 4: CPU finalization — per-type aggregation, NaN/Inf detection
     GradMetrics& m = *scratch->h_metrics;
     m = GradMetrics{};  // Zero everything
 
-    // Per-type accumulators (indexed by ParamGroupType enum: 0..5)
-    float type_sum_sq[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    int type_count[6] = {0, 0, 0, 0, 0, 0};
+    // Per-type accumulators (indexed by ParamGroupType enum: 0..6)
+    constexpr int kNumGroups = static_cast<int>(GRIM::ParamGroupType::COUNT);
+    float type_sum_sq[kNumGroups] = {};
+    int type_count[kNumGroups] = {};
 
     for (size_t g = 0; g < num_groups; ++g) {
         float sq = scratch->h_partial_sums[g];
@@ -249,7 +258,7 @@ GradNormStatus measureGradientNorms(
         if (sz == 0) continue;
 
         // Accumulate per-type
-        if (type_idx >= 0 && type_idx < 6) {
+        if (type_idx >= 0 && type_idx < kNumGroups) {
             type_sum_sq[type_idx] += sq;
             type_count[type_idx] += static_cast<int>(sz);
         }
@@ -262,11 +271,30 @@ GradNormStatus measureGradientNorms(
     m.ffn_sum_sq = type_sum_sq[3];            m.ffn_count = type_count[3];
     m.rmsnorm_sum_sq = type_sum_sq[4];        m.rmsnorm_count = type_count[4];
     m.scratchblock_sum_sq = type_sum_sq[5];   m.scratchblock_count = type_count[5];
+    m.numeric_head_sum_sq = type_sum_sq[6];   m.numeric_head_count = type_count[6];
 
     // Aggregate metrics
     m.groups_processed = static_cast<uint32_t>(num_groups);
 
     return GradNormStatus::SUCCESS;
+}
+
+GradNormStatus measureGradientNorms(
+    const GRIM::ParameterGroup* groups,
+    size_t num_groups,
+    GradNormScratch* scratch,
+    cudaStream_t stream
+) {
+    GradNormStatus st = measureGradientNormsLaunch(groups, num_groups, scratch, stream);
+    if (st != GradNormStatus::SUCCESS) {
+        return st;
+    }
+    cudaError_t err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[GradNorm] FATAL: cudaStreamSynchronize failed: %s\n", cudaGetErrorString(err));
+        return GradNormStatus::CUDA_ERROR;
+    }
+    return measureGradientNormsFinalize(groups, num_groups, scratch);
 }
 
 void freeGradNormScratch(GradNormScratch*& scratch) {

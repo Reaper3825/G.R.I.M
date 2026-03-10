@@ -7,7 +7,6 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
 #include <stdexcept>
 #include <string>
 

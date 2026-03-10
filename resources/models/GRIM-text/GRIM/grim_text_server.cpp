@@ -21,12 +21,14 @@
 
 #include "grim_language_model_cuda.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
+#include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include <iostream>
 #include <fstream>
 #include <filesystem>
 #include <memory>
 #include <chrono>
+#include <sstream>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include "../../control/ai_config_paths.hpp"
@@ -205,13 +207,12 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
         auto tokens = std::move(encoded.token_ids);
         auto numeric_values = std::move(encoded.token_numeric_values);
         auto atom_mask = std::move(encoded.token_atom_mask);
+        auto prompt_atom_table = encoded.atom_table;
+        auto atom_entry_ids = std::move(encoded.atom_entry_ids);
         auto end_encode = std::chrono::high_resolution_clock::now();
         auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_encode - start_encode).count();
         std::cout << " " << tokens.size() << " tokens (" << encode_ms << "ms)" << std::endl;
 
-        // CRITICAL: Remove EOS token from prompt if present
-        // The tokenizer adds EOS by default, but for generation we want the MODEL to generate EOS
-        // Having EOS in the prompt confuses the model's attention
         int eos_id = g_tokenizer->eosId();
         if (!tokens.empty() && tokens.back() == eos_id) {
             tokens.pop_back();
@@ -220,6 +221,9 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
             }
             if (!atom_mask.empty()) {
                 atom_mask.pop_back();
+            }
+            if (!atom_entry_ids.empty()) {
+                atom_entry_ids.pop_back();
             }
             std::cout << "[Generate] Removed EOS from prompt, now " << tokens.size() << " tokens" << std::endl;
         }
@@ -235,7 +239,8 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
 
         std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
         auto start_gen = std::chrono::high_resolution_clock::now();
-        auto results = g_model->generate(tokens, numeric_values, atom_mask, &gen_config);
+        auto results = g_model->generate(tokens, numeric_values, atom_mask, &gen_config,
+                                         prompt_atom_table, atom_entry_ids);
         auto end_gen = std::chrono::high_resolution_clock::now();
         auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
 
@@ -246,91 +251,55 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
 
         std::cout << "[Generate] Generated " << results[0].token_ids.size() << " tokens in " << gen_ms << "ms" << std::endl;
         std::cout << "[Generate] Tokens/sec: " << (results[0].token_ids.size() * 1000.0 / gen_ms) << std::endl;
-        
-        // DEBUG: Show all generated token IDs BEFORE decode
-        std::cout << "[Generate] Token IDs (before decode): ";
-        for (size_t i = 0; i < results[0].token_ids.size(); i++) {
-            std::cout << results[0].token_ids[i] << " ";
-        }
-        std::cout << std::endl;
 
         std::cout << "[Generate] Decoding..." << std::flush;
         auto start_decode = std::chrono::high_resolution_clock::now();
-        
-        // Atom resolver: converts atom tokens to symbolic representation
-        // Atoms are structural tokens (numbers, URLs, etc) injected by ScratchBlock during reasoning
-        auto atom_resolver = [](int token_id, GRIM::Tokenizer::AtomType type) -> std::string {
-            // Return atom type name for visibility
-            switch (type) {
-                case GRIM::Tokenizer::AtomType::ATOM_INTEGER: return "[INT]";
-                case GRIM::Tokenizer::AtomType::ATOM_FLOAT: return "[FLOAT]";
-                case GRIM::Tokenizer::AtomType::ATOM_HEX: return "[HEX]";
-                case GRIM::Tokenizer::AtomType::ATOM_BINARY: return "[BIN]";
-                case GRIM::Tokenizer::AtomType::ATOM_IDENTIFIER: return "[ID]";
-                case GRIM::Tokenizer::AtomType::ATOM_STRING_LITERAL: return "[STR]";
-                case GRIM::Tokenizer::AtomType::ATOM_REGEX: return "[REGEX]";
-                case GRIM::Tokenizer::AtomType::ATOM_URL: return "[URL]";
-                case GRIM::Tokenizer::AtomType::ATOM_EMAIL: return "[EMAIL]";
-                case GRIM::Tokenizer::AtomType::ATOM_PATH: return "[PATH]";
-                case GRIM::Tokenizer::AtomType::ATOM_DATE: return "[DATE]";
-                case GRIM::Tokenizer::AtomType::ATOM_TIME: return "[TIME]";
-                case GRIM::Tokenizer::AtomType::ATOM_IP_ADDRESS: return "[IP]";
-                case GRIM::Tokenizer::AtomType::ATOM_EQUATION: return "[EQN]";
-                case GRIM::Tokenizer::AtomType::ATOM_EXPRESSION: return "[EXPR]";
-                default: return "[ATOM]";
+
+        const auto& seq = results[0];
+        const GRIM::Tokenizer::AtomTable* atom_tbl = seq.context_atom_table.get();
+        std::string output;
+        for (size_t i = 0; i < seq.token_ids.size(); ++i) {
+            const int tid = seq.token_ids[i];
+
+            if (g_tokenizer->isByteToken(tid)) {
+                output.push_back(static_cast<char>(g_tokenizer->byteEncoder().tokenToByte(tid)));
+                continue;
             }
-        };
-        
-        std::string output = g_tokenizer->decodeWithAtoms(results[0].token_ids, atom_resolver);
+
+            if (g_tokenizer->isAtomToken(tid)) {
+                // Context atoms: use atom table raw text
+                if (atom_tbl && i < seq.atom_entry_ids.size() &&
+                    seq.atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
+                    const auto* entry = atom_tbl->getAtom(seq.atom_entry_ids[i]);
+                    if (entry) {
+                        output += atom_tbl->atomToString(*entry);
+                        continue;
+                    }
+                }
+
+                // Model-generated <NUM>: format the predicted numeric value
+                if (i < seq.token_atom_mask.size() && seq.token_atom_mask[i] != 0 &&
+                    i < seq.token_numeric_values.size()) {
+                    output += GRIM::Tokenizer::formatNumericValue(seq.token_numeric_values[i]);
+                    continue;
+                }
+
+                output += g_tokenizer->tokenToString(tid);
+                continue;
+            }
+
+            output += g_tokenizer->tokenToString(tid);
+        }
+
         auto end_decode = std::chrono::high_resolution_clock::now();
         auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_decode - start_decode).count();
         std::cout << " done (" << decode_ms << "ms)" << std::endl;
-        
-        // DEBUG: Show token IDs AFTER decode (should be same)
-        std::cout << "[Generate] Token IDs (after decode): ";
-        for (size_t i = 0; i < results[0].token_ids.size(); i++) {
-            std::cout << results[0].token_ids[i] << " ";
-        }
-        std::cout << std::endl;
 
         return output;
 
     } catch (const std::exception& e) {
         std::cout << "[Generate] EXCEPTION: " << e.what() << std::endl;
         return std::string("Error: ") + e.what();
-    }
-}
-
-//======================================================//
-//  Shared config override helper — applies sampling
-//  parameters from a JSON request body onto a
-//  GenerationConfig. Avoids duplicating the same logic
-//  in multiple endpoint handlers.
-//======================================================//
-void applyGenerationOverrides(const json& request, GenerationConfig& cfg)
-{
-    if (request.contains("max_tokens"))   cfg.max_new_tokens    = request["max_tokens"].get<int>();
-    if (request.contains("temperature"))  cfg.temperature       = request["temperature"].get<float>();
-    if (request.contains("top_p"))        cfg.top_p             = request["top_p"].get<float>();
-    if (request.contains("top_k"))        cfg.top_k             = request["top_k"].get<int>();
-    if (request.contains("min_p"))        cfg.min_p             = request["min_p"].get<float>();
-    if (request.contains("typical_p"))    cfg.typical_p         = request["typical_p"].get<float>();
-    if (request.contains("repetition_penalty"))  cfg.repetition_penalty  = request["repetition_penalty"].get<float>();
-    if (request.contains("frequency_penalty"))   cfg.frequency_penalty   = request["frequency_penalty"].get<float>();
-    if (request.contains("presence_penalty"))    cfg.presence_penalty    = request["presence_penalty"].get<float>();
-    if (request.contains("no_repeat_ngram_size")) cfg.no_repeat_ngram_size = request["no_repeat_ngram_size"].get<int>();
-    if (request.contains("seed"))         cfg.seed              = request["seed"].get<unsigned int>();
-    if (request.contains("enable_scratchblock_reasoning")) {
-        cfg.enable_scratchblock_reasoning = request["enable_scratchblock_reasoning"].get<bool>();
-    }
-    if (request.contains("strategy")) {
-        std::string strat = request["strategy"].get<std::string>();
-        if      (strat == "greedy")     { cfg.strategy = SamplingStrategy::GREEDY; cfg.do_sample = false; }
-        else if (strat == "top_k")        cfg.strategy = SamplingStrategy::TOP_K;
-        else if (strat == "top_p")        cfg.strategy = SamplingStrategy::TOP_P;
-        else if (strat == "min_p")        cfg.strategy = SamplingStrategy::MIN_P;
-        else if (strat == "typical")      cfg.strategy = SamplingStrategy::TYPICAL;
-        else if (strat == "top_k_top_p")  cfg.strategy = SamplingStrategy::TOP_K_TOP_P;
     }
 }
 
@@ -428,6 +397,8 @@ int main(int argc, char** argv)
         try {
             auto request = json::parse(req.body);
             std::string prompt = request.value("prompt", "");
+            int max_tokens = request.value("max_tokens", g_generation_defaults.max_new_tokens);
+            float temperature = request.value("temperature", g_generation_defaults.temperature);
 
             if (prompt.empty()) {
                 res.status = 400;
@@ -435,8 +406,35 @@ int main(int argc, char** argv)
                 return;
             }
 
+            // Build GenerationConfig from defaults + request overrides
             GenerationConfig gen_config = g_generation_defaults;
-            applyGenerationOverrides(request, gen_config);
+            gen_config.max_new_tokens = max_tokens;
+            gen_config.temperature = temperature;
+            
+            // Parse optional sampling parameters
+            if (request.contains("top_p")) gen_config.top_p = request["top_p"].get<float>();
+            if (request.contains("top_k")) gen_config.top_k = request["top_k"].get<int>();
+            if (request.contains("min_p")) gen_config.min_p = request["min_p"].get<float>();
+            if (request.contains("typical_p")) gen_config.typical_p = request["typical_p"].get<float>();
+            if (request.contains("repetition_penalty")) gen_config.repetition_penalty = request["repetition_penalty"].get<float>();
+            if (request.contains("frequency_penalty")) gen_config.frequency_penalty = request["frequency_penalty"].get<float>();
+            if (request.contains("presence_penalty")) gen_config.presence_penalty = request["presence_penalty"].get<float>();
+            if (request.contains("no_repeat_ngram_size")) gen_config.no_repeat_ngram_size = request["no_repeat_ngram_size"].get<int>();
+            if (request.contains("seed")) gen_config.seed = request["seed"].get<unsigned int>();
+            if (request.contains("enable_scratchblock_reasoning")) {
+                gen_config.enable_scratchblock_reasoning = request["enable_scratchblock_reasoning"].get<bool>();
+            }
+            
+            // Strategy override: "greedy", "top_k", "top_p", "min_p", "typical", "top_k_top_p"
+            if (request.contains("strategy")) {
+                std::string strat = request["strategy"].get<std::string>();
+                if (strat == "greedy") { gen_config.strategy = SamplingStrategy::GREEDY; gen_config.do_sample = false; }
+                else if (strat == "top_k") gen_config.strategy = SamplingStrategy::TOP_K;
+                else if (strat == "top_p") gen_config.strategy = SamplingStrategy::TOP_P;
+                else if (strat == "min_p") gen_config.strategy = SamplingStrategy::MIN_P;
+                else if (strat == "typical") gen_config.strategy = SamplingStrategy::TYPICAL;
+                else if (strat == "top_k_top_p") gen_config.strategy = SamplingStrategy::TOP_K_TOP_P;
+            }
 
             std::string text = generateResponse(prompt, gen_config);
 
@@ -471,9 +469,36 @@ int main(int argc, char** argv)
                 prompt += "Assistant: ";
             }
 
+            int max_tokens = request.value("max_tokens", g_generation_defaults.max_new_tokens);
+            float temperature = request.value("temperature", g_generation_defaults.temperature);
+
             // Build GenerationConfig from defaults + request overrides
             GenerationConfig gen_config = g_generation_defaults;
-            applyGenerationOverrides(request, gen_config);
+            gen_config.max_new_tokens = max_tokens;
+            gen_config.temperature = temperature;
+            
+            // Parse optional sampling parameters
+            if (request.contains("top_p")) gen_config.top_p = request["top_p"].get<float>();
+            if (request.contains("top_k")) gen_config.top_k = request["top_k"].get<int>();
+            if (request.contains("min_p")) gen_config.min_p = request["min_p"].get<float>();
+            if (request.contains("typical_p")) gen_config.typical_p = request["typical_p"].get<float>();
+            if (request.contains("repetition_penalty")) gen_config.repetition_penalty = request["repetition_penalty"].get<float>();
+            if (request.contains("frequency_penalty")) gen_config.frequency_penalty = request["frequency_penalty"].get<float>();
+            if (request.contains("presence_penalty")) gen_config.presence_penalty = request["presence_penalty"].get<float>();
+            if (request.contains("no_repeat_ngram_size")) gen_config.no_repeat_ngram_size = request["no_repeat_ngram_size"].get<int>();
+            if (request.contains("seed")) gen_config.seed = request["seed"].get<unsigned int>();
+            if (request.contains("enable_scratchblock_reasoning")) {
+                gen_config.enable_scratchblock_reasoning = request["enable_scratchblock_reasoning"].get<bool>();
+            }
+            if (request.contains("strategy")) {
+                std::string strat = request["strategy"].get<std::string>();
+                if (strat == "greedy") { gen_config.strategy = SamplingStrategy::GREEDY; gen_config.do_sample = false; }
+                else if (strat == "top_k") gen_config.strategy = SamplingStrategy::TOP_K;
+                else if (strat == "top_p") gen_config.strategy = SamplingStrategy::TOP_P;
+                else if (strat == "min_p") gen_config.strategy = SamplingStrategy::MIN_P;
+                else if (strat == "typical") gen_config.strategy = SamplingStrategy::TYPICAL;
+                else if (strat == "top_k_top_p") gen_config.strategy = SamplingStrategy::TOP_K_TOP_P;
+            }
 
             std::string text = generateResponse(prompt, gen_config);
 
@@ -489,157 +514,6 @@ int main(int argc, char** argv)
         } catch (const std::exception& e) {
             res.status = 500;
             std::cerr << "[/api/chat] ERROR: " << e.what() << std::endl;
-            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
-        }
-    });
-
-    //==================================================//
-    //  MMO ENVELOPE ENDPOINTS
-    //
-    //  These accept RequestEnvelope JSON and return
-    //  ResponseEnvelope JSON.  The Orchestrator's
-    //  direct-HTTP path uses these endpoints.
-    //
-    //  RequestEnvelope schema:
-    //    { schema_version, request_id, session_id, turn_id,
-    //      target_model_id, task, payload, scope?,
-    //      constraints?, output_schema?, max_length? }
-    //
-    //  ResponseEnvelope schema:
-    //    { schema_version, request_id, target_model_id,
-    //      status: "ok"|"refuse"|"error",
-    //      result?, refusal?, error? }
-    //==================================================//
-
-    // Helper: validate required RequestEnvelope fields and return
-    // a pre-populated ResponseEnvelope.  Returns false + sets
-    // HTTP 400 if validation fails.
-    auto validateEnvelope = [](const json& env, httplib::Response& res,
-                               const std::string& expected_task)
-        -> std::pair<bool, json> {
-
-        json resp;
-        resp["schema_version"]  = env.value("schema_version", 1u);
-        resp["request_id"]      = env.value("request_id", "");
-        resp["target_model_id"] = env.value("target_model_id", "");
-
-        auto require = [&](const char* field) -> bool {
-            if (!env.contains(field) || env[field].get<std::string>().empty()) {
-                resp["status"] = "error";
-                resp["error"]  = std::string("Missing required field: ") + field;
-                res.status = 400;
-                res.set_content(resp.dump(), "application/json");
-                return false;
-            }
-            return true;
-        };
-
-        if (!require("request_id"))      return {false, resp};
-        if (!require("target_model_id")) return {false, resp};
-        if (!require("task"))            return {false, resp};
-        if (!require("payload"))         return {false, resp};
-
-        std::string task = env["task"].get<std::string>();
-        if (task != expected_task) {
-            resp["status"] = "error";
-            resp["error"]  = "Expected task='" + expected_task
-                             + "' but got '" + task + "'";
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-            return {false, resp};
-        }
-
-        return {true, resp};
-    };
-
-    // ── /api/mmo/route ──────────────────────────────────
-    // Router model examines user prompt + metadata scope
-    // and produces a structured routing decision.
-    svr.Post("/api/mmo/route", [&, validateEnvelope](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto env = json::parse(req.body);
-            auto [valid, resp] = validateEnvelope(env, res, "route");
-            if (!valid) return;
-
-            std::string payload = env["payload"].get<std::string>();
-            std::string scope   = env.value("scope", "");
-
-            // Build the routing prompt: scope context + user payload
-            std::string prompt;
-            if (!scope.empty()) {
-                prompt += scope + "\n\n";
-            }
-            prompt += payload;
-
-            GenerationConfig gen_config = g_generation_defaults;
-            if (env.contains("max_length") && env["max_length"].get<int>() > 0)
-                gen_config.max_new_tokens = env["max_length"].get<int>();
-
-            std::string result = generateResponse(prompt, gen_config);
-
-            resp["status"] = "ok";
-            resp["result"] = result;
-            res.set_content(resp.dump(), "application/json");
-
-        } catch (const std::exception& e) {
-            res.status = 500;
-            std::cerr << "[/api/mmo/route] ERROR: " << e.what() << std::endl;
-            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
-        }
-    });
-
-    // ── /api/mmo/generate ───────────────────────────────
-    // Sub-model generation: payload is the composed_generation
-    // prompt (already fully structured by the router).
-    svr.Post("/api/mmo/generate", [&, validateEnvelope](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto env = json::parse(req.body);
-            auto [valid, resp] = validateEnvelope(env, res, "generate");
-            if (!valid) return;
-
-            std::string payload = env["payload"].get<std::string>();
-
-            GenerationConfig gen_config = g_generation_defaults;
-            if (env.contains("max_length") && env["max_length"].get<int>() > 0)
-                gen_config.max_new_tokens = env["max_length"].get<int>();
-
-            std::string result = generateResponse(payload, gen_config);
-
-            resp["status"] = "ok";
-            resp["result"] = result;
-            res.set_content(resp.dump(), "application/json");
-
-        } catch (const std::exception& e) {
-            res.status = 500;
-            std::cerr << "[/api/mmo/generate] ERROR: " << e.what() << std::endl;
-            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
-        }
-    });
-
-    // ── /api/mmo/synthesize ─────────────────────────────
-    // Router synthesizes the final response from sub-model
-    // output (payload = sub-model results JSON).
-    svr.Post("/api/mmo/synthesize", [&, validateEnvelope](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto env = json::parse(req.body);
-            auto [valid, resp] = validateEnvelope(env, res, "synthesize");
-            if (!valid) return;
-
-            std::string payload = env["payload"].get<std::string>();
-
-            GenerationConfig gen_config = g_generation_defaults;
-            if (env.contains("max_length") && env["max_length"].get<int>() > 0)
-                gen_config.max_new_tokens = env["max_length"].get<int>();
-
-            std::string result = generateResponse(payload, gen_config);
-
-            resp["status"] = "ok";
-            resp["result"] = result;
-            res.set_content(resp.dump(), "application/json");
-
-        } catch (const std::exception& e) {
-            res.status = 500;
-            std::cerr << "[/api/mmo/synthesize] ERROR: " << e.what() << std::endl;
             res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
         }
     });

@@ -18,7 +18,6 @@
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorConversion/TensorConversion.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"  // Centralized equation logging (Rule 21)
-#include "../../Shared/VerboseLogging.hpp"  // Compile-time diagnostic guards (Issue #151)
 #include <cuda_runtime.h>
 #include <cstdlib>
 #include <cstring>
@@ -306,11 +305,6 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
     W_qkv_.ensure_grad();
     Tensor::xavier_uniform_(W_qkv_, seed + 0, stream);
 
-    // Issue #106: Scale QKV weights by 1/sqrt(d_model) to prevent initial LSE explosion.
-    // Without this, coherent summation causes attention scores to start saturated.
-    // Expected output norm ~8, actual without scaling ~125.
-    scaleInplace(W_qkv_, 1.0f / std::sqrt(static_cast<float>(d_model)));
-    
     if (config_.use_bias) {
         b_qkv_ = Tensor::zeros({qkv_out_dim}, stream, "enc_b_qkv_own");
         b_qkv_.requires_grad_();
@@ -368,24 +362,6 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
                         cudaMemcpyHostToDevice, stream);
     }
     
-    //==================================================//
-    //  QK-Norm per-head alpha (Dehghani et al. 2023)
-    //  Initialized to 1.0 so initial behavior = standard RMSNorm
-    //==================================================//
-    if (config_.qk_norm_enabled) {
-        const int effective_kv_heads = config_.effectiveKVHeads();
-        
-        alpha_q_ = Tensor::zeros({config_.num_heads}, stream, "enc_alpha_q_own");
-        alpha_q_.requires_grad_();
-        alpha_q_.ensure_grad();
-        fillOnes(alpha_q_);
-        
-        alpha_k_ = Tensor::zeros({effective_kv_heads}, stream, "enc_alpha_k_own");
-        alpha_k_.requires_grad_();
-        alpha_k_.ensure_grad();
-        fillOnes(alpha_k_);
-    }
-    
     weights_ready_ = true;
     
     fprintf(stderr, "[EncodingLayer] Self-allocated weights (Pattern B): "
@@ -413,8 +389,6 @@ EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     , ffn_(std::move(other.ffn_))
     , layer_scale1_(std::move(other.layer_scale1_))
     , layer_scale2_(std::move(other.layer_scale2_))
-    , alpha_q_(std::move(other.alpha_q_))
-    , alpha_k_(std::move(other.alpha_k_))
 {
     // Null out the moved-from object
     other.config_.cublas_handle = nullptr;
@@ -438,8 +412,6 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         ffn_ = std::move(other.ffn_);
         layer_scale1_ = std::move(other.layer_scale1_);
         layer_scale2_ = std::move(other.layer_scale2_);
-        alpha_q_ = std::move(other.alpha_q_);
-        alpha_k_ = std::move(other.alpha_k_);
         
         other.config_.cublas_handle = nullptr;
         other.weights_ready_ = false;
@@ -567,7 +539,12 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         fflush(stderr);
     }
     // Use transpose_b=true since W_qkv is [qkv_dim, d_model] and we need [tokens, d_model] @ [d_model, qkv_dim]
-    intermediates.qkv_out = autograd::matmul(intermediates.ln1_out, W_qkv_, stream, nullptr, nullptr, true);
+    // Contract: pass explicit A cache for grad_B (W_qkv) path.
+    if (!intermediates.ln1_out.data) {
+        throw std::runtime_error("EncodingLayer::forward: ln1_out.data is NULL before QKV matmul (cannot supply required a_cache for W_qkv grad)");
+    }
+    intermediates.qkv_out = autograd::matmul(intermediates.ln1_out, W_qkv_, stream,
+                                            intermediates.ln1_out.data, nullptr, true);
     if (qkv_debug > 0) {
         const bool always_log = (qkv_debug >= 2);
         logTensorNonFinite("AutogradQKV:qkv_out_prebias", intermediates.qkv_out, stream, always_log);
@@ -576,9 +553,9 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // ========================================================================
     // [QKV_EQUATION] DIAGNOSTIC (Rule 21) - Equation-based logging
     // Formula: qkv_out = ln1_out @ W_qkv^T + b_qkv
+    // Skipped on gradient-accumulation micro-batches (same weights → duplicate output)
     // ========================================================================
-    if constexpr (GRIM::VerboseLogging::ENABLE_TRAINING_SIGNAL_DIAGNOSTICS) {
-    if (isEquationLoggingEnabled()) {
+    if (isEquationLoggingEnabled() && !GRIM::getEquationLoggingSkipThisPassRef()) {
         const int qkv_dim_local = config_.d_model + 2 * config_.kvDim();
         const int d_model_local = config_.d_model;
         const int num_heads_local = config_.num_heads;
@@ -788,7 +765,6 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             }
         }
     }
-    } // if constexpr ENABLE_TRAINING_SIGNAL_DIAGNOSTICS (QKV_EQUATION)
     
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV matmul DONE, adding bias...\n");
     // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking
@@ -831,25 +807,6 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         logTensorNonFinite("AutogradQKV:Q_bhsd", intermediates.Q_bhsd, stream, always_log);
         logTensorNonFinite("AutogradQKV:K_bhsd", intermediates.K_bhsd, stream, always_log);
         logTensorNonFinite("AutogradQKV:V_bhsd", intermediates.V_bhsd, stream, always_log);
-    }
-    
-    //--------------------------------------------------
-    // 3a. QK-Norm: Per-head RMSNorm on Q and K (Dehghani et al. 2023)
-    //     Stabilizes attention logit magnitude across training.
-    //     Applied BEFORE RoPE so rotation operates on unit-RMS vectors.
-    //--------------------------------------------------
-    if (config_.qk_norm_enabled && alpha_q_.data && alpha_k_.data) {
-        if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3a: QK-Norm...\n");
-        intermediates.Q_bhsd = autograd::qk_rms_norm(
-            intermediates.Q_bhsd, alpha_q_, num_heads, seq_len, head_dim, 1e-6f, stream);
-        intermediates.K_bhsd = autograd::qk_rms_norm(
-            intermediates.K_bhsd, alpha_k_, num_kv_heads, seq_len, head_dim, 1e-6f, stream);
-        if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3a: QK-Norm DONE\n");
-        if (qkv_debug > 0) {
-            const bool always_log = (qkv_debug >= 2);
-            logTensorNonFinite("AutogradQKV:Q_qknorm", intermediates.Q_bhsd, stream, always_log);
-            logTensorNonFinite("AutogradQKV:K_qknorm", intermediates.K_bhsd, stream, always_log);
-        }
     }
     
     //--------------------------------------------------
@@ -962,7 +919,12 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection...\n");
     // W_o is [d_model, d_model], so W_o^T is also [d_model, d_model]
     // Use transpose_b=true to compute attn_out @ W_o^T
-    intermediates.proj_out = autograd::matmul(intermediates.attn_out, W_o_, stream, nullptr, nullptr, true);
+    // Contract: pass explicit A cache for grad_B (W_o) path.
+    if (!intermediates.attn_out.data) {
+        throw std::runtime_error("EncodingLayer::forward: attn_out.data is NULL before output projection matmul (cannot supply required a_cache for W_o grad)");
+    }
+    intermediates.proj_out = autograd::matmul(intermediates.attn_out, W_o_, stream,
+                                              intermediates.attn_out.data, nullptr, true);
     // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking on b_o
     if (config_.use_bias && b_o_.data) {
         intermediates.proj_out = autograd::broadcast_add(intermediates.proj_out, b_o_, stream);
@@ -1044,7 +1006,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     //--------------------------------------------------
     // 9. FFN: ln2_out -> ffn_out (already using autograd)
     // Issue #56: FFN also stores its intermediates in this same ForwardIntermediates
-    // (ffn_gate_up_out, ffn_swiglu_out are written by SwiGLU FFN forward)
+    // (ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out are written by SwiGLU forward)
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
     intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates, training_step, layer_idx);
@@ -1103,9 +1065,9 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // Interpretation:
     //   |avg_cos| → 1.0 = mode collapse (all vectors aligned) = BAD
     //   |avg_cos| near 0 = diverse representations = generally healthy
+    // Skipped on gradient-accumulation micro-batches (same weights → duplicate output)
     // ═══════════════════════════════════════════════════════════════════════════
-    if constexpr (GRIM::VerboseLogging::ENABLE_TRAINING_SIGNAL_DIAGNOSTICS) {
-    if (isEquationLoggingEnabled() && (layer_idx == 0 || layer_idx == 11)) {
+    if (isEquationLoggingEnabled() && !GRIM::getEquationLoggingSkipThisPassRef() && (layer_idx == 0 || layer_idx == 11)) {
         cudaStreamSynchronize(stream);  // Ensure data is ready
         
         // Copy layer output to host for analysis
@@ -1169,7 +1131,6 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         }
         EQ_LOG("LAYER_COSINE_EQUATION", eq.str(), 0, layer_idx, 0, GRIM::EquationPhase::RESIDUAL_ADD);
     }
-    } // if constexpr ENABLE_TRAINING_SIGNAL_DIAGNOSTICS (LAYER_COSINE_EQUATION)
     
     // Return a non-owning view of the output
     // The actual Tensor lives in intermediates and stays alive until backward completes

@@ -62,7 +62,7 @@ if (log_file_.is_open()) {
             log_file_ << ss.str() << std::endl;
             log_file_.flush();
         }
-        // Silence stdout for non-fatal logs; fatal errors continue to use stderr elsewhere.
+        std::cout << ss.str() << std::endl;
     }
     
     void logStep(flatbuffers::Offset<TrainingStepLog> step_log) {

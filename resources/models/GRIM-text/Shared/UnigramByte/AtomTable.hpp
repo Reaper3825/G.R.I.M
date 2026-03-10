@@ -23,7 +23,9 @@
 #include "Unigram.hpp"  // For AtomType
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -201,7 +203,7 @@ struct alignas(64) AtomEntry {
     
     // Initialize to safe defaults
     AtomEntry() 
-        : hash(0), id(0), type(AtomType::ATOM_IDENTIFIER), 
+        : hash(0), id(0), type(AtomType::ATOM_NONE), 
           category(AtomCategory::GENERIC), origin(AtomOrigin::USER_INPUT),
           padding1{0, 0}, raw_text_ref(), confidence(1.0f),
           created_at(0), source_start(0), source_end(0),
@@ -442,34 +444,34 @@ private:
 //  Inline Helpers
 //======================================================//
 
-// Get human-readable name for atom type
 inline const char* atomTypeName(AtomType type) {
     switch (type) {
-        case AtomType::ATOM_INTEGER: return "INTEGER";
-        case AtomType::ATOM_FLOAT: return "FLOAT";
-        case AtomType::ATOM_HEX: return "HEX";
-        case AtomType::ATOM_BINARY: return "BINARY";
-        case AtomType::ATOM_URL: return "URL";
-        case AtomType::ATOM_EMAIL: return "EMAIL";
-        case AtomType::ATOM_PATH: return "PATH";
-        case AtomType::ATOM_DATE: return "DATE";
-        case AtomType::ATOM_TIME: return "TIME";
-        case AtomType::ATOM_IP_ADDRESS: return "IP";
-        case AtomType::ATOM_STRING_LITERAL: return "STRING";
-        case AtomType::ATOM_IDENTIFIER: return "IDENTIFIER";
-        case AtomType::ATOM_REGEX: return "REGEX";
-        case AtomType::ATOM_EQUATION: return "EQUATION";
-        case AtomType::ATOM_EXPRESSION: return "EXPRESSION";
+        case AtomType::ATOM_NONE: return "NONE";
+        case AtomType::ATOM_NUM:  return "NUM";
         default: return "UNKNOWN";
     }
 }
 
-// Check if atom type is numeric
 inline bool isNumericAtom(AtomType type) {
-    return type == AtomType::ATOM_INTEGER ||
-           type == AtomType::ATOM_FLOAT ||
-           type == AtomType::ATOM_HEX ||
-           type == AtomType::ATOM_BINARY;
+    return type == AtomType::ATOM_NUM;
+}
+
+/// Deterministic formatting of a predicted numeric value.
+/// - double precision to avoid premature rounding
+/// - near-integer within epsilon → printed as integer (no trailing ".0")
+/// - otherwise %.9g for consistent output with enough precision
+inline std::string formatNumericValue(float value) {
+    double v = static_cast<double>(value);
+    double rounded = std::round(v);
+    constexpr double kEpsilon = 1e-6;
+    if (std::fabs(v - rounded) < kEpsilon && std::fabs(v) < 1e15) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(rounded));
+        return std::string(buf);
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.9g", v);
+    return std::string(buf);
 }
 
 } // namespace Tokenizer

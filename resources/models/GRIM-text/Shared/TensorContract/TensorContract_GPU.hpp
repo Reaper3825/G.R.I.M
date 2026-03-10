@@ -726,7 +726,8 @@ enum class ParamGroupType : uint8_t {
     FFN = 3,            ///< Feed-forward network weights (W1, W2)
     RMSNORM = 4,        ///< RMSNorm gamma parameters
     SCRATCHBLOCK = 5,   ///< Atom type embeddings + projection
-    COUNT = 6           ///< Number of parameter group types
+    NUMERIC_HEAD = 6,   ///< Numeric prediction head weights + bias
+    COUNT = 7           ///< Number of parameter group types
 };
 
 //======================================================//
@@ -1122,7 +1123,12 @@ struct Tensor {
             TENSOR_LOG_LIFECYCLE(free_counter,
                 "[Tensor::release] #F%d cudaFree data=%p name=%s\n",
                 (void*)data, name ? name : "unnamed");
-            cudaFree(data);
+            cudaError_t free_err = cudaFree(data);
+            if (free_err != cudaSuccess) {
+                fprintf(stderr, "[Tensor::release] cudaFree(%p) failed: %s (name=%s)\n",
+                        (void*)data, cudaGetErrorString(free_err),
+                        name ? name : "unnamed");
+            }
         }
         grad_.reset();
         grad_fn.reset();
@@ -1209,6 +1215,10 @@ Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream = n
 /**
  * Row-wise mean centering: output[t,d] = input[t,d] - mean_d(input[t,:])
  *
+ * ISSUE #118 FIX: Removes common direction from activations to prevent mode collapse.
+ * The common direction (learned by V projection and FFN) accumulates through 
+ * residual stream across 12 encoder layers. By centering before residual add,
+ * we zero this accumulated bias.
  *
  * Mathematical property: Backward is ALSO centering (grad_x = grad_y - mean(grad_y))
  * This is because centering is a linear operation with symmetric Jacobian.
@@ -1273,22 +1283,23 @@ Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr,
             const float* input_cache = nullptr);
 
 /**
- * Fused SwiGLU gate activation: output = SiLU(gate) * up
- * Input: [tokens, 2*d_ff] — first half is gate, second half is up
- * Output: [tokens, d_ff]
+ * SiLU (Swish) activation: y = x * sigmoid(x)
  *
- * SiLU(x) = x * sigmoid(x)
+ * Used as the gate activation in SwiGLU feed-forward networks.
+ * TAPE-BASED: Uses external cache pointer for backward pass.
  *
- * TAPE-BASED: Caches the full gate_up input for backward.
- * Uses fused gate/up projection to avoid autograd fan-out.
- *
- * @param gate_up Fused gate+up tensor [tokens, 2*d_ff]
- * @param d_ff    Hidden dimension (half of gate_up's column count)
- * @param stream  CUDA stream
- * @param input_cache External cache for gate_up (needed for backward)
+ * @param input_cache External cache for input (needed for backward)
  */
-Tensor swiglu_fused(const Tensor& gate_up, int d_ff, cudaStream_t stream = nullptr,
-                    const float* input_cache = nullptr);
+Tensor silu(const Tensor& x, cudaStream_t stream = nullptr,
+            const float* input_cache = nullptr);
+
+/**
+ * Element-wise (Hadamard) product: y = a ⊙ b
+ *
+ * Used for the gating operation in SwiGLU: SiLU(gate) ⊙ up
+ * Both inputs must have the same shape.
+ */
+Tensor elementwise_mul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 
 /**
  * RMSNorm: y = x / rms(x) * (learnable)gamma
@@ -1393,31 +1404,6 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
 Tensor reshape_bhsd_to_flat(
     Tensor& bhsd_input,
     int batch_size, int seq_len, int num_heads, int head_dim,
-    cudaStream_t stream = nullptr);
-
-/**
- * Apply per-head RMSNorm to Q or K projections with autograd tracking.
- * 
- * Forward: y[row,d] = alpha[h] * x[row,d] / rms(x[row,:])
- * where h = (row / seq_len) % num_heads, rms = sqrt(mean(x^2) + eps)
- * 
- * This stabilizes attention logit magnitudes across training, preventing
- * gradient explosion from growing Q/K norms (Dehghani et al., 2023).
- * 
- * @param bhsd_input  Input tensor [B*H*S, D] (Q or K projections flattened)
- * @param alpha       Per-head learnable scale [num_heads]
- * @param num_heads   Number of heads for this input (num_q_heads for Q, num_kv_heads for K)
- * @param seq_len     Sequence length
- * @param head_dim    Dimension per head
- * @param eps         Epsilon for numerical stability
- * @param stream      CUDA stream
- * @return Normalized tensor with same shape, autograd chain linked
- */
-Tensor qk_rms_norm(
-    Tensor& bhsd_input,
-    Tensor& alpha,
-    int num_heads, int seq_len, int head_dim,
-    float eps = 1e-6f,
     cudaStream_t stream = nullptr);
 
 /**

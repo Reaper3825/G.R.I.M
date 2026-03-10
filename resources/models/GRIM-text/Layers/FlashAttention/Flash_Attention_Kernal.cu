@@ -39,6 +39,9 @@ inline bool isEquationLoggingEnabled() {
 // NOTE: FLASHATTENTION_DISABLE_DROPOUT removed per Rule 20 - feature dropout is now enabled
 // (was silently ignored before despite config having attention_dropout parameter)
 
+// ATen stub required before flash-attention headers (flash_fwd_kernel.h uses at::cuda::philox::unpack).
+#include <ATen/cuda/detail/UnpackRaw.cuh>
+
 #define FLASH_NAMESPACE grim_flash
 #include "namespace_config.h"
 #include "static_switch.h"
@@ -267,8 +270,8 @@ template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local,
          bool Is_even_K, bool Is_softcap, bool Return_softmax>
 __global__ void flash_fwd_kernel(const Flash_fwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    grim_flash::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
-                             Is_even_MN, Is_even_K, Is_softcap, Return_softmax>(params);
+    flash::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
+                       Is_even_MN, Is_even_K, Return_softmax>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
@@ -279,7 +282,7 @@ __global__ void flash_fwd_kernel(const Flash_fwd_params params) {
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Is_even_M, bool Is_even_K>
 __global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    grim_flash::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K>(params);
+    flash::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
@@ -308,7 +311,7 @@ __global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
 template<bool Clear_dQaccum, typename Kernel_traits>
 __global__ void flash_bwd_dot_do_o_kernel(const Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    grim_flash::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
+    flash::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
@@ -583,8 +586,12 @@ void init_bwd_params_contiguous(Flash_bwd_params& params,
 
     params.do_row_stride = n_heads * head_dim;
     params.dq_row_stride = n_heads * head_dim;
-    params.dk_row_stride = n_kv_heads * head_dim;
-    params.dv_row_stride = n_kv_heads * head_dim;
+    // ISSUE #85 FIX: dK/dV buffers are allocated for num_heads (not num_kv_heads) so the
+    // kernel can write per-query-head contributions at bidh * dk_head_stride without overlap.
+    // Row stride must match the allocation layout; using n_kv_heads caused head writes to
+    // alias across sequence positions, silently corrupting dK/dV gradients.
+    params.dk_row_stride = n_heads * head_dim;
+    params.dv_row_stride = n_heads * head_dim;
 
     params.do_batch_stride = seqlen * params.do_row_stride;
     params.dq_batch_stride = seqlen * params.dq_row_stride;
@@ -1302,8 +1309,8 @@ extern "C" void flash_attn_bwd_ex(
                  dq_bytes, dsoftmax_bytes);
         FlashAttentionLog::info(ws_msg);
     }
-    grim_flash::detail::check_cuda(cudaMemsetAsync(dq_accum, 0, dq_bytes, stream),
-                                   "cudaMemsetAsync(dq_accum)");
+    // dq_accum zeroing is handled by the preprocessing kernel (Clear_dQaccum=true in
+    // flash_bwd_dot_do_o_kernel) and the main kernel's Is_first path. No need to memset here.
 
     static int s_bwd_call_count = 0;
     ++s_bwd_call_count;

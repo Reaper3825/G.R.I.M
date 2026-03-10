@@ -232,7 +232,7 @@ void LanguageModel::initTrainingState() {
     // AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
     // ═══════════════════════════════════════════════════════════════
     // FFN/Attention/RMSNorm gradients flow through encoder's Tensor& accessors:
-    //   - enc->ffnWGateUp().grad_data(), enc->ffnWDown().grad_data()
+    //   - enc->ffnW1().grad_data(), enc->ffnW2().grad_data()
     //   - enc->attnWqkv().grad_data(), enc->attnWo().grad_data()
     //   - enc->rms1Gamma().grad_data(), enc->rms2Gamma().grad_data()
     // Allocated via ensure_grad() in EncodingLayer::allocateWeights().
@@ -377,13 +377,10 @@ void LanguageModel::initTrainingState() {
     training_state_.grad_encoder_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
         false, grad_stream, "grad_encoder_out");
-    
-    const size_t tokens_per_batch = max_batch_size * max_seq_len_cache;
 
     // ═══════════════════════════════════════════════════════════════
     //  ENCODER BACKWARD TEMPORARIES (Issue #45 FIX: Tensor allocation)
     // ═══════════════════════════════════════════════════════════════
-    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     const int max_tokens_int = static_cast<int>(max_tokens);
     
     // FFN backward temporaries

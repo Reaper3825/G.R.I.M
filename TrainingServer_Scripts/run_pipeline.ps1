@@ -2,14 +2,21 @@
 # 1. Collect data from web sources
 # 2. Verify and filter data
 # 3. Train GPU model
+#
+# Uses local ai_config.json from GRIM root for training parameters.
+# Edit ai_config.json to control hyperparameters, paths, etc.
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  GRIM-text Complete Training Pipeline" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-$exe_dir = "d:\G.R.I.M\resources\models\GRIM-text\training\build_vs_cuda\Release"
-$training_dir = "d:\G.R.I.M\resources\models\GRIM-text\training"
+# Resolve paths relative to this script (TrainingServer_Scripts/ is under G.R.I.M root)
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$grimRoot = (Get-Item $scriptDir).Parent.FullName
+$exe_dir = Join-Path $grimRoot "resources\models\GRIM-text\training\build_vs_cuda\Release"
+$training_dir = Join-Path $grimRoot "resources\models\GRIM-text\training"
+$config_path = Join-Path $grimRoot "ai_config.json"
 
 Set-Location $training_dir
 
@@ -58,7 +65,14 @@ Write-Host "[3/3] TRAINING MODEL (GPU)..." -ForegroundColor Yellow
 Write-Host "----------------------------------------" -ForegroundColor Gray
 
 if (Test-Path "$exe_dir\train_gpu.exe") {
-    & "$exe_dir\train_gpu.exe"
+    if (!(Test-Path $config_path)) {
+        Write-Host "❌ ai_config.json not found at: $config_path" -ForegroundColor Red
+        Write-Host "   Create or copy ai_config.json to control training parameters" -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "Using config: $config_path" -ForegroundColor Gray
+    Set-Location $grimRoot
+    & "$exe_dir\train_gpu.exe" --config $config_path
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "✓ Training complete" -ForegroundColor Green

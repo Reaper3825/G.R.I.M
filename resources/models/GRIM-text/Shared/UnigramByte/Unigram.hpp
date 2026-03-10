@@ -38,45 +38,12 @@ namespace GRIM {
 namespace Tokenizer {
 
 //======================================================//
-//  Atom Types for ScratchBlock Integration
+//  Atom Types — single <NUM> token for numeric scratchpad reasoning
 //======================================================//
 enum class AtomType : int {
-    // Structural atoms (detected during tokenization)
     ATOM_NONE = 0,
-    
-    // Boundary markers (model learns these as delimiters)
-    ATOM_END,               // End of any atom sequence
-    
-    // Numbers
-    ATOM_INTEGER,           // 42, -17
-    ATOM_FLOAT,             // 3.14, -2.5e10
-    ATOM_HEX,               // 0xFF, 0x1A2B
-    ATOM_BINARY,            // 0b1010
-    
-    // Code structures  
-    ATOM_IDENTIFIER,        // variable_name, functionName
-    ATOM_STRING_LITERAL,    // "hello", 'world'
-    ATOM_REGEX,             // /pattern/flags
-    
-    // Special sequences
-    ATOM_URL,               // https://...
-    ATOM_EMAIL,             // user@domain.com
-    ATOM_PATH,              // /usr/bin, C:\Windows
-    ATOM_DATE,              // 2025-12-08
-    ATOM_TIME,              // 14:30:00
-    ATOM_IP_ADDRESS,        // 192.168.1.1
-    
-    // Math/Logic
-    ATOM_EQUATION,          // x + y = z
-    ATOM_EXPRESSION,        // (a * b) + c
-
-    // Count of contiguous, in-use atom types (used for token layout)
+    ATOM_NUM  = 1,
     ATOM_ACTIVE_COUNT,
-    
-    // Reserved for future
-    ATOM_RESERVED_START = 200,
-    ATOM_RESERVED_END = 255,
-    
     ATOM_TYPE_COUNT
 };
 

@@ -194,53 +194,21 @@ struct LoggingContext {
 
 /**
  * @brief Telemetry lattice context for multi-scale monitoring
+ * Pattern B: TelemetryLattice is self-managing (RAII via unique_ptr).
  */
 struct TelemetryContext {
-    GRIM::Telemetry::TelemetryLattice* lattice = nullptr;
+    std::unique_ptr<GRIM::Telemetry::TelemetryLattice> lattice;
     GRIM::Telemetry::LatticeConfig config;
     GRIM::Telemetry::TelemetryControlConfig control_config;
     std::unique_ptr<GRIM::Telemetry::TelemetryControl> controller;
     bool enabled = true;
-    
-    ~TelemetryContext() {
-        if (lattice) {
-            GRIM::Telemetry::freeTelemetryLattice(&lattice);
-        }
-    }
-    
-    // Move-only semantics (std::unique_ptr cannot be copied)
+
     TelemetryContext() = default;
+    ~TelemetryContext() = default;
     TelemetryContext(const TelemetryContext&) = delete;
     TelemetryContext& operator=(const TelemetryContext&) = delete;
-    TelemetryContext(TelemetryContext&& other) noexcept
-        : lattice(other.lattice)
-        , config(std::move(other.config))
-        , control_config(std::move(other.control_config))
-        , controller(std::move(other.controller))
-        , enabled(other.enabled)
-    {
-        // Transfer ownership - critical to prevent double-free
-        other.lattice = nullptr;
-    }
-    TelemetryContext& operator=(TelemetryContext&& other) noexcept {
-        if (this != &other) {
-            // Clean up our current lattice
-            if (lattice) {
-                GRIM::Telemetry::freeTelemetryLattice(&lattice);
-            }
-            
-            // Transfer from other
-            lattice = other.lattice;
-            config = std::move(other.config);
-            control_config = std::move(other.control_config);
-            controller = std::move(other.controller);
-            enabled = other.enabled;
-            
-            // Nullify source
-            other.lattice = nullptr;
-        }
-        return *this;
-    }
+    TelemetryContext(TelemetryContext&&) noexcept = default;
+    TelemetryContext& operator=(TelemetryContext&&) noexcept = default;
 };
 
 /**
@@ -327,6 +295,8 @@ struct TrainingContext {
     // State tracking
     int global_step = 0;
     float best_val_loss = std::numeric_limits<float>::infinity();
+    /** Number of epochs actually completed (set by Phase 2; used by Phase 3 for summary). */
+    int epochs_completed = 0;
     
     // Auto-stop state
     bool auto_stop_triggered = false;
