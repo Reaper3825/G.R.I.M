@@ -5,6 +5,7 @@
 #include "commands_question.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
 #include "../MMO/Core/SessionContextManager.hpp"
+#include "../MMO/UI/EmotionPresentationController.hpp"
 #include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice/voice_speak.hpp"
@@ -16,6 +17,7 @@
 #include "ai/intent_gate.hpp"
 #include "ai/fast_classifier.hpp"
 #include "memory/unified_memory.hpp"
+#include "memory/memory_buffer_rotation.hpp"
 #include "Reward_Learning/grim_rl.hpp"
 #include "ai/personality_manager.hpp"
 #include "ai/proactive_dialogue.hpp"
@@ -534,6 +536,16 @@ void handleCommand(const std::string& line)
 
     // Output result
     std::string finalText = ResponseManager::get(result.message);
+
+    // Inject EPC text_prefix for conversational/banter responses
+    if (result.category == "conversation" || result.category == "banter" ||
+        result.category == "question") {
+        auto pres = GRIM::MMO::EmotionPresentationController::instance().currentPresentation();
+        if (!pres.text_prefix.empty()) {
+            finalText = pres.text_prefix + finalText;
+        }
+    }
+
     Logger::logResult(result);
     history.push(finalText, (result.color.a << 24) | (result.color.b << 16) | (result.color.g << 8) | result.color.r);
     // [GRIM CONTEXT] Record successful command context
@@ -543,7 +555,7 @@ void handleCommand(const std::string& line)
         contextObj.timestamp = static_cast<uint64_t>(std::time(nullptr));
         contextObj.source = GRIM::SourceType::GRIM_INTERNAL;
         contextObj.type = GRIM::TypeTag::COMMAND;
-        contextObj.intent = GRIM::MemoryIntent::INFORM;
+        contextObj.intent = GRIM::MemoryIntent::INFORM; 
         contextObj.context = GRIM::ContextType::CONVERSATION;
         contextObj.raw = cmdRaw;
         contextObj.normalized = GRIMInput::normalizeCommand(cmdRaw);
@@ -551,14 +563,22 @@ void handleCommand(const std::string& line)
         contextObj.tags = {"context_command", "session"};
 
         GRIM::MMO::SessionContextManager::instance().rememberContextObject(kDefaultSession, contextObj);
+        GRIM::MemoryBufferRotation::instance().preprocess(contextObj);
     }
 
 
 
     std::cout << finalText << std::endl;
 
-    if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos)
-        Voice::speak(result.voice, result.category.empty() ? "routine" : result.category);
+    if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos) {
+        // Pass EPC voice prosody to TTS
+        auto pres = GRIM::MMO::EmotionPresentationController::instance().currentPresentation();
+        Voice::VoiceParams vp;
+        vp.pitch    = pres.voice_pitch;
+        vp.rate     = pres.voice_rate;
+        vp.emphasis = pres.voice_emphasis;
+        Voice::speak(result.voice, result.category.empty() ? "routine" : result.category, vp);
+    }
 
     // Request feedback for successful voice commands
     {

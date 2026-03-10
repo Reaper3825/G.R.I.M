@@ -282,16 +282,52 @@ rules.push_back(rule);
 // Load learned rules from memory storage
 // ====================================================
 void NLP::loadLearnedRules(GRIM::UnifiedMemoryStorage& storage) {
-    // TODO: Implement when memory storage API is available
-    (void)storage;
+    auto commands = storage.getAllLearnedCommands();
+    for (const auto& obj : commands) {
+        // Each learned command stores: raw = pattern string, intent_name = intent
+        if (obj.raw.empty() || obj.intent_name.empty()) continue;
+
+        // Skip if a rule with this intent+pattern already exists
+        bool duplicate = false;
+        for (const auto& existing : rules) {
+            if (existing.intent == obj.intent_name && existing.pattern_str == obj.raw) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+
+        Rule rule;
+        rule.intent          = obj.intent_name;
+        rule.pattern_str     = obj.raw;
+        rule.case_insensitive = true;
+        rule.learned         = true;
+        rule.source          = "memory";
+        rule.success_rate    = static_cast<double>(obj.confidence);
+        rule.category        = "learned";
+
+        try {
+            rule.pattern = std::regex(rule.pattern_str,
+                std::regex::ECMAScript | std::regex::icase);
+            rules.push_back(std::move(rule));
+        } catch (const std::regex_error&) {
+            // Skip malformed patterns — do not crash
+        }
+    }
 }
 
 // ====================================================
 // Save learned rules to memory storage
 // ====================================================
 void NLP::saveLearnedRules(GRIM::UnifiedMemoryStorage& storage) {
-    // TODO: Implement when memory storage API is available
-    (void)storage;
+    for (const auto& rule : rules) {
+        if (!rule.learned) continue;
+        storage.storeLearnedCommand(
+            rule.pattern_str,   // phrase = the pattern string
+            rule.intent,        // action = the intent name
+            static_cast<float>(rule.success_rate)
+        );
+    }
 }
 
 // ====================================================

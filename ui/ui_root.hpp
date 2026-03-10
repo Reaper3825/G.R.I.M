@@ -32,6 +32,7 @@ public:
     void draw();
 
     void addPanel(const std::shared_ptr<UIPanel>& panel);
+    void removePanel(const std::string& name);
     std::shared_ptr<UIPanel> getPanel(const std::string& name);
     void setVisible(const std::string& name, bool visible);
     void bringToFront(const std::string& name);  // Move panel to top of z-order

@@ -104,6 +104,20 @@ static void register_all_commands() {
                   "Toggle settings panel visibility",
                   "ui", false);
 
+    // MMO UI surface tools
+    REGISTER_TOOL("ui.create_surface", cmdCreateSurface,
+                  "Create a new UI surface (panel, popup, modal, toast, tool window, inspector)",
+                  "ui", false);
+    REGISTER_TOOL("ui.show_surface", cmdShowSurface,
+                  "Show a previously created UI surface",
+                  "ui", false);
+    REGISTER_TOOL("ui.hide_surface", cmdHideSurface,
+                  "Hide a visible UI surface without destroying it",
+                  "ui", false);
+    REGISTER_TOOL("ui.destroy_surface", cmdDestroySurface,
+                  "Permanently remove a UI surface",
+                  "ui", false);
+
     // System information
     REGISTER_TOOL("system_info", cmdSystemInfo,
                   "Display system hardware and software information",

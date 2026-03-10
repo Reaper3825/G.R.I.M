@@ -5,9 +5,12 @@
 #include "../MMO/Core/SessionContextManager.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
 #include "../MMO/Core/ActionPolicyRegistry.hpp"
+#include "../MMO/Core/ModelRegistry.hpp"
+#include "../MMO/Core/ToolTrainingParser.hpp"
 #include "nlp/NlpAnnotation.hpp"
 #include "nlp/RouterMetadataBuilder.hpp"
 #include "memory/context_snapshot.hpp"
+#include "memory/atomic_writer.hpp"
 #include "resources.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
@@ -15,14 +18,11 @@
 #include "personality_manager.hpp"
 #include "action_executor.hpp"  // ✅ Intelligent action execution
 #include "task_planner.hpp"     // ✅ Multi-step task planning
-#include "nlp/nlp.hpp"  // ✅ For NLP integration
-#include "fast_classifier.hpp"  // ✅ For teaching classifier
 #include "location.hpp"  // ✅ For location context
 #include "helpers/grim_input.hpp"  // ✅ For parseInput
 #include "grim_backend.hpp"  // ✅ Native GRIM model backend (external reference)
 #include <cpr/cpr.h>
 #include <fstream>
-#include <sstream>
 #include <future>
 #include <algorithm>
 
@@ -52,11 +52,8 @@ nlohmann::json& voiceMemory() {
 // =========================================================
 void saveMemory() {
     try {
-        std::ofstream f("memory.json");
-        if (f) {
-            f << longTermMemory.dump(2);
-            LOG_PHASE("Memory saved", true);
-        }
+        GRIM::AtomicWriter::writeString("memory.json", longTermMemory.dump(2));
+        LOG_PHASE("Memory saved", true);
     } catch (const std::exception& e) {
         LOG_ERROR("Memory", std::string("Failed to save memory.json: ") + e.what());
         LOG_PHASE("Memory save", false);
@@ -114,44 +111,8 @@ void setLastCommand(const std::string& command) {
 }
 
 // =========================================================
-// Backend resolver
+// Core async AI call — all requests go through MMO orchestrator
 // =========================================================
-std::string resolveBackendURL() {
-    std::string backend = aiConfig.value("backend", "auto");
-
-    // Native GRIM backend - always available
-    if (backend == "grim_native") {
-        return "grim_native";
-    }
-
-    if (backend == "auto") {
-        try {
-            auto r = cpr::Get(cpr::Url{aiConfig.value("ollama_url","http://127.0.0.1:11434") + "/api/tags"},
-                              cpr::Timeout{1000});
-            if (r.status_code == 200) return "ollama";
-        } catch (...) {}
-
-        try {
-            auto r = cpr::Get(cpr::Url{aiConfig.value("localai_url","http://127.0.0.1:8080/v1") + "/models"},
-                              cpr::Timeout{1000});
-            if (r.status_code == 200) return "localai";
-        } catch (...) {}
-
-        return "openai";
-    }
-
-    return backend;
-}
-
-// =========================================================
-// Core async AI call
-// =========================================================
-// =========================================================
-// Session management for KV cache reuse
-// =========================================================
-static std::string g_currentModel;  // Track model to detect changes
-static bool g_modelWarmedUp = false;  // Track if model is loaded
-
 static constexpr const char* kDefaultSessionId = "default";
 
 void clearConversationHistory() {
@@ -160,323 +121,49 @@ void clearConversationHistory() {
     LOG_DEBUG("AI", "Conversation history cleared");
 }
 
-// Helper: ensure system prompt + user message are in session history,
-// trim to max_messages, and return the messages as JSON array.
-static nlohmann::json prepareConversationMessages(
-    const std::string& prompt,
-    const std::string& session_id = kDefaultSessionId)
-{
-    auto& scm = GRIM::MMO::SessionContextManager::instance();
-
-    // Add system prompt once
-    if (aiConfig.contains("personality")) {
-        auto personality = aiConfig["personality"];
-        if (personality.value("use_custom_prompt", false)) {
-            std::string sys = personality.value("custom_prompt",
-                "You are GRIM. Be brief and direct.");
-            scm.setSystemPrompt(session_id, sys);
-        }
-    }
-
-    // Add user message and trim
-    scm.addMessage(session_id, "user", prompt);
-    size_t max_hist = aiConfig.value("conversation_history_size", 10);
-    scm.trimHistory(session_id, max_hist);
-
-    // Build JSON messages array
-    auto msgs = scm.getMessages(session_id);
-    nlohmann::json arr = nlohmann::json::array();
-    for (const auto& m : msgs) {
-        arr.push_back({{"role", m.role}, {"content", m.content}});
-    }
-    return arr;
-}
-
 std::future<std::string> callAIAsync(const std::string& prompt) {
     return std::async(std::launch::async, [prompt]() -> std::string {
-        // ── MMO path: route through orchestrator when enabled ──
-        if (g_orchestrator) {
-            auto& registry = GRIM::MMO::ModelRegistry::instance();
-            if (registry.isEnabled()) {
-                // Produce NlpAnnotation for structured routing
-                auto& scm = GRIM::MMO::SessionContextManager::instance();
-                GRIM::ContextSnapshot snapshot = scm.legacySnapshot("default");
-                GRIM::NlpAnnotation annotation = GRIM::annotate(prompt, snapshot);
-
-                // Build router metadata envelope
-                auto& toolReg = GRIM::MMO::ToolRegistry::instance();
-                GRIM::RouterMetadataBuilder builder;
-                builder.setAnnotation(annotation)
-                       .setContext(snapshot)
-                       .setToolSummary(toolReg.generateCompactPrompt());
-                GRIM::RouterMetadata meta = builder.build();
-
-                GRIM::MMO::RequestContext ctx;
-                ctx.request_id = std::to_string(
-                    std::chrono::steady_clock::now().time_since_epoch().count());
-                ctx.prompt = prompt;
-                ctx.metadata_json = meta.toJson().dump();
-                ctx.tool_registry_version = toolReg.version();
-
-                auto result = g_orchestrator->generate(ctx);
-                if (result.success) {
-                    return result.response;
-                }
-                LOG_ERROR("AI", "MMO orchestrator failed: " + result.error);
-                if (registry.mode() == "enforced") {
-                    return "[AI] Orchestrator error: " + result.error;
-                }
-                // shadow mode: fall through to legacy path
-                LOG_DEBUG("AI", "MMO shadow mode — falling back to legacy backend");
-            }
+        if (!g_orchestrator) {
+            throw std::runtime_error(
+                "g_orchestrator is NULL — MMO must be initialized before calling AI. "
+                "Check bootstrap/bootstrap.cpp bootstrapMMOLayer().");
         }
 
-        std::string backend = resolveBackendURL();
-        std::string model   = aiConfig.value("default_model", "llama3.1:8b");
-
-        LOG_DEBUG("AI", "callAIAsync backend=" + backend + " model=" + model);
-
-        try {
-            // ✅ NATIVE GRIM-TEXT BACKEND `(HTTP Server)
-            if (backend == "grim_native") {
-                model = "grim-text";  // Override model name for grim-text server
-                
-                // Check for model change
-                if (g_currentModel != model) {
-                    g_currentModel = model;
-                    g_modelWarmedUp = false;
-                    clearConversationHistory();
-                    LOG_DEBUG("AI", "Model changed to " + model + ", warmup needed");
-                }
-                
-                nlohmann::json messages = prepareConversationMessages(prompt);
-                
-                // Build request body (Ollama-compatible format)
-                nlohmann::json requestBody = {
-                    {"model", model},
-                    {"messages", messages},
-                    {"stream", false},
-                    {"max_tokens", aiConfig.value("max_tokens", 256)},
-                    {"temperature", aiConfig.value("temperature", 0.8f)}
-                };
-                
-                auto start = std::chrono::high_resolution_clock::now();
-                
-                // Call grim-text server
-                auto resp = cpr::Post(
-                    cpr::Url{ aiConfig.value("grim_text_url", "http://127.0.0.1:11435") + "/api/chat" },
-                    cpr::Header{{"Content-Type","application/json"}},
-                    cpr::Body{ requestBody.dump() },
-                    cpr::Timeout{30000}
-                );
-                
-                auto end = std::chrono::high_resolution_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-                
-                if (resp.status_code == 200) {
-                    LOG_DEBUG("AI", "grim-text response in " + std::to_string(duration) + "ms");
-                    
-                    auto j = nlohmann::json::parse(resp.text, nullptr, false);
-                    
-                    if (j.is_discarded()) {
-                        LOG_ERROR("AI", "Failed to parse grim-text JSON: " + resp.text.substr(0, 500));
-                        return "[AI] Backend call failed";
-                    }
-                    
-                    std::string response = j["message"]["content"].get<std::string>();
-                    
-                    // Record assistant response in session history
-                    auto& scm = GRIM::MMO::SessionContextManager::instance();
-                    scm.addMessage(kDefaultSessionId, "assistant", response);
-                    
-                    if (response.empty()) {
-                        LOG_ERROR("AI", "grim-text returned empty response");
-                        return "[AI] Backend call failed";
-                    }
-                    
-                    return response;
-                }
-                
-                LOG_ERROR("AI", "grim-text HTTP " + std::to_string(resp.status_code) + ": " + resp.text);
-                return "[AI] Backend call failed - is grim-text server running?";
-            }
-            
-            if (backend == "ollama") {
-                // Model warmup detection
-                if (g_currentModel != model) {
-                    g_currentModel = model;
-                    g_modelWarmedUp = false;
-                    clearConversationHistory();
-                    LOG_DEBUG("AI", "Model changed to " + model + ", warmup needed");
-                }
-                
-                nlohmann::json messages = prepareConversationMessages(prompt);
-                
-                // Build optimized request with configurable performance parameters
-                nlohmann::json options = {
-                    {"num_ctx", 4096},
-                    {"num_predict", 512},
-                    {"temperature", 0.7},
-                    {"top_k", 40},
-                    {"top_p", 0.9},
-                    {"repeat_penalty", 1.1},
-                    {"num_thread", 8},
-                    {"num_gpu", 99},
-                    {"num_batch", 512},
-                    {"use_mmap", true},
-                    {"use_mlock", false},
-                    {"low_vram", false}
-                };
-                
-                // Override with user config if present
-                if (aiConfig.contains("ollama_options")) {
-                    for (auto& [key, value] : aiConfig["ollama_options"].items()) {
-                        options[key] = value;
-                    }
-                }
-                
-                nlohmann::json requestBody = {
-                    {"model", model}, 
-                    {"messages", messages},
-                    {"stream", false},
-                    {"options", options},
-                    {"keep_alive", "30m"}
-                };
-                
-                auto start = std::chrono::high_resolution_clock::now();
-                
-                auto resp = cpr::Post(
-                    cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/chat" },
-                    cpr::Header{{"Content-Type","application/json"}},
-                    cpr::Body{ requestBody.dump() },
-                    cpr::Timeout{60000}
-                );
-                
-                auto end = std::chrono::high_resolution_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-                
-                if (resp.status_code == 200) {
-                    LOG_DEBUG("AI", "Ollama response in " + std::to_string(duration) + "ms (" + 
-                             std::to_string(resp.text.size()) + " bytes)");
-                    
-                    if (!g_modelWarmedUp) {
-                        LOG_DEBUG("AI", "Model warmed up (first call took " + std::to_string(duration) + "ms)");
-                        g_modelWarmedUp = true;
-                    }
-                    
-                    auto j = nlohmann::json::parse(resp.text, nullptr, false);
-                    
-                    if (j.is_discarded()) {
-                        LOG_ERROR("AI", "Failed to parse Ollama JSON: " + resp.text.substr(0, 500));
-                        return "[AI] Backend call failed";
-                    }
-                    
-                    std::string response = j["message"]["content"].get<std::string>();
-                    
-                    // Record assistant response in session history
-                    auto& scm = GRIM::MMO::SessionContextManager::instance();
-                    scm.addMessage(kDefaultSessionId, "assistant", response);
-                    
-                    if (response.empty()) {
-                        LOG_ERROR("AI", "Ollama returned empty response field. Full JSON: " + resp.text.substr(0, 500));
-                        return "[AI] Backend call failed";
-                    }
-                    
-                    return response;
-                }
-                
-                LOG_ERROR("AI", "Ollama HTTP " + std::to_string(resp.status_code) + ": " + resp.text);
-                LOG_DEBUG("AI", "Request body was: " + requestBody.dump().substr(0, 500));
-                return "[AI] Backend call failed";
-            }
-            else if (backend == "localai" || backend == "openai") {
-                std::string url =
-                    (backend == "localai")
-                        ? aiConfig.value("localai_url","http://127.0.0.1:8080/v1") + "/chat/completions"
-                        : "https://api.openai.com/v1/chat/completions";
-
-                cpr::Header headers = {{"Content-Type","application/json"}};
-                if (backend == "openai") {
-                    auto apiKey = aiConfig["api_keys"].value("openai", "");
-                    if (apiKey.empty()) return "[AI] Missing OpenAI API key";
-                    headers["Authorization"] = "Bearer " + apiKey;
-                }
-
-                auto resp = cpr::Post(
-                    cpr::Url{url},
-                    headers,
-                    cpr::Body{ nlohmann::json{
-                        {"model", model},
-                        {"messages", nlohmann::json::array({
-                            {{"role","user"},{"content",prompt}}
-                        })}
-                    }.dump() }
-                );
-                if (resp.status_code == 200) {
-                    auto j = nlohmann::json::parse(resp.text, nullptr, false);
-                    if (j.contains("choices"))
-                        return j["choices"][0]["message"]["content"].get<std::string>();
-                }
-            }
-        }
-        catch (const std::exception& e) {
-            LOG_ERROR("AI", std::string("Exception: ") + e.what());
+        auto& registry = GRIM::MMO::ModelRegistry::instance();
+        if (!registry.isEnabled()) {
+            throw std::runtime_error(
+                "MMO is disabled in config but callAIAsync requires it. "
+                "Set mmo.enabled=true in ai_config.json.");
         }
 
-        return "[AI] Backend call failed";
+        // Produce NlpAnnotation for structured routing
+        auto& scm = GRIM::MMO::SessionContextManager::instance();
+        GRIM::MMO::ContextSnapshotV2 snapshot = scm.snapshot("default");
+        GRIM::NlpAnnotation annotation = GRIM::annotate(prompt, snapshot);
+
+        // Build router metadata envelope
+        auto& toolReg = GRIM::MMO::ToolRegistry::instance();
+        GRIM::RouterMetadataBuilder builder;
+        builder.setAnnotation(annotation)
+               .setContextV2(snapshot)
+               .setToolSummary(toolReg.generateCompactPrompt());
+        GRIM::RouterMetadata meta = builder.build();
+
+        GRIM::MMO::RequestContext ctx;
+        ctx.request_id = std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+        ctx.prompt = prompt;
+        ctx.metadata_json = meta.toJson().dump();
+        ctx.tool_registry_version = toolReg.version();
+
+        auto result = g_orchestrator->generate(ctx);
+        if (result.success) {
+            return result.response;
+        }
+
+        LOG_ERROR("AI", "MMO orchestrator failed: " + result.error);
+        return "[AI] Orchestrator error: " + result.error;
     });
-}
-
-// =========================================================
-// Model warmup (preload and cache model in memory/VRAM)
-// =========================================================
-void warmupOllamaModel() {
-    std::string backend = resolveBackendURL();
-    if (backend != "ollama") {
-        LOG_DEBUG("AI", "Skipping warmup - backend is not Ollama");
-        return;
-    }
-    
-    std::string model = aiConfig.value("default_model", "llama3.1:8b");
-    LOG_DEBUG("AI", "Warming up Ollama model: " + model);
-    
-    try {
-        // Use a minimal prompt to trigger model loading
-        nlohmann::json warmupBody = {
-            {"model", model},
-            {"messages", nlohmann::json::array({
-                {{"role", "user"}, {"content", "hi"}}
-            })},
-            {"stream", false},
-            {"options", {
-                {"num_predict", 1},  // Generate only 1 token
-                {"num_ctx", 512}     // Minimal context
-            }},
-            {"keep_alive", "30m"}  // Keep model loaded
-        };
-        
-        auto start = std::chrono::high_resolution_clock::now();
-        
-        auto resp = cpr::Post(
-            cpr::Url{aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/chat"},
-            cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{warmupBody.dump()},
-            cpr::Timeout{60000}
-        );
-        
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-        
-        if (resp.status_code == 200) {
-            LOG_DEBUG("AI", "Model warmup complete in " + std::to_string(duration) + "ms");
-            g_currentModel = model;
-            g_modelWarmedUp = true;
-        } else {
-            LOG_ERROR("AI", "Model warmup failed with status " + std::to_string(resp.status_code));
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("AI", std::string("Model warmup exception: ") + e.what());
-    }
 }
 
 // =========================================================
@@ -553,6 +240,23 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
     result.errorCode = "ERR_AI_INTERPRET_FAIL";
 
     try {
+        // Record user message in conversation history
+        auto& scmHistory = GRIM::MMO::SessionContextManager::instance();
+
+        // Set system prompt once per session
+        if (aiConfig.contains("personality")) {
+            auto personality = aiConfig["personality"];
+            if (personality.value("use_custom_prompt", false)) {
+                std::string sys = personality.value("custom_prompt",
+                    "You are GRIM. Be brief and direct.");
+                scmHistory.setSystemPrompt(kDefaultSessionId, sys);
+            }
+        }
+
+        scmHistory.addMessage(kDefaultSessionId, "user", input);
+        size_t max_hist = aiConfig.value("conversation_history_size", 10);
+        scmHistory.trimHistory(kDefaultSessionId, max_hist);
+
         // --- Build context prompt with strict JSON formatting ---
         std::string personalityPrefix = GRIM::PersonalityManager::generatePrefix();
         
@@ -586,11 +290,8 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
             "\n\nInput: \"" + input + "\"\n\n"
             "JSON response:";
 
-        // --- Query backend (Llama / LocalAI / OpenAI etc.) ---
-        std::string backend = resolveBackendURL();
-        std::string model   = aiConfig.value("default_model", "llama3.1:8b");
-
-        LOG_DEBUG("AI", "ai_interpret backend=" + backend + " model=" + model);
+        // --- Query backend via MMO Orchestrator ---
+        LOG_DEBUG("AI", "ai_interpret dispatching via MMO Orchestrator");
 
         std::string reply;
 
@@ -607,33 +308,33 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
         }
 
         // --- Extract JSON from response (Mistral sometimes adds extra text) ---
-        std::string jsonStr = reply;
-        size_t jsonStart = reply.find('{');
-        size_t jsonEnd = reply.rfind('}');
-        
-        if (jsonStart != std::string::npos && jsonEnd != std::string::npos && jsonEnd > jsonStart) {
-            jsonStr = reply.substr(jsonStart, jsonEnd - jsonStart + 1);
-            LOG_DEBUG("AI", "Extracted JSON: " + jsonStr);
-        } else {
-            LOG_ERROR("AI", "No JSON found in response: " + reply);
+        auto& trainingParser = GRIM::MMO::ToolTrainingParser::instance();
+        auto parsed = trainingParser.parseModelOutput(reply);
+
+        // Build training example (outcome filled in at each exit point)
+        GRIM::MMO::ToolTrainingExample trainEx;
+        trainEx.raw_user_input   = input;
+        trainEx.raw_model_output = reply;
+        trainEx.extracted_json   = parsed.extracted_json;
+
+        if (!parsed.valid) {
+            LOG_ERROR("AI", "No valid JSON in response: " + reply);
+            trainEx.parsed_intent = "parse_failure";
+            trainEx.outcome = GRIM::MMO::ToolTrainingExample::Outcome::ParseFailure;
+            trainingParser.record(std::move(trainEx));
+
             result.message = "[AI] Invalid response format.";
             result.voice = "Sorry, I got a malformed response.";
             return result;
         }
 
-        // --- Parse model response as JSON ---
-        nlohmann::json j = nlohmann::json::parse(jsonStr, nullptr, false);
-        
-        // Validate JSON before accessing it
-        if (j.is_discarded() || !j.is_object()) {
-            LOG_ERROR("AI", "Interpretation failed — non-JSON response: " + reply);
-            result.message = "[AI] Could not interpret input.";
-            result.voice = "Sorry, I couldn't interpret that.";
-            return result;
-        }
+        LOG_DEBUG("AI", "Extracted JSON: " + parsed.extracted_json);
+
+        // Use parsed result
+        const nlohmann::json& j = parsed.parsed;
 
         // --- Route based on intent ---
-        std::string intent = j.value("intent", "conversation");
+        std::string intent = parsed.intent;
 
         if (intent == "command" && allowCommands) {
             std::string suggested = j.value("suggested_command", "");
@@ -662,72 +363,37 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                     }
                 }
                 
-                // ✅ Check if this is a simple action command (click, type, press, etc.)
-                if (GRIM::ActionExecutor::isActionCommand(suggested)) {
-                    LOG_DEBUG("AI", "Detected action command, executing directly: " + suggested);
-                    CommandResult actionResult = GRIM::ActionExecutor::executeAction(suggested);
-                    
-                    // Still teach the NLP about this pattern
-                    try {
-                        extern NLP g_nlp;
-                        if (g_nlp.learnPattern(input, suggested)) {
-                            LOG_DEBUG("AI", "✓ Taught NLP: \"" + input + "\" → " + suggested);
-                        }
-                    } catch (...) {}
-                    
-                    return actionResult;
-                }
-                
-                // ✅ INTEGRATION #5: Teach both NLP and Fast Classifier
-                try {
-                    extern NLP g_nlp;
-                    
-                    // Teach NLP to recognize this pattern
-                    if (g_nlp.learnPattern(input, suggested)) {
-                        LOG_DEBUG("AI", "✓ Taught NLP: \"" + input + "\" → " + suggested);
-                    }
-                    
-                    // Teach Fast Classifier the command words
-                    std::string lowerInput = input;
-                    std::transform(lowerInput.begin(), lowerInput.end(), 
-                                 lowerInput.begin(), ::tolower);
-                    std::string lowerSuggested = suggested;
-                    std::transform(lowerSuggested.begin(), lowerSuggested.end(),
-                                 lowerSuggested.begin(), ::tolower);
-                    
-                    // Extract verbs from the suggested command
-                    std::istringstream iss(lowerSuggested);
-                    std::string word;
-                    while (iss >> word) {
-                        // Check if this word appears in the input
-                        if (lowerInput.find(word) != std::string::npos) {
-                            // Common command verbs that should be boosted
-                            static const std::vector<std::string> commandVerbs = {
-                                "open", "close", "run", "launch", "show", "list",
-                                "set", "create", "delete", "search", "find", "play",
-                                "stop", "kill", "start", "restart", "shutdown"
-                            };
-                            
-                            if (std::find(commandVerbs.begin(), commandVerbs.end(), word) != commandVerbs.end()) {
-                                GRIM::FastClassifier::boostCommandWeight(word, 1.5f);
-                                LOG_DEBUG("AI", "✓ Boosted Fast Classifier weight for: " + word);
-                            }
-                        }
-                    }
-                    
-                } catch (const std::exception& e) {
-                    LOG_ERROR("AI", std::string("Failed to teach systems: ") + e.what());
-                }
-                
-                // ✅ NEW: Actually execute the suggested command using dispatchCommand
                 // Gate through ActionPolicyRegistry (Training Wheels)
                 LOG_DEBUG("AI", "Evaluating policy for command: " + suggested);
                 
                 auto [cmd, arg] = GRIMInput::parseInput(suggested);
 
+                // Check if the tool exists in the registry before proceeding
+                auto& toolRegGap = GRIM::MMO::ToolRegistry::instance();
+                if (!toolRegGap.isRegistered(cmd) && !toolRegGap.resolveAlias(cmd).has_value()) {
+                    // Tool not recognized — check for structured tool gap
+                    std::string gap_req_id = std::to_string(
+                        std::chrono::steady_clock::now().time_since_epoch().count());
+                    auto gap = g_orchestrator->evaluateToolGap(cmd, gap_req_id);
+                    if (gap) {
+                        LOG_DEBUG("AI", "Tool gap detected for: " + cmd);
+                        trainEx.parsed_intent  = "command";
+                        trainEx.parsed_tool_id = cmd;
+                        trainEx.parsed_args    = arg;
+                        trainEx.outcome = GRIM::MMO::ToolTrainingExample::Outcome::GapDetected;
+                        trainingParser.record(std::move(trainEx));
+
+                        result.message = gap->rationale;
+                        result.voice   = "I don't have a tool for that yet.";
+                        result.category = "tool_gap";
+                        result.success = false;
+                        return result;
+                    }
+                }
+
                 // Produce NlpAnnotation for confidence signals
                 auto& scmPolicy = GRIM::MMO::SessionContextManager::instance();
-                GRIM::ContextSnapshot policySnapshot = scmPolicy.legacySnapshot("default");
+                GRIM::MMO::ContextSnapshotV2 policySnapshot = scmPolicy.snapshot("default");
                 GRIM::NlpAnnotation policyAnn = GRIM::annotate(input, policySnapshot);
 
                 GRIM::MMO::ActionProposal proposal;
@@ -745,6 +411,15 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
 
                 if (decision.verdict == GRIM::MMO::PolicyVerdict::Deny) {
                     LOG_DEBUG("AI", "Policy DENIED command: " + cmd + " (" + decision.reason + ")");
+                    trainEx.parsed_intent    = "command";
+                    trainEx.parsed_tool_id   = cmd;
+                    trainEx.parsed_args      = arg;
+                    trainEx.router_confidence = policyAnn.confidence_summary.overall;
+                    trainEx.intent_confidence = policyAnn.confidence_summary.intent_confidence;
+                    trainEx.entity_confidence = policyAnn.confidence_summary.entity_confidence;
+                    trainEx.outcome = GRIM::MMO::ToolTrainingExample::Outcome::PolicyDenied;
+                    trainingParser.record(std::move(trainEx));
+
                     result.message = "[AI] Action denied: " + decision.reason;
                     result.voice   = "I can't do that right now.";
                     result.success = false;
@@ -756,12 +431,31 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                     LOG_DEBUG("AI", "Policy VERIFY for: " + cmd + " (" + decision.reason + ")");
 
                     auto& sessionCtx = GRIM::MMO::SessionContextManager::instance();
+
+                    // Record proposal so correction tuples can be collected on rejection
+                    GRIM::MMO::ActionEpisode ep;
+                    ep.tool_id    = cmd;
+                    ep.proposed_args = arg;
+                    ep.confidence = policyAnn.confidence_summary.overall;
+                    ep.risk       = proposal.referent_resolution < 0.8f ? 0.5f : 0.2f;
+                    ep.confirmation_requested = true;
+                    sessionCtx.recordProposal("default", ep);
+
                     GRIM::MMO::PendingInteraction pending;
                     pending.kind             = GRIM::MMO::PendingKind::Confirmation;
                     pending.original_command = suggested;
                     pending.prompt_shown     = decision.verification_prompt;
                     pending.created_at       = std::chrono::steady_clock::now();
                     sessionCtx.setPending("default", pending);
+
+                    trainEx.parsed_intent    = "command";
+                    trainEx.parsed_tool_id   = cmd;
+                    trainEx.parsed_args      = arg;
+                    trainEx.router_confidence = policyAnn.confidence_summary.overall;
+                    trainEx.intent_confidence = policyAnn.confidence_summary.intent_confidence;
+                    trainEx.entity_confidence = policyAnn.confidence_summary.entity_confidence;
+                    trainEx.outcome = GRIM::MMO::ToolTrainingExample::Outcome::PolicyVerify;
+                    trainingParser.record(std::move(trainEx));
 
                     result.message  = decision.verification_prompt;
                     result.voice    = decision.verification_prompt;
@@ -771,11 +465,36 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                     return result;
                 }
 
-                // Policy allows — execute
+                // Policy allows — check for shadow mode before executing
+                auto& mmoRegistry = GRIM::MMO::ModelRegistry::instance();
+                if (mmoRegistry.isEnabled() && mmoRegistry.mode() == "shadow") {
+                    LOG_DEBUG("AI", "[SHADOW] Would execute: " + suggested + " (suppressed)");
+                    trainEx.parsed_intent  = "command";
+                    trainEx.parsed_tool_id = cmd;
+                    trainEx.parsed_args    = arg;
+                    trainEx.outcome = GRIM::MMO::ToolTrainingExample::Outcome::ShadowSuppressed;
+                    trainingParser.record(std::move(trainEx));
+
+                    result.message = "[Shadow] I would run: " + suggested;
+                    result.voice   = "";
+                    result.category = "shadow_log";
+                    result.success = true;
+                    result.errorCode = "ERR_NONE";
+                    return result;
+                }
+
                 LOG_DEBUG("AI", "Policy ALLOW — executing: " + suggested);
                 
-                extern CommandResult dispatchCommand(const std::string&, const std::string&);
-                CommandResult cmdResult = dispatchCommand(cmd, arg);
+                CommandResult cmdResult;
+                
+                // Route action commands (click, type, press) through ActionExecutor
+                if (GRIM::ActionExecutor::isActionCommand(suggested)) {
+                    LOG_DEBUG("AI", "Routing through ActionExecutor: " + suggested);
+                    cmdResult = GRIM::ActionExecutor::executeAction(suggested);
+                } else {
+                    extern CommandResult dispatchCommand(const std::string&, const std::string&);
+                    cmdResult = dispatchCommand(cmd, arg);
+                }
                 
                 // Record analytics in both registries
                 auto& toolReg = GRIM::MMO::ToolRegistry::instance();
@@ -786,9 +505,24 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                     toolReg.recordFailure(cmd);
                     GRIM::MMO::ActionPolicyRegistry::instance().recordOutcome(cmd, policyAnn.confidence_summary.overall, false);
                 }
+
+                // Record training example
+                trainEx.parsed_intent    = "command";
+                trainEx.parsed_tool_id   = cmd;
+                trainEx.parsed_args      = arg;
+                trainEx.router_confidence = policyAnn.confidence_summary.overall;
+                trainEx.intent_confidence = policyAnn.confidence_summary.intent_confidence;
+                trainEx.entity_confidence = policyAnn.confidence_summary.entity_confidence;
+                trainEx.outcome = cmdResult.success
+                    ? GRIM::MMO::ToolTrainingExample::Outcome::Success
+                    : GRIM::MMO::ToolTrainingExample::Outcome::Failure;
+                trainingParser.record(std::move(trainEx));
                 
                 // Mark that it was AI-inferred
                 cmdResult.category = cmdResult.category.empty() ? "ai_inferred" : cmdResult.category;
+                
+                // Record assistant response in conversation history
+                scmHistory.addMessage(kDefaultSessionId, "assistant", cmdResult.message);
                 
                 return cmdResult;
             }
@@ -802,6 +536,13 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                 result.category = "conversation";
                 result.success = true;
                 result.errorCode = "ERR_NONE";
+
+                trainEx.parsed_intent = intent;
+                trainEx.outcome = GRIM::MMO::ToolTrainingExample::Outcome::Conversation;
+                trainingParser.record(std::move(trainEx));
+
+                // Record assistant response in conversation history
+                scmHistory.addMessage(kDefaultSessionId, "assistant", response);
 
                 // store context
                 longTermMemory["last_conversation"] = {
@@ -825,97 +566,6 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
     }
 
     return result;
-}
-
-// =========================================================
-// Streaming / incremental AI call
-// =========================================================
-void ai_process_stream(
-    const std::string& input,
-    nlohmann::json& memory,
-    const std::function<void(const std::string&)>& callback
-) {
-    std::string backend = resolveBackendURL();
-    std::string model   = aiConfig.value("default_model", "llama3.1:8b");
-
-    LOG_DEBUG("AI", "ai_process_stream backend=" + backend + " model=" + model);
-
-    bool success = false;
-
-    try {
-        if (backend == "ollama") {
-            auto resp = cpr::Post(
-                cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/generate" },
-                cpr::Header{{"Content-Type","application/json"}},
-                cpr::Body{ nlohmann::json{{"model", model}, {"prompt", input}, {"stream", true}}.dump() },
-                cpr::Timeout{60000}
-            );
-            if (resp.status_code == 200) {
-                std::istringstream ss(resp.text);
-                std::string line;
-                while (std::getline(ss, line)) {
-                    if (!line.empty() && callback) callback(line + " ");
-                }
-                success = true;
-            }
-        }
-        else if (backend == "localai" || backend == "openai") {
-            std::string url =
-                (backend == "localai")
-                    ? aiConfig.value("localai_url","http://127.0.0.1:8080/v1") + "/chat/completions"
-                    : "https://api.openai.com/v1/chat/completions";
-
-            cpr::Header headers = {{"Content-Type","application/json"}};
-            if (backend == "openai") {
-                auto apiKey = aiConfig["api_keys"].value("openai", "");
-                if (apiKey.empty()) {
-                    if (callback) callback("[AI] Missing OpenAI API key\n");
-                    LOG_ERROR("AI", "Missing OpenAI API key");
-                    return;
-                }
-                headers["Authorization"] = "Bearer " + apiKey;
-            }
-
-            auto resp = cpr::Post(
-                cpr::Url{url},
-                headers,
-                cpr::Body{ nlohmann::json{
-                    {"model", model},
-                    {"stream", true},
-                    {"messages", nlohmann::json::array({
-                        {{"role","user"},{"content",input}}
-                    })}
-                }.dump() },
-                cpr::Timeout{60000}
-            );
-
-            if (resp.status_code == 200) {
-                std::istringstream ss(resp.text);
-                std::string line;
-                while (std::getline(ss, line)) {
-                    if (line.rfind("data:", 0) == 0) {
-                        std::string chunk = line.substr(5);
-                        if (chunk.find("[DONE]") != std::string::npos) break;
-                        auto j = nlohmann::json::parse(chunk, nullptr, false);
-                        if (!j.is_discarded() && j.contains("choices")) {
-                            auto delta = j["choices"][0]["delta"];
-                            if (delta.contains("content")) {
-                                if (callback) callback(delta["content"].get<std::string>());
-                            }
-                        }
-                    }
-                }
-                success = true;
-            }
-        }
-    }
-    catch (const std::exception& e) {
-        LOG_ERROR("AI", std::string("Exception in ai_process_stream: ") + e.what());
-    }
-
-    // Memory update
-    memory["last_input"] = input;
-    memory["last_reply"] = success ? "[streamed reply]" : "[AI] Stream failed";
 }
 
 // =========================================================

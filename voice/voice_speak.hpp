@@ -5,18 +5,27 @@
 namespace Voice {
     extern std::atomic<bool> g_isSpeaking;
 
+    // Voice prosody parameters from EmotionPresentationController
+    struct VoiceParams {
+        float pitch    = 1.0f;  // multiplier (1.0 = neutral)
+        float rate     = 1.0f;  // multiplier (1.0 = neutral)
+        float emphasis = 0.5f;  // 0..1 range
+    };
+
     bool initTTS();
     void shutdownTTS();
     bool isReady();
 
     void speak(const std::string& text, const std::string& category);
+    void speak(const std::string& text, const std::string& category, const VoiceParams& params);
     void playAudio(const std::string& path);
     bool isPlaying();
     bool isSpeaking();
 
     std::string coquiSpeak(const std::string& text,
                            const std::string& speaker,
-                           double speed);
+                           double speed,
+                           double pitch = 1.0);
 
     void initQueue();
     void shutdownQueue();

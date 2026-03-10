@@ -84,4 +84,12 @@ struct ResponseEnvelope {
     std::string    error;          // when status == Error
 };
 
+// =========================================================
+// getSubjectTags — extract subject tags from raw user input
+//
+// Returns tags suitable for matching against ModelInfo::subject_tags,
+// enabling subject-based routing to pick the right sub-model.
+// =========================================================
+std::vector<std::string> getSubjectTags(const std::string& raw_input);
+
 } // namespace GRIM::MMO

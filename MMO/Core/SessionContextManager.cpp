@@ -1,4 +1,5 @@
 #include "SessionContextManager.hpp"
+#include "CorrectionTuple.hpp"
 
 #include <algorithm>
 #include <ctime>
@@ -243,6 +244,30 @@ void SessionContextManager::recordUserResponse(
     ep.correction_text = correction_text;
     if (!rejected && correction_text.empty()) {
         ep.accepted_action = ep.tool_id;
+    }
+
+    // Collect correction tuple when user rejects a proposal
+    if (rejected) {
+        std::string turn_id;
+        std::string raw_input;
+        std::string nlp_summary;
+        std::vector<std::string> router_tags;
+        std::string route;
+        if (!s.turns.empty()) {
+            const auto& turn = s.turns.back();
+            turn_id     = turn.turn_id;
+            raw_input   = turn.user_input.raw;
+            nlp_summary = turn.nlp_summary;
+            router_tags = turn.router_tags;
+            route       = turn.selected_route;
+        }
+        CorrectionTupleCollector::instance().collect(
+            session_id, turn_id, raw_input,
+            ep.tool_id, ep.proposed_args,
+            ep.confidence, ep.risk,
+            correction_text, "",  // resolved_tool_id filled later if correction is parsed
+            nlp_summary, router_tags, {},  // subject_tags not stored per-turn yet
+            route, s.mood);
     }
 }
 

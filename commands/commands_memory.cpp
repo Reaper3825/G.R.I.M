@@ -2,6 +2,7 @@
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "memory/unified_memory.hpp"
+#include "memory/memory_buffer_rotation.hpp"
 #include "logger.hpp"
 #include <string>
 
@@ -65,7 +66,7 @@ CommandResult cmdRemember(const std::string& arg) {
     obj.normalized = "remember " + fullText;
     obj.tags       = {"manual", "remember"};
 
-    g_memoryStorage.storeLongTerm(obj);
+    GRIM::MemoryBufferRotation::instance().preprocess(obj);
 
     LOG_DEBUG("Memory", "Remembered: " + fullText);
 

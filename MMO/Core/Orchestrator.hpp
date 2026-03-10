@@ -23,6 +23,7 @@
 #include "ModelLoader.hpp"
 #include "ModelRegistry.hpp"
 #include "RequestContext.hpp"
+#include "ToolGapPlanner.hpp"
 #include "../Router/ModelRouter.hpp"
 #include "../Shared/MMD.hpp"
 #include "../../ai/backends/IGenerationBackend.hpp"
@@ -44,6 +45,7 @@ struct OrchestratorConfig {
     int  generate_timeout_ms        = 30000;
     int  synthesize_timeout_ms      = 10000;
     int  max_submodels_per_request  = 1;    // v1: single sub-model
+    std::string correction_output_path = "correction_tuples.jsonl";
 };
 
 // =========================================================
@@ -63,7 +65,7 @@ struct OrchestratorResult {
 // Usage:
 //   Orchestrator orch(registry, loader, config);
 //   RequestContext ctx;
-//   ctx.request_id = generateId();
+//   ctx.request_id = generateId(); 
 //   ctx.prompt = "Explain photosynthesis";
 //   auto result = orch.generate(ctx);
 //   if (result.success) { use(result.response); }
@@ -91,6 +93,12 @@ public:
     void registerBackend(const std::string& model_id,
                          std::unique_ptr<IGenerationBackend> backend);
 
+    // Evaluate whether a tool/capability exists in the registry.
+    // Returns a ToolGapProposal if the capability is missing.
+    std::optional<ToolGapProposal> evaluateToolGap(
+        const std::string& capability,
+        const std::string& request_id) const;
+
     // Clean shutdown — unloads all models via loader.
     void shutdown();
 
@@ -116,6 +124,7 @@ private:
     MemoryFacade*  memory_;    // nullptr if memory not wired yet
     OrchestratorConfig config_;
     ModelRouter    router_;
+    ToolGapPlanner tool_gap_planner_;
     std::unordered_map<std::string, std::unique_ptr<IGenerationBackend>> backends_;
     mutable std::mutex mutex_;
 };

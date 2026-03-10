@@ -53,7 +53,12 @@ namespace Voice {
     // =========================================================
     // Queue state
     // =========================================================
-    static std::queue<std::pair<std::string,std::string>> speakQueue;
+    struct SpeakItem {
+        std::string text;
+        std::string category;
+        VoiceParams params;
+    };
+    static std::queue<SpeakItem> speakQueue;
     static std::mutex queueMutex;
     static std::condition_variable queueCV;
     static bool workerRunning = false;
@@ -382,21 +387,25 @@ namespace Voice {
             queueCV.wait(lock, [] { return !speakQueue.empty() || !workerRunning; });
             if (!workerRunning) break;
 
-            auto [text, category] = speakQueue.front();
+            SpeakItem item = speakQueue.front();
             speakQueue.pop();
             lock.unlock();
 
-            LOG_DEBUG("Voice/Worker", "Processing: " + text);
+            LOG_DEBUG("Voice/Worker", "Processing: " + item.text);
 
             std::string engine = "coqui";
-            auto it = g_rules.find(category);
+            auto it = g_rules.find(item.category);
             if (it != g_rules.end()) {
                 if (it->second == "coqui" || it->second == "sapi")
                     engine = it->second;
             }
 
+            // Apply EPC voice_rate as speed multiplier, pitch from EPC
+            double effectiveSpeed = g_speed * static_cast<double>(item.params.rate);
+            double effectivePitch = static_cast<double>(item.params.pitch);
+
             if (engine == "coqui") {
-                std::string wavPath = coquiSpeak(text, g_speaker, g_speed);
+                std::string wavPath = coquiSpeak(item.text, g_speaker, effectiveSpeed, effectivePitch);
                 
                 if (!wavPath.empty()) {
                     playAudio(wavPath);
@@ -413,7 +422,7 @@ namespace Voice {
                     ".Speak([Console]::In.ReadToEnd())\"";
                 FILE* pipe = _popen(command.c_str(), "w");
                 if (pipe) {
-                    fwrite(text.c_str(), 1, text.size(), pipe);
+                    fwrite(item.text.c_str(), 1, item.text.size(), pipe);
                     _pclose(pipe);
                 }
             }
@@ -547,7 +556,8 @@ namespace Voice {
     // =========================================================
     std::string coquiSpeak(const std::string& text,
                            const std::string& speaker,
-                           double speed) {
+                           double speed,
+                           double pitch) {
 #ifdef _WIN32
         // ? LOCK: Prevent concurrent TTS generation
         std::lock_guard<std::mutex> generationLock(ttsGenerationMutex);
@@ -576,6 +586,7 @@ namespace Voice {
             {"text", text},
             {"speaker", speaker},
             {"speed", speed},
+            {"pitch", pitch},
             {"language", g_language},  // ? Include language for XTTS v2
             {"out", outFile}
         };
@@ -671,9 +682,9 @@ namespace Voice {
     }
 
     // =========================================================
-    // High-level Speak (enqueue)
+    // High-level Speak (enqueue) — with voice prosody params
     // =========================================================
-    void speak(const std::string& text, const std::string& category) {
+    void speak(const std::string& text, const std::string& category, const VoiceParams& params) {
         // ? FIX: Strip "GRIM:" or "GRIM :" prefix if present
         std::string cleanedText = text;
         
@@ -698,9 +709,13 @@ namespace Voice {
         
         {
             std::lock_guard<std::mutex> lock(queueMutex);
-            speakQueue.emplace(cleanedText, category);
+            speakQueue.push({cleanedText, category, params});
         }
         queueCV.notify_one();
+    }
+
+    void speak(const std::string& text, const std::string& category) {
+        speak(text, category, VoiceParams{});
     }
     
     // =========================================================

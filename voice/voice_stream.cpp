@@ -222,15 +222,8 @@ static void run(whisper_context* ctx,
                     LOG_DEBUG("VoiceStream", "Dispatching command: " + intent.name);
                     handleCommand(clean);
                 } else {
-                    std::string fullReply;
-                    ai_process_stream(
-                     VoiceStream::g_state.partial,
-                    uiLongTermMemory,
-                    [&](const std::string& chunk) {
-                        fullReply += chunk;
-                        // Note: Console now uses ConsolePanel with UIInputBox - no direct buffer access
-                        LOG_DEBUG("VoiceStream/AI", "Chunk: " + chunk);
-                    });
+                    auto future = callAIAsync(VoiceStream::g_state.partial);
+                    std::string fullReply = future.get();
 
                     uiHistory->push("[AI] " + fullReply, 0xFF00FF00);
                 }

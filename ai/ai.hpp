@@ -39,11 +39,6 @@ void incrementUsageCount(const std::string& command);
 void setLastCommand(const std::string& command);
 
 // ====================================================
-// AI backend resolver
-// ====================================================
-std::string resolveBackendURL();
-
-// ====================================================
 // Core AI calls
 // ====================================================
 std::future<std::string> callAIAsync(const std::string& prompt);
@@ -52,7 +47,6 @@ std::future<std::string> callAIAsync(const std::string& prompt);
 // Conversation management (for KV cache optimization)
 // ====================================================
 void clearConversationHistory();  // Clear conversation context to start fresh
-void warmupOllamaModel();         // Preload and warm up the AI model
 
 // Warm up the AI backend at launch to avoid first-call delays.
 void warmupAI();
@@ -62,8 +56,3 @@ void warmupAI();
 // ====================================================
 CommandResult ai_process(const std::string& input);
 CommandResult ai_interpret(const std::string& input, bool allowCommands = true);
-
-
-void ai_process_stream(const std::string& input,
-                       nlohmann::json& memory,
-                       const std::function<void(const std::string&)>& onChunk);

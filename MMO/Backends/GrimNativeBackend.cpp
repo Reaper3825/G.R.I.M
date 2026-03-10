@@ -118,16 +118,13 @@ GenerationResult GrimNativeBackend::generateWithHistory(
         return result;
     }
 
-    // Parse Ollama-compatible response format
+    // Parse Ollama-compatible response format (canonical: /api/chat)
     if (j.contains("message") && j["message"].contains("content")) {
         result.success = true;
         result.text    = j["message"]["content"].get<std::string>();
-    } else if (j.contains("response")) {
-        // Fallback for /api/generate format
-        result.success = true;
-        result.text    = j["response"].get<std::string>();
     } else {
-        result.error = "Unexpected response format from " + endpoint;
+        result.error = "Unexpected response format from " + endpoint
+                       + " — expected {\"message\":{\"content\":\"...\"}}";
         LOG_ERROR("MMO_GRIM_NATIVE", result.error);
         return result;
     }

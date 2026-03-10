@@ -4,6 +4,7 @@
 #include "logger.hpp"
 #include "memory/unified_memory.hpp"
 #include "../MMO/Core/SessionContextManager.hpp"
+#include "../MMO/Core/CorrectionTuple.hpp"
 #include "ai/ai_rl.hpp"
 #include "helpers/grim_input.hpp"
 #include "response_manager.hpp"
@@ -248,6 +249,7 @@ bool processFeedbackResponse(const std::string& originalCmd, const std::string& 
 
     if (isPositive || isNegative) {
         // Simple yes/no confirmation
+        auto& scm = GRIM::MMO::SessionContextManager::instance();
         try {
             nlohmann::json fb = {
                 {"type", "explicit_feedback"},
@@ -260,7 +262,15 @@ bool processFeedbackResponse(const std::string& originalCmd, const std::string& 
             LOG_DEBUG("Feedback", "Explicit feedback recorded: " + std::string(isPositive ? "positive" : "negative"));
             
             if (isPositive) {
-                GRIM::MMO::SessionContextManager::instance().recordUsage(kDefaultSession, originalCmd);
+                scm.recordUsage(kDefaultSession, originalCmd);
+                // Record acceptance and mark any pending correction tuple as confirmed
+                scm.recordUserResponse(kDefaultSession, false, "");
+                auto snap = scm.snapshot(kDefaultSession);
+                GRIM::MMO::CorrectionTupleCollector::instance().markConfirmed(
+                    kDefaultSession, snap.turn_id);
+            } else {
+                // Record rejection — triggers correction tuple collection
+                scm.recordUserResponse(kDefaultSession, true, "");
             }
         } catch (const std::exception& e) {
             LOG_ERROR("Feedback", std::string("Error sending feedback to RL: ") + e.what());
@@ -308,6 +318,7 @@ bool processFeedbackResponse(const std::string& originalCmd, const std::string& 
         // High confidence - user is repeating/confirming
         LOG_DEBUG("Feedback", "High confidence match - treating as implicit confirmation");
         
+        auto& scm = GRIM::MMO::SessionContextManager::instance();
         try {
             nlohmann::json fb = {
                 {"type", "implicit_confirmation"},
@@ -321,7 +332,12 @@ bool processFeedbackResponse(const std::string& originalCmd, const std::string& 
             GRIM::RL::getAction(fb);
             
             CommandExecution::storeLearnedCommand(normalizedResponse, originalCmd, finalConfidence);
-            GRIM::MMO::SessionContextManager::instance().recordUsage(kDefaultSession, originalCmd);
+            scm.recordUsage(kDefaultSession, originalCmd);
+            // Record acceptance and mark correction tuple confirmed
+            scm.recordUserResponse(kDefaultSession, false, "");
+            auto snap = scm.snapshot(kDefaultSession);
+            GRIM::MMO::CorrectionTupleCollector::instance().markConfirmed(
+                kDefaultSession, snap.turn_id);
         } catch (const std::exception& e) {
             LOG_ERROR("Feedback", std::string("Error recording implicit feedback: ") + e.what());
         }
@@ -345,9 +361,13 @@ bool processFeedbackResponse(const std::string& originalCmd, const std::string& 
         return true;
     }
     else {
-        // Low confidence - treat as a new command
+        // Low confidence - treat as a new command (user correction)
         LOG_DEBUG("Feedback", "Low confidence - treating as new command");
         
+        // Record rejection + correction text → triggers correction tuple collection
+        GRIM::MMO::SessionContextManager::instance().recordUserResponse(
+            kDefaultSession, true, userResponse);
+
         try {
             nlohmann::json fb = {
                 {"type", "command_change"},

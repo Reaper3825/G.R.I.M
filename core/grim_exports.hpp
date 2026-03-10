@@ -43,7 +43,6 @@ extern "C" {
 extern "C" {
     GRIM_EXPORT_SYMBOL std::string getResourcePath();
     GRIM_EXPORT_SYMBOL CommandResult reloadNlpRules();
-    GRIM_EXPORT_SYMBOL std::string resolveBackendURL();
     GRIM_EXPORT_SYMBOL CommandResult ai_process(const std::string& input);
     GRIM_EXPORT_SYMBOL void logPhaseInternal(const std::string& file, const std::string& phase, bool success);
 }
@@ -59,7 +58,7 @@ namespace Voice {
     GRIM_EXPORT_SYMBOL std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemory);
     GRIM_EXPORT_SYMBOL void playAudio(const std::string& file);
     GRIM_EXPORT_SYMBOL bool isSpeaking();
-    GRIM_EXPORT_SYMBOL std::string coquiSpeak(const std::string& text, const std::string& model, double speed);
+    GRIM_EXPORT_SYMBOL std::string coquiSpeak(const std::string& text, const std::string& model, double speed, double pitch = 1.0);
     
     struct State;
     extern GRIM_EXPORT_SYMBOL State g_state;

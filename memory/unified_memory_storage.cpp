@@ -1,5 +1,6 @@
 #include "unified_memory.hpp"
 #include "unified_memory_generated.h"  // FlatBuffers generated header
+#include "atomic_writer.hpp"
 #include "logger.hpp"
 #include <fstream>
 #include <filesystem>
@@ -267,10 +268,8 @@ void UnifiedMemoryStorage::loadFromDisk() {
 }
 
 void UnifiedMemoryStorage::saveToDisk() {
- // Save to JSON (backward compatibility)
+ // Save to JSON (backward compatibility) — atomic write
     if (jsonPath.empty()) return;
-    
-    std::filesystem::create_directories(std::filesystem::path(jsonPath).parent_path());
     
     nlohmann::json j;
     j["memories"] = nlohmann::json::array();
@@ -279,10 +278,11 @@ void UnifiedMemoryStorage::saveToDisk() {
         j["memories"].push_back(nlohmann::json::parse(obj.toJSON()));
   }
     
-    std::ofstream ofs(jsonPath, std::ios::trunc);
-    if (ofs.is_open()) {
-    ofs << j.dump(2);
-  LOG_DEBUG("UnifiedMemory", "Saved " + std::to_string(longTerm.size()) + " memories to JSON");
+    try {
+        AtomicWriter::writeString(jsonPath, j.dump(2));
+        LOG_DEBUG("UnifiedMemory", "Saved " + std::to_string(longTerm.size()) + " memories to JSON (atomic)");
+    } catch (const std::exception& e) {
+        LOG_ERROR("UnifiedMemory", std::string("Atomic JSON save failed: ") + e.what());
     }
 }
 
@@ -341,11 +341,12 @@ void UnifiedMemoryStorage::saveToFlatBuffer() {
     
     builder.Finish(store);
     
-    // Write to file
-    std::ofstream ofs(fbPath, std::ios::binary | std::ios::trunc);
-    if (ofs.is_open()) {
-      ofs.write(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
-        LOG_DEBUG("UnifiedMemory", "Saved " + std::to_string(longTerm.size()) + " memories to FlatBuffer");
+    // Write to file — atomic write
+    try {
+        AtomicWriter::write(fbPath, builder.GetBufferPointer(), builder.GetSize());
+        LOG_DEBUG("UnifiedMemory", "Saved " + std::to_string(longTerm.size()) + " memories to FlatBuffer (atomic)");
+    } catch (const std::exception& e) {
+        LOG_ERROR("UnifiedMemory", std::string("Atomic FlatBuffer save failed: ") + e.what());
     }
 }
 

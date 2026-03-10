@@ -120,3 +120,12 @@ NlpAnnotation annotate(const std::string& raw_input,
                         const ContextSnapshot& context);
 
 } // namespace GRIM
+
+// Forward declare V2 for overload
+namespace GRIM::MMO { struct ContextSnapshotV2; }
+
+namespace GRIM {
+// V2 overload — accepts rich ContextSnapshotV2, projects to V1 internally.
+NlpAnnotation annotate(const std::string& raw_input,
+                        const GRIM::MMO::ContextSnapshotV2& context_v2);
+} // namespace GRIM

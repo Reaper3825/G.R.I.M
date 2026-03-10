@@ -17,6 +17,7 @@
 
 // External references
 extern GRIM::UnifiedMemoryStorage g_memoryStorage;
+#include "memory/memory_buffer_rotation.hpp"
 
 namespace GRIM {
 
@@ -1049,12 +1050,12 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
         LOG_DEBUG("QuestionHandler", "Storing vision analysis");
     }
     
-    // Store in long-term memory with high confidence
+    // Stage in rotation pipeline (will flush to long-term on merge/sync)
     try {
-        g_memoryStorage.storeLongTerm(memory);
-        LOG_DEBUG("QuestionHandler", "Successfully stored context memory: " + std::to_string(memory.id));
+        GRIM::MemoryBufferRotation::instance().preprocess(memory);
+        LOG_DEBUG("QuestionHandler", "Staged context memory: " + std::to_string(memory.id));
     } catch (const std::exception& e) {
-        LOG_ERROR("QuestionHandler", "Failed to store memory: " + std::string(e.what()));
+        LOG_ERROR("QuestionHandler", "Failed to stage memory: " + std::string(e.what()));
     }
 }
 

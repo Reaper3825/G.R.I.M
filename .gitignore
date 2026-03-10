@@ -132,6 +132,11 @@ resources/models/GRIM-text/**/*.png
 resources/models/GRIM-text/**/*.fb
 
 # ==============================
+# Node / JS dependencies
+# ==============================
+node_modules/
+
+# ==============================
 # Python / Virtual Environments
 # ==============================
 .venv/

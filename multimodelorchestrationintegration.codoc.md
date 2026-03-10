@@ -320,7 +320,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - Loaded from `ai_config.json` → `mmo.orchestrator` in `bootstrapMMOLayer()` (see §26)
 
 **Current consumers**
-- `callAIAsync()` in `ai/ai.cpp` — MMO branch at top of async lambda; routes through `g_orchestrator->generate()` when registry is enabled, falls back to legacy `resolveBackendURL()` in shadow mode on failure, returns error string in enforced mode on failure
+- `callAIAsync()` in `ai/ai.cpp` — sole dispatch path; all AI calls route through `g_orchestrator->generate()`, throws on null orchestrator
 - `bootstrap/bootstrap.cpp` — constructs orchestrator after registry and loader, wires process callbacks
 - `main.cpp` — `consoleHandler` (Win32) and `signalHandler` (Unix) call `g_orchestrator->shutdown()` + delete during teardown
 
@@ -331,10 +331,14 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - HTTP via cpr — same library used by existing `callAIAsync()` and `GRIMBackend`
 
 **Legacy replaced**
-- Direct `resolveBackendURL()` call in `callAIAsync()` is bypassed when MMO is enabled (shadow mode preserves fallback; enforced mode does not)
+- `resolveBackendURL()` deleted entirely — no fallback, no shadow mode
+- `callAIAsync()` rewritten: orchestrator-only, no legacy backend branches
+- `ai_process_stream()` deleted — callers migrated to `callAIAsync()`
+- `warmupOllamaModel()` deleted — no model-specific warmup
+- `stopGRIMTextServer()` legacy fallback calls removed from `main.cpp`
 
 **Status**
-- Implemented; bootstrap wiring complete; `callAIAsync` MMO branch active; shutdown handlers wired; NLP/memory context wiring pending
+- Implemented; bootstrap wiring complete; `callAIAsync` is orchestrator-only; shutdown handlers wired; NLP/memory context wiring pending
 
 ## Separation-of-concerns summary
 
@@ -354,7 +358,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 | Unified tool registry | `ToolRegistry` | `ToolRegistry::instance()` |
 | Action policy / Training Wheels | `ActionPolicyRegistry` | `ActionPolicyRegistry::instance().evaluate()` |
 | Bootstrap wiring | `bootstrap/bootstrap.cpp` | globals + init block + idle tick thread |
-| AI dispatch replacement | `ai/ai.cpp` | MMO branch in `callAIAsync()` + policy gate in `ai_interpret()` |
+| AI dispatch replacement | `ai/ai.cpp` | `callAIAsync()` → orchestrator-only, no legacy backend paths |
 | Shutdown teardown | `main.cpp` | `consoleHandler` / `signalHandler` — top-down delete |
 
 ## Legacy paths removed
@@ -374,6 +378,18 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - All `GRIM::Feedback::` globals deleted from `commands_feedback.cpp`
 - All `GRIM::ContextManager::` static method calls replaced with `SessionContextManager` in `commands_core.cpp`, `commands_feedback.cpp`, `MemoryFacade.cpp`, `proactive_dialogue.cpp`
 - `memory/context_manager.hpp` and `memory/context_manager.cpp` deleted — `ContextSnapshot` struct extracted to `memory/context_snapshot.hpp`
+- `resolveBackendURL()` deleted from `ai/ai.cpp`, `ai/ai.hpp`, `core/grim_exports.hpp`
+- `warmupOllamaModel()` deleted from `ai/ai.cpp`, `ai/ai.hpp`, `bootstrap/bootstrap.cpp`
+- `ai_process_stream()` deleted from `ai/ai.cpp`, `ai/ai.hpp`; caller migrated to `callAIAsync()` in `voice/voice_stream.cpp`
+- `g_currentModel` / `g_modelWarmedUp` statics deleted from `ai/ai.cpp`
+- `autoSelectBackend()` deleted from `commands/commands_ai.cpp`
+- `callAIAsync()` legacy backend branches (ollama/localai/openai/grim_native direct HTTP) deleted
+- `Orchestrator::callBackend()` direct HTTP fallback deleted
+- `GrimNativeBackend` `j["response"]` format fallback deleted
+- `cmdGrimAi()` direct HTTP backend branches deleted (~100 lines)
+- `cmdAiBackend()` `resolveBackendURL()` call and `autoSelectBackend()` call deleted
+- 3 `stopGRIMTextServer()` legacy fallback calls deleted from `main.cpp`
+- `cpr/cpr.h` include removed from `commands/commands_ai.cpp`
 
 ## Legacy paths fully migrated
 
@@ -853,11 +869,10 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 ## Next systems to document when touched
 
-- IGenerationBackend concrete implementations (LlamaCppBackend, ExternalBackend)
-- ToolTrainingParser (Phase 1.0)
-- ToolGapPlanner integration into synthesize-step handling
-- UI surface registry / emotion presentation controller
-- Model-keyed process manager
+- MemoryBufferRotation long-term flush scheduling (periodic vs shutdown-only)
+- Physical visual context (camera/real-world semantic interpretation)
+- Plugin hot-reload ToolRegistry cache invalidation
+- LoRA training pipeline from ToolTrainingExamples + CorrectionTuples
 
 ### 13. Bootstrap phase separation (Phase 0.1)
 
@@ -868,7 +883,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `bootstrapConfigAndStatics(argc, argv)` — Phase 1: config, aliases, fonts
 - `bootstrapHardwareAndResources()` — Phase 2: hardware inventory, location, ResourceSignal, ResourceCoordinator
 - `bootstrapSubsystems()` — Phase 3: voice (Coqui), RL bridge, GRIM-text server
-- `bootstrapMMOLayer()` — Phase 4: ModelRegistry, ModelLoader, Orchestrator, ToolRegistry seed, ActionPolicyRegistry, SessionContextManager
+- `bootstrapMMOLayer()` — Phase 4: ModelRegistry, ModelLoader, ProcessManager, Orchestrator, ToolRegistry seed, ActionPolicyRegistry, SessionContextManager
 - `bootstrapWarmup()` — Phase 5: Ollama warmup, Whisper preload
 - `runBootstrapChecks(argc, argv)` — public orchestrator that calls phases 1-5 in sequence
 - `stopMMOIdleTick()` — stops the background idle-tick thread
@@ -1102,7 +1117,7 @@ When refactoring a system, append or update the relevant section in this file wi
 - Backend registry on Orchestrator (`backends_` map)
 - `registerBackend(model_id, backend)` — stores backends
 - `resultToEnvelope()` — converts `GenerationResult` to `ResponseEnvelope` (parses structured JSON if present, wraps raw text otherwise)
-- Backend dispatch priority: registered backend → direct HTTP fallback
+- Backend dispatch priority: registered backend → throw on missing (no HTTP fallback)
 - Envelope serialization into `GenerationOptions` for backend consumption
 
 **Does not own**
@@ -1120,7 +1135,7 @@ When refactoring a system, append or update the relevant section in this file wi
 - Endpoint paths `/api/route`, `/api/generate`, `/api/synthesize` → `/api/mmo/*` prefix
 
 **Status**
-- Implemented; all configured models get backends registered at bootstrap; envelope transport wired
+- Implemented; all configured models get backends registered at bootstrap; envelope transport wired; direct HTTP fallback deleted from `callBackend()` — throws `runtime_error` if backend not registered
 
 ### 26. Config loading from ai_config.json (Phase 3 wiring)
 
@@ -1318,3 +1333,732 @@ When refactoring a system, append or update the relevant section in this file wi
 
 **Status**
 - Implemented; registered at bootstrap; Orchestrator dispatch wired
+
+---
+
+### 32. ProcessManager — model-keyed server process lifecycle
+
+**What changed**
+- New `MMO/Core/ProcessManager.hpp` + `ProcessManager.cpp`
+- Replaces the singleton `GRIMTextServerManager` in the MMO path
+- Bootstrap callbacks on `ModelLoader` now delegate to `ProcessManager::start(model)` / `stop(model_id)` instead of the singleton
+- `main.cpp` shutdown handlers call `g_processManager->stopAll()` before legacy `stopGRIMTextServer()`
+- Global `g_processManager` declared in `bootstrap.hpp`, allocated in `bootstrapMMOLayer()`
+
+**Owns**
+- One OS process per model ID (model-keyed `ProcessSlot` map)
+- Port uniqueness validation — throws `std::runtime_error` if two models claim the same port
+- Per-model Windows mutex identity (`Global\GRIMTextServer_{model_id}`)
+- GrimTextServer process spawning (path resolution, `CreateProcessA`, health poll)
+- Graceful + forceful process termination (CTRL_C_EVENT → TerminateProcess fallback)
+
+**Does not own**
+- Model load/unload state machine (owned by `ModelLoader`)
+- Config loading — receives `ModelInfo` which already has paths/ports populated
+- Backend logic — only manages the OS process; backends are registered separately
+- Non-GrimTextServer backends (Ollama, LlamaCpp, External) — marked as running but not process-managed
+
+**Canonical hook points**
+- `g_processManager->start(model)` — ModelLoader start callback
+- `g_processManager->stop(model_id)` — ModelLoader stop callback
+- `g_processManager->stopAll()` — main.cpp shutdown
+- `g_processManager->checkHealth(model_id, timeout_ms)` — HTTP GET health check
+- `g_processManager->isRunning(model_id)` — OS-level process alive check
+- `g_processManager->getUrl(model_id)` — retrieve the URL for a running model
+
+**Current consumers**
+- `bootstrap/bootstrap.cpp` — creates `g_processManager`, wires into ModelLoader callbacks
+- `main.cpp` — `consoleHandler()` and normal shutdown path call `stopAll()` + delete
+
+**Status**
+- Implemented; replaces singleton delegation in MMO path; legacy `stopGRIMTextServer()` fallback calls deleted from `main.cpp`
+
+### 33. Legacy path purge — no backwards compatibility
+
+**What changed**
+- `resolveBackendURL()` deleted from `ai/ai.cpp`, `ai/ai.hpp`, `core/grim_exports.hpp`
+- `warmupOllamaModel()` deleted from `ai/ai.cpp`, `ai/ai.hpp`, `bootstrap/bootstrap.cpp`
+- `ai_process_stream()` deleted from `ai/ai.cpp`, `ai/ai.hpp`; caller in `voice/voice_stream.cpp` migrated to `callAIAsync()`
+- `g_currentModel` / `g_modelWarmedUp` statics deleted from `ai/ai.cpp`
+- `callAIAsync()` rewritten to orchestrator-only — no shadow mode, no legacy backend branches (ollama/localai/openai/grim_native direct HTTP deleted)
+- `Orchestrator::callBackend()` — direct HTTP fallback deleted; throws `runtime_error` if no backend registered
+- `GrimNativeBackend::generate()` — `j["response"]` fallback format deleted; enforces canonical `j["message"]["content"]` only
+- `cmdAiBackend()` — `resolveBackendURL()` call deleted, `autoSelectBackend()` helper deleted, simplified to config-set-only
+- `cmdGrimAi()` — all direct HTTP backend branches deleted (~100 lines); delegates to `ai_process()` only
+- `main.cpp` — 3 `stopGRIMTextServer()` legacy fallback calls deleted (lines 103, 157, 500)
+- `bootstrap.cpp` — `warmupOllamaModel()` call removed from Phase 5 warmup
+- `cpr/cpr.h` include removed from `commands/commands_ai.cpp`
+
+**Deleted functions**
+- `resolveBackendURL()` — was in `ai/ai.cpp`, exported via `grim_exports.hpp`
+- `warmupOllamaModel()` — was in `ai/ai.cpp`
+- `ai_process_stream()` — was in `ai/ai.cpp`
+- `autoSelectBackend()` — was in `commands/commands_ai.cpp`
+
+**Deleted statics**
+- `g_currentModel` — was in `ai/ai.cpp`
+- `g_modelWarmedUp` — was in `ai/ai.cpp`
+
+**Files modified**
+- `ai/ai.cpp` — bulk of deletions
+- `ai/ai.hpp` — 3 declarations removed
+- `core/grim_exports.hpp` — `resolveBackendURL` export removed
+- `commands/commands_ai.cpp` — `autoSelectBackend`, direct HTTP branches, `cpr` include removed
+- `voice/voice_stream.cpp` — `ai_process_stream` → `callAIAsync`
+- `main.cpp` — 3 `stopGRIMTextServer` calls removed
+- `bootstrap/bootstrap.cpp` — `warmupOllamaModel` call + comment removed
+- `MMO/Core/Orchestrator.cpp` — direct HTTP fallback in `callBackend()` removed
+- `MMO/Backends/GrimNativeBackend.cpp` — `j["response"]` format fallback removed
+
+**Validation status**
+- All `resolveBackendURL` references eliminated (verified via grep)
+- All `ai_process_stream` references eliminated
+- All `warmupOllamaModel` references eliminated
+- All `stopGRIMTextServer` legacy fallback calls eliminated
+- CommandRegistry → ToolRegistry seeding bridge retained (data sync, not compat shim)
+
+**Remaining gaps**
+- `warmupAI()` in `ai/ai.cpp` still exists as a minimal hello-world warmup — delegates through `callAIAsync` → orchestrator, so it's clean
+- `ai_process()` export in `grim_exports.hpp` retained — used by external consumers; internally routes through orchestrator
+
+---
+
+## §34 — Config hardening + ContextSnapshotV2 wiring + ToolGapPlanner integration + MMD.cpp
+
+**What changed**
+
+1. **ai_config.json** — Added three missing config sections that bootstrap code already read with fallback defaults:
+   - `mmo.model_loader`: `load_timeout_ms`, `idle_ttl_ms`, `hot_ttl_cap_ms`, `use_degrade_step_ms`
+   - `mmo.orchestrator`: `route_timeout_ms`, `generate_timeout_ms`, `synthesize_timeout_ms`, `max_submodels_per_request`
+   - `training_wheels` (top-level): `enabled`, `risk_threshold`, `min_confidence_floor`, `uncalibrated_router_confidence`, `calibration_min_samples`, `per_category_thresholds`
+
+2. **ContextSnapshotV2 wired end-to-end** — Primary AI dispatch paths now use V2 rich snapshots instead of V1 legacy projections:
+   - `NlpAnnotation.hpp/.cpp` — Added `annotate(raw_input, ContextSnapshotV2)` overload. Projects V2→V1 internally for IntentGate/FastClassifier (which still consume V1 fields).
+   - `RouterMetadataBuilder.hpp/.cpp` — Added `setContextV2(ContextSnapshotV2)`. Stores owned V1 copy (projected from V2) + serializes V2-only rich fields (referents, turn summaries, visual context, mood, pressure) into `context_snapshot.v2` in the router metadata JSON. Also auto-populates `visual_context_physical` and `visual_context_digital` from V2.
+   - `ai.cpp` — Both call sites (`callAIAsync()` and `ai_interpret()` policy evaluation) switched from `scm.legacySnapshot("default")` → `scm.snapshot("default")`, using V2 overloads of `annotate()` and `setContextV2()`.
+
+3. **ToolGapPlanner integrated into Orchestrator** — When the model suggests a tool/command that isn't in the ToolRegistry, the system now returns a structured gap proposal instead of a cryptic error:
+   - `Orchestrator.hpp` — Added `ToolGapPlanner tool_gap_planner_` member, `evaluateToolGap(capability, request_id)` public method.
+   - `Orchestrator.cpp` — Constructor initializes `tool_gap_planner_(ToolRegistry::instance())`. `evaluateToolGap()` delegates to planner.
+   - `ai.cpp` — In `ai_interpret()`, after parsing a suggested command, checks `toolRegGap.isRegistered(cmd)` and `resolveAlias(cmd)`. If unrecognized, calls `g_orchestrator->evaluateToolGap()` and returns the gap rationale to the user.
+
+4. **MMD.cpp implemented** — `getSubjectTags(raw_input)` declared in `MMO/Shared/MMD.hpp`, implemented in new `MMO/Shared/MMD.cpp`:
+   - Keyword-based subject tag extraction for subject-based routing
+   - Maps ~45 keywords across 9 subject categories (math, science, programming, technology, language, writing, creative, knowledge, general)
+   - Returns `{"general"}` when no specific tags match
+   - Tags match against `ModelInfo::subject_tags` for sub-model selection
+
+**What now owns the concern**
+
+| Concern | Owner |
+|---------|-------|
+| Config defaults for MMO subsystems | `ai_config.json` (explicit) + bootstrap fallbacks (safety net) |
+| Rich context for AI dispatch | `SessionContextManager::snapshot()` → `ContextSnapshotV2` |
+| V1 context for IntentGate/FastClassifier | `annotate(V2)` internal projection; `legacySnapshot()` for other callers |
+| Visual context in router metadata | `RouterMetadataBuilder::setContextV2()` auto-populates from V2 |
+| Tool gap detection | `Orchestrator::evaluateToolGap()` → `ToolGapPlanner::evaluate()` |
+| Subject tag extraction | `GRIM::MMO::getSubjectTags()` in `MMO/Shared/MMD.cpp` |
+
+**Canonical integration points**
+
+- `annotate(raw_input, ContextSnapshotV2)` — V2-aware NLP annotation entry point
+- `RouterMetadataBuilder::setContextV2(v2)` — V2-aware metadata builder
+- `Orchestrator::evaluateToolGap(capability, request_id)` — structured tool gap check
+- `GRIM::MMO::getSubjectTags(raw_input)` — subject tag extraction for routing
+
+**Files modified**
+- `ai_config.json` — 3 new config sections
+- `nlp/NlpAnnotation.hpp` — V2 overload declaration
+- `nlp/NlpAnnotation.cpp` — V2 overload implementation + `#include SessionContextManager.hpp`
+- `nlp/RouterMetadataBuilder.hpp` — `setContextV2()` method, `has_v2_`/`owned_v1_`/`context_v2_json_` members
+- `nlp/RouterMetadataBuilder.cpp` — `setContextV2()` impl, `build()` updated for V2
+- `ai/ai.cpp` — Both `legacySnapshot()` call sites → `snapshot()` + V2 overloads; tool gap check added
+- `MMO/Core/Orchestrator.hpp` — `ToolGapPlanner` include + member + `evaluateToolGap()` method
+- `MMO/Core/Orchestrator.cpp` — `ToolGapPlanner` init in constructor + `evaluateToolGap()` impl
+- `MMO/Shared/MMD.hpp` — `getSubjectTags()` declaration
+- `MMO/Shared/MMD.cpp` — **NEW FILE** — keyword-based subject tag extraction
+
+**Validation status**
+- `legacySnapshot()` still exists on SessionContextManager for `commands_core.cpp` (3 sites) and `MemoryFacade.cpp` (2 sites) — these only need V1 fields (mood, consecutive commands)
+- Primary AI dispatch (`callAIAsync` + `ai_interpret` policy) fully on V2
+- ToolGapPlanner fires before ActionPolicyRegistry in `ai_interpret()`, so unrecognized tools never hit the policy gate
+- `ai_config.json` validated as valid JSON
+
+**Remaining gaps**
+- `commands_core.cpp` and `MemoryFacade.cpp` still use `legacySnapshot()` — low priority, they only need mood/consecutive-command V1 fields
+- `getSubjectTags()` not yet called from router — ModelRouter needs wiring to use it during route decision
+- ToolGapPlanner returns proposals but no UI flow for user approval/scaffold/hot-load yet
+- Visual context in V2 not yet populated by any perception system (fields are empty defaults)
+
+---
+
+## §35 — Subject tags in routing + NLP stubs fixed + EmotionPresentationController + Correction tuples
+
+**What changed**
+
+1. **Subject tags wired into routing metadata** — `RouterMetadataBuilder::build()` now calls `GRIM::MMO::getSubjectTags()` on the raw user input and includes the extracted subject tags in the router metadata envelope (`subject_tags` field). The router model can use these to inform sub-model selection alongside `ModelInfo::subject_tags`.
+   - `RouterMetadataBuilder.hpp` — Added `subject_tags` field to `RouterMetadata` struct
+   - `RouterMetadataBuilder.cpp` — Added `#include "../MMO/Shared/MMD.hpp"`, calls `getSubjectTags()` in `build()`, serializes in `toJson()`
+
+2. **NLP stubs resolved** — Three TODO stubs replaced with real implementations:
+   - **Language detection**: `NlpAnnotation.cpp` — Added `detectLanguage()` heuristic. Counts characters in Latin, CJK, Cyrillic, and Arabic UTF-8 ranges. Returns ISO 639-1 codes (`en`, `zh`, `ru`, `ar`). Replaces hardcoded `"en"`.
+   - **loadLearnedRules**: `nlp.cpp` — Loads all learned commands from `UnifiedMemoryStorage::getAllLearnedCommands()`, reconstructs `NLP::Rule` objects (pattern, intent, success_rate), skips duplicates and malformed patterns.
+   - **saveLearnedRules**: `nlp.cpp` — Iterates rules where `learned == true`, stores each via `storage.storeLearnedCommand(pattern_str, intent, success_rate)`.
+   - Note: `grammar_parser.cpp` `matchTemplate()` left as-is — requires significant template parsing design, not a simple stub fill.
+
+3. **EmotionPresentationController created** — Separates internal mood state (PersonalityManager, used by routing/memory/policy/reward) from outward expression (UI/voice/avatar):
+   - `MMO/UI/EmotionPresentationController.hpp` — **NEW FILE**. Defines `PresentationChannel` enum (Text/Voice/Avatar), `EmotionPresentation` struct (mood_label, text_prefix, voice_pitch/rate/emphasis, avatar_expression, intensity), `EmotionPresentationController` singleton.
+   - `MMO/UI/EmotionPresentationController.cpp` — **NEW FILE**. Maps `PersonalityManager::get()` Mood values to outward presentation parameters. When disabled, returns neutral defaults. Per-channel enable/disable supported. All atomics, lock-free.
+   - Mood→Expression mapping: Curious=raised pitch + "Hmm, " prefix; Playful=bright voice; Irritated=lower pitch + emphasis; Tired=slower/softer; Focused=slightly faster; Calm=all neutral.
+
+4. **CorrectionTuple system created** — Typed artifact for user correction → LoRA fine-tuning pipeline:
+   - `MMO/Core/CorrectionTuple.hpp` — **NEW FILE**. Defines `CorrectionTuple` struct (rejected proposal + user correction + NLP/routing context + signal type) and `CorrectionTupleCollector` singleton (collect, markConfirmed, flush to JSONL, clear).
+   - `MMO/Core/CorrectionTuple.cpp` — **NEW FILE**. Implements collection (builds full tuple from episode + context), confirmation marking, JSONL append-mode export with complete serialization.
+   - `SessionContextManager.cpp` — `recordUserResponse()` now auto-collects a correction tuple when `rejected == true`, capturing tool_id, args, confidence, risk, correction_text, NLP summary, router tags, route, and mood from the current session state.
+   - `Orchestrator.cpp` — `shutdown()` now flushes pending correction tuples to `correction_tuples.jsonl` before unloading models.
+
+**What now owns the concern**
+
+| Concern | Owner |
+|---------|-------|
+| Subject tags in router metadata | `RouterMetadataBuilder::build()` → `getSubjectTags()` |
+| Language detection | `detectLanguage()` in `NlpAnnotation.cpp` |
+| NLP rule persistence | `NLP::loadLearnedRules()` / `saveLearnedRules()` via `UnifiedMemoryStorage` |
+| Outward emotion expression | `EmotionPresentationController::currentPresentation()` |
+| Internal mood state | `PersonalityManager` (unchanged — EPC reads, does not own) |
+| Correction data for LoRA | `CorrectionTupleCollector` (auto-collected on rejection) |
+| Correction flush at shutdown | `Orchestrator::shutdown()` |
+
+**Canonical integration points**
+
+- `RouterMetadata::subject_tags` — available in router metadata JSON for route decisions
+- `EmotionPresentationController::instance().currentPresentation()` — get outward expression for current mood
+- `EmotionPresentationController::instance().setEnabled(false)` — suppress all outward emotion
+- `CorrectionTupleCollector::instance().flush(path)` — export pending corrections to JSONL
+- `CorrectionTupleCollector::instance().markConfirmed(session_id, turn_id)` — mark correction as successfully executed
+
+**Files modified**
+
+- `nlp/RouterMetadataBuilder.hpp` — `subject_tags` field added to `RouterMetadata`
+- `nlp/RouterMetadataBuilder.cpp` — `#include MMD.hpp`, `getSubjectTags()` call in `build()`, serialized in `toJson()`
+- `nlp/NlpAnnotation.cpp` — `detectLanguage()` function added, replaces hardcoded `"en"`
+- `nlp/nlp.cpp` — `loadLearnedRules()` and `saveLearnedRules()` implemented (was TODO stubs)
+- `MMO/UI/EmotionPresentationController.hpp` — **NEW FILE**
+- `MMO/UI/EmotionPresentationController.cpp` — **NEW FILE**
+
+### 28. Legacy NLP decoupling and conversation history wiring
+
+**What changed**
+
+- Removed direct `ActionExecutor::isActionCommand()` bypass that skipped ActionPolicy gate — action commands now flow through the same policy evaluation as all other commands
+- Deleted `g_nlp.learnPattern()` calls from `ai_interpret()` — NLP teaching was legacy coupling; `ToolTrainingParser` now records all training examples via MMO pipeline
+- Deleted `FastClassifier::boostCommandWeight()` calls from `ai_interpret()` — weight boosting was ad-hoc learning superseded by ToolTraining data
+- Deleted dead `prepareConversationMessages()` function — replaced by inline SessionContextManager recording
+- Removed dead includes: `nlp/nlp.hpp`, `fast_classifier.hpp`, `<sstream>` from `ai/ai.cpp`
+- Fixed bare `#include "commands_core.hpp"` in `ai/ai_rl.hpp`, `ai/ai_reward.hpp`, `ai/ai_rl.cpp` → `"commands/commands_core.hpp"` (resolved Clang include-path failures cascading through main.cpp)
+- Wired conversation history into `ai_interpret()`: user message recorded at entry via `SessionContextManager::addMessage("user")`; assistant responses recorded at command-execution and conversation exit paths via `addMessage("assistant")`
+- System prompt now set via `SessionContextManager::setSystemPrompt()` on each `ai_interpret()` call using personality config
+
+**What now owns the concern**
+
+| Concern | Owner |
+|---------|-------|
+| Online learning from AI dispatch | `ToolTrainingParser::record()` — structured examples for LoRA fine-tuning |
+| Action command policy gating | `ActionPolicyRegistry::evaluate()` in `ai_interpret()` — same gate as all commands |
+| Action command execution | `ActionExecutor::executeAction()` (still used, but now inside policy-gated path) |
+| Conversation history storage | `SessionContextManager::addMessage()` in `ai_interpret()` |
+| System prompt management | `SessionContextManager::setSystemPrompt()` in `ai_interpret()` (reads `ai_config.json → personality`) |
+| History trimming | `SessionContextManager::trimHistory()` — capped by `ai_config.json → conversation_history_size` |
+
+**Deleted legacy paths**
+
+- `extern NLP g_nlp; g_nlp.learnPattern(input, suggested)` — two call sites removed
+- `GRIM::FastClassifier::boostCommandWeight(word, 1.5f)` — verb-extraction loop removed
+- `prepareConversationMessages()` — dead helper removed
+- `try { ... } catch (...) {}` swallowing errors around NLP teaching — deleted (Rule 20)
+
+**Canonical integration points**
+
+- `SessionContextManager::instance().addMessage(session_id, role, content)` — record user/assistant turns
+- `SessionContextManager::instance().setSystemPrompt(session_id, prompt)` — idempotent system prompt
+- `SessionContextManager::instance().trimHistory(session_id, max)` — keep history bounded
+- `ToolTrainingParser::instance().record(example)` — all training data collection
+
+**Validation status**
+
+- Build verified: `cmake --build --preset release` passes with zero errors
+- IntelliSense errors in `main.cpp` are IDE artifacts (Clang can't resolve `helpers/widget.hpp` from `ui/ui_panel.hpp` — CMake include dirs handle this at compile time)
+- ActionExecutor path now gated by ActionPolicy — action commands no longer bypass training wheels
+
+**Files modified**
+
+- `ai/ai.cpp` — legacy NLP/FastClassifier blocks removed; conversation history wiring added; dead function deleted
+- `ai/ai_rl.hpp` — include path fixed
+- `ai/ai_reward.hpp` — include path fixed
+- `ai/ai_rl.cpp` — include path fixed
+- `MMO/Core/CorrectionTuple.hpp` — **NEW FILE**
+- `MMO/Core/CorrectionTuple.cpp` — **NEW FILE**
+- `MMO/Core/SessionContextManager.cpp` — `#include CorrectionTuple.hpp`, auto-collect on rejection in `recordUserResponse()`
+- `MMO/Core/Orchestrator.cpp` — `#include CorrectionTuple.hpp`, flush in `shutdown()`
+
+**Validation status**
+
+- Subject tags now flow: user input → `getSubjectTags()` → `RouterMetadata::subject_tags` → router JSON. Router model can match against `ModelInfo::subject_tags`.
+- Language detection is heuristic (character-range counting) — sufficient for body-side classification; router model does its own language handling.
+- `loadLearnedRules` / `saveLearnedRules` consume the existing `UnifiedMemoryStorage` API — no new storage schema needed.
+- EPC is fully functional but not yet called from any response path — consumers (TTS, UI, avatar) need to query `currentPresentation()`.
+- Correction tuples auto-collect on rejection but `markConfirmed()` not yet called after successful correction execution.
+- `grammar_parser.cpp` `matchTemplate()` still returns false (placeholder) — deferred to dedicated template parsing design.
+
+**Remaining gaps**
+
+- EPC not yet consumed by UI response rendering, TTS engine, or avatar system
+- `markConfirmed()` not called after correction execution — needs wiring in `ai_interpret()` success path
+- `flush()` writes to `correction_tuples.jsonl` in working directory — may need configurable output path
+- UISurfaceSpec/Registry still planned only
+- Shadow mode still planned only
+- 3-buffer memory rotation still planned only
+
+---
+
+## §36 — Correction Loop Wiring, EPC Consumer, UISurfaceSpec, Shadow Mode
+
+**What changed**
+
+1. **Correction loop fully wired** — `processFeedbackResponse()` in `commands_feedback.cpp` now calls `SessionContextManager::recordUserResponse()` on all feedback paths (positive confirmation, negative rejection, low-confidence correction). `CorrectionTupleCollector::markConfirmed()` is called on positive feedback using the current turn_id from snapshot. `ai_interpret()` now calls `SessionContextManager::recordProposal()` when policy requires verification, so the `ActionEpisode` exists for subsequent correction tuple collection on rejection.
+
+2. **EPC wired into response path** — `commands_core.cpp` `handleCommand()` now calls `EmotionPresentationController::instance().currentPresentation()` for conversational/banter/question responses and prepends `text_prefix` to `finalText` before output. Voice parameters (pitch, rate, emphasis) are available in the `EmotionPresentation` struct but `Voice::speak()` doesn't accept them yet — voice modulation deferred to TTS system upgrade.
+
+3. **UISurfaceSpec + UISurfaceRegistry created** — `MMO/UI/UISurfaceSpec.hpp/.cpp` defines the validated UI surface contract: `SurfaceKind` (OverlayPanel/Popup/Modal/Toast/ToolWindow/Inspector), `LifetimePolicy`, `VisibilityState`, `InputPolicy`, `WidgetSpec`, `LayoutSpec`. `validateSurfaceSpec()` enforces constraints (Modal requires Exclusive input, Toast requires AutoDismiss, etc.). `MMO/UI/UISurfaceRegistry.hpp/.cpp` is the runtime registry with create/update/show/hide/destroy lifecycle, unique surface_id keying, event callbacks, and query methods.
+
+4. **Shadow mode implemented** — `ai_interpret()` checks `ModelRegistry::mode() == "shadow"` after policy allows a command. In shadow mode, the proposed command is logged but not executed; user sees `[Shadow] I would run: <cmd>`. Config key `mmo.mode` already existed in `ai_config.json` with value `"shadow"`.
+
+**Ownership boundaries**
+
+| Concern | Owner | Hook point |
+|---------|-------|------------|
+| Correction tuple collection | `SessionContextManager::recordUserResponse()` | auto-collects via `CorrectionTupleCollector::collect()` |
+| Correction confirmation | `processFeedbackResponse()` | calls `CorrectionTupleCollector::markConfirmed()` |
+| Action proposal tracking | `ai_interpret()` | calls `SessionContextManager::recordProposal()` before setPending |
+| EPC text injection | `handleCommand()` in `commands_core.cpp` | reads `currentPresentation().text_prefix` |
+| UI surface lifecycle | `UISurfaceRegistry` singleton | create/show/hide/destroy with event callbacks |
+| Shadow mode gate | `ai_interpret()` in `ai.cpp` | checks `ModelRegistry::mode()` before command execution |
+
+**Files touched**
+
+- `ai/ai.cpp` — `#include ModelRegistry.hpp`, `recordProposal()` call in verification path, shadow mode check before command execution
+- `commands/commands_feedback.cpp` — `#include CorrectionTuple.hpp`, `recordUserResponse()` + `markConfirmed()` in positive/negative/correction feedback paths
+- `commands/commands_core.cpp` — `#include EmotionPresentationController.hpp`, EPC `text_prefix` injection for conversational responses
+- `MMO/UI/UISurfaceSpec.hpp` — **NEW FILE** (surface spec types + validation declaration)
+- `MMO/UI/UISurfaceSpec.cpp` — **NEW FILE** (validation implementation)
+- `MMO/UI/UISurfaceRegistry.hpp` — **NEW FILE** (registry declaration + event callback types)
+- `MMO/UI/UISurfaceRegistry.cpp` — **NEW FILE** (registry implementation)
+
+**Validation status**
+
+- Correction loop is end-to-end: propose → setPending → user responds → processFeedbackResponse → recordUserResponse (triggers CorrectionTupleCollector) or markConfirmed. All three feedback response paths (positive, negative, low-confidence correction) are wired.
+- EPC text_prefix is injected for `conversation`, `banter`, and `question` category responses. Other categories (command execution, verification, etc.) show neutral text.
+- UISurfaceRegistry enforces spec constraints at create/update time. Modals require Exclusive input, Toasts require AutoDismiss + positive timeout.
+- Shadow mode is config-driven (`mmo.mode: "shadow"` vs `"enforced"`). In enforced mode (or any non-shadow value), commands execute normally.
+- CMake glob_recurse auto-includes new UI files.
+
+**Remaining gaps**
+
+- EPC voice parameters not consumed — `Voice::speak()` needs pitch/rate/emphasis parameters
+- EPC avatar expression not consumed — no avatar rendering system exists yet
+- UISurfaceRegistry not yet wired to ToolRegistry as UI tools (ui.create_surface, etc.)
+- UISurfaceRegistry not consumed by any UI renderer — need host/renderer integration
+- `flush()` output path still hardcoded — needs configurable output path
+- 3-buffer memory rotation still planned only
+
+---
+
+## §37 — UISurfaceRegistry bootstrap wiring
+
+**What changed**
+
+- `bootstrap/bootstrap.hpp` — Added `#include "../MMO/UI/UISurfaceRegistry.hpp"` so the type is visible to bootstrap consumers
+- `bootstrap/bootstrap.cpp` — In `bootstrapMMOLayer()`, after `SessionContextManager ready` log, added `UISurfaceRegistry::instance()` touch + readiness log
+- `main.cpp` — Added `#include "MMO/UI/UISurfaceRegistry.hpp"`. Added `GRIM::MMO::UISurfaceRegistry::instance().destroyAll()` call to all 3 shutdown paths (console signal handler, `CTRL_CLOSE_EVENT` handler, normal exit cleanup), positioned after ProcessManager teardown and before ResourceCoordinator cleanup
+
+**Owns**
+
+- UISurfaceRegistry singleton initialization at bootstrap time
+- UISurfaceRegistry teardown (destroyAll) at all shutdown paths
+
+**Does not own**
+
+- UISurfaceRegistry class implementation (owned by `MMO/UI/UISurfaceRegistry.cpp`)
+- UI surface creation/update (owned by future tool handlers or ToolRegistry-backed UI tool commands)
+- SurfaceChangeCallback registration for rendering (owned by UI renderer, not yet wired)
+
+**Canonical hook points**
+
+- `bootstrapMMOLayer()` — singleton alive before any tool/command could reference it
+- All 3 `main.cpp` shutdown paths — `destroyAll()` fires Destroyed events for each surface, clearing the registry
+- `UISurfaceRegistry::instance().onSurfaceChange(callback)` — renderers hook here (deferred to renderer integration)
+
+**Current consumers**
+
+- `bootstrap/bootstrap.cpp` — touches singleton for initialization
+- `main.cpp` — calls `destroyAll()` on all shutdown paths
+
+**Legacy replaced**
+
+- None (new system)
+
+**Status**
+
+- Implemented; singleton lifecycle managed (init at bootstrap Phase 4, cleanup at shutdown)
+
+---
+
+## §38 — UI tools registered in ToolRegistry
+
+**What changed**
+
+- `bootstrap/bootstrap.cpp` — After `UISurfaceRegistry` is alive in `bootstrapMMOLayer()`, 4 UI tool descriptors are registered in `ToolRegistry`:
+  - `ui.create_surface` — Create a new UI surface (needs_confirmation=true). Parameters: surface_id, kind, title. Capability tags: ui, create_surface, display.
+  - `ui.show_surface` — Show a previously created surface. Parameters: surface_id. Capability tags: ui, show_surface.
+  - `ui.hide_surface` — Hide a visible surface without destroying it. Parameters: surface_id. Capability tags: ui, hide_surface.
+  - `ui.destroy_surface` — Permanently remove a surface (needs_confirmation=true). Parameters: surface_id. Capability tags: ui, destroy_surface.
+- All 4 tools have `category = "ui"`, `is_informational = false`, `provider_type = Builtin`.
+
+**Owns**
+
+- ToolRegistry registration of UI surface tool entries at bootstrap
+
+**Does not own**
+
+- Command dispatch for these tools (command handlers not yet implemented)
+- UISurfaceRegistry lifecycle (§37)
+- UI rendering (deferred to renderer integration)
+
+**Canonical hook points**
+
+- Model can discover these tools via `ToolRegistry::generateCompactPrompt()` / `generateFullPrompt()`
+- `ToolGapPlanner::evaluate("ui.create_surface", ...)` returns `nullopt` — tool exists
+- When command handlers are wired, dispatch will route `ui.create_surface surface_id` to `UISurfaceRegistry::create()`
+
+**Current consumers**
+
+- `ToolRegistry::generateCompactPrompt()` — includes UI tools in model-facing tool summary
+
+**Status**
+
+- Tool descriptors registered; command handlers wired in §39
+
+---
+
+## §39 — UI tool command handlers wired to dispatch
+
+**What changed**
+
+- `commands/commands_ui.hpp` — Declared 4 new handlers: `cmdCreateSurface`, `cmdShowSurface`, `cmdHideSurface`, `cmdDestroySurface`
+- `commands/commands_ui.cpp` — Implemented all 4 handlers:
+  - `cmdCreateSurface(arg)` — Parses JSON arg (`surface_id`, `kind`, `title`, optional `host_target`, `auto_dismiss_ms`), maps `kind` string → `SurfaceKind` enum, validates via `UISurfaceRegistry::create()`.
+  - `cmdShowSurface(arg)` — Accepts plain `surface_id` string or JSON `{"surface_id":"..."}`, calls `UISurfaceRegistry::show()`.
+  - `cmdHideSurface(arg)` — Same arg pattern, calls `UISurfaceRegistry::hide()`.
+  - `cmdDestroySurface(arg)` — Same arg pattern, calls `UISurfaceRegistry::destroy()`.
+- `plugins/core_plugin.cpp` — Registered all 4 as `REGISTER_TOOL("ui.create_surface", ...)` etc. in the UI Controls block, between `toggle_settings` and `system_info`. This inserts them into both `commandMap` (for `dispatchCommand` lookup) and `GRIM::CommandRegistry` (for metadata).
+
+**Owns**
+
+- Command handler implementations for UI surface CRUD
+- String→`SurfaceKind` enum mapping (`parseSurfaceKind`)
+- JSON arg parsing for surface creation parameters
+
+**Does not own**
+
+- ToolRegistry descriptors (§38, bootstrap)
+- UISurfaceRegistry lifecycle (§37, bootstrap + shutdown)
+- SurfaceChangeCallback rendering (deferred)
+- ActionPolicyRegistry gating (handled by `ai_interpret()` before dispatch)
+
+**Canonical hook points**
+
+- `dispatchCommand("ui.create_surface", jsonArg)` — creates surface via registry
+- `dispatchCommand("ui.show_surface", surfaceId)` — shows surface
+- `dispatchCommand("ui.hide_surface", surfaceId)` — hides surface
+- `dispatchCommand("ui.destroy_surface", surfaceId)` — destroys surface
+- AI flow: model output → `ai_interpret()` → `ActionPolicyRegistry.evaluate()` → `dispatchCommand()` → handler → `UISurfaceRegistry`
+
+**Current consumers**
+
+- `dispatchCommand()` in `commands_core.cpp` — routes by `commandMap` lookup
+- `ai_interpret()` in `ai/ai.cpp` — dispatches model-suggested tools through policy gate
+- `ToolRegistry` analytics — `recordSuccess`/`recordFailure` called by dispatch wrapper
+
+**Legacy replaced**
+
+- None (new system)
+
+**Status**
+
+- Fully wired: tool descriptors (§38) + command handlers (§39) + dispatch registration (core_plugin.cpp)
+
+---
+
+## §40 — EPC voice prosody wired to TTS pipeline
+
+**What changed**
+
+- `voice/voice_speak.hpp` — Added `Voice::VoiceParams` struct (`pitch`, `rate`, `emphasis` floats) and new overload `Voice::speak(text, category, params)`.
+- `voice/voice_speak.cpp` — Queue item changed from `pair<string,string>` to `SpeakItem{text, category, VoiceParams}`. Worker applies `voice_rate` as speed multiplier (`effectiveSpeed = g_speed * params.rate`). Old `speak(text, category)` overload delegates to new one with default `VoiceParams{}`.
+- `commands/commands_core.cpp` — Main `handleCommand()` output path now fetches `EmotionPresentationController::currentPresentation()` and passes `voice_pitch`/`voice_rate`/`voice_emphasis` into `Voice::speak()` via `VoiceParams`.
+
+**Owns**
+
+- `VoiceParams` struct definition
+- Mapping from `EmotionPresentation` voice fields → TTS speed/pitch
+- Queue transport of prosody parameters
+
+**Does not own**
+
+- EmotionPresentationController mood→presentation mapping (EPC owns that)
+- TTS bridge protocol extension for pitch (future: add `pitch` key to coquiSpeak JSON request)
+- EPC mood selection (PersonalityManager drives that)
+
+**Canonical hook points**
+
+- `Voice::speak(text, category, params)` — any caller can supply prosody
+- `speakWorker()` — applies `params.rate` as speed multiplier to `coquiSpeak`
+- Future: extend `coquiSpeak` JSON request with `{"pitch": params.pitch}` when TTS bridge supports it
+
+**Status**
+
+- Wired end-to-end: EPC → VoiceParams → speak queue → worker → coquiSpeak speed. Pitch passthrough to TTS bridge pending (bridge needs server-side support).
+
+---
+
+## §41 — Configurable correction output path
+
+**What changed**
+
+- `MMO/Core/Orchestrator.hpp` — Added `std::string correction_output_path = "correction_tuples.jsonl"` to `OrchestratorConfig`.
+- `MMO/Core/Orchestrator.cpp` — `shutdown()` now uses `config_.correction_output_path` instead of hardcoded `"correction_tuples.jsonl"`.
+- `bootstrap/bootstrap.cpp` — Loads `correction_output_path` from `ai_config.json → mmo.orchestrator.correction_output_path` with default fallback.
+
+**Owns**
+
+- Config field for correction output path
+- Loading from JSON config
+
+**Does not own**
+
+- CorrectionTupleCollector implementation (unchanged)
+- Orchestrator lifecycle (unchanged)
+
+**Canonical hook points**
+
+- `ai_config.json → mmo.orchestrator.correction_output_path` — set custom path
+- `OrchestratorConfig.correction_output_path` — read by `Orchestrator::shutdown()`
+
+**Status**
+
+- Implemented; defaults to `"correction_tuples.jsonl"` when config key absent
+
+---
+
+## §42 — ToolTrainingParser (Phase 1.0)
+
+**What changed**
+
+- `MMO/Core/ToolTrainingParser.hpp` — New file. `ParsedModelOutput` struct (valid flag, intent, suggested_command, response_text, extracted_json, parsed JSON object). `ToolTrainingExample` struct (full interaction record: input, model output, parsed fields, outcome enum, confidence signals). `ToolTrainingParser` singleton class with `parseModelOutput()`, `record()`, `flush()`, `clear()`, `pendingCount()`.
+- `MMO/Core/ToolTrainingParser.cpp` — Implementation. `findBalancedJson()` uses brace-depth counting with string-literal awareness (handles escaped quotes, nested objects/arrays). `parseModelOutput()` replaces the naive first-`{`-last-`}` extraction. `flush()` appends JSONL to disk (same pattern as CorrectionTupleCollector). `exampleToJson()` serializes input/model_output/outcome/confidence.
+- `ai/ai.cpp` — Replaced naive JSON extraction block with `ToolTrainingParser::parseModelOutput()`. Added `#include "ToolTrainingParser.hpp"`. Every exit path in `ai_interpret()` now records a `ToolTrainingExample` with the appropriate outcome (ParseFailure, GapDetected, PolicyDenied, PolicyVerify, ShadowSuppressed, Success, Failure, Conversation).
+- `MMO/Core/Orchestrator.cpp` — `shutdown()` now flushes `ToolTrainingParser::instance().flush("tool_training_examples.jsonl")` alongside CorrectionTuples.
+
+**Owns**
+
+- Robust brace-depth JSON extraction from model output
+- `ToolTrainingExample` data contract (full-spectrum training signal)
+- JSONL export of all model interactions (positive + negative)
+- `ParsedModelOutput` as the canonical parse result type
+
+**Does not own**
+
+- CorrectionTupleCollector (captures rejections with user corrections — complementary, not replaced)
+- Model prompt construction (still in `ai_interpret()`)
+- ToolGapPlanner evaluation (called by `ai_interpret()`, feeds outcome into training example)
+- ActionPolicyRegistry gating (feeds verdict into training example)
+
+**Canonical hook points**
+
+- `ToolTrainingParser::instance().parseModelOutput(reply)` — replaces raw JSON extraction
+- `ToolTrainingParser::instance().record(example)` — called at each `ai_interpret()` exit
+- `ToolTrainingParser::instance().flush(path)` — called from `Orchestrator::shutdown()`
+- `tool_training_examples.jsonl` — output file (append mode, one JSON object per line)
+
+**Relationship to CorrectionTupleCollector**
+
+- CorrectionTuples capture **user corrections** (negative signal with corrected tool_id)
+- ToolTrainingExamples capture **all interactions** (positive signal from successes, negative from failures/gaps/denials, neutral from conversations)
+- Together they provide a complete LoRA fine-tuning dataset
+
+**Status**
+
+- Phase 1.0 complete. Robust parser wired, all exit paths recorded, JSONL flushed at shutdown.
+
+---
+
+## §43 — UI Renderer Integration (UISurfaceRendererBridge)
+
+**What changed**
+
+- Added `UIRoot::removePanel(const std::string& name)` — safe panel removal from `m_panelMap` + `m_panels` vector, wrapped in `postTask` for thread safety.
+- Created `DynamicSurfacePanel` (`ui/dynamic_surface_panel.hpp`, `ui/dynamic_surface_panel.cpp`) — `UIPanel` subclass that takes a `UISurfaceSpec` and renders its widgets via `OverlayRenderer`. Maps `SurfaceKind` to panel properties (draggable, resizable, chrome). Renders label/button/progress widget types.
+- Created `UISurfaceRendererBridge` (`ui/ui_surface_renderer_bridge.hpp`, `ui/ui_surface_renderer_bridge.cpp`) — static `install()` registers a `SurfaceChangeCallback` on `UISurfaceRegistry::instance()`. Routes all UIRoot mutations through `postTask` for thread safety.
+- Wired `UISurfaceRendererBridge::install()` in `main.cpp` after UIRoot and panels are initialized (after line 386).
+
+**What now owns the concern**
+
+| Concern | Owner |
+|---------|-------|
+| Surface lifecycle events | `UISurfaceRegistry` (unchanged) |
+| Event → panel mapping | `UISurfaceRendererBridge::install()` callback |
+| Dynamic panel rendering | `DynamicSurfacePanel::drawOverlay()` |
+| Panel add/remove/visibility | `UIRoot` (extended with `removePanel`) |
+
+**Canonical integration points**
+
+- `UISurfaceRendererBridge::install()` — call once after `UIRoot::get().init()` and `UISurfaceRegistry::instance()` are both live
+- `DynamicSurfacePanel::updateSpec(spec)` — called on `SurfaceEvent::Updated` to re-apply spec changes
+- `UIRoot::get().removePanel(name)` — called on `SurfaceEvent::Destroyed`
+
+**Event → action mapping**
+
+| SurfaceEvent | Bridge action |
+|-------------|---------------|
+| Created | `make_shared<DynamicSurfacePanel>(spec)` → `UIRoot::addPanel()` |
+| Shown | `UIRoot::setVisible(id, true)` |
+| Hidden | `UIRoot::setVisible(id, false)` |
+| Updated | `panel->updateSpec(newSpec)` |
+| Destroyed | `UIRoot::removePanel(id)` |
+
+**Thread safety**
+
+All UIRoot mutations routed through `UIRoot::get().postTask()` since `SurfaceChangeCallback` fires under `UISurfaceRegistry`'s mutex (potentially from any thread).
+
+**Status**
+
+- Phase 1.0 complete. Bridge wired, all 5 surface events handled, DynamicSurfacePanel renders label/button/progress widgets.
+
+---
+
+## §44 — 3-Buffer Memory Rotation + Atomic Writes
+
+**What changed**
+
+- Created `AtomicWriter` (`memory/atomic_writer.hpp`) — static utility for write-temp + rename. Three overloads: `write(path, data, size)`, `writeString(path, content)`, `writeWith(path, callback)`. Creates parent directories, writes to `.tmp`, flushes, then `std::filesystem::rename` for atomicity.
+- Created `MemoryBufferRotation` (`memory/memory_buffer_rotation.hpp`, `memory/memory_buffer_rotation.cpp`) — singleton 3-buffer pipeline:
+  - **Working** — active context for current session
+  - **Preprocessing** — incoming data staged here via `preprocess(obj)`
+  - **SyncAndClear** — `syncToLongTerm(storage)` moves working → sync, persists to long-term, clears
+  - `mergeToWorking()` drains preprocessing into working
+  - `workingSnapshot()` returns a copy of working buffer for building precomposed context
+  - Thread-safe under mutex
+- Modified `UnifiedMemoryStorage::saveToDisk()` — replaced raw `ofstream` with `AtomicWriter::writeString()`. Inference never reads partially-written JSON.
+- Modified `UnifiedMemoryStorage::saveToFlatBuffer()` — replaced raw `ofstream` with `AtomicWriter::write()`. Same atomic guarantee for FlatBuffer format.
+- Modified `ai/ai.cpp::saveMemory()` — replaced raw `ofstream` with `GRIM::AtomicWriter::writeString()`. The global `memory.json` is now crash-safe.
+- Added `#include "atomic_writer.hpp"` to `unified_memory_storage.cpp` and `ai/ai.cpp`.
+
+**What now owns the concern**
+
+| Concern | Owner |
+|---------|-------|
+| Atomic file writes | `GRIM::AtomicWriter` (header-only utility) |
+| 3-buffer rotation | `GRIM::MemoryBufferRotation` singleton |
+| Long-term persistence | `UnifiedMemoryStorage::saveToDisk/saveToFlatBuffer` (now atomic) |
+| Legacy `memory.json` writes | `saveMemory()` in `ai/ai.cpp` (now atomic) |
+
+**Canonical integration points**
+
+- `MemoryBufferRotation::instance().preprocess(obj)` — stage incoming memory
+- `MemoryBufferRotation::instance().mergeToWorking()` — drain preprocessing into working
+- `MemoryBufferRotation::instance().syncToLongTerm(storage)` — persist and clear
+- `MemoryBufferRotation::instance().workingSnapshot()` — read working context for precomposed metadata
+- `GRIM::AtomicWriter::writeString(path, content)` — atomic text file write
+- `GRIM::AtomicWriter::write(path, data, size)` — atomic binary file write
+
+**Relationship to existing memory system**
+
+- `UnifiedMemoryStorage` remains the long-term store (FlatBuffer + JSON)
+- `MemoryBufferRotation` sits in front as the short-term pipeline
+- Orchestrator will call `preprocess` for incoming data, `mergeToWorking` before building context, and `syncToLongTerm` periodically or at shutdown
+
+**Status**
+
+- Phase 1.0 complete. 3-buffer pipeline implemented, all file writes now atomic.
+
+---
+
+## §45 — TTS Bridge Pitch Input Port
+
+**What changed**
+
+- `voice_speak.hpp` — Added `double pitch = 1.0` parameter to `coquiSpeak()` (default preserves all existing callers).
+- `grim_exports.hpp` — Same signature change on the DLL export declaration.
+- `voice_speak.cpp` — `speakWorker()` now reads `item.params.pitch` into `effectivePitch` and passes it to `coquiSpeak()`.
+- `voice_speak.cpp` — `coquiSpeak()` implementation accepts `pitch` and includes `{"pitch", pitch}` in the JSON request sent to the Python bridge.
+
+**What was NOT changed**
+
+- `coqui_bridge.py` — Python side ignores unknown JSON keys, so `pitch` is a no-op until the TTS model handles it.
+- Existing callers (`commands_voice.cpp`, `preCacheCommonPhrases`) — unchanged, default `pitch=1.0` applies.
+
+**Data flow**
+
+```
+EPC VoiceParams.pitch → speakWorker effectivePitch → coquiSpeak(pitch) → JSON {"pitch": 1.2} → bridge stdin
+```
+
+**Status**
+
+- Input port wired end-to-end. Python-side pitch handling deferred until custom TTS model is ready.
+
+---
+
+## §46 — MemoryBufferRotation Consumer Wiring
+
+**What changed**
+
+- `commands/commands_memory.cpp` — `cmdRemember()` now stages via `MemoryBufferRotation::instance().preprocess(obj)` instead of direct `g_memoryStorage.storeLongTerm(obj)`. Added `#include "memory/memory_buffer_rotation.hpp"`.
+- `commands/commands_question.cpp` — `storeContextMemory()` now stages via `preprocess()` instead of direct `storeLongTerm()`. Added `#include "memory/memory_buffer_rotation.hpp"`.
+- `commands/commands_core.cpp` — After `rememberContextObject()`, also calls `preprocess()` to stage the context object in the rotation pipeline. Added `#include "memory/memory_buffer_rotation.hpp"`.
+- `MMO/Core/Orchestrator.cpp` — `buildRouterScope()` calls `MemoryBufferRotation::instance().mergeToWorking()` before building scope JSON. This ensures all preprocessed memory is available in the working context before requests. Added `#include "../../memory/memory_buffer_rotation.hpp"`.
+- `main.cpp` — All three shutdown paths (Win32 CTRL_C handler, Unix signal handler, normal shutdown §13) now flush the rotation pipeline before MMO teardown: `mergeToWorking()` → `syncToLongTerm(g_memoryStorage)` → `clear()`. Added `#include "memory/memory_buffer_rotation.hpp"`.
+
+**Data flow**
+
+```
+cmdRemember / storeContextMemory / rememberContextObject
+  → preprocess(obj) → preprocessing_ buffer
+  → (on next AI request) mergeToWorking() drains into working_ buffer
+  → (on shutdown) syncToLongTerm() persists working_ → g_memoryStorage
+```
+
+**What now owns the concern**
+
+| Concern | Owner |
+|---------|-------|
+| Staging incoming memory | `MemoryBufferRotation::preprocess()` |
+| Draining to working context | `Orchestrator::buildRouterScope()` triggers `mergeToWorking()` |
+| Persisting to long-term | All shutdown paths trigger `syncToLongTerm()` |
+| Working context reads | `MemoryBufferRotation::workingSnapshot()` (available for future consumers) |
+
+**Does not own**
+
+- Long-term storage format or indexing (owned by `UnifiedMemoryStorage`)
+- MemoryFacade retrieval API (unchanged, still reads from `UnifiedMemoryStorage`)
+- Session context objects (still managed by `SessionContextManager` independently)
+
+**Canonical hook points**
+
+- `GRIM::MemoryBufferRotation::instance().preprocess(obj)` — all new memory objects
+- `GRIM::MemoryBufferRotation::instance().mergeToWorking()` — called in `buildRouterScope()`
+- `GRIM::MemoryBufferRotation::instance().syncToLongTerm(g_memoryStorage)` — all shutdown paths
+
+**Status**
+
+- Pipeline fully wired. Incoming memory flows through preprocessing → working → long-term on shutdown.

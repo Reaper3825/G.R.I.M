@@ -10,14 +10,19 @@
 #pragma once
 
 #include "NlpAnnotation.hpp"
+#include "../memory/context_snapshot.hpp"
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace GRIM {
+}
 
-// Forward
-struct ContextSnapshot;
+// Forward declare V2
+namespace GRIM::MMO { struct ContextSnapshotV2; }
+
+namespace GRIM {
 
 // =========================================================
 // RouterMetadata — the envelope sent to grim-text
@@ -48,6 +53,9 @@ struct RouterMetadata {
     std::vector<std::string> risk_tags;
     nlohmann::json action_policy_hints;
 
+    // Subject tags for sub-model selection
+    std::vector<std::string> subject_tags;
+
     // Confidence
     nlohmann::json confidence_snapshot;
 
@@ -63,8 +71,12 @@ public:
     // Set the NLP annotation (required)
     RouterMetadataBuilder& setAnnotation(const NlpAnnotation& ann);
 
-    // Set context snapshot (required)
+    // Set context snapshot (V1 — required unless V2 provided)
     RouterMetadataBuilder& setContext(const ContextSnapshot& ctx);
+
+    // Set context snapshot V2 — rich version with visual, referents, episodes.
+    // When V2 is set, V1 is projected automatically; setContext(V1) is not needed.
+    RouterMetadataBuilder& setContextV2(const GRIM::MMO::ContextSnapshotV2& ctx_v2);
 
     // Set tool surface summary (called from ToolRegistry)
     RouterMetadataBuilder& setToolSummary(const std::string& compact_prompt);
@@ -82,6 +94,9 @@ public:
 private:
     const NlpAnnotation*   annotation_ = nullptr;
     const ContextSnapshot* context_    = nullptr;
+    bool                   has_v2_     = false;
+    ContextSnapshot        owned_v1_;   // V1 projected from V2 (owned copy)
+    nlohmann::json         context_v2_json_;  // serialized V2 snapshot
     std::string            tool_summary_;
     nlohmann::json         phys_visual_ = nlohmann::json::object();
     nlohmann::json         digi_visual_ = nlohmann::json::object();

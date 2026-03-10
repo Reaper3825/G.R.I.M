@@ -6,6 +6,7 @@
 #include "wake/wake_key.hpp"
 #include "wake/wake_voice.hpp"
 #include "memory/unified_memory.hpp"
+#include "memory/memory_buffer_rotation.hpp"
 #include "ai/ai_rl.hpp"
 #include "ai/intent_gate.hpp"
 #include "ai/task_planner.hpp" 
@@ -25,10 +26,12 @@
 #include "ui/ui_settings_menu.hpp"
 #include "ui/ui_training_panel.hpp"
 #include "ui/ui_DataCollection.hpp"
+#include "ui/ui_surface_renderer_bridge.hpp"
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
 #include "perception/perception.hpp"
 #include "perception/perception_context.hpp" 
+#include "MMO/UI/UISurfaceRegistry.hpp"
 #include <crtdbg.h>
 #include <chrono>
 #include <thread>
@@ -67,6 +70,11 @@ BOOL WINAPI consoleHandler(DWORD signal) {
         // Stop idle-tick thread first
         stopMMOIdleTick();
 
+        // Flush rotation pipeline to long-term storage
+        GRIM::MemoryBufferRotation::instance().mergeToWorking();
+        GRIM::MemoryBufferRotation::instance().syncToLongTerm(g_memoryStorage);
+        GRIM::MemoryBufferRotation::instance().clear();
+
         // Tear down MMO orchestration layer (top-down)
         if (g_orchestrator) {
             g_orchestrator->shutdown();
@@ -82,7 +90,17 @@ BOOL WINAPI consoleHandler(DWORD signal) {
             delete g_modelLoader;
             g_modelLoader = nullptr;
         }
+        // ProcessManager — stop all model server processes
+        if (g_processManager) {
+            LOG_DEBUG("Shutdown", "Stopping model server processes...");
+            g_processManager->stopAll();
+            delete g_processManager;
+            g_processManager = nullptr;
+        }
+        // UISurfaceRegistry — tear down all managed surfaces
+        GRIM::MMO::UISurfaceRegistry::instance().destroyAll();
         if (g_resourceCoordinator) {
+
             delete g_resourceCoordinator;
             g_resourceCoordinator = nullptr;
         }
@@ -91,10 +109,6 @@ BOOL WINAPI consoleHandler(DWORD signal) {
             delete g_resourceSignal;
             g_resourceSignal = nullptr;
         }
-        
-        // Stop all child processes
-        LOG_DEBUG("Shutdown", "Stopping GRIM-text servers...");
-        GRIM::stopGRIMTextServer();
         
         LOG_DEBUG("Shutdown", "Stopping training control server...");
         GRIM::stopTrainingServer();
@@ -116,6 +130,11 @@ void signalHandler(int signal) {
         // Stop idle-tick thread first
         stopMMOIdleTick();
 
+        // Flush rotation pipeline to long-term storage
+        GRIM::MemoryBufferRotation::instance().mergeToWorking();
+        GRIM::MemoryBufferRotation::instance().syncToLongTerm(g_memoryStorage);
+        GRIM::MemoryBufferRotation::instance().clear();
+
         // Tear down MMO orchestration layer (top-down)
         if (g_orchestrator) {
             g_orchestrator->shutdown();
@@ -131,6 +150,14 @@ void signalHandler(int signal) {
             delete g_modelLoader;
             g_modelLoader = nullptr;
         }
+        // ProcessManager — stop all model server processes
+        if (g_processManager) {
+            g_processManager->stopAll();
+            delete g_processManager;
+            g_processManager = nullptr;
+        }
+        // UISurfaceRegistry — tear down all managed surfaces
+        GRIM::MMO::UISurfaceRegistry::instance().destroyAll();
         if (g_resourceCoordinator) {
             delete g_resourceCoordinator;
             g_resourceCoordinator = nullptr;
@@ -141,8 +168,6 @@ void signalHandler(int signal) {
             g_resourceSignal = nullptr;
         }
         
-        // Stop all child processes
-        GRIM::stopGRIMTextServer();
         GRIM::stopTrainingServer();
         
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -372,6 +397,10 @@ int main(int argc, char* argv[])
 
     LOG_PHASE("UIRoot and panels initialized (hidden)", true);
 
+    // Wire UISurfaceRegistry → UIRoot bridge so tool-created surfaces render
+    UISurfaceRendererBridge::install();
+    LOG_PHASE("UISurfaceRendererBridge installed", true);
+
     // ======================================================
     // 10. Launch popup UI (still separate layered window)
     // ======================================================
@@ -478,9 +507,46 @@ int main(int argc, char* argv[])
     // ======================================================
     LOG_PHASE("Shutting down subsystems", true);
 
-    // Shutdown GRIM-text server (inference)
-    GRIM::stopGRIMTextServer();
-    
+    // Stop idle-tick thread first
+    stopMMOIdleTick();
+
+    // Flush rotation pipeline to long-term storage before teardown
+    GRIM::MemoryBufferRotation::instance().mergeToWorking();
+    GRIM::MemoryBufferRotation::instance().syncToLongTerm(g_memoryStorage);
+    GRIM::MemoryBufferRotation::instance().clear();
+
+    // Tear down MMO orchestration layer (top-down, mirrors bootstrap Phase 4 in reverse)
+    if (g_orchestrator) {
+        g_orchestrator->shutdown();
+        delete g_orchestrator;
+        g_orchestrator = nullptr;
+    }
+    if (g_memoryFacade) {
+        delete g_memoryFacade;
+        g_memoryFacade = nullptr;
+    }
+    if (g_modelLoader) {
+        g_modelLoader->unloadAll();
+        delete g_modelLoader;
+        g_modelLoader = nullptr;
+    }
+    if (g_processManager) {
+        g_processManager->stopAll();
+        delete g_processManager;
+        g_processManager = nullptr;
+    }
+    // UISurfaceRegistry — tear down all managed surfaces
+    GRIM::MMO::UISurfaceRegistry::instance().destroyAll();
+    if (g_resourceCoordinator) {
+        delete g_resourceCoordinator;
+        g_resourceCoordinator = nullptr;
+    }
+    if (g_resourceSignal) {
+        g_resourceSignal->stop();
+        delete g_resourceSignal;
+        g_resourceSignal = nullptr;
+    }
+
     // Shutdown training control server
     GRIM::stopTrainingServer();
     

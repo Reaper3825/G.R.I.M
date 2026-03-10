@@ -2,7 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
-#include "commands_core.hpp"
+#include "commands/commands_core.hpp"
 #include "ai_reward.hpp"
 
 namespace GRIM::RL

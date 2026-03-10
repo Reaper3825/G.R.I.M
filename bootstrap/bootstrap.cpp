@@ -8,13 +8,14 @@
 #include "logger.hpp"
 #include "voice/voice.hpp"
 #include "ai/ai_rl.hpp"
-#include "ai/ai.hpp"  // For warmupOllamaModel()
+#include "ai/ai.hpp"
 #include "ai/grim_text_server_manager.hpp"  // For GRIM-text server
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/ResourceSignal.hpp"
 #include "../MMO/Core/ResourceCoordinator.hpp"
 #include "../MMO/Core/ModelRegistry.hpp"
 #include "../MMO/Core/ModelLoader.hpp"
+#include "../MMO/Core/ProcessManager.hpp"
 #include "../MMO/Core/Orchestrator.hpp"
 #include "../MMO/Core/SessionContextManager.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
@@ -36,9 +37,10 @@ GRIM::MMO::ResourceSignal*   g_resourceSignal      = nullptr;
 GRIM::MMO::ResourceCoordinator* g_resourceCoordinator = nullptr;
 
 // Global MMO orchestration layer
-GRIM::MMO::ModelLoader*    g_modelLoader    = nullptr;
-GRIM::MMO::Orchestrator*   g_orchestrator   = nullptr;
-GRIM::MMO::MemoryFacade*   g_memoryFacade   = nullptr;
+GRIM::MMO::ModelLoader*      g_modelLoader      = nullptr;
+GRIM::MMO::ProcessManager*   g_processManager   = nullptr;
+GRIM::MMO::Orchestrator*     g_orchestrator     = nullptr;
+GRIM::MMO::MemoryFacade*     g_memoryFacade     = nullptr;
 
 // Idle-tick background thread for ModelLoader TTL management
 static std::atomic<bool> s_idleTickStop{false};
@@ -228,17 +230,16 @@ static void bootstrapMMOLayer() {
         g_modelLoader = new GRIM::MMO::ModelLoader(
             registry, *g_resourceCoordinator, loaderCfg);
 
+        // Model-keyed process manager — owns one OS process per model
+        g_processManager = new GRIM::MMO::ProcessManager();
+
         g_modelLoader->setStartCallback([](const GRIM::MMO::ModelInfo& info) -> bool {
-            if (info.backend_type == GRIM::MMO::BackendType::GrimTextServer) {
-                auto& mgr = GRIM::GRIMTextServerManager::getInstance();
-                mgr.setServerURL(info.url);
-                return mgr.start();
-            }
-            return true;
+            if (!g_processManager) return false;
+            return g_processManager->start(info);
         });
         g_modelLoader->setStopCallback([](const GRIM::MMO::ModelInfo& info) {
-            if (info.backend_type == GRIM::MMO::BackendType::GrimTextServer) {
-                GRIM::stopGRIMTextServer();
+            if (g_processManager) {
+                g_processManager->stop(info.id);
             }
         });
 
@@ -250,6 +251,7 @@ static void bootstrapMMOLayer() {
             orchCfg.generate_timeout_ms         = oc.value("generate_timeout_ms", 30000);
             orchCfg.synthesize_timeout_ms       = oc.value("synthesize_timeout_ms", 10000);
             orchCfg.max_submodels_per_request   = oc.value("max_submodels_per_request", 1);
+            orchCfg.correction_output_path      = oc.value("correction_output_path", "correction_tuples.jsonl");
         }
         g_orchestrator = new GRIM::MMO::Orchestrator(
             registry, *g_modelLoader, orchCfg);
@@ -353,18 +355,85 @@ static void bootstrapMMOLayer() {
 
     // SessionContextManager (singleton auto-constructed)
     LOG_PHASE("MMO SessionContextManager ready", true);
+
+    // UISurfaceRegistry (singleton auto-constructed)
+    // Touch the singleton so it's alive before any UI tools reference it.
+    (void)GRIM::MMO::UISurfaceRegistry::instance();
+    LOG_PHASE("MMO UISurfaceRegistry ready", true);
+
+    // Register UI tools in ToolRegistry so the model knows these capabilities exist
+    {
+        auto& toolReg = GRIM::MMO::ToolRegistry::instance();
+
+        GRIM::MMO::ToolDescriptor createSurface;
+        createSurface.tool_id        = "ui.create_surface";
+        createSurface.display_name   = "Create UI Surface";
+        createSurface.provider_type  = GRIM::MMO::ToolProviderType::Builtin;
+        createSurface.provider_name  = "builtin";
+        createSurface.description    = "Create a new UI surface (panel, popup, modal, toast, tool window, or inspector)";
+        createSurface.category       = "ui";
+        createSurface.is_informational = false;
+        createSurface.needs_confirmation = true;
+        createSurface.parameters = {
+            {"surface_id", "string", "Unique identifier for the surface", true},
+            {"kind", "string", "Surface type: overlay_panel, popup, modal, toast, tool_window, inspector", true},
+            {"title", "string", "Display title", true}
+        };
+        createSurface.capability_tags = {"ui", "create_surface", "display"};
+        createSurface.keywords = {"panel", "popup", "modal", "toast", "window", "surface", "ui"};
+        toolReg.registerTool(createSurface);
+
+        GRIM::MMO::ToolDescriptor showSurface;
+        showSurface.tool_id        = "ui.show_surface";
+        showSurface.display_name   = "Show UI Surface";
+        showSurface.provider_type  = GRIM::MMO::ToolProviderType::Builtin;
+        showSurface.provider_name  = "builtin";
+        showSurface.description    = "Show a previously created UI surface";
+        showSurface.category       = "ui";
+        showSurface.is_informational = false;
+        showSurface.parameters = {
+            {"surface_id", "string", "ID of the surface to show", true}
+        };
+        showSurface.capability_tags = {"ui", "show_surface"};
+        toolReg.registerTool(showSurface);
+
+        GRIM::MMO::ToolDescriptor hideSurface;
+        hideSurface.tool_id        = "ui.hide_surface";
+        hideSurface.display_name   = "Hide UI Surface";
+        hideSurface.provider_type  = GRIM::MMO::ToolProviderType::Builtin;
+        hideSurface.provider_name  = "builtin";
+        hideSurface.description    = "Hide a visible UI surface without destroying it";
+        hideSurface.category       = "ui";
+        hideSurface.is_informational = false;
+        hideSurface.parameters = {
+            {"surface_id", "string", "ID of the surface to hide", true}
+        };
+        hideSurface.capability_tags = {"ui", "hide_surface"};
+        toolReg.registerTool(hideSurface);
+
+        GRIM::MMO::ToolDescriptor destroySurface;
+        destroySurface.tool_id        = "ui.destroy_surface";
+        destroySurface.display_name   = "Destroy UI Surface";
+        destroySurface.provider_type  = GRIM::MMO::ToolProviderType::Builtin;
+        destroySurface.provider_name  = "builtin";
+        destroySurface.description    = "Permanently remove a UI surface";
+        destroySurface.category       = "ui";
+        destroySurface.is_informational = false;
+        destroySurface.needs_confirmation = true;
+        destroySurface.parameters = {
+            {"surface_id", "string", "ID of the surface to destroy", true}
+        };
+        destroySurface.capability_tags = {"ui", "destroy_surface"};
+        toolReg.registerTool(destroySurface);
+
+        LOG_PHASE("MMO UI tools registered (4 surface tools)", true);
+    }
 }
 
 // ================================================================
 // Phase 5: Warmup and preload scheduling
 // ================================================================
 static void bootstrapWarmup() {
-    if (aiConfig.value("backend", "ollama") == "ollama") {
-        LOG_PHASE("AI model warmup begin", true);
-        warmupOllamaModel();
-        LOG_PHASE("AI model warmup complete", true);
-    }
-
     LOG_PHASE("Whisper preload begin", true);
     try {
         if (Voice::getWhisperContext() == nullptr) {

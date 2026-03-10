@@ -2,7 +2,7 @@
 #include "logger.hpp"
 #include "bridge_manager.hpp"
 #include "ai_reward.hpp"
-#include "commands_core.hpp"
+#include "commands/commands_core.hpp"
 #include <nlohmann/json.hpp>
 #include <mutex>
 

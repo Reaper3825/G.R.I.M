@@ -185,6 +185,35 @@ void UIRoot::addPanel(const std::shared_ptr<UIPanel>& panel)
     }
 }
 
+void UIRoot::removePanel(const std::string& name)
+{
+    auto task = [this, name]() {
+        std::unique_lock lock(m_panelMutex);
+        auto mapIt = m_panelMap.find(name);
+        if (mapIt == m_panelMap.end()) return;
+
+        auto panel = mapIt->second;
+        m_panelMap.erase(mapIt);
+
+        for (auto it = m_panels.begin(); it != m_panels.end(); ++it) {
+            if (*it == panel) {
+                m_panels.erase(it);
+                break;
+            }
+        }
+
+        LOG_DEBUG("UIRoot", "Removed panel: " + name);
+        lock.unlock();
+        updateWindowZOrder();
+    };
+
+    if (!isUIThread()) {
+        postTask(task);
+    } else {
+        task();
+    }
+}
+
 std::shared_ptr<UIPanel> UIRoot::getPanel(const std::string& name)
 {
     std::shared_lock lock(m_panelMutex);

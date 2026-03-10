@@ -5,9 +5,7 @@
 #include "aliases.hpp"
 #include "nlp/nlp.hpp"
 #include "ai/ai.hpp"
-#include "logger.hpp"  // ✅ Added
-
-#include <cpr/cpr.h>
+#include "logger.hpp"
 
 #ifdef _WIN32
   #include <shellapi.h>
@@ -23,54 +21,32 @@ static std::string trim(const std::string& s) {
     return s.substr(start, end - start + 1);
 }
 
-static std::string autoSelectBackend() {
-    if (g_hardwareInventory.hasGPU() && (g_hardwareInventory.hasCUDA() || g_hardwareInventory.hasROCm() || g_hardwareInventory.hasMetal())) {
-        return "localai";
-    }
-    if (g_hardwareInventory.os_name == "Linux" || g_hardwareInventory.os_name == "macOS") {
-        return "ollama";
-    }
-    return "openai";
-}
-
 CommandResult cmdAiBackend(const std::string& arg) {
     std::string input = trim(arg);
 
     if (input.empty()) {
+        std::string current = aiConfig.value("backend", "(not set)");
         return {
-            true,                                           // success
-            "[AI] Current backend: " + resolveBackendURL(), // message
-            "ERR_NONE",                                     // errorCode
-            "summary",                                      // category
-            "Current AI backend",                           // voice
-            Colors::Cyan                                    // color
+            true,
+            "[AI] Current backend config: " + current,
+            "ERR_NONE",
+            "summary",
+            "Current AI backend",
+            Colors::Cyan
         };
     }
 
-    std::string selected = (input == "auto") ? autoSelectBackend() : input;
+    // All routing is handled by MMO ModelRouter — this just sets the config key
+    aiConfig["backend"] = input;
+    LOG_TRACE("AI", "Backend config set to: " + input);
 
-    if (selected == "grim_native" || selected == "ollama" || selected == "localai" || selected == "openai") {
-        aiConfig["backend"] = selected;
-        LOG_TRACE("AI", "Backend set to: " + selected);
-
-        return {
-            true,                                       // success
-            "[AI] Backend set to: " + selected,         // message
-            "ERR_NONE",                                 // errorCode
-            "routine",                                  // category
-            "Backend set to " + selected,               // voice
-            Colors::Green                               // color
-        };
-    }
-
-    LOG_ERROR("AI", "Invalid backend: " + input);
     return {
-        false,                                                                     // success
-        ErrorManager::getUserMessage("ERR_AI_INVALID_BACKEND") + ": " + input,    // message
-        "ERR_AI_INVALID_BACKEND",                                                  // errorCode
-        "error",                                                                   // category
-        "Invalid backend",                                                         // voice
-        Colors::Red                                                                // color
+        true,
+        "[AI] Backend config set to: " + input,
+        "ERR_NONE",
+        "routine",
+        "Backend set to " + input,
+        Colors::Green
     };
 }
 
@@ -103,96 +79,7 @@ CommandResult cmdClearContext(const std::string& /*arg*/) {
 CommandResult cmdGrimAi(const std::string& arg) {
     LOG_TRACE("AI", "cmdGrimAi called with arg=\"" + arg + "\"");
 
-    std::string backend = resolveBackendURL();
-    LOG_DEBUG("AI", "Current backend resolved: " + backend);
-
-    // Handle grim_native backend (GRIM-text server)
-    if (backend == "grim_native") {
-        std::string model = "grim-text";
-        std::string prompt = arg;
-
-        auto resp = cpr::Post(
-            cpr::Url{ aiConfig.value("grim_text_url", "http://127.0.0.1:11435") + "/api/generate" },
-            cpr::Header{{"Content-Type","application/json"}},
-            cpr::Body{ nlohmann::json{
-                {"model", model},
-                {"prompt", prompt},
-                {"max_tokens", aiConfig.value("max_tokens", 256)},
-                {"temperature", aiConfig.value("temperature", 0.8f)},
-                {"stream", false}
-            }.dump() }
-        );
-
-        if (resp.status_code == 200) {
-            auto j = nlohmann::json::parse(resp.text, nullptr, false);
-            if (!j.is_discarded() && j.contains("response")) {
-                std::string reply = j["response"].get<std::string>();
-                LOG_TRACE("AI", "grim-text replied successfully");
-                return {
-                    true,               // success
-                    reply,              // message
-                    "ERR_NONE",         // errorCode
-                    "routine",          // category
-                    reply,              // voice
-                    Colors::Cyan        // color
-                };
-            }
-        }
-
-        LOG_ERROR("AI", "grim-text backend error - is server running?");
-        return {
-            false,                                          // success
-            "[AI] grim-text backend error",                 // message
-            "ERR_AI_BACKEND_FAILED",                        // errorCode
-            "error",                                        // category
-            "grim-text backend error",                      // voice
-            Colors::Red                                     // color
-        };
-    }
-
-    if (backend == "ollama") {
-        std::string model  = aiConfig.value("default_model", "mistral");
-        std::string prompt = arg;
-        std::string modelCopy = model;
-        if (modelCopy.find(':') == std::string::npos) modelCopy += ":latest";
-
-        auto resp = cpr::Post(
-            cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/generate" },
-            cpr::Header{{"Content-Type","application/json"}},
-            cpr::Body{ nlohmann::json{
-                {"model", modelCopy},
-                {"prompt", prompt},
-                {"stream", false}
-            }.dump() }
-        );
-
-        if (resp.status_code == 200) {
-            auto j = nlohmann::json::parse(resp.text, nullptr, false);
-            if (!j.is_discarded() && j.contains("response")) {
-                std::string reply = j["response"].get<std::string>();
-                LOG_TRACE("AI", "Ollama replied successfully");
-                return {
-                    true,               // success
-                    reply,              // message
-                    "ERR_NONE",         // errorCode
-                    "routine",          // category
-                    reply,              // voice
-                    Colors::Cyan        // color
-                };
-            }
-        }
-
-        LOG_ERROR("AI", "Ollama backend error");
-        return {
-            false,                              // success
-            "[AI] Ollama backend error",        // message
-            "ERR_AI_BACKEND_FAILED",            // errorCode
-            "error",                            // category
-            "Ollama backend error",             // voice
-            Colors::Red                         // color
-        };
-    }
-
+    // All routing via MMO Orchestrator through ai_process
     CommandResult result = ai_process(arg);
 
     if (result.category.empty()) result.category = "routine";

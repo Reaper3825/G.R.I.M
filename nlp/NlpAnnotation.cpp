@@ -13,6 +13,7 @@
 #include "nlp.hpp"
 #include "../ai/intent_gate.hpp"
 #include "../ai/fast_classifier.hpp"
+#include "../MMO/Core/SessionContextManager.hpp"
 #include "../memory/context_snapshot.hpp"
 #include <algorithm>
 #include <cctype>
@@ -39,6 +40,35 @@ static std::string normalizeText(const std::string& raw) {
     // trim trailing space
     if (!out.empty() && out.back() == ' ') out.pop_back();
     return out;
+}
+
+// ─── Language detection (lightweight heuristic) ───────────────────────
+
+static std::string detectLanguage(const std::string& text) {
+    // Count characters in non-Latin Unicode ranges
+    int cjk = 0, cyrillic = 0, arabic = 0, latin = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        auto c = static_cast<unsigned char>(text[i]);
+        if (c < 0x80) {
+            if (std::isalpha(c)) ++latin;
+        } else if (c >= 0xD0 && c <= 0xD4) {
+            // Cyrillic block (UTF-8 two-byte: 0xD0xx-0xD4xx)
+            ++cyrillic; ++i;
+        } else if (c >= 0xD8 && c <= 0xDB) {
+            // Arabic block (UTF-8 two-byte: 0xD8xx-0xDBxx)
+            ++arabic; ++i;
+        } else if (c >= 0xE4 && c <= 0xE9) {
+            // CJK Unified Ideographs range (UTF-8 three-byte: 0xE4xxxx-0xE9xxxx)
+            ++cjk; i += 2;
+        }
+    }
+    int total = latin + cjk + cyrillic + arabic;
+    if (total == 0) return "en";
+
+    if (cjk * 3 > total) return "zh";       // Chinese/Japanese/Korean predominant
+    if (cyrillic * 3 > total) return "ru";   // Cyrillic predominant
+    if (arabic * 3 > total) return "ar";     // Arabic predominant
+    return "en";
 }
 
 // ─── Entity extraction (regex-based, aligns with GRIM-text atoms) ─────
@@ -239,7 +269,7 @@ NlpAnnotation annotate(const std::string& raw_input,
     NlpAnnotation ann;
     ann.raw_text        = raw_input;
     ann.normalized_text = normalizeText(raw_input);
-    ann.language        = "en"; // TODO: language detection
+    ann.language        = detectLanguage(raw_input);
 
     // ─── Utterance priors from IntentGate + FastClassifier ──
     IntentResult gate = IntentGate::decide(raw_input, context);
@@ -309,6 +339,27 @@ NlpAnnotation annotate(const std::string& raw_input,
     ann.confidence_summary.overall = (entity_conf + static_cast<float>(intent.confidence) + gate.confidence) / 3.0f;
 
     return ann;
+}
+
+// =========================================================
+// annotate() V2 overload — accepts ContextSnapshotV2
+//
+// Projects V2 → V1 for IntentGate/FastClassifier (which still
+// consume ContextSnapshot), then delegates to the V1 overload.
+// =========================================================
+NlpAnnotation annotate(const std::string& raw_input,
+                        const GRIM::MMO::ContextSnapshotV2& v2) {
+    // Project V2 → V1 for legacy consumers
+    ContextSnapshot v1;
+    v1.currentMood         = v2.current_mood;
+    v1.lastNlpCategory     = v2.lastNlpCategory;
+    v1.consecutiveCommands = v2.consecutiveCommands;
+    v1.conversationDepth   = static_cast<int>(v2.recent_turn_summaries.size());
+
+    // Populate recentIntents from utterance_priors strings
+    v1.recentIntents = v2.utterance_priors;
+
+    return annotate(raw_input, v1);
 }
 
 } // namespace GRIM

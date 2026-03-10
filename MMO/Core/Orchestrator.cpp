@@ -5,8 +5,12 @@
 // correlation validation → Contracts::validateResponse.
 //======================================================//
 #include "Orchestrator.hpp"
+#include "ToolRegistry.hpp"
+#include "CorrectionTuple.hpp"
+#include "ToolTrainingParser.hpp"
 
 #include "../../logger.hpp"
+#include "../../memory/memory_buffer_rotation.hpp"
 
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
@@ -26,7 +30,8 @@ Orchestrator::Orchestrator(ModelRegistry& registry,
     : registry_(registry)
     , loader_(loader)
     , memory_(memory)
-    , config_(config) {}
+    , config_(config)
+    , tool_gap_planner_(ToolRegistry::instance()) {}
 
 // =========================================================
 // setMemoryFacade — late-bind memory after init
@@ -262,6 +267,23 @@ OrchestratorResult Orchestrator::generate(const RequestContext& ctx) {
 
 void Orchestrator::shutdown() {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // Flush any pending correction tuples before unloading models
+    size_t flushed = CorrectionTupleCollector::instance().flush(
+        config_.correction_output_path);
+    if (flushed > 0) {
+        LOG_DEBUG("MMO_ORCH", "Flushed " + std::to_string(flushed)
+                  + " correction tuples to disk");
+    }
+
+    // Flush training examples (positive + negative signal)
+    size_t trainFlushed = ToolTrainingParser::instance().flush(
+        "tool_training_examples.jsonl");
+    if (trainFlushed > 0) {
+        LOG_DEBUG("MMO_ORCH", "Flushed " + std::to_string(trainFlushed)
+                  + " training examples to disk");
+    }
+
     loader_.unloadAll();
     LOG_DEBUG("MMO_ORCH", "Orchestrator shutdown complete");
 }
@@ -271,6 +293,9 @@ void Orchestrator::shutdown() {
 // =========================================================
 
 std::string Orchestrator::buildRouterScope(const RequestContext& ctx) const {
+    // Drain preprocessing buffer into working context before building scope
+    GRIM::MemoryBufferRotation::instance().mergeToWorking();
+
     if (!memory_) {
         return ctx.metadata_json;
     }
@@ -326,8 +351,7 @@ std::string Orchestrator::buildRouterScope(const RequestContext& ctx) const {
 // =========================================================
 // callBackend — dispatch to model backend via IGenerationBackend
 //
-// If a backend is registered for the model, dispatches through it.
-// Otherwise falls back to direct HTTP (legacy path during migration).
+// All models MUST have a registered backend. No fallback.
 // =========================================================
 
 ResponseEnvelope Orchestrator::callBackend(
@@ -336,108 +360,41 @@ ResponseEnvelope Orchestrator::callBackend(
     const RequestEnvelope& envelope,
     int timeout_ms) {
 
-    // ── Try IGenerationBackend dispatch first ──
     auto it = backends_.find(model.id);
-    if (it != backends_.end()) {
-        IGenerationBackend* backend = it->second.get();
-
-        GenerationOptions opts;
-        opts.timeout_ms = timeout_ms;
-        if (!envelope.scope.empty())    opts.metadata_json = envelope.scope;
-
-        // Pass full envelope so MMO-aware backends can use
-        // the structured endpoint instead of /api/chat.
-        nlohmann::json env_body;
-        env_body["schema_version"]  = envelope.schema_version;
-        env_body["request_id"]      = envelope.request_id;
-        env_body["session_id"]      = envelope.session_id;
-        env_body["turn_id"]         = envelope.turn_id;
-        env_body["target_model_id"] = envelope.target_model_id;
-        env_body["task"]            = envelope.task;
-        env_body["payload"]         = envelope.payload;
-        if (!envelope.scope.empty())         env_body["scope"]         = envelope.scope;
-        if (!envelope.constraints.empty())   env_body["constraints"]   = envelope.constraints;
-        if (!envelope.output_schema.empty()) env_body["output_schema"] = envelope.output_schema;
-        if (envelope.max_length > 0)         env_body["max_length"]    = envelope.max_length;
-        opts.envelope_json = env_body.dump();
-        opts.mmo_endpoint  = endpoint;
-
-        GenerationResult gen_result = backend->generate(
-            envelope.payload, opts);
-
-        return resultToEnvelope(gen_result, envelope);
+    if (it == backends_.end()) {
+        throw std::runtime_error(
+            "No registered backend for model '" + model.id
+            + "' — all models must be registered at bootstrap. "
+            "Check createBackendForModel() in bootstrap.cpp.");
     }
 
-    // ── Legacy direct HTTP fallback ──
-    LOG_DEBUG("MMO_ORCH", "No registered backend for '" + model.id
-              + "' — using direct HTTP");
+    IGenerationBackend* backend = it->second.get();
 
-    ResponseEnvelope response;
-    response.request_id      = envelope.request_id;
-    response.target_model_id = model.id;
+    GenerationOptions opts;
+    opts.timeout_ms = timeout_ms;
+    if (!envelope.scope.empty())    opts.metadata_json = envelope.scope;
 
-    // Build JSON request body from envelope
-    nlohmann::json body;
-    body["schema_version"]  = envelope.schema_version;
-    body["request_id"]      = envelope.request_id;
-    body["session_id"]      = envelope.session_id;
-    body["turn_id"]         = envelope.turn_id;
-    body["target_model_id"] = envelope.target_model_id;
-    body["task"]            = envelope.task;
-    body["payload"]         = envelope.payload;
-    if (!envelope.scope.empty())         body["scope"]         = envelope.scope;
-    if (!envelope.constraints.empty())   body["constraints"]   = envelope.constraints;
-    if (!envelope.output_schema.empty()) body["output_schema"] = envelope.output_schema;
-    if (envelope.max_length > 0)         body["max_length"]    = envelope.max_length;
+    // Pass full envelope so MMO-aware backends can use
+    // the structured endpoint instead of /api/chat.
+    nlohmann::json env_body;
+    env_body["schema_version"]  = envelope.schema_version;
+    env_body["request_id"]      = envelope.request_id;
+    env_body["session_id"]      = envelope.session_id;
+    env_body["turn_id"]         = envelope.turn_id;
+    env_body["target_model_id"] = envelope.target_model_id;
+    env_body["task"]            = envelope.task;
+    env_body["payload"]         = envelope.payload;
+    if (!envelope.scope.empty())         env_body["scope"]         = envelope.scope;
+    if (!envelope.constraints.empty())   env_body["constraints"]   = envelope.constraints;
+    if (!envelope.output_schema.empty()) env_body["output_schema"] = envelope.output_schema;
+    if (envelope.max_length > 0)         env_body["max_length"]    = envelope.max_length;
+    opts.envelope_json = env_body.dump();
+    opts.mmo_endpoint  = endpoint;
 
-    std::string url = model.url + endpoint;
+    GenerationResult gen_result = backend->generate(
+        envelope.payload, opts);
 
-    LOG_DEBUG("MMO_ORCH", "Calling " + url + " task=" + envelope.task
-              + " request_id=" + envelope.request_id);
-
-    cpr::Response http_resp = cpr::Post(
-        cpr::Url{url},
-        cpr::Header{{"Content-Type", "application/json"}},
-        cpr::Body{body.dump()},
-        cpr::Timeout{timeout_ms}
-    );
-
-    if (http_resp.status_code != 200) {
-        response.status = ResponseStatus::Error;
-        response.error  = "HTTP " + std::to_string(http_resp.status_code)
-                          + " from " + url + ": " + http_resp.text.substr(0, 500);
-        LOG_ERROR("MMO_ORCH", response.error);
-        return response;
-    }
-
-    // Parse JSON response
-    auto j = nlohmann::json::parse(http_resp.text, nullptr, false);
-    if (j.is_discarded()) {
-        response.status = ResponseStatus::Error;
-        response.error  = "Invalid JSON from " + url + ": "
-                          + http_resp.text.substr(0, 500);
-        LOG_ERROR("MMO_ORCH", response.error);
-        return response;
-    }
-
-    // Map JSON fields to ResponseEnvelope
-    response.schema_version = j.value("schema_version", 1u);
-    response.request_id     = j.value("request_id", std::string{});
-    response.target_model_id = j.value("target_model_id", std::string{});
-
-    std::string status_str  = j.value("status", std::string{"error"});
-    if (status_str == "ok") {
-        response.status = ResponseStatus::Ok;
-        response.result = j.value("result", std::string{});
-    } else if (status_str == "refuse") {
-        response.status  = ResponseStatus::Refuse;
-        response.refusal = j.value("refusal", std::string{});
-    } else {
-        response.status = ResponseStatus::Error;
-        response.error  = j.value("error", std::string{"unknown error"});
-    }
-
-    return response;
+    return resultToEnvelope(gen_result, envelope);
 }
 
 // =========================================================
@@ -486,6 +443,16 @@ ResponseEnvelope Orchestrator::resultToEnvelope(
     }
 
     return response;
+}
+
+// =========================================================
+// evaluateToolGap — check if a capability is missing
+// =========================================================
+
+std::optional<ToolGapProposal> Orchestrator::evaluateToolGap(
+    const std::string& capability,
+    const std::string& request_id) const {
+    return tool_gap_planner_.evaluate(capability, request_id);
 }
 
 } // namespace GRIM::MMO

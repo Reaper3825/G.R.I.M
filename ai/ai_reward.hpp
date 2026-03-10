@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <unordered_map>
-#include "commands_core.hpp"    // for CommandResult
+#include "commands/commands_core.hpp"    // for CommandResult
 
 struct RewardBreakdown {
     float baseReward = 0.0f;
