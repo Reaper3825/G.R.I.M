@@ -298,6 +298,12 @@ void LanguageModel::initTrainingState() {
 
     training_state_.cached_targets_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "cached_targets");
+
+    if (cfg.mtp_enabled && cfg.mtp_k > 0) {
+        training_state_.mtp_shifted_targets_tensor = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "mtp_shifted_targets");
+        std::cout << "✓ Allocated MTP shifted targets buffer [" << max_logit_tokens << "]" << std::endl;
+    }
     
     // NOTE: Using empty() not zeros() - ComputeLossBatch fully overwrites this buffer
     // via cudaMemcpyAsync before every forward pass. No need to waste bandwidth zero-filling.

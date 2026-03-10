@@ -59,15 +59,29 @@ const GPUGrimEncoder& LanguageModel::getGpuEncoder() const {
     return *gpu_encoder_;
 }
 
+LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) {
+    if (k < 0 || k >= static_cast<int>(mtp_heads_.size())) {
+        return nullptr;
+    }
+    return &mtp_heads_[k];
+}
+
+const LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) const {
+    if (k < 0 || k >= static_cast<int>(mtp_heads_.size())) {
+        return nullptr;
+    }
+    return &mtp_heads_[k];
+}
+
 //======================================================//
 
 namespace {
 
 // Production constants - using centralized HyperParameters (Rule 20)
-constexpr float kNegInf = HyperParameters::NEG_INF_ATTENTION;
-constexpr float kProbabilityFloor = HyperParameters::PROBABILITY_FLOOR;
-constexpr float kSoftmaxClipThreshold = HyperParameters::SOFTMAX_CLIP_THRESHOLD;
-constexpr float kTemperatureEpsilon = HyperParameters::EPSILON_TEMPERATURE;
+[[maybe_unused]] constexpr float kNegInf = HyperParameters::NEG_INF_ATTENTION;
+[[maybe_unused]] constexpr float kProbabilityFloor = HyperParameters::PROBABILITY_FLOOR;
+[[maybe_unused]] constexpr float kSoftmaxClipThreshold = HyperParameters::SOFTMAX_CLIP_THRESHOLD;
+[[maybe_unused]] constexpr float kTemperatureEpsilon = HyperParameters::EPSILON_TEMPERATURE;
 constexpr uint32_t kMaxReasonableVocabSize = HyperParameters::MAX_REASONABLE_VOCAB_SIZE;
 
 int detectVocabSizeFromBinary(const std::string& path) {

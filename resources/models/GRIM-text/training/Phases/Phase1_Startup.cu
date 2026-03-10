@@ -963,6 +963,16 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
               ", init=" + std::to_string(model_config.layer_scale_init) +
               " | QK-norm: " + std::string(model_config.qk_norm_enabled ? "ENABLED" : "disabled"));
     
+    // Multi-token prediction (MTP) - auxiliary heads
+    model_config.mtp_enabled = hp.mtp_enabled;
+    model_config.mtp_k = hp.mtp_k;
+    model_config.mtp_alpha = hp.mtp_alpha;
+    model_config.mtp_alpha_warmup_steps = hp.mtp_alpha_warmup_steps;
+    if (model_config.mtp_enabled && (model_config.mtp_k <= 0 || model_config.mtp_alpha <= 0.0f)) {
+        throw std::runtime_error("multi_token_prediction: when enabled, k and alpha must be > 0 (k=" +
+            std::to_string(model_config.mtp_k) + " alpha=" + std::to_string(model_config.mtp_alpha) + ")");
+    }
+
     // Hardcoded Hidden States Diagnostic (Issue #42)
     model_config.hardcoded_hidden_pattern = static_cast<GRIM::LanguageModelConfig::HardcodedPattern>(hp.hardcoded_hidden_pattern);
     model_config.hardcoded_log_every_n_batches = hp.hardcoded_log_every_n_batches;
@@ -1099,6 +1109,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("Initializing TrainingState (grad buffers, activation caches)...");
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
+
+    // Build parameter groups for optimizer and grad-norm (required even when logit_update_trace is off).
+    // Otherwise Phase2 allocateGradNormScratch gets max_groups=0 and fails.
+    model->buildParameterGroups();
 
     // ═══════════════════════════════════════════════════════════════
     // tie_embeddings pointer verification (Step C: non-negotiable truth)

@@ -75,6 +75,7 @@ struct TrainingState {
     
     // Target/input ID caches (int typed)
     Tensor cached_targets_tensor;       // [max_tokens] int32
+    Tensor mtp_shifted_targets_tensor;   // [max_logit_tokens] int32 — MTP shifted targets (one buffer, reused per head)
     Tensor cached_token_ids_tensor;     // [max_tokens] int32
     Tensor cached_token_numeric_values; // [max_tokens] float
     
@@ -116,6 +117,17 @@ struct TrainingState {
     //======================================================//
     float cached_loss_value = 0.0f;
     float cached_text_loss = 0.0f;
+
+    // MTP diagnostics (filled by computeAutogradLoss when MTP enabled; logged by Phase2)
+    struct MTPDiagnostics {
+        std::vector<float> head_loss;
+        std::vector<float> head_acc;
+        float L0_main = 0.0f;       // Main (next-token) loss before adding MTP terms
+        float alpha_effective = 0.0f;
+        float L_total = 0.0f;
+        bool valid = false;
+    };
+    MTPDiagnostics mtp_diagnostics;
     
     // Owns ALL intermediate tensors during forward→backward cycle
     // Replaces old autograd_ctx (which mixed input args with tensor storage)

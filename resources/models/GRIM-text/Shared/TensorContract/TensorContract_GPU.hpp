@@ -727,7 +727,8 @@ enum class ParamGroupType : uint8_t {
     RMSNORM = 4,        ///< RMSNorm gamma parameters
     SCRATCHBLOCK = 5,   ///< Atom type embeddings + projection
     NUMERIC_HEAD = 6,   ///< Numeric prediction head weights + bias
-    COUNT = 7           ///< Number of parameter group types
+    MTP = 7,            ///< Multi-token prediction auxiliary heads (weight + bias per head)
+    COUNT = 8           ///< Number of parameter group types
 };
 
 //======================================================//
@@ -1193,6 +1194,13 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr,
  * Element-wise addition: C = A + B
  */
 Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
+
+/**
+ * Scale a scalar tensor by a constant (for loss weighting, e.g. MTP alpha/K).
+ * Forward: result = scale * input (input must be 1 element).
+ * Backward: gradient passed to input is scale * grad_output.
+ */
+Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream = nullptr);
 
 // autograd::scale() DELETED — dead code from reverted Issue #98 (Rule 20)
 

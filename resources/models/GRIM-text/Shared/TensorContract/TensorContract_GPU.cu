@@ -82,22 +82,12 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 // Global stream for async cleanup - initialized on first use
 static cudaStream_t g_cleanup_stream = nullptr;
 
-// Static cuBLAS handle for autograd operations (LayerScaleGradFn etc.)
-// Avoids creating/destroying handles per backward call (Issue #ownership-audit)
-static cublasHandle_t g_autograd_cublas_handle = nullptr;
+// cuBLAS for autograd is the handle from TrainingState/InferenceState; layers call
+// set_autograd_cublas_handle() and autograd matmul uses get_autograd_cublas_handle() (thread-local).
 
 void initCleanupStream() {
     if (g_cleanup_stream == nullptr) {
         cudaStreamCreate(&g_cleanup_stream);
-    }
-}
-
-static void initAutogradCublasHandle() {
-    if (g_autograd_cublas_handle == nullptr) {
-        cublasStatus_t status = cublasCreate(&g_autograd_cublas_handle);
-        if (status != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("Failed to create autograd cuBLAS handle, status=" + std::to_string(static_cast<int>(status)));
-        }
     }
 }
 
@@ -239,13 +229,10 @@ void flushDeferredCleanup() {
     }
 }
 
-// Destroy all module-static GPU resources (cleanup stream + cuBLAS handle)
-// Call during process shutdown after all GPU work is complete
+// Destroy module-static GPU resources (cleanup stream only).
+// cuBLAS handle is owned by TrainingState/InferenceState and destroyed there.
+// Call during process shutdown after all GPU work is complete.
 void shutdownAutogradResources() {
-    if (g_autograd_cublas_handle) {
-        cublasDestroy(g_autograd_cublas_handle);
-        g_autograd_cublas_handle = nullptr;
-    }
     if (g_cleanup_stream) {
         cudaStreamSynchronize(g_cleanup_stream);
         cudaStreamDestroy(g_cleanup_stream);
@@ -1463,7 +1450,7 @@ __global__ void kernel_elementwise_mul_backward(
 
 // Element-wise add backward: grad_a = grad_out, grad_b = grad_out
 // (Gradient just passes through to both inputs)
-__global__ void kernel_add_backward(
+__global__ __attribute__((unused)) void kernel_add_backward(
     const float* grad_output,
     float* grad_a,
     float* grad_b,
@@ -3928,6 +3915,65 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     return result;
 }
 
+// ScaleScalarGradFn: backward for scale_scalar; passes scale * grad_output to input
+struct ScaleScalarGradFn : public GradFn {
+    std::shared_ptr<GradFn> input_grad_fn;
+    TensorContract::TensorShape input_shape;
+    float scale = 0.0f;
+    ScaleScalarGradFn() { op_name = "scale_scalar"; }
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied) return;
+        applied = true;
+        if (!input_grad_fn || !input_grad_fn->op_name) return;
+        if (!grad_output.data || grad_output.numel() < 1) return;
+        float h_grad = 0.0f;
+        cudaMemcpyAsync(&h_grad, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        const float scaled = scale * h_grad;
+        float* d_scaled = nullptr;
+        cudaMalloc(&d_scaled, sizeof(float));
+        cudaMemcpyAsync(d_scaled, &scaled, sizeof(float), cudaMemcpyHostToDevice, stream);
+        Tensor view;
+        view.data = d_scaled;
+        view.shape = input_shape;
+        view.owns_data = false;
+        view.stream = stream;
+        input_grad_fn->apply(view, stream);
+        queueForDeferredCleanup(d_scaled);
+    }
+};
+
+Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::scale_scalar: stream is NULL");
+    }
+    if (t.numel() != 1) {
+        throw std::invalid_argument("autograd::scale_scalar: input must be scalar (1 element), got " + std::to_string(t.numel()));
+    }
+    float h_val = 0.0f;
+    cudaMemcpyAsync(&h_val, t.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    const float scaled_val = scale * h_val;
+    float* d_out = nullptr;
+    cudaMalloc(&d_out, sizeof(float));
+    cudaMemcpyAsync(d_out, &scaled_val, sizeof(float), cudaMemcpyHostToDevice, stream);
+    Tensor result;
+    result.data = d_out;
+    result.owns_data = true;
+    result.shape = TensorContract::TensorShape::make_BSM(1, 1);
+    result.is_leaf = false;
+    result.requires_grad = t.requires_grad;
+    result.stream = stream;
+    if (t.requires_grad && t.grad_fn) {
+        auto grad_fn = std::make_shared<ScaleScalarGradFn>();
+        grad_fn->input_grad_fn = t.grad_fn;
+        grad_fn->input_shape = t.shape;
+        grad_fn->scale = scale;
+        result.grad_fn = grad_fn;
+    }
+    return result;
+}
+
 /**
  * autograd::broadcast_add - Add bias to tensor with broadcasting: output = input + bias
  * 
@@ -5966,31 +6012,7 @@ Tensor reshape_bhsd_to_flat(
 // 2. Calls qkv_out->grad_fn->apply() to continue the chain to W_qkv
 // ═══════════════════════════════════════════════════════════════════════════
 
-// CUDA kernel to split QKV: [tokens, qkv_dim] -> Q[tokens, d_model], K[tokens, kv_dim], V[tokens, kv_dim]
-__global__ void kernel_split_qkv(
-    const float* __restrict__ qkv,     // [tokens, qkv_dim] where qkv_dim = d_model + 2*kv_dim
-    float* __restrict__ Q,              // [tokens, d_model]
-    float* __restrict__ K,              // [tokens, kv_dim]
-    float* __restrict__ V,              // [tokens, kv_dim]
-    int tokens, int d_model, int kv_dim
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total_qkv_dim = d_model + 2 * kv_dim;
-    const int total_q_elems = tokens * d_model;
-    const int total_kv_elems = tokens * kv_dim;
-    
-    // Q elements: idx in [0, tokens * d_model)
-    if (idx < total_q_elems) {
-        const int token = idx / d_model;
-        const int col = idx % d_model;
-        Q[idx] = qkv[token * total_qkv_dim + col];
-    }
-    
-    // K elements: idx in [0, tokens * kv_dim)
-    // Separate kernel launch or just use offset
-}
-
-// One kernel: split qkv [tokens, qkv_dim] -> Q_bsm, K_bsm, V_bsm (same logic as before).
+// One kernel: split qkv [tokens, qkv_dim] -> Q_bsm, K_bsm, V_bsm.
 // Uses 1D grid only (blocks_split, 256) so launch is valid on all drivers; 2D grid
 // and 768 threads/block can trigger "invalid argument".
 __global__ void kernel_split_qkv_all(

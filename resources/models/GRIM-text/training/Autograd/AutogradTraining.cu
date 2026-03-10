@@ -55,7 +55,7 @@ constexpr int kBlockSize = 256;
 
 // Thin wrapper around shared launchScaleGradients (GradientCC_GPU)
 // Accepts size_t for convenience since .numel() returns size_t
-inline void scaleGradBuffer(float* data, size_t n, float scale, cudaStream_t stream) {
+[[maybe_unused]] inline void scaleGradBuffer(float* data, size_t n, float scale, cudaStream_t stream) {
     if (!data || n == 0) {
         return;
     }
@@ -966,27 +966,6 @@ static void computeNumericLossAsync(
     *d_count_out = d_count;
 }
 
-static float computeNumericLoss(
-    const Tensor& numeric_head_output,
-    const float* cached_numeric_values,
-    const int* cached_targets,
-    int total_tokens,
-    int num_token_id,
-    cudaStream_t stream
-) {
-    float h_loss = 0.0f;
-    int h_count = 0;
-    float* d_loss = nullptr;
-    int* d_count = nullptr;
-    computeNumericLossAsync(numeric_head_output, cached_numeric_values, cached_targets,
-                            total_tokens, num_token_id, stream,
-                            &h_loss, &h_count, &d_loss, &d_count);
-    cudaStreamSynchronize(stream);
-    cudaFree(d_loss);
-    cudaFree(d_count);
-    return (h_count > 0) ? h_loss / static_cast<float>(h_count) : 0.0f;
-}
-
 //======================================================================
 // Autograd Loss Computation
 //======================================================================
@@ -1057,6 +1036,85 @@ LossResult computeAutogradLoss(
     
     // Move loss tensor to intermediates (TrainingState owns it during backward)
     intermediates.loss_tensor = std::move(loss_tensor);
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
+    // ═══════════════════════════════════════════════════════════════════════════
+    ts->mtp_diagnostics.valid = false;
+    if (ctx.model && cfg->mtp_enabled && cfg->mtp_k > 0 &&
+        intermediates.encoder_output_tensor.data && ts->mtp_shifted_targets_tensor.data) {
+        float L0_main = 0.0f;
+        cudaMemcpyAsync(&L0_main, intermediates.loss_tensor.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+        cudaStreamSynchronize(ctx.stream);
+        ts->mtp_diagnostics.L0_main = L0_main;
+        const float alpha_effective = cfg->mtp_alpha * std::min(1.0f,
+            static_cast<float>(ctx.step) / static_cast<float>(cfg->mtp_alpha_warmup_steps > 0 ? cfg->mtp_alpha_warmup_steps : 1));
+        const int K = cfg->mtp_k;
+        const float scale = (K > 0 && alpha_effective > 0.0f) ? (alpha_effective / static_cast<float>(K)) : 0.0f;
+        intermediates.mtp_logits_tensors.clear();
+        ts->mtp_diagnostics.head_loss.clear();
+        ts->mtp_diagnostics.head_acc.clear();
+        ts->mtp_diagnostics.alpha_effective = alpha_effective;
+        for (int k = 0; k < K && scale > 0.0f; ++k) {
+            LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
+            if (!head || !head->weight.data || !head->bias.data) continue;
+            const int shift = k + 1;
+            autograd::launchShiftTargetsKernel(
+                targets,
+                reinterpret_cast<int*>(ts->mtp_shifted_targets_tensor.data),
+                total_tokens,
+                ctx.seq_len,
+                shift,
+                ctx.stream
+            );
+            Tensor logits_k = autograd::matmul(
+                intermediates.encoder_output_tensor,
+                head->weight,
+                ctx.stream,
+                intermediates.encoder_output_tensor.data,
+                nullptr,
+                true
+            );
+            logits_k = autograd::broadcast_add(logits_k, head->bias, ctx.stream);
+            intermediates.mtp_logits_tensors.push_back(std::move(logits_k));
+            Tensor loss_k = autograd::unified_loss(
+                intermediates.mtp_logits_tensors.back(),
+                reinterpret_cast<const int*>(ts->mtp_shifted_targets_tensor.data),
+                nullptr,
+                total_tokens,
+                vocab_size,
+                ctx.loss_config,
+                ctx.stream
+            );
+            float h_loss_k = 0.0f;
+            cudaMemcpyAsync(&h_loss_k, loss_k.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+            int* d_correct = nullptr;
+            int* d_valid = nullptr;
+            cudaMalloc(&d_correct, sizeof(int));
+            cudaMalloc(&d_valid, sizeof(int));
+            autograd::launchMTPAccuracyKernel(
+                intermediates.mtp_logits_tensors.back().data,
+                reinterpret_cast<const int*>(ts->mtp_shifted_targets_tensor.data),
+                total_tokens,
+                vocab_size,
+                d_correct,
+                d_valid,
+                ctx.stream
+            );
+            cudaStreamSynchronize(ctx.stream);
+            ts->mtp_diagnostics.head_loss.push_back(h_loss_k);
+            int h_correct = 0, h_valid = 0;
+            cudaMemcpy(&h_correct, d_correct, sizeof(int), cudaMemcpyDeviceToHost);
+            cudaMemcpy(&h_valid, d_valid, sizeof(int), cudaMemcpyDeviceToHost);
+            cudaFree(d_correct);
+            cudaFree(d_valid);
+            float acc_k = (h_valid > 0) ? (static_cast<float>(h_correct) / static_cast<float>(h_valid)) * 100.0f : 0.0f;
+            ts->mtp_diagnostics.head_acc.push_back(acc_k);
+            Tensor scaled_k = autograd::scale_scalar(loss_k, scale, ctx.stream);
+            intermediates.loss_tensor = autograd::add(intermediates.loss_tensor, scaled_k, ctx.stream);
+        }
+        ts->mtp_diagnostics.valid = !ts->mtp_diagnostics.head_loss.empty();
+    }
     
     // Issue both loss D2H copies before a single sync (batch sync for text + numeric)
     float text_loss = 0.0f;
@@ -1082,6 +1140,10 @@ LossResult computeAutogradLoss(
     }
 
     cudaStreamSynchronize(ctx.stream);
+
+    if (ts->mtp_diagnostics.valid) {
+        ts->mtp_diagnostics.L_total = text_loss;
+    }
 
     if (have_numeric) {
         cudaFree(d_numeric_loss);
@@ -1189,6 +1251,17 @@ BackwardResult executeAutogradBackward(
             ctx.numeric_head->weights().zero_grad(ctx.stream);
             ctx.numeric_head->bias().zero_grad(ctx.stream);
         }
+
+        // MTP head parameters
+        if (ctx.model && ctx.model->getMtpK() > 0) {
+            for (int k = 0; k < ctx.model->getMtpK(); ++k) {
+                LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
+                if (head) {
+                    if (head->weight.data) head->weight.zero_grad(ctx.stream);
+                    if (head->bias.data) head->bias.zero_grad(ctx.stream);
+                }
+            }
+        }
     }
     
     // Call backward on the text loss (single loss path)
@@ -1226,8 +1299,8 @@ BackwardResult executeAutogradBackward(
 //======================================================================
 
 bool verifyGradientsAreConnected(AutogradContext& ctx) {
-    auto* ts = ctx.training_state;
-    const auto* cfg = ctx.config;
+    (void)ctx.training_state;
+    (void)ctx.config;
     bool ok = true;
     
     // The autograd system stores gradients in Tensor.grad_ fields (shared_ptr<Tensor>)
@@ -1346,6 +1419,22 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         checkScratch(ctx.scratch_block->atomTypeEmbeddings(), "atomTypeEmbeddings");
         checkScratch(ctx.scratch_block->atomProjection(), "atomProjection");
     }
+
+    if (ctx.model && ctx.model->getMtpK() > 0) {
+        for (int k = 0; k < ctx.model->getMtpK(); ++k) {
+            LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
+            if (head) {
+                if (head->weight.data && !head->weight.has_grad()) {
+                    AG_WARN("MTP head " << k << " weight.grad is NULL");
+                    ok = false;
+                }
+                if (head->bias.data && !head->bias.has_grad()) {
+                    AG_WARN("MTP head " << k << " bias.grad is NULL");
+                    ok = false;
+                }
+            }
+        }
+    }
     
     return ok;
 }
@@ -1426,7 +1515,7 @@ LossResult autogradTrainingStep(
         cudaMemcpyHostToDevice, stream));
     
     // Atom mask + text features
-    constexpr int kTextFeatureDim = Batching::BatchPayload::kTextFeatureDim;
+    (void)Batching::BatchPayload::kTextFeatureDim;  // reserved for validation
     if (training_state.cached_token_atom_mask.data) {
         CUDA_CHECK(cudaMemcpyAsync(
             reinterpret_cast<uint8_t*>(training_state.cached_token_atom_mask.data),
@@ -1476,6 +1565,7 @@ LossResult autogradTrainingStep(
     );
     ctx.loss_config = buildLossConfig(model.getLossOptions(), training_state.d_class_weights);
     ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on accumulation micro-batches
+    ctx.model = &model;  // For MTP head access in computeAutogradLoss
 
     // ═══════════════════════════════════════════════════════════════════════════
     // FORWARD → LOSS → BACKWARD

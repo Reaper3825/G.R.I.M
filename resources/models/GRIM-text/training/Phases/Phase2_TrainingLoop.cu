@@ -861,10 +861,20 @@ std::string formatGradientComponents(const GRIM::GradNorm::GradMetrics& gm, bool
     return comp_msg.str();
 }
 
+/** Cosine decay: lr = min_lr + (base_lr - min_lr) * 0.5 * (1 + cos(pi * progress)), progress in [0,1]. */
+inline float getCosineDecayLr(float base_lr, float min_lr, float progress) {
+    const float p = std::clamp(progress, 0.0f, 1.0f);
+    const float decay = 0.5f * (1.0f + std::cos(3.14159265f * p));
+    return min_lr + (base_lr - min_lr) * decay;
+}
+
 float getScheduledLearningRate(
     int step,
     float base_lr,
     int warmup_steps,
+    int total_steps,
+    float cosine_decay_min_lr,
+    bool cosine_decay_enabled,
     bool stability_overrides_enabled) {
     
     if (stability_overrides_enabled) {
@@ -872,11 +882,17 @@ float getScheduledLearningRate(
     }
     
     if (step < warmup_steps) {
-        return base_lr * (static_cast<float>(step + 1) / warmup_steps);
+        return base_lr * (static_cast<float>(step + 1) / static_cast<float>(std::max(1, warmup_steps)));
     }
     
-    // Constant LR after warmup
-    return base_lr;
+    if (!cosine_decay_enabled || total_steps <= warmup_steps) {
+        return base_lr;
+    }
+    
+    const int decay_steps = total_steps - warmup_steps;
+    const int current_decay_step = step - warmup_steps;
+    const float progress = static_cast<float>(current_decay_step) / static_cast<float>(std::max(1, decay_steps));
+    return getCosineDecayLr(base_lr, cosine_decay_min_lr, progress);
 }
 
 bool isBatchQuarantined(
@@ -3978,7 +3994,8 @@ BatchResult processBatch(
     // Learning rate computation (accum_steps already computed above)
     auto lr_start = std::chrono::steady_clock::now();
     const float scheduled_lr = Internal::getScheduledLearningRate(
-        ctx.global_step, hp.learning_rate, hp.warmup_steps, 
+        ctx.global_step, hp.learning_rate, hp.warmup_steps,
+        ctx.estimated_total_steps, hp.cosine_decay_min_lr, hp.cosine_decay_enabled,
         ctx.config.stability.enabled);
     
     result.learning_rate = scheduled_lr;
@@ -4303,7 +4320,8 @@ BatchResult processBatch(
                             g.type == GRIM::ParamGroupType::FFN ||
                             g.type == GRIM::ParamGroupType::RMSNORM ||
                             g.type == GRIM::ParamGroupType::SCRATCHBLOCK ||
-                            g.type == GRIM::ParamGroupType::NUMERIC_HEAD) {
+                            g.type == GRIM::ParamGroupType::NUMERIC_HEAD ||
+                            g.type == GRIM::ParamGroupType::MTP) {
                             launchScaleGradients(g.grads(), static_cast<int>(g.size()), enc_clip_coef, clip_stream);
                         }
                     }
@@ -4697,6 +4715,9 @@ EpochResult runEpoch(
         *ctx.logging.logger);
     
     const int total_batches = static_cast<int>(schedule.batches.size());
+    if (ctx.estimated_total_steps == 0 && total_batches > 0) {
+        ctx.estimated_total_steps = num_epochs * total_batches;
+    }
     int total_batches_to_run = total_batches;
     const bool single_batch_overfit = hp.single_batch_overfit_enabled;
     if (single_batch_overfit) {
@@ -4749,6 +4770,44 @@ EpochResult runEpoch(
             ctx.logging.logger->log("[Step " + std::to_string(ctx.global_step) + "] " +
                                     Internal::formatMetric("loss", batch_result.loss) + " " +
                                     Internal::formatMetric("lr", batch_result.learning_rate, 8));
+            // MTP diagnostics: per-head loss, acc, loss_ratio, alpha_effective, L_total
+            {
+                auto& ts = ctx.model->getTrainingState();
+                if (ts.mtp_diagnostics.valid && !ts.mtp_diagnostics.head_loss.empty()) {
+                    const float L0 = ts.mtp_diagnostics.L0_main > 0.0f ? ts.mtp_diagnostics.L0_main : batch_result.loss;
+                    std::ostringstream mtp_log;
+                    for (size_t i = 0; i < ts.mtp_diagnostics.head_loss.size(); ++i) {
+                        const float Lk = ts.mtp_diagnostics.head_loss[i];
+                        const float acc = i < ts.mtp_diagnostics.head_acc.size() ? ts.mtp_diagnostics.head_acc[i] : 0.0f;
+                        const float ratio = (L0 > 0.0f) ? (Lk / L0) : 0.0f;
+                        mtp_log << "[MTP_EQUATION] head_k=" << (i + 1) << ": loss=" << Internal::formatScalar(Lk, 4)
+                                << " acc=" << Internal::formatScalar(acc, 2) << "%"
+                                << " loss_ratio=" << Internal::formatScalar(ratio, 4) << " ";
+                    }
+                    mtp_log << "alpha_effective=" << Internal::formatScalar(ts.mtp_diagnostics.alpha_effective, 4)
+                            << " L_total=" << Internal::formatScalar(ts.mtp_diagnostics.L_total, 4);
+                    ctx.logging.logger->log(mtp_log.str());
+                    // MTP Monitor: Lk/L0 with healthy-range indication (configurable via log_ratio_monitor)
+                    if (hp.mtp_log_ratio_monitor) {
+                        static const float kHealthyLow[] = { 1.1f, 1.3f, 1.5f, 1.6f };
+                        static const float kHealthyHigh[] = { 1.3f, 1.6f, 2.0f, 2.2f };
+                        std::ostringstream mon;
+                        mon << "[MTP_Monitor]";
+                        for (size_t i = 0; i < ts.mtp_diagnostics.head_loss.size(); ++i) {
+                            const float ratio = (L0 > 0.0f) ? (ts.mtp_diagnostics.head_loss[i] / L0) : 0.0f;
+                            const int k = static_cast<int>(i) + 1;
+                            const size_t idx = std::min(static_cast<size_t>(k - 1), static_cast<size_t>(4));
+                            const float lo = kHealthyLow[idx];
+                            const float hi = kHealthyHigh[idx];
+                            const bool ok = (ratio >= lo && ratio <= hi);
+                            mon << " k=" << k << ": Lk/L0=" << Internal::formatScalar(ratio, 3)
+                                << " (healthy " << Internal::formatScalar(lo, 1) << "-" << Internal::formatScalar(hi, 1)
+                                << (ok ? " OK" : " OUT_OF_RANGE") << ")";
+                        }
+                        ctx.logging.logger->log(mon.str());
+                    }
+                }
+            }
             if (ctx.config.hyperparameters.guess_aux_enabled &&
                 state.guess_cache_ready && !state.guess_cache_faulted) {
                 const GRIMTS::GuessCacheTelemetry telemetry = GRIMTS::GetCacheTelemetry(false);
@@ -4935,6 +4994,10 @@ bool executePhase2(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Warmup steps: ") + std::to_string(hp.warmup_steps), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Target learning rate: ") + std::to_string(hp.learning_rate), ctx.global_step);
+    if (hp.cosine_decay_enabled) {
+        EmitModuleInfo(ModuleId::Training,
+            std::string("  Cosine decay: enabled, min_lr=") + std::to_string(hp.cosine_decay_min_lr), ctx.global_step);
+    }
     EmitModuleInfo(ModuleId::Training, 
         std::string("  Soft restart: ") + (hp.soft_restart_enabled ? "enabled" : "disabled"), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, 

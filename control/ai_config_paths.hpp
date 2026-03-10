@@ -159,6 +159,8 @@ struct TrainingHyperparameters {
     float grad_clip_norm;
     bool per_token_grad_scale;
     int warmup_steps;
+    bool cosine_decay_enabled;
+    float cosine_decay_min_lr;
     int max_seq_len;
     int min_seq_valid_tokens;  // Minimum valid tokens required (after masking first/last positions)
     int log_interval;
@@ -325,6 +327,13 @@ struct TrainingHyperparameters {
     bool disable_async_frees;
     bool synchronize_after_kernels;
     
+    // Multi-token prediction (MTP) - auxiliary heads for trajectory learning
+    bool mtp_enabled = false;
+    int mtp_k = 0;
+    float mtp_alpha = 0.2f;
+    int mtp_alpha_warmup_steps = 500;
+    bool mtp_log_ratio_monitor = true;
+
     // Prediction comparison - NO DEFAULTS
     bool prediction_comparison_enabled;
     int prediction_comparison_interval;
@@ -728,6 +737,13 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.max_seq_len, trainConfig, "max_seq_len");
     assignTrainingField(params.min_seq_valid_tokens, trainConfig, "min_seq_valid_tokens");
     assignTrainingField(params.warmup_steps, trainConfig, "warmup_steps");
+    if (auto it = trainConfig.find("cosine_decay"); it != trainConfig.end() && it->is_object()) {
+        params.cosine_decay_enabled = it->value("enabled", false);
+        params.cosine_decay_min_lr = it->value("min_lr", 0.0f);
+    } else {
+        params.cosine_decay_enabled = false;
+        params.cosine_decay_min_lr = 0.0f;
+    }
     assignTrainingField(params.log_interval, trainConfig, "log_interval");
     assignTrainingField(params.atom_stats_interval, trainConfig, "atom_stats_interval");
     assignTrainingField(params.atom_stats_max_seqs, trainConfig, "atom_stats_max_seqs");
@@ -1149,6 +1165,16 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.synchronize_after_kernels = cuda_exec.value("synchronize_after_kernels", params.synchronize_after_kernels);
     }
     
+    // Load multi_token_prediction (MTP) configuration
+    if (auto it = trainConfig.find("multi_token_prediction"); it != trainConfig.end() && it->is_object()) {
+        const auto& mtp = *it;
+        params.mtp_enabled = mtp.value("enabled", params.mtp_enabled);
+        params.mtp_k = mtp.value("k", params.mtp_k);
+        params.mtp_alpha = mtp.value("alpha", params.mtp_alpha);
+        params.mtp_alpha_warmup_steps = mtp.value("alpha_warmup_steps", params.mtp_alpha_warmup_steps);
+        params.mtp_log_ratio_monitor = mtp.value("log_ratio_monitor", params.mtp_log_ratio_monitor);
+    }
+
     // Load prediction comparison configuration
     if (auto it = trainConfig.find("prediction_comparison"); it != trainConfig.end() && it->is_object()) {
         const auto& pred_cmp = *it;

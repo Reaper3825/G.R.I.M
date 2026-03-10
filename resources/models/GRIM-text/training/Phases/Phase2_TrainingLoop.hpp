@@ -205,16 +205,18 @@ ValidationResult runValidation(TrainingContext& ctx);
 namespace Internal {
 
 /**
- * @brief Get scheduled learning rate with warmup + cosine decay + telemetry modulation
+ * @brief Get scheduled learning rate: linear warmup, then constant or cosine decay.
+ * @param total_steps Estimated total training steps (epochs * batches per epoch). 0 disables cosine decay.
+ * @param cosine_decay_min_lr Minimum LR at end of schedule when cosine_decay_enabled.
  */
 float getScheduledLearningRate(
     int step,
     float base_lr,
-    float min_lr,
     int warmup_steps,
     int total_steps,
-    bool stability_overrides_enabled,
-    GRIM::Telemetry::TelemetryLattice* lattice = nullptr);
+    float cosine_decay_min_lr,
+    bool cosine_decay_enabled,
+    bool stability_overrides_enabled);
 
 /**
  * @brief Check if a batch should be skipped due to quarantine

@@ -272,6 +272,7 @@ GradNormStatus measureGradientNormsFinalize(
     m.rmsnorm_sum_sq = type_sum_sq[4];        m.rmsnorm_count = type_count[4];
     m.scratchblock_sum_sq = type_sum_sq[5];   m.scratchblock_count = type_count[5];
     m.numeric_head_sum_sq = type_sum_sq[6];   m.numeric_head_count = type_count[6];
+    m.mtp_sum_sq = type_sum_sq[7];            m.mtp_count = type_count[7];
 
     // Aggregate metrics
     m.groups_processed = static_cast<uint32_t>(num_groups);

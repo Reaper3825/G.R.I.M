@@ -165,6 +165,9 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
             config.use_flash_attention = hyperparams.use_flash_attention;
             config.min_seq_len_for_flash = hyperparams.min_seq_len_for_flash;
         }
+        // MTP: so load() will load the .mtp sidecar when loading a checkpoint that was saved with MTP
+        config.mtp_enabled = hyperparams.mtp_enabled;
+        config.mtp_k = hyperparams.mtp_k;
 
         config.computeDerivedValues();  // Compute head_dim = d_model / num_heads
         

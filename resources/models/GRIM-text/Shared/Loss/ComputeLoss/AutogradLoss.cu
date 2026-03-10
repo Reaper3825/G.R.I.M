@@ -42,6 +42,86 @@ namespace autograd {
 constexpr float kEpsilon = 1e-10f;
 
 //========================================================================
+// Shifted targets for MTP (multi-token prediction)
+// out[t] = targets[t+shift] when (t % seq_len) + shift < seq_len else -1
+//========================================================================
+__global__ void kernelShiftTargets(
+    const int* __restrict__ targets,
+    int* __restrict__ out,
+    int total_tokens,
+    int seq_len,
+    int shift
+) {
+    const int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= total_tokens) return;
+    const int pos = t % seq_len;
+    if (pos + shift < seq_len) {
+        out[t] = targets[t + shift];
+    } else {
+        out[t] = -1;
+    }
+}
+
+void launchShiftTargetsKernel(
+    const int* targets,
+    int* shifted_out,
+    int total_tokens,
+    int seq_len,
+    int shift,
+    cudaStream_t stream
+) {
+    if (!targets || !shifted_out || total_tokens <= 0 || seq_len <= 0 || shift <= 0) return;
+    const int block = 256;
+    const int grid = (total_tokens + block - 1) / block;
+    kernelShiftTargets<<<grid, block, 0, stream>>>(targets, shifted_out, total_tokens, seq_len, shift);
+}
+
+// MTP accuracy: per-token argmax(logits[t]) == targets[t], count valid (targets[t] != -1)
+__global__ void kernelMTPAccuracy(
+    const float* __restrict__ logits,
+    const int* __restrict__ targets,
+    int total_tokens,
+    int vocab_size,
+    int* __restrict__ d_correct,
+    int* __restrict__ d_valid
+) {
+    const int t = blockIdx.x * blockDim.x + threadIdx.x;
+    int my_correct = 0, my_valid = 0;
+    if (t < total_tokens && targets[t] >= 0) {
+        my_valid = 1;
+        const float* row = logits + t * static_cast<size_t>(vocab_size);
+        int best = 0;
+        float best_val = row[0];
+        for (int v = 1; v < vocab_size; ++v) {
+            if (row[v] > best_val) {
+                best_val = row[v];
+                best = v;
+            }
+        }
+        if (best == targets[t]) my_correct = 1;
+    }
+    atomicAdd(d_valid, my_valid);
+    atomicAdd(d_correct, my_correct);
+}
+
+void launchMTPAccuracyKernel(
+    const float* logits,
+    const int* targets,
+    int total_tokens,
+    int vocab_size,
+    int* d_correct,
+    int* d_valid,
+    cudaStream_t stream
+) {
+    if (!logits || !targets || !d_correct || !d_valid || total_tokens <= 0 || vocab_size <= 0) return;
+    cudaMemsetAsync(d_correct, 0, sizeof(int), stream);
+    cudaMemsetAsync(d_valid, 0, sizeof(int), stream);
+    const int block = 256;
+    const int grid = (total_tokens + block - 1) / block;
+    kernelMTPAccuracy<<<grid, block, 0, stream>>>(logits, targets, total_tokens, vocab_size, d_correct, d_valid);
+}
+
+//========================================================================
 // CUDA Kernels — NLL Loss on log-probabilities
 // These kernels receive log_probs = log_softmax(logits), NOT raw logits.
 // Softmax is computed ONCE in autograd::log_softmax() and saved for backward.

@@ -106,6 +106,9 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
     NumericHeadLayer*  numeric_head = nullptr;
+
+    /** Model pointer for MTP head access in computeAutogradLoss; set by autogradTrainingStep. */
+    LanguageModel* model = nullptr;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PARAMETERS
