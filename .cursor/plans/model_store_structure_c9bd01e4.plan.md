@@ -117,14 +117,14 @@ resources/models/model_store/<model_id>/
 **What moves INTO `model_config.json`:**
 
 - `training.config.`* → `model_config.json` (architecture, hyperparameters, generation, diagnostics)
-- `tokenizer.*` → `model_config.json` `tokenizer` section
+- `tokenizer.`* → `model_config.json` `tokenizer` section
 
 **What STAYS in `ai_config.json`:**
 
 - `paths.`* (system-level paths including model_store root)
-- `data_collection.*` (data pipeline config)
+- `data_collection.`* (data pipeline config)
 - `training.server_host` / `training.server_port` (training control server)
-- `mmo.*` (MMO routing — which models to load, URLs, backends)
+- `mmo.`* (MMO routing — which models to load, URLs, backends)
 - Body config: `api_keys`, `backend`, `conversation_history_size`, `default_model`, `grim_text_url`, `localai_url`, `max_tokens`, `ollama_options`, `ollama_url`, `personality`, `silence_threshold`, `silence_timeout_ms`, `ui`, `vision`, `vision_model`, `voice`, `whisper`, `whisper_language`, `whisper_max_tokens`
 
 `**model_config.json` structure:**

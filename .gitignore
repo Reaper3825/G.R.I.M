@@ -205,3 +205,6 @@ data/*
 .cache/*
 *.bin*
 *.ckpt*
+scripts/run_train_on_bridges2.sh
+scripts/train_bridges2.sbatch
+scripts/run_train_on_anvil.sh

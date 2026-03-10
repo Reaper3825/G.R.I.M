@@ -15,6 +15,27 @@ if(NOT DEFINED CMAKE_PREFIX_PATH)
     endif()
 endif()
 
+# Use CUDAToolkit_ROOT (or GRIM_CUDA_ROOT) before enabling CUDA so CMake picks that nvcc, not one from PATH.
+# Needed on clusters (e.g. Anvil) where default module is CUDA 11 but project has CUDA 12 in project space.
+foreach(_root CUDAToolkit_ROOT GRIM_CUDA_ROOT)
+  if(DEFINED ${_root} AND NOT "${${_root}}" STREQUAL "")
+    set(_cuda_root "${${_root}}")
+    if(EXISTS "${_cuda_root}/bin/nvcc")
+      set(CMAKE_CUDA_COMPILER "${_cuda_root}/bin/nvcc" CACHE PATH "CUDA compiler" FORCE)
+      message(STATUS "Using CUDA from ${_root}=${_cuda_root}")
+      break()
+    endif()
+  endif()
+  if(DEFINED ENV{${_root}} AND NOT "$ENV{${_root}}" STREQUAL "")
+    set(_cuda_root "$ENV{${_root}}")
+    if(EXISTS "${_cuda_root}/bin/nvcc")
+      set(CMAKE_CUDA_COMPILER "${_cuda_root}/bin/nvcc" CACHE PATH "CUDA compiler" FORCE)
+      message(STATUS "Using CUDA from ${_root}=${_cuda_root}")
+      break()
+    endif()
+  endif()
+endforeach()
+
 # Enable CUDA (required for training loop)
 enable_language(CUDA)
 project(GRIM_TrainingLoop LANGUAGES CXX CUDA)
@@ -50,6 +71,17 @@ set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 
 # Find required packages
 find_package(CUDAToolkit REQUIRED)
+
+# CUTLASS (flash-attention) requires CUDA 12+. Fail early with clear instructions.
+if(CUDAToolkit_VERSION_MAJOR LESS 12)
+  message(FATAL_ERROR
+    "CUDAToolkit ${CUDAToolkit_VERSION} detected. CUTLASS (flash-attention) requires CUDA 12+.\n"
+    "  Set CUDAToolkit_ROOT (or GRIM_CUDA_ROOT) to a CUDA 12+ toolkit before configuring, e.g.:\n"
+    "  cmake -DCUDAToolkit_ROOT=/path/to/cuda-12.0 ..\n"
+    "  Or from the run script (Anvil): ensure project CUDA 12 is installed and script will default to it.")
+endif()
+message(STATUS "CUDAToolkit version: ${CUDAToolkit_VERSION}")
+
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(flatbuffers CONFIG REQUIRED)
 

@@ -109,6 +109,8 @@ fi
 
 # Bridges-2 modules: cuda, gcc, cmake. CUDA 12+ required.
 BRIDGES2_MODULES="source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || module load cuda/12 2>/dev/null || module load cuda/12.0 2>/dev/null || true; module load gcc 2>/dev/null || true; module load cmake 2>/dev/null || true"
+# Default to project CUDA 12 when 11.x is detected (CUTLASS requires 12+). Uses GRIM_PROJECT_DIR=$BRIDGES2_DIR to find cuda-12.0.
+BRIDGES2_ENSURE_CUDA12="export GRIM_PROJECT_DIR=\$BRIDGES2_DIR; source \"\$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true"
 BRIDGES2_CUDA_ROOT='NVCC=$(which nvcc 2>/dev/null); if [ -z "$NVCC" ]; then echo "ERROR: nvcc not found. module load cuda" >&2; exit 1; fi; CUDAToolkit_ROOT=$(dirname "$(dirname "$NVCC")"); echo "[Bridges-2] $(nvcc --version | grep release | head -1)"'
 
 # vcpkg
@@ -149,7 +151,7 @@ if [[ "$DO_BUILD" == true ]]; then
   fi
   echo "Building train_gpu on Bridges-2 ($BRIDGES2_DIR/$BUILD_DIR)..."
   echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80)"
-  ssh "$BRIDGES2_SSH" "$BRIDGES2_CUDA_ARCH cd $BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && cd $BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_CUDA_ROOT && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$CUDAToolkit_ROOT && make -j \$(nproc) train_gpu"
+  ssh "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_CUDA_ROOT && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$CUDAToolkit_ROOT && make -j \$(nproc) train_gpu"
 fi
 
 # Transfer data
