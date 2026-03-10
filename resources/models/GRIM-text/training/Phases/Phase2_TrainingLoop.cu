@@ -4767,6 +4767,25 @@ EpochResult runEpoch(
                     mtp_log << "alpha_effective=" << Internal::formatScalar(ts.mtp_diagnostics.alpha_effective, 4)
                             << " L_total=" << Internal::formatScalar(ts.mtp_diagnostics.L_total, 4);
                     ctx.logging.logger->log(mtp_log.str());
+                    // MTP Monitor: Lk/L0 with healthy-range indication (configurable via log_ratio_monitor)
+                    if (hp.mtp_log_ratio_monitor) {
+                        static const float kHealthyLow[] = { 1.1f, 1.3f, 1.5f, 1.6f };
+                        static const float kHealthyHigh[] = { 1.3f, 1.6f, 2.0f, 2.2f };
+                        std::ostringstream mon;
+                        mon << "[MTP_Monitor]";
+                        for (size_t i = 0; i < ts.mtp_diagnostics.head_loss.size(); ++i) {
+                            const float ratio = (L0 > 0.0f) ? (ts.mtp_diagnostics.head_loss[i] / L0) : 0.0f;
+                            const int k = static_cast<int>(i) + 1;
+                            const size_t idx = std::min(static_cast<size_t>(k - 1), static_cast<size_t>(4));
+                            const float lo = kHealthyLow[idx];
+                            const float hi = kHealthyHigh[idx];
+                            const bool ok = (ratio >= lo && ratio <= hi);
+                            mon << " k=" << k << ": Lk/L0=" << Internal::formatScalar(ratio, 3)
+                                << " (healthy " << Internal::formatScalar(lo, 1) << "-" << Internal::formatScalar(hi, 1)
+                                << (ok ? " OK" : " OUT_OF_RANGE") << ")";
+                        }
+                        ctx.logging.logger->log(mon.str());
+                    }
                 }
             }
             if (ctx.config.hyperparameters.guess_aux_enabled &&

@@ -325,6 +325,7 @@ struct TrainingHyperparameters {
     int mtp_k = 0;
     float mtp_alpha = 0.2f;
     int mtp_alpha_warmup_steps = 500;
+    bool mtp_log_ratio_monitor = true;
 
     // Prediction comparison - NO DEFAULTS
     bool prediction_comparison_enabled;
@@ -1148,6 +1149,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.mtp_k = mtp.value("k", params.mtp_k);
         params.mtp_alpha = mtp.value("alpha", params.mtp_alpha);
         params.mtp_alpha_warmup_steps = mtp.value("alpha_warmup_steps", params.mtp_alpha_warmup_steps);
+        params.mtp_log_ratio_monitor = mtp.value("log_ratio_monitor", params.mtp_log_ratio_monitor);
     }
 
     // Load prediction comparison configuration

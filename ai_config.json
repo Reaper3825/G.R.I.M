@@ -306,7 +306,8 @@
                 "enabled": true,
                 "k": 3,
                 "alpha": 0.2,
-                "alpha_warmup_steps": 500
+                "alpha_warmup_steps": 500,
+                "log_ratio_monitor": true
             },
 
             "prediction_comparison": {
