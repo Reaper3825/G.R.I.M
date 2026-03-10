@@ -294,6 +294,8 @@ struct TrainingContext {
     
     // State tracking
     int global_step = 0;
+    /** Estimated total steps (epochs * batches per epoch), set in runEpoch; used for cosine LR decay. */
+    int estimated_total_steps = 0;
     float best_val_loss = std::numeric_limits<float>::infinity();
     /** Number of epochs actually completed (set by Phase 2; used by Phase 3 for summary). */
     int epochs_completed = 0;

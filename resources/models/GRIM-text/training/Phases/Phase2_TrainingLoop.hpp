@@ -205,12 +205,17 @@ ValidationResult runValidation(TrainingContext& ctx);
 namespace Internal {
 
 /**
- * @brief Get scheduled learning rate with warmup, constant after warmup
+ * @brief Get scheduled learning rate: linear warmup, then constant or cosine decay.
+ * @param total_steps Estimated total training steps (epochs * batches per epoch). 0 disables cosine decay.
+ * @param cosine_decay_min_lr Minimum LR at end of schedule when cosine_decay_enabled.
  */
 float getScheduledLearningRate(
     int step,
     float base_lr,
     int warmup_steps,
+    int total_steps,
+    float cosine_decay_min_lr,
+    bool cosine_decay_enabled,
     bool stability_overrides_enabled);
 
 /**

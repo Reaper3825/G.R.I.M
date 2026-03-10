@@ -111,6 +111,10 @@
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
             "warmup_steps": 2000,
+            "cosine_decay": {
+                "enabled": true,
+                "min_lr": 6e-5
+            },
             "max_seq_len": 1024,
             "min_seq_valid_tokens": 10,
             "log_interval": 25,
@@ -369,7 +373,7 @@
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.125,
+            "attention_dropout": 0.12,
             "dropout_rate": 0.1,
             "residual_dropout_rate": 0.1,
             "force_rebuild_vocab": false,

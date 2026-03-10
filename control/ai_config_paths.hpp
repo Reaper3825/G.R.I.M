@@ -158,6 +158,8 @@ struct TrainingHyperparameters {
     float grad_clip_norm;
     bool per_token_grad_scale;
     int warmup_steps;
+    bool cosine_decay_enabled;
+    float cosine_decay_min_lr;
     int max_seq_len;
     int min_seq_valid_tokens;  // Minimum valid tokens required (after masking first/last positions)
     int log_interval;
@@ -729,6 +731,13 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.max_seq_len, trainConfig, "max_seq_len");
     assignTrainingField(params.min_seq_valid_tokens, trainConfig, "min_seq_valid_tokens");
     assignTrainingField(params.warmup_steps, trainConfig, "warmup_steps");
+    if (auto it = trainConfig.find("cosine_decay"); it != trainConfig.end() && it->is_object()) {
+        params.cosine_decay_enabled = it->value("enabled", false);
+        params.cosine_decay_min_lr = it->value("min_lr", 0.0f);
+    } else {
+        params.cosine_decay_enabled = false;
+        params.cosine_decay_min_lr = 0.0f;
+    }
     assignTrainingField(params.log_interval, trainConfig, "log_interval");
     assignTrainingField(params.atom_stats_interval, trainConfig, "atom_stats_interval");
     assignTrainingField(params.atom_stats_max_seqs, trainConfig, "atom_stats_max_seqs");

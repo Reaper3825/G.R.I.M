@@ -861,10 +861,20 @@ std::string formatGradientComponents(const GRIM::GradNorm::GradMetrics& gm, bool
     return comp_msg.str();
 }
 
+/** Cosine decay: lr = min_lr + (base_lr - min_lr) * 0.5 * (1 + cos(pi * progress)), progress in [0,1]. */
+inline float getCosineDecayLr(float base_lr, float min_lr, float progress) {
+    const float p = std::clamp(progress, 0.0f, 1.0f);
+    const float decay = 0.5f * (1.0f + std::cos(3.14159265f * p));
+    return min_lr + (base_lr - min_lr) * decay;
+}
+
 float getScheduledLearningRate(
     int step,
     float base_lr,
     int warmup_steps,
+    int total_steps,
+    float cosine_decay_min_lr,
+    bool cosine_decay_enabled,
     bool stability_overrides_enabled) {
     
     if (stability_overrides_enabled) {
@@ -872,11 +882,17 @@ float getScheduledLearningRate(
     }
     
     if (step < warmup_steps) {
-        return base_lr * (static_cast<float>(step + 1) / warmup_steps);
+        return base_lr * (static_cast<float>(step + 1) / static_cast<float>(std::max(1, warmup_steps)));
     }
     
-    // Constant LR after warmup
-    return base_lr;
+    if (!cosine_decay_enabled || total_steps <= warmup_steps) {
+        return base_lr;
+    }
+    
+    const int decay_steps = total_steps - warmup_steps;
+    const int current_decay_step = step - warmup_steps;
+    const float progress = static_cast<float>(current_decay_step) / static_cast<float>(std::max(1, decay_steps));
+    return getCosineDecayLr(base_lr, cosine_decay_min_lr, progress);
 }
 
 bool isBatchQuarantined(
@@ -3978,7 +3994,8 @@ BatchResult processBatch(
     // Learning rate computation (accum_steps already computed above)
     auto lr_start = std::chrono::steady_clock::now();
     const float scheduled_lr = Internal::getScheduledLearningRate(
-        ctx.global_step, hp.learning_rate, hp.warmup_steps, 
+        ctx.global_step, hp.learning_rate, hp.warmup_steps,
+        ctx.estimated_total_steps, hp.cosine_decay_min_lr, hp.cosine_decay_enabled,
         ctx.config.stability.enabled);
     
     result.learning_rate = scheduled_lr;
@@ -4698,6 +4715,9 @@ EpochResult runEpoch(
         *ctx.logging.logger);
     
     const int total_batches = static_cast<int>(schedule.batches.size());
+    if (ctx.estimated_total_steps == 0 && total_batches > 0) {
+        ctx.estimated_total_steps = num_epochs * total_batches;
+    }
     int total_batches_to_run = total_batches;
     const bool single_batch_overfit = hp.single_batch_overfit_enabled;
     if (single_batch_overfit) {
@@ -4974,6 +4994,10 @@ bool executePhase2(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Warmup steps: ") + std::to_string(hp.warmup_steps), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Target learning rate: ") + std::to_string(hp.learning_rate), ctx.global_step);
+    if (hp.cosine_decay_enabled) {
+        EmitModuleInfo(ModuleId::Training,
+            std::string("  Cosine decay: enabled, min_lr=") + std::to_string(hp.cosine_decay_min_lr), ctx.global_step);
+    }
     EmitModuleInfo(ModuleId::Training, 
         std::string("  Soft restart: ") + (hp.soft_restart_enabled ? "enabled" : "disabled"), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, 
