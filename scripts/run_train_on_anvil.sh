@@ -101,8 +101,8 @@ ANVIL_CMAKE_MODULE="${ANVIL_CMAKE_MODULE:-}"
 ANVIL_CUDA_MODULE="${ANVIL_CUDA_MODULE:-}"
 # If GRIM_CUDA_ROOT set: skip CUDA modules, use that path. Else: try module (cuda/12.0.1, modtree/gpu, etc.)
 ANVIL_MODULES="source /etc/profile.d/modules.sh 2>/dev/null || source /usr/share/modules/init/bash 2>/dev/null || true; if [ -z \"\$GRIM_CUDA_ROOT\" ]; then if [ -n \"${ANVIL_CUDA_MODULE}\" ]; then module load ${ANVIL_CUDA_MODULE} 2>/dev/null || true; fi; if ! which nvcc >/dev/null 2>&1; then module load cuda/12.0.1 2>/dev/null || module load cuda/11.4.2 2>/dev/null || module load modtree/gpu 2>/dev/null || module load cuda 2>/dev/null || true; fi; fi; module load gcc 2>/dev/null || true; if [ -n \"${ANVIL_CMAKE_MODULE}\" ]; then module load ${ANVIL_CMAKE_MODULE} 2>/dev/null || true; else module load cmake/3.26 2>/dev/null || module load cmake/3.22 2>/dev/null || module load cmake 2>/dev/null || true; fi"
-# Default to project CUDA 12 when 11.x is detected (CUTLASS requires 12+). Uses GRIM_PROJECT_DIR to find cuda-12.0.
-ANVIL_ENSURE_CUDA12="GRIM_PROJECT_DIR='$ANVIL_PROJECT_PARENT' source \"$ANVIL_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true"
+# Default to project CUDA 12 when 11.x is detected (CUTLASS requires 12+). Inlined so remote does not need ensure_cuda12_for_training.sh.
+ANVIL_ENSURE_CUDA12='_p='"$ANVIL_PROJECT_PARENT"'; if [ -z "$GRIM_CUDA_ROOT" ] && NVCC=$(which nvcc 2>/dev/null) && [ -n "$NVCC" ]; then _v=$(nvcc --version 2>/dev/null | sed -n "s/.*release \([0-9]*\)\..*/\1/p" | head -1); if [ -n "$_v" ] && [ "$_v" -lt 12 ] && [ -x "${_p}/cuda-12.0/bin/nvcc" ]; then export GRIM_CUDA_ROOT="${_p}/cuda-12.0"; export PATH="$GRIM_CUDA_ROOT/bin:$PATH"; export LD_LIBRARY_PATH="$GRIM_CUDA_ROOT/lib64:${LD_LIBRARY_PATH:-}"; echo "[Anvil] Using project CUDA 12: $GRIM_CUDA_ROOT" >&2; fi; fi; unset _p _v; true'
 # Set CUDAToolkit_ROOT and require CUDA 12+. If GRIM_CUDA_ROOT set (by user or ensure script), use that toolkit.
 ANVIL_CUDA_ROOT='if [ -n "$GRIM_CUDA_ROOT" ]; then if [ ! -x "$GRIM_CUDA_ROOT/bin/nvcc" ]; then echo "ERROR: GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT but bin/nvcc not found or not executable" >&2; exit 1; fi; export PATH="$GRIM_CUDA_ROOT/bin:$PATH"; CUDAToolkit_ROOT="$GRIM_CUDA_ROOT"; echo "[Anvil] Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT"; else NVCC=$(which nvcc 2>/dev/null); if [ -z "$NVCC" ]; then echo "ERROR: nvcc not found. Set GRIM_CUDA_ROOT=/path/to/cuda-12 or use a CUDA 12 module." >&2; exit 1; fi; CUDAToolkit_ROOT=$(dirname "$(dirname "$NVCC")"); fi; NVCC_RELEASE=$("$CUDAToolkit_ROOT/bin/nvcc" --version 2>/dev/null | grep -E "release [0-9]" | head -1); echo "[Anvil] $NVCC_RELEASE"; CUDA_MAJOR=$(echo "$NVCC_RELEASE" | sed -n "s/.*release \([0-9]*\)\..*/\1/p"); if [ -n "$CUDA_MAJOR" ] && [ "$CUDA_MAJOR" -lt 12 ]; then echo "ERROR: CUDA $CUDA_MAJOR.x detected. CUTLASS (flash-attention) requires CUDA 12+." >&2; echo "  Install CUDA 12 to project space, then:" >&2; echo "  GRIM_CUDA_ROOT=/anvil/projects/x-cis210085/GRIM/cuda-12.0 ./scripts/run_train_on_anvil.sh --build" >&2; exit 1; fi'
 # vcpkg: use toolchain with x64-linux. TrainingLoop uses minimal manifest (training/vcpkg.json) so only
@@ -140,31 +140,35 @@ fi
 # Pass GRIM_CUDA_ROOT to remote if set (user-installed CUDA 12 for Anvil)
 ANVIL_EXPORT_CUDA="${GRIM_CUDA_ROOT:+export GRIM_CUDA_ROOT='$GRIM_CUDA_ROOT'; }"
 
+# Anvil-G has A100 (sm_80) only. Default to sm_80; override with GRIM_CUDA_ARCH if needed (e.g. 80;86 for A100+RTX).
+ANVIL_CUDA_ARCH="export GRIM_CUDA_ARCH=${GRIM_CUDA_ARCH:-80}; "
+
 # --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu
 if [[ "$DO_BUILD" == true ]]; then
   echo "Building train_gpu (training loop) on Anvil in $ANVIL_DIR/$BUILD_DIR ..."
   [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT (user-installed CUDA 12)"
-  ssh anvil "$ANVIL_EXPORT_CUDA cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && ${ANVIL_CLEAN_BEFORE_BUILD}mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
+  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && ${ANVIL_CLEAN_BEFORE_BUILD}mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
 fi
 
 # --build-grim: GRIM-text/GRIM CMake → grim_text_server (inference)
 if [[ "$DO_BUILD_GRIM" == true ]]; then
   echo "Building grim_text_server (GRIM-text inference) on Anvil in $ANVIL_DIR/$GRIM_DIR/build ..."
   [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT"
-  ssh anvil "$ANVIL_EXPORT_CUDA cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
+  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
 fi
 
 # --build-grim-exe: repo root CMake → GRIM (main host / adaptive controller for future agent)
 if [[ "$DO_BUILD_GRIM_EXE" == true ]]; then
   echo "Building GRIM (main host / grim.exe) on Anvil in $ANVIL_DIR/build ..."
   [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT"
-  ssh anvil "$ANVIL_EXPORT_CUDA cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
+  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
 fi
 
 if [[ "$USE_SBATCH" == true ]]; then
   echo "Submitting batch job on Anvil (partition=$PARTITION, account=$ACCOUNT) ..."
-  # Run ensure_cuda12 on submit node so GRIM_CUDA_ROOT is set; pass it to the job via --export=ALL
-  ssh anvil "cd $ANVIL_DIR && GRIM_PROJECT_DIR='$ANVIL_PROJECT_PARENT' source scripts/ensure_cuda12_for_training.sh 2>/dev/null || true; GRIM_SLURM_ACCOUNT=$ACCOUNT GRIM_SLURM_QOS=$QOS sbatch --export=ALL --partition=$PARTITION $SLURM_ACCOUNT_ARGS scripts/train_anvil.sbatch"
+  # Inlined: default to project CUDA 12 on submit node, then pass env to job via --export=ALL (no remote script needed)
+  ANVIL_SBATCH_ENSURE_CUDA12='_p='"$ANVIL_PROJECT_PARENT"'; if [ -z "$GRIM_CUDA_ROOT" ] && NVCC=$(which nvcc 2>/dev/null) && [ -n "$NVCC" ]; then _v=$(nvcc --version 2>/dev/null | sed -n "s/.*release \([0-9]*\)\..*/\1/p" | head -1); if [ -n "$_v" ] && [ "$_v" -lt 12 ] && [ -x "${_p}/cuda-12.0/bin/nvcc" ]; then export GRIM_CUDA_ROOT="${_p}/cuda-12.0"; export PATH="$GRIM_CUDA_ROOT/bin:$PATH"; export LD_LIBRARY_PATH="$GRIM_CUDA_ROOT/lib64:${LD_LIBRARY_PATH:-}"; fi; fi; unset _p _v'
+  ssh anvil "cd $ANVIL_DIR && $ANVIL_SBATCH_ENSURE_CUDA12 && GRIM_SLURM_ACCOUNT=$ACCOUNT GRIM_SLURM_QOS=$QOS sbatch --export=ALL --partition=$PARTITION $SLURM_ACCOUNT_ARGS scripts/train_anvil.sbatch"
   echo "Job submitted. Check with: ssh anvil squeue -u \$USER"
   exit 0
 fi

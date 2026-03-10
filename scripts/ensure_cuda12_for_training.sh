@@ -62,8 +62,8 @@ if [[ -n "$CANDIDATE" ]]; then
 fi
 
 echo "ERROR: CUDA 11.x detected. CUTLASS (flash-attention) requires CUDA 12+." >&2
-echo "  Install CUDA 12 to project space, then either:" >&2
-echo "  - set GRIM_CUDA12_ROOT=/path/to/cuda-12.0 and re-run, or" >&2
-echo "  - set GRIM_PROJECT_DIR to repo root (script will use \$GRIM_PROJECT_DIR/cuda-12.0), or" >&2
+[[ -n "$_ensure_cuda12_project" ]] && echo "  Looked for: ${_ensure_cuda12_project}/cuda-12.0 and ${_ensure_cuda12_project}/cuda-12" >&2
+echo "  Install CUDA 12 to project space (e.g. toolkitpath=${_ensure_cuda12_project:-/path/to/project}/cuda-12.0), then:" >&2
+echo "  - re-run without setting GRIM_CUDA_ROOT (script will auto-use it), or" >&2
 echo "  - run: GRIM_CUDA_ROOT=/path/to/cuda-12.0 ./scripts/run_train_on_anvil.sh --build" >&2
 return 1 2>/dev/null || exit 1
