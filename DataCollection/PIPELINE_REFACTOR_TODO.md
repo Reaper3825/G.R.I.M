@@ -59,12 +59,25 @@ The pipeline now runs 5 steps in correct order:
 - [x] Progress written to FlatBuffer status file for UI consumption
 - [x] Progress percentages mapped to step ranges (0-5%, 5-25%, 25-35%, 35-55%, 55-85%, 85-100%)
 
-### Phase 5: Testing
+### Phase 5: Incremental Collection & Pre-fetch Dedup ✅ COMPLETE
+- [x] Source-level refresh gating: skip sources collected within 24h
+- [x] Source completion tracking via `markSourceCompleted()`/`markSourceFailed()`
+- [x] ArXiv pagination: resume from `last_offset` instead of `start=0`
+- [x] StackOverflow pagination: advance `page` parameter across runs
+- [x] Wikipedia pre-fetch: check article URLs before individual HTTP requests
+- [x] GitHub/Reddit/NewsAPI: check result URLs before adding to entries
+- [x] HTML crawl: pre-check article URLs before downloading pages
+- [x] Removed 8 duplicate entries from `source_data.json`
+- [x] Fixed divide-by-zero on empty entries avg_length calculation
+
+### Phase 6: Testing
 - [ ] Test with empty `.grmt` (new collection)
 - [ ] Test with existing `.grmt` (append mode)
 - [ ] Test with missing `source_type` in config
 - [ ] Verify deduplication works across all 3 streams
 - [ ] Verify progress updates show in UI
+- [ ] Verify source refresh gating skips recently-collected sources
+- [ ] Verify ArXiv/SO pagination advances across runs
 
 ---
 
@@ -92,4 +105,16 @@ The pipeline now runs 5 steps in correct order:
   - Updated `fetchFromSource()` logging to show fetcher + category
   - Legacy `SourceType` alias maintained for backward compatibility
 - Next: Phase 2 - Pipeline Restructure (Step 1: Collection)
+
+### Session: March 11, 2026
+- **Phase 5 COMPLETE: Incremental Collection & Pre-fetch Dedup**
+  - Added source-level refresh gating in `collectData()` - skips sources collected <24h ago
+  - Added `markSourceCompleted()`/`markSourceFailed()` calls after each source
+  - Fixed `fetchArXiv()` to use `SourceRecord.last_offset` for pagination (was always `start=0`)
+  - Fixed `fetchStackOverflow()` to use `SourceRecord.last_page` for pagination
+  - Added pre-fetch URL checks in `fetchWikipedia()` (before individual article HTTP requests)
+  - Added pre-fetch URL checks in `fetchGitHub()`, `fetchReddit()`, `fetchNewsAPI()`
+  - Added pre-fetch URL check for crawled article pages in `fetchCustom()`
+  - Removed 8 duplicate entries from `source_data.json` (88 unique sources remain)
+  - Fixed divide-by-zero bug in avg_length calculation when all entries are duplicates
 

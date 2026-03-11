@@ -456,18 +456,6 @@
       "fetch_limit": 300
     },
     {
-      "name": "Stanford Encyclopedia of Philosophy",
-      "url": "https://plato.stanford.edu/",
-      "source_type": "philosophy",
-      "enabled": true,
-      "priority": 10,
-      "requires_auth": false,
-      "crawl_depth": 2,
-      "content_filter": {
-        "path_patterns": ["/entries/", "/archives/"]
-      }
-    },
-    {
       "name": "MIT Classics Archive - Aristotle's Rhetoric",
       "url": "https://classics.mit.edu/Aristotle/rhetoric.html",
       "source_type": "classical_texts",
@@ -497,15 +485,6 @@
       "content_filter": {
         "formats": ["LaTeX", "PDF"]
       }
-    },
-    {
-      "name": "Internet Encyclopedia of Philosophy",
-      "url": "https://iep.utm.edu/",
-      "source_type": "philosophy",
-      "enabled": true,
-      "priority": 9,
-      "requires_auth": false,
-      "crawl_depth": 2
     },
     {
       "name": "PhilPapers",
@@ -602,19 +581,6 @@
       "priority": 8,
       "requires_auth": false,
       "crawl_depth": 2
-    },
-    {
-      "name": "PubMed Central - Open Access",
-      "url": "https://www.ncbi.nlm.nih.gov/pmc/",
-      "source_type": "academic_papers",
-      "enabled": true,
-      "priority": 8,
-      "requires_auth": false,
-      "fetch_limit": 500,
-      "content_filter": {
-        "subjects": ["neuroscience", "cognitive science", "linguistics"],
-        "open_access_only": true
-      }
     },
     {
       "name": "Intel ARK - CPU Specifications",
@@ -738,15 +704,6 @@
       "crawl_depth": 2
     },
     {
-      "name": "Purdue OWL - Writing Resources",
-      "url": "https://owl.purdue.edu/",
-      "source_type": "rhetoric",
-      "enabled": true,
-      "priority": 8,
-      "requires_auth": false,
-      "crawl_depth": 2
-    },
-    {
       "name": "UNC Writing Center Resources",
       "url": "https://writingcenter.unc.edu/tips-and-tools/",
       "source_type": "rhetoric",
@@ -772,18 +729,6 @@
       "priority": 9,
       "requires_auth": false,
       "fetch_limit": 500
-    },
-    {
-      "name": "OpenStax - Free Textbooks",
-      "url": "https://openstax.org/",
-      "source_type": "open_books",
-      "enabled": true,
-      "priority": 9,
-      "requires_auth": false,
-      "crawl_depth": 2,
-      "content_filter": {
-        "subjects": ["Philosophy", "Logic", "Computer Science", "Mathematics"]
-      }
     },
     {
       "name": "LibriSpeech - Speech Corpus Transcripts",
@@ -845,28 +790,9 @@
       "requires_auth": false
     },
     {
-      "name": "Stanford Encyclopedia of Philosophy - Logic & Reasoning",
-      "url": "https://plato.stanford.edu/contents.html#l",
-      "source_type": "theoretical_reasoning",
-      "enabled": true,
-      "priority": 10,
-      "requires_auth": false,
-      "content_filter": {
-        "subjects": ["Logic", "Epistemology", "Philosophy of Science", "Reasoning"]
-      }
-    },
-    {
       "name": "Nature - Theoretical Physics & Mathematics",
       "url": "https://www.nature.com/subjects/theoretical-physics",
       "source_type": "theoretical_science",
-      "enabled": true,
-      "priority": 10,
-      "requires_auth": false
-    },
-    {
-      "name": "PhilSci Archive - Philosophy of Science",
-      "url": "http://philsci-archive.pitt.edu/",
-      "source_type": "theoretical_reasoning",
       "enabled": true,
       "priority": 10,
       "requires_auth": false
@@ -955,14 +881,6 @@
       "source_type": "grammar",
       "enabled": true,
       "priority": 8,
-      "requires_auth": false
-    },
-    {
-      "name": "The Philosopher's Index",
-      "url": "https://philpapers.org/",
-      "source_type": "theoretical_reasoning",
-      "enabled": true,
-      "priority": 9,
       "requires_auth": false
     },
     {
