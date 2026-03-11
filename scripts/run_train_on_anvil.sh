@@ -125,19 +125,21 @@ ANVIL_TRAINING_MANIFEST_ENSURE="mkdir -p $ANVIL_DIR/$TRAINING_DIR && [ -f $ANVIL
 # Init flash-attention submodule only (avoids "No url for external/vcpkg" if vcpkg was ever a submodule).
 # Also init flash-attention's submodules (cutlass) - required for cute/tensor.hpp
 # Pin cutlass to CUTLASS 3.4.1 (bbe579a) for flash-attention. CUDA 12+ nvcc required regardless—
-# CUDA 11.x triggers stride.hpp "unexpected function type" template error.
+# (We do not patch CUTLASS/stride.hpp; it's dependency code we don't track.)
 # Set GRIM_USE_LATEST_CUTLASS=1 to skip pin (still requires CUDA 12+).
 CUTLASS_PIN="bbe579a9e3beb6ea6626d9227ec32d0dae119a49"
 if [[ "${GRIM_USE_LATEST_CUTLASS:-}" == "1" ]]; then
   ANVIL_SUBMODULE_INIT="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init external/flash-attention && (cd external/flash-attention && git submodule update --init csrc/cutlass)"
   ANVIL_CLEAN_BEFORE_BUILD=""
 else
-  ANVIL_SUBMODULE_INIT="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init external/flash-attention && (cd external/flash-attention && git submodule update --init csrc/cutlass) && (echo 'Pinning cutlass to 3.4.1 (bbe579a)...' && cd external/flash-attention/csrc/cutlass && git fetch origin && git checkout $CUTLASS_PIN) && (echo 'Applying flash-attention bwd template fix...' && cd external/flash-attention && (git apply -p1 < ../../scripts/patches/flash-attention-bwd-template-fix.patch || (echo '  Patch failed, trying sed fallback...' && sed -i.bak -e 's/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, true>/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, true, true>/g' -e 's/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, false>/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, true, false>/g' -e 's/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, false>/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, false, false>/g' -e 's/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, true>/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, false, true>/g' csrc/flash_attn/src/flash_bwd_kernel.h && rm -f csrc/flash_attn/src/flash_bwd_kernel.h.bak))) || { echo 'Flash-attention patch failed. Build requires the bwd template fix.'; exit 1; }"
+  ANVIL_SUBMODULE_INIT="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init external/flash-attention && (cd external/flash-attention && git submodule update --init csrc/cutlass) && (echo 'Pinning cutlass to 3.4.1 (bbe579a)...' && cd external/flash-attention/csrc/cutlass && git fetch origin && git checkout $CUTLASS_PIN) && (echo 'Applying flash-attention bwd template fix (if needed)...' && cd external/flash-attention && git apply -p1 < ../../scripts/patches/flash-attention-bwd-template-fix.patch 2>/dev/null || true)"
   # Force clean rebuild when cutlass is pinned (headers changed; Make would otherwise use cached objects)
   ANVIL_CLEAN_BEFORE_BUILD="rm -rf $ANVIL_DIR/$BUILD_DIR && "
 fi
 
-# Pass GRIM_CUDA_ROOT to remote if set (user-installed CUDA 12 for Anvil)
+# Pass GRIM_CUDA_ROOT to remote if set (user-installed CUDA 12 for Anvil).
+# If not set, prefer project CUDA 12 on Anvil so "just run the script" picks it up.
+ANVIL_PREFER_PROJECT_CUDA12='if [ -z "$GRIM_CUDA_ROOT" ] && [ -x "'"$ANVIL_PROJECT_PARENT"'/cuda-12.0/bin/nvcc" ]; then export GRIM_CUDA_ROOT="'"$ANVIL_PROJECT_PARENT"'/cuda-12.0"; export PATH="$GRIM_CUDA_ROOT/bin:$PATH"; export LD_LIBRARY_PATH="$GRIM_CUDA_ROOT/lib64:${LD_LIBRARY_PATH:-}"; echo "[Anvil] Using project CUDA 12: $GRIM_CUDA_ROOT" >&2; fi'
 ANVIL_EXPORT_CUDA="${GRIM_CUDA_ROOT:+export GRIM_CUDA_ROOT='$GRIM_CUDA_ROOT'; }"
 
 # Anvil-G has A100 (sm_80) only. Default to sm_80; override with GRIM_CUDA_ARCH if needed (e.g. 80;86 for A100+RTX).
@@ -147,29 +149,49 @@ ANVIL_CUDA_ARCH="export GRIM_CUDA_ARCH=${GRIM_CUDA_ARCH:-80}; "
 if [[ "$DO_BUILD" == true ]]; then
   echo "Building train_gpu (training loop) on Anvil in $ANVIL_DIR/$BUILD_DIR ..."
   [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT (user-installed CUDA 12)"
-  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && ${ANVIL_CLEAN_BEFORE_BUILD}mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
+  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_PREFER_PROJECT_CUDA12 && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && ${ANVIL_CLEAN_BEFORE_BUILD}mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
 fi
 
 # --build-grim: GRIM-text/GRIM CMake → grim_text_server (inference)
 if [[ "$DO_BUILD_GRIM" == true ]]; then
   echo "Building grim_text_server (GRIM-text inference) on Anvil in $ANVIL_DIR/$GRIM_DIR/build ..."
   [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT"
-  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
+  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_PREFER_PROJECT_CUDA12 && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
 fi
 
 # --build-grim-exe: repo root CMake → GRIM (main host / adaptive controller for future agent)
 if [[ "$DO_BUILD_GRIM_EXE" == true ]]; then
   echo "Building GRIM (main host / grim.exe) on Anvil in $ANVIL_DIR/build ..."
   [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT"
-  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
+  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_PREFER_PROJECT_CUDA12 && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
 fi
 
 if [[ "$USE_SBATCH" == true ]]; then
   echo "Submitting batch job on Anvil (partition=$PARTITION, account=$ACCOUNT) ..."
-  # Inlined: default to project CUDA 12 on submit node, then pass env to job via --export=ALL (no remote script needed)
+  # Inlined: default to project CUDA 12 on submit node; write .anvil_job_env and generate train_anvil.sbatch (script owns it).
   ANVIL_SBATCH_ENSURE_CUDA12='_p='"$ANVIL_PROJECT_PARENT"'; if [ -z "$GRIM_CUDA_ROOT" ] && NVCC=$(which nvcc 2>/dev/null) && [ -n "$NVCC" ]; then _v=$(nvcc --version 2>/dev/null | sed -n "s/.*release \([0-9]*\)\..*/\1/p" | head -1); if [ -n "$_v" ] && [ "$_v" -lt 12 ] && [ -x "${_p}/cuda-12.0/bin/nvcc" ]; then export GRIM_CUDA_ROOT="${_p}/cuda-12.0"; export PATH="$GRIM_CUDA_ROOT/bin:$PATH"; export LD_LIBRARY_PATH="$GRIM_CUDA_ROOT/lib64:${LD_LIBRARY_PATH:-}"; fi; fi; unset _p _v'
-  ssh anvil "cd $ANVIL_DIR && $ANVIL_SBATCH_ENSURE_CUDA12 && GRIM_SLURM_ACCOUNT=$ACCOUNT GRIM_SLURM_QOS=$QOS sbatch --export=ALL --partition=$PARTITION $SLURM_ACCOUNT_ARGS scripts/train_anvil.sbatch"
-  echo "Job submitted. Check with: ssh anvil squeue -u \$USER"
+  ANVIL_WRITE_JOB_ENV='_f=scripts/.anvil_job_env; echo "export GRIM_ANVIL_DIR='"'"'$ANVIL_DIR'"'"'" > "$_f"; echo "export GRIM_CUDA_ARCH=80" >> "$_f"; [ -n "\$GRIM_CUDA_ROOT" ] && echo "export GRIM_CUDA_ROOT=\"\$GRIM_CUDA_ROOT\"" >> "$_f" && echo "export PATH=\"\$GRIM_CUDA_ROOT/bin:\$PATH\"" >> "$_f" && echo "export LD_LIBRARY_PATH=\"\$GRIM_CUDA_ROOT/lib64:\${LD_LIBRARY_PATH:-}\"" >> "$_f"; true'
+  ssh anvil "cd $ANVIL_DIR && $ANVIL_PREFER_PROJECT_CUDA12 && $ANVIL_SBATCH_ENSURE_CUDA12 && $ANVIL_WRITE_JOB_ENV && cat > scripts/train_anvil.sbatch && chmod +x scripts/train_anvil.sbatch && sbatch --export=ALL --partition=$PARTITION $SLURM_ACCOUNT_ARGS scripts/train_anvil.sbatch" << EOF
+#!/bin/bash
+#SBATCH -p $PARTITION
+#SBATCH -A $ACCOUNT
+#SBATCH --gres=gpu:1
+#SBATCH -t 4:00:00
+#SBATCH -N 1
+# Generated by run_train_on_anvil.sh --sbatch
+set -e
+cd "$ANVIL_DIR"
+source "$ANVIL_DIR/scripts/.anvil_job_env" 2>/dev/null || true
+export PATH="\${GRIM_CUDA_ROOT:-}/bin:\$PATH"
+export LD_LIBRARY_PATH="\${GRIM_CUDA_ROOT:-}/lib64:\${LD_LIBRARY_PATH:-}"
+./resources/models/GRIM-text/training/TrainingLoop/build/train_gpu --config $CONFIG
+EOF
+  ANVIL_USER="${GRIM_ANVIL_USER:-$(ssh -o BatchMode=yes anvil whoami 2>/dev/null)}"
+  if [[ -n "$ANVIL_USER" ]]; then
+    echo "Job submitted. Check status with: ssh anvil squeue -u $ANVIL_USER"
+  else
+    echo "Job submitted. Check status with: ssh anvil squeue -u YOUR_ANVIL_USERNAME"
+  fi
   exit 0
 fi
 

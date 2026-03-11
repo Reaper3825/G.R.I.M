@@ -1,0 +1,19 @@
+#!/bin/bash
+#SBATCH -p gpu
+#SBATCH -A cis210085-gpu
+#SBATCH --gres=gpu:1
+#SBATCH -t 4:00:00
+#SBATCH -N 1
+#
+# GRIM-text training on Anvil (Purdue). Copy to train_anvil.sbatch and set account.
+# Run via: ./scripts/run_train_on_anvil.sh --build --sbatch
+#
+# Required: source .anvil_job_env so the job uses the same CUDA 12 as the build
+# (SLURM does not always pass PATH/LD_LIBRARY_PATH from the submit node).
+#
+set -e
+cd "${GRIM_ANVIL_DIR:-$HOME/G.R.I.M}"
+source "${GRIM_ANVIL_DIR:-.}/scripts/.anvil_job_env" 2>/dev/null || true
+export PATH="${GRIM_CUDA_ROOT:-}/bin:$PATH"
+export LD_LIBRARY_PATH="${GRIM_CUDA_ROOT:-}/lib64:${LD_LIBRARY_PATH:-}"
+./resources/models/GRIM-text/training/TrainingLoop/build/train_gpu --config model_config.json

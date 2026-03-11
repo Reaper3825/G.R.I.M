@@ -29,8 +29,11 @@ enum class BatchOrdering {
 };
 
 // =============================================================================
-// Batch Assignment
+// Batch Assignment (scheduler output)
 // =============================================================================
+// The scheduler (buildBatches) produces BatchAssignment: which seq_ids go in which
+// batch and in what order. Downstream builds BatchPayload from each assignment
+// (buildBatchPayload) and acts on the payload for training/validation.
 struct BatchAssignment {
     std::vector<uint32_t> seq_ids;   // sequence ids in this batch
     uint32_t max_seq_len = 0;        // longest sequence length in the batch

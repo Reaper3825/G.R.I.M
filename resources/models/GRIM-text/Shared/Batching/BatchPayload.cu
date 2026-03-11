@@ -177,6 +177,23 @@ BatchPayload buildBatchPayload(
         ? static_cast<float>(payload.actual_tokens) / static_cast<float>(payload.total_tokens)
         : 0.0f;
 
+    // Scheduler-only fields carried from assignment (BatchPayload is single source of truth)
+    payload.overflow = assignment.overflow;
+    if (!payload.seq_lengths.empty()) {
+        payload.min_seq_len = *std::min_element(payload.seq_lengths.begin(), payload.seq_lengths.end());
+        if (payload.seq_lengths.size() >= 2) {
+            float mean = 0.0f;
+            for (int len : payload.seq_lengths) mean += static_cast<float>(len);
+            mean /= static_cast<float>(payload.seq_lengths.size());
+            float var = 0.0f;
+            for (int len : payload.seq_lengths) {
+                float diff = static_cast<float>(len) - mean;
+                var += diff * diff;
+            }
+            payload.length_variance = var / static_cast<float>(payload.seq_lengths.size());
+        }
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 3: Cache fit check
     // ═════════════════════════════════════════════════════════════════════════
