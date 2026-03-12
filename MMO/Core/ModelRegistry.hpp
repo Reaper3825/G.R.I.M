@@ -72,10 +72,37 @@ public:
     // Current MMO mode ("shadow" or "enforced").
     const std::string& mode() const;
 
+    // --- Runtime mutation -----------------------------------------------
+
+    // Register a new sub-model at runtime. Validates invariants
+    // (no LoRA, unique ID, required fields). Throws on violation.
+    // Returns a const pointer to the newly inserted model.
+    const ModelInfo* registerModel(ModelInfo model);
+
+    // Remove a sub-model by ID. Throws if the ID is the router
+    // (router cannot be removed at runtime) or if the ID is unknown.
+    void removeModel(const std::string& id);
+
+    // --- Serialization --------------------------------------------------
+
+    // Serialize a ModelInfo to JSON (for config persistence).
+    static nlohmann::json serializeModelToJson(const ModelInfo& model);
+
+    // Serialize the full mmo section (for rewriting ai_config.json).
+    nlohmann::json serializeMMOSection() const;
+
     // --- Lifecycle ------------------------------------------------------
 
     // Clear all state (for tests or shutdown).
     void clear();
+
+    // --- Static helpers (public for UI and serialization) ----------------
+
+    // Parse BackendType from string. Throws on unknown value.
+    static BackendType parseBackendType(const std::string& str);
+
+    // Convert BackendType to config string.
+    static std::string backendTypeToString(BackendType bt);
 
 private:
     ModelRegistry() = default;
@@ -84,9 +111,6 @@ private:
 
     // Parse one model entry from JSON into ModelInfo.
     static ModelInfo parseModelInfo(const nlohmann::json& entry);
-
-    // Parse BackendType from string. Throws on unknown value.
-    static BackendType parseBackendType(const std::string& str);
 
     // Validate a single ModelInfo. Throws on violation.
     static void validateModel(const ModelInfo& model, bool is_router);

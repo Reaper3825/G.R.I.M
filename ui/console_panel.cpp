@@ -42,6 +42,15 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "Training panel not found - may not be initialized yet");
           }
+      })),
+      modelsButton(std::make_shared<UIButton>(" Models ", []() {
+          auto modelPanel = UIRoot::get().getPanel("Model Registry");
+          if (modelPanel) {
+              modelPanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened model registry panel via button");
+          } else {
+              LOG_DEBUG("ConsolePanel", "Model registry panel not found - may not be initialized yet");
+          }
       }))
 {
     position = { 100, 300 };
@@ -89,6 +98,11 @@ ConsolePanel::ConsolePanel()
         trainingButton->setPosition(position.x + size.x - 220, position.y + 5);
         trainingButton->setSize(100, 25);
     }
+
+    if (modelsButton) {
+        modelsButton->setPosition(position.x + size.x - 440, position.y + 5);
+        modelsButton->setSize(100, 25);
+    }
     
     // Add stylized welcome message to GLOBAL history
     auto& history = getConsoleHistory();
@@ -123,6 +137,10 @@ void ConsolePanel::update(const InputState& input, float dt)
         if (DCButton) {
         DCButton->setPosition(position.x + size.x - 330, position.y + 5);
         DCButton->update(input, dt);
+    }
+    if (modelsButton) {
+        modelsButton->setPosition(position.x + size.x - 440, position.y + 5);
+        modelsButton->update(input, dt);
     }
 
     if (!isVisible()) return;
@@ -161,6 +179,10 @@ void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
 
     if (DCButton) {
         DCButton->drawOverlay(renderer, position);
+    }
+
+    if (modelsButton) {
+        modelsButton->drawOverlay(renderer, position);
     }
     
     // Now draw console-specific content on top

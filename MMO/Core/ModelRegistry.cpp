@@ -179,6 +179,104 @@ void ModelRegistry::clear() {
 }
 
 // =========================================================
+// Runtime mutation
+// =========================================================
+
+const ModelInfo* ModelRegistry::registerModel(ModelInfo model) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Cannot register a router at runtime
+    if (!model.lora_path.empty() || !model.hard_copy_path.empty()) {
+        throw std::runtime_error(
+            "ModelRegistry::registerModel: model '" + model.id
+            + "' has lora_path or hard_copy_path set — "
+              "only the router may have these. Sub-models are frozen information bricks.");
+    }
+
+    validateModel(model, /*is_router=*/false);
+
+    if (models_.count(model.id)) {
+        throw std::runtime_error(
+            "ModelRegistry::registerModel: duplicate model id '" + model.id + "'");
+    }
+
+    auto [it, inserted] = models_.emplace(model.id, std::move(model));
+    if (!inserted) {
+        throw std::runtime_error(
+            "ModelRegistry::registerModel: emplace failed for '" + it->first + "'");
+    }
+    return &it->second;
+}
+
+void ModelRegistry::removeModel(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (id == router_id_) {
+        throw std::runtime_error(
+            "ModelRegistry::removeModel: cannot remove the router ('"
+            + id + "') at runtime");
+    }
+
+    auto it = models_.find(id);
+    if (it == models_.end()) {
+        throw std::runtime_error(
+            "ModelRegistry::removeModel: model '" + id + "' not found");
+    }
+
+    models_.erase(it);
+}
+
+// =========================================================
+// Serialization
+// =========================================================
+
+nlohmann::json ModelRegistry::serializeModelToJson(const ModelInfo& model) {
+    nlohmann::json j;
+    j["id"]          = model.id;
+    j["name"]        = model.name;
+    j["version"]     = model.version;
+    j["subject"]     = model.subject;
+    j["description"] = model.description;
+    j["model_path"]  = model.model_path;
+    j["backend_type"] = backendTypeToString(model.backend_type);
+    j["url"]          = model.url;
+    j["subject_tags"] = model.subject_tags;
+    j["usage_weight"] = model.usage_weight;
+    j["estimated_ram_mb"]  = model.estimated_ram_mb;
+    j["estimated_vram_mb"] = model.estimated_vram_mb;
+
+    // Router-only fields — only emit if non-empty
+    if (!model.lora_path.empty())      j["lora_path"]      = model.lora_path;
+    if (!model.hard_copy_path.empty()) j["hard_copy_path"] = model.hard_copy_path;
+
+    return j;
+}
+
+nlohmann::json ModelRegistry::serializeMMOSection() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    nlohmann::json mmo;
+    mmo["enabled"] = config_.enabled;
+    mmo["mode"]    = config_.mode;
+
+    // Router
+    auto rit = models_.find(router_id_);
+    if (rit != models_.end()) {
+        mmo["router"] = serializeModelToJson(rit->second);
+    }
+
+    // Sub-models
+    nlohmann::json subs = nlohmann::json::array();
+    for (const auto& [id, model] : models_) {
+        if (id == router_id_) continue;
+        subs.push_back(serializeModelToJson(model));
+    }
+    mmo["sub_models"] = subs;
+
+    return mmo;
+}
+
+// =========================================================
 // Parsing helpers
 // =========================================================
 
@@ -226,6 +324,18 @@ BackendType ModelRegistry::parseBackendType(const std::string& str) {
     throw std::runtime_error(
         "ModelRegistry: unknown backend_type '" + str
         + "' (valid: grim_text_server, llama_cpp, ollama, external)");
+}
+
+std::string ModelRegistry::backendTypeToString(BackendType bt) {
+    switch (bt) {
+        case BackendType::GrimTextServer: return "grim_text_server";
+        case BackendType::LlamaCpp:       return "llama_cpp";
+        case BackendType::Ollama:         return "ollama";
+        case BackendType::External:       return "external";
+    }
+    throw std::runtime_error(
+        "ModelRegistry::backendTypeToString: unknown BackendType value "
+        + std::to_string(static_cast<int>(bt)));
 }
 
 void ModelRegistry::validateModel(const ModelInfo& model, bool is_router) {

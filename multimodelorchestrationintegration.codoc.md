@@ -202,12 +202,15 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - Enforces invariants: exactly one router, unique IDs, sub-models must not have `lora_path` / `hard_copy_path`
 - Provides lookup by id, by subject tag, router accessor, sub-model list
 - Exposes MMO enabled/mode state
+- **Runtime mutation**: register/remove sub-models at runtime (used by UIModelPanel)
+- **Serialization**: serialize ModelInfo to/from JSON for config persistence
 
 **Does not own**
-- Model process lifecycle (future `ModelLoader`)
-- Runtime orchestration (future `Orchestrator`)
+- Model process lifecycle (`ModelLoader`)
+- Runtime orchestration (`Orchestrator`)
 - Resource claims for model loading (goes through `ResourceCoordinator`)
-- Server process management (currently `GRIMTextServerManager`, future model-keyed process manager)
+- Server process management (`ProcessManager`)
+- Config file I/O (callers use `serializeModelToJson()` / `serializeMMOSection()` helpers)
 
 **Canonical hook points**
 - `ModelRegistry::instance()` — singleton
@@ -217,6 +220,11 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `ModelRegistry::getSubModels()` — all non-router models
 - `ModelRegistry::getModelsBySubjectTag(tag)` — subject-based lookup for routing
 - `ModelRegistry::isEnabled()` / `ModelRegistry::mode()` — MMO state
+- `ModelRegistry::registerModel(ModelInfo)` — runtime sub-model registration (validates, inserts)
+- `ModelRegistry::removeModel(id)` — runtime sub-model removal (refuses router removal)
+- `ModelRegistry::serializeModelToJson(model)` — ModelInfo → JSON (static)
+- `ModelRegistry::serializeMMOSection()` — full mmo JSON section
+- `ModelRegistry::parseBackendType(str)` / `backendTypeToString(bt)` — BackendType ↔ string
 
 **Config contract**
 - `ai_config.json` → `mmo.enabled`, `mmo.mode`, `mmo.router` (object), `mmo.sub_models` (array)
@@ -227,12 +235,13 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `Orchestrator` — queries registry for routing decisions and sub-model validation
 - `bootstrap/bootstrap.cpp` — calls `loadFromConfig(aiConfig)` during init
 - `ai/ai.cpp` — checks `isEnabled()` / `mode()` in `callAIAsync` MMO branch
+- `ui/ui_model_panel.cpp` — runtime register/remove via Creator view, browse via Browser view, config persistence via `persistSubModel()` / `removeSubModelFromConfig()`
 
 **Legacy replaced**
 - None (new system)
 
 **Status**
-- Implemented; bootstrap integration complete
+- Implemented; bootstrap integration complete; runtime mutation and serialization added
 
 ### 7. ModelLoader (`MMO/Core/ModelLoader.hpp`, `MMO/Core/ModelLoader.cpp`)
 
@@ -1583,6 +1592,67 @@ When refactoring a system, append or update the relevant section in this file wi
 - `SessionContextManager::instance().setSystemPrompt(session_id, prompt)` — idempotent system prompt
 - `SessionContextManager::instance().trimHistory(session_id, max)` — keep history bounded
 - `ToolTrainingParser::instance().record(example)` — all training data collection
+
+### 34. UIModelPanel — Model Creator Suite (`ui/ui_model_panel.hpp`, `ui/ui_model_panel.cpp`)
+
+**What changed**
+- `UIModelPanel` redesigned from empty stub into three-view model management panel
+- Old `ModelPreset` struct deleted — replaced by `GRIM::MMO::ModelInfo` from `MMD.hpp`
+- Old `refreshModelPresets()` / `setActiveModelPreset()` API deleted — replaced by MMO-integrated API
+- New `KnowledgeGapEntry` struct for knowledge-gap intake from orchestrator/router
+- New `ModelPanelView` enum: `Browser`, `Creator`, `GapQueue`
+
+**Owns**
+- UI for browsing all registered models (router + sub-models) with residency state, resource footprint
+- UI form for registering new sub-models: ID, name, subject, tags, backend type, path, URL, resource estimates
+- Pre-flight validation before registration: ID uniqueness, path validity, dry-run resource claim
+- Knowledge gap queue display: incoming `KnowledgeGapEntry` items, "create from this" pre-fill flow
+- Config persistence: writes new sub-model entries to `ai_config.json` → `mmo.sub_models`
+- Resource bars showing total/used VRAM and RAM
+
+**Does not own**
+- Model lifecycle state machine (that's `ModelLoader`)
+- Resource admission decisions (that's `ResourceCoordinator`)
+- Routing or orchestration (that's `Orchestrator` / `ModelRouter`)
+- Training (that's `UITrainingPanel` / `train_gpu`)
+- Model metadata contract (that's `MMD.hpp`)
+- Tool-gap proposals (that's `ToolGapPlanner` — UIModelPanel handles the *knowledge*-gap variant)
+
+**Canonical hook points**
+- `UIModelPanel::pushKnowledgeGap(KnowledgeGapEntry)` — called by orchestrator when `getModelsBySubjectTag()` returns empty
+- `UIModelPanel::setView(ModelPanelView)` — switch between Browser / Creator / GapQueue
+- `UIModelPanel::prefillCreatorFromGap(KnowledgeGapEntry)` — pre-fill creator form from gap entry
+- `UIModelPanel::refreshModelList()` — re-read `ModelRegistry` and `ModelLoader` state
+- `UIModelPanel::pendingGapCount()` — for badge/notification on panel tab
+
+**Reads from**
+- `ModelRegistry::instance()` — all model entries, sub-model list, router info
+- `ModelLoader::getState(model_id)` / `getSlot(model_id)` — residency state for status badges
+- `ResourceSignal::latest()` — live VRAM/RAM for resource bars
+- `ResourceCoordinator` — dry-run claims for pre-flight validation
+
+**Writes to**
+- `ModelRegistry` — `registerModel(ModelInfo)`, `removeModel(id)` — runtime sub-model management
+- `ai_config.json` → `mmo.sub_models` — persist new entries via `persistSubModel()`, remove via `removeSubModelFromConfig()`
+- `ModelLoader::ensureLoaded()` / `unload()` — user-triggered load/unload from browser
+
+**Required extensions to existing systems**
+- ~~`ModelRegistry` needs: `registerModel(ModelInfo)` / `removeModel(id)`~~ — **DONE** (added to `ModelRegistry.hpp/.cpp`)
+- ~~`ai_config.json` needs: `mmo` section~~ — **DONE** (router + sub_models + model_loader + orchestrator config added)
+
+**Current consumers**
+- `ui/ui_root.cpp` — creates and hosts the panel
+- Future: `Orchestrator` → calls `pushKnowledgeGap()` when routing finds no subject match
+
+**Legacy replaced**
+- `ModelPreset` struct — deleted
+- `refreshModelPresets()` / `setActiveModelPreset()` — deleted
+
+**Status**
+- Header designed and implementation complete
+- Three views: Browser (model list with residency state), Creator (registration form), GapQueue (knowledge gap intake)
+- Config persistence uses write-temp + rename for atomicity
+- Resource bars driven by `ResourceSignal::latest()`
 
 **Validation status**
 

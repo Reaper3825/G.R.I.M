@@ -819,7 +819,7 @@ But the body should still keep one authoritative UI registry and surface contrac
 - Popup and overlay hosts should share the same surface-registry model even if their render backends differ.
 
 ### Key rule
-
+is
 The body owns the UI shell. The model may request **validated UI surfaces through tools**, and the body may optionally render an **emotion presentation layer**, but the model does not directly own rendering, window creation policy, or emotional presentation state.
 
 ```mermaid

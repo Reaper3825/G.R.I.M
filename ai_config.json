@@ -17,6 +17,40 @@
     "grim_text_url": "http://127.0.0.1:11435",
     "localai_url": "http://127.0.0.1:8080/v1",
     "max_tokens": 256,
+    "mmo": {
+        "enabled": false,
+        "mode": "shadow",
+        "router": {
+            "id": "grim-text-router",
+            "name": "GRIM-text Router",
+            "version": "1.0",
+            "subject": "general",
+            "description": "Primary router model — routes requests and synthesizes sub-model outputs",
+            "model_path": "resources/models/GRIM-text/grim_text.bin",
+            "backend_type": "grim_text_server",
+            "url": "http://127.0.0.1:11435",
+            "subject_tags": ["general", "routing", "synthesis"],
+            "usage_weight": 1.0,
+            "lora_path": "",
+            "hard_copy_path": "",
+            "estimated_ram_mb": 0,
+            "estimated_vram_mb": 2048
+        },
+        "sub_models": [],
+        "model_loader": {
+            "load_timeout_ms": 30000,
+            "idle_ttl_ms": 60000,
+            "hot_ttl_cap_ms": 300000,
+            "use_degrade_step_ms": 5000
+        },
+        "orchestrator": {
+            "route_timeout_ms": 10000,
+            "generate_timeout_ms": 30000,
+            "synthesize_timeout_ms": 10000,
+            "max_submodels_per_request": 1,
+            "correction_output_path": "correction_tuples.jsonl"
+        }
+    },
     "ollama_options": {
         "low_vram": false,
         "num_batch": 512,
