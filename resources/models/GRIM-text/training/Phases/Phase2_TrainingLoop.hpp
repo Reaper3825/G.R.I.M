@@ -28,6 +28,7 @@
 
 #include "Phase1_Startup.hpp"
 #include "../TrainingEvents.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/TNC/Token-normalized_clipping.hpp"
 #include "../../Layers/GRIMTS/GRIM-TS.hpp"
 
@@ -174,20 +175,19 @@ EpochResult runEpoch(
 
 /**
  * @brief Process a single batch
- * 
+ *
  * @param ctx Training context
  * @param state Loop state
- * @param batch Dynamic batch assignment
+ * @param payload Batch payload (single source of truth; built from BatchAssignment in runEpoch)
  * @param batch_idx Batch index within epoch
- * @param total_batches Total batches in epoch
+ * @param epoch_idx Epoch index
  * @return BatchResult Result from this batch
  */
 BatchResult processBatch(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    const GRIM::Batching::BatchAssignment& batch,
+    const GRIM::Batching::BatchPayload& payload,
     int batch_idx,
-    int total_batches,
     int epoch_idx);
 
 /**
@@ -261,7 +261,7 @@ void maybeRunMicroValidation(
 bool handleGradientSpike(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    const GRIM::Batching::BatchAssignment& batch,
+    const GRIM::Batching::BatchPayload& payload,
     float preclip_grad_rms,
     float preclip_norm_grad,
     float batch_loss,

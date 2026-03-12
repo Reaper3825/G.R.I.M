@@ -14,6 +14,9 @@
 #
 set -e
 cd "${GRIM_BRIDGES2_DIR:-$HOME/G.R.I.M}"
+# Default to project CUDA 12 when default module is 11.x (CUTLASS requires 12+)
+GRIM_PROJECT_DIR="${GRIM_BRIDGES2_DIR:-$HOME/G.R.I.M}"
+source "${GRIM_PROJECT_DIR}/scripts/ensure_cuda12_for_training.sh" 2>/dev/null || true
 export PATH="${GRIM_CUDA_ROOT:-}/bin:$PATH"
 export LD_LIBRARY_PATH="${GRIM_CUDA_ROOT:-}/lib64:${LD_LIBRARY_PATH:-}"
 ./resources/models/GRIM-text/training/TrainingLoop/build/train_gpu --config ai_config.json

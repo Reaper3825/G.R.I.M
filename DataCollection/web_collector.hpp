@@ -789,6 +789,25 @@ size_t WebDataCollector::collectData() {
             continue;
         }
         
+        // Skip sources that were recently collected (avoids re-fetching known data)
+        if (stateManager_) {
+            const int64_t REFRESH_INTERVAL_SECONDS = 86400;  // 24 hours
+            if (!stateManager_->sourceNeedsRefresh(source.url, REFRESH_INTERVAL_SECONDS)) {
+                auto record = stateManager_->getSourceRecord(source.url);
+                int64_t hours_ago = 0;
+                if (record) {
+                    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    hours_ago = (now - record->last_successful_timestamp) / 3600;
+                }
+                log("[SKIP] " + source.name + ": Collected " + std::to_string(hours_ago) + 
+                    "h ago, refresh interval is " + std::to_string(REFRESH_INTERVAL_SECONDS / 3600) + "h");
+                progress_current_++;
+                updateProgress(progress_current_, progress_total_);
+                continue;
+            }
+        }
+        
         log("\n--- Fetching from: " + source.name + " ---");
         log("URL: " + source.url);
         log("Type: " + sourceTypeToString(source.source_type));
@@ -852,6 +871,19 @@ size_t WebDataCollector::collectData() {
                 stats_.per_source_type[source.source_type] += new_entries;
             }
             
+            // Track source completion in state manager for refresh gating
+            if (stateManager_) {
+                stateManager_->markSourceCompleted(source.url, new_entries);
+                // Persist source metadata for tracking
+                auto existingRecord = stateManager_->getSourceRecord(source.url);
+                if (existingRecord) {
+                    auto updated = *existingRecord;
+                    updated.name = source.name;
+                    updated.source_type = source.source_type_str;
+                    stateManager_->updateSourceRecord(updated);
+                }
+            }
+            
             if (new_entries > 0) {
                 log("[SUCCESS] " + source.name + ": " + std::to_string(new_entries) + " new entries in " + std::to_string(duration) + "s");
                 if (url_duplicates > 0 || content_duplicates > 0) {
@@ -863,7 +895,9 @@ size_t WebDataCollector::collectData() {
                 for (const auto& entry : entries) {
                     avg_length += entry.content.length();
                 }
-                avg_length /= entries.size();
+                if (!entries.empty()) {
+                    avg_length /= entries.size();
+                }
                 log("  Average content length: " + std::to_string(avg_length) + " chars");
             } else {
                 if (url_duplicates > 0 || content_duplicates > 0) {
@@ -877,9 +911,15 @@ size_t WebDataCollector::collectData() {
         } catch (const std::exception& e) {
             logError("[FAILED] " + source.name + ": " + e.what());
             stats_.failed++;
+            if (stateManager_) {
+                stateManager_->markSourceFailed(source.url, e.what());
+            }
         } catch (...) {
             logError("[FAILED] " + source.name + ": Unknown error");
             stats_.failed++;
+            if (stateManager_) {
+                stateManager_->markSourceFailed(source.url, "Unknown error");
+            }
         }
         
         progress_current_++;
@@ -988,21 +1028,25 @@ std::vector<RawDataEntry> WebDataCollector::fetchGitHub(const DataSource& source
             
             // Handle single repository response
             if (data.is_object() && data.contains("name")) {
-                RawDataEntry entry;
-                entry.content = data.value("description", "") + "\n\n" + 
-                               data.value("readme", "");
-                entry.source_url = data.value("html_url", source.url);
-                entry.author = data.value("owner", json::object()).value("login", "Unknown");
-                entry.source_name = source.name;
-                entry.source_type = source.source_type;
-                entry.source_priority = source.priority;
-                entry.fetch_date = getCurrentUnixTime();
-                entry.metadata_json = data.dump();
+                std::string repo_url = data.value("html_url", source.url);
                 
-                if (source.filter.passes(entry.content)) {
-                    entries.push_back(entry);
-                } else {
-                    stats_.filtered_out++;
+                if (!(stateManager_ && stateManager_->hasCollectedUrl(repo_url))) {
+                    RawDataEntry entry;
+                    entry.content = data.value("description", "") + "\n\n" + 
+                                   data.value("readme", "");
+                    entry.source_url = repo_url;
+                    entry.author = data.value("owner", json::object()).value("login", "Unknown");
+                    entry.source_name = source.name;
+                    entry.source_type = source.source_type;
+                    entry.source_priority = source.priority;
+                    entry.fetch_date = getCurrentUnixTime();
+                    entry.metadata_json = data.dump();
+                    
+                    if (source.filter.passes(entry.content)) {
+                        entries.push_back(entry);
+                    } else {
+                        stats_.filtered_out++;
+                    }
                 }
             }
             // Handle array of repositories
@@ -1010,10 +1054,15 @@ std::vector<RawDataEntry> WebDataCollector::fetchGitHub(const DataSource& source
                 for (const auto& item : data) {
                     if (entries.size() >= static_cast<size_t>(config_.max_entries_per_source)) break;
                     
+                    std::string repo_url = item.value("html_url", source.url);
+                    if (stateManager_ && stateManager_->hasCollectedUrl(repo_url)) {
+                        continue;
+                    }
+                    
                     RawDataEntry entry;
                     entry.content = item.value("description", "") + "\n\n" + 
                                    item.value("readme", "");
-                    entry.source_url = item.value("html_url", source.url);
+                    entry.source_url = repo_url;
                     entry.author = item.value("owner", json::object()).value("login", "Unknown");
                     entry.source_name = source.name;
                     entry.source_type = source.source_type;
@@ -1057,14 +1106,27 @@ std::vector<RawDataEntry> WebDataCollector::fetchArXiv(const DataSource& source)
     log("Fetching ArXiv papers via streaming...");
     
     try {
-        std::string api_url = "http://export.arxiv.org/api/query?search_query=all&start=0&max_results=";
-        api_url += std::to_string(std::min(source.fetch_limit, 100));
+        // Resume from last offset to avoid re-fetching known papers
+        int startOffset = 0;
+        if (stateManager_) {
+            auto record = stateManager_->getSourceRecord(source.url);
+            if (record && record->last_offset > 0) {
+                startOffset = record->last_offset;
+                log("[ArXiv] Resuming from offset " + std::to_string(startOffset));
+            }
+        }
+        
+        int maxResults = std::min(source.fetch_limit, 100);
+        std::string api_url = "http://export.arxiv.org/api/query?search_query=all&start=" + 
+            std::to_string(startOffset) + "&max_results=" + std::to_string(maxResults);
         
         std::string response;
         if (!downloader_->downloadToMemory(api_url, response, 5 * 1024 * 1024)) {
             logError("Failed to download from ArXiv API");
             return entries;
         }
+        
+        size_t skipped_known = 0;
         
         // Simple XML parsing - extract entries
         size_t pos = 0;
@@ -1075,7 +1137,6 @@ std::vector<RawDataEntry> WebDataCollector::fetchArXiv(const DataSource& source)
             
             std::string entry_xml = response.substr(pos, end - pos + 8);
             
-            // Extract title, summary, id
             auto extract = [&](const std::string& tag) {
                 std::string open = "<" + tag + ">";
                 std::string close = "</" + tag + ">";
@@ -1090,6 +1151,14 @@ std::vector<RawDataEntry> WebDataCollector::fetchArXiv(const DataSource& source)
             std::string title = extract("title");
             std::string summary = extract("summary");
             std::string id = extract("id");
+            
+            // Skip papers we've already collected
+            if (stateManager_ && stateManager_->hasCollectedUrl(id)) {
+                skipped_known++;
+                pos = end + 8;
+                continue;
+            }
+            
             std::string content = title + "\n\n" + summary;
             
             if (content.length() > 100 && source.filter.passes(content)) {
@@ -1109,7 +1178,20 @@ std::vector<RawDataEntry> WebDataCollector::fetchArXiv(const DataSource& source)
             pos = end + 8;
         }
         
-        log("Fetched " + std::to_string(entries.size()) + " ArXiv papers");
+        // Advance pagination offset for next run
+        if (stateManager_) {
+            DataCollection::SourceRecord record;
+            auto existing = stateManager_->getSourceRecord(source.url);
+            if (existing) record = *existing;
+            record.url = source.url;
+            record.name = source.name;
+            record.source_type = "arxiv_api";
+            record.last_offset = startOffset + maxResults;
+            stateManager_->updateSourceRecord(record);
+        }
+        
+        log("Fetched " + std::to_string(entries.size()) + " ArXiv papers" +
+            (skipped_known > 0 ? " (skipped " + std::to_string(skipped_known) + " already collected)" : ""));
     } catch (const std::exception& e) {
         logError("Exception in fetchArXiv: " + std::string(e.what()));
     }
@@ -1136,6 +1218,8 @@ std::vector<RawDataEntry> WebDataCollector::fetchWikipedia(const DataSource& sou
         size_t pos = response.find("\"random\":[");
         if (pos == std::string::npos) return entries;
         
+        size_t wiki_skipped = 0;
+        
         pos = response.find("\"id\":", pos);
         while (pos != std::string::npos && entries.size() < static_cast<size_t>(source.fetch_limit)) {
             pos += 5;
@@ -1143,6 +1227,14 @@ std::vector<RawDataEntry> WebDataCollector::fetchWikipedia(const DataSource& sou
             if (end == std::string::npos) break;
             
             std::string page_id = response.substr(pos, end - pos);
+            
+            // Check if this article was already collected BEFORE making the HTTP request
+            std::string article_url = "https://en.wikipedia.org/?curid=" + page_id;
+            if (stateManager_ && stateManager_->hasCollectedUrl(article_url)) {
+                wiki_skipped++;
+                pos = response.find("\"id\":", pos);
+                continue;
+            }
             
             // Fetch content
             std::string content_url = "https://en.wikipedia.org/w/api.php?action=query&prop=extracts&pageids=";
@@ -1184,7 +1276,8 @@ std::vector<RawDataEntry> WebDataCollector::fetchWikipedia(const DataSource& sou
             pos = response.find("\"id\":", pos);
         }
         
-        log("Fetched " + std::to_string(entries.size()) + " Wikipedia articles");
+        log("Fetched " + std::to_string(entries.size()) + " Wikipedia articles" +
+            (wiki_skipped > 0 ? " (skipped " + std::to_string(wiki_skipped) + " already collected)" : ""));
     } catch (const std::exception& e) {
         logError("Exception in fetchWikipedia: " + std::string(e.what()));
     }
@@ -1197,14 +1290,27 @@ std::vector<RawDataEntry> WebDataCollector::fetchStackOverflow(const DataSource&
     log("Fetching StackOverflow via streaming...");
     
     try {
+        // Resume from last page to avoid re-fetching same top questions
+        int startPage = 1;
+        if (stateManager_) {
+            auto record = stateManager_->getSourceRecord(source.url);
+            if (record && record->last_page > 0) {
+                startPage = record->last_page + 1;
+                log("[SO] Resuming from page " + std::to_string(startPage));
+            }
+        }
+        
+        int pageSize = std::min(source.fetch_limit, 100);
         std::string api_url = "https://api.stackexchange.com/2.3/questions?order=desc&sort=votes&site=stackoverflow&pagesize=";
-        api_url += std::to_string(std::min(source.fetch_limit, 100)) + "&filter=withbody";
+        api_url += std::to_string(pageSize) + "&page=" + std::to_string(startPage) + "&filter=withbody";
         
         std::string response;
         if (!downloader_->downloadToMemory(api_url, response, 10 * 1024 * 1024)) {
             logError("Failed to fetch StackOverflow");
             return entries;
         }
+        
+        size_t skipped_known = 0;
         
         // Simple parsing
         size_t items_pos = response.find("\"items\":[");
@@ -1233,6 +1339,13 @@ std::vector<RawDataEntry> WebDataCollector::fetchStackOverflow(const DataSource&
             std::string body = extract("body");
             std::string link = extract("link");
             
+            // Skip questions we've already collected
+            if (!link.empty() && stateManager_ && stateManager_->hasCollectedUrl(link)) {
+                skipped_known++;
+                pos = obj_end + 1;
+                continue;
+            }
+            
             if (!title.empty() && !body.empty()) {
                 std::string content = "Question: " + title + "\n\n" + body;
                 if (source.filter.passes(content)) {
@@ -1253,7 +1366,20 @@ std::vector<RawDataEntry> WebDataCollector::fetchStackOverflow(const DataSource&
             pos = obj_end + 1;
         }
         
-        log("Fetched " + std::to_string(entries.size()) + " StackOverflow questions");
+        // Advance page for next run
+        if (stateManager_) {
+            DataCollection::SourceRecord record;
+            auto existing = stateManager_->getSourceRecord(source.url);
+            if (existing) record = *existing;
+            record.url = source.url;
+            record.name = source.name;
+            record.source_type = "stackoverflow_api";
+            record.last_page = startPage;
+            stateManager_->updateSourceRecord(record);
+        }
+        
+        log("Fetched " + std::to_string(entries.size()) + " StackOverflow questions" +
+            (skipped_known > 0 ? " (skipped " + std::to_string(skipped_known) + " already collected)" : ""));
     } catch (const std::exception& e) {
         logError("Exception in fetchStackOverflow: " + std::string(e.what()));
     }
@@ -1316,11 +1442,18 @@ std::vector<RawDataEntry> WebDataCollector::fetchReddit(const DataSource& source
             std::string author = extract("author");
             
             if (!title.empty()) {
+                std::string post_url = "https://www.reddit.com" + permalink;
+                
+                if (stateManager_ && stateManager_->hasCollectedUrl(post_url)) {
+                    pos = data_end;
+                    continue;
+                }
+                
                 std::string content = "Title: " + title + "\n\n" + selftext;
                 if (content.length() > 100 && source.filter.passes(content)) {
                     RawDataEntry entry;
                     entry.content = std::move(content);
-                    entry.source_url = "https://www.reddit.com" + permalink;
+                    entry.source_url = std::move(post_url);
                     entry.title = std::move(title);
                     entry.author = std::move(author);
                     entry.source_name = source.name;
@@ -1393,6 +1526,11 @@ std::vector<RawDataEntry> WebDataCollector::fetchNewsAPI(const DataSource& sourc
             std::string author = extract("author");
             
             if (!title.empty()) {
+                if (stateManager_ && stateManager_->hasCollectedUrl(url)) {
+                    pos = obj_end;
+                    continue;
+                }
+                
                 std::string full_content = title + "\n\n" + description + "\n\n" + content;
                 if (source.filter.passes(full_content)) {
                     RawDataEntry entry;
@@ -1577,6 +1715,11 @@ std::vector<RawDataEntry> WebDataCollector::fetchCustom(const DataSource& source
                     const auto& article_url = valid_links[i];
                     
                     try {
+                        // Pre-fetch URL check for crawled article pages
+                        if (stateManager_ && stateManager_->hasCollectedUrl(article_url)) {
+                            continue;
+                        }
+                        
                         std::string article_html;
                         if (downloader_->downloadToMemory(article_url, article_html, 10 * 1024 * 1024)) {
                             auto article_extracted = HTMLExtractor::extract(article_html);

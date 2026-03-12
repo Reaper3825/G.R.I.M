@@ -67,6 +67,9 @@ struct BatchPayload {
     std::vector<int> seq_lengths;            // [batch_size] — original length per sequence before padding
     std::vector<int> valid_target_counts;    // [batch_size] — unmasked targets per sequence
     float packing_efficiency = 0.0f;         // actual_tokens / total_tokens
+    int min_seq_len = 0;                     // shortest sequence in batch (for logging)
+    float length_variance = 0.0f;            // variance of seq_lengths (scheduler metric)
+    bool overflow = false;                   // true if single seq exceeded token budget (scheduler)
 
     // ═══════════════════════════════════════════════════════════════════════════
     // PADDED DATA (flat [batch_size * max_seq_len] layout, computed ONCE)

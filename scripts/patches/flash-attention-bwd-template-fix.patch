@@ -1,7 +1,6 @@
 --- a/csrc/flash_attn/src/flash_bwd_kernel.h
 +++ b/csrc/flash_attn/src/flash_bwd_kernel.h
-@@ -796,13 +796,13 @@ inline __device__ void compute_dq_dk_dv(const Params &params) {
- 
+@@ -796,13 +796,13 @@
      const int n_block_max = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
      if (n_block_max == 1) {
 -        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, true>(params, bidb, bidh, 0);
@@ -18,4 +17,3 @@
 +        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, false, true>(params, bidb, bidh, 0);
      }
  }
- 

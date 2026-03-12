@@ -273,7 +273,7 @@
                     "lambda": 0.0
                 },
                 "class_balanced": {
-                    "enabled": true,
+                    "enabled": false,
                     "beta": 0.5
                 },
                 "preference": {

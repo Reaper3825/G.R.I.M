@@ -1,0 +1,16 @@
+--- a/include/cute/stride.hpp
++++ b/include/cute/stride.hpp
+@@ -293,7 +293,11 @@ compact(Shape   const& shape,
+     if constexpr (is_constant<1, Shape>::value) {
+       return cute::make_tuple(Int<0>{}, current); // If current is dynamic, this could save a reg
+-    } else {
+-      return cute::make_tuple(current, current * shape);
++    } else if constexpr (is_static<Shape>::value && is_static<Current>::value) {
++      // NVCC workaround: bypass operator*(C<t>, C<u>) which triggers "unexpected function type"
++      // bug due to ambiguity with unary operator*(C<t>) (dereference) in template resolution
++      return cute::make_tuple(current, C<(Shape::value * Current::value)>{});
++    } else {
++      return cute::make_tuple(current, current * shape);
+     }
+   }
+ 

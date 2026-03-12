@@ -680,8 +680,9 @@ __global__ void collapseTokenDiagKernel(
     int vocab_size,
     int collapse_token_id,
     CollapseTokenStats* __restrict__ block_results,  // [gridDim.x] partial results
-    CollapseTokenStats* __restrict__ final_result     // [1] final output (written by block 0 after sync)
+    CollapseTokenStats* __restrict__ final_result     // unused; host merges block_results
 ) {
+    (void)final_result;
     // Phase 1: each thread processes one position, block reduces via shared mem
     __shared__ float  s_logit_sum[256];
     __shared__ float  s_logit_min[256];
@@ -1083,7 +1084,7 @@ void maybeRunMicroValidation(
 bool handleGradientSpike(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    const GRIM::Batching::BatchAssignment& batch,
+    const GRIM::Batching::BatchPayload& payload,
     float preclip_grad_rms,
     float preclip_norm_grad,
     float batch_loss,
@@ -1120,17 +1121,17 @@ bool handleGradientSpike(
         }
     }
     
-    // Quarantine sequences
-    for (uint32_t sid : batch.seq_ids) {
+    // Quarantine sequences (from payload — scheduler put them in this batch)
+    for (uint32_t sid : payload.seq_ids) {
         state.spike_counts[sid]++;
         state.quarantined_seqs.insert(sid);
     }
     
     std::ostringstream qmsg;
     qmsg << "[GradGuard] quarantined seqs=[";
-    for (size_t si = 0; si < batch.seq_ids.size(); ++si) {
-        qmsg << batch.seq_ids[si];
-        if (si + 1 < batch.seq_ids.size()) qmsg << ",";
+    for (size_t si = 0; si < payload.seq_ids.size(); ++si) {
+        qmsg << payload.seq_ids[si];
+        if (si + 1 < payload.seq_ids.size()) qmsg << ",";
     }
     qmsg << "]";
     ctx.logging.logger->log(qmsg.str());
@@ -1144,15 +1145,15 @@ bool handleGradientSpike(
                    << preclip_grad_rms << " (raw) / " << preclip_norm_grad << " (per-token)\n";
         bad_seq_log << "Loss: " << batch_loss << " | Tokens: " << clip_selection.stats.total_tokens << "\n";
         bad_seq_log << "Sequence IDs: ";
-        for (size_t si = 0; si < batch.seq_ids.size(); ++si) {
-            bad_seq_log << batch.seq_ids[si];
-            if (si + 1 < batch.seq_ids.size()) bad_seq_log << ", ";
+        for (size_t si = 0; si < payload.seq_ids.size(); ++si) {
+            bad_seq_log << payload.seq_ids[si];
+            if (si + 1 < payload.seq_ids.size()) bad_seq_log << ", ";
         }
         bad_seq_log << "\n";
         
         // Decode and dump the actual text content
-        for (size_t bi = 0; bi < batch.seq_ids.size(); ++bi) {
-            uint32_t sid = batch.seq_ids[bi];
+        for (size_t bi = 0; bi < payload.seq_ids.size(); ++bi) {
+            uint32_t sid = payload.seq_ids[bi];
             bad_seq_log << "\n--- Sequence " << sid << " ---\n";
             
             // Get the sequence from training data seqs
@@ -1548,9 +1549,8 @@ ValidationResult runValidation(TrainingContext& ctx) {
 BatchResult processBatch(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    const GRIM::Batching::BatchAssignment& batch,
+    const GRIM::Batching::BatchPayload& payload,
     int batch_idx,
-    int total_batches,
     int epoch_idx) {
     
     BatchResult result;
@@ -1590,23 +1590,15 @@ BatchResult processBatch(
     // - Remove global_step from logs (creates confusion with near-duplicate batch_number)
     // ========================================================================
 
-    // Build unified batch payload — single source of truth for all metadata
-    const auto& model_cfg = ctx.model->getConfig();
-    const auto token_layout = ctx.tokenizer.tokenLayout();
-    auto payload = GRIM::Batching::buildBatchPayload(
-        batch, ctx.data.train_views, ctx.config.actual_vocab_size,
-        token_layout,
-        static_cast<size_t>(std::max(1, model_cfg.max_cached_batch)),
-        static_cast<size_t>(std::max(1, std::min(model_cfg.max_seq_len, model_cfg.max_cached_seq_len))));
-    
+    // Payload is built in runEpoch from scheduler (BatchAssignment); single source of truth here
     if (payload.batch_size == 0) {
         result.skipped = true;
         result.skip_reason = "filtered";
         return result;
     }
 
-    // Extract filtered_seq_ids for quarantine check
-    std::vector<uint32_t> filtered_seq_ids(batch.seq_ids.begin(), batch.seq_ids.end());
+    // Extract filtered_seq_ids for quarantine check (from payload)
+    std::vector<uint32_t> filtered_seq_ids(payload.seq_ids.begin(), payload.seq_ids.end());
     
     // Check quarantine
     if (Internal::isBatchQuarantined(filtered_seq_ids, state.quarantined_seqs)) {
@@ -1656,9 +1648,9 @@ BatchResult processBatch(
         std::ostringstream batch_info;
         batch_info << "[GradTrace] BATCH_INFO batch=" << (batch_idx + 1)
                    << " seqs=[";
-        for (size_t i = 0; i < batch.seq_ids.size(); ++i) {
-            batch_info << batch.seq_ids[i];
-            if (i + 1 < batch.seq_ids.size()) batch_info << ",";
+        for (size_t i = 0; i < payload.seq_ids.size(); ++i) {
+            batch_info << payload.seq_ids[i];
+            if (i + 1 < payload.seq_ids.size()) batch_info << ",";
         }
         batch_info << "] lens=[";
         for (int i = 0; i < payload.batch_size; ++i) {
@@ -3241,8 +3233,8 @@ BatchResult processBatch(
                                     " loss=" + Internal::formatScalar(result.loss) +
                                     " invalid_tokens=true");
             
-            // Quarantine corrupted sequences
-            for (uint32_t sid : batch.seq_ids) {
+            // Quarantine corrupted sequences (from payload)
+            for (uint32_t sid : payload.seq_ids) {
                 state.spike_counts[sid]++;
                 state.quarantined_seqs.insert(sid);
             }
@@ -3255,15 +3247,15 @@ BatchResult processBatch(
                 bad_seq_log << "[Batch " << (batch_idx + 1) << "] DATA CORRUPTION DETECTED\n";
                 bad_seq_log << "Loss: " << result.loss << " | Invalid tokens: " << (has_invalid_tokens ? "yes" : "no") << "\n";
                 bad_seq_log << "Sequence IDs: ";
-                for (size_t si = 0; si < batch.seq_ids.size(); ++si) {
-                    bad_seq_log << batch.seq_ids[si];
-                    if (si + 1 < batch.seq_ids.size()) bad_seq_log << ", ";
+                for (size_t si = 0; si < payload.seq_ids.size(); ++si) {
+                    bad_seq_log << payload.seq_ids[si];
+                    if (si + 1 < payload.seq_ids.size()) bad_seq_log << ", ";
                 }
                 bad_seq_log << "\n";
                 
                 // CRITICAL: Decode sequences and check for data corruption
-                for (size_t bi = 0; bi < batch.seq_ids.size(); ++bi) {
-                    uint32_t sid = batch.seq_ids[bi];
+                for (size_t bi = 0; bi < payload.seq_ids.size(); ++bi) {
+                    uint32_t sid = payload.seq_ids[bi];
                     bad_seq_log << "\n--- Sequence " << sid << " ---\n";
                     
                     if (sid < ctx.data.train_seqs.size()) {
@@ -3917,7 +3909,7 @@ BatchResult processBatch(
     
     // Handle gradient spikes
     auto spike_start = std::chrono::steady_clock::now();
-    if (Internal::handleGradientSpike(ctx, state, batch, preclip_grad_rms, preclip_grad_rms, 
+    if (Internal::handleGradientSpike(ctx, state, payload, preclip_grad_rms, preclip_grad_rms,
                                       result.loss, clip_selection, batch_idx)) {
         // zeroGrad removed: next autogradTrainingStep with accumulate=false zeros gradients
         ctx.optimizer.current_micro_step = 0;  // Reset accumulation window
@@ -4736,22 +4728,30 @@ EpochResult runEpoch(
     // Get accumulation steps from hyperparameters
     const int accum_steps = std::max(1, ctx.config.hyperparameters.gradient_accumulation_steps);
     
-    // Process batches
+    // Process batches: scheduler (BatchAssignment) dictates order; we build BatchPayload and act on it
+    const auto& model_cfg = ctx.model->getConfig();
+    const auto token_layout = ctx.tokenizer.tokenLayout();
+    const size_t max_cached_batch = static_cast<size_t>(std::max(1, model_cfg.max_cached_batch));
+    const size_t max_cached_seq = static_cast<size_t>(std::max(1, std::min(model_cfg.max_seq_len, model_cfg.max_cached_seq_len)));
+
     for (int batch_idx = 0; batch_idx < total_batches_to_run; ++batch_idx) {
-        const auto& batch = schedule.batches[single_batch_overfit ? 0 : batch_idx];
-        
-        // Log progress periodically
+        const auto& assignment = schedule.batches[single_batch_overfit ? 0 : batch_idx];
+        GRIM::Batching::BatchPayload payload = GRIM::Batching::buildBatchPayload(
+            assignment, ctx.data.train_views, ctx.config.actual_vocab_size,
+            token_layout, max_cached_batch, max_cached_seq);
+
+        // Log progress periodically (from payload — single source of truth)
         if (batch_idx % 5 == 0) {
             std::ostringstream msg;
             msg << "[Batch " << (batch_idx + 1) << "/" << total_batches_to_run << "] "
-                << "size=" << batch.seq_ids.size()
-                << " len=" << batch.min_seq_len << "-" << batch.max_seq_len
-                << " eff=" << static_cast<int>(batch.packing_efficiency * 100) << "%"
+                << "size=" << payload.seq_ids.size()
+                << " len=" << payload.min_seq_len << "-" << payload.max_seq_len
+                << " eff=" << static_cast<int>(payload.packing_efficiency * 100) << "%"
                 << " accum_steps=" << accum_steps;
             ctx.logging.logger->log(msg.str());
         }
 
-        BatchResult batch_result = processBatch(ctx, state, batch, batch_idx, total_batches_to_run, epoch_idx);
+        BatchResult batch_result = processBatch(ctx, state, payload, batch_idx, epoch_idx);
         
         if (batch_result.skipped) {
             result.batches_skipped++;
