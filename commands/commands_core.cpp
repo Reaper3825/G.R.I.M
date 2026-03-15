@@ -5,6 +5,7 @@
 #include "commands_question.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
 #include "../MMO/Core/SessionContextManager.hpp"
+#include "../MMO/Core/ModelRegistry.hpp"
 #include "../MMO/UI/EmotionPresentationController.hpp"
 #include "response_manager.hpp"
 #include "console_history.hpp"
@@ -228,8 +229,13 @@ void handleCommand(const std::string& line)
     ensureCorePluginsRegistered();
 
     // ====================================================
-    // ✅ NEW: Intent Classification - Route to command or banter pipeline
+    // Intent Classification — metadata tagging + local-only routing
+    //   When MMO is enabled the classifier is metadata-only:
+    //   utterance_priors flow via NlpAnnotation → RouterMetadata
+    //   and the ROUTER decides banter / question / command routing.
+    //   When MMO is disabled, fall back to local banter/question paths.
     // ====================================================
+    if (!GRIM::MMO::ModelRegistry::instance().isEnabled())
     try {
         auto& scm = GRIM::MMO::SessionContextManager::instance();
         GRIM::ContextSnapshot ctx = scm.legacySnapshot(kDefaultSession);
@@ -322,6 +328,8 @@ void handleCommand(const std::string& line)
         LOG_ERROR("HandleCommand", std::string("Intent classification failed: ") + e.what());
         // Fall through to normal command processing on error
     }
+    // When MMO IS enabled, all input falls through here to the command map
+    // lookup and then to ai_interpret() → orchestrator → router.
 
     // ====================================================
     // Multi-command detection and processing

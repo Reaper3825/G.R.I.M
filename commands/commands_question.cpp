@@ -258,23 +258,50 @@ QuestionResult QuestionHandler::searchBaseMemory(const std::string& question) {
         }
     }
     
-    // Search base memory for system facts stored internally
+    // Search internal memory for relevant context, then generate via AI.
+    // Memory is context, not the answer — never dump mem.raw to the user.
     auto keywords = extractKeywords(question);
+    std::string context_snippets;
+    int snippet_count = 0;
+    const int MAX_SNIPPETS = 5;
+    const size_t MAX_CONTEXT_CHARS = 800;
+
     for (const auto& keyword : keywords) {
         auto memories = g_memoryStorage.search(keyword, 10);
         for (const auto& mem : memories) {
-            // Only return memories stored by GRIM itself
-            if (mem.source == SourceType::GRIM_INTERNAL && mem.confidence > result.confidence) {
-                result.answered = true;
-                result.answer = mem.raw;
-                result.confidence = mem.confidence;
-                result.references.push_back(std::to_string(mem.id));
-                
-                LOG_DEBUG("QuestionHandler", "Found in base memory: " + std::to_string(mem.id));
-            }
+            if (mem.source != SourceType::GRIM_INTERNAL) continue;
+            if (mem.context == ContextType::MONITOR) continue;
+            if (mem.type == TypeTag::EVENT) continue;
+            if (snippet_count >= MAX_SNIPPETS) break;
+            if (context_snippets.size() + mem.raw.size() > MAX_CONTEXT_CHARS) continue;
+
+            context_snippets += "- " + mem.raw.substr(0, 200) + "\n";
+            result.references.push_back(std::to_string(mem.id));
+            ++snippet_count;
+            LOG_DEBUG("QuestionHandler", "Memory context from: " + std::to_string(mem.id));
         }
     }
-    
+
+    if (context_snippets.empty())
+        return result;
+
+    // Generate a response using memory as context (RAG pattern)
+    try {
+        std::string prompt = "Using the following context from your memory, answer the user's question concisely. "
+                             "If the context is not relevant to the question, say so.\n\n"
+                             "Context:\n" + context_snippets + "\n"
+                             "Question: " + question;
+
+        CommandResult aiResult = ai_process(prompt);
+        if (aiResult.success && !aiResult.message.empty()) {
+            result.answered = true;
+            result.answer = aiResult.message;
+            result.confidence = 0.7f;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("QuestionHandler", "Memory-grounded generation failed: " + std::string(e.what()));
+    }
+
     return result;
 }
 
@@ -1115,11 +1142,11 @@ CommandResult cmdQuestion(const std::string& question) {
         
         LOG_DEBUG("QuestionHandler", "Answered " + sourceStr + confidenceStr);
         
-        // ✅ FIX: Truncate long vision responses for TTS (XTTS has 400 token limit ~= 300 chars safe)
+        // Truncate long responses for TTS (XTTS has 400 token limit ~= 300 chars safe)
         std::string voiceResponse = result.answer;
         const size_t MAX_TTS_LENGTH = 300;
         
-        if (result.source == GRIM::AnswerSource::Vision && voiceResponse.length() > MAX_TTS_LENGTH) {
+        if (voiceResponse.length() > MAX_TTS_LENGTH) {
             // Intelligently truncate - find last complete sentence before limit
             size_t truncateAt = voiceResponse.find_last_of(".!?", MAX_TTS_LENGTH);
             if (truncateAt != std::string::npos && truncateAt > 100) {
@@ -1129,7 +1156,7 @@ CommandResult cmdQuestion(const std::string& question) {
                 voiceResponse = voiceResponse.substr(0, MAX_TTS_LENGTH - 3) + "...";
             }
             
-            LOG_DEBUG("QuestionHandler", "Truncated vision response for TTS: " + 
+            LOG_DEBUG("QuestionHandler", "Truncated response for TTS: " + 
                       std::to_string(result.answer.length()) + " -> " + 
                       std::to_string(voiceResponse.length()) + " chars");
         }

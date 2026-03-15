@@ -12,6 +12,7 @@ class OverlayRenderer;  // Forward declaration
 struct PanelChromeOptions {
     bool enableMinimize = true;
     bool enableMaximize = true;
+    bool enableClose = true;
 };
 
 enum class MinimizeType {
@@ -88,6 +89,7 @@ protected:
     bool maximized = false;
     bool minimizeHovered = false;
     bool maximizeHovered = false;
+    bool closeHovered = false;
     float storedHeight = 0.0f;
     Vec2 storedPosition{0.0f, 0.0f};
     Vec2 storedSize{0.0f, 0.0f};
@@ -99,5 +101,6 @@ protected:
     bool handleChromeButtons(const InputState& input);
     void toggleMinimize();
     void toggleMaximize();
-    Vec2 chromeButtonOrigin(bool minimizeButton) const;
+    // slot 0 = close (rightmost), 1 = maximize, 2 = minimize (leftmost)
+    Vec2 chromeButtonOrigin(int slot) const;
 };

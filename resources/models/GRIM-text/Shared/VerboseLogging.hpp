@@ -10,7 +10,7 @@
 
 namespace GRIM {
 namespace VerboseLogging {
-
+ 
 // Forward pass logging - DISABLED FOR PRODUCTION (enable for debugging only)
 constexpr bool ENABLE_FORWARD_FLASH_ATTN_LOGS = false; ///< "[FORWARD] Flash Attention complete"
 constexpr bool ENABLE_FORWARD_CACHE_LOGS = false;      ///< "[FORWARD] Cached attn_bhsd"
@@ -27,6 +27,7 @@ constexpr bool ENABLE_BACKWARD_FLASH_ATTN_LOGS = false;///< "[BACKWARD layer=X] 
 
 // Loss computation logging - DISABLED FOR PRODUCTION
 constexpr bool ENABLE_LOSS_ORDER_LOGS = false;         ///< "[ORDER] computeLossBatch.*"
+constexpr bool ENABLE_LOSS_BACKWARD_SAMPLING = false;  ///< NLLLossGradFn diagnostic sampling
 
 // Expensive diagnostics (D2H copies for analysis - disable for production training)
 constexpr bool ENABLE_EXPENSIVE_DIAGNOSTICS = false;   ///< Rule 21 argmax analysis, embedding cosine, etc.

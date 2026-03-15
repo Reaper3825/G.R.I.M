@@ -187,6 +187,9 @@ struct EncoderConfig {
     
     // Bias control - when false, encoder layers skip bias addition (b_qkv, b_o not used)
     bool use_bias = true;
+
+    // QK-Norm: RMSNorm applied to Q and K projections before attention scoring
+    bool qk_norm_enabled = false;
     
     // Layer self-allocation (Pattern B): seed and scaling config for weight initialization
     uint64_t weight_seed = 0;         // Base seed for Xavier init (per-layer offset: seed + layer*10)
@@ -311,6 +314,7 @@ struct LanguageModelConfig {
     int num_threads = 4;
     bool tie_embeddings = true;
     bool use_bias = true;
+    bool qk_norm_enabled = false;  // QK-Norm: RMSNorm applied to Q and K before attention scoring
     
     // Issue #109: LayerScale - learnable residual scaling from CaiT paper
     // Reduces correlation buildup between layers by gating sublayer outputs

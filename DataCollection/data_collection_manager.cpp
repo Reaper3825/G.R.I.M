@@ -59,7 +59,7 @@ bool DataCollectionManager::initialize(const std::string& stateDir) {
 }
 
 bool DataCollectionManager::startCollection(const CollectionConfig& config) {
-    std::lock_guard<std::mutex> lock(statusMutex_);
+    std::unique_lock<std::mutex> lock(statusMutex_);
     
     if (running_) {
         currentStatus_.message = "Collection already in progress";
@@ -68,13 +68,19 @@ bool DataCollectionManager::startCollection(const CollectionConfig& config) {
     
     // Initialize if not done
     if (!initialized_) {
-        // Unlock to avoid deadlock during initialize
-        statusMutex_.unlock();
+        lock.unlock();
         if (!initialize()) {
-            statusMutex_.lock();
             return false;
         }
-        statusMutex_.lock();
+        lock.lock();
+    }
+    
+    // Join previous thread before starting a new one (destroying a joinable
+    // std::thread calls std::terminate → crash with STATUS_STACK_BUFFER_OVERRUN)
+    if (collectionThread_ && collectionThread_->joinable()) {
+        lock.unlock();
+        collectionThread_->join();
+        lock.lock();
     }
     
     // Reset from completion state if needed

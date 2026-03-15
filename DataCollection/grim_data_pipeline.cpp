@@ -28,6 +28,7 @@
 #include "data_preprocessor.hpp"
 #include "data_splitter.hpp"
 #include "collection_state.hpp"  // Persistent state tracking
+#include "data_structurer.hpp"   // LLM-powered data structuring (Q/A generation)
 #include "control/training_control_generated.h"
 #include "control/ai_config_paths.hpp"  // For loading paths from ai_config.json
 #include "checkpoint_data_generated.h"  // FlatBuffers checkpoint schema
@@ -36,17 +37,20 @@
 #include "training_paths.hpp"
 #include <zip.h>
 #include <poppler/cpp/poppler-document.h>
-#include <poppler/cpp/poppler-page.h>
+#include <poppler/cpp/poppler-page.h>  `
 
 using namespace GRIM::Training;
 namespace fs = std::filesystem;
 
 namespace {
     std::string g_checkpoint_dir;
-    std::string g_verified_dir;
+    std::string g_verified_dir; 
     std::string g_output_dir = "data";
     std::string g_raw_dir;
     bool g_force_rebuild = false;  // Skip deduplication state for fresh rebuild
+    bool g_skip_structuring = false;  // Skip LLM structuring step
+    std::vector<std::string> g_qa_jsonl_paths;  // External Q/A JSONL files for merge ingestion
+    GRIM::DataCollection::DataStructuringConfig g_structuring_config;  // LLM structuring config
     
     // Global state manager for tracking processed files
     std::unique_ptr<GRIM::DataCollection::CollectionStateManager> g_stateManager;
@@ -136,6 +140,103 @@ namespace {
             }
         }
         return true;
+    }
+
+    // Ingest external Q/A and conversational JSONL files into cleaned_texts.
+    // Supported line formats:
+    //   {"question": "...", "answer": "..."}              → "Q: ...\n\nA: ..."
+    //   {"conversation": [{"role":"human","content":"..."}, {"role":"assistant","content":"..."}]}
+    //                                                      → "Human: ...\n\nAssistant: ..."
+    //   {"content": "..."}                                 → verbatim (already formatted)
+    void ingestQaJsonlFiles(const std::vector<std::string>& paths,
+                            std::vector<std::string>& cleaned_texts,
+                            size_t& total_ingested,
+                            size_t& total_bad_lines,
+                            size_t& total_skipped) {
+        total_ingested = 0;
+        total_bad_lines = 0;
+        total_skipped = 0;
+
+        for (const auto& path : paths) {
+            if (!fs::exists(path)) {
+                std::cerr << "  [Q/A] Warning: file not found: " << path << "\n";
+                continue;
+            }
+
+            // Skip if already processed (unless force rebuild)
+            if (!g_force_rebuild && g_stateManager && g_stateManager->hasCollectedUrl(path)) {
+                std::cout << "  [Q/A] Skipping already processed: " << path << "\n";
+                total_skipped++;
+                continue;
+            }
+
+            std::ifstream file(path);
+            if (!file.is_open()) {
+                std::cerr << "  [Q/A] Warning: cannot open: " << path << "\n";
+                continue;
+            }
+
+            size_t file_ingested = 0;
+            size_t file_bad = 0;
+            std::string line;
+            while (std::getline(file, line)) {
+                if (line.empty()) continue;
+                try {
+                    nlohmann::json j = nlohmann::json::parse(line);
+
+                    std::string content;
+
+                    if (j.contains("question") && j["question"].is_string() &&
+                        j.contains("answer") && j["answer"].is_string()) {
+                        // Q/A pair
+                        content = "Q: " + j["question"].get<std::string>()
+                                + "\n\nA: " + j["answer"].get<std::string>();
+                    } else if (j.contains("conversation") && j["conversation"].is_array()) {
+                        // Multi-turn conversation
+                        for (const auto& turn : j["conversation"]) {
+                            if (!turn.contains("role") || !turn.contains("content")) continue;
+                            std::string role = turn["role"].get<std::string>();
+                            std::string text = turn["content"].get<std::string>();
+                            if (!content.empty()) content += "\n\n";
+                            if (role == "human" || role == "user") {
+                                content += "Human: " + text;
+                            } else if (role == "assistant" || role == "bot") {
+                                content += "Assistant: " + text;
+                            } else {
+                                content += role + ": " + text;
+                            }
+                        }
+                    } else if (j.contains("content") && j["content"].is_string()) {
+                        // Already formatted content
+                        content = j["content"].get<std::string>();
+                    } else {
+                        file_bad++;
+                        continue;
+                    }
+
+                    if (!content.empty()) {
+                        cleaned_texts.push_back(std::move(content));
+                        file_ingested++;
+                    }
+                } catch (...) {
+                    file_bad++;
+                    continue;
+                }
+            }
+
+            // Mark file as processed
+            if (g_stateManager) {
+                g_stateManager->markUrlCollected(path, "qa_jsonl");
+            }
+
+            std::cout << "  [Q/A] " << fs::path(path).filename().string()
+                      << ": " << file_ingested << " entries";
+            if (file_bad > 0) std::cout << " (" << file_bad << " bad lines)";
+            std::cout << "\n";
+
+            total_ingested += file_ingested;
+            total_bad_lines += file_bad;
+        }
     }
 
     // Extract text from PDF using poppler C++ API
@@ -553,7 +654,9 @@ static void printUsage() {
     std::cout << "  --skip-verification      Skip re-verification when merging\n";
     std::cout << "  --force-rebuild          Ignore deduplication state, rebuild from all verified data\n";
     std::cout << "  --retrain-vocab          Force retrain tokenizer (ignores existing vocab)\n";
-    std::cout << "  --vocab-size <size>      Vocabulary size for tokenizer (default: 50000)\n\n";
+    std::cout << "  --vocab-size <size>      Vocabulary size for tokenizer (default: 50000)\n";
+    std::cout << "  --qa-jsonl <path>        External Q/A JSONL file (repeatable)\n";
+    std::cout << "  --skip-structuring       Skip LLM data structuring step\n\n";
     std::cout << "Examples:\n";
     std::cout << "  grim_data_pipeline collect --config source_data.json\n";
     std::cout << "  grim_data_pipeline verify --raw-dir data/raw\n";
@@ -616,38 +719,12 @@ int runCollect(const std::string& config_path, std::function<void(float)> progre
         collector.setProgressCallback(progressCallback);
     }
     
-    std::ifstream config_file(config_path);
-    if (!config_file.is_open()) {
-        std::cerr << "ERROR: Cannot open config file\n";
-        return 1;
-    }
-    
-    // Parse JSON config and add sources
-    std::string config_content((std::istreambuf_iterator<char>(config_file)),
-                               std::istreambuf_iterator<char>());
-    
-    try {
-        auto config_json = nlohmann::json::parse(config_content);
-        
-        if (config_json.contains("data_sources")) {
-            for (const auto& source_json : config_json["data_sources"]) {
-                if (!source_json.value("enabled", true)) continue;
-                
-                DataSource source;
-                source.name = source_json.value("name", "");
-                source.url = source_json.value("url", "");
-                source.source_type = sourceTypeFromString(source_json.value("source_type", "unknown"));
-                source.enabled = source_json.value("enabled", true);
-                source.priority = source_json.value("priority", 5);
-                source.fetch_limit = source_json.value("fetch_limit", 100);
-                
-                if (!source.url.empty()) {
-                    collector.addSource(source);
-                }
-            }
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "ERROR: Failed to parse config: " << e.what() << "\n";
+    // Use the unified config loader — it handles fetcher auto-detection,
+    // content filters, crawl_depth, source_type_str, and all other fields.
+    // The old manual JSON parsing was missing fetcher_type/autoDetectFetcher(),
+    // causing ALL sources to fall through to HTML_CRAWL regardless of type.
+    if (!collector.loadConfigFromJson(config_path)) {
+        std::cerr << "ERROR: Failed to load config from " << config_path << "\n";
         return 1;
     }
     
@@ -917,7 +994,7 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     }
 
     currentPhase = "Loading";
-    std::cout << "[1/5] Loading data...\n";
+    std::cout << "[1/7] Loading data...\n";
     std::cout << "  Checkpoints: " << checkpoint_files.size() << "\n";
     reportProgress(5.0f);
 
@@ -1058,30 +1135,66 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     }
     std::cout << "\n\n";
 
+    // Load previously merged cache entries so they are preserved across runs.
+    // Without this, the final trunc-write would discard all data from prior merges.
+    std::vector<VerifiedEntry> previously_merged;
+    {
+        fs::path cache_path = fs::path(resolved_output_dir) / "merged_verified_cache.jsonl";
+        if (fs::exists(cache_path)) {
+            std::ifstream prev(cache_path);
+            std::string line;
+            while (std::getline(prev, line)) {
+                if (line.empty()) continue;
+                try {
+                    nlohmann::json j = nlohmann::json::parse(line);
+                    VerifiedEntry ve;
+                    ve.content = j["content"].get<std::string>();
+                    ve.source_url = j.value("source_url", std::string("merged_cache"));
+                    ve.source_type = j.value("source_type", std::string("cached"));
+                    ve.reliability_score = j.value("reliability_score", 0.9f);
+                    ve.verification_time = j.value("verification_time", (time_t)0);
+                    previously_merged.push_back(std::move(ve));
+                } catch (...) {
+                    continue;
+                }
+            }
+            std::cout << "  Previously merged cache: " << previously_merged.size() << " entries\n";
+        }
+    }
+
     // Combine all data
     std::vector<VerifiedEntry> all_verified = existing_verified;
     all_verified.insert(all_verified.end(), checkpoint_entries.begin(), checkpoint_entries.end());
 
     // Deduplicate using persistent state manager
     currentPhase = "Deduplicating";
-    std::cout << "[2/5] Deduplicating...\n";
+    std::cout << "[2/7] Deduplicating...\n";
     if (g_force_rebuild) {
         std::cout << "  Force rebuild enabled - ignoring previous processing state\n";
     }
     std::vector<VerifiedEntry> deduplicated;
     size_t skipped_duplicates = 0;
+    std::unordered_set<uint64_t> batch_hashes;  // In-batch dedup
 
     for (const auto& entry : all_verified) {
-        // Check persistent state (tracks across all runs)
-        if (!g_force_rebuild && g_stateManager && g_stateManager->hasSeenContent(entry.content)) {
+        // Check if this content was already merged into training data in a previous run
+        // (NOT hasSeenContent — that's the collector's dedup, which would reject everything)
+        if (!g_force_rebuild && g_stateManager && g_stateManager->hasMergedContent(entry.content)) {
             skipped_duplicates++;
             continue;
         }
         
-        // New unique content - add and mark as seen
+        // Deduplicate within this batch (verified + checkpoint entries may overlap)
+        uint64_t h = GRIM::DataCollection::computeContentHash(entry.content);
+        if (!batch_hashes.insert(h).second) {
+            skipped_duplicates++;
+            continue;
+        }
+        
+        // New unique content - add and mark as merged
         deduplicated.push_back(entry);
         if (g_stateManager) {
-            g_stateManager->markContentSeen(entry.content);
+            g_stateManager->markContentMerged(entry.content);
         }
 
         // Coarse progress during dedup.
@@ -1104,16 +1217,25 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
 
     // Safety check: Ensure we have data to process
     if (deduplicated.empty()) {
-        std::cout << "WARNING: No data remaining after deduplication. Nothing to merge.\n";
-        std::cout << "This usually means all data has already been processed.\n";
-        std::cout << "TIP: Use 'Force Rebuild' button or --force-rebuild flag to reprocess all data.\n";
-        std::cout << "=== MERGE COMPLETE (NO NEW DATA) ===\n";
-        return 0;  // Not an error, just nothing to do
+        // Even with no new entries, if structuring is enabled and there are previously
+        // merged entries, we should continue to re-inject and structure them incrementally.
+        bool has_structuring_work = g_structuring_config.enabled && !g_skip_structuring
+            && g_structuring_config.mode != "raw" && !previously_merged.empty();
+
+        if (!has_structuring_work) {
+            std::cout << "WARNING: No data remaining after deduplication. Nothing to merge.\n";
+            std::cout << "This usually means all data has already been processed.\n";
+            std::cout << "TIP: Use 'Force Rebuild' button or --force-rebuild flag to reprocess all data.\n";
+            std::cout << "=== MERGE COMPLETE (NO NEW DATA) ===\n";
+            return 0;  // Not an error, just nothing to do
+        }
+        std::cout << "  No new entries, but " << previously_merged.size()
+                  << " cached entries may need structuring. Continuing...\n\n";
     }
 
     // Verify deduplicated data
     currentPhase = "Verifying";
-    std::cout << "[3/5] Verifying quality...\n";
+    std::cout << "[3/7] Verifying quality...\n";
     
     // Convert to UnverifiedEntry for verification
     std::vector<UnverifiedEntry> to_verify;
@@ -1158,7 +1280,7 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     reportProgress(55.0f);
     
     // Safety check after verification
-    if (verified_entries.empty()) {
+    if (verified_entries.empty() && previously_merged.empty()) {
         std::cout << "WARNING: No data passed verification. Nothing to output.\n";
         std::cout << "=== MERGE COMPLETE (NO VERIFIED DATA) ===\n";
         return 0;
@@ -1166,7 +1288,7 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     
     // Preprocess verified data
     currentPhase = "Preprocessing";
-    std::cout << "[4/5] Preprocessing...\n";
+    std::cout << "[4/7] Preprocessing...\n";
     
     // Load max_seq_len from training config
     GRIM::Config::TrainingHyperparameters train_params;
@@ -1273,9 +1395,161 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     }
     std::cout << "\xE2\x9C\x93 Cleaned: " << cleaned_texts.size() << " entries\n\n";
 
+    // Re-inject previously merged entries that aren't duplicates of new data.
+    // These already passed cleaning + verification in prior runs.
+    // Injected BEFORE structuring so old prose entries get structured incrementally.
+    if (!previously_merged.empty()) {
+        size_t reinjected = 0;
+        for (const auto& pm : previously_merged) {
+            if (pm.content.empty()) continue;
+            if (preprocessor.isDuplicate(pm.content)) continue;
+            cleaned_texts.push_back(pm.content);
+            reinjected++;
+        }
+        std::cout << "  Re-injected " << reinjected << " entries from previous cache ("
+                  << (previously_merged.size() - reinjected) << " were duplicates of new data)\n\n";
+    }
+
+    // ========== [5/7] Structure Data (LLM Q/A generation) ==========
+    if (g_structuring_config.enabled && !g_skip_structuring && g_structuring_config.mode != "raw") {
+        currentPhase = "Structuring";
+        std::cout << "[5/7] Structuring data via LLM (" << g_structuring_config.mode << " mode)...\n";
+
+        if (g_structuring_config.ollama_model.empty()) {
+            throw std::runtime_error("data_structuring.ollama_model is empty — MUST specify a model in ai_config.json");
+        }
+
+        // Load ollama_url from parent config if not set in structuring config
+        if (g_structuring_config.ollama_url.empty()) {
+            g_structuring_config.ollama_url = "http://127.0.0.1:11434";
+        }
+
+        GRIM::DataCollection::DataStructurer structurer(g_structuring_config);
+
+        // Health check Ollama
+        std::cout << "  Checking Ollama at " << g_structuring_config.ollama_url
+                  << " (model: " << g_structuring_config.ollama_model << ")...\n";
+        if (!structurer.checkOllamaHealth()) {
+            std::cerr << "  WARNING: Ollama is not reachable. Skipping structuring step.\n";
+            std::cerr << "  All " << cleaned_texts.size() << " entries will remain as raw prose.\n\n";
+        } else {
+            std::cout << "  \xE2\x9C\x93 Ollama is online\n";
+
+            // Filter entries that need structuring (skip already structured + already processed)
+            std::vector<size_t> indices_to_structure;
+            size_t already_structured_count = 0;
+            size_t already_processed_count = 0;
+
+            for (size_t i = 0; i < cleaned_texts.size(); ++i) {
+                if (g_structuring_config.skip_already_structured &&
+                    GRIM::DataCollection::DataStructurer::isAlreadyStructured(cleaned_texts[i])) {
+                    already_structured_count++;
+                    continue;
+                }
+                if (g_stateManager && g_stateManager->hasStructuredContent(cleaned_texts[i])) {
+                    already_processed_count++;
+                    continue;
+                }
+                indices_to_structure.push_back(i);
+            }
+
+            // Apply max_entries_per_run limit
+            if (g_structuring_config.max_entries_per_run > 0 &&
+                static_cast<int>(indices_to_structure.size()) > g_structuring_config.max_entries_per_run) {
+                std::cout << "  Limiting to " << g_structuring_config.max_entries_per_run
+                          << " entries this run (of " << indices_to_structure.size() << " pending)\n";
+                indices_to_structure.resize(g_structuring_config.max_entries_per_run);
+            }
+
+            std::cout << "  To structure: " << indices_to_structure.size();
+            if (already_structured_count > 0)
+                std::cout << " (skipped " << already_structured_count << " already structured)";
+            if (already_processed_count > 0)
+                std::cout << " (skipped " << already_processed_count << " previously processed)";
+            std::cout << "\n";
+
+            if (!indices_to_structure.empty()) {
+                // Gather texts for batch processing
+                std::vector<std::string> batch_texts;
+                batch_texts.reserve(indices_to_structure.size());
+                for (size_t idx : indices_to_structure) {
+                    batch_texts.push_back(cleaned_texts[idx]);
+                }
+
+                auto last_progress_time = std::chrono::steady_clock::now();
+
+                auto batch_result = structurer.structureBatch(batch_texts,
+                    [&](size_t done, size_t total) {
+                        auto now = std::chrono::steady_clock::now();
+                        if ((now - last_progress_time) >= std::chrono::seconds(2) || done == total) {
+                            float t = static_cast<float>(done) / static_cast<float>(total);
+                            int pct = static_cast<int>(t * 100.0f);
+                            std::cout << "  Structuring: " << done << "/" << total
+                                      << " (" << pct << "%)\n";
+                            reportProgress(85.0f + t * 7.0f); // 85% -> 92%
+                            last_progress_time = now;
+                        }
+                    });
+
+                // Apply results: replace original text with structured version(s)
+                std::vector<std::string> new_cleaned;
+                new_cleaned.reserve(cleaned_texts.size() + batch_result.succeeded);
+
+                size_t next_structure_pos = 0;
+
+                for (size_t i = 0; i < cleaned_texts.size(); ++i) {
+                    if (next_structure_pos < indices_to_structure.size() &&
+                        i == indices_to_structure[next_structure_pos]) {
+                        // This entry was sent for structuring
+                        auto& structured = batch_result.structured[next_structure_pos];
+                        for (auto& s : structured) {
+                            new_cleaned.push_back(std::move(s));
+                        }
+                        // Mark original content as structured for future runs
+                        if (g_stateManager && structured.size() > 0 &&
+                            structured[0] != cleaned_texts[i]) {
+                            g_stateManager->markContentStructured(cleaned_texts[i]);
+                        }
+                        next_structure_pos++;
+                    } else {
+                        // Keep as-is (already structured, already processed, or not selected)
+                        new_cleaned.push_back(std::move(cleaned_texts[i]));
+                    }
+                }
+
+                cleaned_texts = std::move(new_cleaned);
+
+                std::cout << "\xE2\x9C\x93 Structured: " << batch_result.succeeded << " entries succeeded, "
+                          << batch_result.failed << " failed (kept original), "
+                          << batch_result.skipped << " skipped\n";
+                std::cout << "  Total entries after structuring: " << cleaned_texts.size() << "\n\n";
+            } else {
+                std::cout << "  No new entries to structure.\n\n";
+            }
+        }
+    } else if (g_skip_structuring) {
+        std::cout << "[5/7] Structuring skipped (--skip-structuring)\n\n";
+    } else if (!g_structuring_config.enabled) {
+        std::cout << "[5/7] Structuring disabled in config\n\n";
+    }
+
+    reportProgress(92.0f);
+
+    // ========== [6/7] External Q/A ingestion ==========
+    // Ingest external Q/A and conversational JSONL files into cleaned_texts
+    if (!g_qa_jsonl_paths.empty()) {
+        std::cout << "[6/7] Ingesting " << g_qa_jsonl_paths.size() << " external Q/A JSONL file(s)...\n";
+        size_t qa_ingested = 0, qa_bad = 0, qa_skipped = 0;
+        ingestQaJsonlFiles(g_qa_jsonl_paths, cleaned_texts, qa_ingested, qa_bad, qa_skipped);
+        std::cout << "\xE2\x9C\x93 Q/A ingestion: " << qa_ingested << " entries added";
+        if (qa_bad > 0) std::cout << " (" << qa_bad << " bad lines)";
+        if (qa_skipped > 0) std::cout << " (" << qa_skipped << " files already processed)";
+        std::cout << "\n\n";
+    }
+
     // Instead of splitting/tokenizing here, write a merged cleaned cache for training/tokenizer pipeline.
     currentPhase = "Writing";
-    std::cout << "[5/5] Writing merged verified cache...\n";
+    std::cout << "[7/7] Writing merged verified cache...\n";
 
     fs::create_directories(resolved_output_dir);
     fs::path cache_path = fs::path(resolved_output_dir) / "merged_verified_cache.jsonl";
@@ -1296,7 +1570,7 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
         if (cleaned_texts.size() > 2000 && (i % 1000) == 0) {
             const float t = static_cast<float>(i + 1) /
                             static_cast<float>(cleaned_texts.size());
-            reportProgress(85.0f + t * 14.0f); // 85% -> 99%
+            reportProgress(93.0f + t * 6.0f); // 93% -> 99%
         }
     }
 
@@ -1397,6 +1671,47 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
         std::cout << "[DataPipeline] WARNING: Could not load paths from ai_config.json, using defaults" << std::endl;
     }
 
+    // Load Q/A JSONL paths from ai_config.json data_collection section
+    try {
+        std::ifstream configFile("ai_config.json");
+        if (configFile.is_open()) {
+            nlohmann::json config = nlohmann::json::parse(configFile);
+            if (config.contains("data_collection") && config["data_collection"].contains("qa_jsonl_paths")) {
+                auto& qa_paths = config["data_collection"]["qa_jsonl_paths"];
+                if (qa_paths.is_array()) {
+                    for (const auto& p : qa_paths) {
+                        if (p.is_string()) {
+                            g_qa_jsonl_paths.push_back(p.get<std::string>());
+                        }
+                    }
+                    if (!g_qa_jsonl_paths.empty()) {
+                        std::cout << "[DataPipeline] ✓ Loaded " << g_qa_jsonl_paths.size()
+                                  << " Q/A JSONL path(s) from ai_config.json\n";
+                    }
+                }
+            }
+        }
+    } catch (...) {}
+
+    // Load data_structuring config from ai_config.json
+    try {
+        std::ifstream configFile2("ai_config.json");
+        if (configFile2.is_open()) {
+            nlohmann::json config = nlohmann::json::parse(configFile2);
+            if (config.contains("data_collection") && config["data_collection"].contains("data_structuring")) {
+                g_structuring_config = GRIM::DataCollection::DataStructuringConfig::fromJson(
+                    config["data_collection"]["data_structuring"]);
+                // Load ollama_url from top-level config if not in structuring block
+                if (g_structuring_config.ollama_url.empty() && config.contains("ollama_url")) {
+                    g_structuring_config.ollama_url = config["ollama_url"].get<std::string>();
+                }
+                std::cout << "[DataPipeline] \xE2\x9C\x93 Data structuring config loaded (mode: "
+                          << g_structuring_config.mode << ", enabled: "
+                          << (g_structuring_config.enabled ? "yes" : "no") << ")\n";
+            }
+        }
+    } catch (...) {}
+
     // Command-line arguments override ai_config.json
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
@@ -1432,6 +1747,14 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
         else if (arg == "--vocab-size" && i + 1 < argc) {
             vocab_size = std::stoi(argv[++i]);
             std::cout << "[DataPipeline] Vocab size set to: " << vocab_size << "\n";
+        }
+        else if (arg == "--qa-jsonl" && i + 1 < argc) {
+            g_qa_jsonl_paths.push_back(argv[++i]);
+            std::cout << "[DataPipeline] Added Q/A JSONL: " << g_qa_jsonl_paths.back() << "\n";
+        }
+        else if (arg == "--skip-structuring") {
+            g_skip_structuring = true;
+            std::cout << "[DataPipeline] Skipping LLM data structuring step\n";
         }
     }
 

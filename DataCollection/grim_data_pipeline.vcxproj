@@ -448,6 +448,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClInclude Include="D:\G.R.I.M\resources\models\GRIM-text\DataCollection\verifier.hpp" />
     <ClInclude Include="D:\G.R.I.M\resources\models\GRIM-text\DataCollection\data_preprocessor.hpp" />
     <ClInclude Include="D:\G.R.I.M\resources\models\GRIM-text\DataCollection\data_splitter.hpp" />
+    <ClInclude Include="D:\G.R.I.M\resources\models\GRIM-text\DataCollection\data_structurer.hpp" />
     <ClInclude Include="D:\G.R.I.M\resources\models\GRIM-text\DataCollection\html_extractor.hpp" />
     <Natvis Include="D:\G.R.I.M\vcpkg_installed\x64-windows\share\nlohmann_json\nlohmann_json.natvis">
     </Natvis>

@@ -22,8 +22,9 @@ public:
     static void write(const std::string& path,
                       const void* data, size_t size) {
         std::string tmp = path + ".tmp";
-        std::filesystem::create_directories(
-            std::filesystem::path(path).parent_path());
+        auto parent = std::filesystem::path(path).parent_path();
+        if (!parent.empty())
+            std::filesystem::create_directories(parent);
 
         {
             std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
@@ -55,8 +56,9 @@ public:
     static void writeWith(const std::string& path,
                           const std::function<void(std::ofstream&)>& writer) {
         std::string tmp = path + ".tmp";
-        std::filesystem::create_directories(
-            std::filesystem::path(path).parent_path());
+        auto parent = std::filesystem::path(path).parent_path();
+        if (!parent.empty())
+            std::filesystem::create_directories(parent);
 
         {
             std::ofstream out(tmp, std::ios::binary | std::ios::trunc);

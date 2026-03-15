@@ -270,8 +270,8 @@ template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local,
          bool Is_even_K, bool Is_softcap, bool Return_softmax>
 __global__ void flash_fwd_kernel(const Flash_fwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    flash::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
-                       Is_even_MN, Is_even_K, Return_softmax>(params);
+    grim_flash::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
+                       Is_even_MN, Is_even_K, Is_softcap, Return_softmax>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
@@ -282,7 +282,7 @@ __global__ void flash_fwd_kernel(const Flash_fwd_params params) {
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Is_even_M, bool Is_even_K>
 __global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    flash::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K>(params);
+    grim_flash::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
@@ -311,7 +311,7 @@ __global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
 template<bool Clear_dQaccum, typename Kernel_traits>
 __global__ void flash_bwd_dot_do_o_kernel(const Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    flash::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
+    grim_flash::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");

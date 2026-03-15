@@ -77,6 +77,9 @@ struct EncodingConfig {
     float softmax_temperature = 1.0f;
     float dropout_rate = 0.0f;        // Sublayer dropout DROP rate (0.0 = disabled). Applied after attention projection and FFN output.
     float attention_dropout = 0.0f;   // Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% dropped)
+
+    // QK-Norm: RMSNorm applied to Q and K projections before attention scoring
+    bool qk_norm_enabled = false;
     
     // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state
     // WARNING: If nullptr, attention sees no positional info - all positions equivalent!

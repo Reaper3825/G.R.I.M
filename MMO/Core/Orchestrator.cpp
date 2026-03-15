@@ -92,6 +92,34 @@ OrchestratorResult Orchestrator::generate(const RequestContext& ctx) {
         return result;
     }
 
+    // ── Passthrough: no sub-models → call router directly ──
+    if (registry_.getSubModels().empty()) {
+        loader_.markInUse(router_info->id);
+
+        auto it = backends_.find(router_info->id);
+        if (it == backends_.end()) {
+            loader_.markIdle(router_info->id);
+            throw std::runtime_error(
+                "No registered backend for router '" + router_info->id
+                + "' — check createBackendForModel() in bootstrap.cpp.");
+        }
+
+        GenerationOptions opts;
+        opts.timeout_ms = config_.generate_timeout_ms;
+
+        GenerationResult gen = it->second->generate(ctx.prompt, opts);
+        loader_.markIdle(router_info->id);
+
+        if (gen.success) {
+            result.success  = true;
+            result.response = gen.text;
+        } else {
+            result.error = "Router passthrough failed: " + gen.error;
+            LOG_ERROR("MMO_ORCH", result.error);
+        }
+        return result;
+    }
+
     // ── Step 3: Build and send route request ──
     loader_.markInUse(router_info->id);
 

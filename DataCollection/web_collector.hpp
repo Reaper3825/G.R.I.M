@@ -284,6 +284,10 @@ struct RawDataEntry {
     
     std::string metadata_json;  // Additional metadata as JSON
     
+    // Q/A fields — populated when entry is a question/answer pair
+    std::string question;   // Raw question text (for FlatBuffer input_text)
+    std::string answer;     // Raw answer text (for FlatBuffer target_text)
+    
     // Semantic tags (POS, NER, content type, etc.)
     std::vector<std::string> tags;
     
@@ -370,7 +374,7 @@ struct CollectorConfig {
     int timeout_seconds = 15;  // Faster timeout (was 30)
     int rate_limit_delay_ms = 100;  // 10x faster (was 1000)
     int max_retries = 3;
-    int max_concurrent_requests = 25;  // 10x more parallel (was 5) - OPTIMIZED FOR 128GB RAM
+    int max_concurrent_requests = 50;  // 10x more parallel (was 5) - OPTIMIZED FOR 128GB RAM
     
     std::string user_agent = "GRIM-DataCollector/2.0";
     
@@ -637,7 +641,6 @@ WebDataCollector::~WebDataCollector() {
 }
 
 bool WebDataCollector::loadConfigFromJson(const std::string& json_path) {
-#ifdef HAVE_NLOHMANN_JSON
     try {
         std::ifstream file(json_path);
         if (!file.is_open()) {
@@ -744,10 +747,6 @@ bool WebDataCollector::loadConfigFromJson(const std::string& json_path) {
         logError("Failed to parse JSON config: " + std::string(e.what()));
         return false;
     }
-#else
-    logError("JSON support not available (HAVE_NLOHMANN_JSON not defined)");
-    return false;
-#endif
 }
 
 size_t WebDataCollector::collectData() {
@@ -1117,8 +1116,23 @@ std::vector<RawDataEntry> WebDataCollector::fetchArXiv(const DataSource& source)
         }
         
         int maxResults = std::min(source.fetch_limit, 100);
-        std::string api_url = "http://export.arxiv.org/api/query?search_query=all&start=" + 
-            std::to_string(startOffset) + "&max_results=" + std::to_string(maxResults);
+        
+        // Parse search_query from the configured source URL so user's
+        // category/topic filters are respected (e.g. cat:cs.AI+OR+cat:cs.CL)
+        std::string search_query = "all";
+        size_t sq_pos = source.url.find("search_query=");
+        if (sq_pos != std::string::npos) {
+            sq_pos += 13; // length of "search_query="
+            size_t sq_end = source.url.find('&', sq_pos);
+            search_query = (sq_end != std::string::npos) 
+                ? source.url.substr(sq_pos, sq_end - sq_pos)
+                : source.url.substr(sq_pos);
+        }
+        
+        std::string api_url = "http://export.arxiv.org/api/query?search_query=" + search_query +
+            "&start=" + std::to_string(startOffset) + 
+            "&max_results=" + std::to_string(maxResults) +
+            "&sortBy=submittedDate&sortOrder=descending";
         
         std::string response;
         if (!downloader_->downloadToMemory(api_url, response, 5 * 1024 * 1024)) {
@@ -1312,12 +1326,45 @@ std::vector<RawDataEntry> WebDataCollector::fetchStackOverflow(const DataSource&
         
         size_t skipped_known = 0;
         
-        // Simple parsing
+        // Helper to extract a JSON string value from a raw JSON object substring
+        auto extractStr = [](const std::string& obj, const std::string& field) -> std::string {
+            std::string search = "\"" + field + "\":\"";
+            size_t s = obj.find(search);
+            if (s == std::string::npos) return {};
+            s += search.length();
+            size_t e = obj.find("\"", s);
+            return (e != std::string::npos) ? obj.substr(s, e - s) : std::string();
+        };
+        
+        // Helper to extract a JSON integer value from a raw JSON object substring
+        auto extractInt = [](const std::string& obj, const std::string& field) -> int64_t {
+            std::string search = "\"" + field + "\":";
+            size_t s = obj.find(search);
+            if (s == std::string::npos) return -1;
+            s += search.length();
+            // Skip whitespace
+            while (s < obj.size() && (obj[s] == ' ' || obj[s] == '\t')) ++s;
+            if (s >= obj.size() || (!std::isdigit(obj[s]) && obj[s] != '-')) return -1;
+            size_t e = s;
+            while (e < obj.size() && (std::isdigit(obj[e]) || obj[e] == '-')) ++e;
+            return std::stoll(obj.substr(s, e - s));
+        };
+        
+        // First pass: parse questions and collect accepted_answer_ids for batching
+        struct ParsedQuestion {
+            std::string title;
+            std::string body;
+            std::string link;
+            int64_t accepted_answer_id = -1;
+        };
+        std::vector<ParsedQuestion> parsed_questions;
+        std::vector<int64_t> answer_ids_to_fetch;
+        
         size_t items_pos = response.find("\"items\":[");
         if (items_pos == std::string::npos) return entries;
         
         size_t pos = items_pos + 9;
-        while (entries.size() < static_cast<size_t>(source.fetch_limit)) {
+        while (parsed_questions.size() < static_cast<size_t>(source.fetch_limit)) {
             pos = response.find("{", pos);
             if (pos == std::string::npos || pos > response.find("]", items_pos)) break;
             
@@ -1326,18 +1373,7 @@ std::vector<RawDataEntry> WebDataCollector::fetchStackOverflow(const DataSource&
             
             std::string obj = response.substr(pos, obj_end - pos + 1);
             
-            auto extract = [&](const std::string& field) {
-                std::string search = "\"" + field + "\":\"";
-                size_t s = obj.find(search);
-                if (s == std::string::npos) return std::string();
-                s += search.length();
-                size_t e = obj.find("\"", s);
-                return (e != std::string::npos) ? obj.substr(s, e - s) : std::string();
-            };
-            
-            std::string title = extract("title");
-            std::string body = extract("body");
-            std::string link = extract("link");
+            std::string link = extractStr(obj, "link");
             
             // Skip questions we've already collected
             if (!link.empty() && stateManager_ && stateManager_->hasCollectedUrl(link)) {
@@ -1346,24 +1382,104 @@ std::vector<RawDataEntry> WebDataCollector::fetchStackOverflow(const DataSource&
                 continue;
             }
             
+            std::string title = extractStr(obj, "title");
+            std::string body = extractStr(obj, "body");
+            
             if (!title.empty() && !body.empty()) {
-                std::string content = "Question: " + title + "\n\n" + body;
-                if (source.filter.passes(content)) {
-                    RawDataEntry entry;
-                    entry.content = std::move(content);
-                    entry.source_url = std::move(link);
-                    entry.title = std::move(title);
-                    entry.source_name = source.name;
-                    entry.source_type = source.source_type;
-                    entry.source_priority = source.priority;
-                    entry.fetch_date = getCurrentUnixTime();
-                    entries.push_back(std::move(entry));
-                } else {
-                    stats_.filtered_out++;
+                ParsedQuestion pq;
+                pq.title = std::move(title);
+                pq.body = std::move(body);
+                pq.link = std::move(link);
+                pq.accepted_answer_id = extractInt(obj, "accepted_answer_id");
+                
+                if (pq.accepted_answer_id > 0) {
+                    answer_ids_to_fetch.push_back(pq.accepted_answer_id);
                 }
+                parsed_questions.push_back(std::move(pq));
             }
             
             pos = obj_end + 1;
+        }
+        
+        // Batch-fetch accepted answers (up to 100 IDs per request to respect SE API)
+        std::unordered_map<int64_t, std::string> answer_bodies;
+        
+        for (size_t batch_start = 0; batch_start < answer_ids_to_fetch.size(); batch_start += 100) {
+            size_t batch_end = std::min(batch_start + 100, answer_ids_to_fetch.size());
+            
+            // Build semicolon-separated ID list: /answers/1;2;3
+            std::string id_list;
+            for (size_t i = batch_start; i < batch_end; ++i) {
+                if (!id_list.empty()) id_list += ";";
+                id_list += std::to_string(answer_ids_to_fetch[i]);
+            }
+            
+            std::string answers_url = "https://api.stackexchange.com/2.3/answers/" + id_list
+                + "?site=stackoverflow&filter=withbody";
+            
+            std::string answers_response;
+            if (!downloader_->downloadToMemory(answers_url, answers_response, 10 * 1024 * 1024)) {
+                log("[SO] Warning: failed to fetch answer batch, continuing without answers");
+                continue;
+            }
+            
+            // Parse answer bodies from response
+            size_t a_items_pos = answers_response.find("\"items\":[");
+            if (a_items_pos == std::string::npos) continue;
+            
+            size_t a_pos = a_items_pos + 9;
+            while (true) {
+                a_pos = answers_response.find("{", a_pos);
+                if (a_pos == std::string::npos || a_pos > answers_response.find("]", a_items_pos)) break;
+                
+                size_t a_obj_end = answers_response.find("}", a_pos);
+                if (a_obj_end == std::string::npos) break;
+                
+                std::string a_obj = answers_response.substr(a_pos, a_obj_end - a_pos + 1);
+                
+                int64_t answer_id = extractInt(a_obj, "answer_id");
+                std::string a_body = extractStr(a_obj, "body");
+                
+                if (answer_id > 0 && !a_body.empty()) {
+                    answer_bodies[answer_id] = std::move(a_body);
+                }
+                
+                a_pos = a_obj_end + 1;
+            }
+        }
+        
+        size_t with_answers = 0;
+        
+        // Build entries with Q/A format when answer is available
+        for (auto& pq : parsed_questions) {
+            std::string question_text = pq.title + "\n\n" + pq.body;
+            std::string content;
+            std::string answer_text;
+            
+            auto it = (pq.accepted_answer_id > 0) ? answer_bodies.find(pq.accepted_answer_id) : answer_bodies.end();
+            if (it != answer_bodies.end()) {
+                answer_text = it->second;
+                content = "Q: " + question_text + "\n\nA: " + answer_text;
+                with_answers++;
+            } else {
+                content = "Q: " + question_text;
+            }
+            
+            if (source.filter.passes(content)) {
+                RawDataEntry entry;
+                entry.content = std::move(content);
+                entry.source_url = std::move(pq.link);
+                entry.title = pq.title;
+                entry.question = std::move(question_text);
+                entry.answer = std::move(answer_text);
+                entry.source_name = source.name;
+                entry.source_type = source.source_type;
+                entry.source_priority = source.priority;
+                entry.fetch_date = getCurrentUnixTime();
+                entries.push_back(std::move(entry));
+            } else {
+                stats_.filtered_out++;
+            }
         }
         
         // Advance page for next run
@@ -1378,7 +1494,8 @@ std::vector<RawDataEntry> WebDataCollector::fetchStackOverflow(const DataSource&
             stateManager_->updateSourceRecord(record);
         }
         
-        log("Fetched " + std::to_string(entries.size()) + " StackOverflow questions" +
+        log("Fetched " + std::to_string(entries.size()) + " StackOverflow Q/A entries (" +
+            std::to_string(with_answers) + " with accepted answers)" +
             (skipped_known > 0 ? " (skipped " + std::to_string(skipped_known) + " already collected)" : ""));
     } catch (const std::exception& e) {
         logError("Exception in fetchStackOverflow: " + std::string(e.what()));
@@ -1691,15 +1808,21 @@ std::vector<RawDataEntry> WebDataCollector::fetchCustom(const DataSource& source
                     static_cast<size_t>(source.fetch_limit - entries.size()))) + " article pages...");
                 
                 // Fetch article pages with error tracking and timeout
-                int consecutive_failures = 0;
-                const int MAX_CONSECUTIVE_FAILURES = 5;
+                int consecutive_download_failures = 0;  // actual network/download failures only
+                int consecutive_filter_misses = 0;       // content filter rejections (not errors)
+                const int MAX_CONSECUTIVE_DOWNLOAD_FAILURES = 10;
+                const int MAX_CONSECUTIVE_FILTER_MISSES = 20;  // non-article pages are expected
                 const int MAX_CRAWL_TIME_SECONDS = 180;  // 3 minutes max per source
                 auto crawl_start = std::chrono::steady_clock::now();
                 
                 for (size_t i = 0; i < valid_links.size(); ++i) {
                     if (entries.size() >= static_cast<size_t>(source.fetch_limit)) break;
-                    if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
-                        log("[HTML] ⚠ Stopping crawl - too many consecutive failures");
+                    if (consecutive_download_failures >= MAX_CONSECUTIVE_DOWNLOAD_FAILURES) {
+                        log("[HTML] ⚠ Stopping crawl - too many consecutive download failures");
+                        break;
+                    }
+                    if (consecutive_filter_misses >= MAX_CONSECUTIVE_FILTER_MISSES) {
+                        log("[HTML] ⚠ Stopping crawl - too many consecutive content filter misses");
                         break;
                     }
                     
@@ -1721,6 +1844,12 @@ std::vector<RawDataEntry> WebDataCollector::fetchCustom(const DataSource& source
                         }
                         
                         std::string article_html;
+                        // Rate limit between requests to avoid server bans
+                        if (i > 0 && config_.rate_limit_delay_ms > 0) {
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(config_.rate_limit_delay_ms));
+                        }
+                        
                         if (downloader_->downloadToMemory(article_url, article_html, 10 * 1024 * 1024)) {
                             auto article_extracted = HTMLExtractor::extract(article_html);
                             
@@ -1743,16 +1872,19 @@ std::vector<RawDataEntry> WebDataCollector::fetchCustom(const DataSource& source
                                 article_entry.fetch_date = getCurrentUnixTime();
                                 
                                 entries.push_back(std::move(article_entry));
-                                consecutive_failures = 0; // Reset on success
+                                consecutive_download_failures = 0;
+                                consecutive_filter_misses = 0;
                             } else {
-                                consecutive_failures++;
+                                // Content filter miss — page downloaded OK but wasn't useful content
+                                consecutive_filter_misses++;
+                                consecutive_download_failures = 0; // download succeeded
                             }
                         } else {
-                            consecutive_failures++;
+                            consecutive_download_failures++;
                         }
                     } catch (const std::exception& e) {
                         logError("[HTML] Article fetch error: " + std::string(e.what()));
-                        consecutive_failures++;
+                        consecutive_download_failures++;
                     }
                 }
                 
@@ -1929,12 +2061,16 @@ float WebDataCollector::updateProgress(size_t current, size_t total) {
 void WebDataCollector::addSource(const DataSource& source) {
     DataSource adjustedSource = source;
     
+    // Ensure fetcher_type is correctly detected from URL
+    adjustedSource.autoDetectFetcher();
+    
     // Apply dynamic fetch_limit based on crawl_depth
     adjustedSource.applyDynamicFetchLimit();
     
     config_.sources.push_back(adjustedSource);
     log("Added source: " + source.name + 
-        " (crawl_depth=" + std::to_string(adjustedSource.crawl_depth) + 
+        " (fetcher=" + fetcherTypeToString(adjustedSource.fetcher_type) +
+        ", crawl_depth=" + std::to_string(adjustedSource.crawl_depth) + 
         ", fetch_limit=" + std::to_string(adjustedSource.fetch_limit) + ")");
 }
 
@@ -2060,6 +2196,14 @@ bool WebDataCollector::saveToFlatBuffer(const std::string& output_path) {
         auto raw_text_offset = builder.CreateString(entry.content);
         auto example_id_offset = builder.CreateString(entry.generateId());
         
+        // Populate Q/A fields when available
+        auto input_text_offset = entry.question.empty()
+            ? flatbuffers::Offset<flatbuffers::String>(0)
+            : builder.CreateString(entry.question);
+        auto target_text_offset = entry.answer.empty()
+            ? flatbuffers::Offset<flatbuffers::String>(0)
+            : builder.CreateString(entry.answer);
+        
         auto example = GRIMWebTraining::CreateTrainingExample(
             builder,
             raw_text_offset,
@@ -2069,7 +2213,7 @@ bool WebDataCollector::saveToFlatBuffer(const std::string& output_path) {
             source_info,
             verification,
             metadata,
-            0, 0, 0, 0, // input/target/context/prompt
+            input_text_offset, target_text_offset, 0, 0, // input/target/context/prompt
             example_id_offset,
             now
         );

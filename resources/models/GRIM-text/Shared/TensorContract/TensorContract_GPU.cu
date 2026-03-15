@@ -1450,7 +1450,7 @@ __global__ void kernel_elementwise_mul_backward(
 
 // Element-wise add backward: grad_a = grad_out, grad_b = grad_out
 // (Gradient just passes through to both inputs)
-__global__ __attribute__((unused)) void kernel_add_backward(
+__global__ void kernel_add_backward(
     const float* grad_output,
     float* grad_a,
     float* grad_b,

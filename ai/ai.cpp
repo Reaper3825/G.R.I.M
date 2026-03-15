@@ -21,6 +21,7 @@
 #include "location.hpp"  // ✅ For location context
 #include "helpers/grim_input.hpp"  // ✅ For parseInput
 #include "grim_backend.hpp"  // ✅ Native GRIM model backend (external reference)
+#include "../MMO/Backends/OllamaBackend.hpp"
 #include <cpr/cpr.h>
 #include <fstream>
 #include <future>
@@ -121,8 +122,48 @@ void clearConversationHistory() {
     LOG_DEBUG("AI", "Conversation history cleared");
 }
 
+// =========================================================
+// callOllamaDirect — bypass orchestrator for Ollama backend
+// =========================================================
+static std::string callOllamaDirect(const std::string& prompt) {
+    std::string url   = aiConfig.value("ollama_url", "http://127.0.0.1:11434");
+    std::string model = aiConfig.value("default_model", "llama3.1:8b");
+
+    GRIM::MMO::OllamaBackend backend(url, "ollama-direct", model);
+
+    // Build conversation history from SessionContextManager
+    auto& scm = GRIM::MMO::SessionContextManager::instance();
+    auto messages = scm.getMessages(kDefaultSessionId);
+
+    std::vector<GRIM::MMO::HistoryEntry> history;
+    history.reserve(messages.size());
+    for (const auto& msg : messages) {
+        history.push_back({msg.role, msg.content});
+    }
+
+    GRIM::MMO::GenerationOptions opts;
+    opts.timeout_ms = 60000;
+
+    GRIM::MMO::GenerationResult gen = backend.generateWithHistory(prompt, history, opts);
+    if (gen.success) {
+        return gen.text;
+    }
+
+    LOG_ERROR("AI", "Ollama direct call failed: " + gen.error);
+    return "[AI] Backend call failed: " + gen.error;
+}
+
 std::future<std::string> callAIAsync(const std::string& prompt) {
     return std::async(std::launch::async, [prompt]() -> std::string {
+        // Check aiConfig["backend"] to decide routing
+        std::string backend = aiConfig.value("backend", "auto");
+
+        // Direct Ollama path — no orchestrator needed
+        if (backend == "ollama") {
+            return callOllamaDirect(prompt);
+        }
+
+        // All other backends route through MMO orchestrator
         if (!g_orchestrator) {
             throw std::runtime_error(
                 "g_orchestrator is NULL — MMO must be initialized before calling AI. "
@@ -132,8 +173,9 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         auto& registry = GRIM::MMO::ModelRegistry::instance();
         if (!registry.isEnabled()) {
             throw std::runtime_error(
-                "MMO is disabled in config but callAIAsync requires it. "
-                "Set mmo.enabled=true in ai_config.json.");
+                "MMO is disabled in config but backend '" + backend
+                + "' requires it. Set mmo.enabled=true in ai_config.json "
+                "or set backend to 'ollama'.");
         }
 
         // Produce NlpAnnotation for structured routing

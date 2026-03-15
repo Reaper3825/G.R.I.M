@@ -53,16 +53,22 @@ bool UIPanel::handleChromeButtons(const InputState& input) {
                pt.y >= pos.y && pt.y <= pos.y + sz.y;
     };
 
-    Vec2 minOrigin = chromeButtonOrigin(true);
-    Vec2 maxOrigin = chromeButtonOrigin(false);
+    Vec2 closeOrigin = chromeButtonOrigin(0);
+    Vec2 maxOrigin   = chromeButtonOrigin(1);
+    Vec2 minOrigin   = chromeButtonOrigin(2);
 
-    minimizeHovered = chromeOptions.enableMinimize && isInside(input.mousePos, minOrigin, btnSize);
+    closeHovered    = chromeOptions.enableClose    && isInside(input.mousePos, closeOrigin, btnSize);
     maximizeHovered = chromeOptions.enableMaximize && isInside(input.mousePos, maxOrigin, btnSize);
+    minimizeHovered = chromeOptions.enableMinimize && isInside(input.mousePos, minOrigin, btnSize);
 
     bool pressed = input.mousePressed[0];
 
     if (pressed) {
-        if (minimizeHovered && chromeOptions.enableMinimize) {
+        if (closeHovered && chromeOptions.enableClose) {
+            setVisible(false);
+            if (onClose) onClose();
+            consumed = true;
+        } else if (minimizeHovered && chromeOptions.enableMinimize) {
             toggleMinimize();
             consumed = true;
         } else if (maximizeHovered && chromeOptions.enableMaximize) {
@@ -117,9 +123,9 @@ void UIPanel::toggleMaximize() {
     }
 }
 
-Vec2 UIPanel::chromeButtonOrigin(bool minimizeButton) const {
+Vec2 UIPanel::chromeButtonOrigin(int slot) const {
     const float padding = 6.0f;
-    float offset = minimizeButton ? (chromeButtonSize + padding) * 2.0f : (chromeButtonSize + padding);
+    float offset = (chromeButtonSize + padding) * static_cast<float>(slot + 1);
     return {position.x + size.x - offset, position.y + padding};
 }
 
@@ -214,19 +220,26 @@ void UIPanel::drawOverlay(OverlayRenderer& renderer) {
     renderer.drawRect({position.x, position.y}, {2, size.y}, borderColor);
     renderer.drawRect({position.x + size.x - 2, position.y}, {2, size.y}, borderColor);
     
-    // Draw chrome buttons
-    if (chromeOptions.enableMinimize) {
-        Vec2 btn = chromeButtonOrigin(true);
-        uint32_t color = minimizeHovered ? 0xFF505050 : 0xFF3A3A3A;
+    // Draw chrome buttons (right to left: close, maximize, minimize)
+    if (chromeOptions.enableClose) {
+        Vec2 btn = chromeButtonOrigin(0);
+        uint32_t color = closeHovered ? 0xFF3333CC : 0xFF3A3A3A;
         renderer.drawRect(btn, {chromeButtonSize, chromeButtonSize}, color);
-        renderer.drawText({btn.x + 6.0f, btn.y + 2.0f}, "-", 0xFFFFFFFF);
+        renderer.drawText({btn.x + 5.0f, btn.y + 2.0f}, "X", 0xFFFFFFFF);
     }
 
     if (chromeOptions.enableMaximize) {
-        Vec2 btn = chromeButtonOrigin(false);
+        Vec2 btn = chromeButtonOrigin(1);
         uint32_t color = maximizeHovered ? 0xFF505050 : 0xFF3A3A3A;
         renderer.drawRect(btn, {chromeButtonSize, chromeButtonSize}, color);
         renderer.drawText({btn.x + 5.0f, btn.y + 2.0f}, "[]", 0xFFFFFFFF);
+    }
+
+    if (chromeOptions.enableMinimize) {
+        Vec2 btn = chromeButtonOrigin(2);
+        uint32_t color = minimizeHovered ? 0xFF505050 : 0xFF3A3A3A;
+        renderer.drawRect(btn, {chromeButtonSize, chromeButtonSize}, color);
+        renderer.drawText({btn.x + 6.0f, btn.y + 2.0f}, "-", 0xFFFFFFFF);
     }
 
     // Draw resize handle (visual indicator in bottom-right corner)
