@@ -5,7 +5,7 @@
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
 #   - Allocation: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. abc1234p)
-#   - Path: Set GRIM_BRIDGES2_DIR to your project path, e.g. /ocean/projects/<alloc_id>/G.R.I.M
+#   - Path: Set GRIM_BRIDGES2_DIR to your repo path, e.g. /ocean/projects/<alloc_id>/<username>/G.R.I.M (default: cis210058p/uwadkins)
 #   - Submodules: flash-attention (script runs git submodule update --init before build)
 #   - vcpkg: Script clones to GRIM_BRIDGES2_DIR/vcpkg if missing
 #   - CUDA 12+ for training (flash-attention). Bridges-2: module load cuda (check with module avail cuda)
@@ -30,9 +30,9 @@ EXE="$BUILD_DIR/train_gpu"
 CONFIG="${CONFIG:-../../../../ai_config.json}"
 CACHE_PATH="$REPO_ROOT/resources/models/GRIM-text/training/data/merged_verified_cache.jsonl"
 
-# Bridges-2 path - REQUIRED: set GRIM_BRIDGES2_DIR to e.g. /ocean/projects/<alloc_id>/G.R.I.M
-BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-}"
-ACCOUNT="${GRIM_BRIDGES2_ACCOUNT:-}"
+# Bridges-2 path: /ocean/projects/<alloc_id>/<username>/G.R.I.M (override with GRIM_BRIDGES2_DIR)
+BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
+ACCOUNT="${GRIM_BRIDGES2_ACCOUNT:-cis210058p}"
 PARTITION="${PARTITION:-GPU-shared}"
 GPU_TYPE="${GPU_TYPE:-h100-80}"
 DO_BUILD=false
@@ -54,15 +54,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Validate required env
+# Validate (path/account have defaults; override with env if needed)
 if [[ -z "$BRIDGES2_DIR" ]]; then
-  echo "ERROR: Set GRIM_BRIDGES2_DIR to your Bridges-2 project path."
-  echo "  Example: export GRIM_BRIDGES2_DIR=/ocean/projects/abc1234p/G.R.I.M"
-  echo "  Find your path: ssh bridges2 'echo \$HOME' or check /ocean/projects/<your_alloc_id>/"
+  echo "ERROR: Set GRIM_BRIDGES2_DIR to your Bridges-2 repo path."
+  echo "  Example: export GRIM_BRIDGES2_DIR=/ocean/projects/cis210058p/uwadkins/G.R.I.M"
+  echo "  Your dir is under the allocation: /ocean/projects/<alloc_id>/<username>/"
   exit 1
 fi
 if [[ -z "$ACCOUNT" ]]; then
-  echo "ERROR: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. abc1234p)."
+  echo "ERROR: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. cis210058p)."
   echo "  Find it in your ACCESS allocation summary."
   exit 1
 fi
@@ -83,22 +83,20 @@ SLURM_ACCOUNT_ARGS="-A $ACCOUNT"
 GRIM_SLURM_MAIL="${GRIM_SLURM_MAIL:-}"
 [[ -n "$GRIM_SLURM_MAIL" ]] && SLURM_MAIL_ARGS="--mail-type=BEGIN,END,FAIL --mail-user=$GRIM_SLURM_MAIL" || SLURM_MAIL_ARGS=""
 
-# SSH check
-if ! ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH" true 2>/dev/null; then
-  echo "SSH to Bridges-2 failed. Ensure:"
-  echo "  1. Add to ~/.ssh/config:"
-  echo "     Host bridges2"
-  echo "       HostName bridges2.psc.edu"
-  echo "       User uwadkins"
-  echo "  2. Or run: ssh-add ~/.ssh/id_ed25519"
+# One long-lived SSH using a script-unique socket in /tmp (avoids ~/.ssh permission issues)
+BRIDGES2_CTRL="/tmp/cm-grim-$$"
+if ! ssh -f -N -M -S "$BRIDGES2_CTRL" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH"; then
+  echo "SSH to Bridges-2 failed. Try: ssh bridges2"
   exit 1
 fi
+trap 'ssh -S "$BRIDGES2_CTRL" -O exit "$BRIDGES2_SSH" 2>/dev/null; rm -f "$BRIDGES2_CTRL"' EXIT
+BRIDGES2_SSH_OPTS="-S $BRIDGES2_CTRL -o ControlMaster=no"
 
 # Sync repo
 BRIDGES2_SYNCED=false
 if [[ -z "${GRIM_BRIDGES2_SKIP_PULL:-}" ]]; then
   echo "Syncing Bridges-2 repo..."
-  ssh "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && git fetch origin && git reset --hard origin/\$(git rev-parse --abbrev-ref HEAD)"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && git fetch origin && git reset --hard origin/\$(git rev-parse --abbrev-ref HEAD)"
   echo "  Done."
   BRIDGES2_SYNCED=true
 fi
@@ -144,14 +142,9 @@ BRIDGES2_CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TO
 
 # --build
 if [[ "$DO_BUILD" == true ]]; then
-  TENSORCONTRACT_SRC="$REPO_ROOT/resources/models/GRIM-text/Shared/TensorContract/TensorContract_GPU.cu"
-  if [[ -f "$TENSORCONTRACT_SRC" ]]; then
-    echo "Transferring TensorContract_GPU.cu..."
-    scp -q "$TENSORCONTRACT_SRC" "$BRIDGES2_SSH:$BRIDGES2_DIR/resources/models/GRIM-text/Shared/TensorContract/"
-  fi
   echo "Building train_gpu on Bridges-2 ($BRIDGES2_DIR/$BUILD_DIR)..."
   echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80)"
-  ssh "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_CUDA_ROOT && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$CUDAToolkit_ROOT && make -j \$(nproc) train_gpu"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_CUDA_ROOT && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$CUDAToolkit_ROOT && make -j \$(nproc) train_gpu"
 fi
 
 # Transfer data
@@ -160,14 +153,14 @@ if [[ ! -f "$CACHE_PATH_EXPANDED" ]]; then
   exit 1
 fi
 echo "Transferring merged_verified_cache.jsonl..."
-ssh "$BRIDGES2_SSH" "mkdir -p $REMOTE_TRAINING/data"
-scp -q "$CACHE_PATH_EXPANDED" "$BRIDGES2_SSH:$REMOTE_CACHE"
+ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_TRAINING/data"
+ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CACHE" < "$CACHE_PATH_EXPANDED"
 echo "  -> $REMOTE_CACHE"
 
 # Transfer ai_config.json
 if [[ -f "$REPO_ROOT/ai_config.json" ]]; then
   echo "Transferring ai_config.json..."
-  scp -q "$REPO_ROOT/ai_config.json" "$BRIDGES2_SSH:$BRIDGES2_DIR/ai_config.json"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/ai_config.json" < "$REPO_ROOT/ai_config.json"
 fi
 
 # Batch job
@@ -178,10 +171,10 @@ if [[ "$USE_SBATCH" == true ]]; then
     echo "  Create it with: #SBATCH -p $PARTITION, #SBATCH -A $ACCOUNT, #SBATCH --gpus=$GPU_TYPE:1"
     exit 1
   fi
-  ssh "$BRIDGES2_SSH" "mkdir -p $BRIDGES2_DIR/scripts $BRIDGES2_DIR/logs"
-  scp -q "$SBATCH_PATH" "$BRIDGES2_SSH:$BRIDGES2_DIR/scripts/"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $BRIDGES2_DIR/scripts $BRIDGES2_DIR/logs"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/scripts/train_bridges2.sbatch" < "$SBATCH_PATH"
   echo "Submitting batch job (partition=$PARTITION, gpu=$GPU_TYPE)..."
-  SUBMIT_OUT=$(ssh "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t 4:00:00 scripts/train_bridges2.sbatch")
+  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t 4:00:00 scripts/train_bridges2.sbatch")
   echo "$SUBMIT_OUT"
   exit 0
 fi
@@ -191,7 +184,7 @@ fi
 echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
 SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 4:00:00 --pty"
 if [[ -t 0 ]]; then
-  ssh -t "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $REMOTE_EXE --config $BRIDGES2_DIR/ai_config.json"
+  ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $REMOTE_EXE --config $BRIDGES2_DIR/ai_config.json"
 else
-  ssh "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $REMOTE_EXE --config $BRIDGES2_DIR/ai_config.json"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $REMOTE_EXE --config $BRIDGES2_DIR/ai_config.json"
 fi

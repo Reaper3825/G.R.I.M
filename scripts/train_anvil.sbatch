@@ -7,9 +7,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --mem-per-gpu=64G
 #SBATCH --output=logs/train_anvil_%j.out
 #SBATCH --error=logs/train_anvil_%j.err
+# mem-per-gpu overrides partition DefMemPerGPU=120000 so we request 64G and schedule faster
 #
 # Run GRIM-text training on Purdue Anvil (Anvil-G: 4× A100).
 # Partitions: gpu, gpu-debug. See: showpartitions or sinfo -s

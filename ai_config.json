@@ -179,7 +179,7 @@
                 "freeze_after_step": 0
             },
             "epochs": 5,
-            "force_rebuild_vocab": false,
+            "force_rebuild_vocab": true,
             "generation": {
                 "do_sample": true,
                 "enable_scratchblock_reasoning": true,

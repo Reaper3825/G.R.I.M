@@ -400,6 +400,10 @@ target_link_libraries(train_gpu PRIVATE
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_link_libraries(train_gpu PRIVATE pthread gomp)
 endif()
+# GCC: std::filesystem (C++17) is in libstdc++fs until merged into libstdc++.so (GCC 9.1+); link explicitly for compatibility
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(train_gpu PRIVATE stdc++fs)
+endif()
 
 target_include_directories(train_gpu PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
