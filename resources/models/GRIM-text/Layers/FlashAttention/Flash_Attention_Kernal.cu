@@ -272,7 +272,7 @@ template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local,
 __global__ void flash_fwd_kernel(const Flash_fwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     grim_flash::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
-                       Is_even_MN, Is_even_K, Is_softcap, Return_softmax>(params);
+                       Is_even_MN, Is_even_K, Return_softmax>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
