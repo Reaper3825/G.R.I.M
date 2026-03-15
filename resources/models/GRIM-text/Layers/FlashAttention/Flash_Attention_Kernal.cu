@@ -57,7 +57,8 @@ inline bool isEquationLoggingEnabled() {
 #include "flash_bwd_kernel.h"
 
 namespace grim_flash {
-
+// Bring flash-attention functions into grim_flash so grim_flash::compute_attn etc. resolve
+using namespace flash;
 
 // Copy of flash.h parameter structs (ATen removed via philox_unpack.cuh stub).
 struct Qkv_params {
