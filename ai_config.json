@@ -192,7 +192,7 @@
                 "repetition_penalty": 1.1,
                 "repetition_penalty_window": 64,
                 "strategy": "greedy",
-                "temperature": 0.8,
+                "temperature": 0.5,
                 "top_k": 50,
                 "top_p": 0.9,
                 "typical_p": 1.0
