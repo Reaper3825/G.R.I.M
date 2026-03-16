@@ -171,15 +171,15 @@
                 "single_stream_mode": false,
                 "synchronize_after_kernels": true
             },
-            "d_ff": 3072,
-            "d_model": 768,
+            "d_ff": 4096,
+            "d_model": 1024,
             "dropout_rate": 0.1,
             "embedding_freeze": {
                 "enabled": false,
                 "freeze_after_step": 0
             },
             "epochs": 25,
-            "force_rebuild_vocab": true,
+            "force_rebuild_vocab": false,
             "generation": {
                 "do_sample": true,
                 "enable_scratchblock_reasoning": true,
