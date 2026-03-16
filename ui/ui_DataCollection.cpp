@@ -49,7 +49,7 @@ UIDataCollectionPanel::UIDataCollectionPanel()
     position = { 250, 550 };
     size = { 1350, 900 };
     setVisible(false);
-    setBackground(0xE0181818);
+    setBackground(UITheme::Colors::PanelBg);
 
 
 
@@ -62,6 +62,10 @@ UIDataCollectionPanel::UIDataCollectionPanel()
     // Initialize HF results scroll box
     hfResultsScrollBox = std::make_shared<UIScrollBox>();
     hfResultsScrollBox->setChildSpacing(5.0f);
+    
+    // Initialize sources scroll box (checkbox list for data sources)
+    sourcesScrollBox = std::make_shared<UIScrollBox>();
+    sourcesScrollBox->setChildSpacing(5.0f);
     
     // Initialize data collection manager
     collectionManager = std::make_unique<GRIM::DataCollection::DataCollectionManager>();
@@ -220,6 +224,7 @@ UIDataCollectionPanel::UIDataCollectionPanel()
     
     // Load initial data
     loadSourcesFromJSON();
+    loadSourcesIntoCache();
     updateDatasetStats();
     updateSourceList();
     
@@ -343,6 +348,11 @@ void UIDataCollectionPanel::update(const InputState& input, float dt) {
         hfResultsScrollBox->update(input, dt);
     }
     
+    // Update sources scrollbox (checkbox list)
+    if (sourcesScrollBox) {
+        sourcesScrollBox->update(input, dt);
+    }
+    
     // Handle queue item interactions (hover, click to remove, right-click context)
     hoveredQueueItem = -1;
     {
@@ -441,376 +451,21 @@ void UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
     float scrollAreaHeight = panelHeight - (leftY - panelY) - 10;
     renderer.drawRect({leftX, scrollAreaY}, {leftPanelWidth, scrollAreaHeight}, UITheme::Colors::Background);
     
-    // Calculate content height
-    leftPanelContentHeight = 30 + (40 * 3) + 60 + 35 + 40 + 60 + 200;
+    // Calculate content height (config + add source + HF + queue + filters + sources scrollbox)
+    leftPanelContentHeight = 30 + (40 * 3) + 60 + 35 + 40 + 60 + 200 + 180 + 100 + 25 + 200 + 30;
     
     float offsetY = -leftPanelScrollPosition;
     float renderY = scrollAreaY + offsetY;
     
-    // Sliders
     float sliderWidth = leftPanelWidth - 20;
     float sliderHeight = 35;
     
-    // Configuration section
-    if (renderY >= scrollAreaY - 30 && renderY <= scrollAreaY + scrollAreaHeight) {
-        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY + 10}, sliderWidth, "Collection Configuration");
-    }
-    renderY += 40;
-    
-    if (fetchLimitSlider && renderY >= scrollAreaY - sliderHeight && renderY <= scrollAreaY + scrollAreaHeight) {
-        fetchLimitSlider->setPosition(leftX + 10, renderY);
-        fetchLimitSlider->setSize(sliderWidth, sliderHeight);
-        fetchLimitSlider->drawOverlay(renderer, position);
-    }
-    renderY += sliderHeight + 5;
-    
-    if (vocabSizeSlider && renderY >= scrollAreaY - sliderHeight && renderY <= scrollAreaY + scrollAreaHeight) {
-        vocabSizeSlider->setPosition(leftX + 10, renderY);
-        vocabSizeSlider->setSize(sliderWidth, sliderHeight);
-        vocabSizeSlider->drawOverlay(renderer, position);
-    }
-    renderY += sliderHeight + 5;
-    
-    if (verificationThresholdSlider && renderY >= scrollAreaY - sliderHeight && renderY <= scrollAreaY + scrollAreaHeight) {
-        verificationThresholdSlider->setPosition(leftX + 10, renderY);
-        verificationThresholdSlider->setSize(sliderWidth, sliderHeight);
-        verificationThresholdSlider->drawOverlay(renderer, position);
-    }
-    renderY += sliderHeight + 5;
-    
-    if (maxHFResultsSlider && renderY >= scrollAreaY - sliderHeight && renderY <= scrollAreaY + scrollAreaHeight) {
-        maxHFResultsSlider->setPosition(leftX + 10, renderY);
-        maxHFResultsSlider->setSize(sliderWidth, sliderHeight);
-        maxHFResultsSlider->drawOverlay(renderer, position);
-    }
-    renderY += sliderHeight + 15;
-    
-    // Add data source section
-    if (renderY >= scrollAreaY - 80 && renderY <= scrollAreaY + scrollAreaHeight) {
-        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Add Data Source");
-        renderY += 25;
-        
-        if (sourceUrlInput) {
-            sourceUrlInput->setPosition(leftX + 10, renderY);
-            sourceUrlInput->setSize(sliderWidth, 30);
-            sourceUrlInput->drawOverlay(renderer, position);
-            renderY += 35;
-        }
-        
-        if (addSourceButton) {
-            addSourceButton->setPosition(leftX + 10, renderY);
-            addSourceButton->setSize(sliderWidth, 35);
-            addSourceButton->drawOverlay(renderer, position);
-        }
-    }
-    renderY += 40;
-    
-    // Hugging Face section
-    if (renderY >= scrollAreaY - 200 && renderY <= scrollAreaY + scrollAreaHeight) {
-        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Hugging Face Datasets");
-        renderY += 20;
-        renderer.drawText({leftX + 15, renderY}, "Select category or search by keyword", UITheme::Colors::TextSecondary);
-        renderY += 20;
-        
-        // HF Token input
-        if (hfTokenInput) {
-            hfTokenInput->setPosition(leftX + 10, renderY);
-            hfTokenInput->setSize(sliderWidth, 25);
-            hfTokenInput->drawOverlay(renderer, position);
-            renderY += 30;
-        }
-        
-        // HF Search input
-        if (hfSearchInput) {
-            hfSearchInput->setPosition(leftX + 10, renderY);
-            hfSearchInput->setSize(sliderWidth, 25);
-            hfSearchInput->drawOverlay(renderer, position);
-            renderY += 30;
-        }
-        
-        // HF Category dropdown
-        if (hfCategoryDropdown) {
-            hfCategoryDropdown->setPosition(leftX + 10, renderY);
-            hfCategoryDropdown->setSize(sliderWidth, 30);
-            hfCategoryDropdown->drawOverlay(renderer, position);
-            renderY += 35;
-        }
-        
-        // HF Buttons
-        float btnHeight = 30;
-        float btnWidth = sliderWidth / 3 - 3.5f;
-        
-        if (searchHFButton) {
-            searchHFButton->setPosition(leftX + 10, renderY);
-            searchHFButton->setSize(btnWidth, btnHeight);
-            searchHFButton->drawOverlay(renderer, position);
-        }
-        
-        if (searchHFCategoryButton) {
-            searchHFCategoryButton->setPosition(leftX + 10 + btnWidth + 5, renderY);
-            searchHFCategoryButton->setSize(btnWidth, btnHeight);
-            searchHFCategoryButton->drawOverlay(renderer, position);
-        }
-        
-        if (browseHFButton) {
-            browseHFButton->setPosition(leftX + 10 + (btnWidth + 5) * 2, renderY);
-            browseHFButton->setSize(btnWidth, btnHeight);
-            browseHFButton->drawOverlay(renderer, position);
-        }
-        renderY += btnHeight + 15;
-        
-        // HF search results - Using scrollbox with widgets
-        if (!hfSearchResults.empty() && hfResultsScrollBox) {
-            UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Search Results:");
-            renderY += 20;
-            
-            float resultsBoxHeight = std::min(150.0f, maxHFResults * 75.0f);
-            
-            // Position and size the scrollbox FIRST
-            hfResultsScrollBox->setPosition(leftX + 10, renderY);
-            hfResultsScrollBox->setSize(leftPanelWidth - 20, resultsBoxHeight);
-            
-            // NOW populate if background thread signaled ready OR if scrollbox is empty but we have results
-            if (hfResultsNeedsPopulate.load() || hfResultsScrollBox->getChildren().empty()) {
-                populateHFResults(leftPanelWidth - 20);
-                hfResultsNeedsPopulate.store(false);
-            }
-            
-            // Draw the scrollbox with positioned children
-            hfResultsScrollBox->drawOverlay(renderer, position);
-            
-            renderY += resultsBoxHeight + UITheme::Spacing::Medium;
-        } else if (hfSearching.load()) {
-            // Show loading indicator when searching
-            renderer.drawText({leftX + 10, renderY}, "Search Results:", UITheme::Colors::Primary);
-            renderY += 20;
-            
-            // Animated loading dots
-            int dots = static_cast<int>(searchAnimTime * 3.0f) % 4;
-            std::string loadingText = "Searching HuggingFace" + std::string(dots, '.');
-            renderer.drawText({leftX + 15, renderY}, loadingText, UITheme::Colors::Warning);
-            renderY += 20;
-        } else if (!lastSearchError.empty()) {
-            // Show error state
-            renderer.drawText({leftX + 10, renderY}, "Search Results:", UITheme::Colors::Primary);
-            renderY += 20;
-            renderer.drawText({leftX + 15, renderY}, "⚠ " + lastSearchError, UITheme::Colors::Danger);
-            renderY += 20;
-        }
-    }
-    renderY += UITheme::Spacing::Large;
-    
-    // Download Queue section with improved UI using UITheme
-    if (renderY >= scrollAreaY - 200 && renderY <= scrollAreaY + scrollAreaHeight) {
-        // Header with queue count
-        size_t queueCount = 0;
-        size_t pendingCount = 0;
-        size_t completedCount = 0;
-        size_t failedCount = 0;
-        {
-            std::lock_guard<std::mutex> lock(queueMutex);
-            queueCount = downloadQueue.size();
-            for (const auto& item : downloadQueue) {
-                if (item.status == "pending") pendingCount++;
-                else if (item.status == "completed") completedCount++;
-                else if (item.status == "failed") failedCount++;
-            }
-        }
-        
-        std::string queueHeader = "Download Queue";
-        if (queueCount > 0) {
-            queueHeader += " (" + std::to_string(queueCount) + ")";
-        }
-        if (queueProcessing.load()) {
-            queueHeader += " [PROCESSING]";
-        }
-        renderer.drawText({leftX + 10, renderY}, queueHeader, UITheme::Colors::Warning);
-        
-        // Show stats summary using theme colors
-        if (queueCount > 0) {
-            std::string statsText = "";
-            if (pendingCount > 0) statsText += std::to_string(pendingCount) + " pending ";
-            if (completedCount > 0) statsText += std::to_string(completedCount) + " done ";
-            if (failedCount > 0) statsText += std::to_string(failedCount) + " failed";
-            if (!statsText.empty()) {
-                renderer.drawText({leftX + sliderWidth - 120, renderY}, statsText, UITheme::Colors::TextDisabled);
-            }
-        }
-        renderY += 25;
-        
-        {
-            std::lock_guard<std::mutex> lock(queueMutex);
-            if (!downloadQueue.empty()) {
-                float queueItemHeight = UITheme::Sizes::WidgetHeight;  // Use theme size
-                float queueBoxHeight = std::min(180.0f, downloadQueue.size() * queueItemHeight + 10);
-                
-                // Draw queue container using theme
-                renderer.drawRect({leftX + 10, renderY}, {sliderWidth, queueBoxHeight}, UITheme::Colors::ScrollboxBg);
-                
-                float itemY = renderY + 5;
-                for (size_t i = 0; i < downloadQueue.size() && itemY + queueItemHeight <= renderY + queueBoxHeight; ++i) {
-                    const auto& item = downloadQueue[i];
-                    bool isHovered = (hoveredQueueItem == static_cast<int>(i));
-                    bool isCurrentlyProcessing = (currentQueueIndex.load() == static_cast<int>(i));
-                    
-                    // Draw item using UIDrawHelpers
-                    UIDrawHelpers::drawWidgetBackground(renderer,
-                        {leftX + 12, itemY},
-                        {sliderWidth - 4, queueItemHeight - 4},
-                        isHovered, isCurrentlyProcessing, false);
-                    
-                    // Status indicator bar using theme colors
-                    uint32_t statusColor = UITheme::Colors::TextDisabled;
-                    if (item.status == "downloading") statusColor = UITheme::Colors::Info;
-                    else if (item.status == "completed") statusColor = UITheme::Colors::Success;
-                    else if (item.status == "failed") statusColor = UITheme::Colors::Danger;
-                    else if (item.status == "pending") statusColor = UITheme::Colors::Warning;
-                    
-                    UIDrawHelpers::drawCategoryIndicator(renderer, {leftX + 12, itemY}, queueItemHeight - 4, statusColor);
-                    
-                    // Dataset name (truncated)
-                    std::string displayName = item.displayName;
-                    if (displayName.length() > 30) displayName = displayName.substr(0, 27) + "...";
-                    renderer.drawText({leftX + 20, itemY + 3}, displayName, UITheme::Colors::TextPrimary);
-                    
-                    // Status line with progress or error
-                    std::string statusLine = "[" + item.status + "]";
-                    if (item.status == "downloading") {
-                        int pct = static_cast<int>(item.progress * 100);
-                        statusLine = "Downloading... " + std::to_string(pct) + "%";
-                        
-                        // Draw progress bar using theme colors
-                        float progressBarWidth = sliderWidth - 80;
-                        float progressBarHeight = UITheme::Sizes::SliderHeight * 0.4f;
-                        float progressBarY = itemY + queueItemHeight - 12;
-                        renderer.drawRect({leftX + 20, progressBarY}, {progressBarWidth, progressBarHeight}, UITheme::Colors::SliderTrack);
-                        renderer.drawRect({leftX + 20, progressBarY}, {progressBarWidth * item.progress, progressBarHeight}, UITheme::Colors::Info);
-                    } else if (item.status == "failed" && !item.errorMessage.empty()) {
-                        std::string err = item.errorMessage;
-                        if (err.length() > 35) err = err.substr(0, 32) + "...";
-                        statusLine = "✗ " + err;
-                    } else if (item.status == "completed") {
-                        statusLine = "✓ Download complete";
-                    } else if (item.status == "pending") {
-                        if (item.retryCount > 0) {
-                            statusLine = "Pending (retry #" + std::to_string(item.retryCount) + ")";
-                        } else {
-                            statusLine = "Waiting in queue...";
-                        }
-                    }
-                    renderer.drawText({leftX + 20, itemY + 18}, statusLine, statusColor);
-                    
-                    // Hover actions: [X] remove button
-                    if (isHovered && item.status != "downloading") {
-                        float removeX = leftX + sliderWidth - 25;
-                        UIDrawHelpers::drawWidgetBackground(renderer, {removeX, itemY + 8}, {18, 18}, true, false, false);
-                        renderer.drawRect({removeX, itemY + 8}, {18, 18}, UITheme::Colors::Danger & 0x44FFFFFF);
-                        renderer.drawText({removeX + 4, itemY + 8}, "X", UITheme::Colors::Danger);
-                        
-                        // Retry button for failed items
-                        if (item.status == "failed") {
-                            float retryX = removeX - 25;
-                            UIDrawHelpers::drawWidgetBackground(renderer, {retryX, itemY + 8}, {20, 18}, true, false, false);
-                            renderer.drawRect({retryX, itemY + 8}, {20, 18}, UITheme::Colors::Success & 0x44FFFFFF);
-                            renderer.drawText({retryX + 3, itemY + 8}, "⟳", UITheme::Colors::Success);
-                        }
-                    }
-                    
-                    itemY += queueItemHeight;
-                }
-                renderY += queueBoxHeight + 5;
-            } else {
-                renderer.drawText({leftX + 15, renderY}, "Queue empty - click datasets to add", UITheme::Colors::TextDisabled);
-                renderY += 20;
-            }
-        }
-        renderY += 10;
-        
-        // Queue control buttons
-        float btnHeight = UITheme::Sizes::ButtonHeight;
-        float btnWidth = sliderWidth / 3 - 3.5f;
-        
-        // Process Queue button - show "Processing..." when active
-        if (processQueueButton && renderY <= scrollAreaY + scrollAreaHeight) {
-            if (queueProcessing.load()) {
-                processQueueButton->setText("Processing...");
-            } else {
-                processQueueButton->setText("Process Queue");
-            }
-            processQueueButton->setPosition(leftX + 10, renderY);
-            processQueueButton->setSize(btnWidth, btnHeight);
-            processQueueButton->drawOverlay(renderer, position);
-        }
-        
-        if (clearQueueButton && renderY <= scrollAreaY + scrollAreaHeight) {
-            clearQueueButton->setPosition(leftX + 10 + btnWidth + 5, renderY);
-            clearQueueButton->setSize(btnWidth, btnHeight);
-            clearQueueButton->drawOverlay(renderer, position);
-        }
-        
-        // Add "Clear Done" button - new
-        // This would need a new button, but we can reuse clearFiltersButton position for now
-        // or add text hint
-        renderer.drawText({leftX + 10 + (btnWidth + 5) * 2 + 5, renderY + 7}, "Right-click: clear done", UITheme::Colors::TextDisabled);
-        
-        renderY += btnHeight + 15;
-    }
-    
-    // Filter section
-    if (renderY >= scrollAreaY - 100 && renderY <= scrollAreaY + scrollAreaHeight) {
-        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Filters");
-        renderY += 25;
-        
-        std::string filterStatus = "Source: " + activeSourceFilter + " | Status: " + activeStatusFilter;
-        renderer.drawText({leftX + 15, renderY}, filterStatus, UITheme::Colors::TextSecondary);
-        renderY += 20;
-        
-        float btnHeight = UITheme::Sizes::ButtonHeight;
-        float btnWidth = sliderWidth / 3 - 3.5f;
-        
-        if (filterAllButton && renderY <= scrollAreaY + scrollAreaHeight) {
-            filterAllButton->setPosition(leftX + 10, renderY);
-            filterAllButton->setSize(btnWidth, btnHeight);
-            filterAllButton->drawOverlay(renderer, position);
-        }
-        
-        if (filterWebButton && renderY <= scrollAreaY + scrollAreaHeight) {
-            filterWebButton->setPosition(leftX + 10 + btnWidth + 5, renderY);
-            filterWebButton->setSize(btnWidth, btnHeight);
-            filterWebButton->drawOverlay(renderer, position);
-        }
-        
-        if (filterHFButton && renderY <= scrollAreaY + scrollAreaHeight) {
-            filterHFButton->setPosition(leftX + 10 + (btnWidth + 5) * 2, renderY);
-            filterHFButton->setSize(btnWidth, btnHeight);
-            filterHFButton->drawOverlay(renderer, position);
-        }
-        renderY += btnHeight + 5;
-        
-        if (clearFiltersButton && renderY <= scrollAreaY + scrollAreaHeight) {
-            clearFiltersButton->setPosition(leftX + 10, renderY);
-            clearFiltersButton->setSize(sliderWidth, btnHeight);
-            clearFiltersButton->drawOverlay(renderer, position);
-        }
-        renderY += btnHeight + 15;
-    }
-    
-    // Source list section
-    if (renderY >= scrollAreaY - 200 && renderY <= scrollAreaY + scrollAreaHeight) {
-        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Data Sources");
-        renderY += 25;
-        
-        if (!sourceListInfo.empty()) {
-            std::istringstream stream(sourceListInfo);
-            std::string line;
-            while (std::getline(stream, line) && renderY <= scrollAreaY + scrollAreaHeight) {
-                renderer.drawText({leftX + 15, renderY}, line, UITheme::Colors::TextSecondary);
-                renderY += 18;
-            }
-        } else {
-            renderer.drawText({leftX + 15, renderY}, "No sources configured", UITheme::Colors::TextDisabled);
-        }
-    }
+    layoutConfigSection(renderer, leftX, sliderWidth, sliderHeight, renderY, scrollAreaY, scrollAreaHeight);
+    layoutAddSourceSection(renderer, leftX, sliderWidth, renderY, scrollAreaY, scrollAreaHeight);
+    layoutHFSection(renderer, leftX, sliderWidth, leftPanelWidth, renderY, scrollAreaY, scrollAreaHeight);
+    layoutQueueSection(renderer, leftX, sliderWidth, renderY, scrollAreaY, scrollAreaHeight);
+    layoutFiltersSection(renderer, leftX, sliderWidth, renderY, scrollAreaY, scrollAreaHeight);
+    layoutSourcesSection(renderer, leftX, sliderWidth, renderY, scrollAreaY, scrollAreaHeight);
     
     // Draw scroll bar using theme colors
     if (leftPanelContentHeight > scrollAreaHeight) {
@@ -919,8 +574,8 @@ void UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
     
     // Logs section
     float logWidth = rightPanelWidth;
-    UIDrawHelpers::drawSectionHeader(renderer, {rightX, rightY}, logWidth, "Collection Logs");
-    rightY += 25;
+    UIDrawHelpers::drawSectionHeader(renderer, {rightX, rightY}, logWidth, "Collection Logs", UITheme::Colors::SectionNeutral);
+    rightY += UITheme::Spacing::Large;
     
     float logHeight = panelHeight - (rightY - panelY);
     
@@ -1097,8 +752,356 @@ void UIDataCollectionPanel::loadSourcesFromJSON() {
                 addLog("Loaded " + std::to_string(totalSources) + " enabled sources", 0);
             }
         }
+        loadSourcesIntoCache();
     } catch (const std::exception& e) {
         addLog("Error loading sources: " + std::string(e.what()), 2);
+    }
+}
+
+void UIDataCollectionPanel::loadSourcesIntoCache() {
+    std::string sourcePath = getResourcePath() + "/models/GRIM-text/training/source_data.json";
+    loadedSources.clear();
+    try {
+        if (!std::filesystem::exists(sourcePath)) return;
+        std::ifstream sourceFile(sourcePath);
+        nlohmann::json sourceData;
+        sourceFile >> sourceData;
+        sourceFile.close();
+        if (!sourceData.contains("data_sources")) return;
+        int idx = 0;
+        for (const auto& source : sourceData["data_sources"]) {
+            SourceEntry entry;
+            entry.jsonIndex = idx++;
+            entry.name = source.value("name", "Unknown");
+            entry.url = source.value("url", "");
+            entry.enabled = source.value("enabled", true);
+            entry.id = entry.url.empty() ? ("src_" + std::to_string(entry.jsonIndex)) : entry.url;
+            loadedSources.push_back(entry);
+        }
+        sourcesNeedsPopulate.store(true);
+    } catch (const std::exception&) {
+        loadedSources.clear();
+    }
+}
+
+void UIDataCollectionPanel::setSourceEnabled(int jsonIndex, bool enabled) {
+    std::string sourcePath = getResourcePath() + "/models/GRIM-text/training/source_data.json";
+    try {
+        nlohmann::json sourceData;
+        std::ifstream inFile(sourcePath);
+        if (!inFile.good()) return;
+        inFile >> sourceData;
+        inFile.close();
+        if (!sourceData.contains("data_sources") || jsonIndex < 0 ||
+            static_cast<size_t>(jsonIndex) >= sourceData["data_sources"].size()) {
+            return;
+        }
+        sourceData["data_sources"][static_cast<size_t>(jsonIndex)]["enabled"] = enabled;
+        std::ofstream outFile(sourcePath);
+        if (!outFile.is_open()) return;
+        outFile << sourceData.dump(2);
+        outFile.close();
+        loadSourcesIntoCache();
+        updateSourceList();
+        addLog(enabled ? "Source enabled" : "Source disabled", 0);
+    } catch (const std::exception& e) {
+        addLog("Error updating source: " + std::string(e.what()), 2);
+    }
+}
+
+void UIDataCollectionPanel::populateSourcesScrollBox(float containerWidth) {
+    if (!sourcesScrollBox) return;
+    sourcesScrollBox->clearChildren();
+    float rowHeight = 28.0f;
+    float toggleWidth = containerWidth - 10.0f;
+    for (const auto& entry : loadedSources) {
+        std::string label = entry.name;
+        if (label.length() > 35) label = label.substr(0, 32) + "...";
+        auto toggle = std::make_shared<UIToggle>(label, entry.enabled,
+            [this, jsonIndex = entry.jsonIndex](bool value) {
+                setSourceEnabled(jsonIndex, value);
+            });
+        toggle->setSize(toggleWidth, rowHeight);
+        sourcesScrollBox->addChild(toggle);
+    }
+    sourcesScrollBox->autoLayoutChildren();
+}
+
+void UIDataCollectionPanel::layoutConfigSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float sliderHeight, float& renderY, float scrollAreaY, float scrollAreaHeight) {
+    if (renderY >= scrollAreaY - 30 && renderY <= scrollAreaY + scrollAreaHeight) {
+        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY + 10}, sliderWidth, "Collection Configuration", UITheme::Colors::SectionNeutral);
+    }
+    renderY += 40;
+    if (fetchLimitSlider && renderY >= scrollAreaY - sliderHeight && renderY <= scrollAreaY + scrollAreaHeight) {
+        fetchLimitSlider->setPosition(leftX + 10, renderY);
+        fetchLimitSlider->setSize(sliderWidth, sliderHeight);
+        fetchLimitSlider->drawOverlay(renderer, position);
+    }
+    renderY += sliderHeight + 5;
+    if (vocabSizeSlider && renderY >= scrollAreaY - sliderHeight && renderY <= scrollAreaY + scrollAreaHeight) {
+        vocabSizeSlider->setPosition(leftX + 10, renderY);
+        vocabSizeSlider->setSize(sliderWidth, sliderHeight);
+        vocabSizeSlider->drawOverlay(renderer, position);
+    }
+    renderY += sliderHeight + 5;
+    if (verificationThresholdSlider && renderY >= scrollAreaY - sliderHeight && renderY <= scrollAreaY + scrollAreaHeight) {
+        verificationThresholdSlider->setPosition(leftX + 10, renderY);
+        verificationThresholdSlider->setSize(sliderWidth, sliderHeight);
+        verificationThresholdSlider->drawOverlay(renderer, position);
+    }
+    renderY += sliderHeight + 5;
+    if (maxHFResultsSlider && renderY >= scrollAreaY - sliderHeight && renderY <= scrollAreaY + scrollAreaHeight) {
+        maxHFResultsSlider->setPosition(leftX + 10, renderY);
+        maxHFResultsSlider->setSize(sliderWidth, sliderHeight);
+        maxHFResultsSlider->drawOverlay(renderer, position);
+    }
+    renderY += sliderHeight + 15;
+}
+
+void UIDataCollectionPanel::layoutAddSourceSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float& renderY, float scrollAreaY, float scrollAreaHeight) {
+    if (renderY >= scrollAreaY - 80 && renderY <= scrollAreaY + scrollAreaHeight) {
+        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Add Data Source", UITheme::Colors::SectionNeutral);
+        renderY += 25;
+        if (sourceUrlInput) {
+            sourceUrlInput->setPosition(leftX + 10, renderY);
+            sourceUrlInput->setSize(sliderWidth, 30);
+            sourceUrlInput->drawOverlay(renderer, position);
+            renderY += 35;
+        }
+        if (addSourceButton) {
+            addSourceButton->setPosition(leftX + 10, renderY);
+            addSourceButton->setSize(sliderWidth, 35);
+            addSourceButton->drawOverlay(renderer, position);
+        }
+    }
+    renderY += 40;
+}
+
+void UIDataCollectionPanel::layoutHFSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float leftPanelWidth, float& renderY, float scrollAreaY, float scrollAreaHeight) {
+    if (renderY >= scrollAreaY - 200 && renderY <= scrollAreaY + scrollAreaHeight) {
+        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Hugging Face Datasets", UITheme::Colors::SectionNeutral);
+        renderY += 20;
+        renderer.drawText({leftX + 15, renderY}, "Select category or search by keyword", UITheme::Colors::TextSecondary);
+        renderY += 20;
+        if (hfTokenInput) {
+            hfTokenInput->setPosition(leftX + 10, renderY);
+            hfTokenInput->setSize(sliderWidth, 25);
+            hfTokenInput->drawOverlay(renderer, position);
+            renderY += 30;
+        }
+        if (hfSearchInput) {
+            hfSearchInput->setPosition(leftX + 10, renderY);
+            hfSearchInput->setSize(sliderWidth, 25);
+            hfSearchInput->drawOverlay(renderer, position);
+            renderY += 30;
+        }
+        if (hfCategoryDropdown) {
+            hfCategoryDropdown->setPosition(leftX + 10, renderY);
+            hfCategoryDropdown->setSize(sliderWidth, 30);
+            hfCategoryDropdown->drawOverlay(renderer, position);
+            renderY += 35;
+        }
+        float btnHeight = 30;
+        float btnWidth = sliderWidth / 3 - 3.5f;
+        if (searchHFButton) {
+            searchHFButton->setPosition(leftX + 10, renderY);
+            searchHFButton->setSize(btnWidth, btnHeight);
+            searchHFButton->drawOverlay(renderer, position);
+        }
+        if (searchHFCategoryButton) {
+            searchHFCategoryButton->setPosition(leftX + 10 + btnWidth + 5, renderY);
+            searchHFCategoryButton->setSize(btnWidth, btnHeight);
+            searchHFCategoryButton->drawOverlay(renderer, position);
+        }
+        if (browseHFButton) {
+            browseHFButton->setPosition(leftX + 10 + (btnWidth + 5) * 2, renderY);
+            browseHFButton->setSize(btnWidth, btnHeight);
+            browseHFButton->drawOverlay(renderer, position);
+        }
+        renderY += btnHeight + 15;
+        if (!hfSearchResults.empty() && hfResultsScrollBox) {
+            UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Search Results:", UITheme::Colors::SectionNeutral);
+            renderY += 20;
+            float resultsBoxHeight = std::min(150.0f, maxHFResults * 75.0f);
+            hfResultsScrollBox->setPosition(leftX + 10, renderY);
+            hfResultsScrollBox->setSize(leftPanelWidth - 20, resultsBoxHeight);
+            if (hfResultsNeedsPopulate.load() || hfResultsScrollBox->getChildren().empty()) {
+                populateHFResults(leftPanelWidth - 20);
+                hfResultsNeedsPopulate.store(false);
+            }
+            hfResultsScrollBox->drawOverlay(renderer, position);
+            renderY += resultsBoxHeight + UITheme::Spacing::Medium;
+        } else if (hfSearching.load()) {
+            renderer.drawText({leftX + 10, renderY}, "Search Results:", UITheme::Colors::Primary);
+            renderY += 20;
+            int dots = static_cast<int>(searchAnimTime * 3.0f) % 4;
+            std::string loadingText = "Searching HuggingFace" + std::string(dots, '.');
+            renderer.drawText({leftX + 15, renderY}, loadingText, UITheme::Colors::Warning);
+            renderY += 20;
+        } else if (!lastSearchError.empty()) {
+            renderer.drawText({leftX + 10, renderY}, "Search Results:", UITheme::Colors::Primary);
+            renderY += 20;
+            renderer.drawText({leftX + 15, renderY}, "⚠ " + lastSearchError, UITheme::Colors::Danger);
+            renderY += 20;
+        }
+    }
+    renderY += UITheme::Spacing::Large;
+}
+
+void UIDataCollectionPanel::layoutQueueSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float& renderY, float scrollAreaY, float scrollAreaHeight) {
+    if (renderY >= scrollAreaY - 200 && renderY <= scrollAreaY + scrollAreaHeight) {
+        size_t queueCount = 0, pendingCount = 0, completedCount = 0, failedCount = 0;
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            queueCount = downloadQueue.size();
+            for (const auto& item : downloadQueue) {
+                if (item.status == "pending") pendingCount++;
+                else if (item.status == "completed") completedCount++;
+                else if (item.status == "failed") failedCount++;
+            }
+        }
+        std::string queueHeader = "Download Queue";
+        if (queueCount > 0) queueHeader += " (" + std::to_string(queueCount) + ")";
+        if (queueProcessing.load()) queueHeader += " [PROCESSING]";
+        renderer.drawText({leftX + 10, renderY}, queueHeader, UITheme::Colors::Warning);
+        if (queueCount > 0) {
+            std::string statsText = "";
+            if (pendingCount > 0) statsText += std::to_string(pendingCount) + " pending ";
+            if (completedCount > 0) statsText += std::to_string(completedCount) + " done ";
+            if (failedCount > 0) statsText += std::to_string(failedCount) + " failed";
+            if (!statsText.empty())
+                renderer.drawText({leftX + sliderWidth - 120, renderY}, statsText, UITheme::Colors::TextDisabled);
+        }
+        renderY += 25;
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            if (!downloadQueue.empty()) {
+                float queueItemHeight = UITheme::Sizes::WidgetHeight;
+                float queueBoxHeight = std::min(180.0f, downloadQueue.size() * queueItemHeight + 10);
+                renderer.drawRect({leftX + 10, renderY}, {sliderWidth, queueBoxHeight}, UITheme::Colors::ScrollboxBg);
+                float itemY = renderY + 5;
+                for (size_t i = 0; i < downloadQueue.size() && itemY + queueItemHeight <= renderY + queueBoxHeight; ++i) {
+                    const auto& item = downloadQueue[i];
+                    bool isHovered = (hoveredQueueItem == static_cast<int>(i));
+                    bool isCurrentlyProcessing = (currentQueueIndex.load() == static_cast<int>(i));
+                    UIDrawHelpers::drawWidgetBackground(renderer, {leftX + 12, itemY}, {sliderWidth - 4, queueItemHeight - 4}, isHovered, isCurrentlyProcessing, false);
+                    uint32_t statusColor = UITheme::Colors::TextDisabled;
+                    if (item.status == "downloading") statusColor = UITheme::Colors::Info;
+                    else if (item.status == "completed") statusColor = UITheme::Colors::Success;
+                    else if (item.status == "failed") statusColor = UITheme::Colors::Danger;
+                    else if (item.status == "pending") statusColor = UITheme::Colors::Warning;
+                    UIDrawHelpers::drawCategoryIndicator(renderer, {leftX + 12, itemY}, queueItemHeight - 4, statusColor);
+                    std::string displayName = item.displayName;
+                    if (displayName.length() > 30) displayName = displayName.substr(0, 27) + "...";
+                    renderer.drawText({leftX + 20, itemY + 3}, displayName, UITheme::Colors::TextPrimary);
+                    std::string statusLine = "[" + item.status + "]";
+                    if (item.status == "downloading") {
+                        int pct = static_cast<int>(item.progress * 100);
+                        statusLine = "Downloading... " + std::to_string(pct) + "%";
+                        float progressBarWidth = sliderWidth - 80;
+                        float progressBarHeight = UITheme::Sizes::SliderHeight * 0.4f;
+                        float progressBarY = itemY + queueItemHeight - 12;
+                        renderer.drawRect({leftX + 20, progressBarY}, {progressBarWidth, progressBarHeight}, UITheme::Colors::SliderTrack);
+                        renderer.drawRect({leftX + 20, progressBarY}, {progressBarWidth * item.progress, progressBarHeight}, UITheme::Colors::Info);
+                    } else if (item.status == "failed" && !item.errorMessage.empty()) {
+                        std::string err = item.errorMessage;
+                        if (err.length() > 35) err = err.substr(0, 32) + "...";
+                        statusLine = "✗ " + err;
+                    } else if (item.status == "completed") statusLine = "✓ Download complete";
+                    else if (item.status == "pending") statusLine = item.retryCount > 0 ? "Pending (retry #" + std::to_string(item.retryCount) + ")" : "Waiting in queue...";
+                    renderer.drawText({leftX + 20, itemY + 18}, statusLine, statusColor);
+                    if (isHovered && item.status != "downloading") {
+                        float removeX = leftX + sliderWidth - 25;
+                        UIDrawHelpers::drawWidgetBackground(renderer, {removeX, itemY + 8}, {18, 18}, true, false, false);
+                        renderer.drawRect({removeX, itemY + 8}, {18, 18}, UITheme::Colors::Danger & 0x44FFFFFF);
+                        renderer.drawText({removeX + 4, itemY + 8}, "X", UITheme::Colors::Danger);
+                        if (item.status == "failed") {
+                            float retryX = removeX - 25;
+                            UIDrawHelpers::drawWidgetBackground(renderer, {retryX, itemY + 8}, {20, 18}, true, false, false);
+                            renderer.drawRect({retryX, itemY + 8}, {20, 18}, UITheme::Colors::Success & 0x44FFFFFF);
+                            renderer.drawText({retryX + 3, itemY + 8}, "⟳", UITheme::Colors::Success);
+                        }
+                    }
+                    itemY += queueItemHeight;
+                }
+                renderY += queueBoxHeight + 5;
+            } else {
+                renderer.drawText({leftX + 15, renderY}, "Queue empty - click datasets to add", UITheme::Colors::TextDisabled);
+                renderY += 20;
+            }
+        }
+        renderY += 10;
+        float btnHeight = UITheme::Sizes::ButtonHeight;
+        float btnWidth = sliderWidth / 3 - 3.5f;
+        if (processQueueButton && renderY <= scrollAreaY + scrollAreaHeight) {
+            processQueueButton->setText(queueProcessing.load() ? "Processing..." : "Process Queue");
+            processQueueButton->setPosition(leftX + 10, renderY);
+            processQueueButton->setSize(btnWidth, btnHeight);
+            processQueueButton->drawOverlay(renderer, position);
+        }
+        if (clearQueueButton && renderY <= scrollAreaY + scrollAreaHeight) {
+            clearQueueButton->setPosition(leftX + 10 + btnWidth + 5, renderY);
+            clearQueueButton->setSize(btnWidth, btnHeight);
+            clearQueueButton->drawOverlay(renderer, position);
+        }
+        renderer.drawText({leftX + 10 + (btnWidth + 5) * 2 + 5, renderY + 7}, "Right-click: clear done", UITheme::Colors::TextDisabled);
+        renderY += btnHeight + 15;
+    }
+}
+
+void UIDataCollectionPanel::layoutFiltersSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float& renderY, float scrollAreaY, float scrollAreaHeight) {
+    if (renderY >= scrollAreaY - 100 && renderY <= scrollAreaY + scrollAreaHeight) {
+        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Filters", UITheme::Colors::SectionNeutral);
+        renderY += 25;
+        renderer.drawText({leftX + 15, renderY}, "Source: " + activeSourceFilter + " | Status: " + activeStatusFilter, UITheme::Colors::TextSecondary);
+        renderY += 20;
+        float btnHeight = UITheme::Sizes::ButtonHeight;
+        float btnWidth = sliderWidth / 3 - 3.5f;
+        if (filterAllButton && renderY <= scrollAreaY + scrollAreaHeight) {
+            filterAllButton->setPosition(leftX + 10, renderY);
+            filterAllButton->setSize(btnWidth, btnHeight);
+            filterAllButton->drawOverlay(renderer, position);
+        }
+        if (filterWebButton && renderY <= scrollAreaY + scrollAreaHeight) {
+            filterWebButton->setPosition(leftX + 10 + btnWidth + 5, renderY);
+            filterWebButton->setSize(btnWidth, btnHeight);
+            filterWebButton->drawOverlay(renderer, position);
+        }
+        if (filterHFButton && renderY <= scrollAreaY + scrollAreaHeight) {
+            filterHFButton->setPosition(leftX + 10 + (btnWidth + 5) * 2, renderY);
+            filterHFButton->setSize(btnWidth, btnHeight);
+            filterHFButton->drawOverlay(renderer, position);
+        }
+        renderY += btnHeight + 5;
+        if (clearFiltersButton && renderY <= scrollAreaY + scrollAreaHeight) {
+            clearFiltersButton->setPosition(leftX + 10, renderY);
+            clearFiltersButton->setSize(sliderWidth, btnHeight);
+            clearFiltersButton->drawOverlay(renderer, position);
+        }
+        renderY += btnHeight + 15;
+    }
+}
+
+void UIDataCollectionPanel::layoutSourcesSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float& renderY, float scrollAreaY, float scrollAreaHeight) {
+    const float sourcesScrollBoxHeight = 200.0f;
+    if (renderY >= scrollAreaY - sourcesScrollBoxHeight - 30 && renderY <= scrollAreaY + scrollAreaHeight) {
+        UIDrawHelpers::drawSectionHeader(renderer, {leftX + 10, renderY}, sliderWidth, "Data Sources", UITheme::Colors::SectionNeutral);
+        renderY += 25;
+        if (sourcesScrollBox) {
+            if (sourcesNeedsPopulate.load() || sourcesScrollBox->getChildren().empty()) {
+                populateSourcesScrollBox(sliderWidth);
+                sourcesNeedsPopulate.store(false);
+            }
+            sourcesScrollBox->setPosition(leftX + 10, renderY);
+            sourcesScrollBox->setSize(sliderWidth, sourcesScrollBoxHeight);
+            renderer.drawRect({leftX + 10, renderY}, {sliderWidth, sourcesScrollBoxHeight}, UITheme::Colors::ScrollboxBg);
+            sourcesScrollBox->drawOverlay(renderer, position);
+            renderY += sourcesScrollBoxHeight + UITheme::Spacing::Small;
+        }
+        if (loadedSources.empty()) {
+            renderer.drawText({leftX + 15, renderY}, "No sources configured. Add a URL above.", UITheme::Colors::TextDisabled);
+            renderY += 18;
+        }
     }
 }
 

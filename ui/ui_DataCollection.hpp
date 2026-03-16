@@ -14,6 +14,7 @@
 #include "ui_inputbox.hpp"
 #include "ui_scrollbox.hpp"
 #include "ui_dropdown.hpp"
+#include "ui_toggle.hpp"
 #include "DataCollection/data_collection_manager.hpp"
 #include "DataCollection/huggingface_webhook.hpp"
 
@@ -77,7 +78,26 @@ private:
     void rebuildLeftPanel();  // Rebuild scrollbox contents
     void populateHFResults(float containerWidth);  // Populate HF results scrollbox with widgets
     void populateDownloadQueue();  // Populate download queue with widgets
-    
+    void populateSourcesScrollBox(float containerWidth);  // Populate sources scrollbox with toggle per source
+    void setSourceEnabled(int jsonIndex, bool enabled);  // Persist enabled state to source_data.json
+    void loadSourcesIntoCache();  // Reload loadedSources from source_data.json
+
+    // Left panel layout helpers (Phase 2 modularization)
+    void layoutConfigSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float sliderHeight, float& renderY, float scrollAreaY, float scrollAreaHeight);
+    void layoutAddSourceSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float& renderY, float scrollAreaY, float scrollAreaHeight);
+    void layoutHFSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float leftPanelWidth, float& renderY, float scrollAreaY, float scrollAreaHeight);
+    void layoutQueueSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float& renderY, float scrollAreaY, float scrollAreaHeight);
+    void layoutFiltersSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float& renderY, float scrollAreaY, float scrollAreaHeight);
+    void layoutSourcesSection(OverlayRenderer& renderer, float leftX, float sliderWidth, float& renderY, float scrollAreaY, float scrollAreaHeight);
+
+    struct SourceEntry {
+        std::string id;
+        std::string name;
+        std::string url;
+        bool enabled = true;
+        int jsonIndex = -1;
+    };
+
     struct LogEntry {
         std::string timestamp;
         std::string message;
@@ -151,7 +171,12 @@ private:
     std::shared_ptr<UIVBox> buttonVBox;
     std::shared_ptr<UIScrollBox> leftPanelScrollBox;
     std::shared_ptr<UIScrollBox> hfResultsScrollBox;
+    std::shared_ptr<UIScrollBox> sourcesScrollBox;
     std::atomic<bool> hfResultsNeedsPopulate{false};
+    std::atomic<bool> sourcesNeedsPopulate{false};
+
+    // Cached source list for checkbox scrollbox (from source_data.json)
+    std::vector<SourceEntry> loadedSources;
 
     
     // Status and stats

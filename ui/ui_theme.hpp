@@ -31,6 +31,7 @@ namespace UITheme {
         constexpr uint32_t TextHeader      = 0xFFFFFFFF;  // Section headers
         
         // Section tints
+        constexpr uint32_t SectionNeutral  = 0xFF2A3540;  // Neutral (Data Collection, generic panels)
         constexpr uint32_t SectionAI       = 0xFF2A3A4A;  // Blue tint
         constexpr uint32_t SectionVoice    = 0xFF3A2A4A;  // Purple tint
         constexpr uint32_t SectionWhisper  = 0xFF4A3A2A;  // Orange tint
