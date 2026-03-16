@@ -29,10 +29,9 @@ void OverlayRenderer::init(HWND hwnd, int width, int height)
     m_bitmap = CreateDIBSection(m_hdcMem, &bmi, DIB_RGB_COLORS, &m_pixels, nullptr, 0);
     m_oldBitmap = (HBITMAP)SelectObject(m_hdcMem, m_bitmap);
     
-    // Create font
     m_font = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
+                        ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
     
     SelectObject(m_hdcMem, m_font);
     SetBkMode(m_hdcMem, TRANSPARENT);
@@ -101,20 +100,18 @@ void OverlayRenderer::setFont(const std::string& fontName, int fontSize)
         wFontName.push_back(static_cast<wchar_t>(c));
     }
     
-    // Create new font
     m_font = CreateFontW(fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, wFontName.c_str());
+                        ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, wFontName.c_str());
     
     if (m_font) {
         SelectObject(m_hdcMem, m_font);
         LOG_DEBUG("OverlayRenderer", "Font changed to: " + fontName + " (size " + std::to_string(fontSize) + ")");
     } else {
         LOG_ERROR("OverlayRenderer", "Failed to create font: " + fontName);
-        // Fallback to default
         m_font = CreateFontW(fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
+                            ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
         SelectObject(m_hdcMem, m_font);
     }
 }
