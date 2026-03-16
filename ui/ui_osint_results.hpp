@@ -33,7 +33,7 @@ class GRIM_HOST_API UIOsintResults : public UIPanel {
 public:
     UIOsintResults();
     
-    void drawOverlay(OverlayRenderer& renderer) override;
+    bool drawOverlay(OverlayRenderer& renderer) override;
     void update(const InputState& input, float dt) override;
     
     // Load findings from JSONL log file

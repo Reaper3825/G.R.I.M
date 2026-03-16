@@ -20,17 +20,15 @@ void UISettingsMenu::update(const InputState& input, float dt) {
 }
 
 // Simplified draw - scrollbox handles children  
-void UISettingsMenu::drawOverlay(OverlayRenderer& renderer) {
-    if (!isVisible()) return;
+bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer) {
+    if (!UIPanel::drawOverlay(renderer)) return false;
     
-    // Draw panel background and title
-    UIPanel::drawOverlay(renderer);
-    
-    // Scrollbox draws itself and all children
     scrollBox->drawOverlay(renderer, position);
     
-    // Unsaved changes indicator
     if (hasChanges) {
         renderer.drawText({position.x + size.x - 150, position.y + 8}, "* Unsaved", 0xFFFFFF00);
     }
+    
+    renderer.popClipRect();
+    return true;
 }

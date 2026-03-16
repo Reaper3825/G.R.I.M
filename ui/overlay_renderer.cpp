@@ -119,12 +119,46 @@ void OverlayRenderer::setFont(const std::string& fontName, int fontSize)
     }
 }
 
+void OverlayRenderer::pushClipRect(const Vec2& pos, const Vec2& size)
+{
+    ClipRect incoming;
+    incoming.x1 = std::max(0, (int)pos.x);
+    incoming.y1 = std::max(0, (int)pos.y);
+    incoming.x2 = std::min(m_width,  (int)(pos.x + size.x));
+    incoming.y2 = std::min(m_height, (int)(pos.y + size.y));
+
+    if (!m_clipStack.empty()) {
+        const ClipRect& cur = m_clipStack.back();
+        incoming.x1 = std::max(incoming.x1, cur.x1);
+        incoming.y1 = std::max(incoming.y1, cur.y1);
+        incoming.x2 = std::min(incoming.x2, cur.x2);
+        incoming.y2 = std::min(incoming.y2, cur.y2);
+    }
+
+    m_clipStack.push_back(incoming);
+}
+
+void OverlayRenderer::popClipRect()
+{
+    if (!m_clipStack.empty())
+        m_clipStack.pop_back();
+}
+
+ClipRect OverlayRenderer::activeClip() const
+{
+    if (!m_clipStack.empty())
+        return m_clipStack.back();
+    return { 0, 0, m_width, m_height };
+}
+
 void OverlayRenderer::beginFrame()
 {
-    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? ADD thread safety
+    std::lock_guard<std::mutex> lock(m_renderMutex);
     
     if (!m_pixels)
         return;
+    
+    m_clipStack.clear();
     
     // Clear to transparent (alpha = 0)
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
@@ -162,7 +196,7 @@ void OverlayRenderer::endFrame()
 
 void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color)
 {
-    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? ADD thread safety
+    std::lock_guard<std::mutex> lock(m_renderMutex);
     
     if (!m_pixels)
         return;
@@ -178,11 +212,12 @@ void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color
     g = (g * a) / 255;
     b = (b * a) / 255;
     
-    // Draw filled rectangle
-    int x1 = std::max(0, (int)pos.x);
-    int y1 = std::max(0, (int)pos.y);
-    int x2 = std::min(m_width, (int)(pos.x + size.x));
-    int y2 = std::min(m_height, (int)(pos.y + size.y));
+    ClipRect clip = activeClip();
+    
+    int x1 = std::max(clip.x1, (int)pos.x);
+    int y1 = std::max(clip.y1, (int)pos.y);
+    int x2 = std::min(clip.x2, (int)(pos.x + size.x));
+    int y2 = std::min(clip.y2, (int)(pos.y + size.y));
     
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
     
@@ -198,13 +233,15 @@ void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color
 
 void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_t color)
 {
-    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? ADD thread safety
+    std::lock_guard<std::mutex> lock(m_renderMutex);
     
     if (!m_hdcMem || !m_pixels)
         return;
     
     if (text.empty())
         return;
+    
+    ClipRect clip = activeClip();
     
     // Extract RGBA components
     uint8_t a = (color >> 24) & 0xFF;
@@ -214,27 +251,41 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
     uint8_t b = color & 0xFF;
     
     // Calculate text area (approximate)
-    int x1 = std::max(0, (int)pos.x);
-    int y1 = std::max(0, (int)pos.y);
+    int rawX1 = (int)pos.x;
+    int rawY1 = (int)pos.y;
     int textWidth = (int)(text.length() * 9); // ~9 pixels per char for Consolas 16pt
     int textHeight = 20; // ~20 pixels height
-    int x2 = std::min(m_width, x1 + textWidth);
-    int y2 = std::min(m_height, y1 + textHeight);
+    int rawX2 = rawX1 + textWidth;
+    int rawY2 = rawY1 + textHeight;
+    
+    // Early-out if text is entirely outside clip rect
+    if (rawX2 <= clip.x1 || rawX1 >= clip.x2 ||
+        rawY2 <= clip.y1 || rawY1 >= clip.y2)
+        return;
+    
+    // Clamp the alpha-fix region to the clip rect
+    int x1 = std::max(clip.x1, rawX1);
+    int y1 = std::max(clip.y1, rawY1);
+    int x2 = std::min(clip.x2, rawX2);
+    int y2 = std::min(clip.y2, rawY2);
+    
+    // Use a GDI clip region so TextOut doesn't write outside the panel
+    HRGN hClipRgn = CreateRectRgn(clip.x1, clip.y1, clip.x2, clip.y2);
+    SelectClipRgn(m_hdcMem, hClipRgn);
     
     // Set the text color for GDI
     SetTextColor(m_hdcMem, RGB(r, g, b));
     SetBkMode(m_hdcMem, OPAQUE);
-    SetBkColor(m_hdcMem, RGB(0x10, 0x10, 0x10)); // Very dark gray, but not pure black
+    SetBkColor(m_hdcMem, RGB(0x10, 0x10, 0x10));
     
     // Convert to wide string and handle encoding properly
     std::wstring wtext;
     wtext.reserve(text.length());
     for (char c : text) {
-        // Only convert valid ASCII characters
         if (c >= 32 && c < 127) {
             wtext.push_back(static_cast<wchar_t>(c));
         } else {
-            wtext.push_back(L'?'); // Replace invalid chars
+            wtext.push_back(L'?');
         }
     }
     
@@ -244,7 +295,11 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
     // Force GDI to flush so the pixels are updated
     GdiFlush();
     
-    // Fix the alpha channel for the text area
+    // Remove GDI clip region
+    SelectClipRgn(m_hdcMem, nullptr);
+    DeleteObject(hClipRgn);
+    
+    // Fix the alpha channel for the text area (clamped to clip rect)
     // GDI writes RGB but sets alpha to 0, so we need to make these pixels visible
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
     
@@ -255,12 +310,10 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
             int idx = y * m_width + x;
             uint32_t pixel = pixels[idx];
             
-            // Extract current RGB (GDI has written these)
             uint8_t pb = pixel & 0xFF;
             uint8_t pg = (pixel >> 8) & 0xFF;
             uint8_t pr = (pixel >> 16) & 0xFF;
             
-            // Set alpha to make pixel visible (preserve the RGB that GDI wrote)
             pixels[idx] = (255 << 24) | (pr << 16) | (pg << 8) | pb;
         }
     }
@@ -286,19 +339,17 @@ void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t colo
     
     uint32_t premultColor = (a << 24) | (r << 16) | (g << 8) | b;
     
-    // Bresenham's line algorithm with thickness
+    ClipRect clip = activeClip();
+    
     float dx = end.x - start.x;
     float dy = end.y - start.y;
     float len = std::sqrt(dx * dx + dy * dy);
     
     if (len < 0.01f) {
-        // Draw a point
         drawRect(start, {thickness, thickness}, color);
         return;
     }
     
-    // Draw line as series of thick points with anti-aliasing
-    // Use more segments for smoother lines (at least 2 segments per pixel)
     int segments = static_cast<int>(len * 2.0f) + 1;
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
     
@@ -309,19 +360,17 @@ void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t colo
         int x = static_cast<int>(fx);
         int y = static_cast<int>(fy);
         
-        // Draw thick point with circular brush for smoother appearance
         int halfThick = static_cast<int>(thickness / 2.0f) + 1;
         float radiusSq = (thickness / 2.0f) * (thickness / 2.0f);
         
         for (int py = -halfThick; py <= halfThick; ++py) {
             for (int px = -halfThick; px <= halfThick; ++px) {
-                // Use circular brush instead of square
                 float distSq = static_cast<float>(px * px + py * py);
                 if (distSq <= radiusSq) {
                     int xx = x + px;
                     int yy = y + py;
                     
-                    if (xx >= 0 && xx < m_width && yy >= 0 && yy < m_height) {
+                    if (xx >= clip.x1 && xx < clip.x2 && yy >= clip.y1 && yy < clip.y2) {
                         int idx = yy * m_width + xx;
                         pixels[idx] = premultColor;
                     }

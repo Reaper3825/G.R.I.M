@@ -17,7 +17,7 @@ public:
 
     void updateSpec(const GRIM::MMO::UISurfaceSpec& spec);
 
-    void drawOverlay(OverlayRenderer& renderer) override;
+    bool drawOverlay(OverlayRenderer& renderer) override;
 
     const std::string& surfaceId() const { return surface_id_; }
 

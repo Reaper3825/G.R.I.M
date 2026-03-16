@@ -39,18 +39,14 @@ void DynamicSurfacePanel::updateSpec(const UISurfaceSpec& spec) {
     setTitle(spec.title);
 }
 
-void DynamicSurfacePanel::drawOverlay(OverlayRenderer& renderer) {
-    // Draw base panel chrome (title bar, background, border)
-    UIPanel::drawOverlay(renderer);
-
-    if (isMinimized()) return;
+bool DynamicSurfacePanel::drawOverlay(OverlayRenderer& renderer) {
+    if (!UIPanel::drawOverlay(renderer)) return false;
 
     Vec2 pos = getPosition();
     float yOff = pos.y + titleBarHeight + static_cast<float>(spec_.layout.padding);
     float xStart = pos.x + static_cast<float>(spec_.layout.padding);
     float spacing = static_cast<float>(spec_.layout.spacing);
 
-    // Render widgets from spec
     for (const auto& widget : spec_.widgets) {
         if (widget.widget_type == "label") {
             renderer.drawText({xStart, yOff}, widget.label, 0xFFDDDDDD);
@@ -66,14 +62,15 @@ void DynamicSurfacePanel::drawOverlay(OverlayRenderer& renderer) {
             renderer.drawRect({xStart, yOff}, {barSize.x * 0.5f, barSize.y}, 0xFF4488FF);
             yOff += barSize.y + spacing;
         } else {
-            // Unknown widget — render label as fallback
             renderer.drawText({xStart, yOff}, "[" + widget.widget_type + "] " + widget.label, 0xFF888888);
             yOff += 20.0f + spacing;
         }
     }
 
-    // If no widgets, show placeholder
     if (spec_.widgets.empty()) {
         renderer.drawText({xStart, yOff}, "(empty surface)", 0xFF666666);
     }
+    
+    renderer.popClipRect();
+    return true;
 }

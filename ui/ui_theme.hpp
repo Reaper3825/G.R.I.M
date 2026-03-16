@@ -91,9 +91,9 @@ namespace UITheme {
     // Animation & Timing
     // ====================================================
     namespace Timing {
-        constexpr float HoverDelay     = 0.0f;    // Instant hover
-        constexpr float TransitionMs   = 150.0f;  // State transitions
-        constexpr float ScrollSmooth   = 0.2f;    // Scroll smoothing
+        constexpr float HoverDelay     = 0.05f;    // Instant hover
+        constexpr float TransitionMs   = 100.0f;  // State transitions
+        constexpr float ScrollSmooth   = 0.1f;    // Scroll smoothing
     }
     
     // ====================================================

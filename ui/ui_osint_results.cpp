@@ -290,9 +290,8 @@ void UIOsintResults::update(const InputState& input, float dt) {
     }
 }
 
-void UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
-    // Draw base panel
-    UIPanel::drawOverlay(renderer);
+bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
+    if (!UIPanel::drawOverlay(renderer)) return false;
     
     float contentY = position.y + titleBarHeight;
     
@@ -465,11 +464,12 @@ void UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
         }
     }
     
-    // Draw detail panel if a finding is selected
-    // FIX: Validate selectedRow before drawing detail panel
     if (showDetailPanel && selectedRow >= 0 && selectedRow < static_cast<int>(filteredFindings.size())) {
         drawDetailPanel(renderer);
     }
+    
+    renderer.popClipRect();
+    return true;
 }
 
 void UIOsintResults::drawDetailPanel(OverlayRenderer& renderer) {

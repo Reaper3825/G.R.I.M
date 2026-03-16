@@ -754,16 +754,12 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     }
 }
 
-void UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
+bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
 {
-    if (!isVisible()) return;
+    if (!UIPanel::drawOverlay(renderer)) return false;
     
-    UIPanel::drawOverlay(renderer);
-    
-    // Draw scroll box with all children (scrollbox handles culling and scroll offset)
     scrollBox->drawOverlay(renderer, position);
     
-    // Draw Save & Close button
     if (saveButton) {
         Vec2 btnPos = saveButton->getPosition();
         Vec2 btnSize = saveButton->getSize();
@@ -781,7 +777,6 @@ void UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
         renderer.drawText({btnPos.x + 10, textY}, "Save & Close", 0xFFFFFFFF);
     }
     
-    // Draw Cancel button
     if (cancelButton) {
         Vec2 btnPos = cancelButton->getPosition();
         Vec2 btnSize = cancelButton->getSize();
@@ -799,9 +794,11 @@ void UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
         renderer.drawText({btnPos.x + 10, textY}, "Cancel", 0xFFFFFFFF);
     }
     
-    // Unsaved changes indicator
     if (hasChanges) {
         renderer.drawText({position.x + size.x - 150, position.y + 8}, "* Unsaved", 0xFFFFFF00);
     }
+    
+    renderer.popClipRect();
+    return true;
 }
 

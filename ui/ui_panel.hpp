@@ -23,6 +23,11 @@ enum class MinimizeType {
     
 };
 
+struct PanelRect {
+    Vec2 origin;
+    Vec2 size;
+};
+
 class GRIM_HOST_API UIPanel : public Widget {
 public:
     UIPanel(const std::string& title = "", bool draggable = true);
@@ -41,8 +46,15 @@ public:
     // Override base widget draw (does nothing, we use drawOverlay instead)
     void draw(UIRenderer& renderer) override { /* unused */ }
     
-    // New method for overlay rendering
-    virtual void drawOverlay(OverlayRenderer& renderer);
+    // Draws panel chrome (background, title bar, borders, buttons).
+    // Returns true if subclass should draw content (i.e. panel is visible
+    // and not minimized). When true, a clip rect for the content area has
+    // been pushed onto the renderer -- the caller MUST call
+    // renderer.popClipRect() when finished drawing content.
+    virtual bool drawOverlay(OverlayRenderer& renderer);
+    
+    // The drawable region inside the panel, below the title bar and inside borders.
+    PanelRect getContentRect() const;
 
     void setBackground(uint32_t color) { bgColor = color; }
     void setBorder(uint32_t color) { borderColor = color; }

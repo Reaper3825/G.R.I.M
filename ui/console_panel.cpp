@@ -161,14 +161,10 @@ void ConsolePanel::update(const InputState& input, float dt)
     }
 }
 
-void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
+bool ConsolePanel::drawOverlay(OverlayRenderer& renderer)
 {
-    if (!isVisible()) return;
+    if (!UIPanel::drawOverlay(renderer)) return false;
     
-    // First, let the base panel draw its background, border, and title
-    UIPanel::drawOverlay(renderer);
-    
-    // ✅ Draw buttons using their drawOverlay method
     if (settingsButton) {
         settingsButton->drawOverlay(renderer, position);
     }
@@ -185,55 +181,45 @@ void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
         modelsButton->drawOverlay(renderer, position);
     }
     
-    // Now draw console-specific content on top
-    
     // Draw separator line under title
     renderer.drawRect({position.x + 10, position.y + titleBarHeight + 2}, 
                      {size.x - 20, 2}, 0xFF00FF00);
 
-    // Draw console history - USE GLOBAL HISTORY
     auto& history = getConsoleHistory();
     
-    // Calculate proper width for wrapping (account for padding)
     float maxTextWidth = size.x - 60.0f;
-    
-    // IMPORTANT: Ensure wrapped lines are generated with correct width!
     history.ensureWrapped(maxTextWidth);
     
-    float y = position.y + titleBarHeight + 12; // Start below separator
+    float y = position.y + titleBarHeight + 12;
     auto lines = history.wrapped();
     
-    // Calculate scrollable area (leave room for input box)
     float scrollAreaHeight = size.y - titleBarHeight - 70;
     int maxLines = static_cast<int>(scrollAreaHeight / 20.0f);
     int startIdx = std::max(0, static_cast<int>(lines.size()) - maxLines);
     
-    // Draw history lines
     for (int i = startIdx; i < static_cast<int>(lines.size()); ++i)
     {
-        if (y >= position.y + size.y - 70) break; // Don't draw over input area
+        if (y >= position.y + size.y - 70) break;
         renderer.drawText({position.x + 15, y}, lines[i].text, lines[i].color);
         y += 20.0f;
     }
 
-    // ✅ Draw input area using UIInputBox
     float inputY = position.y + size.y - 50;
     
-    // Input area background with border
     renderer.drawRect({position.x + 8, inputY - 2}, {size.x - 16, 42}, 0xFF1A1A1A);
     renderer.drawRect({position.x + 8, inputY - 3}, {size.x - 16, 1}, 0xFF00FF00);
     
-    // Draw input prompt
     renderer.drawText({position.x + 18, inputY + 10}, ">", 0xFF00FF00);
     
-    // ✅ Draw the UIInputBox
     if (consoleInput) {
         consoleInput->drawOverlay(renderer, position);
     }
     
-    // Draw help text
     renderer.drawText({position.x + 15, inputY + 28}, "ESC: Close", 0xFF666666);
     renderer.drawText({position.x + size.x - 200, inputY + 28}, "Enter: Execute", 0xFF666666);
+    
+    renderer.popClipRect();
+    return true;
 }
 
 void ConsolePanel::executeCommand(const std::string& cmd)

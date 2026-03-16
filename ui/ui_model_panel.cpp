@@ -245,12 +245,9 @@ void UIModelPanel::update(const InputState& input, float dt) {
 // Draw
 // =========================================================
 
-void UIModelPanel::drawOverlay(OverlayRenderer& renderer) {
-    if (!isVisible()) return;
+bool UIModelPanel::drawOverlay(OverlayRenderer& renderer) {
+    if (!UIPanel::drawOverlay(renderer)) return false;
 
-    UIPanel::drawOverlay(renderer);
-
-    // Draw tab buttons (UIPanel::drawOverlay doesn't draw children)
     tabBrowserBtn_->setPosition(position.x + 10.0f, position.y + 35.0f);
     tabCreatorBtn_->setPosition(position.x + 95.0f, position.y + 35.0f);
     tabGapQueueBtn_->setPosition(position.x + 180.0f, position.y + 35.0f);
@@ -258,7 +255,6 @@ void UIModelPanel::drawOverlay(OverlayRenderer& renderer) {
     tabCreatorBtn_->drawOverlay(renderer, position);
     tabGapQueueBtn_->drawOverlay(renderer, position);
 
-    // Active tab underline indicator
     float tabW = 80.0f;
     float indicatorY = position.y + 63.0f;
     float indicatorX = position.x + 10.0f;
@@ -277,6 +273,9 @@ void UIModelPanel::drawOverlay(OverlayRenderer& renderer) {
             drawGapQueueView(renderer);
             break;
     }
+    
+    renderer.popClipRect();
+    return true;
 }
 
 // =========================================================

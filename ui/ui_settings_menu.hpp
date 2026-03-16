@@ -17,7 +17,7 @@ public:
     UISettingsMenu();
 
     void update(const InputState& input, float dt) override;
-    void drawOverlay(OverlayRenderer& renderer) override;
+    bool drawOverlay(OverlayRenderer& renderer) override;
 
 private:
     void loadConfig();

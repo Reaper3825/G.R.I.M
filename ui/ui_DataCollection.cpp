@@ -418,15 +418,14 @@ void UIDataCollectionPanel::update(const InputState& input, float dt) {
     }
 }
 
-void UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
-    if (!isVisible()) return;
+bool UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
+    if (!UIPanel::drawOverlay(renderer)) return false;
     
-    UIPanel::drawOverlay(renderer);
-    
-    float panelX = position.x + 10;
-    float panelY = position.y + 40;
-    float panelWidth = size.x - 20;
-    float panelHeight = size.y - 50;
+    PanelRect content = getContentRect();
+    float panelX = content.origin.x + 8;
+    float panelY = content.origin.y + 10;
+    float panelWidth = content.size.x - 16;
+    float panelHeight = content.size.y - 10;
     
     // Split into two columns
     float leftPanelWidth = panelWidth * 0.35f;
@@ -608,6 +607,9 @@ void UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
     if (hfCategoryDropdown && hfCategoryDropdown->isExpanded()) {
         hfCategoryDropdown->drawExpandedList(renderer, position);
     }
+    
+    renderer.popClipRect();
+    return true;
 }
 
 void UIDataCollectionPanel::startFullCollection() {

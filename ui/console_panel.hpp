@@ -14,7 +14,7 @@ public:
     ConsolePanel();
 
     void update(const InputState& input, float dt) override;
-    void drawOverlay(OverlayRenderer& renderer) override;
+    bool drawOverlay(OverlayRenderer& renderer) override;
     
     // Execute a command programmatically
     void executeCommand(const std::string& cmd);

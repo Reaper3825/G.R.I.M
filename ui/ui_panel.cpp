@@ -204,8 +204,16 @@ void UIPanel::update(const InputState& input, float dt) {
     }
 }
 
-void UIPanel::drawOverlay(OverlayRenderer& renderer) {
-    if (!isVisible()) return;
+PanelRect UIPanel::getContentRect() const {
+    float borderW = 2.0f;
+    return {
+        { position.x + borderW, position.y + titleBarHeight },
+        { size.x - borderW * 2.0f, size.y - titleBarHeight - borderW }
+    };
+}
+
+bool UIPanel::drawOverlay(OverlayRenderer& renderer) {
+    if (!isVisible()) return false;
     
     // Panel background
     renderer.drawRect(position, size, bgColor);
@@ -256,7 +264,10 @@ void UIPanel::drawOverlay(OverlayRenderer& renderer) {
     }
 
     if (minimized)
-        return;
+        return false;
 
-    // Draw children would go here - not implemented yet
+    // Push clip rect for the content area so subclass draws stay inside the panel
+    PanelRect content = getContentRect();
+    renderer.pushClipRect(content.origin, content.size);
+    return true;
 }
