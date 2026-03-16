@@ -273,10 +273,8 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
     HRGN hClipRgn = CreateRectRgn(clip.x1, clip.y1, clip.x2, clip.y2);
     SelectClipRgn(m_hdcMem, hClipRgn);
     
-    // Set the text color for GDI
     SetTextColor(m_hdcMem, RGB(r, g, b));
-    SetBkMode(m_hdcMem, OPAQUE);
-    SetBkColor(m_hdcMem, RGB(0x10, 0x10, 0x10));
+    SetBkMode(m_hdcMem, TRANSPARENT);
     
     // Convert to wide string and handle encoding properly
     std::wstring wtext;
@@ -289,32 +287,40 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
         }
     }
     
-    // Draw text using GDI - this writes to the DIB section
+    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+    
+    // Snapshot pixels before TextOut so we can detect which ones GDI changed.
+    // Only glyph pixels are written in TRANSPARENT mode.
+    int snapW = x2 - x1;
+    int snapH = y2 - y1;
+    std::vector<uint32_t> snapshot(snapW * snapH);
+    for (int sy = 0; sy < snapH; ++sy) {
+        for (int sx = 0; sx < snapW; ++sx) {
+            snapshot[sy * snapW + sx] = pixels[(y1 + sy) * m_width + (x1 + sx)];
+        }
+    }
+    
     TextOutW(m_hdcMem, (int)pos.x, (int)pos.y, wtext.c_str(), (int)wtext.length());
     
-    // Force GDI to flush so the pixels are updated
     GdiFlush();
     
-    // Remove GDI clip region
     SelectClipRgn(m_hdcMem, nullptr);
     DeleteObject(hClipRgn);
     
-    // Fix the alpha channel for the text area (clamped to clip rect)
-    // GDI writes RGB but sets alpha to 0, so we need to make these pixels visible
-    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
-    
-    for (int y = y1; y < y2; ++y)
+    // Fix alpha only on pixels that GDI actually changed (the glyph pixels).
+    // GDI writes RGB but zeros alpha, so unchanged pixels keep their original value.
+    for (int sy = 0; sy < snapH; ++sy)
     {
-        for (int x = x1; x < x2; ++x)
+        for (int sx = 0; sx < snapW; ++sx)
         {
-            int idx = y * m_width + x;
-            uint32_t pixel = pixels[idx];
-            
-            uint8_t pb = pixel & 0xFF;
-            uint8_t pg = (pixel >> 8) & 0xFF;
-            uint8_t pr = (pixel >> 16) & 0xFF;
-            
-            pixels[idx] = (255 << 24) | (pr << 16) | (pg << 8) | pb;
+            int idx = (y1 + sy) * m_width + (x1 + sx);
+            if (pixels[idx] != snapshot[sy * snapW + sx]) {
+                uint32_t pixel = pixels[idx];
+                uint8_t pr = (pixel >> 16) & 0xFF;
+                uint8_t pg = (pixel >> 8) & 0xFF;
+                uint8_t pb = pixel & 0xFF;
+                pixels[idx] = (a << 24) | (pr << 16) | (pg << 8) | pb;
+            }
         }
     }
 }
