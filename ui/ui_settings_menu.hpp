@@ -6,6 +6,7 @@
 #include "ui_scrollbox.hpp"
 #include "ui_dropdown.hpp"  // ? NEW: Include dropdown
 #include <vector>
+#include <unordered_map>
 #include <memory>
 #include <nlohmann/json.hpp>
 
@@ -51,4 +52,6 @@ private:
     bool hasChanges = false;
     bool isRefreshing = false;
     bool needsWidgetRefresh = false;
+
+    std::unordered_map<std::string, std::string> m_fontPathMap;
 };

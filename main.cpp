@@ -28,6 +28,7 @@
 #include "ui/ui_DataCollection.hpp"
 #include "ui/ui_model_panel.hpp"
 #include "ui/ui_surface_renderer_bridge.hpp"
+#include "resources.hpp"
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
 #include "perception/perception.hpp"
@@ -373,6 +374,15 @@ int main(int argc, char* argv[])
     // 9. Initialize unified UI system (UIRoot)
     // ======================================================
     UIRoot::get().init(overlayWin->hwnd, overlayWin->width, overlayWin->height);
+
+    {
+        std::string fontPath = findAnyFontInResources(argc, argv);
+        if (!fontPath.empty()) {
+            UIRoot::get().getRenderer().setFont(fontPath, 16);
+        } else {
+            LOG_ERROR("UIRoot", "No font file found — text will not render");
+        }
+    }
 
     auto consolePanel  = std::make_shared<ConsolePanel>();
     auto settingsPanel = std::make_shared<UISettingsMenu>();

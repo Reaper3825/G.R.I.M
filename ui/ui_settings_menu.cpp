@@ -2,8 +2,9 @@
 #include "overlay_renderer.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
-#include "ui_root.hpp"  // ? NEW: For accessing renderer
-#include "../voice/voice_speak.hpp"  // ? NEW: For updating speaker dynamically
+#include "ui_root.hpp"
+#include "../voice/voice_speak.hpp"
+#include "../resources.hpp"
 #include "../perception/perception_context.hpp"  // For vision AI control
 #include <fstream>
 #include <functional>
@@ -61,36 +62,47 @@ std::vector<std::string> UISettingsMenu::getSpeakerEmbeddings() {
     return embeddings;
 }
 
-// ? NEW: Scan for available fonts in resources/fonts directory
 std::vector<std::string> UISettingsMenu::getFontList() {
     std::vector<std::string> fonts;
-    
-    // Add system fonts first
-    fonts.push_back("Consolas");
-    fonts.push_back("Courier New");
-    fonts.push_back("Arial");
-    fonts.push_back("Segoe UI");
-    
-    try {
-        std::string fontDir = "D:/G.R.I.M/resources/fonts";
-        
-        if (std::filesystem::exists(fontDir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(fontDir)) {
-                if (entry.path().extension() == ".ttf" || entry.path().extension() == ".otf") {
-                    std::string fontName = entry.path().stem().string();
-                    // Add only if not already in list
-                    if (std::find(fonts.begin(), fonts.end(), fontName) == fonts.end()) {
-                        fonts.push_back(fontName);
-                    }
-                }
-            }
+    m_fontPathMap.clear();
+
+    auto scanDir = [&](const std::filesystem::path& dir) {
+        if (!std::filesystem::exists(dir)) return;
+        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) continue;
+            auto ext = entry.path().extension().string();
+            if (ext != ".ttf" && ext != ".otf") continue;
+            std::string name = entry.path().stem().string();
+            if (m_fontPathMap.count(name)) continue;
+            m_fontPathMap[name] = entry.path().string();
+            fonts.push_back(name);
         }
-        
-        LOG_DEBUG("UISettingsMenu", "Found " + std::to_string(fonts.size()) + " fonts");
+    };
+
+    try {
+        scanDir(std::filesystem::path(getResourcePath()));
+        scanDir(std::filesystem::path(getGrimRootDir()) / "resources" / "fonts");
+
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                 std::filesystem::path(getGrimRootDir()) / "resources" / "fonts",
+                 std::filesystem::directory_options::skip_permission_denied)) {
+            if (!entry.is_regular_file()) continue;
+            auto ext = entry.path().extension().string();
+            if (ext != ".ttf" && ext != ".otf") continue;
+            std::string name = entry.path().stem().string();
+            if (m_fontPathMap.count(name)) continue;
+            m_fontPathMap[name] = entry.path().string();
+            fonts.push_back(name);
+        }
     } catch (const std::exception& e) {
         LOG_ERROR("UISettingsMenu", std::string("Failed to scan fonts: ") + e.what());
     }
-    
+
+    if (fonts.empty()) {
+        fonts.push_back("(no fonts found)");
+    }
+
+    LOG_DEBUG("UISettingsMenu", "Found " + std::to_string(fonts.size()) + " TTF/OTF fonts");
     return fonts;
 }
 
@@ -208,19 +220,23 @@ void UISettingsMenu::applyChanges() {
         }
     }
     
-    // ? NEW: Update UI font if it changed
     if (pendingConfig.contains("ui") && pendingConfig["ui"].is_object() &&
         pendingConfig["ui"].contains("font_name")) {
-        std::string newFont = pendingConfig["ui"]["font_name"].get<std::string>();
-        int fontSize = 16; // Default
+        std::string fontName = pendingConfig["ui"]["font_name"].get<std::string>();
+        int fontSize = 16;
         if (pendingConfig["ui"].contains("font_size")) {
             fontSize = pendingConfig["ui"]["font_size"].get<int>();
         }
-        
-        // Get UIRoot renderer and update font
-        auto& uiRoot = UIRoot::get();
-        uiRoot.getRenderer().setFont(newFont, fontSize);
-        LOG_DEBUG("UISettingsMenu", "UI font updated to: " + newFont + " (size " + std::to_string(fontSize) + ")");
+
+        if (m_fontPathMap.empty()) getFontList();
+
+        auto it = m_fontPathMap.find(fontName);
+        if (it != m_fontPathMap.end()) {
+            UIRoot::get().getRenderer().setFont(it->second, fontSize);
+            LOG_DEBUG("UISettingsMenu", "UI font updated to: " + fontName + " (" + it->second + ", size " + std::to_string(fontSize) + ")");
+        } else {
+            LOG_ERROR("UISettingsMenu", "Font file not found for: " + fontName);
+        }
     }
     
     LOG_DEBUG("UISettingsMenu", "Settings applied and saved successfully");
