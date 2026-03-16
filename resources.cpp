@@ -171,14 +171,29 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
         return {};
     }
 
-    for (auto& p : fs::directory_iterator(resDir)) {
-        if (p.is_regular_file()) {
-            auto ext = p.path().extension().string();
-            if (ext == ".ttf" || ext == ".otf") {
-                LOG_PHASE("Font search", true);
-                LOG_DEBUG("Resources", "Found font: " + p.path().string());
-                return p.path().string();
+    // Recursively search for any .ttf or .otf font file
+    try {
+        for (auto& p : fs::recursive_directory_iterator(resDir, fs::directory_options::skip_permission_denied)) {
+            if (p.is_regular_file()) {
+                auto ext = p.path().extension().string();
+                if (ext == ".ttf" || ext == ".otf") {
+                    LOG_PHASE("Font search", true);
+                    LOG_DEBUG("Resources", "Found font: " + p.path().string());
+                    return p.path().string();
+                }
             }
+        }
+    } catch (...) {}
+
+    // Fallback: check build directory for ui_font.ttf (copied by CMake)
+    for (auto& tryPath : {
+        fs::current_path() / "ui_font.ttf",
+        fs::path(getGrimRootDir()) / "out" / "build" / "ui_font.ttf"
+    }) {
+        if (fs::exists(tryPath)) {
+            LOG_PHASE("Font search", true);
+            LOG_DEBUG("Resources", "Found fallback font: " + tryPath.string());
+            return tryPath.string();
         }
     }
 

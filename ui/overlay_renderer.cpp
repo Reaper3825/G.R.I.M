@@ -129,7 +129,7 @@ void OverlayRenderer::setFont(const std::string& fontPath, int fontSize)
             bakedChars
         );
 
-        if (result > 0) {
+        if (result != 0) {
             for (int i = 0; i < kCharCount; ++i) {
                 m_bakedChars[i].x0 = bakedChars[i].x0;
                 m_bakedChars[i].y0 = bakedChars[i].y0;
@@ -142,7 +142,8 @@ void OverlayRenderer::setFont(const std::string& fontPath, int fontSize)
             m_fontLoaded = true;
             LOG_DEBUG("OverlayRenderer", "Font loaded: " + fontPath +
                      " (size " + std::to_string(fontSize) +
-                     ", atlas " + std::to_string(m_atlasWidth) + "x" + std::to_string(m_atlasHeight) + ")");
+                     ", atlas " + std::to_string(m_atlasWidth) + "x" + std::to_string(m_atlasHeight) +
+                     ", bake result " + std::to_string(result) + ")");
             return;
         }
 
