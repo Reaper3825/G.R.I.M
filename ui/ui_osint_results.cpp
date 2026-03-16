@@ -385,7 +385,8 @@ bool UIOsintResults::drawOverlay(OverlayRenderer& renderer) {
     if (filteredFindings.empty()) {
         renderer.drawText({position.x + size.x / 2 - 100, contentY + 50}, 
                          "No findings match current filter", 0xFF888888);
-        return;
+        renderer.popClipRect();
+        return true;
     }
     
     // Draw table rows
