@@ -4,43 +4,43 @@ overview: A method-by-method audit of every training technique in GRIM-text, wit
 todos:
   - id: c1-weight-tying
     content: "C1: Enable weight tying (tie_embeddings: true in ai_config.json)"
-    status: pending
-  - id: b1-remove-encoder-centering
-    content: "B1: Remove center_encoder_residuals (set to false)"
-    status: pending
-  - id: b2-remove-lmhead-centering
-    content: "B2: Remove center_hidden_states (set to false), keep project_out_pc1: true"
-    status: pending
+    status: completed
+  - id: b1-disable-encoder-centering
+    content: "B1: Disable center_encoder_residuals via config (set to false)"
+    status: completed
+  - id: b2-disable-lmhead-centering
+    content: "B2: Disable center_hidden_states via config (set to false), keep project_out_pc1: true"
+    status: completed
   - id: a1-fix-mtp-mismatch
     content: "A1: Fix MTP representation mismatch — apply final RMSNorm to MTP input in AutogradTraining.cu"
-    status: pending
+    status: completed
   - id: c2-enable-qknorm
     content: "C2: Enable QK-Norm (qk_norm.enabled: true in ai_config.json)"
-    status: pending
+    status: completed
   - id: c3-enable-layerscale
     content: "C3: Enable LayerScale (layer_scale.enabled: true, init_value: 0.1)"
-    status: pending
+    status: completed
   - id: a2-reduce-sbr-scale
     content: "A2: Reduce SBR atom_scale from 1.0 to 0.1"
-    status: pending
+    status: completed
   - id: a3-reduce-dropout
     content: "A3: Reduce all dropout rates from 0.1-0.12 to 0.05"
-    status: pending
+    status: completed
   - id: a4-reduce-label-smoothing
     content: "A4: Reduce label smoothing epsilon from 0.1 to 0.05"
-    status: pending
-  - id: b3-remove-numeric-head
-    content: "B3: Remove or fix NumericHead (bias gradient bug + competing objective)"
-    status: pending
+    status: completed
+  - id: b3-fix-numeric-head
+    content: "B3: Fix NumericHead bias gradient bug (required for SBR)"
+    status: completed
   - id: a1-mtp-warmup
     content: "A1b: Increase MTP alpha_warmup_steps from 500 to 2000"
-    status: pending
+    status: completed
   - id: c4-zloss
-    content: "C4: Implement z-loss regularization kernel in AutogradLoss.cu"
-    status: pending
+    content: "C4: Implement z-loss — config in ai_config.json, parse via ai_config_paths, wire through LossOptions/LossConfig/buildLossConfig/AutogradLoss.cu"
+    status: in_progress
   - id: a5-vocab
     content: "A5: Regenerate vocab closer to 10K target (lower min_subword_freq or more data)"
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -50,50 +50,49 @@ isProject: false
 
 After 5 epochs on an A100, the model produces incoherent output. Key diagnostic signals from the training log:
 
-- **h_rms_growth**: 26x at start, 182x at epoch 1, **400x by epoch 5** (hidden state norm explosion)
-- **Embedding gradient RMS**: 3.5e-5 at start, dropping to **1e-6 by epoch 5** (embeddings stop learning)
+- **h_rms and ρ(l)**: The RHO_BUILDUP diagnostic marks layers as "healthy" when ρ(l) stays low and |Δρ| ≤ 0.05. The diagnostic does *not* evaluate h_rms_growth (reported but not classified). So h_rms behavior is not flagged as problematic by your own diagnostics.
+- **Embedding gradient RMS**: 3.5e-5 at start, dropping to **1e-6 by epoch 5** (embeddings effectively stop learning)
 - **Encoder gradient RMS**: attn 4.3e-4 at start, dropping to **5.4e-5** (8x reduction)
 - **Prediction collapse**: only 28-35 unique argmax tokens out of 2512, dominated by space (tok36)
-- **Layer 0 ANOMALY**: consistently amplifies representation cosine similarity by +0.09 to +0.15
+- **Layer 0 ANOMALY** (some batches): when Δρ > 0.05, the diagnostic flags "LAYER AMPLIFIES ρ"
 
 ---
 
-## B. REMOVE — Methods Hurting Coherence
+## B. DISABLE via Config — Methods to Turn Off for Coherence
 
-### B1. `center_encoder_residuals` — Remove
+Centering operations are config-controlled; no code removal needed. Disable via config when they're attenuating gradients or stripping useful signal.
 
-**What it does**: Applies `center_columns` (subtract feature-wise mean) after BOTH the attention residual AND FFN residual in every encoder layer. That is **24 centering operations** across 12 layers.
+### B1. `center_encoder_residuals` — Disable
+
+**What it does**: Applies `center_columns` (subtract feature-wise mean) after BOTH the attention residual AND FFN residual in every encoder layer. That is **24 centering operations** across 12 layers. Guarded by `config_.center_encoder_residuals`.
 
 **Where**: `Encoding_GPU.cu` lines 991-994 and 1047-1052
 
-**Why remove**: Despite 24 centering passes, h_rms is STILL exploding (400x by epoch 5). Centering is failing at its intended purpose (controlling norm/collapse) while actively stripping useful directional information from the residual stream. The gradients for encoder weights (attn, ffn) have dropped 8x, indicating the centering backward pass is attenuating useful gradient signal through the 24-deep chain.
+**Why disable**: The centering backward pass attenuates gradient signal through a 24-deep chain. Encoder gradient RMS (attn, ffn) has dropped ~8x over training. Centering strips directional information that may be useful for token discrimination. Turn off via config to test whether coherence improves.
 
 **Config change**: `center_encoder_residuals: false` in `lm_head_centering`
 
 ---
 
-### B2. `center_hidden_states` — Remove (replace with PC1)
+### B2. `center_hidden_states` — Disable (use PC1 instead)
 
-**What it does**: At the LM head, applies `center_columns` then `center_rows` before the output projection. This removes both the shared feature direction and shared token direction from the representation.
+**What it does**: At the LM head, applies `center_columns` then `center_rows` before the output projection. This removes both the shared feature direction and shared token direction from the representation. Guarded by `config_.center_hidden_states`; mutually exclusive with `project_out_pc1`.
 
 **Where**: `lm_head_GPU.cu` lines 199-226
 
-**Why remove**: Column + row centering is the most aggressive option. Combined with B1 (24 encoder centerings), the model's representations are being stripped at every stage. The code already implements `project_out_pc1` as a milder alternative (mutually exclusive with `center_hidden_states`). PC1 projection removes only the single dominant direction via power iteration, preserving much more useful signal.
+**Why disable**: Column + row centering is the most aggressive option. The code implements `project_out_pc1` as a milder alternative. PC1 projection removes only the single dominant direction via power iteration, preserving more useful signal. Turn off the dual centering and rely on PC1.
 
 **Config change**: `center_hidden_states: false`, keep `project_out_pc1: true`
 
 ---
 
-### B3. NumericHead — Remove or Fix
+### B3. NumericHead — Fix (required for SBR)
 
-**What it does**: Predicts `(log_magnitude, sign)` for numeric tokens. Loss: `L_total += 0.1 * numeric_loss`.
+**What it does**: Predicts `(log_magnitude, sign)` for numeric tokens. Required for Scratch Block Reasoning. Loss: `L_total += 0.1 * numeric_loss`.
 
 **Where**: `numeric_head_GPU.cu`, `AutogradTraining.cu` lines 857-863
 
-**Why remove**: Two issues:
-
-1. **Bias gradient bug**: The bias is applied via a raw CUDA kernel (`kernelNumericHeadBias`) that bypasses autograd. Backward never computes `grad_bias`, so bias gets zero gradients.
-2. **Competing objective**: Adds another loss signal (0.1 weight) that pushes encoder representations toward numeric prediction, diverting gradient budget from language modeling coherence.
+**Why fix**: The bias is applied via a raw CUDA kernel (`kernelNumericHeadBias`) that bypasses autograd. Backward never computes `grad_bias`, so bias gets zero gradients. Fix by routing bias through autograd (e.g. `autograd::broadcast_add`) so gradients flow correctly. The NumericHead stays — it's required for SBR.
 
 ---
 
@@ -183,7 +182,7 @@ With only 2512 tokens, label smoothing of 0.1 spreads 10% of probability mass ac
 
 **Current**: Disabled. Already fully implemented and wired through config.
 
-**Why**: With h_rms growing 400x across layers, attention logit magnitudes become unstable. QK-Norm (per-head RMSNorm on Q and K before dot-product) normalizes the attention input regardless of hidden state magnitude. Used in Gemma-2, Chameleon, and other modern architectures specifically to handle representation scale issues.
+**Why**: Per-head RMSNorm on Q and K before dot-product normalizes attention input and stabilizes attention logits. Used in Gemma-2, Chameleon, and other modern architectures. Optional stability improvement; not tied to h_rms.
 
 **Where implemented**: `Encoding_GPU.cu` (config `qk_norm_enabled`), `TrainingOps.cu` line 283, `Phase1_Startup.cu` line 960
 
@@ -195,7 +194,7 @@ With only 2512 tokens, label smoothing of 0.1 spreads 10% of probability mass ac
 
 **Current**: Disabled. Already fully implemented with learned scalars per sublayer.
 
-**Why**: The h_rms explosion (400x) is because sublayer outputs (attention, FFN) are added to the residual stream at full magnitude. LayerScale (from CaiT/DeiT-III) gates each sublayer output with a learned scalar (initialized small, e.g., 0.1-1.0), allowing the model to learn how much each layer should contribute to the residual stream.
+**Why**: LayerScale (from CaiT/DeiT-III) gates each sublayer output with a learned scalar (initialized small), letting the model learn how much each layer contributes to the residual. Optional stability/regularization; not tied to h_rms.
 
 **Where implemented**: `Encoding_GPU.cu` lines 348-363 (init), 953-957 (attention gate), 1035-1039 (FFN gate). Uses `autograd::layer_scale()` with proper backward.
 
@@ -203,13 +202,29 @@ With only 2512 tokens, label smoothing of 0.1 spreads 10% of probability mass ac
 
 ---
 
-### C4. Z-Loss Regularization — New Implementation Needed
+### C4. Z-Loss Regularization — New Implementation (Config-Driven)
 
-**What**: Regularize logit magnitudes: `L_z = (1/N) * sum(log(sum(exp(logits)))^2)`. Penalizes logits from drifting to large magnitudes.
+**What**: Regularize logit magnitudes: `L_z = (1/N) * sum(log(sum(exp(logits)))^2)`. Penalizes logits from drifting to large magnitudes. Used in PaLM, Gemini.
 
-**Why**: The logs show `logit_std` growing and `ratio(actual/expected)` consistently ~1.7-2.0x. Z-loss (used in PaLM, Gemini) would constrain this drift and keep the softmax distribution well-behaved.
+**Why**: The logs show `logit_std` growing and `ratio(actual/expected)` consistently ~1.7-2.0x. Z-loss would constrain this drift.
 
-**Where to add**: In `AutogradLoss.cu` after `unified_loss`, add a small z-loss term (weight ~~1e-4). This is a new kernel (~~20 lines CUDA) plus autograd wiring.
+**Implementation** — Must follow the same config pattern as other losses (label_smoothing, focal, entropy_reg). All hyperparameters read from `ai_config.json` via `ai_config_paths.hpp`:
+
+1. **ai_config.json** — Add under `training.config.loss`:
+
+```json
+   "z_loss": { "enabled": false, "lambda": 1e-4 }
+   
+
+```
+
+1. **control/ai_config_paths.hpp** — Add to `TrainingHyperparameters`: `loss_z_loss_enabled`, `loss_z_loss_lambda`. Parse in `applyTrainingConfigObject` under `loss.z_loss` (same pattern as `loss.entropy_reg`).
+2. **Shared/HyperParameters/HyperParameters_GPU.hpp** — Add `DEFAULT_LOSS_Z_LOSS_ENABLED`, `DEFAULT_LOSS_Z_LOSS_LAMBDA`.
+3. **Shared/Loss/LossContext/LossContext.hpp** — Add `z_loss_enabled`, `z_loss_lambda` to `LossOptions`.
+4. **Phases/Phase1_Startup.cu** — Map `hyperparameters.loss_z_loss_`* to `loss_options.z_loss_`*.
+5. **Shared/Loss/ComputeLoss/AutogradLoss.hpp** — Add `z_loss_enabled`, `z_loss_lambda` to `LossConfig`.
+6. **training/Autograd/AutogradTraining.cu** — In `buildLossConfig`, map `opts.z_loss_`* to `lc.z_loss_`*.
+7. **Shared/Loss/ComputeLoss/AutogradLoss.cu** — Implement z-loss kernel and wire as additive term (`L_total += lambda * L_z` when enabled). Backward flows through logits to LM head.
 
 ---
 
@@ -233,7 +248,7 @@ flowchart TD
         LS2 --> Res2["Residual Add"]
     end
     
-    Enc --> EncoderOut["Encoder Output<br/>h_rms=16.0 (target: controlled)"]
+    Enc --> EncoderOut["Encoder Output"]
     
     EncoderOut --> FinalRMS["Final RMSNorm"]
     FinalRMS --> PC1["PC1 Projection (KEEP)"]
@@ -249,20 +264,19 @@ flowchart TD
 
 
 
-**Removed from the diagram**: `center_encoder_residuals` (24 centering ops), `center_hidden_states` (aggressive dual centering at LM head), NumericHead (bias gradient bug + competing objective).
+**Disabled via config in this plan**: `center_encoder_residuals`, `center_hidden_states`. NumericHead is required for SBR — fix its bias gradient bug (bias bypasses autograd).
 
 ---
 
 ## Priority Order
 
-1. **C1: Enable weight tying** — fixes the dead embedding gradient problem
-2. **B1+B2: Remove dual centering** — stop destroying representations; keep PC1 only
-3. **A1: Fix MTP representation mismatch** — apply RMSNorm to MTP input
-4. **C2: Enable QK-Norm** — stabilize attention against h_rms growth
-5. **C3: Enable LayerScale** — control h_rms growth at source (init=0.1)
-6. **A2: Reduce SBR atom_scale** — 1.0 to 0.1
-7. **A3+A4: Reduce dropout and label smoothing**
-8. **B3: Remove/fix NumericHead**
-9. **C4: Add z-loss** — new code needed
-10. **A5: Regenerate vocab** — requires tokenizer retraining + data re-encoding
+1. **C1: Enable weight tying** — fixes the dead embedding gradient problem (emb_rms 1e-6)
+2. **B1+B2: Disable dual centering via config** — reduce gradient attenuation; keep PC1 only
+3. **A1: Fix MTP representation mismatch** — apply RMSNorm to MTP input so encoder gets coherent gradient signals
+4. **A2: Reduce SBR atom_scale** — 1.0 to 0.1 (optional, if atom injection may dominate)
+5. **A3+A4: Reduce dropout and label smoothing**
+6. **B3: Fix NumericHead bias gradient** — required for SBR; bias bypasses autograd
+7. **C2, C3: Enable QK-Norm and LayerScale** — optional stability improvements (already implemented)
+8. **C4: Add z-loss** — config-driven via ai_config.json + ai_config_paths (same pattern as entropy_reg, focal)
+9. **A5: Regenerate vocab** — requires tokenizer retraining + data re-encoding
 

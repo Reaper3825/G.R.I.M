@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -11,6 +12,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 #include <cuda_runtime.h>
@@ -77,10 +81,50 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
         GRIM::Logging::EmitModuleError(kLogModule, "[load] Read failed");
         return false;
     }
+    file.close();
+
+    // Run diagnostics before verification to report what is wrong
+    auto emitFlatBufferLoadDiag = [&](const std::string& issue) {
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] FlatBuffer: " + issue);
+    };
+    std::vector<std::string> issues;
+
+    if (file_size < 8) {
+        issues.push_back("buffer too small (need >= 8 bytes for root_offset + file_id), got " + std::to_string(file_size));
+    }
+    if (file_size >= 4) {
+        uint32_t first4 = 0;
+        std::memcpy(&first4, buffer.data(), 4);
+        if (first4 == 0x474D5254u) {
+            issues.push_back("first 4 bytes = 0x474D5254 (GRMT magic) — looks like training data .grmt, not a checkpoint");
+        }
+    }
+    if (file_size >= 8) {
+        const char* expected_id = "GRMT";
+        const char* tail = reinterpret_cast<const char*>(buffer.data()) + file_size - 4;
+        if (std::memcmp(tail, expected_id, 4) != 0) {
+            std::ostringstream ss;
+            uint32_t tail4 = 0;
+            std::memcpy(&tail4, tail, 4);
+            ss << "file_identifier at end wrong: expected \"GRMT\", got 0x" << std::hex << tail4 << std::dec;
+            issues.push_back(ss.str());
+        }
+        uint32_t root_offset = 0;
+        std::memcpy(&root_offset, buffer.data() + file_size - 8, 4);
+        if (root_offset >= file_size - 8) {
+            issues.push_back("root_offset=" + std::to_string(root_offset) + " points outside buffer (size=" + std::to_string(file_size) + ", truncated or corrupt)");
+        }
+    }
 
     flatbuffers::Verifier verifier(buffer.data(), buffer.size());
     if (!GRIMTransformer::VerifyTransformerModelBuffer(verifier)) {
-        GRIM::Logging::EmitModuleError(kLogModule, "[load] Invalid FlatBuffer");
+        emitFlatBufferLoadDiag("verification failed");
+        for (const auto& s : issues) {
+            emitFlatBufferLoadDiag(s);
+        }
+        if (issues.empty()) {
+            emitFlatBufferLoadDiag("file_size=" + std::to_string(file_size) + " — structure invalid (bad vtables/offsets or schema mismatch)");
+        }
         return false;
     }
 
@@ -697,6 +741,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     std::filesystem::remove(temp_path, ec);
 
     {
+#ifdef _WIN32
         std::ofstream file(temp_path, std::ios::binary);
         if (!file) {
             GRIM::Logging::EmitModuleError(kLogModule, Msg("[save] Failed to open: ", temp_path));
@@ -708,6 +753,34 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             return false;
         }
         file.flush();
+        if (file) {
+            file.close();
+        }
+#else
+        const char* buf = reinterpret_cast<const char*>(builder.GetBufferPointer());
+        const std::size_t buf_size = builder.GetSize();
+        int fd = open(temp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            GRIM::Logging::EmitModuleError(kLogModule, Msg("[save] Failed to open: ", temp_path));
+            return false;
+        }
+        std::size_t total_written = 0;
+        while (total_written < buf_size) {
+            ssize_t n = write(fd, buf + total_written, buf_size - total_written);
+            if (n <= 0) break;
+            total_written += static_cast<std::size_t>(n);
+        }
+        if (total_written != buf_size) {
+            GRIM::Logging::EmitModuleError(kLogModule, "[save] Write failed");
+            close(fd);
+            std::filesystem::remove(temp_path, ec);
+            return false;
+        }
+        if (fsync(fd) != 0) {
+            GRIM::Logging::EmitModuleError(kLogModule, "[save] fsync failed (checkpoint may be corrupt on NFS/Lustre)");
+        }
+        close(fd);
+#endif
     }
 
     if (!config_.atomic_write) {

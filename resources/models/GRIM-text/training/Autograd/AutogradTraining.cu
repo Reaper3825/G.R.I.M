@@ -881,6 +881,8 @@ autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts, const
     lc.smoothing_epsilon   = opts.label_smoothing_enabled ? opts.label_smoothing_epsilon : 0.0f;
     lc.entropy_reg_enabled = opts.entropy_reg_enabled;
     lc.entropy_reg_lambda  = opts.entropy_reg_enabled ? opts.entropy_reg_lambda : 0.0f;
+    lc.z_loss_enabled = opts.z_loss_enabled;
+    lc.z_loss_lambda  = opts.z_loss_enabled ? opts.z_loss_lambda : 0.0f;
     lc.class_balanced_enabled = opts.class_balanced_enabled;
     lc.d_class_weights     = opts.class_balanced_enabled ? d_class_weights : nullptr;
     return lc;
@@ -1055,6 +1057,13 @@ LossResult computeAutogradLoss(
         ts->mtp_diagnostics.head_loss.clear();
         ts->mtp_diagnostics.head_acc.clear();
         ts->mtp_diagnostics.alpha_effective = alpha_effective;
+        // Apply same final RMSNorm as LM head so MTP and LM head receive aligned representations (fixes representation mismatch)
+        intermediates.mtp_input = autograd::rms_norm(
+            intermediates.encoder_output_tensor,
+            ctx.lm_head->finalRmsGamma(),
+            1e-5f,
+            ctx.stream
+        );
         for (int k = 0; k < K && scale > 0.0f; ++k) {
             LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
             if (!head || !head->weight.data || !head->bias.data) continue;
@@ -1068,7 +1077,7 @@ LossResult computeAutogradLoss(
                 ctx.stream
             );
             Tensor logits_k = autograd::matmul(
-                intermediates.encoder_output_tensor,
+                intermediates.mtp_input,
                 head->weight,
                 ctx.stream,
                 intermediates.encoder_output_tensor.data,

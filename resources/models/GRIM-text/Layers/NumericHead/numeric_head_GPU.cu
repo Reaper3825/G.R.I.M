@@ -10,26 +10,13 @@
 //======================================================//
 
 #include "numeric_head_GPU.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"  // autograd::broadcast_add
 
 #include <stdexcept>
 #include <cstdio>
 #include <cmath>
 
 namespace GRIM {
-
-//======================================================//
-//  CUDA Kernel: Add bias to output rows
-//======================================================//
-__global__ void kernelNumericHeadBias(
-    float* __restrict__ output,  // [total_tokens, 2]
-    const float* __restrict__ bias,  // [2]
-    int total_tokens
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= total_tokens * 2) return;
-    const int col = idx % 2;
-    output[idx] += bias[col];
-}
 
 //======================================================//
 //  Constructor
@@ -106,16 +93,9 @@ Tensor NumericHeadLayer::forward(Tensor& encoder_output, int total_tokens, cudaS
         true  // transpose_b=true: output = input @ W^T  -> [total_tokens, 2]
     );
 
-    // Add bias
+    // Add bias via autograd so grad_bias flows (Issue: B3 - kernelNumericHeadBias bypassed autograd)
     if (bias_.data) {
-        const int n = total_tokens * 2;
-        const int block = 256;
-        const int grid = (n + block - 1) / block;
-        kernelNumericHeadBias<<<grid, block, 0, stream>>>(
-            output.data, bias_.data, total_tokens);
-
-        // Bias gradient will be computed in backward via autograd
-        // (not critical for initial version — bias grad is sum of output grads)
+        output = autograd::broadcast_add(output, bias_, stream);
     }
 
     return output;

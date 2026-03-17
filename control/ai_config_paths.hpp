@@ -254,6 +254,10 @@ struct TrainingHyperparameters {
     bool loss_entropy_reg_enabled;
     float loss_entropy_reg_lambda;
 
+    // Z-loss: L_z = (1/N)*sum(log LSE)^2, penalizes logit magnitude drift (PaLM/Gemini)
+    bool loss_z_loss_enabled = false;
+    float loss_z_loss_lambda = 1e-4f;
+
     // Class-balanced loss: reweights per-token loss by 1/freq^β
     bool loss_class_balanced_enabled = false;
     float loss_class_balanced_beta = 0.5f;
@@ -991,6 +995,17 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             } else if (er.is_object()) {
                 params.loss_entropy_reg_enabled = er.value("enabled", params.loss_entropy_reg_enabled);
                 params.loss_entropy_reg_lambda = er.value("lambda", params.loss_entropy_reg_lambda);
+            }
+        }
+
+        // Z-loss: L_z = (1/N)*sum(log LSE)^2 (PaLM/Gemini style)
+        if (auto z_it = loss_cfg.find("z_loss"); z_it != loss_cfg.end()) {
+            const auto& z = *z_it;
+            if (z.is_boolean()) {
+                params.loss_z_loss_enabled = z.get<bool>();
+            } else if (z.is_object()) {
+                params.loss_z_loss_enabled = z.value("enabled", params.loss_z_loss_enabled);
+                params.loss_z_loss_lambda = z.value("lambda", params.loss_z_loss_lambda);
             }
         }
 
