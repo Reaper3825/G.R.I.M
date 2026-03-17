@@ -1080,7 +1080,7 @@ LossResult computeAutogradLoss(
                 intermediates.mtp_input,
                 head->weight,
                 ctx.stream,
-                intermediates.encoder_output_tensor.data,
+                intermediates.mtp_input.data,
                 nullptr,
                 true
             );
