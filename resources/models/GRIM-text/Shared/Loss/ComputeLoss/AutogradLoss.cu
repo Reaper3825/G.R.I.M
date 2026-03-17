@@ -1424,7 +1424,8 @@ __global__ void kernelZLossForward(
     __syncthreads();
 
     float my_sum = 0.0f;
-    for (int t = blockIdx.x * blockDim.x + threadIdx.x; t < num_tokens; t += blockDim.x * gridDim.x) {
+    const int total_threads = blockDim.x * gridDim.x;
+    for (int t = blockIdx.x * blockDim.x + threadIdx.x; t < num_tokens; t += total_threads) {
         const float* row = logits + static_cast<size_t>(t) * vocab_size;
         float max_val = row[0];
         for (int v = 1; v < vocab_size; ++v) {
@@ -1453,7 +1454,8 @@ __global__ void kernelZLossBackward(
     float scale  // upstream grad (typically 1.0)
 ) {
     const float coeff = lambda_over_n * 2.0f * scale;
-    for (int t = blockIdx.x * blockDim.x + threadIdx.x; t < num_tokens; t += blockDim.x * gridDim.x) {
+    const int total_threads = blockDim.x * gridDim.x;
+    for (int t = blockIdx.x * blockDim.x + threadIdx.x; t < num_tokens; t += total_threads) {
         const float* row = logits + static_cast<size_t>(t) * vocab_size;
         float* g_row = grad_logits + static_cast<size_t>(t) * vocab_size;
 

@@ -37,7 +37,7 @@ todos:
     status: completed
   - id: c4-zloss
     content: "C4: Implement z-loss — config in ai_config.json, parse via ai_config_paths, wire through LossOptions/LossConfig/buildLossConfig/AutogradLoss.cu"
-    status: in_progress
+    status: completed
   - id: a5-vocab
     content: "A5: Regenerate vocab closer to 10K target (lower min_subword_freq or more data)"
     status: completed

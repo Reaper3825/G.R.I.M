@@ -652,6 +652,8 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "loss.preference.enabled", "loss.preference.beta",
         "loss.distillation.enabled", "loss.distillation.temperature", "loss.distillation.lambda",
         "loss.masking.enabled", "loss.masking.tag",
+        "loss.entropy_reg.enabled", "loss.entropy_reg.lambda",
+        "loss.z_loss.enabled", "loss.z_loss.lambda",
         
         // Stability overrides
         "stability_overrides_enabled",
