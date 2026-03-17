@@ -679,8 +679,16 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         throw std::runtime_error("AutogradTraining: cached_logits_tensor buffer is NULL - TrainingState MUST allocate logits buffer for inference");
     }
     
+    // RULE 20: Fail loud — validate encoder output populated before LM head
+    if (!intermediates.encoder_output_tensor.data || intermediates.encoder_output_tensor.shape.total_elements() == 0) {
+        throw std::runtime_error("AutogradTraining: encoder_output_tensor not populated before LM head - encoder forward failed or buffer not set");
+    }
     // Forward pass: builds autograd graph through RMSNorm → centering → matmul → bias
     Tensor logits_tensor = ctx.lm_head->forward(intermediates.encoder_output_tensor, intermediates.centered_encoder_output);
+    // RULE 20: Fail loud — validate logits populated (catch uninitialized/bad forward immediately)
+    if (!logits_tensor.data || logits_tensor.shape.total_elements() != static_cast<size_t>(total_tokens) * cfg->vocab_size) {
+        throw std::runtime_error("AutogradTraining: logits_tensor not populated or wrong shape after LM head forward");
+    }
     
     // Copy centered data to scratch buffer for diagnostics (Issue #115)
     if (cfg->lm_head_center_hidden_states && ts->centering_scratch_tensor.data && intermediates.centered_encoder_output.data) {
@@ -1005,12 +1013,35 @@ LossResult computeAutogradLoss(
     const int vocab_size = cfg->vocab_size;
     const int valid_tokens = payload.valid_tokens;
     
+    // RULE 20: Fail loud — no valid tokens means loss would be undefined
+    if (valid_tokens <= 0) {
+        throw std::runtime_error("computeAutogradLoss: valid_tokens=" + std::to_string(valid_tokens) +
+            " — no valid targets, loss would be undefined. Check batch payload.");
+    }
+    
     AG_INFO("Computing loss: tokens=" << total_tokens << " vocab=" << vocab_size
             << " valid=" << valid_tokens);
     
     // ═══════════════════════════════════════════════════════════════════════════
     // 1. TEXT CROSS-ENTROPY LOSS (autograd::unified_loss)
     // ═══════════════════════════════════════════════════════════════════════════
+    
+    // RULE 20: Fail loud — sample-check logits for NaN/Inf before loss (catches bad forward immediately)
+    {
+        const size_t sample = std::min<size_t>(64, intermediates.logits_tensor.shape.total_elements());
+        if (sample > 0) {
+            std::vector<float> h_sample(sample);
+            cudaMemcpyAsync(h_sample.data(), intermediates.logits_tensor.data, sample * sizeof(float),
+                            cudaMemcpyDeviceToHost, ctx.stream);
+            cudaStreamSynchronize(ctx.stream);
+            for (size_t i = 0; i < sample; ++i) {
+                if (!std::isfinite(h_sample[i])) {
+                    throw std::runtime_error("computeAutogradLoss: logits contain non-finite value at index " +
+                        std::to_string(i) + " (forward produced NaN/Inf before loss - fix forward path)");
+                }
+            }
+        }
+    }
     
     // Setup gradient buffer for logits (reuse pre-allocated buffer from TrainingState)
     if (!ts->grad_logits_tensor.data) {
@@ -1038,6 +1069,11 @@ LossResult computeAutogradLoss(
     
     // Move loss tensor to intermediates (TrainingState owns it during backward)
     intermediates.loss_tensor = std::move(loss_tensor);
+    
+    // RULE 20: Fail loud — loss tensor must be populated before MTP or D2H
+    if (!intermediates.loss_tensor.data) {
+        throw std::runtime_error("computeAutogradLoss: loss_tensor not populated after unified_loss");
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
@@ -1057,6 +1093,10 @@ LossResult computeAutogradLoss(
         ts->mtp_diagnostics.head_loss.clear();
         ts->mtp_diagnostics.head_acc.clear();
         ts->mtp_diagnostics.alpha_effective = alpha_effective;
+        // RULE 20: Fail loud — finalRmsGamma required for MTP representation alignment
+        if (!ctx.lm_head->finalRmsGamma().data) {
+            throw std::runtime_error("computeAutogradLoss: MTP enabled but lm_head finalRmsGamma not allocated");
+        }
         // Apply same final RMSNorm as LM head so MTP and LM head receive aligned representations (fixes representation mismatch)
         intermediates.mtp_input = autograd::rms_norm(
             intermediates.encoder_output_tensor,
@@ -1064,6 +1104,10 @@ LossResult computeAutogradLoss(
             1e-5f,
             ctx.stream
         );
+        // RULE 20: Fail loud — mtp_input must be populated for matmul
+        if (!intermediates.mtp_input.data || intermediates.mtp_input.shape.total_elements() == 0) {
+            throw std::runtime_error("computeAutogradLoss: mtp_input not populated after rms_norm — check encoder_output_tensor");
+        }
         for (int k = 0; k < K && scale > 0.0f; ++k) {
             LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
             if (!head || !head->weight.data || !head->bias.data) continue;
@@ -1123,6 +1167,11 @@ LossResult computeAutogradLoss(
             intermediates.loss_tensor = autograd::add(intermediates.loss_tensor, scaled_k, ctx.stream);
         }
         ts->mtp_diagnostics.valid = !ts->mtp_diagnostics.head_loss.empty();
+    }
+    
+    // RULE 20: Fail loud — loss_tensor must be valid before D2H
+    if (!intermediates.loss_tensor.data) {
+        throw std::runtime_error("computeAutogradLoss: loss_tensor not populated before D2H — loss computation or MTP add failed");
     }
     
     // Issue both loss D2H copies before a single sync (batch sync for text + numeric)
