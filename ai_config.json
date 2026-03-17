@@ -159,7 +159,7 @@
                 "plateau_min_delta": 0.004,
                 "plateau_patience": 18
             },
-            "batch_size": 8,
+            "batch_size": 12,
             "batch_strategy": "RANDOM",
             "checkpoint_interval": 2000,
             "cosine_decay": {
@@ -215,12 +215,12 @@
             },
             "learning_rate": 0.0006,
             "lm_head_centering": {
-                "center_encoder_residuals": true,
+                "center_encoder_residuals": false,
                 "center_hidden_states": true,
                 "center_logits": false,
                 "enabled": true,
                 "pc1_power_iters": 5,
-                "project_out_pc1": true
+                "project_out_pc1": false
             },
             "log_interval": 25,
             "log_recorder": {
@@ -278,7 +278,7 @@
                 },
                 "label_smoothing": {
                     "enabled": true,
-                    "epsilon": 0.1
+                    "epsilon": 0.05
                 },
                 "masking": {
                     "enabled": true,
@@ -420,7 +420,7 @@
                     "threshold": 150.0
                 }
             },
-            "tie_embeddings": false,
+            "tie_embeddings": true,
             "use_flash_attention": true,
             "use_gpu": true,
             "validation_interval": 2000,
