@@ -7,7 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <nlohmann/json.hpp>
-#include <windows.h>
+#include "grim_platform.h"
 
 namespace {
 

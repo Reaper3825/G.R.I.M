@@ -1,10 +1,14 @@
 #pragma once
 
 // Export macro for GRIM host symbols that plugins need
-#if defined(GRIM_BUILD_HOST)
-  #define GRIM_EXPORT_SYMBOL __declspec(dllexport)
+#if defined(_WIN32)
+  #if defined(GRIM_BUILD_HOST)
+    #define GRIM_EXPORT_SYMBOL __declspec(dllexport)
+  #else
+    #define GRIM_EXPORT_SYMBOL __declspec(dllimport)
+  #endif
 #else
-  #define GRIM_EXPORT_SYMBOL __declspec(dllimport)
+  #define GRIM_EXPORT_SYMBOL __attribute__((visibility("default")))
 #endif
 
 // Forward declarations with exports

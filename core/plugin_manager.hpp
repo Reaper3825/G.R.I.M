@@ -2,7 +2,7 @@
 #include <string>
 #include <unordered_map>
 #include <filesystem>
-#include <windows.h>
+#include "grim_platform.h"
 #include <vector>
 #include "commands_core.hpp"
 
@@ -17,7 +17,7 @@ public:
 
 private:
     struct LoadedPlugin {
-        HMODULE handle;
+        void* handle;  // HMODULE on Windows, void* from dlopen on Unix
         std::filesystem::file_time_type lastWrite;
         std::vector<std::string> commands;
     };

@@ -1,5 +1,5 @@
 #include "ui_helpers.hpp"
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <chrono>
 #include <string>
 

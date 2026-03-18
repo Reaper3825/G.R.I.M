@@ -14,9 +14,7 @@
 #include <stdexcept>
 #include <thread>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include "core/grim_platform.h"
 
 namespace fs = std::filesystem;
 

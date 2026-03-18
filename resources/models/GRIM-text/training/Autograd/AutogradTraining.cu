@@ -1052,6 +1052,10 @@ LossResult computeAutogradLoss(
         cudaMemcpyAsync(&L0_main, intermediates.loss_tensor.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
         cudaStreamSynchronize(ctx.stream);
         ts->mtp_diagnostics.L0_main = L0_main;
+        if (!std::isfinite(L0_main)) {
+            throw std::runtime_error("computeAutogradLoss: main CE loss (L0_main) is non-finite (" + std::to_string(L0_main) +
+                ") — unified_loss failed before MTP. num_tokens=" + std::to_string(total_tokens) + " vocab=" + std::to_string(vocab_size));
+        }
         const float alpha_effective = cfg->mtp_alpha * std::min(1.0f,
             static_cast<float>(ctx.step) / static_cast<float>(cfg->mtp_alpha_warmup_steps > 0 ? cfg->mtp_alpha_warmup_steps : 1));
         const int K = cfg->mtp_k;
@@ -1126,6 +1130,10 @@ LossResult computeAutogradLoss(
                 ctx.stream
             );
             cudaStreamSynchronize(ctx.stream);
+            if (!std::isfinite(h_loss_k)) {
+                throw std::runtime_error("computeAutogradLoss: MTP head k=" + std::to_string(k) +
+                    " loss is non-finite (" + std::to_string(h_loss_k) + ") — shift=" + std::to_string(shift));
+            }
             ts->mtp_diagnostics.head_loss.push_back(h_loss_k);
             int h_correct = 0, h_valid = 0;
             cudaMemcpy(&h_correct, d_correct, sizeof(int), cudaMemcpyDeviceToHost);
@@ -1175,7 +1183,15 @@ LossResult computeAutogradLoss(
     }
 
     if (!std::isfinite(text_loss)) {
-        throw std::runtime_error("computeAutogradLoss: text_loss is non-finite (" + std::to_string(text_loss) + ")");
+        std::string msg = "computeAutogradLoss: text_loss is non-finite (" + std::to_string(text_loss) + ")";
+        if (ts->mtp_diagnostics.valid) {
+            msg += " L0_main=" + std::to_string(ts->mtp_diagnostics.L0_main);
+            for (size_t i = 0; i < ts->mtp_diagnostics.head_loss.size(); ++i)
+                msg += " head_loss[" + std::to_string(i) + "]=" + std::to_string(ts->mtp_diagnostics.head_loss[i]);
+        }
+        if (have_numeric)
+            msg += " numeric_h_loss=" + std::to_string(numeric_h_loss) + " count=" + std::to_string(numeric_h_count);
+        throw std::runtime_error(msg);
     }
 
     result.text_loss = text_loss;

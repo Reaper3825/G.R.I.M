@@ -1,7 +1,7 @@
 #include "platform_input.hpp"
 
 #ifdef _WIN32
-#include <windows.h>
+#include "grim_platform.h"
 
 namespace PlatformInput {
     

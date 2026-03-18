@@ -190,7 +190,7 @@
                 "no_repeat_ngram_size": 3,
                 "presence_penalty": 0.0,
                 "repetition_penalty": 1.1,
-                "repetition_penalty_window": 64,
+                "repetition_penalty_window": 12,
                 "strategy": "greedy",
                 "temperature": 0.5,
                 "top_k": 50,
@@ -216,9 +216,9 @@
             "learning_rate": 0.0006,
             "lm_head_centering": {
                 "center_encoder_residuals": false,
-                "center_hidden_states": true,
+                "center_hidden_states": false,
                 "center_logits": false,
-                "enabled": true,
+                "enabled": false,
                 "pc1_power_iters": 5,
                 "project_out_pc1": false
             },
@@ -274,7 +274,7 @@
                 "focal": {
                     "alpha": 1.0,
                     "enabled": true,
-                    "gamma": 0.0
+                    "gamma": 0.8
                 },
                 "label_smoothing": {
                     "enabled": true,

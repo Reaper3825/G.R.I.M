@@ -15,8 +15,9 @@
 #include "core/window_manager.hpp"
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
-#include "core/platform_input.hpp"  
-#include "core/platform_clipboard.hpp"  
+#include "core/platform_input.hpp"
+#include "core/platform_clipboard.hpp"
+#include "core/platform_window.hpp"  
 #include "helpers/mouse.hpp"
 #include "helpers/key.hpp"
 #include "helpers/cerr_suppressor.hpp"
@@ -34,17 +35,21 @@
 #include "perception/perception.hpp"
 #include "perception/perception_context.hpp" 
 #include "MMO/UI/UISurfaceRegistry.hpp"
+#ifdef _WIN32
 #include <crtdbg.h>
+#endif
 #include <chrono>
 #include <thread>
 #include <csignal>
 #include <atomic>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include "core/grim_platform.h"
 
+#ifdef _WIN32
 #define CHECK_HEAP() _CrtCheckMemory()
+#else
+#define CHECK_HEAP() ((void)0)
+#endif
 
 GRIM::UnifiedMemoryStorage g_memoryStorage;
 static GRIM::WebSocketServer wsServer;
@@ -232,7 +237,7 @@ int main(int argc, char* argv[])
     aliases::init();
     LOG_PHASE("Aliases initialized", true);
 
-    PluginManager::initialize("D:/G.R.I.M/plugins");
+    PluginManager::initialize((std::filesystem::path(getGrimRootDir()) / "plugins").string());
     LOG_PHASE("Plugin manager initialized", true);
 
     // ======================================================
@@ -316,39 +321,33 @@ int main(int argc, char* argv[])
     }
         LOG_PHASE("Continuous screen capture started", useContinuousCapture);
     // ======================================================
-    // 7. Initialize BGFX global context
+    // 7. Initialize BGFX global context (platform window)
     // ======================================================
     LOG_PHASE("Initializing BGFX on main thread", true);
 
-    HWND tempHwnd = CreateWindowExW(
-        0, L"STATIC", L"TempBGFXWindow",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-        1, 1, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+    void* tempHwnd = PlatformWindow::createBGFXInitWindow();
 
     if (!tempHwnd) {
-        LOG_ERROR("Main", "Failed to create temporary window for BGFX");
+        LOG_ERROR("Main", "Failed to create temporary window for BGFX (platform layer returned null)");
         return 1;
     }
 
-    if (!WindowManager::initGlobalBGFX(tempHwnd)) {
+    if (!WindowManager::initGlobalBGFX(static_cast<HWND>(tempHwnd))) {
         LOG_ERROR("Main", "Failed to initialize BGFX on main thread");
-        DestroyWindow(tempHwnd);
+        PlatformWindow::destroyBGFXInitWindow(tempHwnd);
         return 1;
     }
 
-    ShowWindow(tempHwnd, SW_HIDE);
+    PlatformWindow::setWindowVisible(tempHwnd, false);
     LOG_PHASE("BGFX initialized successfully", true);
 
     // ======================================================
     // 8. Create unified transparent overlay (multi-monitor)
     // ======================================================
     LOG_PHASE("Creating GRIM unified overlay window", true);
-    
-    // Use virtual screen dimensions to span all monitors
-    int virtualX = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    int virtualY = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    int virtualWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    int virtualHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+    int virtualX = 0, virtualY = 0, virtualWidth = 0, virtualHeight = 0;
+    PlatformWindow::getVirtualScreenRect(virtualX, virtualY, virtualWidth, virtualHeight);
     
     LOG_DEBUG("Main", "Virtual screen: " + std::to_string(virtualWidth) + "x" + 
               std::to_string(virtualHeight) + " at (" + 
@@ -461,28 +460,18 @@ int main(int argc, char* argv[])
         auto inputCaptureStart = std::chrono::steady_clock::now();
         InputState input;
         input.captureFromHWND(overlayWin->hwnd);
-        
-        // ✅ NEW: Update Mouse class state from InputState for better reliability
+
+        float wheelDelta = 0.0f;
+        bool quitRequested = false;
+        PlatformWindow::pumpEvents(wheelDelta, quitRequested);
+        input.mouseWheelDelta = wheelDelta;
+        if (quitRequested)
+            WindowManager::requestMainLoopStop();
+
+        // Update Mouse class state from InputState for better reliability
         Mouse::updateFromInput(input);
         Key::updateFromInput(input);
         auto inputCaptureEnd = std::chrono::steady_clock::now();
-        
-        MSG msg{};
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
-        {
-            // Capture mouse wheel before dispatching
-            if (msg.message == WM_MOUSEWHEEL) {
-                // WM_MOUSEWHEEL provides delta in HIWORD(wParam)
-                // Positive = scroll up, Negative = scroll down
-                short delta = GET_WHEEL_DELTA_WPARAM(msg.wParam);
-                input.mouseWheelDelta = static_cast<float>(delta);
-            }
-            
-            if (msg.message == WM_QUIT)
-                WindowManager::requestMainLoopStop();
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
 
         auto uiUpdateStart = std::chrono::steady_clock::now();
         UIRoot::get().update(input, 0.016f);

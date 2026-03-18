@@ -2,7 +2,7 @@
 #include <cstring>
 
 #ifdef _WIN32
-#include <windows.h>
+#include "grim_platform.h"
 
 namespace PlatformClipboard {
     

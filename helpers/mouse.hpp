@@ -4,7 +4,7 @@
 #include <functional>
 #include <mutex>
 #include <vector>
-#include <Windows.h>
+#include "core/grim_platform.h"
 
 // Forward declaration
 struct InputState;

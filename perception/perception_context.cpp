@@ -17,7 +17,7 @@
 #include <atomic> // ✅ For async Vision AI init guard
 
 #ifdef _WIN32
-#include <windows.h>
+#include <windows.h>  // GDI
 #include <psapi.h>
 #pragma comment(lib, "psapi.lib")
 #endif

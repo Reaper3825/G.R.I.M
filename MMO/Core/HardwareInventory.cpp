@@ -10,7 +10,7 @@
 #include <cstdlib>
 
 #ifdef _WIN32
-    #include <windows.h>
+    #include <windows.h>  // GetPhysicallyInstalledSystemMemory, etc.
     #include <dxgi.h>
     #include <Wbemidl.h>
     #include <comdef.h>

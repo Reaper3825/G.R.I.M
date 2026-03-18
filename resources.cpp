@@ -3,7 +3,7 @@
 #include "logger.hpp"
 
 #if defined(_WIN32)
-    #include <windows.h>
+    #include <windows.h>  // GetModuleFileNameA
 #elif defined(__APPLE__)
     #include <mach-o/dyld.h>
 #else

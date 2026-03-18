@@ -1,5 +1,5 @@
 #pragma once
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <bgfx/bgfx.h>
 #include <string>
 

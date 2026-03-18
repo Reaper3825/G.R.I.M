@@ -37,7 +37,7 @@
 #include <vector>
 
 #ifdef _WIN32
-    #include <windows.h>
+    #include <windows.h>  // GetModuleFileNameW, etc.
 #elif defined(__APPLE__)
     #include <mach-o/dyld.h>
 #else

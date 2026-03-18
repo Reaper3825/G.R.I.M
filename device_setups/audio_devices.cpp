@@ -2,7 +2,7 @@
 #include <iostream>
 
 #ifdef _WIN32
-    #include <windows.h>
+    #include <windows.h>  // waveOut API
     #include <mmdeviceapi.h>
     #include <functiondiscoverykeys_devpkey.h>
     #pragma comment(lib, "ole32.lib")

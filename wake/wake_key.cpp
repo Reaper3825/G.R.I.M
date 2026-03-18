@@ -13,7 +13,7 @@
 #include "bootstrap/bootstrap_config.hpp"
 
 #include <thread>
-#include <windows.h>
+#include "core/grim_platform.h"
 
 namespace WakeKey {
 

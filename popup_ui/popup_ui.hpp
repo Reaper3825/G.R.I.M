@@ -1,5 +1,5 @@
 #pragma once
-#include <windows.h>
+#include "core/grim_platform.h"
 #include "popup_anim.hpp"
 #define WM_GRIM_SHOW_POPUP (WM_APP + 1)
 

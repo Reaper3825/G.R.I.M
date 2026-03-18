@@ -3,7 +3,7 @@
 #include "commands/commands_core.hpp"
 #include "logger.hpp"
 
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <string>
 #include <vector>
 #include <filesystem>

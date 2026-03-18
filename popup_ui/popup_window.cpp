@@ -1,7 +1,7 @@
 #include "pch.hpp"
 #include "popup_window.hpp"
 #include "ui/ui_root.hpp"
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <stb/stb_image.h>
 #include "core/ui_sync.hpp"
 #include <algorithm>

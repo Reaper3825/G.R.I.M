@@ -3,7 +3,7 @@
 #include "ui_renderer.hpp"
 #include "input_parser.hpp"
 #include <algorithm>
-#include <windows.h>
+#include "core/grim_platform.h"
 
 
 UIConsoleView::UIConsoleView(ConsoleHistory* h)

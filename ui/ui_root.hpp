@@ -11,7 +11,7 @@
 #include "overlay_renderer.hpp"
 #include "ui_panel.hpp"
 #include "logger.hpp"
-#include <windows.h>
+#include "core/grim_platform.h"
 
 // Include plugin.hpp for GRIM_HOST_API macro
 #include "core/plugin.hpp"

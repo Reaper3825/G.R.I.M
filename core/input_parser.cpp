@@ -13,7 +13,7 @@
 #include <vector>
 #include <sstream>
 #include <unordered_map>
-#include <windows.h>
+#include "grim_platform.h"
 
 // ====================================================
 // Check if mouse input should be processed by UI
@@ -113,16 +113,13 @@ void InputState::captureFromHWND(HWND hwnd)
 
     for (int i = 0; i < 3; ++i)
     {
-        int vk = (i == 0) ? VK_LBUTTON : (i == 1) ? VK_RBUTTON : VK_MBUTTON;
-        bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
-        
+        bool down = PlatformInput::isMouseButtonDown(i);
         if (down && !prevMouseDown[i]) mousePressed[i] = true;  // Transition: up -> down
         if (!down && prevMouseDown[i]) mouseReleased[i] = true; // Transition: down -> up
-        
         mouseDown[i] = down;
         prevMouseDown[i] = down;
     }
-    
+
     // Keyboard state transitions
     for (int i = 0; i < 256; ++i)
     {

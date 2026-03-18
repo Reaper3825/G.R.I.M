@@ -17,7 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
-    #include <windows.h>
+    #include <windows.h>  // CreateProcess, pipes, etc.
 #endif
 
 namespace fs = std::filesystem;

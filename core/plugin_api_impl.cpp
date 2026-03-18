@@ -30,7 +30,7 @@
 
 // Platform-specific includes
 #ifdef _WIN32
-    #include <windows.h>
+    #include <windows.h>  // For CreateProcess, psapi, tlhelp32, etc.
     #include <psapi.h>
     #include <tlhelp32.h>
 #else

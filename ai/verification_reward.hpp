@@ -173,7 +173,12 @@ extern "C" {
      * @param source_type Optional source type (can be NULL)
      * @return Reward score 0.0 to 1.0
      */
-    __declspec(dllexport) float GRIM_VerifyContent(
+    #if defined(_WIN32)
+    __declspec(dllexport)
+    #else
+    __attribute__((visibility("default")))
+    #endif
+    float GRIM_VerifyContent(
         const char* content,
         const char* source_url,
         const char* source_type
@@ -185,14 +190,24 @@ extern "C" {
      * @param url URL to check
      * @return 1 if trusted, 0 otherwise
      */
-    __declspec(dllexport) int GRIM_IsTrustedSource(const char* url);
+    #if defined(_WIN32)
+    __declspec(dllexport)
+    #else
+    __attribute__((visibility("default")))
+    #endif
+    int GRIM_IsTrustedSource(const char* url);
 
     /**
      * @brief Add domain to trusted list
      * 
      * @param domain Domain to add (e.g., "arxiv.org")
      */
-    __declspec(dllexport) void GRIM_AddTrustedDomain(const char* domain);
+    #if defined(_WIN32)
+    __declspec(dllexport)
+    #else
+    __attribute__((visibility("default")))
+    #endif
+    void GRIM_AddTrustedDomain(const char* domain);
 }
 
 } // namespace GRIM::RL

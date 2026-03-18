@@ -24,9 +24,7 @@
 #include <string>
 #include <unordered_map>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include "core/grim_platform.h"
 
 namespace GRIM::MMO {
 

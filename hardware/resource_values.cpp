@@ -5,7 +5,7 @@
 #include <cstdlib>
 
 #ifdef _WIN32
-    #include <windows.h>
+    #include <windows.h>  // GlobalMemoryStatusEx
 #endif
 
 #ifdef WHISPER_USE_CUDA

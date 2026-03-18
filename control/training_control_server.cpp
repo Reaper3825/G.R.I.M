@@ -42,7 +42,7 @@
 #include "ai_config_paths.hpp"
 
 #ifdef _WIN32
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <processthreadsapi.h>
 #endif
 

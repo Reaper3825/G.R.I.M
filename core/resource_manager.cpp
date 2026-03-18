@@ -2,7 +2,7 @@
 #include "logger.hpp"
 
 #ifdef _WIN32
-#include <windows.h>
+#include "grim_platform.h"
 #include <pdh.h>
 #pragma comment(lib, "pdh.lib")
 #endif

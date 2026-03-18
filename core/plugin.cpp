@@ -15,14 +15,14 @@ std::unordered_map<std::string, CommandFunc> commandMap;        // host owns it
 static std::mutex regMutex;
 
 // ---------------- Host exports (stable ABI) ----------------
-extern "C" __declspec(dllexport)
+extern "C" GRIM_HOST_API
 void grim_register_command(const char* name, PluginCommandFunc func) {
     std::lock_guard<std::mutex> lock(regMutex);
     commandMap[std::string(name)] = func;
     LOG_DEBUG("PluginSystem", std::string("Registered command: ") + name);
 }
 
-extern "C" __declspec(dllexport)
+extern "C" GRIM_HOST_API
 void grim_unregister_command(const char* name) {
     std::lock_guard<std::mutex> lock(regMutex);
     commandMap.erase(std::string(name));

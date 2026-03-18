@@ -5,7 +5,7 @@
 #include "../MMO/Core/HardwareInventory.hpp" // Use new hardware inventory
 
 #ifdef _WIN32
-#include <windows.h>
+#include "core/grim_platform.h"
 #endif
 
 namespace GRIM {

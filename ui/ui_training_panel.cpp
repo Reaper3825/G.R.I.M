@@ -7,7 +7,7 @@
 #include <fstream>
 #include <algorithm>
 #include <nlohmann/json.hpp>
-#include <Windows.h>
+#include "core/grim_platform.h"
 #include <filesystem>
 #include "ui_training_panel.hpp"
 #include "ui_slider.hpp"

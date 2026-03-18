@@ -1,5 +1,5 @@
 #pragma once
-#include <Windows.h>
+#include "grim_platform.h"
 #include <string>
 #include <vector>
 

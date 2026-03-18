@@ -5,22 +5,50 @@ cmake_minimum_required(VERSION 3.20)
 
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# Platform-specific vcpkg triplet (user can override with -DVCPKG_TARGET_TRIPLET=...)
+# On Apple Silicon, default to arm64-osx; vcpkg may otherwise pick x64-osx from host.
+if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+  if(APPLE)
+    if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+      set(VCPKG_TARGET_TRIPLET "arm64-osx" CACHE STRING "vcpkg target triplet")
+    elseif(CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+      set(VCPKG_TARGET_TRIPLET "x64-osx" CACHE STRING "vcpkg target triplet")
+    else()
+      # Default Apple Silicon to arm64-osx (Homebrew in /opt/homebrew = M1/M2/M3)
+      set(VCPKG_TARGET_TRIPLET "arm64-osx" CACHE STRING "vcpkg target triplet")
+    endif()
+  elseif(WIN32)
+    set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "vcpkg target triplet")
+  else()
+    set(VCPKG_TARGET_TRIPLET "x64-linux" CACHE STRING "vcpkg target triplet")
+  endif()
+endif()
+message(STATUS "[GRIM] Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
+
 set(VCPKG_FEATURE_FLAGS "manifests,versions" CACHE STRING "")
 set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed")
-include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include")
-include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include/opencv4")
+include_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
+# OpenCV include (layout may vary per triplet)
+if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/opencv4")
+  include_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/opencv4")
+endif()
 # Make GRIM-text shared headers available to all targets (e.g., TrainingLoop)
 include_directories("${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/Shared")
 
 # Add library search paths for both Debug and Release
-link_directories("${VCPKG_INSTALLED_DIR}/x64-windows/lib")
-link_directories("${VCPKG_INSTALLED_DIR}/x64-windows/debug/lib")
+link_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")
+if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib")
+  link_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib")
+endif()
 
 project(GRIM LANGUAGES CXX C)
 
 # Enable CUDA support for libraries that use GPU (ONNX Runtime, Whisper, etc.)
-# Note: We don't compile .cu files in main GRIM build anymore (GRIM-text is separate)
-enable_language(CUDA OPTIONAL)
+# Note: CUDA is not available on macOS - only enable on Windows/Linux
+# We don't compile .cu files in main GRIM build anymore (GRIM-text is separate)
+if(NOT APPLE)
+  enable_language(CUDA OPTIONAL)
+endif()
 
 if (CMAKE_CUDA_COMPILER)
     message(STATUS "[GRIM] CUDA detected - GPU acceleration available for ONNX Runtime, Whisper")
@@ -36,11 +64,12 @@ if (MSVC)
 endif()
 
 add_compile_definitions(
-    NOMINMAX
-    WIN32_LEAN_AND_MEAN
     $<$<CONFIG:Debug>:BX_CONFIG_DEBUG=1>
     $<$<NOT:$<CONFIG:Debug>>:BX_CONFIG_DEBUG=0>
 )
+if(WIN32)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 
 set(GRIM_ROOT_DIR ${CMAKE_SOURCE_DIR} CACHE PATH "Root of GRIM project")
 add_compile_definitions(GRIM_ROOT_DIR="${GRIM_ROOT_DIR}")
@@ -74,6 +103,15 @@ include(cmake/Options.cmake)
 
 include(cmake/Sources.cmake)
 
+# Platform window layer: one implementation per OS (avoid duplicate symbols)
+list(FILTER GRIM_SOURCES EXCLUDE REGEX "core/platform_window_.*\\.cpp$")
+if(WIN32)
+  list(APPEND GRIM_SOURCES ${CMAKE_SOURCE_DIR}/core/platform_window_win32.cpp)
+elseif(APPLE)
+  list(APPEND GRIM_SOURCES ${CMAKE_SOURCE_DIR}/core/platform_window_macos.cpp)
+  target_link_libraries(GRIM PRIVATE "-framework CoreGraphics")
+endif()
+
 # =========================================================
 # Copy STB headers from bimg 3rdparty to deps/include
 # =========================================================
@@ -105,7 +143,7 @@ include(cmake/Config.cmake)
 
 # Ensure ONNX Runtime includes are available if perception is enabled
 if(GRIM_USE_PERCEPTION)
-    target_include_directories(GRIM PRIVATE "${VCPKG_INSTALLED_DIR}/x64-windows/include")
+    target_include_directories(GRIM PRIVATE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
 endif()
 
 # Perception libraries are now linked in Config.cmake
@@ -159,10 +197,25 @@ target_link_libraries(GRIM_EXPORT INTERFACE GRIM)
 target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external/porcupine/include
 )
-target_link_directories(GRIM PRIVATE
-    ${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64
-)
-target_link_libraries(GRIM PRIVATE pv_porcupine)
+# Porcupine: platform-specific lib path (picovoice layout)
+if(APPLE)
+  if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+    set(_porcupine_lib "macos/arm64")
+  else()
+    set(_porcupine_lib "macos/x86_64")
+  endif()
+elseif(WIN32)
+  set(_porcupine_lib "windows/amd64")
+else()
+  set(_porcupine_lib "linux/x86_64")
+endif()
+set(_porcupine_dir "${CMAKE_SOURCE_DIR}/external/porcupine/lib/${_porcupine_lib}")
+if(EXISTS "${_porcupine_dir}")
+  target_link_directories(GRIM PRIVATE "${_porcupine_dir}")
+  target_link_libraries(GRIM PRIVATE pv_porcupine)
+else()
+  message(WARNING "[GRIM] Porcupine lib not found at ${_porcupine_dir} - wake word may be disabled")
+endif()
 
 # =========================================================
 # Whisper Linking

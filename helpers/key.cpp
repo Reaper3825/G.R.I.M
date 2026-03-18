@@ -2,7 +2,7 @@
 #include "input_parser.hpp"
 #include "logger.hpp"
 
-#include <windows.h>
+#include "core/grim_platform.h"
 
 std::unordered_map<KeyCode, Key::KeyState> Key::keyStates;
 

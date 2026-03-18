@@ -43,9 +43,9 @@ if(CCACHE_PROGRAM)
 endif()
 
 # =========================================================
-# GPU acceleration setup
+# GPU acceleration setup (CUDA not available on macOS)
 # =========================================================
-if(GRIM_USE_CUDA)
+if(GRIM_USE_CUDA AND NOT APPLE)
     add_definitions(-DWHISPER_USE_CUDA)
     set(GGML_CUDA ON CACHE BOOL "Enable CUDA in ggml")
 
@@ -131,22 +131,25 @@ if(GRIM_USE_PERCEPTION)
     endif()
     
     # ONNX Runtime - use IMPORTED target to avoid transitive dependency issues
-    set(ONNX_LIB_PATH "${VCPKG_INSTALLED_DIR}/x64-windows/lib/onnxruntime.lib")
+    if(WIN32)
+        set(ONNX_LIB_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/onnxruntime.lib")
+    else()
+        set(ONNX_LIB_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libonnxruntime.a")
+    endif()
     if(EXISTS "${ONNX_LIB_PATH}")
         message(STATUS "[GRIM] ✓ ONNX Runtime found")
         
-        # Create IMPORTED target to prevent CMake from resolving broken transitive dependencies
         if(NOT TARGET onnxruntime_imported)
             add_library(onnxruntime_imported STATIC IMPORTED GLOBAL)
             set_target_properties(onnxruntime_imported PROPERTIES
                 IMPORTED_LOCATION "${ONNX_LIB_PATH}"
-                INTERFACE_INCLUDE_DIRECTORIES "${VCPKG_INSTALLED_DIR}/x64-windows/include"
+                INTERFACE_INCLUDE_DIRECTORIES "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
                 IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
             )
         endif()
         
         list(APPEND GRIM_PERCEPTION_LIBS onnxruntime_imported)
-        target_include_directories(GRIM PRIVATE "${VCPKG_INSTALLED_DIR}/x64-windows/include")
+        target_include_directories(GRIM PRIVATE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
         add_compile_definitions(GRIM_HAS_ONNXRUNTIME)
     else()
         message(WARNING "[GRIM] ✗ ONNX Runtime not found at ${ONNX_LIB_PATH}")
@@ -204,14 +207,21 @@ target_link_libraries(GRIM PRIVATE
 # =========================================================
 # OpenAL - Force release version for all configurations
 # =========================================================
-# Create IMPORTED target to avoid CUDA device link issues with raw library paths
-set(_openal_release_lib "${VCPKG_INSTALLED_DIR}/x64-windows/lib/OpenAL32.lib")
-if(NOT TARGET OpenAL32_IMPORTED)
-    add_library(OpenAL32_IMPORTED STATIC IMPORTED GLOBAL)
-    set_target_properties(OpenAL32_IMPORTED PROPERTIES
-        IMPORTED_LOCATION "${_openal_release_lib}"
-    )
+if(WIN32)
+    set(_openal_release_lib "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/OpenAL32.lib")
+else()
+    set(_openal_release_lib "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libopenal.a")
 endif()
-target_link_libraries(GRIM PRIVATE OpenAL32_IMPORTED)
+if(EXISTS "${_openal_release_lib}")
+    if(NOT TARGET OpenAL32_IMPORTED)
+        add_library(OpenAL32_IMPORTED STATIC IMPORTED GLOBAL)
+        set_target_properties(OpenAL32_IMPORTED PROPERTIES
+            IMPORTED_LOCATION "${_openal_release_lib}"
+        )
+    endif()
+    target_link_libraries(GRIM PRIVATE OpenAL32_IMPORTED)
+elseif(APPLE)
+    target_link_libraries(GRIM PRIVATE OpenAL)
+endif()
 
 

@@ -48,7 +48,7 @@ namespace Colors {
 // Console color helpers
 // ====================================================
 #ifdef _WIN32
-    #include <windows.h>
+    #include "core/grim_platform.h"
 
     inline void setConsoleColor(const Color& c) {
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);

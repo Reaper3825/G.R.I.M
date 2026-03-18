@@ -7,10 +7,14 @@
 #include <filesystem>
 
 // Export macros for logger functions
-#if defined(GRIM_BUILD_HOST)
-  #define GRIM_LOGGER_API __declspec(dllexport)
+#if defined(_WIN32)
+  #if defined(GRIM_BUILD_HOST)
+    #define GRIM_LOGGER_API __declspec(dllexport)
+  #else
+    #define GRIM_LOGGER_API __declspec(dllimport)
+  #endif
 #else
-  #define GRIM_LOGGER_API __declspec(dllimport)
+  #define GRIM_LOGGER_API __attribute__((visibility("default")))
 #endif
 
 // =====================================================

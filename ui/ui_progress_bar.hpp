@@ -9,7 +9,7 @@ public:
 
     void update(const InputState& input, float dt) override;
     void draw(class UIRenderer& renderer) override;
-    void drawOverlay(class OverlayRenderer& renderer, const Vec2& panelPos);
+    void drawOverlay(class OverlayRenderer& renderer, const Vec2& panelPos) override;
 
     // Progress control
     void setValue(float val);

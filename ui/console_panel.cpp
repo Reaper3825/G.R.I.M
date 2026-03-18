@@ -7,7 +7,7 @@
 #include "ui_slider.hpp"  // For checking if slider is editing
 #include "commands/commands_core.hpp"
 #include "helpers/key.hpp"
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <chrono>
 #include <algorithm>
 #include <iomanip>

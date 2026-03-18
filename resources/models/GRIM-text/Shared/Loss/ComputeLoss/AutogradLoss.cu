@@ -1335,11 +1335,26 @@ __host__ Tensor unified_loss(
             "Check valid_mask and targets for corruption.");
     }
     
+    if (!std::isfinite(h_loss_sum)) {
+        throw std::runtime_error("[unified_loss] h_loss_sum is non-finite (" + std::to_string(h_loss_sum) +
+            ") — NLL kernel produced NaN/Inf. valid_count=" + std::to_string(h_valid_count) +
+            " weight_sum=" + std::to_string(h_weight_sum) + " focal=" + std::to_string(config.focal_gamma) +
+            " smoothing=" + std::to_string(config.smoothing_epsilon) + " entropy_lambda=" + std::to_string(config.entropy_reg_lambda));
+    }
+    
     // Mean loss: weighted_loss_sum / weight_sum (class-balanced) or loss_sum / valid_count (standard)
     const float normalization = (config.d_class_weights && h_weight_sum > 0.0f)
         ? h_weight_sum
         : static_cast<float>(h_valid_count);
+    if (normalization <= 0.0f || !std::isfinite(normalization)) {
+        throw std::runtime_error("[unified_loss] normalization invalid (" + std::to_string(normalization) +
+            ") — valid_count=" + std::to_string(h_valid_count) + " weight_sum=" + std::to_string(h_weight_sum));
+    }
     const float mean_loss = h_loss_sum / normalization;
+    if (!std::isfinite(mean_loss)) {
+        throw std::runtime_error("[unified_loss] mean_loss is non-finite (" + std::to_string(mean_loss) +
+            ") after h_loss_sum=" + std::to_string(h_loss_sum) + " / norm=" + std::to_string(normalization));
+    }
     
     AG_TRACE("[unified_loss] loss_sum=%.6f valid_count=%d mean_loss=%.6f\n",
              h_loss_sum, h_valid_count, mean_loss);

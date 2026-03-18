@@ -16,7 +16,7 @@
 #include <leptonica/allheaders.h>
 
 #ifdef _WIN32
-#include <windows.h>
+#include <windows.h>  // GDI screen capture
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
 #endif

@@ -11,21 +11,25 @@ struct PluginCommand {
     PluginCommandFunc func;
 };
 
-// ---------- Export macros ----------
-#if defined(GRIM_BUILD_HOST)
-  // Building the GRIM host (exe): host symbols are exported
-  #define GRIM_HOST_API __declspec(dllexport)
+// ---------- Export macros (Windows: __declspec, macOS/Linux: visibility attribute) ----------
+#if defined(__APPLE__) || defined(__linux__)
+  #define GRIM_HOST_API __attribute__((visibility("default")))
+  #if defined(GRIM_BUILD_PLUGIN)
+    #define GRIM_PLUGIN_API __attribute__((visibility("default")))
+  #else
+    #define GRIM_PLUGIN_API
+  #endif
 #else
-  // From plugins: host symbols are imported
-  #define GRIM_HOST_API __declspec(dllimport)
-#endif
-
-#if defined(GRIM_BUILD_PLUGIN)
-  // Building a plugin DLL: plugin entry is exported
-  #define GRIM_PLUGIN_API __declspec(dllexport)
-#else
-  // Not building a plugin: no export needed
-  #define GRIM_PLUGIN_API
+  #if defined(GRIM_BUILD_HOST)
+    #define GRIM_HOST_API __declspec(dllexport)
+  #else
+    #define GRIM_HOST_API __declspec(dllimport)
+  #endif
+  #if defined(GRIM_BUILD_PLUGIN)
+    #define GRIM_PLUGIN_API __declspec(dllexport)
+  #else
+    #define GRIM_PLUGIN_API
+  #endif
 #endif
 
 extern "C" {

@@ -24,7 +24,7 @@
 extern nlohmann::json aiConfig;
 
 #ifdef _WIN32
-#include <windows.h>
+#include <windows.h>  // GDI
 #include <wininet.h>
 #pragma comment(lib, "wininet.lib")
 #endif

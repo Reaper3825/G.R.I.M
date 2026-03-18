@@ -9,7 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
-#include <windows.h>
+#include "core/grim_platform.h"
 #endif
 
 using json = nlohmann::json;

@@ -4,7 +4,7 @@
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <Wlanapi.h>
 #pragma comment(lib, "wlanapi.lib")
 #endif

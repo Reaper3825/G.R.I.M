@@ -3,7 +3,7 @@
 #include <vector>
 #include <filesystem>
 #include <nlohmann/json.hpp>
-#include <windows.h>
+#include "core/grim_platform.h"
 #include "console_history.hpp"
 #include "timer.hpp"
 

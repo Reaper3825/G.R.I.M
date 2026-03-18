@@ -8,7 +8,7 @@
 #include <cstring>
 
 #ifdef _WIN32
-    #include <windows.h>
+    #include <windows.h>  // WaitForSingleObject, CreateEvent, etc.
     #include <psapi.h>
 #elif __linux__
     #include <sys/sysinfo.h>

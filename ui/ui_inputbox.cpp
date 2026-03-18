@@ -7,7 +7,7 @@
 #include "helpers/key.hpp"
 #include "ui_focus_manager.hpp"
 #include "logger.hpp"
-#include <Windows.h>
+#include "core/grim_platform.h"
 
 // Static guard to prevent event propagation between input boxes
 static UIInputBox* g_activeInputBox = nullptr;

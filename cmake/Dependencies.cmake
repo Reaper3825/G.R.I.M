@@ -21,13 +21,14 @@ if (NOT DEFINED VCPKG_INSTALLED_DIR)
     set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
 endif()
 
-set(_dll_dir_vcpkg "${VCPKG_INSTALLED_DIR}/x64-windows/bin")
+set(_dll_dir_vcpkg "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
 set(_dll_dir_whisper "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/bin")
 set(_dll_dir_porcupine "${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64")
 
 # =========================================================
-# Helper macro for DLL copies
+# Helper macro for DLL copies (Windows only)
 # =========================================================
+if(WIN32)
 function(grim_copy_dlls SRC_DIR)
     foreach(_dll IN LISTS ARGN)
         if (EXISTS "${SRC_DIR}/${_dll}")
@@ -40,6 +41,11 @@ function(grim_copy_dlls SRC_DIR)
         endif()
     endforeach()
 endfunction()
+else()
+function(grim_copy_dlls SRC_DIR)
+    # No-op on non-Windows (dylib/so are linked, not copied)
+endfunction()
+endif()
 
 # =========================================================
 # Whisper / GGML DLLs

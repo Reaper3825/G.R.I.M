@@ -6,7 +6,7 @@
 #include "pch.hpp"
 #include "voice/voice_speak.hpp"
 #include "ui/ui_root.hpp"
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <atomic>
 #include <thread>
 #include <chrono>

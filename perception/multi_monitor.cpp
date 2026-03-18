@@ -4,7 +4,7 @@
 #include <algorithm>
 
 #ifdef _WIN32
-#include <windows.h>
+#include "core/grim_platform.h"
 #include <ShellScalingApi.h>
 #pragma comment(lib, "Shcore.lib")
 #endif

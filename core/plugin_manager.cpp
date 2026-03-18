@@ -6,7 +6,49 @@
 #include <thread>
 #include <chrono>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 using namespace std::chrono_literals;
+
+namespace {
+
+#ifdef _WIN32
+const char* kPluginExt = ".dll";
+#elif __APPLE__
+const char* kPluginExt = ".dylib";
+#else
+const char* kPluginExt = ".so";
+#endif
+
+void* loadLib(const std::filesystem::path& path) {
+#ifdef _WIN32
+    return LoadLibraryA(path.string().c_str());
+#else
+    return dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+}
+
+void unloadLib(void* handle) {
+#ifdef _WIN32
+    if (handle) FreeLibrary(static_cast<HMODULE>(handle));
+#else
+    if (handle) dlclose(handle);
+#endif
+}
+
+void* getSymbol(void* handle, const char* name) {
+#ifdef _WIN32
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle), name));
+#else
+    return dlsym(handle, name);
+#endif
+}
+
+} // namespace
 
 void PluginManager::initialize(const std::string& folder) {
     pluginDir = folder;
@@ -18,24 +60,23 @@ void PluginManager::initialize(const std::string& folder) {
 
     LOG_DEBUG("PluginManager", "Scanning for plugins in: " + pluginDir.string());
     for (auto& entry : std::filesystem::directory_iterator(pluginDir)) {
-    if (entry.path().extension() != ".dll")
-        continue;
+        if (entry.path().extension() != kPluginExt)
+            continue;
 
-    auto name = entry.path().stem().string();
-    if (name == "core_plugin")
-        continue; // skip built-in core
+        auto name = entry.path().stem().string();
+        if (name == "core_plugin")
+            continue;
 
-    loadPlugin(entry.path());
-}
-
+        loadPlugin(entry.path());
+    }
 }
 
 void PluginManager::checkForHotReload() {
     for (auto& entry : std::filesystem::directory_iterator(pluginDir)) {
-            if (entry.path().stem().string() == "core_plugin")
-        continue; // skip built-in core
+        if (entry.path().stem().string() == "core_plugin")
+            continue;
 
-        if (entry.path().extension() != ".dll")
+        if (entry.path().extension() != kPluginExt)
             continue;
 
         std::string name = entry.path().filename().string();
@@ -64,59 +105,53 @@ void PluginManager::unloadAll() {
 
 void PluginManager::loadPlugin(const std::filesystem::path& path) {
     std::string name = path.filename().string();
-    HMODULE lib = LoadLibraryA(path.string().c_str());
+    void* lib = loadLib(path);
     if (!lib) {
         LOG_ERROR("PluginManager", "Failed to load plugin: " + name);
         return;
     }
 
-    // Use new plugin API
     using GetInfoFunc = const GrimPluginInfo* (*)();
     using InitFunc = GrimResult (*)(const GrimPluginAPI*);
-    
-    auto getInfoFunc = reinterpret_cast<GetInfoFunc>(GetProcAddress(lib, "grim_plugin_get_info"));
-    auto initFunc = reinterpret_cast<InitFunc>(GetProcAddress(lib, "grim_plugin_init"));
-    
+
+    auto getInfoFunc = reinterpret_cast<GetInfoFunc>(getSymbol(lib, "grim_plugin_get_info"));
+    auto initFunc = reinterpret_cast<InitFunc>(getSymbol(lib, "grim_plugin_init"));
+
     if (!getInfoFunc || !initFunc) {
         LOG_ERROR("PluginManager", "Plugin missing required functions: " + name);
-        FreeLibrary(lib);
+        unloadLib(lib);
         return;
     }
 
     try {
-        // Get plugin info
         const GrimPluginInfo* info = getInfoFunc();
         if (!info) {
             LOG_ERROR("PluginManager", "Plugin get_info returned null: " + name);
-            FreeLibrary(lib);
+            unloadLib(lib);
             return;
         }
-        
-        // Check API version compatibility
+
         if (info->api_version > GRIM_API_VERSION) {
             LOG_ERROR("PluginManager", "Plugin API version mismatch: " + name);
-            FreeLibrary(lib);
+            unloadLib(lib);
             return;
         }
-        
+
         LOG_DEBUG("PluginManager", "Loading plugin: " + std::string(info->name) + " v" + info->version);
-        
-        // Create API table with requested permissions
+
         GrimPluginAPI* api = PluginAPI::createPluginAPI(
             info->name,
             path.string(),
             info->required_permissions
         );
-        
-        // Initialize plugin
+
         GrimResult result = initFunc(api);
         if (result != GRIM_OK) {
             LOG_ERROR("PluginManager", "Plugin init failed: " + name);
-            FreeLibrary(lib);
+            unloadLib(lib);
             return;
         }
-        
-        // Store plugin info
+
         LoadedPlugin lp;
         lp.handle = lib;
         lp.lastWrite = std::filesystem::last_write_time(path);
@@ -125,7 +160,7 @@ void PluginManager::loadPlugin(const std::filesystem::path& path) {
         LOG_DEBUG("PluginManager", "Loaded plugin: " + std::string(info->name));
     } catch (...) {
         LOG_ERROR("PluginManager", "Exception loading " + name);
-        FreeLibrary(lib);
+        unloadLib(lib);
     }
 }
 
@@ -137,19 +172,16 @@ void PluginManager::unloadPlugin(const std::string& name) {
     LOG_DEBUG("PluginManager", "Unloading plugin: " + name);
 
     try {
-        // Call plugin shutdown
         using ShutdownFunc = void (*)();
         auto shutdownFunc = reinterpret_cast<ShutdownFunc>(
-            GetProcAddress(it->second.handle, "grim_plugin_shutdown"));
-        
+            getSymbol(it->second.handle, "grim_plugin_shutdown"));
+
         if (shutdownFunc) {
             shutdownFunc();
         }
-        
-        // Clean up plugin resources
+
         PluginAPI::cleanupPluginContext(name);
-        
-        FreeLibrary(it->second.handle);
+        unloadLib(it->second.handle);
     } catch (...) {
         LOG_ERROR("PluginManager", "Error while unloading " + name);
     }
