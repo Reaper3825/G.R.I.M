@@ -1066,10 +1066,10 @@ LossResult computeAutogradLoss(
         ts->mtp_diagnostics.alpha_effective = alpha_effective;
 
         // Resolve mtp_input: same representation as LM head matmul input (A1 fix)
-        Tensor mtp_input;
+        const Tensor* mtp_input = nullptr;
         if (intermediates.centered_encoder_output.data) {
             // LM head used center_hidden_states or project_out_pc1 — use that buffer
-            mtp_input = intermediates.centered_encoder_output;
+            mtp_input = &intermediates.centered_encoder_output;
         } else if (ctx.lm_head->config().has_final_rms_norm && ctx.lm_head->finalRmsGamma().data) {
             // LM head used only RMSNorm — apply it so MTP sees the same normalized representation
             intermediates.mtp_input_tensor = autograd::rms_norm(
@@ -1078,9 +1078,9 @@ LossResult computeAutogradLoss(
                 ctx.lm_head->config().rms_epsilon,
                 ctx.stream
             );
-            mtp_input = intermediates.mtp_input_tensor;
+            mtp_input = &intermediates.mtp_input_tensor;
         } else {
-            mtp_input = intermediates.encoder_output_tensor;
+            mtp_input = &intermediates.encoder_output_tensor;
         }
 
         for (int k = 0; k < K && scale > 0.0f; ++k) {
@@ -1096,10 +1096,10 @@ LossResult computeAutogradLoss(
                 ctx.stream
             );
             Tensor logits_k = autograd::matmul(
-                mtp_input,
+                *mtp_input,
                 head->weight,
                 ctx.stream,
-                mtp_input.data,
+                mtp_input->data,
                 nullptr,
                 true
             );
