@@ -1039,6 +1039,11 @@ LossResult computeAutogradLoss(
 
     // ═══════════════════════════════════════════════════════════════════════════
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
+    //
+    // FIX (A1): MTP heads MUST consume the same representation as the LM head.
+    // Previously MTP used raw encoder_output_tensor while the LM head applies
+    // RMSNorm + optional center/PC1. That mismatch sent conflicting gradients to
+    // the encoder. Now we use the exact same matmul input the LM head uses.
     // ═══════════════════════════════════════════════════════════════════════════
     ts->mtp_diagnostics.valid = false;
     if (ctx.model && cfg->mtp_enabled && cfg->mtp_k > 0 &&
@@ -1055,6 +1060,25 @@ LossResult computeAutogradLoss(
         ts->mtp_diagnostics.head_loss.clear();
         ts->mtp_diagnostics.head_acc.clear();
         ts->mtp_diagnostics.alpha_effective = alpha_effective;
+
+        // Resolve mtp_input: same representation as LM head matmul input (A1 fix)
+        Tensor mtp_input;
+        if (intermediates.centered_encoder_output.data) {
+            // LM head used center_hidden_states or project_out_pc1 — use that buffer
+            mtp_input = intermediates.centered_encoder_output;
+        } else if (ctx.lm_head->config().has_final_rms_norm && ctx.lm_head->finalRmsGamma().data) {
+            // LM head used only RMSNorm — apply it so MTP sees the same normalized representation
+            intermediates.mtp_input_tensor = autograd::rms_norm(
+                intermediates.encoder_output_tensor,
+                ctx.lm_head->finalRmsGamma(),
+                ctx.lm_head->config().rms_epsilon,
+                ctx.stream
+            );
+            mtp_input = intermediates.mtp_input_tensor;
+        } else {
+            mtp_input = intermediates.encoder_output_tensor;
+        }
+
         for (int k = 0; k < K && scale > 0.0f; ++k) {
             LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
             if (!head || !head->weight.data || !head->bias.data) continue;
@@ -1068,10 +1092,10 @@ LossResult computeAutogradLoss(
                 ctx.stream
             );
             Tensor logits_k = autograd::matmul(
-                intermediates.encoder_output_tensor,
+                mtp_input,
                 head->weight,
                 ctx.stream,
-                intermediates.encoder_output_tensor.data,
+                mtp_input.data,
                 nullptr,
                 true
             );
