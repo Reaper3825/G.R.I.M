@@ -6,7 +6,7 @@
 
 namespace UIDrawHelpers {
     
-    // Draw a section header with background tint
+    // Draw a section header with subtle divider  [GLASS_PHASE5]
     inline void drawSectionHeader(OverlayRenderer& renderer, 
                                    const Vec2& pos, 
                                    float width, 
@@ -16,20 +16,14 @@ namespace UIDrawHelpers {
         
         float headerHeight = Sizes::HeaderHeight;
         
-        // Draw tinted background
-        renderer.drawRect(pos, {width, headerHeight}, tintColor);
-        
-        // Draw top border
-        renderer.drawRect(pos, {width, Sizes::BorderWidth}, Colors::BorderPrimary);
-        
-        // Draw bottom border
-        renderer.drawRect({pos.x, pos.y + headerHeight - Sizes::BorderWidth}, 
-                         {width, Sizes::BorderWidth}, Colors::BorderPrimary);
-        
         // Draw header text (centered vertically)
         float textY = pos.y + (headerHeight / 2.0f) - 8;
         renderer.drawText({pos.x + Spacing::PaddingX, textY}, 
                          title, Colors::TextHeader);
+        
+        // Draw single subtle divider at bottom  [GLASS_PHASE5]
+        renderer.drawRect({pos.x, pos.y + headerHeight - 1}, 
+                         {width, 1}, Colors::DividerLine);
     }
     
     // Draw a horizontal divider line
@@ -55,7 +49,7 @@ namespace UIDrawHelpers {
         renderer.drawText({pos.x + labelWidth, pos.y}, value, Colors::TextValue);
     }
     
-    // Draw a widget background with optional hover state
+    // Draw a widget background with optional hover state (glassmorphism)
     inline void drawWidgetBackground(OverlayRenderer& renderer,
                                      const Vec2& pos,
                                      const Vec2& size,
@@ -73,19 +67,17 @@ namespace UIDrawHelpers {
             bgColor = Colors::WidgetBgHover;
         }
         
-        // Draw background
-        renderer.drawRect(pos, size, bgColor);
+        float r = Sizes::WidgetRadius;
         
-        // Draw border
-        uint32_t borderColor = isHovered ? Colors::BorderFocus : Colors::BorderSubtle;
-        if (isActive) borderColor = Colors::Primary;
+        // Glass background (rounded)
+        renderer.drawRoundedRect(pos, size, bgColor, r);
+        
+        // Glass border (rounded)
+        uint32_t borderColor = isActive ? Colors::Primary : 
+                               (isHovered ? Colors::BorderFocus : Colors::BorderPrimary);
         if (isDisabled) borderColor = Colors::BorderSubtle;
         
-        float borderW = Sizes::BorderWidth;
-        renderer.drawRect(pos, {size.x, borderW}, borderColor);  // Top
-        renderer.drawRect(pos, {borderW, size.y}, borderColor);  // Left
-        renderer.drawRect({pos.x, pos.y + size.y - borderW}, {size.x, borderW}, borderColor);  // Bottom
-        renderer.drawRect({pos.x + size.x - borderW, pos.y}, {borderW, size.y}, borderColor);  // Right
+        renderer.drawRoundedBorder(pos, size, borderColor, r, Sizes::BorderWidth);
     }
     
     // Draw a category indicator (small colored bar on left)

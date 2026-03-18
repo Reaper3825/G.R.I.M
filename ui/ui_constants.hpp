@@ -17,7 +17,7 @@ constexpr float kBottomPad   = 8.0f;
 constexpr float kFontSize    = 16.0f;
 constexpr float kLineSpacing = 1.2f;
 
-// Debug colors (ARGB → BGFX uses ABGR internally)
-constexpr uint32_t kColorBackground = 0xFF181818;
-constexpr uint32_t kColorTitleBar   = 0xFF202020;
-constexpr uint32_t kColorInputBar   = 0xFF1E1E1E;
+// Glass theme colors (ARGB → BGFX uses ABGR internally)  [GLASS_PHASE6]
+constexpr uint32_t kColorBackground = 0xFF0E0E0E;
+constexpr uint32_t kColorTitleBar   = 0xF0202020;
+constexpr uint32_t kColorInputBar   = 0xF01A1A1A;

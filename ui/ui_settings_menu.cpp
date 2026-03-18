@@ -1,5 +1,6 @@
 #include "ui_settings_menu.hpp"
 #include "overlay_renderer.hpp"
+#include "ui_theme.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
 #include "ui_root.hpp"
@@ -19,7 +20,7 @@ UISettingsMenu::UISettingsMenu()
     position = { 200, 425 };
     size = { 500, 600 };  // Increased height to accommodate scrollbox
     setVisible(false);
-    setBackground(0xC0202020);
+    setBackground(UITheme::Colors::PanelBg);
     
     // Create scroll box for content
     scrollBox = std::make_shared<UIScrollBox>();
@@ -776,42 +777,31 @@ bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
     
     scrollBox->drawOverlay(renderer, position);
     
+    using namespace UITheme;
     if (saveButton) {
         Vec2 btnPos = saveButton->getPosition();
         Vec2 btnSize = saveButton->getSize();
         
-        uint32_t btnColor = 0xFF2A4A2A;
-        uint32_t borderColor = 0xFF00FF00;
-        
-        renderer.drawRect(btnPos, btnSize, btnColor);
-        renderer.drawRect(btnPos, {btnSize.x, 2}, borderColor);
-        renderer.drawRect(btnPos, {2, btnSize.y}, borderColor);
-        renderer.drawRect({btnPos.x, btnPos.y + btnSize.y - 2}, {btnSize.x, 2}, borderColor);
-        renderer.drawRect({btnPos.x + btnSize.x - 2, btnPos.y}, {2, btnSize.y}, borderColor);
+        renderer.drawRoundedRect(btnPos, btnSize, Colors::SuccessBg, Sizes::WidgetRadius);
+        renderer.drawRoundedBorder(btnPos, btnSize, Colors::Success, Sizes::WidgetRadius);
         
         float textY = btnPos.y + (btnSize.y / 2.0f) - 8;
-        renderer.drawText({btnPos.x + 10, textY}, "Save & Close", 0xFFFFFFFF);
+        renderer.drawText({btnPos.x + 10, textY}, "Save & Close", Colors::TextWhite);
     }
     
     if (cancelButton) {
         Vec2 btnPos = cancelButton->getPosition();
         Vec2 btnSize = cancelButton->getSize();
         
-        uint32_t btnColor = 0xFF4A2A2A;
-        uint32_t borderColor = 0xFFFF0000;
-        
-        renderer.drawRect(btnPos, btnSize, btnColor);
-        renderer.drawRect(btnPos, {btnSize.x, 2}, borderColor);
-        renderer.drawRect(btnPos, {2, btnSize.y}, borderColor);
-        renderer.drawRect({btnPos.x, btnPos.y + btnSize.y - 2}, {btnSize.x, 2}, borderColor);
-        renderer.drawRect({btnPos.x + btnSize.x - 2, btnPos.y}, {2, btnSize.y}, borderColor);
+        renderer.drawRoundedRect(btnPos, btnSize, Colors::DangerBg, Sizes::WidgetRadius);
+        renderer.drawRoundedBorder(btnPos, btnSize, Colors::Danger, Sizes::WidgetRadius);
         
         float textY = btnPos.y + (btnSize.y / 2.0f) - 8;
-        renderer.drawText({btnPos.x + 10, textY}, "Cancel", 0xFFFFFFFF);
+        renderer.drawText({btnPos.x + 10, textY}, "Cancel", Colors::TextWhite);
     }
     
     if (hasChanges) {
-        renderer.drawText({position.x + size.x - 150, position.y + 8}, "* Unsaved", 0xFFFFFF00);
+        renderer.drawText({position.x + size.x - 150, position.y + 8}, "* Unsaved", Colors::WarningLight);
     }
     
     renderer.popClipRect();

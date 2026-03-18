@@ -2,6 +2,7 @@
 #include "ui_panel.hpp"
 #include "ui_button.hpp"
 #include "ui_inputbox.hpp"
+#include "ui_layout_box.hpp"
 #include "console_history.hpp"
 #include "commands/commands_core.hpp"
 #include <string>
@@ -32,6 +33,7 @@ private:
     std::shared_ptr<UIButton> trainingButton;  // Training control button
     std::shared_ptr<UIButton> DCButton;        // Data Collection button
     std::shared_ptr<UIButton> modelsButton;    // Model Registry button
+    std::shared_ptr<UIHBox> toolbarBox;         // Horizontal layout for toolbar buttons
     
     // Helper to get current time string
     std::string getCurrentTime() const;

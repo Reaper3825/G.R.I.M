@@ -1,4 +1,5 @@
 #include "ui_slider.hpp"
+#include "ui_theme.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
 #include "helpers/mouse.hpp"
@@ -179,8 +180,10 @@ void UISlider::draw(UIRenderer& renderer) {
 }
 
 void UISlider::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
+    using namespace UITheme;
+    
     // Draw label on the left
-    renderer.drawText({position.x, position.y + 10}, label, 0xFFFFFFFF);
+    renderer.drawText({position.x, position.y + 10}, label, Colors::TextPrimary);
     
     // Recalculate slider positions based on current position (for scrolling)
     Vec2 currentSliderStart = {position.x + 150, position.y + 15};
@@ -196,60 +199,51 @@ void UISlider::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     uint32_t boxColor;
     
     if (editingText) {
-        // Show text buffer with cursor when editing
         displayText = textBuffer + "|";
-        textColor = 0xFFFFFF00;  // Yellow when editing
-        boxColor = 0xFF00FFFF;   // Cyan border for active editing
+        textColor = Colors::Warning;       // Warm amber when editing
+        boxColor = Colors::BorderFocus;    // Periwinkle border for active editing
     } else {
-        // Show formatted value normally
         std::ostringstream oss;
         oss << std::fixed;
         
-        // Determine precision based on value range
         if (maxValue - minValue < 0.01f) {
-            oss << std::setprecision(6);  // Very small range (e.g., 0.00001 to 0.01)
+            oss << std::setprecision(6);
         } else if (maxValue - minValue < 1.0f) {
-            oss << std::setprecision(4);  // Small range (e.g., 0.0 to 1.0)
+            oss << std::setprecision(4);
         } else if (maxValue - minValue < 100.0f) {
-            oss << std::setprecision(2);  // Medium range
+            oss << std::setprecision(2);
         } else {
-            oss << std::setprecision(0);  // Large range (integers)
+            oss << std::setprecision(0);
         }
         
         oss << value;
         displayText = oss.str();
-        textColor = 0xFF00FFFF;  // Cyan normally
-        boxColor = 0xFF404040;   // Dark gray border
+        textColor = Colors::TextValue;
+        boxColor = Colors::BorderPrimary;
     }
     
     // Draw text box background and border
-    renderer.drawRect(currentTextBoxPos, currentTextBoxSize, 0xFF1A1A1A);
-    renderer.drawRect(currentTextBoxPos, {currentTextBoxSize.x, 1}, boxColor);
-    renderer.drawRect(currentTextBoxPos, {1, currentTextBoxSize.y}, boxColor);
-    renderer.drawRect({currentTextBoxPos.x, currentTextBoxPos.y + currentTextBoxSize.y - 1}, 
-                      {currentTextBoxSize.x, 1}, boxColor);
-    renderer.drawRect({currentTextBoxPos.x + currentTextBoxSize.x - 1, currentTextBoxPos.y}, 
-                      {1, currentTextBoxSize.y}, boxColor);
+    renderer.drawRoundedRect(currentTextBoxPos, currentTextBoxSize, Colors::ContentAreaBg, Sizes::SmallRadius);
+    renderer.drawRoundedBorder(currentTextBoxPos, currentTextBoxSize, boxColor, Sizes::SmallRadius);
     
     // Draw text
     renderer.drawText({currentTextBoxPos.x + 3, currentTextBoxPos.y + 2}, displayText, textColor);
     
     // Draw slider track
-    renderer.drawRect(currentSliderStart, currentSliderSize, 0xFF404040);
+    float trackRadius = currentSliderSize.y * 0.5f;
+    renderer.drawRoundedRect(currentSliderStart, currentSliderSize, Colors::SliderTrack, trackRadius);
     
     // Draw filled portion
     float fillWidth = currentSliderSize.x * getNormalizedValue();
-    renderer.drawRect(currentSliderStart, {fillWidth, currentSliderSize.y}, 0xFF00FFFF);
+    if (fillWidth > 0)
+        renderer.drawRoundedRect(currentSliderStart, {fillWidth, currentSliderSize.y}, Colors::SliderFill, trackRadius);
     
     // Draw handle
     float handleX = currentSliderStart.x + getNormalizedValue() * currentSliderSize.x;
     Vec2 handlePos = {handleX - 7.5f, currentSliderStart.y - 5};
     Vec2 handleSize = {15, 20};
     
-    uint32_t handleColor = dragging ? 0xFF00FFFF : 0xFFCCCCCC;
-    renderer.drawRect(handlePos, handleSize, handleColor);
-    renderer.drawRect(handlePos, {handleSize.x, 2}, 0xFFFFFFFF);
-    renderer.drawRect(handlePos, {2, handleSize.y}, 0xFFFFFFFF);
-    renderer.drawRect({handlePos.x, handlePos.y + handleSize.y - 2}, {handleSize.x, 2}, 0xFFFFFFFF);
-    renderer.drawRect({handlePos.x + handleSize.x - 2, handlePos.y}, {2, handleSize.y}, 0xFFFFFFFF);
+    uint32_t handleColor = dragging ? Colors::SliderHandleActive : Colors::SliderHandle;
+    renderer.drawRoundedRect(handlePos, handleSize, handleColor, Sizes::SmallRadius);
+    renderer.drawRoundedBorder(handlePos, handleSize, Colors::BorderPrimary, Sizes::SmallRadius);
 }

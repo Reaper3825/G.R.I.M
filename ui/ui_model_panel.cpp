@@ -33,12 +33,12 @@ static std::string backendDisplayName(GRIM::MMO::BackendType bt) {
 static uint32_t statusColor(GRIM::MMO::ResidencyState state) {
     switch (state) {
         case GRIM::MMO::ResidencyState::Unloaded:      return 0xFF888888;  // gray
-        case GRIM::MMO::ResidencyState::Loading:       return 0xFFFFCC00;  // yellow
-        case GRIM::MMO::ResidencyState::Loaded:        return 0xFF00CC00;  // green
-        case GRIM::MMO::ResidencyState::InUse:         return 0xFF00AAFF;  // blue
-        case GRIM::MMO::ResidencyState::Idle:          return 0xFF00CC99;  // teal
-        case GRIM::MMO::ResidencyState::EvictEligible: return 0xFFFF8800;  // orange
-        case GRIM::MMO::ResidencyState::Unloading:     return 0xFFFF4444;  // red
+        case GRIM::MMO::ResidencyState::Loading:       return 0xFFE8D050;  // gold
+        case GRIM::MMO::ResidencyState::Loaded:        return 0xFF5AD07A;  // green
+        case GRIM::MMO::ResidencyState::InUse:         return 0xFF5B8DEF;  // blue
+        case GRIM::MMO::ResidencyState::Idle:          return 0xFF5AD0A0;  // teal
+        case GRIM::MMO::ResidencyState::EvictEligible: return 0xFFE8A840;  // amber
+        case GRIM::MMO::ResidencyState::Unloading:     return 0xFFE05555;  // coral
     }
     return 0xFFFFFFFF;
 }
@@ -70,7 +70,7 @@ UIModelPanel::UIModelPanel()
     : UIPanel("Model Registry", true)
 {
     setVisible(false);
-    setBackground(0xE0181818);
+    setBackground(0xF0202020);  // [GLASS_PHASE4] Opaque dark card
 
     // Tab buttons — positions set each frame in update()/drawOverlay()
     tabBrowserBtn_ = std::make_shared<UIButton>("Browse", [this]() {
@@ -99,12 +99,12 @@ UIModelPanel::UIModelPanel()
     vramBar_ = std::make_shared<UIProgressBar>("VRAM", 1.0f);
     vramBar_->setSize(330.0f, 20.0f);
     vramBar_->setShowPercentage(true);
-    vramBar_->setFillColor(0xFF00AAFF);
+    vramBar_->setFillColor(0xFF5B8DEF);
 
     ramBar_ = std::make_shared<UIProgressBar>("RAM", 1.0f);
     ramBar_->setSize(330.0f, 20.0f);
     ramBar_->setShowPercentage(true);
-    ramBar_->setFillColor(0xFF00CC66);
+    ramBar_->setFillColor(0xFF5AD07A);
 
     // Creator view widgets — positions set each frame in update()/drawOverlay()
     creatorIdInput_ = std::make_shared<UIInputBox>(&bufId_);
@@ -260,7 +260,7 @@ bool UIModelPanel::drawOverlay(OverlayRenderer& renderer) {
     float indicatorX = position.x + 10.0f;
     if (activeView_ == ModelPanelView::Creator) indicatorX = position.x + 95.0f;
     else if (activeView_ == ModelPanelView::GapQueue) indicatorX = position.x + 180.0f;
-    renderer.drawRect({indicatorX, indicatorY}, {tabW, 2.0f}, 0xFF00AAFF);
+    renderer.drawRect({indicatorX, indicatorY}, {tabW, 2.0f}, 0xFF6B8CFF);
 
     switch (activeView_) {
         case ModelPanelView::Browser:
@@ -356,7 +356,7 @@ void UIModelPanel::drawBrowserView(OverlayRenderer& renderer) {
     renderer.drawText({x + 560.0f, y}, "Actions", 0xFFCCCCCC);
     y += 22.0f;
 
-    renderer.drawLine({x, y}, {x + 660.0f, y}, 0xFF444444, 1.0f);
+    renderer.drawLine({x, y}, {x + 660.0f, y}, 0x10FFFFFF, 1.0f);  // [GLASS_PHASE4] Faint separator
     y += 4.0f;
 
     if (modelEntries_.empty()) {
@@ -368,7 +368,7 @@ void UIModelPanel::drawBrowserView(OverlayRenderer& renderer) {
 
         // Hover highlight
         if (static_cast<int>(i) == hoveredBrowserRow_) {
-            renderer.drawRect({x, y - 1.0f}, {660.0f, kRowHeight}, 0x30FFFFFF);
+            renderer.drawRect({x, y - 1.0f}, {660.0f, kRowHeight}, 0x15FFFFFF);  // [GLASS_PHASE4] Dim hover
         }
 
         std::string label = entry.name;
@@ -387,11 +387,11 @@ void UIModelPanel::drawBrowserView(OverlayRenderer& renderer) {
             // Load/Unload toggle
             bool isLoaded = (entry.status != "Unloaded" && entry.status != "N/A");
             if (isLoaded) {
-                renderer.drawText({x + 560.0f, y}, "[Unload]", 0xFFFFAA00);
+                renderer.drawText({x + 560.0f, y}, "[Unload]", 0xFFE8A840);
             } else {
-                renderer.drawText({x + 560.0f, y}, "[Load]", 0xFF00CC00);
+                renderer.drawText({x + 560.0f, y}, "[Load]", 0xFF5AD07A);
             }
-            renderer.drawText({x + 622.0f, y}, "[x]", 0xFFFF4444);
+            renderer.drawText({x + 622.0f, y}, "[x]", 0xFFE05555);
         }
 
         y += kRowHeight;
@@ -570,7 +570,7 @@ void UIModelPanel::submitNewModel() {
     std::string error;
     if (!validateCreatorFields(error)) {
         creatorStatusLabel_->setText(error);
-        creatorStatusLabel_->setColor(0xFFFF4444);
+        creatorStatusLabel_->setColor(0xFFE05555);
         return;
     }
 
@@ -595,7 +595,7 @@ void UIModelPanel::submitNewModel() {
         registry.registerModel(std::move(model));
     } catch (const std::runtime_error& e) {
         creatorStatusLabel_->setText(e.what());
-        creatorStatusLabel_->setColor(0xFFFF4444);
+        creatorStatusLabel_->setColor(0xFFE05555);
         return;
     }
 
@@ -603,17 +603,17 @@ void UIModelPanel::submitNewModel() {
     const auto* registered = registry.getModelById(bufId_);
     if (registered && !persistSubModel(*registered)) {
         creatorStatusLabel_->setText("Registered but failed to save config");
-        creatorStatusLabel_->setColor(0xFFFFAA00);
+        creatorStatusLabel_->setColor(0xFFE8A840);
         return;
     }
 
     creatorStatusLabel_->setText("Registered: " + bufId_);
-    creatorStatusLabel_->setColor(0xFF00CC00);
+    creatorStatusLabel_->setColor(0xFF5AD07A);
     LOG_DEBUG("UIModelPanel", "Registered new sub-model '" + bufId_ + "'");
 
     clearCreatorFields();
     creatorStatusLabel_->setText("Registered successfully");
-    creatorStatusLabel_->setColor(0xFF00CC00);
+    creatorStatusLabel_->setColor(0xFF5AD07A);
 }
 
 void UIModelPanel::prefillCreatorFromGap(const KnowledgeGapEntry& gap) {
@@ -630,7 +630,7 @@ void UIModelPanel::prefillCreatorFromGap(const KnowledgeGapEntry& gap) {
     creatorTagsInput_->setText(tagStr);
 
     creatorStatusLabel_->setText("Pre-filled from knowledge gap");
-    creatorStatusLabel_->setColor(0xFFFFCC00);
+    creatorStatusLabel_->setColor(0xFFE8D050);
 }
 
 // =========================================================
@@ -659,7 +659,7 @@ void UIModelPanel::drawGapQueueView(OverlayRenderer& renderer) {
     renderer.drawText({x + 480.0f, y}, "Actions", 0xFFCCCCCC);
     y += 22.0f;
 
-    renderer.drawLine({x, y}, {x + 660.0f, y}, 0xFF444444, 1.0f);
+    renderer.drawLine({x, y}, {x + 660.0f, y}, 0x10FFFFFF, 1.0f);  // [GLASS_PHASE4] Faint separator
     y += 4.0f;
 
     for (size_t i = 0; i < gapQueue_.size(); ++i) {
@@ -667,7 +667,7 @@ void UIModelPanel::drawGapQueueView(OverlayRenderer& renderer) {
 
         // Hover highlight
         if (static_cast<int>(i) == hoveredGapRow_) {
-            renderer.drawRect({x, y - 1.0f}, {660.0f, kRowHeight}, 0x30FFFFFF);
+            renderer.drawRect({x, y - 1.0f}, {660.0f, kRowHeight}, 0x15FFFFFF);  // [GLASS_PHASE4] Dim hover
         }
 
         renderer.drawText({x, y}, gap.subject, 0xFFFFFFFF);
@@ -678,8 +678,8 @@ void UIModelPanel::drawGapQueueView(OverlayRenderer& renderer) {
             tagStr += gap.tags[t];
         }
         renderer.drawText({x + 200.0f, y}, tagStr, 0xFFAAAAAA);
-        renderer.drawText({x + 480.0f, y}, "[Create]", 0xFF00AAFF);
-        renderer.drawText({x + 550.0f, y}, "[Dismiss]", 0xFFFF4444);
+        renderer.drawText({x + 480.0f, y}, "[Create]", 0xFF6B8CFF);
+        renderer.drawText({x + 550.0f, y}, "[Dismiss]", 0xFFE05555);
 
         y += kRowHeight;
     }

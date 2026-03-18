@@ -1,4 +1,5 @@
 #include "ui_button.hpp"
+#include "ui_theme.hpp"
 #include "ui_renderer.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
@@ -62,7 +63,7 @@ void UIButton::draw(UIRenderer& renderer) {
     }
 
     renderer.drawRect(position, size, c);
-    renderer.drawText({position.x + 8, position.y + size.y / 4}, label, 0xFFFFFFFF);
+    renderer.drawText({position.x + 8, position.y + size.y / 4}, label, UITheme::Colors::TextPrimary);
 }
 
 void UIButton::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
@@ -74,9 +75,12 @@ void UIButton::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         c = hoverColor;
     }
 
-    renderer.drawRect(position, size, c);
+    renderer.drawRoundedRect(position, size, c, UITheme::Sizes::WidgetRadius);
+    
+    // Glass border
+    renderer.drawRoundedBorder(position, size, UITheme::Colors::BorderPrimary, UITheme::Sizes::WidgetRadius);
     
     // Center text vertically in button
     float textY = position.y + (size.y / 2.0f) - 8;
-    renderer.drawText({position.x + 8, textY}, label, 0xFFFFFFFF);
+    renderer.drawText({position.x + 8, textY}, label, UITheme::Colors::TextPrimary);
 }

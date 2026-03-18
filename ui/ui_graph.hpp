@@ -48,8 +48,8 @@ struct DataSeries {
     uint32_t color;
     bool visible;
     
-    DataSeries() : name(""), color(0xFFFFFFFF), visible(true) {}
-    DataSeries(const std::string& n, uint32_t col = 0xFFFFFFFF) 
+    DataSeries() : name(""), color(0xFFEAEAEA), visible(true) {}
+    DataSeries(const std::string& n, uint32_t col = 0xFFEAEAEA) 
         : name(n), color(col), visible(true) {}
 };
 
@@ -77,12 +77,12 @@ struct GraphConfig {
     float barWidth = 0.8f;  // As fraction of available space (0.0-1.0)
     float donutThickness = 0.4f;  // As fraction of radius (0.0-1.0)
     
-    // Colors
-    uint32_t backgroundColor = 0xFF1A1A1A;
-    uint32_t gridColor = 0xFF303030;
-    uint32_t axisColor = 0xFF505050;
-    uint32_t textColor = 0xFFCCCCCC;
-    uint32_t primaryColor = 0xFF00AAFF;  // Default data color
+    // Colors  [GLASS_PHASE5]
+    uint32_t backgroundColor = 0xF01A1A1A;
+    uint32_t gridColor = 0x10FFFFFF;
+    uint32_t axisColor = 0x15FFFFFF;
+    uint32_t textColor = 0xFF909090;
+    uint32_t primaryColor = 0xFF6B8CFF;  // Default data color
     
     // Padding
     float paddingLeft = 50.0f;

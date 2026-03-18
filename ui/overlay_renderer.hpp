@@ -27,6 +27,13 @@ public:
     void endFrame();
     
     void drawRect(const Vec2& pos, const Vec2& size, uint32_t color);
+    void drawRoundedRect(const Vec2& pos, const Vec2& size, uint32_t color, float radius);
+    void drawRoundedBorder(const Vec2& pos, const Vec2& size, uint32_t color, float radius, float thickness = 1.0f);
+    void drawGlassPanel(const Vec2& pos, const Vec2& size, float radius, 
+                        uint32_t bgColor, uint32_t borderColor, uint32_t glowColor,
+                        int blurRadius = 12, float shadowOffset = 4.0f);
+    void drawSoftGlow(const Vec2& pos, const Vec2& size, float radius,
+                      uint32_t color, float spread);
     void drawText(const Vec2& pos, const std::string& text, uint32_t color);
     void drawLine(const Vec2& start, const Vec2& end, uint32_t color, float thickness = 1.0f);
     
@@ -35,6 +42,10 @@ public:
     
     void pushClipRect(const Vec2& pos, const Vec2& size);
     void popClipRect();
+    
+    // Frosted glass blur: 2-pass separable box blur on the pixel buffer region.
+    // Call BEFORE drawing the panel background to blur content behind it.
+    void blurRegion(int x, int y, int w, int h, int radius = 6);
     
     int getWidth() const { return m_width; }
     int getHeight() const { return m_height; }
@@ -57,6 +68,9 @@ private:
     std::mutex m_renderMutex;
     std::vector<ClipRect> m_clipStack;
     ClipRect activeClip() const;
+
+    // Temp buffer for blur passes (lazily allocated)
+    std::vector<uint32_t> m_blurTemp;
 
     // stb_truetype font state
     std::vector<uint8_t> m_fontFileData;

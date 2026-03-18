@@ -40,7 +40,7 @@ bool processEvents(HWND hwnd,
                 if (!input.empty())
                 {
                     handleCommand(input);
-                    uiHistory.push(input, 0xFF00FF00);
+                    uiHistory.push(input, 0xFF8BABFF);
                 }
                 return true;
             }

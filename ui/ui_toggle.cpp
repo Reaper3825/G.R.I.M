@@ -1,4 +1,5 @@
 #include "ui_toggle.hpp"
+#include "ui_theme.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
 #include "helpers/mouse.hpp"
@@ -39,31 +40,32 @@ void UIToggle::draw(UIRenderer& renderer) {
 }
 
 void UIToggle::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
+    using namespace UITheme;
+    
     // Draw label
-    renderer.drawText({position.x, position.y + 15}, label, 0xFFFFFFFF);
+    renderer.drawText({position.x, position.y + 15}, label, Colors::TextPrimary);
     
     // Recalculate toggle position based on current position (for scrolling)
     Vec2 currentTogglePos = {position.x + size.x - 60, position.y + 8};
     
-    // Draw toggle background
-    uint32_t bgColor = enabled ? 0xFF2A4A2A : 0xFF4A2A2A;  // Green if ON, red if OFF
-    renderer.drawRect(currentTogglePos, toggleSize, bgColor);
+    // Draw toggle background — glass pill (fully rounded)
+    uint32_t bgColor = enabled ? Colors::ToggleBgOn : Colors::ToggleBgOff;
+    float pillRadius = toggleSize.y * 0.5f;
+    renderer.drawRoundedRect(currentTogglePos, toggleSize, bgColor, pillRadius);
     
-    // Draw toggle border
-    uint32_t borderColor = enabled ? 0xFF00FF00 : 0xFFFF0000;
-    renderer.drawRect(currentTogglePos, {toggleSize.x, 2}, borderColor);
-    renderer.drawRect(currentTogglePos, {2, toggleSize.y}, borderColor);
-    renderer.drawRect({currentTogglePos.x, currentTogglePos.y + toggleSize.y - 2}, {toggleSize.x, 2}, borderColor);
-    renderer.drawRect({currentTogglePos.x + toggleSize.x - 2, currentTogglePos.y}, {2, toggleSize.y}, borderColor);
+    // Draw toggle border — rounded frosted edge
+    uint32_t borderColor = enabled ? Colors::Success : Colors::BorderPrimary;
+    renderer.drawRoundedBorder(currentTogglePos, toggleSize, borderColor, pillRadius);
     
-    // Draw toggle handle (circle approximated with rectangle)
+    // Draw toggle handle — round glass knob
     float handleX = enabled ? (currentTogglePos.x + toggleSize.x - 22) : (currentTogglePos.x + 2);
     Vec2 handlePos = {handleX, currentTogglePos.y + 2};
     Vec2 handleSize = {20, 20};
     
-    renderer.drawRect(handlePos, handleSize, 0xFFFFFFFF);
+    renderer.drawRoundedRect(handlePos, handleSize, Colors::ToggleHandle, 10.0f);
+    renderer.drawRoundedBorder(handlePos, handleSize, Colors::BorderPrimary, 10.0f);
     
     // Draw state text
     std::string stateText = enabled ? "ON" : "OFF";
-    renderer.drawText({currentTogglePos.x + (enabled ? 5.0f : 25.0f), currentTogglePos.y + 7}, stateText, 0xFF000000);
+    renderer.drawText({currentTogglePos.x + (enabled ? 5.0f : 25.0f), currentTogglePos.y + 7}, stateText, Colors::ToggleText);
 }

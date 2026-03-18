@@ -1,5 +1,6 @@
 #pragma once
 #include "widget.hpp"
+#include "ui_theme.hpp"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -86,8 +87,8 @@ protected:
     Vec2 resizeStartPos{0, 0};
     Vec2 resizeStartSize{0, 0};
 
-    uint32_t bgColor = 0xFF202020;
-    uint32_t borderColor = 0xFFFFFFFF;
+    uint32_t bgColor = UITheme::Colors::PanelBg;
+    uint32_t borderColor = UITheme::Colors::BorderPrimary;
 
     float titleBarHeight = 30.0f;
     float resizeHandleSize = 20.0f;  // Increased from 10 to 20 pixels

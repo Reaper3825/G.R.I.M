@@ -46,8 +46,8 @@ UIDataCollectionPanel::UIDataCollectionPanel()
 {
 
     // Panel dimensions
-    position = { 250, 550 };
-    size = { 1350, 900 };
+    position = { 250, 500 };
+    size = { 1350, 750 };
     setVisible(false);
     setBackground(UITheme::Colors::PanelBg);
 
@@ -422,9 +422,9 @@ bool UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
     if (!UIPanel::drawOverlay(renderer)) return false;
     
     PanelRect content = getContentRect();
-    float panelX = content.origin.x + 8;
+    float panelX = content.origin.x + 15;
     float panelY = content.origin.y + 10;
-    float panelWidth = content.size.x - 16;
+    float panelWidth = content.size.x - 30;
     float panelHeight = content.size.y - 10;
     
     // Split into two columns
@@ -448,7 +448,7 @@ bool UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
     // Scrollable area
     float scrollAreaY = leftY;
     float scrollAreaHeight = panelHeight - (leftY - panelY) - 10;
-    renderer.drawRect({leftX, scrollAreaY}, {leftPanelWidth, scrollAreaHeight}, UITheme::Colors::Background);
+    renderer.drawRoundedRect({leftX, scrollAreaY}, {leftPanelWidth, scrollAreaHeight}, UITheme::Colors::Background, UITheme::Sizes::WidgetRadius);
     
     // Calculate content height (config + add source + HF + queue + filters + sources scrollbox)
     leftPanelContentHeight = 30 + (40 * 3) + 60 + 35 + 40 + 60 + 200 + 180 + 100 + 25 + 200 + 30;
@@ -473,8 +473,8 @@ bool UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
         float scrollBarHeight = (scrollAreaHeight / leftPanelContentHeight) * scrollAreaHeight;
         float scrollBarY = scrollAreaY + (leftPanelScrollPosition / leftPanelContentHeight) * scrollAreaHeight;
         
-        renderer.drawRect({scrollBarX, scrollAreaY}, {scrollBarWidth, scrollAreaHeight}, UITheme::Colors::SliderTrack);
-        renderer.drawRect({scrollBarX, scrollBarY}, {scrollBarWidth, scrollBarHeight}, UITheme::Colors::Primary);
+        renderer.drawRoundedRect({scrollBarX, scrollAreaY}, {scrollBarWidth, scrollAreaHeight}, UITheme::Colors::SliderTrack, UITheme::Sizes::SmallRadius);
+        renderer.drawRoundedRect({scrollBarX, scrollBarY}, {scrollBarWidth, scrollBarHeight}, UITheme::Colors::Primary, UITheme::Sizes::SmallRadius);
     }
     
     // ============================================================
@@ -578,8 +578,7 @@ bool UIDataCollectionPanel::drawOverlay(OverlayRenderer& renderer) {
     
     float logHeight = panelHeight - (rightY - panelY);
     
-    renderer.drawRect({rightX, rightY}, {logWidth, logHeight}, UITheme::Colors::Background);
-    UIDrawHelpers::drawDivider(renderer, {rightX, rightY}, logWidth);
+    renderer.drawRoundedRect({rightX, rightY}, {logWidth, logHeight}, UITheme::Colors::Background, UITheme::Sizes::WidgetRadius);
     
     // Draw log entries
     {
@@ -980,7 +979,7 @@ void UIDataCollectionPanel::layoutQueueSection(OverlayRenderer& renderer, float 
             if (!downloadQueue.empty()) {
                 float queueItemHeight = UITheme::Sizes::WidgetHeight;
                 float queueBoxHeight = std::min(180.0f, downloadQueue.size() * queueItemHeight + 10);
-                renderer.drawRect({leftX + 10, renderY}, {sliderWidth, queueBoxHeight}, UITheme::Colors::ScrollboxBg);
+                renderer.drawRoundedRect({leftX + 10, renderY}, {sliderWidth, queueBoxHeight}, UITheme::Colors::ScrollboxBg, UITheme::Sizes::WidgetRadius);
                 float itemY = renderY + 5;
                 for (size_t i = 0; i < downloadQueue.size() && itemY + queueItemHeight <= renderY + queueBoxHeight; ++i) {
                     const auto& item = downloadQueue[i];
@@ -1003,8 +1002,8 @@ void UIDataCollectionPanel::layoutQueueSection(OverlayRenderer& renderer, float 
                         float progressBarWidth = sliderWidth - 80;
                         float progressBarHeight = UITheme::Sizes::SliderHeight * 0.4f;
                         float progressBarY = itemY + queueItemHeight - 12;
-                        renderer.drawRect({leftX + 20, progressBarY}, {progressBarWidth, progressBarHeight}, UITheme::Colors::SliderTrack);
-                        renderer.drawRect({leftX + 20, progressBarY}, {progressBarWidth * item.progress, progressBarHeight}, UITheme::Colors::Info);
+                        renderer.drawRoundedRect({leftX + 20, progressBarY}, {progressBarWidth, progressBarHeight}, UITheme::Colors::SliderTrack, UITheme::Sizes::SmallRadius);
+                        renderer.drawRoundedRect({leftX + 20, progressBarY}, {progressBarWidth * item.progress, progressBarHeight}, UITheme::Colors::Info, UITheme::Sizes::SmallRadius);
                     } else if (item.status == "failed" && !item.errorMessage.empty()) {
                         std::string err = item.errorMessage;
                         if (err.length() > 35) err = err.substr(0, 32) + "...";
@@ -1015,12 +1014,12 @@ void UIDataCollectionPanel::layoutQueueSection(OverlayRenderer& renderer, float 
                     if (isHovered && item.status != "downloading") {
                         float removeX = leftX + sliderWidth - 25;
                         UIDrawHelpers::drawWidgetBackground(renderer, {removeX, itemY + 8}, {18, 18}, true, false, false);
-                        renderer.drawRect({removeX, itemY + 8}, {18, 18}, UITheme::Colors::Danger & 0x44FFFFFF);
+                        renderer.drawRoundedRect({removeX, itemY + 8}, {18, 18}, UITheme::Colors::Danger & 0x44FFFFFF, UITheme::Sizes::SmallRadius);
                         renderer.drawText({removeX + 4, itemY + 8}, "X", UITheme::Colors::Danger);
                         if (item.status == "failed") {
                             float retryX = removeX - 25;
                             UIDrawHelpers::drawWidgetBackground(renderer, {retryX, itemY + 8}, {20, 18}, true, false, false);
-                            renderer.drawRect({retryX, itemY + 8}, {20, 18}, UITheme::Colors::Success & 0x44FFFFFF);
+                            renderer.drawRoundedRect({retryX, itemY + 8}, {20, 18}, UITheme::Colors::Success & 0x44FFFFFF, UITheme::Sizes::SmallRadius);
                             renderer.drawText({retryX + 3, itemY + 8}, "⟳", UITheme::Colors::Success);
                         }
                     }
@@ -1096,7 +1095,7 @@ void UIDataCollectionPanel::layoutSourcesSection(OverlayRenderer& renderer, floa
             }
             sourcesScrollBox->setPosition(leftX + 10, renderY);
             sourcesScrollBox->setSize(sliderWidth, sourcesScrollBoxHeight);
-            renderer.drawRect({leftX + 10, renderY}, {sliderWidth, sourcesScrollBoxHeight}, UITheme::Colors::ScrollboxBg);
+            renderer.drawRoundedRect({leftX + 10, renderY}, {sliderWidth, sourcesScrollBoxHeight}, UITheme::Colors::ScrollboxBg, UITheme::Sizes::WidgetRadius);
             sourcesScrollBox->drawOverlay(renderer, position);
             renderY += sourcesScrollBoxHeight + UITheme::Spacing::Small;
         }

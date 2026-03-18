@@ -1,4 +1,5 @@
 #include "ui_inputbox.hpp"
+#include "ui_theme.hpp"
 #include "ui_renderer.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
@@ -147,12 +148,12 @@ void UIInputBox::draw(UIRenderer& renderer) {
     if (!isVisible()) return;
     
     // Background
-    uint32_t bgColor = focused ? 0xFF2A2A2A : 0xFF202020;
+    uint32_t bgColor = focused ? 0xFF2A2A38 : 0xD9222238;
     renderer.drawRect(position, size, bgColor);
     
     // Text
     std::string display = buffer.empty() ? placeholder : buffer;
-    uint32_t textColor = buffer.empty() ? 0xFF606060 : 0xFFFFFFFF;
+    uint32_t textColor = buffer.empty() ? 0xFF505050 : 0xFFEAEAEA;
     
     if (caretVisible && focused && !buffer.empty())
         display.push_back('|');
@@ -163,22 +164,20 @@ void UIInputBox::draw(UIRenderer& renderer) {
 }
 
 void UIInputBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
+    using namespace UITheme;
     if (!isVisible()) return;
     
     // Background with focus indication
-    uint32_t bgColor = focused ? 0xFF2A2A2A : 0xFF252525;
-    renderer.drawRect(position, size, bgColor);
+    uint32_t bgColor = focused ? Colors::WidgetBgHover : Colors::WidgetBg;
+    renderer.drawRoundedRect(position, size, bgColor, Sizes::WidgetRadius);
     
-    // Border - brighter when focused
-    uint32_t borderColor = focused ? 0xFF00AAFF : 0xFF555555;
-    renderer.drawRect(position, {size.x, 2}, borderColor);
-    renderer.drawRect(position, {2, size.y}, borderColor);
-    renderer.drawRect({position.x, position.y + size.y - 2}, {size.x, 2}, borderColor);
-    renderer.drawRect({position.x + size.x - 2, position.y}, {2, size.y}, borderColor);
+    // Rounded border — accent on focus, visible frost otherwise
+    uint32_t borderColor = focused ? Colors::BorderFocus : Colors::BorderPrimary;
+    renderer.drawRoundedBorder(position, size, borderColor, Sizes::WidgetRadius);
     
     // Text content
     std::string display = buffer.empty() ? placeholder : buffer;
-    uint32_t textColor = buffer.empty() ? 0xFF777777 : 0xFFCCCCCC;
+    uint32_t textColor = buffer.empty() ? Colors::TextDisabled : 0xFFD0D0D0;
     
     // Add blinking cursor when focused
     if (caretVisible && focused) {

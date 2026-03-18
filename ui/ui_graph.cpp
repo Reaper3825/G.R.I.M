@@ -238,13 +238,10 @@ void UIGraph::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
 // ============================================================
 
 void UIGraph::drawBackground(OverlayRenderer& renderer) {
-    renderer.drawRect(position, size, m_config.backgroundColor);
+    renderer.drawRoundedRect(position, size, m_config.backgroundColor, 6.0f);
     
     // Border
-    renderer.drawRect(position, {size.x, 2}, m_config.axisColor);
-    renderer.drawRect(position, {2, size.y}, m_config.axisColor);
-    renderer.drawRect({position.x, position.y + size.y - 2}, {size.x, 2}, m_config.axisColor);
-    renderer.drawRect({position.x + size.x - 2, position.y}, {2, size.y}, m_config.axisColor);
+    renderer.drawRoundedBorder(position, size, m_config.axisColor, 6.0f);
 }
 
 void UIGraph::drawTitle(OverlayRenderer& renderer) {
@@ -333,8 +330,8 @@ void UIGraph::drawLegend(OverlayRenderer& renderer) {
     size_t numEntries = m_series.empty() ? m_data.size() : m_series.size();
     float legendWidth = numEntries * entryWidth + 10;
     
-    // Background
-    renderer.drawRect(legendPos, {legendWidth, entryHeight + 10}, 0xCC000000);
+    // Background  [GLASS_PHASE5]
+    renderer.drawRoundedRect(legendPos, {legendWidth, entryHeight + 10}, 0xF0252525, 4.0f);
     
     // Entries (horizontal layout)
     if (m_type == GraphType::MultiLine || m_type == GraphType::StackedBar || m_type == GraphType::Area) {
@@ -404,7 +401,7 @@ void UIGraph::drawLineGraph(OverlayRenderer& renderer) {
         float y = mapValueToY(m_data[i].value);
         
         float radius = (m_hoveredIndex == static_cast<int>(i)) ? m_config.pointRadius * 1.5f : m_config.pointRadius;
-        uint32_t pointColor = (m_hoveredIndex == static_cast<int>(i)) ? 0xFFFFFF00 : 0xFFFFFFFF;
+        uint32_t pointColor = (m_hoveredIndex == static_cast<int>(i)) ? 0xFFE8D050 : 0xFFEAEAEA;
         
         // Draw point as small square
         renderer.drawRect({x - radius, y - radius}, {radius * 2, radius * 2}, pointColor);
@@ -413,7 +410,7 @@ void UIGraph::drawLineGraph(OverlayRenderer& renderer) {
         if (m_hoveredIndex == static_cast<int>(i) && m_config.showValues) {
             std::ostringstream oss;
             oss << std::fixed << std::setprecision(2) << m_data[i].value;
-            renderer.drawText({x + 10, y - 10}, oss.str(), 0xFFFFFF00);
+            renderer.drawText({x + 10, y - 10}, oss.str(), 0xFFE8D050);
         }
     }
 }
@@ -442,7 +439,7 @@ void UIGraph::drawBarGraph(OverlayRenderer& renderer) {
             y = origin.y + graphArea.y - barHeight;
         }
         
-        uint32_t barColor = (m_hoveredIndex == static_cast<int>(i)) ? 0xFFFFAA00 : m_config.primaryColor;
+        uint32_t barColor = (m_hoveredIndex == static_cast<int>(i)) ? 0xFFE8A840 : m_config.primaryColor;
         renderer.drawRect({x, y}, {barWidth, barHeight}, barColor);
         
         // Draw label
@@ -482,7 +479,7 @@ void UIGraph::drawHorizontalBarGraph(OverlayRenderer& renderer) {
             barWidth *= m_animationProgress;
         }
         
-        uint32_t barColor = (m_hoveredIndex == static_cast<int>(i)) ? 0xFFFFAA00 : m_config.primaryColor;
+        uint32_t barColor = (m_hoveredIndex == static_cast<int>(i)) ? 0xFFE8A840 : m_config.primaryColor;
         renderer.drawRect({x, y}, {barWidth, barHeight}, barColor);
         
         // Draw label
@@ -514,8 +511,8 @@ void UIGraph::drawScatterGraph(OverlayRenderer& renderer) {
         float y = mapValueToY(m_data[i].value);
         
         float radius = (m_hoveredIndex == static_cast<int>(i)) ? m_config.pointRadius * 1.5f : m_config.pointRadius;
-        uint32_t color = m_data[i].color != 0xFFFFFFFF ? m_data[i].color : m_config.primaryColor;
-        if (m_hoveredIndex == static_cast<int>(i)) color = 0xFFFFFF00;
+        uint32_t color = m_data[i].color != 0xFFEAEAEA ? m_data[i].color : m_config.primaryColor;
+        if (m_hoveredIndex == static_cast<int>(i)) color = 0xFFE8D050;
         
         // Draw point
         renderer.drawRect({x - radius, y - radius}, {radius * 2, radius * 2}, color);
@@ -527,7 +524,7 @@ void UIGraph::drawScatterGraph(OverlayRenderer& renderer) {
             if (!m_data[i].label.empty()) {
                 oss << " (" << m_data[i].label << ")";
             }
-            renderer.drawText({x + 10, y - 10}, oss.str(), 0xFFFFFF00);
+            renderer.drawText({x + 10, y - 10}, oss.str(), 0xFFE8D050);
         }
     }
 }
@@ -628,9 +625,9 @@ void UIGraph::drawPieChart(OverlayRenderer& renderer) {
     for (size_t i = 0; i < m_data.size(); ++i) {
         float sliceAngle = (m_data[i].value / total) * 2 * M_PI;
         
-        uint32_t color = m_data[i].color != 0xFFFFFFFF ? m_data[i].color : generateSeriesColor(i);
+        uint32_t color = m_data[i].color != 0xFFEAEAEA ? m_data[i].color : generateSeriesColor(i);
         if (m_hoveredIndex == static_cast<int>(i)) {
-            color = 0xFFFFFF00;  // Highlight hovered
+            color = 0xFFE8D050;  // Highlight hovered
         }
         
         // Draw slice as filled triangle fan (approximated with rectangles)
@@ -666,7 +663,7 @@ void UIGraph::drawPieChart(OverlayRenderer& renderer) {
             float percentage = (m_data[i].value / total) * 100.0f;
             std::ostringstream oss;
             oss << std::fixed << std::setprecision(1) << percentage << "%";
-            renderer.drawText({labelX - 15, labelY - 6}, oss.str(), 0xFF000000);
+            renderer.drawText({labelX - 15, labelY - 6}, oss.str(), 0xFF0E0E0E);
         }
         
         currentAngle += sliceAngle;
@@ -932,16 +929,16 @@ int UIGraph::findHoveredPoint(const Vec2& mousePos) const {
 uint32_t UIGraph::generateSeriesColor(int index) const {
     // Predefined color palette
     static const uint32_t colors[] = {
-        0xFF00AAFF,  // Cyan
-        0xFFFF6600,  // Orange
-        0xFF00FF00,  // Green
-        0xFFFF00FF,  // Magenta
-        0xFFFFFF00,  // Yellow
-        0xFFFF0000,  // Red
-        0xFF00FFFF,  // Light cyan
-        0xFFAA00FF,  // Purple
-        0xFF00AA00,  // Dark green
-        0xFFFFAA00,  // Gold
+        0xFF6B8CFF,  // Periwinkle
+        0xFFE89040,  // Warm orange
+        0xFF5AD07A,  // Soft green
+        0xFFC074E8,  // Lavender
+        0xFFE8D050,  // Soft gold
+        0xFFE05555,  // Muted coral
+        0xFF50C8D0,  // Teal
+        0xFF9070E8,  // Plum
+        0xFF60B060,  // Forest
+        0xFFE8A840,  // Amber
     };
     
     return colors[index % 10];

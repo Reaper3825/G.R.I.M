@@ -1,5 +1,6 @@
 #pragma once
 #include "widget.hpp"
+#include "ui_theme.hpp"
 #include <string>
 
 class UIProgressBar : public Widget {
@@ -30,8 +31,8 @@ private:
     bool showPercentage = true;
 
     // Colors
-    uint32_t fillColor = 0xFF00FFFF;      // Cyan fill
-    uint32_t bgColor = 0xFF404040;        // Dark gray background
-    uint32_t borderColor = 0xFF606060;    // Border
-    uint32_t textColor = 0xFFFFFFFF;      // White text
+    uint32_t fillColor = UITheme::Colors::Primary;
+    uint32_t bgColor = UITheme::Colors::ContentAreaBg;
+    uint32_t borderColor = UITheme::Colors::BorderPrimary;
+    uint32_t textColor = UITheme::Colors::TextPrimary;
 };

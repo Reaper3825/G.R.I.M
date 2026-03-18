@@ -1,4 +1,5 @@
 #include "ui_panel.hpp"
+#include "ui_theme.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
 #include "helpers/mouse.hpp"
@@ -205,61 +206,59 @@ void UIPanel::update(const InputState& input, float dt) {
 }
 
 PanelRect UIPanel::getContentRect() const {
-    float borderW = 2.0f;
+    float inset = 6.0f;
     return {
-        { position.x + borderW, position.y + titleBarHeight },
-        { size.x - borderW * 2.0f, size.y - titleBarHeight - borderW }
+        { position.x + inset, position.y + titleBarHeight },
+        { size.x - inset * 2.0f, size.y - titleBarHeight - inset }
     };
 }
 
 bool UIPanel::drawOverlay(OverlayRenderer& renderer) {
+    using namespace UITheme;
     if (!isVisible()) return false;
     
-    // Panel background
-    renderer.drawRect(position, size, bgColor);
+    // Full glassmorphism panel: blur + shadow + translucent fill + glow + border
+    renderer.drawGlassPanel(position, size, Sizes::BorderRadius,
+                            bgColor,
+                            Colors::BorderPrimary,
+                            Colors::GlassHighlight,
+                            Colors::BlurRadius,
+                            4.0f);
 
-    // Title bar
-    renderer.drawRect(position, {size.x, titleBarHeight}, 0xFF303030);
-    renderer.drawText({position.x + 8, position.y + 6}, title, 0xFFFFFFFF);
-
-    // Border (4 rectangles)
-    renderer.drawRect({position.x, position.y}, {size.x, 2}, borderColor);
-    renderer.drawRect({position.x, position.y + size.y - 2}, {size.x, 2}, borderColor);
-    renderer.drawRect({position.x, position.y}, {2, size.y}, borderColor);
-    renderer.drawRect({position.x + size.x - 2, position.y}, {2, size.y}, borderColor);
+    // Title text
+    renderer.drawText({position.x + 8, position.y + 6}, title, Colors::TextHeader);
     
-    // Draw chrome buttons (right to left: close, maximize, minimize)
+    // Chrome buttons — glass style
     if (chromeOptions.enableClose) {
         Vec2 btn = chromeButtonOrigin(0);
-        uint32_t color = closeHovered ? 0xFF3333CC : 0xFF3A3A3A;
-        renderer.drawRect(btn, {chromeButtonSize, chromeButtonSize}, color);
-        renderer.drawText({btn.x + 5.0f, btn.y + 2.0f}, "X", 0xFFFFFFFF);
+        uint32_t color = closeHovered ? Colors::ChromeClose : Colors::ChromeBtn;
+        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, Sizes::SmallRadius);
+        renderer.drawText({btn.x + 5.0f, btn.y + 2.0f}, "X", Colors::TextPrimary);
     }
 
     if (chromeOptions.enableMaximize) {
         Vec2 btn = chromeButtonOrigin(1);
-        uint32_t color = maximizeHovered ? 0xFF505050 : 0xFF3A3A3A;
-        renderer.drawRect(btn, {chromeButtonSize, chromeButtonSize}, color);
-        renderer.drawText({btn.x + 5.0f, btn.y + 2.0f}, "[]", 0xFFFFFFFF);
+        uint32_t color = maximizeHovered ? Colors::ChromeBtnHover : Colors::ChromeBtn;
+        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, Sizes::SmallRadius);
+        renderer.drawText({btn.x + 5.0f, btn.y + 2.0f}, "[]", Colors::TextPrimary);
     }
 
     if (chromeOptions.enableMinimize) {
         Vec2 btn = chromeButtonOrigin(2);
-        uint32_t color = minimizeHovered ? 0xFF505050 : 0xFF3A3A3A;
-        renderer.drawRect(btn, {chromeButtonSize, chromeButtonSize}, color);
-        renderer.drawText({btn.x + 6.0f, btn.y + 2.0f}, "-", 0xFFFFFFFF);
+        uint32_t color = minimizeHovered ? Colors::ChromeBtnHover : Colors::ChromeBtn;
+        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, Sizes::SmallRadius);
+        renderer.drawText({btn.x + 6.0f, btn.y + 2.0f}, "-", Colors::TextPrimary);
     }
 
-    // Draw resize handle (visual indicator in bottom-right corner)
+    // Resize grip
     if (resizable && !maximized) {
         float handleX = position.x + size.x - resizeHandleSize;
         float handleY = position.y + size.y - resizeHandleSize;
         
-        // Draw three diagonal lines as resize grip
         for (int i = 0; i < 3; ++i) {
             float offset = i * 3.0f;
             renderer.drawRect({handleX + offset, handleY + resizeHandleSize - offset - 2}, 
-                            {resizeHandleSize - offset, 2}, 0xFF888888);
+                            {resizeHandleSize - offset, 1}, Colors::ChromeBtn);
         }
     }
 

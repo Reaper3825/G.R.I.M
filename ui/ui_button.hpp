@@ -1,5 +1,6 @@
 #pragma once
 #include "widget.hpp"
+#include "ui_theme.hpp"
 #include <string>
 #include <functional>
 
@@ -24,9 +25,9 @@ private:
     std::function<void()> callback;
     bool pressed = false;
     bool hovered = false;
-    bool pressedInside = false;  // ? NEW: Track if press started inside
+    bool pressedInside = false;
 
-    uint32_t baseColor = 0xFF303030;
-    uint32_t hoverColor = 0xFF404040;
-    uint32_t pressColor = 0xFF505050;
+    uint32_t baseColor  = UITheme::Colors::WidgetBg;
+    uint32_t hoverColor = UITheme::Colors::WidgetBgHover;
+    uint32_t pressColor = UITheme::Colors::WidgetBgActive;
 };

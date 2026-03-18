@@ -1,4 +1,5 @@
 #include "ui_progress_bar.hpp"
+#include "ui_theme.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
 #include <algorithm>
@@ -41,20 +42,18 @@ void UIProgressBar::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos)
     Vec2 barStart = {position.x + 150, position.y + 10};
     Vec2 barSize = {size.x - 160, 20};
 
-    // Draw background
-    renderer.drawRect(barStart, barSize, bgColor);
+    // Draw background (rounded)
+    float barRadius = barSize.y * 0.5f;
+    renderer.drawRoundedRect(barStart, barSize, bgColor, barRadius);
 
-    // Draw fill
+    // Draw fill (rounded)
     float fillWidth = barSize.x * getProgress();
     if (fillWidth > 0) {
-        renderer.drawRect(barStart, {fillWidth, barSize.y}, fillColor);
+        renderer.drawRoundedRect(barStart, {fillWidth, barSize.y}, fillColor, barRadius);
     }
 
-    // Draw border (4 rectangles)
-    renderer.drawRect(barStart, {barSize.x, 2}, borderColor);
-    renderer.drawRect({barStart.x, barStart.y + barSize.y - 2}, {barSize.x, 2}, borderColor);
-    renderer.drawRect(barStart, {2, barSize.y}, borderColor);
-    renderer.drawRect({barStart.x + barSize.x - 2, barStart.y}, {2, barSize.y}, borderColor);
+    // Draw border (rounded)
+    renderer.drawRoundedBorder(barStart, barSize, borderColor, barRadius);
 
     // Draw percentage text if enabled
     if (showPercentage) {

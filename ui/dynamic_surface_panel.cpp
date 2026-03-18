@@ -53,13 +53,13 @@ bool DynamicSurfacePanel::drawOverlay(OverlayRenderer& renderer) {
             yOff += 20.0f + spacing;
         } else if (widget.widget_type == "button") {
             Vec2 btnSize{100.0f, 24.0f};
-            renderer.drawRect({xStart, yOff}, btnSize, 0xFF444444);
+            renderer.drawRoundedRect({xStart, yOff}, btnSize, 0xFF444444, 4.0f);
             renderer.drawText({xStart + 8.0f, yOff + 4.0f}, widget.label, 0xFFFFFFFF);
             yOff += btnSize.y + spacing;
         } else if (widget.widget_type == "progress") {
             Vec2 barSize{200.0f, 16.0f};
-            renderer.drawRect({xStart, yOff}, barSize, 0xFF333333);
-            renderer.drawRect({xStart, yOff}, {barSize.x * 0.5f, barSize.y}, 0xFF4488FF);
+            renderer.drawRoundedRect({xStart, yOff}, barSize, 0xFF333333, 4.0f);
+            renderer.drawRoundedRect({xStart, yOff}, {barSize.x * 0.5f, barSize.y}, 0xFF4488FF, 4.0f);
             yOff += barSize.y + spacing;
         } else {
             renderer.drawText({xStart, yOff}, "[" + widget.widget_type + "] " + widget.label, 0xFF888888);

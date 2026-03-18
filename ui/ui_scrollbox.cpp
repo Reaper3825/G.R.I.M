@@ -1,4 +1,5 @@
 #include "ui_scrollbox.hpp"
+#include "ui_theme.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
 #include "ui_dropdown.hpp"  // For checking if child is a dropdown
@@ -162,14 +163,13 @@ void UIScrollBox::draw(UIRenderer& renderer) {
 }
 
 void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
-    // Draw background
-    renderer.drawRect(position, size, 0xFF1A1A1A);
+    using namespace UITheme;
     
-    // Draw border
-    renderer.drawRect(position, {size.x, 1}, 0xFF333333);
-    renderer.drawRect(position, {1, size.y}, 0xFF333333);
-    renderer.drawRect({position.x, position.y + size.y - 1}, {size.x, 1}, 0xFF333333);
-    renderer.drawRect({position.x + size.x - 1, position.y}, {1, size.y}, 0xFF333333);
+    // Draw background — translucent recessed glass
+    renderer.drawRoundedRect(position, size, Colors::ContentAreaBg, Sizes::WidgetRadius);
+    
+    // Draw border — visible glass edges
+    renderer.drawRoundedBorder(position, size, Colors::BorderPrimary, Sizes::WidgetRadius);
     
 
     
@@ -221,18 +221,15 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         // Scrollbar track
         Vec2 trackPos = {position.x + size.x - scrollbarWidth - 2, position.y + 2};
         Vec2 trackSize = {scrollbarWidth, size.y - 4};
-        renderer.drawRect(trackPos, trackSize, 0xFF0A0A0A);
+        renderer.drawRoundedRect(trackPos, trackSize, Colors::ContentAreaBg, Sizes::SmallRadius);
         
         // Scrollbar thumb
-        uint32_t thumbColor = isDraggingScrollbar ? 0xFF6A6A6A : 
-                              (isHoveringScrollbar ? 0xFF5A5A5A : 0xFF4A4A4A);
-        renderer.drawRect(sbPos, sbSize, thumbColor);
+        uint32_t thumbColor = isDraggingScrollbar ? Colors::ScrollThumbDrag : 
+                              (isHoveringScrollbar ? Colors::ScrollThumbHover : Colors::ScrollThumb);
+        renderer.drawRoundedRect(sbPos, sbSize, thumbColor, Sizes::SmallRadius);
         
-        // Scrollbar thumb border
-        renderer.drawRect(sbPos, {sbSize.x, 1}, 0xFF7A7A7A);
-        renderer.drawRect(sbPos, {1, sbSize.y}, 0xFF7A7A7A);
-        renderer.drawRect({sbPos.x, sbPos.y + sbSize.y - 1}, {sbSize.x, 1}, 0xFF2A2A2A);
-        renderer.drawRect({sbPos.x + sbSize.x - 1, sbPos.y}, {1, sbSize.y}, 0xFF2A2A2A);
+        // Glass thumb border
+        renderer.drawRoundedBorder(sbPos, sbSize, Colors::BorderPrimary, Sizes::SmallRadius);
     }
     
     // SECOND PASS: Draw expanded dropdown lists on top of everything

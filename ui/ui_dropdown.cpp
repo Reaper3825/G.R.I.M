@@ -1,4 +1,5 @@
 #include "ui_dropdown.hpp"
+#include "ui_theme.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
 #include "helpers/mouse.hpp"
@@ -93,33 +94,33 @@ void UIDropdown::draw(UIRenderer& renderer) {
 }
 
 void UIDropdown::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
+    using namespace UITheme;
+    
     // Draw label
-    renderer.drawText({position.x, position.y + 15}, label, 0xFFFFFFFF);
+    renderer.drawText({position.x, position.y + 15}, label, Colors::TextPrimary);
     
     // Recalculate dropdown position based on current position (for scrolling)
     Vec2 currentDropdownPos = {position.x + 150, position.y + 5};
     Vec2 currentDropdownSize = {size.x - 160, 30};
     
     // Draw dropdown box
-    renderer.drawRect(currentDropdownPos, currentDropdownSize, 0xFF303030);
-    renderer.drawRect(currentDropdownPos, {currentDropdownSize.x, 2}, 0xFF00FFFF);
-    renderer.drawRect(currentDropdownPos, {2, currentDropdownSize.y}, 0xFF00FFFF);
-    renderer.drawRect({currentDropdownPos.x, currentDropdownPos.y + currentDropdownSize.y - 2}, {currentDropdownSize.x, 2}, 0xFF00FFFF);
-    renderer.drawRect({currentDropdownPos.x + currentDropdownSize.x - 2, currentDropdownPos.y}, {2, currentDropdownSize.y}, 0xFF00FFFF);
+    renderer.drawRoundedRect(currentDropdownPos, currentDropdownSize, Colors::WidgetBg, Sizes::WidgetRadius);
+    renderer.drawRoundedBorder(currentDropdownPos, currentDropdownSize, Colors::BorderPrimary, Sizes::WidgetRadius);
     
     // Draw selected item
     std::string selected = getSelectedItem();
-    renderer.drawText({currentDropdownPos.x + 8, currentDropdownPos.y + 8}, selected, 0xFFFFFFFF);
+    renderer.drawText({currentDropdownPos.x + 8, currentDropdownPos.y + 8}, selected, Colors::TextPrimary);
     
     // Draw arrow indicator
     std::string arrow = expanded ? "^" : "v";
-    renderer.drawText({currentDropdownPos.x + currentDropdownSize.x - 20, currentDropdownPos.y + 8}, arrow, 0xFF00FFFF);
+    renderer.drawText({currentDropdownPos.x + currentDropdownSize.x - 20, currentDropdownPos.y + 8}, arrow, Colors::TextValue);
     
     // Note: Expanded list is NOT drawn here - it's drawn in drawExpandedList() 
     // which is called after all other widgets to ensure proper z-order
 }
 
 void UIDropdown::drawExpandedList(OverlayRenderer& renderer, const Vec2& panelPos) {
+    using namespace UITheme;
     if (!expanded) return;
     
     // Recalculate dropdown position
@@ -138,11 +139,11 @@ void UIDropdown::drawExpandedList(OverlayRenderer& renderer, const Vec2& panelPo
         Vec2 optPos = {currentDropdownPos.x, currentDropdownPos.y + currentDropdownSize.y + i * 25};
         Vec2 optSize = {currentDropdownSize.x, 25};
         
-        uint32_t bgColor = (itemIndex == selectedIndex) ? 0xFF404040 : 0xFF202020;
+        uint32_t bgColor = (itemIndex == selectedIndex) ? Colors::WidgetBgHover : Colors::ContentAreaBg;
         renderer.drawRect(optPos, optSize, bgColor);
-        renderer.drawRect(optPos, {optSize.x, 1}, 0xFF00FFFF);
+        renderer.drawRect(optPos, {optSize.x, 1}, Colors::GlassHighlight);
         
-        renderer.drawText({optPos.x + 8, optPos.y + 5}, options[itemIndex], 0xFFFFFFFF);
+        renderer.drawText({optPos.x + 8, optPos.y + 5}, options[itemIndex], Colors::TextPrimary);
     }
     
     // Draw scroll indicators if needed
@@ -152,23 +153,23 @@ void UIDropdown::drawExpandedList(OverlayRenderer& renderer, const Vec2& panelPo
         float listHeight = visibleItems * 25.0f;
         
         // Scrollbar background
-        renderer.drawRect({scrollbarX, listY}, {8, listHeight}, 0xFF101010);
+        renderer.drawRoundedRect({scrollbarX, listY}, {8, listHeight}, Colors::ContentAreaBg, Sizes::SmallRadius);
         
         // Scrollbar thumb
         float scrollRatio = static_cast<float>(scrollOffset) / (totalItems - visibleItems);
         float thumbHeight = (static_cast<float>(visibleItems) / totalItems) * listHeight;
         float thumbY = listY + scrollRatio * (listHeight - thumbHeight);
         
-        renderer.drawRect({scrollbarX, thumbY}, {8, thumbHeight}, 0xFF00FFFF);
+        renderer.drawRoundedRect({scrollbarX, thumbY}, {8, thumbHeight}, Colors::ScrollThumbDrag, Sizes::SmallRadius);
         
         // Draw scroll arrows/indicators
         if (scrollOffset > 0) {
             // Up arrow indicator at top
-            renderer.drawText({scrollbarX - 5, listY + 2}, "^", 0xFFFFFF00);
+            renderer.drawText({scrollbarX - 5, listY + 2}, "^", Colors::TextValue);
         }
         if (scrollOffset < totalItems - visibleItems) {
             // Down arrow indicator at bottom
-            renderer.drawText({scrollbarX - 5, listY + listHeight - 15}, "v", 0xFFFFFF00);
+            renderer.drawText({scrollbarX - 5, listY + listHeight - 15}, "v", Colors::TextValue);
         }
     }
 }

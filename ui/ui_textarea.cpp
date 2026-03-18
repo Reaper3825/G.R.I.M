@@ -1,4 +1,5 @@
 #include "ui_textarea.hpp"
+#include "ui_theme.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
 #include "helpers/mouse.hpp"
@@ -74,19 +75,18 @@ void UITextArea::draw(UIRenderer& renderer) {
 }
 
 void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
+    using namespace UITheme;
+    
     // Draw label
-    renderer.drawText({position.x, position.y - 18}, label, 0xFFFFFFFF);
+    renderer.drawText({position.x, position.y - 18}, label, Colors::TextPrimary);
     
-    // Draw text area background
-    uint32_t bgColor = focused ? 0xFF3A3A3A : (hovered ? 0xFF2F2F2F : 0xFF252525);
-    renderer.drawRect(position, size, bgColor);
+    // Draw text area background — translucent glass
+    uint32_t bgColor = focused ? Colors::WidgetBgHover : (hovered ? Colors::WidgetBgHover : Colors::WidgetBg);
+    renderer.drawRoundedRect(position, size, bgColor, Sizes::WidgetRadius);
     
-    // Draw border
-    uint32_t borderColor = focused ? 0xFF00AAFF : 0xFF555555;
-    renderer.drawRect(position, {size.x, 2}, borderColor);
-    renderer.drawRect(position, {2, size.y}, borderColor);
-    renderer.drawRect({position.x, position.y + size.y - 2}, {size.x, 2}, borderColor);
-    renderer.drawRect({position.x + size.x - 2, position.y}, {2, size.y}, borderColor);
+    // Rounded border — accent on focus, visible frost otherwise
+    uint32_t borderColor = focused ? Colors::BorderFocus : Colors::BorderPrimary;
+    renderer.drawRoundedBorder(position, size, borderColor, Sizes::WidgetRadius);
     
     // Draw text content (multi-line)
     float yPos = position.y + 8;
@@ -95,7 +95,7 @@ void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     
     if (text.empty() && !focused) {
         // Show placeholder
-        renderer.drawText({position.x + 8, yPos}, placeholder, 0xFF777777);
+        renderer.drawText({position.x + 8, yPos}, placeholder, Colors::TextDisabled);
     } else {
         // Show actual text
         int startLine = static_cast<int>(scrollOffset);
@@ -107,12 +107,12 @@ void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
                 displayLine = displayLine.substr(0, 57) + "...";
             }
             
-            renderer.drawText({position.x + 8, yPos}, displayLine, 0xFFCCCCCC);
+            renderer.drawText({position.x + 8, yPos}, displayLine, 0xFFD0D0D0);
             yPos += lineHeight;
         }
     }
     
     // Draw character count
     std::string charCount = std::to_string(text.length()) + " chars";
-    renderer.drawText({position.x + size.x - 80, position.y + size.y - 18}, charCount, 0xFF888888);
+    renderer.drawText({position.x + size.x - 80, position.y + size.y - 18}, charCount, 0xFF909090);
 }

@@ -13,6 +13,7 @@
 #include "ui_slider.hpp"
 #include "ui_graph.hpp"
 #include "overlay_renderer.hpp"
+#include "ui_theme.hpp"
 #include "logger.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "ai/training_server_manager.hpp"
@@ -53,7 +54,7 @@ UITrainingPanel::UITrainingPanel()
     position = { 250, 500 };  //default position
     size = { 1350, 1100 };   //default size
     setVisible(false);
-    setBackground(0xE0181818);
+    setBackground(0xF0202020);  // [GLASS_PHASE4] Opaque dark card
     
     // Ensure title bar is accessible (minimum 50px from top of screen)
     if (position.y < 50.0f) {
@@ -253,12 +254,12 @@ UITrainingPanel::UITrainingPanel()
     
     // Initialize progress bars with max value 1.0 (we pass 0.0-1.0 range)
     trainingProgressBar = std::make_shared<UIProgressBar>("Training Progress", 1.0f);
-    trainingProgressBar->setFillColor(0xFF00AA00);
-    trainingProgressBar->setBackgroundColor(0xFF1A1A1A);
+    trainingProgressBar->setFillColor(0xFF5AD07A);
+    trainingProgressBar->setBackgroundColor(0xD91A1A30);
     
     collectionProgressBar = std::make_shared<UIProgressBar>("Data Collection ", 1.0f);
-    collectionProgressBar->setFillColor(0xFF00AAFF);  // Cyan color for collection
-    collectionProgressBar->setBackgroundColor(0xFF1A1A1A);
+    collectionProgressBar->setFillColor(0xFF5B8DEF);  // Blue for collection
+    collectionProgressBar->setBackgroundColor(0xD91A1A30);
     
     // Initialize resource monitoring graph
     resourceMonitorGraph = std::make_shared<UIGraph>("System Resources", GraphType::Area);
@@ -278,19 +279,19 @@ UITrainingPanel::UITrainingPanel()
     graphConfig.maxValue = 100.0f;  // Percentage scale (0-100%)
     graphConfig.gridLines = 5;
     graphConfig.lineThickness = 2.0f;
-    graphConfig.backgroundColor = 0xFF0A0A0A;
-    graphConfig.gridColor = 0xFF252525;
-    graphConfig.axisColor = 0xFF404040;
-    graphConfig.textColor = 0xFFCCCCCC;  // Brighter text for better readability
+    graphConfig.backgroundColor = 0xF01A1A1A;  // [GLASS_PHASE4] Opaque recessed
+    graphConfig.gridColor = 0x10FFFFFF;  // [GLASS_PHASE4] Faint grid
+    graphConfig.axisColor = 0x15FFFFFF;  // [GLASS_PHASE4] Dim axis
+    graphConfig.textColor = 0xFF909090;
     graphConfig.paddingLeft = 50.0f;
     graphConfig.paddingRight = 15.0f;
     graphConfig.paddingTop = 30.0f;
     graphConfig.paddingBottom = 50.0f;  // More space for legend and X-axis labels
     
     // Add three series for CPU, Memory, and GPU usage
-    resourceMonitorGraph->addSeries("CPU", {}, 0xFF00AAFF);      // Cyan
-    resourceMonitorGraph->addSeries("Memory", {}, 0xFF00FF00);   // Green
-    resourceMonitorGraph->addSeries("GPU", {}, 0xFFFF6600);      // Orange
+    resourceMonitorGraph->addSeries("CPU", {}, 0xFF5B8DEF);      // Blue
+    resourceMonitorGraph->addSeries("Memory", {}, 0xFF5AD07A);   // Green
+    resourceMonitorGraph->addSeries("GPU", {}, 0xFFE08040);      // Orange
     
     // Initialize the resource monitor singleton
     ResourceMonitor::getInstance().initialize();
@@ -522,9 +523,9 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     if (!UIPanel::drawOverlay(renderer)) return false;
     
     PanelRect content = getContentRect();
-    float panelX = content.origin.x + 8;
+    float panelX = content.origin.x + 15;
     float panelY = content.origin.y + 10;
-    float panelWidth = content.size.x - 16;
+    float panelWidth = content.size.x - 30;
     float panelHeight = content.size.y - 10;
     
     // Split into two columns
@@ -540,11 +541,11 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     
     // Server status header (fixed at top)
     std::string trainingServerStatus = serverConnected ? "[ONLINE] Training" : "[OFFLINE] Training";
-    uint32_t trainingServerColor = serverConnected ? 0xFF00FF00 : 0xFFFF0000;
+    uint32_t trainingServerColor = serverConnected ? 0xFF5AD07A : 0xFFE05555;
     renderer.drawText({leftX, leftY}, trainingServerStatus, trainingServerColor);
     
     // Draw separator line
-    renderer.drawRect({leftX, leftY}, {leftPanelWidth, 2}, 0xFF404040);
+    renderer.drawRect({leftX, leftY}, {leftPanelWidth, 2}, 0x10FFFFFF);  // [GLASS_PHASE4] Faint divider
     leftY += 10;
     
     // Scrollable area for configuration
@@ -552,7 +553,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     float scrollAreaHeight = panelHeight - (leftY - panelY) - 10;
     
     // Draw scroll area background
-    renderer.drawRect({leftX, scrollAreaY}, {leftPanelWidth, scrollAreaHeight}, 0xFF0A0A0A);
+    renderer.drawRoundedRect({leftX, scrollAreaY}, {leftPanelWidth, scrollAreaHeight}, 0xF01A1A1A, UITheme::Sizes::WidgetRadius);
     
     // Calculate content height
     float contentY = 0;
@@ -580,7 +581,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     
     // Configuration header
     if (renderY >= scrollAreaY - 30 && renderY <= scrollAreaY + scrollAreaHeight) {
-        renderer.drawText({leftX + 10, renderY + 10}, "Training Configuration", 0xFF00FFFF);
+        renderer.drawText({leftX + 10, renderY + 10}, "Training Configuration", 0xFF6B8CFF);
     }
     renderY += 40;
     
@@ -644,7 +645,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     // Data Source Input Section
     if (renderY >= scrollAreaY - 80 && renderY <= scrollAreaY + scrollAreaHeight) {
         // Section header
-        renderer.drawText({leftX + 10, renderY}, "Add Data Source", 0xFF00FFFF);
+        renderer.drawText({leftX + 10, renderY}, "Add Data Source", 0xFF6B8CFF);
         renderY += 25;
         
         // Input box
@@ -668,7 +669,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     // Data Verification Section
     if (renderY >= scrollAreaY - 80 && renderY <= scrollAreaY + scrollAreaHeight) {
         // Section header
-        renderer.drawText({leftX + 10, renderY}, "Data Pipeline", 0xFF00FFFF);
+        renderer.drawText({leftX + 10, renderY}, "Data Pipeline", 0xFF6B8CFF);
         renderY += 25;
         
         // Data collection status indicator
@@ -677,10 +678,10 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         
         if (dataCollectionActive) {
             collectionStatusIndicator = "[ACTIVE] Collecting";
-            collectionIndicatorColor = 0xFF00AAFF;  // Cyan
+            collectionIndicatorColor = 0xFF5B8DEF;  // Blue
         } else if (dataCollectionCompleted && currentStats.collectionProgress >= 99.0f) {
             collectionStatusIndicator = "[COMPLETED]";
-            collectionIndicatorColor = 0xFF00FF00;  // Green
+            collectionIndicatorColor = 0xFF5AD07A;  // Green
         } else {
             collectionStatusIndicator = "[IDLE] Ready";
             collectionIndicatorColor = 0xFF808080;  // Grey
@@ -692,7 +693,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         if ((dataCollectionActive || dataCollectionCompleted) && currentStats.collectionProgress > 0.0f) {
             std::string progressText = " (" + std::to_string((int)currentStats.collectionProgress) + "%)";
             renderer.drawText({leftX + 120, renderY}, progressText, 
-                            dataCollectionActive ? 0xFF00AAFF : 0xFF00FF00);
+                            dataCollectionActive ? 0xFF5B8DEF : 0xFF5AD07A);
         }
         renderY += 25;
         
@@ -705,7 +706,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         }
         
         // Training Data Path Configuration Section
-        renderer.drawText({leftX + 10, renderY}, "Training Data Path:", 0xFF00AAFF);
+        renderer.drawText({leftX + 10, renderY}, "Training Data Path:", 0xFF5B8DEF);
         renderY += 25;
         
         if (trainingDataPathInput) {
@@ -734,15 +735,12 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         float scrollBarHeight = (scrollAreaHeight / leftPanelContentHeight) * scrollAreaHeight;
         float scrollBarY = scrollAreaY + (leftPanelScrollPosition / leftPanelContentHeight) * scrollAreaHeight;
         
-        renderer.drawRect({scrollBarX, scrollAreaY}, {scrollBarWidth, scrollAreaHeight}, 0xFF202020);
-        renderer.drawRect({scrollBarX, scrollBarY}, {scrollBarWidth, scrollBarHeight}, 0xFF00FFFF);
+        renderer.drawRoundedRect({scrollBarX, scrollAreaY}, {scrollBarWidth, scrollAreaHeight}, 0xF01A1A1A, UITheme::Sizes::SmallRadius);
+        renderer.drawRoundedRect({scrollBarX, scrollBarY}, {scrollBarWidth, scrollBarHeight}, 0x20FFFFFF, UITheme::Sizes::SmallRadius);
     }
     
     // Draw scroll area border
-    renderer.drawRect({leftX, scrollAreaY}, {leftPanelWidth, 2}, 0xFF303030);
-    renderer.drawRect({leftX, scrollAreaY}, {2, scrollAreaHeight}, 0xFF303030);
-    renderer.drawRect({leftX, scrollAreaY + scrollAreaHeight - 2}, {leftPanelWidth, 2}, 0xFF303030);
-    renderer.drawRect({leftX + leftPanelWidth - 2, scrollAreaY}, {2, scrollAreaHeight}, 0xFF303030);
+    renderer.drawRoundedBorder({leftX, scrollAreaY}, {leftPanelWidth, scrollAreaHeight}, 0x12FFFFFF, UITheme::Sizes::WidgetRadius);
     
     // ============================================================
     // RIGHT PANEL - Stats, Controls, and Verbose Output
@@ -752,7 +750,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     
     // Connection status
     std::string connStatus = serverConnected ? "✓ Connected" : "✗ Disconnected";
-    uint32_t connColor = serverConnected ? 0xFF00FF00 : 0xFFFF0000;
+    uint32_t connColor = serverConnected ? 0xFF5AD07A : 0xFFE05555;
     renderer.drawText({rightX, rightY}, connStatus, connColor);
     rightY += 25;
     
@@ -762,10 +760,10 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     
     if (dataCollectionActive) {
         collectionStatus = "[ACTIVE] Data Collection";
-        collectionColor = 0xFF00AAFF;  // Cyan
+        collectionColor = 0xFF5B8DEF;  // Blue
     } else if (dataCollectionCompleted && currentStats.collectionProgress >= 99.0f) {
         collectionStatus = "[COMPLETED] Data Collection";
-        collectionColor = 0xFF00FF00;  // Green
+        collectionColor = 0xFF5AD07A;  // Green
     } else {
         collectionStatus = "[IDLE] Data Collection";
         collectionColor = 0xFF606060;  // Dark grey
@@ -796,7 +794,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     if (!checkpointMergeStatus.empty() && 
         (currentState == Control::TrainingState_Collecting || 
          currentState == Control::TrainingState_Verifying)) {
-        renderer.drawText({rightX, rightY}, checkpointMergeStatus, 0xFFFFAA00);
+        renderer.drawText({rightX, rightY}, checkpointMergeStatus, 0xFFE8A840);
         rightY += 25;
     }
     
@@ -884,7 +882,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         
         // Show current collection phase if active
         if (dataCollectionActive && !currentStats.currentPhase.empty()) {
-            renderer.drawText({rightX, rightY}, "Phase: " + std::string(currentStats.currentPhase), 0xFF00AAFF);
+            renderer.drawText({rightX, rightY}, "Phase: " + std::string(currentStats.currentPhase), 0xFF5B8DEF);
             rightY += 20;
         }
         
@@ -955,42 +953,36 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     rightY += btnHeight + btnHeight + 50;  // Account for two rows of buttons
     
     // Verbose Calculation Area (placeholder for future use)
-    renderer.drawText({rightX, rightY}, "Verbose Output / Calculations", 0xFF00FFFF);
+    renderer.drawText({rightX, rightY}, "Verbose Output / Calculations", 0xFF6B8CFF);
     rightY += 30;
     
     float verboseHeight = panelHeight - (rightY - panelY) - 250; // Leave room for logs
     float verboseWidth = rightPanelWidth;
     
     // Draw verbose area background
-    renderer.drawRect({rightX, rightY}, {verboseWidth, verboseHeight}, 0xFF0A0A0A);
+    renderer.drawRoundedRect({rightX, rightY}, {verboseWidth, verboseHeight}, 0xF01A1A1A, UITheme::Sizes::WidgetRadius);
     
     // Placeholder text
-    renderer.drawText({rightX + 10, rightY + 10}, "[Reserved for verbose training calculations]", 0xFF808080);
-    renderer.drawText({rightX + 10, rightY + 30}, "• GPU utilization graphs", 0xFF606060);
-    renderer.drawText({rightX + 10, rightY + 50}, "• Memory usage tracking", 0xFF606060);
-    renderer.drawText({rightX + 10, rightY + 70}, "• Token throughput metrics", 0xFF606060);
-    renderer.drawText({rightX + 10, rightY + 90}, "• Gradient statistics", 0xFF606060);
+    renderer.drawText({rightX + 10, rightY + 10}, "[Reserved for verbose training calculations]", 0xFF909090);
+    renderer.drawText({rightX + 10, rightY + 30}, "• GPU utilization graphs", 0xFF505050);
+    renderer.drawText({rightX + 10, rightY + 50}, "• Memory usage tracking", 0xFF505050);
+    renderer.drawText({rightX + 10, rightY + 70}, "• Token throughput metrics", 0xFF505050);
+    renderer.drawText({rightX + 10, rightY + 90}, "• Gradient statistics", 0xFF505050);
     
     // Draw verbose area border
-    renderer.drawRect({rightX, rightY}, {verboseWidth, 2}, 0xFF303030);
-    renderer.drawRect({rightX, rightY}, {2, verboseHeight}, 0xFF303030);
-    renderer.drawRect({rightX, rightY + verboseHeight - 2}, {verboseWidth, 2}, 0xFF303030);
-    renderer.drawRect({rightX + verboseWidth - 2, rightY}, {2, verboseHeight}, 0xFF303030);
+    renderer.drawRoundedBorder({rightX, rightY}, {verboseWidth, verboseHeight}, 0x14FFFFFF, UITheme::Sizes::WidgetRadius);
     
     rightY += verboseHeight + 20;
     
     // Logs section
-    renderer.drawText({rightX, rightY}, "Training Logs", 0xFF00FFFF);
+    renderer.drawText({rightX, rightY}, "Training Logs", 0xFF6B8CFF);
     rightY += 25;
     
     float logHeight = panelHeight - (rightY - panelY);
     float logWidth = rightPanelWidth;
     
-    renderer.drawRect({rightX, rightY}, {logWidth, logHeight}, 0xFF0A0A0A);
-    renderer.drawRect({rightX, rightY}, {logWidth, 1}, 0xFF303030);
-    renderer.drawRect({rightX, rightY}, {1, logHeight}, 0xFF303030);
-    renderer.drawRect({rightX, rightY + logHeight - 1}, {logWidth, 1}, 0xFF303030);
-    renderer.drawRect({rightX + logWidth - 1, rightY}, {1, logHeight}, 0xFF303030);
+    renderer.drawRoundedRect({rightX, rightY}, {logWidth, logHeight}, 0xF01A1A1A, UITheme::Sizes::WidgetRadius);
+    renderer.drawRoundedBorder({rightX, rightY}, {logWidth, logHeight}, 0x14FFFFFF, UITheme::Sizes::WidgetRadius);
     
     // Draw log entries
     std::lock_guard<std::mutex> lock(logMutex);
@@ -1002,9 +994,9 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     for (size_t i = startIdx; i < logEntries.size(); i++) {
         const auto& entry = logEntries[i];
         
-        uint32_t color = 0xFF00FF00;
-        if (entry.level == 1) color = 0xFFFFAA00;
-        else if (entry.level == 2) color = 0xFFFF0000;
+        uint32_t color = 0xFF5AD07A;
+        if (entry.level == 1) color = 0xFFE8A840;
+        else if (entry.level == 2) color = 0xFFE05555;
         
         renderer.drawText({rightX + 5, logY}, entry.timestamp + " " + entry.message, color);
         
@@ -1245,12 +1237,12 @@ std::string UITrainingPanel::getStateString(Control::TrainingState state) const 
 uint32_t UITrainingPanel::getStateColor(Control::TrainingState state) const {
     switch (state) {
         case Control::TrainingState_Idle: return 0xFF808080;
-        case Control::TrainingState_Collecting: return 0xFF00AAFF;
-        case Control::TrainingState_Verifying: return 0xFF00AAFF;
-        case Control::TrainingState_Training: return 0xFF00FF00;
-        case Control::TrainingState_Paused: return 0xFFFFAA00;
-        case Control::TrainingState_Completed: return 0xFF00FFFF;
-        case Control::TrainingState_Error: return 0xFFFF0000;
+        case Control::TrainingState_Collecting: return 0xFF5B8DEF;
+        case Control::TrainingState_Verifying: return 0xFF5B8DEF;
+        case Control::TrainingState_Training: return 0xFF5AD07A;
+        case Control::TrainingState_Paused: return 0xFFE8A840;
+        case Control::TrainingState_Completed: return 0xFF6B8CFF;
+        case Control::TrainingState_Error: return 0xFFE05555;
         default: return 0xFFFFFFFF;
     }
 }
@@ -1760,9 +1752,9 @@ void UITrainingPanel::updateResourceMonitoring(float dt) {
         // Update the graph with new data
         if (resourceMonitorGraph) {
             resourceMonitorGraph->clearSeries();
-            resourceMonitorGraph->addSeries("CPU", cpuHistory, 0xFF00AAFF);      // Cyan
-            resourceMonitorGraph->addSeries("Memory", memoryHistory, 0xFF00FF00); // Green
-            resourceMonitorGraph->addSeries("GPU", gpuHistory, 0xFFFF6600);      // Orange
+            resourceMonitorGraph->addSeries("CPU", cpuHistory, 0xFF5B8DEF);      // Blue
+            resourceMonitorGraph->addSeries("Memory", memoryHistory, 0xFF5AD07A); // Green
+            resourceMonitorGraph->addSeries("GPU", gpuHistory, 0xFFE08040);      // Orange
         }
         
         resourceSampleCount++;
