@@ -1339,6 +1339,14 @@ __host__ Tensor unified_loss(
             "Check valid_mask and targets for corruption.");
     }
     
+    // RULE 20: Fail loud — catch NaN at the source (before mean division masks it)
+    if (!std::isfinite(h_loss_sum)) {
+        throw std::runtime_error("[unified_loss] loss_sum is non-finite (" + std::to_string(h_loss_sum) +
+            ") — NaN/Inf in per-token NLL losses. valid_count=" + std::to_string(h_valid_count) +
+            " num_tokens=" + std::to_string(num_tokens) + " vocab_size=" + std::to_string(vocab_size) +
+            ". Check log_softmax output for NaN (logits may contain non-finite values beyond the sample check).");
+    }
+
     // Mean loss: weighted_loss_sum / weight_sum (class-balanced) or loss_sum / valid_count (standard)
     const float normalization = (config.d_class_weights && h_weight_sum > 0.0f)
         ? h_weight_sum

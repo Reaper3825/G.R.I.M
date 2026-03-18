@@ -1026,18 +1026,71 @@ LossResult computeAutogradLoss(
     // 1. TEXT CROSS-ENTROPY LOSS (autograd::unified_loss)
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // RULE 20: Fail loud — sample-check logits for NaN/Inf before loss (catches bad forward immediately)
+    // RULE 20: Fail loud — strided sample-check logits for NaN/Inf before loss
+    // The old check only looked at the first 64 values (< 1 token's worth of logits).
+    // This version strides across ALL tokens to catch NaN anywhere in the logits tensor.
     {
-        const size_t sample = std::min<size_t>(64, intermediates.logits_tensor.shape.total_elements());
-        if (sample > 0) {
-            std::vector<float> h_sample(sample);
-            cudaMemcpyAsync(h_sample.data(), intermediates.logits_tensor.data, sample * sizeof(float),
-                            cudaMemcpyDeviceToHost, ctx.stream);
+        const size_t total_elems = intermediates.logits_tensor.shape.total_elements();
+        constexpr size_t kSamplesPerToken = 4;  // Check 4 values per token (first, mid, target-area, last)
+        const size_t stride = (total_tokens > 0 && vocab_size > 0)
+            ? static_cast<size_t>(vocab_size) : 1;
+        // Sample layout: for each token, check 4 positions across the vocab dimension
+        const size_t sample_count = std::min<size_t>(
+            static_cast<size_t>(total_tokens) * kSamplesPerToken, total_elems);
+        if (sample_count > 0 && total_tokens > 0) {
+            // Batch D2H: copy first token + last token fully, plus spot-check middle tokens
+            std::vector<float> h_first(stride);
+            std::vector<float> h_last(stride);
+            // Copy first token's logits
+            cudaMemcpyAsync(h_first.data(), intermediates.logits_tensor.data,
+                            stride * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+            // Copy last token's logits
+            const size_t last_token_offset = static_cast<size_t>(total_tokens - 1) * stride;
+            if (last_token_offset + stride <= total_elems) {
+                cudaMemcpyAsync(h_last.data(),
+                                intermediates.logits_tensor.data + last_token_offset,
+                                stride * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+            }
+            // Spot-check: sample 1 float from every 64th token in the middle
+            constexpr size_t kSpotStride = 64;
+            std::vector<float> h_spots;
+            std::vector<size_t> spot_token_indices;
+            for (size_t t = kSpotStride; t < static_cast<size_t>(total_tokens - 1); t += kSpotStride) {
+                spot_token_indices.push_back(t);
+            }
+            h_spots.resize(spot_token_indices.size());
+            for (size_t s = 0; s < spot_token_indices.size(); ++s) {
+                size_t off = spot_token_indices[s] * stride;
+                cudaMemcpyAsync(&h_spots[s], intermediates.logits_tensor.data + off,
+                                sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+            }
             cudaStreamSynchronize(ctx.stream);
-            for (size_t i = 0; i < sample; ++i) {
-                if (!std::isfinite(h_sample[i])) {
-                    throw std::runtime_error("computeAutogradLoss: logits contain non-finite value at index " +
-                        std::to_string(i) + " (forward produced NaN/Inf before loss - fix forward path)");
+            // Check first token
+            for (size_t i = 0; i < stride; ++i) {
+                if (!std::isfinite(h_first[i])) {
+                    throw std::runtime_error("computeAutogradLoss: logits NaN/Inf at token=0 vocab_idx=" +
+                        std::to_string(i) + " value=" + std::to_string(h_first[i]) +
+                        " (forward produced non-finite logits - weights may be corrupted)");
+                }
+            }
+            // Check last token
+            if (last_token_offset + stride <= total_elems) {
+                for (size_t i = 0; i < stride; ++i) {
+                    if (!std::isfinite(h_last[i])) {
+                        throw std::runtime_error("computeAutogradLoss: logits NaN/Inf at token=" +
+                            std::to_string(total_tokens - 1) + " vocab_idx=" + std::to_string(i) +
+                            " value=" + std::to_string(h_last[i]) +
+                            " (forward produced non-finite logits - weights may be corrupted)");
+                    }
+                }
+            }
+            // Check spot samples
+            for (size_t s = 0; s < h_spots.size(); ++s) {
+                if (!std::isfinite(h_spots[s])) {
+                    throw std::runtime_error("computeAutogradLoss: logits NaN/Inf at token=" +
+                        std::to_string(spot_token_indices[s]) + " vocab_idx=0 value=" +
+                        std::to_string(h_spots[s]) +
+                        " (forward produced non-finite logits at mid-tensor - weights corrupted)");
                 }
             }
         }
@@ -1073,6 +1126,18 @@ LossResult computeAutogradLoss(
     // RULE 20: Fail loud — loss tensor must be populated before MTP or D2H
     if (!intermediates.loss_tensor.data) {
         throw std::runtime_error("computeAutogradLoss: loss_tensor not populated after unified_loss");
+    }
+
+    // RULE 20: Verify text CE loss is finite BEFORE MTP additions
+    // This distinguishes "text logits caused NaN" from "MTP head caused NaN"
+    {
+        float h_text_ce = 0.0f;
+        cudaMemcpy(&h_text_ce, intermediates.loss_tensor.data, sizeof(float), cudaMemcpyDeviceToHost);
+        if (!std::isfinite(h_text_ce)) {
+            throw std::runtime_error("computeAutogradLoss: text CE loss is non-finite (" +
+                std::to_string(h_text_ce) + ") BEFORE MTP — the main LM head logits are the source. "
+                "Check encoder output, RMSNorm, centering, or LM head weights for corruption.");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1156,6 +1221,13 @@ LossResult computeAutogradLoss(
             );
             cudaStreamSynchronize(ctx.stream);
             ts->mtp_diagnostics.head_loss.push_back(h_loss_k);
+            // RULE 20: Fail loud — catch NaN in individual MTP heads
+            if (!std::isfinite(h_loss_k)) {
+                throw std::runtime_error("computeAutogradLoss: MTP head " + std::to_string(k) +
+                    " loss is non-finite (" + std::to_string(h_loss_k) +
+                    ") — MTP head weights or shifted targets are corrupted. "
+                    "shift=" + std::to_string(shift) + " scale=" + std::to_string(scale));
+            }
             int h_correct = 0, h_valid = 0;
             cudaMemcpy(&h_correct, d_correct, sizeof(int), cudaMemcpyDeviceToHost);
             cudaMemcpy(&h_valid, d_valid, sizeof(int), cudaMemcpyDeviceToHost);

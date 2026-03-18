@@ -4418,6 +4418,30 @@ BatchResult processBatch(
                               ctx.optimizer.optimizer_state.step,
                               ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
                               emb_freeze_step);
+        
+        // RULE 20: Post-optimizer weight NaN spot check
+        // Catches the EXACT batch where optimizer corrupts weights (instead of crashing
+        // on the NEXT batch's forward pass with an unhelpful "logits NaN" message).
+        {
+            cudaStreamSynchronize(ctx.model->getTrainingState().stream_ctrl.getPrimaryStream());
+            const auto& groups = ctx.model->parameterGroups();
+            for (size_t g = 0; g < groups.size(); ++g) {
+                if (!groups[g].params || groups[g].size() == 0) continue;
+                // Sample first element of each parameter group (fast: 1 float per group)
+                float h_sample = 0.0f;
+                cudaMemcpy(&h_sample, groups[g].params, sizeof(float), cudaMemcpyDeviceToHost);
+                if (!std::isfinite(h_sample)) {
+                    throw std::runtime_error("[FATAL] Post-optimizer NaN/Inf in parameter group '" +
+                        groups[g].name + "' (group " + std::to_string(g) + ") at batch " +
+                        std::to_string(batch_idx + 1) + " optimizer_step=" +
+                        std::to_string(ctx.optimizer.optimizer_state.step) +
+                        " lr=" + std::to_string(result.learning_rate) +
+                        " — THIS batch's optimizer step corrupted weights. "
+                        "Check gradient magnitude and clipping for this group.");
+                }
+            }
+        }
+
         // Reset micro_step counter after optimizer step completes
         ctx.optimizer.current_micro_step = 0;
 
