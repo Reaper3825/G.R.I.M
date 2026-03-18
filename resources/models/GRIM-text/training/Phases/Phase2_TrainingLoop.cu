@@ -4426,10 +4426,10 @@ BatchResult processBatch(
             cudaStreamSynchronize(ctx.model->getTrainingState().stream_ctrl.getPrimaryStream());
             const auto& groups = ctx.model->parameterGroups();
             for (size_t g = 0; g < groups.size(); ++g) {
-                if (!groups[g].params || groups[g].size() == 0) continue;
+                if (!groups[g].weights() || groups[g].size() == 0) continue;
                 // Sample first element of each parameter group (fast: 1 float per group)
                 float h_sample = 0.0f;
-                cudaMemcpy(&h_sample, groups[g].params, sizeof(float), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&h_sample, groups[g].weights(), sizeof(float), cudaMemcpyDeviceToHost);
                 if (!std::isfinite(h_sample)) {
                     throw std::runtime_error("[FATAL] Post-optimizer NaN/Inf in parameter group '" +
                         groups[g].name + "' (group " + std::to_string(g) + ") at batch " +
