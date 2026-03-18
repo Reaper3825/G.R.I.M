@@ -33,11 +33,7 @@ struct LossConfig {
     // Penalizes low entropy (overconfidence), encourages diversity
     float entropy_reg_lambda = 0.0f;
     bool  entropy_reg_enabled = false;
-
-    // Z-loss: L_z = (1/N)*sum(log LSE)^2, penalizes logit magnitude drift
-    float z_loss_lambda = 0.0f;
-    bool  z_loss_enabled = false;
-
+    
     // Class-balanced loss: per-token weight = 1/freq(target)^β
     // GPU array [vocab_size], nullptr = disabled (all weights 1.0)
     const float* d_class_weights = nullptr;

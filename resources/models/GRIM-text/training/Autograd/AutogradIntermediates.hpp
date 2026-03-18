@@ -48,7 +48,6 @@ struct AutogradIntermediates {
     Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
     Tensor numeric_head_output;        // [total_tokens, 2] - (log_magnitude, sign_logit)
     Tensor loss_tensor;                // Scalar loss driving backward
-    Tensor mtp_input;                 // RMSNorm(encoder_output) — aligns MTP with LM head input (Issue: representation mismatch fix)
     std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -65,7 +64,6 @@ struct AutogradIntermediates {
         logits_tensor = Tensor();
         numeric_head_output = Tensor();
         loss_tensor = Tensor();
-        mtp_input = Tensor();
         mtp_logits_tensors.clear();
     }
     

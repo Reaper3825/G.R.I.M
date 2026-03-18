@@ -219,19 +219,8 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
         // Issue #149: project out dominant PC1 direction via power iteration (IN-PLACE)
         // h̃[t] = h[t] - (h[t]·g)*g  where g = PC1(H), g treated as stop-gradient
         // Backward: grad_h = (I - gg^T) * grad_h̃
-        // When current_input is local 'normalized', move into out_centered_hidden so buffer survives return.
-        // (project_out_pc1 modifies in-place and returns non-owning view; local normalized would free buffer)
-        if (current_input == &normalized) {
-            out_centered_hidden = std::move(normalized);
-        } else {
-            out_centered_hidden.data = const_cast<float*>(current_input->data);
-            out_centered_hidden.shape = current_input->shape;
-            out_centered_hidden.owns_data = false;
-            out_centered_hidden.requires_grad = current_input->requires_grad;
-            out_centered_hidden.grad_fn = current_input->grad_fn;
-            out_centered_hidden.stream = stream;
-        }
-        (void)autograd::project_out_pc1(out_centered_hidden, config_.pc1_power_iters, stream);
+        // Returns non-owning view — input tensor's buffer is modified in-place
+        out_centered_hidden = autograd::project_out_pc1(*current_input, config_.pc1_power_iters, stream);
         matmul_input = &out_centered_hidden;
     } else {
         out_centered_hidden = Tensor();  // No centering, clear output

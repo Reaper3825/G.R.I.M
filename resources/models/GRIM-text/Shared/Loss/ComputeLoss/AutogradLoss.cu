@@ -1233,10 +1233,6 @@ struct NLLLossGradFn : public GradFn {
 // Main API Functions (Host-only)
 //========================================================================
 
-// Forward declaration for z-loss
-static Tensor compute_z_loss_tensor(Tensor& logits, int num_tokens, int vocab_size,
-                                    float lambda, cudaStream_t stream);
-
 __host__ Tensor unified_loss(
     Tensor& logits,
     const int* targets,
@@ -1339,14 +1335,6 @@ __host__ Tensor unified_loss(
             "Check valid_mask and targets for corruption.");
     }
     
-    // RULE 20: Fail loud — catch NaN at the source (before mean division masks it)
-    if (!std::isfinite(h_loss_sum)) {
-        throw std::runtime_error("[unified_loss] loss_sum is non-finite (" + std::to_string(h_loss_sum) +
-            ") — NaN/Inf in per-token NLL losses. valid_count=" + std::to_string(h_valid_count) +
-            " num_tokens=" + std::to_string(num_tokens) + " vocab_size=" + std::to_string(vocab_size) +
-            ". Check log_softmax output for NaN (logits may contain non-finite values beyond the sample check).");
-    }
-
     // Mean loss: weighted_loss_sum / weight_sum (class-balanced) or loss_sum / valid_count (standard)
     const float normalization = (config.d_class_weights && h_weight_sum > 0.0f)
         ? h_weight_sum
@@ -1396,14 +1384,7 @@ __host__ Tensor unified_loss(
         loss.grad_fn = grad_fn;
     }
     
-    // ── Step 6: Add z-loss if enabled ──
-    if (config.z_loss_enabled && config.z_loss_lambda > 0.0f && logits.requires_grad) {
-        Tensor z_loss_tensor = compute_z_loss_tensor(
-            logits, num_tokens, vocab_size, config.z_loss_lambda, stream);
-        loss = autograd::add(loss, z_loss_tensor, stream);
-    }
-
-    // ── Step 7: Cleanup temporary buffers ──
+    // ── Step 6: Cleanup temporary buffers ──
     cudaFree(per_token_loss);
     cudaFree(d_loss_sum);
     cudaFree(d_valid_count);
@@ -1416,160 +1397,6 @@ __host__ Tensor unified_loss(
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
 // Was a thin wrapper calling unified_loss() with hardcoded plain CE config.
 // All callers now use unified_loss() directly with real LossConfig from model.
-
-//========================================================================
-// Z-loss: L_z = (1/N)*sum(log LSE)^2 — penalizes logit magnitude drift (PaLM/Gemini)
-//========================================================================
-
-__global__ void kernelZLossForward(
-    const float* __restrict__ logits,
-    float* __restrict__ d_lz_sum,
-    int num_tokens,
-    int vocab_size
-) {
-    __shared__ float block_sum;
-    if (threadIdx.x == 0) block_sum = 0.0f;
-    __syncthreads();
-
-    float my_sum = 0.0f;
-    const int total_threads = blockDim.x * gridDim.x;
-    for (int t = blockIdx.x * blockDim.x + threadIdx.x; t < num_tokens; t += total_threads) {
-        const float* row = logits + static_cast<size_t>(t) * vocab_size;
-        float max_val = row[0];
-        for (int v = 1; v < vocab_size; ++v) {
-            if (row[v] > max_val) max_val = row[v];
-        }
-        float lse = 0.0f;
-        for (int v = 0; v < vocab_size; ++v) {
-            lse += expf(row[v] - max_val);
-        }
-        lse = max_val + logf(lse + 1e-10f);
-        my_sum += lse * lse;
-    }
-    atomicAdd(&block_sum, my_sum);
-    __syncthreads();
-    if (threadIdx.x == 0) {
-        atomicAdd(d_lz_sum, block_sum);
-    }
-}
-
-__global__ void kernelZLossBackward(
-    const float* __restrict__ logits,
-    float* __restrict__ grad_logits,
-    int num_tokens,
-    int vocab_size,
-    float lambda_over_n,
-    float scale  // upstream grad (typically 1.0)
-) {
-    const float coeff = lambda_over_n * 2.0f * scale;
-    const int total_threads = blockDim.x * gridDim.x;
-    for (int t = blockIdx.x * blockDim.x + threadIdx.x; t < num_tokens; t += total_threads) {
-        const float* row = logits + static_cast<size_t>(t) * vocab_size;
-        float* g_row = grad_logits + static_cast<size_t>(t) * vocab_size;
-
-        float max_val = row[0];
-        for (int v = 1; v < vocab_size; ++v) {
-            if (row[v] > max_val) max_val = row[v];
-        }
-        float sum_exp = 0.0f;
-        for (int v = 0; v < vocab_size; ++v) {
-            sum_exp += expf(row[v] - max_val);
-        }
-        sum_exp += 1e-10f;
-        float lse = max_val + logf(sum_exp);
-        for (int v = 0; v < vocab_size; ++v) {
-            float sm = expf(row[v] - max_val) / sum_exp;
-            g_row[v] += coeff * lse * sm;
-        }
-    }
-}
-
-struct ZLossGradFn : public GradFn {
-    float* logits_data;          // NOT owned — points to caller's logits
-    Tensor* logits_tensor;      // NOT owned — to call accumulate_grad
-    int num_tokens;
-    int vocab_size;
-    float lambda;
-    float* grad_buffer;          // OWNED — temporary for backward output
-    cudaStream_t async_stream;
-
-    ZLossGradFn(float* logits, Tensor* logits_t, int N, int V, float lam, cudaStream_t stream)
-        : logits_data(logits), logits_tensor(logits_t), num_tokens(N), vocab_size(V), lambda(lam)
-        , grad_buffer(nullptr), async_stream(stream)
-    {
-        op_name = "z_loss";
-    }
-
-    ~ZLossGradFn() override {
-        if (grad_buffer) {
-            cudaFree(grad_buffer);
-            grad_buffer = nullptr;
-        }
-    }
-
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        float upstream_scale = 1.0f;
-        if (grad_output.data && grad_output.numel() > 0) {
-            cudaMemcpyAsync(&upstream_scale, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-        }
-        logits_tensor->ensure_grad();
-        const size_t total = static_cast<size_t>(num_tokens) * vocab_size;
-        if (!grad_buffer) {
-            cudaMalloc(&grad_buffer, total * sizeof(float));
-        }
-        cudaMemsetAsync(grad_buffer, 0, total * sizeof(float), stream);
-        const float lambda_over_n = lambda / static_cast<float>(num_tokens);
-        const int block = 256;
-        const int grid = std::min(4096, (num_tokens + block - 1) / block);
-        kernelZLossBackward<<<grid, block, 0, stream>>>(
-            logits_data, grad_buffer, num_tokens, vocab_size, lambda_over_n, upstream_scale);
-        logits_tensor->accumulate_grad(grad_buffer, total, 1.0f, stream);
-    }
-};
-
-// Returns scalar tensor (lambda * L_z) with grad_fn that adds z-loss gradient to logits
-static Tensor compute_z_loss_tensor(
-    Tensor& logits,
-    int num_tokens,
-    int vocab_size,
-    float lambda,
-    cudaStream_t stream
-) {
-    if (!logits.data || num_tokens <= 0 || vocab_size <= 0 || lambda <= 0.0f) {
-        throw std::runtime_error("[z_loss] invalid inputs");
-    }
-    float* d_lz_sum = nullptr;
-    cudaMalloc(&d_lz_sum, sizeof(float));
-    cudaMemsetAsync(d_lz_sum, 0, sizeof(float), stream);
-    const int block = 256;
-    const int grid = std::min(4096, (num_tokens + block - 1) / block);
-    kernelZLossForward<<<grid, block, 0, stream>>>(logits.data, d_lz_sum, num_tokens, vocab_size);
-    float h_lz_sum = 0.0f;
-    cudaMemcpyAsync(&h_lz_sum, d_lz_sum, sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
-    cudaFree(d_lz_sum);
-    const float lz = h_lz_sum / static_cast<float>(num_tokens);
-    const float scaled = lambda * lz;
-
-    float* d_scalar = nullptr;
-    cudaMalloc(&d_scalar, sizeof(float));
-    cudaMemcpyAsync(d_scalar, &scaled, sizeof(float), cudaMemcpyHostToDevice, stream);
-
-    Tensor result;
-    result.data = d_scalar;
-    result.owns_data = true;
-    result.shape = TensorContract::TensorShape::make_BSM(1, 1);
-    result.is_leaf = false;
-    result.requires_grad = logits.requires_grad;
-    result.stream = stream;
-
-    if (logits.requires_grad) {
-        result.grad_fn = std::make_shared<ZLossGradFn>(
-            logits.data, &logits, num_tokens, vocab_size, lambda, stream);
-    }
-    return result;
-}
 
 }  // namespace autograd
 }  // namespace GRIM

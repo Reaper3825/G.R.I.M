@@ -287,8 +287,6 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     // Issue #44 FIX: Entropy regularization to prevent mode collapse
     config.loss_options.entropy_reg_enabled = config.hyperparameters.loss_entropy_reg_enabled;
     config.loss_options.entropy_reg_lambda = config.hyperparameters.loss_entropy_reg_lambda;
-    config.loss_options.z_loss_enabled = config.hyperparameters.loss_z_loss_enabled;
-    config.loss_options.z_loss_lambda = config.hyperparameters.loss_z_loss_lambda;
 
     // Class-balanced loss: reweights per-token loss by 1/freq^β
     config.loss_options.class_balanced_enabled = config.hyperparameters.loss_class_balanced_enabled;

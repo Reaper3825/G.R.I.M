@@ -4,43 +4,43 @@ overview: A method-by-method audit of every training technique in GRIM-text, wit
 todos:
   - id: c1-weight-tying
     content: "C1: Enable weight tying (tie_embeddings: true in ai_config.json)"
-    status: completed
+    status: pending
   - id: b1-disable-encoder-centering
     content: "B1: Disable center_encoder_residuals via config (set to false)"
-    status: completed
+    status: pending
   - id: b2-disable-lmhead-centering
     content: "B2: Disable center_hidden_states via config (set to false), keep project_out_pc1: true"
-    status: completed
+    status: pending
   - id: a1-fix-mtp-mismatch
     content: "A1: Fix MTP representation mismatch — apply final RMSNorm to MTP input in AutogradTraining.cu"
-    status: completed
+    status: pending
   - id: c2-enable-qknorm
     content: "C2: Enable QK-Norm (qk_norm.enabled: true in ai_config.json)"
-    status: completed
+    status: pending
   - id: c3-enable-layerscale
     content: "C3: Enable LayerScale (layer_scale.enabled: true, init_value: 0.1)"
-    status: completed
+    status: pending
   - id: a2-reduce-sbr-scale
     content: "A2: Reduce SBR atom_scale from 1.0 to 0.1"
-    status: completed
+    status: pending
   - id: a3-reduce-dropout
     content: "A3: Reduce all dropout rates from 0.1-0.12 to 0.05"
-    status: completed
+    status: pending
   - id: a4-reduce-label-smoothing
     content: "A4: Reduce label smoothing epsilon from 0.1 to 0.05"
-    status: completed
-  - id: b3-fix-numeric-head
-    content: "B3: Fix NumericHead bias gradient bug (required for SBR)"
-    status: completed
+    status: pending
+  - id: b3-remove-numeric-head
+    content: "B3: Remove or fix NumericHead (bias gradient bug + competing objective)"
+    status: pending
   - id: a1-mtp-warmup
     content: "A1b: Increase MTP alpha_warmup_steps from 500 to 2000"
-    status: completed
+    status: pending
   - id: c4-zloss
-    content: "C4: Implement z-loss — config in ai_config.json, parse via ai_config_paths, wire through LossOptions/LossConfig/buildLossConfig/AutogradLoss.cu"
-    status: completed
+    content: "C4: Implement z-loss regularization kernel in AutogradLoss.cu"
+    status: pending
   - id: a5-vocab
     content: "A5: Regenerate vocab closer to 10K target (lower min_subword_freq or more data)"
-    status: completed
+    status: pending
 isProject: false
 ---
 
@@ -86,13 +86,16 @@ Centering operations are config-controlled; no code removal needed. Disable via 
 
 ---
 
-### B3. NumericHead — Fix (required for SBR)
+### B3. NumericHead — Remove or Fix
 
-**What it does**: Predicts `(log_magnitude, sign)` for numeric tokens. Required for Scratch Block Reasoning. Loss: `L_total += 0.1 * numeric_loss`.
+**What it does**: Predicts `(log_magnitude, sign)` for numeric tokens. Loss: `L_total += 0.1 * numeric_loss`.
 
 **Where**: `numeric_head_GPU.cu`, `AutogradTraining.cu` lines 857-863
 
-**Why fix**: The bias is applied via a raw CUDA kernel (`kernelNumericHeadBias`) that bypasses autograd. Backward never computes `grad_bias`, so bias gets zero gradients. Fix by routing bias through autograd (e.g. `autograd::broadcast_add`) so gradients flow correctly. The NumericHead stays — it's required for SBR.
+**Why remove**: Two issues:
+
+1. **Bias gradient bug**: The bias is applied via a raw CUDA kernel (`kernelNumericHeadBias`) that bypasses autograd. Backward never computes `grad_bias`, so bias gets zero gradients.
+2. **Competing objective**: Adds another loss signal (0.1 weight) that pushes encoder representations toward numeric prediction, diverting gradient budget from language modeling coherence.
 
 ---
 
@@ -202,29 +205,13 @@ With only 2512 tokens, label smoothing of 0.1 spreads 10% of probability mass ac
 
 ---
 
-### C4. Z-Loss Regularization — New Implementation (Config-Driven)
+### C4. Z-Loss Regularization — New Implementation Needed
 
-**What**: Regularize logit magnitudes: `L_z = (1/N) * sum(log(sum(exp(logits)))^2)`. Penalizes logits from drifting to large magnitudes. Used in PaLM, Gemini.
+**What**: Regularize logit magnitudes: `L_z = (1/N) * sum(log(sum(exp(logits)))^2)`. Penalizes logits from drifting to large magnitudes.
 
-**Why**: The logs show `logit_std` growing and `ratio(actual/expected)` consistently ~1.7-2.0x. Z-loss would constrain this drift.
+**Why**: The logs show `logit_std` growing and `ratio(actual/expected)` consistently ~1.7-2.0x. Z-loss (used in PaLM, Gemini) would constrain this drift and keep the softmax distribution well-behaved.
 
-**Implementation** — Must follow the same config pattern as other losses (label_smoothing, focal, entropy_reg). All hyperparameters read from `ai_config.json` via `ai_config_paths.hpp`:
-
-1. **ai_config.json** — Add under `training.config.loss`:
-
-```json
-   "z_loss": { "enabled": false, "lambda": 1e-4 }
-   
-
-```
-
-1. **control/ai_config_paths.hpp** — Add to `TrainingHyperparameters`: `loss_z_loss_enabled`, `loss_z_loss_lambda`. Parse in `applyTrainingConfigObject` under `loss.z_loss` (same pattern as `loss.entropy_reg`).
-2. **Shared/HyperParameters/HyperParameters_GPU.hpp** — Add `DEFAULT_LOSS_Z_LOSS_ENABLED`, `DEFAULT_LOSS_Z_LOSS_LAMBDA`.
-3. **Shared/Loss/LossContext/LossContext.hpp** — Add `z_loss_enabled`, `z_loss_lambda` to `LossOptions`.
-4. **Phases/Phase1_Startup.cu** — Map `hyperparameters.loss_z_loss_`* to `loss_options.z_loss_`*.
-5. **Shared/Loss/ComputeLoss/AutogradLoss.hpp** — Add `z_loss_enabled`, `z_loss_lambda` to `LossConfig`.
-6. **training/Autograd/AutogradTraining.cu** — In `buildLossConfig`, map `opts.z_loss_`* to `lc.z_loss_`*.
-7. **Shared/Loss/ComputeLoss/AutogradLoss.cu** — Implement z-loss kernel and wire as additive term (`L_total += lambda * L_z` when enabled). Backward flows through logits to LM head.
+**Where to add**: In `AutogradLoss.cu` after `unified_loss`, add a small z-loss term (weight ~~1e-4). This is a new kernel (~~20 lines CUDA) plus autograd wiring.
 
 ---
 
@@ -264,7 +251,7 @@ flowchart TD
 
 
 
-**Disabled via config in this plan**: `center_encoder_residuals`, `center_hidden_states`. NumericHead is required for SBR — fix its bias gradient bug (bias bypasses autograd).
+**Disabled via config in this plan**: `center_encoder_residuals`, `center_hidden_states`. NumericHead has a bias gradient bug and competing objective — remove or fix.
 
 ---
 
@@ -275,8 +262,8 @@ flowchart TD
 3. **A1: Fix MTP representation mismatch** — apply RMSNorm to MTP input so encoder gets coherent gradient signals
 4. **A2: Reduce SBR atom_scale** — 1.0 to 0.1 (optional, if atom injection may dominate)
 5. **A3+A4: Reduce dropout and label smoothing**
-6. **B3: Fix NumericHead bias gradient** — required for SBR; bias bypasses autograd
+6. **B3: Remove/fix NumericHead** — bias gradient bug + competing objective
 7. **C2, C3: Enable QK-Norm and LayerScale** — optional stability improvements (already implemented)
-8. **C4: Add z-loss** — config-driven via ai_config.json + ai_config_paths (same pattern as entropy_reg, focal)
+8. **C4: Add z-loss** — new code needed
 9. **A5: Regenerate vocab** — requires tokenizer retraining + data re-encoding
 

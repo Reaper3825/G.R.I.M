@@ -335,10 +335,6 @@ constexpr bool DEFAULT_LOSS_MASKING_ENABLED = true;
 constexpr bool DEFAULT_LOSS_ENTROPY_REG_ENABLED = false;
 constexpr float DEFAULT_LOSS_ENTROPY_REG_LAMBDA = 0.0f;  // Regularization strength when enabled (try 0.1-1.0)
 
-// Z-loss: L_z = (1/N)*sum(log LSE)^2, penalizes logit magnitude drift (PaLM/Gemini)
-constexpr bool DEFAULT_LOSS_Z_LOSS_ENABLED = false;
-constexpr float DEFAULT_LOSS_Z_LOSS_LAMBDA = 1e-4f;
-
 // Class-balanced loss: w_v = 1/freq(v)^β reweights per-token loss
 // β=0.5 → sqrt inverse frequency. Counteracts frequency-biased CE gradient.
 constexpr bool DEFAULT_LOSS_CLASS_BALANCED_ENABLED = false;

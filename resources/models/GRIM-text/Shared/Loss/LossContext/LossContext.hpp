@@ -44,10 +44,6 @@ struct LossOptions {
     bool entropy_reg_enabled = HyperParameters::DEFAULT_LOSS_ENTROPY_REG_ENABLED;
     float entropy_reg_lambda = HyperParameters::DEFAULT_LOSS_ENTROPY_REG_LAMBDA;
 
-    // Z-loss: L_z = (1/N)*sum(log LSE)^2 (PaLM/Gemini)
-    bool z_loss_enabled = HyperParameters::DEFAULT_LOSS_Z_LOSS_ENABLED;
-    float z_loss_lambda = HyperParameters::DEFAULT_LOSS_Z_LOSS_LAMBDA;
-
     // Class-balanced loss: w_v = 1/freq(v)^β reweights per-token loss
     bool class_balanced_enabled = HyperParameters::DEFAULT_LOSS_CLASS_BALANCED_ENABLED;
     float class_balanced_beta = HyperParameters::DEFAULT_LOSS_CLASS_BALANCED_BETA;

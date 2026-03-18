@@ -111,7 +111,7 @@
         "enable_parallel_tokenization": true,
         "max_length": 2048,
         "max_vocab_size": 10000,
-        "min_subword_freq": 1,
+        "min_subword_freq": 3,
         "model_type": "unibytes",
         "parallel_threshold": 1000,
         "prune_during_mining": false,
@@ -151,7 +151,7 @@
                 "head": 0,
                 "layer": -1
             },
-            "attention_dropout": 0.05,
+            "attention_dropout": 0.12,
             "auto_stop": {
                 "enabled": true,
                 "high_loss_patience": 12,
@@ -173,7 +173,7 @@
             },
             "d_ff": 3072,
             "d_model": 768,
-            "dropout_rate": 0.05,
+            "dropout_rate": 0.1,
             "embedding_freeze": {
                 "enabled": false,
                 "freeze_after_step": 0
@@ -210,17 +210,17 @@
                 "pattern": "random_centered"
             },
             "layer_scale": {
-                "enabled": true,
-                "init_value": 0.1
+                "enabled": false,
+                "init_value": 1.0
             },
             "learning_rate": 0.0006,
             "lm_head_centering": {
                 "center_encoder_residuals": false,
-                "center_hidden_states": false,
+                "center_hidden_states": true,
                 "center_logits": false,
                 "enabled": true,
                 "pc1_power_iters": 5,
-                "project_out_pc1": true
+                "project_out_pc1": false
             },
             "log_interval": 25,
             "log_recorder": {
@@ -287,10 +287,6 @@
                 "preference": {
                     "beta": 0.1,
                     "enabled": false
-                },
-                "z_loss": {
-                    "enabled": false,
-                    "lambda": 1e-4
                 }
             },
             "max_seq_len": 1024,
@@ -305,7 +301,7 @@
             "min_seq_valid_tokens": 10,
             "multi_token_prediction": {
                 "alpha": 0.2,
-                "alpha_warmup_steps": 2000,
+                "alpha_warmup_steps": 500,
                 "enabled": true,
                 "k": 3,
                 "log_ratio_monitor": true
@@ -329,10 +325,10 @@
             "qk_norm": {
                 "enabled": false
             },
-            "residual_dropout_rate": 0.05,
+            "residual_dropout_rate": 0.1,
             "scratch_block_reasoning": {
                 "atom_embedding_dim": 96,
-                "atom_scale": 0.1,
+                "atom_scale": 1.0,
                 "enabled": true,
                 "max_atoms": 8192
             },
