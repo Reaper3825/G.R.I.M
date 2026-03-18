@@ -1,7 +1,9 @@
+#include "core/grim_platform.h"
+#ifdef _WIN32
+
 #include "pch.hpp"
 #include "popup_window.hpp"
 #include "ui/ui_root.hpp"
-#include "core/grim_platform.h"
 #include <stb/stb_image.h>
 #include "core/ui_sync.hpp"
 #include <algorithm>
@@ -664,3 +666,5 @@ void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float
     DeleteDC(hdcDst);
     ReleaseDC(nullptr, hdcScreen);
 }
+
+#endif // _WIN32

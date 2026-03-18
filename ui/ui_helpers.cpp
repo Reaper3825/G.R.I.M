@@ -8,7 +8,12 @@
 // ============================================================
 bool updateCaretBlink(uint64_t& lastToggleTime, bool caretVisible)
 {
+#ifdef _WIN32
     uint64_t now = GetTickCount64();
+#else
+    auto tp = std::chrono::steady_clock::now().time_since_epoch();
+    uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(tp).count());
+#endif
     if (now - lastToggleTime > 500)
     {
         caretVisible = !caretVisible;

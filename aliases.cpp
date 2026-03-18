@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <shlobj.h>  // For SHGetFolderPath (Start Menu)
+#ifdef _WIN32
+#include <shlobj.h>
+#endif
 #include <ctime>
 
 namespace fs = std::filesystem;
@@ -127,14 +129,14 @@ static void scanDirectory(const fs::path& dir, std::unordered_map<std::string, s
     }
 }
 
+#ifdef _WIN32
 // Scan Windows Start Menu for shortcuts
 static void scanStartMenu(std::unordered_map<std::string, std::string>& aliases, int& count) {
     char path[MAX_PATH];
     
-    // Common Start Menu locations
     std::vector<int> folders = {
-        CSIDL_COMMON_PROGRAMS,  // All Users Start Menu
-        CSIDL_PROGRAMS          // Current User Start Menu
+        CSIDL_COMMON_PROGRAMS,
+        CSIDL_PROGRAMS
     };
     
     LOG_DEBUG("Aliases", "Scanning Start Menu...");
@@ -144,7 +146,6 @@ static void scanStartMenu(std::unordered_map<std::string, std::string>& aliases,
             try {
                 fs::path startMenuPath(path);
                 
-                // Scan recursively but limit depth
                 for (const auto& entry : fs::recursive_directory_iterator(
                     startMenuPath,
                     fs::directory_options::skip_permission_denied)) {
@@ -157,7 +158,6 @@ static void scanStartMenu(std::unordered_map<std::string, std::string>& aliases,
                             aliases[key] = path;
                             count++;
                             
-                            // Report progress every 50 items
                             if (count % 50 == 0) {
                                 LOG_DEBUG("Aliases", "Scan progress: " + std::to_string(count) + " aliases found...");
                             }
@@ -170,6 +170,7 @@ static void scanStartMenu(std::unordered_map<std::string, std::string>& aliases,
         }
     }
 }
+#endif
 
 // Perform the actual scan
 static void performScan() {
@@ -215,11 +216,13 @@ static void performScan() {
         }
     }
     
-    // 2. Scan Start Menu shortcuts
+    // 2. Scan Start Menu shortcuts (Windows only)
+#ifdef _WIN32
     LOG_DEBUG("Aliases", "Scanning Windows Start Menu shortcuts...");
     int startMenuCount = count;
     scanStartMenu(newAutoAliases, count);
     LOG_DEBUG("Aliases", "  → Found " + std::to_string(count - startMenuCount) + " Start Menu shortcuts");
+#endif
     
     // 3. Update global auto aliases
     {

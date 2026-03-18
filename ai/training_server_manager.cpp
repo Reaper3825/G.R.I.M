@@ -103,9 +103,10 @@ bool TrainingServerManager::start() {
         LOG_DEBUG("TrainingServer", "External training control server detected on port 11436");
         LOG_DEBUG("TrainingServer", "Adopting existing server instead of starting new instance");
         
-        // Don't manage the process (we didn't start it), but mark as running
         running_ = true;
-        hProcess_ = nullptr;  // We don't own this process
+#ifdef _WIN32
+        hProcess_ = nullptr;
+#endif
         
         return true;
     }

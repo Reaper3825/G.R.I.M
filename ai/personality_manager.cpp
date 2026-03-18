@@ -1,6 +1,7 @@
 #include "pch.hpp"
 #include "personality_manager.hpp"
 #include "logger.hpp"
+#include "resources.hpp"
 #include <algorithm>
 
 using namespace GRIM;
@@ -36,7 +37,7 @@ void PersonalityManager::save(nlohmann::json& memory) {
 }
 
 void PersonalityManager::updateAfterCommand(bool success) {
-    extern nlohmann::json longTermMemory;  // ✅ access global memory safely
+    
 
     if (success) {
         state.confidence = (std::min)(1.0f, state.confidence + 0.05f);
@@ -81,7 +82,7 @@ std::string PersonalityManager::moodToString(Mood mood) {
 }
 
 std::string PersonalityManager::generatePrefix() {
-    extern nlohmann::json aiConfig;  // Access global config
+    
     
     // Check if custom personality prompt is enabled
     if (aiConfig.contains("personality") && aiConfig["personality"].is_object()) {

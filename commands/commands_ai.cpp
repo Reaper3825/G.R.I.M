@@ -137,7 +137,7 @@ CommandResult cmdOpenApp(const std::string& arg) {
         Colors::Green                       // color
     };
 #else
-    LOG_INFO("cmdOpenApp", "(Stub) Would open: " + appPath);
+    LOG_DEBUG("cmdOpenApp", "(Stub) Would open: " + appPath);
     return {
         true,                                           // success
         "[App] (Stub) Would open: " + appPath,          // message

@@ -1,4 +1,5 @@
 #include "perception_context.hpp"
+#include "core/grim_platform.h"
 #include "perception.hpp"
 #include "multi_monitor.hpp" // ✅ Multi-monitor support
 #include "vision_ai.hpp"      // ✅ Vision AI integration

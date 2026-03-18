@@ -102,7 +102,12 @@ bool Mouse::wasReleased(MouseButton btn) {
 
 POINT Mouse::getPosition() {
     POINT pt;
+#ifdef _WIN32
     GetCursorPos(&pt);
+#else
+    pt.x = 0;
+    pt.y = 0;
+#endif
     return pt;
 }
 

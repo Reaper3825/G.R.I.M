@@ -3,6 +3,7 @@
 #include "ui_renderer.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
+#include <chrono>
 #include "helpers/mouse.hpp"
 #include "helpers/key.hpp"
 #include "ui_focus_manager.hpp"
@@ -32,7 +33,12 @@ void UIInputBox::update(const InputState& input, float dt) {
     if (!isVisible()) return;
     
     // Caret blink
+#ifdef _WIN32
     uint64_t now = GetTickCount64();
+#else
+    auto tp = std::chrono::steady_clock::now().time_since_epoch();
+    uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(tp).count());
+#endif
     if (now - lastBlink > 500) {
         caretVisible = !caretVisible;
         lastBlink = now;

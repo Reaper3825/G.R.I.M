@@ -425,11 +425,15 @@ int main(int argc, char* argv[])
     // ======================================================
     // 10. Launch popup UI (still separate layered window)
     // ======================================================
+#ifdef _WIN32
     std::thread([]() {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        runPopupUI(256, 256); // Layered window popup (separate)
+        runPopupUI(256, 256);
     }).detach();
     LOG_PHASE("Popup UI launched (layered window)", true);
+#else
+    LOG_DEBUG("Main", "Popup UI not yet implemented on this platform");
+#endif
 
     WindowManager::processMainThreadUpdates();
 

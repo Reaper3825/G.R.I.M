@@ -26,6 +26,7 @@ typedef void* HANDLE;
 
 // Simple types
 typedef unsigned long DWORD;
+typedef unsigned short WORD;
 typedef unsigned int UINT;
 typedef int BOOL;
 typedef unsigned char BYTE;
@@ -34,6 +35,12 @@ typedef unsigned long ULONG;
 typedef void* LPVOID;
 typedef const void* LPCVOID;
 typedef unsigned long long ULONG_PTR;
+typedef long long LRESULT;
+typedef unsigned long long WPARAM;
+typedef long long LPARAM;
+typedef void* HHOOK;
+typedef wchar_t WCHAR;
+#define CALLBACK
 
 // Constants
 #ifndef FALSE
@@ -90,6 +97,9 @@ struct STARTUPINFOA {
 #define VK_F10       0x79
 #define VK_F11       0x7A
 #define VK_F12       0x7B
+#define VK_SHIFT     0x10
+#define VK_CONTROL   0x11
+#define VK_MENU      0x12
 #define VK_LSHIFT    0xA0
 #define VK_RSHIFT    0xA1
 #define VK_LCONTROL  0xA2
@@ -137,6 +147,15 @@ struct STARTUPINFOA {
 #define VK_NUMPAD7    0x67
 #define VK_NUMPAD8    0x68
 #define VK_NUMPAD9    0x69
+#define VK_MULTIPLY   0x6A
+#define VK_ADD        0x6B
+#define VK_SEPARATOR  0x6C
+#define VK_SUBTRACT   0x6D
+#define VK_DECIMAL    0x6E
+#define VK_DIVIDE     0x6F
+#define VK_SNAPSHOT   0x2C
+#define VK_PAUSE      0x13
+#define VK_APPS       0x5D
 
 // POINT for mouse position (MouseState)
 struct POINT {

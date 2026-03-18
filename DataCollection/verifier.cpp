@@ -15,7 +15,9 @@
 #include <array>
 #include <mutex>
 #include <numeric>
+#ifdef GRIM_HAS_ONNXRUNTIME
 #include <onnxruntime_cxx_api.h>
+#endif
 #include <sentencepiece_processor.h>
 
 namespace fs = std::filesystem;
@@ -148,7 +150,7 @@ private:
             std::cerr << "[Verifier] Semantic ONNX not found at: " << path << "\n";
             return false;
         }
-
+#ifdef GRIM_HAS_ONNXRUNTIME
         env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "SemanticVerifier");
         session_options_ = std::make_unique<Ort::SessionOptions>();
         session_options_->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
@@ -194,6 +196,9 @@ private:
         }
 
         return true;
+#else
+        return false;
+#endif
     }
 
     SemanticEncodedInput encodePair(const std::string& premise, const std::string& hypothesis) const {
@@ -262,6 +267,7 @@ private:
 
     std::optional<std::array<float, 3>> infer(const std::string& premise,
                                               const std::string& hypothesis) const {
+#ifdef GRIM_HAS_ONNXRUNTIME
         if (!session_) {
             return std::nullopt;
         }
@@ -322,6 +328,10 @@ private:
         auto* logits = outputs[0].GetTensorMutableData<float>();
         std::array<float, 3> raw_logits{logits[0], logits[1], logits[2]};
         return softmax(raw_logits);
+#else
+        (void)premise; (void)hypothesis;
+        return std::nullopt;
+#endif
     }
 
     int max_seq_length_;
@@ -337,9 +347,11 @@ private:
     int unk_id_ = 0;
     std::vector<std::string> positive_prompts_;
     std::vector<std::string> negative_prompts_;
+#ifdef GRIM_HAS_ONNXRUNTIME
     std::unique_ptr<Ort::Env> env_;
     std::unique_ptr<Ort::Session> session_;
     std::unique_ptr<Ort::SessionOptions> session_options_;
+#endif
     std::vector<std::string> input_names_;
     std::vector<std::string> output_names_;
     mutable std::mutex run_mutex_;

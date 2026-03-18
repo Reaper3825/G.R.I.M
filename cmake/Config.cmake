@@ -179,12 +179,19 @@ else()
     set(_build_config_dir "${CMAKE_BUILD_TYPE}")
 endif()
 
-link_directories(
+target_link_directories(GRIM PRIVATE
     "${DEPS_LIB_DIR}"
     "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/${_build_config_dir}"
+    "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src"
+    "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/ggml/src"
+    "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/ggml/src/ggml-metal"
+    "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/ggml/src/ggml-blas"
     "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx/${_build_config_dir}"
     "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bimg/${_build_config_dir}"
     "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bx/${_build_config_dir}"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/cmake/bgfx"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/cmake/bimg"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/cmake/bx"
 )
 
 target_link_libraries(GRIM PRIVATE
@@ -192,8 +199,8 @@ target_link_libraries(GRIM PRIVATE
 
     # Audio / Speech
     portaudio
-    pv_porcupine
     whisper
+    ggml ggml-base ggml-cpu
 
     # HTTP / Networking
     cpr
@@ -203,6 +210,11 @@ target_link_libraries(GRIM PRIVATE
 
     ${GRIM_PERCEPTION_LIBS}
 )
+
+if(APPLE)
+    target_link_libraries(GRIM PRIVATE ggml-metal ggml-blas)
+    target_link_libraries(GRIM PRIVATE "-framework Accelerate" "-framework Foundation")
+endif()
 
 # =========================================================
 # OpenAL - Force release version for all configurations

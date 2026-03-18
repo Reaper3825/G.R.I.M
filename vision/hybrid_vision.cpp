@@ -80,8 +80,8 @@ HybridVisionSystem::~HybridVisionSystem() {
 }
 
 bool HybridVisionSystem::init_onnx() {
+#ifdef GRIM_HAS_ONNXRUNTIME
     try {
-        // Create ONNX environment
         onnx_env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "HybridVision");
         
         // Create session options
@@ -134,15 +134,21 @@ bool HybridVisionSystem::init_onnx() {
         
     } catch (const std::exception& e) {
         std::cerr << "Failed to initialize ONNX: " << e.what() << std::endl;
+#ifdef GRIM_HAS_ONNXRUNTIME
         onnx_session_.reset();
+#endif
         return false;
     }
+#else
+    return false;
+#endif
 }
 
 float HybridVisionSystem::preprocess_with_onnx(
     const ImageData& image,
     std::vector<float>& out_embeddings
 ) {
+#ifdef GRIM_HAS_ONNXRUNTIME
     if (!onnx_session_) {
         return 0.0f;
     }
@@ -223,6 +229,10 @@ float HybridVisionSystem::preprocess_with_onnx(
         std::cerr << "ONNX preprocessing error: " << e.what() << std::endl;
         return 0.0f;
     }
+#else
+    (void)image; (void)out_embeddings;
+    return 0.0f;
+#endif
 }
 
 void HybridVisionSystem::resize_image(ImageData& image, int max_size) {
@@ -402,7 +412,7 @@ VisionResult HybridVisionSystem::query(
     }
     
     // Step 1: ONNX preprocessing (optional)
-    if (config_.use_onnx_preprocessing && onnx_session_) {
+    if (config_.use_onnx_preprocessing && has_onnx_preprocessing()) {
         std::cout << "\n1️⃣  ONNX Preprocessing..." << std::endl;
         
         std::vector<float> embeddings;

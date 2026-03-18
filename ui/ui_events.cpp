@@ -1,9 +1,11 @@
 #include "ui_events.hpp"
+#include "core/grim_platform.h"
+
+#ifdef _WIN32
 #include "console_history.hpp"
 #include "commands/commands_core.hpp"
 #include "logger.hpp"
 
-#include "core/grim_platform.h"
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -81,3 +83,5 @@ bool processEvents(HWND hwnd,
 
     return true;
 }
+
+#endif // _WIN32

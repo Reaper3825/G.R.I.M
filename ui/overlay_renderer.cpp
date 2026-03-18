@@ -40,6 +40,21 @@ void OverlayRenderer::init(HWND hwnd, int width, int height)
     LOG_DEBUG("OverlayRenderer", "Initialized overlay renderer (" +
              std::to_string(width) + "x" + std::to_string(height) + ")");
 }
+#elif defined(__APPLE__)
+void OverlayRenderer::init(HWND hwnd, int width, int height)
+{
+    LOG_DEBUG("OverlayRenderer", "Initializing (macOS software renderer)");
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+
+    m_nativeWindow = hwnd;
+    m_width = width;
+    m_height = height;
+    m_pixels = new uint32_t[width * height]();
+    m_ownsPixels = true;
+
+    LOG_DEBUG("OverlayRenderer", "Initialized overlay renderer (" +
+             std::to_string(width) + "x" + std::to_string(height) + ")");
+}
 #endif
 
 void OverlayRenderer::init(int width, int height, void* pixelBuffer)
@@ -79,6 +94,8 @@ void OverlayRenderer::shutdown()
         m_hdcScreen = nullptr;
     }
     m_hwnd = nullptr;
+#elif defined(__APPLE__)
+    m_nativeWindow = nullptr;
 #endif
 
     if (m_ownsPixels) {
@@ -231,6 +248,12 @@ void OverlayRenderer::endFrame()
 
     UpdateLayeredWindow(m_hwnd, m_hdcScreen, &wndPos, &wndSize, m_hdcMem,
                        &srcPos, 0, &blend, ULW_ALPHA);
+#elif defined(__APPLE__)
+    if (!m_nativeWindow || !m_pixels)
+        return;
+
+    extern void grimOverlayBlit(void* nsWindow, void* pixels, int width, int height);
+    grimOverlayBlit(m_nativeWindow, m_pixels, m_width, m_height);
 #endif
 }
 

@@ -12,7 +12,9 @@
 #include <nlohmann/json.hpp>
 
 // ONNX Runtime for fast vision inference
+#ifdef GRIM_HAS_ONNXRUNTIME
 #include <onnxruntime_cxx_api.h>
+#endif
 
 // Hybrid ONNX + Ollama Vision System
 #include "vision/hybrid_vision.hpp"
@@ -60,10 +62,11 @@ struct VisionAIManager::Impl {
     std::string azureEndpoint;
     std::string githubToken;
     
-    // ONNX Runtime components
+#ifdef GRIM_HAS_ONNXRUNTIME
     std::unique_ptr<Ort::Env> onnxEnv;
     std::unique_ptr<Ort::Session> onnxSession;
     std::unique_ptr<Ort::SessionOptions> onnxSessionOptions;
+#endif
     std::string onnxModelPath;
     bool onnxInitialized = false;
     
@@ -218,13 +221,12 @@ bool VisionAIManager::isBackendAvailable(VisionAIBackend backend) {
             
             // Try to initialize ONNX Runtime if not already done
             if (!pImpl->onnxInitialized) {
+#ifdef GRIM_HAS_ONNXRUNTIME
                 try {
                     LOG_DEBUG("VisionAI", "Initializing ONNX Runtime...");
                     
-                    // Create ONNX environment
                     pImpl->onnxEnv = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "GRIM_Vision");
                     
-                    // Create session options
                     pImpl->onnxSessionOptions = std::make_unique<Ort::SessionOptions>();
                     pImpl->onnxSessionOptions->SetIntraOpNumThreads(4);
                     pImpl->onnxSessionOptions->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
@@ -264,6 +266,10 @@ bool VisionAIManager::isBackendAvailable(VisionAIBackend backend) {
                     pImpl->onnxInitialized = false;
                     return false;
                 }
+#else
+                LOG_DEBUG("VisionAI", "ONNX Runtime not available on this platform");
+                return false;
+#endif
             }
             return pImpl->onnxInitialized;
         }
@@ -551,6 +557,7 @@ VisionAnalysisResult VisionAIManager::analyzeWithONNX(const VisionAnalysisReques
     result.backend = VisionAIBackend::ONNX_Vision;
     result.modelUsed = "llama3.2-vision-11b-encoder (ONNX)";
     
+#ifdef GRIM_HAS_ONNXRUNTIME
     if (!pImpl->onnxInitialized || !pImpl->onnxSession) {
         result.success = false;
         result.errorMessage = "ONNX Runtime not initialized";
@@ -712,6 +719,12 @@ VisionAnalysisResult VisionAIManager::analyzeWithONNX(const VisionAnalysisReques
         LOG_ERROR("VisionAI", result.errorMessage);
         return result;
     }
+#else
+    result.success = false;
+    result.errorMessage = "ONNX Runtime not available on this platform";
+    (void)request;
+#endif
+    return result;
 }
 
 VisionAnalysisResult VisionAIManager::analyzeWithHybridVision(const VisionAnalysisRequest& request) {

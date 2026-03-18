@@ -1,4 +1,6 @@
+#ifdef GRIM_HAS_PORCUPINE
 #include "pv_porcupine.h"
+#endif
 #include "logger.hpp"
 #include "console_history.hpp"
 #include "timer.hpp"
@@ -36,12 +38,15 @@
 
 namespace Voice {
 
+#ifdef GRIM_HAS_PORCUPINE
 static pv_porcupine_t* g_porcupine = nullptr;
+#endif
 static std::mutex g_mutex;
 
 bool initWakeWord(const std::string& accessKey,
                   const std::string& modelPath,
                   const std::string& keywordPath) {
+#ifdef GRIM_HAS_PORCUPINE
     std::lock_guard<std::mutex> lock(g_mutex);
     LOG_DEBUG("Porcupine", "CWD: " + std::filesystem::current_path().string());
     LOG_DEBUG("Porcupine", "Initializing wake-word engine...");
@@ -84,9 +89,15 @@ bool initWakeWord(const std::string& accessKey,
 
     LOG_DEBUG("Porcupine", "Wake-word engine initialized successfully!");
     return true;
+#else
+    (void)accessKey; (void)modelPath; (void)keywordPath;
+    LOG_DEBUG("Porcupine", "Wake-word engine not available (Porcupine SDK not found)");
+    return false;
+#endif
 }
 
 bool detectWakeWordFrame(const int16_t* pcm) {
+#ifdef GRIM_HAS_PORCUPINE
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_porcupine) return false;
 
@@ -97,15 +108,21 @@ bool detectWakeWordFrame(const int16_t* pcm) {
         return false;
     }
     return (keywordIndex >= 0);
+#else
+    (void)pcm;
+    return false;
+#endif
 }
 
 void shutdownWakeWord() {
+#ifdef GRIM_HAS_PORCUPINE
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_porcupine) {
         pv_porcupine_delete(g_porcupine);
         g_porcupine = nullptr;
         LOG_TRACE("Porcupine", "Wakeword engine shut down.");
     }
+#endif
 }
 
 } // namespace Voice

@@ -233,9 +233,11 @@ target_link_libraries(GRIM PRIVATE ${_grim_ffmpeg_libs})
 set(_sentencepiece_core_libs
     sentencepiece
     sentencepiece_train
-    libprotobuf-lite
-    abseil_dll
+    protobuf-lite
 )
+if(WIN32)
+    list(APPEND _sentencepiece_core_libs abseil_dll)
+endif()
 
 set(_sentencepiece_absl_libs
     absl_decode_rust_punycode

@@ -15,7 +15,9 @@
 #include <vector>
 #include <memory>
 #include <map>
+#ifdef GRIM_HAS_ONNXRUNTIME
 #include <onnxruntime_cxx_api.h>
+#endif
 #include "hybrid_vision.hpp"
 
 namespace grim {
@@ -120,10 +122,11 @@ public:
 private:
     bool initialized_ = false;
     
-    // ONNX components
+#ifdef GRIM_HAS_ONNXRUNTIME
     std::unique_ptr<Ort::Env> onnx_env_;
     std::unique_ptr<Ort::Session> onnx_session_;
     std::unique_ptr<Ort::SessionOptions> onnx_options_;
+#endif
     bool using_cuda_ = false;
     
     // Scene classification

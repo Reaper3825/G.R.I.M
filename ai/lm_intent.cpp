@@ -1,5 +1,6 @@
 #include "lm_intent.hpp"
 #include "intent_gate.hpp"
+#include "ai.hpp"
 #include "logger.hpp"
 #include <nlohmann/json.hpp>
 
@@ -265,10 +266,8 @@ IntentType LMIntent::askOllama(const std::string& line) {
     }
 #else
     // Fallback: use existing AI backend
-    extern std::future<std::string> callAIAsync(const std::string& prompt);
-    
     std::string prompt = "Classify as 'command' or 'banter': " + line;
-    auto future = callAIAsync(prompt);
+    auto future = ::callAIAsync(prompt);
     std::string response = future.get();
     
     if (response.find("command") != std::string::npos) {

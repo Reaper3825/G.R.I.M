@@ -1,4 +1,6 @@
 #include "bridge_manager.hpp"
+
+#ifdef _WIN32
 #include "logger.hpp"
 #include <unordered_map>
 #include <string>
@@ -100,3 +102,10 @@ void BridgeManager::stop(const std::string& id) {
 
     LOG_DEBUG("BridgeManager", "Stopped bridge: " + id);
 }
+#else // !_WIN32
+
+bool BridgeManager::start(const std::string&, const std::string&) { return false; }
+nlohmann::json BridgeManager::send(const std::string&, const nlohmann::json&) { return {}; }
+void BridgeManager::stop(const std::string&) {}
+
+#endif // _WIN32

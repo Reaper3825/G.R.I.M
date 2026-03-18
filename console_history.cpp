@@ -1,8 +1,11 @@
 #include "console_history.hpp"
 #include <sstream>
+#ifdef _WIN32
 #include <crtdbg.h>
-
 #define CHECK_HEAP() _CrtCheckMemory()
+#else
+#define CHECK_HEAP() ((void)0)
+#endif
 
 // -------------------------------------------------------------
 // Temporary text width approximation (fixed-width assumption)

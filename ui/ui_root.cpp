@@ -2,6 +2,7 @@
 #include "logger.hpp"
 #include "input_parser.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
+#include "core/platform_window.hpp"
 
 extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
@@ -232,18 +233,20 @@ void UIRoot::updateWindowZOrder()
     if (!m_hwnd)
         return;
     
+#ifdef _WIN32
     if (hasVisiblePanels())
     {
-        // Show window and bring to TOPMOST when UI is visible
         ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
         SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
     else
     {
-        // Hide window completely when no UI visible
         ShowWindow(m_hwnd, SW_HIDE);
     }
+#else
+    PlatformWindow::setWindowVisible(m_hwnd, hasVisiblePanels());
+#endif
 }
 
 void UIRoot::setVisible(const std::string& name, bool visible)

@@ -1,5 +1,7 @@
 #include "window.hpp"
 #include "logger.hpp"
+
+#ifdef _WIN32
 #include <chrono>
 #include <windowsx.h>
 #include <algorithm>
@@ -209,3 +211,5 @@ LRESULT Window::InstanceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
+
+#endif // _WIN32

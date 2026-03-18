@@ -26,8 +26,7 @@ bool NLPGrammarProvider::init() {
 }
 
 void NLPGrammarProvider::extractCommandWeights() {
-    extern NLP g_nlp;
-    auto nlpRules = g_nlp.getAllRules();
+    auto nlpRules = ::g_nlp.getAllRules();
     
     std::unordered_map<std::string, float> commandWeights;
     std::regex verbPattern(R"(\b(open|close|launch|run|show|list|set|create|delete|search|find|play|stop|kill|start|end|save|load|change|update|modify|make|remove|install|uninstall|download|restart|reboot|shutdown|pause|resume|backup)\b)");
@@ -52,8 +51,7 @@ void NLPGrammarProvider::extractCommandWeights() {
 }
 
 void NLPGrammarProvider::extractQuestionWeights() {
-    extern NLP g_nlp;
-    auto nlpRules = g_nlp.getAllRules();
+    auto nlpRules = ::g_nlp.getAllRules();
     
     std::unordered_map<std::string, float> questionWeights;
     std::regex questionPattern(R"(\b(what|who|where|when|why|how|which|whats|whos|wheres|whens|whys|hows)\b)");
@@ -77,8 +75,7 @@ void NLPGrammarProvider::extractQuestionWeights() {
 }
 
 void NLPGrammarProvider::extractLocationWeights() {
-    extern NLP g_nlp;
-    auto nlpRules = g_nlp.getAllRules();
+    auto nlpRules = ::g_nlp.getAllRules();
     
     std::unordered_map<std::string, float> locationWeights;
     std::regex locationPattern(R"(\b(weather|temperature|forecast|near|nearby|local|around|location|place|store|restaurant|closest|nearest|find|best|recommendation|area|city|address)\b)");

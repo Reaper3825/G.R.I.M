@@ -24,11 +24,17 @@
 #include "ai/proactive_dialogue.hpp"
 #include "core/plugin.hpp"
 #include "helpers/color.hpp"
+#ifdef _WIN32
 #include <crtdbg.h>
+#endif
 #include "helpers/grim_input.hpp"
 #include <algorithm>
 
+#ifdef _WIN32
 #define CHECK_HEAP() _CrtCheckMemory()
+#else
+#define CHECK_HEAP() ((void)0)
+#endif
 
 using Voice::speak;
 

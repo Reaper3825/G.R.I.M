@@ -25,7 +25,7 @@ static std::mutex g_batchMutex;
 // =====================================================
 
 // Build a dynamic action space directly from GRIM's command registry
-static std::vector<std::string> buildDynamicActionSpace()
+std::vector<std::string> buildDynamicActionSpace()
 {
     std::vector<std::string> actions;
     actions.reserve(commandMap.size());
@@ -36,7 +36,7 @@ static std::vector<std::string> buildDynamicActionSpace()
 
 // Generate lightweight deterministic embedding values per command
 // (Placeholder — replace with NLP embeddings later)
-static nlohmann::json embedCommands(const std::vector<std::string>& commands)
+nlohmann::json embedCommands(const std::vector<std::string>& commands)
 {
     nlohmann::json embeddings;
     for (const auto& cmd : commands)

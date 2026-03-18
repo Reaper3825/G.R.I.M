@@ -1,34 +1,36 @@
 #pragma once
 #include "core/grim_platform.h"
+
+#ifdef _WIN32
 #include "popup_anim.hpp"
 #define WM_GRIM_SHOW_POPUP (WM_APP + 1)
 
 // ===========================================================
 // GRIM Popup UI Control Header
 // ===========================================================
-//
-// Exports the top-level popup UI control loop and helper functions
-// to show/hide/notify overlay activity.
-//
-// ===========================================================
 
-// Main popup UI loop. Launches and manages bgfx rendering + alpha.
 void runPopupUI(int width, int height);
-
-// Control visibility of the popup window.
 void showPopup();
 void hidePopup();
-
-// Notify the popup of user or system activity.
-// Resets idle timers and triggers display.
 void notifyPopupActivity();
 
-// Get animation state (for rendering)
 PopupAnimState getPopupAnimState();
 float getPopupAlpha();
 float getPopupScale();
 float getPopupPulse();
 bool isPopupVisible();
+
+#else
+// Stubs for non-Windows platforms (popup not yet implemented)
+inline void runPopupUI(int, int) {}
+inline void showPopup() {}
+inline void hidePopup() {}
+inline void notifyPopupActivity() {}
+inline bool isPopupVisible() { return false; }
+inline float getPopupAlpha() { return 0.0f; }
+inline float getPopupScale() { return 1.0f; }
+inline float getPopupPulse() { return 0.0f; }
+#endif
 
 namespace bx {
     void mtxSRT(

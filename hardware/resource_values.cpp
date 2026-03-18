@@ -26,13 +26,17 @@ ResourceMonitor& ResourceMonitor::getInstance() {
 ResourceMonitor::ResourceMonitor()
     : initialized(false),
       gpuAvailable(false),
+#ifdef _WIN32
       numProcessors(0),
       cpuInitialized(false),
-      minUpdateInterval(0.1) // Minimum 100ms between updates
+#endif
+      minUpdateInterval(0.1)
 {
+#ifdef _WIN32
     lastCPU.QuadPart = 0;
     lastSysCPU.QuadPart = 0;
     lastUserCPU.QuadPart = 0;
+#endif
     lastUpdateTime = std::chrono::steady_clock::now();
 }
 

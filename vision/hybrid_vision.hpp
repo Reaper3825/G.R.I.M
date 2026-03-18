@@ -16,7 +16,9 @@
 #include <memory>
 #include <optional>
 #include <chrono>
+#ifdef GRIM_HAS_ONNXRUNTIME
 #include <onnxruntime_cxx_api.h>
+#endif
 
 namespace grim {
 namespace vision {
@@ -131,7 +133,13 @@ public:
      * @brief Check if ONNX preprocessing is available
      * @return true if ONNX model is loaded and ready
      */
-    bool has_onnx_preprocessing() const { return onnx_session_ != nullptr; }
+    bool has_onnx_preprocessing() const {
+#ifdef GRIM_HAS_ONNXRUNTIME
+        return onnx_session_ != nullptr;
+#else
+        return false;
+#endif
+    }
     
     /**
      * @brief Check if GPU acceleration is available
@@ -212,10 +220,11 @@ private:
     
     VisionConfig config_;
     
-    // ONNX Runtime
+#ifdef GRIM_HAS_ONNXRUNTIME
     std::unique_ptr<Ort::Env> onnx_env_;
     std::unique_ptr<Ort::Session> onnx_session_;
     std::unique_ptr<Ort::SessionOptions> onnx_session_options_;
+#endif
     bool using_cuda_ = false;
     
     // Input/output names for ONNX

@@ -21,37 +21,40 @@ FastVisionInterpreter::FastVisionInterpreter() {
 FastVisionInterpreter::~FastVisionInterpreter() = default;
 
 bool FastVisionInterpreter::init(const std::string& onnx_model_path) {
+#ifdef GRIM_HAS_ONNXRUNTIME
     try {
-        // Initialize ONNX Runtime
         onnx_env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "FastVision");
         
         onnx_options_ = std::make_unique<Ort::SessionOptions>();
         onnx_options_->SetIntraOpNumThreads(4);
         onnx_options_->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         
-        // Try CUDA
         try {
             OrtCUDAProviderOptions cuda_options;
             cuda_options.device_id = 0;
             onnx_options_->AppendExecutionProvider_CUDA(cuda_options);
             using_cuda_ = true;
-            std::cout << "✅ Fast Vision using GPU (CUDA)" << std::endl;
         } catch (...) {
-            std::cout << "⚠️  Fast Vision using CPU" << std::endl;
         }
         
-        // Load model
+#ifdef _WIN32
         std::wstring model_path_w(onnx_model_path.begin(), onnx_model_path.end());
         onnx_session_ = std::make_unique<Ort::Session>(*onnx_env_, model_path_w.c_str(), *onnx_options_);
+#else
+        onnx_session_ = std::make_unique<Ort::Session>(*onnx_env_, onnx_model_path.c_str(), *onnx_options_);
+#endif
         
         initialized_ = true;
-        std::cout << "✅ Fast Vision Interpreter initialized" << std::endl;
         return true;
         
     } catch (const std::exception& e) {
         std::cerr << "Failed to initialize Fast Vision: " << e.what() << std::endl;
         return false;
     }
+#else
+    (void)onnx_model_path;
+    return false;
+#endif
 }
 
 void FastVisionInterpreter::initSceneTemplates() {
@@ -165,7 +168,7 @@ std::vector<float> FastVisionInterpreter::extractEmbeddings(const ImageData& ima
         }
     }
     
-    // Run ONNX inference
+#ifdef GRIM_HAS_ONNXRUNTIME
     std::vector<int64_t> input_shape = {1, 3, 560, 560};
     auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     
@@ -183,6 +186,9 @@ std::vector<float> FastVisionInterpreter::extractEmbeddings(const ImageData& ima
     size_t output_size = outputs[0].GetTensorTypeAndShapeInfo().GetElementCount();
     
     return std::vector<float>(output_data, output_data + output_size);
+#else
+    return {};
+#endif
 }
 
 SceneClassification FastVisionInterpreter::classifyScene(

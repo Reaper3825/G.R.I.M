@@ -1,4 +1,6 @@
 #include "InputController.hpp"
+
+#ifdef _WIN32
 #include <thread>
 #include <cstdlib>
 
@@ -94,3 +96,19 @@ void InputController::sendMouseEvent(DWORD flags, int dx, int dy, DWORD data) {
 }
 
 } // namespace GRIM
+#else // !_WIN32
+
+namespace GRIM {
+
+void InputController::moveMouse(int, int) {}
+void InputController::click(MouseButton) {}
+void InputController::doubleClick(MouseButton) {}
+void InputController::scroll(int) {}
+void InputController::keyEvent(WORD, KeyAction) {}
+void InputController::typeText(const std::string&, int) {}
+void InputController::combo(const std::vector<WORD>&) {}
+
+void InputController::sendMouseEvent(DWORD, int, int, DWORD) {}
+
+} // namespace GRIM
+#endif // _WIN32

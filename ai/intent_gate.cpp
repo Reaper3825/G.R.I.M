@@ -69,12 +69,11 @@ IntentResult IntentGate::decide(const std::string& line, const ContextSnapshot& 
     // ? INTEGRATION #2: Boost confidence with NLP success rate
     if (fast.confidence > FAST_THRESHOLD) {
         try {
-            extern NLP g_nlp;
-            Intent nlpMatch = g_nlp.parse(line);
+            Intent nlpMatch = ::g_nlp.parse(line);
             
             if (nlpMatch.matched) {
                 // Find the matching rule to get success_rate
-                auto rules = g_nlp.getAllRules();
+                auto rules = ::g_nlp.getAllRules();
                 for (const auto& rule : rules) {
                     if (rule.intent == nlpMatch.name) {
                         // Adjust confidence based on NLP history

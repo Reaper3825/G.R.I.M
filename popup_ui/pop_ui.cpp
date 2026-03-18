@@ -1,3 +1,6 @@
+#include "core/grim_platform.h"
+#ifdef _WIN32
+
 #include "popup_ui.hpp"
 #include "popup_window.hpp"
 #include "popup_renderer.hpp"
@@ -309,3 +312,5 @@ bool isPopupVisible()
 {
     return g_popupVisible.load();
 }
+
+#endif // _WIN32

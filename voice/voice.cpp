@@ -14,7 +14,11 @@
 #include <iostream>
 #include <fstream>
 #include <cstdio>
+#ifdef _WIN32
 #include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include <cmath>
 
 namespace fs = std::filesystem;
@@ -135,20 +139,36 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     }
     
     // Temporarily redirect stderr to silence PortAudio debug output
-    int old_stderr = _dup(2); // dup stderr
+#ifdef _WIN32
+    int old_stderr = _dup(2);
     FILE* nul_file = fopen("nul", "w");
-    _dup2(_fileno(nul_file), 2); // redirect stderr to nul
+    _dup2(_fileno(nul_file), 2);
+#else
+    int old_stderr = dup(2);
+    FILE* nul_file = fopen("/dev/null", "w");
+    dup2(fileno(nul_file), 2);
+#endif
 
     if (Pa_Initialize() != paNoError) {
-        _dup2(old_stderr, 2); // restore
+#ifdef _WIN32
+        _dup2(old_stderr, 2);
         _close(old_stderr);
+#else
+        dup2(old_stderr, 2);
+        close(old_stderr);
+#endif
         fclose(nul_file);
         ErrorManager::report("ERR_VOICE_NO_CONTEXT");
         return "";
     }
 
-    _dup2(old_stderr, 2); // restore
+#ifdef _WIN32
+    _dup2(old_stderr, 2);
     _close(old_stderr);
+#else
+    dup2(old_stderr, 2);
+    close(old_stderr);
+#endif
     fclose(nul_file);
 
     AudioData data;

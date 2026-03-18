@@ -104,12 +104,11 @@ include(cmake/Options.cmake)
 include(cmake/Sources.cmake)
 
 # Platform window layer: one implementation per OS (avoid duplicate symbols)
-list(FILTER GRIM_SOURCES EXCLUDE REGEX "core/platform_window_.*\\.cpp$")
+list(FILTER GRIM_SOURCES EXCLUDE REGEX "core/platform_window_.*\\.(cpp|mm)$")
 if(WIN32)
   list(APPEND GRIM_SOURCES ${CMAKE_SOURCE_DIR}/core/platform_window_win32.cpp)
 elseif(APPLE)
-  list(APPEND GRIM_SOURCES ${CMAKE_SOURCE_DIR}/core/platform_window_macos.cpp)
-  target_link_libraries(GRIM PRIVATE "-framework CoreGraphics")
+  list(APPEND GRIM_SOURCES ${CMAKE_SOURCE_DIR}/core/platform_window_macos.mm)
 endif()
 
 # =========================================================
@@ -167,11 +166,22 @@ target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external_collector
     ${CMAKE_SOURCE_DIR}/perception
     ${CMAKE_SOURCE_DIR}/vision
+    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bgfx/include
+    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bx/include
+    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bimg/include
     ${CMAKE_SOURCE_DIR}/deps/include
 )
 
 # Configure PCH after include directories are set
 target_precompile_headers(GRIM PRIVATE ${CMAKE_SOURCE_DIR}/pch.hpp)
+
+# Objective-C++ files cannot use a C++ PCH
+if(APPLE)
+    file(GLOB_RECURSE OBJCXX_FILES "${CMAKE_SOURCE_DIR}/*.mm")
+    foreach(mm_file ${OBJCXX_FILES})
+        set_source_files_properties(${mm_file} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    endforeach()
+endif()
 
 if (MSVC)
     target_link_options(GRIM PRIVATE /SUBSYSTEM:CONSOLE)
@@ -210,11 +220,12 @@ else()
   set(_porcupine_lib "linux/x86_64")
 endif()
 set(_porcupine_dir "${CMAKE_SOURCE_DIR}/external/porcupine/lib/${_porcupine_lib}")
-if(EXISTS "${_porcupine_dir}")
+if(EXISTS "${_porcupine_dir}" AND EXISTS "${CMAKE_SOURCE_DIR}/external/porcupine/include/pv_porcupine.h")
   target_link_directories(GRIM PRIVATE "${_porcupine_dir}")
   target_link_libraries(GRIM PRIVATE pv_porcupine)
+  target_compile_definitions(GRIM PRIVATE GRIM_HAS_PORCUPINE=1)
 else()
-  message(WARNING "[GRIM] Porcupine lib not found at ${_porcupine_dir} - wake word may be disabled")
+  message(WARNING "[GRIM] Porcupine not found at ${_porcupine_dir} - wake word disabled")
 endif()
 
 # =========================================================
@@ -242,6 +253,21 @@ target_link_directories(GRIM PRIVATE
 target_link_libraries(GRIM PRIVATE bx bimg bgfx)
 target_link_libraries(GRIM PRIVATE whisper)
 
+# macOS frameworks for platform window layer + Metal BGFX backend
+if(APPLE)
+  target_link_libraries(GRIM PRIVATE
+    "-framework Cocoa"
+    "-framework CoreGraphics"
+    "-framework Metal"
+    "-framework QuartzCore"
+    "-framework AudioToolbox"
+    "-framework CoreAudio"
+    "-framework AudioUnit"
+    "-framework CoreServices"
+    "-framework IOKit"
+  )
+endif()
+
 # Link gumbo HTML parser (used by DataCollection)
 find_package(unofficial-gumbo CONFIG REQUIRED)
 target_link_libraries(GRIM PRIVATE unofficial::gumbo::gumbo)
@@ -251,7 +277,9 @@ message(STATUS "[GRIM] Build configuration complete.")
 # Hot-Reloadable Plugins
 # Note: core_plugin is built directly into GRIM.exe, not as a hot-reloadable DLL
 # Only independent plugins with minimal dependencies should be hot-reloadable
-add_subdirectory(plugins/osint_plugin)
-add_subdirectory(plugins/network_test_plugin)
+if(WIN32)
+  add_subdirectory(plugins/osint_plugin)
+  add_subdirectory(plugins/network_test_plugin)
+endif()
 
 

@@ -48,6 +48,11 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
     return true;
 }
 
+void* createOverlayWindow(int x, int y, int width, int height) {
+    (void)x; (void)y; (void)width; (void)height;
+    return nullptr;
+}
+
 } // namespace PlatformWindow
 
 #endif

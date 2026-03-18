@@ -15,9 +15,7 @@ struct ClipRect {
 class OverlayRenderer
 {
 public:
-#ifdef _WIN32
     void init(HWND hwnd, int width, int height);
-#endif
     void init(int width, int height, void* pixelBuffer = nullptr);
     void shutdown();
     
@@ -56,6 +54,8 @@ private:
     HDC m_hdcMem = nullptr;
     HBITMAP m_bitmap = nullptr;
     HBITMAP m_oldBitmap = nullptr;
+#elif defined(__APPLE__)
+    void* m_nativeWindow = nullptr;
 #endif
 
     int m_width = 0;

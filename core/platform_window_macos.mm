@@ -5,7 +5,8 @@
 #if defined(__APPLE__)
 
 #import <Cocoa/Cocoa.h>
-#import <QuartzCore/CAMetalLayer.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/QuartzCore.h>
 #include "platform_window.hpp"
 #include "logger.hpp"
 
@@ -208,6 +209,7 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
 
 // =============================================================================
 // macOS overlay window creation (called from WindowManager via platform layer)
+// Uses a regular CALayer (not Metal) for software-rendered 2D overlay
 // =============================================================================
 void* createOverlayWindow(int x, int y, int width, int height) {
     @autoreleasepool {
@@ -235,11 +237,10 @@ void* createOverlayWindow(int x, int y, int width, int height) {
             NSWindowCollectionBehaviorFullScreenAuxiliary];
         [window setReleasedWhenClosed:NO];
 
-        GRIMMetalView* metalView = [[GRIMMetalView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
-        [metalView setWantsLayer:YES];
-        [window setContentView:metalView];
-
-        [window makeKeyAndOrderFront:nil];
+        NSView* contentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+        [contentView setWantsLayer:YES];
+        contentView.layer.contentsGravity = kCAGravityResize;
+        [window setContentView:contentView];
 
         LOG_DEBUG("PlatformWindow", "macOS: Overlay window created (" +
                   std::to_string(width) + "x" + std::to_string(height) + ")");
@@ -249,5 +250,43 @@ void* createOverlayWindow(int x, int y, int width, int height) {
 }
 
 } // namespace PlatformWindow
+
+// =============================================================================
+// Overlay renderer blit: copies BGRA pixel buffer to the overlay window's layer
+// Called from OverlayRenderer::endFrame() on macOS
+// =============================================================================
+void grimOverlayBlit(void* nsWindowHandle, void* pixels, int width, int height) {
+    @autoreleasepool {
+        if (!nsWindowHandle || !pixels || width <= 0 || height <= 0) return;
+
+        NSWindow* window = (__bridge NSWindow*)nsWindowHandle;
+        NSView* contentView = [window contentView];
+        if (!contentView) return;
+
+        CALayer* layer = [contentView layer];
+        if (!layer) return;
+
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+        // Pixel format matches OverlayRenderer: (a << 24) | (r << 16) | (g << 8) | b
+        // In memory (little-endian x86/ARM): B G R A → kCGImageAlphaPremultipliedFirst + 32Little
+        CGContextRef ctx = CGBitmapContextCreate(
+            pixels, width, height, 8, width * 4,
+            colorSpace,
+            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+
+        if (ctx) {
+            CGImageRef image = CGBitmapContextCreateImage(ctx);
+            if (image) {
+                [CATransaction begin];
+                [CATransaction setDisableActions:YES];
+                layer.contents = (__bridge id)image;
+                [CATransaction commit];
+                CGImageRelease(image);
+            }
+            CGContextRelease(ctx);
+        }
+        CGColorSpaceRelease(colorSpace);
+    }
+}
 
 #endif // __APPLE__
