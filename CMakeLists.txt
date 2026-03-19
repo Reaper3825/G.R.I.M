@@ -229,26 +229,10 @@ else()
 endif()
 
 # =========================================================
-# Whisper Linking
+# Whisper / BX / BIMG / BGFX link directories
 # =========================================================
-set(WHISPER_LIB_DEBUG   "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/Debug")
-set(WHISPER_LIB_RELEASE "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/Release")
-
-target_link_directories(GRIM PRIVATE
-    $<$<CONFIG:Debug>:${WHISPER_LIB_DEBUG}>
-    $<$<CONFIG:Release>:${WHISPER_LIB_RELEASE}>
-)
-
-# =========================================================
-# BX / BIMG / BGFX Linking (Proper order + per-config paths)
-# =========================================================
-set(DEPS_LIB_DEBUG   "${CMAKE_SOURCE_DIR}/deps/lib/Debug")
-set(DEPS_LIB_RELEASE "${CMAKE_SOURCE_DIR}/deps/lib/Release")
-
-target_link_directories(GRIM PRIVATE
-    $<$<CONFIG:Debug>:${DEPS_LIB_DEBUG}>
-    $<$<CONFIG:Release>:${DEPS_LIB_RELEASE}>
-)
+# Link directories for whisper, bx, bimg, bgfx are added in cmake/Config.cmake
+# (only existing paths are added to avoid ld "search path not found" warnings).
 # order: bx → bimg → bgfx
 target_link_libraries(GRIM PRIVATE bx bimg bgfx)
 target_link_libraries(GRIM PRIVATE whisper)

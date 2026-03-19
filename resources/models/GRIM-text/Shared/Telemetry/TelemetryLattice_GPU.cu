@@ -394,14 +394,35 @@ TelemetryLattice::TelemetryLattice(const LatticeConfig& config)
 //=============================================================================
 
 TelemetryLattice::~TelemetryLattice() {
+    // Log any pending CUDA error before teardown (often explains cudaFree failures below)
+    cudaError_t pending = cudaGetLastError();
+    if (pending != cudaSuccess) {
+        fprintf(stderr, "[Telemetry] Lattice teardown: GPU already in error state: %s. "
+                "cudaFree failures below are a consequence; fix the earlier fault.\n",
+                cudaGetErrorString(pending));
+    }
     releaseNonTensor();
     // observations_ and scratch_vectors_ auto-release via Tensor destructor
     fprintf(stdout, "[Telemetry] Lattice freed\n");
 }
 
 void TelemetryLattice::releaseNonTensor() {
-    if (levels_) { cudaFree(levels_); levels_ = nullptr; }
-    if (d_error_flag_) { cudaFree(d_error_flag_); d_error_flag_ = nullptr; }
+    if (levels_) {
+        cudaError_t err = cudaFree(levels_);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[Telemetry] cudaFree(levels_) failed: %s (ptr=%p)\n",
+                    cudaGetErrorString(err), (void*)levels_);
+        }
+        levels_ = nullptr;
+    }
+    if (d_error_flag_) {
+        cudaError_t err = cudaFree(d_error_flag_);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[Telemetry] cudaFree(d_error_flag_) failed: %s (ptr=%p)\n",
+                    cudaGetErrorString(err), (void*)d_error_flag_);
+        }
+        d_error_flag_ = nullptr;
+    }
 }
 
 //=============================================================================

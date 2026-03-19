@@ -4777,6 +4777,19 @@ EpochResult runEpoch(
 
         BatchResult batch_result = processBatch(ctx, state, payload, batch_idx, epoch_idx);
         
+        // After first batch: sync and surface any CUDA error so we see the real fault
+        // (otherwise it only appears later as cudaFree failures during teardown)
+        if (batch_idx == 0 && !batch_result.skipped) {
+            cudaError_t sync_err = cudaDeviceSynchronize();
+            cudaError_t last_err = (sync_err != cudaSuccess) ? sync_err : cudaGetLastError();
+            if (last_err != cudaSuccess) {
+                ctx.logging.logger->log("[CUDA] ERROR after first batch: " + std::string(cudaGetErrorString(last_err)) +
+                    " (sync=" + (sync_err != cudaSuccess ? "failed" : "ok") + "). "
+                    "Fix this to avoid cudaFree 'illegal memory access' during teardown.");
+                cudaGetLastError(); // clear so subsequent code can run if desired
+            }
+        }
+        
         if (batch_result.skipped) {
             result.batches_skipped++;
             ctx.logging.logger->log("[Batch " + std::to_string(batch_idx + 1) + 

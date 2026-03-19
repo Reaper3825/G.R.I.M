@@ -338,7 +338,22 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+#if defined(__APPLE__)
+    // On macOS: keep BGFX on the main window so the overlay has no BGFX clear (stays transparent).
+    auto mainWin = std::make_unique<GRIMWindow>();
+    mainWin->hwnd = tempHwnd;
+    mainWin->name = "main";
+    mainWin->visible = true;
+    mainWin->isOverlay = false;
+    mainWin->width = 320;
+    mainWin->height = 200;
+    WindowManager::registerWindow(std::move(mainWin));
+    WindowManager::updateWindowDimensions("main", 320, 200);
+    WindowManager::processMainThreadUpdates();  // Apply BGFX to main window
+    PlatformWindow::setWindowVisible(tempHwnd, true);
+#else
     PlatformWindow::setWindowVisible(tempHwnd, false);
+#endif
     LOG_PHASE("BGFX initialized successfully", true);
 
     // ======================================================
@@ -361,9 +376,10 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+#if !defined(__APPLE__)
+    // On Windows/Linux, BGFX renders to the overlay. On macOS, BGFX stays on main window so overlay stays transparent.
     WindowManager::initGlobalBGFX(overlayWin->hwnd);
-    
-    // Set the overlay as the BGFX render target
+#endif
     WindowManager::updateWindowDimensions("overlay", virtualWidth, virtualHeight);
     WindowManager::processMainThreadUpdates();
     

@@ -280,7 +280,11 @@ GRIMWindow* WindowManager::createOverlay(const std::string& name, int w, int h, 
         win->hwnd = hwnd;
         win->name = name;
         win->visible = true;
+#if defined(__APPLE__)
+        win->isOverlay = true;  // BGFX stays on main window; overlay is UI-only so background stays transparent
+#else
         win->isOverlay = false;
+#endif
         win->width = virtualWidth;
         win->height = virtualHeight;
 

@@ -1129,6 +1129,10 @@ struct Tensor {
                 fprintf(stderr, "[Tensor::release] cudaFree(%p) failed: %s (name=%s)\n",
                         (void*)data, cudaGetErrorString(free_err),
                         name ? name : "unnamed");
+                if (free_err == cudaErrorIllegalAddress) {
+                    fprintf(stderr, "[Tensor::release] Hint: illegal memory access on cudaFree usually means "
+                            "a prior kernel faulted. Check [CUDA] ERROR after first batch in logs, or run under compute-sanitizer.\n");
+                }
             }
         }
         grad_.reset();

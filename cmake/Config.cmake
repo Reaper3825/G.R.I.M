@@ -179,8 +179,8 @@ else()
     set(_build_config_dir "${CMAKE_BUILD_TYPE}")
 endif()
 
-target_link_directories(GRIM PRIVATE
-    "${DEPS_LIB_DIR}"
+# Only add link directories that exist to avoid ld "search path not found" warnings
+set(_link_dir_candidates
     "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/${_build_config_dir}"
     "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src"
     "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/ggml/src"
@@ -193,6 +193,20 @@ target_link_directories(GRIM PRIVATE
     "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/cmake/bimg"
     "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/cmake/bx"
 )
+if(DEFINED DEPS_LIB_DIR AND DEPS_LIB_DIR)
+    list(INSERT _link_dir_candidates 0 "${DEPS_LIB_DIR}")
+endif()
+set(_build_deps_dir "${CMAKE_SOURCE_DIR}/deps/lib/${_build_config_dir}")
+if(EXISTS "${_build_deps_dir}")
+    list(APPEND _link_dir_candidates "${_build_deps_dir}")
+endif()
+set(_grim_link_dirs "")
+foreach(_dir ${_link_dir_candidates})
+    if(EXISTS "${_dir}")
+        list(APPEND _grim_link_dirs "${_dir}")
+    endif()
+endforeach()
+target_link_directories(GRIM PRIVATE ${_grim_link_dirs})
 
 target_link_libraries(GRIM PRIVATE
 

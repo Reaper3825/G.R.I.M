@@ -9,6 +9,8 @@
 #import <QuartzCore/QuartzCore.h>
 #include "platform_window.hpp"
 #include "logger.hpp"
+#include <string>
+#include <vector>
 
 // =============================================================================
 // Metal-backed NSView for BGFX
@@ -19,6 +21,17 @@
 @implementation GRIMMetalView
 
 - (BOOL)wantsUpdateLayer { return YES; }
+
+- (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)canBecomeKeyView { return YES; }
+
+- (BOOL)becomeFirstResponder {
+    return [super becomeFirstResponder];
+}
+
+- (BOOL)resignFirstResponder {
+    return [super resignFirstResponder];
+}
 
 + (Class)layerClass { return [CAMetalLayer class]; }
 
@@ -105,7 +118,8 @@ void* createBGFXInitWindow() {
     @autoreleasepool {
         ensureNSApp();
 
-        NSRect frame = NSMakeRect(0, 0, 1, 1);
+        // Use a small visible size on macOS so the window can be focused for the backtick hotkey
+        NSRect frame = NSMakeRect(0, 0, 320, 200);
 
         NSWindowStyleMask style =
             NSWindowStyleMaskTitled |
@@ -150,6 +164,10 @@ void setWindowVisible(void* handle, bool visible) {
         if (visible) {
             [window makeKeyAndOrderFront:nil];
             [NSApp activateIgnoringOtherApps:YES];
+            NSView* contentView = [window contentView];
+            if (contentView && ![window firstResponder]) {
+                [window makeFirstResponder:contentView];
+            }
         } else {
             [window orderOut:nil];
         }
@@ -185,7 +203,7 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
         while (true) {
             NSEvent* event = [NSApp
                 nextEventMatchingMask:NSEventMaskAny
-                            untilDate:nil
+                            untilDate:[NSDate dateWithTimeIntervalSinceNow:0]
                                inMode:NSDefaultRunLoopMode
                               dequeue:YES];
             if (!event) break;
@@ -196,6 +214,18 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
 
             if ([event type] == NSEventTypeApplicationDefined &&
                 [event subtype] == NSEventSubtypeApplicationActivated) {
+            }
+
+            // Debug: log key events to verify keyboard input on macOS
+            NSEventType etype = [event type];
+            if (etype == NSEventTypeKeyDown || etype == NSEventTypeKeyUp) {
+                unsigned short keyCode = [event keyCode];
+                NSString* chars = [event characters];
+                std::string charsStr = chars && [chars length] ? std::string([chars UTF8String]) : "";
+                const char* kind = (etype == NSEventTypeKeyDown) ? "KeyDown" : "KeyUp";
+                LOG_DEBUG("PlatformWindow",
+                    std::string(kind) + " keyCode=" + std::to_string(keyCode) +
+                    (charsStr.empty() ? "" : " char='" + charsStr + "'"));
             }
 
             [NSApp sendEvent:event];
@@ -240,6 +270,8 @@ void* createOverlayWindow(int x, int y, int width, int height) {
         NSView* contentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
         [contentView setWantsLayer:YES];
         contentView.layer.contentsGravity = kCAGravityResize;
+        contentView.layer.opaque = NO;
+        contentView.layer.backgroundColor = [NSColor clearColor].CGColor;  // No tint behind transparent pixels
         [window setContentView:contentView];
 
         LOG_DEBUG("PlatformWindow", "macOS: Overlay window created (" +
@@ -266,13 +298,53 @@ void grimOverlayBlit(void* nsWindowHandle, void* pixels, int width, int height) 
         CALayer* layer = [contentView layer];
         if (!layer) return;
 
+        // Never set contents on CAMetalLayer — it owns its drawables and presentation.
+        // Use a dedicated image sublayer so we don't conflict with Metal's ownership.
+        CALayer* imageLayer = nil;
+        if ([layer isKindOfClass:[CAMetalLayer class]]) {
+            for (CALayer* sub in layer.sublayers) {
+                if (sub.name && [sub.name isEqualToString:@"GRIMOverlayImage"]) {
+                    imageLayer = sub;
+                    break;
+                }
+            }
+            if (!imageLayer) {
+                imageLayer = [CALayer layer];
+                imageLayer.name = @"GRIMOverlayImage";
+                imageLayer.frame = layer.bounds;
+                imageLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+                imageLayer.contentsGravity = kCAGravityResize;
+                imageLayer.opaque = NO;
+                imageLayer.backgroundColor = [NSColor clearColor].CGColor;
+                [layer addSublayer:imageLayer];
+            }
+            imageLayer.frame = layer.bounds;
+            imageLayer.opaque = NO;
+            imageLayer.backgroundColor = [NSColor clearColor].CGColor;
+            layer = imageLayer;
+        } else {
+            layer.opaque = NO;
+            layer.backgroundColor = [NSColor clearColor].CGColor;
+        }
+
         CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-        // Pixel format matches OverlayRenderer: (a << 24) | (r << 16) | (g << 8) | b
-        // In memory (little-endian x86/ARM): B G R A → kCGImageAlphaPremultipliedFirst + 32Little
+        // OverlayRenderer uses (a<<24)|(r<<16)|(g<<8)|b → in memory [B,G,R,A].
+        // Core Graphics expects RGBA with PremultipliedLast → [R,G,B,A]. Copy and swap R/B.
+        size_t numPixels = (size_t)width * (size_t)height;
+        std::vector<uint32_t> rgbaBuffer(numPixels);
+        const uint32_t* src = static_cast<const uint32_t*>(pixels);
+        for (size_t i = 0; i < numPixels; ++i) {
+            uint32_t p = src[i];
+            uint32_t a = (p >> 24) & 0xFF;
+            uint32_t r = (p >> 16) & 0xFF;
+            uint32_t g = (p >>  8) & 0xFF;
+            uint32_t b = p & 0xFF;
+            rgbaBuffer[i] = (a << 24) | (b << 16) | (g << 8) | r;  // store as R,G,B,A for PremultipliedLast
+        }
         CGContextRef ctx = CGBitmapContextCreate(
-            pixels, width, height, 8, width * 4,
+            rgbaBuffer.data(), width, height, 8, width * 4,
             colorSpace,
-            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Little);
 
         if (ctx) {
             CGImageRef image = CGBitmapContextCreateImage(ctx);
