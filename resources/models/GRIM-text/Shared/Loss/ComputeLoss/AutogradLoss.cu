@@ -549,6 +549,16 @@ void launchUnifiedLossBackward(
         entropy_reg_lambda, entropy_reg_enabled,
         class_weights
     );
+    {
+        cudaError_t _sync_err = cudaStreamSynchronize(stream);
+        fprintf(stderr, "[BACKWARD_DIAG] kernelNLLLossBackward: %s (num_tokens=%d vocab_size=%d log_probs=%p targets=%p grad_log_probs=%p logprobs_size=%zuB targets_size=%zuB)\n",
+                _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                num_tokens, vocab_size,
+                (void*)log_probs, (void*)targets, (void*)grad_log_probs,
+                static_cast<size_t>(num_tokens) * vocab_size * sizeof(float),
+                static_cast<size_t>(num_tokens) * sizeof(int));
+        fflush(stderr);
+    }
 }
 
 //========================================================================

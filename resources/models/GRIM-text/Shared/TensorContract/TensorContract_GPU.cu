@@ -2139,6 +2139,12 @@ struct CenterRowsGradFn : public GradFn {
         {
             kernel_center_rows<<<num_rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_output.data, input_grad, row_dim, num_rows);
+            cudaError_t _sync_err = cudaStreamSynchronize(stream);
+            fprintf(stderr, "[BACKWARD_DIAG] kernel_center_rows: %s (num_rows=%d row_dim=%d in=%p out=%p size=%zuB)\n",
+                    _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                    num_rows, row_dim, (void*)grad_output.data, (void*)input_grad,
+                    static_cast<size_t>(num_rows) * row_dim * sizeof(float));
+            fflush(stderr);
         }
         
         // Continue backward chain
@@ -2222,8 +2228,14 @@ struct CenterColumnsGradFn : public GradFn {
         {
             kernel_center_columns<<<num_cols, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_output.data, input_grad, num_cols, num_rows);
+            cudaError_t _sync_err = cudaStreamSynchronize(stream);
+            fprintf(stderr, "[BACKWARD_DIAG] kernel_center_columns: %s (num_rows=%d num_cols=%d in=%p out=%p size=%zuB)\n",
+                    _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                    num_rows, num_cols, (void*)grad_output.data, (void*)input_grad,
+                    static_cast<size_t>(num_rows) * num_cols * sizeof(float));
+            fflush(stderr);
         }
-        
+
         // Continue backward chain
         if (input_grad_fn) {
             Tensor input_grad_tensor;
@@ -3409,6 +3421,16 @@ struct RMSNormGradFn : public GradFn {
                 input_grad, gamma_grad_ptr,
                 tokens, d_model, eps);
             trackKernelLaunch("kernel_rmsnorm_backward", stream);
+            {
+                cudaError_t _sync_err = cudaStreamSynchronize(stream);
+                fprintf(stderr, "[BACKWARD_DIAG] kernel_rmsnorm_backward: %s (tokens=%d d_model=%d grad_out=%p cached_input=%p input_grad=%p gamma=%p size_in=%zuB size_gamma=%zuB)\n",
+                        _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                        tokens, d_model,
+                        (void*)grad_output.data, (void*)cached_input, (void*)input_grad, (void*)gamma_data,
+                        static_cast<size_t>(tokens) * d_model * sizeof(float),
+                        static_cast<size_t>(d_model) * sizeof(float));
+                fflush(stderr);
+            }
 
             // CONTINUE AUTOGRAD CHAIN using stored grad_fn
             if (input_grad_fn && input_grad_fn->op_name) {
@@ -3655,6 +3677,15 @@ struct LogSoftmaxGradFn : public GradFn {
         kernel_log_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
             grad_output.data, saved_log_softmax, input_grad, num_tokens, dim);
         trackKernelLaunch("kernel_log_softmax_backward", stream);
+        {
+            cudaError_t _sync_err = cudaStreamSynchronize(stream);
+            fprintf(stderr, "[BACKWARD_DIAG] kernel_log_softmax_backward: %s (num_tokens=%d dim=%d grad_out=%p log_softmax=%p input_grad=%p size=%zuB)\n",
+                    _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                    num_tokens, dim,
+                    (void*)grad_output.data, (void*)saved_log_softmax, (void*)input_grad,
+                    static_cast<size_t>(num_tokens) * dim * sizeof(float));
+            fflush(stderr);
+        }
 
         // Continue autograd chain
         if (input_grad_fn) {
@@ -4999,6 +5030,16 @@ struct MatMulGradFn : public GradFn {
                     grad_a, K             // ldc=K=768 (leading dim of [K,M])
                 );
                 trackCublasCall("cublasSgemm_grad_A_transB", cublas_handle, stream, sgemm_status_1);
+                {
+                    cudaError_t _sync_err = cudaStreamSynchronize(stream);
+                    fprintf(stderr, "[BACKWARD_DIAG] grad_A transB SGEMM: %s (M=%d K=%d N=%d grad_a=%p cached_b=%p grad_out=%p size_A=%zuB size_B=%zuB size_C=%zuB)\n",
+                            _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                            M, K, N, (void*)grad_a, (void*)cached_b, (void*)grad_output.data,
+                            static_cast<size_t>(K) * N * sizeof(float),
+                            static_cast<size_t>(N) * M * sizeof(float),
+                            static_cast<size_t>(K) * M * sizeof(float));
+                    fflush(stderr);
+                }
             } else {
                 // grad_A = grad_C @ B^T  where B is [K, N]
                 // Goal: grad_A[M,K] = grad_C[M,N] @ B^T[N,K]  (row-major)
@@ -5027,6 +5068,16 @@ struct MatMulGradFn : public GradFn {
                     grad_a, K             // ldc=K (leading dim of [K,M] col-major)
                 );
                 trackCublasCall("cublasSgemm_grad_A", cublas_handle, stream, sgemm_status_2);
+                {
+                    cudaError_t _sync_err = cudaStreamSynchronize(stream);
+                    fprintf(stderr, "[BACKWARD_DIAG] grad_A SGEMM: %s (M=%d K=%d N=%d grad_a=%p cached_b=%p grad_out=%p size_A=%zuB size_B=%zuB size_C=%zuB)\n",
+                            _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                            M, K, N, (void*)grad_a, (void*)cached_b, (void*)grad_output.data,
+                            static_cast<size_t>(N) * K * sizeof(float),
+                            static_cast<size_t>(N) * M * sizeof(float),
+                            static_cast<size_t>(K) * M * sizeof(float));
+                    fflush(stderr);
+                }
             }
         }
         
@@ -5095,6 +5146,16 @@ struct MatMulGradFn : public GradFn {
                     grad_b, K             // ldc=K (leading dim of [K,N])
                 );
                 trackCublasCall("cublasSgemm_grad_B_transB", cublas_handle, stream, sgemm_status_3);
+                {
+                    cudaError_t _sync_err = cudaStreamSynchronize(stream);
+                    fprintf(stderr, "[BACKWARD_DIAG] grad_B transB SGEMM: %s (M=%d K=%d N=%d grad_b=%p cached_a=%p grad_out=%p size_A=%zuB size_B=%zuB size_C=%zuB)\n",
+                            _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                            M, K, N, (void*)grad_b, (void*)cached_a, (void*)grad_output.data,
+                            static_cast<size_t>(K) * M * sizeof(float),
+                            static_cast<size_t>(N) * M * sizeof(float),
+                            static_cast<size_t>(K) * N * sizeof(float));
+                    fflush(stderr);
+                }
                 
                 // ISSUE #77 DIAGNOSTIC: Log grad_b AFTER the GEMM
                 if (g_issue77_diag_enabled && g_issue77_diag_call_count <= 24) {
@@ -5131,6 +5192,16 @@ struct MatMulGradFn : public GradFn {
                     grad_b, N             // ldc=N (leading dim of [N,K] col-major)
                 );
                 trackCublasCall("cublasSgemm_grad_B", cublas_handle, stream, sgemm_status_4);
+                {
+                    cudaError_t _sync_err = cudaStreamSynchronize(stream);
+                    fprintf(stderr, "[BACKWARD_DIAG] grad_B SGEMM: %s (M=%d K=%d N=%d grad_b=%p cached_a=%p grad_out=%p size_A=%zuB size_B=%zuB size_C=%zuB)\n",
+                            _sync_err == cudaSuccess ? "OK" : cudaGetErrorString(_sync_err),
+                            M, K, N, (void*)grad_b, (void*)cached_a, (void*)grad_output.data,
+                            static_cast<size_t>(M) * K * sizeof(float),
+                            static_cast<size_t>(M) * N * sizeof(float),
+                            static_cast<size_t>(K) * N * sizeof(float));
+                    fflush(stderr);
+                }
             }
             
             // ISSUE #60 DEBUG: Capture LM head grad contribution if debugging enabled
