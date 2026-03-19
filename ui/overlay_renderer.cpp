@@ -137,6 +137,7 @@ void OverlayRenderer::shutdown()
     m_fontFileData.clear();
     m_fontAtlas.clear();
     m_fontLoaded = false;
+    m_glassCache.clear();
 }
 
 // ---------------------------------------------------------------
@@ -724,9 +725,64 @@ void OverlayRenderer::drawSoftGlow(const Vec2& pos, const Vec2& size, float radi
 // Drawing: glassmorphism panel (blur + shadow + fill + glow + border)
 // ---------------------------------------------------------------
 
+// Fast content hash for dirty detection (sample every 16th pixel)
+static uint64_t computeContentHash(const uint32_t* pixels, size_t count)
+{
+    uint64_t hash = 0;
+    const int step = 16;
+    for (size_t i = 0; i < count; i += step)
+        hash = hash * 31u + pixels[i];
+    return hash;
+}
+
+void OverlayRenderer::blitCachedToPanel(int rx, int ry, int capW, int capH,
+                                        const std::vector<uint32_t>& cachedPixels,
+                                        const Vec2& pos, const Vec2& size, float radius)
+{
+    if (!m_pixels || cachedPixels.size() < static_cast<size_t>(capW * capH))
+        return;
+
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+    ClipRect clip = activeClip();
+
+    float maxR = std::min(size.x, size.y) * 0.5f;
+    float r = std::min(radius, maxR);
+    float cx = pos.x + size.x * 0.5f;
+    float cy = pos.y + size.y * 0.5f;
+    float hx = size.x * 0.5f - r;
+    float hy = size.y * 0.5f - r;
+
+    int ix1 = std::max(clip.x1, rx);
+    int iy1 = std::max(clip.y1, ry);
+    int ix2 = std::min(clip.x2, rx + capW);
+    int iy2 = std::min(clip.y2, ry + capH);
+
+    for (int y = iy1; y < iy2; ++y) {
+        float py = y + 0.5f;
+        int sy0 = y - ry;
+        for (int x = ix1; x < ix2; ++x) {
+            float px = x + 0.5f;
+
+            float qx = std::abs(px - cx) - hx;
+            float qy = std::abs(py - cy) - hy;
+            float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
+                                   std::max(qy, 0.0f) * std::max(qy, 0.0f))
+                         + std::min(std::max(qx, qy), 0.0f) - r;
+            if (dist > 0.0f) continue;
+
+            int sx = x - rx;
+            int sy = sy0;
+            if (sx >= 0 && sx < capW && sy >= 0 && sy < capH)
+                pixels[y * m_width + x] = cachedPixels[sy * capW + sx];
+        }
+    }
+}
+
 void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float radius,
                                       uint32_t bgColor, uint32_t borderColor, uint32_t glowColor,
-                                      int blurRadius, float shadowOffset)
+                                      int blurRadius, float shadowOffset,
+                                      uintptr_t panelId)
 {
     int rx = (int)pos.x, ry = (int)pos.y;
     int rw = (int)size.x, rh = (int)size.y;
@@ -755,114 +811,135 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
             rx, ry, capW, capH, m_blurTemp.data());
 
         if (ok) {
-            // Distort + write into panel area (inside rounded rect only).
-            {
-                std::lock_guard<std::mutex> lock(m_renderMutex);
-                uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
-                ClipRect clip = activeClip();
+            uint64_t contentHash = computeContentHash(m_blurTemp.data(), needed);
 
-                float maxR = std::min(size.x, size.y) * 0.5f;
-                float r = std::min(radius, maxR);
-                float cx = pos.x + size.x * 0.5f;
-                float cy = pos.y + size.y * 0.5f;
-                float hx = size.x * 0.5f - r;
-                float hy = size.y * 0.5f - r;
-
-                int ix1 = std::max(clip.x1, rx);
-                int iy1 = std::max(clip.y1, ry);
-                int ix2 = std::min(clip.x2, rx + capW);
-                int iy2 = std::min(clip.y2, ry + capH);
-
-                // Distortion strength in pixels (tuned for "glass" refraction).
-                const float distortPx = float(blurRadius) / 10.0f;
-
-                // Low-frequency smooth noise (value noise) → gradient for refraction offsets.
-                // This avoids the "offset magnification" look from high-frequency hash jitter.
-                auto hash01 = [](uint32_t v) -> float {
-                    v ^= (v >> 16);
-                    v *= 0x7feb352du;
-                    v ^= (v >> 15);
-                    v *= 0x846ca68bu;
-                    v ^= (v >> 16);
-                    return (v & 0x00FFFFFFu) / 16777215.0f;
-                };
-                auto gridNoise = [&](int gx, int gy) -> float {
-                    uint32_t v = (uint32_t)gx * 374761393u ^ (uint32_t)gy * 668265263u ^ m_grainSeed;
-                    return hash01(v);
-                };
-                auto smoothstep = [](float t) -> float { return t * t * (3.0f - 2.0f * t); };
-                auto sampleNoise = [&](float u, float v) -> float {
-                    // Small grid to keep distortion coherent.
-                    const float scale = 1.0f / 46.0f; // larger = smoother warps
-                    float xg = u * scale;
-                    float yg = v * scale;
-                    int x0 = (int)std::floor(xg);
-                    int y0 = (int)std::floor(yg);
-                    float tx = xg - x0;
-                    float ty = yg - y0;
-                    float sx = smoothstep(tx);
-                    float sy = smoothstep(ty);
-                    float n00 = gridNoise(x0,     y0);
-                    float n10 = gridNoise(x0 + 1, y0);
-                    float n01 = gridNoise(x0,     y0 + 1);
-                    float n11 = gridNoise(x0 + 1, y0 + 1);
-                    float nx0 = n00 + (n10 - n00) * sx;
-                    float nx1 = n01 + (n11 - n01) * sx;
-                    return nx0 + (nx1 - nx0) * sy;
-                };
-
-                for (int y = iy1; y < iy2; ++y) {
-                    float py = y + 0.5f;
-                    int sy0 = y - ry;
-                    for (int x = ix1; x < ix2; ++x) {
-                        float px = x + 0.5f;
-
-                        float qx = std::abs(px - cx) - hx;
-                        float qy = std::abs(py - cy) - hy;
-                        float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
-                                               std::max(qy, 0.0f) * std::max(qy, 0.0f))
-                                     + std::min(std::max(qx, qy), 0.0f) - r;
-                        if (dist > 0.0f) continue;
-
-                        // Use gradient of smooth noise as a pseudo-normal field.
-                        float u = (float)(x - rx);
-                        float v = (float)(y - ry);
-                        const float eps = 1.35f;
-                        float nL = sampleNoise(u - eps, v);
-                        float nR = sampleNoise(u + eps, v);
-                        float nU = sampleNoise(u, v - eps);
-                        float nD = sampleNoise(u, v + eps);
-                        float gx = (nR - nL);
-                        float gy = (nD - nU);
-
-                        // Center and scale; clamp to avoid "magnify" jumps.
-                        float ox = std::max(-1.0f, std::min(1.0f, gx * 2.0f)) * distortPx;
-                        float oy = std::max(-1.0f, std::min(1.0f, gy * 2.0f)) * distortPx;
-
-                        int sx = std::clamp((int)((x - rx) + ox), 0, capW - 1);
-                        int sy = std::clamp((int)(sy0 + oy), 0, capH - 1);
-
-                        pixels[y * m_width + x] = m_blurTemp[sy * capW + sx];
-                    }
+            // Dirty detection: if content unchanged and rect matches, reuse cached result
+            bool usedCache = false;
+            if (panelId != 0) {
+                auto it = m_glassCache.find(panelId);
+                if (it != m_glassCache.end() &&
+                    it->second.rectX == rx && it->second.rectY == ry &&
+                    it->second.rectW == capW && it->second.rectH == capH &&
+                    it->second.contentHash == contentHash &&
+                    it->second.pixels.size() >= needed) {
+                    blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, pos, size, radius);
+                    usedCache = true;
                 }
             }
 
-            // Slight blur to soften distortion and mimic glass diffusion.
-            // IMPORTANT: call after releasing m_renderMutex to avoid deadlock.
-            // Diffusion blur: tuned for frosted glass.
-            // Previously we divided by 18 which capped the effect (~5 radius at BlurRadius=100).
-            // Scale more directly and clamp for performance.
-            // Stronger frosted diffusion (intensity via multiple passes).
-            // Keep the radius stable, and increase "how much" we blur by
-            // re-applying the same blur multiple times.
-            int frostRadius = (int)std::round(blurRadius / 2.5f);
-            frostRadius = std::clamp(frostRadius, 8, 32);
-            // Increase blur intensity primarily via additional diffusion passes.
-            // (Multiple gaussian passes approximates a larger gaussian.)
-            blurRegion(rx, ry, capW, capH, frostRadius);
-            blurRegion(rx, ry, capW, capH, frostRadius);
-            blurRegion(rx, ry, capW, capH, frostRadius);
-            blurRegion(rx, ry, capW, capH, frostRadius);
+            if (!usedCache) {
+                // Distort + write into panel area (inside rounded rect only).
+                {
+                    std::lock_guard<std::mutex> lock(m_renderMutex);
+                    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+                    ClipRect clip = activeClip();
+
+                    float maxR = std::min(size.x, size.y) * 0.5f;
+                    float r = std::min(radius, maxR);
+                    float cx = pos.x + size.x * 0.5f;
+                    float cy = pos.y + size.y * 0.5f;
+                    float hx = size.x * 0.5f - r;
+                    float hy = size.y * 0.5f - r;
+
+                    int ix1 = std::max(clip.x1, rx);
+                    int iy1 = std::max(clip.y1, ry);
+                    int ix2 = std::min(clip.x2, rx + capW);
+                    int iy2 = std::min(clip.y2, ry + capH);
+
+                    // Distortion strength in pixels (tuned for "glass" refraction).
+                    const float distortPx = float(blurRadius) / 10.0f;
+
+                    // Low-frequency smooth noise (value noise) → gradient for refraction offsets.
+                    auto hash01 = [](uint32_t v) -> float {
+                        v ^= (v >> 16);
+                        v *= 0x7feb352du;
+                        v ^= (v >> 15);
+                        v *= 0x846ca68bu;
+                        v ^= (v >> 16);
+                        return (v & 0x00FFFFFFu) / 16777215.0f;
+                    };
+                    auto gridNoise = [&](int gx, int gy) -> float {
+                        uint32_t v = (uint32_t)gx * 374761393u ^ (uint32_t)gy * 668265263u ^ m_grainSeed;
+                        return hash01(v);
+                    };
+                    auto smoothstep = [](float t) -> float { return t * t * (3.0f - 2.0f * t); };
+                    auto sampleNoise = [&](float u, float v) -> float {
+                        const float scale = 1.0f / 46.0f;
+                        float xg = u * scale;
+                        float yg = v * scale;
+                        int x0 = (int)std::floor(xg);
+                        int y0 = (int)std::floor(yg);
+                        float tx = xg - x0;
+                        float ty = yg - y0;
+                        float sx = smoothstep(tx);
+                        float sy = smoothstep(ty);
+                        float n00 = gridNoise(x0,     y0);
+                        float n10 = gridNoise(x0 + 1, y0);
+                        float n01 = gridNoise(x0,     y0 + 1);
+                        float n11 = gridNoise(x0 + 1, y0 + 1);
+                        float nx0 = n00 + (n10 - n00) * sx;
+                        float nx1 = n01 + (n11 - n01) * sx;
+                        return nx0 + (nx1 - nx0) * sy;
+                    };
+
+                    for (int y = iy1; y < iy2; ++y) {
+                        float py = y + 0.5f;
+                        int sy0 = y - ry;
+                        for (int x = ix1; x < ix2; ++x) {
+                            float px = x + 0.5f;
+
+                            float qx = std::abs(px - cx) - hx;
+                            float qy = std::abs(py - cy) - hy;
+                            float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
+                                                   std::max(qy, 0.0f) * std::max(qy, 0.0f))
+                                         + std::min(std::max(qx, qy), 0.0f) - r;
+                            if (dist > 0.0f) continue;
+
+                            float u = (float)(x - rx);
+                            float v = (float)(y - ry);
+                            const float eps = 1.35f;
+                            float nL = sampleNoise(u - eps, v);
+                            float nR = sampleNoise(u + eps, v);
+                            float nU = sampleNoise(u, v - eps);
+                            float nD = sampleNoise(u, v + eps);
+                            float gx = (nR - nL);
+                            float gy = (nD - nU);
+
+                            float ox = std::max(-1.0f, std::min(1.0f, gx * 2.0f)) * distortPx;
+                            float oy = std::max(-1.0f, std::min(1.0f, gy * 2.0f)) * distortPx;
+
+                            int sx = std::clamp((int)((x - rx) + ox), 0, capW - 1);
+                            int sy = std::clamp((int)(sy0 + oy), 0, capH - 1);
+
+                            pixels[y * m_width + x] = m_blurTemp[sy * capW + sx];
+                        }
+                    }
+                }
+
+                // Slight blur to soften distortion and mimic glass diffusion.
+                int frostRadius = (int)std::round(blurRadius / 2.5f);
+                frostRadius = std::clamp(frostRadius, 8, 32);
+                blurRegion(rx, ry, capW, capH, frostRadius);
+                blurRegion(rx, ry, capW, capH, frostRadius);
+                blurRegion(rx, ry, capW, capH, frostRadius);
+                blurRegion(rx, ry, capW, capH, frostRadius);
+
+                // Cache result for next frame (when panelId provided)
+                if (panelId != 0) {
+                    auto& cache = m_glassCache[panelId];
+                    cache.contentHash = contentHash;
+                    cache.rectX = rx;
+                    cache.rectY = ry;
+                    cache.rectW = capW;
+                    cache.rectH = capH;
+                    cache.pixels.resize(needed);
+                    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+                    for (int row = 0; row < capH; ++row)
+                        std::memcpy(cache.pixels.data() + row * capW,
+                                    pixels + (ry + row) * m_width + rx,
+                                    capW * sizeof(uint32_t));
+                }
+            }
         }
     }
 

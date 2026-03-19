@@ -6,6 +6,7 @@
 #include <string>
 #include <mutex>
 #include <cstdint>
+#include <unordered_map>
 #include "helpers/vector2.hpp"
 
 struct ClipRect {
@@ -28,9 +29,10 @@ public:
     void drawRect(const Vec2& pos, const Vec2& size, uint32_t color);
     void drawRoundedRect(const Vec2& pos, const Vec2& size, uint32_t color, float radius);
     void drawRoundedBorder(const Vec2& pos, const Vec2& size, uint32_t color, float radius, float thickness = 1.0f);
-    void drawGlassPanel(const Vec2& pos, const Vec2& size, float radius, 
+    void drawGlassPanel(const Vec2& pos, const Vec2& size, float radius,
                         uint32_t bgColor, uint32_t borderColor, uint32_t glowColor,
-                        int blurRadius = 100, float shadowOffset = 4.0f);
+                        int blurRadius = 100, float shadowOffset = 4.0f,
+                        uintptr_t panelId = 0);
     void drawSoftGlow(const Vec2& pos, const Vec2& size, float radius,
                       uint32_t color, float spread);
     void drawText(const Vec2& pos, const std::string& text, uint32_t color);
@@ -87,6 +89,18 @@ private:
     std::vector<uint32_t> m_blurTemp;
     // Gaussian kernel for per-pixel blur (1D, half window)
     std::vector<float> m_gaussianKernel;
+
+    // Dirty detection: cache distorted+blurred result per panel; only update when content changes
+    struct PanelGlassCache {
+        uint64_t contentHash = 0;
+        int rectX = 0, rectY = 0, rectW = 0, rectH = 0;
+        std::vector<uint32_t> pixels;
+    };
+    std::unordered_map<uintptr_t, PanelGlassCache> m_glassCache;
+
+    void blitCachedToPanel(int rx, int ry, int capW, int capH,
+                          const std::vector<uint32_t>& cachedPixels,
+                          const Vec2& pos, const Vec2& size, float radius);
 
     void drawRoundedRectToBuffer(uint32_t* buf, int bufW, int bufH,
                                   const Vec2& pos, const Vec2& size, uint32_t color, float radius);

@@ -1,11 +1,18 @@
 #pragma once
 
+#include <string>
+#include <functional>
+
 // =============================================================================
 // Platform window/display abstraction for BGFX init and main loop
 // Same UI flow on all platforms; only these APIs are OS-specific.
 // =============================================================================
 
 namespace PlatformWindow {
+
+// Optional callback for injecting typed text (used on macOS; Windows uses WM_CHAR).
+// Set before pumpEvents runs. Signature: void(const std::string&).
+void setTextInputCallback(std::function<void(const std::string&)> callback);
 
 // Create a minimal window for BGFX init. Returns native handle (HWND on Windows,
 // NSWindow* on macOS). Caller passes to WindowManager::initGlobalBGFX(handle).

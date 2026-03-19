@@ -225,7 +225,8 @@ bool UIPanel::drawOverlay(OverlayRenderer& renderer) {
                             Colors::BorderPrimary,
                             Colors::GlassHighlight,
                             Colors::BlurRadius,
-                            4.0f);
+                            4.0f,
+                            reinterpret_cast<uintptr_t>(this));
 
     // Chrome buttons — macOS traffic light dots (left side: close, minimize, maximize)
     // slot 0 = close (leftmost), 1 = minimize, 2 = maximize

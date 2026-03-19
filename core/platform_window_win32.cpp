@@ -7,6 +7,10 @@
 
 namespace PlatformWindow {
 
+void setTextInputCallback(std::function<void(const std::string&)>) {
+    // Windows uses WM_CHAR in OverlayWndProc; no callback needed
+}
+
 void* createBGFXInitWindow() {
     HWND hwnd = CreateWindowExW(
         0, L"STATIC", L"TempBGFXWindow",

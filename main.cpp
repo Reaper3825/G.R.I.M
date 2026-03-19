@@ -432,6 +432,13 @@ int main(int argc, char* argv[])
     UIRoot::get().addPanel(dataHubPanel);
     UIRoot::get().addPanel(modelPanel);
 
+#if defined(__APPLE__)
+    // macOS: inject typed characters into text input (Windows uses WM_CHAR in OverlayWndProc)
+    PlatformWindow::setTextInputCallback([](const std::string& text) {
+        UIRoot::get().injectTextInput(text);
+    });
+#endif
+
     LOG_PHASE("UIRoot and panels initialized (hidden)", true);
 
     // Wire UISurfaceRegistry → UIRoot bridge so tool-created surfaces render

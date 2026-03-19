@@ -14,6 +14,7 @@
 #include "platform_window.hpp"
 #include "logger.hpp"
 #include <string>
+#include <functional>
 #include <vector>
 #include <cstring>
 
@@ -99,6 +100,7 @@ static NSWindow*       s_bgfxWindow   = nil;
 static GRIMAppDelegate* s_appDelegate = nil;
 static bool            s_appInitialized = false;
 static const NSInteger kOverlayHostTag = 0x4752494D; // 'GRIM' for viewWithTag
+static std::function<void(const std::string&)> s_textInputCallback;
 
 static void ensureNSApp() {
     if (s_appInitialized) return;
@@ -119,6 +121,10 @@ static void ensureNSApp() {
 // PlatformWindow API
 // =============================================================================
 namespace PlatformWindow {
+
+void setTextInputCallback(std::function<void(const std::string&)> callback) {
+    s_textInputCallback = std::move(callback);
+}
 
 void* createBGFXInitWindow() {
     @autoreleasepool {
@@ -222,16 +228,24 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
                 [event subtype] == NSEventSubtypeApplicationActivated) {
             }
 
-            // Debug: log key events to verify keyboard input on macOS
+            // macOS equivalent of WM_CHAR: inject printable characters into text input
             NSEventType etype = [event type];
-            if (etype == NSEventTypeKeyDown || etype == NSEventTypeKeyUp) {
-                unsigned short keyCode = [event keyCode];
+            if (etype == NSEventTypeKeyDown && s_textInputCallback) {
                 NSString* chars = [event characters];
-                std::string charsStr = chars && [chars length] ? std::string([chars UTF8String]) : "";
-                const char* kind = (etype == NSEventTypeKeyDown) ? "KeyDown" : "KeyUp";
-                LOG_DEBUG("PlatformWindow",
-                    std::string(kind) + " keyCode=" + std::to_string(keyCode) +
-                    (charsStr.empty() ? "" : " char='" + charsStr + "'"));
+                if (chars && [chars length] > 0) {
+                    std::string charsStr = [chars UTF8String];
+                    bool injectedAny = false;
+                    for (unsigned char c : charsStr) {
+                        if (c >= 32 && c < 127) {
+                            s_textInputCallback(std::string(1, static_cast<char>(c)));
+                            injectedAny = true;
+                        }
+                    }
+                    // Consume event when we injected text (avoids system beep)
+                    if (injectedAny) {
+                        continue;
+                    }
+                }
             }
 
             [NSApp sendEvent:event];
