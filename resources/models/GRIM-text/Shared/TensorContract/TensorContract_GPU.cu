@@ -198,9 +198,16 @@ void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t st
     
     // RULE 20: Fail Loud - throw immediately on cuBLAS error
     if (status != CUBLAS_STATUS_SUCCESS) {
+        const char* hint = "";
+        switch (status) {
+            case CUBLAS_STATUS_INVALID_VALUE: hint = " (dim/leading-dim mismatch)"; break;
+            case CUBLAS_STATUS_EXECUTION_FAILED: hint = " (kernel crash — prior illegal memory access or bad pointer)"; break;
+            case CUBLAS_STATUS_ALLOC_FAILED: hint = " (GPU OOM)"; break;
+            case CUBLAS_STATUS_NOT_INITIALIZED: hint = " (handle not initialized)"; break;
+            default: break;
+        }
         throw std::runtime_error(std::string("cuBLAS SGEMM failed: ") + op_name + 
-            " status=" + std::to_string(static_cast<int>(status)) +
-            " (CUBLAS_STATUS_INVALID_VALUE=7 means dimension/leading-dim mismatch)");
+            " status=" + std::to_string(static_cast<int>(status)) + hint);
     }
     
     // Also check for CUDA errors - RULE 20: Fail Loud
@@ -4939,7 +4946,31 @@ struct MatMulGradFn : public GradFn {
             if (!grad_a) {
                 throw std::runtime_error("MatMulGradFn::apply: grad_a is NULL - capture_inputs() must be called");
             }
-            
+            fprintf(stderr, "[MatMulGradFn] grad_A: M=%d K=%d N=%d transB=%d grad_a=%p cached_b=%p grad_out=%p\n",
+                    M, K, N, (int)transpose_b, (void*)grad_a, (void*)cached_b, (void*)grad_output.data);
+            fflush(stderr);
+
+            if (M <= 0 || K <= 0 || N <= 0) {
+                throw std::runtime_error(
+                    std::string("MatMulGradFn::apply: invalid dimensions M=") + std::to_string(M) +
+                    " K=" + std::to_string(K) + " N=" + std::to_string(N));
+            }
+
+            {
+                cudaError_t pre_err = cudaDeviceSynchronize();
+                if (pre_err != cudaSuccess) {
+                    fprintf(stderr, "[MatMulGradFn] GPU ALREADY FAULTED before grad_A SGEMM: %s\n",
+                            cudaGetErrorString(pre_err));
+                    fflush(stderr);
+                }
+                cudaError_t pending = cudaGetLastError();
+                if (pending != cudaSuccess) {
+                    fprintf(stderr, "[MatMulGradFn] Pending CUDA error before grad_A SGEMM: %s\n",
+                            cudaGetErrorString(pending));
+                    fflush(stderr);
+                }
+            }
+
             if (transpose_b) {
                 // grad_A = grad_C @ B  where B is [N, K] (original weights, NOT transposed now)
                 // Row-major: grad_A[M,K] = grad_C[M,N] @ B[N,K]

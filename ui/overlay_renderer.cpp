@@ -852,7 +852,16 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
             // Diffusion blur: tuned for frosted glass.
             // Previously we divided by 18 which capped the effect (~5 radius at BlurRadius=100).
             // Scale more directly and clamp for performance.
-            int frostRadius = std::clamp(blurRadius / 4, 6, 32);
+            // Stronger frosted diffusion (intensity via multiple passes).
+            // Keep the radius stable, and increase "how much" we blur by
+            // re-applying the same blur multiple times.
+            int frostRadius = (int)std::round(blurRadius / 2.5f);
+            frostRadius = std::clamp(frostRadius, 8, 32);
+            // Increase blur intensity primarily via additional diffusion passes.
+            // (Multiple gaussian passes approximates a larger gaussian.)
+            blurRegion(rx, ry, capW, capH, frostRadius);
+            blurRegion(rx, ry, capW, capH, frostRadius);
+            blurRegion(rx, ry, capW, capH, frostRadius);
             blurRegion(rx, ry, capW, capH, frostRadius);
         }
     }

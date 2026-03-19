@@ -1652,6 +1652,14 @@ LossResult autogradTrainingStep(
         return loss_result;
     }
     
+    {
+        cudaError_t sync_err = cudaDeviceSynchronize();
+        cudaError_t pending  = cudaGetLastError();
+        fprintf(stderr, "[autogradTrainingStep] PRE-BACKWARD GPU check: sync=%s pending=%s\n",
+                cudaGetErrorString(sync_err), cudaGetErrorString(pending));
+        fflush(stderr);
+    }
+
     BackwardResult bwd_result = executeAutogradBackward(ctx, accumulate);
     if (!bwd_result.success) {
         loss_result.success = false;
