@@ -7,6 +7,7 @@
 #include "../voice/voice_speak.hpp"
 #include "../resources.hpp"
 #include "../perception/perception_context.hpp"  // For vision AI control
+#include "core/platform_window.hpp"
 #include <fstream>
 #include <functional>
 #include <filesystem>
@@ -133,6 +134,11 @@ void UISettingsMenu::loadConfig() {
                 }},
                 {"vision", {
                     {"enabled", true}
+                }},
+                {"blur", {
+                    {"enabled", true},
+                    {"opacity", 0.99},
+                    {"intensity", 2}
                 }}
             };
         }
@@ -240,6 +246,15 @@ void UISettingsMenu::applyChanges() {
         }
     }
     
+    if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object()) {
+        bool blurEnabled = pendingConfig["blur"].value("enabled", true);
+        float blurOpacity = pendingConfig["blur"].value("opacity", 0.99f);
+        int blurIntensity = pendingConfig["blur"].value("intensity", 2);
+        PlatformWindow::setOverlayBlurStyle(
+            UIRoot::get().getHWND(),
+            blurEnabled, blurOpacity, blurIntensity);
+    }
+
     LOG_DEBUG("UISettingsMenu", "Settings applied and saved successfully");
 }
 
@@ -703,6 +718,66 @@ void UISettingsMenu::createWidgets() {
         visionToggle->setSize(widgetWidth, widgetHeight);
         scrollBox->addChild(visionToggle);
         
+        // ===== Toggle 4: Blur Enabled =====
+        bool blurEnabled = true;
+        if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object() &&
+            pendingConfig["blur"].contains("enabled")) {
+            blurEnabled = pendingConfig["blur"]["enabled"].get<bool>();
+        }
+        auto blurToggle = std::make_shared<UIToggle>(
+            "Glass Blur:",
+            blurEnabled,
+            [this](bool value) {
+                if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object()) {
+                    pendingConfig["blur"] = nlohmann::json::object();
+                }
+                pendingConfig["blur"]["enabled"] = value;
+                hasChanges = true;
+            }
+        );
+        blurToggle->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(blurToggle);
+
+        // ===== Slider 3: Blur Opacity =====
+        float blurOpacity = 0.99f;
+        if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object() &&
+            pendingConfig["blur"].contains("opacity")) {
+            blurOpacity = pendingConfig["blur"]["opacity"].get<float>();
+        }
+        auto blurOpacitySlider = std::make_shared<UISlider>(
+            "Blur Opacity:",
+            0.0f, 1.0f, blurOpacity,
+            [this](float value) {
+                if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object()) {
+                    pendingConfig["blur"] = nlohmann::json::object();
+                }
+                pendingConfig["blur"]["opacity"] = value;
+                hasChanges = true;
+            }
+        );
+        blurOpacitySlider->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(blurOpacitySlider);
+
+        // ===== Slider 4: Blur Intensity (number of stacked blur layers) =====
+        int blurIntensity = 2;
+        if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object() &&
+            pendingConfig["blur"].contains("intensity")) {
+            blurIntensity = pendingConfig["blur"]["intensity"].get<int>();
+        }
+        auto blurIntensitySlider = std::make_shared<UISlider>(
+            "Blur Intensity:",
+            1.0f, 5.0f, static_cast<float>(blurIntensity),
+            [this](float value) {
+                if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object()) {
+                    pendingConfig["blur"] = nlohmann::json::object();
+                }
+                pendingConfig["blur"]["intensity"] = static_cast<int>(value);
+                hasChanges = true;
+            }
+        );
+        blurIntensitySlider->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(blurIntensitySlider);
+
         // Auto-layout all children in the scrollbox
         scrollBox->setChildSpacing(5.0f);
         scrollBox->autoLayoutChildren(10.0f);

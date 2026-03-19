@@ -6,6 +6,9 @@
         "openai": ""
     },
     "backend": "ollama",
+    "blur": {
+        "enabled": true
+    },
     "conversation_history_size": 10,
     "data_collection": {
         "clear_merged_cache_on_merge": false,

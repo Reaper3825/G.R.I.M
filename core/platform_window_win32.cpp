@@ -64,6 +64,17 @@ void setOverlayBlurMask(void* overlayWindowHandle,
     (void)cornerRadius;
 }
 
+void setOverlayBlurStyle(void* overlayWindowHandle,
+                          bool enabled,
+                          float opacity,
+                          int intensity)
+{
+    (void)overlayWindowHandle;
+    (void)enabled;
+    (void)opacity;
+    (void)intensity;
+}
+
 bool captureDesktopBehindOverlay(void* overlayWindowHandle,
                                  int x,
                                  int y,

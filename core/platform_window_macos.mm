@@ -273,23 +273,25 @@ void* createOverlayWindow(int x, int y, int width, int height) {
             NSWindowCollectionBehaviorFullScreenAuxiliary];
         [window setReleasedWhenClosed:NO];
 
-        // Container hosts (1) OS blur layer behind and (2) our overlay image layer on top.
+        // Container hosts (1) N stacked OS blur layers behind and (2) our overlay image on top.
         NSView* containerView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
         [containerView setWantsLayer:YES];
         containerView.layer.opaque = NO;
         containerView.layer.backgroundColor = [NSColor clearColor].CGColor;
 
-        // OS blur (vibrancy) so we blur the real desktop behind the window.
-        NSVisualEffectView* blurView = [[NSVisualEffectView alloc] initWithFrame:containerView.bounds];
-        blurView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        // HUDWindow tends to look fairly opaque/gray; use a lighter, subtler material.
-        blurView.material = NSVisualEffectMaterialUnderWindowBackground;
-        blurView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-        blurView.state = NSVisualEffectStateActive;
-        // When using screen-captured refraction, we don't want an extra gray wash.
-        // Keep the view present (so mask plumbing works) but effectively disabled.
-        blurView.alphaValue = 0.0;
-        [containerView addSubview:blurView];
+        auto makeBlurView = [&](NSView* parent) {
+            NSVisualEffectView* v = [[NSVisualEffectView alloc] initWithFrame:parent.bounds];
+            v.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            v.material = NSVisualEffectMaterialFullScreenUI;
+            v.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+            v.state = NSVisualEffectStateActive;
+            v.alphaValue = 0.99;
+            [parent addSubview:v];
+        };
+
+        // Two stacked blur passes for a heavier frosted-glass radius.
+        makeBlurView(containerView);
+        makeBlurView(containerView);
 
         // Our overlay image (rendered into a layer by grimOverlayBlit).
         NSView* overlayHost = [[NSView alloc] initWithFrame:containerView.bounds];
@@ -314,7 +316,7 @@ void setOverlayBlurMask(void* overlayWindowHandle,
                          int panelCount,
                          float cornerRadius)
 {
-    if (!overlayWindowHandle)
+    if (!overlayWindowHandle || !panelRects || panelCount <= 0)
         return;
 
     @autoreleasepool {
@@ -324,59 +326,91 @@ void setOverlayBlurMask(void* overlayWindowHandle,
         NSView* containerView = [window contentView];
         if (!containerView) return;
 
-        NSVisualEffectView* blurView = nil;
-        for (NSView* sub in containerView.subviews) {
-            if ([sub isKindOfClass:[NSVisualEffectView class]]) {
-                blurView = (NSVisualEffectView*)sub;
-                break;
-            }
-        }
-        if (!blurView)
-            return;
-
-        blurView.wantsLayer = YES;
-        if (!blurView.layer)
-            return;
-
-        // Reuse the mask layer if it already exists.
-        CAShapeLayer* maskLayer = nullptr;
-        if (blurView.layer.mask && [blurView.layer.mask isKindOfClass:[CAShapeLayer class]]) {
-            maskLayer = (CAShapeLayer*)blurView.layer.mask;
-        }
-        if (!maskLayer) {
-            maskLayer = [CAShapeLayer layer];
-            maskLayer.fillColor = [NSColor whiteColor].CGColor;
-            maskLayer.geometryFlipped = YES; // Match typical UI "y increases downward" intuition.
-            blurView.layer.mask = maskLayer;
-        }
-
-        // Build a union of rounded-rect panel shapes.
+        // Build path using CoreGraphics directly (avoids ObjC NSBezierPath overhead).
         CGMutablePathRef path = CGPathCreateMutable();
+        const float r = std::max(0.0f, cornerRadius);
 
-        int count = std::max(0, panelCount);
-        float r = cornerRadius;
-        if (r < 0.0f) r = 0.0f;
-
-        for (int i = 0; i < count; ++i) {
-            if (!panelRects) break;
-            float x = panelRects[i * 4 + 0];
-            float y = panelRects[i * 4 + 1];
-            float w = panelRects[i * 4 + 2];
-            float h = panelRects[i * 4 + 3];
-
-            if (w <= 0.0f || h <= 0.0f)
-                continue;
-
-            NSRect nr = NSMakeRect(x, y, w, h);
-            NSBezierPath* bp = [NSBezierPath bezierPathWithRoundedRect:nr
-                                                              xRadius:r
-                                                              yRadius:r];
-            CGPathAddPath(path, NULL, bp.CGPath);
+        for (int i = 0; i < panelCount; ++i) {
+            const float x = panelRects[i * 4 + 0];
+            const float y = panelRects[i * 4 + 1];
+            const float w = panelRects[i * 4 + 2];
+            const float h = panelRects[i * 4 + 3];
+            if (w <= 0.0f || h <= 0.0f) continue;
+            CGPathAddRoundedRect(path, nullptr, CGRectMake(x, y, w, h), r, r);
         }
 
-        maskLayer.frame = blurView.bounds;
-        maskLayer.path = path;
+        for (NSView* sub in containerView.subviews) {
+            if (![sub isKindOfClass:[NSVisualEffectView class]]) continue;
+
+            CALayer* layer = sub.layer; // NSVisualEffectView always has a layer
+            if (!layer) continue;
+
+            CAShapeLayer* maskLayer = (CAShapeLayer*)layer.mask;
+            if (!maskLayer) {
+                maskLayer = [CAShapeLayer layer];
+                maskLayer.fillColor = [NSColor whiteColor].CGColor;
+                maskLayer.geometryFlipped = YES;
+                layer.mask = maskLayer;
+            }
+
+            maskLayer.frame = layer.bounds;
+            maskLayer.path = path;
+        }
+
         CGPathRelease(path);
+    }
+}
+
+void setOverlayBlurStyle(void* overlayWindowHandle,
+                          bool enabled,
+                          float opacity,
+                          int intensity)
+{
+    if (!overlayWindowHandle) return;
+
+    @autoreleasepool {
+        NSWindow* window = (__bridge NSWindow*)overlayWindowHandle;
+        if (!window) return;
+
+        NSView* containerView = [window contentView];
+        if (!containerView) return;
+
+        intensity = std::max(0, std::min(intensity, 5));
+
+        // Collect existing blur views.
+        NSMutableArray<NSVisualEffectView*>* existing = [NSMutableArray array];
+        for (NSView* sub in containerView.subviews) {
+            if ([sub isKindOfClass:[NSVisualEffectView class]])
+                [existing addObject:(NSVisualEffectView*)sub];
+        }
+
+        int currentCount = (int)existing.count;
+        int desired = enabled ? intensity : 0;
+
+        // Remove excess blur views.
+        while (currentCount > desired) {
+            [existing.lastObject removeFromSuperview];
+            [existing removeLastObject];
+            --currentCount;
+        }
+
+        // Add missing blur views (insert below the overlay host, i.e. at index 0+).
+        while (currentCount < desired) {
+            NSVisualEffectView* v = [[NSVisualEffectView alloc] initWithFrame:containerView.bounds];
+            v.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            v.material = NSVisualEffectMaterialFullScreenUI;
+            v.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+            v.state = NSVisualEffectStateActive;
+            [containerView addSubview:v positioned:NSWindowBelow relativeTo:containerView.subviews.lastObject];
+            [existing addObject:v];
+            ++currentCount;
+        }
+
+        // Update opacity on all blur views.
+        float clampedOpacity = std::max(0.0f, std::min(1.0f, opacity));
+        for (NSVisualEffectView* v in existing) {
+            v.alphaValue = clampedOpacity;
+        }
     }
 }
 

@@ -35,6 +35,12 @@ void setOverlayBlurMask(void* overlayWindowHandle,
                          int panelCount,
                          float cornerRadius);
 
+// Update blur style at runtime: toggle, opacity (0..1), and intensity (layer count).
+void setOverlayBlurStyle(void* overlayWindowHandle,
+                          bool enabled,
+                          float opacity,
+                          int intensity);
+
 // Capture pixels from the real desktop behind the overlay window.
 // Input coordinates are in overlay-window local space (origin = top-left of overlay window).
 // Output pixels are packed ARGB: (a<<24)|(r<<16)|(g<<8)|b.

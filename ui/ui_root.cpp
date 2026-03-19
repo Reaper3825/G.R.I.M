@@ -4,8 +4,10 @@
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "core/platform_window.hpp"
 #include "ui_theme.hpp"
+#include <nlohmann/json.hpp>
 
 extern GRIM::MMO::HardwareInventory g_hardwareInventory;
+extern nlohmann::json aiConfig;
 
 void UIRoot::init(HWND hwnd, uint32_t width, uint32_t height)
 {
@@ -18,7 +20,22 @@ void UIRoot::init(HWND hwnd, uint32_t width, uint32_t height)
     
     // Initialize the overlay renderer
     m_renderer.init(hwnd, width, height);
-    
+
+#if defined(__APPLE__)
+    // Apply saved blur settings from config.
+    {
+        bool blurEnabled = true;
+        float blurOpacity = 0.99f;
+        int blurIntensity = 2;
+        if (aiConfig.contains("blur") && aiConfig["blur"].is_object()) {
+            blurEnabled = aiConfig["blur"].value("enabled", true);
+            blurOpacity = aiConfig["blur"].value("opacity", 0.99f);
+            blurIntensity = aiConfig["blur"].value("intensity", 2);
+        }
+        PlatformWindow::setOverlayBlurStyle(hwnd, blurEnabled, blurOpacity, blurIntensity);
+    }
+#endif
+
     LOG_PHASE("UIRoot initialized (overlay renderer)", true);
 }
 
