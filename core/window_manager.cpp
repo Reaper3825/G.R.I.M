@@ -16,10 +16,70 @@ std::mutex g_gpuMutex;
 
 namespace
 {
-    constexpr uint32_t kDefaultClearColor = 0xFF121212;
+    // BGFX setViewClear expects RGBA (0xRRGGBBAA); ARGB would show as red.
+    constexpr uint32_t kDefaultClearColor = 0x121212FF;
     constexpr uint32_t kFallbackWidth = 1920;
     constexpr uint32_t kFallbackHeight = 1080;
 }
+
+#ifdef _WIN32
+namespace
+{
+    // Enable DWM blur-behind for layered windows so transparency shows a blurred
+    // real desktop backdrop (instead of only our own synthetic frosted noise).
+    static void enableDwmBlurBehind(HWND hwnd)
+    {
+        if (!hwnd)
+            return;
+
+        // ACCENT_POLICY and SetWindowCompositionAttribute are available on Windows 10+.
+        // We declare minimal versions here to avoid pulling in undocumented headers.
+        struct ACCENT_POLICY
+        {
+            int AccentState;
+            int AccentFlags;
+            int GradientColor;
+            int AnimationId;
+        };
+
+        struct WINDOWCOMPOSITIONATTRIBDATA
+        {
+            int Attrib;
+            PVOID pvData;
+            SIZE_T cbData;
+        };
+
+        enum
+        {
+            WCA_ACCENT_POLICY = 19,
+            ACCENT_ENABLE_BLURBEHIND = 3
+        };
+
+        HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        if (!user32)
+            return;
+
+        using SetWindowCompositionAttributeFn = BOOL(WINAPI*)(HWND, WINDOWCOMPOSITIONATTRIBDATA*);
+        auto fn = reinterpret_cast<SetWindowCompositionAttributeFn>(
+            GetProcAddress(user32, "SetWindowCompositionAttribute"));
+        if (!fn)
+            return;
+
+        ACCENT_POLICY policy{};
+        policy.AccentState = ACCENT_ENABLE_BLURBEHIND;
+        policy.AccentFlags = 0;
+        policy.GradientColor = 0;
+        policy.AnimationId = 0;
+
+        WINDOWCOMPOSITIONATTRIBDATA data{};
+        data.Attrib = WCA_ACCENT_POLICY;
+        data.pvData = &policy;
+        data.cbData = sizeof(policy);
+
+        fn(hwnd, &data);
+    }
+} // namespace
+#endif
 
 // =====================================================
 // BGFX Init
@@ -256,6 +316,11 @@ GRIMWindow* WindowManager::createOverlay(const std::string& name, int w, int h, 
         }
 
         UpdateWindow(hwnd);
+
+#ifdef _WIN32
+        // Blur the real desktop behind the overlay window.
+        enableDwmBlurBehind(hwnd);
+#endif
 #else
         int virtualX = 0, virtualY = 0, virtualWidth = 0, virtualHeight = 0;
         PlatformWindow::getVirtualScreenRect(virtualX, virtualY, virtualWidth, virtualHeight);

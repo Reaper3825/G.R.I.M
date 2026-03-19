@@ -242,6 +242,9 @@ if(APPLE)
   target_link_libraries(GRIM PRIVATE
     "-framework Cocoa"
     "-framework CoreGraphics"
+    "-framework ScreenCaptureKit"
+    "-framework CoreMedia"
+    "-framework CoreVideo"
     "-framework Metal"
     "-framework QuartzCore"
     "-framework AudioToolbox"

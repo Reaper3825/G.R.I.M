@@ -173,26 +173,15 @@ void UIInputBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     using namespace UITheme;
     if (!isVisible()) return;
     
-    // Background with focus indication
-    uint32_t bgColor = focused ? Colors::WidgetBgHover : Colors::WidgetBg;
-    renderer.drawRoundedRect(position, size, bgColor, Sizes::WidgetRadius);
-    
-    // Rounded border — accent on focus, visible frost otherwise
-    uint32_t borderColor = focused ? Colors::BorderFocus : Colors::BorderPrimary;
-    renderer.drawRoundedBorder(position, size, borderColor, Sizes::WidgetRadius);
-    
-    // Text content
     std::string display = buffer.empty() ? placeholder : buffer;
-    uint32_t textColor = buffer.empty() ? Colors::TextDisabled : 0xFFD0D0D0;
+    uint32_t textColor = buffer.empty() ? Colors::TextDisabled : Colors::TextLight;
     
-    // Add blinking cursor when focused
     if (caretVisible && focused) {
         display += "|";
     }
     
-    // Truncate long text to fit in box (rough calculation)
-    int maxChars = static_cast<int>(size.x / 8) - 2;  // Approximate character width
-    if (display.length() > maxChars) {
+    int maxChars = static_cast<int>(size.x / 8) - 2;
+    if (static_cast<int>(display.length()) > maxChars) {
         display = "..." + display.substr(display.length() - maxChars + 3);
     }
     

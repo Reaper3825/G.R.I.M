@@ -1914,6 +1914,17 @@ BatchResult processBatch(
     ctx.model->getTrainingState().tracked_collapse_token = g_collapse_token_id;
     
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call autogradTrainingStep...\n");
+    // First-batch CUDA checkpoint: surface any error before forward/loss/backward
+    if (batch_idx == 0) {
+        cudaError_t e = cudaDeviceSynchronize();
+        cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
+        if (last != cudaSuccess) {
+            ctx.logging.logger->log("[CUDA] first_batch BEFORE autogradTrainingStep: " + std::string(cudaGetErrorString(last)));
+            cudaGetLastError();
+        } else {
+            ctx.logging.logger->log("[CUDA] first_batch BEFORE autogradTrainingStep: ok");
+        }
+    }
     // STABILITY FIX (Issue #27/Math Audit): Apply 1/M scaling at the source (backward pass) to match PyTorch.
     // This ensures that gradients averaged per micro-batch are further averaged across the accumulation window,
     // preventing the "Sum of Averages" discrepancy that causes gradient explosion by a factor of M.
@@ -1929,6 +1940,19 @@ BatchResult processBatch(
     result.loss = loss_result.loss_value;
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] autogradTrainingStep returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
+    
+    // First-batch CUDA checkpoint: fault is in forward/loss/backward if we see error here
+    if (batch_idx == 0) {
+        cudaError_t e = cudaDeviceSynchronize();
+        cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
+        if (last != cudaSuccess) {
+            ctx.logging.logger->log("[CUDA] first_batch AFTER autogradTrainingStep: " + std::string(cudaGetErrorString(last)) +
+                " (fault is in forward, loss, or backward)");
+            cudaGetLastError();
+        } else {
+            ctx.logging.logger->log("[CUDA] first_batch AFTER autogradTrainingStep: ok");
+        }
+    }
     
     // Handle training step failure (NaN/Inf loss or backward error)
     if (!loss_result.success) {
@@ -4575,6 +4599,28 @@ BatchResult processBatch(
             throw std::runtime_error(
                 std::string("FATAL Telemetry: ") + 
                 GRIM::Telemetry::getTelemetryErrorMessage(tel_err));
+        }
+        if (batch_idx == 0) {
+            cudaError_t e = cudaDeviceSynchronize();
+            cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
+            if (last != cudaSuccess) {
+                ctx.logging.logger->log("[CUDA] first_batch AFTER telemetry update: " + std::string(cudaGetErrorString(last)));
+                cudaGetLastError();
+            } else {
+                ctx.logging.logger->log("[CUDA] first_batch AFTER telemetry update: ok");
+            }
+        }
+    }
+    
+    // First-batch CUDA checkpoint (runs even if telemetry disabled): last point before step++
+    if (batch_idx == 0) {
+        cudaError_t e = cudaDeviceSynchronize();
+        cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
+        if (last != cudaSuccess) {
+            ctx.logging.logger->log("[CUDA] first_batch END processBatch: " + std::string(cudaGetErrorString(last)));
+            cudaGetLastError();
+        } else {
+            ctx.logging.logger->log("[CUDA] first_batch END processBatch: ok");
         }
     }
     

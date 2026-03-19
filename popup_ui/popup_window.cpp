@@ -24,6 +24,57 @@ std::mutex g_alphaMutex;
 static int g_popupWidth = 0;
 static int g_popupHeight = 0;
 
+// Enable DWM blur-behind so popup translucency blurs the real desktop backdrop.
+static void enableDwmBlurBehind(HWND hwnd)
+{
+    if (!hwnd)
+        return;
+
+    struct ACCENT_POLICY
+    {
+        int AccentState;
+        int AccentFlags;
+        int GradientColor;
+        int AnimationId;
+    };
+
+    struct WINDOWCOMPOSITIONATTRIBDATA
+    {
+        int Attrib;
+        PVOID pvData;
+        SIZE_T cbData;
+    };
+
+    enum
+    {
+        WCA_ACCENT_POLICY = 19,
+        ACCENT_ENABLE_BLURBEHIND = 3
+    };
+
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32)
+        return;
+
+    using SetWindowCompositionAttributeFn = BOOL(WINAPI*)(HWND, WINDOWCOMPOSITIONATTRIBDATA*);
+    auto fn = reinterpret_cast<SetWindowCompositionAttributeFn>(
+        GetProcAddress(user32, "SetWindowCompositionAttribute"));
+    if (!fn)
+        return;
+
+    ACCENT_POLICY policy{};
+    policy.AccentState = ACCENT_ENABLE_BLURBEHIND;
+    policy.AccentFlags = 0;
+    policy.GradientColor = 0;
+    policy.AnimationId = 0;
+
+    WINDOWCOMPOSITIONATTRIBDATA data{};
+    data.Attrib = WCA_ACCENT_POLICY;
+    data.pvData = &policy;
+    data.cbData = sizeof(policy);
+
+    fn(hwnd, &data);
+}
+
 // ===========================================================
 // Shadow helpers
 // ===========================================================
@@ -212,6 +263,7 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     }
 
     UpdateWindow(hwnd);
+    enableDwmBlurBehind(hwnd);
     ShowWindow(hwnd, SW_SHOWDEFAULT);
 
     LOG_DEBUG("PopupWindow", "HWND created successfully (" +

@@ -21,13 +21,16 @@ public:
     
     void beginFrame();
     void endFrame();
-    
+
+    // Draw scene behind panels so blur has content to distort (frosted glass).
+    void drawBackdrop(int width, int height);
+
     void drawRect(const Vec2& pos, const Vec2& size, uint32_t color);
     void drawRoundedRect(const Vec2& pos, const Vec2& size, uint32_t color, float radius);
     void drawRoundedBorder(const Vec2& pos, const Vec2& size, uint32_t color, float radius, float thickness = 1.0f);
     void drawGlassPanel(const Vec2& pos, const Vec2& size, float radius, 
                         uint32_t bgColor, uint32_t borderColor, uint32_t glowColor,
-                        int blurRadius = 12, float shadowOffset = 4.0f);
+                        int blurRadius = 100, float shadowOffset = 4.0f);
     void drawSoftGlow(const Vec2& pos, const Vec2& size, float radius,
                       uint32_t color, float spread);
     void drawText(const Vec2& pos, const std::string& text, uint32_t color);
@@ -40,9 +43,11 @@ public:
     void popClipRect();
     
     // Frosted glass blur: 2-pass separable box blur on the pixel buffer region.
-    // Call BEFORE drawing the panel background to blur content behind it.
     void blurRegion(int x, int y, int w, int h, int radius = 6);
-    
+
+    // Copy from backdrop buffer into main buffer (panel rect); then blur so blobs never show raw.
+    void copyBackdropRegion(int x, int y, int w, int h);
+
     int getWidth() const { return m_width; }
     int getHeight() const { return m_height; }
     void* getPixels() const { return m_pixels; }
@@ -63,12 +68,31 @@ private:
     void* m_pixels = nullptr;
     bool m_ownsPixels = false;
 
+    // When enabled, we rely on OS-level blur-backdrop (vibrancy / DWM acrylic)
+    // and skip the synthetic "blur the noise we drew" pipeline.
+    bool m_usePlatformBlur = false;
+
+    // Animated grain seed (changes per frame) for glass noise.
+    uint32_t m_grainSeed = 0xA53C9E17u;
+
     std::mutex m_renderMutex;
     std::vector<ClipRect> m_clipStack;
     ClipRect activeClip() const;
 
+    // Backdrop buffer: scene to blur (never shown raw; only composited into main in panel rects)
+    uint32_t* m_backdropPixels = nullptr;
+    bool m_backdropDirty = true;
+
     // Temp buffer for blur passes (lazily allocated)
     std::vector<uint32_t> m_blurTemp;
+    // Gaussian kernel for per-pixel blur (1D, half window)
+    std::vector<float> m_gaussianKernel;
+
+    void drawRoundedRectToBuffer(uint32_t* buf, int bufW, int bufH,
+                                  const Vec2& pos, const Vec2& size, uint32_t color, float radius);
+
+    // Subtle grain/noise overlay for glass (visual refraction cue).
+    void applyGlassGrain(const Vec2& pos, const Vec2& size, float radius, float strength);
 
     // stb_truetype font state
     std::vector<uint8_t> m_fontFileData;

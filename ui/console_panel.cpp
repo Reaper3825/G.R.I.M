@@ -70,18 +70,12 @@ ConsolePanel::ConsolePanel()
             
             auto& history = getConsoleHistory();
             
-            // Add separator before command
-            history.push("  -----------------------------------------------------------", UITheme::Colors::BorderPrimary);
-            
-            // Add input to history with timestamp
             std::string timestamp = "[" + getCurrentTime() + "]";
+            history.push("", UITheme::Colors::Background);
             history.push("  " + timestamp + " > " + submittedText, UITheme::Colors::PrimaryLight);
             
-            // Execute command (handleCommand adds results to history internally)
             handleCommand(submittedText);
             
-            // Add separator after output
-            history.push("  -----------------------------------------------------------", UITheme::Colors::BorderMedium);
             history.push("", UITheme::Colors::Background);
         }
     });
@@ -104,19 +98,14 @@ ConsolePanel::ConsolePanel()
     toolbarBox->addWidget(settingsButton);
     toolbarBox->layout();
     
-    // Add stylized welcome message to GLOBAL history
     auto& history = getConsoleHistory();
     history.push("", UITheme::Colors::Background);
-    history.push("  ===========================================================", UITheme::Colors::BorderDecorative);
-    history.push("           G.R.I.M - General Responsive Interface           ", UITheme::Colors::TextHeader);
-    history.push("              Machine Intelligence Console                   ", UITheme::Colors::PrimaryLight);
-    history.push("  ===========================================================", UITheme::Colors::BorderDecorative);
+    history.push("  G.R.I.M - General Responsive Interface", UITheme::Colors::TextHeader);
+    history.push("  Machine Intelligence Console", UITheme::Colors::PrimaryLight);
     history.push("", UITheme::Colors::Background);
     history.push("  System Status: ONLINE", UITheme::Colors::Success);
     history.push("  Type 'help' for available commands", UITheme::Colors::TextSecondary);
     history.push("  Press ESC to close | Click console to focus", UITheme::Colors::TextDisabled);
-    history.push("", UITheme::Colors::Background);
-    history.push("  -----------------------------------------------------------", UITheme::Colors::BorderMedium);
     history.push("", UITheme::Colors::Background);
 }
 
@@ -125,13 +114,11 @@ void ConsolePanel::update(const InputState& input, float dt)
     // Call base panel update to handle drag/resize
     UIPanel::update(input, dt);
 
-    // Update toolbar layout box position (right-aligned, left of chrome buttons)
     if (toolbarBox) {
         toolbarBox->layout();
-        float chromeWidth = 75.0f; // space reserved for close/max/min buttons
         float toolbarW = toolbarBox->getSize().x;
-        float toolbarX = position.x + size.x - toolbarW - chromeWidth;
-        float toolbarY = position.y + 5.0f;
+        float toolbarX = position.x + size.x - toolbarW - 12.0f;
+        float toolbarY = position.y + (titleBarHeight - 25.0f) * 0.5f;
         toolbarBox->setPosition(toolbarX, toolbarY);
         toolbarBox->layout();
         toolbarBox->update(input, dt);
@@ -139,12 +126,10 @@ void ConsolePanel::update(const InputState& input, float dt)
 
     if (!isVisible()) return;
     
-    // ✅ Update console input box
     if (consoleInput) {
-        // Position at bottom of console panel
-        float inputY = position.y + size.y - 42;
-        consoleInput->setPosition(position.x + 40, inputY);
-        consoleInput->setSize(size.x - 50, 30);
+        float inputY = position.y + size.y - 52;
+        consoleInput->setPosition(position.x + 38, inputY);
+        consoleInput->setSize(size.x - 56, 30);
         consoleInput->update(input, dt);
     }
 
@@ -159,42 +144,44 @@ bool ConsolePanel::drawOverlay(OverlayRenderer& renderer)
 {
     if (!UIPanel::drawOverlay(renderer)) return false;
     
-    // Draw separator line under title
-    renderer.drawRect({position.x + 10, position.y + titleBarHeight + 2}, 
-                     {size.x - 20, 1}, UITheme::Colors::DividerFaint);
+    // Subtle separator under title bar
+    renderer.drawRect({position.x + 16, position.y + titleBarHeight + 1}, 
+                     {size.x - 32, 1}, UITheme::Colors::DividerFaint);
 
     auto& history = getConsoleHistory();
     
     float maxTextWidth = size.x - 60.0f;
     history.ensureWrapped(maxTextWidth);
     
-    float y = position.y + titleBarHeight + 12;
+    float y = position.y + titleBarHeight + 14;
     auto lines = history.wrapped();
     
-    float scrollAreaHeight = size.y - titleBarHeight - 70;
+    float scrollAreaHeight = size.y - titleBarHeight - 76;
     int maxLines = static_cast<int>(scrollAreaHeight / 20.0f);
     int startIdx = std::max(0, static_cast<int>(lines.size()) - maxLines);
     
     for (int i = startIdx; i < static_cast<int>(lines.size()); ++i)
     {
-        if (y >= position.y + size.y - 70) break;
-        renderer.drawText({position.x + 15, y}, lines[i].text, lines[i].color);
+        if (y >= position.y + size.y - 76) break;
+        renderer.drawText({position.x + 18, y}, lines[i].text, lines[i].color);
         y += 20.0f;
     }
 
-    float inputY = position.y + size.y - 50;
+    // Glass input area at bottom
+    float inputY = position.y + size.y - 56;
+    float inputRadius = UITheme::Sizes::WidgetRadius + 4.0f;
     
-    renderer.drawRoundedRect({position.x + 8, inputY - 2}, {size.x - 16, 42}, UITheme::Colors::ContentAreaBg, UITheme::Sizes::WidgetRadius + 2.0f);
-    renderer.drawRoundedBorder({position.x + 8, inputY - 2}, {size.x - 16, 42}, UITheme::Colors::BorderPrimary, UITheme::Sizes::WidgetRadius + 2.0f);
+    renderer.drawRoundedRect({position.x + 12, inputY}, {size.x - 24, 40}, UITheme::Colors::ScrollboxBg, inputRadius);
+    renderer.drawRoundedBorder({position.x + 12, inputY}, {size.x - 24, 40}, UITheme::Colors::BorderSubtle, inputRadius);
     
-    renderer.drawText({position.x + 18, inputY + 10}, ">", UITheme::Colors::Primary);
+    renderer.drawText({position.x + 22, inputY + 11}, ">", UITheme::Colors::Primary);
     
     if (consoleInput) {
         consoleInput->drawOverlay(renderer, position);
     }
     
-    renderer.drawText({position.x + 15, inputY + 28}, "ESC: Close", UITheme::Colors::TextDisabled);
-    renderer.drawText({position.x + size.x - 200, inputY + 28}, "Enter: Execute", UITheme::Colors::TextDisabled);
+    renderer.drawText({position.x + 18, inputY + 30}, "ESC Close", UITheme::Colors::TextDisabled);
+    renderer.drawText({position.x + size.x - 175, inputY + 30}, "Enter Execute", UITheme::Colors::TextDisabled);
     
     renderer.popClipRect();
     

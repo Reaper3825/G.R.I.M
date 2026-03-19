@@ -68,19 +68,23 @@ void UIButton::draw(UIRenderer& renderer) {
 
 void UIButton::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     uint32_t c = baseColor;
+    uint32_t textColor = UITheme::Colors::TextPrimary;
     if (pressed) {
         c = pressColor;
     }
     else if (hovered) {
         c = hoverColor;
+        textColor = UITheme::Colors::TextWhite;
     }
 
-    renderer.drawRoundedRect(position, size, c, UITheme::Sizes::WidgetRadius);
+    float pillRadius = size.y * 0.5f;
+    renderer.drawRoundedRect(position, size, c, pillRadius);
     
-    // Glass border
-    renderer.drawRoundedBorder(position, size, UITheme::Colors::BorderPrimary, UITheme::Sizes::WidgetRadius);
+    uint32_t borderColor = hovered ? UITheme::Colors::BorderPrimary : UITheme::Colors::BorderSubtle;
+    renderer.drawRoundedBorder(position, size, borderColor, pillRadius);
     
-    // Center text vertically in button
-    float textY = position.y + (size.y / 2.0f) - 8;
-    renderer.drawText({position.x + 8, textY}, label, UITheme::Colors::TextPrimary);
+    float textWidth = label.length() * 7.5f;
+    float textX = position.x + (size.x - textWidth) * 0.5f;
+    float textY = position.y + (size.y * 0.5f) - 8.0f;
+    renderer.drawText({textX, textY}, label, textColor);
 }

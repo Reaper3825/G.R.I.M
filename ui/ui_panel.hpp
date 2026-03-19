@@ -107,7 +107,7 @@ protected:
     Vec2 storedPosition{0.0f, 0.0f};
     Vec2 storedSize{0.0f, 0.0f};
     static Vec2 s_canvasSize;
-    static constexpr float chromeButtonSize = 18.0f;
+    static constexpr float chromeButtonSize = 12.0f;
     
     // Helper to check if mouse is over resize handle (bottom-right corner)
     bool isOverResizeHandle(const Vec2& mousePos) const;

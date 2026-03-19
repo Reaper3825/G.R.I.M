@@ -55,8 +55,8 @@ bool UIPanel::handleChromeButtons(const InputState& input) {
     };
 
     Vec2 closeOrigin = chromeButtonOrigin(0);
-    Vec2 maxOrigin   = chromeButtonOrigin(1);
-    Vec2 minOrigin   = chromeButtonOrigin(2);
+    Vec2 minOrigin   = chromeButtonOrigin(1);
+    Vec2 maxOrigin   = chromeButtonOrigin(2);
 
     closeHovered    = chromeOptions.enableClose    && isInside(input.mousePos, closeOrigin, btnSize);
     maximizeHovered = chromeOptions.enableMaximize && isInside(input.mousePos, maxOrigin, btnSize);
@@ -125,9 +125,11 @@ void UIPanel::toggleMaximize() {
 }
 
 Vec2 UIPanel::chromeButtonOrigin(int slot) const {
-    const float padding = 6.0f;
-    float offset = (chromeButtonSize + padding) * static_cast<float>(slot + 1);
-    return {position.x + size.x - offset, position.y + padding};
+    const float padding = 10.0f;
+    const float spacing = chromeButtonSize + 8.0f;
+    float x = position.x + padding + spacing * static_cast<float>(slot);
+    float y = position.y + (titleBarHeight - chromeButtonSize) * 0.5f;
+    return {x, y};
 }
 
 void UIPanel::update(const InputState& input, float dt) {
@@ -225,40 +227,43 @@ bool UIPanel::drawOverlay(OverlayRenderer& renderer) {
                             Colors::BlurRadius,
                             4.0f);
 
-    // Title text
-    renderer.drawText({position.x + 8, position.y + 6}, title, Colors::TextHeader);
+    // Chrome buttons — macOS traffic light dots (left side: close, minimize, maximize)
+    // slot 0 = close (leftmost), 1 = minimize, 2 = maximize
+    float dotRadius = chromeButtonSize * 0.5f;
     
-    // Chrome buttons — glass style
     if (chromeOptions.enableClose) {
         Vec2 btn = chromeButtonOrigin(0);
         uint32_t color = closeHovered ? Colors::ChromeClose : Colors::ChromeBtn;
-        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, Sizes::SmallRadius);
-        renderer.drawText({btn.x + 5.0f, btn.y + 2.0f}, "X", Colors::TextPrimary);
-    }
-
-    if (chromeOptions.enableMaximize) {
-        Vec2 btn = chromeButtonOrigin(1);
-        uint32_t color = maximizeHovered ? Colors::ChromeBtnHover : Colors::ChromeBtn;
-        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, Sizes::SmallRadius);
-        renderer.drawText({btn.x + 5.0f, btn.y + 2.0f}, "[]", Colors::TextPrimary);
+        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, dotRadius);
     }
 
     if (chromeOptions.enableMinimize) {
-        Vec2 btn = chromeButtonOrigin(2);
-        uint32_t color = minimizeHovered ? Colors::ChromeBtnHover : Colors::ChromeBtn;
-        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, Sizes::SmallRadius);
-        renderer.drawText({btn.x + 6.0f, btn.y + 2.0f}, "-", Colors::TextPrimary);
+        Vec2 btn = chromeButtonOrigin(1);
+        uint32_t color = minimizeHovered ? Colors::ChromeMinimize : Colors::ChromeBtn;
+        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, dotRadius);
     }
 
-    // Resize grip
+    if (chromeOptions.enableMaximize) {
+        Vec2 btn = chromeButtonOrigin(2);
+        uint32_t color = maximizeHovered ? Colors::ChromeMaximize : Colors::ChromeBtn;
+        renderer.drawRoundedRect(btn, {chromeButtonSize, chromeButtonSize}, color, dotRadius);
+    }
+
+    // Title text — centered in title bar
+    float titleX = position.x + (size.x - title.length() * 8.0f) * 0.5f;
+    renderer.drawText({titleX, position.y + 8.0f}, title, Colors::TextHeader);
+
+    // Resize grip — subtle dots
     if (resizable && !maximized) {
-        float handleX = position.x + size.x - resizeHandleSize;
-        float handleY = position.y + size.y - resizeHandleSize;
+        float handleX = position.x + size.x - 14.0f;
+        float handleY = position.y + size.y - 14.0f;
         
         for (int i = 0; i < 3; ++i) {
-            float offset = i * 3.0f;
-            renderer.drawRect({handleX + offset, handleY + resizeHandleSize - offset - 2}, 
-                            {resizeHandleSize - offset, 1}, Colors::ChromeBtn);
+            for (int j = 0; j <= i; ++j) {
+                float dx = handleX + (2 - i) * 4.0f;
+                float dy = handleY + j * 4.0f;
+                renderer.drawRoundedRect({dx, dy}, {2, 2}, Colors::BorderSubtle, 1.0f);
+            }
         }
     }
 

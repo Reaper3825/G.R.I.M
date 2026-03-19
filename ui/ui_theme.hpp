@@ -5,103 +5,104 @@ namespace UITheme {
     // ====================================================
     // Glassmorphism Color Palette
     // ====================================================
-    // Design language: frosted glass panels, soft depth cues,
-    // warm neutrals with a refined blue accent family.
-    // Semi-transparent backgrounds simulate light diffusion.
-    // Beveled borders (lighter top/left, darker bottom/right)
-    // give interactive elements tactile, skeuomorphic depth.
+    // Frosted glass panels over a dark scene with neon color
+    // blobs bleeding through. High corner radii for a bubbly,
+    // organic feel. Clean 1px borders with visible white frost.
+    // Translucent fills let background blur show through.
     // ====================================================
     namespace Colors {
-        // --- Glass Backgrounds (translucent for frosted glass effect) ---
-        constexpr uint32_t PanelBg         = 0x99181820;  // Dark card surface (60% opacity, slight blue tint)
-        constexpr uint32_t ScrollboxBg     = 0x80141418;  // Recessed content area (50% opacity)
-        constexpr uint32_t WidgetBg        = 0xA0222228;  // Widget surface (63% opacity)
-        constexpr uint32_t WidgetBgHover   = 0xB02A2A32;  // Lifted on hover (69% opacity)
-        constexpr uint32_t WidgetBgActive  = 0xD0323238;  // Pressed (81% opacity)
-        constexpr uint32_t WidgetBgDisabled= 0x601A1A1A;  // Faded (disabled)
-        constexpr uint32_t Background      = 0xFF0E0E0E;  // Deep base (opaque)
-        constexpr uint32_t SliderTrack     = 0x80141418;  // Recessed track
-        constexpr uint32_t SliderFill      = 0xFF6B8CFF;  // Filled portion (accent)
-        constexpr uint32_t SliderHandle    = 0xD9D0D0D0;  // Handle default
-        constexpr uint32_t SliderHandleActive = 0xFF8BABFF; // Handle while dragging
+        // --- Glass Backgrounds (frost = blur distortion shows through; not just tint) ---
+        constexpr uint32_t PanelBg         = 0xB81C1A28;  // 72% opacity so blur is visible
+        constexpr uint32_t ScrollboxBg     = 0xA0181624;  // 63% opacity, recessed
+        constexpr uint32_t WidgetBg        = 0xB0201E30;  // 69% opacity, slight purple
+        constexpr uint32_t WidgetBgHover   = 0x90302E44;  // 56% opacity, lifted
+        constexpr uint32_t WidgetBgActive  = 0xA8403E58;  // 66% opacity, pressed
+        constexpr uint32_t WidgetBgDisabled= 0x40181828;  // 25% opacity, faded
+        constexpr uint32_t Background      = 0xFF0A0A12;  // Deep base (opaque, blue-black)
+        constexpr uint32_t SliderTrack     = 0x60141420;  // Recessed track
+        constexpr uint32_t SliderFill      = 0xFF7B6EF6;  // Filled portion (violet accent)
+        constexpr uint32_t SliderHandle    = 0xE0E0E0F0;  // Handle default (cool white)
+        constexpr uint32_t SliderHandleActive = 0xFFA090FF; // Handle while dragging
 
         // --- Toggle States ---
-        constexpr uint32_t ToggleBgOn      = 0xA01A3020;  // Translucent green tint
-        constexpr uint32_t ToggleBgOff     = 0xA02A2230;  // Translucent purple tint
-        constexpr uint32_t ToggleHandle    = 0xE0D0D0D0;  // Knob color
-        constexpr uint32_t ToggleText      = 0xFF0E0E0E;  // ON/OFF label (dark)
+        constexpr uint32_t ToggleBgOn      = 0x90184028;  // Translucent green tint
+        constexpr uint32_t ToggleBgOff     = 0x90281838;  // Translucent purple tint
+        constexpr uint32_t ToggleHandle    = 0xE0E0E0F0;  // Knob color
+        constexpr uint32_t ToggleText      = 0xFF0E0E14;  // ON/OFF label (dark)
 
         // --- Scrollbar ---
-        constexpr uint32_t ScrollThumb         = 0x15FFFFFF;  // Resting thumb
-        constexpr uint32_t ScrollThumbHover    = 0x20FFFFFF;  // Hovered thumb
-        constexpr uint32_t ScrollThumbDrag     = 0x30FFFFFF;  // Dragging thumb
+        constexpr uint32_t ScrollThumb         = 0x18FFFFFF;  // Resting thumb
+        constexpr uint32_t ScrollThumbHover    = 0x28FFFFFF;  // Hovered thumb
+        constexpr uint32_t ScrollThumbDrag     = 0x3CFFFFFF;  // Dragging thumb
 
         // --- Card & Content Area ---
-        constexpr uint32_t ContentAreaBg   = 0x80141418;  // Recessed inner areas
-        constexpr uint32_t CardSurface     = 0xA0202028;  // Card surface
-        constexpr uint32_t TableHeaderBg   = 0x90202028;  // Table/list header row
-        constexpr uint32_t RowEven         = 0x80141418;  // Alternating row (even)
-        constexpr uint32_t RowOdd          = 0x88181820;  // Alternating row (odd)
-        constexpr uint32_t RowHover        = 0xA0222228;  // Hovered row
-        constexpr uint32_t RowSelected     = 0xB02A2A32;  // Selected row
+        constexpr uint32_t ContentAreaBg   = 0xB0141420;  // 69% opacity, recessed
+        constexpr uint32_t CardSurface     = 0xD01E1C2C;  // 82% opacity, card surface
+        constexpr uint32_t TableHeaderBg   = 0x70201E30;  // Table/list header row
+        constexpr uint32_t RowEven         = 0x50141420;  // Alternating row (even)
+        constexpr uint32_t RowOdd          = 0x581A1828;  // Alternating row (odd)
+        constexpr uint32_t RowHover        = 0x78282640;  // Hovered row
+        constexpr uint32_t RowSelected     = 0x90302E50;  // Selected row
         constexpr uint32_t DividerLine     = 0x18FFFFFF;  // Section dividers within cards
-        constexpr uint32_t PanelShadow     = 0x50000000;  // Drop shadow behind panels
+        constexpr uint32_t PanelShadow     = 0x60000008;  // Drop shadow behind panels
 
-        // --- Accent Palette (muted, modern) ---
-        constexpr uint32_t Primary         = 0xFF6B8CFF;  // Periwinkle blue
-        constexpr uint32_t PrimaryLight    = 0xFF8BABFF;  // Light periwinkle (active slider handle, etc)
-        constexpr uint32_t Success         = 0xFF5AD07A;  // Soft green
-        constexpr uint32_t SuccessBg       = 0xA01A3020;  // Translucent green button bg
-        constexpr uint32_t Warning         = 0xFFE8A840;  // Warm amber
-        constexpr uint32_t WarningLight    = 0xFFE8D050;  // Bright golden yellow
-        constexpr uint32_t Danger          = 0xFFE05555;  // Muted coral red
-        constexpr uint32_t DangerBg        = 0xA04A1A22;  // Translucent red button bg
-        constexpr uint32_t DangerBright    = 0xFFAA2020;  // Solid critical alert bg
-        constexpr uint32_t AccentBlue      = 0xFF4080FF;  // Active filter / selection accent
-        constexpr uint32_t Info            = 0xFF5B8DEF;  // Cornflower blue
+        // --- Accent Palette (neon-inspired, vibrant) ---
+        constexpr uint32_t Primary         = 0xFF7B6EF6;  // Soft violet
+        constexpr uint32_t PrimaryLight    = 0xFFA090FF;  // Light lavender
+        constexpr uint32_t Success         = 0xFF50E080;  // Neon green
+        constexpr uint32_t SuccessBg       = 0x80183828;  // Translucent green button bg
+        constexpr uint32_t Warning         = 0xFFF0B040;  // Warm amber
+        constexpr uint32_t WarningLight    = 0xFFF0D860;  // Bright golden yellow
+        constexpr uint32_t Danger          = 0xFFE84060;  // Vibrant pink-red
+        constexpr uint32_t DangerBg        = 0x80481828;  // Translucent red button bg
+        constexpr uint32_t DangerBright    = 0xFFCC2040;  // Solid critical alert bg
+        constexpr uint32_t AccentBlue      = 0xFF5090FF;  // Active filter / selection accent
+        constexpr uint32_t Info            = 0xFF6B90F0;  // Cornflower blue
 
-        // --- Text (off-white for reduced glare) ---
-        constexpr uint32_t TextPrimary     = 0xFFEAEAEA;  // Soft white
-        constexpr uint32_t TextSecondary   = 0xFF909090;  // Neutral gray
-        constexpr uint32_t TextMuted       = 0xFF999999;  // Dimmed body text
-        constexpr uint32_t TextLight       = 0xFFCCCCCC;  // Light gray body text
-        constexpr uint32_t TextLabel       = 0xFFAAAAAA;  // Field labels
-        constexpr uint32_t TextDisabled    = 0xFF505050;  // Muted
-        constexpr uint32_t TextValue       = 0xFF8BABFF;  // Light periwinkle
-        constexpr uint32_t TextLink        = 0xFF8888FF;  // Link/domain text
-        constexpr uint32_t TextHeader      = 0xFFF0F0F0;  // Bright off-white
+        // --- Text (cool off-white for glass contrast) ---
+        constexpr uint32_t TextPrimary     = 0xFFEEEEF4;  // Cool soft white
+        constexpr uint32_t TextSecondary   = 0xFF8888A0;  // Cool gray
+        constexpr uint32_t TextMuted       = 0xFF9090A8;  // Dimmed body text
+        constexpr uint32_t TextLight       = 0xFFCCCCD8;  // Light gray body text
+        constexpr uint32_t TextLabel       = 0xFFAAAABB;  // Field labels
+        constexpr uint32_t TextDisabled    = 0xFF484860;  // Muted
+        constexpr uint32_t TextValue       = 0xFFA090FF;  // Light lavender
+        constexpr uint32_t TextLink        = 0xFF9080FF;  // Link/domain text
+        constexpr uint32_t TextHeader      = 0xFFF4F4FF;  // Bright cool white
         constexpr uint32_t TextWhite       = 0xFFFFFFFF;  // Pure white
 
-        // --- Section Tints (subtle neutral washes) ---
-        constexpr uint32_t SectionNeutral     = 0x90181820;  // Neutral wash
-        constexpr uint32_t SectionAI          = 0x901A2028;  // Cool grey
-        constexpr uint32_t SectionVoice       = 0x90281820;  // Warm grey
-        constexpr uint32_t SectionWhisper     = 0x90282018;  // Warm grey
-        constexpr uint32_t SectionPersonality = 0x901A2820;  // Cool grey
+        // --- Section Tints (purple-shifted washes) ---
+        constexpr uint32_t SectionNeutral     = 0x701A1828;  // Cool neutral wash
+        constexpr uint32_t SectionAI          = 0x70181830;  // Cool violet tint
+        constexpr uint32_t SectionVoice       = 0x70281828;  // Warm magenta tint
+        constexpr uint32_t SectionWhisper     = 0x70282018;  // Warm amber tint
+        constexpr uint32_t SectionPersonality = 0x70182820;  // Cool teal tint
 
-        // --- Glass Borders (visible frosted edges) ---
-        constexpr uint32_t BorderPrimary   = 0x40FFFFFF;  // Visible glass edge (25% white)
-        constexpr uint32_t BorderSubtle    = 0x20FFFFFF;  // Subtle frost line (12% white)
-        constexpr uint32_t BorderFocus     = 0xFF6B8CFF;  // Focus ring matches accent
-        constexpr uint32_t BorderShadow    = 0x20000000;  // Bottom/right shadow edge
+        // --- Glass Borders (visible frosted edges, clean) ---
+        constexpr uint32_t BorderPrimary   = 0x50FFFFFF;  // Clean glass edge (31% white)
+        constexpr uint32_t BorderSubtle    = 0x28FFFFFF;  // Subtle frost line (16% white)
+        constexpr uint32_t BorderFocus     = 0xFF7B6EF6;  // Focus ring matches accent
+        constexpr uint32_t BorderShadow    = 0x28000010;  // Bottom/right shadow edge
         
         // --- Glass Highlight & Depth ---
-        constexpr uint32_t GlassHighlight  = 0x28FFFFFF;  // Top edge glow (15% white)
-        constexpr uint32_t GlassInnerGlow  = 0x10FFFFFF;  // Inner diffuse glow
-        constexpr uint32_t DividerFaint    = 0x08FFFFFF;  // Faint section divider (3% white)
-        constexpr uint32_t BorderDecorative= 0x20FFFFFF;  // Decorative border / divider (12% white)
-        constexpr uint32_t BorderMedium    = 0x14FFFFFF;  // Medium frost line (8% white)
-        constexpr uint32_t DepthShadow     = 0x50000000;  // Drop shadow for panels
-        constexpr uint32_t ShadowLight     = 0x40000000;  // Lighter shadow (detail panels)
-        constexpr uint32_t ShadowSubtle    = 0x10000000;  // Very subtle shadow edge
+        constexpr uint32_t GlassHighlight  = 0x38FFFFFF;  // Top edge glow (22% white)
+        constexpr uint32_t GlassInnerGlow  = 0x14FFFFFF;  // Inner diffuse glow
+        constexpr uint32_t DividerFaint    = 0x0CFFFFFF;  // Faint section divider (5% white)
+        constexpr uint32_t BorderDecorative= 0x28FFFFFF;  // Decorative border / divider (16% white)
+        constexpr uint32_t BorderMedium    = 0x1CFFFFFF;  // Medium frost line (11% white)
+        constexpr uint32_t DepthShadow     = 0x60000010;  // Drop shadow for panels (blue tint)
+        constexpr uint32_t ShadowLight     = 0x48000008;  // Lighter shadow
+        constexpr uint32_t ShadowSubtle    = 0x14000008;  // Very subtle shadow edge
         
-        // --- Chrome Button States ---
-        constexpr uint32_t ChromeBtn       = 0x20FFFFFF;  // Dim window control button
-        constexpr uint32_t ChromeBtnHover  = 0x35FFFFFF;  // Brighten on hover
-        constexpr uint32_t ChromeClose     = 0xC0E05555;  // Close button hovered
+        // --- Chrome Button States (macOS traffic light style) ---
+        constexpr uint32_t ChromeClose     = 0xFFE84060;  // Red close dot
+        constexpr uint32_t ChromeMinimize  = 0xFFF0B040;  // Yellow minimize dot
+        constexpr uint32_t ChromeMaximize  = 0xFF50E080;  // Green maximize dot
+        constexpr uint32_t ChromeBtn       = 0x30FFFFFF;  // Unfocused chrome dot
+        constexpr uint32_t ChromeBtnHover  = 0x50FFFFFF;  // Brighten on hover
 
-        // --- Blur ---
-        constexpr int BlurRadius           = 12;          // Frosted glass blur kernel radius
+        // --- Blur (distortion strength) ---
+        constexpr int BlurRadius           = 90;          // Frosted glass blur kernel radius
     }
     
     // ====================================================
@@ -114,8 +115,8 @@ namespace UITheme {
         constexpr float Large      = 20.0f;
         constexpr float XLarge     = 30.0f;
         
-        constexpr float PaddingX   = 16.0f;
-        constexpr float PaddingY   = 14.0f;
+        constexpr float PaddingX   = 18.0f;
+        constexpr float PaddingY   = 16.0f;
     }
     
     // ====================================================
@@ -123,7 +124,7 @@ namespace UITheme {
     // ====================================================
     namespace Sizes {
         constexpr float WidgetHeight       = 38.0f;
-        constexpr float HeaderHeight       = 32.0f;
+        constexpr float HeaderHeight       = 34.0f;
         constexpr float ButtonHeight       = 34.0f;
         constexpr float SliderHeight       = 38.0f;
         constexpr float ToggleHeight       = 28.0f;
@@ -132,11 +133,12 @@ namespace UITheme {
         
         constexpr float BorderWidth        = 1.0f;   // Thin glass edges
         constexpr float BorderWidthSubtle  = 1.0f;
-        constexpr float BorderRadius       = 16.0f;   // Panel-level rounded glass corners
-        constexpr float WidgetRadius       = 6.0f;    // Widget-level rounding (buttons, inputs, etc)
-        constexpr float SmallRadius        = 4.0f;    // Small element rounding (handles, text boxes)
+        constexpr float BorderRadius       = 22.0f;   // Large rounded glass corners (bubbly)
+        constexpr float WidgetRadius       = 10.0f;   // Widget-level rounding (pill-like)
+        constexpr float SmallRadius        = 6.0f;    // Small element rounding
         
-        constexpr float ScrollbarWidth     = 10.0f;  // Slim modern scrollbar
+        constexpr float ChromeDotSize      = 12.0f;   // macOS-style traffic light dots
+        constexpr float ScrollbarWidth     = 8.0f;    // Slim modern scrollbar
     }
     
     // ====================================================

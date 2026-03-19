@@ -9,19 +9,19 @@
     "conversation_history_size": 10,
     "data_collection": {
         "clear_merged_cache_on_merge": false,
-        "max_huggingface_pdfs_per_dataset": 2000,
-        "max_huggingface_pdfs_total": 10000,
-        "max_new_entries_per_run": 100000,
         "data_structuring": {
             "enabled": true,
+            "max_entries_per_run": 0,
+            "max_input_chars": 3000,
             "mode": "qa",
             "ollama_model": "llama3.1:8b",
             "parallel_requests": 4,
-            "timeout_ms": 60000,
-            "max_input_chars": 3000,
             "skip_already_structured": true,
-            "max_entries_per_run": 0
-        }
+            "timeout_ms": 60000
+        },
+        "max_huggingface_pdfs_per_dataset": 2000,
+        "max_huggingface_pdfs_total": 10000,
+        "max_new_entries_per_run": 100000
     },
     "default_model": "llama3.1:8b",
     "grim_text_url": "http://127.0.0.1:11435",
@@ -432,7 +432,7 @@
     },
     "ui": {
         "Minimize": "Side",
-        "font_name": "DejaVuSans-Bold",
+        "font_name": "DejaVuSerif-Italic",
         "font_size": 16
     },
     "vision": {

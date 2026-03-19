@@ -27,4 +27,22 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested);
 // Returns native handle (HWND on Windows, NSWindow* on macOS).
 void* createOverlayWindow(int x, int y, int width, int height);
 
+// macOS: Constrain NSVisualEffectView blur so it only appears behind UI panels.
+// For other platforms this can be a no-op.
+// panelRects is an array of [x, y, w, h] tuples in overlay coordinate space.
+void setOverlayBlurMask(void* overlayWindowHandle,
+                         const float* panelRects,
+                         int panelCount,
+                         float cornerRadius);
+
+// Capture pixels from the real desktop behind the overlay window.
+// Input coordinates are in overlay-window local space (origin = top-left of overlay window).
+// Output pixels are packed ARGB: (a<<24)|(r<<16)|(g<<8)|b.
+bool captureDesktopBehindOverlay(void* overlayWindowHandle,
+                                 int x,
+                                 int y,
+                                 int width,
+                                 int height,
+                                 uint32_t* outPixelsARGB);
+
 } // namespace PlatformWindow

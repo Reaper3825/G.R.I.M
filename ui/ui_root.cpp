@@ -3,6 +3,7 @@
 #include "input_parser.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "core/platform_window.hpp"
+#include "ui_theme.hpp"
 
 extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 
@@ -135,11 +136,46 @@ void UIRoot::draw()
     }
     
     auto panels = snapshotPanels();
+
+#if defined(__APPLE__)
+    // macOS OS-blur is applied via NSVisualEffectView, which would otherwise tint
+    // the entire transparent overlay window. Constrain the blur to our panel
+    // rectangles by updating the blur mask each frame.
+    {
+        std::vector<float> blurRects;
+        blurRects.reserve(panels.size() * 4);
+
+        for (auto& panel : panels) {
+            if (!panel || !panel->isVisible())
+                continue;
+
+            Vec2 pos = panel->getPosition();
+            Vec2 size = panel->getSize();
+
+            blurRects.push_back(pos.x);
+            blurRects.push_back(pos.y);
+            blurRects.push_back(size.x);
+            blurRects.push_back(size.y);
+        }
+
+        if (!blurRects.empty()) {
+            PlatformWindow::setOverlayBlurMask(m_hwnd,
+                                                blurRects.data(),
+                                                static_cast<int>(blurRects.size() / 4),
+                                                UITheme::Sizes::BorderRadius);
+        } else {
+            PlatformWindow::setOverlayBlurMask(m_hwnd, nullptr, 0, UITheme::Sizes::BorderRadius);
+        }
+    }
+#endif
     
     // Begin frame - clears to transparent
     m_renderer.beginFrame();
-    
-    // Draw all visible panels using drawOverlay
+
+    // Ensure frost texture exists (generated once; precomputed noise has no dots/shapes).
+    m_renderer.drawBackdrop(m_width, m_height);
+
+    // Draw all visible panels
     for (auto& panel : panels)
     {
         if (panel && panel->isVisible())

@@ -1,5 +1,6 @@
 #include "overlay_renderer.hpp"
 #include "logger.hpp"
+#include "core/platform_window.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -36,6 +37,14 @@ void OverlayRenderer::init(HWND hwnd, int width, int height)
     m_bitmap = CreateDIBSection(m_hdcMem, &bmi, DIB_RGB_COLORS, &m_pixels, nullptr, 0);
     m_oldBitmap = (HBITMAP)SelectObject(m_hdcMem, m_bitmap);
     m_ownsPixels = false;
+    m_backdropPixels = new uint32_t[width * height]();
+    m_backdropDirty = true;
+
+#if defined(_WIN32)
+    // On Windows we enable DWM blur-behind at the window level, so we skip
+    // per-panel synthetic backdrop blurring for better "real desktop" blur.
+    m_usePlatformBlur = true;
+#endif
 
     LOG_DEBUG("OverlayRenderer", "Initialized overlay renderer (" +
              std::to_string(width) + "x" + std::to_string(height) + ")");
@@ -51,6 +60,14 @@ void OverlayRenderer::init(HWND hwnd, int width, int height)
     m_height = height;
     m_pixels = new uint32_t[width * height]();
     m_ownsPixels = true;
+    m_backdropPixels = new uint32_t[width * height]();
+    m_backdropDirty = true;
+
+#if defined(__APPLE__)
+    // On macOS we enable vibrancy/NSVisualEffectView behind the overlay window,
+    // so we skip per-panel synthetic backdrop blurring.
+    m_usePlatformBlur = true;
+#endif
 
     LOG_DEBUG("OverlayRenderer", "Initialized overlay renderer (" +
              std::to_string(width) + "x" + std::to_string(height) + ")");
@@ -63,6 +80,12 @@ void OverlayRenderer::init(int width, int height, void* pixelBuffer)
     m_width = width;
     m_height = height;
 
+#if defined(_WIN32) || defined(__APPLE__)
+    m_usePlatformBlur = true;
+#else
+    m_usePlatformBlur = false;
+#endif
+
     if (pixelBuffer) {
         m_pixels = pixelBuffer;
         m_ownsPixels = false;
@@ -70,6 +93,9 @@ void OverlayRenderer::init(int width, int height, void* pixelBuffer)
         m_pixels = new uint32_t[width * height]();
         m_ownsPixels = true;
     }
+    if (m_width > 0 && m_height > 0)
+        m_backdropPixels = new uint32_t[m_width * m_height]();
+    m_backdropDirty = true;
 }
 
 void OverlayRenderer::shutdown()
@@ -98,6 +124,10 @@ void OverlayRenderer::shutdown()
     m_nativeWindow = nullptr;
 #endif
 
+    if (m_backdropPixels) {
+        delete[] m_backdropPixels;
+        m_backdropPixels = nullptr;
+    }
     if (m_ownsPixels) {
         delete[] static_cast<uint32_t*>(m_pixels);
     }
@@ -219,6 +249,11 @@ void OverlayRenderer::beginFrame()
     if (!m_pixels)
         return;
 
+    // Advance grain seed each frame (xorshift32)
+    m_grainSeed ^= (m_grainSeed << 13);
+    m_grainSeed ^= (m_grainSeed >> 17);
+    m_grainSeed ^= (m_grainSeed << 5);
+
     m_clipStack.clear();
 
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
@@ -255,6 +290,143 @@ void OverlayRenderer::endFrame()
     extern void grimOverlayBlit(void* nsWindow, void* pixels, int width, int height);
     grimOverlayBlit(m_nativeWindow, m_pixels, m_width, m_height);
 #endif
+}
+
+// ---------------------------------------------------------------
+// Backdrop: draw to separate buffer so blobs are only visible through blurred panels
+// ---------------------------------------------------------------
+
+void OverlayRenderer::drawRoundedRectToBuffer(uint32_t* buf, int bufW, int bufH,
+                                              const Vec2& pos, const Vec2& size, uint32_t color, float radius)
+{
+    if (!buf || bufW <= 0 || bufH <= 0 || size.x <= 0 || size.y <= 0)
+        return;
+    float maxR = std::min(size.x, size.y) * 0.5f;
+    float r = std::min(radius, maxR);
+    uint8_t a = (color >> 24) & 0xFF;
+    uint8_t sr = (color >> 16) & 0xFF;
+    uint8_t sg = (color >> 8) & 0xFF;
+    uint8_t sb = color & 0xFF;
+    int ix1 = (int)pos.x;
+    int iy1 = (int)pos.y;
+    int ix2 = (int)(pos.x + size.x);
+    int iy2 = (int)(pos.y + size.y);
+    int ri = (int)(r + 1.0f);
+    int clipX1 = 0, clipY1 = 0, clipX2 = bufW, clipY2 = bufH;
+
+    for (int y = std::max(clipY1, iy1 - 1); y < std::min(clipY2, iy2 + 1); ++y) {
+        for (int x = std::max(clipX1, ix1 - 1); x < std::min(clipX2, ix2 + 1); ++x) {
+            float dx = 0, dy = 0;
+            if (x < ix1 + ri && y < iy1 + ri) {
+                dx = (ix1 + r) - x - 0.5f;
+                dy = (iy1 + r) - y - 0.5f;
+            } else if (x >= ix2 - ri && y < iy1 + ri) {
+                dx = x + 0.5f - (ix2 - r);
+                dy = (iy1 + r) - y - 0.5f;
+            } else if (x < ix1 + ri && y >= iy2 - ri) {
+                dx = (ix1 + r) - x - 0.5f;
+                dy = y + 0.5f - (iy2 - r);
+            } else if (x >= ix2 - ri && y >= iy2 - ri) {
+                dx = x + 0.5f - (ix2 - r);
+                dy = y + 0.5f - (iy2 - r);
+            }
+            float coverage = 1.0f;
+            if (dx > 0 && dy > 0) {
+                float dist = std::sqrt(dx * dx + dy * dy);
+                if (dist > r + 0.5f) continue;
+                if (dist > r - 0.5f) coverage = r + 0.5f - dist;
+            }
+            uint8_t pixelAlpha = (uint8_t)(a * coverage);
+            if (pixelAlpha == 0) continue;
+            uint8_t pr = (uint8_t)((sr * pixelAlpha) / 255);
+            uint8_t pg = (uint8_t)((sg * pixelAlpha) / 255);
+            uint8_t pb = (uint8_t)((sb * pixelAlpha) / 255);
+            int idx = y * bufW + x;
+            uint32_t dst = buf[idx];
+            uint8_t da = (dst >> 24) & 0xFF;
+            uint8_t dr = (dst >> 16) & 0xFF;
+            uint8_t dg = (dst >> 8) & 0xFF;
+            uint8_t db = dst & 0xFF;
+            uint8_t invA = 255 - pixelAlpha;
+            uint8_t outA = pixelAlpha + (uint8_t)((da * invA) / 255);
+            uint8_t outR = pr + (uint8_t)((dr * invA) / 255);
+            uint8_t outG = pg + (uint8_t)((dg * invA) / 255);
+            uint8_t outB = pb + (uint8_t)((db * invA) / 255);
+            buf[idx] = (outA << 24) | (outR << 16) | (outG << 8) | outB;
+        }
+    }
+}
+
+void OverlayRenderer::drawBackdrop(int width, int height)
+{
+    if (!m_backdropPixels || width <= 0 || height <= 0)
+        return;
+
+    if (m_usePlatformBlur) {
+        // OS blur already provides the "real desktop" backdrop. Keep our own
+        // synthetic noise pipeline disabled so we don't mask the blur.
+        m_backdropDirty = false;
+        return;
+    }
+
+    if (!m_backdropDirty)
+        return;
+
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+
+    // Frost source texture: per-pixel pseudo-random noise (tinted).
+    // We precompute once to avoid dots/shapes and per-panel generation cost.
+    // blurRegion() will then turn it into cloudy frosted distortion.
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            uint32_t h = (uint32_t)(x * 73856093) ^ (uint32_t)(y * 19349663);
+            h ^= (h << 13);
+            h ^= (h >> 17);
+            h ^= (h << 5);
+            float t = static_cast<float>(h & 0xFFFFu) / 65535.0f;
+
+            // Violet-blue tinted noise — stronger range so blur reads as visible frost
+            uint8_t r = static_cast<uint8_t>(30.0f + t * 120.0f);
+            uint8_t g = static_cast<uint8_t>(20.0f + t * 80.0f);
+            uint8_t b = static_cast<uint8_t>(40.0f + t * 130.0f);
+            uint8_t a = static_cast<uint8_t>(140.0f + t * 115.0f);
+
+            m_backdropPixels[y * width + x] = (static_cast<uint32_t>(a) << 24) |
+                                              (static_cast<uint32_t>(r) << 16) |
+                                              (static_cast<uint32_t>(g) << 8)  |
+                                              (static_cast<uint32_t>(b));
+        }
+    }
+
+    m_backdropDirty = false;
+}
+
+void OverlayRenderer::copyBackdropRegion(int dstX, int dstY, int w, int h)
+{
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+    if (!m_pixels || !m_backdropPixels || w <= 0 || h <= 0)
+        return;
+
+    if (m_usePlatformBlur)
+        return;
+
+    // Copy from a fixed source (center of backdrop) so the frost pattern follows the panel
+    int srcX = std::max(0, (m_width - w) / 2);
+    int srcY = std::max(0, (m_height - h) / 2);
+    int copyW = std::min(w, m_width - srcX);
+    int copyH = std::min(h, m_height - srcY);
+    uint32_t* dst = static_cast<uint32_t*>(m_pixels);
+    for (int row = 0; row < copyH; ++row) {
+        int sy = srcY + row;
+        int dy = dstY + row;
+        if (dy < 0 || dy >= m_height) continue;
+        for (int col = 0; col < copyW; ++col) {
+            int sx = srcX + col;
+            int dx = dstX + col;
+            if (dx < 0 || dx >= m_width) continue;
+            dst[dy * m_width + dx] = m_backdropPixels[sy * m_width + sx];
+        }
+    }
 }
 
 // ---------------------------------------------------------------
@@ -556,22 +728,153 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
                                       uint32_t bgColor, uint32_t borderColor, uint32_t glowColor,
                                       int blurRadius, float shadowOffset)
 {
-    // 1. Frosted blur behind the panel (before drawing anything)
-    blurRegion((int)pos.x, (int)pos.y, (int)size.x, (int)size.y, blurRadius);
-    
-    // 2. Soft outer glow — feathered halo outside the shape for bubble softness
-    float glowSpread = 6.0f;
-    drawSoftGlow(pos, size, radius, 0x18FFFFFF, glowSpread);
-    
-    // 3. Drop shadow (offset, darker)
-    if (shadowOffset > 0) {
-        drawRoundedRect({pos.x + shadowOffset, pos.y + shadowOffset}, size, 0x30000000, radius);
+    int rx = (int)pos.x, ry = (int)pos.y;
+    int rw = (int)size.x, rh = (int)size.y;
+
+    // 1-2. Real refraction: capture pixels behind the overlay and distort them.
+    // This is the only way to get true "desktop refraction" in our software renderer.
+    bool haveOverlayHandle = false;
+#if defined(__APPLE__)
+    haveOverlayHandle = (m_nativeWindow != nullptr);
+#elif defined(_WIN32)
+    haveOverlayHandle = (m_hwnd != nullptr);
+#endif
+
+    if (haveOverlayHandle) {
+        const int capW = std::max(1, rw);
+        const int capH = std::max(1, rh);
+        const size_t needed = (size_t)capW * (size_t)capH;
+        if (m_blurTemp.size() < needed) m_blurTemp.resize(needed);
+
+        bool ok = PlatformWindow::captureDesktopBehindOverlay(
+#if defined(__APPLE__)
+            m_nativeWindow,
+#else
+            (void*)m_hwnd,
+#endif
+            rx, ry, capW, capH, m_blurTemp.data());
+
+        if (ok) {
+            // Distort + write into panel area (inside rounded rect only).
+            {
+                std::lock_guard<std::mutex> lock(m_renderMutex);
+                uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+                ClipRect clip = activeClip();
+
+                float maxR = std::min(size.x, size.y) * 0.5f;
+                float r = std::min(radius, maxR);
+                float cx = pos.x + size.x * 0.5f;
+                float cy = pos.y + size.y * 0.5f;
+                float hx = size.x * 0.5f - r;
+                float hy = size.y * 0.5f - r;
+
+                int ix1 = std::max(clip.x1, rx);
+                int iy1 = std::max(clip.y1, ry);
+                int ix2 = std::min(clip.x2, rx + capW);
+                int iy2 = std::min(clip.y2, ry + capH);
+
+                // Distortion strength in pixels (tuned for "glass" refraction).
+                const float distortPx = float(blurRadius) / 10.0f;
+
+                // Low-frequency smooth noise (value noise) → gradient for refraction offsets.
+                // This avoids the "offset magnification" look from high-frequency hash jitter.
+                auto hash01 = [](uint32_t v) -> float {
+                    v ^= (v >> 16);
+                    v *= 0x7feb352du;
+                    v ^= (v >> 15);
+                    v *= 0x846ca68bu;
+                    v ^= (v >> 16);
+                    return (v & 0x00FFFFFFu) / 16777215.0f;
+                };
+                auto gridNoise = [&](int gx, int gy) -> float {
+                    uint32_t v = (uint32_t)gx * 374761393u ^ (uint32_t)gy * 668265263u ^ m_grainSeed;
+                    return hash01(v);
+                };
+                auto smoothstep = [](float t) -> float { return t * t * (3.0f - 2.0f * t); };
+                auto sampleNoise = [&](float u, float v) -> float {
+                    // Small grid to keep distortion coherent.
+                    const float scale = 1.0f / 46.0f; // larger = smoother warps
+                    float xg = u * scale;
+                    float yg = v * scale;
+                    int x0 = (int)std::floor(xg);
+                    int y0 = (int)std::floor(yg);
+                    float tx = xg - x0;
+                    float ty = yg - y0;
+                    float sx = smoothstep(tx);
+                    float sy = smoothstep(ty);
+                    float n00 = gridNoise(x0,     y0);
+                    float n10 = gridNoise(x0 + 1, y0);
+                    float n01 = gridNoise(x0,     y0 + 1);
+                    float n11 = gridNoise(x0 + 1, y0 + 1);
+                    float nx0 = n00 + (n10 - n00) * sx;
+                    float nx1 = n01 + (n11 - n01) * sx;
+                    return nx0 + (nx1 - nx0) * sy;
+                };
+
+                for (int y = iy1; y < iy2; ++y) {
+                    float py = y + 0.5f;
+                    int sy0 = y - ry;
+                    for (int x = ix1; x < ix2; ++x) {
+                        float px = x + 0.5f;
+
+                        float qx = std::abs(px - cx) - hx;
+                        float qy = std::abs(py - cy) - hy;
+                        float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
+                                               std::max(qy, 0.0f) * std::max(qy, 0.0f))
+                                     + std::min(std::max(qx, qy), 0.0f) - r;
+                        if (dist > 0.0f) continue;
+
+                        // Use gradient of smooth noise as a pseudo-normal field.
+                        float u = (float)(x - rx);
+                        float v = (float)(y - ry);
+                        const float eps = 1.35f;
+                        float nL = sampleNoise(u - eps, v);
+                        float nR = sampleNoise(u + eps, v);
+                        float nU = sampleNoise(u, v - eps);
+                        float nD = sampleNoise(u, v + eps);
+                        float gx = (nR - nL);
+                        float gy = (nD - nU);
+
+                        // Center and scale; clamp to avoid "magnify" jumps.
+                        float ox = std::max(-1.0f, std::min(1.0f, gx * 2.0f)) * distortPx;
+                        float oy = std::max(-1.0f, std::min(1.0f, gy * 2.0f)) * distortPx;
+
+                        int sx = std::clamp((int)((x - rx) + ox), 0, capW - 1);
+                        int sy = std::clamp((int)(sy0 + oy), 0, capH - 1);
+
+                        pixels[y * m_width + x] = m_blurTemp[sy * capW + sx];
+                    }
+                }
+            }
+
+            // Slight blur to soften distortion and mimic glass diffusion.
+            // IMPORTANT: call after releasing m_renderMutex to avoid deadlock.
+            // Diffusion blur: tuned for frosted glass.
+            // Previously we divided by 18 which capped the effect (~5 radius at BlurRadius=100).
+            // Scale more directly and clamp for performance.
+            int frostRadius = std::clamp(blurRadius / 4, 6, 32);
+            blurRegion(rx, ry, capW, capH, frostRadius);
+        }
     }
-    
-    // 4. Glass fill — semi-transparent background over the blurred area
-    drawRoundedRect(pos, size, bgColor, radius);
-    
-    // 5. Smooth per-pixel top-edge highlight (bubble specular — no banding)
+
+    // 3. Drop shadow (slightly offset, same size as panel — no halo)
+    if (shadowOffset > 0) {
+        drawRoundedRect({pos.x + shadowOffset, pos.y + shadowOffset}, size, 0x35000000, radius);
+    }
+
+    // 4. Glass fill — tint so OS-blurred backdrop is visible through panel.
+    //    Keep alpha relatively low; otherwise the panel reads as an opaque gray.
+    uint8_t ba = (bgColor >> 24) & 0xFF;
+    uint32_t glassTint = (bgColor & 0x00FFFFFF) | ((uint32_t)(ba * 40 / 100) << 24);  // ~40% of theme alpha
+    drawRoundedRect(pos, size, glassTint, radius);
+
+    // 4b. Glass grain/noise — adds "refraction" cue so it doesn't read as flat gray tint.
+    // Only needed when OS blur is used (we're not blurring our own backdrop texture then).
+    if (m_usePlatformBlur) {
+        applyGlassGrain(pos, size, radius, 0.28f);
+    }
+
+    // 5. Top-edge highlight (inside panel only, no bleed)
     if (glowColor != 0) {
         std::lock_guard<std::mutex> lock(m_renderMutex);
         if (m_pixels) {
@@ -579,81 +882,147 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
             uint8_t gr = (glowColor >> 16) & 0xFF;
             uint8_t gg = (glowColor >> 8) & 0xFF;
             uint8_t gb = glowColor & 0xFF;
-            
-            float gradientHeight = size.y * 0.3f;
+
+            float gradientHeight = size.y * 0.25f;
             float maxR = std::min(size.x, size.y) * 0.5f;
             float r = std::min(radius, maxR);
-            
+
             ClipRect clip = activeClip();
             uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
-            
-            // SDF parameters for rounded rect
+
             float cx = pos.x + size.x * 0.5f;
             float cy = pos.y + size.y * 0.5f;
             float hx = size.x * 0.5f - r;
             float hy = size.y * 0.5f - r;
-            
+
             int ix1 = std::max(clip.x1, (int)pos.x);
             int iy1 = std::max(clip.y1, (int)pos.y);
             int ix2 = std::min(clip.x2, (int)(pos.x + size.x));
             int iy2 = std::min(clip.y2, (int)(pos.y + gradientHeight));
-            
+
             for (int y = iy1; y < iy2; ++y) {
                 float py = y + 0.5f;
-                // Vertical fade: 1 at top, 0 at bottom of gradient zone
                 float vt = (py - pos.y) / gradientHeight;
-                float vFade = (1.0f - vt) * (1.0f - vt); // quadratic falloff
-                
+                float vFade = (1.0f - vt) * (1.0f - vt) * (1.0f - vt); // cubic falloff for smoother highlight
+
                 for (int x = ix1; x < ix2; ++x) {
                     float px = x + 0.5f;
-                    
-                    // SDF test — only draw inside the rounded rect
+
                     float qx = std::abs(px - cx) - hx;
                     float qy = std::abs(py - cy) - hy;
                     float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
                                            std::max(qy, 0.0f) * std::max(qy, 0.0f))
                                  + std::min(std::max(qx, qy), 0.0f) - r;
-                    
-                    if (dist > 0.0f) continue; // outside shape
-                    
-                    // Anti-alias at edge (smooth 1px transition)
+
+                    if (dist > 0.0f) continue;
+
                     float edgeFade = std::min(1.0f, -dist);
-                    
+
                     uint8_t pixelAlpha = (uint8_t)(ga * vFade * edgeFade);
                     if (pixelAlpha == 0) continue;
-                    
+
                     uint8_t pr = (uint8_t)((gr * pixelAlpha) / 255);
                     uint8_t pg = (uint8_t)((gg * pixelAlpha) / 255);
                     uint8_t pb = (uint8_t)((gb * pixelAlpha) / 255);
-                    
+
                     int idx = y * m_width + x;
                     uint32_t dst = pixels[idx];
                     uint8_t da = (dst >> 24) & 0xFF;
                     uint8_t dr = (dst >> 16) & 0xFF;
                     uint8_t dg = (dst >> 8) & 0xFF;
                     uint8_t db = dst & 0xFF;
-                    
+
                     uint8_t invA = 255 - pixelAlpha;
                     uint8_t outA = pixelAlpha + (uint8_t)((da * invA) / 255);
                     uint8_t outR = pr + (uint8_t)((dr * invA) / 255);
                     uint8_t outG = pg + (uint8_t)((dg * invA) / 255);
                     uint8_t outB = pb + (uint8_t)((db * invA) / 255);
-                    
+
                     pixels[idx] = (outA << 24) | (outR << 16) | (outG << 8) | outB;
                 }
             }
         }
     }
-    
-    // 6. Soft border — use lower opacity for subtle glass edge
-    uint8_t bA = (borderColor >> 24) & 0xFF;
-    uint8_t bR = (borderColor >> 16) & 0xFF;
-    uint8_t bG = (borderColor >> 8) & 0xFF;
-    uint8_t bB = borderColor & 0xFF;
-    // Soften border to ~40% of its original alpha for a frosted, not harsh, edge
-    uint8_t softA = (uint8_t)(bA * 0.4f);
-    uint32_t softBorder = (softA << 24) | (bR << 16) | (bG << 8) | bB;
-    drawRoundedBorder(pos, size, softBorder, radius, 1.0f);
+
+    // 6. Clean border — crisp edge, no glow past the panel
+    drawRoundedBorder(pos, size, borderColor, radius, 1.0f);
+}
+
+void OverlayRenderer::applyGlassGrain(const Vec2& pos, const Vec2& size, float radius, float strength)
+{
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+    if (!m_pixels || strength <= 0.0f || size.x <= 0 || size.y <= 0)
+        return;
+
+    strength = std::min(1.0f, std::max(0.0f, strength));
+
+    ClipRect clip = activeClip();
+    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+
+    float maxR = std::min(size.x, size.y) * 0.5f;
+    float r = std::min(radius, maxR);
+    float cx = pos.x + size.x * 0.5f;
+    float cy = pos.y + size.y * 0.5f;
+    float hx = size.x * 0.5f - r;
+    float hy = size.y * 0.5f - r;
+
+    int ix1 = std::max(clip.x1, (int)pos.x);
+    int iy1 = std::max(clip.y1, (int)pos.y);
+    int ix2 = std::min(clip.x2, (int)(pos.x + size.x));
+    int iy2 = std::min(clip.y2, (int)(pos.y + size.y));
+
+    auto clamp8 = [](int v) -> uint8_t { return (uint8_t)std::min(255, std::max(0, v)); };
+
+    // Grain amplitude (in RGB units). Keep subtle.
+    int amp = (int)(10.0f * strength + 0.5f); // ~2..10
+    if (amp < 1) amp = 1;
+
+    for (int y = iy1; y < iy2; ++y) {
+        float py = y + 0.5f;
+        for (int x = ix1; x < ix2; ++x) {
+            float px = x + 0.5f;
+
+            // Rounded-rect SDF inside test (same as highlight)
+            float qx = std::abs(px - cx) - hx;
+            float qy = std::abs(py - cy) - hy;
+            float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
+                                   std::max(qy, 0.0f) * std::max(qy, 0.0f))
+                         + std::min(std::max(qx, qy), 0.0f) - r;
+            if (dist > 0.0f)
+                continue;
+
+            // Fade grain slightly near edges so border stays clean.
+            float edge = std::min(1.0f, -dist);
+            float edgeFade = 0.35f + 0.65f * std::min(1.0f, edge * 2.0f);
+
+            // Hash noise from (x,y,seed)
+            uint32_t h = (uint32_t)(x * 374761393u) ^ (uint32_t)(y * 668265263u) ^ m_grainSeed;
+            h ^= (h >> 13);
+            h *= 1274126177u;
+            h ^= (h >> 16);
+
+            // Map to [-1,1]
+            float n = ((int)(h & 0xFFu) - 128) / 128.0f;
+            int d = (int)(n * amp * edgeFade);
+
+            int idx = y * m_width + x;
+            uint32_t dst = pixels[idx];
+            uint8_t a = (dst >> 24) & 0xFF;
+            uint8_t r8 = (dst >> 16) & 0xFF;
+            uint8_t g8 = (dst >> 8) & 0xFF;
+            uint8_t b8 = dst & 0xFF;
+
+            // Slightly color-shift grain for "refractive" feel (cool bias).
+            int dr = d;
+            int dg = (int)(d * 0.7f);
+            int db = (int)(d * 1.1f);
+
+            pixels[idx] = (uint32_t(a) << 24) |
+                          (uint32_t(clamp8((int)r8 + dr)) << 16) |
+                          (uint32_t(clamp8((int)g8 + dg)) << 8) |
+                          (uint32_t(clamp8((int)b8 + db)));
+        }
+    }
 }
 
 // ---------------------------------------------------------------
@@ -802,7 +1171,7 @@ void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t colo
 }
 
 // ---------------------------------------------------------------
-// Blur: 2-pass separable box blur for frosted glass effect
+// Blur: 2-pass separable Gaussian (per-pixel weighted) for frosted glass
 // ---------------------------------------------------------------
 
 void OverlayRenderer::blurRegion(int x, int y, int w, int h, int radius)
@@ -812,7 +1181,9 @@ void OverlayRenderer::blurRegion(int x, int y, int w, int h, int radius)
     if (!m_pixels || w <= 0 || h <= 0 || radius <= 0)
         return;
 
-    // Clamp region to pixel buffer bounds
+    // Even when OS blur is enabled, we still use blurRegion for the
+    // captured-desktop refraction path (small radius).
+
     int x1 = std::max(0, x);
     int y1 = std::max(0, y);
     int x2 = std::min(m_width, x + w);
@@ -821,59 +1192,66 @@ void OverlayRenderer::blurRegion(int x, int y, int w, int h, int radius)
     int rh = y2 - y1;
     if (rw <= 0 || rh <= 0) return;
 
-    // Lazy-allocate temp buffer
     size_t needed = static_cast<size_t>(rw) * rh;
     if (m_blurTemp.size() < needed)
         m_blurTemp.resize(needed);
 
-    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
     int diameter = radius * 2 + 1;
+    if (m_gaussianKernel.size() != static_cast<size_t>(diameter)) {
+        m_gaussianKernel.resize(diameter);
+        float sigma = radius / 2.0f;
+        if (sigma < 0.5f) sigma = 0.5f;
+        float sum = 0;
+        for (int k = -radius; k <= radius; ++k) {
+            float g = std::exp(-(k * k) / (2.0f * sigma * sigma));
+            m_gaussianKernel[k + radius] = g;
+            sum += g;
+        }
+        for (int i = 0; i < diameter; ++i)
+            m_gaussianKernel[i] /= sum;
+    }
 
-    // --- Pass 1: Horizontal blur → temp buffer ---
+    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+
+    // Pass 1: Horizontal Gaussian → temp buffer
     for (int row = 0; row < rh; ++row) {
         int py = y1 + row;
         for (int col = 0; col < rw; ++col) {
             int px = x1 + col;
-            uint32_t sumA = 0, sumR = 0, sumG = 0, sumB = 0;
-            int count = 0;
+            float sumA = 0, sumR = 0, sumG = 0, sumB = 0;
             for (int k = -radius; k <= radius; ++k) {
                 int sx = std::clamp(px + k, x1, x2 - 1);
+                float weight = m_gaussianKernel[k + radius];
                 uint32_t c = pixels[py * m_width + sx];
-                sumA += (c >> 24) & 0xFF;
-                sumR += (c >> 16) & 0xFF;
-                sumG += (c >> 8) & 0xFF;
-                sumB += c & 0xFF;
-                ++count;
+                sumA += weight * ((c >> 24) & 0xFF);
+                sumR += weight * ((c >> 16) & 0xFF);
+                sumG += weight * ((c >> 8) & 0xFF);
+                sumB += weight * (c & 0xFF);
             }
-            m_blurTemp[row * rw + col] = 
-                ((sumA / count) << 24) |
-                ((sumR / count) << 16) |
-                ((sumG / count) << 8) |
-                (sumB / count);
+            auto clamp8 = [](float v) { return static_cast<uint32_t>(std::min(255, std::max(0, static_cast<int>(v + 0.5f)))); };
+            m_blurTemp[row * rw + col] =
+                (clamp8(sumA) << 24) | (clamp8(sumR) << 16) | (clamp8(sumG) << 8) | clamp8(sumB);
         }
     }
 
-    // --- Pass 2: Vertical blur from temp → back to pixel buffer ---
+    // Pass 2: Vertical Gaussian from temp → pixel buffer
+    auto clamp8 = [](float v) { return static_cast<uint32_t>(std::min(255, std::max(0, static_cast<int>(v + 0.5f)))); };
     for (int col = 0; col < rw; ++col) {
         for (int row = 0; row < rh; ++row) {
-            uint32_t sumA = 0, sumR = 0, sumG = 0, sumB = 0;
-            int count = 0;
+            float sumA = 0, sumR = 0, sumG = 0, sumB = 0;
             for (int k = -radius; k <= radius; ++k) {
                 int sy = std::clamp(row + k, 0, rh - 1);
+                float weight = m_gaussianKernel[k + radius];
                 uint32_t c = m_blurTemp[sy * rw + col];
-                sumA += (c >> 24) & 0xFF;
-                sumR += (c >> 16) & 0xFF;
-                sumG += (c >> 8) & 0xFF;
-                sumB += c & 0xFF;
-                ++count;
+                sumA += weight * ((c >> 24) & 0xFF);
+                sumR += weight * ((c >> 16) & 0xFF);
+                sumG += weight * ((c >> 8) & 0xFF);
+                sumB += weight * (c & 0xFF);
             }
             int py = y1 + row;
             int px = x1 + col;
-            pixels[py * m_width + px] = 
-                ((sumA / count) << 24) |
-                ((sumR / count) << 16) |
-                ((sumG / count) << 8) |
-                (sumB / count);
+            pixels[py * m_width + px] =
+                (clamp8(sumA) << 24) | (clamp8(sumR) << 16) | (clamp8(sumG) << 8) | clamp8(sumB);
         }
     }
 }
