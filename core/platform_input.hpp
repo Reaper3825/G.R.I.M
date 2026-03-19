@@ -26,6 +26,9 @@ namespace PlatformInput {
     // Get cursor position relative to a window
     void getCursorPosRelative(void* windowHandle, int& x, int& y);
     
+    // On macOS, returns true when Command is held (used so Cmd maps to Ctrl for shortcuts)
+    bool isCommandDown();
+
     // Virtual key code mappings (cross-platform)
     enum class Key : int {
         // Mouse buttons

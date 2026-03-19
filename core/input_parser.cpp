@@ -45,7 +45,8 @@ InputState InputState::capture()
         state.mouseDown[i] = PlatformInput::isMouseButtonDown(i);
     }
 
-    state.ctrl = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Control));
+    state.ctrl = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Control))
+                 || PlatformInput::isCommandDown();
     state.shift = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Shift));
     state.alt = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Alt));
 
@@ -136,11 +137,12 @@ void InputState::captureFromHWND(HWND hwnd)
         prevKeyDown[i] = down;
     }
     
-    ctrl = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Control));
+    ctrl = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Control))
+           || PlatformInput::isCommandDown(); // macOS: Cmd acts as Ctrl for shortcuts
     shift = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Shift));
     alt = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Alt));
     
-    // ✅ NEW: Detect clipboard shortcuts (Ctrl+C, Ctrl+V, Ctrl+X)
+    // Detect clipboard shortcuts (Ctrl+C / Cmd+C, Ctrl+V / Cmd+V, Ctrl+X / Cmd+X)
     if (ctrl && !shift && !alt) {
         // Ctrl+C - Copy
         if (keyPressed['C']) {

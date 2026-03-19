@@ -229,21 +229,25 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
             }
 
             // macOS equivalent of WM_CHAR: inject printable characters into text input
+            // Skip injection when Cmd is held (let clipboard shortcuts pass through to polling)
             NSEventType etype = [event type];
             if (etype == NSEventTypeKeyDown && s_textInputCallback) {
-                NSString* chars = [event characters];
-                if (chars && [chars length] > 0) {
-                    std::string charsStr = [chars UTF8String];
-                    bool injectedAny = false;
-                    for (unsigned char c : charsStr) {
-                        if (c >= 32 && c < 127) {
-                            s_textInputCallback(std::string(1, static_cast<char>(c)));
-                            injectedAny = true;
+                NSEventModifierFlags mods = [event modifierFlags];
+                bool cmdHeld = (mods & NSEventModifierFlagCommand) != 0;
+                if (!cmdHeld) {
+                    NSString* chars = [event characters];
+                    if (chars && [chars length] > 0) {
+                        std::string charsStr = [chars UTF8String];
+                        bool injectedAny = false;
+                        for (unsigned char c : charsStr) {
+                            if (c >= 32 && c < 127) {
+                                s_textInputCallback(std::string(1, static_cast<char>(c)));
+                                injectedAny = true;
+                            }
                         }
-                    }
-                    // Consume event when we injected text (avoids system beep)
-                    if (injectedAny) {
-                        continue;
+                        if (injectedAny) {
+                            continue;
+                        }
                     }
                 }
             }

@@ -27,6 +27,10 @@ namespace PlatformInput {
     bool isKeyDown(int keyCode) {
         return (GetAsyncKeyState(keyCode) & 0x8000) != 0;
     }
+
+    bool isCommandDown() {
+        return false; // Command key is macOS-only
+    }
     
     void getCursorPos(int& x, int& y) {
         POINT p{};
@@ -95,6 +99,10 @@ namespace PlatformInput {
         
         KeyCode kc = XKeysymToKeycode(display, keyCode);
         return (keys[kc / 8] & (1 << (kc % 8))) != 0;
+    }
+
+    bool isCommandDown() {
+        return false; // Command key is macOS-only
     }
     
     void getCursorPos(int& x, int& y) {
@@ -237,6 +245,11 @@ namespace PlatformInput {
         if (macCode < 0) return false;
         return CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, static_cast<CGKeyCode>(macCode));
     }
+
+    bool isCommandDown() {
+        return CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, static_cast<CGKeyCode>(kVK_Command))
+            || CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, static_cast<CGKeyCode>(kVK_RightCommand));
+    }
     
     void getCursorPos(int& x, int& y) {
         CGEventRef event = CGEventCreate(nullptr);
@@ -261,6 +274,7 @@ namespace PlatformInput {
     void shutdown() {}
     bool isMouseButtonDown(int) { return false; }
     bool isKeyDown(int) { return false; }
+    bool isCommandDown() { return false; }
     void getCursorPos(int& x, int& y) { x = y = 0; }
     void getCursorPosRelative(void*, int& x, int& y) { x = y = 0; }
 }

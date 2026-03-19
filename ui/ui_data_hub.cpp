@@ -37,6 +37,11 @@ static constexpr float kCardHeight   = kCardTopBarH + 2.0f * kCardRowH + kCardPa
 static constexpr float kCardGap      = 14.0f;
 static constexpr float kCardInnerPad = 12.0f;
 
+// Structurer tab spacing (labels above text areas need ~18px + padding)
+static constexpr float kStructRowGap     = 12.0f;   // padding between toolbar rows
+static constexpr float kStructSectionGap = 16.0f;   // padding between sections
+static constexpr float kStructLabelSpace = 24.0f;   // space for labels above input areas
+
 // System-only: auto-detect fetcher from URL (matches web_collector logic)
 static std::string detectFetcherFromUrl(const std::string& url) {
     if (url.find("api.github.com") != std::string::npos || url.find("github.com") != std::string::npos)
@@ -926,65 +931,74 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
     float fullW = content.size.x - 30.0f;
 
     // ── Toolbar row 1 ───────────────────────────────────
-
-    float ddW = 160.0f;
-    float gap = 10.0f;
+    // Dropdowns: UIDropdown uses 150px for label + (size.x - 160) for box. Need size.x > 160.
+    float ddW = 260.0f;   // ~100px for dropdown box after 150px label
+    float sliderW = 280.0f;  // ~120px for slider bar after 150px label (UISlider uses same layout)
+    float gap = 14.0f;
+    float rowH = 36.0f;   // Enough for dropdown box (30px) + padding
 
     modelDropdown_->setPosition(x, y);
-    modelDropdown_->setSize(ddW, 30.0f);
+    modelDropdown_->setSize(ddW, rowH);
     modelDropdown_->drawOverlay(renderer, position);
 
     formatDropdown_->setPosition(x + ddW + gap, y);
-    formatDropdown_->setSize(ddW, 30.0f);
+    formatDropdown_->setSize(ddW, rowH);
     formatDropdown_->drawOverlay(renderer, position);
 
     viewModeDropdown_->setPosition(x + (ddW + gap) * 2.0f, y);
-    viewModeDropdown_->setSize(ddW, 30.0f);
+    viewModeDropdown_->setSize(ddW, rowH);
     viewModeDropdown_->drawOverlay(renderer, position);
 
-    float actionX = x + (ddW + gap) * 3.0f;
-    btnStructure_->setPosition(actionX, y);
-    btnStructure_->setSize(100.0f, 30.0f);
-    btnStructure_->drawOverlay(renderer, position);
+    // Action buttons right-aligned in top right
+    float rightX = x + fullW;
+    float structW = 100.0f, structAllW = 110.0f, saveW = 100.0f, assignW = 80.0f, removeW = 80.0f;
+    float btnGap = 8.0f;
 
-    btnStructureAll_->setPosition(actionX + 105.0f, y);
-    btnStructureAll_->setSize(110.0f, 30.0f);
+    btnStructureAll_->setPosition(rightX - structAllW, y);
+    btnStructureAll_->setSize(structAllW, rowH);
     btnStructureAll_->drawOverlay(renderer, position);
-    y += 38.0f;
+
+    btnStructure_->setPosition(rightX - structAllW - btnGap - structW, y);
+    btnStructure_->setSize(structW, rowH);
+    btnStructure_->drawOverlay(renderer, position);
+    y += rowH + kStructRowGap;
 
     // ── Toolbar row 2 ───────────────────────────────────
+    // Sliders need more width for the bar; UISlider uses 150px label + (size.x - 160) for bar
 
     sliderMaxEntries_->setPosition(x, y);
-    sliderMaxEntries_->setSize(ddW, 30.0f);
+    sliderMaxEntries_->setSize(sliderW, rowH);
     sliderMaxEntries_->drawOverlay(renderer, position);
 
-    sliderParallel_->setPosition(x + ddW + gap, y);
-    sliderParallel_->setSize(ddW, 30.0f);
+    sliderParallel_->setPosition(x + sliderW + gap, y);
+    sliderParallel_->setSize(sliderW, rowH);
     sliderParallel_->drawOverlay(renderer, position);
 
-    btnSave_->setPosition(actionX, y);
-    btnSave_->setSize(100.0f, 30.0f);
-    btnSave_->drawOverlay(renderer, position);
+    // Save, Assign, Remove right-aligned
+    btnRemoveAssign_->setPosition(rightX - removeW, y);
+    btnRemoveAssign_->setSize(removeW, rowH);
+    btnRemoveAssign_->drawOverlay(renderer, position);
 
-    btnAssign_->setPosition(actionX + 105.0f, y);
-    btnAssign_->setSize(80.0f, 30.0f);
+    btnAssign_->setPosition(rightX - removeW - btnGap - assignW, y);
+    btnAssign_->setSize(assignW, rowH);
     btnAssign_->drawOverlay(renderer, position);
 
-    btnRemoveAssign_->setPosition(actionX + 190.0f, y);
-    btnRemoveAssign_->setSize(80.0f, 30.0f);
-    btnRemoveAssign_->drawOverlay(renderer, position);
-    y += 38.0f;
+    btnSave_->setPosition(rightX - removeW - btnGap - assignW - btnGap - saveW, y);
+    btnSave_->setSize(saveW, rowH);
+    btnSave_->drawOverlay(renderer, position);
+    y += rowH + kStructRowGap;
 
     // ── Search bar ──────────────────────────────────────
 
+    float searchH = 28.0f;
     structSearchInput_->setPosition(x, y);
-    structSearchInput_->setSize(fullW * 0.4f, 28.0f);
+    structSearchInput_->setSize(fullW * 0.4f, searchH);
     structSearchInput_->drawOverlay(renderer, position);
 
     if (!datasetViewMode_) {
         float navX = x + fullW * 0.4f + 20.0f;
         btnPrevSeq_->setPosition(navX, y);
-        btnPrevSeq_->setSize(35.0f, 28.0f);
+        btnPrevSeq_->setSize(35.0f, searchH);
         btnPrevSeq_->drawOverlay(renderer, position);
 
         std::string seqLabel = std::to_string(currentSequenceIndex_ + 1)
@@ -992,13 +1006,13 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
         renderer.drawText({navX + 42.0f, y + 6.0f}, seqLabel, UITheme::Colors::TextPrimary);
 
         btnNextSeq_->setPosition(navX + 130.0f, y);
-        btnNextSeq_->setSize(35.0f, 28.0f);
+        btnNextSeq_->setSize(35.0f, searchH);
         btnNextSeq_->drawOverlay(renderer, position);
     }
-    y += 35.0f;
+    y += searchH + kStructSectionGap;
 
     UIDrawHelpers::drawDivider(renderer, {x, y}, fullW);
-    y += 5.0f;
+    y += kStructLabelSpace;  // Space for "Raw Source" / "Structured Output" labels above text areas
 
     // ── Dual text areas ─────────────────────────────────
 

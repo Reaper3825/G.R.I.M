@@ -36,6 +36,12 @@ private:
     bool editingText = false;
     std::string textBuffer;
     float valueBeforeEdit = 0.0f;
+
+    // Key repeat for backspace while editing
+    float bsHeldTimer = 0.0f;
+    bool bsRepeatFiring = false;
+    static constexpr float kRepeatDelay = 0.40f;
+    static constexpr float kRepeatRate = 0.035f;
     
     float getNormalizedValue() const;
     float getHandleX() const;

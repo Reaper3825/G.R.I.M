@@ -9,17 +9,15 @@
 #include "ui_focus_manager.hpp"
 #include "logger.hpp"
 #include "core/grim_platform.h"
+#include "core/platform_clipboard.hpp"
+#include <algorithm>
 
-// Static guard to prevent event propagation between input boxes
 static UIInputBox* g_activeInputBox = nullptr;
 
 UIInputBox::UIInputBox(std::string* bind)
     : externalBind(bind) 
 {
-    // Generate unique focus ID
     focusID = UIFocusManager::getInstance().generateUniqueID();
-    
-    // Initialize buffer from external bind if provided
     if (externalBind && !externalBind->empty()) {
         buffer = *externalBind;
     }
@@ -29,9 +27,52 @@ void UIInputBox::setPlaceholder(const std::string& t) {
     placeholder = t;
 }
 
+// ---------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------
+
+int UIInputBox::charIndexAtX(float clickX) const {
+    float textStartX = position.x + 6.0f;
+    float relX = clickX - textStartX;
+    if (relX <= 0.0f) return 0;
+
+    // Account for display truncation (leading "..." when text overflows)
+    int maxChars = static_cast<int>(size.x / kCharWidth) - 2;
+    int displayOffset = 0;
+    if (static_cast<int>(buffer.length()) > maxChars && maxChars > 3) {
+        displayOffset = static_cast<int>(buffer.length()) - maxChars + 3;
+    }
+
+    int idx = static_cast<int>(relX / kCharWidth);
+    if (displayOffset > 0) {
+        idx += displayOffset; // map from display space to buffer space
+    }
+    return std::clamp(idx, 0, static_cast<int>(buffer.length()));
+}
+
+void UIInputBox::deleteSelection() {
+    if (!hasSelection()) return;
+    int lo = std::min(selStart, selEnd);
+    int hi = std::max(selStart, selEnd);
+    buffer.erase(lo, hi - lo);
+    cursorPos = lo;
+    clearSelection();
+}
+
+std::string UIInputBox::selectedText() const {
+    if (!hasSelection()) return "";
+    int lo = std::min(selStart, selEnd);
+    int hi = std::max(selStart, selEnd);
+    return buffer.substr(lo, hi - lo);
+}
+
+// ---------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------
+
 void UIInputBox::update(const InputState& input, float dt) {
     if (!isVisible()) return;
-    
+
     // Caret blink
 #ifdef _WIN32
     uint64_t now = GetTickCount64();
@@ -43,121 +84,253 @@ void UIInputBox::update(const InputState& input, float dt) {
         caretVisible = !caretVisible;
         lastBlink = now;
     }
-    
+
     Vec2 m = input.mousePos;
-    
-    // Check if mouse is over the input box
     bool overBox = (m.x >= position.x && m.x <= position.x + size.x &&
                     m.y >= position.y && m.y <= position.y + size.y);
-    
+
     bool leftPressed = Mouse::wasPressed(MouseButton::Left);
-    
-    // Handle focus change
+
+    // -------------------------------------------------------
+    // Focus management
+    // -------------------------------------------------------
     if (leftPressed) {
         if (overBox) {
-            // Clicking on this box
             if (!focused) {
-                // If another box was active, clear it first
                 if (g_activeInputBox != nullptr && g_activeInputBox != this) {
-                    // Commit the other box's changes
-                    if (g_activeInputBox->externalBind) {
+                    if (g_activeInputBox->externalBind)
                         *(g_activeInputBox->externalBind) = g_activeInputBox->buffer;
-                    }
-                    g_activeInputBox->setFocused(false);  // Use base class method
-                    LOG_DEBUG("UIInputBox", "Previous input box auto-committed on focus transfer");
+                    g_activeInputBox->setFocused(false);
                 }
-                
-                // Gain focus - set as active input box
-                setFocused(true);  // Use base class method
+                setFocused(true);
                 g_activeInputBox = this;
-                LOG_DEBUG("UIInputBox", "Input box gained focus");
             }
+            // Click-to-position cursor
+            cursorPos = charIndexAtX(m.x);
+            if (input.shift) {
+                selEnd = cursorPos;
+            } else {
+                clearSelection();
+            }
+            caretVisible = true;
+            lastBlink = now;
         } else {
-            // Clicking outside this box
             if (focused && g_activeInputBox == this) {
-                // Lose focus - commit changes and clear active guard
-                setFocused(false);  // Use base class method
+                setFocused(false);
                 g_activeInputBox = nullptr;
-                if (externalBind) {
-                    *externalBind = buffer;
-                }
-                LOG_DEBUG("UIInputBox", "Input box lost focus, committed: " + buffer);
+                if (externalBind) *externalBind = buffer;
             }
         }
     }
-    
-    // Only process input when this box is the active one
+
     if (!focused || g_activeInputBox != this) return;
-    
-    // Handle keyboard input
-    
-    // Handle Backspace
-    if (Key::wasPressed(KeyCode::Backspace)) {
-        if (!buffer.empty()) {
-            buffer.pop_back();
+
+    // -------------------------------------------------------
+    // Key repeat logic
+    // -------------------------------------------------------
+    // We track a "held" action key (Backspace, Delete, Left, Right)
+    // and fire repeats after an initial delay.
+
+    auto isActionKeyDown = [&](KeyCode kc) -> bool { return Key::isDown(kc); };
+
+    auto processActionKey = [&](KeyCode kc, int vk) {
+        if (Key::wasPressed(kc)) {
+            heldKeyVK = vk;
+            heldKeyTimer = 0.0f;
+            repeatFiring = false;
+            return true; // fire once immediately
+        }
+        if (heldKeyVK == vk && isActionKeyDown(kc)) {
+            heldKeyTimer += dt;
+            if (!repeatFiring && heldKeyTimer >= repeatDelay) {
+                repeatFiring = true;
+                heldKeyTimer = 0.0f;
+                return true;
+            }
+            if (repeatFiring && heldKeyTimer >= repeatRate) {
+                heldKeyTimer = 0.0f;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Release tracking
+    if (heldKeyVK >= 0) {
+        KeyCode heldKC = KeyCode::Unknown;
+        switch (heldKeyVK) {
+            case VK_BACK:   heldKC = KeyCode::Backspace; break;
+            case VK_DELETE: heldKC = KeyCode::Delete; break;
+            case VK_LEFT:   heldKC = KeyCode::Left; break;
+            case VK_RIGHT:  heldKC = KeyCode::Right; break;
+            default: break;
+        }
+        if (heldKC != KeyCode::Unknown && !isActionKeyDown(heldKC)) {
+            heldKeyVK = -1;
+            heldKeyTimer = 0.0f;
+            repeatFiring = false;
         }
     }
-    
-    // Handle Delete (same as backspace for now)
-    if (Key::wasPressed(KeyCode::Delete)) {
-        if (!buffer.empty()) {
-            buffer.pop_back();
+
+    // -------------------------------------------------------
+    // Backspace
+    // -------------------------------------------------------
+    if (processActionKey(KeyCode::Backspace, VK_BACK)) {
+        if (hasSelection()) {
+            deleteSelection();
+        } else if (cursorPos > 0) {
+            buffer.erase(cursorPos - 1, 1);
+            cursorPos--;
+            clearSelection();
+        }
+        caretVisible = true;
+        lastBlink = now;
+    }
+
+    // -------------------------------------------------------
+    // Delete
+    // -------------------------------------------------------
+    if (processActionKey(KeyCode::Delete, VK_DELETE)) {
+        if (hasSelection()) {
+            deleteSelection();
+        } else if (cursorPos < static_cast<int>(buffer.length())) {
+            buffer.erase(cursorPos, 1);
+            clearSelection();
+        }
+        caretVisible = true;
+        lastBlink = now;
+    }
+
+    // -------------------------------------------------------
+    // Arrow keys (with shift for selection, with repeat)
+    // -------------------------------------------------------
+    if (processActionKey(KeyCode::Left, VK_LEFT)) {
+        if (cursorPos > 0) cursorPos--;
+        if (input.shift) {
+            selEnd = cursorPos;
+        } else {
+            clearSelection();
+        }
+        caretVisible = true;
+        lastBlink = now;
+    }
+
+    if (processActionKey(KeyCode::Right, VK_RIGHT)) {
+        if (cursorPos < static_cast<int>(buffer.length())) cursorPos++;
+        if (input.shift) {
+            selEnd = cursorPos;
+        } else {
+            clearSelection();
+        }
+        caretVisible = true;
+        lastBlink = now;
+    }
+
+    // Home / End
+    if (Key::wasPressed(KeyCode::Home)) {
+        cursorPos = 0;
+        if (input.shift) selEnd = cursorPos;
+        else clearSelection();
+    }
+    if (Key::wasPressed(KeyCode::End)) {
+        cursorPos = static_cast<int>(buffer.length());
+        if (input.shift) selEnd = cursorPos;
+        else clearSelection();
+    }
+
+    // -------------------------------------------------------
+    // Select All (Ctrl+A / Cmd+A)
+    // -------------------------------------------------------
+    if (input.ctrl && Key::wasPressed(KeyCode::A)) {
+        selStart = 0;
+        selEnd = static_cast<int>(buffer.length());
+        cursorPos = selEnd;
+    }
+
+    // -------------------------------------------------------
+    // Clipboard (Ctrl+C / Ctrl+V / Ctrl+X)
+    // -------------------------------------------------------
+    if (input.copyRequested) {
+        if (hasSelection()) {
+            PlatformClipboard::copyText(selectedText());
         }
     }
-    
-    // Handle Enter - commit and unfocus
+
+    if (input.cutRequested) {
+        if (hasSelection()) {
+            PlatformClipboard::copyText(selectedText());
+            deleteSelection();
+        }
+    }
+
+    if (input.pasteRequested && !input.pastedText.empty()) {
+        if (hasSelection()) deleteSelection();
+        // Filter to printable ASCII
+        std::string filtered;
+        for (char c : input.pastedText) {
+            if (c >= 32 && c <= 126) filtered += c;
+        }
+        buffer.insert(cursorPos, filtered);
+        cursorPos += static_cast<int>(filtered.length());
+        clearSelection();
+    }
+
+    // -------------------------------------------------------
+    // Enter - commit and unfocus
+    // -------------------------------------------------------
     if (Key::wasPressed(KeyCode::Enter)) {
-        std::string submittedText = buffer;  // Capture before clear
-        
-        // Clear the buffer for next input
+        std::string submittedText = buffer;
         buffer.clear();
-        if (externalBind) {
-            externalBind->clear();
-        }
-        
-        setFocused(false);  // Use base class method
-        g_activeInputBox = nullptr;  // Clear active guard
-        
-        // Fire the submit delegate event
+        cursorPos = 0;
+        clearSelection();
+        if (externalBind) externalBind->clear();
+
+        setFocused(false);
+        g_activeInputBox = nullptr;
         submitTextInput(submittedText);
-        
-        LOG_DEBUG("UIInputBox", "Enter pressed, submitted and cleared: " + submittedText);
         return;
     }
-    
-    // Handle Escape - cancel edit and restore previous value
+
+    // -------------------------------------------------------
+    // Escape - cancel edit
+    // -------------------------------------------------------
     if (Key::wasPressed(KeyCode::Escape)) {
-        setFocused(false);  // Use base class method
-        g_activeInputBox = nullptr;  // Clear active guard
-        if (externalBind) {
-            buffer = *externalBind;  // Restore from external bind
-        }
-        LOG_DEBUG("UIInputBox", "Escape pressed, cancelled edit");
+        setFocused(false);
+        g_activeInputBox = nullptr;
+        if (externalBind) buffer = *externalBind;
+        cursorPos = static_cast<int>(buffer.length());
+        clearSelection();
         return;
     }
-    
-    // Handle text input from InputState
+
+    // -------------------------------------------------------
+    // Text input from platform (WM_CHAR / macOS text callback)
+    // -------------------------------------------------------
     for (char c : input.textInput) {
-        // Allow all printable ASCII characters for file paths
         if (c >= 32 && c <= 126) {
-            buffer += c;
+            if (hasSelection()) deleteSelection();
+            buffer.insert(buffer.begin() + cursorPos, c);
+            cursorPos++;
+            clearSelection();
+            caretVisible = true;
+            lastBlink = now;
         }
     }
-    
-    // Sync buffer to external bind in real-time
-    if (externalBind) {
-        *externalBind = buffer;
-    }
+
+    // Sync to external bind
+    if (externalBind) *externalBind = buffer;
 }
+
+// ---------------------------------------------------------------
+// Draw (legacy UIRenderer path)
+// ---------------------------------------------------------------
 
 void UIInputBox::draw(UIRenderer& renderer) {
     if (!isVisible()) return;
     
-    // Background
     uint32_t bgColor = focused ? 0xFF2A2A38 : 0xD9222238;
     renderer.drawRect(position, size, bgColor);
     
-    // Text
     std::string display = buffer.empty() ? placeholder : buffer;
     uint32_t textColor = buffer.empty() ? 0xFF505050 : 0xFFEAEAEA;
     
@@ -169,51 +342,84 @@ void UIInputBox::draw(UIRenderer& renderer) {
     renderer.drawText({position.x + 6, position.y + 6}, display, textColor);
 }
 
+// ---------------------------------------------------------------
+// drawOverlay (OverlayRenderer path with cursor + selection)
+// ---------------------------------------------------------------
+
 void UIInputBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     using namespace UITheme;
     if (!isVisible()) return;
-    
-    std::string display = buffer.empty() ? placeholder : buffer;
+
+    int maxChars = static_cast<int>(size.x / kCharWidth) - 2;
+    if (maxChars < 1) maxChars = 1;
+
+    // Build display string, handling overflow with leading "..."
+    std::string display;
+    int displayOffset = 0; // first buffer index shown
+    if (buffer.empty()) {
+        display = placeholder;
+    } else if (static_cast<int>(buffer.length()) > maxChars && maxChars > 3) {
+        displayOffset = static_cast<int>(buffer.length()) - maxChars + 3;
+        display = "..." + buffer.substr(displayOffset);
+    } else {
+        display = buffer;
+    }
+
     uint32_t textColor = buffer.empty() ? Colors::TextDisabled : Colors::TextLight;
-    
-    if (caretVisible && focused) {
-        display += "|";
+
+    // Draw selection highlight
+    if (focused && hasSelection() && !buffer.empty()) {
+        int lo = std::min(selStart, selEnd);
+        int hi = std::max(selStart, selEnd);
+        // Map buffer indices to display coordinates
+        int dispLo = std::max(0, lo - displayOffset);
+        int dispHi = std::min(static_cast<int>(display.length()), hi - displayOffset);
+        if (displayOffset > 0) {
+            dispLo = std::max(3, dispLo + 3);
+            dispHi = std::min(static_cast<int>(display.length()), dispHi + 3);
+        }
+        if (dispHi > dispLo) {
+            float selX = position.x + 6.0f + dispLo * kCharWidth;
+            float selW = (dispHi - dispLo) * kCharWidth;
+            renderer.drawRect({selX, position.y + 3.0f}, {selW, size.y - 6.0f}, 0x604488CC);
+        }
     }
-    
-    int maxChars = static_cast<int>(size.x / 8) - 2;
-    if (static_cast<int>(display.length()) > maxChars) {
-        display = "..." + display.substr(display.length() - maxChars + 3);
-    }
-    
+
     renderer.drawText({position.x + 6, position.y + 6}, display, textColor);
+
+    // Draw caret
+    if (focused && caretVisible && !buffer.empty()) {
+        int dispCursorPos = cursorPos - displayOffset;
+        if (displayOffset > 0) dispCursorPos += 3;
+        dispCursorPos = std::clamp(dispCursorPos, 0, static_cast<int>(display.length()));
+        float caretX = position.x + 6.0f + dispCursorPos * kCharWidth;
+        renderer.drawRect({caretX, position.y + 4.0f}, {1.5f, size.y - 8.0f}, Colors::TextLight);
+    } else if (focused && caretVisible && buffer.empty()) {
+        renderer.drawRect({position.x + 6.0f, position.y + 4.0f}, {1.5f, size.y - 8.0f}, Colors::TextLight);
+    }
 }
+
+// ---------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------
 
 void UIInputBox::setText(const std::string& text) {
     buffer = text;
-    if (externalBind) {
-        *externalBind = text;
-    }
+    cursorPos = static_cast<int>(buffer.length());
+    clearSelection();
+    if (externalBind) *externalBind = text;
 }
 
 void UIInputBox::clear() {
     buffer.clear();
-    if (externalBind) {
-        externalBind->clear();
-    }
+    cursorPos = 0;
+    clearSelection();
+    if (externalBind) externalBind->clear();
 }
 
 void UIInputBox::submitTextInput(const std::string& text) {
-    // Validation checks could go here
-    if (text.empty()) {
-        LOG_DEBUG("UIInputBox", "Skipping submit - empty text");
-        return;
-    }
-    
-    // Execute the delegate if bound
+    if (text.empty()) return;
     if (OnTextSubmitted.IsBound()) {
         OnTextSubmitted.Execute(text);
-        LOG_DEBUG("UIInputBox", "Text submitted via delegate: " + text);
-    } else {
-        LOG_DEBUG("UIInputBox", "Text submitted but no delegate bound: " + text);
     }
 }

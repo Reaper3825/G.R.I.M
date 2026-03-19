@@ -289,9 +289,11 @@ void UIRoot::updateWindowZOrder()
 #ifdef _WIN32
     if (hasVisiblePanels())
     {
-        ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
+        ShowWindow(m_hwnd, SW_SHOW);
         SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetForegroundWindow(m_hwnd);
+        SetFocus(m_hwnd);
     }
     else
     {

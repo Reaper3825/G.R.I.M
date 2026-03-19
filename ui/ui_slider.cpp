@@ -54,11 +54,28 @@ void UISlider::update(const InputState& input, float dt) {
     
     // Handle text editing
     if (editingText) {
-        // Handle Backspace and Delete keys
+        // Backspace / Delete with key repeat
+        bool bsFire = false;
         if (Key::wasPressed(KeyCode::Backspace) || Key::wasPressed(KeyCode::Delete)) {
-            if (!textBuffer.empty()) {
-                textBuffer.pop_back();
+            bsHeldTimer = 0.0f;
+            bsRepeatFiring = false;
+            bsFire = true;
+        } else if (Key::isDown(KeyCode::Backspace) || Key::isDown(KeyCode::Delete)) {
+            bsHeldTimer += dt;
+            if (!bsRepeatFiring && bsHeldTimer >= kRepeatDelay) {
+                bsRepeatFiring = true;
+                bsHeldTimer = 0.0f;
+                bsFire = true;
+            } else if (bsRepeatFiring && bsHeldTimer >= kRepeatRate) {
+                bsHeldTimer = 0.0f;
+                bsFire = true;
             }
+        } else {
+            bsHeldTimer = 0.0f;
+            bsRepeatFiring = false;
+        }
+        if (bsFire && !textBuffer.empty()) {
+            textBuffer.pop_back();
         }
         
         // Handle Escape key - cancel edit
@@ -89,13 +106,19 @@ void UISlider::update(const InputState& input, float dt) {
             return;
         }
         
-        // Check for text input (numeric characters only)
+        // Paste support (numeric characters only)
+        if (input.pasteRequested && !input.pastedText.empty()) {
+            for (char c : input.pastedText) {
+                if ((c >= '0' && c <= '9') || c == '.' || c == '-')
+                    textBuffer += c;
+            }
+        }
+
+        // Text input (numeric characters only)
         for (char c : input.textInput) {
             if ((c >= '0' && c <= '9') || c == '.' || c == '-') {
-                // Allow numbers, decimal point, and negative sign
                 textBuffer += c;
             }
-            // Ignore other characters (rejects non-numeric input)
         }
         
         // Click outside track - commit or cancel

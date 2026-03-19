@@ -326,7 +326,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     // Store in intermediates for backward
     intermediates.embedding_tensor = std::move(emb_output);
-    fprintf(stderr, "[AutogradForward] CHECKPOINT: embedding done\n"); fflush(stderr);
     
     // ═══════════════════════════════════════════════════════════════════════════
     //  EMBEDDING DROPOUT (Issue #133)
@@ -510,7 +509,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     //  Encoder layer outputs stored in intermediates to keep autograd graph alive.
     // ═══════════════════════════════════════════════════════════════════════════
     
-    fprintf(stderr, "[AutogradForward] CHECKPOINT: about to run encoder layers\n"); fflush(stderr);
     if (!ctx.gpu_encoder) {
         throw std::runtime_error("AutogradForward: gpu_encoder is NULL - pass encoder in context");
     }
@@ -611,9 +609,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 ? intermediates.embedding_tensor
                 : intermediates.encoder_layer_outputs.back();
             
-            fprintf(stderr, "[AutogradForward] encoder layer %d/%d entering forward...\n", layer_idx, num_layers); fflush(stderr);
             Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage, ctx.step, layer_idx);
-            fprintf(stderr, "[AutogradForward] encoder layer %d/%d forward returned\n", layer_idx, num_layers); fflush(stderr);
             
             if (cfg->residual_dropout_rate > 0.0f && ctx.is_training) {
                 const uint64_t residual_drop_seed = ctx.step * 2654435761ULL + 7000 + static_cast<uint64_t>(layer_idx) * 131;
@@ -684,9 +680,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     }
     
     // Forward pass: builds autograd graph through RMSNorm → centering → matmul → bias
-    fprintf(stderr, "[AutogradForward] CHECKPOINT: about to run LM head forward\n"); fflush(stderr);
     Tensor logits_tensor = ctx.lm_head->forward(intermediates.encoder_output_tensor, intermediates.centered_encoder_output);
-    fprintf(stderr, "[AutogradForward] CHECKPOINT: LM head forward done\n"); fflush(stderr);
     
     // Copy centered data to scratch buffer for diagnostics (Issue #115)
     if (cfg->lm_head_center_hidden_states && ts->centering_scratch_tensor.data && intermediates.centered_encoder_output.data) {
@@ -1617,21 +1611,9 @@ LossResult autogradTrainingStep(
     // FORWARD → LOSS → BACKWARD
     // ═══════════════════════════════════════════════════════════════════════════
     
-    fprintf(stderr, "[autogradTrainingStep] CHECKPOINT: about to executeAutogradForward (step=%lu)\n", (unsigned long)step);
-    fflush(stderr);
     ForwardResult fwd_result = executeAutogradForward(ctx);
     if (!fwd_result.success) {
         throw std::runtime_error("autogradTrainingStep: Forward failed - " + fwd_result.error_message);
-    }
-    fprintf(stderr, "[autogradTrainingStep] CHECKPOINT: forward done, about to computeAutogradLoss\n");
-    fflush(stderr);
-    {
-        cudaError_t e = cudaDeviceSynchronize();
-        cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
-        if (last != cudaSuccess) {
-            fprintf(stderr, "[autogradTrainingStep] CUDA ERROR after forward: %s\n", cudaGetErrorString(last));
-            fflush(stderr);
-        }
     }
     
     LossResult loss_result = computeAutogradLoss(ctx);
@@ -1640,8 +1622,6 @@ LossResult autogradTrainingStep(
         training_state.autograd_intermediates.clear();
         return loss_result;
     }
-    fprintf(stderr, "[autogradTrainingStep] CHECKPOINT: loss done (loss=%.6f), about to backward\n", loss_result.loss_value);
-    fflush(stderr);
     
     // Rule 20: Non-finite loss means forward produced garbage.
     // Skip backward entirely — don't propagate NaN/Inf gradients.
@@ -1652,14 +1632,6 @@ LossResult autogradTrainingStep(
         return loss_result;
     }
     
-    {
-        cudaError_t sync_err = cudaDeviceSynchronize();
-        cudaError_t pending  = cudaGetLastError();
-        fprintf(stderr, "[autogradTrainingStep] PRE-BACKWARD GPU check: sync=%s pending=%s\n",
-                cudaGetErrorString(sync_err), cudaGetErrorString(pending));
-        fflush(stderr);
-    }
-
     BackwardResult bwd_result = executeAutogradBackward(ctx, accumulate);
     if (!bwd_result.success) {
         loss_result.success = false;
