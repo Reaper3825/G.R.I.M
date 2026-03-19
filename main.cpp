@@ -26,7 +26,7 @@
 #include "ui/console_panel.hpp"
 #include "ui/ui_settings_menu.hpp"
 #include "ui/ui_training_panel.hpp"
-#include "ui/ui_DataCollection.hpp"
+#include "ui/ui_data_hub.hpp"
 #include "ui/ui_model_panel.hpp"
 #include "ui/ui_surface_renderer_bridge.hpp"
 #include "resources.hpp"
@@ -402,7 +402,7 @@ int main(int argc, char* argv[])
     auto consolePanel  = std::make_shared<ConsolePanel>();
     auto settingsPanel = std::make_shared<UISettingsMenu>();
     auto trainingPanel = std::make_shared<UITrainingPanel>();
-    auto dataCollectionPanel = std::make_shared<UIDataCollectionPanel>();
+    auto dataHubPanel = std::make_shared<UIDataHubPanel>();
     auto modelPanel = std::make_shared<UIModelPanel>();
     {
         // Center on screen
@@ -423,13 +423,13 @@ int main(int argc, char* argv[])
     consolePanel->setVisible(false);
     settingsPanel->setVisible(false);
     trainingPanel->setVisible(false);
-    dataCollectionPanel->setVisible(false);
+    dataHubPanel->setVisible(false);
     modelPanel->setVisible(false);
 
     UIRoot::get().addPanel(consolePanel);
     UIRoot::get().addPanel(settingsPanel);
     UIRoot::get().addPanel(trainingPanel);
-    UIRoot::get().addPanel(dataCollectionPanel);
+    UIRoot::get().addPanel(dataHubPanel);
     UIRoot::get().addPanel(modelPanel);
 
     LOG_PHASE("UIRoot and panels initialized (hidden)", true);

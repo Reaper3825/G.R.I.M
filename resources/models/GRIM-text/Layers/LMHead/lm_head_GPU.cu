@@ -223,7 +223,15 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
         out_centered_hidden = autograd::project_out_pc1(*current_input, config_.pc1_power_iters, stream);
         matmul_input = &out_centered_hidden;
     } else {
-        out_centered_hidden = Tensor();  // No centering, clear output
+        if (current_input == &normalized) {
+            // RMSNorm was applied but no centering — preserve the normalized
+            // tensor in out_centered_hidden so cached_a doesn't dangle when
+            // this function returns (normalized is a local).
+            out_centered_hidden = std::move(normalized);
+            matmul_input = &out_centered_hidden;
+        } else {
+            out_centered_hidden = Tensor();
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════

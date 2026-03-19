@@ -24,14 +24,13 @@ ConsolePanel::ConsolePanel()
               LOG_DEBUG("ConsolePanel", "Settings panel not found - may not be initialized yet");
           }
       })),
-      DCButton(std::make_shared<UIButton>(" Data Collection ", []() {
-          // Open data collection panel
-          auto dataCollectionPanel = UIRoot::get().getPanel("DataCollection");
-          if (dataCollectionPanel) {
-              dataCollectionPanel->setVisible(true);
-              LOG_DEBUG("ConsolePanel", "Opened data collection panel via button");
+      DCButton(std::make_shared<UIButton>(" Data Hub ", []() {
+          auto dataHubPanel = UIRoot::get().getPanel("DataHub");
+          if (dataHubPanel) {
+              dataHubPanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened DataHub panel via button");
           } else {
-              LOG_DEBUG("ConsolePanel", "Data collection panel not found - may not be initialized yet");
+              LOG_DEBUG("ConsolePanel", "DataHub panel not found");
           }
       })),
       trainingButton(std::make_shared<UIButton>(" Training ", []() {

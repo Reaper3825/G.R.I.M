@@ -102,22 +102,12 @@ private:
     std::shared_ptr<UIButton>      btnRebuild_;
     std::shared_ptr<UIButton>      btnStop_;
     std::shared_ptr<UIButton>      btnRefreshStats_;
-    std::shared_ptr<UISlider>      sliderFetchLimit_;
-    std::shared_ptr<UISlider>      sliderVocabSize_;
-    std::shared_ptr<UISlider>      sliderVerifyThreshold_;
 
     // ═════════════════════════════════════════════════════
     //  Sources tab widgets
     // ═════════════════════════════════════════════════════
 
-    std::shared_ptr<UIInputBox>  sourceUrlInput_;
-    std::shared_ptr<UIButton>    btnAddSource_;
-    std::shared_ptr<UIScrollBox> sourcesScrollBox_;
-    std::shared_ptr<UIButton>    btnFilterWeb_;
-    std::shared_ptr<UIButton>    btnFilterHF_;
-    std::shared_ptr<UIButton>    btnFilterAll_;
-    std::shared_ptr<UIButton>    btnClearFilters_;
-    std::atomic<bool>            sourcesNeedsPopulate_{false};
+    std::shared_ptr<UIButton>    btnAddCard_;
 
     // ═════════════════════════════════════════════════════
     //  HuggingFace tab widgets
@@ -211,17 +201,29 @@ private:
     //  Sources tab state
     // ═════════════════════════════════════════════════════
 
-    struct SourceEntry {
-        std::string id;
-        std::string name;
+    struct SourceCard {
+        size_t      cardId       = 0;
+        std::string name         = "New Source";
         std::string url;
-        bool enabled   = true;
-        int  jsonIndex  = -1;
+        int         priority     = 5;
+        bool        enabled      = true;
+        int         crawlDepth   = 2;
+        int         fetchLimit   = 100;
+        bool        requiresAuth = false;
+
+        std::shared_ptr<UIInputBox>  nameInput;
+        std::shared_ptr<UIInputBox>  urlInput;
+        std::shared_ptr<UISlider>    prioritySlider;
+        std::shared_ptr<UISlider>    depthSlider;
+        std::shared_ptr<UISlider>    limitSlider;
+        std::shared_ptr<UIToggle>    enabledToggle;
+        std::shared_ptr<UIButton>    deleteBtn;
     };
-    std::vector<SourceEntry> loadedSources_;
-    std::string activeSourceFilter_ = "all";
-    std::string activeStatusFilter_ = "all";
-    std::string sourceUrlBuffer_;
+    std::vector<SourceCard> sourceCards_;
+    size_t nextSourceCardId_ = 0;
+    int    cardToDelete_     = -1;
+    bool   sourcesDirty_     = false;
+    float  sourcesScrollOffset_ = 0.0f;
 
     // ═════════════════════════════════════════════════════
     //  HuggingFace tab state
@@ -274,11 +276,13 @@ private:
     //  Internal methods — Sources
     // ═════════════════════════════════════════════════════
 
-    void loadSourcesFromJSON();
-    void loadSourcesIntoCache();
-    void saveSourceToJSON(const std::string& url);
-    void setSourceEnabled(int jsonIndex, bool enabled);
-    void populateSourcesScrollBox(float containerWidth);
+    void loadSourceCards();
+    void saveSourceCards();
+    SourceCard buildSourceCard(const std::string& name = "New Source",
+                               const std::string& url = "",
+                               int priority = 5, int depth = 2,
+                               int limit = 100, bool enabled = true);
+    void removeSourceCard(size_t cardId);
 
     // ═════════════════════════════════════════════════════
     //  Internal methods — HuggingFace

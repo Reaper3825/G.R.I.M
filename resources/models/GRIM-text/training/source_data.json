@@ -1,7 +1,7 @@
 {
   "data_sources": [
     {
-      "enabled": true,
+      "enabled": false,
       "name": "Custom Source",
       "priority": 5,
       "requires_auth": false,

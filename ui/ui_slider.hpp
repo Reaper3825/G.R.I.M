@@ -32,12 +32,10 @@ private:
     Vec2 sliderStart{0, 0};
     Vec2 sliderSize{0, 0};
     
-    // Text editing
+    // Text editing (track itself is the editable area)
     bool editingText = false;
     std::string textBuffer;
     float valueBeforeEdit = 0.0f;
-    Vec2 textBoxPos{0, 0};
-    Vec2 textBoxSize{0, 0};
     
     float getNormalizedValue() const;
     float getHandleX() const;
