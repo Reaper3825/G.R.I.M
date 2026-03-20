@@ -37,7 +37,7 @@
 #include "training_paths.hpp"
 #include <zip.h>
 #include <poppler/cpp/poppler-document.h>
-#include <poppler/cpp/poppler-page.h>  `
+#include <poppler/cpp/poppler-page.h>
 
 using namespace GRIM::Training;
 namespace fs = std::filesystem;

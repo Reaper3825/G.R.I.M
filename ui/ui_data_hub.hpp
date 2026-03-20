@@ -178,8 +178,13 @@ private:
     int         sourcesProcessed_     = 0;
     int         totalSources_         = 0;
     int         checkpointsCollected_ = 0;
+    int         entriesCollected_     = 0;
+    int         duplicatesSkipped_    = 0;
+    int64_t     elapsedSeconds_       = 0;
 
     std::string datasetSizeInfo_;
+    std::string hudFileSize_          = "--";
+    int         hudCheckpoints_       = 0;
     std::string checkpointStatsInfo_;
     std::string verificationStatsInfo_;
 

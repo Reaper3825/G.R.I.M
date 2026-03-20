@@ -546,11 +546,6 @@ GRIM::Tokenizer::UniByte initializeTokenizer(
     cfg.character_coverage = GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE;
     cfg.enable_scratch_block_reasoning = hyperparameters.tokenizer_enable_scratch_block_reasoning;
     cfg.detect_numbers = hyperparameters.tokenizer_detect_numbers;
-    cfg.detect_urls = hyperparameters.tokenizer_detect_urls;
-    cfg.detect_emails = hyperparameters.tokenizer_detect_emails;
-    cfg.detect_paths = hyperparameters.tokenizer_detect_paths;
-    cfg.detect_dates = hyperparameters.tokenizer_detect_dates;
-    cfg.detect_code_literals = hyperparameters.tokenizer_detect_code_literals;
     cfg.enable_byte_fallback = tok_config.enable_byte_fallback;
     cfg.prefer_gpu = GRIM::HyperParameters::TOKENIZER_PREFER_GPU;
     

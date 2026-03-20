@@ -44,6 +44,9 @@ public:
     // Check if any UI panel is currently visible
     bool hasVisiblePanels() const;
     
+    // Check if any panel is currently being dragged or resized
+    bool isAnyPanelDragging() const;
+    
     // Check if UI consumed input this frame (for blocking pass-through)
     bool didConsumeInput() const { return m_inputConsumed; }
     

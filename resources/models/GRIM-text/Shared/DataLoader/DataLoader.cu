@@ -416,11 +416,6 @@ bool PrepareTrainingDataFromCache(
 	// Load scratch block reasoning settings from training hyperparameters (single source of truth)
 	tok_config.enable_scratch_block_reasoning = train_config.tokenizer_enable_scratch_block_reasoning;
 	tok_config.detect_numbers = train_config.tokenizer_detect_numbers;
-	tok_config.detect_urls = train_config.tokenizer_detect_urls;
-	tok_config.detect_emails = train_config.tokenizer_detect_emails;
-	tok_config.detect_paths = train_config.tokenizer_detect_paths;
-	tok_config.detect_dates = train_config.tokenizer_detect_dates;
-	tok_config.detect_code_literals = train_config.tokenizer_detect_code_literals;
 	
 	tok_config.enable_byte_fallback = config_tok.enable_byte_fallback;
 	tok_config.prefer_gpu = true;

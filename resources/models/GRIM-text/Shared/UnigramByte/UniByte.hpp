@@ -160,12 +160,8 @@ struct UniByteConfig {
     bool enable_scratch_block_reasoning = true;  // Toggle internal reasoning layer
     
     // Structural detection (only used if scratch block reasoning enabled)
+    // Number atoms are the only remaining supported tokenizer-side detection.
     bool detect_numbers = true;
-    bool detect_urls = true;
-    bool detect_emails = true;
-    bool detect_paths = true;
-    bool detect_dates = true;
-    bool detect_code_literals = true;
     
     // Byte fallback
     bool enable_byte_fallback = true;

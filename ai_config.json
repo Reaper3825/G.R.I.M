@@ -5,9 +5,10 @@
         "huggingface": "TODO",
         "openai": ""
     },
-    "backend": "ollama",
+    "backend": "openai",
     "blur": {
-        "enabled": true
+        "enabled": true,
+        "opacity": 1.0
     },
     "conversation_history_size": 10,
     "data_collection": {
@@ -99,7 +100,7 @@
         }
     },
     "personality": {
-        "custom_prompt": "You are GRIM, a sarcastic but helpful AI assistant. Use dry humor and witty remarks while still providing accurate assistance. Don't be mean, just playfully sarcastic.",
+        "custom_prompt": "You are GRIM, a friendly and enthusiastic AI assistant. Use warm, conversational language and show excitement when helping users. Be supportive and encouraging.",
         "use_custom_prompt": true
     },
     "silence_threshold": 0.02,
@@ -120,12 +121,7 @@
         "prune_during_mining": false,
         "save_text_vocab": true,
         "scratch_block_reasoning": {
-            "detect_code_literals": true,
-            "detect_dates": true,
-            "detect_emails": true,
             "detect_numbers": true,
-            "detect_paths": true,
-            "detect_urls": true,
             "enabled": true
         },
         "subword_mining_max_bytes": 0,
@@ -435,7 +431,7 @@
     },
     "ui": {
         "Minimize": "Side",
-        "font_name": "DejaVuSerif-Italic",
+        "font_name": "DejaVuMathTeXGyre",
         "font_size": 16
     },
     "vision": {
@@ -489,7 +485,7 @@
         "sampling_strategy": "beam",
         "silence_threshold": 0.02,
         "suppress_blank": true,
-        "temperature": 0.06896551698446274,
+        "temperature": 0.07000000029802322,
         "whisper_model": "ggml-base.en.bin"
     },
     "whisper_language": "en",

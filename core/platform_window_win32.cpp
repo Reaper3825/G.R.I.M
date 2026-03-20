@@ -79,6 +79,11 @@ void setOverlayBlurStyle(void* overlayWindowHandle,
     (void)intensity;
 }
 
+void setOverlayClickThrough(void* overlayWindowHandle, bool clickThrough) {
+    (void)overlayWindowHandle;
+    (void)clickThrough;
+}
+
 bool captureDesktopBehindOverlay(void* overlayWindowHandle,
                                  int x,
                                  int y,

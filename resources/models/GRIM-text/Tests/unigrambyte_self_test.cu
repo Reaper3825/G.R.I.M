@@ -540,8 +540,6 @@ bool testUniByteStructuralDetection(std::string& message) {
     UniByteConfig config;
     config.target_vocab_size = 50000;
     config.detect_numbers = true;
-    config.detect_urls = true;
-    config.detect_dates = true;
     
     UniByte tokenizer(config);
     
@@ -566,25 +564,13 @@ bool testUniByteStructuralDetection(std::string& message) {
 bool testUniByteURLDetection(std::string& message) {
     UniByteConfig config;
     config.target_vocab_size = 50000;
-    config.detect_urls = true;
     
     UniByte tokenizer(config);
     
     std::string input = "Visit https://example.com/path for more info";
     auto result = tokenizer.encodeWithMetadata(input);
     
-    bool found_url = false;
-    for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
-            found_url = true;
-            std::string_view url_view = span.view();
-            ASSERT_TRUE(url_view.find("example.com") != std::string_view::npos,
-                       "URL should contain domain");
-            break;
-        }
-    }
-    
-    ASSERT_TRUE(found_url, "Should detect URL in input");
+    ASSERT_EQ(result.atoms.size(), 0, "URLs should pass through without atom detection");
     
     return true;
 }
@@ -592,25 +578,13 @@ bool testUniByteURLDetection(std::string& message) {
 bool testUniByteURLDetectionCaseInsensitive(std::string& message) {
     UniByteConfig config;
     config.target_vocab_size = 50000;
-    config.detect_urls = true;
 
     UniByte tokenizer(config);
 
     std::string input = "Visit HTTPS://Example.com/path for more info";
     auto result = tokenizer.encodeWithMetadata(input);
 
-    bool found_url = false;
-    for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
-            found_url = true;
-            std::string_view url_view = span.view();
-            ASSERT_TRUE(url_view.find("Example.com") != std::string_view::npos,
-                        "URL should contain domain");
-            break;
-        }
-    }
-
-    ASSERT_TRUE(found_url, "Should detect URL in input");
+    ASSERT_EQ(result.atoms.size(), 0, "URLs should pass through without atom detection");
 
     return true;
 }
@@ -618,25 +592,13 @@ bool testUniByteURLDetectionCaseInsensitive(std::string& message) {
 bool testUniByteEmailDetection(std::string& message) {
     UniByteConfig config;
     config.target_vocab_size = 50000;
-    config.detect_emails = true;
     
     UniByte tokenizer(config);
     
     std::string input = "Contact us at test@example.com";
     auto result = tokenizer.encodeWithMetadata(input);
     
-    bool found_email = false;
-    for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
-            found_email = true;
-            // Use contentView() to get just the atom content (no whitespace)
-            std::string_view email_view = span.contentView();
-            ASSERT_TRUE(email_view == "test@example.com", "Email value mismatch");
-            break;
-        }
-    }
-    
-    ASSERT_TRUE(found_email, "Should detect email in input");
+    ASSERT_EQ(result.atoms.size(), 0, "Emails should pass through without atom detection");
     
     return true;
 }
@@ -644,22 +606,13 @@ bool testUniByteEmailDetection(std::string& message) {
 bool testUniByteDateDetection(std::string& message) {
     UniByteConfig config;
     config.target_vocab_size = 50000;
-    config.detect_dates = true;
     
     UniByte tokenizer(config);
     
     std::string input = "The meeting is on 2024-12-25";
     auto result = tokenizer.encodeWithMetadata(input);
     
-    bool found_date = false;
-    for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
-            found_date = true;
-            break;
-        }
-    }
-    
-    ASSERT_TRUE(found_date, "Should detect date in input");
+    ASSERT_TRUE(result.atoms.size() >= 1, "Date text should only expose numeric atom spans");
     
     return true;
 }
@@ -1070,14 +1023,11 @@ bool testAtomTableHashDeduplication(std::string& message) {
 //======================================================//
 
 bool testFullPipeline(std::string& message) {
-    // Create tokenizer with all features
+    // Create tokenizer with current numeric-only atom detection.
     UniByteConfig config;
     config.target_vocab_size = 50000;
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
-    config.detect_urls = true;
-    config.detect_emails = true;
-    config.detect_dates = true;
     
     UniByte tokenizer(config);
     
@@ -1093,13 +1043,13 @@ bool testFullPipeline(std::string& message) {
     tokenizer.unigramLM().addPiece(" ", -0.5f, false);
     tokenizer.unigramLM().addPiece(".", -0.6f, false);
     
-    // Complex input with multiple structural elements
-    std::string input = "The price is 42.99. Visit https://shop.com for more info.";
+    // Mixed input: numbers become atoms, URLs remain plain text.
+    std::string input = "The price is 42.99. Visit https://shop.com for 3 more info.";
     
     auto result = tokenizer.encodeWithMetadata(input);
     
     ASSERT_TRUE(result.token_ids.size() > 0, "Should produce tokens");
-    ASSERT_TRUE(result.atoms.size() >= 2, "Should detect at least 2 structures");
+    ASSERT_TRUE(result.atoms.size() >= 2, "Should detect numeric structures only");
     
     // Verify we can decode back
     std::string decoded = tokenizer.decode(result.token_ids);
@@ -1319,16 +1269,15 @@ bool testUnicodeMultiLanguage(std::string& message) {
 bool testUnicodeWithStructural(std::string& message) {
     UniByteConfig config;
     config.enable_byte_fallback = true;
-    config.detect_urls = true;
-    config.detect_emails = true;
+    config.detect_numbers = true;
     config.enable_scratch_block_reasoning = true;  // Enable atom detection
     UniByte tokenizer(config);
     
-    std::string input = "日本のサイト: https://example.jp メール: test@日本.jp";
+    std::string input = "日本の価格は 42.5 円です";
     
     // Use encodeWithMetadata to get both tokens and atom information
     auto result = tokenizer.encodeWithMetadata(input);
-    ASSERT_TRUE(result.token_ids.size() > 0, "Unicode with URLs should produce tokens");
+    ASSERT_TRUE(result.token_ids.size() > 0, "Unicode with numbers should produce tokens");
     
     // Build an atom resolver that returns the original text for detected atoms
     // Store atom original texts by their position in token stream
@@ -1348,7 +1297,7 @@ bool testUnicodeWithStructural(std::string& message) {
     };
     
     std::string decoded = tokenizer.decodeWithAtoms(result.token_ids, resolver);
-    ASSERT_STR_EQ(decoded, input, "Unicode+structural round-trip failed");
+    ASSERT_STR_EQ(decoded, input, "Unicode+numeric round-trip failed");
     
     return true;
 }
@@ -1360,22 +1309,13 @@ bool testUnicodeWithStructural(std::string& message) {
 bool testMultipleURLs(std::string& message) {
     UniByteConfig config;
     config.enable_byte_fallback = true;
-    config.detect_urls = true;
     UniByte tokenizer(config);
     
     std::string input = "Visit https://first.com and https://second.com or http://third.org";
     
     auto result = tokenizer.encodeWithMetadata(input);
     
-    // Count URL atoms
-    int url_count = 0;
-    for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
-            url_count++;
-        }
-    }
-    
-    ASSERT_EQ(url_count, 3, "Should detect 3 URLs");
+    ASSERT_EQ(result.atoms.size(), 0, "URLs should remain regular text");
     
     return true;
 }
@@ -1383,21 +1323,13 @@ bool testMultipleURLs(std::string& message) {
 bool testMultipleEmails(std::string& message) {
     UniByteConfig config;
     config.enable_byte_fallback = true;
-    config.detect_emails = true;
     UniByte tokenizer(config);
     
     std::string input = "Contact: alice@example.com, bob@test.org, charlie@domain.net";
     
     auto result = tokenizer.encodeWithMetadata(input);
     
-    int email_count = 0;
-    for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
-            email_count++;
-        }
-    }
-    
-    ASSERT_TRUE(email_count >= 3, "Should detect at least 3 emails");
+    ASSERT_EQ(result.atoms.size(), 0, "Emails should remain regular text");
     
     return true;
 }
@@ -1430,14 +1362,14 @@ bool testAdjacentStructural(std::string& message) {
     UniByteConfig config;
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
-    config.detect_urls = true;
     UniByte tokenizer(config);
     
-    // Numbers immediately followed by URL
-    std::string input = "Price:$99https://buy.com";
+    // Number immediately followed by letters should still tokenize cleanly.
+    std::string input = "Price:$99USD";
     
     auto result = tokenizer.encodeWithMetadata(input);
     ASSERT_TRUE(result.token_ids.size() > 0, "Adjacent structures should tokenize");
+    ASSERT_TRUE(result.atoms.size() >= 1, "Adjacent numeric text should preserve number atoms");
     
     return true;
 }
@@ -1449,22 +1381,13 @@ bool testAdjacentStructural(std::string& message) {
 bool testWindowsPath(std::string& message) {
     UniByteConfig config;
     config.enable_byte_fallback = true;
-    config.detect_paths = true;
     UniByte tokenizer(config);
     
     std::string input = "Open file C:\\Users\\test\\document.txt please";
     
     auto result = tokenizer.encodeWithMetadata(input);
     
-    bool found_path = false;
-    for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
-            found_path = true;
-            break;
-        }
-    }
-    
-    ASSERT_TRUE(found_path, "Should detect Windows path");
+    ASSERT_EQ(result.atoms.size(), 0, "Paths should remain regular text");
     
     return true;
 }
@@ -1472,22 +1395,13 @@ bool testWindowsPath(std::string& message) {
 bool testUnixPath(std::string& message) {
     UniByteConfig config;
     config.enable_byte_fallback = true;
-    config.detect_paths = true;
     UniByte tokenizer(config);
     
     std::string input = "Run /usr/local/bin/program with args";
     
     auto result = tokenizer.encodeWithMetadata(input);
     
-    bool found_path = false;
-    for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
-            found_path = true;
-            break;
-        }
-    }
-    
-    ASSERT_TRUE(found_path, "Should detect Unix path");
+    ASSERT_EQ(result.atoms.size(), 0, "Paths should remain regular text");
     
     return true;
 }
@@ -1850,10 +1764,10 @@ int main(int argc, char** argv) {
     // Section 4: UniByte Orchestrator Tests
     suite.addTest("UniByte.BasicEncode", testUniByteBasicEncode);
     suite.addTest("UniByte.StructuralDetection", testUniByteStructuralDetection);
-    suite.addTest("UniByte.URLDetection", testUniByteURLDetection);
-    suite.addTest("UniByte.URLDetection.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);
-    suite.addTest("UniByte.EmailDetection", testUniByteEmailDetection);
-    suite.addTest("UniByte.DateDetection", testUniByteDateDetection);
+    suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);
+    suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);
+    suite.addTest("UniByte.EmailPassthrough", testUniByteEmailDetection);
+    suite.addTest("UniByte.DateNumericOnly", testUniByteDateDetection);
     suite.addTest("UniByte.PlaceholderInjection", testUniBytePlaceholderInjection);
     suite.addTest("UniByte.RoundTrip", testUniByteRoundTrip);
     
@@ -1891,17 +1805,17 @@ int main(int argc, char** argv) {
     // Section 8: Unicode & Emoji Tests
     suite.addTest("Unicode.Emoji", testUnicodeEmoji);
     suite.addTest("Unicode.MultiLanguage", testUnicodeMultiLanguage);
-    suite.addTest("Unicode.WithStructural", testUnicodeWithStructural);
+    suite.addTest("Unicode.WithNumbers", testUnicodeWithStructural);
     
     // Section 9: Multiple Structural Elements Tests
-    suite.addTest("Structural.MultipleURLs", testMultipleURLs);
-    suite.addTest("Structural.MultipleEmails", testMultipleEmails);
+    suite.addTest("Structural.MultipleURLsPassthrough", testMultipleURLs);
+    suite.addTest("Structural.MultipleEmailsPassthrough", testMultipleEmails);
     suite.addTest("Structural.MixedNumbers", testMixedNumbers);
     suite.addTest("Structural.Adjacent", testAdjacentStructural);
     
     // Section 10: Path Detection Tests
-    suite.addTest("Path.Windows", testWindowsPath);
-    suite.addTest("Path.Unix", testUnixPath);
+    suite.addTest("Path.WindowsPassthrough", testWindowsPath);
+    suite.addTest("Path.UnixPassthrough", testUnixPath);
     
     // Section 11: Numeric Edge Cases
     suite.addTest("Numeric.ScientificNotation", testScientificNotation);

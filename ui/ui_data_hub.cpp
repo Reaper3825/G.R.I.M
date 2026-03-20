@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -117,7 +118,7 @@ UIDataHubPanel::UIDataHubPanel()
     btnRefreshStats_ = std::make_shared<UIButton>("Refresh Stats", [this]() { updateDatasetStats(); });
 
     homeWidgets_ = {
-        progressBar_, btnFull_, btnCollect_, btnVerify_, btnMerge_,
+        btnFull_, btnCollect_, btnVerify_, btnMerge_,
         btnRebuild_, btnStop_, btnRefreshStats_
     };
 
@@ -467,88 +468,219 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
 // =========================================================
 
 void UIDataHubPanel::drawHomeTab(OverlayRenderer& renderer, const PanelRect& content) {
-    float x = content.origin.x + 15.0f;
-    float y = content.origin.y + 10.0f;
+    static constexpr float kPi          = 3.14159265f;
+    static constexpr float kGaugeRadius = 88.0f;
+    static constexpr float kArcThick    = 10.0f;
+    static constexpr int   kArcSegs     = 64;
+    static constexpr int   kTileCount   = 6;
+    static constexpr float kTileH       = 58.0f;
+    static constexpr float kTileGap     = 10.0f;
+    static constexpr float kBtnW        = 130.0f;
+    static constexpr float kBtnH        = 32.0f;
+    static constexpr float kBtnGap      = 8.0f;
+    static constexpr int   kBtnCount    = 7;
+
+    float x     = content.origin.x + 15.0f;
+    float y     = content.origin.y + 10.0f;
     float fullW = content.size.x - 30.0f;
 
     // ── Status banner ───────────────────────────────────
 
-    std::string statusText = collectionActive_ ? "[ACTIVE] " + currentPhase_ : "[IDLE] Ready";
-    uint32_t statusColor = collectionActive_ ? UITheme::Colors::Info : UITheme::Colors::TextDisabled;
-    renderer.drawText({x, y}, statusText, statusColor);
+    {
+        uint32_t dotColor = collectionActive_ ? UITheme::Colors::Success
+                          : collectionCompleted_ ? UITheme::Colors::Info
+                          : UITheme::Colors::TextDisabled;
+        renderer.drawRoundedRect({x, y + 3.0f}, {8.0f, 8.0f}, dotColor, 4.0f);
 
-    if (!collectionMessage_.empty()) {
-        renderer.drawText({x + 250.0f, y}, collectionMessage_, UITheme::Colors::TextSecondary);
+        std::string statusText = collectionActive_    ? "ACTIVE"
+                               : collectionCompleted_ ? "COMPLETE"
+                               : "IDLE";
+        uint32_t statusColor = collectionActive_    ? UITheme::Colors::Success
+                             : collectionCompleted_ ? UITheme::Colors::Info
+                             : UITheme::Colors::TextSecondary;
+        renderer.drawText({x + 14.0f, y}, statusText, statusColor);
+
+        if (!currentPhase_.empty() && currentPhase_ != "idle")
+            renderer.drawText({x + 90.0f, y}, currentPhase_, UITheme::Colors::TextMuted);
+
+        if (!collectionMessage_.empty()) {
+            float msgW = UIDrawHelpers::getTextWidth(collectionMessage_);
+            renderer.drawText({x + fullW - msgW, y}, collectionMessage_,
+                              UITheme::Colors::TextSecondary);
+        }
     }
-    y += 25.0f;
+    y += 22.0f;
+    renderer.drawRect({x, y}, {fullW, 1.0f}, UITheme::Colors::DividerLine);
+    y += 8.0f;
 
-    // ── Progress bar ────────────────────────────────────
-
-    progressBar_->setValue(currentProgress_ / 100.0f);
-    progressBar_->setPosition(x, y);
-    progressBar_->setSize(fullW, UITheme::Sizes::ProgressBarHeight);
-    progressBar_->drawOverlay(renderer, position);
-    y += UITheme::Sizes::ProgressBarHeight + 15.0f;
-
-    // ── Two-column: left = config, right = actions ──────
-
-    float colGap = 20.0f;
-    float leftW  = fullW * 0.45f;
-    float rightW = fullW - leftW - colGap;
-    float rightX = x + leftW + colGap;
-
-    // Left column: stats
-    UIDrawHelpers::drawSectionHeader(renderer, {x, y}, leftW, "Dataset Stats",
-                                     UITheme::Colors::SectionNeutral);
-    float statsY = y + UITheme::Sizes::HeaderHeight + 5.0f;
-    if (!datasetSizeInfo_.empty())
-        renderer.drawText({x + 5.0f, statsY}, datasetSizeInfo_, UITheme::Colors::Success);
-    statsY += 18.0f;
-    if (!checkpointStatsInfo_.empty())
-        renderer.drawText({x + 5.0f, statsY}, checkpointStatsInfo_, UITheme::Colors::TextSecondary);
-    statsY += 18.0f;
-    if (!verificationStatsInfo_.empty())
-        renderer.drawText({x + 5.0f, statsY}, verificationStatsInfo_, UITheme::Colors::TextSecondary);
-
-    // Right column: action buttons
-    UIDrawHelpers::drawSectionHeader(renderer, {rightX, y}, rightW, "Actions",
-                                     UITheme::Colors::SectionNeutral);
-    float btnY = y + UITheme::Sizes::HeaderHeight + 5.0f;
-    float btnH = UITheme::Sizes::ButtonHeight + 5.0f;
-    float btnW = 180.0f;
-
-    auto drawBtn = [&](std::shared_ptr<UIButton>& btn, float& yRef) {
-        btn->setPosition(rightX, yRef);
-        btn->setSize(btnW, btnH);
-        btn->drawOverlay(renderer, position);
-        yRef += btnH + 3.0f;
-    };
-    drawBtn(btnFull_, btnY);
-    drawBtn(btnCollect_, btnY);
-    drawBtn(btnVerify_, btnY);
-    drawBtn(btnMerge_, btnY);
-    drawBtn(btnRebuild_, btnY);
-    drawBtn(btnStop_, btnY);
-    drawBtn(btnRefreshStats_, btnY);
-
-    // ── Log viewer ──────────────────────────────────────
-
-    float logTopY = std::max(statsY + 20.0f, btnY + 10.0f);
-    UIDrawHelpers::drawSectionHeader(renderer, {x, logTopY}, fullW, "Collection Logs",
-                                     UITheme::Colors::SectionNeutral);
-    logTopY += UITheme::Sizes::HeaderHeight;
-
-    float logH = content.origin.y + content.size.y - logTopY - 10.0f;
-    if (logH < 40.0f) logH = 40.0f;
-
-    renderer.drawRoundedRect({x, logTopY}, {fullW, logH},
-                             UITheme::Colors::Background, UITheme::Sizes::WidgetRadius);
+    // ── Half-circle progress gauge ──────────────────────
 
     {
+        float gaugeCX = x + fullW / 2.0f;
+        float gaugeCY = y + kGaugeRadius + 5.0f;
+        float progress = std::clamp(currentProgress_ / 100.0f, 0.0f, 1.0f);
+
+        uint32_t arcFillColor = collectionActive_    ? UITheme::Colors::Info
+                              : collectionCompleted_ ? UITheme::Colors::Success
+                              : UITheme::Colors::Primary;
+
+        for (int i = 0; i < kArcSegs; i++) {
+            float a1 = kPi - (kPi * static_cast<float>(i)     / kArcSegs);
+            float a2 = kPi - (kPi * static_cast<float>(i + 1) / kArcSegs);
+            Vec2 p1 = {gaugeCX + kGaugeRadius * std::cos(a1),
+                       gaugeCY - kGaugeRadius * std::sin(a1)};
+            Vec2 p2 = {gaugeCX + kGaugeRadius * std::cos(a2),
+                       gaugeCY - kGaugeRadius * std::sin(a2)};
+            renderer.drawLine(p1, p2, UITheme::Colors::SliderTrack, kArcThick);
+        }
+
+        if (progress > 0.005f) {
+            int filledSegs = static_cast<int>(kArcSegs * progress);
+
+            uint32_t glowColor = (arcFillColor & 0x00FFFFFF) | 0x28000000;
+            for (int i = 0; i < filledSegs; i++) {
+                float a1 = kPi - (kPi * static_cast<float>(i)     / kArcSegs);
+                float a2 = kPi - (kPi * static_cast<float>(i + 1) / kArcSegs);
+                Vec2 p1 = {gaugeCX + kGaugeRadius * std::cos(a1),
+                           gaugeCY - kGaugeRadius * std::sin(a1)};
+                Vec2 p2 = {gaugeCX + kGaugeRadius * std::cos(a2),
+                           gaugeCY - kGaugeRadius * std::sin(a2)};
+                renderer.drawLine(p1, p2, glowColor, kArcThick + 8.0f);
+            }
+
+            for (int i = 0; i < filledSegs; i++) {
+                float a1 = kPi - (kPi * static_cast<float>(i)     / kArcSegs);
+                float a2 = kPi - (kPi * static_cast<float>(i + 1) / kArcSegs);
+                Vec2 p1 = {gaugeCX + kGaugeRadius * std::cos(a1),
+                           gaugeCY - kGaugeRadius * std::sin(a1)};
+                Vec2 p2 = {gaugeCX + kGaugeRadius * std::cos(a2),
+                           gaugeCY - kGaugeRadius * std::sin(a2)};
+                renderer.drawLine(p1, p2, arcFillColor, kArcThick);
+            }
+        }
+
+        for (int tick = 0; tick <= 4; tick++) {
+            float frac  = tick / 4.0f;
+            float angle = kPi - (kPi * frac);
+            float rIn   = kGaugeRadius - kArcThick / 2.0f - 2.0f;
+            float rOut  = kGaugeRadius - kArcThick / 2.0f - 8.0f;
+            Vec2 tp1 = {gaugeCX + rIn  * std::cos(angle), gaugeCY - rIn  * std::sin(angle)};
+            Vec2 tp2 = {gaugeCX + rOut * std::cos(angle), gaugeCY - rOut * std::sin(angle)};
+            renderer.drawLine(tp1, tp2, UITheme::Colors::BorderSubtle, 1.0f);
+        }
+
+        int pctVal = static_cast<int>(currentProgress_);
+        std::string pctText = std::to_string(pctVal) + "%";
+        float pctW = UIDrawHelpers::getTextWidth(pctText, 14.0f);
+        renderer.drawText({gaugeCX - pctW / 2.0f, gaugeCY - kGaugeRadius * 0.48f - 8.0f},
+                          pctText, UITheme::Colors::TextPrimary);
+
+        std::string phaseLabel = collectionActive_ ? currentPhase_ : "Pipeline Progress";
+        float labelW = UIDrawHelpers::getTextWidth(phaseLabel, 14.0f);
+        renderer.drawText({gaugeCX - labelW / 2.0f, gaugeCY - kGaugeRadius * 0.48f + 10.0f},
+                          phaseLabel, UITheme::Colors::TextSecondary);
+
+        y = gaugeCY + 15.0f;
+    }
+
+    // ── HUD stat tiles ──────────────────────────────────
+
+    {
+        float tileW = (fullW - (kTileCount - 1) * kTileGap) / kTileCount;
+
+        std::string elapsedStr = "--";
+        if (elapsedSeconds_ > 0) {
+            int hrs  = static_cast<int>(elapsedSeconds_ / 3600);
+            int mins = static_cast<int>((elapsedSeconds_ % 3600) / 60);
+            int secs = static_cast<int>(elapsedSeconds_ % 60);
+            std::ostringstream oss;
+            if (hrs > 0)
+                oss << hrs << ":"
+                    << std::setfill('0') << std::setw(2) << mins << ":"
+                    << std::setw(2) << secs;
+            else
+                oss << std::setfill('0') << std::setw(2) << mins << ":"
+                    << std::setw(2) << secs;
+            elapsedStr = oss.str();
+        }
+
+        struct Tile { const char* label; std::string value; uint32_t accent; };
+        Tile tiles[kTileCount] = {
+            {"DATABASE",    hudFileSize_,
+             UITheme::Colors::Info},
+            {"SEQUENCES",   std::to_string(totalSequences_),
+             UITheme::Colors::Primary},
+            {"SOURCES",     std::to_string(totalSources_) + " / "
+                            + std::to_string(sourceCards_.size()),
+             UITheme::Colors::Success},
+            {"CHECKPOINTS", std::to_string(hudCheckpoints_),
+             UITheme::Colors::Warning},
+            {"ENTRIES",     std::to_string(entriesCollected_),
+             UITheme::Colors::PrimaryLight},
+            {"ELAPSED",     elapsedStr,
+             UITheme::Colors::AccentBlue},
+        };
+
+        for (int i = 0; i < kTileCount; i++) {
+            float tx = x + i * (tileW + kTileGap);
+
+            renderer.drawRoundedRect({tx, y}, {tileW, kTileH},
+                                     UITheme::Colors::CardSurface,
+                                     UITheme::Sizes::SmallRadius);
+            renderer.drawRoundedBorder({tx, y}, {tileW, kTileH},
+                                       UITheme::Colors::BorderSubtle,
+                                       UITheme::Sizes::SmallRadius);
+
+            renderer.drawRect({tx + 8.0f, y + 4.0f},
+                              {tileW - 16.0f, 2.0f}, tiles[i].accent);
+
+            renderer.drawText({tx + 10.0f, y + 12.0f},
+                              tiles[i].label, UITheme::Colors::TextSecondary);
+            renderer.drawText({tx + 10.0f, y + 32.0f},
+                              tiles[i].value, UITheme::Colors::TextPrimary);
+        }
+
+        y += kTileH + 15.0f;
+    }
+
+    // ── Action buttons (centered horizontal row) ────────
+
+    {
+        float totalBtnW = kBtnCount * kBtnW + (kBtnCount - 1) * kBtnGap;
+        float startX    = x + (fullW - totalBtnW) / 2.0f;
+
+        std::shared_ptr<UIButton>* btns[kBtnCount] = {
+            &btnFull_, &btnCollect_, &btnVerify_, &btnMerge_,
+            &btnRebuild_, &btnStop_, &btnRefreshStats_
+        };
+
+        for (int i = 0; i < kBtnCount; i++) {
+            float bx = startX + i * (kBtnW + kBtnGap);
+            (*btns[i])->setPosition(bx, y);
+            (*btns[i])->setSize(kBtnW, kBtnH);
+            (*btns[i])->drawOverlay(renderer, position);
+        }
+
+        y += kBtnH + 12.0f;
+    }
+
+    // ── Collection log viewer ───────────────────────────
+
+    {
+        UIDrawHelpers::drawSectionHeader(renderer, {x, y}, fullW, "Collection Logs",
+                                         UITheme::Colors::SectionNeutral);
+        y += UITheme::Sizes::HeaderHeight;
+
+        float logH = content.origin.y + content.size.y - y - 10.0f;
+        if (logH < 40.0f) logH = 40.0f;
+
+        renderer.drawRoundedRect({x, y}, {fullW, logH},
+                                 UITheme::Colors::Background, UITheme::Sizes::WidgetRadius);
+
         std::lock_guard<std::mutex> lock(logMutex_);
-        float entryY = logTopY + 5.0f;
-        int visible = static_cast<int>(logH / 18.0f);
-        int start   = std::max(0, static_cast<int>(logEntries_.size()) - visible);
+        float entryY = y + 5.0f;
+        int visible  = static_cast<int>(logH / 18.0f);
+        int start    = std::max(0, static_cast<int>(logEntries_.size()) - visible);
         for (size_t i = static_cast<size_t>(start); i < logEntries_.size(); ++i) {
             const auto& e = logEntries_[i];
             uint32_t color = UITheme::Colors::Success;
@@ -556,7 +688,7 @@ void UIDataHubPanel::drawHomeTab(OverlayRenderer& renderer, const PanelRect& con
             else if (e.level == 2) color = UITheme::Colors::Danger;
             renderer.drawText({x + 5.0f, entryY}, e.timestamp + " " + e.message, color);
             entryY += 18.0f;
-            if (entryY > logTopY + logH) break;
+            if (entryY > y + logH) break;
         }
     }
 }
@@ -1085,6 +1217,9 @@ void UIDataHubPanel::pollCollectionManager() {
     collectionMessage_     = status.message;
     sourcesProcessed_      = status.sourcesProcessed;
     checkpointsCollected_  = status.checkpointsCollected;
+    entriesCollected_      = status.entriesCollected;
+    duplicatesSkipped_     = status.duplicatesSkipped;
+    elapsedSeconds_        = status.elapsedSeconds;
 
     if (status.phase == "complete" && collectionActive_) {
         addLog("Collection completed successfully", 0);
@@ -1101,6 +1236,7 @@ void UIDataHubPanel::updateDatasetStats() {
     GRIM::Config::GrimTextPaths paths;
     if (!GRIM::Config::loadGrimTextPaths(paths)) {
         datasetSizeInfo_ = "Dataset: Config error";
+        hudFileSize_ = "N/A";
         return;
     }
 
@@ -1108,16 +1244,17 @@ void UIDataHubPanel::updateDatasetStats() {
         if (std::filesystem::exists(paths.training_data)) {
             auto sz = std::filesystem::file_size(paths.training_data);
             std::stringstream ss;
-            ss << "Dataset: ";
             if (sz >= 1024ULL * 1024 * 1024)
                 ss << std::fixed << std::setprecision(2) << (sz / (1024.0 * 1024.0 * 1024.0)) << " GB";
             else if (sz >= 1024ULL * 1024)
                 ss << std::fixed << std::setprecision(2) << (sz / (1024.0 * 1024.0)) << " MB";
             else
                 ss << (sz / 1024) << " KB";
-            datasetSizeInfo_ = ss.str();
+            hudFileSize_ = ss.str();
+            datasetSizeInfo_ = "Dataset: " + hudFileSize_;
         } else {
             datasetSizeInfo_ = "Dataset: Not found";
+            hudFileSize_ = "N/A";
         }
 
         std::string ckptDir = getResourcePath() + "/models/GRIM-text/training/checkpoints";
@@ -1125,10 +1262,12 @@ void UIDataHubPanel::updateDatasetStats() {
             int count = 0;
             for (const auto& e : std::filesystem::directory_iterator(ckptDir))
                 if (e.path().extension() == ".ckpt") count++;
+            hudCheckpoints_ = count;
             checkpointStatsInfo_ = "Checkpoints: " + std::to_string(count);
         }
     } catch (const std::exception&) {
         datasetSizeInfo_ = "Dataset: Error";
+        hudFileSize_ = "Error";
     }
 }
 

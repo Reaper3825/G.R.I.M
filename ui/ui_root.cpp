@@ -406,6 +406,17 @@ bool UIRoot::hasVisiblePanels() const
     return false;
 }
 
+bool UIRoot::isAnyPanelDragging() const
+{
+    auto panels = snapshotPanels();
+    for (const auto& panel : panels)
+    {
+        if (panel && panel->isVisible() && (panel->isDragging() || panel->isResizing()))
+            return true;
+    }
+    return false;
+}
+
 void UIRoot::injectTextInput(const std::string& text)
 {
     m_pendingTextInput += text;

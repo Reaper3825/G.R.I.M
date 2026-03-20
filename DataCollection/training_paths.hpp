@@ -12,6 +12,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include "core/grim_platform.h"
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <limits.h>
 #else
 #include <limits.h>
 #include <unistd.h>
@@ -40,6 +43,12 @@ inline std::filesystem::path resolveResourceRoot() {
     char exeBuffer[MAX_PATH];
     DWORD len = GetModuleFileNameA(nullptr, exeBuffer, MAX_PATH);
     if (len > 0 && len < MAX_PATH) {
+        bases.emplace_back(std::filesystem::path(exeBuffer).parent_path());
+    }
+#elif defined(__APPLE__)
+    char exeBuffer[PATH_MAX];
+    uint32_t bufSize = sizeof(exeBuffer);
+    if (_NSGetExecutablePath(exeBuffer, &bufSize) == 0) {
         bases.emplace_back(std::filesystem::path(exeBuffer).parent_path());
     }
 #else

@@ -193,7 +193,14 @@ static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     {
     case WM_NCHITTEST:
     {
-        if (UIRoot::get().hasVisiblePanels() || isPopupVisible())
+        POINT pt;
+        pt.x = GET_X_LPARAM(lParam);
+        pt.y = GET_Y_LPARAM(lParam);
+        ScreenToClient(hwnd, &pt);
+
+        if (UIRoot::get().shouldReceiveInputAt(static_cast<float>(pt.x), static_cast<float>(pt.y))
+            || UIRoot::get().isAnyPanelDragging()
+            || isPopupVisible())
         {
             return HTCLIENT;
         }

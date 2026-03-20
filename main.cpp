@@ -269,7 +269,7 @@ int main(int argc, char* argv[])
     // ======================================================
     // 4.   Memory system
     // ======================================================
-    g_memoryStorage.initialize("D:/G.R.I.M/data/memories.fb");
+    g_memoryStorage.initialize((std::filesystem::path(getGrimRootDir()) / "data" / "memories.fb").string());
     LOG_PHASE("Memory system initialized", true);
 
     // Wire MemoryFacade into the MMO orchestrator (memory init is after bootstrap)
@@ -499,6 +499,16 @@ int main(int argc, char* argv[])
         Mouse::updateFromInput(input);
         Key::updateFromInput(input);
         auto inputCaptureEnd = std::chrono::steady_clock::now();
+
+        // Per-frame overlay click-through: allow clicks to pass through to
+        // other apps when the cursor is not over any visible GRIM panel.
+        // On macOS this toggles NSWindow.ignoresMouseEvents; on Windows the
+        // WM_NCHITTEST handler in OverlayWndProc does position-based testing.
+        {
+            bool overUI = UIRoot::get().shouldReceiveInputAt(input.mousePos.x, input.mousePos.y)
+                          || UIRoot::get().isAnyPanelDragging();
+            PlatformWindow::setOverlayClickThrough(overlayWin->hwnd, !overUI);
+        }
 
         auto uiUpdateStart = std::chrono::steady_clock::now();
         UIRoot::get().update(input, 0.016f);

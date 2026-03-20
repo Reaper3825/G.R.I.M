@@ -654,8 +654,6 @@ config.character_coverage = 0.9995f;
 config.min_subword_freq = 3;
 config.enable_scratch_block_reasoning = true;
 config.detect_numbers = true;
-config.detect_urls = true;
-config.detect_emails = true;
 config.enable_byte_fallback = true;
 config.prefer_gpu = true;
 

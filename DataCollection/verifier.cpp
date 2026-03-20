@@ -172,10 +172,13 @@ private:
             }
         }
 
-        std::wstring model_path_w(path.begin(), path.end());
-        
         try {
+#ifdef _WIN32
+            std::wstring model_path_w(path.begin(), path.end());
             session_ = std::make_unique<Ort::Session>(*env_, model_path_w.c_str(), *session_options_);
+#else
+            session_ = std::make_unique<Ort::Session>(*env_, path.c_str(), *session_options_);
+#endif
         } catch (const std::exception& e) {
             std::cerr << "[Verifier] Failed to create ONNX session: " << e.what() << "\n";
             std::cerr << "[Verifier] Model path: " << path << "\n";

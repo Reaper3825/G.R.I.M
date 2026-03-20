@@ -136,8 +136,10 @@ if(GRIM_USE_PERCEPTION)
     else()
         set(ONNX_LIB_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libonnxruntime.a")
     endif()
+    # On Mac/Linux, vcpkg splits onnxruntime into component libraries
+    set(_ort_session "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libonnxruntime_session.a")
     if(EXISTS "${ONNX_LIB_PATH}")
-        message(STATUS "[GRIM] ✓ ONNX Runtime found")
+        message(STATUS "[GRIM] ✓ ONNX Runtime found (single lib)")
         
         if(NOT TARGET onnxruntime_imported)
             add_library(onnxruntime_imported STATIC IMPORTED GLOBAL)
@@ -150,6 +152,36 @@ if(GRIM_USE_PERCEPTION)
         
         list(APPEND GRIM_PERCEPTION_LIBS onnxruntime_imported)
         target_include_directories(GRIM PRIVATE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
+        add_compile_definitions(GRIM_HAS_ONNXRUNTIME)
+    elseif(EXISTS "${_ort_session}")
+        message(STATUS "[GRIM] ✓ ONNX Runtime found (component libs)")
+        set(_ort_libs
+            onnxruntime_session
+            onnxruntime_providers
+            onnxruntime_optimizer
+            onnxruntime_framework
+            onnxruntime_graph
+            onnxruntime_mlas
+            onnxruntime_common
+            onnxruntime_util
+            onnxruntime_lora
+            onnxruntime_flatbuffers
+            onnx
+            onnx_proto
+            re2
+            cpuinfo
+            protobuf
+        )
+        foreach(_ort_lib ${_ort_libs})
+            set(_ort_lib_path "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/lib${_ort_lib}.a")
+            if(EXISTS "${_ort_lib_path}")
+                target_link_libraries(GRIM PRIVATE ${_ort_lib})
+            endif()
+        endforeach()
+        target_include_directories(GRIM PRIVATE
+            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/onnxruntime"
+        )
         add_compile_definitions(GRIM_HAS_ONNXRUNTIME)
     else()
         message(WARNING "[GRIM] ✗ ONNX Runtime not found at ${ONNX_LIB_PATH}")

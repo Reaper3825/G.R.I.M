@@ -48,6 +48,11 @@ void setOverlayBlurStyle(void* overlayWindowHandle,
                           float opacity,
                           int intensity);
 
+// Toggle click-through on the overlay window.
+// When clickThrough is true, all mouse events pass to windows behind the overlay.
+// When false, the overlay captures mouse events normally.
+void setOverlayClickThrough(void* overlayWindowHandle, bool clickThrough);
+
 // Capture pixels from the real desktop behind the overlay window.
 // Input coordinates are in overlay-window local space (origin = top-left of overlay window).
 // Output pixels are packed ARGB: (a<<24)|(r<<16)|(g<<8)|b.

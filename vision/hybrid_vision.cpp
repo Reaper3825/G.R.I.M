@@ -106,6 +106,7 @@ bool HybridVisionSystem::init_onnx() {
         }
         
         // Load the model
+#ifdef _WIN32
         std::wstring model_path_w(config_.onnx_model_path.begin(), 
                                   config_.onnx_model_path.end());
         onnx_session_ = std::make_unique<Ort::Session>(
@@ -113,6 +114,13 @@ bool HybridVisionSystem::init_onnx() {
             model_path_w.c_str(),
             *onnx_session_options_
         );
+#else
+        onnx_session_ = std::make_unique<Ort::Session>(
+            *onnx_env_,
+            config_.onnx_model_path.c_str(),
+            *onnx_session_options_
+        );
+#endif
         
         // Get input/output names
         Ort::AllocatorWithDefaultOptions allocator;

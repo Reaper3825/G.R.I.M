@@ -1143,8 +1143,6 @@ bool testRoundTripEncoding_FULL(std::string& message) {
     UniByteConfig tokenizer_config;
     tokenizer_config.enable_scratch_block_reasoning = true;
     tokenizer_config.detect_numbers = true;
-    tokenizer_config.detect_urls = true;
-    tokenizer_config.detect_emails = true;
     
     UniByte tokenizer(tokenizer_config);
     
@@ -1154,7 +1152,7 @@ bool testRoundTripEncoding_FULL(std::string& message) {
     // Encode with metadata
     auto result = tokenizer.encodeWithMetadata(test_text);
     
-    SB_ASSERT_TRUE(result.atom_tokens > 0, "Should detect atoms in test text");
+    SB_ASSERT_TRUE(result.atom_tokens > 0, "Should detect numeric atoms in test text");
     SB_ASSERT_TRUE(result.atoms.size() > 0, "Should have atom metadata");
     
     // Verify atom token IDs are in correct range [ATOM_TOKEN_OFFSET, ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)

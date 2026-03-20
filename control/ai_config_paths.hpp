@@ -353,11 +353,6 @@ struct TrainingHyperparameters {
     // Scratch block reasoning configuration - NO DEFAULTS
     bool tokenizer_enable_scratch_block_reasoning;
     bool tokenizer_detect_numbers;
-    bool tokenizer_detect_urls;
-    bool tokenizer_detect_emails;
-    bool tokenizer_detect_paths;
-    bool tokenizer_detect_dates;
-    bool tokenizer_detect_code_literals;
 };
 
 /**
@@ -1278,11 +1273,6 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
         const auto& sbr = tok["scratch_block_reasoning"];
         assignTrainingField(hyperparameters.tokenizer_enable_scratch_block_reasoning, sbr, "enabled");
         assignTrainingField(hyperparameters.tokenizer_detect_numbers, sbr, "detect_numbers");
-        assignTrainingField(hyperparameters.tokenizer_detect_urls, sbr, "detect_urls");
-        assignTrainingField(hyperparameters.tokenizer_detect_emails, sbr, "detect_emails");
-        assignTrainingField(hyperparameters.tokenizer_detect_paths, sbr, "detect_paths");
-        assignTrainingField(hyperparameters.tokenizer_detect_dates, sbr, "detect_dates");
-        assignTrainingField(hyperparameters.tokenizer_detect_code_literals, sbr, "detect_code_literals");
     }
 
     if (tok.contains("special_tokens") && tok["special_tokens"].is_array()) {

@@ -285,7 +285,7 @@ void* createOverlayWindow(int x, int y, int width, int height) {
         [window setOpaque:NO];
         [window setBackgroundColor:[NSColor clearColor]];
         [window setHasShadow:NO];
-        [window setIgnoresMouseEvents:NO];
+        [window setIgnoresMouseEvents:YES];
         [window setCollectionBehavior:
             NSWindowCollectionBehaviorCanJoinAllSpaces |
             NSWindowCollectionBehaviorFullScreenAuxiliary];
@@ -432,6 +432,17 @@ void setOverlayBlurStyle(void* overlayWindowHandle,
     }
 }
 
+void setOverlayClickThrough(void* overlayWindowHandle, bool clickThrough) {
+    if (!overlayWindowHandle) return;
+    @autoreleasepool {
+        NSWindow* window = (__bridge NSWindow*)overlayWindowHandle;
+        BOOL shouldIgnore = clickThrough ? YES : NO;
+        if ([window ignoresMouseEvents] != shouldIgnore) {
+            [window setIgnoresMouseEvents:shouldIgnore];
+        }
+    }
+}
+
 } // namespace PlatformWindow
 
 // =============================================================
@@ -498,7 +509,12 @@ static void ensureScreenCaptureStarted(NSWindow* overlayWindow) {
     [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent* content, NSError* error) {
         if (error || !content) {
             if (error) {
-                LOG_ERROR("PlatformWindow", std::string("ScreenCaptureKit content error: ") + [[error localizedDescription] UTF8String]);
+                static int sckErrorCount = 0;
+                if (sckErrorCount < 3) {
+                    LOG_ERROR("PlatformWindow", std::string("ScreenCaptureKit content error: ") + [[error localizedDescription] UTF8String]);
+                    if (++sckErrorCount == 3)
+                        LOG_ERROR("PlatformWindow", "Suppressing further ScreenCaptureKit errors (grant Screen Recording permission in System Settings)");
+                }
             }
             return;
         }
