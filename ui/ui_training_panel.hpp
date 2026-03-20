@@ -8,7 +8,7 @@
 #include "ui_graph.hpp"
 #include "ui_training_config.hpp"
 #include "control/training_controller.hpp"
-#include "DataCollection/data_collection_manager.hpp"
+#include "DataCollection/pipeline/pipeline_orchestrator.hpp"
 #include "hardware/resource_values.hpp"
 #include <memory>
 #include <string>
@@ -75,7 +75,7 @@ private:
     GRIMText::TrainingConfig currentConfig;
     
     // Data collection manager (in-process)
-    std::unique_ptr<GRIM::DataCollection::DataCollectionManager> collectionManager;
+    std::unique_ptr<GRIM::Pipeline::PipelineOrchestrator> collectionManager;
     
     bool serverConnected;
     bool serverStarting;  // Flag to prevent duplicate server starts

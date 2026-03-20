@@ -8,7 +8,7 @@
 //  subclasses or per-tab files.
 //
 //  UI owns layout + events only.  All logic lives in
-//  DataCollectionManager, HuggingFaceWebhook,
+//  PipelineOrchestrator, HuggingFaceWebhook,
 //  DataStructurer, and DatasetTarget.
 //======================================================//
 

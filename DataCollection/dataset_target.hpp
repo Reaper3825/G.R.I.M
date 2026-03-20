@@ -21,12 +21,17 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
+namespace GRIM { namespace Pipeline {
+    class IDatasetIO;
+    struct TaggedEntry;
+}}
+
 // Lightweight handle for a sequence in the mass dataset.
-// `id` will be a persistent unique ID once the tagging plan lands.
-// Until then, `index` (0-based line number) is the stand-in key.
+// `id` is a persistent unique ID assigned by StageTag.
 struct SequenceHandle {
     size_t      index = 0;
     std::string id;
@@ -37,6 +42,7 @@ struct SequenceHandle {
     std::string subject;
     std::string quality_tier;
     std::vector<std::string> tags;
+    float       reliability_score = 0.0f;
 };
 
 // Truncated preview returned from search queries.
@@ -70,6 +76,8 @@ public:
     // ── Mass dataset (single source of truth) ───────────
 
     bool   loadMassDataset();
+    bool   loadMassDatasetFromManifest(const std::filesystem::path& manifestPath,
+                                       std::shared_ptr<GRIM::Pipeline::IDatasetIO> io);
     size_t massDatasetSize() const;
 
     SequenceHandle getSequence(size_t index) const;

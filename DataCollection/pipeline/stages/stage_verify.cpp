@@ -1,7 +1,7 @@
 #include "stage_verify.hpp"
 #include "../pipeline_context.hpp"
 #include "../chunk_spool.hpp"
-#include "../../verifier.hpp"
+#include "DataCollection/verifier.hpp"
 
 #include <nlohmann/json.hpp>
 #include <chrono>

@@ -47,6 +47,12 @@ file(GLOB REWARD_LEARNING_SOURCES "Reward_Learning/*.cpp")
 file(GLOB REWARD_LEARNING_HEADERS "Reward_Learning/*.hpp")
 file(GLOB DataCollection_SOURCES "DataCollection/*.cpp")
 file(GLOB DataCollection_HEADERS "DataCollection/*.hpp")
+file(GLOB DataCollection_Pipeline_SOURCES "DataCollection/pipeline/*.cpp")
+file(GLOB DataCollection_Pipeline_HEADERS "DataCollection/pipeline/*.hpp")
+file(GLOB DataCollection_PipelineStages_SOURCES "DataCollection/pipeline/stages/*.cpp")
+file(GLOB DataCollection_PipelineStages_HEADERS "DataCollection/pipeline/stages/*.hpp")
+file(GLOB DataCollection_IO_SOURCES "DataCollection/io/*.cpp")
+file(GLOB DataCollection_IO_HEADERS "DataCollection/io/*.hpp")
 file(GLOB hardware_SOURCES "hardware/*.cpp")
 file(GLOB hardware_HEADERS "hardware/*.hpp")
 file(GLOB_RECURSE MMO_SOURCES "MMO/*.cpp")
@@ -55,6 +61,9 @@ file(GLOB_RECURSE MMO_HEADERS "MMO/*.hpp")
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_data_collection\\.cpp$")
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "merge_checkpoints\\.cpp$")
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_verifier\\.cpp$")
+# Exclude replaced monolithic files
+list(FILTER DataCollection_SOURCES EXCLUDE REGEX "grim_data_pipeline\\.cpp$")
+list(FILTER DataCollection_SOURCES EXCLUDE REGEX "data_collection_manager\\.cpp$")
 # =========================================================
 # GRIM-text Model: Standalone Build (2025-11-05)
 # =========================================================
@@ -94,6 +103,9 @@ set(GRIM_SOURCES
     ${REWARD_LEARNING_SOURCES}
     ${GRIM_GPU_SOURCES}
     ${DataCollection_SOURCES}
+    ${DataCollection_Pipeline_SOURCES}
+    ${DataCollection_PipelineStages_SOURCES}
+    ${DataCollection_IO_SOURCES}
     ${hardware_SOURCES}
     ${MMO_SOURCES}
 )
@@ -128,6 +140,9 @@ set(GRIM_HEADERS
     ${VISION_HEADERS}
     ${REWARD_LEARNING_HEADERS}
     ${DataCollection_HEADERS}
+    ${DataCollection_Pipeline_HEADERS}
+    ${DataCollection_PipelineStages_HEADERS}
+    ${DataCollection_IO_HEADERS}
     ${hardware_HEADERS}
     ${MMO_HEADERS}
 )

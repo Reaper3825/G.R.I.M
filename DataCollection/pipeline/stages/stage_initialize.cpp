@@ -1,10 +1,10 @@
 #include "stage_initialize.hpp"
 #include "../pipeline_context.hpp"
 #include "../chunk_spool.hpp"
-#include "../../io/dataset_io_json.hpp"
-#include "../../collection_state.hpp"
-#include "../../training_paths.hpp"
-#include "../../../control/ai_config_paths.hpp"
+#include "DataCollection/io/dataset_io_json.hpp"
+#include "DataCollection/collection_state.hpp"
+#include "DataCollection/training_paths.hpp"
+#include "control/ai_config_paths.hpp"
 
 #include <nlohmann/json.hpp>
 #include <chrono>

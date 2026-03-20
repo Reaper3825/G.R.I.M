@@ -1,7 +1,7 @@
 #include "stage_dedup.hpp"
 #include "../pipeline_context.hpp"
 #include "../chunk_spool.hpp"
-#include "../../collection_state.hpp"
+#include "DataCollection/collection_state.hpp"
 
 #include <nlohmann/json.hpp>
 #include <chrono>

@@ -82,7 +82,7 @@ UITrainingPanel::UITrainingPanel()
     }
     
     // Initialize data collection manager (in-process)
-    collectionManager = std::make_unique<GRIM::DataCollection::DataCollectionManager>();
+    collectionManager = std::make_unique<GRIM::Pipeline::PipelineOrchestrator>();
     
     // Initialize configuration sliders
     epochsSlider = std::make_shared<UISlider>("Epochs", 1.0f, 50.0f, 
@@ -408,9 +408,9 @@ void UITrainingPanel::update(const InputState& input, float dt) {
             dataCollectionCompleted = true;
             pipelineRequestPending = false;
             
-            if (status.phase == "complete") {
+            if (status.state == GRIM::Pipeline::PipelineState::Complete) {
                 addLog("✓ Data collection completed successfully!", 1);
-            } else if (status.phase == "error") {
+            } else if (status.state == GRIM::Pipeline::PipelineState::Error) {
                 addLog("✗ Data collection failed: " + status.message, 2);
             }
         }
@@ -1553,16 +1553,10 @@ void UITrainingPanel::startDataCollection() {
     dataCollectionCompleted = false;
     pipelineRequestPending = true;
     
-    addLog("Launching data collection via DataCollectionManager...", 0);
-    
-    // Start collection using the manager
-    if (collectionManager->startCollection("full")) {
-        addLog("✓ Data collection started successfully", 1);
-    } else {
-        addLog("✗ Failed to start data collection", 2);
-        dataCollectionActive = false;
-        pipelineRequestPending = false;
-    }
+    addLog("Launching data pipeline...", 0);
+
+    collectionManager->startPipeline(GRIM::Pipeline::PipelineMode::Full);
+    addLog("✓ Data pipeline started successfully", 1);
 }
 
 void UITrainingPanel::updateDatasetSize() {

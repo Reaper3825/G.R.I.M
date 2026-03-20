@@ -1,8 +1,8 @@
 #include "stage_collect.hpp"
 #include "../pipeline_context.hpp"
 #include "../chunk_spool.hpp"
-#include "../../web_collector.hpp"
-#include "../../../control/ai_config_paths.hpp"
+#include "DataCollection/web_collector.hpp"
+#include "control/ai_config_paths.hpp"
 
 #include <nlohmann/json.hpp>
 #include <chrono>

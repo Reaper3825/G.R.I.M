@@ -43,19 +43,19 @@ todos:
     status: completed
   - id: update-ui
     content: Update ui_data_hub.hpp/.cpp to replace DataCollectionManager with PipelineOrchestrator
-    status: in_progress
+    status: completed
   - id: update-dataset-target
     content: Update dataset_target.hpp to use TaggedEntry, bridge with StageTag output
-    status: pending
+    status: completed
   - id: delete-old-files
     content: Remove grim_data_pipeline.cpp, data_collection_manager.hpp/.cpp, merge_checkpoints.cpp from build
-    status: pending
+    status: completed
   - id: update-cmake
     content: Update CMakeLists to add new pipeline files, remove old ones
-    status: pending
+    status: completed
   - id: update-cli
     content: Refactor main_data_collection.cpp to use PipelineOrchestrator instead of StartDataCollection()
-    status: pending
+    status: in_progress
 isProject: false
 ---
 

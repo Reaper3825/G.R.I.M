@@ -1,13 +1,13 @@
 #include "stage_ingest.hpp"
 #include "../pipeline_context.hpp"
 #include "../chunk_spool.hpp"
-#include "../../collection_state.hpp"
-#include "../../huggingface_webhook.hpp"
-#include "../../verifier.hpp"
+#include "DataCollection/collection_state.hpp"
+#include "DataCollection/huggingface_webhook.hpp"
+#include "DataCollection/verifier.hpp"
 
 #include <nlohmann/json.hpp>
 #include <flatbuffers/flatbuffers.h>
-#include "../../checkpoint_data_generated.h"
+#include "DataCollection/checkpoint_data_generated.h"
 
 #include <chrono>
 #include <filesystem>

@@ -1,7 +1,7 @@
 #include "stage_write.hpp"
 #include "../pipeline_context.hpp"
 #include "../chunk_spool.hpp"
-#include "../../io/dataset_io.hpp"
+#include "DataCollection/io/dataset_io.hpp"
 
 #include <nlohmann/json.hpp>
 #include <chrono>
