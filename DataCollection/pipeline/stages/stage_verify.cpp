@@ -29,15 +29,14 @@ StageResult StageVerify::execute(PipelineContext& ctx) {
         if (ctx.onProgress) ctx.onProgress(PipelineState::Verify, p, "verifying");
     };
 
-    // Configure verifier
-    Config verifierConfig;
+    ::Config verifierConfig;
     verifierConfig.input_dir = ctx.config.verifiedDir;
     verifierConfig.output_dir = ctx.config.verifiedDir;
     verifierConfig.verbose_logging = false;
     verifierConfig.save_rejected = false;
     verifierConfig.progressive_filtering = true;
 
-    Verifier verifier(verifierConfig);
+    ::Verifier verifier(verifierConfig);
 
     size_t totalVerified = 0;
     size_t totalChunks = ctx.ingestCursor.chunkFiles.size();

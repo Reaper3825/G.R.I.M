@@ -1732,7 +1732,6 @@ void UIDataHubPanel::loadUIConfig() {
         f >> cfg;
 
         if (cfg.contains("fetchLimit"))             { fetchLimit_ = cfg["fetchLimit"]; }
-        if (cfg.contains("vocabSize"))              { vocabSize_ = cfg["vocabSize"]; }
         if (cfg.contains("verificationThreshold"))  { verificationThreshold_ = cfg["verificationThreshold"]; }
         if (cfg.contains("maxHFResults"))            { maxHFResults_ = cfg["maxHFResults"]; if (sliderMaxHFResults_) sliderMaxHFResults_->setValue(static_cast<float>(maxHFResults_)); }
 
@@ -1749,7 +1748,6 @@ void UIDataHubPanel::saveUIConfig() {
         std::filesystem::create_directories(stateDir);
         nlohmann::json cfg;
         cfg["fetchLimit"]             = fetchLimit_;
-        cfg["vocabSize"]              = vocabSize_;
         cfg["verificationThreshold"]  = verificationThreshold_;
         cfg["maxHFResults"]           = maxHFResults_;
         std::ofstream f(path);

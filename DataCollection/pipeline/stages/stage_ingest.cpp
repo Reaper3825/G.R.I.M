@@ -4,6 +4,7 @@
 #include "DataCollection/collection_state.hpp"
 #include "DataCollection/huggingface_webhook.hpp"
 #include "DataCollection/verifier.hpp"
+#include "DataCollection/io/dataset_io.hpp"
 
 #include <nlohmann/json.hpp>
 #include <flatbuffers/flatbuffers.h>
@@ -232,29 +233,19 @@ StageResult StageIngest::execute(PipelineContext& ctx) {
     }
     reportProgress(55.0f);
 
-    // ── 4. Load previously merged cache ─────────────────
-    {
-        fs::path cachePath = fs::path(ctx.config.outputDir) / "merged_verified_cache.jsonl";
-        if (fs::exists(cachePath)) {
-            size_t prevCount = 0;
-            std::ifstream prev(cachePath);
-            std::string line;
-            while (std::getline(prev, line)) {
-                if (line.empty()) continue;
-                try {
-                    json j = json::parse(line);
-                    VerifiedEntry ve;
-                    ve.content = j["content"].get<std::string>();
-                    ve.source_url = j.value("source_url", std::string("merged_cache"));
-                    ve.source_type = j.value("source_type", std::string("cached"));
-                    ve.reliability_score = j.value("reliability_score", 0.9f);
-                    ve.verification_time = j.value("verification_time", time_t(0));
-                    verifiedEntries.push_back(std::move(ve));
-                    prevCount++;
-                } catch (...) { continue; }
-            }
-            if (prevCount > 0) {
-                std::cout << "[Ingest] Previously merged cache: " << prevCount << " entries\n";
+    // ── 4. On rebuild: re-ingest existing mass dataset ──
+    if (ctx.config.forceRebuild && ctx.datasetIO) {
+        std::vector<TaggedEntry> existing;
+        if (ctx.datasetIO->loadAllEntries(ctx.run.massDatasetPath, existing) && !existing.empty()) {
+            std::cout << "[Ingest] Re-ingesting mass dataset: " << existing.size() << " entries\n";
+            for (auto& te : existing) {
+                VerifiedEntry ve;
+                ve.content = std::move(te.content);
+                ve.source_url = std::move(te.sourceUrl);
+                ve.source_type = std::move(te.sourceType);
+                ve.reliability_score = te.reliabilityScore;
+                ve.verification_time = te.timestamp;
+                verifiedEntries.push_back(std::move(ve));
             }
         }
     }

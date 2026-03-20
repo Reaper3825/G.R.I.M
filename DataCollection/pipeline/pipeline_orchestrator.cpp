@@ -1,5 +1,6 @@
 #include "pipeline_orchestrator.hpp"
 #include "chunk_spool.hpp"
+#include "DataCollection/collection_state.hpp"
 #include "stages/stage_initialize.hpp"
 #include "stages/stage_collect.hpp"
 #include "stages/stage_ingest.hpp"
@@ -63,9 +64,21 @@ void PipelineOrchestrator::startPipeline(PipelineMode mode) {
         thread_->join();
     }
 
-    // Reset context for new run
-    context_ = PipelineContext{};
+    // Reset context for new run (no copy/move assignment; PipelineContext has unique_ptr)
+    context_.config = PipelineConfig{};
     context_.config.mode = mode;
+    context_.stats = PipelineStats{};
+    context_.stateManager.reset();
+    context_.run = PipelineRunLayout{};
+    context_.ingestCursor = ChunkCursor{};
+    context_.verifyCursor = ChunkCursor{};
+    context_.dedupCursor = ChunkCursor{};
+    context_.preprocessCursor = ChunkCursor{};
+    context_.tagCursor = ChunkCursor{};
+    context_.cleanedChunk.clear();
+    context_.taggedChunk.clear();
+    context_.chunkSize = 5000;
+    context_.datasetIO.reset();
     context_.stopRequested.store(false);
 
     context_.onProgress = [this](PipelineState state, float progress, const std::string& msg) {
@@ -205,8 +218,7 @@ void PipelineOrchestrator::executionThread() {
     std::cout << "  Dedup removed: " << context_.stats.duplicatesRemoved << "\n";
     std::cout << "  Cleaned:    " << context_.stats.entriesCleaned << "\n";
     std::cout << "  Tagged:     " << context_.stats.entriesTagged << "\n";
-    std::cout << "  Written:    " << context_.stats.entriesWritten << "\n";
-    std::cout << "  Shards:     " << context_.stats.shardsWritten << "\n\n";
+    std::cout << "  Written:    " << context_.stats.entriesWritten << "\n\n";
 }
 
 } // namespace Pipeline

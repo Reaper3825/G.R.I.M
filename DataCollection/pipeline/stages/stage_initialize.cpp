@@ -44,7 +44,6 @@ StageResult StageInitialize::execute(PipelineContext& ctx) {
         std::cout << "[Initialize] WARNING: Could not load ai_config.json, using defaults\n";
     }
 
-    // Apply defaults where still empty
     if (ctx.config.checkpointDir.empty())  ctx.config.checkpointDir  = "data/checkpoints";
     if (ctx.config.rawDir.empty())         ctx.config.rawDir         = "data/raw";
     if (ctx.config.verifiedDir.empty())    ctx.config.verifiedDir    = "data/verified";
@@ -73,18 +72,18 @@ StageResult StageInitialize::execute(PipelineContext& ctx) {
         now.time_since_epoch()).count();
     ctx.run.runId = "run_" + std::to_string(epoch);
 
-    ctx.run.outputRoot   = fs::path(ctx.config.outputDir);
-    ctx.run.runRoot      = ctx.run.outputRoot / "pipeline_runs" / ctx.run.runId;
-    ctx.run.spoolRoot    = ctx.run.runRoot / "spool";
-    ctx.run.manifestPath = ctx.run.outputRoot / "manifest.json";
+    ctx.run.outputRoot      = fs::path(ctx.config.outputDir);
+    ctx.run.runRoot         = ctx.run.outputRoot / "pipeline_runs" / ctx.run.runId;
+    ctx.run.spoolRoot       = ctx.run.runRoot / "spool";
+    ctx.run.massDatasetPath = ctx.run.outputRoot / "mass_dataset.jsonl";
 
     std::error_code ec;
     fs::create_directories(ctx.run.spoolRoot, ec);
-    fs::create_directories(ctx.run.outputRoot / "shards", ec);
+    fs::create_directories(ctx.run.outputRoot, ec);
 
     std::cout << "[Initialize] Run ID: " << ctx.run.runId << "\n";
     std::cout << "[Initialize] Spool:  " << ctx.run.spoolRoot.string() << "\n";
-    std::cout << "[Initialize] Output: " << ctx.run.outputRoot.string() << "\n";
+    std::cout << "[Initialize] Output: " << ctx.run.massDatasetPath.string() << "\n";
 
     // ── Initialize collection state manager ─────────────
     std::string stateDir = ctx.config.checkpointDir + "/collection_state";
@@ -92,24 +91,16 @@ StageResult StageInitialize::execute(PipelineContext& ctx) {
     std::cout << "[Initialize] State: " << ctx.stateManager->getTotalUniqueUrls() << " tracked URLs, "
               << ctx.stateManager->getTotalUniqueContent() << " content hashes\n";
 
-    // ── Force rebuild detection ─────────────────────────
+    // ── Force rebuild (only when mode explicitly requests it) ──
     if (ctx.config.mode == PipelineMode::MergeRebuild) {
         ctx.config.forceRebuild = true;
     }
 
-    if (!ctx.config.forceRebuild && ctx.stateManager->getTotalUniqueContent() > 0) {
-        fs::path trainingGrmt = fs::path(ctx.config.outputDir) / "training_data.grmt";
-        if (!fs::exists(trainingGrmt)) {
-            std::cout << "[Initialize] Training data missing but "
-                      << ctx.stateManager->getTotalUniqueContent()
-                      << " content hashes found. Enabling force-rebuild.\n";
-            ctx.config.forceRebuild = true;
-        }
-    }
+    // ── Create storage provider ─────────────────────────
+    ctx.datasetIO = std::make_shared<DatasetIOJson>();
 
-    // ── Create storage providers ────────────────────────
-    ctx.datasetIO     = std::make_shared<DatasetIOJson>();
-    ctx.datasetWriter = std::make_shared<AppendOnlyDatasetWriterJson>();
+    size_t existingCount = ctx.datasetIO->countEntries(ctx.run.massDatasetPath);
+    std::cout << "[Initialize] Mass dataset: " << existingCount << " existing entries\n";
 
     auto elapsed = std::chrono::steady_clock::now() - startTime;
     result.durationSeconds = std::chrono::duration<float>(elapsed).count();

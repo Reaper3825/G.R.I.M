@@ -2,7 +2,7 @@
 #include "../pipeline_context.hpp"
 #include "../chunk_spool.hpp"
 #include "DataCollection/data_preprocessor.hpp"
-#include "control/ai_config_paths.hpp"
+#include "DataCollection/collection_state.hpp"
 
 #include <nlohmann/json.hpp>
 #include <chrono>
@@ -32,16 +32,8 @@ StageResult StagePreprocess::execute(PipelineContext& ctx) {
         if (ctx.onProgress) ctx.onProgress(PipelineState::Preprocess, p, "preprocessing");
     };
 
-    // Load max_seq_len from training config
-    GRIM::Config::TrainingHyperparameters trainParams;
-    int maxSeqLen = 900;
-    if (GRIM::Config::loadTrainingHyperparameters(trainParams)) {
-        maxSeqLen = trainParams.max_seq_len;
-        std::cout << "[Preprocess] Using max_seq_len=" << maxSeqLen << " from config\n";
-    }
-
-    const int charsPerToken = 4;
-    int maxChars = maxSeqLen * charsPerToken;
+    // Character-based chunk limit only (no token/training coupling)
+    int maxChars = ctx.config.maxChunkChars > 0 ? ctx.config.maxChunkChars : 3600;
 
     PreprocessorConfig prepConfig;
     prepConfig.remove_html = true;
@@ -51,7 +43,7 @@ StageResult StagePreprocess::execute(PipelineContext& ctx) {
     prepConfig.max_length = 100000;
     prepConfig.max_repetition_ratio = 0.5f;
     prepConfig.dedup_threshold = 0.9f;
-    prepConfig.max_token_estimate_chars = maxChars;
+    prepConfig.max_token_estimate_chars = maxChars;  // Used only as character limit for chunking
 
     DataPreprocessor preprocessor(prepConfig);
 

@@ -484,7 +484,6 @@ int main(int argc, char* argv[])
         auto frameStart = std::chrono::steady_clock::now();
 
         // Capture input and convert to client coordinates for UI
-        auto inputCaptureStart = std::chrono::steady_clock::now();
         InputState input;
         input.captureFromHWND(overlayWin->hwnd);
 
@@ -498,7 +497,6 @@ int main(int argc, char* argv[])
         // Update Mouse class state from InputState for better reliability
         Mouse::updateFromInput(input);
         Key::updateFromInput(input);
-        auto inputCaptureEnd = std::chrono::steady_clock::now();
 
         // Per-frame overlay click-through: allow clicks to pass through to
         // other apps when the cursor is not over any visible GRIM panel.
@@ -510,18 +508,10 @@ int main(int argc, char* argv[])
             PlatformWindow::setOverlayClickThrough(overlayWin->hwnd, !overUI);
         }
 
-        auto uiUpdateStart = std::chrono::steady_clock::now();
         UIRoot::get().update(input, 0.016f);
-        auto uiUpdateEnd = std::chrono::steady_clock::now();
-        
-        auto uiDrawStart = std::chrono::steady_clock::now();
         UIRoot::get().draw();
-        auto uiDrawEnd = std::chrono::steady_clock::now();
-
-        auto wmUpdateStart = std::chrono::steady_clock::now();
         WindowManager::processMainThreadUpdates();
         WindowManager::renderFrame();
-        auto wmUpdateEnd = std::chrono::steady_clock::now();
         
         // Clear per-frame input states
         Key::endFrame();
@@ -529,20 +519,6 @@ int main(int argc, char* argv[])
 
         auto frameEnd = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart);
-        
-        // Frame timing breakdown if frame is slow
-        if (elapsed.count() > 40) { // More than 20ms = potential stutter
-            auto inputMs = std::chrono::duration_cast<std::chrono::microseconds>(inputCaptureEnd - inputCaptureStart).count() / 1000.0;
-            auto uiUpdateMs = std::chrono::duration_cast<std::chrono::microseconds>(uiUpdateEnd - uiUpdateStart).count() / 1000.0;
-            auto uiDrawMs = std::chrono::duration_cast<std::chrono::microseconds>(uiDrawEnd - uiDrawStart).count() / 1000.0;
-            auto wmMs = std::chrono::duration_cast<std::chrono::microseconds>(wmUpdateEnd - wmUpdateStart).count() / 1000.0;
-            
-            LOG_DEBUG("MainLoop", "SLOW FRAME (" + std::to_string(elapsed.count()) + "ms): " +
-                      "Input=" + std::to_string(inputMs) + "ms, " +
-                      "UI Update=" + std::to_string(uiUpdateMs) + "ms, " +
-                      "UI Draw=" + std::to_string(uiDrawMs) + "ms, " +
-                      "WM=" + std::to_string(wmMs) + "ms");
-        }
         
         if (elapsed < kFrameDuration)
             std::this_thread::sleep_for(kFrameDuration - elapsed);

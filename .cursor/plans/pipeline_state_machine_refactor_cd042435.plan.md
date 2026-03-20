@@ -55,7 +55,7 @@ todos:
     status: completed
   - id: update-cli
     content: Refactor main_data_collection.cpp to use PipelineOrchestrator instead of StartDataCollection()
-    status: in_progress
+    status: completed
 isProject: false
 ---
 

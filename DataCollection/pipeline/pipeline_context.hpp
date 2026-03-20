@@ -23,7 +23,6 @@ namespace Pipeline {
 namespace fs = std::filesystem;
 
 class IDatasetIO;
-class AppendOnlyDatasetWriter;
 
 struct PipelineConfig {
     PipelineMode mode = PipelineMode::Full;
@@ -33,7 +32,7 @@ struct PipelineConfig {
     std::string verifiedDir;
     std::string outputDir;
     bool forceRebuild = false;
-    int vocabSize = 50000;
+    int maxChunkChars = 3600;
     std::vector<std::string> qaJsonlPaths;
 };
 
@@ -48,7 +47,6 @@ struct PipelineStats {
     size_t chunksCreated = 0;
     size_t prunedCount = 0;
     size_t chunksProcessed = 0;
-    size_t shardsWritten = 0;
 };
 
 struct TaggedEntry {
@@ -61,6 +59,7 @@ struct TaggedEntry {
     std::vector<std::string> tags;
     float reliabilityScore = 0.0f;
     int64_t timestamp = 0;
+    bool verified = false;
 };
 
 template <typename T>
@@ -86,10 +85,8 @@ struct PipelineRunLayout {
     fs::path runRoot;
     fs::path spoolRoot;
     fs::path outputRoot;
-    fs::path manifestPath;
+    fs::path massDatasetPath;
 };
-
-struct VerifiedEntry;
 
 struct PipelineContext {
     PipelineConfig config;
@@ -113,7 +110,6 @@ struct PipelineContext {
     std::atomic<bool> stopRequested{false};
 
     std::shared_ptr<IDatasetIO> datasetIO;
-    std::shared_ptr<AppendOnlyDatasetWriter> datasetWriter;
 };
 
 } // namespace Pipeline

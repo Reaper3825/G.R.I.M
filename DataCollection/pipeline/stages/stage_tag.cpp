@@ -145,6 +145,7 @@ StageResult StageTag::execute(PipelineContext& ctx) {
                     entry.subject          = classifySubject(entry.content);
                     entry.tags             = autoTags(entry.sourceType, entry.qualityTier, entry.subject);
                     entry.timestamp        = timestamp;
+                    entry.verified         = true;
 
                     tagged.push_back(std::move(entry));
                 } catch (...) { continue; }
@@ -164,6 +165,7 @@ StageResult StageTag::execute(PipelineContext& ctx) {
                 j["subject"]           = entry.subject;
                 j["reliability_score"] = entry.reliabilityScore;
                 j["timestamp"]         = entry.timestamp;
+                j["verified"]          = entry.verified;
                 j["tags"]              = entry.tags;
                 out << j.dump() << "\n";
             }

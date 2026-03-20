@@ -76,8 +76,7 @@ public:
     // ── Mass dataset (single source of truth) ───────────
 
     bool   loadMassDataset();
-    bool   loadMassDatasetFromManifest(const std::filesystem::path& manifestPath,
-                                       std::shared_ptr<GRIM::Pipeline::IDatasetIO> io);
+    bool   loadMassDataset(std::shared_ptr<GRIM::Pipeline::IDatasetIO> io);
     size_t massDatasetSize() const;
 
     SequenceHandle getSequence(size_t index) const;

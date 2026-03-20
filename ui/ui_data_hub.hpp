@@ -189,7 +189,6 @@ private:
     std::string verificationStatsInfo_;
 
     int   fetchLimit_             = 100;
-    int   vocabSize_              = 50000;
     float verificationThreshold_  = 0.7f;
     int   maxHFResults_           = 4;
 
