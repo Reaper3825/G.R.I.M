@@ -7,43 +7,43 @@ todos:
     status: completed
   - id: pipeline-context
     content: Create pipeline_context.hpp with PipelineConfig, PipelineStats, PipelineContext, chunk cursors, run spool refs, and TaggedEntry
-    status: in_progress
+    status: completed
   - id: pipeline-stage
     content: Create pipeline_stage.hpp with IPipelineStage interface
     status: completed
   - id: dataset-io
     content: Create io/dataset_io.hpp plus append_only_dataset_writer.hpp/.cpp and JSON shard-backed implementations
-    status: pending
+    status: completed
   - id: stage-initialize
     content: Create stage_initialize.hpp/.cpp -- extract config loading, path resolution, state manager init from StartDataCollection()
-    status: pending
+    status: completed
   - id: stage-collect
     content: Create stage_collect.hpp/.cpp -- extract runCollect() logic, wrap WebDataCollector
-    status: pending
+    status: completed
   - id: stage-ingest
     content: Create stage_ingest.hpp/.cpp -- stream HF ingestion, Q/A JSONL, checkpoint loading, and PDF processing into chunk spool files
-    status: pending
+    status: completed
   - id: stage-verify
     content: Create stage_verify.hpp/.cpp -- stream verification over chunk spool, wrap Verifier
-    status: pending
+    status: completed
   - id: stage-dedup
     content: Create stage_dedup.hpp/.cpp -- stream deduplication over chunks using CollectionStateManager
-    status: pending
+    status: completed
   - id: stage-preprocess
     content: Create stage_preprocess.hpp/.cpp -- stream preprocessing, chunking, and quality filtering from runMerge()
-    status: pending
+    status: completed
   - id: stage-tag
     content: "Create stage_tag.hpp/.cpp -- NEW: stream metadata ID assignment, quality tier tagging, subject classification, bridge with DatasetTarget/SequenceHandle; no pipeline-side structuring"
-    status: pending
+    status: completed
   - id: stage-write
     content: Create stage_write.hpp/.cpp -- append tagged chunks into shard files, update manifest atomically, never rewrite the full corpus
-    status: pending
+    status: completed
   - id: pipeline-orchestrator
     content: Create pipeline_orchestrator.hpp/.cpp -- state machine, stage registry, execution thread, progress aggregation
-    status: pending
+    status: completed
   - id: update-ui
     content: Update ui_data_hub.hpp/.cpp to replace DataCollectionManager with PipelineOrchestrator
-    status: pending
+    status: in_progress
   - id: update-dataset-target
     content: Update dataset_target.hpp to use TaggedEntry, bridge with StageTag output
     status: pending

@@ -1211,41 +1211,45 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     }
 #endif
     
-    // Try to load checkpoint - scan for latest
-    std::string latest_checkpoint;
-    {
-        std::string best_path;
-        int best_epoch = -1;
-        if (fs::exists(config.paths.checkpoint_dir) && fs::is_directory(config.paths.checkpoint_dir)) {
-            for (const auto& entry : fs::directory_iterator(config.paths.checkpoint_dir)) {
-                const auto& p = entry.path();
-                if (p.extension() == ".bin" && p.stem().string().rfind("checkpoint_epoch_", 0) == 0) {
-                    // Extract epoch number from "checkpoint_epoch_N"
-                    std::string stem = p.stem().string();
-                    std::string epoch_str = stem.substr(std::string("checkpoint_epoch_").size());
-                    try {
-                        int epoch = std::stoi(epoch_str);
-                        if (epoch > best_epoch) {
-                            best_epoch = epoch;
-                            best_path = p.string();
-                        }
-                    } catch (const std::exception& e) {
-                        logger.log("[WARNING] Skipping malformed checkpoint filename: " + stem + " (" + e.what() + ")");
-                    }
+    // Try to load checkpoint - scan newest-to-oldest and stop at first valid file.
+    std::vector<std::pair<int, std::string>> checkpoint_candidates;
+    if (fs::exists(config.paths.checkpoint_dir) && fs::is_directory(config.paths.checkpoint_dir)) {
+        for (const auto& entry : fs::directory_iterator(config.paths.checkpoint_dir)) {
+            const auto& p = entry.path();
+            if (p.extension() == ".bin" && p.stem().string().rfind("checkpoint_epoch_", 0) == 0) {
+                // Extract epoch number from "checkpoint_epoch_N"
+                std::string stem = p.stem().string();
+                std::string epoch_str = stem.substr(std::string("checkpoint_epoch_").size());
+                try {
+                    int epoch = std::stoi(epoch_str);
+                    checkpoint_candidates.emplace_back(epoch, p.string());
+                } catch (const std::exception& e) {
+                    logger.log("[WARNING] Skipping malformed checkpoint filename: " + stem + " (" + e.what() + ")");
                 }
             }
         }
-        latest_checkpoint = best_path;
     }
-    if (!latest_checkpoint.empty() && fs::exists(latest_checkpoint)) {
-        logger.log("Found checkpoint: " + latest_checkpoint);
-        if (model->load(latest_checkpoint)) {
+
+    std::sort(checkpoint_candidates.begin(), checkpoint_candidates.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    bool loaded_checkpoint = false;
+    for (const auto& [epoch, checkpoint_path] : checkpoint_candidates) {
+        logger.log("Found checkpoint candidate: " + checkpoint_path + " (epoch " + std::to_string(epoch) + ")");
+        if (model->load(checkpoint_path)) {
             logger.log("✓ Loaded weights from checkpoint");
-        } else {
-            logger.log("⚠ Failed to load checkpoint, starting fresh");
+            loaded_checkpoint = true;
+            break;
         }
-    } else {
-        logger.log("No checkpoint found, starting fresh");
+        logger.log("⚠ Failed to load checkpoint candidate, trying older checkpoint");
+    }
+
+    if (!loaded_checkpoint) {
+        if (!checkpoint_candidates.empty()) {
+            logger.log("⚠ No loadable checkpoint found, starting fresh");
+        } else {
+            logger.log("No checkpoint found, starting fresh");
+        }
     }
     
     logger.log("✓ Model initialized");

@@ -31,7 +31,7 @@
 #include "ui_textarea.hpp"
 #include "ui_toggle.hpp"
 
-#include "DataCollection/data_collection_manager.hpp"
+#include "DataCollection/pipeline/pipeline_orchestrator.hpp"
 #include "DataCollection/huggingface_webhook.hpp"
 
 class OverlayRenderer;
@@ -149,7 +149,7 @@ private:
     //  Backend services
     // ═════════════════════════════════════════════════════
 
-    std::unique_ptr<GRIM::DataCollection::DataCollectionManager> collectionManager_;
+    std::unique_ptr<GRIM::Pipeline::PipelineOrchestrator> pipelineOrchestrator_;
     std::unique_ptr<GRIM::DataCollection::HuggingFaceWebhook>    hfWebhook_;
 
     // ═════════════════════════════════════════════════════

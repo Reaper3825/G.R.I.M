@@ -235,8 +235,8 @@ UIDataHubPanel::UIDataHubPanel()
 
     // ── Backend services ────────────────────────────────
 
-    collectionManager_ = std::make_unique<GRIM::DataCollection::DataCollectionManager>();
-    hfWebhook_         = std::make_unique<GRIM::DataCollection::HuggingFaceWebhook>();
+    pipelineOrchestrator_ = std::make_unique<GRIM::Pipeline::PipelineOrchestrator>();
+    hfWebhook_            = std::make_unique<GRIM::DataCollection::HuggingFaceWebhook>();
 
     // ── Load persisted state ────────────────────────────
 
@@ -258,7 +258,7 @@ UIDataHubPanel::~UIDataHubPanel() {
     saveUIConfig();
     if (sourcesDirty_) saveSourceCards();
     saveDownloadQueue();
-    if (collectionManager_) collectionManager_->shutdown();
+    if (pipelineOrchestrator_) pipelineOrchestrator_->stopPipeline();
     LOG_DEBUG("DataHub", "Panel destroyed — config saved");
 }
 
@@ -1187,14 +1187,15 @@ void UIDataHubPanel::startCollection(const std::string& mode) {
     collectionActive_    = true;
     collectionCompleted_ = false;
 
-    if (collectionManager_->startCollection(mode)) {
-        addLog(mode + " started", 0);
-        LOG_DEBUG("DataHub", "Collection started: " + mode);
-    } else {
-        addLog("Failed to start " + mode, 2);
-        LOG_ERROR("DataHub", "Failed to start collection: " + mode);
-        collectionActive_ = false;
-    }
+    GRIM::Pipeline::PipelineMode pipelineMode = GRIM::Pipeline::PipelineMode::Full;
+    if (mode == "collect")       pipelineMode = GRIM::Pipeline::PipelineMode::CollectOnly;
+    else if (mode == "verify")   pipelineMode = GRIM::Pipeline::PipelineMode::VerifyOnly;
+    else if (mode == "merge")    pipelineMode = GRIM::Pipeline::PipelineMode::MergeOnly;
+    else if (mode == "merge-rebuild") pipelineMode = GRIM::Pipeline::PipelineMode::MergeRebuild;
+
+    pipelineOrchestrator_->startPipeline(pipelineMode);
+    addLog(mode + " started", 0);
+    LOG_DEBUG("DataHub", "Pipeline started: " + mode);
 }
 
 void UIDataHubPanel::stopCollection() {
@@ -1203,31 +1204,29 @@ void UIDataHubPanel::stopCollection() {
         return;
     }
     addLog("Stopping collection...", 0);
-    collectionManager_->stopCollection();
+    pipelineOrchestrator_->stopPipeline();
     collectionActive_ = false;
     LOG_DEBUG("DataHub", "Collection stopped by user");
 }
 
 void UIDataHubPanel::pollCollectionManager() {
-    if (!collectionManager_) return;
+    if (!pipelineOrchestrator_) return;
 
-    auto status = collectionManager_->getStatus();
+    auto status = pipelineOrchestrator_->getStatus();
     currentPhase_          = status.phase;
     currentProgress_       = status.progress;
     collectionMessage_     = status.message;
-    sourcesProcessed_      = status.sourcesProcessed;
-    checkpointsCollected_  = status.checkpointsCollected;
-    entriesCollected_      = status.entriesCollected;
-    duplicatesSkipped_     = status.duplicatesSkipped;
+    entriesCollected_      = static_cast<int>(status.stats.entriesIngested);
+    duplicatesSkipped_     = static_cast<int>(status.stats.duplicatesRemoved);
     elapsedSeconds_        = status.elapsedSeconds;
 
-    if (status.phase == "complete" && collectionActive_) {
-        addLog("Collection completed successfully", 0);
+    if (status.state == GRIM::Pipeline::PipelineState::Complete && collectionActive_) {
+        addLog("Pipeline completed successfully", 0);
         collectionActive_    = false;
         collectionCompleted_ = true;
         updateDatasetStats();
-    } else if (status.phase == "error" && collectionActive_) {
-        addLog("Collection error: " + status.message, 2);
+    } else if (status.state == GRIM::Pipeline::PipelineState::Error && collectionActive_) {
+        addLog("Pipeline error: " + status.message, 2);
         collectionActive_ = false;
     }
 }

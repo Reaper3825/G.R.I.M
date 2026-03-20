@@ -98,21 +98,24 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
         if (first4 == 0x474D5254u) {
             issues.push_back("first 4 bytes = 0x474D5254 (GRMT magic) — looks like training data .grmt, not a checkpoint");
         }
+        if (first4 >= file_size) {
+            issues.push_back("root_offset=" + std::to_string(first4) +
+                             " points outside buffer (size=" + std::to_string(file_size) + ", truncated or corrupt)");
+        }
     }
     if (file_size >= 8) {
         const char* expected_id = "GRMT";
-        const char* tail = reinterpret_cast<const char*>(buffer.data()) + file_size - 4;
-        if (std::memcmp(tail, expected_id, 4) != 0) {
+        const char* file_id = reinterpret_cast<const char*>(buffer.data()) + 4;
+        if (std::memcmp(file_id, expected_id, 4) != 0) {
             std::ostringstream ss;
-            uint32_t tail4 = 0;
-            std::memcpy(&tail4, tail, 4);
-            ss << "file_identifier at end wrong: expected \"GRMT\", got 0x" << std::hex << tail4 << std::dec;
+            char observed_id[5] = {
+                file_id[0], file_id[1], file_id[2], file_id[3], '\0'
+            };
+            uint32_t observed_raw = 0;
+            std::memcpy(&observed_raw, file_id, 4);
+            ss << "file_identifier at offset 4 wrong: expected \"GRMT\", got \""
+               << observed_id << "\" (0x" << std::hex << observed_raw << std::dec << ")";
             issues.push_back(ss.str());
-        }
-        uint32_t root_offset = 0;
-        std::memcpy(&root_offset, buffer.data() + file_size - 8, 4);
-        if (root_offset >= file_size - 8) {
-            issues.push_back("root_offset=" + std::to_string(root_offset) + " points outside buffer (size=" + std::to_string(file_size) + ", truncated or corrupt)");
         }
     }
 
