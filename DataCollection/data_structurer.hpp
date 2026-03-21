@@ -100,10 +100,38 @@ Output format (strict JSON object):
 {"instruction": "...", "response": "..."})";
 }
 
+inline std::string thoughtSystemPrompt() {
+    return R"(You are a training data formatter. Your job is to read a passage of text and break it down into a chain of thought reasoning.
+
+Rules:
+1. Break the passage into logical reasoning steps or key insights.
+2. Each thought should be a self-contained reasoning step.
+3. Generate 2-5 thought entries depending on complexity.
+4. Output ONLY a JSON array — no markdown, no explanation, no preamble.
+
+Output format (strict JSON array):
+[{"thought": "..."}, {"thought": "..."}, ...])";
+}
+
+inline std::string conceptBlockSystemPrompt() {
+    return R"(You are a curriculum data formatter. Your job is to read a passage and produce a single ConceptBlock — an atomic learning unit with a question, ordered intermediate reasoning steps, and a final answer.
+
+Rules:
+1. The "question" is the input prompt or problem statement.
+2. "intermediates" is an ordered list of 2-5 reasoning steps, derivations, or thought steps that lead from the question to the answer.
+3. The "answer" is the final conclusion or result.
+4. Output ONLY a JSON object — no markdown, no explanation, no preamble.
+
+Output format (strict JSON object):
+{"question": "...", "intermediates": ["step 1", "step 2", "step 3"], "answer": "..."})";
+}
+
 inline std::string getSystemPrompt(const std::string& mode) {
     if (mode == "qa") return qaSystemPrompt();
+    if (mode == "thought") return thoughtSystemPrompt();
     if (mode == "conversation") return conversationSystemPrompt();
     if (mode == "instruct") return instructSystemPrompt();
+    if (mode == "concept_block") return conceptBlockSystemPrompt();
     return qaSystemPrompt();
 }
 
@@ -200,6 +228,8 @@ public:
     explicit DataStructurer(const DataStructuringConfig& config)
         : config_(config) {}
 
+    std::string lastError() const { return lastError_; }
+
     // Check if Ollama is reachable
     bool checkOllamaHealth() const {
         std::string url = config_.ollama_url + "/api/tags";
@@ -225,10 +255,12 @@ public:
         return false;
     }
 
-    // Structure a single text entry into Q/A formatted strings.
-    // Returns one string per Q/A pair: "Q: ...\n\nA: ..."
-    // On failure, returns empty vector (caller should keep original).
     std::vector<std::string> structureEntry(const std::string& content) const {
+        return structureEntry(content, config_.mode, "");
+    }
+
+    std::vector<std::string> structureEntry(const std::string& content, const std::string& mode,
+                                            const std::string& customPrompt = "") const {
         // Truncate input if too long
         std::string input = content;
         if (static_cast<int>(input.size()) > config_.max_input_chars) {
@@ -240,7 +272,9 @@ public:
             }
         }
 
-        std::string system_prompt = prompts::getSystemPrompt(config_.mode);
+        std::string system_prompt = customPrompt.empty()
+            ? prompts::getSystemPrompt(mode)
+            : customPrompt;
 
         // Build Ollama /api/chat request
         nlohmann::json body;
@@ -261,20 +295,27 @@ public:
         auto resp = detail::curlPost(endpoint, body.dump(), config_.timeout_ms);
 
         if (!resp.error.empty() || resp.status_code != 200) {
-            std::cerr << "[DataStructurer] LLM call failed: "
-                      << (resp.error.empty() ? "HTTP " + std::to_string(resp.status_code) : resp.error) << "\n";
+            std::string detail;
+            if (!resp.error.empty()) detail = resp.error;
+            if (resp.status_code != 0 && resp.status_code != 200)
+                detail += (detail.empty() ? "" : " — ") + std::string("HTTP ") + std::to_string(resp.status_code);
+            if (detail.empty()) detail = "unknown error (is Ollama running at " + config_.ollama_url + "?)";
+            if (resp.status_code == 404) detail += " — model '" + config_.ollama_model + "' not found";
+            lastError_ = detail;
+            std::cerr << "[DataStructurer] LLM call failed: " << detail << "\n";
             return {};
         }
 
         // Parse Ollama response
         auto j = nlohmann::json::parse(resp.body, nullptr, false);
         if (j.is_discarded() || !j.contains("message") || !j["message"].contains("content")) {
-            std::cerr << "[DataStructurer] Invalid Ollama response format\n";
+            lastError_ = "Invalid Ollama response format (model: " + config_.ollama_model + ")";
+            std::cerr << "[DataStructurer] " << lastError_ << "\n";
             return {};
         }
 
         std::string llm_output = j["message"]["content"].get<std::string>();
-        return parseLLMOutput(llm_output, config_.mode);
+        return parseLLMOutput(llm_output, mode);
     }
 
     // Process a batch of texts in parallel.
@@ -357,6 +398,7 @@ public:
 
 private:
     DataStructuringConfig config_;
+    mutable std::string lastError_;
 
     // Extract JSON from LLM output that may contain markdown fences or preamble
     static std::string extractJson(const std::string& raw) {
@@ -471,6 +513,29 @@ private:
                     results.push_back("Q: " + inst + "\n\nA: " + resp);
                 }
             }
+        } else if (mode == "thought") {
+            if (parsed.is_array()) {
+                for (const auto& entry : parsed) {
+                    if (entry.contains("thought")) {
+                        std::string t = entry["thought"].get<std::string>();
+                        if (!t.empty()) results.push_back("T: " + t);
+                    }
+                }
+            } else if (parsed.contains("thought")) {
+                std::string t = parsed["thought"].get<std::string>();
+                if (!t.empty()) results.push_back("T: " + t);
+            }
+        } else if (mode == "concept_block") {
+            if (parsed.contains("question"))
+                results.push_back("Q: " + parsed["question"].get<std::string>());
+            if (parsed.contains("intermediates") && parsed["intermediates"].is_array()) {
+                for (const auto& step : parsed["intermediates"]) {
+                    if (step.is_string())
+                        results.push_back("T: " + step.get<std::string>());
+                }
+            }
+            if (parsed.contains("answer"))
+                results.push_back("A: " + parsed["answer"].get<std::string>());
         }
 
         return results;

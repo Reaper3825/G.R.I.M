@@ -108,6 +108,7 @@ AutogradContext initAutogradContext(
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     NumericHeadLayer* numeric_head,
+    ReasoningHeadLayer* reasoning_head,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
@@ -123,6 +124,7 @@ AutogradContext initAutogradContext(
     ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
     ctx.numeric_head = numeric_head;
+    ctx.reasoning_head = reasoning_head;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.payload = &payload;
@@ -147,6 +149,7 @@ AutogradContext initAutogradContext(
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     NumericHeadLayer* numeric_head,
+    ReasoningHeadLayer* reasoning_head,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     int batch_size,
@@ -163,6 +166,7 @@ AutogradContext initAutogradContext(
     ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
     ctx.numeric_head = numeric_head;
+    ctx.reasoning_head = reasoning_head;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.payload = nullptr;  // No payload for inference
@@ -861,6 +865,41 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             intermediates.encoder_output_tensor, total_tokens, ctx.stream);
         intermediates.numeric_head_output = std::move(numeric_pred);
     }
+
+    // Reasoning head: parallel to numeric head, reads encoder + ScratchBlock atoms
+    if (ctx.reasoning_head && ctx.scratch_block && ctx.scratch_block->isEnabled()) {
+        // D2H num_atoms — numAtomsBuffer() is device memory
+        int num_atoms = 0;
+        cudaMemcpyAsync(&num_atoms, ctx.scratch_block->numAtomsBuffer(),
+                        sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+        cudaStreamSynchronize(ctx.stream);
+
+        if (num_atoms > 0) {
+            const int atom_dim = cfg->scratch_block_atom_embedding_dim;
+
+            // Create canonical copy-first atom embeddings tensor (AutogradIntermediates owns it)
+            intermediates.scratch_atom_embeddings = Tensor::empty(
+                TensorContract::TensorShape::make_BSM(num_atoms, atom_dim),
+                ctx.is_training, ctx.stream, "scratch_atom_embeddings");
+            cudaMemcpyAsync(
+                intermediates.scratch_atom_embeddings.data,
+                ctx.scratch_block->atomEmbeddingsBuffer(),
+                static_cast<size_t>(num_atoms) * atom_dim * sizeof(float),
+                cudaMemcpyDeviceToDevice, ctx.stream);
+
+            ctx.reasoning_head->setStream(ctx.stream);
+            ctx.reasoning_head->setCublasHandle(ctx.cublas_handle);
+
+            ReasoningHeadOutput rh_out = ctx.reasoning_head->forward(
+                intermediates.encoder_output_tensor,
+                intermediates.scratch_atom_embeddings,
+                ctx.scratch_block->atomPositionsBuffer(),
+                num_atoms,
+                total_tokens,
+                ctx.stream);
+            intermediates.reasoning_output = std::move(rh_out);
+        }
+    }
     
     AG_INFO("Forward complete: logits shape=[" << total_tokens << ", " << cfg->vocab_size << "]");
     
@@ -1507,6 +1546,7 @@ LossResult autogradTrainingStep(
     LMHeadLayer* lm_head = model.getLmHeadLayer();
     ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
     NumericHeadLayer* numeric_head = model.getNumericHeadLayer();
+    ReasoningHeadLayer* reasoning_head = model.getReasoningHeadLayer();
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1596,6 +1636,7 @@ LossResult autogradTrainingStep(
         lm_head,
         scratch_block,
         numeric_head,
+        reasoning_head,
         training_state.cublas_handle,
         stream,
         payload,

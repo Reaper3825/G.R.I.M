@@ -105,6 +105,18 @@ StageResult StageIngest::execute(PipelineContext& ctx) {
 
     reportProgress(5.0f);
 
+    // If the mass dataset is empty or missing, stale "already collected"
+    // flags are meaningless — force re-ingestion of all sources.
+    bool datasetEmpty = !fs::exists(ctx.run.massDatasetPath)
+                     || fs::file_size(ctx.run.massDatasetPath) == 0;
+    bool skipCollected = ctx.stateManager && !ctx.config.forceRebuild && !datasetEmpty;
+
+    if (datasetEmpty && ctx.stateManager && ctx.stateManager->getTotalUniqueContent() > 0) {
+        std::cout << "[Ingest] Mass dataset empty but state has "
+                  << ctx.stateManager->getTotalUniqueContent()
+                  << " tracked hashes — ignoring stale skip flags\n";
+    }
+
     // ── 1. Load verified JSONL entries ──────────────────
     std::vector<VerifiedEntry> verifiedEntries;
     if (fs::exists(ctx.config.verifiedDir)) {
@@ -144,7 +156,7 @@ StageResult StageIngest::execute(PipelineContext& ctx) {
                 std::string ext = fileEntry.path().extension().string();
                 std::string sourceTag = "hf:" + datasetDir.path().filename().string();
 
-                if (ctx.stateManager && !ctx.config.forceRebuild &&
+                if (skipCollected &&
                     ctx.stateManager->hasCollectedUrl(fileEntry.path().string())) {
                     continue;
                 }
@@ -191,7 +203,7 @@ StageResult StageIngest::execute(PipelineContext& ctx) {
                 if (filename.substr(0, 11) != "checkpoint_" ||
                     entry.path().extension() != ".ckpt") continue;
 
-                if (ctx.stateManager && !ctx.config.forceRebuild &&
+                if (skipCollected &&
                     ctx.stateManager->hasCollectedUrl(entry.path().string())) {
                     ckptSkipped++;
                     continue;

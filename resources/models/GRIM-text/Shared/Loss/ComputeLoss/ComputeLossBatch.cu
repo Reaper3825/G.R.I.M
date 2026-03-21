@@ -236,6 +236,7 @@ float LanguageModel::computeLossBatch(
 		getLmHeadLayer(),
 		scratch_block,
 		getNumericHeadLayer(),
+		getReasoningHeadLayer(),
 		training_state_.cublas_handle,
 		stream,
 		payload,

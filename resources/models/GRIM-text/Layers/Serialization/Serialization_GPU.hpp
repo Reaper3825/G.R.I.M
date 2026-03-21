@@ -139,6 +139,25 @@ struct SerializationNumericHeadWriteView {
 	int d_model = 0;
 };
 
+struct SerializationReasoningHeadReadView {
+	DeviceReadView w_op;       // [num_ops, d_total]
+	DeviceReadView b_op;       // [num_ops]
+	DeviceReadView w_arg1;     // [1, d_total]
+	DeviceReadView w_arg2;     // [1, d_total]
+	int num_ops = 0;
+	int d_total = 0;
+	bool enabled = false;
+};
+
+struct SerializationReasoningHeadWriteView {
+	DeviceWriteView w_op;
+	DeviceWriteView b_op;
+	DeviceWriteView w_arg1;
+	DeviceWriteView w_arg2;
+	int num_ops = 0;
+	int d_total = 0;
+};
+
 struct SerializationSaveSources {
 	SerializationModelConfigView config;
 	SerializationGpuEmbeddingReadView gpu_embedding;
@@ -147,6 +166,7 @@ struct SerializationSaveSources {
 	SerializationLMHeadReadView lm_head;
 	SerializationScratchBlockReadView scratch_block;
 	SerializationNumericHeadReadView numeric_head;
+	SerializationReasoningHeadReadView reasoning_head;
 	DeviceReadView final_rms_gamma;
 };
 
@@ -171,6 +191,7 @@ struct SerializationLoadRequest {
 	SerializationLMHeadWriteView lm_head;
 	SerializationScratchBlockWriteView scratch_block;
 	SerializationNumericHeadWriteView numeric_head;
+	SerializationReasoningHeadWriteView reasoning_head;
 	DeviceWriteView final_rms_gamma;
 };
 

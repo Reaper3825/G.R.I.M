@@ -60,6 +60,8 @@ struct TaggedEntry {
     float reliabilityScore = 0.0f;
     int64_t timestamp = 0;
     bool verified = false;
+    bool structured = false;
+    std::string structuredOutput;
 };
 
 template <typename T>

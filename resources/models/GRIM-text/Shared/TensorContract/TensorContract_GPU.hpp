@@ -728,7 +728,8 @@ enum class ParamGroupType : uint8_t {
     SCRATCHBLOCK = 5,   ///< Atom type embeddings + projection
     NUMERIC_HEAD = 6,   ///< Numeric prediction head weights + bias
     MTP = 7,            ///< Multi-token prediction auxiliary heads (weight + bias per head)
-    COUNT = 8           ///< Number of parameter group types
+    REASONING_HEAD = 8, ///< Reasoning head weights (W_op, b_op, w_arg1, w_arg2)
+    COUNT = 9           ///< Number of parameter group types
 };
 
 //======================================================//

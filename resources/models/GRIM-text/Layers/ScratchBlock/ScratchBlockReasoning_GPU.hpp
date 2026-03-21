@@ -7,8 +7,6 @@
 //  internally. No external cache buffers, no gradient tap.
 //
 //  Forward:  output = input + scale * project(atom_emb)
-//            atom_emb dims: 0-15 type, 16-31 value, 32-39 int bits,
-//                           40-47 flags, 48-63 text features (excl. length)
 //  Backward: grad_input = grad_output (additive identity)
 //            + parameter gradients for projection/embeddings
 //

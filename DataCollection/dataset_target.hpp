@@ -1,37 +1,36 @@
 //======================================================//
-//  DatasetTarget — Cross-platform model folder and mass
-//  dataset management with ID-based sequence referencing.
+//  DatasetTarget — Mass dataset access and per-model
+//  configuration file management.
 //
 //  Owns:
-//    - Model folder lifecycle (temp → commit / discard)
 //    - Mass dataset load / search / append
 //    - Per-model sequence assignment (ID references, not copies)
-//    - Per-model structured output storage
-//    - Source file cleanup after HF download merges
+//    - Structured output persistence back into mass_dataset.jsonl
+//    - Per-model config file: <model_name>_configuration.json
 //
-//  All paths are std::filesystem::path, relative to a
-//  repo-root-derived model store root.  No hardcoded OS paths.
-//
-//  ID migration: index-based keys today, persistent IDs
-//  once the tagging plan lands.  The UI framework (search,
-//  filter, assign/remove) requires zero structural changes.
+//  All content lives in mass_dataset.jsonl.
+//  Per-model assignment + config state lives in
+//  model_store/<model_id>/<model_name>_configuration.json.
 //======================================================//
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#include "concept_block.hpp"
 
 namespace GRIM { namespace Pipeline {
     class IDatasetIO;
     struct TaggedEntry;
 }}
 
-// Lightweight handle for a sequence in the mass dataset.
-// `id` is a persistent unique ID assigned by StageTag.
 struct SequenceHandle {
     size_t      index = 0;
     std::string id;
@@ -43,9 +42,10 @@ struct SequenceHandle {
     std::string quality_tier;
     std::vector<std::string> tags;
     float       reliability_score = 0.0f;
+    bool        verified = false;
+    bool        is_structured = false;
 };
 
-// Truncated preview returned from search queries.
 struct SearchResult {
     size_t      index;
     std::string id;
@@ -59,19 +59,12 @@ public:
                            const std::filesystem::path& mass_dataset_path);
     ~DatasetTarget();
 
-    // ── Model folder lifecycle ──────────────────────────
-
-    std::filesystem::path createTempModelFolder();
-
-    bool commitModelFolder(const std::filesystem::path& temp_path,
-                           const std::string& model_id);
-
-    bool discardTempModelFolder(const std::filesystem::path& temp_path);
-
     // ── Active model ────────────────────────────────────
 
-    void        setActiveModel(const std::string& model_id);
+    void        setActiveModel(const std::string& model_id,
+                               const std::string& model_name = "");
     std::string activeModelId() const;
+    std::string activeModelName() const;
 
     // ── Mass dataset (single source of truth) ───────────
 
@@ -80,8 +73,6 @@ public:
     size_t massDatasetSize() const;
 
     SequenceHandle getSequence(size_t index) const;
-
-    bool appendToMassDataset(const std::vector<std::string>& entries);
 
     // ── Search & Filter ─────────────────────────────────
 
@@ -102,14 +93,42 @@ public:
     bool assignSequenceToModel(const std::string& seq_id);
 
     bool removeSequenceFromModel(size_t seq_index);
+    bool removeSequenceFromModel(const std::string& seq_id);
 
-    std::vector<size_t> getAssignedSequences() const;
     bool   isAssigned(size_t seq_index) const;
+    bool   isAssignedById(const std::string& seq_id) const;
     size_t assignedCount() const;
 
+    // ── Curriculum ordering ─────────────────────────────
+
+    bool moveSequenceUp(size_t curriculum_index);
+    bool moveSequenceDown(size_t curriculum_index);
+    bool moveSequence(size_t from_index, size_t to_index);
+    const std::vector<std::string>& curriculumOrder() const;
+    size_t curriculumIndexOf(const std::string& seq_id) const;
+
+    // ── Phase markers ───────────────────────────────────
+
+    struct PhaseMarker { size_t position = 0; std::string label; };
+
+    void insertPhaseMarker(size_t position, const std::string& label);
+    void removePhaseMarker(size_t marker_index);
+    const std::vector<PhaseMarker>& phaseMarkers() const;
+
+    // ── Bulk operations ─────────────────────────────────
+
+    void assignMultiple(const std::vector<size_t>& seq_indices);
+    void removeMultiple(const std::vector<size_t>& curriculum_indices);
+
+    // ── Filtered pool access ────────────────────────────
+
+    std::vector<size_t> filterSequences(
+        const std::string& subject_filter,
+        const std::string& quality_filter,
+        const std::string& search_query) const;
+
     // ── Assignment persistence ──────────────────────────
-    // Stored as: model_store/<model_id>/dataset_refs.json
-    // Format:    {"assigned": [0, 14, 27, 103, ...]}
+    // Stored in: model_store/<model_id>/<model_name>_configuration.json
 
     bool loadAssignments();
     bool saveAssignments() const;
@@ -119,14 +138,57 @@ public:
     bool        writeStructuredOutput(size_t seq_index, const std::string& structured);
     std::string readStructuredOutput(size_t seq_index) const;
 
-    // ── Cleanup ─────────────────────────────────────────
+    bool appendStructuredEntry(const std::string& content,
+                               const std::string& structuredOutput,
+                               const std::string& sourceType = "structurer",
+                               const std::string& sourceUrl = "",
+                               const std::string& qualityTier = "medium",
+                               const std::string& subject = "general");
 
-    bool deleteSourceFiles(const std::vector<std::filesystem::path>& files);
+    // ── ConceptBlock CRUD ────────────────────────────────
+
+    bool   loadConceptBlocks();
+    bool   saveConceptBlocks() const;
+    size_t conceptBlockCount() const;
+
+    GRIM::ConceptBlock getConceptBlock(size_t index) const;
+    GRIM::ConceptBlock getConceptBlockById(const std::string& cb_id) const;
+
+    bool addConceptBlock(const GRIM::ConceptBlock& cb);
+    bool updateConceptBlock(const std::string& cb_id, const GRIM::ConceptBlock& cb);
+    bool removeConceptBlock(const std::string& cb_id);
+
+    std::vector<size_t> searchConceptBlocks(const std::string& query,
+                                            size_t max_results = 50) const;
+    std::vector<size_t> filterConceptBlocks(const std::string& format_type,
+                                            const std::string& search_query = "") const;
+
+    // ── ConceptBlock model assignment ────────────────────
+
+    bool assignConceptBlockToModel(const std::string& cb_id);
+    bool removeConceptBlockFromModel(const std::string& cb_id);
+    bool isConceptBlockAssigned(const std::string& cb_id) const;
+    size_t assignedConceptBlockCount() const;
+    const std::vector<std::string>& assignedConceptBlockOrder() const;
 
 private:
-    std::filesystem::path   modelStoreRoot_;
-    std::filesystem::path   massDatasetPath_;
-    std::string             activeModelId_;
+    std::filesystem::path       modelStoreRoot_;
+    std::filesystem::path       massDatasetPath_;
+    std::string                 activeModelId_;
+    std::string                 activeModelName_;
     std::vector<SequenceHandle> sequences_;
-    std::vector<size_t>     assignedIndices_;
+    std::vector<std::string>    assignedOrder_;
+    std::set<std::string>       assignedSet_;
+    std::vector<PhaseMarker>    phaseMarkers_;
+
+    // ConceptBlock storage
+    std::vector<GRIM::ConceptBlock>                     conceptBlocks_;
+    std::unordered_map<std::string, size_t>             cbIdIndex_;
+    std::vector<std::string>                            assignedCBOrder_;
+    std::set<std::string>                               assignedCBSet_;
+
+    std::filesystem::path configFilePath() const;
+    std::filesystem::path conceptBlocksPath() const;
+    void rebuildSequenceCache(const std::vector<GRIM::Pipeline::TaggedEntry>& entries);
+    void rebuildCBIndex();
 };

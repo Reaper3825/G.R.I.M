@@ -262,6 +262,25 @@ bool LanguageModel::save(const std::string& path) {
                        std::to_string(config_.d_model) + ")");
     }
 
+    // ReasoningHead weights
+    if (reasoning_head_layer_) {
+        const int dt = reasoning_head_layer_->d_total();
+        const int nops = reasoning_head_layer_->num_ops();
+        request.sources.reasoning_head.enabled = true;
+        request.sources.reasoning_head.num_ops = nops;
+        request.sources.reasoning_head.d_total = dt;
+        request.sources.reasoning_head.w_op.ptr = reasoning_head_layer_->W_op().data;
+        request.sources.reasoning_head.w_op.count = static_cast<std::size_t>(nops) * dt;
+        request.sources.reasoning_head.b_op.ptr = reasoning_head_layer_->b_op().data;
+        request.sources.reasoning_head.b_op.count = static_cast<std::size_t>(nops);
+        request.sources.reasoning_head.w_arg1.ptr = reasoning_head_layer_->w_arg1().data;
+        request.sources.reasoning_head.w_arg1.count = static_cast<std::size_t>(dt);
+        request.sources.reasoning_head.w_arg2.ptr = reasoning_head_layer_->w_arg2().data;
+        request.sources.reasoning_head.w_arg2.count = static_cast<std::size_t>(dt);
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing ReasoningHead weights (d_total=" +
+                       std::to_string(dt) + ", num_ops=" + std::to_string(nops) + ")");
+    }
+
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head) — owned by LMHeadLayer
     if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data) {
         request.sources.final_rms_gamma.ptr = lm_head_layer_->finalRmsGamma().data;
@@ -428,6 +447,26 @@ bool LanguageModel::load(const std::string& path) {
                     numeric_head_layer_->bias().data,
                     2);
         request.numeric_head.d_model = config_.d_model;
+    }
+
+    // ReasoningHead weight destinations
+    if (reasoning_head_layer_) {
+        const int dt = reasoning_head_layer_->d_total();
+        const int nops = reasoning_head_layer_->num_ops();
+        assignWrite(request.reasoning_head.w_op,
+                    reasoning_head_layer_->W_op().data,
+                    static_cast<std::size_t>(nops) * dt);
+        assignWrite(request.reasoning_head.b_op,
+                    reasoning_head_layer_->b_op().data,
+                    static_cast<std::size_t>(nops));
+        assignWrite(request.reasoning_head.w_arg1,
+                    reasoning_head_layer_->w_arg1().data,
+                    static_cast<std::size_t>(dt));
+        assignWrite(request.reasoning_head.w_arg2,
+                    reasoning_head_layer_->w_arg2().data,
+                    static_cast<std::size_t>(dt));
+        request.reasoning_head.num_ops = nops;
+        request.reasoning_head.d_total = dt;
     }
 
     // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer

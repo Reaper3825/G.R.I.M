@@ -17,6 +17,13 @@ public:
     std::string getSelectedItem() const;
     std::string getLabel() const { return label; }
     
+    void setItems(const std::vector<std::string>& items) {
+        options = items;
+        if (selectedIndex >= static_cast<int>(options.size()))
+            selectedIndex = options.empty() ? -1 : 0;
+        scrollOffset = 0;
+    }
+
     // Set maximum visible items before scrolling (default: 8)
     void setMaxVisibleItems(int max) { maxVisibleItems = std::max(1, max); }
     

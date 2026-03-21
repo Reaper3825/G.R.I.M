@@ -27,6 +27,8 @@
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 // NumericHead for numeric prediction
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"
+// ReasoningHead for structured reasoning
+#include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -106,6 +108,7 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
     NumericHeadLayer*  numeric_head = nullptr;
+    ReasoningHeadLayer* reasoning_head = nullptr;
 
     /** Model pointer for MTP head access in computeAutogradLoss; set by autogradTrainingStep. */
     LanguageModel* model = nullptr;
@@ -160,6 +163,7 @@ AutogradContext initAutogradContext(
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     NumericHeadLayer* numeric_head,
+    ReasoningHeadLayer* reasoning_head,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
@@ -179,6 +183,7 @@ AutogradContext initAutogradContext(
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     NumericHeadLayer* numeric_head,
+    ReasoningHeadLayer* reasoning_head,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     int batch_size,

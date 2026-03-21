@@ -36,6 +36,7 @@
 #include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/LMHead/lm_head_GPU.hpp"
 #include "../Layers/NumericHead/numeric_head_GPU.hpp"
+#include "../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -336,6 +337,10 @@ struct LanguageModelConfig {
     int scratch_block_atom_embedding_dim = 64; // Atom embedding dimension
     int scratch_block_max_atoms = 256;         // Max atoms per sequence
     float scratch_block_atom_scale = 1.0f;     // Scale factor for atom injection (unit scale)
+
+    // ReasoningHead config
+    bool reasoning_head_enabled = false;       // Enable ReasoningHead parallel layer
+    int reasoning_num_ops = 8;                 // Number of reasoning operations (output dim)
     
     // LM Head centering config (Issue #37 / #40 fixes)
     // When enabled, centers hidden states before LM head projection.
@@ -684,6 +689,10 @@ public:
     NumericHeadLayer* getNumericHeadLayer() { return numeric_head_layer_.get(); }
     const NumericHeadLayer* getNumericHeadLayer() const { return numeric_head_layer_.get(); }
 
+    // Reasoning Head layer access (nullptr when disabled)
+    ReasoningHeadLayer* getReasoningHeadLayer() { return reasoning_head_layer_.get(); }
+    const ReasoningHeadLayer* getReasoningHeadLayer() const { return reasoning_head_layer_.get(); }
+
     // Multi-token prediction (MTP) auxiliary heads - one weight + bias per head (indices 0..mtp_k-1)
     struct MTPHead {
         Tensor weight;  // [vocab_size, d_model] same layout as LM head
@@ -752,6 +761,9 @@ private:
 
     // Numeric Head layer (predicts log-magnitude + sign for <NUM> tokens)
     std::unique_ptr<NumericHeadLayer> numeric_head_layer_;
+
+    // Reasoning Head layer (structured reasoning: op + arg selection over atoms)
+    std::unique_ptr<ReasoningHeadLayer> reasoning_head_layer_;
 
     // Multi-token prediction (MTP) auxiliary heads - K independent linear heads (not tied to embedding)
     std::vector<MTPHead> mtp_heads_;

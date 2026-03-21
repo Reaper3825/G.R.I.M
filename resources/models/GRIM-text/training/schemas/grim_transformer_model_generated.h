@@ -54,6 +54,10 @@ struct ScratchBlockWeights;
 struct ScratchBlockWeightsBuilder;
 struct ScratchBlockWeightsT;
 
+struct ReasoningHeadWeights;
+struct ReasoningHeadWeightsBuilder;
+struct ReasoningHeadWeightsT;
+
 struct ModelConfig;
 struct ModelConfigBuilder;
 struct ModelConfigT;
@@ -1325,6 +1329,121 @@ inline ::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeightsDirect(
 
 ::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 
+// ─── ReasoningHeadWeights ────────────────────────────────────────────────────
+
+struct ReasoningHeadWeightsT : public ::flatbuffers::NativeTable {
+  typedef ReasoningHeadWeights TableType;
+  std::vector<float> w_op_data{};
+  std::vector<float> b_op_data{};
+  std::vector<float> w_arg1_data{};
+  std::vector<float> w_arg2_data{};
+  uint32_t num_ops = 0;
+  uint32_t d_total = 0;
+};
+
+struct ReasoningHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ReasoningHeadWeightsT NativeTableType;
+  typedef ReasoningHeadWeightsBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_W_OP_DATA = 4,
+    VT_B_OP_DATA = 6,
+    VT_W_ARG1_DATA = 8,
+    VT_W_ARG2_DATA = 10,
+    VT_NUM_OPS = 12,
+    VT_D_TOTAL = 14
+  };
+  const ::flatbuffers::Vector<float> *w_op_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_OP_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_op_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_OP_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_arg1_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_ARG1_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_arg2_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_ARG2_DATA);
+  }
+  uint32_t num_ops() const {
+    return GetField<uint32_t>(VT_NUM_OPS, 0);
+  }
+  uint32_t d_total() const {
+    return GetField<uint32_t>(VT_D_TOTAL, 0);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_W_OP_DATA) &&
+           verifier.VerifyVector(w_op_data()) &&
+           VerifyOffset(verifier, VT_B_OP_DATA) &&
+           verifier.VerifyVector(b_op_data()) &&
+           VerifyOffset(verifier, VT_W_ARG1_DATA) &&
+           verifier.VerifyVector(w_arg1_data()) &&
+           VerifyOffset(verifier, VT_W_ARG2_DATA) &&
+           verifier.VerifyVector(w_arg2_data()) &&
+           VerifyField<uint32_t>(verifier, VT_NUM_OPS, 4) &&
+           VerifyField<uint32_t>(verifier, VT_D_TOTAL, 4) &&
+           verifier.EndTable();
+  }
+  ReasoningHeadWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(ReasoningHeadWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<ReasoningHeadWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct ReasoningHeadWeightsBuilder {
+  typedef ReasoningHeadWeights Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_w_op_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_op_data) {
+    fbb_.AddOffset(ReasoningHeadWeights::VT_W_OP_DATA, w_op_data);
+  }
+  void add_b_op_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_op_data) {
+    fbb_.AddOffset(ReasoningHeadWeights::VT_B_OP_DATA, b_op_data);
+  }
+  void add_w_arg1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_arg1_data) {
+    fbb_.AddOffset(ReasoningHeadWeights::VT_W_ARG1_DATA, w_arg1_data);
+  }
+  void add_w_arg2_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_arg2_data) {
+    fbb_.AddOffset(ReasoningHeadWeights::VT_W_ARG2_DATA, w_arg2_data);
+  }
+  void add_num_ops(uint32_t num_ops) {
+    fbb_.AddElement<uint32_t>(ReasoningHeadWeights::VT_NUM_OPS, num_ops, 0);
+  }
+  void add_d_total(uint32_t d_total) {
+    fbb_.AddElement<uint32_t>(ReasoningHeadWeights::VT_D_TOTAL, d_total, 0);
+  }
+  explicit ReasoningHeadWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ReasoningHeadWeights> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ReasoningHeadWeights>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_op_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_op_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_arg1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_arg2_data = 0,
+    uint32_t num_ops = 0,
+    uint32_t d_total = 0) {
+  ReasoningHeadWeightsBuilder builder_(_fbb);
+  builder_.add_d_total(d_total);
+  builder_.add_num_ops(num_ops);
+  builder_.add_w_arg2_data(w_arg2_data);
+  builder_.add_w_arg1_data(w_arg1_data);
+  builder_.add_b_op_data(b_op_data);
+  builder_.add_w_op_data(w_op_data);
+  return builder_.Finish();
+}
+
+::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+// ─── End ReasoningHeadWeights ────────────────────────────────────────────────
+
 struct ScratchBlockWeightsT : public ::flatbuffers::NativeTable {
   typedef ScratchBlockWeights TableType;
   std::vector<float> atom_type_embeddings{};
@@ -1978,6 +2097,7 @@ struct TransformerModelT : public ::flatbuffers::NativeTable {
   std::unique_ptr<GRIMTransformer::LMHeadWeightsT> lm_head{};
   std::unique_ptr<GRIMTransformer::NumericHeadWeightsT> numeric_head{};
   std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT> scratch_block{};
+  std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT> reasoning_head{};
   std::vector<float> final_rms_gamma{};
   std::unique_ptr<GRIMTransformer::LossWeightingWeightsT> loss_weighting{};
   std::unique_ptr<GRIMTransformer::TrainingMetadataT> training_metadata{};
@@ -2008,7 +2128,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_CHECKSUM_CRC32 = 24,
     VT_CHECKSUM_XXHASH64 = 26,
     VT_CREATION_TIMESTAMP = 28,
-    VT_LAST_MODIFIED_TIMESTAMP = 30
+    VT_LAST_MODIFIED_TIMESTAMP = 30,
+    VT_REASONING_HEAD = 32
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -2030,6 +2151,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const GRIMTransformer::ScratchBlockWeights *scratch_block() const {
     return GetPointer<const GRIMTransformer::ScratchBlockWeights *>(VT_SCRATCH_BLOCK);
+  }
+  const GRIMTransformer::ReasoningHeadWeights *reasoning_head() const {
+    return GetPointer<const GRIMTransformer::ReasoningHeadWeights *>(VT_REASONING_HEAD);
   }
   const ::flatbuffers::Vector<float> *final_rms_gamma() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_FINAL_RMS_GAMMA);
@@ -2068,6 +2192,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(numeric_head()) &&
            VerifyOffset(verifier, VT_SCRATCH_BLOCK) &&
            verifier.VerifyTable(scratch_block()) &&
+           VerifyOffset(verifier, VT_REASONING_HEAD) &&
+           verifier.VerifyTable(reasoning_head()) &&
            VerifyOffset(verifier, VT_FINAL_RMS_GAMMA) &&
            verifier.VerifyVector(final_rms_gamma()) &&
            VerifyOffset(verifier, VT_LOSS_WEIGHTING) &&
@@ -2109,6 +2235,9 @@ struct TransformerModelBuilder {
   }
   void add_scratch_block(::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block) {
     fbb_.AddOffset(TransformerModel::VT_SCRATCH_BLOCK, scratch_block);
+  }
+  void add_reasoning_head(::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head) {
+    fbb_.AddOffset(TransformerModel::VT_REASONING_HEAD, reasoning_head);
   }
   void add_final_rms_gamma(::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma) {
     fbb_.AddOffset(TransformerModel::VT_FINAL_RMS_GAMMA, final_rms_gamma);
@@ -2161,7 +2290,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     uint32_t checksum_crc32 = 0,
     uint64_t checksum_xxhash64 = 0,
     uint64_t creation_timestamp = 0,
-    uint64_t last_modified_timestamp = 0) {
+    uint64_t last_modified_timestamp = 0,
+    ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0) {
   TransformerModelBuilder builder_(_fbb);
   builder_.add_last_modified_timestamp(last_modified_timestamp);
   builder_.add_creation_timestamp(creation_timestamp);
@@ -2169,6 +2299,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
   builder_.add_checksum_crc32(checksum_crc32);
   builder_.add_training_metadata(training_metadata);
   builder_.add_loss_weighting(loss_weighting);
+  builder_.add_reasoning_head(reasoning_head);
   builder_.add_final_rms_gamma(final_rms_gamma);
   builder_.add_scratch_block(scratch_block);
   builder_.add_numeric_head(numeric_head);
@@ -2195,7 +2326,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     uint32_t checksum_crc32 = 0,
     uint64_t checksum_xxhash64 = 0,
     uint64_t creation_timestamp = 0,
-    uint64_t last_modified_timestamp = 0) {
+    uint64_t last_modified_timestamp = 0,
+    ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0) {
   auto encoder_layers__ = encoder_layers ? _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>(*encoder_layers) : 0;
   auto final_rms_gamma__ = final_rms_gamma ? _fbb.CreateVector<float>(*final_rms_gamma) : 0;
   return GRIMTransformer::CreateTransformerModel(
@@ -2213,7 +2345,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       checksum_crc32,
       checksum_xxhash64,
       creation_timestamp,
-      last_modified_timestamp);
+      last_modified_timestamp,
+      reasoning_head);
 }
 
 ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -2615,6 +2748,51 @@ inline ::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeights(::flat
       _use_bias);
 }
 
+// ─── ReasoningHeadWeights Pack/UnPack ─────────────────────────────────────────
+
+inline ReasoningHeadWeightsT *ReasoningHeadWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<ReasoningHeadWeightsT>(new ReasoningHeadWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void ReasoningHeadWeights::UnPackTo(ReasoningHeadWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = w_op_data(); if (_e) { _o->w_op_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_op_data[_i] = _e->Get(_i); } } else { _o->w_op_data.resize(0); } }
+  { auto _e = b_op_data(); if (_e) { _o->b_op_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_op_data[_i] = _e->Get(_i); } } else { _o->b_op_data.resize(0); } }
+  { auto _e = w_arg1_data(); if (_e) { _o->w_arg1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_arg1_data[_i] = _e->Get(_i); } } else { _o->w_arg1_data.resize(0); } }
+  { auto _e = w_arg2_data(); if (_e) { _o->w_arg2_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_arg2_data[_i] = _e->Get(_i); } } else { _o->w_arg2_data.resize(0); } }
+  { auto _e = num_ops(); _o->num_ops = _e; }
+  { auto _e = d_total(); _o->d_total = _e; }
+}
+
+inline ::flatbuffers::Offset<ReasoningHeadWeights> ReasoningHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateReasoningHeadWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ReasoningHeadWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _w_op_data = _o->w_op_data.size() ? _fbb.CreateVector(_o->w_op_data) : 0;
+  auto _b_op_data = _o->b_op_data.size() ? _fbb.CreateVector(_o->b_op_data) : 0;
+  auto _w_arg1_data = _o->w_arg1_data.size() ? _fbb.CreateVector(_o->w_arg1_data) : 0;
+  auto _w_arg2_data = _o->w_arg2_data.size() ? _fbb.CreateVector(_o->w_arg2_data) : 0;
+  auto _num_ops = _o->num_ops;
+  auto _d_total = _o->d_total;
+  return GRIMTransformer::CreateReasoningHeadWeights(
+      _fbb,
+      _w_op_data,
+      _b_op_data,
+      _w_arg1_data,
+      _w_arg2_data,
+      _num_ops,
+      _d_total);
+}
+
+// ─── End ReasoningHeadWeights Pack/UnPack ─────────────────────────────────────
+
 inline ScratchBlockWeightsT *ScratchBlockWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ScratchBlockWeightsT>(new ScratchBlockWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -2828,6 +3006,7 @@ inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
         lm_head((o.lm_head) ? new GRIMTransformer::LMHeadWeightsT(*o.lm_head) : nullptr),
         numeric_head((o.numeric_head) ? new GRIMTransformer::NumericHeadWeightsT(*o.numeric_head) : nullptr),
         scratch_block((o.scratch_block) ? new GRIMTransformer::ScratchBlockWeightsT(*o.scratch_block) : nullptr),
+        reasoning_head((o.reasoning_head) ? new GRIMTransformer::ReasoningHeadWeightsT(*o.reasoning_head) : nullptr),
         final_rms_gamma(o.final_rms_gamma),
         loss_weighting((o.loss_weighting) ? new GRIMTransformer::LossWeightingWeightsT(*o.loss_weighting) : nullptr),
         training_metadata((o.training_metadata) ? new GRIMTransformer::TrainingMetadataT(*o.training_metadata) : nullptr),
@@ -2847,6 +3026,7 @@ inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLAT
   std::swap(lm_head, o.lm_head);
   std::swap(numeric_head, o.numeric_head);
   std::swap(scratch_block, o.scratch_block);
+  std::swap(reasoning_head, o.reasoning_head);
   std::swap(final_rms_gamma, o.final_rms_gamma);
   std::swap(loss_weighting, o.loss_weighting);
   std::swap(training_metadata, o.training_metadata);
@@ -2873,6 +3053,7 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = lm_head(); if (_e) { if(_o->lm_head) { _e->UnPackTo(_o->lm_head.get(), _resolver); } else { _o->lm_head = std::unique_ptr<GRIMTransformer::LMHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->lm_head) { _o->lm_head.reset(); } }
   { auto _e = numeric_head(); if (_e) { if(_o->numeric_head) { _e->UnPackTo(_o->numeric_head.get(), _resolver); } else { _o->numeric_head = std::unique_ptr<GRIMTransformer::NumericHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->numeric_head) { _o->numeric_head.reset(); } }
   { auto _e = scratch_block(); if (_e) { if(_o->scratch_block) { _e->UnPackTo(_o->scratch_block.get(), _resolver); } else { _o->scratch_block = std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->scratch_block) { _o->scratch_block.reset(); } }
+  { auto _e = reasoning_head(); if (_e) { if(_o->reasoning_head) { _e->UnPackTo(_o->reasoning_head.get(), _resolver); } else { _o->reasoning_head = std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->reasoning_head) { _o->reasoning_head.reset(); } }
   { auto _e = final_rms_gamma(); if (_e) { _o->final_rms_gamma.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->final_rms_gamma[_i] = _e->Get(_i); } } else { _o->final_rms_gamma.resize(0); } }
   { auto _e = loss_weighting(); if (_e) { if(_o->loss_weighting) { _e->UnPackTo(_o->loss_weighting.get(), _resolver); } else { _o->loss_weighting = std::unique_ptr<GRIMTransformer::LossWeightingWeightsT>(_e->UnPack(_resolver)); } } else if (_o->loss_weighting) { _o->loss_weighting.reset(); } }
   { auto _e = training_metadata(); if (_e) { if(_o->training_metadata) { _e->UnPackTo(_o->training_metadata.get(), _resolver); } else { _o->training_metadata = std::unique_ptr<GRIMTransformer::TrainingMetadataT>(_e->UnPack(_resolver)); } } else if (_o->training_metadata) { _o->training_metadata.reset(); } }
@@ -2897,6 +3078,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
   auto _lm_head = _o->lm_head ? CreateLMHeadWeights(_fbb, _o->lm_head.get(), _rehasher) : 0;
   auto _numeric_head = _o->numeric_head ? CreateNumericHeadWeights(_fbb, _o->numeric_head.get(), _rehasher) : 0;
   auto _scratch_block = _o->scratch_block ? CreateScratchBlockWeights(_fbb, _o->scratch_block.get(), _rehasher) : 0;
+  auto _reasoning_head = _o->reasoning_head ? CreateReasoningHeadWeights(_fbb, _o->reasoning_head.get(), _rehasher) : 0;
   auto _final_rms_gamma = _o->final_rms_gamma.size() ? _fbb.CreateVector(_o->final_rms_gamma) : 0;
   auto _loss_weighting = _o->loss_weighting ? CreateLossWeightingWeights(_fbb, _o->loss_weighting.get(), _rehasher) : 0;
   auto _training_metadata = _o->training_metadata ? CreateTrainingMetadata(_fbb, _o->training_metadata.get(), _rehasher) : 0;
@@ -2919,7 +3101,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
       _checksum_crc32,
       _checksum_xxhash64,
       _creation_timestamp,
-      _last_modified_timestamp);
+      _last_modified_timestamp,
+      _reasoning_head);
 }
 
 inline const GRIMTransformer::TransformerModel *GetTransformerModel(const void *buf) {

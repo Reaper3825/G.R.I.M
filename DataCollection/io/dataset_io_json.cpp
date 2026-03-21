@@ -20,6 +20,8 @@ static TaggedEntry parseTaggedEntry(const json& j) {
     e.reliabilityScore = j.value("reliability_score", 0.0f);
     e.timestamp        = j.value("timestamp", int64_t(0));
     e.verified         = j.value("verified", false);
+    e.structured       = j.value("structured", false);
+    e.structuredOutput = j.value("structured_output", std::string());
     if (j.contains("tags") && j["tags"].is_array()) {
         for (const auto& t : j["tags"]) {
             if (t.is_string()) e.tags.push_back(t.get<std::string>());
@@ -39,6 +41,9 @@ static json taggedEntryToJson(const TaggedEntry& e) {
     j["reliability_score"] = e.reliabilityScore;
     j["timestamp"]         = e.timestamp;
     j["verified"]          = e.verified;
+    j["structured"]        = e.structured;
+    if (!e.structuredOutput.empty())
+        j["structured_output"] = e.structuredOutput;
     j["tags"]              = e.tags;
     return j;
 }

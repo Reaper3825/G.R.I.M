@@ -10,6 +10,7 @@
 #include "resources.hpp"
 #include "control/ai_config_paths.hpp"
 #include "core/input_parser.hpp"
+#include "MMO/Core/ModelRegistry.hpp"
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -43,7 +44,48 @@ static constexpr float kStructRowGap     = 12.0f;   // padding between toolbar r
 static constexpr float kStructSectionGap = 16.0f;   // padding between sections
 static constexpr float kStructLabelSpace = 24.0f;   // space for labels above input areas
 
+// Sequence card dimensions (used in drawStructurerTab and helpers)
+static constexpr float kSeqCardTopBarH     = 32.0f;
+static constexpr float kSeqCardEntryLabelH = 16.0f;
+static constexpr float kSeqCardEntryTextH  = 55.0f;
+static constexpr float kSeqCardEntryGapH   = 6.0f;
+static constexpr float kSeqCardEntryH      = kSeqCardEntryLabelH + kSeqCardEntryTextH + kSeqCardEntryGapH;
+static constexpr float kSeqCardBtnRowH     = 30.0f;
+static constexpr float kSeqCardPadBot      = 8.0f;
+static constexpr float kSeqCardInnerPad    = 12.0f;
+
+// Curriculum view dimensions
+static constexpr float kPoolRowH       = 24.0f;
+static constexpr float kCBListRowH     = 44.0f; // ConceptBlock registry (name + question preview)
+static constexpr float kPoolHeaderH    = 28.0f;
+static constexpr float kCurrRowH       = 28.0f;
+static constexpr float kPhaseRowH      = 22.0f;
+static constexpr float kFilterBarH     = 34.0f;
+static constexpr float kDetailDividerH = 18.0f;
+
+static constexpr float kColNum         = 0.06f;
+static constexpr float kColSubject     = 0.12f;
+static constexpr float kColQuality     = 0.10f;
+static constexpr float kColSource      = 0.10f;
+static constexpr float kColStructured  = 0.08f;
+
 // System-only: auto-detect fetcher from URL (matches web_collector logic)
+static std::string cbSingleLinePreview(const std::string& s, size_t maxLen) {
+    std::string t;
+    t.reserve(s.size());
+    for (char c : s) {
+        if (c == '\n' || c == '\r' || c == '\t')
+            t.push_back(' ');
+        else
+            t.push_back(c);
+    }
+    while (!t.empty() && t.back() == ' ')
+        t.pop_back();
+    if (t.size() > maxLen)
+        return t.substr(0, maxLen - 2) + "..";
+    return t;
+}
+
 static std::string detectFetcherFromUrl(const std::string& url) {
     if (url.find("api.github.com") != std::string::npos || url.find("github.com") != std::string::npos)
         return "github_api";
@@ -102,6 +144,11 @@ UIDataHubPanel::UIDataHubPanel()
         setView(DataHubView::Structurer);
     });
     tabStructBtn_->setSize(100.0f, 28.0f);
+
+    tabCurriculumBtn_ = std::make_shared<UIButton>("Curriculum", [this]() {
+        setView(DataHubView::Curriculum);
+    });
+    tabCurriculumBtn_->setSize(100.0f, 28.0f);
 
     // ── Home tab widgets ────────────────────────────────
 
@@ -184,17 +231,29 @@ UIDataHubPanel::UIDataHubPanel()
 
     modelDropdown_ = std::make_shared<UIDropdown>(
         "Model", std::vector<std::string>{"(none)"}, 0,
-        [this](int, const std::string&) {
-            LOG_DEBUG("DataHub", "Model selection changed");
+        [this](int idx, const std::string& name) {
+            if (!datasetTarget_ || idx < 0) return;
+            auto models = GRIM::MMO::ModelRegistry::instance().getAllModels();
+            if (idx < static_cast<int>(models.size())) {
+                datasetTarget_->setActiveModel(models[idx]->id, models[idx]->name);
+                datasetTarget_->loadAssignments();
+                assignedSequences_ = datasetTarget_->assignedCount();
+            }
         });
 
     formatDropdown_ = std::make_shared<UIDropdown>(
-        "Format", std::vector<std::string>{"Q/A", "Conversation", "Instruct", "Raw"}, 0,
+        "Format", std::vector<std::string>{"Q/A", "Thought", "Conversation", "Instruct", "Raw"}, 0,
         [this](int, const std::string&) {});
 
     viewModeDropdown_ = std::make_shared<UIDropdown>(
-        "View", std::vector<std::string>{"Dataset View", "Sequence View"}, 0,
-        [this](int idx, const std::string&) { datasetViewMode_ = (idx == 0); });
+        "View", std::vector<std::string>{"Dataset View", "Sequence View", "Curriculum View"}, 0,
+        [this](int idx, const std::string&) {
+            structViewMode_ = idx;
+            if (idx == 2) {
+                poolFilterDirty_ = true;
+                rebuildFilteredPool();
+            }
+        });
 
     structSearchInput_ = std::make_shared<UIInputBox>();
     structSearchInput_->setPlaceholder("Search sequences...");
@@ -207,36 +266,544 @@ UIDataHubPanel::UIDataHubPanel()
     structuredTextArea_ = std::make_shared<UITextArea>("Structured Output", "",
         [](const std::string&) {});
 
-    btnStructure_    = std::make_shared<UIButton>("Structure",     [this]() { LOG_DEBUG("DataHub", "Structure — not yet wired"); });
-    btnStructureAll_ = std::make_shared<UIButton>("Structure All", [this]() { LOG_DEBUG("DataHub", "Structure All — not yet wired"); });
-    btnSave_         = std::make_shared<UIButton>("Save",          [this]() { LOG_DEBUG("DataHub", "Save — not yet wired"); });
-    btnPrevSeq_      = std::make_shared<UIButton>("<",  [this]() { if (currentSequenceIndex_ > 0) currentSequenceIndex_--; });
-    btnNextSeq_      = std::make_shared<UIButton>(">",  [this]() { if (currentSequenceIndex_ + 1 < totalSequences_) currentSequenceIndex_++; });
-    btnAssign_       = std::make_shared<UIButton>("Assign",  [this]() { LOG_DEBUG("DataHub", "Assign — not yet wired"); });
-    btnRemoveAssign_ = std::make_shared<UIButton>("Remove",  [this]() { LOG_DEBUG("DataHub", "Remove — not yet wired"); });
+    btnStructure_ = std::make_shared<UIButton>("Structure", [this]() {
+        if (!structurer_ || !rawTextArea_) return;
+        std::string raw = rawTextArea_->getText();
+        if (raw.empty()) { addLog("No raw text to structure", 1); return; }
+        auto results = structurer_->structureEntry(raw);
+        if (results.empty()) {
+            addLog("Structuring failed — LLM returned no output", 2);
+            return;
+        }
+        std::string combined;
+        for (size_t i = 0; i < results.size(); ++i) {
+            if (i > 0) combined += "\n\n---\n\n";
+            combined += results[i];
+        }
+        if (structuredTextArea_) structuredTextArea_->setText(combined);
+        addLog("Structured into " + std::to_string(results.size()) + " pair(s)", 0);
+    });
+
+    btnStructureAll_ = std::make_shared<UIButton>("Structure All", [this]() {
+        if (!structurer_ || !datasetTarget_) return;
+        addLog("Structure All — running in background...", 0);
+        std::thread([this]() {
+            std::vector<std::string> texts;
+            size_t count = datasetTarget_->massDatasetSize();
+            for (size_t i = 0; i < count; ++i) {
+                auto seq = datasetTarget_->getSequence(i);
+                if (!seq.is_structured) texts.push_back(seq.content);
+            }
+            if (texts.empty()) { addLog("No unstructured sequences found", 1); return; }
+            auto result = structurer_->structureBatch(texts,
+                [this](size_t done, size_t total) {
+                    addLog("Structuring: " + std::to_string(done) + "/" + std::to_string(total), 0);
+                });
+            size_t writeIdx = 0;
+            for (size_t i = 0; i < datasetTarget_->massDatasetSize() && writeIdx < result.structured.size(); ++i) {
+                auto seq = datasetTarget_->getSequence(i);
+                if (seq.is_structured) continue;
+                const auto& pairs = result.structured[writeIdx++];
+                if (!pairs.empty()) {
+                    std::string combined;
+                    for (size_t p = 0; p < pairs.size(); ++p) {
+                        if (p > 0) combined += "\n\n---\n\n";
+                        combined += pairs[p];
+                    }
+                    datasetTarget_->writeStructuredOutput(i, combined);
+                }
+            }
+            structuredCount_ = 0;
+            for (size_t i = 0; i < datasetTarget_->massDatasetSize(); ++i)
+                if (datasetTarget_->getSequence(i).is_structured) structuredCount_++;
+            failedCount_ = result.failed;
+            addLog("Structure All complete: " + std::to_string(result.succeeded) + " ok, "
+                 + std::to_string(result.failed) + " failed", 0);
+        }).detach();
+    });
+
+    btnSave_ = std::make_shared<UIButton>("Save", [this]() {
+        if (!datasetTarget_ || !structuredTextArea_) return;
+        std::string text = structuredTextArea_->getText();
+        if (text.empty()) { addLog("Nothing to save", 1); return; }
+        if (currentSequenceIndex_ < datasetTarget_->massDatasetSize()) {
+            if (datasetTarget_->writeStructuredOutput(currentSequenceIndex_, text)) {
+                structuredCount_ = 0;
+                for (size_t i = 0; i < datasetTarget_->massDatasetSize(); ++i)
+                    if (datasetTarget_->getSequence(i).is_structured) structuredCount_++;
+                addLog("Saved structured output for sequence " + std::to_string(currentSequenceIndex_), 0);
+                loadCurrentSequence();
+            } else {
+                addLog("Failed to save structured output", 2);
+            }
+        } else {
+            std::string raw = rawTextArea_ ? rawTextArea_->getText() : "";
+            if (datasetTarget_->appendStructuredEntry(raw, text)) {
+                totalSequences_ = datasetTarget_->massDatasetSize();
+                structuredCount_++;
+                addLog("Appended new structured entry to mass dataset", 0);
+            } else {
+                addLog("Failed to append new entry", 2);
+            }
+        }
+    });
+
+    btnPrevSeq_ = std::make_shared<UIButton>("<", [this]() {
+        if (currentSequenceIndex_ > 0) {
+            currentSequenceIndex_--;
+            loadCurrentSequence();
+        }
+    });
+    btnNextSeq_ = std::make_shared<UIButton>(">", [this]() {
+        if (currentSequenceIndex_ + 1 < totalSequences_) {
+            currentSequenceIndex_++;
+            loadCurrentSequence();
+        }
+    });
+
+    btnAssign_ = std::make_shared<UIButton>("Assign", [this]() {
+        if (!datasetTarget_) return;
+        if (datasetTarget_->activeModelId().empty()) {
+            addLog("Select a model first", 1); return;
+        }
+        if (datasetTarget_->assignSequenceToModel(currentSequenceIndex_)) {
+            assignedSequences_ = datasetTarget_->assignedCount();
+            addLog("Assigned sequence to " + datasetTarget_->activeModelName(), 0);
+        } else {
+            addLog("Failed to assign sequence", 2);
+        }
+    });
+
+    btnRemoveAssign_ = std::make_shared<UIButton>("Remove", [this]() {
+        if (!datasetTarget_) return;
+        if (datasetTarget_->removeSequenceFromModel(currentSequenceIndex_)) {
+            assignedSequences_ = datasetTarget_->assignedCount();
+            addLog("Removed assignment from " + datasetTarget_->activeModelName(), 0);
+        } else {
+            addLog("Failed to remove assignment", 2);
+        }
+    });
+
+    btnGenerate_ = std::make_shared<UIButton>("Generate", [this]() {
+        if (!structurer_ || !rawTextArea_) return;
+        std::string raw = rawTextArea_->getText();
+        if (raw.empty()) { addLog("No raw text to generate from", 1); return; }
+
+        static const char* modes[] = {"qa", "thought", "conversation", "instruct", "raw"};
+        int fmtIdx = formatDropdown_ ? formatDropdown_->getSelectedIndex() : 0;
+        std::string mode = (fmtIdx >= 0 && fmtIdx < 5) ? modes[fmtIdx] : "qa";
+        std::string prompt = customPromptArea_ ? customPromptArea_->getText() : "";
+
+        auto results = structurer_->structureEntry(raw, mode, prompt);
+        if (results.empty()) {
+            std::string err = structurer_->lastError();
+            addLog("Generation failed: " + (err.empty() ? "LLM returned no output" : err), 2);
+            return;
+        }
+        std::string combined;
+        for (size_t i = 0; i < results.size(); ++i) {
+            if (i > 0) combined += "\n\n---\n\n";
+            combined += results[i];
+        }
+        if (structuredTextArea_) structuredTextArea_->setText(combined);
+        addLog("Generated " + std::to_string(results.size()) + " pair(s) in " + mode + " format", 0);
+    });
+
+    btnAddSequence_ = std::make_shared<UIButton>("+ Add Sequence", [this]() {
+        int defaultFormat = formatDropdown_ ? formatDropdown_->getSelectedIndex() : 0;
+        sequenceCards_.push_back(buildSequenceCard(defaultFormat));
+        addLog("Added new sequence card", 0);
+    });
+
+    customPromptArea_ = std::make_shared<UITextArea>("", "",
+        [](const std::string&) {});
+
+    btnAppendEntry_ = std::make_shared<UIButton>("Append", [this]() {
+        if (!datasetTarget_ || !structuredTextArea_) return;
+        std::string structured = structuredTextArea_->getText();
+        if (structured.empty()) {
+            addLog("Nothing to append — structured text area is empty", 1);
+            return;
+        }
+        std::string raw = rawTextArea_ ? rawTextArea_->getText() : "";
+        if (datasetTarget_->appendStructuredEntry(raw, structured)) {
+            totalSequences_ = datasetTarget_->massDatasetSize();
+            structuredCount_++;
+            addLog("Appended new entry to dataset (" + std::to_string(totalSequences_) + " total)", 0);
+        } else {
+            addLog("Failed to append entry to dataset", 2);
+        }
+    });
 
     sliderMaxEntries_ = std::make_shared<UISlider>("Max Entries", 0.0f, 1000.0f, 0.0f, [](float) {});
     sliderParallel_   = std::make_shared<UISlider>("Parallel",    1.0f, 16.0f,   4.0f, [](float) {});
 
+    // ── Curriculum view widgets ──────────────────────────
+
+    subjectFilterDropdown_ = std::make_shared<UIDropdown>(
+        "Subject",
+        std::vector<std::string>{"All", "general", "code", "math", "science",
+                                  "history", "medical", "legal"},
+        0, [this](int idx, const std::string&) {
+            filterSubjectIdx_ = idx;
+            poolFilterDirty_ = true;
+            rebuildFilteredPool();
+        });
+
+    qualityFilterDropdown_ = std::make_shared<UIDropdown>(
+        "Quality",
+        std::vector<std::string>{"All", "high", "medium", "low"},
+        0, [this](int idx, const std::string&) {
+            filterQualityIdx_ = idx;
+            poolFilterDirty_ = true;
+            rebuildFilteredPool();
+        });
+
+    poolSearchInput_ = std::make_shared<UIInputBox>();
+    poolSearchInput_->setPlaceholder("Filter pool...");
+
+    btnAssignSelected_ = std::make_shared<UIButton>("Assign >>", [this]() {
+        if (!datasetTarget_ || datasetTarget_->activeModelId().empty()) {
+            addLog("Select a model first", 1); return;
+        }
+        if (selectedPoolRows_.empty() && selectedPoolRow_ >= 0)
+            selectedPoolRows_.push_back(static_cast<size_t>(selectedPoolRow_));
+        if (selectedPoolRows_.empty()) return;
+        std::vector<size_t> seqIndices;
+        for (size_t r : selectedPoolRows_) {
+            if (r < filteredPoolIndices_.size())
+                seqIndices.push_back(filteredPoolIndices_[r]);
+        }
+        datasetTarget_->assignMultiple(seqIndices);
+        assignedSequences_ = datasetTarget_->assignedCount();
+        selectedPoolRows_.clear();
+        selectedPoolRow_ = -1;
+        poolFilterDirty_ = true;
+        rebuildFilteredPool();
+        addLog("Assigned " + std::to_string(seqIndices.size()) + " sequence(s)", 0);
+    });
+
+    btnRemoveSelected_ = std::make_shared<UIButton>("<< Remove", [this]() {
+        if (!datasetTarget_ || selectedCurrRow_ < 0) return;
+        size_t ci = static_cast<size_t>(selectedCurrRow_);
+        const auto& order = datasetTarget_->curriculumOrder();
+        if (ci >= order.size()) return;
+        datasetTarget_->removeSequenceFromModel(order[ci]);
+        assignedSequences_ = datasetTarget_->assignedCount();
+        selectedCurrRow_ = -1;
+        poolFilterDirty_ = true;
+        rebuildFilteredPool();
+        addLog("Removed sequence from curriculum", 0);
+    });
+
+    btnAddPhase_ = std::make_shared<UIButton>("+ Phase", [this]() {
+        if (!datasetTarget_) return;
+        size_t pos = (selectedCurrRow_ >= 0) ? static_cast<size_t>(selectedCurrRow_) : datasetTarget_->assignedCount();
+        datasetTarget_->insertPhaseMarker(pos, "New Phase");
+        addLog("Added phase marker", 0);
+    });
+
+    detailContentArea_ = std::make_shared<UITextArea>("Content", "",
+        [](const std::string&) {});
+    detailStructuredArea_ = std::make_shared<UITextArea>("Structured Output", "",
+        [](const std::string&) {});
+
+    btnDetailSave_ = std::make_shared<UIButton>("Save", [this]() {
+        if (!datasetTarget_ || detailSeqIndex_ == SIZE_MAX) return;
+        std::string text = detailStructuredArea_ ? detailStructuredArea_->getText() : "";
+        if (datasetTarget_->writeStructuredOutput(detailSeqIndex_, text)) {
+            addLog("Saved structured output for sequence", 0);
+            refreshStructurerState();
+        } else {
+            addLog("Failed to save structured output", 2);
+        }
+    });
+
     structWidgets_ = {
         modelDropdown_, formatDropdown_, viewModeDropdown_,
         structSearchInput_, searchPreviewScrollBox_,
-        rawTextArea_, structuredTextArea_,
-        btnStructure_, btnStructureAll_, btnSave_,
+        rawTextArea_, structuredTextArea_, customPromptArea_,
+        btnStructure_, btnStructureAll_, btnSave_, btnGenerate_,
         btnPrevSeq_, btnNextSeq_, btnAssign_, btnRemoveAssign_,
-        sliderMaxEntries_, sliderParallel_
+        sliderMaxEntries_, sliderParallel_, btnAddSequence_, btnAppendEntry_,
+        subjectFilterDropdown_, qualityFilterDropdown_, poolSearchInput_,
+        btnAssignSelected_, btnRemoveSelected_, btnAddPhase_,
+        detailContentArea_, detailStructuredArea_, btnDetailSave_
+    };
+
+    // ── Curriculum tab widgets ────────────────────────────
+
+    cbModelDropdown_ = std::make_shared<UIDropdown>(
+        "Model", std::vector<std::string>{"(none)"}, 0,
+        [this](int, const std::string&) {});
+
+    cbFormatDropdown_ = std::make_shared<UIDropdown>(
+        "Format", GRIM::presetLabels(), 1,
+        [this](int idx, const std::string&) {
+            cbFormatFilterIdx_ = idx;
+            if (cbListTypeDropdown_)
+                cbListTypeDropdown_->setSelectedIndex(idx);
+            const bool draftRow = (cbDraftPreviewActive_ && selectedCBRow_ == 0);
+            if (draftRow || selectedCBRow_ < 0) {
+                if (idx >= 0 && idx < GRIM::kConceptPresetCount)
+                    syncIntermediateAreas(GRIM::kConceptPresets[idx].defaultIntermediateCount);
+                return;
+            }
+            size_t dsIdx = 0;
+            if (!datasetTarget_ || !cbCurriculumRowToBlockIndex(selectedCBRow_, dsIdx))
+                return;
+            if (idx < 0 || idx >= GRIM::kConceptPresetCount)
+                return;
+            auto cb = datasetTarget_->getConceptBlock(dsIdx);
+            const char* newKey = GRIM::kConceptPresets[idx].key;
+            if (cb.format_type == newKey)
+                return;
+            cb.format_type = newKey;
+            cb.recomputeDerived();
+            if (datasetTarget_->updateConceptBlock(cb.id, cb))
+                addLog("Updated block type", 0);
+        });
+
+    cbListTypeDropdown_ = std::make_shared<UIDropdown>(
+        "", GRIM::presetLabels(), 1,
+        [this](int idx, const std::string&) {
+            if (cbFormatDropdown_)
+                cbFormatDropdown_->setSelectedIndex(idx);
+            const bool draftRow = (cbDraftPreviewActive_ && selectedCBRow_ == 0);
+            if (draftRow || selectedCBRow_ < 0) {
+                if (idx >= 0 && idx < GRIM::kConceptPresetCount)
+                    syncIntermediateAreas(GRIM::kConceptPresets[idx].defaultIntermediateCount);
+                return;
+            }
+            size_t dsIdx = 0;
+            if (!datasetTarget_ || !cbCurriculumRowToBlockIndex(selectedCBRow_, dsIdx))
+                return;
+            if (idx < 0 || idx >= GRIM::kConceptPresetCount)
+                return;
+            auto cb = datasetTarget_->getConceptBlock(dsIdx);
+            const char* newKey = GRIM::kConceptPresets[idx].key;
+            if (cb.format_type == newKey)
+                return;
+            cb.format_type = newKey;
+            cb.recomputeDerived();
+            if (datasetTarget_->updateConceptBlock(cb.id, cb))
+                addLog("Updated block type", 0);
+        });
+    cbListTypeDropdown_->setMaxVisibleItems(6);
+
+    cbSearchInput_ = std::make_shared<UIInputBox>();
+    cbSearchInput_->setPlaceholder("Search concept blocks...");
+
+    cbNameInput_ = std::make_shared<UIInputBox>();
+    cbNameInput_->setPlaceholder("Block name...");
+
+    cbQuestionArea_ = std::make_shared<UITextArea>("Question", "",
+        [](const std::string&) {});
+    cbAnswerArea_ = std::make_shared<UITextArea>("Answer", "",
+        [](const std::string&) {});
+    cbCustomPromptArea_ = std::make_shared<UITextArea>("Custom Prompt", "",
+        [](const std::string&) {});
+
+    btnCBGenerate_ = std::make_shared<UIButton>("Generate", [this]() {
+        generateConceptBlock();
+    });
+
+    btnCBAddStep_ = std::make_shared<UIButton>("+ Step", [this]() {
+        auto area = std::make_shared<UITextArea>(
+            "Step " + std::to_string(cbIntermediateAreas_.size() + 1), "",
+            [](const std::string&) {});
+        cbIntermediateAreas_.push_back(area);
+    });
+
+    btnCBRemoveStep_ = std::make_shared<UIButton>("- Step", [this]() {
+        if (!cbIntermediateAreas_.empty())
+            cbIntermediateAreas_.pop_back();
+    });
+
+    btnCBNew_ = std::make_shared<UIButton>("New Block", [this]() {
+        clearCBEditor();
+        cbDraftPreviewActive_ = true;
+        selectedCBRow_        = 0;
+        cbListScrollOffset_   = 0.0f;
+        int presetIdx = cbFormatDropdown_ ? cbFormatDropdown_->getSelectedIndex() : 1;
+        if (presetIdx >= 0 && presetIdx < GRIM::kConceptPresetCount)
+            syncIntermediateAreas(GRIM::kConceptPresets[presetIdx].defaultIntermediateCount);
+        syncCBListTypeDropdownFromToolbar();
+    });
+
+    btnCBSave_ = std::make_shared<UIButton>("Save", [this]() {
+        if (!datasetTarget_) return;
+        std::string name = cbNameInput_ ? cbNameInput_->getText() : "";
+        std::string question = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
+        if (name.empty() && question.empty()) {
+            addLog("ConceptBlock needs a name or question", 1);
+            return;
+        }
+
+        int presetIdx = cbFormatDropdown_ ? cbFormatDropdown_->getSelectedIndex() : 1;
+        std::string formatKey = (presetIdx >= 0 && presetIdx < GRIM::kConceptPresetCount)
+            ? GRIM::kConceptPresets[presetIdx].key : "chain_of_thought";
+
+        GRIM::ConceptBlock cb;
+        cb.name = name;
+        cb.question = question;
+        cb.answer = cbAnswerArea_ ? cbAnswerArea_->getText() : "";
+        cb.format_type = formatKey;
+        cb.intermediates.clear();
+        for (const auto& area : cbIntermediateAreas_) {
+            cb.intermediates.push_back(area ? area->getText() : "");
+        }
+        cb.recomputeDerived();
+        cb.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+
+        size_t existingIdx = 0;
+        if (cbCurriculumRowToBlockIndex(selectedCBRow_, existingIdx)) {
+            auto existing = datasetTarget_->getConceptBlock(existingIdx);
+            cb.id = existing.id;
+            cb.source_sequence_id = existing.source_sequence_id;
+            if (datasetTarget_->updateConceptBlock(cb.id, cb)) {
+                addLog("Updated ConceptBlock: " + cb.name, 0);
+            } else {
+                addLog("Failed to update ConceptBlock", 2);
+            }
+        } else {
+            std::string seed = cb.name + cb.question + std::to_string(cb.timestamp);
+            cb.id = "";
+            uint64_t h1 = 14695981039346656037ULL;
+            uint64_t h2 = 14695981039346656037ULL;
+            for (size_t i = 0; i < seed.size(); ++i) {
+                uint8_t c = static_cast<uint8_t>(seed[i]);
+                h1 ^= c; h1 *= 1099511628211ULL;
+                if (i + 1 < seed.size()) { h2 ^= static_cast<uint8_t>(seed[i+1]); h2 *= 1099511628211ULL; }
+            }
+            std::ostringstream oss;
+            oss << std::hex << std::setfill('0') << std::setw(16) << h1 << std::setw(16) << h2;
+            cb.id = oss.str();
+
+            if (datasetTarget_->addConceptBlock(cb)) {
+                addLog("Created ConceptBlock: " + cb.name, 0);
+                cbDraftPreviewActive_ = false;
+                cbFilterDirty_         = true;
+                rebuildFilteredCBList();
+                for (int i = 0; i < cbCurriculumListRowCount(); ++i) {
+                    size_t idx = 0;
+                    if (!cbCurriculumRowToBlockIndex(i, idx))
+                        continue;
+                    if (datasetTarget_->getConceptBlock(idx).id == cb.id) {
+                        selectedCBRow_ = i;
+                        break;
+                    }
+                }
+                syncCBListTypeDropdownFromToolbar();
+            } else {
+                addLog("Failed to create ConceptBlock", 2);
+            }
+        }
+        refreshCurriculumTabState();
+    });
+
+    btnCBDelete_ = std::make_shared<UIButton>("Delete", [this]() {
+        if (cbCurriculumRowIsDraft(selectedCBRow_)) {
+            cbDraftPreviewActive_ = false;
+            selectedCBRow_        = -1;
+            clearCBEditor();
+            return;
+        }
+        if (!datasetTarget_ || selectedCBRow_ < 0) return;
+        size_t realIdx = 0;
+        if (!cbCurriculumRowToBlockIndex(selectedCBRow_, realIdx))
+            return;
+        auto cb = datasetTarget_->getConceptBlock(realIdx);
+        if (datasetTarget_->removeConceptBlock(cb.id)) {
+            addLog("Deleted ConceptBlock: " + cb.name, 0);
+            selectedCBRow_ = -1;
+            clearCBEditor();
+            cbFilterDirty_ = true;
+            refreshCurriculumTabState();
+        }
+    });
+
+    btnCBAssign_ = std::make_shared<UIButton>("Assign", [this]() {
+        if (cbCurriculumRowIsDraft(selectedCBRow_)) {
+            addLog("Save the block before assigning it to the model", 1);
+            return;
+        }
+        if (!datasetTarget_ || selectedCBRow_ < 0) return;
+        size_t idx = 0;
+        if (!cbCurriculumRowToBlockIndex(selectedCBRow_, idx))
+            return;
+        auto cb = datasetTarget_->getConceptBlock(idx);
+        if (datasetTarget_->assignConceptBlockToModel(cb.id)) {
+            addLog("Assigned: " + cb.name, 0);
+            refreshCurriculumTabState();
+        }
+    });
+
+    btnCBRemoveAssign_ = std::make_shared<UIButton>("Unassign", [this]() {
+        if (cbCurriculumRowIsDraft(selectedCBRow_)) return;
+        if (!datasetTarget_ || selectedCBRow_ < 0) return;
+        size_t idx = 0;
+        if (!cbCurriculumRowToBlockIndex(selectedCBRow_, idx))
+            return;
+        auto cb = datasetTarget_->getConceptBlock(idx);
+        if (datasetTarget_->removeConceptBlockFromModel(cb.id)) {
+            addLog("Unassigned: " + cb.name, 0);
+            refreshCurriculumTabState();
+        }
+    });
+
+    curriculumWidgets_ = {
+        cbModelDropdown_, cbFormatDropdown_, cbListTypeDropdown_, cbSearchInput_,
+        cbNameInput_, cbQuestionArea_, cbAnswerArea_, cbCustomPromptArea_,
+        btnCBGenerate_, btnCBAddStep_, btnCBRemoveStep_,
+        btnCBNew_, btnCBSave_, btnCBDelete_,
+        btnCBAssign_, btnCBRemoveAssign_
     };
 
     // ── Hide non-active groups ──────────────────────────
 
-    for (auto& w : sourcesWidgets_) w->setVisible(false);
-    for (auto& w : hfWidgets_)      w->setVisible(false);
-    for (auto& w : structWidgets_)  w->setVisible(false);
+    for (auto& w : sourcesWidgets_)    w->setVisible(false);
+    for (auto& w : hfWidgets_)         w->setVisible(false);
+    for (auto& w : structWidgets_)     w->setVisible(false);
+    for (auto& w : curriculumWidgets_) w->setVisible(false);
 
     // ── Backend services ────────────────────────────────
 
     pipelineOrchestrator_ = std::make_unique<GRIM::Pipeline::PipelineOrchestrator>();
     hfWebhook_            = std::make_unique<GRIM::DataCollection::HuggingFaceWebhook>();
+
+    {
+        namespace fs = std::filesystem;
+        GRIM::Config::GrimTextPaths paths;
+        GRIM::Config::loadGrimTextPaths(paths);
+
+        fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
+        fs::path modelStoreRoot;
+        if (!paths.model_store.empty())
+            modelStoreRoot = fs::path(paths.model_store);
+        else
+            modelStoreRoot = grimRoot / "resources" / "models" / "model_store";
+
+        fs::path massDatasetPath;
+        if (!paths.training_data.empty())
+            massDatasetPath = fs::path(paths.training_data).parent_path() / "mass_dataset.jsonl";
+        else
+            massDatasetPath = grimRoot / "resources" / "models" / "GRIM-text" / "training" / "data" / "mass_dataset.jsonl";
+
+        datasetTarget_ = std::make_unique<DatasetTarget>(modelStoreRoot, massDatasetPath);
+
+        GRIM::DataCollection::DataStructuringConfig structCfg;
+        try {
+            auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+            if (snapshot && snapshot->document.contains("data_structuring")) {
+                structCfg = GRIM::DataCollection::DataStructuringConfig::fromJson(
+                    snapshot->document["data_structuring"]);
+            }
+        } catch (...) {}
+        if (structCfg.ollama_model.empty()) structCfg.ollama_model = "llama3.1:8b";
+        structurer_ = std::make_unique<GRIM::DataCollection::DataStructurer>(structCfg);
+    }
 
     // ── Load persisted state ────────────────────────────
 
@@ -245,9 +812,13 @@ UIDataHubPanel::UIDataHubPanel()
     loadDownloadQueue();
     loadHFTokenFromConfig();
     updateDatasetStats();
+    populateModelDropdown();
+    refreshStructurerState();
+
+    if (datasetTarget_) datasetTarget_->loadConceptBlocks();
 
     addLog("DataHub initialized", 0);
-    LOG_DEBUG("DataHub", "Panel initialized — 4 tabs ready");
+    LOG_DEBUG("DataHub", "Panel initialized — 5 tabs ready");
 }
 
 // =========================================================
@@ -280,20 +851,27 @@ void UIDataHubPanel::setView(DataHubView view) {
         saveSourceCards();
 
     switch (activeView_) {
-        case DataHubView::Home:        hideGroup(homeWidgets_);    break;
-        case DataHubView::Sources:     hideGroup(sourcesWidgets_); break;
-        case DataHubView::HuggingFace: hideGroup(hfWidgets_);      break;
-        case DataHubView::Structurer:  hideGroup(structWidgets_);  break;
+        case DataHubView::Home:        hideGroup(homeWidgets_);       break;
+        case DataHubView::Sources:     hideGroup(sourcesWidgets_);    break;
+        case DataHubView::HuggingFace: hideGroup(hfWidgets_);         break;
+        case DataHubView::Structurer:  hideGroup(structWidgets_);     break;
+        case DataHubView::Curriculum:  hideGroup(curriculumWidgets_); break;
     }
 
     activeView_ = view;
 
     switch (activeView_) {
-        case DataHubView::Home:        showGroup(homeWidgets_);    break;
-        case DataHubView::Sources:     showGroup(sourcesWidgets_); break;
-        case DataHubView::HuggingFace: showGroup(hfWidgets_);      break;
-        case DataHubView::Structurer:  showGroup(structWidgets_);  break;
+        case DataHubView::Home:        showGroup(homeWidgets_);       break;
+        case DataHubView::Sources:     showGroup(sourcesWidgets_);    break;
+        case DataHubView::HuggingFace: showGroup(hfWidgets_);         break;
+        case DataHubView::Structurer:  showGroup(structWidgets_);     break;
+        case DataHubView::Curriculum:  showGroup(curriculumWidgets_); break;
     }
+
+    if (activeView_ == DataHubView::Structurer)
+        refreshStructurerState();
+    if (activeView_ == DataHubView::Curriculum)
+        refreshCurriculumTabState();
 
     LOG_DEBUG("DataHub", "Switched to tab " + std::to_string(static_cast<int>(view)));
 }
@@ -312,11 +890,13 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
     tabSourcesBtn_->setPosition(tabX + 95.0f, position.y + kTabBarY);
     tabHFBtn_->setPosition(tabX + 190.0f, position.y + kTabBarY);
     tabStructBtn_->setPosition(tabX + 305.0f, position.y + kTabBarY);
+    tabCurriculumBtn_->setPosition(tabX + 410.0f, position.y + kTabBarY);
 
     tabHomeBtn_->update(input, dt);
     tabSourcesBtn_->update(input, dt);
     tabHFBtn_->update(input, dt);
     tabStructBtn_->update(input, dt);
+    tabCurriculumBtn_->update(input, dt);
 
     // Background timers (run regardless of active tab)
     pollTimer_ += dt;
@@ -402,7 +982,252 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
 
         case DataHubView::Structurer:
             for (auto& w : structWidgets_) w->update(input, dt);
+
+            if (structViewMode_ == 1) {
+                btnAddSequence_->update(input, dt);
+                for (auto& card : sequenceCards_) {
+                    card.formatDropdown->update(input, dt);
+                    card.generateBtn->update(input, dt);
+                    if (card.formatIndex == 1) card.addEntryBtn->update(input, dt);
+                    card.deleteBtn->update(input, dt);
+                    card.saveBtn->update(input, dt);
+                    for (auto& entry : card.entries)
+                        entry.textArea->update(input, dt);
+                }
+
+                if (seqCardToDelete_ >= 0) {
+                    size_t delId = static_cast<size_t>(seqCardToDelete_);
+                    removeSequenceCard(delId);
+                    seqCardToDelete_ = -1;
+                    addLog("Removed sequence card", 0);
+                }
+
+                Vec2 m = input.mousePos;
+                if (seqCardAreaH_ > 0.0f &&
+                    m.x >= position.x && m.x <= position.x + size.x &&
+                    m.y >= seqCardAreaTop_ && m.y <= seqCardAreaTop_ + seqCardAreaH_) {
+                    seqScrollOffset_ -= input.mouseWheelDelta;
+                    float totalH = 10.0f;
+                    for (const auto& c : sequenceCards_)
+                        totalH += sequenceCardHeight(c) + kCardGap;
+                    float maxScroll = std::max(0.0f, totalH - seqCardAreaH_);
+                    seqScrollOffset_ = std::clamp(seqScrollOffset_, 0.0f, maxScroll);
+                }
+            }
+
+            if (structViewMode_ == 2) {
+                if (subjectFilterDropdown_) subjectFilterDropdown_->update(input, dt);
+                if (qualityFilterDropdown_) qualityFilterDropdown_->update(input, dt);
+                if (poolSearchInput_)       poolSearchInput_->update(input, dt);
+                if (btnAssignSelected_)     btnAssignSelected_->update(input, dt);
+                if (btnRemoveSelected_)     btnRemoveSelected_->update(input, dt);
+                if (btnAddPhase_)           btnAddPhase_->update(input, dt);
+                if (detailPanelOpen_) {
+                    if (detailContentArea_)     detailContentArea_->update(input, dt);
+                    if (detailStructuredArea_)  detailStructuredArea_->update(input, dt);
+                    if (btnDetailSave_)         btnDetailSave_->update(input, dt);
+                }
+
+                // Compute layout geometry (mirrors drawStructurerTab + drawCurriculumView)
+                PanelRect cRect = getContentRect();
+                float cvX = cRect.origin.x + 15.0f;
+                float cvFullW = cRect.size.x - 30.0f;
+                // toolbar row1 + gap + toolbar row2 + gap + divider label + filter bar + gap
+                float cvY = cRect.origin.y + 10.0f
+                          + 36.0f + kStructRowGap
+                          + 36.0f + kStructRowGap
+                          + kStructLabelSpace
+                          + kFilterBarH + 6.0f;
+                float cvStatusY     = cRect.origin.y + cRect.size.y - 30.0f;
+                float cvPromptH     = 50.0f + 6.0f + 16.0f + 2.0f + 8.0f;
+                float cvContentEndY = cvStatusY - cvPromptH;
+                float detailH = detailPanelOpen_ ? detailPanelHeight_ : kDetailDividerH;
+                float splitH = (cvContentEndY - cvY) - detailH - 6.0f;
+                if (splitH < 80.0f) splitH = 80.0f;
+
+                float leftW  = cvFullW * 0.58f;
+                float rightW = cvFullW - leftW - 10.0f;
+
+                Vec2 m = input.mousePos;
+
+                // Pool table interaction
+                float poolBodyY = cvY + kPoolHeaderH;
+                float poolBodyH = splitH - kPoolHeaderH;
+                if (m.x >= cvX && m.x <= cvX + leftW &&
+                    m.y >= poolBodyY && m.y <= poolBodyY + poolBodyH) {
+                    // Hover
+                    int startRow = static_cast<int>(poolScrollOffset_ / kPoolRowH);
+                    float relY = m.y - poolBodyY + (poolScrollOffset_ - startRow * kPoolRowH);
+                    int hovRow = startRow + static_cast<int>(relY / kPoolRowH);
+                    if (hovRow >= 0 && hovRow < static_cast<int>(filteredPoolIndices_.size()))
+                        hoveredPoolRow_ = hovRow;
+                    else
+                        hoveredPoolRow_ = -1;
+
+                    // Click to select
+                    if (input.mousePressed[0] && hoveredPoolRow_ >= 0) {
+                        selectPoolRow(hoveredPoolRow_);
+                    }
+
+                    // Scroll
+                    poolScrollOffset_ -= input.mouseWheelDelta;
+                    float maxScroll = std::max(0.0f,
+                        static_cast<float>(filteredPoolIndices_.size()) * kPoolRowH - poolBodyH);
+                    poolScrollOffset_ = std::clamp(poolScrollOffset_, 0.0f, maxScroll);
+                } else {
+                    hoveredPoolRow_ = -1;
+                }
+
+                // Curriculum list interaction
+                float currX = cvX + leftW + 10.0f;
+                float currBodyY = cvY + kPoolHeaderH;
+                float currBodyH = splitH - kPoolHeaderH;
+                if (m.x >= currX && m.x <= currX + rightW &&
+                    m.y >= currBodyY && m.y <= currBodyY + currBodyH && datasetTarget_) {
+
+                    const auto& order = datasetTarget_->curriculumOrder();
+                    const auto& phases = datasetTarget_->phaseMarkers();
+
+                    // Build flat list heights to find hovered row
+                    float itemY = currBodyY - currScrollOffset_;
+                    int hovCurr = -1;
+                    size_t phI = 0;
+                    for (size_t i = 0; i < order.size(); ++i) {
+                        while (phI < phases.size() && phases[phI].position <= i) {
+                            itemY += kPhaseRowH;
+                            phI++;
+                        }
+                        if (m.y >= itemY && m.y < itemY + kCurrRowH)
+                            hovCurr = static_cast<int>(i);
+                        itemY += kCurrRowH;
+                    }
+                    hoveredCurrRow_ = hovCurr;
+
+                    if (input.mousePressed[0] && hoveredCurrRow_ >= 0) {
+                        selectCurriculumRow(hoveredCurrRow_);
+                    }
+
+                    // Check for move up/down arrow clicks
+                    if (input.mousePressed[0] && hoveredCurrRow_ >= 0) {
+                        float arrowX = currX + rightW - 50.0f;
+                        if (m.x >= arrowX && m.x < arrowX + 16.0f) {
+                            size_t ci = static_cast<size_t>(hoveredCurrRow_);
+                            if (ci > 0) {
+                                datasetTarget_->moveSequenceUp(ci);
+                                selectedCurrRow_ = static_cast<int>(ci - 1);
+                                selectCurriculumRow(selectedCurrRow_);
+                            }
+                        } else if (m.x >= arrowX + 18.0f && m.x < arrowX + 34.0f) {
+                            size_t ci = static_cast<size_t>(hoveredCurrRow_);
+                            if (ci + 1 < order.size()) {
+                                datasetTarget_->moveSequenceDown(ci);
+                                selectedCurrRow_ = static_cast<int>(ci + 1);
+                                selectCurriculumRow(selectedCurrRow_);
+                            }
+                        }
+                    }
+
+                    // Scroll
+                    currScrollOffset_ -= input.mouseWheelDelta;
+                    float totalCurrH = order.size() * kCurrRowH + phases.size() * kPhaseRowH;
+                    float maxCurrScroll = std::max(0.0f, totalCurrH - currBodyH);
+                    currScrollOffset_ = std::clamp(currScrollOffset_, 0.0f, maxCurrScroll);
+                } else {
+                    hoveredCurrRow_ = -1;
+                }
+
+                // Detail panel toggle
+                float detailDivY = cvY + splitH + 6.0f;
+                if (input.mousePressed[0] &&
+                    m.x >= cvX && m.x <= cvX + cvFullW &&
+                    m.y >= detailDivY && m.y <= detailDivY + kDetailDividerH) {
+                    detailPanelOpen_ = !detailPanelOpen_;
+                }
+            }
+
+            if (structViewMode_ == 0 && structSearchInput_ && datasetTarget_) {
+                std::string query = structSearchInput_->getText();
+                if (!query.empty() && searchPreviewScrollBox_) {
+                    auto results = datasetTarget_->searchSequences(query, 12);
+                    searchPreviewScrollBox_->clearChildren();
+                    for (const auto& r : results) {
+                        size_t idx = r.index;
+                        auto btn = std::make_shared<UIButton>(r.preview,
+                            [this, idx]() {
+                                currentSequenceIndex_ = idx;
+                                loadCurrentSequence();
+                            });
+                        btn->setSize(400.0f, 30.0f);
+                        searchPreviewScrollBox_->addChild(btn);
+                    }
+                    searchPreviewScrollBox_->autoLayoutChildren();
+                }
+            }
             break;
+
+        case DataHubView::Curriculum: {
+            PanelRect cRect = getContentRect();
+            float cbListX = cRect.origin.x + 15.0f;
+            float cbListY = cRect.origin.y + 10.0f + 36.0f + 12.0f;
+            float cbListW = (cRect.size.x - 30.0f) * 0.38f;
+            float cbListH = cRect.size.y - 120.0f - 36.0f - 12.0f;
+
+            layoutCBListTypeDropdownInList(cbListX, cbListY, cbListW);
+
+            for (auto& w : curriculumWidgets_) w->update(input, dt);
+            for (auto& area : cbIntermediateAreas_)
+                if (area) area->update(input, dt);
+
+            {
+                std::string curSearch = cbSearchInput_ ? cbSearchInput_->getText() : "";
+                if (curSearch != cbFilterSearch_) {
+                    cbFilterSearch_ = curSearch;
+                    cbFilterDirty_ = true;
+                }
+                if (cbFilterDirty_) rebuildFilteredCBList();
+
+                Vec2 m = input.mousePos;
+                const int rowCount = cbCurriculumListRowCount();
+                if (m.x >= cbListX && m.x <= cbListX + cbListW &&
+                    m.y >= cbListY + kPoolHeaderH && m.y <= cbListY + cbListH) {
+                    float bodyY = cbListY + kPoolHeaderH;
+                    int startRow = static_cast<int>(cbListScrollOffset_ / kCBListRowH);
+                    float relY = m.y - bodyY + (cbListScrollOffset_ - startRow * kCBListRowH);
+                    int hovRow = startRow + static_cast<int>(relY / kCBListRowH);
+                    if (hovRow >= 0 && hovRow < rowCount)
+                        hoveredCBRow_ = hovRow;
+                    else
+                        hoveredCBRow_ = -1;
+
+                    const bool ddExpanded =
+                        cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded();
+                    const float typeColStart = cbListX + cbListW - 135.0f;
+                    const bool inTypeBand =
+                        m.x >= typeColStart && m.x <= cbListX + cbListW - 4.0f;
+                    if (input.mousePressed[0] && hoveredCBRow_ >= 0 && !ddExpanded) {
+                        if (!(inTypeBand && hoveredCBRow_ == selectedCBRow_)) {
+                            selectedCBRow_ = hoveredCBRow_;
+                            if (!cbCurriculumRowIsDraft(selectedCBRow_)) {
+                                cbDraftPreviewActive_ = false;
+                                size_t idx = 0;
+                                if (cbCurriculumRowToBlockIndex(selectedCBRow_, idx))
+                                    loadConceptBlockIntoEditor(idx);
+                            } else {
+                                syncCBListTypeDropdownFromToolbar();
+                            }
+                        }
+                    }
+
+                    cbListScrollOffset_ -= input.mouseWheelDelta;
+                    float maxScroll = std::max(0.0f,
+                        static_cast<float>(rowCount) * kCBListRowH - (cbListH - kPoolHeaderH));
+                    cbListScrollOffset_ = std::clamp(cbListScrollOffset_, 0.0f, maxScroll);
+                } else {
+                    hoveredCBRow_ = -1;
+                }
+            }
+            break;
+        }
     }
 }
 
@@ -419,11 +1244,13 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
     tabSourcesBtn_->setPosition(tabX + 95.0f, position.y + kTabBarY);
     tabHFBtn_->setPosition(tabX + 190.0f, position.y + kTabBarY);
     tabStructBtn_->setPosition(tabX + 305.0f, position.y + kTabBarY);
+    tabCurriculumBtn_->setPosition(tabX + 410.0f, position.y + kTabBarY);
 
     tabHomeBtn_->drawOverlay(renderer, position);
     tabSourcesBtn_->drawOverlay(renderer, position);
     tabHFBtn_->drawOverlay(renderer, position);
     tabStructBtn_->drawOverlay(renderer, position);
+    tabCurriculumBtn_->drawOverlay(renderer, position);
 
     // Active tab indicator (2px underline)
     float indicatorX = tabX;
@@ -433,6 +1260,7 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         case DataHubView::Sources:     indicatorX = tabX + 95.0f;   indicatorW = 90.0f;  break;
         case DataHubView::HuggingFace: indicatorX = tabX + 190.0f;  indicatorW = 110.0f; break;
         case DataHubView::Structurer:  indicatorX = tabX + 305.0f;  indicatorW = 100.0f; break;
+        case DataHubView::Curriculum:  indicatorX = tabX + 410.0f;  indicatorW = 100.0f; break;
     }
     renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {indicatorW, 2.0f},
                       UITheme::Colors::Primary);
@@ -447,6 +1275,7 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         case DataHubView::Sources:     drawSourcesTab(renderer, content);     break;
         case DataHubView::HuggingFace: drawHuggingFaceTab(renderer, content); break;
         case DataHubView::Structurer:  drawStructurerTab(renderer, content);  break;
+        case DataHubView::Curriculum:  drawCurriculumTab(renderer, content);  break;
     }
 
     // Dropdowns draw on top of everything
@@ -458,6 +1287,16 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         formatDropdown_->drawExpandedList(renderer, position);
     if (viewModeDropdown_ && viewModeDropdown_->isExpanded())
         viewModeDropdown_->drawExpandedList(renderer, position);
+    for (const auto& card : sequenceCards_) {
+        if (card.formatDropdown && card.formatDropdown->isExpanded())
+            card.formatDropdown->drawExpandedList(renderer, position);
+    }
+    if (cbModelDropdown_ && cbModelDropdown_->isExpanded())
+        cbModelDropdown_->drawExpandedList(renderer, position);
+    if (cbFormatDropdown_ && cbFormatDropdown_->isExpanded())
+        cbFormatDropdown_->drawExpandedList(renderer, position);
+    if (cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded())
+        cbListTypeDropdown_->drawExpandedList(renderer, position);
 
     renderer.popClipRect();
     return true;
@@ -1063,25 +1902,32 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
     float fullW = content.size.x - 30.0f;
 
     // ── Toolbar row 1 ───────────────────────────────────
-    // Dropdowns: UIDropdown uses 150px for label + (size.x - 160) for box. Need size.x > 160.
-    float ddW = 260.0f;   // ~100px for dropdown box after 150px label
-    float sliderW = 280.0f;  // ~120px for slider bar after 150px label (UISlider uses same layout)
+    float ddW = 260.0f;
+    float sliderW = 280.0f;
     float gap = 14.0f;
-    float rowH = 36.0f;   // Enough for dropdown box (30px) + padding
+    float rowH = 36.0f;
+    float genW = 90.0f;
 
-    modelDropdown_->setPosition(x, y);
+    float cx = x;
+    modelDropdown_->setPosition(cx, y);
     modelDropdown_->setSize(ddW, rowH);
     modelDropdown_->drawOverlay(renderer, position);
+    cx += ddW + gap;
 
-    formatDropdown_->setPosition(x + ddW + gap, y);
+    formatDropdown_->setPosition(cx, y);
     formatDropdown_->setSize(ddW, rowH);
     formatDropdown_->drawOverlay(renderer, position);
+    cx += ddW + 8.0f;
 
-    viewModeDropdown_->setPosition(x + (ddW + gap) * 2.0f, y);
+    btnGenerate_->setPosition(cx, y);
+    btnGenerate_->setSize(genW, rowH);
+    btnGenerate_->drawOverlay(renderer, position);
+    cx += genW + gap;
+
+    viewModeDropdown_->setPosition(cx, y);
     viewModeDropdown_->setSize(ddW, rowH);
     viewModeDropdown_->drawOverlay(renderer, position);
 
-    // Action buttons right-aligned in top right
     float rightX = x + fullW;
     float structW = 100.0f, structAllW = 110.0f, saveW = 100.0f, assignW = 80.0f, removeW = 80.0f;
     float btnGap = 8.0f;
@@ -1096,7 +1942,6 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
     y += rowH + kStructRowGap;
 
     // ── Toolbar row 2 ───────────────────────────────────
-    // Sliders need more width for the bar; UISlider uses 150px label + (size.x - 160) for bar
 
     sliderMaxEntries_->setPosition(x, y);
     sliderMaxEntries_->setSize(sliderW, rowH);
@@ -1106,7 +1951,6 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
     sliderParallel_->setSize(sliderW, rowH);
     sliderParallel_->drawOverlay(renderer, position);
 
-    // Save, Assign, Remove right-aligned
     btnRemoveAssign_->setPosition(rightX - removeW, y);
     btnRemoveAssign_->setSize(removeW, rowH);
     btnRemoveAssign_->drawOverlay(renderer, position);
@@ -1120,14 +1964,15 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
     btnSave_->drawOverlay(renderer, position);
     y += rowH + kStructRowGap;
 
-    // ── Search bar ──────────────────────────────────────
+    // ── Search bar (Dataset View) or header (Sequence View) ──
 
     float searchH = 28.0f;
-    structSearchInput_->setPosition(x, y);
-    structSearchInput_->setSize(fullW * 0.4f, searchH);
-    structSearchInput_->drawOverlay(renderer, position);
 
-    if (!datasetViewMode_) {
+    if (structViewMode_ == 0) {
+        structSearchInput_->setPosition(x, y);
+        structSearchInput_->setSize(fullW * 0.4f, searchH);
+        structSearchInput_->drawOverlay(renderer, position);
+
         float navX = x + fullW * 0.4f + 20.0f;
         btnPrevSeq_->setPosition(navX, y);
         btnPrevSeq_->setSize(35.0f, searchH);
@@ -1140,37 +1985,627 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
         btnNextSeq_->setPosition(navX + 130.0f, y);
         btnNextSeq_->setSize(35.0f, searchH);
         btnNextSeq_->drawOverlay(renderer, position);
+        y += searchH + kStructSectionGap;
+    } else if (structViewMode_ == 1) {
+        size_t enabledCards = sequenceCards_.size();
+        std::string header = "Sequences (" + std::to_string(enabledCards) + ")";
+        renderer.drawText({x + 2.0f, y + 6.0f}, header, UITheme::Colors::TextSecondary);
+        y += searchH + kStructSectionGap;
     }
-    y += searchH + kStructSectionGap;
 
     UIDrawHelpers::drawDivider(renderer, {x, y}, fullW);
-    y += kStructLabelSpace;  // Space for "Raw Source" / "Structured Output" labels above text areas
+    y += kStructLabelSpace;
 
-    // ── Dual text areas ─────────────────────────────────
+    // ── Bottom-anchored layout ──────────────────────────
+    // Status bar + custom prompt section are anchored to bottom
 
-    float areaH = content.origin.y + content.size.y - y - 40.0f;
-    if (areaH < 100.0f) areaH = 100.0f;
-    float halfW = (fullW - 10.0f) / 2.0f;
+    float statusY     = content.origin.y + content.size.y - 30.0f;
+    float promptTextH = 50.0f;
+    float promptLabelH = 16.0f;
+    float promptGap    = 6.0f;
+    float promptTopY   = statusY - promptTextH - promptGap;
+    float promptLabelY = promptTopY - promptLabelH - 2.0f;
+    float contentEndY  = promptLabelY - 8.0f;
 
-    rawTextArea_->setPosition(x, y);
-    rawTextArea_->setSize(halfW, areaH);
-    rawTextArea_->drawOverlay(renderer, position);
+    // ── Content split: Dataset View / Sequence View / Curriculum View ──
 
-    structuredTextArea_->setPosition(x + halfW + 10.0f, y);
-    structuredTextArea_->setSize(halfW, areaH);
-    structuredTextArea_->drawOverlay(renderer, position);
-    y += areaH + 5.0f;
+    if (structViewMode_ == 2) {
+        drawCurriculumView(renderer, content, x, y, fullW, contentEndY);
+        return;
+    }
+
+    if (structViewMode_ == 0) {
+        // ── Dual text areas ─────────────────────────────
+        float areaH = contentEndY - y;
+        if (areaH < 100.0f) areaH = 100.0f;
+        float halfW = (fullW - 10.0f) / 2.0f;
+
+        rawTextArea_->setPosition(x, y);
+        rawTextArea_->setSize(halfW, areaH);
+        rawTextArea_->drawOverlay(renderer, position);
+
+        structuredTextArea_->setPosition(x + halfW + 10.0f, y);
+        structuredTextArea_->setSize(halfW, areaH);
+        structuredTextArea_->drawOverlay(renderer, position);
+        y += areaH + 5.0f;
+    } else if (structViewMode_ == 1) {
+        // ── Sequence cards (scrollable) ─────────────────
+        float cardAreaH = contentEndY - y - 46.0f;
+        if (cardAreaH < 120.0f) cardAreaH = 120.0f;
+
+        seqCardAreaTop_ = y;
+        seqCardAreaH_   = cardAreaH;
+
+        renderer.drawRoundedRect({x, y}, {fullW, cardAreaH},
+                                 UITheme::Colors::ContentAreaBg, UITheme::Sizes::WidgetRadius);
+        renderer.drawRoundedBorder({x, y}, {fullW, cardAreaH},
+                                   UITheme::Colors::BorderSubtle, UITheme::Sizes::WidgetRadius);
+
+        renderer.pushClipRect({x, y}, {fullW, cardAreaH});
+
+        float cardY = y + 8.0f - seqScrollOffset_;
+
+        for (size_t ci = 0; ci < sequenceCards_.size(); ++ci) {
+            auto& card = sequenceCards_[ci];
+            float cardH = sequenceCardHeight(card);
+            float cardX = x + 8.0f;
+            float cardW = fullW - 16.0f;
+
+            if (cardY + cardH < y || cardY > y + cardAreaH) {
+                cardY += cardH + kCardGap;
+                continue;
+            }
+
+            // Card background
+            renderer.drawRoundedRect({cardX, cardY}, {cardW, cardH},
+                                     UITheme::Colors::CardSurface, UITheme::Sizes::WidgetRadius);
+            renderer.drawRoundedBorder({cardX, cardY}, {cardW, cardH},
+                                       UITheme::Colors::BorderSubtle, UITheme::Sizes::WidgetRadius);
+
+            float innerX = cardX + kSeqCardInnerPad;
+            float innerW = cardW - 2.0f * kSeqCardInnerPad;
+            float rowY = cardY;
+
+            // Top bar: number + format dropdown + generate + delete
+            renderer.drawText({innerX, rowY + 9.0f},
+                              "#" + std::to_string(ci + 1),
+                              UITheme::Colors::TextMuted);
+
+            float fmtDdW = 180.0f;
+            float genBtnW = 80.0f;
+            float delBtnW = 28.0f;
+
+            card.formatDropdown->setPosition(innerX + 30.0f, rowY + 2.0f);
+            card.formatDropdown->setSize(fmtDdW, 28.0f);
+            card.formatDropdown->drawOverlay(renderer, position);
+
+            card.generateBtn->setPosition(innerX + 30.0f + fmtDdW + 8.0f, rowY + 2.0f);
+            card.generateBtn->setSize(genBtnW, 28.0f);
+            card.generateBtn->drawOverlay(renderer, position);
+
+            float topRightX = cardX + cardW - kSeqCardInnerPad;
+            card.deleteBtn->setPosition(topRightX - delBtnW, rowY + 2.0f);
+            card.deleteBtn->setSize(delBtnW, 28.0f);
+            card.deleteBtn->drawOverlay(renderer, position);
+
+            rowY += kSeqCardTopBarH;
+            renderer.drawRect({innerX, rowY - 1.0f}, {innerW, 1.0f}, UITheme::Colors::DividerLine);
+
+            // Entry fields
+            for (auto& entry : card.entries) {
+                renderer.drawText({innerX + 2.0f, rowY + 2.0f}, entry.prefix,
+                                  UITheme::Colors::TextSecondary);
+                rowY += kSeqCardEntryLabelH;
+
+                entry.textArea->setPosition(innerX, rowY);
+                entry.textArea->setSize(innerW, kSeqCardEntryTextH);
+                entry.textArea->drawOverlay(renderer, position);
+                rowY += kSeqCardEntryTextH + kSeqCardEntryGapH;
+            }
+
+            // Add Entry button (Thought format only)
+            if (card.formatIndex == 1) {
+                float addW = 90.0f;
+                card.addEntryBtn->setPosition(innerX, rowY);
+                card.addEntryBtn->setSize(addW, 24.0f);
+                card.addEntryBtn->drawOverlay(renderer, position);
+                rowY += kSeqCardBtnRowH;
+            }
+
+            // Save button row
+            float saveBtnW = 80.0f;
+            card.saveBtn->setPosition(innerX + innerW - saveBtnW, rowY);
+            card.saveBtn->setSize(saveBtnW, 24.0f);
+            card.saveBtn->drawOverlay(renderer, position);
+
+            cardY += cardH + kCardGap;
+        }
+
+        if (sequenceCards_.empty()) {
+            float emptyX = x + fullW / 2.0f - 160.0f;
+            float emptyY = y + cardAreaH / 2.0f - 10.0f;
+            renderer.drawText({emptyX, emptyY},
+                              "No sequences. Click '+ Add Sequence' below.",
+                              UITheme::Colors::TextDisabled);
+        }
+
+        renderer.popClipRect();
+
+        // Scroll indicator
+        float totalCardH = 10.0f;
+        for (const auto& c : sequenceCards_)
+            totalCardH += sequenceCardHeight(c) + kCardGap;
+        if (totalCardH > cardAreaH) {
+            float scrollRatio = seqScrollOffset_ / (totalCardH - cardAreaH);
+            float thumbRatio  = cardAreaH / totalCardH;
+            float thumbH      = std::max(20.0f, cardAreaH * thumbRatio);
+            float thumbY      = y + scrollRatio * (cardAreaH - thumbH);
+            float barX        = x + fullW - 6.0f;
+            renderer.drawRoundedRect({barX, thumbY}, {4.0f, thumbH},
+                                     UITheme::Colors::ScrollThumb, 2.0f);
+        }
+
+        y += cardAreaH + 10.0f;
+
+        // Add Sequence button (centered below card area)
+        float addBtnW = 220.0f;
+        float addBtnH = 36.0f;
+        float addBtnX = x + (fullW - addBtnW) / 2.0f;
+        btnAddSequence_->setPosition(addBtnX, y);
+        btnAddSequence_->setSize(addBtnW, addBtnH);
+        btnAddSequence_->drawOverlay(renderer, position);
+
+        y += addBtnH + 5.0f;
+    }
+
+    // ── Custom prompt + type ────────────────────────────
+
+    renderer.drawText({x + 2.0f, promptLabelY}, "Custom Prompt",
+                      UITheme::Colors::TextSecondary);
+
+    std::string currentFmt = formatDropdown_ ? formatDropdown_->getSelectedItem() : "Q/A";
+    float fmtLabelW = UIDrawHelpers::getTextWidth("Type: " + currentFmt);
+    renderer.drawText({x + fullW - fmtLabelW - 2.0f, promptLabelY},
+                      "Type: " + currentFmt, UITheme::Colors::TextMuted);
+
+    float appendBtnW = 80.0f;
+    float promptAreaW = fullW - appendBtnW - 8.0f;
+
+    customPromptArea_->setPosition(x, promptTopY);
+    customPromptArea_->setSize(promptAreaW, promptTextH);
+    customPromptArea_->drawOverlay(renderer, position);
+
+    btnAppendEntry_->setPosition(x + promptAreaW + 8.0f, promptTopY);
+    btnAppendEntry_->setSize(appendBtnW, promptTextH);
+    btnAppendEntry_->drawOverlay(renderer, position);
 
     // ── Status bar ──────────────────────────────────────
 
-    renderer.drawRoundedRect({x, y}, {fullW, 25.0f},
+    renderer.drawRoundedRect({x, statusY}, {fullW, 25.0f},
                              UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
 
     std::string status = "Total: " + std::to_string(totalSequences_)
                        + "  |  Assigned: " + std::to_string(assignedSequences_)
                        + "  |  Structured: " + std::to_string(structuredCount_)
                        + "  |  Failed: " + std::to_string(failedCount_);
-    renderer.drawText({x + 10.0f, y + 5.0f}, status, UITheme::Colors::TextSecondary);
+    renderer.drawText({x + 10.0f, statusY + 5.0f}, status, UITheme::Colors::TextSecondary);
+}
+
+// =========================================================
+// Curriculum view
+// =========================================================
+
+static uint32_t subjectBadgeColor(const std::string& subj) {
+    if (subj == "code")    return 0xFF5090FF;
+    if (subj == "math")    return 0xFFF0B040;
+    if (subj == "science") return 0xFF50E080;
+    if (subj == "history") return 0xFFA090FF;
+    if (subj == "medical") return 0xFFE84060;
+    if (subj == "legal")   return 0xFF6B90F0;
+    return 0xFF8888A0;
+}
+
+static uint32_t qualityBadgeColor(const std::string& q) {
+    if (q == "high")   return 0xFF50E080;
+    if (q == "medium") return 0xFFF0B040;
+    if (q == "low")    return 0xFFE84060;
+    return 0xFF8888A0;
+}
+
+void UIDataHubPanel::rebuildFilteredPool() {
+    filteredPoolIndices_.clear();
+    if (!datasetTarget_) return;
+
+    std::string subj;
+    if (subjectFilterDropdown_ && filterSubjectIdx_ > 0)
+        subj = subjectFilterDropdown_->getSelectedItem();
+
+    std::string qual;
+    if (qualityFilterDropdown_ && filterQualityIdx_ > 0)
+        qual = qualityFilterDropdown_->getSelectedItem();
+
+    std::string query;
+    if (poolSearchInput_)
+        query = poolSearchInput_->getText();
+
+    filteredPoolIndices_ = datasetTarget_->filterSequences(subj, qual, query);
+    poolFilterDirty_ = false;
+}
+
+void UIDataHubPanel::selectPoolRow(int row) {
+    selectedPoolRow_ = row;
+    selectedCurrRow_ = -1;
+    if (row >= 0 && static_cast<size_t>(row) < filteredPoolIndices_.size()) {
+        loadDetailForSequence(filteredPoolIndices_[row]);
+    }
+}
+
+void UIDataHubPanel::selectCurriculumRow(int row) {
+    selectedCurrRow_ = row;
+    selectedPoolRow_ = -1;
+    if (!datasetTarget_ || row < 0) return;
+    const auto& order = datasetTarget_->curriculumOrder();
+    if (static_cast<size_t>(row) >= order.size()) return;
+    const std::string& seqId = order[row];
+    for (size_t i = 0; i < datasetTarget_->massDatasetSize(); ++i) {
+        auto seq = datasetTarget_->getSequence(i);
+        if (seq.id == seqId) {
+            loadDetailForSequence(i);
+            return;
+        }
+    }
+}
+
+void UIDataHubPanel::loadDetailForSequence(size_t seqIndex) {
+    detailSeqIndex_ = seqIndex;
+    if (!datasetTarget_ || seqIndex >= datasetTarget_->massDatasetSize()) return;
+    auto seq = datasetTarget_->getSequence(seqIndex);
+    if (detailContentArea_)    detailContentArea_->setText(seq.content);
+    if (detailStructuredArea_) detailStructuredArea_->setText(seq.structured);
+}
+
+void UIDataHubPanel::drawPoolTable(OverlayRenderer& renderer,
+                                    float x, float y, float w, float h) {
+    renderer.drawRoundedRect({x, y}, {w, h},
+                             UITheme::Colors::ContentAreaBg, UITheme::Sizes::SmallRadius);
+    renderer.drawRoundedBorder({x, y}, {w, h},
+                               UITheme::Colors::BorderSubtle, UITheme::Sizes::SmallRadius);
+
+    // Header row
+    renderer.drawRect({x, y}, {w, kPoolHeaderH}, UITheme::Colors::TableHeaderBg);
+    float colX = x + 4.0f;
+    float hdrY = y + 6.0f;
+    renderer.drawText({colX, hdrY}, "#", UITheme::Colors::TextWhite);
+    colX += w * kColNum;
+    renderer.drawText({colX, hdrY}, "Subject", UITheme::Colors::TextWhite);
+    colX += w * kColSubject;
+    renderer.drawText({colX, hdrY}, "Quality", UITheme::Colors::TextWhite);
+    colX += w * kColQuality;
+    renderer.drawText({colX, hdrY}, "Source", UITheme::Colors::TextWhite);
+    colX += w * kColSource;
+    renderer.drawText({colX, hdrY}, "Str?", UITheme::Colors::TextWhite);
+    colX += w * kColStructured;
+    renderer.drawText({colX, hdrY}, "Preview", UITheme::Colors::TextWhite);
+
+    float bodyY = y + kPoolHeaderH;
+    float bodyH = h - kPoolHeaderH;
+    if (bodyH <= 0) return;
+
+    renderer.pushClipRect({x, bodyY}, {w, bodyH});
+
+    int visibleRows = static_cast<int>(bodyH / kPoolRowH) + 1;
+    int startRow = static_cast<int>(poolScrollOffset_ / kPoolRowH);
+    startRow = std::max(0, std::min(startRow, static_cast<int>(filteredPoolIndices_.size()) - 1));
+
+    int totalRows = static_cast<int>(filteredPoolIndices_.size());
+
+    for (int i = startRow; i < std::min(startRow + visibleRows, totalRows); ++i) {
+        size_t seqIdx = filteredPoolIndices_[i];
+        auto seq = datasetTarget_->getSequence(seqIdx);
+
+        float rowY = bodyY + (i - startRow) * kPoolRowH
+                   - (poolScrollOffset_ - startRow * kPoolRowH);
+
+        bool isAssigned = datasetTarget_->isAssigned(seqIdx);
+        uint32_t rowColor = (i == selectedPoolRow_) ? UITheme::Colors::RowSelected :
+                            (i == hoveredPoolRow_)  ? UITheme::Colors::RowHover :
+                            (i % 2 == 0)            ? UITheme::Colors::RowEven
+                                                    : UITheme::Colors::RowOdd;
+        renderer.drawRect({x, rowY}, {w, kPoolRowH}, rowColor);
+
+        if (isAssigned) {
+            renderer.drawRect({x, rowY}, {3.0f, kPoolRowH}, UITheme::Colors::Success);
+        }
+
+        float textY = rowY + 4.0f;
+        colX = x + 4.0f;
+        renderer.drawText({colX, textY}, std::to_string(seqIdx + 1), UITheme::Colors::TextMuted);
+        colX += w * kColNum;
+
+        renderer.drawText({colX, textY}, seq.subject, subjectBadgeColor(seq.subject));
+        colX += w * kColSubject;
+
+        renderer.drawText({colX, textY}, seq.quality_tier, qualityBadgeColor(seq.quality_tier));
+        colX += w * kColQuality;
+
+        std::string srcShort = seq.source_type;
+        if (srcShort.size() > 10) srcShort = srcShort.substr(0, 10);
+        renderer.drawText({colX, textY}, srcShort, UITheme::Colors::TextLight);
+        colX += w * kColSource;
+
+        renderer.drawText({colX, textY}, seq.is_structured ? "Y" : "-",
+                          seq.is_structured ? UITheme::Colors::Success : UITheme::Colors::TextDisabled);
+        colX += w * kColStructured;
+
+        float previewW = w - (colX - x) - 6.0f;
+        int maxChars = static_cast<int>(previewW / 7.5f);
+        std::string preview = seq.content.substr(0, std::min(seq.content.size(), static_cast<size_t>(maxChars)));
+        std::replace(preview.begin(), preview.end(), '\n', ' ');
+        if (static_cast<int>(seq.content.size()) > maxChars) preview += "...";
+        renderer.drawText({colX, textY}, preview, UITheme::Colors::TextPrimary);
+    }
+
+    renderer.popClipRect();
+
+    // Scrollbar
+    float totalH = totalRows * kPoolRowH;
+    if (totalH > bodyH) {
+        float ratio = poolScrollOffset_ / (totalH - bodyH);
+        float thumbRatio = bodyH / totalH;
+        float thumbH = std::max(20.0f, bodyH * thumbRatio);
+        float thumbY = bodyY + ratio * (bodyH - thumbH);
+        float barX = x + w - 6.0f;
+        renderer.drawRoundedRect({barX, thumbY}, {4.0f, thumbH},
+                                 UITheme::Colors::ScrollThumb, 2.0f);
+    }
+}
+
+void UIDataHubPanel::drawCurriculumList(OverlayRenderer& renderer,
+                                         float x, float y, float w, float h) {
+    renderer.drawRoundedRect({x, y}, {w, h},
+                             UITheme::Colors::ContentAreaBg, UITheme::Sizes::SmallRadius);
+    renderer.drawRoundedBorder({x, y}, {w, h},
+                               UITheme::Colors::BorderSubtle, UITheme::Sizes::SmallRadius);
+
+    if (!datasetTarget_) return;
+    const auto& order = datasetTarget_->curriculumOrder();
+    const auto& phases = datasetTarget_->phaseMarkers();
+
+    // Header
+    std::string hdr = "Curriculum (" + std::to_string(order.size()) + ")";
+    renderer.drawRect({x, y}, {w, kPoolHeaderH}, UITheme::Colors::TableHeaderBg);
+    renderer.drawText({x + 8.0f, y + 6.0f}, hdr, UITheme::Colors::TextWhite);
+
+    // Transfer buttons inline in header
+    float btnW = 80.0f;
+    float btnH = 22.0f;
+    float btnY = y + 3.0f;
+    if (btnRemoveSelected_) {
+        btnRemoveSelected_->setPosition(x + w - btnW - 8.0f, btnY);
+        btnRemoveSelected_->setSize(btnW, btnH);
+        btnRemoveSelected_->drawOverlay(renderer, position);
+    }
+    if (btnAddPhase_) {
+        btnAddPhase_->setPosition(x + w - 2.0f * btnW - 16.0f, btnY);
+        btnAddPhase_->setSize(btnW, btnH);
+        btnAddPhase_->drawOverlay(renderer, position);
+    }
+
+    float bodyY = y + kPoolHeaderH;
+    float bodyH = h - kPoolHeaderH;
+    if (bodyH <= 0) return;
+
+    renderer.pushClipRect({x, bodyY}, {w, bodyH});
+
+    // Build a flat list of items: phases interleaved with sequences
+    struct CurrItem { bool isPhase; size_t index; size_t phaseIdx; };
+    std::vector<CurrItem> items;
+    items.reserve(order.size() + phases.size());
+
+    size_t phaseI = 0;
+    for (size_t i = 0; i < order.size(); ++i) {
+        while (phaseI < phases.size() && phases[phaseI].position <= i) {
+            items.push_back({true, i, phaseI});
+            phaseI++;
+        }
+        items.push_back({false, i, 0});
+    }
+    while (phaseI < phases.size()) {
+        items.push_back({true, order.size(), phaseI});
+        phaseI++;
+    }
+
+    float itemY = bodyY - currScrollOffset_;
+    for (size_t ii = 0; ii < items.size(); ++ii) {
+        const auto& item = items[ii];
+        float rowH = item.isPhase ? kPhaseRowH : kCurrRowH;
+
+        if (itemY + rowH >= bodyY && itemY < bodyY + bodyH) {
+            if (item.isPhase) {
+                renderer.drawRect({x, itemY}, {w, rowH}, UITheme::Colors::SectionNeutral);
+                renderer.drawRect({x, itemY + rowH - 1.0f}, {w, 1.0f}, UITheme::Colors::DividerLine);
+                const std::string& label = phases[item.phaseIdx].label;
+                renderer.drawText({x + 10.0f, itemY + 3.0f}, label, UITheme::Colors::TextSecondary);
+            } else {
+                size_t ci = item.index;
+                int row = static_cast<int>(ci);
+                uint32_t rowColor = (row == selectedCurrRow_) ? UITheme::Colors::RowSelected :
+                                    (row == hoveredCurrRow_)  ? UITheme::Colors::RowHover :
+                                    (ci % 2 == 0)             ? UITheme::Colors::RowEven
+                                                              : UITheme::Colors::RowOdd;
+                renderer.drawRect({x, itemY}, {w, rowH}, rowColor);
+
+                const std::string& seqId = order[ci];
+                SequenceHandle seq;
+                for (size_t si = 0; si < datasetTarget_->massDatasetSize(); ++si) {
+                    auto s = datasetTarget_->getSequence(si);
+                    if (s.id == seqId) { seq = s; break; }
+                }
+
+                float textY = itemY + 5.0f;
+                float cx = x + 6.0f;
+
+                renderer.drawText({cx, textY}, std::to_string(ci + 1), UITheme::Colors::TextMuted);
+                cx += 30.0f;
+
+                renderer.drawText({cx, textY}, seq.subject, subjectBadgeColor(seq.subject));
+                cx += 65.0f;
+
+                renderer.drawText({cx, textY}, seq.quality_tier, qualityBadgeColor(seq.quality_tier));
+                cx += 55.0f;
+
+                float previewW = w - (cx - x) - 60.0f;
+                int maxChars = static_cast<int>(previewW / 7.5f);
+                if (maxChars < 0) maxChars = 0;
+                std::string preview = seq.content.substr(
+                    0, std::min(seq.content.size(), static_cast<size_t>(maxChars)));
+                std::replace(preview.begin(), preview.end(), '\n', ' ');
+                if (static_cast<int>(seq.content.size()) > maxChars) preview += "...";
+                renderer.drawText({cx, textY}, preview, UITheme::Colors::TextPrimary);
+
+                // Move up/down arrows on right side
+                float arrowX = x + w - 50.0f;
+                if (ci > 0) {
+                    renderer.drawText({arrowX, textY}, "^", UITheme::Colors::TextLink);
+                }
+                if (ci + 1 < order.size()) {
+                    renderer.drawText({arrowX + 18.0f, textY}, "v", UITheme::Colors::TextLink);
+                }
+            }
+        }
+
+        itemY += rowH;
+    }
+
+    renderer.popClipRect();
+
+    // Scrollbar
+    float totalH = 0;
+    for (const auto& it : items)
+        totalH += it.isPhase ? kPhaseRowH : kCurrRowH;
+    if (totalH > bodyH) {
+        float ratio = currScrollOffset_ / (totalH - bodyH);
+        float thumbRatio = bodyH / totalH;
+        float thumbH = std::max(20.0f, bodyH * thumbRatio);
+        float thumbY = bodyY + ratio * (bodyH - thumbH);
+        float barX = x + w - 6.0f;
+        renderer.drawRoundedRect({barX, thumbY}, {4.0f, thumbH},
+                                 UITheme::Colors::ScrollThumb, 2.0f);
+    }
+}
+
+void UIDataHubPanel::drawDetailEditor(OverlayRenderer& renderer,
+                                       float x, float y, float w, float h) {
+    // Divider bar (clickable to toggle)
+    renderer.drawRect({x, y}, {w, kDetailDividerH}, UITheme::Colors::SectionNeutral);
+    renderer.drawRect({x, y + kDetailDividerH - 1.0f}, {w, 1.0f}, UITheme::Colors::DividerLine);
+    std::string divLabel = detailPanelOpen_ ? "Detail  [click to collapse]" : "Detail  [click to expand]";
+    renderer.drawText({x + 10.0f, y + 2.0f}, divLabel, UITheme::Colors::TextSecondary);
+
+    if (!detailPanelOpen_) return;
+
+    float panelY = y + kDetailDividerH;
+    float panelH = h - kDetailDividerH;
+    if (panelH < 40.0f) return;
+
+    renderer.drawRoundedRect({x, panelY}, {w, panelH},
+                             UITheme::Colors::ContentAreaBg, UITheme::Sizes::SmallRadius);
+
+    if (detailSeqIndex_ == SIZE_MAX) {
+        renderer.drawText({x + 20.0f, panelY + panelH / 2.0f - 8.0f},
+                          "Select a sequence to view details",
+                          UITheme::Colors::TextDisabled);
+        return;
+    }
+
+    float halfW = (w - 18.0f) / 2.0f;
+    float areaH = panelH - 32.0f;
+    if (areaH < 30.0f) areaH = 30.0f;
+
+    detailContentArea_->setPosition(x + 4.0f, panelY + 4.0f);
+    detailContentArea_->setSize(halfW, areaH);
+    detailContentArea_->drawOverlay(renderer, position);
+
+    detailStructuredArea_->setPosition(x + halfW + 14.0f, panelY + 4.0f);
+    detailStructuredArea_->setSize(halfW, areaH);
+    detailStructuredArea_->drawOverlay(renderer, position);
+
+    float saveBtnW = 80.0f;
+    float saveBtnH = 24.0f;
+    btnDetailSave_->setPosition(x + w - saveBtnW - 8.0f, panelY + panelH - saveBtnH - 4.0f);
+    btnDetailSave_->setSize(saveBtnW, saveBtnH);
+    btnDetailSave_->drawOverlay(renderer, position);
+}
+
+void UIDataHubPanel::drawCurriculumView(OverlayRenderer& renderer,
+                                         const PanelRect& /*content*/,
+                                         float x, float y, float fullW,
+                                         float contentEndY) {
+    if (poolFilterDirty_) rebuildFilteredPool();
+
+    float availH = contentEndY - y;
+    if (availH < 100.0f) return;
+
+    // Filter bar
+    float filterX = x;
+    float ddW = 140.0f;
+    float gap = 8.0f;
+    float searchW = 200.0f;
+
+    subjectFilterDropdown_->setPosition(filterX, y);
+    subjectFilterDropdown_->setSize(ddW, kFilterBarH);
+    subjectFilterDropdown_->drawOverlay(renderer, position);
+    filterX += ddW + gap;
+
+    qualityFilterDropdown_->setPosition(filterX, y);
+    qualityFilterDropdown_->setSize(ddW, kFilterBarH);
+    qualityFilterDropdown_->drawOverlay(renderer, position);
+    filterX += ddW + gap;
+
+    poolSearchInput_->setPosition(filterX, y + 2.0f);
+    poolSearchInput_->setSize(searchW, kFilterBarH - 4.0f);
+    poolSearchInput_->drawOverlay(renderer, position);
+    filterX += searchW + gap;
+
+    btnAssignSelected_->setPosition(filterX, y + 2.0f);
+    btnAssignSelected_->setSize(100.0f, kFilterBarH - 4.0f);
+    btnAssignSelected_->drawOverlay(renderer, position);
+
+    y += kFilterBarH + 6.0f;
+
+    // Rebuild filter if search text changed
+    std::string curSearch = poolSearchInput_ ? poolSearchInput_->getText() : "";
+    if (curSearch != filterSearchQuery_) {
+        filterSearchQuery_ = curSearch;
+        rebuildFilteredPool();
+    }
+
+    // Layout: left pool (60%), right curriculum (40%)
+    float detailH = detailPanelOpen_ ? detailPanelHeight_ : kDetailDividerH;
+    float splitH = (contentEndY - y) - detailH - 6.0f;
+    if (splitH < 80.0f) splitH = 80.0f;
+
+    float leftW  = fullW * 0.58f;
+    float rightW = fullW - leftW - 10.0f;
+
+    drawPoolTable(renderer, x, y, leftW, splitH);
+    drawCurriculumList(renderer, x + leftW + 10.0f, y, rightW, splitH);
+
+    float detailY = y + splitH + 6.0f;
+    drawDetailEditor(renderer, x, detailY, fullW, detailH);
+
+    // Status bar
+    float statusY = contentEndY + 2.0f;
+    renderer.drawRoundedRect({x, statusY}, {fullW, 25.0f},
+                             UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
+    std::string status = "Pool: " + std::to_string(filteredPoolIndices_.size())
+                       + " / " + std::to_string(totalSequences_)
+                       + "  |  Curriculum: " + std::to_string(assignedSequences_)
+                       + " sequences";
+    if (datasetTarget_) {
+        status += "  |  " + std::to_string(datasetTarget_->phaseMarkers().size()) + " phases";
+    }
+    renderer.drawText({x + 10.0f, statusY + 5.0f}, status, UITheme::Colors::TextSecondary);
 }
 
 // =========================================================
@@ -1720,6 +3155,272 @@ void UIDataHubPanel::updateQueueInteraction(const InputState& input,
 }
 
 // =========================================================
+// Structurer helpers
+// =========================================================
+
+void UIDataHubPanel::populateModelDropdown() {
+    auto models = GRIM::MMO::ModelRegistry::instance().getAllModels();
+    std::vector<std::string> names;
+    for (const auto* m : models) names.push_back(m->name);
+    if (names.empty()) names.push_back("(no models)");
+    if (modelDropdown_) modelDropdown_->setItems(names);
+}
+
+void UIDataHubPanel::refreshStructurerState() {
+    if (!datasetTarget_) return;
+    datasetTarget_->loadMassDataset();
+    totalSequences_ = datasetTarget_->massDatasetSize();
+    assignedSequences_ = datasetTarget_->assignedCount();
+    structuredCount_ = 0;
+    for (size_t i = 0; i < totalSequences_; ++i)
+        if (datasetTarget_->getSequence(i).is_structured) structuredCount_++;
+    if (currentSequenceIndex_ >= totalSequences_ && totalSequences_ > 0)
+        currentSequenceIndex_ = totalSequences_ - 1;
+    loadCurrentSequence();
+}
+
+void UIDataHubPanel::loadCurrentSequence() {
+    if (!datasetTarget_ || datasetTarget_->massDatasetSize() == 0) {
+        if (rawTextArea_) rawTextArea_->setText("");
+        if (structuredTextArea_) structuredTextArea_->setText("");
+        return;
+    }
+    auto seq = datasetTarget_->getSequence(currentSequenceIndex_);
+    if (rawTextArea_) rawTextArea_->setText(seq.content);
+    if (structuredTextArea_) structuredTextArea_->setText(seq.structured);
+}
+
+// =========================================================
+// Sequence card helpers
+// =========================================================
+
+float UIDataHubPanel::sequenceCardHeight(const SequenceCard& card) const {
+    float h = kSeqCardTopBarH;
+    h += card.entries.size() * kSeqCardEntryH;
+    if (card.formatIndex == 1) h += kSeqCardBtnRowH;
+    h += kSeqCardBtnRowH;
+    h += kSeqCardPadBot;
+    return h;
+}
+
+void UIDataHubPanel::applyFormatTemplate(SequenceCard& card, int formatIndex) {
+    card.formatIndex = formatIndex;
+    card.entries.clear();
+
+    auto makeField = [](const std::string& prefix) {
+        UIDataHubPanel::SequenceCard::EntryField f;
+        f.prefix = prefix;
+        f.textArea = std::make_shared<UITextArea>(prefix, "", [](const std::string&) {});
+        return f;
+    };
+
+    switch (formatIndex) {
+        case 0: // Q/A
+            card.entries.push_back(makeField("Q:"));
+            card.entries.push_back(makeField("A:"));
+            break;
+        case 1: // Thought
+            card.entries.push_back(makeField("T:"));
+            break;
+        case 2: // Conversation
+            card.entries.push_back(makeField("Human:"));
+            card.entries.push_back(makeField("Assistant:"));
+            break;
+        case 3: // Instruct
+            card.entries.push_back(makeField("Instruction:"));
+            card.entries.push_back(makeField("Response:"));
+            break;
+        case 4: // Raw
+        default:
+            card.entries.push_back(makeField("Content:"));
+            break;
+    }
+}
+
+UIDataHubPanel::SequenceCard UIDataHubPanel::buildSequenceCard(int formatIndex) {
+    SequenceCard card;
+    card.cardId      = nextSeqCardId_++;
+    card.formatIndex = formatIndex;
+
+    size_t id = card.cardId;
+
+    std::vector<std::string> formats = {"Q/A", "Thought", "Conversation", "Instruct", "Raw"};
+    card.formatDropdown = std::make_shared<UIDropdown>(
+        "Format", formats, formatIndex,
+        [this, id](int idx, const std::string&) {
+            for (auto& c : sequenceCards_) {
+                if (c.cardId == id) { applyFormatTemplate(c, idx); break; }
+            }
+        });
+    card.formatDropdown->setMaxVisibleItems(5);
+
+    card.generateBtn = std::make_shared<UIButton>("Generate", [this, id]() {
+        generateForCard(id);
+    });
+
+    card.addEntryBtn = std::make_shared<UIButton>("+ Entry", [this, id]() {
+        for (auto& c : sequenceCards_) {
+            if (c.cardId == id) {
+                SequenceCard::EntryField f;
+                f.prefix = "T:";
+                f.textArea = std::make_shared<UITextArea>("T:", "", [](const std::string&) {});
+                c.entries.push_back(std::move(f));
+                break;
+            }
+        }
+    });
+
+    card.deleteBtn = std::make_shared<UIButton>("x", [this, id]() {
+        seqCardToDelete_ = static_cast<int>(id);
+    });
+
+    card.saveBtn = std::make_shared<UIButton>("Save", [this, id]() {
+        saveSequenceCard(id);
+    });
+
+    applyFormatTemplate(card, formatIndex);
+    return card;
+}
+
+void UIDataHubPanel::removeSequenceCard(size_t cardId) {
+    sequenceCards_.erase(
+        std::remove_if(sequenceCards_.begin(), sequenceCards_.end(),
+            [cardId](const SequenceCard& c) { return c.cardId == cardId; }),
+        sequenceCards_.end());
+}
+
+void UIDataHubPanel::generateForCard(size_t cardId) {
+    SequenceCard* card = nullptr;
+    for (auto& c : sequenceCards_) {
+        if (c.cardId == cardId) { card = &c; break; }
+    }
+    if (!card || !structurer_) return;
+
+    std::string raw = rawTextArea_ ? rawTextArea_->getText() : "";
+    if (raw.empty()) { addLog("Put raw text in 'Raw Source' first", 1); return; }
+
+    static const char* modes[] = {"qa", "thought", "conversation", "instruct", "raw"};
+    std::string mode = (card->formatIndex >= 0 && card->formatIndex < 5)
+                           ? modes[card->formatIndex] : "qa";
+
+    std::string prompt = customPromptArea_ ? customPromptArea_->getText() : "";
+    addLog("Generating " + mode + " format...", 0);
+
+    auto results = structurer_->structureEntry(raw, mode, prompt);
+    if (results.empty()) {
+        std::string err = structurer_->lastError();
+        addLog("Generation failed: " + (err.empty() ? "LLM returned no output" : err), 2);
+        return;
+    }
+
+    auto makeField = [](const std::string& prefix, const std::string& text) {
+        UIDataHubPanel::SequenceCard::EntryField f;
+        f.prefix = prefix;
+        f.textArea = std::make_shared<UITextArea>(prefix, text, [](const std::string&) {});
+        return f;
+    };
+
+    if (mode == "qa" || mode == "instruct") {
+        while (card->entries.size() < 2) {
+            std::string pfx = card->entries.empty() ? "Q:" : "A:";
+            card->entries.push_back(makeField(pfx, ""));
+        }
+        std::string result = results[0];
+        size_t aPos = result.find("\n\nA: ");
+        if (aPos != std::string::npos) {
+            std::string q = result.substr(3, aPos - 3);
+            std::string a = result.substr(aPos + 5);
+            card->entries[0].textArea->setText(q);
+            card->entries[1].textArea->setText(a);
+        } else {
+            card->entries[0].textArea->setText(result);
+        }
+    } else if (mode == "thought") {
+        card->entries.clear();
+        for (const auto& r : results) {
+            std::string text = r;
+            if (text.size() > 3 && text.substr(0, 3) == "T: ") text = text.substr(3);
+            card->entries.push_back(makeField("T:", text));
+        }
+        if (card->entries.empty())
+            card->entries.push_back(makeField("T:", ""));
+    } else if (mode == "conversation") {
+        card->entries.clear();
+        if (!results.empty()) {
+            std::istringstream ss(results[0]);
+            std::string line;
+            std::string accum;
+            std::string curPrefix;
+            while (std::getline(ss, line)) {
+                if (line.substr(0, 7) == "Human: " || line.substr(0, 11) == "Assistant: ") {
+                    if (!curPrefix.empty())
+                        card->entries.push_back(makeField(curPrefix, accum));
+                    if (line.substr(0, 7) == "Human: ") {
+                        curPrefix = "Human:";
+                        accum = line.substr(7);
+                    } else {
+                        curPrefix = "Assistant:";
+                        accum = line.substr(11);
+                    }
+                } else if (!curPrefix.empty() && !line.empty()) {
+                    accum += "\n" + line;
+                }
+            }
+            if (!curPrefix.empty())
+                card->entries.push_back(makeField(curPrefix, accum));
+        }
+        if (card->entries.empty()) {
+            card->entries.push_back(makeField("Human:", ""));
+            card->entries.push_back(makeField("Assistant:", ""));
+        }
+    } else {
+        if (!card->entries.empty() && !results.empty()) {
+            std::string combined;
+            for (size_t i = 0; i < results.size(); ++i) {
+                if (i > 0) combined += "\n\n";
+                combined += results[i];
+            }
+            card->entries[0].textArea->setText(combined);
+        }
+    }
+
+    addLog("Generated " + std::to_string(results.size()) + " entries in " + mode + " format", 0);
+}
+
+void UIDataHubPanel::saveSequenceCard(size_t cardId) {
+    SequenceCard* card = nullptr;
+    for (auto& c : sequenceCards_) {
+        if (c.cardId == cardId) { card = &c; break; }
+    }
+    if (!card || !datasetTarget_) return;
+
+    std::string structured;
+    for (size_t i = 0; i < card->entries.size(); ++i) {
+        if (i > 0) structured += "\n\n";
+        structured += card->entries[i].prefix + " " + card->entries[i].textArea->getText();
+    }
+
+    if (structured.empty()) {
+        addLog("Nothing to save — fill in the sequence fields", 1);
+        return;
+    }
+
+    std::string rawContent;
+    for (size_t i = 0; i < card->entries.size(); ++i) {
+        if (i > 0) rawContent += "\n\n";
+        rawContent += card->entries[i].textArea->getText();
+    }
+
+    if (datasetTarget_->appendStructuredEntry(rawContent, structured)) {
+        totalSequences_ = datasetTarget_->massDatasetSize();
+        structuredCount_++;
+        addLog("Saved sequence card #" + std::to_string(card->cardId) + " to dataset", 0);
+    } else {
+        addLog("Failed to save sequence card", 2);
+    }
+}
+
+// =========================================================
 // Config persistence
 // =========================================================
 
@@ -1809,6 +3510,454 @@ void UIDataHubPanel::saveDownloadQueue() {
     } catch (const std::exception& e) {
         LOG_ERROR("DataHub", "Failed to save queue: " + std::string(e.what()));
     }
+}
+
+// =========================================================
+// Curriculum tab layout
+// =========================================================
+
+void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
+                                        const PanelRect& content) {
+    float x     = content.origin.x + 15.0f;
+    float y     = content.origin.y + 10.0f;
+    float fullW = content.size.x - 30.0f;
+
+    // ── Toolbar ──────────────────────────────────────────
+    float ddW   = 200.0f;
+    float gap   = 10.0f;
+    float rowH  = 36.0f;
+    float btnW  = 90.0f;
+
+    float cx = x;
+    cbModelDropdown_->setPosition(cx, y);
+    cbModelDropdown_->setSize(ddW, rowH);
+    cbModelDropdown_->drawOverlay(renderer, position);
+    cx += ddW + gap;
+
+    cbFormatDropdown_->setPosition(cx, y);
+    cbFormatDropdown_->setSize(ddW, rowH);
+    cbFormatDropdown_->drawOverlay(renderer, position);
+    cx += ddW + gap;
+
+    btnCBGenerate_->setPosition(cx, y + 4.0f);
+    btnCBGenerate_->setSize(btnW, rowH - 8.0f);
+    btnCBGenerate_->drawOverlay(renderer, position);
+    cx += btnW + gap;
+
+    float searchW = fullW - (cx - x) - 2.0f;
+    if (searchW < 100.0f) searchW = 100.0f;
+    cbSearchInput_->setPosition(cx, y + 4.0f);
+    cbSearchInput_->setSize(searchW, rowH - 8.0f);
+    cbSearchInput_->drawOverlay(renderer, position);
+
+    y += rowH + 12.0f;
+
+    // ── Split: list left (38%) | editor right (62%) ─────
+    float bottomBarH = 36.0f;
+    float statusBarH = 25.0f;
+    float availH = (content.origin.y + content.size.y) - y - bottomBarH - statusBarH - 10.0f;
+    if (availH < 100.0f) availH = 100.0f;
+
+    float listW   = fullW * 0.38f;
+    float editorX = x + listW + 10.0f;
+    float editorW = fullW - listW - 10.0f;
+
+    // ── ConceptBlock list ────────────────────────────────
+    renderer.drawRoundedRect({x, y}, {listW, availH},
+                             UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
+
+    // Header
+    renderer.drawRoundedRect({x, y}, {listW, kPoolHeaderH},
+                             UITheme::Colors::WidgetBg, UITheme::Sizes::SmallRadius);
+    const float nameColW = listW * 0.34f;
+    const float qColX    = x + 8.0f + nameColW;
+    renderer.drawText({x + 8.0f, y + 6.0f}, "Name", UITheme::Colors::TextSecondary);
+    renderer.drawText({qColX, y + 6.0f}, "Question (preview)", UITheme::Colors::TextSecondary);
+    renderer.drawText({x + listW - 118.0f, y + 6.0f}, "Type", UITheme::Colors::TextSecondary);
+
+    float bodyY = y + kPoolHeaderH;
+    float bodyH = availH - kPoolHeaderH;
+    renderer.pushClipRect({x, bodyY}, {listW, bodyH});
+
+    const int cbRows = cbCurriculumListRowCount();
+    int startRow = static_cast<int>(cbListScrollOffset_ / kCBListRowH);
+    float offsetY = bodyY - (cbListScrollOffset_ - startRow * kCBListRowH);
+    for (int i = startRow; i < cbRows; ++i) {
+        if (offsetY > bodyY + bodyH) break;
+        if (offsetY + kCBListRowH < bodyY) {
+            offsetY += kCBListRowH;
+            continue;
+        }
+
+        std::string nameStr;
+        std::string qRaw;
+        std::string formatKey = "chain_of_thought";
+        std::string blockId;
+        bool isDraft = cbCurriculumRowIsDraft(i);
+
+        if (isDraft) {
+            nameStr = cbNameInput_ ? cbNameInput_->getText() : "";
+            qRaw    = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
+            int pti = cbFormatDropdown_ ? cbFormatDropdown_->getSelectedIndex() : 1;
+            if (pti >= 0 && pti < GRIM::kConceptPresetCount)
+                formatKey = GRIM::kConceptPresets[pti].key;
+            if (nameStr.empty())
+                nameStr = "(new block — unsaved)";
+        } else {
+            size_t realIdx = 0;
+            if (!cbCurriculumRowToBlockIndex(i, realIdx)) {
+                offsetY += kCBListRowH;
+                continue;
+            }
+            auto cb = datasetTarget_ ? datasetTarget_->getConceptBlock(realIdx) : GRIM::ConceptBlock{};
+            nameStr   = cb.name;
+            qRaw      = cb.question;
+            formatKey = cb.format_type;
+            blockId   = cb.id;
+        }
+
+        bool selected = (i == selectedCBRow_);
+        bool hovered  = (i == hoveredCBRow_);
+        uint32_t rowBg = selected ? UITheme::Colors::Primary
+                       : hovered  ? UITheme::Colors::WidgetBgHover
+                       : (i % 2 == 0) ? 0x00000000 : 0x08FFFFFF;
+
+        if (rowBg != 0x00000000)
+            renderer.drawRect({x, offsetY}, {listW, kCBListRowH}, rowBg);
+
+        uint32_t textCol = selected ? 0xFFFFFFFF : UITheme::Colors::TextPrimary;
+        std::string nameLine = cbSingleLinePreview(nameStr, 36);
+        std::string qLine    = cbSingleLinePreview(qRaw, 48);
+        if (qLine.empty())
+            qLine = "—";
+
+        renderer.drawText({x + 8.0f, offsetY + 4.0f}, nameLine, textCol);
+        renderer.drawText({x + 8.0f, offsetY + 22.0f}, qLine,
+                          selected ? 0xCCFFFFFF : UITheme::Colors::TextSecondary);
+
+        if (!(selected && cbListTypeDropdown_)) {
+            int pi = GRIM::presetIndexForKey(formatKey);
+            std::string fmtLabel = (pi >= 0 && pi < GRIM::kConceptPresetCount)
+                ? GRIM::kConceptPresets[pi].label : formatKey;
+            if (fmtLabel.size() > 14)
+                fmtLabel = fmtLabel.substr(0, 12) + "..";
+            renderer.drawText({x + listW - 118.0f, offsetY + 14.0f}, fmtLabel,
+                              selected ? 0xCCFFFFFF : UITheme::Colors::TextSecondary);
+        }
+
+        if (!isDraft && datasetTarget_ && !blockId.empty()
+            && datasetTarget_->isConceptBlockAssigned(blockId))
+            renderer.drawRoundedRect({x + listW - 14.0f, offsetY + 10.0f}, {8.0f, 8.0f},
+                                     UITheme::Colors::Success, 4.0f);
+
+        offsetY += kCBListRowH;
+    }
+    renderer.popClipRect();
+
+    layoutCBListTypeDropdownInList(x, y, listW);
+    if (cbListTypeDropdown_)
+        cbListTypeDropdown_->drawOverlay(renderer, position);
+
+    // ── Editor panel ─────────────────────────────────────
+    renderer.drawRoundedRect({editorX, y}, {editorW, availH},
+                             UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
+
+    float ey = y + 8.0f;
+    float ePad = 8.0f;
+    float eInnerW = editorW - 2.0f * ePad;
+    float fieldH = 28.0f;
+    float areaH  = 55.0f;
+
+    int presetIdx = cbFormatDropdown_ ? cbFormatDropdown_->getSelectedIndex() : 1;
+    if (presetIdx < 0 || presetIdx >= GRIM::kConceptPresetCount) presetIdx = 1;
+    const auto& preset = GRIM::kConceptPresets[presetIdx];
+
+    // Name
+    renderer.drawText({editorX + ePad, ey}, "Name", UITheme::Colors::TextSecondary);
+    ey += 16.0f;
+    cbNameInput_->setPosition(editorX + ePad, ey);
+    cbNameInput_->setSize(eInnerW, fieldH);
+    cbNameInput_->drawOverlay(renderer, position);
+    ey += fieldH + 8.0f;
+
+    // Question (label from preset)
+    renderer.drawText({editorX + ePad, ey}, preset.questionLabel, UITheme::Colors::TextSecondary);
+    ey += 16.0f;
+    cbQuestionArea_->setPosition(editorX + ePad, ey);
+    cbQuestionArea_->setSize(eInnerW, areaH);
+    cbQuestionArea_->drawOverlay(renderer, position);
+    ey += areaH + 8.0f;
+
+    // Intermediates (if preset has them)
+    if (preset.intermediatesLabel) {
+        renderer.drawText({editorX + ePad, ey}, preset.intermediatesLabel,
+                          UITheme::Colors::TextSecondary);
+        ey += 16.0f;
+
+        float stepAreaH = 40.0f;
+        float remainH = (y + availH) - ey - areaH - 60.0f - 8.0f;
+        if (!cbIntermediateAreas_.empty()) {
+            float perStep = (remainH - 30.0f) / static_cast<float>(cbIntermediateAreas_.size());
+            stepAreaH = std::clamp(perStep - 20.0f, 30.0f, 55.0f);
+        }
+
+        for (size_t si = 0; si < cbIntermediateAreas_.size(); ++si) {
+            std::string stepLabel = "Step " + std::to_string(si + 1) + ":";
+            renderer.drawText({editorX + ePad, ey}, stepLabel, UITheme::Colors::TextMuted);
+            ey += 14.0f;
+            cbIntermediateAreas_[si]->setPosition(editorX + ePad, ey);
+            cbIntermediateAreas_[si]->setSize(eInnerW, stepAreaH);
+            cbIntermediateAreas_[si]->drawOverlay(renderer, position);
+            ey += stepAreaH + 4.0f;
+        }
+
+        // Add/Remove step buttons
+        float stepBtnW = 70.0f;
+        btnCBAddStep_->setPosition(editorX + ePad, ey);
+        btnCBAddStep_->setSize(stepBtnW, 24.0f);
+        btnCBAddStep_->drawOverlay(renderer, position);
+
+        btnCBRemoveStep_->setPosition(editorX + ePad + stepBtnW + 6.0f, ey);
+        btnCBRemoveStep_->setSize(stepBtnW, 24.0f);
+        btnCBRemoveStep_->drawOverlay(renderer, position);
+        ey += 30.0f;
+    }
+
+    // Answer (label from preset)
+    float answerY = y + availH - areaH - 8.0f - 16.0f;
+    if (ey > answerY - 4.0f) answerY = ey + 4.0f;
+    renderer.drawText({editorX + ePad, answerY}, preset.answerLabel,
+                      UITheme::Colors::TextSecondary);
+    answerY += 16.0f;
+    float ansH = std::min(areaH, (y + availH) - answerY - 4.0f);
+    if (ansH < 20.0f) ansH = 20.0f;
+    cbAnswerArea_->setPosition(editorX + ePad, answerY);
+    cbAnswerArea_->setSize(eInnerW, ansH);
+    cbAnswerArea_->drawOverlay(renderer, position);
+
+    // ── Bottom action bar ────────────────────────────────
+    float barY = y + availH + 6.0f;
+    float bx = x;
+    float bGap = 8.0f;
+    float bBtnW = 90.0f;
+    float bBtnH = 28.0f;
+
+    btnCBNew_->setPosition(bx, barY + 4.0f);
+    btnCBNew_->setSize(bBtnW, bBtnH);
+    btnCBNew_->drawOverlay(renderer, position);
+    bx += bBtnW + bGap;
+
+    btnCBDelete_->setPosition(bx, barY + 4.0f);
+    btnCBDelete_->setSize(bBtnW - 20.0f, bBtnH);
+    btnCBDelete_->drawOverlay(renderer, position);
+    bx += bBtnW - 20.0f + bGap;
+
+    btnCBSave_->setPosition(bx, barY + 4.0f);
+    btnCBSave_->setSize(bBtnW - 20.0f, bBtnH);
+    btnCBSave_->drawOverlay(renderer, position);
+    bx += bBtnW - 20.0f + bGap;
+
+    btnCBAssign_->setPosition(bx, barY + 4.0f);
+    btnCBAssign_->setSize(bBtnW, bBtnH);
+    btnCBAssign_->drawOverlay(renderer, position);
+    bx += bBtnW + bGap;
+
+    btnCBRemoveAssign_->setPosition(bx, barY + 4.0f);
+    btnCBRemoveAssign_->setSize(bBtnW, bBtnH);
+    btnCBRemoveAssign_->drawOverlay(renderer, position);
+
+    // Custom prompt (right side of action bar)
+    float promptW = fullW - (bx + bBtnW + bGap - x) - 10.0f;
+    if (promptW > 200.0f) {
+        float promptX = bx + bBtnW + bGap + 10.0f;
+        cbCustomPromptArea_->setPosition(promptX, barY);
+        cbCustomPromptArea_->setSize(promptW, bottomBarH);
+        cbCustomPromptArea_->drawOverlay(renderer, position);
+    }
+
+    // ── Status bar ───────────────────────────────────────
+    float statusY = barY + bottomBarH + 4.0f;
+    renderer.drawRoundedRect({x, statusY}, {fullW, statusBarH},
+                             UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
+    std::string status = "Blocks: " + std::to_string(cbTotalCount_)
+                       + "  |  Assigned: " + std::to_string(cbAssignedCount_);
+    if (presetIdx >= 0 && presetIdx < GRIM::kConceptPresetCount)
+        status += std::string("  |  Format: ") + GRIM::kConceptPresets[presetIdx].label;
+    renderer.drawText({x + 10.0f, statusY + 5.0f}, status, UITheme::Colors::TextSecondary);
+}
+
+// =========================================================
+// Curriculum tab helpers
+// =========================================================
+
+void UIDataHubPanel::refreshCurriculumTabState() {
+    if (!datasetTarget_) return;
+    datasetTarget_->loadConceptBlocks();
+    cbTotalCount_ = datasetTarget_->conceptBlockCount();
+    cbAssignedCount_ = datasetTarget_->assignedConceptBlockCount();
+    cbFilterDirty_ = true;
+    rebuildFilteredCBList();
+    populateCBModelDropdown();
+}
+
+void UIDataHubPanel::rebuildFilteredCBList() {
+    cbFilterDirty_ = false;
+    filteredCBIndices_.clear();
+    if (!datasetTarget_) return;
+
+    std::string formatFilter;
+    if (cbFormatFilterIdx_ > 0 && cbFormatFilterIdx_ < GRIM::kConceptPresetCount) {
+        // Index 0 could mean "show all" or the first preset; treat dropdown literally
+    }
+    filteredCBIndices_ = datasetTarget_->filterConceptBlocks("", cbFilterSearch_);
+    cbTotalCount_ = datasetTarget_->conceptBlockCount();
+}
+
+void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
+    if (!datasetTarget_) return;
+    auto cb = datasetTarget_->getConceptBlock(cbIndex);
+    if (cb.id.empty()) return;
+
+    if (cbNameInput_)    cbNameInput_->setText(cb.name);
+    if (cbQuestionArea_) cbQuestionArea_->setText(cb.question);
+    if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
+
+    int pi = GRIM::presetIndexForKey(cb.format_type);
+    if (cbFormatDropdown_ && pi >= 0) cbFormatDropdown_->setSelectedIndex(pi);
+
+    syncIntermediateAreas(static_cast<int>(cb.intermediates.size()));
+    for (size_t i = 0; i < cb.intermediates.size() && i < cbIntermediateAreas_.size(); ++i) {
+        cbIntermediateAreas_[i]->setText(cb.intermediates[i]);
+    }
+    syncCBListTypeDropdownFromToolbar();
+}
+
+void UIDataHubPanel::clearCBEditor() {
+    if (cbNameInput_)    cbNameInput_->setText("");
+    if (cbQuestionArea_) cbQuestionArea_->setText("");
+    if (cbAnswerArea_)   cbAnswerArea_->setText("");
+    cbIntermediateAreas_.clear();
+}
+
+void UIDataHubPanel::syncIntermediateAreas(int count) {
+    if (count < 0) count = 0;
+    while (static_cast<int>(cbIntermediateAreas_.size()) < count) {
+        auto area = std::make_shared<UITextArea>(
+            "Step " + std::to_string(cbIntermediateAreas_.size() + 1), "",
+            [](const std::string&) {});
+        cbIntermediateAreas_.push_back(area);
+    }
+    while (static_cast<int>(cbIntermediateAreas_.size()) > count) {
+        cbIntermediateAreas_.pop_back();
+    }
+}
+
+void UIDataHubPanel::generateConceptBlock() {
+    if (!structurer_ || !cbQuestionArea_) return;
+    std::string input = cbQuestionArea_->getText();
+    if (input.empty()) {
+        addLog("Enter a question/prompt to generate from", 1);
+        return;
+    }
+
+    std::string customPrompt = cbCustomPromptArea_ ? cbCustomPromptArea_->getText() : "";
+    auto results = structurer_->structureEntry(input, "concept_block", customPrompt);
+    if (results.empty()) {
+        std::string err = structurer_->lastError();
+        addLog("Generation failed: " + (err.empty() ? "LLM returned no output" : err), 2);
+        return;
+    }
+
+    std::vector<std::string> intermediates;
+    std::string question;
+    std::string answer;
+
+    for (const auto& line : results) {
+        if (line.size() > 3 && line.substr(0, 3) == "Q: ") {
+            question = line.substr(3);
+        } else if (line.size() > 3 && line.substr(0, 3) == "T: ") {
+            intermediates.push_back(line.substr(3));
+        } else if (line.size() > 3 && line.substr(0, 3) == "A: ") {
+            answer = line.substr(3);
+        }
+    }
+
+    if (!question.empty() && cbQuestionArea_)
+        cbQuestionArea_->setText(question);
+
+    syncIntermediateAreas(static_cast<int>(intermediates.size()));
+    for (size_t i = 0; i < intermediates.size() && i < cbIntermediateAreas_.size(); ++i) {
+        cbIntermediateAreas_[i]->setText(intermediates[i]);
+    }
+
+    if (!answer.empty() && cbAnswerArea_)
+        cbAnswerArea_->setText(answer);
+
+    addLog("Generated ConceptBlock with " + std::to_string(intermediates.size()) + " steps", 0);
+}
+
+int UIDataHubPanel::cbCurriculumListRowCount() const {
+    return static_cast<int>(filteredCBIndices_.size()) + (cbDraftPreviewActive_ ? 1 : 0);
+}
+
+bool UIDataHubPanel::cbCurriculumRowIsDraft(int listRow) const {
+    return cbDraftPreviewActive_ && listRow == 0;
+}
+
+bool UIDataHubPanel::cbCurriculumRowToBlockIndex(int listRow, size_t& outBlockIndex) const {
+    if (listRow < 0) return false;
+    if (cbCurriculumRowIsDraft(listRow)) return false;
+    const int adj = cbDraftPreviewActive_ ? (listRow - 1) : listRow;
+    if (adj < 0 || adj >= static_cast<int>(filteredCBIndices_.size())) return false;
+    outBlockIndex = filteredCBIndices_[static_cast<size_t>(adj)];
+    return true;
+}
+
+void UIDataHubPanel::syncCBListTypeDropdownFromToolbar() {
+    if (!cbListTypeDropdown_ || !cbFormatDropdown_) return;
+    cbListTypeDropdown_->setSelectedIndex(cbFormatDropdown_->getSelectedIndex());
+}
+
+void UIDataHubPanel::layoutCBListTypeDropdownInList(float listX, float listY, float listW) {
+    if (!cbListTypeDropdown_) return;
+    if (selectedCBRow_ < 0 || selectedCBRow_ >= cbCurriculumListRowCount()) {
+        cbListTypeDropdown_->setPosition(-2000.0f, -2000.0f);
+        return;
+    }
+    const float bodyY  = listY + kPoolHeaderH;
+    const float rowTop = bodyY + selectedCBRow_ * kCBListRowH - cbListScrollOffset_;
+    const float typeColX = listX + listW - 128.0f;
+    cbListTypeDropdown_->setPosition(typeColX - 150.0f, rowTop + 4.0f);
+    cbListTypeDropdown_->setSize(290.0f, 36.0f);
+}
+
+void UIDataHubPanel::populateCBModelDropdown() {
+    if (!cbModelDropdown_) return;
+    namespace fs = std::filesystem;
+    GRIM::Config::GrimTextPaths paths;
+    GRIM::Config::loadGrimTextPaths(paths);
+    fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
+    fs::path modelStoreRoot;
+    if (!paths.model_store.empty())
+        modelStoreRoot = fs::path(paths.model_store);
+    else
+        modelStoreRoot = grimRoot / "resources" / "models" / "model_store";
+
+    std::vector<std::string> names;
+    try {
+        if (fs::exists(modelStoreRoot)) {
+            for (const auto& entry : fs::directory_iterator(modelStoreRoot)) {
+                if (entry.is_directory())
+                    names.push_back(entry.path().filename().string());
+            }
+        }
+    } catch (...) {}
+
+    if (names.empty()) names.push_back("(none)");
+    cbModelDropdown_->setItems(names);
+
+    if (datasetTarget_)
+        cbAssignedCount_ = datasetTarget_->assignedConceptBlockCount();
 }
 
 void UIDataHubPanel::loadHFTokenFromConfig() {

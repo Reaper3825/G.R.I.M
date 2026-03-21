@@ -60,7 +60,7 @@ StageResult StagePreprocess::execute(PipelineContext& ctx) {
             return result;
         }
 
-        std::vector<std::string> cleanedTexts;
+        std::vector<json> cleanedEntries;
         {
             std::ifstream file(chunkFile);
             std::string line;
@@ -70,6 +70,10 @@ StageResult StagePreprocess::execute(PipelineContext& ctx) {
                     json j = json::parse(line);
                     std::string content = j.value("content", std::string());
                     if (content.empty()) continue;
+
+                    std::string srcUrl   = j.value("source_url", std::string());
+                    std::string srcType  = j.value("source_type", std::string());
+                    float       relScore = j.value("reliability_score", 0.7f);
 
                     auto rawChunks = preprocessor.chunkLongText(content);
                     for (const auto& rawChunk : rawChunks) {
@@ -81,7 +85,13 @@ StageResult StagePreprocess::execute(PipelineContext& ctx) {
                                 continue;
                             }
                             if (preprocessor.isDuplicate(chunk)) continue;
-                            cleanedTexts.push_back(chunk);
+
+                            json out;
+                            out["content"]           = chunk;
+                            out["source_url"]        = srcUrl;
+                            out["source_type"]       = srcType;
+                            out["reliability_score"] = relScore;
+                            cleanedEntries.push_back(std::move(out));
                             if (rawChunks.size() > 1 || cleanChunks.size() > 1) chunksCreated++;
                         }
                     }
@@ -89,15 +99,13 @@ StageResult StagePreprocess::execute(PipelineContext& ctx) {
             }
         }
 
-        if (!cleanedTexts.empty()) {
+        if (!cleanedEntries.empty()) {
             fs::path outFile = spool.createChunkFile(outputSpool, outputChunkIdx++);
             std::ofstream out(outFile, std::ios::trunc);
-            for (const auto& text : cleanedTexts) {
-                json j;
-                j["content"] = text;
-                out << j.dump() << "\n";
+            for (const auto& entry : cleanedEntries) {
+                out << entry.dump() << "\n";
             }
-            totalCleaned += cleanedTexts.size();
+            totalCleaned += cleanedEntries.size();
         }
 
         chunksProcessed++;
@@ -171,7 +179,10 @@ StageResult StagePreprocess::execute(PipelineContext& ctx) {
                 std::ofstream out(outFile, std::ios::trunc);
                 for (const auto& text : qaTexts) {
                     json j;
-                    j["content"] = text;
+                    j["content"]           = text;
+                    j["source_url"]        = path;
+                    j["source_type"]       = "qa_jsonl";
+                    j["reliability_score"] = 0.85f;
                     out << j.dump() << "\n";
                 }
                 qaIngested += qaTexts.size();

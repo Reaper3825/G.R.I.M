@@ -16,6 +16,7 @@
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/TensorContract/ForwardIntermediates.hpp"
+#include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 
 #include <vector>
 
@@ -51,6 +52,10 @@ struct AutogradIntermediates {
     std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward
     Tensor mtp_input_tensor;           // A1: MTP preprocessed input (RMSNorm only path) — kept alive for backward
 
+    // ReasoningHead — canonical owner of per-forward atom embeddings + output
+    Tensor scratch_atom_embeddings;    // [num_atoms, atom_embedding_dim] - copy-first from ScratchBlock
+    ReasoningHeadOutput reasoning_output;  // op_logits, arg1_logits, arg2_logits
+
     // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
     // ═══════════════════════════════════════════════════════════════════════════
@@ -67,6 +72,8 @@ struct AutogradIntermediates {
         loss_tensor = Tensor();
         mtp_logits_tensors.clear();
         mtp_input_tensor = Tensor();
+        scratch_atom_embeddings = Tensor();
+        reasoning_output = ReasoningHeadOutput{};
     }
     
     /** Check if intermediates are populated (forward has run) */

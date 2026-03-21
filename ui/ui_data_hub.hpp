@@ -1,7 +1,7 @@
 //======================================================//
 //  UIDataHubPanel — Tabbed data collection + structuring
 //
-//  Four tabs: Home | Sources | HuggingFace | Structurer
+//  Five tabs: Home | Sources | HuggingFace | Structurer | Curriculum
 //
 //  Each tab is a widget group.  setView() hides the
 //  current group and shows the next.  No sub-panel
@@ -36,12 +36,9 @@
 
 class OverlayRenderer;
 struct InputState;
-class DatasetTarget;
 
-namespace GRIM { namespace DataCollection {
-    class DataStructurer;
-    struct DataStructuringConfig;
-}}
+#include "DataCollection/dataset_target.hpp"
+#include "DataCollection/data_structurer.hpp"
 
 // ─────────────────────────────────────────────────────────
 //  View enum
@@ -51,7 +48,8 @@ enum class DataHubView : uint8_t {
     Home        = 0,
     Sources     = 1,
     HuggingFace = 2,
-    Structurer  = 3
+    Structurer  = 3,
+    Curriculum  = 4
 };
 
 // ─────────────────────────────────────────────────────────
@@ -80,6 +78,7 @@ private:
     std::vector<std::shared_ptr<Widget>> sourcesWidgets_;
     std::vector<std::shared_ptr<Widget>> hfWidgets_;
     std::vector<std::shared_ptr<Widget>> structWidgets_;
+    std::vector<std::shared_ptr<Widget>> curriculumWidgets_;
 
     // ═════════════════════════════════════════════════════
     //  Tab buttons (always visible)
@@ -89,6 +88,7 @@ private:
     std::shared_ptr<UIButton> tabSourcesBtn_;
     std::shared_ptr<UIButton> tabHFBtn_;
     std::shared_ptr<UIButton> tabStructBtn_;
+    std::shared_ptr<UIButton> tabCurriculumBtn_;
 
     // ═════════════════════════════════════════════════════
     //  Home tab widgets
@@ -142,6 +142,10 @@ private:
     std::shared_ptr<UIButton>    btnNextSeq_;
     std::shared_ptr<UIButton>    btnAssign_;
     std::shared_ptr<UIButton>    btnRemoveAssign_;
+    std::shared_ptr<UIButton>    btnGenerate_;
+    std::shared_ptr<UIButton>    btnAddSequence_;
+    std::shared_ptr<UITextArea>  customPromptArea_;
+    std::shared_ptr<UIButton>    btnAppendEntry_;
     std::shared_ptr<UISlider>    sliderMaxEntries_;
     std::shared_ptr<UISlider>    sliderParallel_;
 
@@ -151,6 +155,8 @@ private:
 
     std::unique_ptr<GRIM::Pipeline::PipelineOrchestrator> pipelineOrchestrator_;
     std::unique_ptr<GRIM::DataCollection::HuggingFaceWebhook>    hfWebhook_;
+    std::unique_ptr<DatasetTarget>                               datasetTarget_;
+    std::unique_ptr<GRIM::DataCollection::DataStructurer>        structurer_;
 
     // ═════════════════════════════════════════════════════
     //  Tab draw methods
@@ -160,6 +166,7 @@ private:
     void drawSourcesTab(OverlayRenderer& renderer, const PanelRect& content);
     void drawHuggingFaceTab(OverlayRenderer& renderer, const PanelRect& content);
     void drawStructurerTab(OverlayRenderer& renderer, const PanelRect& content);
+    void drawCurriculumTab(OverlayRenderer& renderer, const PanelRect& content);
     void drawQueueSection(OverlayRenderer& renderer, float x, float& y, float width);
 
     // ═════════════════════════════════════════════════════
@@ -264,7 +271,110 @@ private:
     size_t assignedSequences_    = 0;
     size_t structuredCount_      = 0;
     size_t failedCount_          = 0;
-    bool   datasetViewMode_      = true;
+    int    structViewMode_       = 0;   // 0=Dataset, 1=Sequence, 2=Curriculum
+
+    struct SequenceCard {
+        size_t cardId       = 0;
+        int    formatIndex  = 0;
+
+        struct EntryField {
+            std::string                prefix;
+            std::shared_ptr<UITextArea> textArea;
+        };
+        std::vector<EntryField> entries;
+
+        std::shared_ptr<UIDropdown> formatDropdown;
+        std::shared_ptr<UIButton>   generateBtn;
+        std::shared_ptr<UIButton>   addEntryBtn;
+        std::shared_ptr<UIButton>   deleteBtn;
+        std::shared_ptr<UIButton>   saveBtn;
+    };
+    std::vector<SequenceCard> sequenceCards_;
+    size_t nextSeqCardId_    = 0;
+    int    seqCardToDelete_  = -1;
+    float  seqScrollOffset_  = 0.0f;
+    float  seqCardAreaTop_   = 0.0f;
+    float  seqCardAreaH_     = 0.0f;
+
+    // ═════════════════════════════════════════════════════
+    //  Curriculum view state
+    // ═════════════════════════════════════════════════════
+
+    float  poolScrollOffset_    = 0.0f;
+    float  currScrollOffset_    = 0.0f;
+    float  detailPanelHeight_   = 200.0f;
+    bool   detailPanelOpen_     = true;
+    int    selectedPoolRow_     = -1;
+    int    hoveredPoolRow_      = -1;
+    int    selectedCurrRow_     = -1;
+    int    hoveredCurrRow_      = -1;
+    std::vector<size_t> filteredPoolIndices_;
+    std::vector<size_t> selectedPoolRows_;
+    bool   poolFilterDirty_     = true;
+
+    int         filterSubjectIdx_  = 0;
+    int         filterQualityIdx_  = 0;
+    std::string filterSearchQuery_;
+
+    std::shared_ptr<UIDropdown> subjectFilterDropdown_;
+    std::shared_ptr<UIDropdown> qualityFilterDropdown_;
+    std::shared_ptr<UIInputBox> poolSearchInput_;
+
+    std::shared_ptr<UIButton>   btnAssignSelected_;
+    std::shared_ptr<UIButton>   btnRemoveSelected_;
+    std::shared_ptr<UIButton>   btnAddPhase_;
+
+    std::shared_ptr<UITextArea> detailContentArea_;
+    std::shared_ptr<UITextArea> detailStructuredArea_;
+    std::shared_ptr<UIButton>   btnDetailSave_;
+    int    detailSourceRow_     = -1;   // -1 = pool, >=0 = curriculum idx
+    size_t detailSeqIndex_      = SIZE_MAX;
+
+    // ═════════════════════════════════════════════════════
+    //  Curriculum tab widgets
+    // ═════════════════════════════════════════════════════
+
+    std::shared_ptr<UIDropdown>  cbModelDropdown_;
+    std::shared_ptr<UIDropdown>  cbFormatDropdown_;
+    /// Shown in the ConceptBlock list on the selected row (format / type).
+    std::shared_ptr<UIDropdown>  cbListTypeDropdown_;
+    std::shared_ptr<UIInputBox>  cbSearchInput_;
+    std::shared_ptr<UIInputBox>  cbNameInput_;
+    std::shared_ptr<UITextArea>  cbQuestionArea_;
+    std::shared_ptr<UITextArea>  cbAnswerArea_;
+    std::shared_ptr<UITextArea>  cbCustomPromptArea_;
+    std::vector<std::shared_ptr<UITextArea>> cbIntermediateAreas_;
+
+    std::shared_ptr<UIButton>    btnCBGenerate_;
+    std::shared_ptr<UIButton>    btnCBAddStep_;
+    std::shared_ptr<UIButton>    btnCBRemoveStep_;
+    std::shared_ptr<UIButton>    btnCBNew_;
+    std::shared_ptr<UIButton>    btnCBSave_;
+    std::shared_ptr<UIButton>    btnCBDelete_;
+    std::shared_ptr<UIButton>    btnCBAssign_;
+    std::shared_ptr<UIButton>    btnCBRemoveAssign_;
+
+    // ═════════════════════════════════════════════════════
+    //  Curriculum tab state
+    // ═════════════════════════════════════════════════════
+
+    float  cbListScrollOffset_   = 0.0f;
+    int    selectedCBRow_        = -1;
+    int    hoveredCBRow_         = -1;
+    std::vector<size_t> filteredCBIndices_;
+    bool   cbFilterDirty_        = true;
+    std::string cbFilterSearch_;
+    int    cbFormatFilterIdx_    = 0;
+    size_t cbTotalCount_         = 0;
+    size_t cbAssignedCount_      = 0;
+    /// Unsaved row pinned at list index 0; shows live name / question preview.
+    bool   cbDraftPreviewActive_ = false;
+
+    int  cbCurriculumListRowCount() const;
+    bool cbCurriculumRowIsDraft(int listRow) const;
+    bool cbCurriculumRowToBlockIndex(int listRow, size_t& outBlockIndex) const;
+    void syncCBListTypeDropdownFromToolbar();
+    void layoutCBListTypeDropdownInList(float listX, float listY, float listW);
 
     // ═════════════════════════════════════════════════════
     //  Internal methods — Home
@@ -304,6 +414,41 @@ private:
     void clearCompletedFromQueue();
     void updateQueueInteraction(const InputState& input, float queueBoxX,
                                 float queueBoxY, float queueBoxW, float queueBoxH);
+
+    // ═════════════════════════════════════════════════════
+    //  Internal methods — Structurer
+    // ═════════════════════════════════════════════════════
+
+    void refreshStructurerState();
+    void loadCurrentSequence();
+    void populateModelDropdown();
+
+    SequenceCard buildSequenceCard(int formatIndex = 0);
+    void applyFormatTemplate(SequenceCard& card, int formatIndex);
+    void removeSequenceCard(size_t cardId);
+    void generateForCard(size_t cardId);
+    void saveSequenceCard(size_t cardId);
+    float sequenceCardHeight(const SequenceCard& card) const;
+
+    // ── Curriculum view methods (Structurer sub-view) ───
+    void drawCurriculumView(OverlayRenderer& renderer, const PanelRect& content,
+                            float x, float y, float fullW, float contentEndY);
+    void drawPoolTable(OverlayRenderer& renderer, float x, float y, float w, float h);
+    void drawCurriculumList(OverlayRenderer& renderer, float x, float y, float w, float h);
+    void drawDetailEditor(OverlayRenderer& renderer, float x, float y, float w, float h);
+    void rebuildFilteredPool();
+    void selectPoolRow(int row);
+    void selectCurriculumRow(int row);
+    void loadDetailForSequence(size_t seqIndex);
+
+    // ── Curriculum tab methods ───────────────────────────
+    void refreshCurriculumTabState();
+    void rebuildFilteredCBList();
+    void loadConceptBlockIntoEditor(size_t cbIndex);
+    void clearCBEditor();
+    void syncIntermediateAreas(int count);
+    void generateConceptBlock();
+    void populateCBModelDropdown();
 
     // ═════════════════════════════════════════════════════
     //  Config persistence

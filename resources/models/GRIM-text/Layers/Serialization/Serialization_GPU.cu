@@ -365,6 +365,40 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                                             fb_numeric_head->d_model()));
     }
 
+    // Load ReasoningHead weights (optional — missing in old checkpoints)
+    const auto* fb_reasoning_head = model_fb->reasoning_head();
+    if (fb_reasoning_head && fb_reasoning_head->w_op_data() && request.reasoning_head.w_op.ptr) {
+        std::vector<float> rh_w_op(fb_reasoning_head->w_op_data()->begin(),
+                                    fb_reasoning_head->w_op_data()->end());
+        if (!upload_device_vector(rh_w_op, request.reasoning_head.w_op, "ReasoningHead W_op")) {
+            return false;
+        }
+        if (fb_reasoning_head->b_op_data() && request.reasoning_head.b_op.ptr) {
+            std::vector<float> rh_b_op(fb_reasoning_head->b_op_data()->begin(),
+                                        fb_reasoning_head->b_op_data()->end());
+            if (!upload_device_vector(rh_b_op, request.reasoning_head.b_op, "ReasoningHead b_op")) {
+                return false;
+            }
+        }
+        if (fb_reasoning_head->w_arg1_data() && request.reasoning_head.w_arg1.ptr) {
+            std::vector<float> rh_w_arg1(fb_reasoning_head->w_arg1_data()->begin(),
+                                          fb_reasoning_head->w_arg1_data()->end());
+            if (!upload_device_vector(rh_w_arg1, request.reasoning_head.w_arg1, "ReasoningHead w_arg1")) {
+                return false;
+            }
+        }
+        if (fb_reasoning_head->w_arg2_data() && request.reasoning_head.w_arg2.ptr) {
+            std::vector<float> rh_w_arg2(fb_reasoning_head->w_arg2_data()->begin(),
+                                          fb_reasoning_head->w_arg2_data()->end());
+            if (!upload_device_vector(rh_w_arg2, request.reasoning_head.w_arg2, "ReasoningHead w_arg2")) {
+                return false;
+            }
+        }
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] ReasoningHead: num_ops=",
+                                            fb_reasoning_head->num_ops(), " d_total=",
+                                            fb_reasoning_head->d_total()));
+    }
+
     // Issue #33: Load final RMSNorm gamma (normalizes encoder output before LM head)
     const auto* fb_final_rms_gamma = model_fb->final_rms_gamma();
     if (fb_final_rms_gamma && request.final_rms_gamma.ptr) {
@@ -674,6 +708,27 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                                             nh_weights.size(), " bias=", nh_bias.size()));
     }
 
+    // Save ReasoningHead weights (optional — only when enabled)
+    flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> fb_reasoning_head = 0;
+    const auto& rh_view = request.sources.reasoning_head;
+    if (rh_view.enabled && rh_view.w_op.ptr) {
+        auto rh_w_op = download_device_vector(rh_view.w_op, "ReasoningHead W_op");
+        auto rh_b_op = download_device_vector(rh_view.b_op, "ReasoningHead b_op");
+        auto rh_w_arg1 = download_device_vector(rh_view.w_arg1, "ReasoningHead w_arg1");
+        auto rh_w_arg2 = download_device_vector(rh_view.w_arg2, "ReasoningHead w_arg2");
+        fb_reasoning_head = GRIMTransformer::CreateReasoningHeadWeights(
+            builder,
+            builder.CreateVector(rh_w_op),
+            builder.CreateVector(rh_b_op),
+            builder.CreateVector(rh_w_arg1),
+            builder.CreateVector(rh_w_arg2),
+            static_cast<uint32_t>(rh_view.num_ops),
+            static_cast<uint32_t>(rh_view.d_total));
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] ReasoningHead: W_op=",
+                                            rh_w_op.size(), " b_op=", rh_b_op.size(),
+                                            " w_arg1=", rh_w_arg1.size(), " w_arg2=", rh_w_arg2.size()));
+    }
+
     // Issue #33: Save final RMSNorm gamma (normalizes encoder output before LM head)
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_final_rms_gamma = 0;
     const auto& final_rms_view = request.sources.final_rms_gamma;
@@ -721,7 +776,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         0,
         0,
         timestamp,
-        timestamp);
+        timestamp,
+        fb_reasoning_head);
 
     builder.Finish(fb_model, "GRMT");
 

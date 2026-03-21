@@ -131,6 +131,20 @@ void LanguageModel::initInferenceState() {
         std::cout << "  ✓ NumericHeadLayer initialized (inference, d_model=" << cfg.d_model << ")" << std::endl;
     }
 
+    // ReasoningHead layer (inference — loaded from checkpoint if present)
+    if (cfg.reasoning_head_enabled) {
+        ReasoningHeadConfig rh_cfg;
+        rh_cfg.d_model = cfg.d_model;
+        rh_cfg.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
+        rh_cfg.num_ops = cfg.reasoning_num_ops;
+        rh_cfg.stream = primary_stream;
+        rh_cfg.cublas_handle = training_state_.cublas_handle;
+
+        reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(rh_cfg, /*seed=*/0, primary_stream);
+        std::cout << "  ✓ ReasoningHeadLayer initialized (inference, d_total="
+                  << rh_cfg.d_total() << ", num_ops=" << rh_cfg.num_ops << ")" << std::endl;
+    }
+
     // MTP heads (inference: allocate so load() can fill from .mtp sidecar; not used in forward)
     if (cfg.mtp_enabled && cfg.mtp_k > 0) {
         mtp_heads_.resize(static_cast<size_t>(cfg.mtp_k));

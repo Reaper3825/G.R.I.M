@@ -77,6 +77,7 @@ struct GrimTextPaths {
     std::string merge_checkpoints_exe;
     std::string collector_log;
     std::string source_config;  // Path to source_data.json for data collection
+    std::string model_store;   // Path to model store directory for per-model configs
     
     bool isValid() const {
         // At minimum, we need vocab and training_data to do any work
@@ -96,6 +97,7 @@ struct GrimTextPaths {
         std::cout << "  merge_checkpoints_exe: " << (merge_checkpoints_exe.empty() ? "(not set)" : merge_checkpoints_exe) << std::endl;
         std::cout << "  collector_log: " << (collector_log.empty() ? "(not set)" : collector_log) << std::endl;
         std::cout << "  source_config: " << (source_config.empty() ? "(not set)" : source_config) << std::endl;
+        std::cout << "  model_store: " << (model_store.empty() ? "(not set)" : model_store) << std::endl;
     }
 };
 
@@ -532,6 +534,7 @@ inline bool populateGrimTextPathsFromConfig(const nlohmann::json& config, GrimTe
     assignIfPresent("merge_checkpoints_exe", paths.merge_checkpoints_exe);
     assignIfPresent("collector_log", paths.collector_log);
     assignIfPresent("source_config", paths.source_config);
+    assignIfPresent("model_store", paths.model_store);
 
     return true;
 }
@@ -1340,7 +1343,8 @@ inline bool loadGrimTextPaths(GrimTextPaths& paths, const std::string& configPat
         paths.vocab + "|" + paths.model + "|" + paths.training_data + "|" +
         paths.checkpoints + "|" + paths.collected + "|" + paths.verified + "|" +
         paths.logs + "|" + paths.training_status + "|" + paths.merge_checkpoints_exe +
-        "|" + paths.collector_log + "|" + paths.source_config;
+        "|" + paths.collector_log + "|" + paths.source_config +
+        "|" + paths.model_store;
 
     if (signature != lastPrintedSignature) {
         std::cout << "[Config] Loading GRIM-text paths from: " << snapshot->config_path << std::endl;

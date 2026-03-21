@@ -238,6 +238,15 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D4b: numeric head registered\n"); fflush(stderr);
     }
 
+    // ReasoningHead parameters
+    if (reasoning_head_layer_) {
+        registerTensor("reasoning_head_w_op", reasoning_head_layer_->W_op(), ParamGroupType::REASONING_HEAD);
+        registerNonDecayTensor("reasoning_head_b_op", reasoning_head_layer_->b_op(), ParamGroupType::REASONING_HEAD);
+        registerTensor("reasoning_head_w_arg1", reasoning_head_layer_->w_arg1(), ParamGroupType::REASONING_HEAD);
+        registerTensor("reasoning_head_w_arg2", reasoning_head_layer_->w_arg2(), ParamGroupType::REASONING_HEAD);
+        fprintf(stderr, "[buildParameterGroups] DIAG-D4c: reasoning head registered\n"); fflush(stderr);
+    }
+
     // Multi-token prediction (MTP) auxiliary heads
     const int mtp_k = (config_.mtp_enabled ? config_.mtp_k : 0);
     for (int k = 0; k < mtp_k; ++k) {
