@@ -402,7 +402,7 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
     // Load ExecutionBlock weights (optional — missing in old checkpoints)
     const auto* fb_exec_block = model_fb->execution_block();
     if (fb_exec_block && request.execution_block.w_decode_1.ptr) {
-        auto ul = [&](const flatbuffers::Vector<float>* src, DeviceWriteView& dst, const char* name) -> bool {
+        auto ul = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
             if (!src || !dst.ptr) return true;
             std::vector<float> buf(src->begin(), src->end());
             return upload_device_vector(buf, dst, name);

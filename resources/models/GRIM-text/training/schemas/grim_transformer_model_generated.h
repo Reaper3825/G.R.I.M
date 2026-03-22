@@ -2442,6 +2442,9 @@ struct TransformerModelBuilder {
   void add_reasoning_head(::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head) {
     fbb_.AddOffset(TransformerModel::VT_REASONING_HEAD, reasoning_head);
   }
+  void add_execution_block(::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block) {
+    fbb_.AddOffset(TransformerModel::VT_EXECUTION_BLOCK, execution_block);
+  }
   void add_final_rms_gamma(::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma) {
     fbb_.AddOffset(TransformerModel::VT_FINAL_RMS_GAMMA, final_rms_gamma);
   }
