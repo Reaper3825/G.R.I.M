@@ -1306,12 +1306,12 @@ LossResult computeAutogradLoss(
         {
             const auto& rh = intermediates.reasoning_output;
             // Read ReasoningHead op_logits to get target op
-            int nops = rh.op_logits.shape.cols;
+            int nops = rh.op_logits.shape.flat.cols;
             std::vector<float> h_op(nops);
             cudaMemcpy(h_op.data(), rh.op_logits.data, nops * sizeof(float), cudaMemcpyDeviceToHost);
             rh_op_target = static_cast<int>(std::max_element(h_op.begin(), h_op.end()) - h_op.begin());
             // arg1/arg2 targets (over num_atoms)
-            int na = rh.arg1_logits.shape.cols;
+            int na = rh.arg1_logits.shape.flat.cols;
             if (na > 0) {
                 std::vector<float> h_a1(na), h_a2(na);
                 cudaMemcpy(h_a1.data(), rh.arg1_logits.data, na * sizeof(float), cudaMemcpyDeviceToHost);
@@ -1326,8 +1326,8 @@ LossResult computeAutogradLoss(
         int step_count = 0;
         for (const auto& step_out : intermediates.execution_block_output.steps) {
             auto ce_from_logits = [&](const Tensor& logits, int target) -> float {
-                if (!logits.data || target < 0 || target >= logits.shape.cols) return 0.0f;
-                int n = logits.shape.cols;
+                if (!logits.data || target < 0 || target >= logits.shape.flat.cols) return 0.0f;
+                int n = logits.shape.flat.cols;
                 std::vector<float> h_logits(n);
                 cudaMemcpy(h_logits.data(), logits.data, n * sizeof(float), cudaMemcpyDeviceToHost);
                 float max_val = *std::max_element(h_logits.begin(), h_logits.end());
