@@ -37,11 +37,11 @@ static constexpr float kEps = 1e-7f;
             char buf[256]; snprintf(buf, sizeof(buf), "%s: null data pointer", name); \
             EXEC_CHECK(false, buf); \
         } \
-        if ((tensor).shape.rows != (expected_r) || (tensor).shape.cols != (expected_c)) { \
+        if ((tensor).shape.flat.rows != (expected_r) || (tensor).shape.flat.cols != (expected_c)) { \
             char buf[256]; snprintf(buf, sizeof(buf), \
                 "%s: expected [%d, %d], got [%d, %d]", \
                 name, (int)(expected_r), (int)(expected_c), \
-                (tensor).shape.rows, (tensor).shape.cols); \
+                (tensor).shape.flat.rows, (tensor).shape.flat.cols); \
             EXEC_CHECK(false, buf); \
         } \
     } while(0)
