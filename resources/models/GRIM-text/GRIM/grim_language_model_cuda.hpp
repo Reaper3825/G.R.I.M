@@ -37,6 +37,7 @@
 #include "../Layers/LMHead/lm_head_GPU.hpp"
 #include "../Layers/NumericHead/numeric_head_GPU.hpp"
 #include "../Layers/ReasoningHead/reasoning_head_GPU.hpp"
+#include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -341,6 +342,20 @@ struct LanguageModelConfig {
     // ReasoningHead config
     bool reasoning_head_enabled = false;       // Enable ReasoningHead parallel layer
     int reasoning_num_ops = 8;                 // Number of reasoning operations (output dim)
+
+    // ExecutionBlock config — differentiable register machine
+    bool execution_block_enabled = false;
+    int execution_block_layer = -1;            // encoder layer to run after (-1 = num_layers - 2)
+    int execution_block_num_ops = 8;
+    int execution_block_num_slots = 4;         // V — memory slots
+    int execution_block_num_steps = 2;         // K — execution steps per forward
+    int execution_block_d_key = 64;
+    int execution_block_d_type = 8;
+    int execution_block_cross_attn_head_dim = 64;
+    int execution_block_cross_attn_topk = 1;
+    float execution_block_usage_decay = 0.9f;
+    float execution_block_diversity_kappa = 2.0f;
+    float execution_block_memory_slot_bias = 0.5f;
     
     // LM Head centering config (Issue #37 / #40 fixes)
     // When enabled, centers hidden states before LM head projection.
@@ -693,6 +708,10 @@ public:
     ReasoningHeadLayer* getReasoningHeadLayer() { return reasoning_head_layer_.get(); }
     const ReasoningHeadLayer* getReasoningHeadLayer() const { return reasoning_head_layer_.get(); }
 
+    // Execution Block layer access (nullptr when disabled)
+    ExecutionBlockLayer* getExecutionBlockLayer() { return execution_block_layer_.get(); }
+    const ExecutionBlockLayer* getExecutionBlockLayer() const { return execution_block_layer_.get(); }
+
     // Multi-token prediction (MTP) auxiliary heads - one weight + bias per head (indices 0..mtp_k-1)
     struct MTPHead {
         Tensor weight;  // [vocab_size, d_model] same layout as LM head
@@ -764,6 +783,9 @@ private:
 
     // Reasoning Head layer (structured reasoning: op + arg selection over atoms)
     std::unique_ptr<ReasoningHeadLayer> reasoning_head_layer_;
+
+    // Execution Block layer (differentiable register machine — internal numeric reasoning)
+    std::unique_ptr<ExecutionBlockLayer> execution_block_layer_;
 
     // Multi-token prediction (MTP) auxiliary heads - K independent linear heads (not tied to embedding)
     std::vector<MTPHead> mtp_heads_;

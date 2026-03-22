@@ -17,6 +17,7 @@
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 #include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
+#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 #include <vector>
 
@@ -56,6 +57,10 @@ struct AutogradIntermediates {
     Tensor scratch_atom_embeddings;    // [num_atoms, atom_embedding_dim] - copy-first from ScratchBlock
     ReasoningHeadOutput reasoning_output;  // op_logits, arg1_logits, arg2_logits
 
+    // ExecutionBlock — memory and per-step outputs
+    ExecutionMemory exec_memory;
+    ExecutionBlockOutput execution_block_output;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
     // ═══════════════════════════════════════════════════════════════════════════
@@ -74,6 +79,8 @@ struct AutogradIntermediates {
         mtp_input_tensor = Tensor();
         scratch_atom_embeddings = Tensor();
         reasoning_output = ReasoningHeadOutput{};
+        exec_memory = ExecutionMemory{};
+        execution_block_output = ExecutionBlockOutput{};
     }
     
     /** Check if intermediates are populated (forward has run) */

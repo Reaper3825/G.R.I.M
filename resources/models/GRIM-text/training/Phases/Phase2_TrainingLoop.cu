@@ -3829,8 +3829,8 @@ BatchResult processBatch(
     const bool tied_for_norm = ctx.model->getConfig().tie_embeddings;
     const float emb_sum_sq_pre = tied_for_norm ? gm.lm_head_sum_sq : (gm.lm_head_sum_sq + gm.embedding_sum_sq);
     const int64_t emb_count_pre = tied_for_norm ? gm.lm_head_count : (gm.lm_head_count + gm.embedding_count);
-    const float enc_sum_sq_pre = gm.attention_sum_sq + gm.ffn_sum_sq + gm.rmsnorm_sum_sq + gm.scratchblock_sum_sq + gm.reasoning_head_sum_sq;
-    const int64_t enc_count_pre = gm.attention_count + gm.ffn_count + gm.rmsnorm_count + gm.scratchblock_count + gm.reasoning_head_count;
+    const float enc_sum_sq_pre = gm.attention_sum_sq + gm.ffn_sum_sq + gm.rmsnorm_sum_sq + gm.scratchblock_sum_sq + gm.reasoning_head_sum_sq + gm.execution_block_sum_sq;
+    const int64_t enc_count_pre = gm.attention_count + gm.ffn_count + gm.rmsnorm_count + gm.scratchblock_count + gm.reasoning_head_count + gm.execution_block_count;
     const float emb_rms_pre = (emb_count_pre > 0) ? std::sqrt(emb_sum_sq_pre / static_cast<float>(emb_count_pre)) : 0.0f;
     const float enc_rms_pre = (enc_count_pre > 0) ? std::sqrt(enc_sum_sq_pre / static_cast<float>(enc_count_pre)) : 0.0f;
     // Separate sb_rms for POST-GRADNORM visibility (Issue #150)
@@ -4282,10 +4282,12 @@ BatchResult processBatch(
             }
             const float clip_enc_sq = clip_gm.attention_sum_sq + clip_gm.ffn_sum_sq
                                     + clip_gm.rmsnorm_sum_sq + clip_gm.scratchblock_sum_sq
-                                    + clip_gm.numeric_head_sum_sq + clip_gm.reasoning_head_sum_sq;
+                                    + clip_gm.numeric_head_sum_sq + clip_gm.reasoning_head_sum_sq
+                                    + clip_gm.execution_block_sum_sq;
             const int64_t clip_enc_count = clip_gm.attention_count + clip_gm.ffn_count
                                          + clip_gm.rmsnorm_count + clip_gm.scratchblock_count
-                                         + clip_gm.numeric_head_count + clip_gm.reasoning_head_count;
+                                         + clip_gm.numeric_head_count + clip_gm.reasoning_head_count
+                                         + clip_gm.execution_block_count;
             const float clip_emb_rms = (clip_emb_count > 0) ? std::sqrt(clip_emb_sq / static_cast<float>(clip_emb_count)) : 0.0f;
             const float clip_enc_rms = (clip_enc_count > 0) ? std::sqrt(clip_enc_sq / static_cast<float>(clip_enc_count)) : 0.0f;
             result.grad_rms = std::sqrt(clip_emb_rms * clip_emb_rms + clip_enc_rms * clip_enc_rms);

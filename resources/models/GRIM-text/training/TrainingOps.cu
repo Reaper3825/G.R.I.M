@@ -423,6 +423,32 @@ void LanguageModel::initGPU() {
                       << rh_config.d_total() << ", num_ops=" << rh_config.num_ops << ")\n";
         }
 
+        // ExecutionBlock layer (differentiable register machine)
+        if (cfg.execution_block_enabled) {
+            ExecutionBlockConfig eb_config;
+            eb_config.d_model = cfg.d_model;
+            eb_config.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
+            eb_config.num_ops = cfg.execution_block_num_ops;
+            eb_config.num_slots = cfg.execution_block_num_slots;
+            eb_config.num_exec_steps = cfg.execution_block_num_steps;
+            eb_config.execution_block_layer = cfg.execution_block_layer;
+            eb_config.d_key = cfg.execution_block_d_key;
+            eb_config.d_type = cfg.execution_block_d_type;
+            eb_config.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
+            eb_config.cross_attn_topk = cfg.execution_block_cross_attn_topk;
+            eb_config.usage_decay = cfg.execution_block_usage_decay;
+            eb_config.diversity_kappa = cfg.execution_block_diversity_kappa;
+            eb_config.memory_slot_bias = cfg.execution_block_memory_slot_bias;
+            eb_config.stream = primary_stream;
+            eb_config.cublas_handle = training_state_.cublas_handle;
+
+            const uint64_t eb_seed = training_state_.weight_init_seed + 20;
+            execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_config, eb_seed, primary_stream);
+            std::cout << "✓ ExecutionBlock layer created (V=" << eb_config.num_slots
+                      << ", K=" << eb_config.num_exec_steps
+                      << ", ops=" << eb_config.num_ops << ")\n";
+        }
+
         // Multi-token prediction (MTP) auxiliary heads: K independent linear heads (not tied to embedding)
         if (cfg.mtp_enabled && cfg.mtp_k > 0) {
             mtp_heads_.resize(static_cast<size_t>(cfg.mtp_k));

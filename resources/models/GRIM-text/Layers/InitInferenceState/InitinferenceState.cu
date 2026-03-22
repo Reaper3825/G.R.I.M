@@ -145,6 +145,30 @@ void LanguageModel::initInferenceState() {
                   << rh_cfg.d_total() << ", num_ops=" << rh_cfg.num_ops << ")" << std::endl;
     }
 
+    // ExecutionBlock layer (inference — loaded from checkpoint if present)
+    if (cfg.execution_block_enabled) {
+        ExecutionBlockConfig eb_cfg;
+        eb_cfg.d_model = cfg.d_model;
+        eb_cfg.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
+        eb_cfg.num_ops = cfg.execution_block_num_ops;
+        eb_cfg.num_slots = cfg.execution_block_num_slots;
+        eb_cfg.num_exec_steps = cfg.execution_block_num_steps;
+        eb_cfg.execution_block_layer = cfg.execution_block_layer;
+        eb_cfg.d_key = cfg.execution_block_d_key;
+        eb_cfg.d_type = cfg.execution_block_d_type;
+        eb_cfg.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
+        eb_cfg.cross_attn_topk = cfg.execution_block_cross_attn_topk;
+        eb_cfg.usage_decay = cfg.execution_block_usage_decay;
+        eb_cfg.diversity_kappa = cfg.execution_block_diversity_kappa;
+        eb_cfg.memory_slot_bias = cfg.execution_block_memory_slot_bias;
+        eb_cfg.stream = primary_stream;
+        eb_cfg.cublas_handle = training_state_.cublas_handle;
+
+        execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_cfg, /*seed=*/0, primary_stream);
+        std::cout << "  ✓ ExecutionBlockLayer initialized (inference, V="
+                  << eb_cfg.num_slots << ", K=" << eb_cfg.num_exec_steps << ")" << std::endl;
+    }
+
     // MTP heads (inference: allocate so load() can fill from .mtp sidecar; not used in forward)
     if (cfg.mtp_enabled && cfg.mtp_k > 0) {
         mtp_heads_.resize(static_cast<size_t>(cfg.mtp_k));

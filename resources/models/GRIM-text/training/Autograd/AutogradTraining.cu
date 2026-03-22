@@ -12,6 +12,7 @@
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
+#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"
@@ -109,6 +110,7 @@ AutogradContext initAutogradContext(
     ScratchBlockLayer* scratch_block,
     NumericHeadLayer* numeric_head,
     ReasoningHeadLayer* reasoning_head,
+    ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
@@ -125,6 +127,7 @@ AutogradContext initAutogradContext(
     ctx.scratch_block = scratch_block;
     ctx.numeric_head = numeric_head;
     ctx.reasoning_head = reasoning_head;
+    ctx.execution_block = execution_block;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.payload = &payload;
@@ -150,6 +153,7 @@ AutogradContext initAutogradContext(
     ScratchBlockLayer* scratch_block,
     NumericHeadLayer* numeric_head,
     ReasoningHeadLayer* reasoning_head,
+    ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     int batch_size,
@@ -167,6 +171,7 @@ AutogradContext initAutogradContext(
     ctx.scratch_block = scratch_block;
     ctx.numeric_head = numeric_head;
     ctx.reasoning_head = reasoning_head;
+    ctx.execution_block = execution_block;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.payload = nullptr;  // No payload for inference
@@ -600,6 +605,17 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         AG_INFO("  embedding_tensor.grad_fn=" << (void*)intermediates.embedding_tensor.grad_fn.get()
                 << " requires_grad=" << intermediates.embedding_tensor.requires_grad);
         
+        // Resolve execution block layer index
+        int exec_layer = -1;
+        int exec_K = 0;
+        if (ctx.execution_block && cfg->execution_block_enabled && ctx.scratch_block && ctx.scratch_block->isEnabled()) {
+            exec_layer = cfg->execution_block_layer;
+            if (exec_layer < 0) exec_layer = num_layers - 2;
+            if (exec_layer < 0) exec_layer = 0;
+            if (exec_layer >= num_layers) exec_layer = num_layers - 1;
+            exec_K = cfg->execution_block_num_steps;
+        }
+
         for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
             auto* enc_layer = ctx.gpu_encoder->getLayer(layer_idx);
             if (!enc_layer) {
@@ -619,6 +635,45 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 const uint64_t residual_drop_seed = ctx.step * 2654435761ULL + 7000 + static_cast<uint64_t>(layer_idx) * 131;
                 layer_output = autograd::dropout(layer_output, cfg->residual_dropout_rate,
                                                  residual_drop_seed, ctx.is_training, ctx.stream);
+            }
+
+            // ExecutionBlock: run K execution steps at the configured layer
+            if (layer_idx == exec_layer && ctx.execution_block) {
+                int num_atoms = 0;
+                cudaMemcpyAsync(&num_atoms, ctx.scratch_block->numAtomsBuffer(),
+                                sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+                cudaStreamSynchronize(ctx.stream);
+
+                const int ae = cfg->scratch_block_atom_embedding_dim;
+                const int V = cfg->execution_block_num_slots;
+                const int dk = cfg->execution_block_d_key;
+                const int dt = cfg->execution_block_d_type;
+
+                intermediates.exec_memory.allocate(V, ae, cfg->d_model, dk, dt, ctx.stream);
+                intermediates.exec_memory.clear(ctx.stream);
+                intermediates.execution_block_output.steps.clear();
+
+                ctx.execution_block->setStream(ctx.stream);
+                ctx.execution_block->setCublasHandle(ctx.cublas_handle);
+
+                for (int step = 0; step < exec_K; ++step) {
+                    auto step_out = ctx.execution_block->executeStep(
+                        layer_output,
+                        ctx.scratch_block->atomEmbeddingsBuffer(),
+                        ctx.scratch_block->atomPositionsBuffer(),
+                        num_atoms, total_tokens,
+                        intermediates.exec_memory,
+                        step, ctx.stream);
+                    intermediates.execution_block_output.steps.push_back(std::move(step_out));
+                }
+            }
+
+            // ExecutionBlock: gated cross-attention read at every layer >= exec_layer
+            if (exec_layer >= 0 && layer_idx >= exec_layer
+                && ctx.execution_block && intermediates.exec_memory.num_filled > 0) {
+                ctx.execution_block->crossAttentionRead(
+                    layer_output, intermediates.exec_memory,
+                    total_tokens, ctx.stream);
             }
             
             intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
@@ -1241,17 +1296,69 @@ LossResult computeAutogradLoss(
 
     float numeric_loss = (numeric_h_count > 0) ? numeric_h_loss / static_cast<float>(numeric_h_count) : 0.0f;
 
+    // ExecutionBlock supervision: CE(exec_logits, reasoning_head_argmax) per step
+    float exec_supervision_loss = 0.0f;
+    if (cfg->execution_block_enabled && cfg->reasoning_head_enabled
+        && !intermediates.execution_block_output.steps.empty()
+        && intermediates.reasoning_output.op_logits.data) {
+        // ReasoningHead targets: argmax of its logits (op, arg1, arg2)
+        int rh_op_target = 0, rh_arg1_target = 0, rh_arg2_target = 0;
+        {
+            const auto& rh = intermediates.reasoning_output;
+            // Read ReasoningHead op_logits to get target op
+            int nops = rh.op_logits.shape.cols;
+            std::vector<float> h_op(nops);
+            cudaMemcpy(h_op.data(), rh.op_logits.data, nops * sizeof(float), cudaMemcpyDeviceToHost);
+            rh_op_target = static_cast<int>(std::max_element(h_op.begin(), h_op.end()) - h_op.begin());
+            // arg1/arg2 targets (over num_atoms)
+            int na = rh.arg1_logits.shape.cols;
+            if (na > 0) {
+                std::vector<float> h_a1(na), h_a2(na);
+                cudaMemcpy(h_a1.data(), rh.arg1_logits.data, na * sizeof(float), cudaMemcpyDeviceToHost);
+                cudaMemcpy(h_a2.data(), rh.arg2_logits.data, na * sizeof(float), cudaMemcpyDeviceToHost);
+                rh_arg1_target = static_cast<int>(std::max_element(h_a1.begin(), h_a1.end()) - h_a1.begin());
+                rh_arg2_target = static_cast<int>(std::max_element(h_a2.begin(), h_a2.end()) - h_a2.begin());
+            }
+        }
+
+        // Per-step supervision: CE of exec block logits against reasoning head targets
+        float step_loss_sum = 0.0f;
+        int step_count = 0;
+        for (const auto& step_out : intermediates.execution_block_output.steps) {
+            auto ce_from_logits = [&](const Tensor& logits, int target) -> float {
+                if (!logits.data || target < 0 || target >= logits.shape.cols) return 0.0f;
+                int n = logits.shape.cols;
+                std::vector<float> h_logits(n);
+                cudaMemcpy(h_logits.data(), logits.data, n * sizeof(float), cudaMemcpyDeviceToHost);
+                float max_val = *std::max_element(h_logits.begin(), h_logits.end());
+                float sum_exp = 0.0f;
+                for (int i = 0; i < n; ++i) sum_exp += expf(h_logits[i] - max_val);
+                return -(h_logits[target] - max_val - logf(sum_exp + 1e-7f));
+            };
+            step_loss_sum += ce_from_logits(step_out.op_logits, rh_op_target);
+            step_loss_sum += ce_from_logits(step_out.arg1_scores, rh_arg1_target);
+            step_loss_sum += ce_from_logits(step_out.arg2_scores, rh_arg2_target);
+            step_count += 3;
+        }
+        if (step_count > 0)
+            exec_supervision_loss = step_loss_sum / static_cast<float>(step_count);
+    }
+    constexpr float kExecSupervisionWeight = 0.05f;
+
     constexpr float kNumericLossWeight = 0.1f;
     result.numeric_loss = numeric_loss;
-    result.loss_value = text_loss + kNumericLossWeight * numeric_loss;
+    result.loss_value = text_loss + kNumericLossWeight * numeric_loss
+                      + kExecSupervisionWeight * exec_supervision_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (text=" 
-            + std::to_string(text_loss) + " numeric=" + std::to_string(numeric_loss) + ")");
+            + std::to_string(text_loss) + " numeric=" + std::to_string(numeric_loss)
+            + " exec_sup=" + std::to_string(exec_supervision_loss) + ")");
     }
     
-    AG_INFO("Loss computed: text_ce=" << text_loss << " numeric=" << numeric_loss << " valid_tokens=" << valid_tokens);
+    AG_INFO("Loss computed: text_ce=" << text_loss << " numeric=" << numeric_loss
+            << " exec_sup=" << exec_supervision_loss << " valid_tokens=" << valid_tokens);
     
     result.success = true;
     return result;
@@ -1628,6 +1735,8 @@ LossResult autogradTrainingStep(
     // AUTOGRAD CONTEXT
     // ═══════════════════════════════════════════════════════════════════════════
     
+    ExecutionBlockLayer* execution_block = model.getExecutionBlockLayer();
+
     AutogradContext ctx = initAutogradContext(
         &cfg,
         &training_state,
@@ -1637,6 +1746,7 @@ LossResult autogradTrainingStep(
         scratch_block,
         numeric_head,
         reasoning_head,
+        execution_block,
         training_state.cublas_handle,
         stream,
         payload,

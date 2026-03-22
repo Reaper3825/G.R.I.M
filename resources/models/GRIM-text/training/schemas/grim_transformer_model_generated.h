@@ -58,6 +58,10 @@ struct ReasoningHeadWeights;
 struct ReasoningHeadWeightsBuilder;
 struct ReasoningHeadWeightsT;
 
+struct ExecutionBlockWeights;
+struct ExecutionBlockWeightsBuilder;
+struct ExecutionBlockWeightsT;
+
 struct ModelConfig;
 struct ModelConfigBuilder;
 struct ModelConfigT;
@@ -1444,6 +1448,198 @@ inline ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(
 
 // ─── End ReasoningHeadWeights ────────────────────────────────────────────────
 
+// ─── ExecutionBlockWeights ───────────────────────────────────────────────────
+
+struct ExecutionBlockWeightsT : public ::flatbuffers::NativeTable {
+  typedef ExecutionBlockWeights TableType;
+  std::vector<float> w_decode_1_data{};
+  std::vector<float> b_decode_1_data{};
+  std::vector<float> w_decode_2_data{};
+  std::vector<float> w_arg1_select_data{};
+  std::vector<float> w_arg2_select_data{};
+  std::vector<float> w_op_select_data{};
+  std::vector<float> w_state_data{};
+  std::vector<float> w_key_base_data{};
+  std::vector<float> w_write_query_data{};
+  std::vector<float> w_write_key_data{};
+  std::vector<float> alpha_data{};
+  std::vector<float> beta_data{};
+  std::vector<float> gamma_data{};
+  std::vector<float> step_embeddings_data{};
+  std::vector<float> type_num_embed_data{};
+  std::vector<float> w_q_read_data{};
+  std::vector<float> w_k_read_data{};
+  std::vector<float> w_v_read_data{};
+  std::vector<float> w_o_read_data{};
+  std::vector<float> w_gate_read_data{};
+  std::vector<float> tau_data{};
+};
+
+struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ExecutionBlockWeightsT NativeTableType;
+  typedef ExecutionBlockWeightsBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_W_DECODE_1_DATA = 4,
+    VT_B_DECODE_1_DATA = 6,
+    VT_W_DECODE_2_DATA = 8,
+    VT_W_ARG1_SELECT_DATA = 10,
+    VT_W_ARG2_SELECT_DATA = 12,
+    VT_W_OP_SELECT_DATA = 14,
+    VT_W_STATE_DATA = 16,
+    VT_W_KEY_BASE_DATA = 18,
+    VT_W_WRITE_QUERY_DATA = 20,
+    VT_W_WRITE_KEY_DATA = 22,
+    VT_ALPHA_DATA = 24,
+    VT_BETA_DATA = 26,
+    VT_GAMMA_DATA = 28,
+    VT_STEP_EMBEDDINGS_DATA = 30,
+    VT_TYPE_NUM_EMBED_DATA = 32,
+    VT_W_Q_READ_DATA = 34,
+    VT_W_K_READ_DATA = 36,
+    VT_W_V_READ_DATA = 38,
+    VT_W_O_READ_DATA = 40,
+    VT_W_GATE_READ_DATA = 42,
+    VT_TAU_DATA = 44
+  };
+  const ::flatbuffers::Vector<float> *w_decode_1_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_DECODE_1_DATA); }
+  const ::flatbuffers::Vector<float> *b_decode_1_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_DECODE_1_DATA); }
+  const ::flatbuffers::Vector<float> *w_decode_2_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_DECODE_2_DATA); }
+  const ::flatbuffers::Vector<float> *w_arg1_select_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_ARG1_SELECT_DATA); }
+  const ::flatbuffers::Vector<float> *w_arg2_select_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_ARG2_SELECT_DATA); }
+  const ::flatbuffers::Vector<float> *w_op_select_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_OP_SELECT_DATA); }
+  const ::flatbuffers::Vector<float> *w_state_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_STATE_DATA); }
+  const ::flatbuffers::Vector<float> *w_key_base_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_KEY_BASE_DATA); }
+  const ::flatbuffers::Vector<float> *w_write_query_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_WRITE_QUERY_DATA); }
+  const ::flatbuffers::Vector<float> *w_write_key_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_WRITE_KEY_DATA); }
+  const ::flatbuffers::Vector<float> *alpha_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ALPHA_DATA); }
+  const ::flatbuffers::Vector<float> *beta_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_BETA_DATA); }
+  const ::flatbuffers::Vector<float> *gamma_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_GAMMA_DATA); }
+  const ::flatbuffers::Vector<float> *step_embeddings_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_STEP_EMBEDDINGS_DATA); }
+  const ::flatbuffers::Vector<float> *type_num_embed_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_TYPE_NUM_EMBED_DATA); }
+  const ::flatbuffers::Vector<float> *w_q_read_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_Q_READ_DATA); }
+  const ::flatbuffers::Vector<float> *w_k_read_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_K_READ_DATA); }
+  const ::flatbuffers::Vector<float> *w_v_read_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_V_READ_DATA); }
+  const ::flatbuffers::Vector<float> *w_o_read_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_O_READ_DATA); }
+  const ::flatbuffers::Vector<float> *w_gate_read_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_GATE_READ_DATA); }
+  const ::flatbuffers::Vector<float> *tau_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_TAU_DATA); }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_W_DECODE_1_DATA) && verifier.VerifyVector(w_decode_1_data()) &&
+           VerifyOffset(verifier, VT_B_DECODE_1_DATA) && verifier.VerifyVector(b_decode_1_data()) &&
+           VerifyOffset(verifier, VT_W_DECODE_2_DATA) && verifier.VerifyVector(w_decode_2_data()) &&
+           VerifyOffset(verifier, VT_W_ARG1_SELECT_DATA) && verifier.VerifyVector(w_arg1_select_data()) &&
+           VerifyOffset(verifier, VT_W_ARG2_SELECT_DATA) && verifier.VerifyVector(w_arg2_select_data()) &&
+           VerifyOffset(verifier, VT_W_OP_SELECT_DATA) && verifier.VerifyVector(w_op_select_data()) &&
+           VerifyOffset(verifier, VT_W_STATE_DATA) && verifier.VerifyVector(w_state_data()) &&
+           VerifyOffset(verifier, VT_W_KEY_BASE_DATA) && verifier.VerifyVector(w_key_base_data()) &&
+           VerifyOffset(verifier, VT_W_WRITE_QUERY_DATA) && verifier.VerifyVector(w_write_query_data()) &&
+           VerifyOffset(verifier, VT_W_WRITE_KEY_DATA) && verifier.VerifyVector(w_write_key_data()) &&
+           VerifyOffset(verifier, VT_ALPHA_DATA) && verifier.VerifyVector(alpha_data()) &&
+           VerifyOffset(verifier, VT_BETA_DATA) && verifier.VerifyVector(beta_data()) &&
+           VerifyOffset(verifier, VT_GAMMA_DATA) && verifier.VerifyVector(gamma_data()) &&
+           VerifyOffset(verifier, VT_STEP_EMBEDDINGS_DATA) && verifier.VerifyVector(step_embeddings_data()) &&
+           VerifyOffset(verifier, VT_TYPE_NUM_EMBED_DATA) && verifier.VerifyVector(type_num_embed_data()) &&
+           VerifyOffset(verifier, VT_W_Q_READ_DATA) && verifier.VerifyVector(w_q_read_data()) &&
+           VerifyOffset(verifier, VT_W_K_READ_DATA) && verifier.VerifyVector(w_k_read_data()) &&
+           VerifyOffset(verifier, VT_W_V_READ_DATA) && verifier.VerifyVector(w_v_read_data()) &&
+           VerifyOffset(verifier, VT_W_O_READ_DATA) && verifier.VerifyVector(w_o_read_data()) &&
+           VerifyOffset(verifier, VT_W_GATE_READ_DATA) && verifier.VerifyVector(w_gate_read_data()) &&
+           VerifyOffset(verifier, VT_TAU_DATA) && verifier.VerifyVector(tau_data()) &&
+           verifier.EndTable();
+  }
+  ExecutionBlockWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(ExecutionBlockWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<ExecutionBlockWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct ExecutionBlockWeightsBuilder {
+  typedef ExecutionBlockWeights Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_w_decode_1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_DECODE_1_DATA, v); }
+  void add_b_decode_1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_B_DECODE_1_DATA, v); }
+  void add_w_decode_2_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_DECODE_2_DATA, v); }
+  void add_w_arg1_select_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_ARG1_SELECT_DATA, v); }
+  void add_w_arg2_select_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_ARG2_SELECT_DATA, v); }
+  void add_w_op_select_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_OP_SELECT_DATA, v); }
+  void add_w_state_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_STATE_DATA, v); }
+  void add_w_key_base_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_KEY_BASE_DATA, v); }
+  void add_w_write_query_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_WRITE_QUERY_DATA, v); }
+  void add_w_write_key_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_WRITE_KEY_DATA, v); }
+  void add_alpha_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_ALPHA_DATA, v); }
+  void add_beta_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_BETA_DATA, v); }
+  void add_gamma_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_GAMMA_DATA, v); }
+  void add_step_embeddings_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_STEP_EMBEDDINGS_DATA, v); }
+  void add_type_num_embed_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_TYPE_NUM_EMBED_DATA, v); }
+  void add_w_q_read_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_Q_READ_DATA, v); }
+  void add_w_k_read_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_K_READ_DATA, v); }
+  void add_w_v_read_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_V_READ_DATA, v); }
+  void add_w_o_read_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_O_READ_DATA, v); }
+  void add_w_gate_read_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_GATE_READ_DATA, v); }
+  void add_tau_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_TAU_DATA, v); }
+  explicit ExecutionBlockWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ExecutionBlockWeights> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ExecutionBlockWeights>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_decode_1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_decode_1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_decode_2_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_arg1_select_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_arg2_select_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_op_select_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_state_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_key_base_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_write_query_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_write_key_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> alpha_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> beta_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> gamma_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> step_embeddings_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> type_num_embed_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_q_read_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_k_read_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_v_read_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_o_read_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_read_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> tau_data = 0) {
+  ExecutionBlockWeightsBuilder builder_(_fbb);
+  builder_.add_tau_data(tau_data);
+  builder_.add_w_gate_read_data(w_gate_read_data);
+  builder_.add_w_o_read_data(w_o_read_data);
+  builder_.add_w_v_read_data(w_v_read_data);
+  builder_.add_w_k_read_data(w_k_read_data);
+  builder_.add_w_q_read_data(w_q_read_data);
+  builder_.add_type_num_embed_data(type_num_embed_data);
+  builder_.add_step_embeddings_data(step_embeddings_data);
+  builder_.add_gamma_data(gamma_data);
+  builder_.add_beta_data(beta_data);
+  builder_.add_alpha_data(alpha_data);
+  builder_.add_w_write_key_data(w_write_key_data);
+  builder_.add_w_write_query_data(w_write_query_data);
+  builder_.add_w_key_base_data(w_key_base_data);
+  builder_.add_w_state_data(w_state_data);
+  builder_.add_w_op_select_data(w_op_select_data);
+  builder_.add_w_arg2_select_data(w_arg2_select_data);
+  builder_.add_w_arg1_select_data(w_arg1_select_data);
+  builder_.add_w_decode_2_data(w_decode_2_data);
+  builder_.add_b_decode_1_data(b_decode_1_data);
+  builder_.add_w_decode_1_data(w_decode_1_data);
+  return builder_.Finish();
+}
+
+::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+// ─── End ExecutionBlockWeights ───────────────────────────────────────────────
+
 struct ScratchBlockWeightsT : public ::flatbuffers::NativeTable {
   typedef ScratchBlockWeights TableType;
   std::vector<float> atom_type_embeddings{};
@@ -2098,6 +2294,7 @@ struct TransformerModelT : public ::flatbuffers::NativeTable {
   std::unique_ptr<GRIMTransformer::NumericHeadWeightsT> numeric_head{};
   std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT> scratch_block{};
   std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT> reasoning_head{};
+  std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT> execution_block{};
   std::vector<float> final_rms_gamma{};
   std::unique_ptr<GRIMTransformer::LossWeightingWeightsT> loss_weighting{};
   std::unique_ptr<GRIMTransformer::TrainingMetadataT> training_metadata{};
@@ -2129,7 +2326,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_CHECKSUM_XXHASH64 = 26,
     VT_CREATION_TIMESTAMP = 28,
     VT_LAST_MODIFIED_TIMESTAMP = 30,
-    VT_REASONING_HEAD = 32
+    VT_REASONING_HEAD = 32,
+    VT_EXECUTION_BLOCK = 34
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -2154,6 +2352,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const GRIMTransformer::ReasoningHeadWeights *reasoning_head() const {
     return GetPointer<const GRIMTransformer::ReasoningHeadWeights *>(VT_REASONING_HEAD);
+  }
+  const GRIMTransformer::ExecutionBlockWeights *execution_block() const {
+    return GetPointer<const GRIMTransformer::ExecutionBlockWeights *>(VT_EXECUTION_BLOCK);
   }
   const ::flatbuffers::Vector<float> *final_rms_gamma() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_FINAL_RMS_GAMMA);
@@ -2194,6 +2395,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(scratch_block()) &&
            VerifyOffset(verifier, VT_REASONING_HEAD) &&
            verifier.VerifyTable(reasoning_head()) &&
+           VerifyOffset(verifier, VT_EXECUTION_BLOCK) &&
+           verifier.VerifyTable(execution_block()) &&
            VerifyOffset(verifier, VT_FINAL_RMS_GAMMA) &&
            verifier.VerifyVector(final_rms_gamma()) &&
            VerifyOffset(verifier, VT_LOSS_WEIGHTING) &&
@@ -2291,7 +2494,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     uint64_t checksum_xxhash64 = 0,
     uint64_t creation_timestamp = 0,
     uint64_t last_modified_timestamp = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
+    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0) {
   TransformerModelBuilder builder_(_fbb);
   builder_.add_last_modified_timestamp(last_modified_timestamp);
   builder_.add_creation_timestamp(creation_timestamp);
@@ -2299,6 +2503,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
   builder_.add_checksum_crc32(checksum_crc32);
   builder_.add_training_metadata(training_metadata);
   builder_.add_loss_weighting(loss_weighting);
+  builder_.add_execution_block(execution_block);
   builder_.add_reasoning_head(reasoning_head);
   builder_.add_final_rms_gamma(final_rms_gamma);
   builder_.add_scratch_block(scratch_block);
@@ -2327,7 +2532,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     uint64_t checksum_xxhash64 = 0,
     uint64_t creation_timestamp = 0,
     uint64_t last_modified_timestamp = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
+    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0) {
   auto encoder_layers__ = encoder_layers ? _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>(*encoder_layers) : 0;
   auto final_rms_gamma__ = final_rms_gamma ? _fbb.CreateVector<float>(*final_rms_gamma) : 0;
   return GRIMTransformer::CreateTransformerModel(
@@ -2346,7 +2552,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       checksum_xxhash64,
       creation_timestamp,
       last_modified_timestamp,
-      reasoning_head);
+      reasoning_head,
+      execution_block);
 }
 
 ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -2793,6 +3000,83 @@ inline ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(::
 
 // ─── End ReasoningHeadWeights Pack/UnPack ─────────────────────────────────────
 
+// ─── ExecutionBlockWeights Pack/UnPack ────────────────────────────────────────
+
+inline ExecutionBlockWeightsT *ExecutionBlockWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<ExecutionBlockWeightsT>(new ExecutionBlockWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void ExecutionBlockWeights::UnPackTo(ExecutionBlockWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = w_decode_1_data(); if (_e) { _o->w_decode_1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_decode_1_data[_i] = _e->Get(_i); } } else { _o->w_decode_1_data.resize(0); } }
+  { auto _e = b_decode_1_data(); if (_e) { _o->b_decode_1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_decode_1_data[_i] = _e->Get(_i); } } else { _o->b_decode_1_data.resize(0); } }
+  { auto _e = w_decode_2_data(); if (_e) { _o->w_decode_2_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_decode_2_data[_i] = _e->Get(_i); } } else { _o->w_decode_2_data.resize(0); } }
+  { auto _e = w_arg1_select_data(); if (_e) { _o->w_arg1_select_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_arg1_select_data[_i] = _e->Get(_i); } } else { _o->w_arg1_select_data.resize(0); } }
+  { auto _e = w_arg2_select_data(); if (_e) { _o->w_arg2_select_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_arg2_select_data[_i] = _e->Get(_i); } } else { _o->w_arg2_select_data.resize(0); } }
+  { auto _e = w_op_select_data(); if (_e) { _o->w_op_select_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_op_select_data[_i] = _e->Get(_i); } } else { _o->w_op_select_data.resize(0); } }
+  { auto _e = w_state_data(); if (_e) { _o->w_state_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_state_data[_i] = _e->Get(_i); } } else { _o->w_state_data.resize(0); } }
+  { auto _e = w_key_base_data(); if (_e) { _o->w_key_base_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_key_base_data[_i] = _e->Get(_i); } } else { _o->w_key_base_data.resize(0); } }
+  { auto _e = w_write_query_data(); if (_e) { _o->w_write_query_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_write_query_data[_i] = _e->Get(_i); } } else { _o->w_write_query_data.resize(0); } }
+  { auto _e = w_write_key_data(); if (_e) { _o->w_write_key_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_write_key_data[_i] = _e->Get(_i); } } else { _o->w_write_key_data.resize(0); } }
+  { auto _e = alpha_data(); if (_e) { _o->alpha_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->alpha_data[_i] = _e->Get(_i); } } else { _o->alpha_data.resize(0); } }
+  { auto _e = beta_data(); if (_e) { _o->beta_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->beta_data[_i] = _e->Get(_i); } } else { _o->beta_data.resize(0); } }
+  { auto _e = gamma_data(); if (_e) { _o->gamma_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->gamma_data[_i] = _e->Get(_i); } } else { _o->gamma_data.resize(0); } }
+  { auto _e = step_embeddings_data(); if (_e) { _o->step_embeddings_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->step_embeddings_data[_i] = _e->Get(_i); } } else { _o->step_embeddings_data.resize(0); } }
+  { auto _e = type_num_embed_data(); if (_e) { _o->type_num_embed_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->type_num_embed_data[_i] = _e->Get(_i); } } else { _o->type_num_embed_data.resize(0); } }
+  { auto _e = w_q_read_data(); if (_e) { _o->w_q_read_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_q_read_data[_i] = _e->Get(_i); } } else { _o->w_q_read_data.resize(0); } }
+  { auto _e = w_k_read_data(); if (_e) { _o->w_k_read_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_k_read_data[_i] = _e->Get(_i); } } else { _o->w_k_read_data.resize(0); } }
+  { auto _e = w_v_read_data(); if (_e) { _o->w_v_read_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_v_read_data[_i] = _e->Get(_i); } } else { _o->w_v_read_data.resize(0); } }
+  { auto _e = w_o_read_data(); if (_e) { _o->w_o_read_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_o_read_data[_i] = _e->Get(_i); } } else { _o->w_o_read_data.resize(0); } }
+  { auto _e = w_gate_read_data(); if (_e) { _o->w_gate_read_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_gate_read_data[_i] = _e->Get(_i); } } else { _o->w_gate_read_data.resize(0); } }
+  { auto _e = tau_data(); if (_e) { _o->tau_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->tau_data[_i] = _e->Get(_i); } } else { _o->tau_data.resize(0); } }
+}
+
+inline ::flatbuffers::Offset<ExecutionBlockWeights> ExecutionBlockWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateExecutionBlockWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ExecutionBlockWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _w_decode_1_data = _o->w_decode_1_data.size() ? _fbb.CreateVector(_o->w_decode_1_data) : 0;
+  auto _b_decode_1_data = _o->b_decode_1_data.size() ? _fbb.CreateVector(_o->b_decode_1_data) : 0;
+  auto _w_decode_2_data = _o->w_decode_2_data.size() ? _fbb.CreateVector(_o->w_decode_2_data) : 0;
+  auto _w_arg1_select_data = _o->w_arg1_select_data.size() ? _fbb.CreateVector(_o->w_arg1_select_data) : 0;
+  auto _w_arg2_select_data = _o->w_arg2_select_data.size() ? _fbb.CreateVector(_o->w_arg2_select_data) : 0;
+  auto _w_op_select_data = _o->w_op_select_data.size() ? _fbb.CreateVector(_o->w_op_select_data) : 0;
+  auto _w_state_data = _o->w_state_data.size() ? _fbb.CreateVector(_o->w_state_data) : 0;
+  auto _w_key_base_data = _o->w_key_base_data.size() ? _fbb.CreateVector(_o->w_key_base_data) : 0;
+  auto _w_write_query_data = _o->w_write_query_data.size() ? _fbb.CreateVector(_o->w_write_query_data) : 0;
+  auto _w_write_key_data = _o->w_write_key_data.size() ? _fbb.CreateVector(_o->w_write_key_data) : 0;
+  auto _alpha_data = _o->alpha_data.size() ? _fbb.CreateVector(_o->alpha_data) : 0;
+  auto _beta_data = _o->beta_data.size() ? _fbb.CreateVector(_o->beta_data) : 0;
+  auto _gamma_data = _o->gamma_data.size() ? _fbb.CreateVector(_o->gamma_data) : 0;
+  auto _step_embeddings_data = _o->step_embeddings_data.size() ? _fbb.CreateVector(_o->step_embeddings_data) : 0;
+  auto _type_num_embed_data = _o->type_num_embed_data.size() ? _fbb.CreateVector(_o->type_num_embed_data) : 0;
+  auto _w_q_read_data = _o->w_q_read_data.size() ? _fbb.CreateVector(_o->w_q_read_data) : 0;
+  auto _w_k_read_data = _o->w_k_read_data.size() ? _fbb.CreateVector(_o->w_k_read_data) : 0;
+  auto _w_v_read_data = _o->w_v_read_data.size() ? _fbb.CreateVector(_o->w_v_read_data) : 0;
+  auto _w_o_read_data = _o->w_o_read_data.size() ? _fbb.CreateVector(_o->w_o_read_data) : 0;
+  auto _w_gate_read_data = _o->w_gate_read_data.size() ? _fbb.CreateVector(_o->w_gate_read_data) : 0;
+  auto _tau_data = _o->tau_data.size() ? _fbb.CreateVector(_o->tau_data) : 0;
+  return GRIMTransformer::CreateExecutionBlockWeights(
+      _fbb,
+      _w_decode_1_data, _b_decode_1_data, _w_decode_2_data,
+      _w_arg1_select_data, _w_arg2_select_data, _w_op_select_data,
+      _w_state_data, _w_key_base_data,
+      _w_write_query_data, _w_write_key_data,
+      _alpha_data, _beta_data, _gamma_data,
+      _step_embeddings_data, _type_num_embed_data,
+      _w_q_read_data, _w_k_read_data, _w_v_read_data, _w_o_read_data,
+      _w_gate_read_data, _tau_data);
+}
+
+// ─── End ExecutionBlockWeights Pack/UnPack ────────────────────────────────────
+
 inline ScratchBlockWeightsT *ScratchBlockWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ScratchBlockWeightsT>(new ScratchBlockWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -3007,6 +3291,7 @@ inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
         numeric_head((o.numeric_head) ? new GRIMTransformer::NumericHeadWeightsT(*o.numeric_head) : nullptr),
         scratch_block((o.scratch_block) ? new GRIMTransformer::ScratchBlockWeightsT(*o.scratch_block) : nullptr),
         reasoning_head((o.reasoning_head) ? new GRIMTransformer::ReasoningHeadWeightsT(*o.reasoning_head) : nullptr),
+        execution_block((o.execution_block) ? new GRIMTransformer::ExecutionBlockWeightsT(*o.execution_block) : nullptr),
         final_rms_gamma(o.final_rms_gamma),
         loss_weighting((o.loss_weighting) ? new GRIMTransformer::LossWeightingWeightsT(*o.loss_weighting) : nullptr),
         training_metadata((o.training_metadata) ? new GRIMTransformer::TrainingMetadataT(*o.training_metadata) : nullptr),
@@ -3027,6 +3312,7 @@ inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLAT
   std::swap(numeric_head, o.numeric_head);
   std::swap(scratch_block, o.scratch_block);
   std::swap(reasoning_head, o.reasoning_head);
+  std::swap(execution_block, o.execution_block);
   std::swap(final_rms_gamma, o.final_rms_gamma);
   std::swap(loss_weighting, o.loss_weighting);
   std::swap(training_metadata, o.training_metadata);
@@ -3054,6 +3340,7 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = numeric_head(); if (_e) { if(_o->numeric_head) { _e->UnPackTo(_o->numeric_head.get(), _resolver); } else { _o->numeric_head = std::unique_ptr<GRIMTransformer::NumericHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->numeric_head) { _o->numeric_head.reset(); } }
   { auto _e = scratch_block(); if (_e) { if(_o->scratch_block) { _e->UnPackTo(_o->scratch_block.get(), _resolver); } else { _o->scratch_block = std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->scratch_block) { _o->scratch_block.reset(); } }
   { auto _e = reasoning_head(); if (_e) { if(_o->reasoning_head) { _e->UnPackTo(_o->reasoning_head.get(), _resolver); } else { _o->reasoning_head = std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->reasoning_head) { _o->reasoning_head.reset(); } }
+  { auto _e = execution_block(); if (_e) { if(_o->execution_block) { _e->UnPackTo(_o->execution_block.get(), _resolver); } else { _o->execution_block = std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->execution_block) { _o->execution_block.reset(); } }
   { auto _e = final_rms_gamma(); if (_e) { _o->final_rms_gamma.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->final_rms_gamma[_i] = _e->Get(_i); } } else { _o->final_rms_gamma.resize(0); } }
   { auto _e = loss_weighting(); if (_e) { if(_o->loss_weighting) { _e->UnPackTo(_o->loss_weighting.get(), _resolver); } else { _o->loss_weighting = std::unique_ptr<GRIMTransformer::LossWeightingWeightsT>(_e->UnPack(_resolver)); } } else if (_o->loss_weighting) { _o->loss_weighting.reset(); } }
   { auto _e = training_metadata(); if (_e) { if(_o->training_metadata) { _e->UnPackTo(_o->training_metadata.get(), _resolver); } else { _o->training_metadata = std::unique_ptr<GRIMTransformer::TrainingMetadataT>(_e->UnPack(_resolver)); } } else if (_o->training_metadata) { _o->training_metadata.reset(); } }
@@ -3079,6 +3366,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
   auto _numeric_head = _o->numeric_head ? CreateNumericHeadWeights(_fbb, _o->numeric_head.get(), _rehasher) : 0;
   auto _scratch_block = _o->scratch_block ? CreateScratchBlockWeights(_fbb, _o->scratch_block.get(), _rehasher) : 0;
   auto _reasoning_head = _o->reasoning_head ? CreateReasoningHeadWeights(_fbb, _o->reasoning_head.get(), _rehasher) : 0;
+  auto _execution_block = _o->execution_block ? CreateExecutionBlockWeights(_fbb, _o->execution_block.get(), _rehasher) : 0;
   auto _final_rms_gamma = _o->final_rms_gamma.size() ? _fbb.CreateVector(_o->final_rms_gamma) : 0;
   auto _loss_weighting = _o->loss_weighting ? CreateLossWeightingWeights(_fbb, _o->loss_weighting.get(), _rehasher) : 0;
   auto _training_metadata = _o->training_metadata ? CreateTrainingMetadata(_fbb, _o->training_metadata.get(), _rehasher) : 0;
@@ -3102,7 +3390,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
       _checksum_xxhash64,
       _creation_timestamp,
       _last_modified_timestamp,
-      _reasoning_head);
+      _reasoning_head,
+      _execution_block);
 }
 
 inline const GRIMTransformer::TransformerModel *GetTransformerModel(const void *buf) {

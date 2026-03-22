@@ -274,6 +274,7 @@ GradNormStatus measureGradientNormsFinalize(
     m.numeric_head_sum_sq = type_sum_sq[6];   m.numeric_head_count = type_count[6];
     m.mtp_sum_sq = type_sum_sq[7];            m.mtp_count = type_count[7];
     m.reasoning_head_sum_sq = type_sum_sq[8]; m.reasoning_head_count = type_count[8];
+    m.execution_block_sum_sq = type_sum_sq[9]; m.execution_block_count = type_count[9];
 
     // Aggregate metrics
     m.groups_processed = static_cast<uint32_t>(num_groups);

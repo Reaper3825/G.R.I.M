@@ -399,6 +399,40 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                                             fb_reasoning_head->d_total()));
     }
 
+    // Load ExecutionBlock weights (optional — missing in old checkpoints)
+    const auto* fb_exec_block = model_fb->execution_block();
+    if (fb_exec_block && request.execution_block.w_decode_1.ptr) {
+        auto ul = [&](const flatbuffers::Vector<float>* src, DeviceWriteView& dst, const char* name) -> bool {
+            if (!src || !dst.ptr) return true;
+            std::vector<float> buf(src->begin(), src->end());
+            return upload_device_vector(buf, dst, name);
+        };
+        bool ok = true;
+        ok = ok && ul(fb_exec_block->w_decode_1_data(), request.execution_block.w_decode_1, "EB w_decode_1");
+        ok = ok && ul(fb_exec_block->b_decode_1_data(), request.execution_block.b_decode_1, "EB b_decode_1");
+        ok = ok && ul(fb_exec_block->w_decode_2_data(), request.execution_block.w_decode_2, "EB w_decode_2");
+        ok = ok && ul(fb_exec_block->w_arg1_select_data(), request.execution_block.w_arg1_select, "EB w_arg1_select");
+        ok = ok && ul(fb_exec_block->w_arg2_select_data(), request.execution_block.w_arg2_select, "EB w_arg2_select");
+        ok = ok && ul(fb_exec_block->w_op_select_data(), request.execution_block.W_op_select, "EB W_op_select");
+        ok = ok && ul(fb_exec_block->w_state_data(), request.execution_block.W_state, "EB W_state");
+        ok = ok && ul(fb_exec_block->w_key_base_data(), request.execution_block.W_key_base, "EB W_key_base");
+        ok = ok && ul(fb_exec_block->w_write_query_data(), request.execution_block.W_write_query, "EB W_write_query");
+        ok = ok && ul(fb_exec_block->w_write_key_data(), request.execution_block.W_write_key, "EB W_write_key");
+        ok = ok && ul(fb_exec_block->alpha_data(), request.execution_block.alpha, "EB alpha");
+        ok = ok && ul(fb_exec_block->beta_data(), request.execution_block.beta, "EB beta");
+        ok = ok && ul(fb_exec_block->gamma_data(), request.execution_block.gamma, "EB gamma");
+        ok = ok && ul(fb_exec_block->step_embeddings_data(), request.execution_block.step_embeddings, "EB step_embeddings");
+        ok = ok && ul(fb_exec_block->type_num_embed_data(), request.execution_block.type_num_embed, "EB type_num_embed");
+        ok = ok && ul(fb_exec_block->w_q_read_data(), request.execution_block.W_Q_read, "EB W_Q_read");
+        ok = ok && ul(fb_exec_block->w_k_read_data(), request.execution_block.W_K_read, "EB W_K_read");
+        ok = ok && ul(fb_exec_block->w_v_read_data(), request.execution_block.W_V_read, "EB W_V_read");
+        ok = ok && ul(fb_exec_block->w_o_read_data(), request.execution_block.W_O_read, "EB W_O_read");
+        ok = ok && ul(fb_exec_block->w_gate_read_data(), request.execution_block.W_gate_read, "EB W_gate_read");
+        ok = ok && ul(fb_exec_block->tau_data(), request.execution_block.tau, "EB tau");
+        if (!ok) return false;
+        GRIM::Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock weights loaded from FlatBuffer");
+    }
+
     // Issue #33: Load final RMSNorm gamma (normalizes encoder output before LM head)
     const auto* fb_final_rms_gamma = model_fb->final_rms_gamma();
     if (fb_final_rms_gamma && request.final_rms_gamma.ptr) {
@@ -729,6 +763,37 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                                             " w_arg1=", rh_w_arg1.size(), " w_arg2=", rh_w_arg2.size()));
     }
 
+    // Save ExecutionBlock weights (optional — only when enabled)
+    flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> fb_execution_block = 0;
+    const auto& eb_view = request.sources.execution_block;
+    if (eb_view.enabled && eb_view.w_decode_1.ptr) {
+        auto dl = [&](const DeviceReadView& v, const char* n) { return download_device_vector(v, n); };
+        fb_execution_block = GRIMTransformer::CreateExecutionBlockWeights(
+            builder,
+            builder.CreateVector(dl(eb_view.w_decode_1, "EB w_decode_1")),
+            builder.CreateVector(dl(eb_view.b_decode_1, "EB b_decode_1")),
+            builder.CreateVector(dl(eb_view.w_decode_2, "EB w_decode_2")),
+            builder.CreateVector(dl(eb_view.w_arg1_select, "EB w_arg1_select")),
+            builder.CreateVector(dl(eb_view.w_arg2_select, "EB w_arg2_select")),
+            builder.CreateVector(dl(eb_view.W_op_select, "EB W_op_select")),
+            builder.CreateVector(dl(eb_view.W_state, "EB W_state")),
+            builder.CreateVector(dl(eb_view.W_key_base, "EB W_key_base")),
+            builder.CreateVector(dl(eb_view.W_write_query, "EB W_write_query")),
+            builder.CreateVector(dl(eb_view.W_write_key, "EB W_write_key")),
+            builder.CreateVector(dl(eb_view.alpha, "EB alpha")),
+            builder.CreateVector(dl(eb_view.beta, "EB beta")),
+            builder.CreateVector(dl(eb_view.gamma, "EB gamma")),
+            builder.CreateVector(dl(eb_view.step_embeddings, "EB step_embeddings")),
+            builder.CreateVector(dl(eb_view.type_num_embed, "EB type_num_embed")),
+            builder.CreateVector(dl(eb_view.W_Q_read, "EB W_Q_read")),
+            builder.CreateVector(dl(eb_view.W_K_read, "EB W_K_read")),
+            builder.CreateVector(dl(eb_view.W_V_read, "EB W_V_read")),
+            builder.CreateVector(dl(eb_view.W_O_read, "EB W_O_read")),
+            builder.CreateVector(dl(eb_view.W_gate_read, "EB W_gate_read")),
+            builder.CreateVector(dl(eb_view.tau, "EB tau")));
+        GRIM::Logging::EmitModuleInfo(kLogModule, "[save] ExecutionBlock weights serialized");
+    }
+
     // Issue #33: Save final RMSNorm gamma (normalizes encoder output before LM head)
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_final_rms_gamma = 0;
     const auto& final_rms_view = request.sources.final_rms_gamma;
@@ -777,7 +842,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         0,
         timestamp,
         timestamp,
-        fb_reasoning_head);
+        fb_reasoning_head,
+        fb_execution_block);
 
     builder.Finish(fb_model, "GRMT");
 

@@ -51,6 +51,7 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
         getScratchBlockLayer(),
         getNumericHeadLayer(),
         getReasoningHeadLayer(),
+        getExecutionBlockLayer(),
         training_state_.cublas_handle,
         stream,
         1,          // batch_size = 1 for inference
