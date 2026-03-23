@@ -1,159 +1,98 @@
-You are fixing a CUDA-based differentiable execution layer (`ExecutionBlockLayer`). The system is already functional, but it has critical architectural and gradient flow issues that must be corrected without changing overall structure.
-
-Apply the following fixes precisely.
+Good questions. Implement exactly as follows:
 
 ---
 
-## 1. Make context fully differentiable
+## Fix 1 — Differentiable context
 
-Current implementation:
+Use the matmul approach.
 
-* `kernelComputeContext` computes mean of H outside autograd.
+* Build a constant `[1, total_tokens]` vector with values `1 / total_tokens`
+* Compute:
 
-Problem:
-
-* This breaks gradient flow from op selection back into H.
-
-Fix:
-
-* Remove `kernelComputeContext`.
-* Replace with autograd-based mean reduction over H:
-
-  * context = mean(H, dim=0) → shape [1, d_model]
-* Ensure this participates in autograd graph.
+  * `context = matmul(avg_vec, H)` → shape `[1, d_model]`
+* Do NOT add a new `autograd::mean` op
+* Ensure this stays inside the autograd graph
 
 ---
 
-## 2. Remove detach in argument selection
+## Fix 2 — Remove detach in arg selection
 
-Current implementation:
+Do NOT use `.detach()` anywhere in arg selection.
 
-* arg logits are detached before masking:
+* Apply masking directly to logits:
 
-  * `arg1_detached = arg1_logits.detach()`
+  * `logits += (1 - mask) * (-1e9)`
+* Then pass logits into `autograd::softmax`
 
-Problem:
-
-* This kills gradient flow into `w_arg*_select`.
-
-Fix:
-
-* Do NOT detach logits.
-* Apply mask directly to logits:
-
-  * masked_logits = logits + (1 - mask) * (-1e9)
-* Then apply softmax to masked_logits.
+Do NOT create a custom autograd mask op.
 
 ---
 
-## 3. Fix value decoding path (avoid wasted compute + gradient noise)
+## Fix 3 — Split decode path
 
-Current implementation:
+Change decode to:
 
-* MLP decode runs on ALL candidates (atoms + memory)
-* Then masked:
+1. Run MLP ONLY on atom rows `[0 → num_atoms)`
+2. Memory rows `[num_atoms → C)` use `M.values` directly
+3. Rebuild `[C,1]` via concatenation:
 
-  * `atom_decoded = mlp_out * atom_mask`
+   * `decoded_values = concat(atom_decoded, mem_values)`
 
-Problem:
-
-* Memory slots are unnecessarily passed through MLP
-* Creates useless gradients and wasted compute
-
-Fix:
-
-* Split decode path:
-
-  * For atom candidates → run MLP decode
-  * For memory slots → directly use stored values
-* Do NOT compute MLP on memory slots at all
+Keep ordering: atoms first, memory second.
 
 ---
 
-## 4. Stabilize injection gate
+## Fix 4 — Stabilize injection gate
 
-Current implementation:
+* Add a **config hyperparameter**: `inject_gate_temp`
+* Forward:
 
-* sigmoid(H[slot] · w_gate)
+  * `gate = sigmoid((H · w_gate) * inject_gate_temp)`
+* Update backward kernel to include `inject_gate_temp` in gradient:
 
-Problem:
+  * multiply derivative by `inject_gate_temp`
 
-* Can saturate early → vanishing gradients
-* Backward path is manually constructed → fragile
-
-Fix:
-
-* Add stabilization:
-
-  * Option A: scale logits (e.g. * 0.5)
-  * Option B: clamp pre-sigmoid values
-  * Option C (preferred): use temperature-controlled sigmoid
-
-Do NOT remove gate, only stabilize it.
+Do NOT make this parameter learnable.
+Do NOT move this to autograd.
 
 ---
 
-## 5. Fix memory slot growth (enable real competition)
+## Fix 5 — Memory slot growth
 
-Current implementation:
+Use Option A.
 
-* `M.num_filled = min(V, M.num_filled + 1)`
+* Remove:
 
-Problem:
-
-* Forces sequential slot usage
-* Prevents learned slot selection
-
-Fix:
-
-* Remove forced increment
-* Let `p_write` determine slot usage
-* `valid_mask` should control which slots are active
-
-Optional:
-
-* Set `num_filled = max(num_filled, index_of_max(p_write))`
+  * `M.num_filled = min(V, M.num_filled + 1)`
+* Cross-attention must operate over ALL `V` slots
+* Slot visibility is controlled ONLY by `valid_mask`
+* Do NOT introduce host-side counting or thresholds
 
 ---
 
-## 6. Prepare op system for extensibility (do NOT fully implement yet)
+## Fix 6 — Op extensibility
 
-Current implementation:
+* Change validation:
 
-* Hardcoded 4 ops (+, -, *, /)
+  * from `num_ops == 4`
+  * to `num_ops > 0`
 
-Problem:
+* Replace hardcoded `4` with `config_.num_ops` where applicable
 
-* Not scalable
-* Cannot support tool system or generalized reasoning
+* Keep current 4 ops implementation intact
 
-Fix:
-
-* Abstract op selection:
-
-  * Replace assumption `num_ops == 4`
-  * Keep current ops but structure code so ops are index-based and extensible
-* Do NOT implement new ops yet, only refactor structure
+* Do NOT introduce dispatch tables or function pointers yet
 
 ---
 
 ## Constraints
 
-* Do NOT change overall execution flow
-* Do NOT move logic out of GPU
-* Do NOT introduce CPU syncs
-* Maintain full differentiability
-* Preserve existing tensor shapes unless explicitly required
+* No CPU sync
+* No structural rewrites
+* No moving logic out of GPU
+* Keep tensor shapes consistent
+* Preserve current execution flow
 
 ---
 
-## Goal
-
-After fixes:
-
-* All decision paths must be differentiable
-* No unnecessary gradient noise
-* Memory must be learnable, not sequential
-* Execution block must behave as a true state-mutating layer inside the forward pass
-
----
+Implement only these changes. Do not refactor unrelated code.

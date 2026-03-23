@@ -681,7 +681,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
             // ExecutionBlock: gated cross-attention read at every layer >= exec_layer
             if (exec_layer >= 0 && layer_idx >= exec_layer
-                && ctx.execution_block && intermediates.exec_memory.num_filled > 0) {
+                && ctx.execution_block) {
                 ctx.execution_block->crossAttentionRead(
                     layer_output, intermediates.exec_memory,
                     total_tokens, ctx.stream);

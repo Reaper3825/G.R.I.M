@@ -62,6 +62,7 @@ struct ExecutionBlockConfig {
     float empty_slot_bonus   = 10.0f;
     float diversity_kappa    = 2.0f;
     float memory_slot_bias   = 0.5f;
+    float inject_gate_temp   = 0.5f;
     float temp_start         = 2.0f;
     float temp_end           = 0.5f;
     int   temp_schedule      = 0;   // 0=linear, 1=cosine
