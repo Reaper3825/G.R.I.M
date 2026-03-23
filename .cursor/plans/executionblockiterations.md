@@ -1,98 +1,58 @@
-Good questions. Implement exactly as follows:
+# 🔧 ExecutionBlock FINAL HARD-FAIL VALIDATION ENFORCEMENT
+
+You are upgrading the ExecutionBlock to a **fail-fast, zero-tolerance system**.
+
+Do NOT change architecture.  
+Do NOT add soft warnings.  
+Do NOT allow degraded execution.
+
+ALL invalid states MUST terminate execution immediately.
 
 ---
 
-## Fix 1 — Differentiable context
+## Implementation status (codebase) ✅
 
-Use the matmul approach.
-
-* Build a constant `[1, total_tokens]` vector with values `1 / total_tokens`
-* Compute:
-
-  * `context = matmul(avg_vec, H)` → shape `[1, d_model]`
-* Do NOT add a new `autograd::mean` op
-* Ensure this stays inside the autograd graph
+1. **Warning-only paths removed** — No `d_warning_flag_`, no `fprintf` warn path.
+2. **Collapse = fatal** — `kernelCheckEntropyCollapse` / `kernelCheckWriteCollapse` use `d_numeric_error_flag_` with `atomicMax`.
+3. **Unified error system** — All failures: NaN/Inf, magnitude, softmax validity, entropy collapse (p_arg1, p_arg2, p_op), write collapse (`max(p_write)`).
+4. **Early checks** — Collapse kernels run **immediately after** each softmax **before** matmul / blended write uses that distribution.
+5. **End of step** — Single `h_error` read + `cudaStreamSynchronize`; if `h_error > 0`, `throw std::runtime_error` with step, `stageIdToName`, and id. `debug_mode` may `fprintf` the same message before throw only.
+6. **debug_mode** — Does not downgrade failures; only optional stderr + `ExecStepMetrics` when `diag_out` is set.
 
 ---
 
-## Fix 2 — Remove detach in arg selection
+# 1. REMOVE ALL WARNING-ONLY PATHS ✅
 
-Do NOT use `.detach()` anywhere in arg selection.
+# 2. COLLAPSE = FATAL ERROR ✅
 
-* Apply masking directly to logits:
+## 2.1 Argument Collapse (p_arg1, p_arg2) ✅  
+## 2.2 Operation Collapse (p_op) ✅  
+## 2.3 Write Collapse (p_write, max only — no entropy gate on p_write) ✅
 
-  * `logits += (1 - mask) * (-1e9)`
-* Then pass logits into `autograd::softmax`
+# 3. UNIFY ERROR SYSTEM ✅
 
-Do NOT create a custom autograd mask op.
+# 4. HARD FAIL ON FIRST INVALID STATE ✅
 
----
+# 5. NO DEGRADED EXECUTION ALLOWED ✅
 
-## Fix 3 — Split decode path
+# 6. EXPAND FAILURE CONDITIONS ✅
 
-Change decode to:
+# 7. DEBUG MODE DOES NOT CHANGE BEHAVIOR ✅
 
-1. Run MLP ONLY on atom rows `[0 → num_atoms)`
-2. Memory rows `[num_atoms → C)` use `M.values` directly
-3. Rebuild `[C,1]` via concatenation:
+# 8. ERROR MESSAGE QUALITY ✅
 
-   * `decoded_values = concat(atom_decoded, mem_values)`
-
-Keep ordering: atoms first, memory second.
+Message shape:  
+`ExecutionBlock FATAL: invalid state at step N — <stage description> (stage id=M)`
 
 ---
 
-## Fix 4 — Stabilize injection gate
+# FINAL REQUIREMENT
 
-* Add a **config hyperparameter**: `inject_gate_temp`
-* Forward:
+ExecutionBlock must:
 
-  * `gate = sigmoid((H · w_gate) * inject_gate_temp)`
-* Update backward kernel to include `inject_gate_temp` in gradient:
+- never silently degrade ✅
+- never continue in invalid state ✅
+- terminate immediately on collapse ✅
+- enforce correctness over completion ✅
 
-  * multiply derivative by `inject_gate_temp`
-
-Do NOT make this parameter learnable.
-Do NOT move this to autograd.
-
----
-
-## Fix 5 — Memory slot growth
-
-Use Option A.
-
-* Remove:
-
-  * `M.num_filled = min(V, M.num_filled + 1)`
-* Cross-attention must operate over ALL `V` slots
-* Slot visibility is controlled ONLY by `valid_mask`
-* Do NOT introduce host-side counting or thresholds
-
----
-
-## Fix 6 — Op extensibility
-
-* Change validation:
-
-  * from `num_ops == 4`
-  * to `num_ops > 0`
-
-* Replace hardcoded `4` with `config_.num_ops` where applicable
-
-* Keep current 4 ops implementation intact
-
-* Do NOT introduce dispatch tables or function pointers yet
-
----
-
-## Constraints
-
-* No CPU sync
-* No structural rewrites
-* No moving logic out of GPU
-* Keep tensor shapes consistent
-* Preserve current execution flow
-
----
-
-Implement only these changes. Do not refactor unrelated code.
+This is a STRICT fail-fast system.

@@ -70,8 +70,26 @@ struct ExecutionBlockConfig {
     int   result_slot_mode   = 0;     // 0 = last token, 1 = fixed index
     int   result_slot_index  = -1;    // used when result_slot_mode == 1
     bool  diag_logging       = false;
+    bool  deterministic      = false;
+    bool  debug_mode         = false;  // extra diagnostics only; does not relax validation
+    float entropy_collapse_threshold = 0.01f;
+    float write_collapse_threshold   = 0.98f;
+    float magnitude_limit            = 1e6f;
     cudaStream_t stream      = nullptr;
     cublasHandle_t cublas_handle = nullptr;
+};
+
+//======================================================//
+//  ExecStepMetrics — lightweight runtime monitoring
+//======================================================//
+struct ExecStepMetrics {
+    float arg1_entropy   = 0.0f;
+    float arg2_entropy   = 0.0f;
+    float op_entropy     = 0.0f;
+    float write_entropy  = 0.0f;
+    float max_p_write    = 0.0f;
+    int   div_clamp_count = 0;
+    float op_distribution[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 //======================================================//
@@ -85,6 +103,7 @@ struct ExecutionBlockStepOutput {
     Tensor p_write;     // [1, V]
     Tensor v_out;       // [1, 1] scalar result
     Tensor result_emb;  // [1, d_model]
+    ExecStepMetrics metrics;  // populated when debug_mode is enabled
 };
 
 //======================================================//
@@ -105,7 +124,7 @@ public:
                                 uint64_t seed,
                                 cudaStream_t init_stream);
 
-    ~ExecutionBlockLayer() = default;
+    ~ExecutionBlockLayer();
 
     ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept;
     ExecutionBlockLayer& operator=(ExecutionBlockLayer&& other) noexcept;
@@ -222,8 +241,14 @@ public:
 
     const ExecutionBlockConfig& config() const { return config_; }
 
+    int lastDivClampCount(cudaStream_t stream) const;
+
 private:
     ExecutionBlockConfig config_;
+
+    // Production hardening: persistent device-side error tracking
+    int* d_numeric_error_flag_ = nullptr;  // atomicMax stage-id: numeric, softmax, collapse
+    int* d_div_clamp_count_    = nullptr;  // atomicAdd on division clamp
 
     // Value decode MLP (atom embedding dims 16-39 -> scalar)
     Tensor w_decode_1_;     // [24, 16]
