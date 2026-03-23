@@ -508,7 +508,7 @@ The Execution Block must be implemented with strict file boundaries. Each file o
 - Own no model-global config definitions beyond consuming `ExecutionBlockConfig`
 - Own no training-loop control flow beyond one execution step and one read pass
 
-`**resources/models/GRIM-text/training/Autograd/AutogradIntermediates.hpp**`
+`**resources/models/GRIM-text/training/Autograd/AutogradIntermediates.hpp`**
 
 - Own runtime intermediates only: `ExecutionMemory`, `ExecutionBlockOutput`
 - Provide storage lifetime and clearing behavior
@@ -749,8 +749,8 @@ CUDA kernels:
 11. `**kernelComputeWriteLogits**` -- alpha*cosine_sim + beta*usage_penalty + gamma*write_score + empty_bonus - kappa*recent_write
 12. `**kernelWriteMemorySlot`** -- write all fields, key from result_emb@W_key_base, step encoding, reset usage, update recent_write_mask
 13. `**kernelCrossAttnQKV`** -- Q=H@W_Q, K=M.key@W_K, V=M.state@W_V
-14. `**kernelCrossAttnSharpScores*`* -- `(Q@K^T) / (sqrt(d) * tau)`, valid_mask, top-k=1 default, softmax
-15. `**kernelCrossAttnGatedOutput**` -- `g = sigmoid(H @ W_gate)`, `R = attn @ V`, `H += g * (R @ W_O)`
+14. `**kernelCrossAttnSharpScores`** -- `(Q@K^T) / (sqrt(d) * tau)`, valid_mask, top-k=1 default, softmax
+15. `**kernelCrossAttnGatedOutput*`* -- `g = sigmoid(H @ W_gate)`, `R = attn @ V`, `H += g * (R @ W_O)`
 16. `**kernelDecayedUsageUpdate**` -- `M.usage = decay * M.usage + sum_queries(attn_weights)`
 17. `**validation helpers / checked launch wrappers**` -- validate tensor ranks, extents, candidate counts, slot ranges, and projection compatibility before dispatch; fatal on mismatch
 

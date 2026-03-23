@@ -161,6 +161,11 @@ void LanguageModel::initInferenceState() {
         eb_cfg.usage_decay = cfg.execution_block_usage_decay;
         eb_cfg.diversity_kappa = cfg.execution_block_diversity_kappa;
         eb_cfg.memory_slot_bias = cfg.execution_block_memory_slot_bias;
+        eb_cfg.temp_start = cfg.execution_block_temp_start;
+        eb_cfg.temp_end = cfg.execution_block_temp_end;
+        eb_cfg.temp_schedule = cfg.execution_block_temp_schedule;
+        eb_cfg.entropy_weight = cfg.execution_block_entropy_weight;
+        eb_cfg.diag_logging = cfg.execution_block_diag_logging;
         eb_cfg.stream = primary_stream;
         eb_cfg.cublas_handle = training_state_.cublas_handle;
 

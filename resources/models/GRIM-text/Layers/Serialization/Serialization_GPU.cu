@@ -399,38 +399,58 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                                             fb_reasoning_head->d_total()));
     }
 
-    // Load ExecutionBlock weights (optional — missing in old checkpoints)
+    // Load ExecutionBlock v2 weights — NO backward compat with v1 checkpoints
     const auto* fb_exec_block = model_fb->execution_block();
-    if (fb_exec_block && request.execution_block.w_decode_1.ptr) {
-        auto ul = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
-            if (!src || !dst.ptr) return true;
+    if (request.execution_block.w_decode_1.ptr) {
+        if (!fb_exec_block) {
+            GRIM::Logging::EmitModuleInfo(kLogModule, "[load] FATAL: ExecutionBlock v2 enabled but checkpoint has no execution_block table");
+            return false;
+        }
+        auto ul_strict = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            if (!src) {
+                GRIM::Logging::EmitModuleInfo(kLogModule, std::string("[load] FATAL: missing required EB field: ") + name);
+                return false;
+            }
+            if (!dst.ptr) {
+                GRIM::Logging::EmitModuleInfo(kLogModule, std::string("[load] FATAL: null destination for EB field: ") + name);
+                return false;
+            }
+            if (src->size() != dst.count) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "[load] FATAL: EB field %s size mismatch: checkpoint=%u expected=%zu",
+                         name, src->size(), dst.count);
+                GRIM::Logging::EmitModuleInfo(kLogModule, msg);
+                return false;
+            }
             std::vector<float> buf(src->begin(), src->end());
             return upload_device_vector(buf, dst, name);
         };
         bool ok = true;
-        ok = ok && ul(fb_exec_block->w_decode_1_data(), request.execution_block.w_decode_1, "EB w_decode_1");
-        ok = ok && ul(fb_exec_block->b_decode_1_data(), request.execution_block.b_decode_1, "EB b_decode_1");
-        ok = ok && ul(fb_exec_block->w_decode_2_data(), request.execution_block.w_decode_2, "EB w_decode_2");
-        ok = ok && ul(fb_exec_block->w_arg1_select_data(), request.execution_block.w_arg1_select, "EB w_arg1_select");
-        ok = ok && ul(fb_exec_block->w_arg2_select_data(), request.execution_block.w_arg2_select, "EB w_arg2_select");
-        ok = ok && ul(fb_exec_block->w_op_select_data(), request.execution_block.W_op_select, "EB W_op_select");
-        ok = ok && ul(fb_exec_block->w_state_data(), request.execution_block.W_state, "EB W_state");
-        ok = ok && ul(fb_exec_block->w_key_base_data(), request.execution_block.W_key_base, "EB W_key_base");
-        ok = ok && ul(fb_exec_block->w_write_query_data(), request.execution_block.W_write_query, "EB W_write_query");
-        ok = ok && ul(fb_exec_block->w_write_key_data(), request.execution_block.W_write_key, "EB W_write_key");
-        ok = ok && ul(fb_exec_block->alpha_data(), request.execution_block.alpha, "EB alpha");
-        ok = ok && ul(fb_exec_block->beta_data(), request.execution_block.beta, "EB beta");
-        ok = ok && ul(fb_exec_block->gamma_data(), request.execution_block.gamma, "EB gamma");
-        ok = ok && ul(fb_exec_block->step_embeddings_data(), request.execution_block.step_embeddings, "EB step_embeddings");
-        ok = ok && ul(fb_exec_block->type_num_embed_data(), request.execution_block.type_num_embed, "EB type_num_embed");
-        ok = ok && ul(fb_exec_block->w_q_read_data(), request.execution_block.W_Q_read, "EB W_Q_read");
-        ok = ok && ul(fb_exec_block->w_k_read_data(), request.execution_block.W_K_read, "EB W_K_read");
-        ok = ok && ul(fb_exec_block->w_v_read_data(), request.execution_block.W_V_read, "EB W_V_read");
-        ok = ok && ul(fb_exec_block->w_o_read_data(), request.execution_block.W_O_read, "EB W_O_read");
-        ok = ok && ul(fb_exec_block->w_gate_read_data(), request.execution_block.W_gate_read, "EB W_gate_read");
-        ok = ok && ul(fb_exec_block->tau_data(), request.execution_block.tau, "EB tau");
+        ok = ok && ul_strict(fb_exec_block->w_decode_1_data(), request.execution_block.w_decode_1, "EB w_decode_1");
+        ok = ok && ul_strict(fb_exec_block->b_decode_1_data(), request.execution_block.b_decode_1, "EB b_decode_1");
+        ok = ok && ul_strict(fb_exec_block->w_decode_2_data(), request.execution_block.w_decode_2, "EB w_decode_2");
+        ok = ok && ul_strict(fb_exec_block->w_arg1_select_data(), request.execution_block.w_arg1_select, "EB w_arg1_select");
+        ok = ok && ul_strict(fb_exec_block->w_arg2_select_data(), request.execution_block.w_arg2_select, "EB w_arg2_select");
+        ok = ok && ul_strict(fb_exec_block->w_op_select_data(), request.execution_block.W_op_select, "EB W_op_select");
+        ok = ok && ul_strict(fb_exec_block->w_key_proj_data(), request.execution_block.W_key_proj, "EB W_key_proj");
+        ok = ok && ul_strict(fb_exec_block->w_write_query_data(), request.execution_block.W_write_query, "EB W_write_query");
+        ok = ok && ul_strict(fb_exec_block->w_write_key_data(), request.execution_block.W_write_key, "EB W_write_key");
+        ok = ok && ul_strict(fb_exec_block->alpha_data(), request.execution_block.alpha, "EB alpha");
+        ok = ok && ul_strict(fb_exec_block->beta_data(), request.execution_block.beta, "EB beta");
+        ok = ok && ul_strict(fb_exec_block->gamma_data(), request.execution_block.gamma, "EB gamma");
+        ok = ok && ul_strict(fb_exec_block->step_embeddings_data(), request.execution_block.step_embeddings, "EB step_embeddings");
+        ok = ok && ul_strict(fb_exec_block->type_num_embed_data(), request.execution_block.type_num_embed, "EB type_num_embed");
+        ok = ok && ul_strict(fb_exec_block->w_value_to_emb_data(), request.execution_block.W_value_to_emb, "EB W_value_to_emb");
+        ok = ok && ul_strict(fb_exec_block->b_value_to_emb_data(), request.execution_block.b_value_to_emb, "EB b_value_to_emb");
+        ok = ok && ul_strict(fb_exec_block->w_inject_gate_data(), request.execution_block.w_inject_gate, "EB w_inject_gate");
+        ok = ok && ul_strict(fb_exec_block->w_q_read_data(), request.execution_block.W_Q_read, "EB W_Q_read");
+        ok = ok && ul_strict(fb_exec_block->w_k_read_data(), request.execution_block.W_K_read, "EB W_K_read");
+        ok = ok && ul_strict(fb_exec_block->w_v_read_data(), request.execution_block.W_V_read, "EB W_V_read");
+        ok = ok && ul_strict(fb_exec_block->w_o_read_data(), request.execution_block.W_O_read, "EB W_O_read");
+        ok = ok && ul_strict(fb_exec_block->w_gate_read_data(), request.execution_block.W_gate_read, "EB W_gate_read");
+        ok = ok && ul_strict(fb_exec_block->tau_data(), request.execution_block.tau, "EB tau");
         if (!ok) return false;
-        GRIM::Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock weights loaded from FlatBuffer");
+        GRIM::Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v2 weights loaded from FlatBuffer");
     }
 
     // Issue #33: Load final RMSNorm gamma (normalizes encoder output before LM head)
@@ -763,7 +783,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                                             " w_arg1=", rh_w_arg1.size(), " w_arg2=", rh_w_arg2.size()));
     }
 
-    // Save ExecutionBlock weights (optional — only when enabled)
+    // Save ExecutionBlock v2 weights
     flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> fb_execution_block = 0;
     const auto& eb_view = request.sources.execution_block;
     if (eb_view.enabled && eb_view.w_decode_1.ptr) {
@@ -776,8 +796,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             builder.CreateVector(dl(eb_view.w_arg1_select, "EB w_arg1_select")),
             builder.CreateVector(dl(eb_view.w_arg2_select, "EB w_arg2_select")),
             builder.CreateVector(dl(eb_view.W_op_select, "EB W_op_select")),
-            builder.CreateVector(dl(eb_view.W_state, "EB W_state")),
-            builder.CreateVector(dl(eb_view.W_key_base, "EB W_key_base")),
+            builder.CreateVector(dl(eb_view.W_key_proj, "EB W_key_proj")),
             builder.CreateVector(dl(eb_view.W_write_query, "EB W_write_query")),
             builder.CreateVector(dl(eb_view.W_write_key, "EB W_write_key")),
             builder.CreateVector(dl(eb_view.alpha, "EB alpha")),
@@ -785,13 +804,16 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             builder.CreateVector(dl(eb_view.gamma, "EB gamma")),
             builder.CreateVector(dl(eb_view.step_embeddings, "EB step_embeddings")),
             builder.CreateVector(dl(eb_view.type_num_embed, "EB type_num_embed")),
+            builder.CreateVector(dl(eb_view.W_value_to_emb, "EB W_value_to_emb")),
+            builder.CreateVector(dl(eb_view.b_value_to_emb, "EB b_value_to_emb")),
+            builder.CreateVector(dl(eb_view.w_inject_gate, "EB w_inject_gate")),
             builder.CreateVector(dl(eb_view.W_Q_read, "EB W_Q_read")),
             builder.CreateVector(dl(eb_view.W_K_read, "EB W_K_read")),
             builder.CreateVector(dl(eb_view.W_V_read, "EB W_V_read")),
             builder.CreateVector(dl(eb_view.W_O_read, "EB W_O_read")),
             builder.CreateVector(dl(eb_view.W_gate_read, "EB W_gate_read")),
             builder.CreateVector(dl(eb_view.tau, "EB tau")));
-        GRIM::Logging::EmitModuleInfo(kLogModule, "[save] ExecutionBlock weights serialized");
+        GRIM::Logging::EmitModuleInfo(kLogModule, "[save] ExecutionBlock v2 weights serialized");
     }
 
     // Issue #33: Save final RMSNorm gamma (normalizes encoder output before LM head)

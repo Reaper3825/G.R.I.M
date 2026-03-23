@@ -281,7 +281,7 @@ bool LanguageModel::save(const std::string& path) {
                        std::to_string(dt) + ", num_ops=" + std::to_string(nops) + ")");
     }
 
-    // ExecutionBlock weights — serialized via FlatBuffer
+    // ExecutionBlock v2 weights — serialized via FlatBuffer
     if (execution_block_layer_) {
         auto assignRead = [](DeviceReadView& v, const Tensor& t) {
             v.ptr = t.data;
@@ -294,8 +294,7 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(request.sources.execution_block.w_arg1_select, execution_block_layer_->w_arg1_select());
         assignRead(request.sources.execution_block.w_arg2_select, execution_block_layer_->w_arg2_select());
         assignRead(request.sources.execution_block.W_op_select, execution_block_layer_->W_op_select());
-        assignRead(request.sources.execution_block.W_state, execution_block_layer_->W_state());
-        assignRead(request.sources.execution_block.W_key_base, execution_block_layer_->W_key_base());
+        assignRead(request.sources.execution_block.W_key_proj, execution_block_layer_->W_key_proj());
         assignRead(request.sources.execution_block.W_write_query, execution_block_layer_->W_write_query());
         assignRead(request.sources.execution_block.W_write_key, execution_block_layer_->W_write_key());
         assignRead(request.sources.execution_block.alpha, execution_block_layer_->alpha());
@@ -303,13 +302,16 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(request.sources.execution_block.gamma, execution_block_layer_->gamma());
         assignRead(request.sources.execution_block.step_embeddings, execution_block_layer_->step_embeddings());
         assignRead(request.sources.execution_block.type_num_embed, execution_block_layer_->type_num_embed());
+        assignRead(request.sources.execution_block.W_value_to_emb, execution_block_layer_->W_value_to_emb());
+        assignRead(request.sources.execution_block.b_value_to_emb, execution_block_layer_->b_value_to_emb());
+        assignRead(request.sources.execution_block.w_inject_gate, execution_block_layer_->w_inject_gate());
         assignRead(request.sources.execution_block.W_Q_read, execution_block_layer_->W_Q_read());
         assignRead(request.sources.execution_block.W_K_read, execution_block_layer_->W_K_read());
         assignRead(request.sources.execution_block.W_V_read, execution_block_layer_->W_V_read());
         assignRead(request.sources.execution_block.W_O_read, execution_block_layer_->W_O_read());
         assignRead(request.sources.execution_block.W_gate_read, execution_block_layer_->W_gate_read());
         assignRead(request.sources.execution_block.tau, execution_block_layer_->tau());
-        EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock weights for FlatBuffer serialization");
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head) — owned by LMHeadLayer
@@ -500,7 +502,7 @@ bool LanguageModel::load(const std::string& path) {
         request.reasoning_head.d_total = dt;
     }
 
-    // ExecutionBlock weight destinations — loaded via FlatBuffer
+    // ExecutionBlock v2 weight destinations — loaded via FlatBuffer
     if (execution_block_layer_) {
         assignWrite(request.execution_block.w_decode_1, execution_block_layer_->w_decode_1().data, static_cast<std::size_t>(execution_block_layer_->w_decode_1().numel()));
         assignWrite(request.execution_block.b_decode_1, execution_block_layer_->b_decode_1().data, static_cast<std::size_t>(execution_block_layer_->b_decode_1().numel()));
@@ -508,8 +510,7 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(request.execution_block.w_arg1_select, execution_block_layer_->w_arg1_select().data, static_cast<std::size_t>(execution_block_layer_->w_arg1_select().numel()));
         assignWrite(request.execution_block.w_arg2_select, execution_block_layer_->w_arg2_select().data, static_cast<std::size_t>(execution_block_layer_->w_arg2_select().numel()));
         assignWrite(request.execution_block.W_op_select, execution_block_layer_->W_op_select().data, static_cast<std::size_t>(execution_block_layer_->W_op_select().numel()));
-        assignWrite(request.execution_block.W_state, execution_block_layer_->W_state().data, static_cast<std::size_t>(execution_block_layer_->W_state().numel()));
-        assignWrite(request.execution_block.W_key_base, execution_block_layer_->W_key_base().data, static_cast<std::size_t>(execution_block_layer_->W_key_base().numel()));
+        assignWrite(request.execution_block.W_key_proj, execution_block_layer_->W_key_proj().data, static_cast<std::size_t>(execution_block_layer_->W_key_proj().numel()));
         assignWrite(request.execution_block.W_write_query, execution_block_layer_->W_write_query().data, static_cast<std::size_t>(execution_block_layer_->W_write_query().numel()));
         assignWrite(request.execution_block.W_write_key, execution_block_layer_->W_write_key().data, static_cast<std::size_t>(execution_block_layer_->W_write_key().numel()));
         assignWrite(request.execution_block.alpha, execution_block_layer_->alpha().data, static_cast<std::size_t>(execution_block_layer_->alpha().numel()));
@@ -517,6 +518,9 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(request.execution_block.gamma, execution_block_layer_->gamma().data, static_cast<std::size_t>(execution_block_layer_->gamma().numel()));
         assignWrite(request.execution_block.step_embeddings, execution_block_layer_->step_embeddings().data, static_cast<std::size_t>(execution_block_layer_->step_embeddings().numel()));
         assignWrite(request.execution_block.type_num_embed, execution_block_layer_->type_num_embed().data, static_cast<std::size_t>(execution_block_layer_->type_num_embed().numel()));
+        assignWrite(request.execution_block.W_value_to_emb, execution_block_layer_->W_value_to_emb().data, static_cast<std::size_t>(execution_block_layer_->W_value_to_emb().numel()));
+        assignWrite(request.execution_block.b_value_to_emb, execution_block_layer_->b_value_to_emb().data, static_cast<std::size_t>(execution_block_layer_->b_value_to_emb().numel()));
+        assignWrite(request.execution_block.w_inject_gate, execution_block_layer_->w_inject_gate().data, static_cast<std::size_t>(execution_block_layer_->w_inject_gate().numel()));
         assignWrite(request.execution_block.W_Q_read, execution_block_layer_->W_Q_read().data, static_cast<std::size_t>(execution_block_layer_->W_Q_read().numel()));
         assignWrite(request.execution_block.W_K_read, execution_block_layer_->W_K_read().data, static_cast<std::size_t>(execution_block_layer_->W_K_read().numel()));
         assignWrite(request.execution_block.W_V_read, execution_block_layer_->W_V_read().data, static_cast<std::size_t>(execution_block_layer_->W_V_read().numel()));

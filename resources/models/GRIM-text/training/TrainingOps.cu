@@ -439,6 +439,11 @@ void LanguageModel::initGPU() {
             eb_config.usage_decay = cfg.execution_block_usage_decay;
             eb_config.diversity_kappa = cfg.execution_block_diversity_kappa;
             eb_config.memory_slot_bias = cfg.execution_block_memory_slot_bias;
+            eb_config.temp_start = cfg.execution_block_temp_start;
+            eb_config.temp_end = cfg.execution_block_temp_end;
+            eb_config.temp_schedule = cfg.execution_block_temp_schedule;
+            eb_config.entropy_weight = cfg.execution_block_entropy_weight;
+            eb_config.diag_logging = cfg.execution_block_diag_logging;
             eb_config.stream = primary_stream;
             eb_config.cublas_handle = training_state_.cublas_handle;
 

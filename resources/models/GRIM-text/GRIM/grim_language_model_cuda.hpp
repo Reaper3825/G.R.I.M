@@ -346,7 +346,7 @@ struct LanguageModelConfig {
     // ExecutionBlock config — differentiable register machine
     bool execution_block_enabled = false;
     int execution_block_layer = -1;            // encoder layer to run after (-1 = num_layers - 2)
-    int execution_block_num_ops = 8;
+    int execution_block_num_ops = 4;           // +, -, *, / only
     int execution_block_num_slots = 4;         // V — memory slots
     int execution_block_num_steps = 2;         // K — execution steps per forward
     int execution_block_d_key = 64;
@@ -356,6 +356,11 @@ struct LanguageModelConfig {
     float execution_block_usage_decay = 0.9f;
     float execution_block_diversity_kappa = 2.0f;
     float execution_block_memory_slot_bias = 0.5f;
+    float execution_block_temp_start = 2.0f;
+    float execution_block_temp_end = 0.5f;
+    int   execution_block_temp_schedule = 0;   // 0=linear, 1=cosine
+    float execution_block_entropy_weight = 0.01f;
+    bool  execution_block_diag_logging = false;
     
     // LM Head centering config (Issue #37 / #40 fixes)
     // When enabled, centers hidden states before LM head projection.

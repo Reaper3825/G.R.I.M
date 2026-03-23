@@ -1451,6 +1451,24 @@ void rope_rotation(
     int seq_len, int head_dim, int rotary_dim,
     cudaStream_t stream = nullptr);
 
+/**
+ * Softmax: p[i] = exp(x[i]) / sum_j exp(x[j])  (along last dim, numerically stable)
+ * Input: [tokens, dim] - softmax computed along dim axis
+ * Optionally divides logits by temperature before computing softmax.
+ * Creates SoftmaxGradFn if input.requires_grad
+ *
+ * @param temperature  Divide logits by this value before softmax. 1.0 = no scaling.
+ */
+Tensor softmax(const Tensor& x, float temperature = 1.0f, cudaStream_t stream = nullptr);
+
+/**
+ * Concatenate two 2D tensors along columns (last dim).
+ * Input:  a [N, D1], b [N, D2]  (same number of rows)
+ * Output: [N, D1 + D2]
+ * Creates ConcatGradFn if either input requires_grad
+ */
+Tensor concat(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
+
 }  // namespace autograd
 
 }  // namespace GRIM

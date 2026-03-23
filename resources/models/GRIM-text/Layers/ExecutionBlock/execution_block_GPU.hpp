@@ -33,9 +33,9 @@ struct ExecutionMemory {
     Tensor valid_mask;        // [V]          1.0 if filled, 0.0 if empty
     Tensor usage;             // [V]          decayed cross-attn read weight
     Tensor write_score;       // [V]          learned overwrite preference bias
-    Tensor key_embeds;        // [V, d_key]   addressing keys (from result_emb, NOT state_embeds)
+    Tensor key_embeds;        // [V, d_key]   addressing keys
     Tensor type_embed;        // [V, d_type]  type tag per slot
-    Tensor recent_write_mask; // [V]          1.0 if written in most recent step
+    Tensor recent_write_mask; // [V]          last-step write probability distribution
     int num_filled = 0;
 
     void clear(cudaStream_t stream);
@@ -48,7 +48,7 @@ struct ExecutionMemory {
 struct ExecutionBlockConfig {
     int d_model              = 0;
     int atom_embedding_dim   = 0;   // from ScratchBlock (default 64)
-    int num_ops              = 8;   // Add,Sub,Mul,Div,Mod,Pow,Min,Max
+    int num_ops              = 4;   // +, -, *, /
     int num_slots            = 4;   // V — max memory slots
     int num_exec_steps       = 2;   // K — execution steps per forward
     int execution_block_layer= -1;  // encoder layer to run after (-1 = num_layers - 2)
@@ -57,30 +57,31 @@ struct ExecutionBlockConfig {
     int d_key                = 64;
     int d_type               = 8;
     int cross_attn_head_dim  = 64;
-    int cross_attn_topk      = 1;   // 1 = one slot per query (default)
+    int cross_attn_topk      = 1;
     float usage_decay        = 0.9f;
     float empty_slot_bonus   = 10.0f;
     float diversity_kappa    = 2.0f;
-    float memory_slot_bias   = 0.5f; // initial bias penalty for memory slot candidates
+    float memory_slot_bias   = 0.5f;
+    float temp_start         = 2.0f;
+    float temp_end           = 0.5f;
+    int   temp_schedule      = 0;   // 0=linear, 1=cosine
+    float entropy_weight     = 0.01f;
+    bool  diag_logging       = false;
     cudaStream_t stream      = nullptr;
     cublasHandle_t cublas_handle = nullptr;
 };
 
 //======================================================//
-//  ExecutionBlockStepOutput — per-step diagnostics
+//  ExecutionBlockStepOutput — per-step diagnostics ONLY
+//  Must NOT drive forward computation.
 //======================================================//
 struct ExecutionBlockStepOutput {
-    int   selected_op   = -1;
-    int   selected_arg1 = -1;
-    int   selected_arg2 = -1;
-    int   selected_slot = -1;
-    float decoded_v1    = 0.0f;
-    float decoded_v2    = 0.0f;
-    float computed_result = 0.0f;
-    Tensor op_logits;       // [1, num_ops]
-    Tensor arg1_scores;     // [1, C]
-    Tensor arg2_scores;     // [1, C]
-    Tensor write_logits;    // [1, V]
+    Tensor p_arg1;      // [1, C] softmax probabilities (detached copy)
+    Tensor p_arg2;      // [1, C]
+    Tensor p_op;        // [1, num_ops]
+    Tensor p_write;     // [1, V]
+    Tensor v_out;       // [1, 1] scalar result
+    Tensor result_emb;  // [1, d_model]
 };
 
 //======================================================//
@@ -110,28 +111,39 @@ public:
     ExecutionBlockLayer& operator=(const ExecutionBlockLayer&) = delete;
 
     //--------------------------------------------------//
-    // Forward: one execution step
+    // Forward: one execution step — mutates H and M
     //--------------------------------------------------//
-    ExecutionBlockStepOutput executeStep(
-        const Tensor& hidden_states,        // [total_tokens, d_model] read-only
+    void executeStep(
+        Tensor& H,                          // [total_tokens, d_model] mutated in place
+        ExecutionMemory& M,
         const float* atom_embeddings,       // [num_atoms, atom_embedding_dim]
         const int* atom_positions,          // [num_atoms]
         int num_atoms,
         int total_tokens,
-        ExecutionMemory& M,
         int step,
-        cudaStream_t stream
+        float temperature,
+        cudaStream_t stream,
+        ExecutionBlockStepOutput* diag_out = nullptr
     );
 
     //--------------------------------------------------//
     // Cross-attention read: H = H + g * W_O(R)
     //--------------------------------------------------//
     void crossAttentionRead(
-        Tensor& hidden_states,              // [total_tokens, d_model] modified in place
-        ExecutionMemory& M,                 // non-const: updates M.usage (decayed)
+        Tensor& hidden_states,
+        ExecutionMemory& M,
         int total_tokens,
         cudaStream_t stream
     );
+
+    //--------------------------------------------------//
+    // Entropy loss over arg/op/write distributions
+    //--------------------------------------------------//
+    Tensor computeEntropyLoss(
+        const std::vector<ExecutionBlockStepOutput>& steps,
+        float weight,
+        cudaStream_t stream
+    ) const;
 
     //--------------------------------------------------//
     // Validation (hard-fail)
@@ -139,7 +151,7 @@ public:
     void validateConfigOrThrow() const;
     void validateMemoryOrThrow(const ExecutionMemory& M) const;
     void validateExecuteStepInputsOrThrow(
-        const Tensor& hidden_states,
+        const Tensor& H,
         const float* atom_embeddings,
         const int* atom_positions,
         int num_atoms,
@@ -160,8 +172,7 @@ public:
     Tensor& w_arg1_select()   { return w_arg1_select_; }
     Tensor& w_arg2_select()   { return w_arg2_select_; }
     Tensor& W_op_select()     { return W_op_select_; }
-    Tensor& W_state()         { return W_state_; }
-    Tensor& W_key_base()      { return W_key_base_; }
+    Tensor& W_key_proj()      { return W_key_proj_; }
     Tensor& W_write_query()   { return W_write_query_; }
     Tensor& W_write_key()     { return W_write_key_; }
     Tensor& alpha()           { return alpha_; }
@@ -169,6 +180,9 @@ public:
     Tensor& gamma()           { return gamma_; }
     Tensor& step_embeddings() { return step_embeddings_; }
     Tensor& type_num_embed()  { return type_num_embed_; }
+    Tensor& W_value_to_emb()  { return W_value_to_emb_; }
+    Tensor& b_value_to_emb()  { return b_value_to_emb_; }
+    Tensor& w_inject_gate()   { return w_inject_gate_; }
     Tensor& W_Q_read()        { return W_Q_read_; }
     Tensor& W_K_read()        { return W_K_read_; }
     Tensor& W_V_read()        { return W_V_read_; }
@@ -182,8 +196,7 @@ public:
     const Tensor& w_arg1_select() const { return w_arg1_select_; }
     const Tensor& w_arg2_select() const { return w_arg2_select_; }
     const Tensor& W_op_select()   const { return W_op_select_; }
-    const Tensor& W_state()       const { return W_state_; }
-    const Tensor& W_key_base()    const { return W_key_base_; }
+    const Tensor& W_key_proj()    const { return W_key_proj_; }
     const Tensor& W_write_query() const { return W_write_query_; }
     const Tensor& W_write_key()   const { return W_write_key_; }
     const Tensor& alpha()         const { return alpha_; }
@@ -191,6 +204,9 @@ public:
     const Tensor& gamma()         const { return gamma_; }
     const Tensor& step_embeddings() const { return step_embeddings_; }
     const Tensor& type_num_embed()  const { return type_num_embed_; }
+    const Tensor& W_value_to_emb()  const { return W_value_to_emb_; }
+    const Tensor& b_value_to_emb()  const { return b_value_to_emb_; }
+    const Tensor& w_inject_gate()   const { return w_inject_gate_; }
     const Tensor& W_Q_read()      const { return W_Q_read_; }
     const Tensor& W_K_read()      const { return W_K_read_; }
     const Tensor& W_V_read()      const { return W_V_read_; }
@@ -211,21 +227,18 @@ private:
     Tensor b_decode_1_;     // [16]
     Tensor w_decode_2_;     // [16, 1]
 
-    // Arg selection
-    Tensor w_arg1_select_;  // [d_model, 1]
-    Tensor w_arg2_select_;  // [d_model, 1]
+    // Arg selection (transposed for matmul: [1,dm] @ [dm,C]^T = [1,C])
+    Tensor w_arg1_select_;  // [1, d_model]
+    Tensor w_arg2_select_;  // [1, d_model]
 
-    // Context-aware op selection
-    Tensor W_op_select_;    // [3 * d_model, num_ops]
+    // Context-aware op selection (4 ops only: +, -, *, /)
+    Tensor W_op_select_;    // [3 * d_model, 4]
 
-    // Memory write: atom_embed -> state_embed
-    Tensor W_state_;        // [atom_embedding_dim, d_model]
+    // Key generation from result embedding
+    Tensor W_key_proj_;     // [d_model, d_key]
 
-    // Key generation (from result_emb, separate from state)
-    Tensor W_key_base_;     // [atom_embedding_dim, d_key]
-
-    // Write-head (normalized logits)
-    Tensor W_write_query_;  // [d_model, d_key]
+    // Write-head (write_context = concat(h1,h2,ctx,result_emb) -> d_key query)
+    Tensor W_write_query_;  // [4 * d_model, d_key]
     Tensor W_write_key_;    // [d_key, d_key]
     Tensor alpha_;          // [1] learned content score scalar (init 1.0)
     Tensor beta_;           // [1] learned usage penalty scalar (init 1.0)
@@ -236,6 +249,13 @@ private:
 
     // Type embedding
     Tensor type_num_embed_;  // [d_type]
+
+    // Linear value embedding (replaces sinusoidal re_embed)
+    Tensor W_value_to_emb_; // [1, d_model]
+    Tensor b_value_to_emb_; // [1, d_model]
+
+    // Injection gate
+    Tensor w_inject_gate_;  // [d_model, 1]
 
     // Cross-attention read (gated + sharpened)
     Tensor W_Q_read_;       // [d_model, head_dim]

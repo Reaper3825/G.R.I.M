@@ -638,6 +638,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             }
 
             // ExecutionBlock: run K execution steps at the configured layer
+            // Each step mutates both layer_output (H) and exec_memory (M) sequentially
             if (layer_idx == exec_layer && ctx.execution_block) {
                 int num_atoms = 0;
                 cudaMemcpyAsync(&num_atoms, ctx.scratch_block->numAtomsBuffer(),
@@ -656,15 +657,25 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 ctx.execution_block->setStream(ctx.stream);
                 ctx.execution_block->setCublasHandle(ctx.cublas_handle);
 
+                // Compute temperature from annealing schedule
+                float T = cfg->execution_block_temp_start;
+                if (cfg->execution_block_temp_schedule == 0) {
+                    // Linear annealing: not step-based here (would need global step)
+                    // For now use temp_start; full schedule wiring is in training loop
+                    T = cfg->execution_block_temp_start;
+                }
+
                 for (int step = 0; step < exec_K; ++step) {
-                    auto step_out = ctx.execution_block->executeStep(
-                        layer_output,
+                    ExecutionBlockStepOutput step_diag;
+                    ctx.execution_block->executeStep(
+                        layer_output,                              // H mutated in place
+                        intermediates.exec_memory,                 // M mutated in place
                         ctx.scratch_block->atomEmbeddingsBuffer(),
                         ctx.scratch_block->atomPositionsBuffer(),
                         num_atoms, total_tokens,
-                        intermediates.exec_memory,
-                        step, ctx.stream);
-                    intermediates.execution_block_output.steps.push_back(std::move(step_out));
+                        step, T, ctx.stream,
+                        &step_diag);
+                    intermediates.execution_block_output.steps.push_back(std::move(step_diag));
                 }
             }
 
@@ -1296,69 +1307,31 @@ LossResult computeAutogradLoss(
 
     float numeric_loss = (numeric_h_count > 0) ? numeric_h_loss / static_cast<float>(numeric_h_count) : 0.0f;
 
-    // ExecutionBlock supervision: CE(exec_logits, reasoning_head_argmax) per step
-    float exec_supervision_loss = 0.0f;
-    if (cfg->execution_block_enabled && cfg->reasoning_head_enabled
-        && !intermediates.execution_block_output.steps.empty()
-        && intermediates.reasoning_output.op_logits.data) {
-        // ReasoningHead targets: argmax of its logits (op, arg1, arg2)
-        int rh_op_target = 0, rh_arg1_target = 0, rh_arg2_target = 0;
-        {
-            const auto& rh = intermediates.reasoning_output;
-            // Read ReasoningHead op_logits to get target op
-            int nops = rh.op_logits.shape.flat.cols;
-            std::vector<float> h_op(nops);
-            cudaMemcpy(h_op.data(), rh.op_logits.data, nops * sizeof(float), cudaMemcpyDeviceToHost);
-            rh_op_target = static_cast<int>(std::max_element(h_op.begin(), h_op.end()) - h_op.begin());
-            // arg1/arg2 targets (over num_atoms)
-            int na = rh.arg1_logits.shape.flat.cols;
-            if (na > 0) {
-                std::vector<float> h_a1(na), h_a2(na);
-                cudaMemcpy(h_a1.data(), rh.arg1_logits.data, na * sizeof(float), cudaMemcpyDeviceToHost);
-                cudaMemcpy(h_a2.data(), rh.arg2_logits.data, na * sizeof(float), cudaMemcpyDeviceToHost);
-                rh_arg1_target = static_cast<int>(std::max_element(h_a1.begin(), h_a1.end()) - h_a1.begin());
-                rh_arg2_target = static_cast<int>(std::max_element(h_a2.begin(), h_a2.end()) - h_a2.begin());
-            }
-        }
-
-        // Per-step supervision: CE of exec block logits against reasoning head targets
-        float step_loss_sum = 0.0f;
-        int step_count = 0;
-        for (const auto& step_out : intermediates.execution_block_output.steps) {
-            auto ce_from_logits = [&](const Tensor& logits, int target) -> float {
-                if (!logits.data || target < 0 || target >= logits.shape.flat.cols) return 0.0f;
-                int n = logits.shape.flat.cols;
-                std::vector<float> h_logits(n);
-                cudaMemcpy(h_logits.data(), logits.data, n * sizeof(float), cudaMemcpyDeviceToHost);
-                float max_val = *std::max_element(h_logits.begin(), h_logits.end());
-                float sum_exp = 0.0f;
-                for (int i = 0; i < n; ++i) sum_exp += expf(h_logits[i] - max_val);
-                return -(h_logits[target] - max_val - logf(sum_exp + 1e-7f));
-            };
-            step_loss_sum += ce_from_logits(step_out.op_logits, rh_op_target);
-            step_loss_sum += ce_from_logits(step_out.arg1_scores, rh_arg1_target);
-            step_loss_sum += ce_from_logits(step_out.arg2_scores, rh_arg2_target);
-            step_count += 3;
-        }
-        if (step_count > 0)
-            exec_supervision_loss = step_loss_sum / static_cast<float>(step_count);
+    // ExecutionBlock entropy regularization (replaces host-side CE supervision)
+    float exec_entropy_loss = 0.0f;
+    if (cfg->execution_block_enabled && ctx.execution_block
+        && !intermediates.execution_block_output.steps.empty()) {
+        Tensor entropy_loss = ctx.execution_block->computeEntropyLoss(
+            intermediates.execution_block_output.steps,
+            cfg->execution_block_entropy_weight,
+            ctx.stream);
+        cudaStreamSynchronize(ctx.stream);
+        cudaMemcpy(&exec_entropy_loss, entropy_loss.data, sizeof(float), cudaMemcpyDeviceToHost);
     }
-    constexpr float kExecSupervisionWeight = 0.05f;
 
     constexpr float kNumericLossWeight = 0.1f;
     result.numeric_loss = numeric_loss;
-    result.loss_value = text_loss + kNumericLossWeight * numeric_loss
-                      + kExecSupervisionWeight * exec_supervision_loss;
+    result.loss_value = text_loss + kNumericLossWeight * numeric_loss + exec_entropy_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (text=" 
             + std::to_string(text_loss) + " numeric=" + std::to_string(numeric_loss)
-            + " exec_sup=" + std::to_string(exec_supervision_loss) + ")");
+            + " exec_entropy=" + std::to_string(exec_entropy_loss) + ")");
     }
     
     AG_INFO("Loss computed: text_ce=" << text_loss << " numeric=" << numeric_loss
-            << " exec_sup=" << exec_supervision_loss << " valid_tokens=" << valid_tokens);
+            << " exec_entropy=" << exec_entropy_loss << " valid_tokens=" << valid_tokens);
     
     result.success = true;
     return result;

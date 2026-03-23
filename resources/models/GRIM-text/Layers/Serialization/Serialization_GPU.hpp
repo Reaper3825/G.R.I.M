@@ -158,28 +158,31 @@ struct SerializationReasoningHeadWriteView {
 	int d_total = 0;
 };
 
+// ExecutionBlock v2: differentiable rewrite — no backward compat with v1 checkpoints
 struct SerializationExecutionBlockReadView {
-	DeviceReadView w_decode_1;     // [24, 16]
-	DeviceReadView b_decode_1;     // [16]
-	DeviceReadView w_decode_2;     // [16, 1]
-	DeviceReadView w_arg1_select;  // [d_model, 1]
-	DeviceReadView w_arg2_select;  // [d_model, 1]
-	DeviceReadView W_op_select;    // [3*d_model, num_ops]
-	DeviceReadView W_state;        // [atom_dim, d_model]
-	DeviceReadView W_key_base;     // [atom_dim, d_key]
-	DeviceReadView W_write_query;  // [d_model, d_key]
-	DeviceReadView W_write_key;    // [d_key, d_key]
-	DeviceReadView alpha;          // [1]
-	DeviceReadView beta;           // [1]
-	DeviceReadView gamma;          // [1]
-	DeviceReadView step_embeddings;// [K, d_model]
-	DeviceReadView type_num_embed; // [d_type]
-	DeviceReadView W_Q_read;       // [d_model, head_dim]
-	DeviceReadView W_K_read;       // [d_key, head_dim]
-	DeviceReadView W_V_read;       // [d_model, head_dim]
-	DeviceReadView W_O_read;       // [head_dim, d_model]
-	DeviceReadView W_gate_read;    // [d_model, 1]
-	DeviceReadView tau;            // [1]
+	DeviceReadView w_decode_1;      // [24, 16]
+	DeviceReadView b_decode_1;      // [16]
+	DeviceReadView w_decode_2;      // [16, 1]
+	DeviceReadView w_arg1_select;   // [1, d_model]
+	DeviceReadView w_arg2_select;   // [1, d_model]
+	DeviceReadView W_op_select;     // [3*d_model, 4]
+	DeviceReadView W_key_proj;      // [d_model, d_key]
+	DeviceReadView W_write_query;   // [4*d_model, d_key]
+	DeviceReadView W_write_key;     // [d_key, d_key]
+	DeviceReadView alpha;           // [1]
+	DeviceReadView beta;            // [1]
+	DeviceReadView gamma;           // [1]
+	DeviceReadView step_embeddings; // [K, d_model]
+	DeviceReadView type_num_embed;  // [d_type]
+	DeviceReadView W_value_to_emb;  // [1, d_model]
+	DeviceReadView b_value_to_emb;  // [1, d_model]
+	DeviceReadView w_inject_gate;   // [d_model, 1]
+	DeviceReadView W_Q_read;        // [d_model, head_dim]
+	DeviceReadView W_K_read;        // [d_key, head_dim]
+	DeviceReadView W_V_read;        // [d_model, head_dim]
+	DeviceReadView W_O_read;        // [head_dim, d_model]
+	DeviceReadView W_gate_read;     // [d_model, 1]
+	DeviceReadView tau;             // [1]
 	bool enabled = false;
 };
 
@@ -190,8 +193,7 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView w_arg1_select;
 	DeviceWriteView w_arg2_select;
 	DeviceWriteView W_op_select;
-	DeviceWriteView W_state;
-	DeviceWriteView W_key_base;
+	DeviceWriteView W_key_proj;
 	DeviceWriteView W_write_query;
 	DeviceWriteView W_write_key;
 	DeviceWriteView alpha;
@@ -199,6 +201,9 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView gamma;
 	DeviceWriteView step_embeddings;
 	DeviceWriteView type_num_embed;
+	DeviceWriteView W_value_to_emb;
+	DeviceWriteView b_value_to_emb;
+	DeviceWriteView w_inject_gate;
 	DeviceWriteView W_Q_read;
 	DeviceWriteView W_K_read;
 	DeviceWriteView W_V_read;

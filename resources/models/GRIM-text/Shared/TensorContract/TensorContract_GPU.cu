@@ -1775,6 +1775,156 @@ __global__ void kernel_log_softmax_backward(
         dx[i] = dy[i] - expf(log_p[i]) * sum_dy;
 }
 
+//========================================================================
+// Softmax Forward (with optional temperature scaling)
+// p[i] = exp(x[i]/T - max) / sum_j exp(x[j]/T - max)
+// One block per row.
+//========================================================================
+__global__ void kernel_softmax_forward(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    int tokens, int dim, float inv_temperature
+) {
+    const int token_idx = blockIdx.x;
+    if (token_idx >= tokens) return;
+
+    const float* row = input  + static_cast<size_t>(token_idx) * dim;
+    float* out_row   = output + static_cast<size_t>(token_idx) * dim;
+
+    constexpr int kMaxWarps = 8;
+    __shared__ float s_warp[kMaxWarps];
+    __shared__ float s_val;
+
+    float local_max = -FLT_MAX;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        local_max = fmaxf(local_max, row[i] * inv_temperature);
+    for (int off = warpSize / 2; off > 0; off >>= 1)
+        local_max = fmaxf(local_max, __shfl_down_sync(0xffffffff, local_max, off));
+
+    const int warp_id = threadIdx.x / warpSize;
+    const int lane_id = threadIdx.x % warpSize;
+    const int num_warps = (blockDim.x + warpSize - 1) / warpSize;
+
+    if (lane_id == 0 && warp_id < kMaxWarps) s_warp[warp_id] = local_max;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        float m = -FLT_MAX;
+        for (int w = 0; w < num_warps && w < kMaxWarps; w++) m = fmaxf(m, s_warp[w]);
+        s_val = m;
+    }
+    __syncthreads();
+    const float max_val = s_val;
+
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        float e = expf(row[i] * inv_temperature - max_val);
+        out_row[i] = e;
+        local_sum += e;
+    }
+    for (int off = warpSize / 2; off > 0; off >>= 1)
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, off);
+
+    if (lane_id == 0 && warp_id < kMaxWarps) s_warp[warp_id] = local_sum;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        float s = 0.0f;
+        for (int w = 0; w < num_warps && w < kMaxWarps; w++) s += s_warp[w];
+        s_val = 1.0f / (s + 1e-7f);
+    }
+    __syncthreads();
+    const float inv_sum = s_val;
+
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        out_row[i] *= inv_sum;
+}
+
+//========================================================================
+// Softmax Backward
+// grad_x[i] += (1/T) * p[i] * (grad_y[i] - dot(grad_y, p))
+//========================================================================
+__global__ void kernel_softmax_backward(
+    const float* __restrict__ grad_output,
+    const float* __restrict__ softmax_out,
+    float* __restrict__ grad_input,
+    int tokens, int dim, float inv_temperature
+) {
+    const int token_idx = blockIdx.x;
+    if (token_idx >= tokens) return;
+
+    const float* dy = grad_output + static_cast<size_t>(token_idx) * dim;
+    const float* p  = softmax_out + static_cast<size_t>(token_idx) * dim;
+    float* dx       = grad_input  + static_cast<size_t>(token_idx) * dim;
+
+    constexpr int kMaxWarps = 8;
+    __shared__ float s_warp[kMaxWarps];
+    __shared__ float s_dot;
+
+    float local_dot = 0.0f;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        local_dot += dy[i] * p[i];
+    for (int off = warpSize / 2; off > 0; off >>= 1)
+        local_dot += __shfl_down_sync(0xffffffff, local_dot, off);
+
+    const int warp_id = threadIdx.x / warpSize;
+    const int lane_id = threadIdx.x % warpSize;
+    const int num_warps = (blockDim.x + warpSize - 1) / warpSize;
+
+    if (lane_id == 0 && warp_id < kMaxWarps) s_warp[warp_id] = local_dot;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        float s = 0.0f;
+        for (int w = 0; w < num_warps && w < kMaxWarps; w++) s += s_warp[w];
+        s_dot = s;
+    }
+    __syncthreads();
+    const float dot = s_dot;
+
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        dx[i] += p[i] * (dy[i] - dot) * inv_temperature;
+}
+
+//========================================================================
+// Concat Forward: out[i, 0:D1] = a[i,:], out[i, D1:D1+D2] = b[i,:]
+//========================================================================
+__global__ void kernel_concat_forward(
+    float* __restrict__ output,
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    int N, int D1, int D2
+) {
+    const int row = blockIdx.x;
+    if (row >= N) return;
+    const int D = D1 + D2;
+    for (int j = threadIdx.x; j < D; j += blockDim.x) {
+        if (j < D1)
+            output[static_cast<size_t>(row) * D + j] = a[static_cast<size_t>(row) * D1 + j];
+        else
+            output[static_cast<size_t>(row) * D + j] = b[static_cast<size_t>(row) * D2 + (j - D1)];
+    }
+}
+
+__global__ void kernel_concat_backward_a(
+    float* __restrict__ grad_a,
+    const float* __restrict__ grad_out,
+    int N, int D1, int D_total
+) {
+    const int row = blockIdx.x;
+    if (row >= N) return;
+    for (int j = threadIdx.x; j < D1; j += blockDim.x)
+        grad_a[static_cast<size_t>(row) * D1 + j] += grad_out[static_cast<size_t>(row) * D_total + j];
+}
+
+__global__ void kernel_concat_backward_b(
+    float* __restrict__ grad_b,
+    const float* __restrict__ grad_out,
+    int N, int D1, int D2, int D_total
+) {
+    const int row = blockIdx.x;
+    if (row >= N) return;
+    for (int j = threadIdx.x; j < D2; j += blockDim.x)
+        grad_b[static_cast<size_t>(row) * D2 + j] += grad_out[static_cast<size_t>(row) * D_total + (D1 + j)];
+}
+
 // Dropout forward: y = x * mask / (1 - p)
 // mask is 0 where dropped, 1 where kept; scale = 1/(1-p) for inverted dropout
 __global__ void kernel_dropout_forward(
@@ -6578,6 +6728,247 @@ void rope_rotation(
     }
     
     AG_TRACE("[rope_rotation] EXIT\n");
+}
+
+//========================================================================
+// SoftmaxGradFn
+//========================================================================
+struct SoftmaxGradFn : public GradFn {
+    bool input_requires_grad = false;
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
+    TensorContract::TensorShape input_shape;
+    std::shared_ptr<GradFn> input_grad_fn;
+    float* saved_softmax = nullptr;
+    int num_tokens = 0;
+    int dim = 0;
+    float inv_temperature = 1.0f;
+
+    SoftmaxGradFn() { op_name = "softmax"; }
+
+    ~SoftmaxGradFn() override {
+        if (saved_softmax) { cudaFree(saved_softmax); saved_softmax = nullptr; }
+    }
+
+    void capture_input(Tensor& x, cudaStream_t stream) {
+        input_requires_grad = x.requires_grad;
+        input_shape = x.shape;
+        input_grad_fn = x.grad_fn;
+
+        if (input_requires_grad) {
+            x.ensure_grad();
+            if (x.is_leaf) {
+                input_grad = x.grad_data();
+            } else {
+                const size_t n = x.numel();
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
+                    queueForDeferredCleanup(p);
+                });
+                input_grad = owned_input_grad.get();
+            }
+        }
+    }
+
+    void save(const float* softmax_output, int tokens_, int dim_, float inv_temp, cudaStream_t stream) {
+        num_tokens = tokens_;
+        dim = dim_;
+        inv_temperature = inv_temp;
+        const size_t bytes = static_cast<size_t>(tokens_) * dim_ * sizeof(float);
+        cudaMalloc(&saved_softmax, bytes);
+        cudaMemcpyAsync(saved_softmax, softmax_output, bytes, cudaMemcpyDeviceToDevice, stream);
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("softmax", this);
+        if (applied) return;
+        applied = true;
+        if (!input_requires_grad) return;
+        if (!saved_softmax || !input_grad) {
+            throw std::runtime_error("SoftmaxGradFn::apply: saved data or grad buffer is NULL");
+        }
+
+        kernel_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, saved_softmax, input_grad, num_tokens, dim, inv_temperature);
+
+        if (input_grad_fn) {
+            Tensor view;
+            view.data = input_grad; view.shape = input_shape;
+            view.owns_data = false; view.stream = stream;
+            input_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        if (saved_softmax) { cudaFree(saved_softmax); saved_softmax = nullptr; }
+        input_grad = nullptr;
+        input_grad_fn.reset();
+    }
+};
+
+Tensor softmax(const Tensor& x, float temperature, cudaStream_t stream) {
+    if (!x.shape.is_2d_layout()) {
+        throw std::invalid_argument("autograd::softmax: input must be 2D [tokens, dim]");
+    }
+    if (!x.data) {
+        throw std::invalid_argument("autograd::softmax: input data is NULL");
+    }
+    if (temperature < 1e-6f) temperature = 1e-6f;
+    const float inv_temp = 1.0f / temperature;
+
+    const auto dims = x.shape.as_2d();
+    const int num_tokens = dims.rows;
+    const int dim = dims.cols;
+
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "softmax_result");
+
+    kernel_softmax_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, num_tokens, dim, inv_temp);
+
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<SoftmaxGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
+        grad_fn->save(result.data, num_tokens, dim, inv_temp, stream);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+//========================================================================
+// ConcatGradFn
+//========================================================================
+struct ConcatGradFn : public GradFn {
+    bool a_requires_grad = false;
+    bool b_requires_grad = false;
+    float* grad_a = nullptr;
+    float* grad_b = nullptr;
+    std::shared_ptr<float> owned_grad_a;
+    std::shared_ptr<float> owned_grad_b;
+    TensorContract::TensorShape a_shape;
+    TensorContract::TensorShape b_shape;
+    std::shared_ptr<GradFn> a_grad_fn;
+    std::shared_ptr<GradFn> b_grad_fn;
+    int rows = 0;
+    int D1 = 0;
+    int D2 = 0;
+
+    ConcatGradFn() { op_name = "concat"; }
+
+    void capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
+        a_requires_grad = a.requires_grad;
+        b_requires_grad = b.requires_grad;
+        a_shape = a.shape;
+        b_shape = b.shape;
+        a_grad_fn = a.grad_fn;
+        b_grad_fn = b.grad_fn;
+
+        if (a_requires_grad) {
+            a.ensure_grad();
+            if (a.is_leaf) {
+                grad_a = a.grad_data();
+            } else {
+                const size_t n = a.numel();
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
+                owned_grad_a = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                grad_a = owned_grad_a.get();
+            }
+        }
+        if (b_requires_grad) {
+            b.ensure_grad();
+            if (b.is_leaf) {
+                grad_b = b.grad_data();
+            } else {
+                const size_t n = b.numel();
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
+                owned_grad_b = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                grad_b = owned_grad_b.get();
+            }
+        }
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("concat", this);
+        if (applied) return;
+        applied = true;
+
+        const int D_total = D1 + D2;
+
+        if (a_requires_grad && grad_a) {
+            kernel_concat_backward_a<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_a, grad_output.data, rows, D1, D_total);
+            if (a_grad_fn) {
+                Tensor view;
+                view.data = grad_a; view.shape = a_shape;
+                view.owns_data = false; view.stream = stream;
+                a_grad_fn->apply(view, stream);
+            }
+        }
+        if (b_requires_grad && grad_b) {
+            kernel_concat_backward_b<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_b, grad_output.data, rows, D1, D2, D_total);
+            if (b_grad_fn && b_grad_fn != a_grad_fn) {
+                Tensor view;
+                view.data = grad_b; view.shape = b_shape;
+                view.owns_data = false; view.stream = stream;
+                b_grad_fn->apply(view, stream);
+            }
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        grad_a = nullptr;
+        grad_b = nullptr;
+        a_grad_fn.reset();
+        b_grad_fn.reset();
+    }
+};
+
+Tensor concat(const Tensor& a, const Tensor& b, cudaStream_t stream) {
+    if (!a.shape.is_2d_layout() || !b.shape.is_2d_layout()) {
+        throw std::invalid_argument("autograd::concat: both inputs must be 2D");
+    }
+    const auto a_dims = a.shape.as_2d();
+    const auto b_dims = b.shape.as_2d();
+    if (a_dims.rows != b_dims.rows) {
+        throw std::invalid_argument("autograd::concat: row count mismatch (a=" +
+            std::to_string(a_dims.rows) + " b=" + std::to_string(b_dims.rows) + ")");
+    }
+    if (!a.data || !b.data) {
+        throw std::invalid_argument("autograd::concat: null data pointer");
+    }
+
+    const int N = a_dims.rows;
+    const int D1 = a_dims.cols;
+    const int D2 = b_dims.cols;
+
+    const bool needs_grad = a.requires_grad || b.requires_grad;
+    auto shape = TensorContract::TensorShape::make_BSM(N, D1 + D2);
+    Tensor result = Tensor::empty(shape, needs_grad, stream, "concat_result");
+
+    kernel_concat_forward<<<N, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        result.data, a.data, b.data, N, D1, D2);
+
+    if (needs_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<ConcatGradFn>();
+        grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
+        grad_fn->rows = N;
+        grad_fn->D1 = D1;
+        grad_fn->D2 = D2;
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
 }
 
 }  // namespace autograd

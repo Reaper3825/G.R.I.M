@@ -247,7 +247,7 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D4c: reasoning head registered\n"); fflush(stderr);
     }
 
-    // ExecutionBlock parameters
+    // ExecutionBlock parameters (v2: differentiable rewrite)
     if (execution_block_layer_) {
         registerTensor("exec_block_w_decode_1", execution_block_layer_->w_decode_1(), ParamGroupType::EXECUTION_BLOCK);
         registerNonDecayTensor("exec_block_b_decode_1", execution_block_layer_->b_decode_1(), ParamGroupType::EXECUTION_BLOCK);
@@ -255,8 +255,7 @@ void LanguageModel::buildParameterGroups() {
         registerTensor("exec_block_w_arg1_select", execution_block_layer_->w_arg1_select(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_w_arg2_select", execution_block_layer_->w_arg2_select(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_op_select", execution_block_layer_->W_op_select(), ParamGroupType::EXECUTION_BLOCK);
-        registerTensor("exec_block_W_state", execution_block_layer_->W_state(), ParamGroupType::EXECUTION_BLOCK);
-        registerTensor("exec_block_W_key_base", execution_block_layer_->W_key_base(), ParamGroupType::EXECUTION_BLOCK);
+        registerTensor("exec_block_W_key_proj", execution_block_layer_->W_key_proj(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_write_query", execution_block_layer_->W_write_query(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_write_key", execution_block_layer_->W_write_key(), ParamGroupType::EXECUTION_BLOCK);
         registerNonDecayTensor("exec_block_alpha", execution_block_layer_->alpha(), ParamGroupType::EXECUTION_BLOCK);
@@ -264,13 +263,16 @@ void LanguageModel::buildParameterGroups() {
         registerNonDecayTensor("exec_block_gamma", execution_block_layer_->gamma(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_step_embeddings", execution_block_layer_->step_embeddings(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_type_num_embed", execution_block_layer_->type_num_embed(), ParamGroupType::EXECUTION_BLOCK);
+        registerTensor("exec_block_W_value_to_emb", execution_block_layer_->W_value_to_emb(), ParamGroupType::EXECUTION_BLOCK);
+        registerNonDecayTensor("exec_block_b_value_to_emb", execution_block_layer_->b_value_to_emb(), ParamGroupType::EXECUTION_BLOCK);
+        registerTensor("exec_block_w_inject_gate", execution_block_layer_->w_inject_gate(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_Q_read", execution_block_layer_->W_Q_read(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_K_read", execution_block_layer_->W_K_read(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_V_read", execution_block_layer_->W_V_read(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_O_read", execution_block_layer_->W_O_read(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_gate_read", execution_block_layer_->W_gate_read(), ParamGroupType::EXECUTION_BLOCK);
         registerNonDecayTensor("exec_block_tau", execution_block_layer_->tau(), ParamGroupType::EXECUTION_BLOCK);
-        fprintf(stderr, "[buildParameterGroups] DIAG-D4d: execution block registered\n"); fflush(stderr);
+        fprintf(stderr, "[buildParameterGroups] DIAG-D4d: execution block v2 registered\n"); fflush(stderr);
     }
 
     // Multi-token prediction (MTP) auxiliary heads
