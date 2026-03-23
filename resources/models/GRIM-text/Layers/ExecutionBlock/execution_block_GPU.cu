@@ -161,20 +161,17 @@ __global__ void kernelGatherCandidateHidden(
 
     if (i < num_atoms) {
         const int pos = positions[i];
-        if (pos < 0 || pos >= total_tokens) {
-            for (int j = threadIdx.x; j < d_model; j += blockDim.x)
-                dst[j] = 0.0f;
-            return;
-        }
-        const float* src = H + static_cast<size_t>(pos) * d_model;
+        const bool in_range = (pos >= 0 && pos < total_tokens);
+        const float scale = in_range ? 1.0f : 0.0f;
+        const float* src = in_range ? (H + static_cast<size_t>(pos) * d_model) : dst;
         for (int j = threadIdx.x; j < d_model; j += blockDim.x)
-            dst[j] = src[j];
+            dst[j] = scale * src[j];
     } else {
         const int slot = i - num_atoms;
         const float valid = mem_valid[slot];
         const float* src = mem_state + static_cast<size_t>(slot) * d_model;
         for (int j = threadIdx.x; j < d_model; j += blockDim.x)
-            dst[j] = (valid >= 0.5f) ? src[j] : 0.0f;
+            dst[j] = valid * src[j];
     }
 }
 
@@ -199,7 +196,7 @@ __global__ void kernelGatherCandidateAtomEmb(
         const float valid = mem_valid[slot];
         const float* src = mem_emb + static_cast<size_t>(slot) * atom_dim;
         for (int j = threadIdx.x; j < atom_dim; j += blockDim.x)
-            dst[j] = (valid >= 0.5f) ? src[j] : 0.0f;
+            dst[j] = valid * src[j];
     }
 }
 
@@ -215,7 +212,7 @@ __global__ void kernelBuildCandidateMask(
     if (i < num_atoms)
         mask[i] = 1.0f;
     else
-        mask[i] = (mem_valid[i - num_atoms] >= 0.5f) ? 1.0f : 0.0f;
+        mask[i] = mem_valid[i - num_atoms];
 }
 
 // Apply mask to logits: masked_logits = logits + (1-mask)*(-1e9)
@@ -242,37 +239,38 @@ __global__ void kernelApplyValueMask(
     masked[i] = values[i] * mask[i];
 }
 
-__global__ void kernelDecodeValues(
-    float* __restrict__ decoded,
-    const float* __restrict__ cand_emb,
-    const float* __restrict__ mem_values,
-    const float* __restrict__ mem_valid,
-    const float* __restrict__ w1,
-    const float* __restrict__ b1,
-    const float* __restrict__ w2,
-    int num_atoms, int V, int atom_dim,
-    int input_dim, int hidden_dim
+// Extract a contiguous column slice: out[i, j] = in[i, start_col + j]
+__global__ void kernelSliceColumns(
+    float* __restrict__ out,      // [rows, width]
+    const float* __restrict__ in, // [rows, in_cols]
+    int rows, int in_cols, int start_col, int width
 ) {
     const int i = blockIdx.x;
+    if (i >= rows) return;
+    for (int j = threadIdx.x; j < width; j += blockDim.x)
+        out[i * width + j] = in[i * in_cols + start_col + j];
+}
+
+// Build atom/mem masks for decoded value blending
+// atom_mask[i] = 1 for atoms, 0 for memory slots
+// mem_values[i] = valid * stored_value for memory slots, 0 for atoms
+__global__ void kernelBuildDecodeComponents(
+    float* __restrict__ atom_mask,       // [C]
+    float* __restrict__ mem_values_out,  // [C]
+    const float* __restrict__ M_values,  // [V]
+    const float* __restrict__ M_valid,   // [V]
+    int num_atoms, int V
+) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
     const int C = num_atoms + V;
     if (i >= C) return;
-
     if (i < num_atoms) {
-        const float* x = cand_emb + static_cast<size_t>(i) * atom_dim + 16;
-        float hidden_vals[16];
-        for (int h = 0; h < hidden_dim; ++h) {
-            float sum = b1[h];
-            for (int d = 0; d < input_dim; ++d)
-                sum += x[d] * w1[d * hidden_dim + h];
-            hidden_vals[h] = fmaxf(sum, 0.0f);
-        }
-        float out = 0.0f;
-        for (int h = 0; h < hidden_dim; ++h)
-            out += hidden_vals[h] * w2[h];
-        decoded[i] = out;
+        atom_mask[i] = 1.0f;
+        mem_values_out[i] = 0.0f;
     } else {
         const int slot = i - num_atoms;
-        decoded[i] = (mem_valid[slot] >= 0.5f) ? mem_values[slot] : 0.0f;
+        atom_mask[i] = 0.0f;
+        mem_values_out[i] = M_valid[slot] * M_values[slot];
     }
 }
 
@@ -1105,17 +1103,27 @@ void ExecutionBlockLayer::executeStep(
     kernelBuildCandidateMask<<<(C + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         cand_mask.data, M.valid_mask.data, num_atoms, V);
 
-    // ──── 3. Decode values [1, C] (raw kernel, detached) ────
-    auto decoded_values = Tensor::zeros({1, C}, stream, "exec_decoded_values");
-    kernelDecodeValues<<<C, 1, 0, stream>>>(
-        decoded_values.data, cand_atom_emb.data, M.values.data,
-        M.valid_mask.data,
-        w_decode_1_.data, b_decode_1_.data, w_decode_2_.data,
-        num_atoms, V, ae, vid, vhd);
+    // ──── 3. Decode values [C, 1] — autograd MLP with SiLU ────
+    // 3a. Extract MLP input slice [C, vid] (dims 16..16+vid) from atom embeddings
+    auto decode_input = Tensor::zeros({C, vid}, stream, "exec_decode_input");
+    kernelSliceColumns<<<C, kBlockSize, 0, stream>>>(
+        decode_input.data, cand_atom_emb.data, C, ae, 16, vid);
 
-    // Apply value mask: decoded_values *= mask
-    kernelApplyValueMask<<<(C + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        decoded_values.data, decoded_values.data, cand_mask.data, C);
+    // 3b. MLP forward: hidden = SiLU(input @ W1 + b1), decoded = hidden @ W2
+    auto decode_hidden = autograd::matmul(decode_input, w_decode_1_, stream);     // [C, vhd]
+    decode_hidden = autograd::broadcast_add(decode_hidden, b_decode_1_, stream);  // [C, vhd]
+    decode_hidden = autograd::silu(decode_hidden, stream);                        // [C, vhd]
+    auto mlp_out = autograd::matmul(decode_hidden, w_decode_2_, stream);          // [C, 1]
+
+    // 3c. Build atom/mem masks and blend: atoms use MLP, memory uses stored values
+    auto atom_mask = Tensor::zeros({C, 1}, stream, "exec_atom_mask");
+    auto mem_vals  = Tensor::zeros({C, 1}, stream, "exec_mem_vals");
+    kernelBuildDecodeComponents<<<(C + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        atom_mask.data, mem_vals.data, M.values.data, M.valid_mask.data, num_atoms, V);
+
+    // atom_decoded zeros out memory slot positions → no MLP gradient from garbage inputs
+    auto atom_decoded   = autograd::elementwise_mul(mlp_out, atom_mask, stream);  // [C, 1]
+    auto decoded_values = autograd::add(atom_decoded, mem_vals, stream);          // [C, 1]
 
     // ──── 4. Arg selection (autograd: matmul + mask + softmax) ────
     // arg1_logits = w_arg1_select [1,dm] @ cand_hidden^T [dm,C] = [1,C]
@@ -1156,9 +1164,9 @@ void ExecutionBlockLayer::executeStep(
     auto p_arg2 = autograd::softmax(arg2_masked, temperature, stream);
 
     // ──── 5. Soft-select values and hidden (autograd: matmul) ────
-    // v1 = p_arg1 [1,C] @ decoded_values^T [C,1] = [1,1]
-    auto v1 = autograd::matmul(p_arg1, decoded_values, stream, nullptr, nullptr, true);
-    auto v2 = autograd::matmul(p_arg2, decoded_values, stream, nullptr, nullptr, true);
+    // v1 = p_arg1 [1,C] @ decoded_values [C,1] = [1,1]
+    auto v1 = autograd::matmul(p_arg1, decoded_values, stream);
+    auto v2 = autograd::matmul(p_arg2, decoded_values, stream);
 
     // h_arg1 = p_arg1 [1,C] @ cand_hidden [C,dm] = [1,dm]
     auto h_arg1 = autograd::matmul(p_arg1, cand_hidden, stream);

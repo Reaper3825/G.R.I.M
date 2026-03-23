@@ -1189,7 +1189,7 @@ FFN(x) = W2 · GELU(W1·x + b1) + b2
 
 ```bibtex
 @software{grim_language_model_2025,
-  author = {Austin (Reaper3825)},
+  author = {Austin Wadkins (Reaper3825)},
   title = {GRIM Language Model: GPU-Accelerated Transformer with ALiBi},
   year = {2025},
   url = {https://github.com/Reaper3825/G.R.I.M},
