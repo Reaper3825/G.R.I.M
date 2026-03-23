@@ -311,7 +311,9 @@ target_link_libraries(grim_language_model_gpu_impl PUBLIC
 # Model serialization library
 add_library(grim_model_serialization STATIC
 
-    ../../Layers/Serialization/Serialization_GPU.cu
+    ../../Layers/Serialization/Serialization_validate.cu
+    ../../Layers/Serialization/Serialization_load.cu
+    ../../Layers/Serialization/Serialization_save.cu
     ../../Common/grim_model_serialization.cu
 )
 set_target_properties(grim_model_serialization PROPERTIES
