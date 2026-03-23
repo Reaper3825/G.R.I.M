@@ -319,91 +319,116 @@ __global__ void kernelFourOpMixForward(
     v_out[0] = s;
 }
 
-// FourOpMix backward: compute gradients for v1, v2, and p_op
+// FourOpMix backward: compute gradients for v1, v2, and p_op (all device pointers, null-safe)
 __global__ void kernelFourOpMixBackward(
-    float* __restrict__ grad_v1,    // [1] accumulate
-    float* __restrict__ grad_v2,    // [1] accumulate
-    float* __restrict__ grad_p_op,  // [4] accumulate
-    float grad_v_out,
-    float v1, float v2,
-    const float* __restrict__ p_op, // [4]
-    const float* __restrict__ results, // [4]
+    float* __restrict__ grad_v1,           // [1] accumulate (may be null)
+    float* __restrict__ grad_v2,           // [1] accumulate (may be null)
+    float* __restrict__ grad_p_op,         // [4] accumulate
+    const float* __restrict__ grad_v_out_ptr, // [1] device
+    const float* __restrict__ pv1,         // [1] device
+    const float* __restrict__ pv2,         // [1] device
+    const float* __restrict__ p_op,        // [4]
+    const float* __restrict__ results,     // [4]
     float eps
 ) {
     if (threadIdx.x != 0) return;
+    float grad_v_out = grad_v_out_ptr[0];
+    float v1 = pv1[0];
+    float v2 = pv2[0];
     float abs_v2 = fabsf(v2);
     float denom = (abs_v2 > eps) ? v2 : copysignf(eps, v2);
-    float safe_v2 = fmaxf(abs_v2, eps);
 
-    for (int k = 0; k < 4; ++k)
-        grad_p_op[k] += results[k] * grad_v_out;
+    if (grad_p_op) {
+        for (int k = 0; k < 4; ++k)
+            grad_p_op[k] += results[k] * grad_v_out;
+    }
 
-    // dv1 = sum_k p_op[k] * d(op_k)/d(v1) * grad
-    float dv1 = 0.0f;
-    dv1 += p_op[0] * 1.0f;       // d(v1+v2)/dv1
-    dv1 += p_op[1] * 1.0f;       // d(v1-v2)/dv1
-    dv1 += p_op[2] * v2;         // d(v1*v2)/dv1
-    dv1 += p_op[3] * (1.0f / denom); // d(v1/denom)/dv1
-    grad_v1[0] += dv1 * grad_v_out;
+    if (grad_v1) {
+        float dv1 = 0.0f;
+        dv1 += p_op[0] * 1.0f;
+        dv1 += p_op[1] * 1.0f;
+        dv1 += p_op[2] * v2;
+        dv1 += p_op[3] * (1.0f / denom);
+        grad_v1[0] += dv1 * grad_v_out;
+    }
 
-    float dv2 = 0.0f;
-    dv2 += p_op[0] * 1.0f;       // d(v1+v2)/dv2
-    dv2 += p_op[1] * (-1.0f);    // d(v1-v2)/dv2
-    dv2 += p_op[2] * v1;         // d(v1*v2)/dv2
-    float div_grad = (abs_v2 >= eps) ? (-v1 / (denom * denom)) : 0.0f;
-    dv2 += p_op[3] * div_grad;
-    grad_v2[0] += dv2 * grad_v_out;
+    if (grad_v2) {
+        float dv2 = 0.0f;
+        dv2 += p_op[0] * 1.0f;
+        dv2 += p_op[1] * (-1.0f);
+        dv2 += p_op[2] * v1;
+        float div_grad = (abs_v2 >= eps) ? (-v1 / (denom * denom)) : 0.0f;
+        dv2 += p_op[3] * div_grad;
+        grad_v2[0] += dv2 * grad_v_out;
+    }
 }
 
-// Injection: H[t,j] += scale * gate[t] * result_emb[j]
-__global__ void kernelInjectResult(
-    float* __restrict__ H,              // [total_tokens, d_model]
-    const float* __restrict__ gate,     // [total_tokens]
+// Single-slot injection forward: compute gate, save pre-injection state, inject
+// H[result_slot] += (1/√d) * sigmoid(H[slot] · w_gate) * result_emb
+__global__ void kernelInjectResultSlot(
+    float* __restrict__ H,               // [total_tokens, d_model]
     const float* __restrict__ result_emb, // [d_model]
+    const float* __restrict__ w_gate,     // [d_model, 1]
     float inv_sqrt_d,
-    int total_tokens, int d_model
+    int result_slot, int d_model,
+    float* __restrict__ save_gate,        // [1] output: computed gate value
+    float* __restrict__ save_H_pre        // [d_model] output: H[slot] before injection
 ) {
-    const int t = blockIdx.x;
-    if (t >= total_tokens) return;
-    float g = gate[t] * inv_sqrt_d;
-    float* h_row = H + static_cast<size_t>(t) * d_model;
+    float* h_slot = H + static_cast<size_t>(result_slot) * d_model;
+
     for (int j = threadIdx.x; j < d_model; j += blockDim.x)
-        h_row[j] += g * result_emb[j];
+        save_H_pre[j] = h_slot[j];
+
+    __shared__ float s_gate;
+    if (threadIdx.x == 0) {
+        float logit = 0.0f;
+        for (int j = 0; j < d_model; ++j)
+            logit += h_slot[j] * w_gate[j];
+        float g = 1.0f / (1.0f + expf(-logit));
+        s_gate = g;
+        save_gate[0] = g;
+    }
+    __syncthreads();
+
+    float scale = inv_sqrt_d * s_gate;
+    for (int j = threadIdx.x; j < d_model; j += blockDim.x)
+        h_slot[j] += scale * result_emb[j];
 }
 
-// Injection backward: compute grad for H, gate, and result_emb
-__global__ void kernelInjectBackward_gate(
-    float* __restrict__ grad_gate,          // [total_tokens]
-    const float* __restrict__ grad_H,       // [total_tokens, d_model]
-    const float* __restrict__ result_emb,   // [d_model]
+// Single-slot injection backward: computes grad_result, grad_w_gate,
+// and modifies grad at slot row to include gate-path gradient
+__global__ void kernelInjectSlotBackward(
+    float* __restrict__ grad_result,       // [d_model] accumulate
+    float* __restrict__ grad_w_gate,       // [d_model] accumulate
+    float* __restrict__ mod_grad_slot,     // [d_model] in/out: copy of grad_output[slot], modified with gate-path
+    const float* __restrict__ saved_result, // [d_model]
+    const float* __restrict__ saved_H_slot, // [d_model] H[slot] before injection
+    const float* __restrict__ w_gate,       // [d_model]
+    const float* __restrict__ saved_gate,   // [1] device
     float inv_sqrt_d,
-    int total_tokens, int d_model
+    int d_model
 ) {
-    const int t = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= total_tokens) return;
-    const float* gh = grad_H + static_cast<size_t>(t) * d_model;
-    float dot = 0.0f;
-    for (int j = 0; j < d_model; ++j)
-        dot += gh[j] * result_emb[j];
-    grad_gate[t] += dot * inv_sqrt_d;
+    float gate_val = saved_gate[0];
+
+    __shared__ float s_d_logit;
+    if (threadIdx.x == 0) {
+        float dot = 0.0f;
+        for (int j = 0; j < d_model; ++j)
+            dot += mod_grad_slot[j] * saved_result[j];
+        s_d_logit = dot * inv_sqrt_d * gate_val * (1.0f - gate_val);
+    }
+    __syncthreads();
+    float d_logit = s_d_logit;
+
+    for (int j = threadIdx.x; j < d_model; j += blockDim.x) {
+        float go = mod_grad_slot[j];
+        grad_result[j] += inv_sqrt_d * gate_val * go;
+        grad_w_gate[j] += saved_H_slot[j] * d_logit;
+        mod_grad_slot[j] = go + w_gate[j] * d_logit;
+    }
 }
 
-__global__ void kernelInjectBackward_result(
-    float* __restrict__ grad_result,        // [d_model]
-    const float* __restrict__ grad_H,       // [total_tokens, d_model]
-    const float* __restrict__ gate,         // [total_tokens]
-    float inv_sqrt_d,
-    int total_tokens, int d_model
-) {
-    const int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= d_model) return;
-    float sum = 0.0f;
-    for (int t = 0; t < total_tokens; ++t)
-        sum += grad_H[static_cast<size_t>(t) * d_model + j] * gate[t];
-    grad_result[j] += sum * inv_sqrt_d;
-}
-
-// Sigmoid gate: gate[t] = sigmoid(H[t] @ w_gate)
+// Sigmoid gate for cross-attention (unchanged, used by crossAttentionRead only)
 __global__ void kernelComputeGate(
     float* __restrict__ gate,
     const float* __restrict__ H,
@@ -421,15 +446,15 @@ __global__ void kernelComputeGate(
 
 // Blended memory write: M_field = (1 - p_write) * M_field + p_write * new_val (broadcast)
 __global__ void kernelBlendedWriteValues(
-    float* __restrict__ mem_values,     // [V, 1]
-    const float* __restrict__ p_write,  // [V]
-    float new_value,
+    float* __restrict__ mem_values,          // [V, 1]
+    const float* __restrict__ p_write,       // [V]
+    const float* __restrict__ new_value_ptr, // [1] device
     int V
 ) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= V) return;
     float p = p_write[i];
-    mem_values[i] = (1.0f - p) * mem_values[i] + p * new_value;
+    mem_values[i] = (1.0f - p) * mem_values[i] + p * new_value_ptr[0];
 }
 
 __global__ void kernelBlendedWriteVectors(
@@ -512,12 +537,18 @@ __global__ void kernelComputeWriteLogits(
     const float* __restrict__ write_sc,
     const float* __restrict__ valid_mask,
     const float* __restrict__ recent_wr,
-    float alpha_val, float beta_val, float gamma_val,
+    const float* __restrict__ alpha_ptr,  // [1] device
+    const float* __restrict__ beta_ptr,   // [1] device
+    const float* __restrict__ gamma_ptr,  // [1] device
     float empty_bonus, float kappa,
     int V, int d_key
 ) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= V) return;
+
+    float alpha_val = alpha_ptr[0];
+    float beta_val  = beta_ptr[0];
+    float gamma_val = gamma_ptr[0];
 
     float k_buf[64];
     for (int j = 0; j < d_key; ++j) {
@@ -560,6 +591,38 @@ __global__ void kernelEntropy(
     out[0] = ent;
 }
 
+// Accumulate: out[0] += in[0]
+__global__ void kernelAccumScalar(
+    float* __restrict__ out,
+    const float* __restrict__ in
+) {
+    if (threadIdx.x == 0)
+        out[0] += in[0];
+}
+
+// Scale and negate: out[0] = -weight * (in[0] / count)
+__global__ void kernelScaleNegAvg(
+    float* __restrict__ out,
+    const float* __restrict__ in,
+    float weight,
+    int count
+) {
+    if (threadIdx.x == 0)
+        out[0] = -weight * (in[0] / fmaxf(static_cast<float>(count), 1.0f));
+}
+
+// Element-wise vector addition: out[i] = a[i] + b[i]
+__global__ void kernelAddVectors(
+    float* __restrict__ out,
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    int N
+) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N) return;
+    out[i] = a[i] + b[i];
+}
+
 //======================================================//
 //  Cross-attention kernels (unchanged)
 //======================================================//
@@ -569,11 +632,14 @@ __global__ void kernelCrossAttnSharpScores(
     const float* __restrict__ Q,
     const float* __restrict__ K,
     const float* __restrict__ valid,
-    float inv_sqrt_d_tau,
+    const float* __restrict__ tau_ptr, // [1] device
     int total_tokens, int num_valid, int head_dim, int topk
 ) {
     const int t = blockIdx.x;
     if (t >= total_tokens) return;
+
+    float tau = fmaxf(tau_ptr[0], 0.01f);
+    float inv_sqrt_d_tau = 1.0f / (sqrtf(static_cast<float>(head_dim)) * tau);
 
     const float* q_row = Q + static_cast<size_t>(t) * head_dim;
     float* s_row = scores + static_cast<size_t>(t) * num_valid;
@@ -669,10 +735,10 @@ __global__ void kernelDecayedUsageUpdate(
 //  FourOpMixGradFn — backward for 4-op + weighted mix
 //======================================================//
 struct FourOpMixGradFn : public GradFn {
-    float saved_v1 = 0.0f;
-    float saved_v2 = 0.0f;
-    float* saved_p_op = nullptr;     // device [4]
-    float* saved_results = nullptr;  // device [4]
+    float* saved_v1 = nullptr;       // [1] device
+    float* saved_v2 = nullptr;       // [1] device
+    float* saved_p_op = nullptr;     // [4] device
+    float* saved_results = nullptr;  // [4] device
 
     float* grad_v1 = nullptr;
     float* grad_v2 = nullptr;
@@ -693,16 +759,19 @@ struct FourOpMixGradFn : public GradFn {
     FourOpMixGradFn() { op_name = "four_op_mix"; }
 
     ~FourOpMixGradFn() override {
+        if (saved_v1) cudaFree(saved_v1);
+        if (saved_v2) cudaFree(saved_v2);
         if (saved_p_op) cudaFree(saved_p_op);
         if (saved_results) cudaFree(saved_results);
     }
 
     void capture(Tensor& v1_t, Tensor& v2_t, Tensor& p_op_t,
-                 float v1_val, float v2_val,
                  const float* d_p_op, const float* d_results,
                  cudaStream_t stream) {
-        saved_v1 = v1_val;
-        saved_v2 = v2_val;
+        cudaMalloc(&saved_v1, sizeof(float));
+        cudaMalloc(&saved_v2, sizeof(float));
+        cudaMemcpyAsync(saved_v1, v1_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(saved_v2, v2_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
         cudaMalloc(&saved_p_op, 4 * sizeof(float));
         cudaMalloc(&saved_results, 4 * sizeof(float));
@@ -741,14 +810,12 @@ struct FourOpMixGradFn : public GradFn {
         if (applied) return;
         applied = true;
 
-        float h_grad;
-        cudaMemcpy(&h_grad, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost);
-
         kernelFourOpMixBackward<<<1, 1, 0, stream>>>(
-            grad_v1 ? grad_v1 : grad_v2,
-            grad_v2 ? grad_v2 : grad_v1,
+            grad_v1,
+            grad_v2,
             grad_p_op,
-            h_grad, saved_v1, saved_v2,
+            grad_output.data,
+            saved_v1, saved_v2,
             saved_p_op, saved_results, kEps);
 
         if (v1_requires_grad && v1_grad_fn) {
@@ -770,6 +837,8 @@ struct FourOpMixGradFn : public GradFn {
 
     void release_saved() override {
         GradFn::release_saved();
+        if (saved_v1) { cudaFree(saved_v1); saved_v1 = nullptr; }
+        if (saved_v2) { cudaFree(saved_v2); saved_v2 = nullptr; }
         if (saved_p_op) { cudaFree(saved_p_op); saved_p_op = nullptr; }
         if (saved_results) { cudaFree(saved_results); saved_results = nullptr; }
         grad_v1 = nullptr; grad_v2 = nullptr; grad_p_op = nullptr;
@@ -778,21 +847,23 @@ struct FourOpMixGradFn : public GradFn {
 };
 
 //======================================================//
-//  ExecutionBlockInjectGradFn
-//  Forward: H_out = H + (1/√d_model) * gate * result_emb
-//  gate = sigmoid(H @ w_inject_gate)
+//  ExecutionBlockInjectGradFn — single-slot injection
+//  Forward: H[slot] += (1/√d) * sigmoid(H[slot]·w_gate) * result_emb
+//  Backward: identity path for all tokens, injection+gate path at slot
 //======================================================//
 struct ExecutionBlockInjectGradFn : public GradFn {
-    float* saved_gate = nullptr;      // [total_tokens]
-    float* saved_result_emb = nullptr;// [d_model]
+    float* saved_result_emb = nullptr;  // [d_model] device copy
+    float* saved_H_slot = nullptr;      // [d_model] device (pre-injection H[slot])
+    float* saved_gate = nullptr;        // [1] device (sigmoid gate value)
+    float* mod_grad_buf = nullptr;      // [total_tokens * d_model] pre-allocated for backward
     float inv_sqrt_d = 0.0f;
+    int result_slot = 0;
     int total_tokens = 0;
     int d_model = 0;
 
-    float* grad_H = nullptr;
     float* grad_result_emb = nullptr;
-    float* grad_gate_logits = nullptr;
-    std::shared_ptr<float> owned_grad_H;
+    float* w_gate_data = nullptr;       // read-only pointer to w_inject_gate_.data
+    float* w_gate_grad = nullptr;       // pointer to w_inject_gate_.grad_data() (leaf)
     std::shared_ptr<float> owned_grad_result;
 
     std::shared_ptr<GradFn> H_grad_fn;
@@ -802,25 +873,36 @@ struct ExecutionBlockInjectGradFn : public GradFn {
     bool H_requires_grad = false;
     bool result_requires_grad = false;
 
-    ExecutionBlockInjectGradFn() { op_name = "exec_inject"; }
+    ExecutionBlockInjectGradFn() { op_name = "exec_inject_slot"; }
 
     ~ExecutionBlockInjectGradFn() override {
-        if (saved_gate) cudaFree(saved_gate);
         if (saved_result_emb) cudaFree(saved_result_emb);
+        if (saved_H_slot) cudaFree(saved_H_slot);
+        if (saved_gate) cudaFree(saved_gate);
+        if (mod_grad_buf) cudaFree(mod_grad_buf);
     }
 
-    void capture(Tensor& H_t, Tensor& result_t,
-                 const float* gate_data, const float* result_data,
-                 float inv_sqrt_d_, int total_tokens_, int d_model_,
+    void capture(Tensor& H_t, Tensor& result_t, Tensor& w_gate_t,
+                 float* gate_device, float* H_slot_device,
+                 float inv_sqrt_d_, int result_slot_, int total_tokens_, int d_model_,
                  cudaStream_t stream) {
         inv_sqrt_d = inv_sqrt_d_;
+        result_slot = result_slot_;
         total_tokens = total_tokens_;
         d_model = d_model_;
 
-        cudaMalloc(&saved_gate, total_tokens_ * sizeof(float));
+        saved_gate = gate_device;
+        saved_H_slot = H_slot_device;
+
         cudaMalloc(&saved_result_emb, d_model_ * sizeof(float));
-        cudaMemcpyAsync(saved_gate, gate_data, total_tokens_ * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        cudaMemcpyAsync(saved_result_emb, result_data, d_model_ * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(saved_result_emb, result_t.data, d_model_ * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+
+        size_t total_size = static_cast<size_t>(total_tokens_) * d_model_ * sizeof(float);
+        cudaMalloc(&mod_grad_buf, total_size);
+
+        w_gate_data = w_gate_t.data;
+        w_gate_t.ensure_grad();
+        w_gate_grad = w_gate_t.grad_data();
 
         H_requires_grad = H_t.requires_grad;
         result_requires_grad = result_t.requires_grad;
@@ -829,28 +911,14 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         H_grad_fn = H_t.grad_fn;
         result_grad_fn = result_t.grad_fn;
 
-        if (H_requires_grad) {
-            H_t.ensure_grad();
-            if (H_t.is_leaf) {
-                grad_H = H_t.grad_data();
-            } else {
-                float* buf = nullptr;
-                size_t n = H_t.numel();
-                cudaMalloc(&buf, n * sizeof(float));
-                cudaMemsetAsync(buf, 0, n * sizeof(float), stream);
-                owned_grad_H = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-                grad_H = owned_grad_H.get();
-            }
-        }
         if (result_requires_grad) {
             result_t.ensure_grad();
             if (result_t.is_leaf) {
                 grad_result_emb = result_t.grad_data();
             } else {
                 float* buf = nullptr;
-                size_t n = result_t.numel();
-                cudaMalloc(&buf, n * sizeof(float));
-                cudaMemsetAsync(buf, 0, n * sizeof(float), stream);
+                cudaMalloc(&buf, d_model_ * sizeof(float));
+                cudaMemsetAsync(buf, 0, d_model_ * sizeof(float), stream);
                 owned_grad_result = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
                 grad_result_emb = owned_grad_result.get();
             }
@@ -861,40 +929,40 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         if (applied) return;
         applied = true;
 
-        // grad_H passes through (residual connection)
-        if (H_requires_grad && grad_H) {
-            size_t count = static_cast<size_t>(total_tokens) * d_model;
-            int grid = (count + 255) / 256;
-            // grad_H += grad_output (identity path of residual)
-            extern __global__ void kernel_accumulate_grad(float*, const float*, size_t, float);
-            // Can't call external kernel easily; use cudaMemcpy-based accumulation
-            // For simplicity, use the inject backward kernels which handle the inject part
+        size_t total_size = static_cast<size_t>(total_tokens) * d_model * sizeof(float);
+        cudaMemcpyAsync(mod_grad_buf, grad_output.data, total_size, cudaMemcpyDeviceToDevice, stream);
+
+        float* slot_grad = mod_grad_buf + static_cast<size_t>(result_slot) * d_model;
+
+        if (saved_gate && saved_result_emb && saved_H_slot) {
+            kernelInjectSlotBackward<<<1, kBlockSize, 0, stream>>>(
+                grad_result_emb ? grad_result_emb : slot_grad,
+                w_gate_grad,
+                slot_grad,
+                saved_result_emb, saved_H_slot, w_gate_data, saved_gate,
+                inv_sqrt_d, d_model);
         }
 
-        // grad_result_emb += sum_t(grad_H[t] * gate[t]) * inv_sqrt_d
-        if (result_requires_grad && grad_result_emb && saved_gate) {
-            kernelInjectBackward_result<<<(d_model + 255) / 256, 256, 0, stream>>>(
-                grad_result_emb, grad_output.data, saved_gate,
-                inv_sqrt_d, total_tokens, d_model);
-
-            if (result_grad_fn) {
-                Tensor view; view.data = grad_result_emb; view.shape = result_shape;
-                view.owns_data = false; view.stream = stream;
-                result_grad_fn->apply(view, stream);
-            }
+        if (result_requires_grad && result_grad_fn && grad_result_emb) {
+            Tensor view; view.data = grad_result_emb; view.shape = result_shape;
+            view.owns_data = false; view.stream = stream;
+            result_grad_fn->apply(view, stream);
         }
 
-        // Continue H gradient chain (residual: grad passes through)
-        if (H_requires_grad && H_grad_fn) {
-            H_grad_fn->apply(grad_output, stream);
+        if (H_requires_grad && H_grad_fn && mod_grad_buf) {
+            Tensor view; view.data = mod_grad_buf; view.shape = H_shape;
+            view.owns_data = false; view.stream = stream;
+            H_grad_fn->apply(view, stream);
         }
     }
 
     void release_saved() override {
         GradFn::release_saved();
-        if (saved_gate) { cudaFree(saved_gate); saved_gate = nullptr; }
         if (saved_result_emb) { cudaFree(saved_result_emb); saved_result_emb = nullptr; }
-        grad_H = nullptr; grad_result_emb = nullptr;
+        if (saved_H_slot) { cudaFree(saved_H_slot); saved_H_slot = nullptr; }
+        if (saved_gate) { cudaFree(saved_gate); saved_gate = nullptr; }
+        if (mod_grad_buf) { cudaFree(mod_grad_buf); mod_grad_buf = nullptr; }
+        grad_result_emb = nullptr; w_gate_data = nullptr; w_gate_grad = nullptr;
         H_grad_fn.reset(); result_grad_fn.reset();
     }
 };
@@ -1125,43 +1193,24 @@ void ExecutionBlockLayer::executeStep(
     auto atom_decoded   = autograd::elementwise_mul(mlp_out, atom_mask, stream);  // [C, 1]
     auto decoded_values = autograd::add(atom_decoded, mem_vals, stream);          // [C, 1]
 
-    // ──── 4. Arg selection (autograd: matmul + mask + softmax) ────
+    // ──── 4. Arg selection (autograd: matmul + detached mask + softmax) ────
     // arg1_logits = w_arg1_select [1,dm] @ cand_hidden^T [dm,C] = [1,C]
     auto arg1_logits = autograd::matmul(w_arg1_select_, cand_hidden, stream,
                                          nullptr, nullptr, true);
 
-    // Apply mask: create penalty tensor (detached)
-    auto mask_penalty = Tensor::zeros({1, C}, stream, "exec_mask_penalty");
+    // Masking is non-learnable — detach logits, apply mask in-place, then softmax
+    auto arg1_detached = arg1_logits.detach(stream);
     kernelApplyLogitMask<<<(C + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        mask_penalty.data, arg1_logits.data, cand_mask.data, C);
-    // Replace arg1_logits data with masked version in a new tensor via add(logits, penalty_delta)
-    // Actually, kernelApplyLogitMask writes masked result to mask_penalty. Use that directly.
-    // Create a Tensor view over the masked data for softmax
-    Tensor arg1_masked;
-    arg1_masked.data = mask_penalty.data;
-    arg1_masked.shape = TensorContract::TensorShape::make_BSM(1, C);
-    arg1_masked.owns_data = false;
-    arg1_masked.requires_grad = arg1_logits.requires_grad;
-    arg1_masked.is_leaf = false;
-    arg1_masked.grad_fn = arg1_logits.grad_fn;
-
-    auto p_arg1 = autograd::softmax(arg1_masked, temperature, stream);
+        arg1_detached.data, arg1_detached.data, cand_mask.data, C);
+    auto p_arg1 = autograd::softmax(arg1_detached, temperature, stream);
 
     // Same for arg2
     auto arg2_logits = autograd::matmul(w_arg2_select_, cand_hidden, stream,
                                          nullptr, nullptr, true);
-    auto mask_penalty2 = Tensor::zeros({1, C}, stream, "exec_mask_penalty2");
+    auto arg2_detached = arg2_logits.detach(stream);
     kernelApplyLogitMask<<<(C + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        mask_penalty2.data, arg2_logits.data, cand_mask.data, C);
-    Tensor arg2_masked;
-    arg2_masked.data = mask_penalty2.data;
-    arg2_masked.shape = TensorContract::TensorShape::make_BSM(1, C);
-    arg2_masked.owns_data = false;
-    arg2_masked.requires_grad = arg2_logits.requires_grad;
-    arg2_masked.is_leaf = false;
-    arg2_masked.grad_fn = arg2_logits.grad_fn;
-
-    auto p_arg2 = autograd::softmax(arg2_masked, temperature, stream);
+        arg2_detached.data, arg2_detached.data, cand_mask.data, C);
+    auto p_arg2 = autograd::softmax(arg2_detached, temperature, stream);
 
     // ──── 5. Soft-select values and hidden (autograd: matmul) ────
     // v1 = p_arg1 [1,C] @ decoded_values [C,1] = [1,1]
@@ -1184,13 +1233,7 @@ void ExecutionBlockLayer::executeStep(
     auto op_logits = autograd::matmul(pool, W_op_select_, stream); // [1, 4]
     auto p_op = autograd::softmax(op_logits, temperature, stream);  // [1, 4]
 
-    // ──── 8. Four ops + soft mix (custom GradFn) ────
-    // Read v1, v2 scalars from device for kernel
-    float h_v1 = 0.0f, h_v2 = 0.0f;
-    cudaStreamSynchronize(stream);
-    cudaMemcpy(&h_v1, v1.data, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_v2, v2.data, sizeof(float), cudaMemcpyDeviceToHost);
-
+    // ──── 8. Four ops + soft mix (custom GradFn, all GPU) ────
     auto op_results = Tensor::zeros({1, nop}, stream, "exec_op_results");
     kernelFourOps<<<1, 1, 0, stream>>>(op_results.data, v1.data, v2.data, kEps);
 
@@ -1200,63 +1243,58 @@ void ExecutionBlockLayer::executeStep(
     kernelFourOpMixForward<<<1, 1, 0, stream>>>(
         v_out.data, p_op.data, op_results.data, nop);
 
-    // Attach FourOpMixGradFn
     {
         auto grad_fn = std::make_shared<FourOpMixGradFn>();
-        grad_fn->capture(v1, v2, p_op, h_v1, h_v2, p_op.data, op_results.data, stream);
+        grad_fn->capture(v1, v2, p_op, p_op.data, op_results.data, stream);
         v_out.grad_fn = grad_fn;
     }
 
     // ──── 9. Linear value embedding (autograd: matmul + add) ────
-    // result_emb = v_out [1,1] @ W_value_to_emb [1,dm] = [1,dm]
     auto result_emb = autograd::matmul(v_out, W_value_to_emb_, stream);
     result_emb = autograd::add(result_emb, b_value_to_emb_, stream);
 
-    // ──── 10. Inject into H (custom GradFn) ────
-    // gate = sigmoid(H @ w_inject_gate) [total_tokens, 1] -> flatten to [total_tokens]
-    auto gate = Tensor::zeros({1, total_tokens}, stream, "exec_gate");
-    kernelComputeGate<<<(total_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        gate.data, H.data, w_inject_gate_.data, total_tokens, dm);
-
+    // ──── 10. Inject into H at result_slot (single slot, custom GradFn) ────
+    int result_slot;
+    if (config_.result_slot_mode == 1 && config_.result_slot_index >= 0 &&
+        config_.result_slot_index < total_tokens) {
+        result_slot = config_.result_slot_index;
+    } else {
+        result_slot = total_tokens - 1;
+    }
     float inv_sqrt_d = 1.0f / sqrtf(static_cast<float>(dm));
 
-    // Save state for backward before mutation
-    auto inject_fn = std::make_shared<ExecutionBlockInjectGradFn>();
-    inject_fn->capture(H, result_emb, gate.data, result_emb.data,
-                       inv_sqrt_d, total_tokens, dm, stream);
+    float* save_gate_buf = nullptr;
+    float* save_H_slot_buf = nullptr;
+    cudaMalloc(&save_gate_buf, sizeof(float));
+    cudaMalloc(&save_H_slot_buf, dm * sizeof(float));
 
-    // Forward: H += (1/√d) * gate * result_emb (broadcast)
-    kernelInjectResult<<<total_tokens, kBlockSize, 0, stream>>>(
-        H.data, gate.data, result_emb.data, inv_sqrt_d, total_tokens, dm);
+    kernelInjectResultSlot<<<1, kBlockSize, 0, stream>>>(
+        H.data, result_emb.data, w_inject_gate_.data,
+        inv_sqrt_d, result_slot, dm,
+        save_gate_buf, save_H_slot_buf);
 
-    // Update H's grad_fn for the injection
-    H.grad_fn = inject_fn;
-    H.is_leaf = false;
-    H.requires_grad = true;
+    {
+        auto inject_fn = std::make_shared<ExecutionBlockInjectGradFn>();
+        inject_fn->capture(H, result_emb, w_inject_gate_,
+                           save_gate_buf, save_H_slot_buf,
+                           inv_sqrt_d, result_slot, total_tokens, dm, stream);
+        H.grad_fn = inject_fn;
+        H.is_leaf = false;
+        H.requires_grad = true;
+    }
 
-    // ──── 11. Write to memory (blended, softmax-weighted) ────
-    // write_context = concat(h_arg1, h_arg2, context, result_emb) [1, 4*dm]
+    // ──── 11. Write to memory (blended, softmax-weighted, all GPU) ────
     auto write_ctx_12 = autograd::concat(h_arg1, h_arg2, stream);
     auto write_ctx_123 = autograd::concat(write_ctx_12, context, stream);
-    auto write_ctx = autograd::concat(write_ctx_123, result_emb, stream); // [1, 4*dm]
+    auto write_ctx = autograd::concat(write_ctx_123, result_emb, stream);
 
-    // q_write = write_ctx @ W_write_query [1, dk]
     auto q_write = autograd::matmul(write_ctx, W_write_query_, stream);
-
-    // Normalize q
     kernelL2Normalize<<<1, 1, 0, stream>>>(q_write.data, dk);
 
-    // Compute write logits (raw kernel with host-read alpha/beta/gamma)
     auto usage_norm = Tensor::zeros({1, V}, stream);
     auto ws_norm = Tensor::zeros({1, V}, stream);
     kernelNormalizeUsage<<<1, 1, 0, stream>>>(usage_norm.data, M.usage.data, V);
     kernelNormalizeWriteScore<<<1, 1, 0, stream>>>(ws_norm.data, M.write_score.data, V);
-
-    float h_alpha, h_beta, h_gamma;
-    cudaStreamSynchronize(stream);
-    cudaMemcpy(&h_alpha, alpha_.data, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_beta,  beta_.data,  sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_gamma, gamma_.data, sizeof(float), cudaMemcpyDeviceToHost);
 
     auto write_logits = Tensor::zeros({1, V}, stream, "exec_write_logits");
     write_logits.requires_grad = true;
@@ -1265,43 +1303,24 @@ void ExecutionBlockLayer::executeStep(
         write_logits.data, q_write.data, M.key_embeds.data,
         W_write_key_.data, usage_norm.data, ws_norm.data,
         M.valid_mask.data, M.recent_write_mask.data,
-        h_alpha, h_beta, h_gamma,
+        alpha_.data, beta_.data, gamma_.data,
         config_.empty_slot_bonus, config_.diversity_kappa,
         V, dk);
 
-    // p_write = softmax(write_logits / T)
     auto p_write = autograd::softmax(write_logits, temperature, stream);
 
-    // Blended memory write
-    float h_v_out = 0.0f;
-    cudaMemcpy(&h_v_out, v_out.data, sizeof(float), cudaMemcpyDeviceToHost);
-
     kernelBlendedWriteValues<<<(V + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        M.values.data, p_write.data, h_v_out, V);
+        M.values.data, p_write.data, v_out.data, V);
 
-    // state_new = result_emb + step_emb[step]
+    // state_new = result_emb + step_embeddings[step]
     auto state_new = Tensor::zeros({1, dm}, stream, "exec_state_new");
-    cudaMemcpyAsync(state_new.data, result_emb.data, dm * sizeof(float), cudaMemcpyDeviceToDevice, stream);
     const float* step_emb_ptr = step_embeddings_.data + static_cast<size_t>(step) * dm;
-    // Add step embedding in-place
-    kernelSmallMatmul<<<1, 1, 0, stream>>>(state_new.data, state_new.data, state_new.data, 0, 0, 0);
-    // Actually, just add element-wise:
-    for (int j = 0; j < dm; j += kBlockSize) {
-        // Use a simple add kernel - but we don't have one exposed. Use cudaMemcpy approach:
-    }
-    // Simpler: launch a small add kernel
-    {
-        // kernelSmallMatmul won't work here. Just do device-side add via a lambda-like kernel.
-        // Use the existing AddStepEmb pattern:
-    }
+    kernelAddVectors<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        state_new.data, result_emb.data, step_emb_ptr, dm);
 
-    // Blend state_embeds
     kernelBlendedWriteVectors<<<V, kBlockSize, 0, stream>>>(
-        M.state_embeds.data, p_write.data, result_emb.data, V, dm);
-    // Add step embedding to each blended state (weighted by p_write)
-    // For simplicity, add step embedding to the blended result (all slots get it proportionally)
+        M.state_embeds.data, p_write.data, state_new.data, V, dm);
 
-    // Compute key_new = result_emb @ W_key_proj [1, dk]
     auto key_new = Tensor::zeros({1, dk}, stream, "exec_key_new");
     kernelSmallMatmul<<<1, dk, 0, stream>>>(
         key_new.data, result_emb.data, W_key_proj_.data, 1, dm, dk);
@@ -1309,22 +1328,16 @@ void ExecutionBlockLayer::executeStep(
     kernelBlendedWriteVectors<<<V, kBlockSize, 0, stream>>>(
         M.key_embeds.data, p_write.data, key_new.data, V, dk);
 
-    // Update valid mask
     kernelBlendedWriteValidMask<<<(V + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         M.valid_mask.data, p_write.data, V);
 
-    // Update recent_write_mask = p_write
     cudaMemcpyAsync(M.recent_write_mask.data, p_write.data, V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
-    // Reset usage for newly written slots (weighted)
-    // usage[i] *= (1 - p_write[i])  (decay proportional to write probability)
-    // This is implicit in the blended write - skip explicit reset
+    // Monotonic growth: one slot becomes "filled" per step, preserving sparsity
+    // and learnable slot competition. valid_mask handles soft validity filtering.
+    M.num_filled = std::min(V, M.num_filled + 1);
 
-    // Track filled count (with blended writes, all slots are partially filled)
-    if (M.num_filled < V)
-        M.num_filled = V; // All slots are now in play
-
-    // ──── 12. Diagnostic output (optional) ────
+    // ──── 12. Diagnostic output (GPU-only, no host sync) ────
     if (diag_out) {
         diag_out->p_arg1 = Tensor::zeros({1, C}, stream);
         cudaMemcpyAsync(diag_out->p_arg1.data, p_arg1.data, C * sizeof(float), cudaMemcpyDeviceToDevice, stream);
@@ -1338,27 +1351,6 @@ void ExecutionBlockLayer::executeStep(
         cudaMemcpyAsync(diag_out->v_out.data, v_out.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
         diag_out->result_emb = Tensor::zeros({1, dm}, stream);
         cudaMemcpyAsync(diag_out->result_emb.data, result_emb.data, dm * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-
-        if (config_.diag_logging) {
-            cudaStreamSynchronize(stream);
-            auto entropy_scalar = [](const float* d_probs, int n, cudaStream_t s) -> float {
-                auto buf = Tensor::zeros({1, 1}, s);
-                kernelEntropy<<<1, 1, 0, s>>>(buf.data, d_probs, n);
-                float val = 0.0f;
-                cudaMemcpy(&val, buf.data, sizeof(float), cudaMemcpyDeviceToHost);
-                return val;
-            };
-            float ent_arg1 = entropy_scalar(p_arg1.data, C, stream);
-            float ent_op   = entropy_scalar(p_op.data, nop, stream);
-            fprintf(stderr, "[ExecBlock diag] step=%d H(p_arg1)=%.4f H(p_op)=%.4f |v_out|=%.6f",
-                    step, ent_arg1, ent_op, fabsf(h_v_out));
-            // L2 norm of result_emb
-            float l2 = 0.0f;
-            std::vector<float> h_emb(dm);
-            cudaMemcpy(h_emb.data(), result_emb.data, dm * sizeof(float), cudaMemcpyDeviceToHost);
-            for (int j = 0; j < dm; ++j) l2 += h_emb[j] * h_emb[j];
-            fprintf(stderr, " ||result_emb||=%.6f\n", sqrtf(l2));
-        }
     }
 }
 
@@ -1370,38 +1362,31 @@ Tensor ExecutionBlockLayer::computeEntropyLoss(
     float weight,
     cudaStream_t stream) const
 {
+    // Entropy loss is a non-differentiable monitoring regularizer.
+    // It is computed via raw CUDA kernels and is NOT connected to the autograd graph.
     if (steps.empty() || weight <= 0.0f) {
-        auto zero = Tensor::zeros({1, 1}, stream, "exec_entropy_zero");
-        zero.requires_grad = true;
-        return zero;
+        return Tensor::zeros({1, 1}, stream, "exec_entropy_zero");
     }
 
-    float total_entropy = 0.0f;
+    auto accum = Tensor::zeros({1, 1}, stream, "exec_entropy_accum");
+    auto tmp   = Tensor::zeros({1, 1}, stream, "exec_entropy_tmp");
     int count = 0;
 
     for (const auto& s : steps) {
-        auto compute_ent = [&](const Tensor& probs, int n) {
+        auto accum_ent = [&](const Tensor& probs, int n) {
             if (!probs.data || n <= 0) return;
-            auto buf = Tensor::zeros({1, 1}, stream);
-            kernelEntropy<<<1, 1, 0, stream>>>(buf.data, probs.data, n);
-            float val = 0.0f;
-            cudaStreamSynchronize(stream);
-            cudaMemcpy(&val, buf.data, sizeof(float), cudaMemcpyDeviceToHost);
-            total_entropy += val;
+            kernelEntropy<<<1, 1, 0, stream>>>(tmp.data, probs.data, n);
+            kernelAccumScalar<<<1, 1, 0, stream>>>(accum.data, tmp.data);
             count++;
         };
-        if (s.p_arg1.data) compute_ent(s.p_arg1, s.p_arg1.shape.flat.cols);
-        if (s.p_arg2.data) compute_ent(s.p_arg2, s.p_arg2.shape.flat.cols);
-        if (s.p_op.data)   compute_ent(s.p_op, s.p_op.shape.flat.cols);
-        if (s.p_write.data) compute_ent(s.p_write, s.p_write.shape.flat.cols);
+        if (s.p_arg1.data) accum_ent(s.p_arg1, s.p_arg1.shape.flat.cols);
+        if (s.p_arg2.data) accum_ent(s.p_arg2, s.p_arg2.shape.flat.cols);
+        if (s.p_op.data)   accum_ent(s.p_op, s.p_op.shape.flat.cols);
+        if (s.p_write.data) accum_ent(s.p_write, s.p_write.shape.flat.cols);
     }
 
-    float avg = (count > 0) ? (total_entropy / static_cast<float>(count)) : 0.0f;
-    float neg_weighted = -weight * avg;
-
     auto result = Tensor::zeros({1, 1}, stream, "exec_entropy_loss");
-    result.requires_grad = true;
-    cudaMemcpyAsync(result.data, &neg_weighted, sizeof(float), cudaMemcpyHostToDevice, stream);
+    kernelScaleNegAvg<<<1, 1, 0, stream>>>(result.data, accum.data, weight, count);
     return result;
 }
 
@@ -1435,15 +1420,10 @@ void ExecutionBlockLayer::crossAttentionRead(
     kernelSmallMatmul<<<nv, hd, 0, stream>>>(
         V_proj.data, M.state_embeds.data, W_V_read_.data, nv, dm, hd);
 
-    float h_tau;
-    cudaMemcpy(&h_tau, tau_.data, sizeof(float), cudaMemcpyDeviceToHost);
-    if (h_tau < 0.01f) h_tau = 0.01f;
-    float inv_sqrt_d_tau = 1.0f / (sqrtf(static_cast<float>(hd)) * h_tau);
-
     auto scores = Tensor::zeros({total_tokens, nv}, stream);
     kernelCrossAttnSharpScores<<<total_tokens, 1, 0, stream>>>(
         scores.data, Q.data, K_proj.data, M.valid_mask.data,
-        inv_sqrt_d_tau, total_tokens, nv, hd, topk);
+        tau_.data, total_tokens, nv, hd, topk);
 
     auto R = Tensor::zeros({total_tokens, hd}, stream);
     kernelCrossAttnWeightedValue<<<total_tokens, hd, 0, stream>>>(

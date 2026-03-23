@@ -1027,6 +1027,7 @@ struct Tensor {
     
     /// Detach from compute graph (returns view with requires_grad=false)
     Tensor detach() const;
+    Tensor detach(cudaStream_t stream) const;
     
     //--------------------------------------------------//
     // Backward Pass

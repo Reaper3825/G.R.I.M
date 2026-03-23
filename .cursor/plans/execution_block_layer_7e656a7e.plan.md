@@ -514,7 +514,7 @@ The Execution Block must be implemented with strict file boundaries. Each file o
 - Provide storage lifetime and clearing behavior
 - Contain no execution kernels or policy logic
 
-`**resources/models/GRIM-text/training/Autograd/AutogradTraining.hpp**`
+`**resources/models/GRIM-text/training/Autograd/AutogradTraining.hpp`**
 
 - Extend `AutogradContext` with `ExecutionBlockLayer*`
 - Declare integration surface only
@@ -750,8 +750,8 @@ CUDA kernels:
 12. `**kernelWriteMemorySlot`** -- write all fields, key from result_emb@W_key_base, step encoding, reset usage, update recent_write_mask
 13. `**kernelCrossAttnQKV`** -- Q=H@W_Q, K=M.key@W_K, V=M.state@W_V
 14. `**kernelCrossAttnSharpScores`** -- `(Q@K^T) / (sqrt(d) * tau)`, valid_mask, top-k=1 default, softmax
-15. `**kernelCrossAttnGatedOutput*`* -- `g = sigmoid(H @ W_gate)`, `R = attn @ V`, `H += g * (R @ W_O)`
-16. `**kernelDecayedUsageUpdate**` -- `M.usage = decay * M.usage + sum_queries(attn_weights)`
+15. `**kernelCrossAttnGatedOutput`** -- `g = sigmoid(H @ W_gate)`, `R = attn @ V`, `H += g * (R @ W_O)`
+16. `**kernelDecayedUsageUpdate*`* -- `M.usage = decay * M.usage + sum_queries(attn_weights)`
 17. `**validation helpers / checked launch wrappers**` -- validate tensor ranks, extents, candidate counts, slot ranges, and projection compatibility before dispatch; fatal on mismatch
 
 The 8 ops (all computed, one selected via STE):

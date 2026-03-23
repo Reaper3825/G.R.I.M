@@ -66,6 +66,8 @@ struct ExecutionBlockConfig {
     float temp_end           = 0.5f;
     int   temp_schedule      = 0;   // 0=linear, 1=cosine
     float entropy_weight     = 0.01f;
+    int   result_slot_mode   = 0;     // 0 = last token, 1 = fixed index
+    int   result_slot_index  = -1;    // used when result_slot_mode == 1
     bool  diag_logging       = false;
     cudaStream_t stream      = nullptr;
     cublasHandle_t cublas_handle = nullptr;

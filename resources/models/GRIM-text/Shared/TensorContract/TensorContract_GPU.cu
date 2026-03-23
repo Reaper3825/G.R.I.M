@@ -1160,6 +1160,12 @@ Tensor Tensor::detach() const {
     return t;
 }
 
+Tensor Tensor::detach(cudaStream_t s) const {
+    Tensor t = detach();
+    t.stream = s;
+    return t;
+}
+
 //======================================================//
 //  Backward Pass
 //======================================================//
