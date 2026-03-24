@@ -22,6 +22,7 @@ static json conceptBlockToJson(const GRIM::ConceptBlock& cb) {
     j["name"]               = cb.name;
     j["question"]           = cb.question;
     j["intermediates"]      = cb.intermediates;
+    j["explanation"]        = cb.explanation;
     j["answer"]             = cb.answer;
     j["intermediate_count"] = cb.intermediate_count;
     j["step_index"]         = cb.step_index;
@@ -29,6 +30,26 @@ static json conceptBlockToJson(const GRIM::ConceptBlock& cb) {
     j["timestamp"]          = cb.timestamp;
     if (!cb.source_sequence_id.empty())
         j["source_sequence_id"] = cb.source_sequence_id;
+
+    if (!cb.state_0.type.empty() || !cb.state_0.atoms.empty()) {
+        json s0;
+        s0["atoms"] = cb.state_0.atoms;
+        s0["type"]  = cb.state_0.type;
+        j["state_0"] = s0;
+    }
+    if (!cb.execution.empty()) {
+        json arr = json::array();
+        for (const auto& st : cb.execution) {
+            json e;
+            e["op"]     = st.op;
+            e["args"]   = st.args;
+            e["result"] = st.result;
+            arr.push_back(std::move(e));
+        }
+        j["execution"] = std::move(arr);
+    }
+    if (cb.state_1.has_result)
+        j["state_1"] = json{{"result", cb.state_1.result}};
     return j;
 }
 
@@ -47,6 +68,45 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
             if (s.is_string()) cb.intermediates.push_back(s.get<std::string>());
         }
     }
+    if (j.contains("explanation") && j["explanation"].is_array()) {
+        for (const auto& s : j["explanation"]) {
+            if (s.is_string()) cb.explanation.push_back(s.get<std::string>());
+        }
+    }
+
+    if (j.contains("state_0") && j["state_0"].is_object()) {
+        const auto& s0 = j["state_0"];
+        cb.state_0.type = s0.value("type", std::string());
+        if (s0.contains("atoms") && s0["atoms"].is_array()) {
+            for (const auto& a : s0["atoms"]) {
+                if (a.is_number()) cb.state_0.atoms.push_back(a.get<double>());
+            }
+        }
+    }
+
+    if (j.contains("execution") && j["execution"].is_array()) {
+        for (const auto& e : j["execution"]) {
+            if (!e.is_object()) continue;
+            GRIM::ConceptExecutionStep step;
+            step.op     = e.value("op", std::string());
+            step.result = e.value("result", 0.0);
+            if (e.contains("args") && e["args"].is_array()) {
+                for (const auto& a : e["args"]) {
+                    if (a.is_number()) step.args.push_back(a.get<double>());
+                }
+            }
+            cb.execution.push_back(std::move(step));
+        }
+    }
+
+    if (j.contains("state_1") && j["state_1"].is_object()) {
+        const auto& s1 = j["state_1"];
+        if (s1.contains("result") && s1["result"].is_number()) {
+            cb.state_1.result     = s1["result"].get<double>();
+            cb.state_1.has_result = true;
+        }
+    }
+
     cb.recomputeDerived();
     return cb;
 }
@@ -639,6 +699,22 @@ std::vector<size_t> DatasetTarget::searchConceptBlocks(
             bool match = toLower(cb.name).find(lq) != std::string::npos
                       || toLower(cb.question).find(lq) != std::string::npos
                       || toLower(cb.answer).find(lq) != std::string::npos;
+            if (!match) {
+                for (const auto& line : cb.intermediates) {
+                    if (toLower(line).find(lq) != std::string::npos) {
+                        match = true;
+                        break;
+                    }
+                }
+            }
+            if (!match) {
+                for (const auto& line : cb.explanation) {
+                    if (toLower(line).find(lq) != std::string::npos) {
+                        match = true;
+                        break;
+                    }
+                }
+            }
             if (!match) continue;
         }
         results.push_back(i);
@@ -661,6 +737,22 @@ std::vector<size_t> DatasetTarget::filterConceptBlocks(
             bool match = toLower(cb.name).find(lq) != std::string::npos
                       || toLower(cb.question).find(lq) != std::string::npos
                       || toLower(cb.answer).find(lq) != std::string::npos;
+            if (!match) {
+                for (const auto& line : cb.intermediates) {
+                    if (toLower(line).find(lq) != std::string::npos) {
+                        match = true;
+                        break;
+                    }
+                }
+            }
+            if (!match) {
+                for (const auto& line : cb.explanation) {
+                    if (toLower(line).find(lq) != std::string::npos) {
+                        match = true;
+                        break;
+                    }
+                }
+            }
             if (!match) continue;
         }
         results.push_back(i);

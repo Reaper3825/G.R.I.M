@@ -608,6 +608,8 @@ SequenceData loadTrainingData(
                 seq.token_text_features.insert(seq.token_text_features.begin(), 0);
             }
             seq.targets.insert(seq.targets.begin(), -1);
+            if (!seq.token_exec_slots.empty())
+                seq.token_exec_slots.insert(seq.token_exec_slots.begin(), static_cast<int32_t>(-1));
             added_bos++;
         }
 
@@ -627,6 +629,8 @@ SequenceData loadTrainingData(
                 seq.targets.back() = eos_id;  // position before EOS → predict EOS
             }
             seq.targets.push_back(-1);  // EOS position itself: nothing follows
+            if (!seq.token_exec_slots.empty())
+                seq.token_exec_slots.push_back(static_cast<int32_t>(-1));
             added_eos++;
         }
     }
@@ -670,6 +674,8 @@ SequenceData loadTrainingData(
                 seq.token_atom_flags.resize(max_seq_len, 0);
                 seq.token_text_features.resize(
                     max_seq_len * GRIM::Tokenizer::kTextFeatureDim, 0);
+                if (!seq.token_exec_slots.empty())
+                    seq.token_exec_slots.resize(max_seq_len, static_cast<int32_t>(-1));
                 padded_count++;
             }
         };
@@ -710,6 +716,8 @@ SequenceData loadTrainingData(
                     for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                         window.token_text_features.push_back(0);
                     }
+                    if (!seq.token_exec_slots.empty())
+                        window.token_exec_slots.push_back(static_cast<int32_t>(-1));
                     bos_prepended++;
                 }
                 
@@ -732,6 +740,12 @@ SequenceData loadTrainingData(
                 window.token_text_features.insert(window.token_text_features.end(),
                     seq.token_text_features.begin() + start * GRIM::Tokenizer::kTextFeatureDim,
                     seq.token_text_features.begin() + end * GRIM::Tokenizer::kTextFeatureDim);
+
+                if (!seq.token_exec_slots.empty()) {
+                    window.token_exec_slots.insert(window.token_exec_slots.end(),
+                        seq.token_exec_slots.begin() + static_cast<ptrdiff_t>(start),
+                        seq.token_exec_slots.begin() + static_cast<ptrdiff_t>(end));
+                }
 
                 
                 // Mask first position if it's the first window (BOS already there)
@@ -776,6 +790,8 @@ SequenceData loadTrainingData(
                     window.token_ids.back() = eos_id;
                     window.token_numeric_values.back() = 0.0f;
                     window.token_atom_mask.back() = 0;
+                    if (!window.token_exec_slots.empty())
+                        window.token_exec_slots.back() = static_cast<int32_t>(-1);
                     // Clear text features for the replaced position
                     const size_t last_tf_start = (window.token_ids.size() - 1) * GRIM::Tokenizer::kTextFeatureDim;
                     for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {

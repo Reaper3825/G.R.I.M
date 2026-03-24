@@ -18,6 +18,24 @@
 
 namespace GRIM {
 
+// Structured register-style curriculum (optional). When present, training can
+// emit aligned numeric atoms + token_exec_slots (see DataLoader + GRMT v10).
+struct ConceptBlockState0 {
+    std::vector<double> atoms;
+    std::string         type;
+};
+
+struct ConceptExecutionStep {
+    std::string          op;
+    std::vector<double>  args;
+    double               result = 0.0;
+};
+
+struct ConceptBlockState1 {
+    double result     = 0.0;
+    bool   has_result = false;
+};
+
 struct ConceptBlock {
     std::string id;
     std::string name;
@@ -25,6 +43,13 @@ struct ConceptBlock {
     std::string question;
     std::vector<std::string> intermediates;
     std::string answer;
+
+    /// NL steps parallel to `intermediates`; JSON field `explanation`.
+    std::vector<std::string> explanation;
+
+    ConceptBlockState0              state_0;
+    std::vector<ConceptExecutionStep> execution;
+    ConceptBlockState1              state_1;
 
     int intermediate_count = 0;
     std::vector<int> step_index;
@@ -34,6 +59,11 @@ struct ConceptBlock {
     int64_t     timestamp = 0;
 
     void recomputeDerived() {
+        if (explanation.empty() && !intermediates.empty())
+            explanation = intermediates;
+        else if (!explanation.empty() && intermediates.empty())
+            intermediates = explanation;
+
         intermediate_count = static_cast<int>(intermediates.size());
         step_index.resize(intermediate_count);
         for (int i = 0; i < intermediate_count; ++i)

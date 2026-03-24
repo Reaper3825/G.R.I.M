@@ -1,0 +1,131 @@
+# Addition-style sequences and teaching argument selection
+
+This document explains how to **structure training (and inference) sequences** so the ExecutionBlock register machine can solve **addition-style** problems, and how the model **learns which registers to use as operands**—given the current GRIM-text implementation (slot-only candidates, hard read/write, softmax + argmax + straight-through estimators).
+
+It is **not** a substitute for `DOCUMENTATION.md` kernel-level detail; it focuses on **data design**, **supervision**, and **expectations**.
+
+---
+
+## What you provide vs what the model learns
+
+| Responsibility | You (data / pipeline) | Model (trained weights) |
+|----------------|-------------------------|-------------------------|
+| Which literal is which scalar in memory | `token_to_slot_map` per token (`-1` = non-state) + numeric side channel; `bootstrapMemoryFromSlotMap` copies into `M.values[slot]` | — |
+| Which slot is arg1 / arg2 | — | `w_arg1_select_` / `w_arg2_select_` over **value-slot** rows of `M.state_embeds`, softmax → argmax → hard read from `M.values` |
+| Which operation (+ − * /) | — | `W_op_select_` from pooled context + soft arg hiddens; softmax → argmax → `kernelHardPickOpForward` |
+| Where to write the result | — | Write head softmax over `V` (scratch masked) → argmax → `kernelHardWriteScalarDev` |
+| What token to predict next | Targets in the batch / LM loss | LM head, injection path, rest of encoder |
+
+There are **no built-in labels** that say “gold arg1 slot = 0, gold arg2 slot = 1.” Unless you add an auxiliary loss, arg identification is learned only through **end-to-end pressure** from whatever losses you optimize.
+
+---
+
+## Structuring an addition-style sequence
+
+### 1. Tokens and side channels
+
+- Represent numbers with your tokenizer’s **numeric atom** path (e.g. `<NUM>`-style tokens) so **ScratchBlock** and **numeric values** align with training.
+- Fill **`numeric_values`** at each token position with the **literal** (e.g. `3.0`, `5.0`).
+- Set **`atom_mask`** (and related flags) consistently with how `buildBatchPayload` / the dataloader already builds batches.
+
+### 2. Slot map (mandatory for register semantics)
+
+- For each **state-bearing numeric token**, set **`token_to_slot_map[pos]`** to an integer slot id in **`[num_scratch_slots, num_slots)`** (value registers only).
+- Use **two distinct slots** for two addends (e.g. first literal → slot `S`, second → `S+1`, or fixed indices like `0` and `1` when `num_scratch_slots == 0`).
+- All **non-state** positions should be **`-1`**.
+
+Bootstrap runs once per forward at the execution layer (before `executeStep` loops): it copies literals into **`M.values[slot]`** and sets **`valid_mask`**.
+
+### 3. Prompt shape (recommended for curriculum)
+
+Start with a **stable surface form**, then diversify:
+
+- Early training: fixed template, e.g. a single phrasing for “What is A plus B?” so layout and slot policy are predictable.
+- Later: paraphrases, but keep a **consistent rule** for “first number in the prompt → slot A, second → slot B” (or another rule you can maintain in the dataloader).
+
+### 4. Targets / supervision
+
+- **Language modeling:** the answer tokens (e.g. digits or a single numeric atom for the sum) should be **reachable** only if the network uses useful representations; that provides **implicit** pressure on execution heads when the block is on the backward path.
+- **Numeric head / other heads:** if you supervise a scalar at a position, ensure it is **consistent** with the story you want (register truth remains **`M.values`** for execution; readout heads are a separate contract—see project docs).
+
+### 5. Execution depth
+
+- **`execution_block_num_steps` (`K`)**: one step can do one binary op and one write. Multi-hop arithmetic may need **multiple steps** or **clear intermediate writes** to slots the next step can read.
+
+---
+
+## How the model learns to “identify args”
+
+### Default (no new code)
+
+- Arg logits are built from **slot-only** candidate hiddens (`M.state_embeds` masked by validity).
+- Forward: **argmax** chooses operand slots; **values** come only from **`M.values`** at those indices.
+- Backward: **straight-through** style routing sends gradients through **softmax** on arg distributions (see `SlotValueSTGradFn` and related autograd nodes in `execution_block_GPU.cu`).
+
+So the model learns **which slots to read** only if **incorrect reads hurt** the scalar or representation paths that your **actual loss** differentiates through.
+
+### If arg selection is too weak
+
+Add **explicit supervision** (requires training changes), for example:
+
+- Auxiliary cross-entropy on **`p_arg1` / `p_arg2`** against **gold slot indices** derived from the same `token_to_slot_map` you already build, or
+- Intermediate **copy/move** tasks (“value in slot i should appear in slot j”) before harder arithmetic.
+
+---
+
+## Inference and generation
+
+- **Single forward** (`forward`, `forwardInit`, `getNextTokenLogits`, etc.): upload **`token_to_slot_map`** together with tokens and numerics so bootstrap and `executeStep` see the same contract as training.
+- **Autoregressive `generate` / `forwardStep`:** the default path appends new tokens with **slot id `-1`** unless you pass a non-default **`new_token_slot_id`** into **`forwardStep`** (and a policy for which slot each generated `<NUM>` should use). Without that, **decode-time** numbers do not participate in registers the same way as a fully specified prompt map.
+
+---
+
+## Quick checklist (addition-style)
+
+1. **`execution_block_enabled`** and scratch path enabled as required by `AutogradTraining.cu` gating.
+2. **Two literals** in the side channel with **two distinct value slots** in `token_to_slot_map`.
+3. **Consistent mapping rule** across examples (or explicit gold for future aux loss).
+4. **Answer tokens / numeric targets** aligned with the task so wrong operands hurt the objective.
+5. **`K` large enough** if the expression needs more than one ALU step.
+6. **Inference:** H2D copy of **`token_to_slot_map`**; **generation:** define slot policy for new `<NUM>` if you need register execution while decoding.
+
+---
+
+## Code path reference (where ops run)
+
+End-to-end, ops are invoked from:
+
+1. **`Autograd::executeAutogradForward`** (`training/Autograd/AutogradTraining.cu`): encoder loop.
+2. At **`exec_layer`**: **`bootstrapMemoryFromSlotMap`**, then **`ExecutionBlockLayer::executeStep`** × **`K`**.
+3. Inside **`executeStep`** (`Layers/ExecutionBlock/execution_block_GPU.cu`): softmax heads → argmax → **`kernelReadSlotValueByRelIdx`** → **`kernelFourOps`** → **`kernelHardPickOpForward`** → hard write + injection.
+
+Later encoder layers may run **`crossAttentionRead`** from memory starting at **`exec_layer`**.
+
+---
+
+## Related files
+
+- `execution_block_GPU.hpp` / `execution_block_GPU.cu` — register machine and kernels.
+- `AutogradTraining.cu` — when the block runs; bootstrap and `executeStep` invocation.
+- `Shared/Batching/BatchPayload.*` — where `token_to_slot_map` is assembled for training.
+- `ComputeLossBatch.cu` — H2D of `token_to_slot_map` into `cached_token_to_slot_map`.
+- `Inference_GPU.cu` / `grim_language_model_gpu.cu` — inference H2D for slot map and `forwardStep` slot argument.
+
+---
+
+## Concept blocks → GRMT (training alignment)
+
+Curriculum JSON lives next to the mass dataset as `concept_blocks.jsonl` (see `DatasetTarget::conceptBlocksPath`). Structured blocks may include:
+
+- `state_0`: `{ "atoms": [...], "type": "..." }`
+- `execution`: `[{ "op", "args", "result" }, ...]`
+- `state_1`: `{ "result" }`
+- `explanation` (or legacy `intermediates`) and `answer`
+
+`PrepareTrainingDataFromCache` (`Shared/DataLoader/DataLoader.cu`) appends each block as a training sequence **before** `merged_verified_cache.jsonl` rows. It renders a canonical text layout, then a trailing `__SLOTS__` section with one numeric literal per line (derived from `state_0` + `execution`). After tokenization, the **last K numeric atoms** in the sequence are assigned consecutive `token_exec_slots` starting at base slot **0** (override with env `GRIM_CONCEPT_EXEC_BASE_SLOT` if your model uses scratch slots and value registers start higher).
+
+**GRMT v10** stores `token_exec_slots[len]` after the per-token atom strings so Phase1 sliding windows and `buildBatchPayload` receive the same slot map as encoding.
+
+---
+
+*Last updated to match the slot-only, hard-read/hard-write ExecutionBlock design and inference slot-map wiring.*

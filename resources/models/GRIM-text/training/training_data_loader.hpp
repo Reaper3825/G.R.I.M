@@ -259,6 +259,13 @@ private:
                     nonfinite_total += seq_nonfinite;
                     nonfinite_sequences++;
                 }
+
+                // GRMT v10: per-token execution slot map (after atom strings)
+                if (version >= 10) {
+                    seq.token_exec_slots.resize(seq_len);
+                    file.read(reinterpret_cast<char*>(seq.token_exec_slots.data()),
+                              seq_len * sizeof(int32_t));
+                }
             }
 
             sequences_.push_back(std::move(seq));

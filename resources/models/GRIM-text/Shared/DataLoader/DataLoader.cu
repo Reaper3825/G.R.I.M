@@ -14,6 +14,9 @@
 #include <stdexcept>
 #include <cstdint>
 #include <exception>
+#include <cmath>
+#include <sstream>
+#include <string>
 
 #include <nlohmann/json.hpp>
 #include "../../Common/grim_model_serialization_version.hpp"
@@ -212,6 +215,176 @@ namespace {
 	}
 }
 
+// ─── Concept blocks → training text + register slot order (ExecutionBlock) ───
+namespace {
+
+using json = nlohmann::json;
+
+std::string formatNumberForConcept(double x) {
+	if (x == std::floor(x) && std::fabs(x) < 1e12)
+		return std::to_string(static_cast<long long>(x));
+	std::ostringstream oss;
+	oss << x;
+	return oss.str();
+}
+
+std::vector<double> slotOrderFromConceptJson(const json& j) {
+	std::vector<double> order;
+	if (j.contains("state_0") && j["state_0"].is_object()) {
+		const auto& s0 = j["state_0"];
+		if (s0.contains("atoms") && s0["atoms"].is_array()) {
+			for (const auto& a : s0["atoms"]) {
+				if (a.is_number()) order.push_back(a.get<double>());
+			}
+		}
+	}
+	if (j.contains("execution") && j["execution"].is_array()) {
+		for (const auto& e : j["execution"]) {
+			if (!e.is_object()) continue;
+			if (e.contains("args") && e["args"].is_array()) {
+				for (const auto& a : e["args"]) {
+					if (a.is_number()) order.push_back(a.get<double>());
+				}
+			}
+			if (e.contains("result") && e["result"].is_number())
+				order.push_back(e["result"].get<double>());
+		}
+	}
+	return order;
+}
+
+std::string conceptJsonToTrainingText(const json& j) {
+	std::ostringstream os;
+	if (j.contains("name") && j["name"].is_string() && !j["name"].get<std::string>().empty())
+		os << "[[" << j["name"].get<std::string>() << "]]\n";
+	if (j.contains("question") && j["question"].is_string() && !j["question"].get<std::string>().empty())
+		os << "Q: " << j["question"].get<std::string>() << "\n";
+
+	if (j.contains("state_0") && j["state_0"].is_object()) {
+		const auto& s0 = j["state_0"];
+		if (s0.contains("type") && s0["type"].is_string() && !s0["type"].get<std::string>().empty())
+			os << "STATE0 type=" << s0["type"].get<std::string>() << "\n";
+	}
+
+	if (j.contains("execution") && j["execution"].is_array()) {
+		for (const auto& e : j["execution"]) {
+			if (!e.is_object()) continue;
+			std::string op = e.value("op", std::string());
+			os << "EXEC " << op;
+			if (e.contains("args") && e["args"].is_array()) {
+				for (const auto& a : e["args"]) {
+					if (a.is_number()) os << " " << formatNumberForConcept(a.get<double>());
+				}
+			}
+			if (e.contains("result") && e["result"].is_number())
+				os << " => " << formatNumberForConcept(e["result"].get<double>());
+			os << "\n";
+		}
+	}
+
+	if (j.contains("state_1") && j["state_1"].is_object()) {
+		const auto& s1 = j["state_1"];
+		if (s1.contains("result") && s1["result"].is_number())
+			os << "STATE1 result=" << formatNumberForConcept(s1["result"].get<double>()) << "\n";
+	}
+
+	const json* expl = nullptr;
+	if (j.contains("explanation") && j["explanation"].is_array())
+		expl = &j["explanation"];
+	else if (j.contains("intermediates") && j["intermediates"].is_array())
+		expl = &j["intermediates"];
+	if (expl) {
+		for (const auto& s : *expl) {
+			if (s.is_string()) os << "EXP: " << s.get<std::string>() << "\n";
+		}
+	}
+
+	if (j.contains("answer") && j["answer"].is_string() && !j["answer"].get<std::string>().empty())
+		os << "A: " << j["answer"].get<std::string>() << "\n";
+
+	std::vector<double> slot_order = slotOrderFromConceptJson(j);
+	if (!slot_order.empty()) {
+		os << "__SLOTS__\n";
+		for (double v : slot_order) os << formatNumberForConcept(v) << "\n";
+	}
+	return os.str();
+}
+
+bool nearEqualConceptNumeric(double expected, float got) {
+	const double g = static_cast<double>(got);
+	const double tol = 1e-3 * std::max(1.0, std::fabs(expected));
+	return std::fabs(expected - g) <= tol;
+}
+
+void assignExecSlotsFromOrder(
+	std::vector<int32_t>& exec_slots,
+	const std::vector<uint8_t>& atom_mask,
+	const std::vector<float>& numeric_values,
+	const std::vector<double>& slot_order,
+	int base_slot) {
+
+	const int n = static_cast<int>(atom_mask.size());
+	exec_slots.assign(n, -1);
+	if (slot_order.empty()) return;
+
+	std::vector<int> num_positions;
+	num_positions.reserve(n);
+	for (int t = n - 1; t >= 0; --t) {
+		if (t < static_cast<int>(atom_mask.size()) && atom_mask[t])
+			num_positions.push_back(t);
+	}
+	if (num_positions.size() < slot_order.size()) {
+		std::cerr << "[DataLoader] concept_blocks: need " << slot_order.size()
+		          << " trailing numeric atoms for slot map, found "
+		          << num_positions.size() << " — leaving slots unset\n";
+		return;
+	}
+
+	for (size_t i = 0; i < slot_order.size(); ++i) {
+		const int t         = num_positions[i];
+		const size_t sidx   = slot_order.size() - 1 - i;
+		const double expect = slot_order[sidx];
+		if (t >= static_cast<int>(numeric_values.size()) ||
+		    !nearEqualConceptNumeric(expect, numeric_values[t])) {
+			std::cerr << "[DataLoader] concept_blocks: slot value mismatch at tail index "
+			          << i << " pos=" << t << " expected=" << expect
+			          << " got=" << (t < static_cast<int>(numeric_values.size())
+			                         ? static_cast<double>(numeric_values[t]) : 0.0)
+			          << "\n";
+		}
+		exec_slots[t] = static_cast<int32_t>(base_slot + static_cast<int>(sidx));
+	}
+}
+
+void loadConceptBlocksCorpus(const fs::path& cache_dir,
+                             std::vector<std::pair<std::string, std::vector<double>>>& out) {
+	fs::path p = cache_dir / "concept_blocks.jsonl";
+	std::ifstream in(p);
+	if (!in.is_open()) {
+		std::cout << "[DataLoader] No concept_blocks.jsonl at " << p.string()
+		          << " (optional)\n";
+		return;
+	}
+	std::string line;
+	size_t lines = 0;
+	while (std::getline(in, line)) {
+		if (line.empty()) continue;
+		try {
+			json j = json::parse(line);
+			std::string text = conceptJsonToTrainingText(j);
+			if (text.size() < kMinCleanedTextLength) continue;
+			out.emplace_back(std::move(text), slotOrderFromConceptJson(j));
+			++lines;
+		} catch (const std::exception& e) {
+			std::cerr << "[DataLoader] concept_blocks.jsonl skip line: " << e.what() << "\n";
+		}
+	}
+	std::cout << "[DataLoader] Loaded " << lines << " concept block training lines from "
+	          << p.string() << std::endl;
+}
+
+}  // namespace
+
 bool PrepareTrainingDataFromCache(
 	const GrimTextPaths& paths,
 	std::string& out_training_data_path,
@@ -374,13 +547,16 @@ bool PrepareTrainingDataFromCache(
 		}
 	}
 
+	std::vector<std::pair<std::string, std::vector<double>>> concept_entries;
+	loadConceptBlocksCorpus(cache_dir, concept_entries);
+
 	if (malformed_lines > 0) {
 		std::cerr << "[DataLoader] Skipped " << malformed_lines 
 				  << " malformed JSONL lines in cache file" << std::endl;
 	}
 
-	if (texts.empty()) {
-		std::cout << "[DataLoader] Cache file is empty; nothing to tokenize." << std::endl;
+	if (texts.empty() && concept_entries.empty()) {
+		std::cout << "[DataLoader] No cache texts and no concept_blocks.jsonl entries; nothing to tokenize." << std::endl;
 		return false;
 	}
 
@@ -440,7 +616,11 @@ bool PrepareTrainingDataFromCache(
 	if (!vocab_loaded) {
 		std::cout << "[DataLoader] Training new tokenizer vocab from cache (target: " 
 				  << target_vocab_size << " tokens)..." << std::endl;
-		tokenizer.train(texts);
+		std::vector<std::string> vocab_corpus = texts;
+		vocab_corpus.reserve(texts.size() + concept_entries.size());
+		for (const auto& ce : concept_entries)
+			vocab_corpus.push_back(ce.first);
+		tokenizer.train(vocab_corpus);
 		if (!out_vocab_path.empty()) {
 			std::cout << "[DataLoader] Saving vocab to " << out_vocab_path << "..." << std::endl << std::flush;
 			if (!tokenizer.save(out_vocab_path, save_text_vocab)) {
@@ -464,48 +644,46 @@ bool PrepareTrainingDataFromCache(
 		std::vector<uint8_t> atom_mask;       // Unified per-token atom mask
 		std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Per-sequence atom registry
 		std::vector<uint32_t> atom_entry_ids;  // Per-token index into atom_table
+		std::vector<int32_t> token_exec_slots;   // GRMT v10: -1 = none; else value-slot id for bootstrap
 	};
 
 	// BOS/EOS are NOT added here — Phase1_Startup owns boundary token
 	// insertion (add_bos, add_eos config flags) and target fixup for them.
 
+	auto build_sequence = [&](const std::string& text) -> std::optional<TokenizedSequence> {
+		auto result = tokenizer.encodeWithMetadata(text);
+		if (result.token_ids.empty()) {
+			return std::nullopt;
+		}
+
+		TokenizedSequence seq;
+		seq.token_ids = std::move(result.token_ids);
+		seq.numeric_values = std::move(result.token_numeric_values);
+		seq.atom_flags = std::move(result.token_atom_flags);
+		seq.text_features = std::move(result.token_text_features);
+		seq.atom_mask = std::move(result.token_atom_mask);
+		seq.atom_table = std::move(result.atom_table);
+		seq.atom_entry_ids = std::move(result.atom_entry_ids);
+		if (seq.numeric_values.size() != seq.token_ids.size() ||
+			seq.atom_flags.size() != seq.token_ids.size() ||
+			seq.text_features.size() != seq.token_ids.size() * GRIM::Tokenizer::kTextFeatureDim ||
+			seq.atom_mask.size() != seq.token_ids.size() ||
+			seq.atom_entry_ids.size() != seq.token_ids.size()) {
+			throw std::runtime_error("[DataLoader] Token/side-channel length mismatch");
+		}
+
+		const size_t seq_len = seq.token_ids.size();
+		seq.targets.resize(seq_len, -1);
+		for (size_t j = 0; j + 1 < seq_len; ++j) {
+			seq.targets[j] = seq.token_ids[j + 1];
+		}
+		seq.token_exec_slots.assign(seq_len, -1);
+		return seq;
+	};
+
 	auto encode_texts = [&](const std::vector<std::string>& corpus) -> std::vector<TokenizedSequence> {
 		std::vector<TokenizedSequence> tokens;
 		tokens.reserve(corpus.size());
-
-		auto build_sequence = [&](const std::string& text) -> std::optional<TokenizedSequence> {
-			auto result = tokenizer.encodeWithMetadata(text);
-			if (result.token_ids.empty()) {
-				return std::nullopt; // Skip 0-length tokenizations
-			}
-
-			TokenizedSequence seq;
-			seq.token_ids = std::move(result.token_ids);
-			seq.numeric_values = std::move(result.token_numeric_values);
-			seq.atom_flags = std::move(result.token_atom_flags);
-			seq.text_features = std::move(result.token_text_features);
-			seq.atom_mask = std::move(result.token_atom_mask);
-			seq.atom_table = std::move(result.atom_table);
-			seq.atom_entry_ids = std::move(result.atom_entry_ids);
-			if (seq.numeric_values.size() != seq.token_ids.size() ||
-				seq.atom_flags.size() != seq.token_ids.size() ||
-				seq.text_features.size() != seq.token_ids.size() * GRIM::Tokenizer::kTextFeatureDim ||
-				seq.atom_mask.size() != seq.token_ids.size() ||
-				seq.atom_entry_ids.size() != seq.token_ids.size()) {
-				throw std::runtime_error("[DataLoader] Token/side-channel length mismatch");
-			}
-
-			// GRMT v6: Pure next-token prediction targets.
-			// target[j] = token_ids[j+1], last position = -1 (no next token).
-			// Phase1_Startup handles BOS/EOS insertion and target fixup around
-			// those boundary tokens.
-			const size_t seq_len = seq.token_ids.size();
-			seq.targets.resize(seq_len, -1); // Last position default: no next token
-			for (size_t j = 0; j + 1 < seq_len; ++j) {
-				seq.targets[j] = seq.token_ids[j + 1];
-			}
-			return seq;
-		};
 
 		const unsigned int workers = resolveTokenizerWorkerCount(config_tok, corpus.size());
 		if (workers <= 1) {
@@ -577,8 +755,29 @@ bool PrepareTrainingDataFromCache(
 		return tokens;
 	};
 
-	std::cout << "[DataLoader] Encoding " << texts.size() << " sequences..." << std::endl << std::flush;
-	auto all_tokens = encode_texts(texts);
+	std::cout << "[DataLoader] Encoding " << texts.size() << " cache + "
+	          << concept_entries.size() << " concept sequences..." << std::endl << std::flush;
+	std::vector<TokenizedSequence> all_tokens;
+	all_tokens.reserve(concept_entries.size() + texts.size());
+	int concept_exec_base_slot = 0;
+	if (const char* ev = std::getenv("GRIM_CONCEPT_EXEC_BASE_SLOT")) {
+		try {
+			concept_exec_base_slot = std::stoi(ev);
+		} catch (...) {}
+	}
+	for (const auto& ce : concept_entries) {
+		auto seq = build_sequence(ce.first);
+		if (!seq) continue;
+		if (!ce.second.empty()) {
+			assignExecSlotsFromOrder(seq->token_exec_slots, seq->atom_mask, seq->numeric_values,
+			                         ce.second, concept_exec_base_slot);
+		}
+		all_tokens.push_back(std::move(*seq));
+	}
+	{
+		auto cache_tok = encode_texts(texts);
+		all_tokens.insert(all_tokens.end(), cache_tok.begin(), cache_tok.end());
+	}
 
 	// Write single GRMT file — Phase1_Startup handles train/val splitting
 	fs::create_directories(cache_dir);
@@ -694,6 +893,11 @@ bool PrepareTrainingDataFromCache(
 					file.write(s.data(), slen);
 				}
 			}
+			std::vector<int32_t> slots = seq.token_exec_slots;
+			if (slots.size() != len) {
+				slots.assign(len, -1);
+			}
+			file.write(reinterpret_cast<const char*>(slots.data()), len * sizeof(int32_t));
 		}
 		return file.good();
 	};
