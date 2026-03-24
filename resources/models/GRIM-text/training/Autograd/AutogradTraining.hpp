@@ -25,8 +25,6 @@
 #include "../../GRIM/grim_language_model_cuda.hpp"
 // ScratchBlock for autograd forward path
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
-// NumericHead for numeric prediction
-#include "../../Layers/NumericHead/numeric_head_GPU.hpp"
 // ReasoningHead for structured reasoning
 #include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 // ExecutionBlock for internal numeric reasoning
@@ -62,9 +60,9 @@ struct ForwardResult {
  * Contains decomposed loss components for logging and gradient weighting.
  */
 struct LossResult {
-    float loss_value = 0.0f;         // Combined loss (text + numeric)
+    float loss_value = 0.0f;         // Combined loss (text CE + optional exec entropy)
     float text_loss = 0.0f;          // Raw text cross-entropy loss
-    float numeric_loss = 0.0f;       // Numeric head loss (log-mag Huber + sign BCE)
+    float numeric_loss = 0.0f;       // Reserved (legacy); always 0 — no value head
     float weight_text = 1.0f;
     int valid_tokens = 0;
     bool success = false;
@@ -109,7 +107,6 @@ struct AutogradContext {
     // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
-    NumericHeadLayer*  numeric_head = nullptr;
     ReasoningHeadLayer* reasoning_head = nullptr;
     ExecutionBlockLayer* execution_block = nullptr;
 
@@ -165,7 +162,6 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
-    NumericHeadLayer* numeric_head,
     ReasoningHeadLayer* reasoning_head,
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
@@ -186,7 +182,6 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
-    NumericHeadLayer* numeric_head,
     ReasoningHeadLayer* reasoning_head,
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,

@@ -35,7 +35,6 @@
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/LMHead/lm_head_GPU.hpp"
-#include "../Layers/NumericHead/numeric_head_GPU.hpp"
 #include "../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
@@ -248,6 +247,8 @@ struct GenerationConfig {
     bool do_sample = true;
     float diversity_penalty = 0.0f;
     std::vector<int> bad_words_ids;
+    /// Token IDs to mask at sampling (e.g. byte-level digit tokens); `<NUM>` must remain unmasked.
+    std::vector<int> masked_numeric_literal_ids;
     unsigned int seed = 0;
 
     // ScratchBlock reasoning during inference
@@ -338,6 +339,8 @@ struct LanguageModelConfig {
     int scratch_block_atom_embedding_dim = 64; // Atom embedding dimension
     int scratch_block_max_atoms = 256;         // Max atoms per sequence
     float scratch_block_atom_scale = 1.0f;     // Scale factor for atom injection (unit scale)
+    /// When true with ExecutionBlock: ScratchBlock uses type embedding only (no magnitude/sign/text value leak).
+    bool scratch_block_execution_first_type_only = true;
 
     // ReasoningHead config
     bool reasoning_head_enabled = false;       // Enable ReasoningHead parallel layer
@@ -623,9 +626,7 @@ public:
     Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
                        int32_t new_token_slot_id = -1);
     
-    // Reconstruct the predicted numeric value from the cached numeric head
-    // output produced by the most recent forward pass. Call AFTER sampling
-    // a <NUM> token and BEFORE forwardStep appends the next token.
+    /// Removed: NumericHead / value prediction. Do not call.
     float predictNumericValue() const;
 
     // Clear KV cache (call before starting new generation)
@@ -716,10 +717,6 @@ public:
     LMHeadLayer* getLmHeadLayer() { return lm_head_layer_.get(); }
     const LMHeadLayer* getLmHeadLayer() const { return lm_head_layer_.get(); }
 
-    // Numeric Head layer access (nullptr when disabled)
-    NumericHeadLayer* getNumericHeadLayer() { return numeric_head_layer_.get(); }
-    const NumericHeadLayer* getNumericHeadLayer() const { return numeric_head_layer_.get(); }
-
     // Reasoning Head layer access (nullptr when disabled)
     ReasoningHeadLayer* getReasoningHeadLayer() { return reasoning_head_layer_.get(); }
     const ReasoningHeadLayer* getReasoningHeadLayer() const { return reasoning_head_layer_.get(); }
@@ -794,9 +791,6 @@ private:
 
     // LM Head layer (Pattern B: persistent, self-allocating, owns final_rms_gamma)
     std::unique_ptr<LMHeadLayer> lm_head_layer_;
-
-    // Numeric Head layer (predicts log-magnitude + sign for <NUM> tokens)
-    std::unique_ptr<NumericHeadLayer> numeric_head_layer_;
 
     // Reasoning Head layer (structured reasoning: op + arg selection over atoms)
     std::unique_ptr<ReasoningHeadLayer> reasoning_head_layer_;

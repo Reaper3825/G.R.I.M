@@ -120,17 +120,6 @@ void LanguageModel::initInferenceState() {
                   << (cfg.tie_embeddings ? "true" : "false") << ")" << std::endl;
     }
 
-    // NumericHead layer (inference mode, no gradients)
-    {
-        NumericHeadConfig nh_cfg;
-        nh_cfg.d_model = cfg.d_model;
-        nh_cfg.stream = primary_stream;
-        nh_cfg.cublas_handle = training_state_.cublas_handle;
-
-        numeric_head_layer_ = std::make_unique<NumericHeadLayer>(nh_cfg, /*seed=*/0, primary_stream);
-        std::cout << "  ✓ NumericHeadLayer initialized (inference, d_model=" << cfg.d_model << ")" << std::endl;
-    }
-
     // ReasoningHead layer (inference — loaded from checkpoint if present)
     if (cfg.reasoning_head_enabled) {
         ReasoningHeadConfig rh_cfg;

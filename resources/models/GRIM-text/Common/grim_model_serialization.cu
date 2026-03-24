@@ -250,18 +250,6 @@ bool LanguageModel::save(const std::string& path) {
                        ", atom_proj=" + std::to_string(request.sources.scratch_block.atom_projection.count) + ")");
     }
 
-    // NumericHead weights
-    if (numeric_head_layer_) {
-        request.sources.numeric_head.enabled = true;
-        request.sources.numeric_head.d_model = config_.d_model;
-        request.sources.numeric_head.weights.ptr = numeric_head_layer_->weights().data;
-        request.sources.numeric_head.weights.count = static_cast<std::size_t>(2 * config_.d_model);
-        request.sources.numeric_head.bias.ptr = numeric_head_layer_->bias().data;
-        request.sources.numeric_head.bias.count = 2;
-        EmitModuleInfo(ModuleId::Checkpoint, "Processing NumericHead weights (d_model=" +
-                       std::to_string(config_.d_model) + ")");
-    }
-
     // ReasoningHead weights
     if (reasoning_head_layer_) {
         const int dt = reasoning_head_layer_->d_total();
@@ -368,7 +356,7 @@ bool LanguageModel::load(const std::string& path) {
 
     // Pattern B: call site is the sole authority for what the model requires.
     request.capabilities.requires_execution_block = (execution_block_layer_ != nullptr);
-    request.capabilities.requires_numeric_head    = (numeric_head_layer_ != nullptr);
+    request.capabilities.requires_numeric_head    = false;
     request.capabilities.requires_reasoning_head  = (reasoning_head_layer_ != nullptr);
     request.capabilities.requires_scratch_block   = (scratch_block_layer_ != nullptr && scratch_block_layer_->isEnabled());
     request.capabilities.requires_final_rms_gamma = (lm_head_layer_ != nullptr && lm_head_layer_->finalRmsGamma().data != nullptr);
@@ -476,17 +464,6 @@ bool LanguageModel::load(const std::string& path) {
         
         // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
         // Old checkpoints may contain text_feature_projection — silently ignored on load.
-    }
-
-    // NumericHead weight destinations
-    if (numeric_head_layer_) {
-        assignWrite(request.numeric_head.weights,
-                    numeric_head_layer_->weights().data,
-                    static_cast<std::size_t>(2 * config_.d_model));
-        assignWrite(request.numeric_head.bias,
-                    numeric_head_layer_->bias().data,
-                    2);
-        request.numeric_head.d_model = config_.d_model;
     }
 
     // ReasoningHead weight destinations

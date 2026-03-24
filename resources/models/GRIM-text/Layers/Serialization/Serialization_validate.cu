@@ -170,18 +170,15 @@ bool validate_checkpoint_capabilities(
         }
     }
 
-    // ─── NumericHead ───
-    if (req.requires_numeric_head) {
-        const auto* fb_nh = model_fb->numeric_head();
-        if (!fb_nh) {
-            Logging::EmitModuleError(kLogModule, "[load] FATAL: NumericHead required but missing in checkpoint");
+    // ─── NumericHead (removed from runtime; reject legacy checkpoints that carry weights) ───
+    if (const auto* fb_nh = model_fb->numeric_head()) {
+        const bool has_weights = fb_nh->projection_data() && fb_nh->projection_data()->size() > 0;
+        if (has_weights) {
+            Logging::EmitModuleError(kLogModule,
+                "[load] FATAL: checkpoint contains NumericHead weights; this build removed NumericHead "
+                "(execution-first). Train or export a checkpoint without NumericHead.");
             return false;
         }
-        const std::size_t expected_weights = 2 * d_model;
-        if (!check_fb_vec_size(fb_nh->projection_data(), expected_weights, "NumericHead weights")) return false;
-        if (!check_fb_vec_size(fb_nh->bias_data(), 2, "NumericHead bias")) return false;
-        if (!cross_check_view(load_req.numeric_head.weights, expected_weights, "NumericHead weights")) return false;
-        if (!cross_check_view(load_req.numeric_head.bias, 2, "NumericHead bias")) return false;
     }
 
     // ─── ReasoningHead ───

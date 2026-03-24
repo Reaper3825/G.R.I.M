@@ -1,248 +1,288 @@
-You are modifying GRIM’s training system to enforce **execution-first numeric reasoning**.
+You are refactoring GRIM’s numeric reasoning system to an execution-first architecture.
 
-The goal is to ensure the model CANNOT solve arithmetic via hidden state approximation and MUST rely on ExecutionBlock.
+This is a hard architectural change. Do not preserve legacy behavior. Do not add compatibility layers.
 
-This is not optional. This is a hard constraint.
-
----
-
-## GOAL
-
-Force the model to learn:
-
-(state, op, args) → execution → state'
-
-NOT:
-
-hidden_state → predicted number
+Implementation checklist and file-level notes: [.cursor/plans/execution-first_numeric_refactor_6c99d23f.plan.md](execution-first_numeric_refactor_6c99d23f.plan.md).
 
 ---
 
-## CORE RULE
+# CORE INVARIANTS (FAIL IF VIOLATED)
 
-Numeric correctness MUST come ONLY from ExecutionBlock.
+## 1. No value prediction exists anywhere in the system.
 
-The model must NOT be able to compute numeric results internally.
+* Remove NumericHead completely.
+* Remove all regression losses on numeric values.
+* No `hidden_state → scalar` mapping for answers.
 
----
+If any path produces a numeric **result** without going through ExecutionBlock → **FAIL**.
 
-## STEP 1 — REMOVE ALL VALUE-BASED SUPERVISION
+## 2. ExecutionBlock is the only source of numeric truth.
 
-Delete all training paths that supervise numeric values.
+All numeric updates must follow:
 
-Specifically:
+`(state₀, op, args) → ExecutionBlock → state₁`
 
-* Remove NumericHead loss (kernelNumericLoss)
-* Remove any regression on numeric_values
-* Remove any objective that compares predicted value to ground truth
+**Correct value with incorrect op or args is still WRONG.**
 
-There must be ZERO gradient path encouraging:
-→ “predict the number directly”
+## 3. Structured prediction only.
 
----
+Per step the model outputs logits (then argmax or sampled indices):
 
-## STEP 2 — STRUCTURED SUPERVISION ONLY
+| Head | Shape | Meaning |
+|------|--------|---------|
+| `op_logits` | `[num_ops]` | Operation |
+| `arg1_logits` | `[num_slots]` | First operand slot |
+| `arg2_logits` | `[num_slots]` | Second operand slot |
+| `write_slot_logits` | `[num_slots]` | Result destination slot |
 
-Training targets must be:
+**Loss (base, per step):**
 
-For each step:
+`L = CE(op) + CE(arg1) + CE(arg2) + CE(write_slot)`
 
-* op_target
-* arg1_target
-* arg2_target
-* write_slot_target
+**No numeric loss term. Ever.**
 
-Loss:
+## 4. Step-wise supervision is mandatory.
 
-L_total =
-CE(op_logits, op_target)
+The dataset must provide **ordered** steps:
 
-* CE(arg1_logits, arg1_target)
-* CE(arg2_logits, arg2_target)
-* CE(write_slot_logits, write_slot_target)
+`step_k: (op, arg1, arg2, write_slot)` with teacher targets for each head.
 
-No numeric loss.
+Do **not** collapse multi-step problems into single-step supervision.
 
 ---
 
-## STEP 3 — EXECUTION-GROUNDED CORRECTNESS
+# INPUT AND SLOTS
 
-After each predicted step:
-
-1. Execute:
-   v_out = ExecutionBlock(op, args)
-
-2. Compare against ground truth:
-
-If v_out != expected_value:
-→ apply penalty to (op, arg1, arg2)
-
-Do NOT train value prediction.
-
-All numeric correctness is enforced through:
-→ correctness of op + slot selection
+* Literals enter **only** at parse time: bind each `<NUM>` to a slot and fill `numeric_values` / `token_to_slot_map`.
+* During **generation**, slots come **only** from **input** or from **execution write-back**. **No dynamic slot creation** (no new slot indices invented by the sampler).
+* `<NUM>` **must** always map to a bound slot; if not → **throw**.
 
 ---
 
-## STEP 4 — HARD DISABLE VALUE LEAKAGE
+# EXECUTION-GROUNDED LEARNING
 
-For arithmetic-tagged batches:
+After each supervised step:
 
-* Disable all value-based ScratchBlock injection:
+`v_out = ExecutionBlock(op, arg1, arg2)` (using current slot state and `write_slot` as implemented in ExecutionBlock).
 
-  * remove log-magnitude features
-  * remove sign features
-  * remove numeric-derived embeddings
-
-Only allow:
-
-* type embedding (this is a number)
-
-Hidden state must NOT contain enough information to reconstruct numeric values.
+Compare `v_out` to `expected_value` for that step (from the teacher trace). This comparison **gates** routing losses below—it is **not** a regression target for a value head.
 
 ---
 
-## STEP 5 — EXECUTION DEPENDENCY ENFORCEMENT
+## Step X — Execution-consistency loss (REQUIRED)
 
-During training:
+If `v_out != expected_value`:
 
-If correct answer requires execution:
+* `CE(arg1) *= α`
+* `CE(arg2) *= α`
 
-* model MUST go through ExecutionBlock
-* no shortcut paths allowed
+**Constraint:** `α > 1`, configurable.
 
-If model produces correct value WITHOUT correct op:
-→ treat as WRONG
+**Purpose:** tie numeric correctness to **operand slot** selection.
 
-Correctness is defined as:
-
-* correct op
-* correct arguments
-* correct transition
-
-NOT correct numeric output alone
+Still **cross-entropy on logits**, not MSE on `v_out`.
 
 ---
 
-## STEP 6 — STEP-WISE SUPERVISION (CRITICAL)
+## Step Y — Joint structured loss (REQUIRED — choose one and document)
 
-Each training example must include ordered steps:
+**Option A — joint head**
 
-Example:
-"12 + 7 * 3"
+* `L_joint = CE(joint_logits, target_joint)` where `joint_logits` is a single discrete distribution over a feasible encoding of `(op, arg1, arg2)` and `target_joint` is the teacher class index.
+* Weight `λ_joint` in total loss if used.
 
-Targets:
+**Option B — preferred (no extra head)**
 
-step 1:
-op = MUL
-arg1 = slot1
-arg2 = slot2
-write_slot = slot3
+If execution is incorrect (`v_out != expected_value`):
 
-step 2:
-op = ADD
-arg1 = slot0
-arg2 = slot3
-write_slot = slot4
+* `CE(op)`, `CE(arg1)`, `CE(arg2)`, `CE(write_slot)` each `*= β` for that step (or a documented per-head schedule).
 
-Loss is applied per step.
+**Constraints:**
 
-DO NOT collapse into single-step supervision.
+* `β ≥ α` (full-head bump must be at least as strong as Step X’s operand bump, unless you explicitly replace Step X).
+* **Do not** silently stack Step X and Step Y-B; document **stack vs replace** in config.
+
+**Purpose:** penalize factorized errors (e.g. right op, wrong slots) that look good under independent CE.
 
 ---
 
-## STEP 7 — INVALID PREDICTION HANDLING
+## Step Z — Generation execution loop (MUST MATCH TRAINING)
 
-If model predicts:
+At **every** decode step:
 
-* invalid op
-* invalid slot index
-* invalid write slot
+1. Run the **structured head** (same heads as training).
+2. **Validate** `(op, arg1, arg2)` [and `write_slot` per your mask rules].
+
+**If valid:**
+
+* Execute **immediately** (ExecutionBlock).
+* Write result to the chosen slot; update numeric state.
+* **Bind** the next emitted `<NUM>` to that slot (`token_to_slot_map`, `numeric_values`).
+
+**Then** continue LM token generation (`forwardStep` / sampling).
+
+**If invalid:**
+
+* **Fail hard** (no silent skip, no corrective execute).
+
+Execution is **interleaved** with token generation—not batched only at end of sequence.
+
+---
+
+# SCRATCHBLOCK CONSTRAINT
+
+For **arithmetic-tagged** batches:
+
+* Disable **all** numeric-derived features (magnitude, sign, value-shaped embeddings, etc.).
+* Only allow **type** embedding: “this token is a number.”
+
+If magnitude information leaks through hidden state → **FAIL**.
+
+---
+
+# EXECUTION DEPENDENCY
+
+If arithmetic is required for the batch:
+
+* ExecutionBlock **must** run.
+* No fallback, no approximation path that skips execution.
+
+If execution is skipped or disabled → **training step fails**.
+
+---
+
+# INVALID PREDICTIONS
+
+If:
+
+* invalid `op`, or
+* invalid slot index (out of range / masked slot),
 
 Then:
 
-* apply full penalty
-* DO NOT execute fallback
-* DO NOT correct silently
+* **Do not** execute.
+* **Do not** correct silently.
+* Apply **full penalty** on the structured heads (training); at inference **fail hard**.
 
-Fail hard.
-
----
-
-## STEP 8 — NO EXECUTION = NO LEARNING
-
-If execution is skipped or disabled:
-
-* training step must fail
-
-ExecutionBlock is mandatory for all arithmetic batches.
+No silent recovery.
 
 ---
 
-## STEP 9 — OPTIONAL CONSISTENCY CHECK (STRONG SIGNAL)
+# NUMERIC TOKEN POLICY
 
-After full sequence:
-
-Compare final slot value with ground truth:
-
-If mismatch:
-→ apply additional penalty across all steps
-
-This reinforces long-chain correctness.
+* Mask all **literal** numeric vocabulary IDs; only `<NUM>` is allowed for numeric surface form.
+* Do **not** supervise numeric **answers** via the LM head.
+* `<NUM>` must map to a slot (see INPUT AND SLOTS).
 
 ---
 
-## STEP 10 — PREVENT COLLAPSE BACK TO TOKEN MODE
+# NUMERIC STATE MODEL
 
-Ensure:
+Maintain explicit state each step, e.g.:
 
-* LM head is NOT used to supervise numeric outputs
-* numeric tokens are masked except <NUM>
-* no pathway exists for model to emit raw numeric strings
+`state_k = { slots: [v₀, v₁, …], transitions: [(op, args → result_slot, v_out), …] }`
 
----
+The model learns **transitions** (op + slot choices), not free-form number prediction.
 
-## EXPECTED RESULT
-
-Model learns:
-
-* select correct operation
-* select correct variable (slot)
-* build correct transition chain
-
-Model does NOT learn:
-
-* numeric patterns
-* memorized arithmetic
-* value prediction
+**Slot identity:** two slots are distinct even if they hold the same value; do not merge slots by value.
 
 ---
 
-## NON-NEGOTIABLE
+# OPTIONAL — SEQUENCE CONSISTENCY
 
-If the model can solve arithmetic without execution:
-
-→ the system is broken
-
-If hidden state alone can produce correct results:
-
-→ the system is broken
-
-Execution must be the ONLY path to numeric correctness.
+After the **full** sequence (multi-step example), optionally compare **final** slot value to ground truth; if mismatch, apply an **additional** penalty across the step losses to reinforce long chains. This does **not** reintroduce value regression on hidden states—it is an extra signal on top of structured CE + Steps X/Y.
 
 ---
 
-## DELIVERABLE
+# NO BACKWARDS COMPATIBILITY
 
-Modify:
+* No dual code paths (legacy numeric head vs new stack). Old behavior is **removed**, not feature-flagged beside the new path.
+* Old checkpoints either **refuse to load** with a clear error or require an explicit **non-default** migration tool—not silent weight drops.
+* No `predictNumericValue`, no `kernelNumericLoss`, no generation fill-in for `<NUM>` from hidden state.
+* DataLoader and batch code: **throw** on violation; do not `cerr` and continue.
 
-* training loop
-* loss computation
-* ScratchBlock behavior (conditional)
-* execution integration
+Full rationale and file-level ownership: [execution-first_numeric_refactor_6c99d23f.plan.md](execution-first_numeric_refactor_6c99d23f.plan.md).
 
-Do NOT introduce fallback paths.
-Do NOT preserve value prediction logic.
+---
 
-If training becomes unstable:
-→ fix supervision, not constraints.
+# FILE INTENT (SEPARATION)
+
+Single **primary owner** per concern (cross-check at boundaries is OK; duplicated business logic is not):
+
+| Concern | Owns it |
+|--------|---------|
+| Batch validity, side-channel lengths, slot map consistency | `BatchPayload` (+ builder) |
+| Literal → `<NUM>` + slot assignment in corpus | `DataLoader`, `UniByte`, `AtomTable` |
+| Config surface | `grim_language_model_cuda.hpp`, `ai_config.json` |
+| Device caches | `TrainingState_GPU`, init training/inference state |
+| Forward order, autograd, structured + LM outputs | `AutogradTraining.cu` |
+| Training batch entry | `ComputeLossBatch.cu` |
+| Deterministic math on slots | `execution_block_GPU.*` |
+| “Type only” vs value injection | `ScratchBlockReasoning_GPU.*` |
+| Prefill / step forward | `Inference_GPU.cu` |
+| Step Z orchestration | `grim_language_model_gpu.cu` |
+| Literal masking at sample time | `Sampling.cu` |
+| Checkpoint format | `grim_model_serialization.cu` |
+
+Structured head implementation: **new module or explicit extension**—do not hide structured logits inside ExecutionBlock as the only API if training loss lives elsewhere without a single contract.
+
+---
+
+# HARD-FAIL ERROR LOGIC
+
+**Throw** (e.g. `std::runtime_error`) on contract breaks. **Do not** clamp, substitute, or skip.
+
+| Situation | Action |
+|-----------|--------|
+| Side-channel length mismatch vs `token_ids` | Throw |
+| `<NUM>` / atom without valid slot in map | Throw |
+| Arithmetic batch but ExecutionBlock off or null | Throw before step |
+| Missing or malformed per-step teacher sequence | Throw |
+| Step Z: invalid structured prediction at decode | Throw (no execute) |
+| `<NUM>` emitted without bound slot | Throw |
+| Slot id outside `[0, num_slots)` or “new” slot at decode | Throw |
+| ScratchBlock value features on arithmetic batch | Throw (misconfig) |
+| ExecutionBlock internal numeric / slot error flag after step | Throw |
+
+**Not a throw:** `v_out != expected` in training → apply Step X / Y loss scaling (learning signal).
+
+---
+
+# FORBIDDEN
+
+Do **not**:
+
+* Reintroduce NumericHead or any scalar value head for answers.
+* Add numeric regression anywhere on predicted vs target **values**.
+* Let the LM emit raw numeric strings (mask literals).
+* Add execution fallback or “fix up” invalid ops/slots by executing a default.
+* Collapse multi-step teacher traces into one step.
+
+---
+
+# REQUIRED IMPLEMENTATION
+
+1. Remove all numeric **value** supervision (`kernelNumericLoss`, etc.).
+2. Implement structured head: `op_logits`, `arg1_logits`, `arg2_logits`, `write_slot_logits` with shapes above.
+3. Implement **Step X** (amplify `CE(arg1)`, `CE(arg2)` when `v_out != expected`).
+4. Implement **Step Y** (document Option A vs B; resolve stacking with Step X).
+5. Enforce ScratchBlock gating for arithmetic batches.
+6. Enforce execution dependency (fail if execution off).
+7. Implement step-wise dataset / batch format.
+8. Refactor **Step Z** generation: interleave structured head → execute → bind → LM step.
+9. Enforce numeric token masking and `<NUM>`–slot binding.
+10. Fail-hard validation everywhere (batch build, forward, generate).
+
+---
+
+# SUCCESS CONDITION
+
+The model should only be **correct** when:
+
+* correct **operations**,
+* correct **operand and write slots**,
+* correct **execution sequence** (Step Z in sync with training).
+
+If it can guess the **answer** without the **correct** execution path → implementation is incorrect.
+
+If training destabilizes → **fix supervision and wiring**, not these constraints.

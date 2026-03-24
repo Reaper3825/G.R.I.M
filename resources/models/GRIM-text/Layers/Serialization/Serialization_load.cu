@@ -279,19 +279,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
             fb_sb->num_atom_types(), " atom_dim=", fb_sb->atom_embedding_dim()));
     }
 
-    // ─── NumericHead (gated by requires_numeric_head) ───
-    if (req.requires_numeric_head) {
-        const auto* fb_nh = model_fb->numeric_head();
-        std::vector<float> nh_weights(fb_nh->projection_data()->begin(), fb_nh->projection_data()->end());
-        if (!upload_device_vector(nh_weights, request.numeric_head.weights, "NumericHead weights"))
-            return false;
-        std::vector<float> nh_bias(fb_nh->bias_data()->begin(), fb_nh->bias_data()->end());
-        if (!upload_device_vector(nh_bias, request.numeric_head.bias, "NumericHead bias"))
-            return false;
-        request.report.numeric_head_loaded = true;
-        Logging::EmitModuleInfo(kLogModule, Msg("[load] NumericHead: d_model=", fb_nh->d_model()));
-    }
-
     // ─── ReasoningHead (gated by requires_reasoning_head) ───
     if (req.requires_reasoning_head) {
         const auto* fb_rh = model_fb->reasoning_head();
@@ -359,10 +346,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     }
 
     // ─── Step 7: Final load verification (safety) ───
-    if (req.requires_numeric_head && !request.report.numeric_head_loaded) {
-        Logging::EmitModuleError(kLogModule, "[load] FATAL: NumericHead required but not loaded");
-        return false;
-    }
     if (req.requires_reasoning_head && !request.report.reasoning_head_loaded) {
         Logging::EmitModuleError(kLogModule, "[load] FATAL: ReasoningHead required but not loaded");
         return false;

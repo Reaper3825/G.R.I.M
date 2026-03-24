@@ -87,7 +87,8 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     const uint8_t* __restrict__ atom_mask,
     const int32_t* __restrict__ token_to_slot_map,
     float* __restrict__ atom_embeddings,
-    int atom_embedding_dim
+    int atom_embedding_dim,
+    int execution_first_type_only
 ) {
     const int atom_idx = blockIdx.x;
     const int dim_idx = threadIdx.x;
@@ -102,6 +103,13 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     int token_pos = atom_positions[atom_idx];
     int token_id = token_ids[token_pos];
     int atom_type = (token_id - ATOM_TOKEN_START) % NUM_ATOM_TYPES;
+
+    // Execution-first training: type embedding only (no magnitude/sign/text leakage).
+    if (execution_first_type_only) {
+        float v = atom_type_embeddings[atom_type * atom_embedding_dim + dim_idx];
+        atom_embeddings[atom_idx * atom_embedding_dim + dim_idx] = v;
+        return;
+    }
 
     // Slot-bound tokens: numeric truth lives in M.values, not in literal embeddings.
     // Suppress literal numeric injection (has_value = false) for slot-bound positions.
@@ -460,7 +468,8 @@ Tensor scratch_block_inject(
     const uint32_t* atom_flags,
     const int32_t* token_to_slot_map,
     int total_tokens,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    bool execution_first_type_only)
 {
     const auto& cfg = layer.config();
 
@@ -492,7 +501,7 @@ Tensor scratch_block_inject(
         output.data, total_tokens,
         token_ids, numeric_values,
         text_features, atom_mask, atom_flags,
-        token_to_slot_map, stream);
+        token_to_slot_map, stream, execution_first_type_only);
 
     // Build GradFn for backward pass
     if (input.requires_grad) {
@@ -698,7 +707,8 @@ void ScratchBlockLayer::runForwardKernels(
     const uint16_t* text_features, const uint8_t* atom_mask,
     const uint32_t* atom_flags,
     const int32_t* token_to_slot_map,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    bool execution_first_type_only)
 {
     // Step 1: Detect atom tokens
     cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), stream);
@@ -717,6 +727,7 @@ void ScratchBlockLayer::runForwardKernels(
     if (atom_blocks <= 0) return;
 
     // Step 2: Lookup atom embeddings (unified: numeric_values + atom_flags + text_features)
+    const int type_only_flag = execution_first_type_only ? 1 : 0;
     kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, config_.atom_embedding_dim, 0, stream>>>(
         token_ids, d_atom_positions_, d_num_atoms_, config_.max_atoms,
         atom_type_embeddings_.data,
@@ -724,7 +735,7 @@ void ScratchBlockLayer::runForwardKernels(
         atom_flags,
         text_features, atom_mask,
         token_to_slot_map,
-        d_atom_embeddings_, config_.atom_embedding_dim);
+        d_atom_embeddings_, config_.atom_embedding_dim, type_only_flag);
 
     // Step 3: Project and inject atom embeddings (single unified projection)
     kernelInjectAtomEmbeddings<<<atom_blocks, config_.d_model, 0, stream>>>(

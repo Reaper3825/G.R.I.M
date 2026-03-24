@@ -18,7 +18,6 @@
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "Autograd/AutogradTraining.hpp"
-#include "../Layers/NumericHead/numeric_head_GPU.hpp"
 
 namespace GRIM {
 
@@ -82,7 +81,6 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
         getEmbeddingLayer(),
         getLmHeadLayer(),
         getScratchBlockLayer(),
-        getNumericHeadLayer(),
         getReasoningHeadLayer(),
         getExecutionBlockLayer(),
         training_state_.cublas_handle,
@@ -111,13 +109,6 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
                     config_.vocab_size * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
 
-    // Cache last-token numeric head output (2 floats) for predictNumericValue()
-    if (training_state_.autograd_intermediates.numeric_head_output.data) {
-        const size_t num_offset = static_cast<size_t>(seq_len - 1) * 2;
-        cudaMemcpyAsync(training_state_.cached_numeric_pred,
-                        training_state_.autograd_intermediates.numeric_head_output.data + num_offset,
-                        2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
-    }
     cudaStreamSynchronize(stream);
 
     // Free all autograd intermediates — inference never runs backward.
@@ -247,12 +238,12 @@ int LanguageModel::getKVCacheLength() const {
 }
 
 //======================================================//
-//  predictNumericValue - Read cached numeric head output
+//  predictNumericValue — removed (execution-first spec; no value head)
 //======================================================//
 float LanguageModel::predictNumericValue() const {
-    return NumericHeadLayer::reconstruct(
-        training_state_.cached_numeric_pred[0],
-        training_state_.cached_numeric_pred[1]);
+    throw std::runtime_error(
+        "predictNumericValue: NumericHead removed; numeric values must come from ExecutionBlock "
+        "and slot binding (spec Step Z), not hidden-state regression");
 }
 
 } // namespace GRIM

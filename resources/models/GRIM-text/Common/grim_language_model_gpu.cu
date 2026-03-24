@@ -810,6 +810,24 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         cfg.unk_token_id,
         cfg.bad_words_ids,
         cfg.seed);
+
+    // Execution-first (spec step 10): mask raw ASCII digit byte tokens so the LM cannot
+    // decode numeric magnitudes as literal strings; `<NUM>` stays allowed (atom range).
+    if (config_.execution_block_enabled) {
+        std::vector<int> numeric_mask = cfg.masked_numeric_literal_ids;
+        if (numeric_mask.empty()) {
+            numeric_mask.reserve(10);
+            for (int b = 0x30; b <= 0x39; ++b) {
+                numeric_mask.push_back(Tokenizer::BYTE_TOKEN_OFFSET + b);
+            }
+        }
+        sampling_cfg.bad_token_ids.insert(sampling_cfg.bad_token_ids.end(),
+                                            numeric_mask.begin(), numeric_mask.end());
+        std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
+        sampling_cfg.bad_token_ids.erase(
+            std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
+            sampling_cfg.bad_token_ids.end());
+    }
     
     Sampling::SamplingPipeline pipeline(sampling_cfg);
     
@@ -860,22 +878,17 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                      std::to_string(vocab_size) + ")");
         }
         
-        // =====================================================================
-        // ScratchBlock Reasoning: numeric head prediction for <NUM> tokens
-        //
-        // The numeric head ran alongside the LM head in the same forward pass
-        // that produced these logits. Its last-token output is already cached
-        // in training_state_.cached_numeric_pred[2] (D2H copy happened in
-        // executeInferenceForward_). We read it BEFORE forwardStep appends
-        // the new token, because the cached prediction corresponds to the
-        // hidden state that produced the sampled token.
-        // =====================================================================
         float token_numeric_value = 0.0f;
         uint8_t token_atom_mask_val = 0;
 
         if (scratchblock_active && GRIM::Tokenizer::isAtomToken(sample.token_id)) {
             token_atom_mask_val = 1;
-            token_numeric_value = predictNumericValue();
+            if (GRIM::Tokenizer::tokenIdToAtomType(sample.token_id)
+                == GRIM::Tokenizer::AtomType::ATOM_NUM) {
+                throw std::runtime_error(
+                    "generateSequenceGPU: sampled <NUM> without execution-bound slot "
+                    "(NumericHead removed; implement Step Z interleaved decode / slot write-back)");
+            }
         }
         
         // Check for EOS BEFORE processing next step

@@ -14,6 +14,7 @@
 #include <cuda_runtime.h>
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../../UnigramByte/Unigram.hpp"
 // AutogradLoss.hpp, LossContext.hpp, TeacherLogits_GPU.hpp
 // removed — now handled by computeAutogradLoss() in AutogradTraining.hpp
 #include "../../LogRecorder/LogRecorder.hpp"
@@ -92,6 +93,31 @@ float LanguageModel::computeLossBatch(
 	payload.validate("computeLossBatch");
 
 	const auto& cfg = getConfig();
+
+	if (cfg.execution_block_enabled) {
+		if (!getExecutionBlockLayer()) {
+			throw std::runtime_error(
+				"computeLossBatch: execution_block_enabled but ExecutionBlock layer is null");
+		}
+		if (!scratch_block_layer_ || !scratch_block_layer_->isEnabled()) {
+			throw std::runtime_error(
+				"computeLossBatch: execution_block_enabled requires ScratchBlock enabled");
+		}
+		const int num_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
+		const int num_slots = cfg.execution_block_num_slots;
+		for (int t = 0; t < payload.total_tokens; ++t) {
+			if (payload.input_ids[static_cast<size_t>(t)] == num_tid
+			    && payload.atom_mask[static_cast<size_t>(t)] != 0) {
+				const int32_t s = payload.token_to_slot_map[static_cast<size_t>(t)];
+				if (s < 0 || s >= num_slots) {
+					throw std::runtime_error(
+						"computeLossBatch: <NUM> at flat index " + std::to_string(t) +
+						" requires token_to_slot_map in [0, " + std::to_string(num_slots) +
+						"), got " + std::to_string(s));
+				}
+			}
+		}
+	}
 
 	GPUGrimEncoder* gpu_encoder = nullptr;
 	try {
@@ -251,7 +277,6 @@ float LanguageModel::computeLossBatch(
 		getEmbeddingLayer(),
 		getLmHeadLayer(),
 		scratch_block,
-		getNumericHeadLayer(),
 		getReasoningHeadLayer(),
 		getExecutionBlockLayer(),
 		training_state_.cublas_handle,

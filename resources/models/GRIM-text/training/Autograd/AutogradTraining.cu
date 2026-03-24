@@ -10,7 +10,6 @@
 #include "../../Layers/grim_layer_gpu.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
-#include "../../Layers/NumericHead/numeric_head_GPU.hpp"
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -108,7 +107,6 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
-    NumericHeadLayer* numeric_head,
     ReasoningHeadLayer* reasoning_head,
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
@@ -125,7 +123,6 @@ AutogradContext initAutogradContext(
     ctx.embedding_layer = embedding_layer;
     ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
-    ctx.numeric_head = numeric_head;
     ctx.reasoning_head = reasoning_head;
     ctx.execution_block = execution_block;
     ctx.cublas_handle = cublas_handle;
@@ -151,7 +148,6 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
-    NumericHeadLayer* numeric_head,
     ReasoningHeadLayer* reasoning_head,
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
@@ -169,7 +165,6 @@ AutogradContext initAutogradContext(
     ctx.embedding_layer = embedding_layer;
     ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
-    ctx.numeric_head = numeric_head;
     ctx.reasoning_head = reasoning_head;
     ctx.execution_block = execution_block;
     ctx.cublas_handle = cublas_handle;
@@ -370,6 +365,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         // Drain stale error from embedding/dropout so we only report ScratchBlock failures
         (void)cudaGetLastError();
 
+        const bool exec_first_type_only =
+            cfg->execution_block_enabled && cfg->scratch_block_execution_first_type_only;
         intermediates.embedding_tensor = autograd::scratch_block_inject(
             intermediates.embedding_tensor,
             *ctx.scratch_block,
@@ -382,7 +379,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 ? reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data)
                 : nullptr,
             total_tokens,
-            ctx.stream);
+            ctx.stream,
+            exec_first_type_only);
 
         cudaError_t cuda_err = cudaGetLastError();
         if (cuda_err != cudaSuccess) {
@@ -940,15 +938,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Move the autograd tensor to intermediates (preserves grad_fn chain)
     intermediates.logits_tensor = std::move(logits_tensor);
     
-    // Numeric head: compute alongside LM head from same encoder output
-    if (ctx.numeric_head) {
-        ctx.numeric_head->setStream(ctx.stream);
-        ctx.numeric_head->setCublasHandle(ctx.cublas_handle);
-        Tensor numeric_pred = ctx.numeric_head->forward(
-            intermediates.encoder_output_tensor, total_tokens, ctx.stream);
-        intermediates.numeric_head_output = std::move(numeric_pred);
-    }
-
     // Reasoning head: parallel to numeric head, reads encoder + ScratchBlock atoms
     if (ctx.reasoning_head && ctx.scratch_block && ctx.scratch_block->isEnabled()) {
         // D2H num_atoms — numAtomsBuffer() is device memory
@@ -1006,86 +995,6 @@ autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts, const
     lc.class_balanced_enabled = opts.class_balanced_enabled;
     lc.d_class_weights     = opts.class_balanced_enabled ? d_class_weights : nullptr;
     return lc;
-}
-
-//======================================================================
-// Numeric Loss Kernel and Host Wrapper
-//======================================================================
-
-__global__ void kernelNumericLoss(
-    const float* __restrict__ numeric_head_output,  // [total_tokens, 2]
-    const float* __restrict__ numeric_values,        // [total_tokens]
-    const int*   __restrict__ targets,               // [total_tokens] pre-shifted
-    int total_tokens,
-    int num_token_id,
-    float* __restrict__ loss_out,
-    int*   __restrict__ atom_count_out
-) {
-    int t = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= total_tokens) return;
-
-    if (targets[t] < 0 || targets[t] != num_token_id) return;
-
-    if (t + 1 >= total_tokens) return;
-    float V = numeric_values[t + 1];
-
-    if (!isfinite(V)) return;
-
-    float y_pred = numeric_head_output[t * 2 + 0];
-    float s_pred = numeric_head_output[t * 2 + 1];
-
-    float abs_v = fminf(fabsf(V), 1e15f);
-    float y_target = log1pf(abs_v);
-    float s_target = (V >= 0.0f) ? 1.0f : 0.0f;
-
-    // Smooth L1 / Huber (delta = 1.0)
-    float diff = y_pred - y_target;
-    float abs_diff = fabsf(diff);
-    float mag_loss = (abs_diff < 1.0f) ? 0.5f * diff * diff : abs_diff - 0.5f;
-
-    // BCEWithLogits
-    float x = s_pred;
-    float s = s_target;
-    float sign_loss = fmaxf(x, 0.0f) - s * x + log1pf(expf(-fabsf(x)));
-
-    atomicAdd(loss_out, mag_loss + sign_loss);
-    atomicAdd(atom_count_out, 1);
-}
-
-// Launches numeric loss kernel and issues async D2H copies; caller must sync and free d_loss/d_count.
-static void computeNumericLossAsync(
-    const Tensor& numeric_head_output,
-    const float* cached_numeric_values,
-    const int* cached_targets,
-    int total_tokens,
-    int num_token_id,
-    cudaStream_t stream,
-    float* h_loss_out,
-    int* h_count_out,
-    float** d_loss_out,
-    int** d_count_out
-) {
-    float* d_loss = nullptr;
-    int*   d_count = nullptr;
-    cudaMalloc(&d_loss, sizeof(float));
-    cudaMalloc(&d_count, sizeof(int));
-    cudaMemsetAsync(d_loss, 0, sizeof(float), stream);
-    cudaMemsetAsync(d_count, 0, sizeof(int), stream);
-
-    const int block = 256;
-    const int grid = (total_tokens + block - 1) / block;
-    kernelNumericLoss<<<grid, block, 0, stream>>>(
-        numeric_head_output.data,
-        cached_numeric_values,
-        cached_targets,
-        total_tokens,
-        num_token_id,
-        d_loss, d_count);
-
-    cudaMemcpyAsync(h_loss_out, d_loss, sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaMemcpyAsync(h_count_out, d_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
-    *d_loss_out = d_loss;
-    *d_count_out = d_count;
 }
 
 //======================================================================
@@ -1275,33 +1184,10 @@ LossResult computeAutogradLoss(
     cudaMemcpyAsync(&text_loss, intermediates.loss_tensor.data, sizeof(float),
                     cudaMemcpyDeviceToHost, ctx.stream);
 
-    float numeric_h_loss = 0.0f;
-    int numeric_h_count = 0;
-    float* d_numeric_loss = nullptr;
-    int* d_numeric_count = nullptr;
-    const bool have_numeric = (ctx.numeric_head && intermediates.numeric_head_output.data);
-    if (have_numeric) {
-        const int num_token_id = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
-        computeNumericLossAsync(
-            intermediates.numeric_head_output,
-            ts->cached_token_numeric_values.data,
-            reinterpret_cast<const int*>(ts->cached_targets_tensor.data),
-            total_tokens,
-            num_token_id,
-            ctx.stream,
-            &numeric_h_loss, &numeric_h_count,
-            &d_numeric_loss, &d_numeric_count);
-    }
-
     cudaStreamSynchronize(ctx.stream);
 
     if (ts->mtp_diagnostics.valid) {
         ts->mtp_diagnostics.L_total = text_loss;
-    }
-
-    if (have_numeric) {
-        cudaFree(d_numeric_loss);
-        cudaFree(d_numeric_count);
     }
 
     if (!std::isfinite(text_loss)) {
@@ -1311,8 +1197,6 @@ LossResult computeAutogradLoss(
             for (size_t i = 0; i < ts->mtp_diagnostics.head_loss.size(); ++i)
                 msg += " head_loss[" + std::to_string(i) + "]=" + std::to_string(ts->mtp_diagnostics.head_loss[i]);
         }
-        if (have_numeric)
-            msg += " numeric_h_loss=" + std::to_string(numeric_h_loss) + " count=" + std::to_string(numeric_h_count);
         throw std::runtime_error(msg);
     }
 
@@ -1322,7 +1206,7 @@ LossResult computeAutogradLoss(
     ts->cached_text_loss = text_loss;
     ts->cached_valid_tokens = valid_tokens;
 
-    float numeric_loss = (numeric_h_count > 0) ? numeric_h_loss / static_cast<float>(numeric_h_count) : 0.0f;
+    constexpr float numeric_loss = 0.0f;
 
     // ExecutionBlock entropy regularization (replaces host-side CE supervision)
     float exec_entropy_loss = 0.0f;
@@ -1336,9 +1220,8 @@ LossResult computeAutogradLoss(
         cudaMemcpy(&exec_entropy_loss, entropy_loss.data, sizeof(float), cudaMemcpyDeviceToHost);
     }
 
-    constexpr float kNumericLossWeight = 0.1f;
     result.numeric_loss = numeric_loss;
-    result.loss_value = text_loss + kNumericLossWeight * numeric_loss + exec_entropy_loss;
+    result.loss_value = text_loss + exec_entropy_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
@@ -1423,11 +1306,6 @@ BackwardResult executeAutogradBackward(
         }
 
         // Numeric head parameters
-        if (ctx.numeric_head) {
-            ctx.numeric_head->weights().zero_grad(ctx.stream);
-            ctx.numeric_head->bias().zero_grad(ctx.stream);
-        }
-
         // MTP head parameters
         if (ctx.model && ctx.model->getMtpK() > 0) {
             for (int k = 0; k < ctx.model->getMtpK(); ++k) {
@@ -1642,7 +1520,6 @@ LossResult autogradTrainingStep(
     EmbeddingLayer* embedding_layer = model.getEmbeddingLayer();
     LMHeadLayer* lm_head = model.getLmHeadLayer();
     ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
-    NumericHeadLayer* numeric_head = model.getNumericHeadLayer();
     ReasoningHeadLayer* reasoning_head = model.getReasoningHeadLayer();
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     
@@ -1742,7 +1619,6 @@ LossResult autogradTrainingStep(
         embedding_layer,
         lm_head,
         scratch_block,
-        numeric_head,
         reasoning_head,
         execution_block,
         training_state.cublas_handle,

@@ -231,13 +231,6 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D-SKIP: scratchblock not enabled\n"); fflush(stderr);
     }
 
-    // NumericHead parameters
-    if (numeric_head_layer_) {
-        registerTensor("numeric_head_weights", numeric_head_layer_->weights(), ParamGroupType::NUMERIC_HEAD);
-        registerNonDecayTensor("numeric_head_bias", numeric_head_layer_->bias(), ParamGroupType::NUMERIC_HEAD);
-        fprintf(stderr, "[buildParameterGroups] DIAG-D4b: numeric head registered\n"); fflush(stderr);
-    }
-
     // ReasoningHead parameters
     if (reasoning_head_layer_) {
         registerTensor("reasoning_head_w_op", reasoning_head_layer_->W_op(), ParamGroupType::REASONING_HEAD);

@@ -179,7 +179,8 @@ public:
         const uint16_t* text_features, const uint8_t* atom_mask,
         const uint32_t* atom_flags,
         const int32_t* token_to_slot_map,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        bool execution_first_type_only = false);
 
 private:    void allocateWeights();
     void freeWeights();
@@ -237,7 +238,8 @@ Tensor scratch_block_inject(
     const uint32_t* atom_flags,
     const int32_t* token_to_slot_map,
     int total_tokens,
-    cudaStream_t stream);
+    cudaStream_t stream,
+    bool execution_first_type_only = false);
 
 }  // namespace autograd
 
