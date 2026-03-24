@@ -7,3 +7,18 @@
 [submodule "external/flash-attention"]
 	path = external/flash-attention
 	url = https://github.com/Dao-AILab/flash-attention.git
+[submodule "external/vcpkg"]
+	path = external/vcpkg
+	url = https://github.com/microsoft/vcpkg.git
+[submodule "openal-soft"]
+	path = openal-soft
+	url = https://github.com/kcat/openal-soft.git
+[submodule "osint/sherlock"]
+	path = osint/sherlock
+	url = https://github.com/sherlock-project/sherlock.git
+[submodule "resources/models/llama.cpp"]
+	path = resources/models/llama.cpp
+	url = https://github.com/ggerganov/llama.cpp.git
+[submodule "vcpkg"]
+	path = vcpkg
+	url = https://github.com/microsoft/vcpkg.git
