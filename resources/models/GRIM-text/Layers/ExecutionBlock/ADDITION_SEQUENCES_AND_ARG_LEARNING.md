@@ -113,18 +113,34 @@ Later encoder layers may run **`crossAttentionRead`** from memory starting at **
 
 ---
 
-## Concept blocks → GRMT (training alignment)
+## Concept blocks and training data
 
-Curriculum JSON lives next to the mass dataset as `concept_blocks.jsonl` (see `DatasetTarget::conceptBlocksPath`). Structured blocks may include:
+### Current behavior (debug / expedient)
+
+**Concept blocks are not only a curriculum ID registry here** — `PrepareTrainingDataFromCache` also **reads `concept_blocks.jsonl`** (same directory as `merged_verified_cache.jsonl`) and **appends each line as its own GRMT sequence** before cache rows. That lets you debug ExecutionBlock + slot maps without wiring mass-dataset resolution yet.
+
+Structured fields in JSON may include:
 
 - `state_0`: `{ "atoms": [...], "type": "..." }`
 - `execution`: `[{ "op", "args", "result" }, ...]`
 - `state_1`: `{ "result" }`
 - `explanation` (or legacy `intermediates`) and `answer`
 
-`PrepareTrainingDataFromCache` (`Shared/DataLoader/DataLoader.cu`) appends each block as a training sequence **before** `merged_verified_cache.jsonl` rows. It renders a canonical text layout, then a trailing `__SLOTS__` section with one numeric literal per line (derived from `state_0` + `execution`). After tokenization, the **last K numeric atoms** in the sequence are assigned consecutive `token_exec_slots` starting at base slot **0** (override with env `GRIM_CONCEPT_EXEC_BASE_SLOT` if your model uses scratch slots and value registers start higher).
+Encoding path: canonical text (`Q:`, `STATE0`, `EXEC`, …) plus a trailing **`__SLOTS__`** block (one numeric per line; order = `state_0.atoms` then each execution step’s `args` + `result`). The **last K numeric atoms** in the tokenized sequence get `token_exec_slots` = `base + 0..K-1` (base from env **`GRIM_CONCEPT_EXEC_BASE_SLOT`**, default `0`).
 
-**GRMT v10** stores `token_exec_slots[len]` after the per-token atom strings so Phase1 sliding windows and `buildBatchPayload` receive the same slot map as encoding.
+**GRMT v10** appends `token_exec_slots[len]` after per-token atom strings; Phase1 sliding windows and `buildBatchPayload` keep that map aligned.
+
+### Target architecture (what it should look like later)
+
+Concept blocks stay **thin curriculum records**: primarily **`id`** (+ optional display fields) and a **stable pointer** to the real payload, e.g. **`source_sequence_id`** referencing a row in **`mass_dataset.jsonl`** / merged cache (or a dedicated structured-sequence store).
+
+**Training prep** should:
+
+1. Resolve `cb_id` → canonical structured sequence (not re-embed the full block from `concept_blocks.jsonl`).
+2. Run **one** encoding pipeline on that resolved text/structure (same as other corpus rows).
+3. Derive **`token_exec_slots` / numeric side channels** from the **structured record** (or a shared schema), not from a duplicate `__SLOTS__` serialization of the block file.
+
+Until that exists, the debug path above is intentionally redundant (block JSON is both UI curriculum and training source).
 
 ---
 

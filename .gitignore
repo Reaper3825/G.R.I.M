@@ -140,6 +140,7 @@ node_modules/
 # Python / Virtual Environments
 # ==============================
 .venv/
+.venv_ultrachat/
 venv/
 resources/.venv/
 */__pycache__/

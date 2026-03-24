@@ -18,8 +18,10 @@
 
 namespace GRIM {
 
-// Structured register-style curriculum (optional). When present, training can
-// emit aligned numeric atoms + token_exec_slots (see DataLoader + GRMT v10).
+// Structured register-style fields (optional). DEBUG: DataLoader may serialize this
+// JSON into GRMT directly. Target: blocks are mainly id + pointer (e.g.
+// source_sequence_id) to structured sequences in mass dataset / cache; prep resolves
+// the pointer and encodes once — see ADDITION_SEQUENCES_AND_ARG_LEARNING.md.
 struct ConceptBlockState0 {
     std::vector<double> atoms;
     std::string         type;

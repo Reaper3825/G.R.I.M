@@ -6,6 +6,8 @@
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
 #   - Allocation: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. abc1234p)
 #   - Path: Set GRIM_BRIDGES2_DIR to your repo path, e.g. /ocean/projects/<alloc_id>/<username>/G.R.I.M (default: cis210058p/uwadkins)
+#   - Data: Pushes merged_verified_cache.jsonl and (if present) concept_blocks.jsonl to
+#     resources/models/GRIM-text/training/data/ on Bridges-2 (same layout as local).
 #   - Submodules: flash-attention (script runs git submodule update --init before build)
 #   - vcpkg: Script clones to GRIM_BRIDGES2_DIR/vcpkg if missing
 #   - CUDA 12+ for training (flash-attention). Bridges-2: module load cuda (check with module avail cuda)
@@ -28,7 +30,9 @@ GRIM_DIR="resources/models/GRIM-text/GRIM"
 BUILD_DIR="$TRAINING_DIR/TrainingLoop/build"
 EXE="$BUILD_DIR/train_gpu"
 CONFIG="${CONFIG:-../../../../ai_config.json}"
-CACHE_PATH="$REPO_ROOT/resources/models/GRIM-text/training/data/merged_verified_cache.jsonl"
+TRAINING_DATA_DIR="$REPO_ROOT/resources/models/GRIM-text/training/data"
+CACHE_PATH="$TRAINING_DATA_DIR/merged_verified_cache.jsonl"
+CONCEPT_BLOCKS_PATH="$TRAINING_DATA_DIR/concept_blocks.jsonl"
 
 # Bridges-2 path: /ocean/projects/<alloc_id>/<username>/G.R.I.M (override with GRIM_BRIDGES2_DIR)
 BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
@@ -69,8 +73,11 @@ fi
 
 REMOTE_TRAINING="$BRIDGES2_DIR/$TRAINING_DIR"
 REMOTE_EXE="$BRIDGES2_DIR/$EXE"
-REMOTE_CACHE="$REMOTE_TRAINING/data/merged_verified_cache.jsonl"
+REMOTE_DATA="$REMOTE_TRAINING/data"
+REMOTE_CACHE="$REMOTE_DATA/merged_verified_cache.jsonl"
+REMOTE_CONCEPT_BLOCKS="$REMOTE_DATA/concept_blocks.jsonl"
 CACHE_PATH_EXPANDED="${CACHE_PATH/#\~/$HOME}"
+CONCEPT_BLOCKS_PATH_EXPANDED="${CONCEPT_BLOCKS_PATH/#\~/$HOME}"
 
 # SSH target: bridges2 or bridges2.psc.edu
 BRIDGES2_SSH="${GRIM_BRIDGES2_SSH:-bridges2}"
@@ -153,9 +160,18 @@ if [[ ! -f "$CACHE_PATH_EXPANDED" ]]; then
   exit 1
 fi
 echo "Transferring merged_verified_cache.jsonl..."
-ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_TRAINING/data"
+ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_DATA"
 ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CACHE" < "$CACHE_PATH_EXPANDED"
 echo "  -> $REMOTE_CACHE"
+
+if [[ -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
+  echo "Transferring concept_blocks.jsonl..."
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CONCEPT_BLOCKS" < "$CONCEPT_BLOCKS_PATH_EXPANDED"
+  echo "  -> $REMOTE_CONCEPT_BLOCKS"
+else
+  echo "Skipping concept_blocks.jsonl (not found at $CONCEPT_BLOCKS_PATH_EXPANDED)."
+  echo "  DataLoader will use cache-only curriculum; add the file locally to ship UltraChat/stem blocks."
+fi
 
 # Transfer ai_config.json
 if [[ -f "$REPO_ROOT/ai_config.json" ]]; then

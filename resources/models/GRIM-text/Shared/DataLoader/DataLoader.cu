@@ -216,6 +216,12 @@ namespace {
 }
 
 // ─── Concept blocks → training text + register slot order (ExecutionBlock) ───
+//
+// DEBUG / EXPEDIENT: We serialize each concept_blocks.jsonl row into text + __SLOTS__
+// and append as GRMT sequences. Long-term, concept blocks should be curriculum IDs
+// that resolve to mass_dataset / cache rows (source_sequence_id); encoding should run
+// on that canonical payload only — see ADDITION_SEQUENCES_AND_ARG_LEARNING.md.
+//
 namespace {
 
 using json = nlohmann::json;
