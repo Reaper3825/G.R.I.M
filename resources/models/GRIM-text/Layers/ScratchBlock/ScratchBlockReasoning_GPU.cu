@@ -85,6 +85,7 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     const uint32_t* __restrict__ token_atom_flags,
     const uint16_t* __restrict__ text_features,
     const uint8_t* __restrict__ atom_mask,
+    const int32_t* __restrict__ token_to_slot_map,
     float* __restrict__ atom_embeddings,
     int atom_embedding_dim
 ) {
@@ -102,9 +103,14 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     int token_id = token_ids[token_pos];
     int atom_type = (token_id - ATOM_TOKEN_START) % NUM_ATOM_TYPES;
 
+    // Slot-bound tokens: numeric truth lives in M.values, not in literal embeddings.
+    // Suppress literal numeric injection (has_value = false) for slot-bound positions.
+    int slot_id = (token_to_slot_map != nullptr) ? token_to_slot_map[token_pos] : -1;
+    bool is_slot_bound = (slot_id >= 0);
+
     float numeric_val = token_numeric_values ? token_numeric_values[token_pos] : 0.0f;
     uint32_t flags = token_atom_flags ? token_atom_flags[token_pos] : 0u;
-    bool has_value = (atom_mask[token_pos] != 0) && isfinite(numeric_val);
+    bool has_value = !is_slot_bound && (atom_mask[token_pos] != 0) && isfinite(numeric_val);
     bool has_flags = (flags != 0u);
 
     // Base embedding from type
@@ -452,12 +458,12 @@ Tensor scratch_block_inject(
     const uint16_t* text_features,
     const uint8_t* atom_mask,
     const uint32_t* atom_flags,
+    const int32_t* token_to_slot_map,
     int total_tokens,
     cudaStream_t stream)
 {
     const auto& cfg = layer.config();
 
-    // Rule 20: No fallbacks — require all pointers so we fail fast and surface missing buffers (e.g. inference path).
     if (!input.data) throw std::runtime_error("scratch_block_inject: input.data is NULL");
     if (!token_ids)  throw std::runtime_error("scratch_block_inject: token_ids is NULL");
     if (!stream)     throw std::runtime_error("scratch_block_inject: stream is NULL");
@@ -485,7 +491,8 @@ Tensor scratch_block_inject(
     layer.runForwardKernels(
         output.data, total_tokens,
         token_ids, numeric_values,
-        text_features, atom_mask, atom_flags, stream);
+        text_features, atom_mask, atom_flags,
+        token_to_slot_map, stream);
 
     // Build GradFn for backward pass
     if (input.requires_grad) {
@@ -690,6 +697,7 @@ void ScratchBlockLayer::runForwardKernels(
     const float* numeric_values,
     const uint16_t* text_features, const uint8_t* atom_mask,
     const uint32_t* atom_flags,
+    const int32_t* token_to_slot_map,
     cudaStream_t stream)
 {
     // Step 1: Detect atom tokens
@@ -715,6 +723,7 @@ void ScratchBlockLayer::runForwardKernels(
         numeric_values,
         atom_flags,
         text_features, atom_mask,
+        token_to_slot_map,
         d_atom_embeddings_, config_.atom_embedding_dim);
 
     // Step 3: Project and inject atom embeddings (single unified projection)

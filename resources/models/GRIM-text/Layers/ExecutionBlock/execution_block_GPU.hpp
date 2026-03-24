@@ -50,6 +50,7 @@ struct ExecutionBlockConfig {
     int atom_embedding_dim   = 0;   // from ScratchBlock (default 64)
     int num_ops              = 4;   // +, -, *, /
     int num_slots            = 4;   // V — max memory slots
+    int num_scratch_slots    = 0;   // S — scratch-only slots [0..S-1]; value slots are [S..V-1]
     int num_exec_steps       = 2;   // K — execution steps per forward
     int execution_block_layer= -1;  // encoder layer to run after (-1 = num_layers - 2)
     int value_decode_input_dim  = 24;
@@ -71,7 +72,7 @@ struct ExecutionBlockConfig {
     int   result_slot_index  = -1;    // used when result_slot_mode == 1
     bool  diag_logging       = false;
     bool  deterministic      = false;
-    bool  debug_mode         = false;  // extra diagnostics only; does not relax validation
+    bool  debug_mode         = true;  // extra diagnostics only; does not relax validation
     float entropy_collapse_threshold = 0.01f;
     float write_collapse_threshold   = 0.98f;
     float magnitude_limit            = 1e6f;
@@ -93,16 +94,29 @@ struct ExecStepMetrics {
 };
 
 //======================================================//
+//  ExecutionRecord — discrete step trace (state₀ → op → v_out)
+//======================================================//
+struct ExecutionRecord {
+    int arg1_slot = -1;
+    int arg2_slot = -1;
+    int op_id = -1;
+    float value_before_1 = 0.0f;
+    float value_before_2 = 0.0f;
+    float value_after = 0.0f;
+};
+
+//======================================================//
 //  ExecutionBlockStepOutput — per-step diagnostics ONLY
 //  Must NOT drive forward computation.
 //======================================================//
 struct ExecutionBlockStepOutput {
-    Tensor p_arg1;      // [1, C] softmax probabilities (detached copy)
-    Tensor p_arg2;      // [1, C]
+    Tensor p_arg1;      // [1, V_val] softmax over value slots [S..V-1] only (detached)
+    Tensor p_arg2;      // [1, V_val]
     Tensor p_op;        // [1, num_ops]
     Tensor p_write;     // [1, V]
-    Tensor v_out;       // [1, 1] scalar result
+    Tensor v_out;       // [1, 1] scalar result (hard op on hard slot reads)
     Tensor result_emb;  // [1, d_model]
+    ExecutionRecord record;   // filled when diag_out != nullptr (host copy at step sync)
     ExecStepMetrics metrics;  // populated when debug_mode is enabled
 };
 
@@ -140,12 +154,29 @@ public:
         ExecutionMemory& M,
         const float* atom_embeddings,       // [num_atoms, atom_embedding_dim]
         const int* atom_positions,          // [num_atoms]
+        const int32_t* token_to_slot_map,   // [total_tokens] slot_id per token position (-1 = non-state-bearing)
         int num_atoms,
         int total_tokens,
         int step,
         float temperature,
         cudaStream_t stream,
         ExecutionBlockStepOutput* diag_out = nullptr
+    );
+
+    //--------------------------------------------------//
+    // StateEncoder: derive [1, d_model] from M.values/state_embeds (always derived, never stored)
+    //--------------------------------------------------//
+    Tensor encodeState(const ExecutionMemory& M, cudaStream_t stream);
+
+    //--------------------------------------------------//
+    // Bootstrap: copy literal values into M.values via slot map (detached, no grad)
+    //--------------------------------------------------//
+    void bootstrapMemoryFromSlotMap(
+        ExecutionMemory& M,
+        const float* device_numeric_values,  // [total_tokens]
+        const int32_t* device_slot_map,      // [total_tokens]
+        int total_tokens,
+        cudaStream_t stream
     );
 
     //--------------------------------------------------//
@@ -176,6 +207,7 @@ public:
         const Tensor& H,
         const float* atom_embeddings,
         const int* atom_positions,
+        const int32_t* token_to_slot_map,
         int num_atoms,
         int total_tokens,
         const ExecutionMemory& M,
@@ -249,6 +281,9 @@ private:
     // Production hardening: persistent device-side error tracking
     int* d_numeric_error_flag_ = nullptr;  // atomicMax stage-id: numeric, softmax, collapse
     int* d_div_clamp_count_    = nullptr;  // atomicAdd on division clamp
+    int* d_exec_idx_           = nullptr;  // [4] arg1_rel, arg2_rel, op_id, write_slot (abs)
+    int* d_exec_record_i_      = nullptr;  // [3] packed for ExecutionRecord ints
+    float* d_exec_record_f_    = nullptr;  // [3] value_before_1, value_before_2, value_after
 
     // Value decode MLP (atom embedding dims 16-39 -> scalar)
     Tensor w_decode_1_;     // [24, 16]

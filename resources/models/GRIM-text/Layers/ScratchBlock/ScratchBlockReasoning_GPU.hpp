@@ -178,6 +178,7 @@ public:
         const float* numeric_values,
         const uint16_t* text_features, const uint8_t* atom_mask,
         const uint32_t* atom_flags,
+        const int32_t* token_to_slot_map,
         cudaStream_t stream);
 
 private:    void allocateWeights();
@@ -234,6 +235,7 @@ Tensor scratch_block_inject(
     const uint16_t* text_features,
     const uint8_t* atom_mask,
     const uint32_t* atom_flags,
+    const int32_t* token_to_slot_map,
     int total_tokens,
     cudaStream_t stream);
 

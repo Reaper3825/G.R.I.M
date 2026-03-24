@@ -197,6 +197,19 @@ float LanguageModel::computeLossBatch(
 			text_feat_bytes, cudaMemcpyHostToDevice, stream));
 	}
 
+	// --- Round 4: token_to_slot_map (block B) ---
+	if (training_state_.cached_token_to_slot_map.data) {
+		CUDA_CHECK(cudaStreamSynchronize(stream));
+		const size_t slot_map_bytes = payload.slotMapBytes();
+		auto handleSlot = scratch_pool->acquire(slot_map_bytes);
+		std::memcpy(handleSlot.data, payload.token_to_slot_map.data(), slot_map_bytes);
+		CUDA_CHECK(cudaMemcpyAsync(
+			reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data),
+			handleSlot.data, slot_map_bytes, cudaMemcpyHostToDevice, stream));
+		CUDA_CHECK(cudaStreamSynchronize(stream));
+		scratch_pool->release(handleSlot);
+	}
+
 	// Final sync ensures all DMAs complete before releasing pinned blocks
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 	scratch_pool->release(handleA);

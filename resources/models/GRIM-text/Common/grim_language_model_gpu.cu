@@ -606,6 +606,7 @@ TokenBufferView LanguageModel::getTokenBufferView() {
     view.device_token_ids = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
     view.device_token_numeric_values = training_state_.cached_token_numeric_values.data;
     view.device_token_atom_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data);
+    view.device_token_to_slot_map = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data);
     view.max_tokens = config_.max_seq_len;
     view.stream = training_state_.stream_ctrl.getPrimaryStream();
     return view;

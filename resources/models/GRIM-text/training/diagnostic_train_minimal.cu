@@ -745,6 +745,7 @@ int main(int argc, char** argv) {
                     payload.numeric_values = train_numeric_values;
                     payload.atom_mask = train_atom_mask;
                     payload.text_features.resize(payload.total_tokens * GRIM::Batching::BatchPayload::kTextFeatureDim, 0);
+                    payload.token_to_slot_map.assign(payload.total_tokens, -1);
                     payload.fits_in_cache = true;  // Assume fits for diagnostic purposes
                     
                     // Unified forward+loss+backward via autograd

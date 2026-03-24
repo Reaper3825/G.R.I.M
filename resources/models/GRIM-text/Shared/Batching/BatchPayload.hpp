@@ -82,6 +82,7 @@ struct BatchPayload {
     std::vector<uint16_t> text_features;     // [total_tokens * kTextFeatureDim] padded with 0
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = any atom type)
      std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
+    std::vector<int32_t> token_to_slot_map;   // [total_tokens] padded with -1 (slot_id for execution; -1 = non-state-bearing)
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ATOM TABLE SIDE CHANNEL (host-only, NOT transferred to GPU)
@@ -194,6 +195,12 @@ struct BatchPayload {
                 std::to_string(atom_flags.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
+        if (static_cast<int>(token_to_slot_map.size()) != total_tokens) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.token_to_slot_map.size()=" +
+                std::to_string(token_to_slot_map.size()) + " != total_tokens=" +
+                std::to_string(total_tokens));
+        }
         const int expected_text_feat = total_tokens * kTextFeatureDim;
         if (static_cast<int>(text_features.size()) != expected_text_feat) {
             throw std::runtime_error(
@@ -212,9 +219,10 @@ struct BatchPayload {
     size_t atomMaskBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
     size_t atomFlagBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint32_t); }
     size_t textFeatureBytes()  const { return static_cast<size_t>(total_tokens) * kTextFeatureDim * sizeof(uint16_t); }
+    size_t slotMapBytes()      const { return static_cast<size_t>(total_tokens) * sizeof(int32_t); }
     size_t totalTransferBytes() const {
         return inputIdBytes() + targetIdBytes() + numericValueBytes() +
-               atomMaskBytes() + atomFlagBytes() + textFeatureBytes();
+               atomMaskBytes() + atomFlagBytes() + textFeatureBytes() + slotMapBytes();
     }
 };
 

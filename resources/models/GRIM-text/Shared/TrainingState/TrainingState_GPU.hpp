@@ -83,6 +83,7 @@ struct TrainingState {
     Tensor cached_token_text_features;  // [max_tokens * kTextFeatureDim] FP16
     Tensor cached_token_atom_mask;      // [max_tokens] uint8 (1 = atom token)
     Tensor cached_token_atom_flags;     // [max_tokens] uint32 (type-specific metadata from AtomTable)
+    Tensor cached_token_to_slot_map;    // [max_tokens] int32  (-1 = non-state-bearing; >=0 = valid slot_id)
     
     int cached_batch_size = 0;
     int cached_seq_len = 0;

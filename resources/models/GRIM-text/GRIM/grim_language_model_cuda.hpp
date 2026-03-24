@@ -531,6 +531,7 @@ struct TokenBufferView {
     int* device_token_ids = nullptr;
     float* device_token_numeric_values = nullptr;
     uint8_t* device_token_atom_mask = nullptr;
+    int32_t* device_token_to_slot_map = nullptr;
     int max_tokens = 0;
     cudaStream_t stream = nullptr;
 };

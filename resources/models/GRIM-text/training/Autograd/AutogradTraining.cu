@@ -378,6 +378,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             reinterpret_cast<const uint16_t*>(ts->cached_token_text_features.data),
             reinterpret_cast<const uint8_t*>(ts->cached_token_atom_mask.data),
             reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
+            ts->cached_token_to_slot_map.data
+                ? reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data)
+                : nullptr,
             total_tokens,
             ctx.stream);
 
@@ -657,6 +660,15 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 ctx.execution_block->setStream(ctx.stream);
                 ctx.execution_block->setCublasHandle(ctx.cublas_handle);
 
+                // Bootstrap M.values from literal numeric values via slot map (detached — no gradient)
+                if (ts->cached_token_to_slot_map.data && ts->cached_token_numeric_values.data) {
+                    ctx.execution_block->bootstrapMemoryFromSlotMap(
+                        intermediates.exec_memory,
+                        ts->cached_token_numeric_values.data,
+                        reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data),
+                        total_tokens, ctx.stream);
+                }
+
                 // Compute temperature from annealing schedule
                 float T = cfg->execution_block_temp_start;
                 if (cfg->execution_block_temp_schedule == 0) {
@@ -665,6 +677,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     T = cfg->execution_block_temp_start;
                 }
 
+                const int32_t* d_slot_map = ts->cached_token_to_slot_map.data
+                    ? reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data)
+                    : nullptr;
+
                 for (int step = 0; step < exec_K; ++step) {
                     ExecutionBlockStepOutput step_diag;
                     ctx.execution_block->executeStep(
@@ -672,6 +688,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         intermediates.exec_memory,                 // M mutated in place
                         ctx.scratch_block->atomEmbeddingsBuffer(),
                         ctx.scratch_block->atomPositionsBuffer(),
+                        d_slot_map,
                         num_atoms, total_tokens,
                         step, T, ctx.stream,
                         &step_diag);
@@ -1696,6 +1713,14 @@ LossResult autogradTrainingStep(
             reinterpret_cast<uint32_t*>(training_state.cached_token_atom_flags.data),
             payload.atom_flags.data(),
             payload.atomFlagBytes(),
+            cudaMemcpyHostToDevice, stream));
+    }
+    // Execution slot map (runtime substrate metadata — stable for full forward/execute sequence)
+    if (training_state.cached_token_to_slot_map.data) {
+        CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<int32_t*>(training_state.cached_token_to_slot_map.data),
+            payload.token_to_slot_map.data(),
+            payload.slotMapBytes(),
             cudaMemcpyHostToDevice, stream));
     }
     

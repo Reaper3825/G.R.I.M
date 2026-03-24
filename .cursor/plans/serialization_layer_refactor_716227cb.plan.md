@@ -135,7 +135,7 @@ Remove: silent ignore of missing pieces, conditional load based on “if table e
 
 ### Step 6 — Pointers are not requirements
 
-`if (request.xyz.ptr)` means **destination exists** only. It must **never** mean the module is required. Requirements = `**req.capabilities.requires_*` only**.
+`if (request.xyz.ptr)` means **destination exists** only. It must **never** mean the module is required. Requirements = `**req.capabilities.requires_`* only**.
 
 ---
 
@@ -157,7 +157,7 @@ Failures use `**EmitModuleError`** and include:
 
 ### Step 9 — Call site (Pattern B)
 
-[grim_model_serialization.cu](resources/models/GRIM-text/Common/grim_model_serialization.cu) sets `**request.capabilities.***` only.
+[grim_model_serialization.cu](resources/models/GRIM-text/Common/grim_model_serialization.cu) sets `**request.capabilities.`*** only.
 
 `SerializationLayer` **must not** compute or override these flags.
 

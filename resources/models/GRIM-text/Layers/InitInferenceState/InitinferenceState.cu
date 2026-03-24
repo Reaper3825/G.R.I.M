@@ -226,6 +226,14 @@ void LanguageModel::initInferenceState() {
         "cached_token_atom_mask_inf"
     );
     std::cout << "  ✓ Allocated atom mask cache (Tensor API)" << std::endl;
+
+    training_state_.cached_token_to_slot_map = Tensor::zeros(
+        TC::make_BSM(1, static_cast<int>(max_tokens)),
+        false,  // no grad for inference
+        primary_stream,
+        "cached_token_to_slot_map_inf"
+    );
+    std::cout << "  ✓ Allocated token-to-slot map cache (Tensor API)" << std::endl;
     
     // DELETED: cached_embeddings_tensor - not used in inference (encoder output computed on-the-fly)
     // DELETED: encoder_layer_caches - intermediate tensor caching moved to AutogradIntermediates

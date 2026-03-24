@@ -30,6 +30,7 @@ struct TrainingSequence {
     std::vector<uint32_t> token_atom_flags;          // GRMT v8: per-token AtomTable flags (type-specific metadata)
     std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Atom registry (shared across sliding windows)
     std::vector<uint32_t> atom_entry_ids;                    // Per-token index into atom_table (kAtomEntryNone = no atom)
+    std::vector<int32_t> token_exec_slots;                   // Per-token slot_id for execution: >=0 = valid slot, -1 = non-state-bearing
 };
 
 //======================================================//

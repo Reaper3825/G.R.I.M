@@ -355,6 +355,14 @@ void LanguageModel::initTrainingState() {
         "cached_token_atom_flags"
     );
     std::cout << "✓ Allocated token atom flags cache (Tensor API)" << std::endl;
+
+    training_state_.cached_token_to_slot_map = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
+        false,  // no grad — runtime substrate metadata
+        primary_stream,
+        "cached_token_to_slot_map"
+    );
+    std::cout << "✓ Allocated token-to-slot map cache (Tensor API)" << std::endl;
     
     std::cout << "✓ Allocated atom mask + text feature + atom flags buffers (" 
               << (max_tokens * (sizeof(float) + sizeof(uint8_t) + sizeof(uint32_t) + kTextFeatureDim * sizeof(uint16_t)) / 1024 / 1024) 

@@ -61,6 +61,7 @@ BatchPayload buildBatchPayload(
         const std::vector<uint32_t>* atom_flags;
         std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
         const std::vector<uint32_t>* atom_entry_ids;
+        const std::vector<int32_t>* exec_slots;
         int length;
     };
 
@@ -148,6 +149,17 @@ BatchPayload buildBatchPayload(
             }
         }
 
+        const std::vector<int32_t>* exec_slots_ptr = nullptr;
+        if (!seq->token_exec_slots.empty()) {
+            if (static_cast<int>(seq->token_exec_slots.size()) != seq_len) {
+                throw std::runtime_error(
+                    "buildBatchPayload: sequence " + std::to_string(sid) +
+                    " token_exec_slots.size()=" + std::to_string(seq->token_exec_slots.size()) +
+                    " != token_ids.size()=" + std::to_string(seq_len));
+            }
+            exec_slots_ptr = &seq->token_exec_slots;
+        }
+
         raw.push_back({
             &seq->token_ids,
             &seq->targets,
@@ -157,6 +169,7 @@ BatchPayload buildBatchPayload(
             &seq->token_atom_flags,
             seq->atom_table,
             &seq->atom_entry_ids,
+            exec_slots_ptr,
             seq_len
         });
 
@@ -233,6 +246,7 @@ BatchPayload buildBatchPayload(
     payload.atom_mask.assign(flat_size, 0);
     payload.atom_flags.assign(flat_size, 0);
     payload.atom_entry_ids.assign(flat_size, GRIM::Tokenizer::kAtomEntryNone);
+    payload.token_to_slot_map.assign(flat_size, -1);
     payload.seq_atom_tables.resize(payload.batch_size);
     payload.valid_target_counts.resize(payload.batch_size, 0);
 
@@ -304,6 +318,15 @@ BatchPayload buildBatchPayload(
         std::memcpy(&payload.atom_entry_ids[row_offset],
                     r.atom_entry_ids->data(),
                     seq_len * sizeof(uint32_t));
+
+        // Copy execution slot map (runtime substrate metadata; -1 for non-state-bearing)
+        if (r.exec_slots) {
+            std::memcpy(&payload.token_to_slot_map[row_offset],
+                        r.exec_slots->data(),
+                        seq_len * sizeof(int32_t));
+        }
+        // else: stays -1 (default) — dataset doesn't yet provide slot assignments
+
         // Store AtomTable reference for this batch row
         payload.seq_atom_tables[b] = r.atom_table;
     }
