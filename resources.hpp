@@ -10,6 +10,8 @@
 // Constants
 // ====================================================
 inline constexpr const char* AI_CONFIG_FILE = "ai_config.json";
+// Gitignored overlay for secrets (merged at startup); see resolveHuggingFaceApiToken()
+inline constexpr const char* AI_CONFIG_LOCAL_FILE = "ai_config.local.json";
 
 // ====================================================
 // Resource loading
@@ -24,6 +26,10 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
 // ====================================================
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
+
+// Hugging Face token resolution order: HF_TOKEN, HUGGINGFACE_HUB_TOKEN, then
+// aiConfig api_keys.huggingface (after merge with ai_config.local.json).
+std::string resolveHuggingFaceApiToken();
 
 // ====================================================
 // Global runtime state

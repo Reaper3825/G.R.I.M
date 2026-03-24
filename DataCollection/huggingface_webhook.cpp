@@ -464,6 +464,134 @@ std::optional<HFDatasetInfo> HuggingFaceWebhook::getDatasetInfo(const std::strin
     }
 }
 
+static std::string hfUrlEncodeComponent(const std::string& s) {
+    CURL* c = curl_easy_init();
+    if (!c)
+        return s;
+    char* e = curl_easy_escape(c, s.c_str(), static_cast<int>(s.size()));
+    std::string out = e ? e : s;
+    if (e)
+        curl_free(e);
+    curl_easy_cleanup(c);
+    return out;
+}
+
+static std::string hfJsonCellBrief(const json& v, size_t maxLen) {
+    std::string val;
+    if (v.is_string())
+        val = v.get<std::string>();
+    else
+        val = v.dump();
+    if (val.size() > maxLen)
+        return val.substr(0, maxLen - 3) + "...";
+    return val;
+}
+
+std::string HuggingFaceWebhook::getDatasetPreviewSample(
+    const std::string& datasetId,
+    int maxRows,
+    size_t maxCharsPerField) {
+    pImpl->lastError.clear();
+    if (datasetId.empty()) {
+        pImpl->lastError = "Empty dataset id";
+        return "";
+    }
+
+    std::string config = "default";
+    std::string split = "train";
+
+    std::string splitsUrl = std::string(pImpl->API_DATASETS) + "/splits?dataset=" + hfUrlEncodeComponent(datasetId);
+    std::string splitsBody = makeRequest(splitsUrl);
+    if (!splitsBody.empty()) {
+        try {
+            auto sj = json::parse(splitsBody);
+            if (sj.contains("splits") && sj["splits"].is_array() && !sj["splits"].empty()) {
+                const json* chosen = nullptr;
+                for (const auto& s : sj["splits"]) {
+                    if (s.value("split", "") == "train") {
+                        chosen = &s;
+                        break;
+                    }
+                }
+                if (!chosen)
+                    chosen = &sj["splits"][0];
+                config = chosen->value("config", config);
+                split = chosen->value("split", split);
+            }
+        } catch (...) {
+            // fall through to default/train
+        }
+    }
+
+    std::string rowsUrl = std::string(pImpl->API_DATASETS) + "/first-rows?dataset=" + hfUrlEncodeComponent(datasetId)
+                        + "&config=" + hfUrlEncodeComponent(config) + "&split=" + hfUrlEncodeComponent(split);
+    std::string rowsBody = makeRequest(rowsUrl);
+    if (rowsBody.empty()) {
+        if (pImpl->lastError.empty())
+            pImpl->lastError = "Empty response from datasets-server";
+        return "";
+    }
+
+    try {
+        auto j = json::parse(rowsBody);
+        if (j.contains("error") && j["error"].is_string()) {
+            pImpl->lastError = j["error"].get<std::string>();
+            return "";
+        }
+
+        std::ostringstream out;
+        out << "Dataset: " << datasetId << "  |  config: " << config << "  |  split: " << split << "\n";
+        if (j.contains("truncated") && j["truncated"].is_boolean() && j["truncated"].get<bool>())
+            out << "(Response truncated by server — showing partial rows.)\n";
+        out << "────────────────────────────────────────\n";
+
+        if (!j.contains("rows") || !j["rows"].is_array() || j["rows"].empty()) {
+            pImpl->lastError = "No rows in preview response";
+            return "";
+        }
+
+        int count = 0;
+        for (const auto& rowWrap : j["rows"]) {
+            if (count >= maxRows)
+                break;
+            if (!rowWrap.contains("row") || !rowWrap["row"].is_object())
+                continue;
+            int idx = rowWrap.value("row_idx", count);
+            out << "\n--- row " << idx << " ---\n";
+            const auto& row = rowWrap["row"];
+            for (auto it = row.begin(); it != row.end(); ++it) {
+                out << it.key() << ": " << hfJsonCellBrief(it.value(), maxCharsPerField) << "\n";
+            }
+            if (rowWrap.contains("truncated_cells") && rowWrap["truncated_cells"].is_array()
+                && !rowWrap["truncated_cells"].empty()) {
+                out << "(truncated fields: ";
+                bool first = true;
+                for (const auto& tc : rowWrap["truncated_cells"]) {
+                    if (!first)
+                        out << ", ";
+                    first = false;
+                    if (tc.is_string())
+                        out << tc.get<std::string>();
+                    else
+                        out << tc.dump();
+                }
+                out << ")\n";
+            }
+            ++count;
+        }
+
+        if (count == 0) {
+            pImpl->lastError = "Could not parse preview rows";
+            return "";
+        }
+
+        return out.str();
+    } catch (const std::exception& e) {
+        pImpl->lastError = "Preview parse error: " + std::string(e.what());
+        return "";
+    }
+}
+
 bool HuggingFaceWebhook::downloadDataset(
     const std::string& datasetId,
     const std::string& outputDir,

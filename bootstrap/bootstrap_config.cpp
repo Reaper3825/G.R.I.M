@@ -99,6 +99,29 @@ void initAll() {
         if (f.is_open()) {
             f >> aiConfig;
             LOG_PHASE("AI config load", true);
+
+            // Machine-specific secrets (gitignored); shallow-merge nested objects (e.g. api_keys)
+            try {
+                fs::path localPath(AI_CONFIG_LOCAL_FILE);
+                if (fs::exists(localPath)) {
+                    std::ifstream fl(localPath);
+                    nlohmann::json local;
+                    fl >> local;
+                    if (local.is_object()) {
+                        for (auto& [key, val] : local.items()) {
+                            if (val.is_object() && aiConfig.contains(key) && aiConfig[key].is_object()) {
+                                for (auto& [k2, v2] : val.items())
+                                    aiConfig[key][k2] = v2;
+                            } else {
+                                aiConfig[key] = val;
+                            }
+                        }
+                    }
+                    LOG_DEBUG("Config", "Merged " + std::string(AI_CONFIG_LOCAL_FILE));
+                }
+            } catch (const std::exception& e) {
+                LOG_ERROR("Config", std::string(AI_CONFIG_LOCAL_FILE) + " merge error: " + e.what());
+            }
             
             // ✅ Initialize native GRIM backend if configured
             if (aiConfig.value("backend", "") == "grim_native") {

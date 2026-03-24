@@ -214,6 +214,17 @@ UIDataHubPanel::UIDataHubPanel()
         "Max Results", 1.0f, 20.0f, static_cast<float>(maxHFResults_),
         [this](float v) { maxHFResults_ = static_cast<int>(v); });
 
+    hfPreviewArea_ = std::make_shared<UITextArea>(
+        "Sample rows", "Click a dataset in the list above to load a preview (Hugging Face datasets-server API).",
+        [](const std::string&) {});
+    btnHFQueuePreview_ = std::make_shared<UIButton>("Add previewed dataset to queue", [this]() {
+        if (hfPreviewDatasetId_.empty()) {
+            addLog("Select a dataset in the list first", 1);
+            return;
+        }
+        addToDownloadQueue(hfPreviewDatasetId_, hfPreviewDisplayName_);
+    });
+
     btnProcessQueue_ = std::make_shared<UIButton>("Process Queue", [this]() {
         processDownloadQueue();
     });
@@ -224,6 +235,7 @@ UIDataHubPanel::UIDataHubPanel()
     hfWidgets_ = {
         hfSearchInput_, btnSearchHF_, btnBrowseHF_, hfCategoryDropdown_,
         hfTokenInput_, hfResultsScrollBox_, sliderMaxHFResults_,
+        hfPreviewArea_, btnHFQueuePreview_,
         btnProcessQueue_, btnClearQueue_
     };
 
@@ -961,6 +973,9 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
         }
 
         case DataHubView::HuggingFace:
+            if (hfPreviewApply_.exchange(false) && hfPreviewArea_) {
+                hfPreviewArea_->setText(hfPreviewPendingText_);
+            }
             hfSearchInput_->update(input, dt);
             hfSearchBuffer_ = hfSearchInput_->getText();
             hfTokenInput_->update(input, dt);
@@ -976,6 +991,8 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             hfCategoryDropdown_->update(input, dt);
             hfResultsScrollBox_->update(input, dt);
             sliderMaxHFResults_->update(input, dt);
+            if (hfPreviewArea_) hfPreviewArea_->update(input, dt);
+            btnHFQueuePreview_->update(input, dt);
             btnProcessQueue_->update(input, dt);
             btnClearQueue_->update(input, dt);
             break;
@@ -1748,7 +1765,7 @@ void UIDataHubPanel::drawHuggingFaceTab(OverlayRenderer& renderer, const PanelRe
             populateHFResults(fullW);
             hfResultsNeedsPopulate_.store(false);
         }
-        resultsH = std::min(180.0f, static_cast<float>(maxHFResults_) * 75.0f);
+        resultsH = std::min(140.0f, static_cast<float>(maxHFResults_) * 68.0f);
         hfResultsScrollBox_->setPosition(x, y);
         hfResultsScrollBox_->setSize(fullW, resultsH);
         hfResultsScrollBox_->drawOverlay(renderer, position);
@@ -1762,6 +1779,32 @@ void UIDataHubPanel::drawHuggingFaceTab(OverlayRenderer& renderer, const PanelRe
         renderer.drawText({x, y}, lastSearchError_, UITheme::Colors::Danger);
         y += 25.0f;
     }
+
+    // ── Dataset preview (datasets-server /first-rows, same source as huggingface.co viewer) ──
+
+    UIDrawHelpers::drawSectionHeader(renderer, {x, y}, fullW, "Dataset preview",
+                                     UITheme::Colors::SectionNeutral);
+    y += UITheme::Sizes::HeaderHeight;
+
+    constexpr float kHfPreviewH = 128.0f;
+    if (hfPreviewArea_) {
+        hfPreviewArea_->setPosition(x, y);
+        hfPreviewArea_->setSize(fullW, kHfPreviewH);
+        hfPreviewArea_->drawOverlay(renderer, position);
+    }
+    y += kHfPreviewH + 8.0f;
+
+    if (btnHFQueuePreview_) {
+        btnHFQueuePreview_->setPosition(x, y);
+        btnHFQueuePreview_->setSize(280.0f, 28.0f);
+        btnHFQueuePreview_->drawOverlay(renderer, position);
+    }
+    y += 34.0f;
+
+    renderer.drawText({x, y},
+                      "Tip: click a result to preview; use the button above to queue (not one-click add).",
+                      UITheme::Colors::TextDisabled);
+    y += 18.0f;
 
     // ── Download queue ──────────────────────────────────
 
@@ -2866,6 +2909,11 @@ void UIDataHubPanel::searchHuggingFaceDatasets() {
     hfSearching_.store(true);
     lastSearchError_.clear();
     searchAnimTime_ = 0.0f;
+    hfSelectedResultIndex_ = -1;
+    hfPreviewDatasetId_.clear();
+    hfPreviewDisplayName_.clear();
+    ++hfPreviewGen_;
+    if (hfPreviewArea_) hfPreviewArea_->setText("Searching...");
 
     std::string query = hfSearchBuffer_;
     std::string token = hfTokenBuffer_;
@@ -2875,17 +2923,27 @@ void UIDataHubPanel::searchHuggingFaceDatasets() {
             if (!token.empty() && hfWebhook_) hfWebhook_->setApiToken(token);
             auto results = hfWebhook_->searchDatasets(query, 20, "task_categories:text-generation");
             hfSearchResults_ = std::move(results);
+            hfSelectedResultIndex_ = -1;
+            hfPreviewDatasetId_.clear();
+            hfPreviewDisplayName_.clear();
             if (hfSearchResults_.empty()) {
                 lastSearchError_ = "No datasets found for: " + query;
                 addLog("No results for: " + query, 1);
+                hfPreviewPendingText_ = "No datasets match this search.";
+                hfPreviewApply_.store(true);
             } else {
                 lastSearchError_.clear();
                 addLog("Found " + std::to_string(hfSearchResults_.size()) + " datasets", 0);
+                hfPreviewPendingText_ =
+                    "Click a dataset in the list to preview sample rows (Hugging Face datasets-server, same as the website viewer).";
+                hfPreviewApply_.store(true);
             }
         } catch (const std::exception& e) {
             lastSearchError_ = "Search failed: " + std::string(e.what());
             addLog("HF search error: " + std::string(e.what()), 2);
             hfSearchResults_.clear();
+            hfPreviewPendingText_ = std::string("Search failed: ") + e.what();
+            hfPreviewApply_.store(true);
         }
         hfSearching_.store(false);
         hfResultsNeedsPopulate_.store(true);
@@ -2900,6 +2958,11 @@ void UIDataHubPanel::searchHuggingFaceByCategory(const std::string& category) {
     hfSearching_.store(true);
     lastSearchError_.clear();
     searchAnimTime_ = 0.0f;
+    hfSelectedResultIndex_ = -1;
+    hfPreviewDatasetId_.clear();
+    hfPreviewDisplayName_.clear();
+    ++hfPreviewGen_;
+    if (hfPreviewArea_) hfPreviewArea_->setText("Searching...");
 
     std::string token = hfTokenBuffer_;
 
@@ -2908,15 +2971,25 @@ void UIDataHubPanel::searchHuggingFaceByCategory(const std::string& category) {
             if (!token.empty() && hfWebhook_) hfWebhook_->setApiToken(token);
             auto results = hfWebhook_->searchDatasets("", 20, "task_categories:" + category);
             hfSearchResults_ = std::move(results);
+            hfSelectedResultIndex_ = -1;
+            hfPreviewDatasetId_.clear();
+            hfPreviewDisplayName_.clear();
             if (hfSearchResults_.empty()) {
                 lastSearchError_ = "No datasets in category: " + category;
+                hfPreviewPendingText_ = "No datasets in this category.";
+                hfPreviewApply_.store(true);
             } else {
                 lastSearchError_.clear();
                 addLog("Found " + std::to_string(hfSearchResults_.size()) + " datasets", 0);
+                hfPreviewPendingText_ =
+                    "Click a dataset in the list to preview sample rows (Hugging Face datasets-server, same as the website viewer).";
+                hfPreviewApply_.store(true);
             }
         } catch (const std::exception& e) {
             lastSearchError_ = "Category search failed: " + std::string(e.what());
             hfSearchResults_.clear();
+            hfPreviewPendingText_ = std::string("Category search failed: ") + e.what();
+            hfPreviewApply_.store(true);
         }
         hfSearching_.store(false);
         hfResultsNeedsPopulate_.store(true);
@@ -2930,6 +3003,11 @@ void UIDataHubPanel::browseHuggingFaceDatasets() {
     hfSearching_.store(true);
     lastSearchError_.clear();
     searchAnimTime_ = 0.0f;
+    hfSelectedResultIndex_ = -1;
+    hfPreviewDatasetId_.clear();
+    hfPreviewDisplayName_.clear();
+    ++hfPreviewGen_;
+    if (hfPreviewArea_) hfPreviewArea_->setText("Loading...");
 
     std::string token = hfTokenBuffer_;
 
@@ -2938,15 +3016,25 @@ void UIDataHubPanel::browseHuggingFaceDatasets() {
             if (!token.empty() && hfWebhook_) hfWebhook_->setApiToken(token);
             auto results = hfWebhook_->searchDatasets("", 20, "task_categories:text-generation");
             hfSearchResults_ = std::move(results);
+            hfSelectedResultIndex_ = -1;
+            hfPreviewDatasetId_.clear();
+            hfPreviewDisplayName_.clear();
             if (hfSearchResults_.empty()) {
                 lastSearchError_ = "Could not load popular datasets";
+                hfPreviewPendingText_ = "Could not load popular datasets.";
+                hfPreviewApply_.store(true);
             } else {
                 lastSearchError_.clear();
                 addLog("Loaded " + std::to_string(hfSearchResults_.size()) + " popular datasets", 0);
+                hfPreviewPendingText_ =
+                    "Click a dataset in the list to preview sample rows (Hugging Face datasets-server, same as the website viewer).";
+                hfPreviewApply_.store(true);
             }
         } catch (const std::exception& e) {
             lastSearchError_ = "Browse failed: " + std::string(e.what());
             hfSearchResults_.clear();
+            hfPreviewPendingText_ = std::string("Browse failed: ") + e.what();
+            hfPreviewApply_.store(true);
         }
         hfSearching_.store(false);
         hfResultsNeedsPopulate_.store(true);
@@ -2959,14 +3047,47 @@ void UIDataHubPanel::populateHFResults(float containerWidth) {
 
     for (size_t i = 0; i < hfSearchResults_.size(); ++i) {
         const auto& ds = hfSearchResults_[i];
-        std::string label = ds.name + "\n " + ds.author
+        std::string nameLine = ds.name.empty() ? ds.id : ds.name;
+        std::string prefix = (static_cast<int>(i) == hfSelectedResultIndex_) ? "> " : "  ";
+        std::string label = prefix + nameLine + "\n " + ds.author
             + "\n Downloads: " + std::to_string(ds.downloads / 1000) + "k | Likes: " + std::to_string(ds.likes);
-        auto btn = std::make_shared<UIButton>(label,
-            [this, id = ds.id, name = ds.name]() { addToDownloadQueue(id, name); });
+        auto btn = std::make_shared<UIButton>(label, [this, i]() { selectHuggingFaceResult(i); });
         btn->setSize(containerWidth - 10.0f, 70.0f);
         hfResultsScrollBox_->addChild(btn);
     }
     hfResultsScrollBox_->autoLayoutChildren();
+}
+
+void UIDataHubPanel::selectHuggingFaceResult(size_t index) {
+    if (index >= hfSearchResults_.size() || !hfWebhook_) return;
+
+    int generation = ++hfPreviewGen_;
+    hfSelectedResultIndex_ = static_cast<int>(index);
+    hfResultsNeedsPopulate_.store(true);
+
+    const auto& ds = hfSearchResults_[index];
+    hfPreviewDatasetId_ = ds.id;
+    hfPreviewDisplayName_ = ds.name.empty() ? ds.id : ds.name;
+
+    if (hfPreviewArea_)
+        hfPreviewArea_->setText("Loading sample rows from datasets.huggingface.co ...");
+
+    std::string token = hfTokenBuffer_;
+    std::string idCopy = ds.id;
+
+    std::thread([this, idCopy, token, generation]() {
+        if (!token.empty() && hfWebhook_) hfWebhook_->setApiToken(token);
+        std::string sample = hfWebhook_->getDatasetPreviewSample(idCopy, 6, 480);
+        if (hfPreviewGen_.load() != generation) return;
+        if (sample.empty()) {
+            std::string err = hfWebhook_->getLastError();
+            sample = err.empty()
+                ? "No preview available. The dataset may be private, gated, or not supported by the Hugging Face datasets viewer API."
+                : err;
+        }
+        hfPreviewPendingText_ = std::move(sample);
+        hfPreviewApply_.store(true);
+    }).detach();
 }
 
 void UIDataHubPanel::addToDownloadQueue(const std::string& datasetId, const std::string& name) {
@@ -3962,19 +4083,12 @@ void UIDataHubPanel::populateCBModelDropdown() {
 
 void UIDataHubPanel::loadHFTokenFromConfig() {
     try {
-        if (!std::filesystem::exists("ai_config.json")) return;
-        std::ifstream f("ai_config.json");
-        nlohmann::json cfg;
-        f >> cfg;
-        if (cfg.contains("api_keys") && cfg["api_keys"].contains("huggingface")) {
-            std::string token = cfg["api_keys"]["huggingface"];
-            if (!token.empty()) {
-                hfTokenInput_->setText(token);
-                hfTokenBuffer_ = token;
-                if (hfWebhook_) hfWebhook_->setApiToken(token);
-                addLog("HF token loaded from config", 0);
-            }
-        }
+        std::string token = resolveHuggingFaceApiToken();
+        if (token.empty()) return;
+        hfTokenInput_->setText(token);
+        hfTokenBuffer_ = token;
+        if (hfWebhook_) hfWebhook_->setApiToken(token);
+        addLog("HF token loaded (HF_TOKEN / HUGGINGFACE_HUB_TOKEN or ai_config)", 0);
     } catch (const std::exception& e) {
         addLog("Error loading HF token: " + std::string(e.what()), 1);
     }

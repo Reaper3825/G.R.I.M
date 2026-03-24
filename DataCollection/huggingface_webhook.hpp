@@ -46,6 +46,12 @@ public:
 
     std::optional<HFDatasetInfo> getDatasetInfo(const std::string& datasetId);
 
+    // Sample rows via datasets-server /first-rows (same API as the Hugging Face website dataset viewer).
+    std::string getDatasetPreviewSample(
+        const std::string& datasetId,
+        int maxRows = 6,
+        size_t maxCharsPerField = 480);
+
     // Dataset download
     bool downloadDataset(
         const std::string& datasetId,

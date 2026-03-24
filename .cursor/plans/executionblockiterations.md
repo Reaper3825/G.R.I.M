@@ -1,337 +1,248 @@
-# FINAL EXECUTION SYSTEM IMPLEMENTATION — STRICT ENFORCEMENT PROMPT
+You are modifying GRIM’s training system to enforce **execution-first numeric reasoning**.
 
-Reference plan: 
+The goal is to ensure the model CANNOT solve arithmetic via hidden state approximation and MUST rely on ExecutionBlock.
 
-This is NOT a design task.
-This is a **surgical implementation task**.
-
-You are enforcing an already-defined system.
+This is not optional. This is a hard constraint.
 
 ---
 
-## PRIMARY GOAL
+## GOAL
 
-Make the codebase match EXACTLY this invariant:
+Force the model to learn:
 
-```text
-tokens → token_to_slot_map → ExecutionMemory.values
-→ ExecutionBlock (op_table) → updated values
-→ StateEncoder(values) → state
-```
+(state, op, args) → execution → state'
 
-No deviations. No partial compliance.
+NOT:
+
+hidden_state → predicted number
 
 ---
 
-## GLOBAL ENFORCEMENT RULE
+## CORE RULE
 
-If any code path allows:
+Numeric correctness MUST come ONLY from ExecutionBlock.
 
-* numeric values from hidden state
-* numeric values from tokenizer after bootstrap
-* numeric values outside ExecutionMemory.values
-
-→ DELETE IT
-
-Do NOT adapt. Do NOT fallback.
+The model must NOT be able to compute numeric results internally.
 
 ---
 
-## STEP 1 — HARD DETECTION PASS (DO THIS FIRST)
+## STEP 1 — REMOVE ALL VALUE-BASED SUPERVISION
 
-Search entire codebase and identify ALL instances of:
+Delete all training paths that supervise numeric values.
 
-* token_numeric_values used outside bootstrap
-* numeric MLP decode paths
-* hidden → float conversion for execution
-* scratch slot numeric usage
-* multiple write paths to “state”
+Specifically:
 
-For each occurrence:
+* Remove NumericHead loss (kernelNumericLoss)
+* Remove any regression on numeric_values
+* Remove any objective that compares predicted value to ground truth
 
-```text
-IF used for execution → DELETE
-IF ambiguous → ERROR and stop
-```
-
-Do not proceed until all violations are removed or accounted for.
+There must be ZERO gradient path encouraging:
+→ “predict the number directly”
 
 ---
 
-## STEP 2 — TOKEN → SLOT SYSTEM (MANDATORY)
+## STEP 2 — STRUCTURED SUPERVISION ONLY
 
-Implement:
+Training targets must be:
 
-```text
-int32_t token_to_slot_map[total_tokens]
-```
+For each step:
 
-Rules:
+* op_target
+* arg1_target
+* arg2_target
+* write_slot_target
 
-* `<NUM>` MUST map to valid slot
-* non-state tokens → -1
-* mapping MUST persist across forward + autoregressive steps
+Loss:
 
-Thread through:
+L_total =
+CE(op_logits, op_target)
 
-* BatchPayload
-* TrainingState
-* InferenceState
-* CUDA kernels
+* CE(arg1_logits, arg1_target)
+* CE(arg2_logits, arg2_target)
+* CE(write_slot_logits, write_slot_target)
 
-If any execution path lacks slot mapping:
-
-→ THROW (fail hard)
+No numeric loss.
 
 ---
 
-## STEP 3 — BOOTSTRAP (ONLY LITERAL ENTRY POINT)
+## STEP 3 — EXECUTION-GROUNDED CORRECTNESS
 
-After ExecutionMemory init:
+After each predicted step:
 
-```text
-if slot_id >= 0:
-    M.values[slot_id] = literal
-```
+1. Execute:
+   v_out = ExecutionBlock(op, args)
 
-Constraints:
+2. Compare against ground truth:
 
-* training: detached
-* inference: prompt only
+If v_out != expected_value:
+→ apply penalty to (op, arg1, arg2)
 
-After this:
+Do NOT train value prediction.
 
-```text
-LITERALS MUST NEVER BE USED AGAIN FOR EXECUTION
-```
-
-Any later usage → FAIL
+All numeric correctness is enforced through:
+→ correctness of op + slot selection
 
 ---
 
-## STEP 4 — EXECUTION BLOCK (CORE REWRITE)
+## STEP 4 — HARD DISABLE VALUE LEAKAGE
 
-Inside `executeStep`:
+For arithmetic-tagged batches:
 
-### REPLACE ALL VALUE SOURCES WITH:
+* Disable all value-based ScratchBlock injection:
 
-```text
-slot_i = token_to_slot_map[arg1]
-slot_j = token_to_slot_map[arg2]
+  * remove log-magnitude features
+  * remove sign features
+  * remove numeric-derived embeddings
 
-v_i = M.values[slot_i]
-v_j = M.values[slot_j]
-```
+Only allow:
 
-If:
+* type embedding (this is a number)
 
-* slot invalid
-* slot == -1
-* slot out of range
-
-→ THROW
+Hidden state must NOT contain enough information to reconstruct numeric values.
 
 ---
 
-### EXECUTION (NON-NEGOTIABLE)
+## STEP 5 — EXECUTION DEPENDENCY ENFORCEMENT
 
-```text
-v_out = op_table[op_id](v_i, v_j)
-```
+During training:
 
-Constraints:
+If correct answer requires execution:
 
-* NO gradients
-* NO hidden state involvement
-* NO approximation
+* model MUST go through ExecutionBlock
+* no shortcut paths allowed
 
----
+If model produces correct value WITHOUT correct op:
+→ treat as WRONG
 
-### WRITE (ONLY PATH)
+Correctness is defined as:
 
-```text
-target_slot ∈ [S .. V-1]
+* correct op
+* correct arguments
+* correct transition
 
-M.values[target_slot] = v_out
-```
-
-If:
-
-* write touches scratch
-* write happens elsewhere
-* blending affects scratch
-
-→ FAIL
+NOT correct numeric output alone
 
 ---
 
-## STEP 5 — STATE SYSTEM (STRICT)
+## STEP 6 — STEP-WISE SUPERVISION (CRITICAL)
 
-### DELETE:
+Each training example must include ordered steps:
 
-* state write heads
-* state logits
-* scratch-based state storage
+Example:
+"12 + 7 * 3"
+
+Targets:
+
+step 1:
+op = MUL
+arg1 = slot1
+arg2 = slot2
+write_slot = slot3
+
+step 2:
+op = ADD
+arg1 = slot0
+arg2 = slot3
+write_slot = slot4
+
+Loss is applied per step.
+
+DO NOT collapse into single-step supervision.
 
 ---
 
-### IMPLEMENT:
+## STEP 7 — INVALID PREDICTION HANDLING
 
-```text
-state0 = StateEncoder(M.values, mask)
-state1 = StateEncoder(M.values_updated)
-```
+If model predicts:
 
-State must NEVER be:
-
-* stored in memory
-* written to scratch
-* predicted directly
-
----
-
-## STEP 6 — SCRATCHBLOCK CORRECTION
-
-In:
-
-`kernelLookupAtomEmbeddingsWithValue`
-
-If:
-
-```text
-slot_id >= 0
-```
+* invalid op
+* invalid slot index
+* invalid write slot
 
 Then:
 
-```text
-has_value = false
-```
+* apply full penalty
+* DO NOT execute fallback
+* DO NOT correct silently
 
-REMOVE:
-
-* numeric literal injection into embedding bands
-
-ADD:
-
-```text
-embedding += slot_embedding[slot_id]
-```
-
-ScratchBlock must NOT contain numeric truth
+Fail hard.
 
 ---
 
-## STEP 7 — GATHER + ARG DOMAIN
+## STEP 8 — NO EXECUTION = NO LEARNING
 
-Candidates:
+If execution is skipped or disabled:
 
-```text
-atoms + value_slots_only
-```
+* training step must fail
 
-EXCLUDE:
-
-* scratch slots
-* state embeddings
-
-Arg heads must operate ONLY on this set
+ExecutionBlock is mandatory for all arithmetic batches.
 
 ---
 
-## STEP 8 — NUMERIC HEAD (CONTAINMENT)
+## STEP 9 — OPTIONAL CONSISTENCY CHECK (STRONG SIGNAL)
 
-NumericHead is:
+After full sequence:
 
-* decode only
-* optional supervision
+Compare final slot value with ground truth:
 
-It MUST NOT:
+If mismatch:
+→ apply additional penalty across all steps
 
-* influence execution
-* provide intermediate values
-* act as truth source
-
-Inference must read:
-
-```text
-M.values[result_slot]
-```
+This reinforces long-chain correctness.
 
 ---
 
-## STEP 9 — AUTOGRAD BOUNDARY
+## STEP 10 — PREVENT COLLAPSE BACK TO TOKEN MODE
 
-Enforce:
+Ensure:
 
-```text
-NO gradient through:
-    op_table
-    M.values writes
-```
-
-If gradients are detected crossing this boundary:
-
-→ FAIL
+* LM head is NOT used to supervise numeric outputs
+* numeric tokens are masked except <NUM>
+* no pathway exists for model to emit raw numeric strings
 
 ---
 
-## STEP 10 — FAIL-HARD VALIDATION
+## EXPECTED RESULT
 
-Add explicit runtime checks:
+Model learns:
 
-* `<NUM>` without slot → ERROR
-* slot out of bounds → ERROR
-* execution using hidden decode → ERROR
-* write to scratch → ERROR
-* dual write paths → ERROR
+* select correct operation
+* select correct variable (slot)
+* build correct transition chain
 
-No warnings. No silent fixes.
+Model does NOT learn:
 
----
-
-## FINAL VERIFICATION CHECKLIST
-
-System is correct ONLY IF:
-
-* arithmetic is exact (bit-consistent)
-* same inputs → identical outputs
-* removing NumericHead does NOT break reasoning
-* removing ScratchBlock numeric bands does NOT break execution
-* multi-step reasoning uses ONLY slot updates
+* numeric patterns
+* memorized arithmetic
+* value prediction
 
 ---
 
-## IMPLEMENTATION RULE
+## NON-NEGOTIABLE
 
-If something conflicts with this system:
+If the model can solve arithmetic without execution:
 
-```text
-DELETE IT
-```
+→ the system is broken
 
-Do NOT:
+If hidden state alone can produce correct results:
 
-* preserve compatibility
-* keep legacy paths
-* introduce fallbacks
+→ the system is broken
+
+Execution must be the ONLY path to numeric correctness.
 
 ---
 
-## END STATE
+## DELIVERABLE
 
-You are not building a “model that predicts numbers.”
+Modify:
 
-You are building:
+* training loop
+* loss computation
+* ScratchBlock behavior (conditional)
+* execution integration
 
-```text
-A deterministic execution engine controlled by a transformer
-```
+Do NOT introduce fallback paths.
+Do NOT preserve value prediction logic.
 
-If the transformer disappears, execution must still be correct.
-
-If execution disappears, the system must fail.
-
----
-
-Execute exactly as specified.
+If training becomes unstable:
+→ fix supervision, not constraints.

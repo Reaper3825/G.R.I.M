@@ -120,6 +120,8 @@ private:
     std::shared_ptr<UIInputBox>  hfTokenInput_;
     std::shared_ptr<UIScrollBox> hfResultsScrollBox_;
     std::shared_ptr<UISlider>    sliderMaxHFResults_;
+    std::shared_ptr<UITextArea>  hfPreviewArea_;
+    std::shared_ptr<UIButton>    btnHFQueuePreview_;
     std::shared_ptr<UIButton>    btnProcessQueue_;
     std::shared_ptr<UIButton>    btnClearQueue_;
     std::atomic<bool>            hfResultsNeedsPopulate_{false};
@@ -247,6 +249,13 @@ private:
     std::string        lastSearchError_;
     std::atomic<bool>  hfSearching_{false};
     float              searchAnimTime_ = 0.0f;
+
+    int         hfSelectedResultIndex_ = -1;
+    std::string hfPreviewDatasetId_;
+    std::string hfPreviewDisplayName_;
+    std::string hfPreviewPendingText_;
+    std::atomic<bool> hfPreviewApply_{false};
+    std::atomic<int>  hfPreviewGen_{0};
 
     struct QueuedDownload {
         std::string datasetId;
@@ -406,6 +415,7 @@ private:
     void searchHuggingFaceByCategory(const std::string& category);
     void browseHuggingFaceDatasets();
     void populateHFResults(float containerWidth);
+    void selectHuggingFaceResult(size_t index);
     void addToDownloadQueue(const std::string& datasetId, const std::string& name);
     void processDownloadQueue();
     void clearDownloadQueue();

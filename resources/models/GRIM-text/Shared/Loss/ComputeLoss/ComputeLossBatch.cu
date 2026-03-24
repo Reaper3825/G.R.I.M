@@ -197,17 +197,20 @@ float LanguageModel::computeLossBatch(
 			text_feat_bytes, cudaMemcpyHostToDevice, stream));
 	}
 
-	// --- Round 4: token_to_slot_map (block B) ---
+	// --- Round 4: token_to_slot_map (reuse block A; pool is only double-buffered) ---
 	if (training_state_.cached_token_to_slot_map.data) {
 		CUDA_CHECK(cudaStreamSynchronize(stream));
 		const size_t slot_map_bytes = payload.slotMapBytes();
-		auto handleSlot = scratch_pool->acquire(slot_map_bytes);
-		std::memcpy(handleSlot.data, payload.token_to_slot_map.data(), slot_map_bytes);
+		if (slot_map_bytes > handleA.capacity_bytes) {
+			throw std::runtime_error(
+				"computeLossBatch: token_to_slot_map transfer (" + std::to_string(slot_map_bytes) +
+				" bytes) exceeds scratch block A capacity (" + std::to_string(handleA.capacity_bytes) + ")");
+		}
+		std::memcpy(handleA.data, payload.token_to_slot_map.data(), slot_map_bytes);
 		CUDA_CHECK(cudaMemcpyAsync(
 			reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data),
-			handleSlot.data, slot_map_bytes, cudaMemcpyHostToDevice, stream));
+			handleA.data, slot_map_bytes, cudaMemcpyHostToDevice, stream));
 		CUDA_CHECK(cudaStreamSynchronize(stream));
-		scratch_pool->release(handleSlot);
 	}
 
 	// Final sync ensures all DMAs complete before releasing pinned blocks

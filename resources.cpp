@@ -1,6 +1,9 @@
 #include "resources.hpp"
 #include "console_history.hpp"
 #include "logger.hpp"
+#include <nlohmann/json.hpp>
+
+#include <cstdlib>
 
 #if defined(_WIN32)
     #include <windows.h>  // GetModuleFileNameA
@@ -203,5 +206,31 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
     }
     LOG_ERROR("Resources", errMsg);
     LOG_PHASE("Font search", false);
+    return {};
+}
+
+static std::string trimEnvToken(const char* s) {
+    if (!s || !*s) return {};
+    std::string t(s);
+    while (!t.empty() && (t.back() == '\n' || t.back() == '\r' || t.back() == ' ' || t.back() == '\t'))
+        t.pop_back();
+    size_t i = 0;
+    while (i < t.size() && (t[i] == ' ' || t[i] == '\t')) ++i;
+    return t.substr(i);
+}
+
+std::string resolveHuggingFaceApiToken() {
+    if (const char* e = std::getenv("HF_TOKEN")) {
+        std::string t = trimEnvToken(e);
+        if (!t.empty()) return t;
+    }
+    if (const char* e = std::getenv("HUGGINGFACE_HUB_TOKEN")) {
+        std::string t = trimEnvToken(e);
+        if (!t.empty()) return t;
+    }
+    if (aiConfig.contains("api_keys") && aiConfig["api_keys"].contains("huggingface")) {
+        std::string t = aiConfig["api_keys"]["huggingface"].get<std::string>();
+        if (!t.empty()) return t;
+    }
     return {};
 }
