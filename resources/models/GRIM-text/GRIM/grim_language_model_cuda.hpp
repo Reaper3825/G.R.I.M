@@ -484,6 +484,8 @@ struct GeneratedSequence {
     std::vector<float> token_scores;
     std::vector<float> token_numeric_values;
     std::vector<uint8_t> token_atom_mask;
+    /// Per-token execution slot id (-1 = non-state-bearing); mirrors BatchPayload::token_to_slot_map
+    std::vector<int32_t> token_to_slot_map;
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> context_atom_table;  // Atom registry from context (null for generated tokens)
     std::vector<uint32_t> atom_entry_ids;  // Per-token atom entry IDs (kAtomEntryNone = no atom)
     float score = 0.0f;
@@ -572,23 +574,27 @@ public:
     // Main API
     Vector forward(const std::vector<int>& token_ids,
                    const std::vector<float>& token_numeric_values,
-                   const std::vector<uint8_t>& token_atom_mask);
+                   const std::vector<uint8_t>& token_atom_mask,
+                   const std::vector<int32_t>& token_to_slot_map = {});
     Vector getNextTokenLogits(const std::vector<int>& context_tokens,
                               const std::vector<float>& context_numeric_values,
-                              const std::vector<uint8_t>& context_atom_mask);
+                              const std::vector<uint8_t>& context_atom_mask,
+                              const std::vector<int32_t>& token_to_slot_map = {});
     std::vector<GeneratedSequence> generate(const std::vector<int>& prompt_tokens,
                                             const std::vector<float>& prompt_numeric_values,
                                             const std::vector<uint8_t>& prompt_atom_mask,
                                             const GenerationConfig* gen_config = nullptr,
                                             std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
-                                            const std::vector<uint32_t>& prompt_atom_entry_ids = {});
+                                            const std::vector<uint32_t>& prompt_atom_entry_ids = {},
+                                            const std::vector<int32_t>& prompt_token_to_slot_map = {});
     GeneratedSequence generateStream(const std::vector<int>& prompt_tokens,
                                      const std::vector<float>& prompt_numeric_values,
                                      const std::vector<uint8_t>& prompt_atom_mask,
                                      GenerationStreamCallback callback,
                                      const GenerationConfig* gen_config = nullptr,
                                      std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
-                                     const std::vector<uint32_t>& prompt_atom_entry_ids = {});
+                                     const std::vector<uint32_t>& prompt_atom_entry_ids = {},
+                                     const std::vector<int32_t>& prompt_token_to_slot_map = {});
     
     // Training
     float computeLossBatch(const GRIM::Batching::BatchPayload& payload,
@@ -608,12 +614,14 @@ public:
     // Returns logits for the last prompt token (ready for first sampling)
     Vector forwardInit(const std::vector<int>& prompt_tokens,
                        const std::vector<float>& prompt_numeric_values,
-                       const std::vector<uint8_t>& prompt_atom_mask);
+                       const std::vector<uint8_t>& prompt_atom_mask,
+                       const std::vector<int32_t>& prompt_token_to_slot_map = {});
     
     // Process a single new token using cached K,V (decode phase)  
     // Returns logits for this token position (ready for next sampling)
     // Appends new token to cached sequence and recomputes full forward pass
-    Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask);
+    Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
+                       int32_t new_token_slot_id = -1);
     
     // Reconstruct the predicted numeric value from the cached numeric head
     // output produced by the most recent forward pass. Call AFTER sampling
@@ -676,10 +684,12 @@ public:
     void initGPU();
     Vector forwardGPU(const std::vector<int>& token_ids,
                       const std::vector<float>& token_numeric_values,
-                      const std::vector<uint8_t>& token_atom_mask);
+                      const std::vector<uint8_t>& token_atom_mask,
+                      const std::vector<int32_t>& token_to_slot_map = {});
     Vector getNextTokenLogitsGPU(const std::vector<int>& context_tokens,
                                  const std::vector<float>& context_numeric_values,
-                                 const std::vector<uint8_t>& context_atom_mask);
+                                 const std::vector<uint8_t>& context_atom_mask,
+                                 const std::vector<int32_t>& token_to_slot_map = {});
     TokenBufferView getTokenBufferView();
     void markDevicePromptReady(int token_count);
     
@@ -738,7 +748,8 @@ public:
                                           const GenerationConfig& cfg,
                                           GenerationStreamCallback* stream_callback = nullptr,
                                           std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
-                                          const std::vector<uint32_t>& prompt_atom_entry_ids = {});
+                                          const std::vector<uint32_t>& prompt_atom_entry_ids = {},
+                                          const std::vector<int32_t>& prompt_token_to_slot_map = {});
     
 private:
     // Core inference forward: assumes data already in cached_* tensors.

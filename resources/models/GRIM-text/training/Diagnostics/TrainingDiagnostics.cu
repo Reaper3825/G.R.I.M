@@ -434,7 +434,7 @@ HiddenState277Analysis computeHiddenState277Analysis(
     // Analyze per-position
     double sum_hidden = 0.0, sum_hidden_sq = 0.0;
     double sum_rms = 0.0;
-    double sum_hidden_tracked = 0.0, sum_rms_tracked = 0.0;
+    double sum_rms_tracked = 0.0;
     double sum_hidden_other = 0.0, sum_rms_other = 0.0;
     double sum_grad_tracked_at_tracked = 0.0, sum_grad_tracked_at_other = 0.0;
     

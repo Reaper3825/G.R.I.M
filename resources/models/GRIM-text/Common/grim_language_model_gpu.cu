@@ -494,11 +494,12 @@ LanguageModel::~LanguageModel() = default;
 
 Vector LanguageModel::forward(const std::vector<int>& token_ids,
                               const std::vector<float>& token_numeric_values,
-                              const std::vector<uint8_t>& token_atom_mask) {
+                              const std::vector<uint8_t>& token_atom_mask,
+                              const std::vector<int32_t>& token_to_slot_map) {
 #ifdef USE_CUDA
     // Use GPU if available
     if (config_.use_gpu && gpu_encoder_) {
-        return forwardGPU(token_ids, token_numeric_values, token_atom_mask);
+        return forwardGPU(token_ids, token_numeric_values, token_atom_mask, token_to_slot_map);
     }
 #endif
     throw std::runtime_error("LanguageModel::forward requires GPU initialization");
@@ -506,22 +507,57 @@ Vector LanguageModel::forward(const std::vector<int>& token_ids,
 
 Vector LanguageModel::getNextTokenLogits(const std::vector<int>& context_tokens,
                                          const std::vector<float>& context_numeric_values,
-                                         const std::vector<uint8_t>& context_atom_mask) {
+                                         const std::vector<uint8_t>& context_atom_mask,
+                                         const std::vector<int32_t>& token_to_slot_map) {
 #ifdef USE_CUDA
     // Use GPU if available
     if (config_.use_gpu && gpu_encoder_) {
         return getNextTokenLogitsGPU(context_tokens,
                                      context_numeric_values,
-                                     context_atom_mask);
+                                     context_atom_mask,
+                                     token_to_slot_map);
     }
 #endif
     throw std::runtime_error("LanguageModel::getNextTokenLogits requires GPU initialization");
 }
 
 
+namespace {
+
+void copyTokenSlotMapH2D_Inference(TrainingState& ts, cudaStream_t stream, int seq_len,
+                                    const std::vector<int32_t>& prompt_map) {
+    if (!ts.cached_token_to_slot_map.data || seq_len <= 0)
+        return;
+    auto* dst = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
+    if (prompt_map.empty()) {
+        std::vector<int32_t> neg(static_cast<size_t>(seq_len), -1);
+        cudaError_t err = cudaMemcpyAsync(dst, neg.data(),
+            static_cast<size_t>(seq_len) * sizeof(int32_t),
+            cudaMemcpyHostToDevice, stream);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("copyTokenSlotMapH2D_Inference (sentinel): ") +
+                                     cudaGetErrorString(err));
+        }
+        return;
+    }
+    if (static_cast<int>(prompt_map.size()) != seq_len) {
+        throw std::runtime_error(
+            "token_to_slot_map size must match sequence length (or pass empty for all -1)");
+    }
+    cudaError_t err = cudaMemcpyAsync(dst, prompt_map.data(),
+        static_cast<size_t>(seq_len) * sizeof(int32_t),
+        cudaMemcpyHostToDevice, stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("copyTokenSlotMapH2D_Inference: ") + cudaGetErrorString(err));
+    }
+}
+
+}  // namespace
+
 Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_tokens,
                                             const std::vector<float>& context_numeric_values,
-                                            const std::vector<uint8_t>& context_atom_mask) {
+                                            const std::vector<uint8_t>& context_atom_mask,
+                                            const std::vector<int32_t>& token_to_slot_map) {
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("getNextTokenLogitsGPU requires initialized GPU encoder");
     }
@@ -572,6 +608,8 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
                     context_atom_mask.data(),
                     seq_len * sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
+
+    copyTokenSlotMapH2D_Inference(training_state_, stream, seq_len, token_to_slot_map);
     
     // Single inference forward path
     return executeInferenceForward_(seq_len);
@@ -579,8 +617,9 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
 
 Vector LanguageModel::forwardGPU(const std::vector<int>& token_ids,
                                  const std::vector<float>& token_numeric_values,
-                                 const std::vector<uint8_t>& token_atom_mask) {
-    return getNextTokenLogitsGPU(token_ids, token_numeric_values, token_atom_mask);
+                                 const std::vector<uint8_t>& token_atom_mask,
+                                 const std::vector<int32_t>& token_to_slot_map) {
+    return getNextTokenLogitsGPU(token_ids, token_numeric_values, token_atom_mask, token_to_slot_map);
 }
 
 TokenBufferView LanguageModel::getTokenBufferView() {
@@ -639,7 +678,8 @@ std::vector<GeneratedSequence> LanguageModel::generate(
     const std::vector<uint8_t>& prompt_atom_mask,
     const GenerationConfig* gen_config,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
-    const std::vector<uint32_t>& prompt_atom_entry_ids)
+    const std::vector<uint32_t>& prompt_atom_entry_ids,
+    const std::vector<int32_t>& prompt_token_to_slot_map)
 {
 #ifdef USE_CUDA
     if (config_.use_gpu && gpu_encoder_) {
@@ -659,7 +699,8 @@ std::vector<GeneratedSequence> LanguageModel::generate(
                                                   seq_cfg,
                                                   nullptr,
                                                   prompt_atom_table,
-                                                  prompt_atom_entry_ids));
+                                                  prompt_atom_entry_ids,
+                                                  prompt_token_to_slot_map));
         }
         return outputs;
     }
@@ -674,7 +715,8 @@ GeneratedSequence LanguageModel::generateStream(
     GenerationStreamCallback callback,
     const GenerationConfig* gen_config,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
-    const std::vector<uint32_t>& prompt_atom_entry_ids)
+    const std::vector<uint32_t>& prompt_atom_entry_ids,
+    const std::vector<int32_t>& prompt_token_to_slot_map)
 {
 #ifdef USE_CUDA
     if (config_.use_gpu && gpu_encoder_) {
@@ -685,7 +727,8 @@ GeneratedSequence LanguageModel::generateStream(
                                    cfg,
                                    &callback,
                                    prompt_atom_table,
-                                   prompt_atom_entry_ids);
+                                   prompt_atom_entry_ids,
+                                   prompt_token_to_slot_map);
     }
 #endif
     throw std::runtime_error("LanguageModel::generateStream requires GPU initialization");
@@ -698,12 +741,21 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                                      const GenerationConfig& cfg,
                                                      GenerationStreamCallback* stream_callback,
                                                      std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
-                                                     const std::vector<uint32_t>& prompt_atom_entry_ids) {
+                                                     const std::vector<uint32_t>& prompt_atom_entry_ids,
+                                                     const std::vector<int32_t>& prompt_token_to_slot_map) {
     GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
     sequence.token_numeric_values = prompt_numeric_values;
     sequence.token_atom_mask = prompt_atom_mask;
     sequence.context_atom_table = prompt_atom_table;
+    if (!prompt_token_to_slot_map.empty()) {
+        if (prompt_token_to_slot_map.size() != prompt_tokens.size()) {
+            throw std::runtime_error("generateSequenceGPU: prompt_token_to_slot_map length mismatch");
+        }
+        sequence.token_to_slot_map = prompt_token_to_slot_map;
+    } else {
+        sequence.token_to_slot_map.assign(prompt_tokens.size(), -1);
+    }
     if (!prompt_atom_entry_ids.empty() && prompt_atom_entry_ids.size() == prompt_tokens.size()) {
         sequence.atom_entry_ids = prompt_atom_entry_ids;
     } else {
@@ -779,7 +831,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
     // Process prompt and get logits for first new token
     Vector logits_vec = forwardInit(prompt_tokens,
                                     prompt_numeric_values,
-                                    prompt_atom_mask);
+                                    prompt_atom_mask,
+                                    sequence.token_to_slot_map);
     if (logits_vec.data.empty()) {
         throw std::runtime_error("generateSequenceGPU: forwardInit returned empty logits");
     }
@@ -833,6 +886,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             sequence.token_scores.push_back(sample.log_probability);
             sequence.token_numeric_values.push_back(0.0f);
             sequence.token_atom_mask.push_back(0);
+            sequence.token_to_slot_map.push_back(-1);
             sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
             sequence.score += sample.log_probability;
             sequence.finished = true;
@@ -843,7 +897,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         }
         
         // Run forward pass for this token WITH ScratchBlock metadata
-        logits_vec = forwardStep(sample.token_id, token_numeric_value, token_atom_mask_val);
+        logits_vec = forwardStep(sample.token_id, token_numeric_value, token_atom_mask_val, -1);
         if (logits_vec.data.empty()) {
             throw std::runtime_error("generateSequenceGPU: forwardStep returned empty logits");
         }
@@ -853,6 +907,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         sequence.token_scores.push_back(sample.log_probability);
         sequence.token_numeric_values.push_back(token_numeric_value);
         sequence.token_atom_mask.push_back(token_atom_mask_val);
+        sequence.token_to_slot_map.push_back(-1);
         sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
         sequence.score += sample.log_probability;
         

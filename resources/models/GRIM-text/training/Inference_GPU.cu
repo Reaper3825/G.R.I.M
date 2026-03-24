@@ -12,6 +12,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <string>
 #include <cuda_runtime.h>
 #include <stdexcept>
 
@@ -20,6 +21,38 @@
 #include "../Layers/NumericHead/numeric_head_GPU.hpp"
 
 namespace GRIM {
+
+namespace {
+
+void copyTokenSlotMapH2D(TrainingState& ts, cudaStream_t stream, int seq_len,
+                         const std::vector<int32_t>& prompt_map) {
+    if (!ts.cached_token_to_slot_map.data || seq_len <= 0)
+        return;
+    auto* dst = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
+    if (prompt_map.empty()) {
+        std::vector<int32_t> neg(static_cast<size_t>(seq_len), -1);
+        cudaError_t err = cudaMemcpyAsync(dst, neg.data(),
+            static_cast<size_t>(seq_len) * sizeof(int32_t),
+            cudaMemcpyHostToDevice, stream);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("copyTokenSlotMapH2D (sentinel): ") +
+                                     cudaGetErrorString(err));
+        }
+        return;
+    }
+    if (static_cast<int>(prompt_map.size()) != seq_len) {
+        throw std::runtime_error(
+            "token_to_slot_map size must match sequence length (or pass empty for all -1)");
+    }
+    cudaError_t err = cudaMemcpyAsync(dst, prompt_map.data(),
+        static_cast<size_t>(seq_len) * sizeof(int32_t),
+        cudaMemcpyHostToDevice, stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("copyTokenSlotMapH2D: ") + cudaGetErrorString(err));
+    }
+}
+
+}  // namespace
 
 //======================================================//
 //  executeInferenceForward_ - THE single inference forward path
@@ -99,7 +132,8 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
 //======================================================//
 Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                                   const std::vector<float>& prompt_numeric_values,
-                                  const std::vector<uint8_t>& prompt_atom_mask) {
+                                  const std::vector<uint8_t>& prompt_atom_mask,
+                                  const std::vector<int32_t>& prompt_token_to_slot_map) {
     const int seq_len = static_cast<int>(prompt_tokens.size());
     
     if (!training_state_.initialized) {
@@ -138,6 +172,8 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                         seq_len * sizeof(uint8_t),
                         cudaMemcpyHostToDevice, stream);
     }
+
+    copyTokenSlotMapH2D(training_state_, stream, seq_len, prompt_token_to_slot_map);
     
     // Store sequence length for subsequent forwardStep() calls
     training_state_.kv_cache_len = seq_len;
@@ -148,7 +184,8 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
 //======================================================//
 //  forwardStep - Decode phase: append token, recompute full sequence
 //======================================================//
-Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t atom_mask) {
+Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
+                                  int32_t new_token_slot_id) {
     if (!training_state_.initialized) {
         throw std::runtime_error("forwardStep: training state not initialized");
     }
@@ -178,6 +215,15 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
     cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data) + new_pos,
                     &atom_mask, sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
+
+    if (training_state_.cached_token_to_slot_map.data) {
+        auto* slot_dst = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data) + new_pos;
+        cudaError_t serr = cudaMemcpyAsync(slot_dst, &new_token_slot_id, sizeof(int32_t),
+                                           cudaMemcpyHostToDevice, stream);
+        if (serr != cudaSuccess) {
+            throw std::runtime_error(std::string("forwardStep slot map: ") + cudaGetErrorString(serr));
+        }
+    }
 
     training_state_.kv_cache_len = new_seq_len;
     
