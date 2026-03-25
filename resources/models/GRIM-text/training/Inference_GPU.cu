@@ -120,18 +120,16 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
         const auto& row_out = training_state_.autograd_intermediates.exec_outputs_per_row;
         if (!row_out.empty() && !row_out[0].steps.empty()) {
             const auto& last_step = row_out[0].steps.back();
-            if (last_step.p_write.data) {
-                const int V = last_step.p_write.shape.empty() ? 0 : last_step.p_write.shape.back();
-                if (V > 0) {
-                    std::vector<float> h_pw(V);
-                    cudaMemcpyAsync(h_pw.data(), last_step.p_write.data,
-                                    V * sizeof(float), cudaMemcpyDeviceToHost, stream);
-                    cudaStreamSynchronize(stream);
-                    int best = 0;
-                    for (int i = 1; i < V; ++i)
-                        if (h_pw[i] > h_pw[best]) best = i;
-                    training_state_.inference_exec_last_write_slot = best;
-                }
+            const int V = config_.execution_block_num_slots;
+            if (last_step.p_write.data && V > 0) {
+                std::vector<float> h_pw(V);
+                cudaMemcpyAsync(h_pw.data(), last_step.p_write.data,
+                                V * sizeof(float), cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream);
+                int best = 0;
+                for (int i = 1; i < V; ++i)
+                    if (h_pw[i] > h_pw[best]) best = i;
+                training_state_.inference_exec_last_write_slot = best;
             }
         }
     }
