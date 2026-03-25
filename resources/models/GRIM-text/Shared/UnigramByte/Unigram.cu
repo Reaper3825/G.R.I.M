@@ -64,6 +64,65 @@ static size_t utf8SequenceLength(unsigned char c) {
     return 1;
 }
 
+// Decode one UTF-8 codepoint at byte index `pos`. Returns false if truncated or ill-formed.
+static bool utf8DecodeAt(const std::string& s, size_t pos, uint32_t* out_cp, size_t* out_len) {
+    if (pos >= s.size()) return false;
+    unsigned char b0 = static_cast<unsigned char>(s[pos]);
+    if ((b0 & 0x80) == 0) {
+        *out_cp = b0;
+        *out_len = 1;
+        return true;
+    }
+    const size_t n = utf8SequenceLength(b0);
+    if (n < 2 || pos + n > s.size()) return false;
+    for (size_t k = 1; k < n; ++k) {
+        if ((static_cast<unsigned char>(s[pos + k]) & 0xC0) != 0x80) return false;
+    }
+    uint32_t cp = 0;
+    if (n == 2) {
+        unsigned char b1 = static_cast<unsigned char>(s[pos + 1]);
+        cp = ((b0 & 0x1Fu) << 6) | (b1 & 0x3Fu);
+        if (cp < 0x80u) return false;
+    } else if (n == 3) {
+        unsigned char b1 = static_cast<unsigned char>(s[pos + 1]);
+        unsigned char b2 = static_cast<unsigned char>(s[pos + 2]);
+        cp = ((b0 & 0x0Fu) << 12) | ((b1 & 0x3Fu) << 6) | (b2 & 0x3Fu);
+        if (cp < 0x800u) return false;
+        if (cp >= 0xD800u && cp <= 0xDFFFu) return false;
+    } else if (n == 4) {
+        unsigned char b1 = static_cast<unsigned char>(s[pos + 1]);
+        unsigned char b2 = static_cast<unsigned char>(s[pos + 2]);
+        unsigned char b3 = static_cast<unsigned char>(s[pos + 3]);
+        cp = ((b0 & 0x07u) << 18) | ((b1 & 0x3Fu) << 12) | ((b2 & 0x3Fu) << 6) | (b3 & 0x3Fu);
+        if (cp < 0x10000u || cp > 0x10FFFFu) return false;
+    } else {
+        return false;
+    }
+    *out_cp = cp;
+    *out_len = n;
+    return true;
+}
+
+// Codepoints stripped only at substring edges for structural vocab dedup (training).
+// Covers ASCII whitespace, Unicode Zs, line/paragraph separators, ZWSP/bidi at boundaries, BOM.
+static bool isStructuralEdgeWhitespace(uint32_t cp) {
+    if (cp <= 0x20u) {
+        return cp == 0x09u || cp == 0x0Au || cp == 0x0Bu || cp == 0x0Cu || cp == 0x0Du || cp == 0x20u;
+    }
+    if (cp == 0x85u) return true;   // NEL
+    if (cp == 0xA0u) return true;  // NBSP
+    if (cp == 0x1680u) return true; // Ogham space mark
+    if (cp >= 0x2000u && cp <= 0x200Au) return true; // General punctuation spaces
+    if (cp >= 0x200Bu && cp <= 0x200Fu) return true; // ZWSP, ZWNJ, ZWJ, marks
+    if (cp == 0x2028u || cp == 0x2029u) return true; // Line / paragraph separator
+    if (cp == 0x202Fu) return true; // Narrow no-break space
+    if (cp == 0x205Fu) return true; // Medium mathematical space
+    if (cp == 0x2060u) return true;  // Word joiner
+    if (cp == 0x3000u) return true;  // Ideographic space
+    if (cp == 0xFEFFu) return true;  // BOM / ZWNBSP
+    return false;
+}
+
 //======================================================//
 //  Character-Level Validator
 //  Rejects garbage characters BEFORE they enter the vocab.
@@ -143,6 +202,48 @@ static bool isValidVocabCharacter(const std::string& ch) {
 
     // Everything else (Latin Extended, common symbols, CJK, emoji, etc.) is OK
     return true;
+}
+
+// Canonical structural form for vocab *candidate selection* during training.
+// Strips leading/trailing UTF-8 whitespace / boundary format chars, with an ASCII
+// byte fallback when a leading/trailing byte is not the start of well-formed UTF-8
+// (avoids getting stuck on messy corpus edges). Interior bytes and case unchanged.
+// Callers store this string as the piece text so "this", " this", "this " do not
+// occupy multiple trie entries.
+static std::string structuralDedupKeyForCandidate(const std::string& s) {
+    size_t start = 0;
+    size_t end = s.size();
+    while (start < end) {
+        uint32_t cp = 0;
+        size_t len = 0;
+        if (utf8DecodeAt(s, start, &cp, &len) && isStructuralEdgeWhitespace(cp)) {
+            start += len;
+            continue;
+        }
+        if (isWhitespaceASCII(static_cast<unsigned char>(s[start]))) {
+            ++start;
+            continue;
+        }
+        break;
+    }
+    while (end > start) {
+        if (isWhitespaceASCII(static_cast<unsigned char>(s[end - 1]))) {
+            --end;
+            continue;
+        }
+        size_t i = end - 1;
+        while (i > start && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80)
+            --i;
+        const size_t ch_start = i;
+        uint32_t cp = 0;
+        size_t len = 0;
+        if (!utf8DecodeAt(s, ch_start, &cp, &len) || ch_start + len != end)
+            break;
+        if (!isStructuralEdgeWhitespace(cp)) break;
+        end = ch_start;
+    }
+    if (start >= end) return "";
+    return s.substr(start, end - start);
 }
 
 // Reject long repeated runs (e.g., "aaaaaa", "!!!!!!", "word  word")
@@ -1628,9 +1729,20 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int added = 0;
     int filtered = 0;
     int repetition_filtered = 0;
+    int structural_dedup_rejected = 0;
     const int max_to_add = target_vocab_size > 0 ? target_vocab_size : std::numeric_limits<int>::max();
 
-    // Pass A: select which entries survive encoding-safety and repetition filters.
+    // Edge-trim canonical form: one trie entry per trimmed identity; first ranked
+    // variant supplies the mining count; stored piece text is always canonical.
+    std::unordered_set<std::string> dedup_keys_seen;
+    for (const auto& ch : char_seeds) {
+        std::string key = structuralDedupKeyForCandidate(ch);
+        if (!key.empty()) dedup_keys_seen.insert(key);
+    }
+    std::cout << "[UnigramLM] Pre-seeded " << dedup_keys_seen.size()
+              << " structural dedup keys from byte-layer chars" << std::endl;
+
+    // Pass A: encoding-safety, repetition, then structural edge-trim dedup.
     // Initial scores are log(count / sum_accepted_counts).
     struct AcceptedPiece { std::string text; int count; };
     std::vector<AcceptedPiece> accepted;
@@ -1652,7 +1764,20 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             continue;
         }
 
-        accepted.push_back({subword, count});
+        std::string dedup_key = structuralDedupKeyForCandidate(subword);
+        if (dedup_key.empty()) {
+            filtered++;
+            continue;
+        }
+        if (dedup_keys_seen.count(dedup_key)) {
+            structural_dedup_rejected++;
+            continue;
+        }
+        dedup_keys_seen.insert(dedup_key);
+
+        // Store canonical trimmed bytes, not the raw mined surface (avoids " this"
+        // and "this " as separate vocab entries).
+        accepted.push_back({dedup_key, count});
     }
 
     // Sum of all accepted mining counts — correct denominator for initial log-probs.
@@ -1673,6 +1798,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     if (repetition_filtered > 0) {
         std::cout << "[UnigramLM] Filtered " << repetition_filtered
                   << " repetition/stutter subword patterns" << std::endl;
+    }
+    if (structural_dedup_rejected > 0) {
+        std::cout << "[UnigramLM] Rejected " << structural_dedup_rejected
+                  << " candidates (structural edge-trim dedup only)" << std::endl;
     }
     std::cout << "[UnigramLM] Added " << added << " subwords (min_freq=" << MIN_SUBWORD_FREQ 
               << ", target=" << target_vocab_size << "), total vocab: " << pieces_.size() << std::endl;
@@ -1845,10 +1974,14 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 if (char_seeds.count(subword)) continue;
                 if (isRepetitionNoise(subword)) continue;
                 if (!isValidSubword(subword)) continue;
+                std::string dedup_key = structuralDedupKeyForCandidate(subword);
+                if (dedup_key.empty()) continue;
+                if (dedup_keys_seen.count(dedup_key)) continue;
+                dedup_keys_seen.insert(dedup_key);
 
                 // Seed with mining log-prob (will be refined by Phase C EM).
                 float score = static_cast<float>(std::log(static_cast<double>(count) / total_accepted_count));
-                addPiece(subword, score, false);
+                addPiece(dedup_key, score, false);
                 backfilled++;
             }
             std::cout << "[UnigramLM] Backfilled " << backfilled << " replacement tokens" << std::endl;
