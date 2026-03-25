@@ -881,13 +881,39 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         float token_numeric_value = 0.0f;
         uint8_t token_atom_mask_val = 0;
 
+        int32_t new_token_slot_id = -1;
+
         if (scratchblock_active && GRIM::Tokenizer::isAtomToken(sample.token_id)) {
             token_atom_mask_val = 1;
             if (GRIM::Tokenizer::tokenIdToAtomType(sample.token_id)
                 == GRIM::Tokenizer::AtomType::ATOM_NUM) {
-                throw std::runtime_error(
-                    "generateSequenceGPU: sampled <NUM> without execution-bound slot "
-                    "(NumericHead removed; implement Step Z interleaved decode / slot write-back)");
+                // Step Z: bind <NUM> to the last-written execution slot
+                if (!config_.execution_block_enabled
+                    || !training_state_.has_inference_exec_memory
+                    || training_state_.inference_exec_last_write_slot < 0) {
+                    throw std::runtime_error(
+                        "generateSequenceGPU: sampled <NUM> without valid execution slot binding "
+                        "(execution_block_enabled=" +
+                        std::to_string(config_.execution_block_enabled) +
+                        ", has_exec_mem=" +
+                        std::to_string(training_state_.has_inference_exec_memory) +
+                        ", last_write_slot=" +
+                        std::to_string(training_state_.inference_exec_last_write_slot) + ")");
+                }
+                const int slot = training_state_.inference_exec_last_write_slot;
+                const int V = config_.execution_block_num_slots;
+                if (slot < 0 || slot >= V) {
+                    throw std::runtime_error(
+                        "generateSequenceGPU: <NUM> write_slot=" + std::to_string(slot) +
+                        " out of range [0, " + std::to_string(V) + ")");
+                }
+                // Read slot value from persistent ExecutionMemory
+                float slot_val = 0.0f;
+                cudaMemcpy(&slot_val,
+                           training_state_.inference_exec_memory.values.data + slot,
+                           sizeof(float), cudaMemcpyDeviceToHost);
+                token_numeric_value = slot_val;
+                new_token_slot_id = slot;
             }
         }
         
@@ -910,7 +936,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         }
         
         // Run forward pass for this token WITH ScratchBlock metadata
-        logits_vec = forwardStep(sample.token_id, token_numeric_value, token_atom_mask_val, -1);
+        logits_vec = forwardStep(sample.token_id, token_numeric_value, token_atom_mask_val,
+                                 new_token_slot_id);
         if (logits_vec.data.empty()) {
             throw std::runtime_error("generateSequenceGPU: forwardStep returned empty logits");
         }
@@ -920,7 +947,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         sequence.token_scores.push_back(sample.log_probability);
         sequence.token_numeric_values.push_back(token_numeric_value);
         sequence.token_atom_mask.push_back(token_atom_mask_val);
-        sequence.token_to_slot_map.push_back(-1);
+        sequence.token_to_slot_map.push_back(new_token_slot_id);
         sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
         sequence.score += sample.log_probability;
         

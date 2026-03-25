@@ -45,6 +45,17 @@ struct BatchAssignment;
 namespace Batching {
 
 // =============================================================================
+// TeacherStep — per-step ground truth for structured CE supervision
+// =============================================================================
+struct TeacherStep {
+    int op_id;
+    int arg1_slot;
+    int arg2_slot;
+    int write_slot;
+    float expected_value;
+};
+
+// =============================================================================
 // BatchPayload — immutable batch datum
 // =============================================================================
 struct BatchPayload {
@@ -83,6 +94,15 @@ struct BatchPayload {
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = any atom type)
      std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
     std::vector<int32_t> token_to_slot_map;   // [total_tokens] padded with -1 (slot_id for execution; -1 = non-state-bearing)
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TEACHER EXECUTION STEPS (for structured CE supervision)
+    // Populated for arithmetic batches; empty for non-execution batches.
+    // teacher_steps[b][k] = TeacherStep for batch row b, execution step k.
+    // When non-empty: teacher_steps.size() == batch_size, each inner vector
+    // has exactly execution_block_num_steps entries (1:1 with ExecutionBlock steps).
+    // ═══════════════════════════════════════════════════════════════════════════
+    std::vector<std::vector<TeacherStep>> teacher_steps;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ATOM TABLE SIDE CHANNEL (host-only, NOT transferred to GPU)
@@ -207,6 +227,16 @@ struct BatchPayload {
                 std::string(caller) + ": BatchPayload.text_features.size()=" +
                 std::to_string(text_features.size()) + " != total_tokens*kTextFeatureDim=" +
                 std::to_string(expected_text_feat));
+        }
+
+        // Teacher steps validation (when populated for arithmetic batches)
+        if (!teacher_steps.empty()) {
+            if (static_cast<int>(teacher_steps.size()) != batch_size) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.teacher_steps.size()=" +
+                    std::to_string(teacher_steps.size()) + " != batch_size=" +
+                    std::to_string(batch_size));
+            }
         }
     }
 

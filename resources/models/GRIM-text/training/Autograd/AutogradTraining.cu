@@ -367,6 +367,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
         const bool exec_first_type_only =
             cfg->execution_block_enabled && cfg->scratch_block_execution_first_type_only;
+        if (cfg->execution_block_enabled && !exec_first_type_only) {
+            throw std::runtime_error(
+                "executeAutogradForward: execution_block_enabled requires "
+                "scratch_block_execution_first_type_only=true to prevent value leakage "
+                "into hidden states on arithmetic batches");
+        }
         intermediates.embedding_tensor = autograd::scratch_block_inject(
             intermediates.embedding_tensor,
             *ctx.scratch_block,
@@ -639,7 +645,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             }
 
             // ExecutionBlock: run K execution steps at the configured layer
-            // Each step mutates both layer_output (H) and exec_memory (M) sequentially
+            // Per-row isolation: each batch row gets its own ExecutionMemory
             if (layer_idx == exec_layer && ctx.execution_block) {
                 int num_atoms = 0;
                 cudaMemcpyAsync(&num_atoms, ctx.scratch_block->numAtomsBuffer(),
@@ -650,56 +656,65 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 const int V = cfg->execution_block_num_slots;
                 const int dk = cfg->execution_block_d_key;
                 const int dt = cfg->execution_block_d_type;
+                const int B  = ctx.batch_size;
+                const int sl = ctx.seq_len;
 
-                intermediates.exec_memory.allocate(V, ae, cfg->d_model, dk, dt, ctx.stream);
-                intermediates.exec_memory.clear(ctx.stream);
-                intermediates.execution_block_output.steps.clear();
+                intermediates.exec_memories.resize(B);
+                intermediates.exec_outputs_per_row.resize(B);
 
                 ctx.execution_block->setStream(ctx.stream);
                 ctx.execution_block->setCublasHandle(ctx.cublas_handle);
 
-                // Bootstrap M.values from literal numeric values via slot map (detached — no gradient)
-                if (ts->cached_token_to_slot_map.data && ts->cached_token_numeric_values.data) {
-                    ctx.execution_block->bootstrapMemoryFromSlotMap(
-                        intermediates.exec_memory,
-                        ts->cached_token_numeric_values.data,
-                        reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data),
-                        total_tokens, ctx.stream);
-                }
-
-                // Compute temperature from annealing schedule
                 float T = cfg->execution_block_temp_start;
-                if (cfg->execution_block_temp_schedule == 0) {
-                    // Linear annealing: not step-based here (would need global step)
-                    // For now use temp_start; full schedule wiring is in training loop
-                    T = cfg->execution_block_temp_start;
-                }
 
-                const int32_t* d_slot_map = ts->cached_token_to_slot_map.data
+                const int32_t* d_slot_map_full = ts->cached_token_to_slot_map.data
                     ? reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data)
                     : nullptr;
 
-                for (int step = 0; step < exec_K; ++step) {
-                    ExecutionBlockStepOutput step_diag;
-                    ctx.execution_block->executeStep(
-                        layer_output,                              // H mutated in place
-                        intermediates.exec_memory,                 // M mutated in place
-                        ctx.scratch_block->atomEmbeddingsBuffer(),
-                        ctx.scratch_block->atomPositionsBuffer(),
-                        d_slot_map,
-                        num_atoms, total_tokens,
-                        step, T, ctx.stream,
-                        &step_diag);
-                    intermediates.execution_block_output.steps.push_back(std::move(step_diag));
+                for (int b = 0; b < B; ++b) {
+                    auto& M_b = intermediates.exec_memories[b];
+                    M_b.allocate(V, ae, cfg->d_model, dk, dt, ctx.stream);
+                    M_b.clear(ctx.stream);
+                    intermediates.exec_outputs_per_row[b].steps.clear();
+
+                    const int tok_off = b * sl;
+
+                    if (d_slot_map_full && ts->cached_token_numeric_values.data) {
+                        ctx.execution_block->bootstrapMemoryFromSlotMap(
+                            M_b,
+                            ts->cached_token_numeric_values.data + tok_off,
+                            d_slot_map_full + tok_off,
+                            sl, ctx.stream);
+                    }
+
+                    for (int step = 0; step < exec_K; ++step) {
+                        ExecutionBlockStepOutput step_diag;
+                        ctx.execution_block->executeStep(
+                            layer_output, M_b,
+                            ctx.scratch_block->atomEmbeddingsBuffer(),
+                            ctx.scratch_block->atomPositionsBuffer(),
+                            d_slot_map_full,
+                            num_atoms, total_tokens,
+                            step, T, ctx.stream,
+                            &step_diag,
+                            tok_off, sl);
+                        intermediates.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
+                    }
                 }
             }
 
-            // ExecutionBlock: gated cross-attention read at every layer >= exec_layer
+            // ExecutionBlock: gated cross-attention read at every layer >= exec_layer (per-row)
             if (exec_layer >= 0 && layer_idx >= exec_layer
-                && ctx.execution_block) {
-                ctx.execution_block->crossAttentionRead(
-                    layer_output, intermediates.exec_memory,
-                    total_tokens, ctx.stream);
+                && ctx.execution_block
+                && !intermediates.exec_memories.empty()) {
+                const int B  = ctx.batch_size;
+                const int sl = ctx.seq_len;
+                for (int b = 0; b < B; ++b) {
+                    ctx.execution_block->crossAttentionRead(
+                        layer_output, intermediates.exec_memories[b],
+                        total_tokens, ctx.stream,
+                        b * sl, sl);
+                }
             }
             
             intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
@@ -938,8 +953,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Move the autograd tensor to intermediates (preserves grad_fn chain)
     intermediates.logits_tensor = std::move(logits_tensor);
     
-    // Reasoning head: parallel to numeric head, reads encoder + ScratchBlock atoms
-    if (ctx.reasoning_head && ctx.scratch_block && ctx.scratch_block->isEnabled()) {
+    // Reasoning head: gated OFF when execution_block_enabled (single execution decision source)
+    if (ctx.reasoning_head && ctx.scratch_block && ctx.scratch_block->isEnabled()
+        && !cfg->execution_block_enabled) {
         // D2H num_atoms — numAtomsBuffer() is device memory
         int num_atoms = 0;
         cudaMemcpyAsync(&num_atoms, ctx.scratch_block->numAtomsBuffer(),
@@ -1208,30 +1224,163 @@ LossResult computeAutogradLoss(
 
     constexpr float numeric_loss = 0.0f;
 
-    // ExecutionBlock entropy regularization (replaces host-side CE supervision)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STRUCTURED CE LOSS on ExecutionBlock outputs (REPLACES entropy as primary)
+    // Per (batch_row, step): CE(p_op, op_id) + CE(p_arg1, arg1) + CE(p_arg2, arg2) + CE(p_write, write)
+    // Step X/Y multipliers amplify CE terms on value mismatch.
+    // ═══════════════════════════════════════════════════════════════════════════
+    float exec_structured_ce = 0.0f;
     float exec_entropy_loss = 0.0f;
+
     if (cfg->execution_block_enabled && ctx.execution_block
-        && !intermediates.execution_block_output.steps.empty()) {
-        Tensor entropy_loss = ctx.execution_block->computeEntropyLoss(
-            intermediates.execution_block_output.steps,
-            cfg->execution_block_entropy_weight,
-            ctx.stream);
-        cudaStreamSynchronize(ctx.stream);
-        cudaMemcpy(&exec_entropy_loss, entropy_loss.data, sizeof(float), cudaMemcpyDeviceToHost);
+        && !intermediates.exec_outputs_per_row.empty()) {
+
+        const int V   = cfg->execution_block_num_slots;
+        const int S   = 0; // TODO: read from ExecutionBlockConfig if scratch slots are used
+        const int V_val = V - S;
+        const int nop = cfg->execution_block_num_ops;
+        const float m_x = cfg->step_x_multiplier;
+        const float m_y = cfg->step_y_multiplier;
+        const bool override_x = cfg->step_y_overrides_x;
+        const float eps_match = cfg->value_match_epsilon;
+
+        const bool have_teacher = (ctx.payload && !ctx.payload->teacher_steps.empty());
+
+        float total_ce = 0.0f;
+        int ce_count = 0;
+
+        for (int b = 0; b < ctx.batch_size; ++b) {
+            const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
+            const auto* teacher_row = (have_teacher && b < static_cast<int>(ctx.payload->teacher_steps.size()))
+                ? &ctx.payload->teacher_steps[b] : nullptr;
+
+            for (int k = 0; k < static_cast<int>(row_steps.size()); ++k) {
+                const auto& sout = row_steps[k];
+                if (!sout.p_op.data || !sout.p_arg1.data || !sout.p_arg2.data || !sout.p_write.data)
+                    continue;
+
+                if (!teacher_row || k >= static_cast<int>(teacher_row->size()))
+                    continue;
+
+                const auto& ts_k = (*teacher_row)[k];
+
+                // Host-side copies of probability distributions
+                std::vector<float> h_p_op(nop), h_p_arg1(V_val), h_p_arg2(V_val), h_p_write(V);
+                cudaMemcpyAsync(h_p_op.data(), sout.p_op.data, nop * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                cudaMemcpyAsync(h_p_arg1.data(), sout.p_arg1.data, V_val * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                cudaMemcpyAsync(h_p_arg2.data(), sout.p_arg2.data, V_val * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                cudaMemcpyAsync(h_p_write.data(), sout.p_write.data, V * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                cudaStreamSynchronize(ctx.stream);
+
+                auto safe_nll = [](const std::vector<float>& p, int target) -> float {
+                    if (target < 0 || target >= static_cast<int>(p.size())) return 20.0f;
+                    float prob = p[target];
+                    if (prob < 1e-10f) prob = 1e-10f;
+                    return -logf(prob);
+                };
+
+                float ce_op = safe_nll(h_p_op, ts_k.op_id);
+                float ce_arg1 = safe_nll(h_p_arg1, ts_k.arg1_slot - S);
+                float ce_arg2 = safe_nll(h_p_arg2, ts_k.arg2_slot - S);
+                float ce_write = safe_nll(h_p_write, ts_k.write_slot);
+
+                // Value mismatch check for Step X / Y multipliers
+                bool value_match = true;
+                if (sout.state_after_values.data) {
+                    float v_out_host = 0.0f;
+                    cudaMemcpy(&v_out_host, sout.state_after_values.data + ts_k.write_slot,
+                               sizeof(float), cudaMemcpyDeviceToHost);
+                    float diff = fabsf(v_out_host - ts_k.expected_value);
+                    if (ts_k.expected_value == truncf(ts_k.expected_value)) {
+                        value_match = (v_out_host == ts_k.expected_value);
+                    } else {
+                        value_match = (diff <= eps_match);
+                    }
+                }
+
+                if (!value_match) {
+                    if (override_x) {
+                        ce_op    *= m_y;
+                        ce_arg1  *= m_y;
+                        ce_arg2  *= m_y;
+                        ce_write *= m_y;
+                    } else {
+                        ce_op    *= m_y;
+                        ce_write *= m_y;
+                        ce_arg1  *= m_x * m_y;
+                        ce_arg2  *= m_x * m_y;
+                    }
+                }
+
+                total_ce += ce_op + ce_arg1 + ce_arg2 + ce_write;
+                ce_count++;
+            }
+        }
+
+        if (ce_count > 0) {
+            exec_structured_ce = total_ce / static_cast<float>(ce_count);
+        }
+
+        // Optional entropy auxiliary (non-differentiable monitoring term)
+        if (cfg->entropy_aux_weight > 0.0f) {
+            for (int b = 0; b < ctx.batch_size; ++b) {
+                Tensor ent = ctx.execution_block->computeEntropyLoss(
+                    intermediates.exec_outputs_per_row[b].steps,
+                    cfg->entropy_aux_weight,
+                    ctx.stream);
+                float h_ent = 0.0f;
+                cudaStreamSynchronize(ctx.stream);
+                cudaMemcpy(&h_ent, ent.data, sizeof(float), cudaMemcpyDeviceToHost);
+                exec_entropy_loss += h_ent;
+            }
+            if (ctx.batch_size > 0)
+                exec_entropy_loss /= static_cast<float>(ctx.batch_size);
+        }
+    }
+
+    // Optional Spec Step 9: final slot vs target MSE penalty
+    float final_consistency_loss = 0.0f;
+    if (cfg->final_slot_consistency_weight > 0.0f
+        && cfg->execution_block_enabled && ctx.execution_block
+        && !intermediates.exec_outputs_per_row.empty()
+        && ctx.payload && !ctx.payload->teacher_steps.empty()) {
+        float mse_sum = 0.0f;
+        int mse_count = 0;
+        for (int b = 0; b < ctx.batch_size; ++b) {
+            const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
+            const auto& teacher_row = ctx.payload->teacher_steps[b];
+            if (row_steps.empty() || teacher_row.empty()) continue;
+            const auto& last_step = row_steps.back();
+            const auto& last_teacher = teacher_row.back();
+            if (last_step.state_after_values.data) {
+                float v_final = 0.0f;
+                cudaMemcpy(&v_final, last_step.state_after_values.data + last_teacher.write_slot,
+                           sizeof(float), cudaMemcpyDeviceToHost);
+                float diff = v_final - last_teacher.expected_value;
+                mse_sum += diff * diff;
+                mse_count++;
+            }
+        }
+        if (mse_count > 0) {
+            final_consistency_loss = cfg->final_slot_consistency_weight *
+                (mse_sum / static_cast<float>(mse_count));
+        }
     }
 
     result.numeric_loss = numeric_loss;
-    result.loss_value = text_loss + exec_entropy_loss;
+    result.loss_value = text_loss + exec_structured_ce + exec_entropy_loss + final_consistency_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (text=" 
             + std::to_string(text_loss) + " numeric=" + std::to_string(numeric_loss)
-            + " exec_entropy=" + std::to_string(exec_entropy_loss) + ")");
+            + " exec_ce=" + std::to_string(exec_structured_ce)
+            + " exec_entropy=" + std::to_string(exec_entropy_loss)
+            + " final_consistency=" + std::to_string(final_consistency_loss) + ")");
     }
     
-    AG_INFO("Loss computed: text_ce=" << text_loss << " numeric=" << numeric_loss
-            << " exec_entropy=" << exec_entropy_loss << " valid_tokens=" << valid_tokens);
+    AG_INFO("Loss computed: text_ce=" << text_loss << " exec_ce=" << exec_structured_ce
+            << " exec_entropy_aux=" << exec_entropy_loss << " valid_tokens=" << valid_tokens);
     
     result.success = true;
     return result;

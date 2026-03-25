@@ -94,6 +94,13 @@ float LanguageModel::computeLossBatch(
 
 	const auto& cfg = getConfig();
 
+	// Execution dependency: arithmetic batches (identified by teacher_steps) MUST use ExecutionBlock
+	if (!payload.teacher_steps.empty() && !cfg.execution_block_enabled) {
+		throw std::runtime_error(
+			"computeLossBatch: batch has teacher_steps (arithmetic) but execution_block_enabled=false; "
+			"arithmetic batches MUST use ExecutionBlock");
+	}
+
 	if (cfg.execution_block_enabled) {
 		if (!getExecutionBlockLayer()) {
 			throw std::runtime_error(
@@ -114,6 +121,41 @@ float LanguageModel::computeLossBatch(
 						"computeLossBatch: <NUM> at flat index " + std::to_string(t) +
 						" requires token_to_slot_map in [0, " + std::to_string(num_slots) +
 						"), got " + std::to_string(s));
+				}
+			}
+		}
+		// Per-row ExecutionMemory isolation: each batch row gets its own M in
+		// executeAutogradForward (vector<ExecutionMemory>). No shared state across rows.
+
+		// Validate teacher steps if present
+		if (!payload.teacher_steps.empty()) {
+			const int K = cfg.execution_block_num_steps;
+			const int num_slots = cfg.execution_block_num_slots;
+			for (int b = 0; b < payload.batch_size; ++b) {
+				if (static_cast<int>(payload.teacher_steps[b].size()) != K) {
+					throw std::runtime_error(
+						"computeLossBatch: teacher_steps[" + std::to_string(b) + "].size()=" +
+						std::to_string(payload.teacher_steps[b].size()) +
+						" != execution_block_num_steps=" + std::to_string(K));
+				}
+				for (int k = 0; k < K; ++k) {
+					const auto& ts = payload.teacher_steps[b][k];
+					if (ts.op_id < 0 || ts.op_id >= cfg.execution_block_num_ops)
+						throw std::runtime_error(
+							"computeLossBatch: teacher_steps[" + std::to_string(b) + "][" +
+							std::to_string(k) + "].op_id=" + std::to_string(ts.op_id) + " out of range");
+					if (ts.arg1_slot < 0 || ts.arg1_slot >= num_slots)
+						throw std::runtime_error(
+							"computeLossBatch: teacher_steps[" + std::to_string(b) + "][" +
+							std::to_string(k) + "].arg1_slot=" + std::to_string(ts.arg1_slot) + " out of range");
+					if (ts.arg2_slot < 0 || ts.arg2_slot >= num_slots)
+						throw std::runtime_error(
+							"computeLossBatch: teacher_steps[" + std::to_string(b) + "][" +
+							std::to_string(k) + "].arg2_slot=" + std::to_string(ts.arg2_slot) + " out of range");
+					if (ts.write_slot < 0 || ts.write_slot >= num_slots)
+						throw std::runtime_error(
+							"computeLossBatch: teacher_steps[" + std::to_string(b) + "][" +
+							std::to_string(k) + "].write_slot=" + std::to_string(ts.write_slot) + " out of range");
 				}
 			}
 		}
@@ -199,6 +241,20 @@ float LanguageModel::computeLossBatch(
 		input_ids_bytes, cudaMemcpyHostToDevice, stream));
 
 	std::memcpy(handleB.data, payload.target_ids.data(), target_ids_bytes);
+
+	// Spec Step 10: LM does not supervise numeric magnitudes.
+	// Mask digit byte target tokens (ASCII '0'..'9') to -1 so unified_loss ignores them.
+	if (cfg.execution_block_enabled) {
+		int32_t* tgt = reinterpret_cast<int32_t*>(handleB.data);
+		const int total_toks = payload.total_tokens;
+		constexpr int DIGIT_LO = Tokenizer::BYTE_TOKEN_OFFSET + 0x30;
+		constexpr int DIGIT_HI = Tokenizer::BYTE_TOKEN_OFFSET + 0x39;
+		for (int t = 0; t < total_toks; ++t) {
+			if (tgt[t] >= DIGIT_LO && tgt[t] <= DIGIT_HI)
+				tgt[t] = -1;
+		}
+	}
+
 	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, handleB.data,
 		target_ids_bytes, cudaMemcpyHostToDevice, stream));
 

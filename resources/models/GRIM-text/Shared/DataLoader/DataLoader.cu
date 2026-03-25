@@ -22,6 +22,7 @@
 #include "../../Common/grim_model_serialization_version.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../Batching/BatchPayload.hpp"
 #include "../../../../control/ai_config_paths.hpp"
 
 namespace fs = std::filesystem;
@@ -340,10 +341,9 @@ void assignExecSlotsFromOrder(
 			num_positions.push_back(t);
 	}
 	if (num_positions.size() < slot_order.size()) {
-		std::cerr << "[DataLoader] concept_blocks: need " << slot_order.size()
-		          << " trailing numeric atoms for slot map, found "
-		          << num_positions.size() << " — leaving slots unset\n";
-		return;
+		throw std::runtime_error(
+			"assignExecSlotsFromOrder: need " + std::to_string(slot_order.size()) +
+			" trailing numeric atoms for slot map, found " + std::to_string(num_positions.size()));
 	}
 
 	for (size_t i = 0; i < slot_order.size(); ++i) {
@@ -352,14 +352,79 @@ void assignExecSlotsFromOrder(
 		const double expect = slot_order[sidx];
 		if (t >= static_cast<int>(numeric_values.size()) ||
 		    !nearEqualConceptNumeric(expect, numeric_values[t])) {
-			std::cerr << "[DataLoader] concept_blocks: slot value mismatch at tail index "
-			          << i << " pos=" << t << " expected=" << expect
-			          << " got=" << (t < static_cast<int>(numeric_values.size())
-			                         ? static_cast<double>(numeric_values[t]) : 0.0)
-			          << "\n";
+			throw std::runtime_error(
+				"assignExecSlotsFromOrder: slot value mismatch at tail index " +
+				std::to_string(i) + " pos=" + std::to_string(t) +
+				" expected=" + std::to_string(expect) +
+				" got=" + std::to_string(
+					t < static_cast<int>(numeric_values.size())
+					? static_cast<double>(numeric_values[t]) : 0.0));
 		}
 		exec_slots[t] = static_cast<int32_t>(base_slot + static_cast<int>(sidx));
 	}
+}
+
+int opStringToId(const std::string& op) {
+	if (op == "add" || op == "+") return 0;
+	if (op == "sub" || op == "-") return 1;
+	if (op == "mul" || op == "*") return 2;
+	if (op == "div" || op == "/") return 3;
+	throw std::runtime_error("opStringToId: unknown op '" + op + "'");
+}
+
+std::vector<GRIM::Batching::TeacherStep> teacherStepsFromConceptJson(
+		const json& j, int num_slots) {
+	std::vector<GRIM::Batching::TeacherStep> steps;
+	if (!j.contains("execution") || !j["execution"].is_array()) return steps;
+
+	// Build value→slot mapping from state_0 atoms (initial slots)
+	std::vector<double> slot_values;
+	if (j.contains("state_0") && j["state_0"].is_object()) {
+		const auto& s0 = j["state_0"];
+		if (s0.contains("atoms") && s0["atoms"].is_array()) {
+			for (const auto& a : s0["atoms"])
+				if (a.is_number()) slot_values.push_back(a.get<double>());
+		}
+	}
+
+	auto findSlot = [&](double val) -> int {
+		for (int i = static_cast<int>(slot_values.size()) - 1; i >= 0; --i) {
+			if (nearEqualConceptNumeric(slot_values[i], static_cast<float>(val)))
+				return i;
+		}
+		return -1;
+	};
+
+	for (const auto& e : j["execution"]) {
+		if (!e.is_object()) continue;
+		GRIM::Batching::TeacherStep ts{};
+		ts.op_id = opStringToId(e.value("op", std::string()));
+
+		std::vector<double> args;
+		if (e.contains("args") && e["args"].is_array()) {
+			for (const auto& a : e["args"])
+				if (a.is_number()) args.push_back(a.get<double>());
+		}
+		if (args.size() < 2)
+			throw std::runtime_error("teacherStepsFromConceptJson: exec step needs >= 2 args");
+
+		ts.arg1_slot = findSlot(args[0]);
+		ts.arg2_slot = findSlot(args[1]);
+		if (ts.arg1_slot < 0 || ts.arg2_slot < 0)
+			throw std::runtime_error("teacherStepsFromConceptJson: arg slot not found");
+
+		double result = e.value("result", 0.0);
+		ts.expected_value = static_cast<float>(result);
+
+		int write_slot = static_cast<int>(slot_values.size());
+		if (write_slot >= num_slots)
+			throw std::runtime_error("teacherStepsFromConceptJson: write_slot " +
+				std::to_string(write_slot) + " >= num_slots " + std::to_string(num_slots));
+		ts.write_slot = write_slot;
+		slot_values.push_back(result);
+		steps.push_back(ts);
+	}
+	return steps;
 }
 
 void loadConceptBlocksCorpus(const fs::path& cache_dir,

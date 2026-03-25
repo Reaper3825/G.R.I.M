@@ -95,6 +95,17 @@ struct TrainingState {
     int kv_cache_len = 0;           // Number of tokens with valid K,V in cache
     int kv_cache_capacity = 0;      // Maximum tokens the cache can hold
     float cached_numeric_pred[2] = {0.0f, 0.0f};  // Last-token numeric head output (host-side)
+
+    //======================================================//
+    //  PERSISTENT EXECUTION MEMORY (Step Z — generation)
+    //  Survives across forwardStep calls during autoregressive decode.
+    //  Reset only on resetKVCache (session boundary).
+    //  After each forward, the last exec_memories[0] is saved here so
+    //  the generation loop can read slot values for <NUM> binding.
+    //======================================================//
+    ExecutionMemory inference_exec_memory;
+    bool has_inference_exec_memory = false;
+    int  inference_exec_last_write_slot = -1;
     
     // Single-token buffers for incremental generation
     Tensor single_token_logits;      // [vocab_size]

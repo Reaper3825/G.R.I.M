@@ -25,6 +25,11 @@ namespace GRIM {
 
 //======================================================//
 //  ExecutionMemory — addressable register file
+//
+//  Each instance represents ONE batch row's register file [V, …].
+//  Per-row isolation: AutogradIntermediates stores a vector<ExecutionMemory>
+//  of size batch_size, and executeAutogradForward processes each row with its
+//  own M, using token_offset/row_tokens to scope H access.
 //======================================================//
 struct ExecutionMemory {
     Tensor values;            // [V, 1]       scalar ground truth per slot
@@ -71,6 +76,7 @@ struct ExecutionBlockConfig {
     int   result_slot_mode   = 0;     // 0 = last token, 1 = fixed index
     int   result_slot_index  = -1;    // used when result_slot_mode == 1
     bool  diag_logging       = false;
+    // Reserved: executeStep currently always uses softmax + STE; no argmax-only path wired yet.
     bool  deterministic      = false;
     bool  debug_mode         = true;  // extra diagnostics only; does not relax validation
     float entropy_collapse_threshold = 0.01f;
@@ -106,8 +112,9 @@ struct ExecutionRecord {
 };
 
 //======================================================//
-//  ExecutionBlockStepOutput — per-step diagnostics ONLY
-//  Must NOT drive forward computation.
+//  ExecutionBlockStepOutput — per-step diagnostics + supervision tensors
+//  p_arg1/p_arg2/p_op/p_write are detached copies for CE loss.
+//  state_before_values / state_after_values enable transition validity checks.
 //======================================================//
 struct ExecutionBlockStepOutput {
     Tensor p_arg1;      // [1, V_val] softmax over value slots [S..V-1] only (detached)
@@ -116,6 +123,10 @@ struct ExecutionBlockStepOutput {
     Tensor p_write;     // [1, V]
     Tensor v_out;       // [1, 1] scalar result (hard op on hard slot reads)
     Tensor result_emb;  // [1, d_model]
+    Tensor state_before_values;  // [V, 1] M.values snapshot before this step
+    Tensor state_before_valid;   // [V]    M.valid_mask snapshot before this step
+    Tensor state_after_values;   // [V, 1] M.values snapshot after this step
+    Tensor state_after_valid;    // [V]    M.valid_mask snapshot after this step
     ExecutionRecord record;   // filled when diag_out != nullptr (host copy at step sync)
     ExecStepMetrics metrics;  // populated when debug_mode is enabled
 };
@@ -148,6 +159,10 @@ public:
 
     //--------------------------------------------------//
     // Forward: one execution step — mutates H and M
+    // token_offset / row_tokens enable per-batch-row processing:
+    //   context = reduce_mean(H[token_offset : token_offset + row_tokens])
+    //   injection at H[token_offset + row_tokens - 1]
+    // When row_tokens == -1 (default), uses full total_tokens (legacy single-row).
     //--------------------------------------------------//
     void executeStep(
         Tensor& H,                          // [total_tokens, d_model] mutated in place
@@ -160,7 +175,9 @@ public:
         int step,
         float temperature,
         cudaStream_t stream,
-        ExecutionBlockStepOutput* diag_out = nullptr
+        ExecutionBlockStepOutput* diag_out = nullptr,
+        int token_offset = 0,
+        int row_tokens = -1
     );
 
     //--------------------------------------------------//
@@ -181,12 +198,15 @@ public:
 
     //--------------------------------------------------//
     // Cross-attention read: H = H + g * W_O(R)
+    // token_offset / row_tokens enable per-batch-row processing.
     //--------------------------------------------------//
     void crossAttentionRead(
         Tensor& hidden_states,
         ExecutionMemory& M,
         int total_tokens,
-        cudaStream_t stream
+        cudaStream_t stream,
+        int token_offset = 0,
+        int row_tokens = -1
     );
 
     //--------------------------------------------------//

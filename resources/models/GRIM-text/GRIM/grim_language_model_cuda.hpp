@@ -364,6 +364,14 @@ struct LanguageModelConfig {
     int   execution_block_temp_schedule = 0;   // 0=linear, 1=cosine
     float execution_block_entropy_weight = 0.01f;
     bool  execution_block_diag_logging = false;
+
+    // Execution-first structured CE loss config (Step X / Y multipliers)
+    float step_x_multiplier = 2.0f;
+    float step_y_multiplier = 2.0f;
+    bool  step_y_overrides_x = false;
+    float entropy_aux_weight = 0.0f;
+    float value_match_epsilon = 1e-6f;
+    float final_slot_consistency_weight = 0.0f; // Spec Step 9 (optional): MSE penalty on final slot values vs target
     
     // LM Head centering config (Issue #37 / #40 fixes)
     // When enabled, centers hidden states before LM head projection.

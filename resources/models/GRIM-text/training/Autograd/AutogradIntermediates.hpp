@@ -57,9 +57,9 @@ struct AutogradIntermediates {
     Tensor scratch_atom_embeddings;    // [num_atoms, atom_embedding_dim] - copy-first from ScratchBlock
     ReasoningHeadOutput reasoning_output;  // op_logits, arg1_logits, arg2_logits
 
-    // ExecutionBlock — memory and per-step outputs
-    ExecutionMemory exec_memory;
-    ExecutionBlockOutput execution_block_output;
+    // ExecutionBlock — per-row memory and per-(row,step) outputs
+    std::vector<ExecutionMemory> exec_memories;               // [batch_size] per-row isolation
+    std::vector<ExecutionBlockOutput> exec_outputs_per_row;   // [batch_size][K steps]
 
     // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
@@ -79,8 +79,8 @@ struct AutogradIntermediates {
         mtp_input_tensor = Tensor();
         scratch_atom_embeddings = Tensor();
         reasoning_output = ReasoningHeadOutput{};
-        exec_memory = ExecutionMemory{};
-        execution_block_output = ExecutionBlockOutput{};
+        exec_memories.clear();
+        exec_outputs_per_row.clear();
     }
     
     /** Check if intermediates are populated (forward has run) */

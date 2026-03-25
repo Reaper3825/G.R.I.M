@@ -1422,6 +1422,8 @@ struct DecodeAssembleGradFn : public GradFn {
 struct ReduceMeanGradFn : public GradFn {
     int total_tokens_ = 0;
     int d_model_ = 0;
+    int token_offset_ = 0;
+    int row_tokens_ = 0;
 
     std::shared_ptr<GradFn> H_grad_fn;
     TensorContract::TensorShape H_shape;
@@ -1435,9 +1437,12 @@ struct ReduceMeanGradFn : public GradFn {
         if (grad_H_buf) cudaFree(grad_H_buf);
     }
 
-    void capture(Tensor& H, int total_tokens, int d_model, cudaStream_t stream) {
+    void capture(Tensor& H, int total_tokens, int d_model, cudaStream_t stream,
+                 int token_offset = 0, int row_tokens = -1) {
         total_tokens_ = total_tokens;
         d_model_ = d_model;
+        token_offset_ = token_offset;
+        row_tokens_ = (row_tokens == -1) ? total_tokens : row_tokens;
         H_requires_grad = H.requires_grad;
         H_shape = H.shape;
         H_grad_fn = H.grad_fn;
@@ -1457,8 +1462,9 @@ struct ReduceMeanGradFn : public GradFn {
         size_t total = static_cast<size_t>(total_tokens_) * d_model_;
         CUDA_CHECK(cudaMemsetAsync(grad_H_buf, 0, total * sizeof(float), stream));
 
-        kernelReduceMeanBackward<<<total_tokens_, kBlockSize, 0, stream>>>(
-            grad_H_buf, grad_output.data, total_tokens_, d_model_);
+        kernelReduceMeanBackward<<<row_tokens_, kBlockSize, 0, stream>>>(
+            grad_H_buf + static_cast<size_t>(token_offset_) * d_model_,
+            grad_output.data, row_tokens_, d_model_);
         CUDA_CHECK_KERNEL();
 
         if (H_grad_fn) {
@@ -1739,8 +1745,12 @@ void ExecutionBlockLayer::executeStep(
     int step,
     float temperature,
     cudaStream_t stream,
-    ExecutionBlockStepOutput* diag_out)
+    ExecutionBlockStepOutput* diag_out,
+    int token_offset,
+    int row_tokens)
 {
+    if (row_tokens < 0) row_tokens = total_tokens;
+
     validateExecuteStepInputsOrThrow(H, atom_embeddings, atom_positions,
                                       token_to_slot_map, num_atoms, total_tokens, M, step);
     (void)atom_embeddings;
@@ -1752,6 +1762,16 @@ void ExecutionBlockLayer::executeStep(
     const int dk  = config_.d_key;
     const int nop = config_.num_ops;
     EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
+
+    // Snapshot state_before for transition validity
+    if (diag_out) {
+        diag_out->state_before_values = Tensor::zeros({V, 1}, stream, "state_before_values");
+        diag_out->state_before_valid  = Tensor::zeros({1, V}, stream, "state_before_valid");
+        cudaMemcpyAsync(diag_out->state_before_values.data, M.values.data,
+                        V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(diag_out->state_before_valid.data, M.valid_mask.data,
+                        V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    }
 
     // Reset per-step error tracking
     CUDA_CHECK(cudaMemsetAsync(d_numeric_error_flag_, 0, sizeof(int), stream));
@@ -1840,16 +1860,16 @@ void ExecutionBlockLayer::executeStep(
     auto h_arg1 = autograd::matmul(p_arg1, cand_hidden, stream);
     auto h_arg2 = autograd::matmul(p_arg2, cand_hidden, stream);
 
-    // ──── 6. Context = reduce_mean(H, dim=0) [1, dm] (differentiable) ────
+    // ──── 6. Context = reduce_mean(H[offset:offset+row], dim=0) [1, dm] ────
     auto context = Tensor::zeros({1, dm}, stream, "exec_context");
     context.requires_grad = true;
     context.is_leaf = false;
     kernelReduceMeanForward<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        context.data, H.data, total_tokens, dm);
+        context.data, H.data + static_cast<size_t>(token_offset) * dm, row_tokens, dm);
     CUDA_CHECK_KERNEL();
     {
         auto mean_fn = std::make_shared<ReduceMeanGradFn>();
-        mean_fn->capture(H, total_tokens, dm, stream);
+        mean_fn->capture(H, total_tokens, dm, stream, token_offset, row_tokens);
         context.grad_fn = mean_fn;
     }
 
@@ -1902,7 +1922,7 @@ void ExecutionBlockLayer::executeStep(
         config_.result_slot_index < total_tokens) {
         result_slot = config_.result_slot_index;
     } else {
-        result_slot = total_tokens - 1;
+        result_slot = token_offset + row_tokens - 1;
     }
     EXEC_CHECK(result_slot >= 0 && result_slot < total_tokens,
                "result_slot out of bounds");
@@ -2022,6 +2042,14 @@ void ExecutionBlockLayer::executeStep(
         cudaMemcpyAsync(diag_out->v_out.data, v_out.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
         diag_out->result_emb = Tensor::zeros({1, dm}, stream);
         cudaMemcpyAsync(diag_out->result_emb.data, result_emb.data, dm * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+
+        // Snapshot state_after for transition validity
+        diag_out->state_after_values = Tensor::zeros({V, 1}, stream, "state_after_values");
+        diag_out->state_after_valid  = Tensor::zeros({1, V}, stream, "state_after_valid");
+        cudaMemcpyAsync(diag_out->state_after_values.data, M.values.data,
+                        V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(diag_out->state_after_valid.data, M.valid_mask.data,
+                        V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
     }
 
     // ──── 13. Metrics collection (debug_mode, populates diag_out->metrics) ────
@@ -2137,9 +2165,12 @@ void ExecutionBlockLayer::crossAttentionRead(
     Tensor& hidden_states,
     ExecutionMemory& M,
     int total_tokens,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    int token_offset,
+    int row_tokens)
 {
     validateCrossAttentionInputsOrThrow(hidden_states, M, total_tokens);
+    if (row_tokens < 0) row_tokens = total_tokens;
 
     const int dm  = config_.d_model;
     const int dk  = config_.d_key;
@@ -2148,9 +2179,11 @@ void ExecutionBlockLayer::crossAttentionRead(
     const int nv  = V;
     const int topk= config_.cross_attn_topk;
 
-    auto Q = Tensor::zeros({total_tokens, hd}, stream);
-    kernelSmallMatmul<<<total_tokens, hd, 0, stream>>>(
-        Q.data, hidden_states.data, W_Q_read_.data, total_tokens, dm, hd);
+    float* H_row = hidden_states.data + static_cast<size_t>(token_offset) * dm;
+
+    auto Q = Tensor::zeros({row_tokens, hd}, stream);
+    kernelSmallMatmul<<<row_tokens, hd, 0, stream>>>(
+        Q.data, H_row, W_Q_read_.data, row_tokens, dm, hd);
     CUDA_CHECK_KERNEL();
 
     auto K_proj = Tensor::zeros({nv, hd}, stream);
@@ -2163,30 +2196,30 @@ void ExecutionBlockLayer::crossAttentionRead(
         V_proj.data, M.state_embeds.data, W_V_read_.data, nv, dm, hd);
     CUDA_CHECK_KERNEL();
 
-    auto scores = Tensor::zeros({total_tokens, nv}, stream);
-    kernelCrossAttnSharpScores<<<total_tokens, 1, 0, stream>>>(
+    auto scores = Tensor::zeros({row_tokens, nv}, stream);
+    kernelCrossAttnSharpScores<<<row_tokens, 1, 0, stream>>>(
         scores.data, Q.data, K_proj.data, M.valid_mask.data,
-        tau_.data, total_tokens, nv, hd, topk);
+        tau_.data, row_tokens, nv, hd, topk);
     CUDA_CHECK_KERNEL();
 
-    auto R = Tensor::zeros({total_tokens, hd}, stream);
-    kernelCrossAttnWeightedValue<<<total_tokens, hd, 0, stream>>>(
-        R.data, scores.data, V_proj.data, total_tokens, nv, hd);
+    auto R = Tensor::zeros({row_tokens, hd}, stream);
+    kernelCrossAttnWeightedValue<<<row_tokens, hd, 0, stream>>>(
+        R.data, scores.data, V_proj.data, row_tokens, nv, hd);
     CUDA_CHECK_KERNEL();
 
-    auto gate = Tensor::zeros({1, total_tokens}, stream);
-    kernelComputeGate<<<(total_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        gate.data, hidden_states.data, W_gate_read_.data, total_tokens, dm);
+    auto gate = Tensor::zeros({1, row_tokens}, stream);
+    kernelComputeGate<<<(row_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        gate.data, H_row, W_gate_read_.data, row_tokens, dm);
     CUDA_CHECK_KERNEL();
 
-    kernelCrossAttnGatedOutput<<<total_tokens, kBlockSize, 0, stream>>>(
-        hidden_states.data, R.data, W_O_read_.data, gate.data,
-        total_tokens, dm, hd);
+    kernelCrossAttnGatedOutput<<<row_tokens, kBlockSize, 0, stream>>>(
+        H_row, R.data, W_O_read_.data, gate.data,
+        row_tokens, dm, hd);
     CUDA_CHECK_KERNEL();
 
     kernelDecayedUsageUpdate<<<(nv + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         M.usage.data, scores.data, config_.usage_decay,
-        total_tokens, nv, V);
+        row_tokens, nv, V);
     CUDA_CHECK_KERNEL();
 }
 

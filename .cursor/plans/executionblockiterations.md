@@ -1,288 +1,223 @@
-You are refactoring GRIM’s numeric reasoning system to an execution-first architecture.
-
-This is a hard architectural change. Do not preserve legacy behavior. Do not add compatibility layers.
-
-Implementation checklist and file-level notes: [.cursor/plans/execution-first_numeric_refactor_6c99d23f.plan.md](execution-first_numeric_refactor_6c99d23f.plan.md).
+You are modifying an execution-first numeric reasoning system. The current implementation is incorrect and must be fixed to support deterministic, per-sample execution learning. Do not redesign unrelated systems. Do not introduce alternative abstractions. Apply only the required structural corrections below.
 
 ---
 
-# CORE INVARIANTS (FAIL IF VIOLATED)
+# 🔴 HARD REQUIREMENT (FAIL IF NOT MET)
 
-## 1. No value prediction exists anywhere in the system.
+The system currently uses a **single ExecutionMemory shared across the entire batch**.
+This is invalid and must be corrected.
 
-* Remove NumericHead completely.
-* Remove all regression losses on numeric values.
-* No `hidden_state → scalar` mapping for answers.
+## REQUIRED CHANGE
 
-If any path produces a numeric **result** without going through ExecutionBlock → **FAIL**.
+Refactor ExecutionMemory and all dependent execution paths to support:
 
-## 2. ExecutionBlock is the only source of numeric truth.
+```
+ExecutionMemory: [batch_size, num_slots, ...]
+```
 
-All numeric updates must follow:
+### This includes:
 
-`(state₀, op, args) → ExecutionBlock → state₁`
+* executeStep
+* bootstrapMemoryFromSlotMap
+* crossAttentionRead
+* any kernel or function accessing slot state
 
-**Correct value with incorrect op or args is still WRONG.**
+### Rules:
 
-## 3. Structured prediction only.
-
-Per step the model outputs logits (then argmax or sampled indices):
-
-| Head | Shape | Meaning |
-|------|--------|---------|
-| `op_logits` | `[num_ops]` | Operation |
-| `arg1_logits` | `[num_slots]` | First operand slot |
-| `arg2_logits` | `[num_slots]` | Second operand slot |
-| `write_slot_logits` | `[num_slots]` | Result destination slot |
-
-**Loss (base, per step):**
-
-`L = CE(op) + CE(arg1) + CE(arg2) + CE(write_slot)`
-
-**No numeric loss term. Ever.**
-
-## 4. Step-wise supervision is mandatory.
-
-The dataset must provide **ordered** steps:
-
-`step_k: (op, arg1, arg2, write_slot)` with teacher targets for each head.
-
-Do **not** collapse multi-step problems into single-step supervision.
+* Every operation must index by `batch_idx`
+* No shared state across batch rows is allowed
+* Any leftover shared state is a hard failure
 
 ---
 
-# INPUT AND SLOTS
+# 🟠 DATA LAYER: TEACHER EXECUTION TRACES
 
-* Literals enter **only** at parse time: bind each `<NUM>` to a slot and fill `numeric_values` / `token_to_slot_map`.
-* During **generation**, slots come **only** from **input** or from **execution write-back**. **No dynamic slot creation** (no new slot indices invented by the sampler).
-* `<NUM>` **must** always map to a bound slot; if not → **throw**.
+Extend BatchPayload to include per-sample ordered execution steps:
 
----
+```
+struct TeacherStep {
+    int op_id;
+    int arg1_slot;
+    int arg2_slot;
+    int write_slot;
+    float expected_value;
+};
+```
 
-# EXECUTION-GROUNDED LEARNING
+Each batch row must contain:
 
-After each supervised step:
+```
+vector<TeacherStep> steps;
+```
 
-`v_out = ExecutionBlock(op, arg1, arg2)` (using current slot state and `write_slot` as implemented in ExecutionBlock).
+### Required changes:
 
-Compare `v_out` to `expected_value` for that step (from the teacher trace). This comparison **gates** routing losses below—it is **not** a regression target for a value head.
+* Extend BatchPayload + builder
+* Add validation:
 
----
+  * step count matches execution_block_num_steps
+  * slot indices are within bounds
+* Copy to GPU in TrainingState
 
-## Step X — Execution-consistency loss (REQUIRED)
+### Failure conditions:
 
-If `v_out != expected_value`:
-
-* `CE(arg1) *= α`
-* `CE(arg2) *= α`
-
-**Constraint:** `α > 1`, configurable.
-
-**Purpose:** tie numeric correctness to **operand slot** selection.
-
-Still **cross-entropy on logits**, not MSE on `v_out`.
-
----
-
-## Step Y — Joint structured loss (REQUIRED — choose one and document)
-
-**Option A — joint head**
-
-* `L_joint = CE(joint_logits, target_joint)` where `joint_logits` is a single discrete distribution over a feasible encoding of `(op, arg1, arg2)` and `target_joint` is the teacher class index.
-* Weight `λ_joint` in total loss if used.
-
-**Option B — preferred (no extra head)**
-
-If execution is incorrect (`v_out != expected_value`):
-
-* `CE(op)`, `CE(arg1)`, `CE(arg2)`, `CE(write_slot)` each `*= β` for that step (or a documented per-head schedule).
-
-**Constraints:**
-
-* `β ≥ α` (full-head bump must be at least as strong as Step X’s operand bump, unless you explicitly replace Step X).
-* **Do not** silently stack Step X and Step Y-B; document **stack vs replace** in config.
-
-**Purpose:** penalize factorized errors (e.g. right op, wrong slots) that look good under independent CE.
+* Missing steps → throw
+* Invalid slot index → throw
 
 ---
 
-## Step Z — Generation execution loop (MUST MATCH TRAINING)
+# 🟡 LOSS: REPLACE ENTROPY WITH STRUCTURED CE
 
-At **every** decode step:
+The system currently relies on entropy. This is incorrect.
 
-1. Run the **structured head** (same heads as training).
-2. **Validate** `(op, arg1, arg2)` [and `write_slot` per your mask rules].
+## REQUIRED CHANGE
 
-**If valid:**
+For each execution step:
 
-* Execute **immediately** (ExecutionBlock).
-* Write result to the chosen slot; update numeric state.
-* **Bind** the next emitted `<NUM>` to that slot (`token_to_slot_map`, `numeric_values`).
+```
+CE(p_op, op_id)
+CE(p_arg1, arg1_slot)
+CE(p_arg2, arg2_slot)
+CE(p_write, write_slot)
+```
 
-**Then** continue LM token generation (`forwardStep` / sampling).
+### Implementation rules:
 
-**If invalid:**
+* Use existing ExecutionBlock outputs:
 
-* **Fail hard** (no silent skip, no corrective execute).
+  * p_op
+  * p_arg1
+  * p_arg2
+  * p_write
+* Do NOT create a new head
+* Map slot indices correctly into logits
 
-Execution is **interleaved** with token generation—not batched only at end of sequence.
+### Entropy:
 
----
-
-# SCRATCHBLOCK CONSTRAINT
-
-For **arithmetic-tagged** batches:
-
-* Disable **all** numeric-derived features (magnitude, sign, value-shaped embeddings, etc.).
-* Only allow **type** embedding: “this token is a number.”
-
-If magnitude information leaks through hidden state → **FAIL**.
-
----
-
-# EXECUTION DEPENDENCY
-
-If arithmetic is required for the batch:
-
-* ExecutionBlock **must** run.
-* No fallback, no approximation path that skips execution.
-
-If execution is skipped or disabled → **training step fails**.
+* Remove as primary loss
+* Keep only as optional small auxiliary (low weight)
 
 ---
 
-# INVALID PREDICTIONS
+# 🔴 REMOVE CONFLICTING SYSTEM
 
-If:
+ReasoningHead operates on atoms, not slots. This conflicts with execution-first design.
 
-* invalid `op`, or
-* invalid slot index (out of range / masked slot),
+## REQUIRED CHANGE
 
-Then:
+EITHER:
 
-* **Do not** execute.
-* **Do not** correct silently.
-* Apply **full penalty** on the structured heads (training); at inference **fail hard**.
+* Remove ReasoningHead from arithmetic path
 
-No silent recovery.
+OR:
 
----
+* Gate it behind config so it never runs during execution training
 
-# NUMERIC TOKEN POLICY
+### Rule:
 
-* Mask all **literal** numeric vocabulary IDs; only `<NUM>` is allowed for numeric surface form.
-* Do **not** supervise numeric **answers** via the LM head.
-* `<NUM>` must map to a slot (see INPUT AND SLOTS).
+There must be only ONE source of execution decisions.
 
 ---
 
-# NUMERIC STATE MODEL
+# 🟢 EXECUTION CONSISTENCY (STEP X / Y)
 
-Maintain explicit state each step, e.g.:
+After each step:
 
-`state_k = { slots: [v₀, v₁, …], transitions: [(op, args → result_slot, v_out), …] }`
+```
+if (v_out != expected_value)
+```
 
-The model learns **transitions** (op + slot choices), not free-form number prediction.
+Apply penalties:
 
-**Slot identity:** two slots are distinct even if they hold the same value; do not merge slots by value.
+## Step X:
 
----
+* Multiply CE(arg1) and CE(arg2)
 
-# OPTIONAL — SEQUENCE CONSISTENCY
+## Step Y:
 
-After the **full** sequence (multi-step example), optionally compare **final** slot value to ground truth; if mismatch, apply an **additional** penalty across the step losses to reinforce long chains. This does **not** reintroduce value regression on hidden states—it is an extra signal on top of structured CE + Steps X/Y.
+* Multiply ALL CE terms (op, arg1, arg2, write)
 
----
+### REQUIRED:
 
-# NO BACKWARDS COMPATIBILITY
+* Implement BOTH
+* Add config:
 
-* No dual code paths (legacy numeric head vs new stack). Old behavior is **removed**, not feature-flagged beside the new path.
-* Old checkpoints either **refuse to load** with a clear error or require an explicit **non-default** migration tool—not silent weight drops.
-* No `predictNumericValue`, no `kernelNumericLoss`, no generation fill-in for `<NUM>` from hidden state.
-* DataLoader and batch code: **throw** on violation; do not `cerr` and continue.
+  * step_x_multiplier
+  * step_y_multiplier
+  * step_y_overrides_x (bool)
 
-Full rationale and file-level ownership: [execution-first_numeric_refactor_6c99d23f.plan.md](execution-first_numeric_refactor_6c99d23f.plan.md).
+### Behavior:
 
----
-
-# FILE INTENT (SEPARATION)
-
-Single **primary owner** per concern (cross-check at boundaries is OK; duplicated business logic is not):
-
-| Concern | Owns it |
-|--------|---------|
-| Batch validity, side-channel lengths, slot map consistency | `BatchPayload` (+ builder) |
-| Literal → `<NUM>` + slot assignment in corpus | `DataLoader`, `UniByte`, `AtomTable` |
-| Config surface | `grim_language_model_cuda.hpp`, `ai_config.json` |
-| Device caches | `TrainingState_GPU`, init training/inference state |
-| Forward order, autograd, structured + LM outputs | `AutogradTraining.cu` |
-| Training batch entry | `ComputeLossBatch.cu` |
-| Deterministic math on slots | `execution_block_GPU.*` |
-| “Type only” vs value injection | `ScratchBlockReasoning_GPU.*` |
-| Prefill / step forward | `Inference_GPU.cu` |
-| Step Z orchestration | `grim_language_model_gpu.cu` |
-| Literal masking at sample time | `Sampling.cu` |
-| Checkpoint format | `grim_model_serialization.cu` |
-
-Structured head implementation: **new module or explicit extension**—do not hide structured logits inside ExecutionBlock as the only API if training loss lives elsewhere without a single contract.
+* If override = true → only Step Y applies
+* Else → multipliers stack
 
 ---
 
-# HARD-FAIL ERROR LOGIC
+# 🔵 GENERATION (STEP Z)
 
-**Throw** (e.g. `std::runtime_error`) on contract breaks. **Do not** clamp, substitute, or skip.
+Fix generation so execution actually runs during decoding.
 
-| Situation | Action |
-|-----------|--------|
-| Side-channel length mismatch vs `token_ids` | Throw |
-| `<NUM>` / atom without valid slot in map | Throw |
-| Arithmetic batch but ExecutionBlock off or null | Throw before step |
-| Missing or malformed per-step teacher sequence | Throw |
-| Step Z: invalid structured prediction at decode | Throw (no execute) |
-| `<NUM>` emitted without bound slot | Throw |
-| Slot id outside `[0, num_slots)` or “new” slot at decode | Throw |
-| ScratchBlock value features on arithmetic batch | Throw (misconfig) |
-| ExecutionBlock internal numeric / slot error flag after step | Throw |
+## REQUIRED LOOP PER TOKEN:
 
-**Not a throw:** `v_out != expected` in training → apply Step X / Y loss scaling (learning signal).
+1. Run forward → get hidden state
+2. Decode:
 
----
+   ```
+   (op, arg1, arg2, write) = argmax from execution logits
+   ```
+3. Execute deterministically → update ExecutionMemory
+4. When `<NUM>` is generated:
 
-# FORBIDDEN
-
-Do **not**:
-
-* Reintroduce NumericHead or any scalar value head for answers.
-* Add numeric regression anywhere on predicted vs target **values**.
-* Let the LM emit raw numeric strings (mask literals).
-* Add execution fallback or “fix up” invalid ops/slots by executing a default.
-* Collapse multi-step teacher traces into one step.
+   * Resolve value from bound slot
+   * Populate numeric output
+   * DO NOT throw
 
 ---
 
-# REQUIRED IMPLEMENTATION
+## REQUIRED CHANGES
 
-1. Remove all numeric **value** supervision (`kernelNumericLoss`, etc.).
-2. Implement structured head: `op_logits`, `arg1_logits`, `arg2_logits`, `write_slot_logits` with shapes above.
-3. Implement **Step X** (amplify `CE(arg1)`, `CE(arg2)` when `v_out != expected`).
-4. Implement **Step Y** (document Option A vs B; resolve stacking with Step X).
-5. Enforce ScratchBlock gating for arithmetic batches.
-6. Enforce execution dependency (fail if execution off).
-7. Implement step-wise dataset / batch format.
-8. Refactor **Step Z** generation: interleave structured head → execute → bind → LM step.
-9. Enforce numeric token masking and `<NUM>`–slot binding.
-10. Fail-hard validation everywhere (batch build, forward, generate).
+* Persist ExecutionMemory across generation steps
+* Reset only when sequence resets
+* Remove `<NUM>` throw path
+* Enforce:
+
+  * invalid op/arg → hard failure
 
 ---
 
-# SUCCESS CONDITION
+# 🔴 STRICT FAILURE POLICY
 
-The model should only be **correct** when:
+The system must fail hard in all of the following:
 
-* correct **operations**,
-* correct **operand and write slots**,
-* correct **execution sequence** (Step Z in sync with training).
+* Shared execution state across batch
+* Missing teacher steps
+* Invalid slot indices
+* Invalid execution operations during training or inference
+* `<NUM>` generated without slot binding
 
-If it can guess the **answer** without the **correct** execution path → implementation is incorrect.
+No warnings. No fallbacks. No silent correction.
 
-If training destabilizes → **fix supervision and wiring**, not these constraints.
+---
+
+# 🚫 DO NOT
+
+* Do not reintroduce NumericHead
+* Do not create duplicate reasoning systems
+* Do not bypass execution with regression
+* Do not allow soft execution (must be deterministic)
+
+---
+
+# ✅ SUCCESS CONDITION
+
+The system is correct when:
+
+* Each batch sample executes independently
+* ExecutionBlock decisions are directly supervised via CE
+* Execution state evolves deterministically per step
+* Generation produces `<NUM>` via slot binding, not prediction
+* No shared or ambiguous execution state exists
+
+---
+
+Implement exactly this. No simplifications. No substitutions.

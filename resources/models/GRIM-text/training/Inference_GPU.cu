@@ -111,6 +111,31 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
 
     cudaStreamSynchronize(stream);
 
+    // Persist ExecutionMemory for Step Z <NUM> slot binding during generation.
+    if (!training_state_.autograd_intermediates.exec_memories.empty()) {
+        training_state_.inference_exec_memory =
+            std::move(training_state_.autograd_intermediates.exec_memories[0]);
+        training_state_.has_inference_exec_memory = true;
+        // Track last write slot from the final execution step
+        const auto& row_out = training_state_.autograd_intermediates.exec_outputs_per_row;
+        if (!row_out.empty() && !row_out[0].steps.empty()) {
+            const auto& last_step = row_out[0].steps.back();
+            if (last_step.p_write.data) {
+                const int V = last_step.p_write.shape.empty() ? 0 : last_step.p_write.shape.back();
+                if (V > 0) {
+                    std::vector<float> h_pw(V);
+                    cudaMemcpyAsync(h_pw.data(), last_step.p_write.data,
+                                    V * sizeof(float), cudaMemcpyDeviceToHost, stream);
+                    cudaStreamSynchronize(stream);
+                    int best = 0;
+                    for (int i = 1; i < V; ++i)
+                        if (h_pw[i] > h_pw[best]) best = i;
+                    training_state_.inference_exec_last_write_slot = best;
+                }
+            }
+        }
+    }
+
     // Free all autograd intermediates — inference never runs backward.
     // Without this, grad_fn chains and cached tensors leak across generation steps.
     training_state_.autograd_intermediates.clear();
@@ -227,6 +252,8 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
 void LanguageModel::resetKVCache() {
     if (training_state_.initialized) {
         training_state_.kv_cache_len = 0;
+        training_state_.has_inference_exec_memory = false;
+        training_state_.inference_exec_last_write_slot = -1;
     }
 }
 
