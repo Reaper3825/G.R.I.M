@@ -28,23 +28,8 @@
 #include <sstream>
 #include <thread>
 #include <unordered_set>
-#include <cctype>
 
 namespace GRIM {
-
-//======================================================//
-//  Case Normalization
-//  Enforces case-insensitive vocabulary to prevent
-//  near-duplicate tokens like 'The' vs 'the' vs ' the'
-//======================================================//
-
-static std::string toLowerASCII(const std::string& s) {
-    std::string result = s;
-    for (char& c : result) {
-        if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
-    }
-    return result;
-}
 
 // Check if character is punctuation (ASCII subset for speed)
 static inline bool isPunct(char c) {
@@ -147,11 +132,6 @@ static bool isValidVocabCharacter(const std::string& ch) {
     if (codepoint >= 0x202A && codepoint <= 0x202E) return false;  // Bidi controls
     if (codepoint == 0x2060) return false;  // Word joiner
     if (codepoint >= 0x2066 && codepoint <= 0x2069) return false;  // Bidi isolates
-    // Reject typographic punctuation that has ASCII equivalents (wastes vocab slots)
-    if (codepoint >= 0x2010 && codepoint <= 0x2015) return false;  // En dash, em dash, etc. (use ASCII '-')
-    if (codepoint >= 0x2018 && codepoint <= 0x201F) return false;  // Curly quotes (use ASCII ' ")
-    if (codepoint == 0x2032 || codepoint == 0x2033) return false;  // Prime marks (use ASCII ')
-    if (codepoint == 0x2039 || codepoint == 0x203A) return false;  // Angle quotes (use ASCII < >)
     if (codepoint == 0xFEFF) return false;  // BOM
     if (codepoint >= 0xFFF0 && codepoint <= 0xFFFF) return false;  // Specials
     if (codepoint >= 0xE0000 && codepoint <= 0xE007F) return false;  // Tags
@@ -163,93 +143,6 @@ static bool isValidVocabCharacter(const std::string& ch) {
 
     // Everything else (Latin Extended, common symbols, CJK, emoji, etc.) is OK
     return true;
-}
-
-// Normalize for near-duplicate detection: lowercase + strip leading/trailing whitespace
-// Used to detect pairs like " the"/"the" and repeated variants like "soooo"/"soo"
-static std::string normalizeForDedup(const std::string& s) {
-    std::string lower = toLowerASCII(s);
-    size_t start = 0;
-    while (start < lower.size() && isWhitespaceASCII(static_cast<unsigned char>(lower[start]))) {
-        ++start;
-    }
-    if (start >= lower.size()) return "";
-
-    size_t end = lower.size();
-    while (end > start && isWhitespaceASCII(static_cast<unsigned char>(lower[end - 1]))) {
-        --end;
-    }
-
-    std::string normalized;
-    normalized.reserve(end - start);
-
-    char prev = '\0';
-    int run = 0;
-    bool last_was_space = false;
-
-    for (size_t i = start; i < end; ++i) {
-        unsigned char uc = static_cast<unsigned char>(lower[i]);
-
-        // Canonicalize common UTF-8 punctuation variants to ASCII equivalents:
-        //   ’/‘ -> '
-        //   –/— -> -
-        if (uc == 0xE2 && i + 2 < end) {
-            unsigned char b1 = static_cast<unsigned char>(lower[i + 1]);
-            unsigned char b2 = static_cast<unsigned char>(lower[i + 2]);
-            if (b1 == 0x80 && (b2 == 0x98 || b2 == 0x99)) {
-                uc = static_cast<unsigned char>('\'');
-                i += 2;
-            } else if (b1 == 0x80 && (b2 == 0x93 || b2 == 0x94)) {
-                uc = static_cast<unsigned char>('-');
-                i += 2;
-            }
-        }
-
-        char c = static_cast<char>(uc);
-
-        if (isWhitespaceASCII(uc)) {
-            if (!last_was_space) {
-                normalized.push_back(' ');
-                last_was_space = true;
-            }
-            prev = '\0';
-            run = 0;
-            continue;
-        }
-
-        last_was_space = false;
-        if (c == prev) {
-            run++;
-        } else {
-            prev = c;
-            run = 1;
-        }
-
-        int keep_limit = std::numeric_limits<int>::max();
-        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-            keep_limit = 2;
-        } else if (c < 128 && isPunct(c)) {
-            keep_limit = (c == '.') ? 3 : 2;
-        }
-
-        if (run <= keep_limit) {
-            normalized.push_back(c);
-        }
-    }
-
-    return normalized;
-}
-
-//======================================================//
-//  Subword Quality Filter
-//  Rejects linguistically nonsensical patterns like "P.," 
-//======================================================//
-
-// Check if character is alphanumeric
-static inline bool isAlnum(char c) {
-    return (c >= 'A' && c <= 'Z') || 
-           (c >= 'a' && c <= 'z') || 
-           (c >= '0' && c <= '9');
 }
 
 // Reject long repeated runs (e.g., "aaaaaa", "!!!!!!", "word  word")
@@ -361,8 +254,8 @@ static bool isRepetitionNoise(const std::string& s) {
            isDoubledTokenNoise(s) || isWordLevelStutter(s);
 }
 
-// Check if subword is linguistically valid
-// Rejects garbage patterns that shouldn't be vocabulary tokens
+// Encoding-safety gate for candidate subwords.
+// Rejects control bytes, invalid characters, pure whitespace, and repetition noise.
 static bool isValidSubword(const std::string& s) {
     if (s.empty()) return false;
 
@@ -372,154 +265,19 @@ static bool isValidSubword(const std::string& s) {
         return isValidVocabCharacter(s);
     }
 
-    // Repetition stripping: reject obvious run-length / stutter artifacts
     if (isRepetitionNoise(s)) return false;
-    
-    // Count character types
-    int alpha_count = 0;
-    int digit_count = 0;
-    int punct_count = 0;
-    int space_count = 0;
-    int upper_count = 0;
-    int lower_count = 0;
-    int control_count = 0;
-    
-    for (unsigned char c : s) {
-        if (c >= 'A' && c <= 'Z') { alpha_count++; upper_count++; }
-        else if (c >= 'a' && c <= 'z') { alpha_count++; lower_count++; }
-        else if (c >= '0' && c <= '9') digit_count++;
-        else if (isWhitespaceASCII(c)) space_count++;
-        else if (c < 128 && isPunct(static_cast<char>(c))) punct_count++;
-        else if (c < 32 || c == 127) control_count++;
-    }
-    
-    int total = static_cast<int>(s.size());
 
-    // Reject control bytes and pure multi-whitespace fragments.
-    if (control_count > 0) return false;
-    if (space_count == total) return false;
-    
-    // === REJECT PATTERNS ===
-    
-    // 1. Pure punctuation combinations (except common ones like "..." or "--")
-    if (punct_count == total) {
-        // Allow only: "...", "--", "***", etc. (repeated single char)
-        bool all_same = true;
-        for (size_t i = 1; i < s.size(); ++i) {
-            if (s[i] != s[0]) { all_same = false; break; }
-        }
-        if (!all_same) return false;
-        // Allow repeated punctuation only up to length 4
-        if (s.size() > 4) return false;
-    }
-    
-    // 2. Single letter + punctuation garbage (like "P.,", "A:", "B;")
-    //    Exception: Common patterns like "I'" (contractions), "U.S", etc.
-    if (alpha_count == 1 && punct_count >= 1 && s.size() <= 4) {
-        // Find the letter position
-        size_t letter_pos = 0;
-        for (size_t i = 0; i < s.size(); ++i) {
-            unsigned char c = static_cast<unsigned char>(s[i]);
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
-                letter_pos = i;
-                break;
-            }
-        }
-        
-        // Reject if letter is NOT at start or end (weird position)
-        if (letter_pos != 0 && letter_pos != s.size() - 1) {
+    for (unsigned char c : s) {
+        if ((c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D) || c == 0x7F)
             return false;
-        }
-        
-        // Reject single uppercase + multiple punct (like "P.,")
-        if (upper_count == 1 && punct_count >= 2) {
-            return false;
-        }
-        
-        // Reject single letter + comma/semicolon/colon at end (like "P,", "A;")
-        char last = s.back();
-        char first = s.front();
-        if (alpha_count == 1 && (last == ',' || last == ';' || last == ':')) {
-            // Exception: common abbreviations with periods before comma
-            if (!(s.size() >= 2 && s[s.size()-2] == '.')) {
-                return false;
-            }
-        }
-        if (alpha_count == 1 && (first == ',' || first == ';' || first == ':')) {
-            return false;
-        }
     }
-    
-    // 3. Mixed punctuation chaos (multiple different punctuation types)
-    if (punct_count >= 2 && alpha_count <= 1) {
-        std::unordered_set<char> punct_types;
-        for (char c : s) {
-            if (isPunct(c)) punct_types.insert(c);
-        }
-        // More than 2 different punctuation types is garbage
-        if (punct_types.size() > 2) return false;
-        
-        // Certain combos are always bad
-        bool has_comma = punct_types.count(',') > 0;
-        bool has_period = punct_types.count('.') > 0;
-        bool has_semicolon = punct_types.count(';') > 0;
-        bool has_colon = punct_types.count(':') > 0;
-        
-        // ".,", ",.", ".;", etc. are garbage
-        if (has_comma && has_period && alpha_count == 0) return false;
-        if (has_comma && has_semicolon) return false;
-        if (has_period && has_semicolon && alpha_count <= 1) return false;
+
+    bool all_space = true;
+    for (unsigned char c : s) {
+        if (!isWhitespaceASCII(c)) { all_space = false; break; }
     }
-    
-    // 4. Starts/ends with space + punctuation (like " ,", "; ")
-    if (s.size() >= 2) {
-        if (s[0] == ' ' && isPunct(s[1])) return false;
-        if (s.back() == ' ' && s.size() >= 2 && isPunct(s[s.size()-2])) {
-            // Exception: ". " and ", " are OK (sentence/clause boundaries)
-            if (!(s[s.size()-2] == '.' || s[s.size()-2] == ',' || 
-                  s[s.size()-2] == '!' || s[s.size()-2] == '?')) {
-                return false;
-            }
-        }
-    }
-    
-    // 5. Reject tokens that are mostly punctuation with scattered letters
-    //    (like ".a.", "a.b", etc. unless it's a known pattern)
-    if (punct_count > alpha_count && alpha_count >= 1 && alpha_count <= 2) {
-        // Allow: contractions like "'s", "'t", "'ll", "'re", "'ve"
-        if (s.size() == 2 && s[0] == '\'') return true;
-        if (s.size() == 3 && s[0] == '\'') return true;
-        
-        // Allow: possessives/quotes like "s'"
-        if (s.size() == 2 && s[1] == '\'') return true;
-        
-        // Allow: abbreviation patterns like "U.S" or "e.g"
-        if (alpha_count == 2 && punct_count == 1 && s.find('.') != std::string::npos) {
-            // Check if it's letter.letter pattern
-            bool valid_abbrev = false;
-            for (size_t i = 1; i < s.size() - 1; ++i) {
-                if (s[i] == '.' && isAlnum(s[i-1]) && isAlnum(s[i+1])) {
-                    valid_abbrev = true;
-                    break;
-                }
-            }
-            if (valid_abbrev) return true;
-        }
-        
-        // Otherwise reject
-        return false;
-    }
-    
-    // 6. Tokens starting with lowercase + immediate uppercase (like "aB")
-    //    These are almost never valid (except camelCase which is rare in natural text)
-    if (s.size() >= 2 && lower_count > 0 && upper_count > 0) {
-        if (s[0] >= 'a' && s[0] <= 'z' && s[1] >= 'A' && s[1] <= 'Z') {
-            // Reject short camelCase fragments
-            if (s.size() <= 3) return false;
-        }
-    }
-    
-    // === ACCEPT ===
+    if (all_space) return false;
+
     return true;
 }
 
@@ -1426,22 +1184,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Segmented " << texts.size() << " documents into " 
               << sentences.size() << " sentences for subword mining" << std::endl;
     
-    // === CASE NORMALIZATION ===
-    // Lowercase ALL training text for case-insensitive vocabulary.
-    // Uppercase characters are still encodable via byte fallback (tokens 0-255).
-    // This prevents near-duplicate tokens: 'The'/'the', ' And'/' and', etc.
-    std::cout << "[UnigramLM] Normalizing to lowercase (case-insensitive vocab)" << std::endl;
-    for (auto& sent : sentences) {
-        sent = toLowerASCII(sent);
-    }
-    
-    // Also create lowercased copy of full texts for char counting + EM iterations
-    std::vector<std::string> lowercase_texts;
-    lowercase_texts.reserve(texts.size());
-    for (const auto& text : texts) {
-        lowercase_texts.push_back(toLowerASCII(text));
-    }
-    
     // Use sentences instead of full documents for the rest of training
     const std::vector<std::string>& training_units = sentences;
     
@@ -1497,9 +1239,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     size_t total_chars = 0;
     size_t atom_chars_skipped = 0;
     
-    for (size_t text_idx = 0; text_idx < lowercase_texts.size(); ++text_idx) {
-        const auto& text = lowercase_texts[text_idx];
-        const auto& spans = atom_spans[text_idx];  // Document-level spans (offsets unchanged by toLowerASCII)
+    for (size_t text_idx = 0; text_idx < texts.size(); ++text_idx) {
+        const auto& text = texts[text_idx];
+        const auto& spans = atom_spans[text_idx];
         size_t span_i = 0;  // Current atom span index
         
         for (size_t i = 0; i < text.size(); ) {
@@ -1886,31 +1628,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int added = 0;
     int filtered = 0;
     int repetition_filtered = 0;
-    int near_duplicates = 0;
     const int max_to_add = target_vocab_size > 0 ? target_vocab_size : std::numeric_limits<int>::max();
-    
-    // Track normalized forms to detect near-duplicates that differ only by
-    // whitespace/case/repetition artifacts (e.g., " the" vs "the", "soooo" vs "soo").
-    // Keep the highest-count surviving variant.
-    std::unordered_set<std::string> normalized_added;
 
-    // Pre-seed normalized_added with byte-layer char_seeds so that space-prefixed
-    // near-duplicates like " a" collide with the byte-covered "a".
-    // Without this, "a" is skipped by char_seeds before reaching dedup, so " a"
-    // (which normalizes to "a") sails through unchallenged — producing redundant
-    // vocab entries for all 26 " X" (space+letter) tokens.
-    for (const auto& ch : char_seeds) {
-        std::string norm = normalizeForDedup(ch);
-        if (!norm.empty()) normalized_added.insert(norm);
-    }
-    std::cout << "[UnigramLM] Pre-seeded " << normalized_added.size()
-              << " normalized forms from byte-layer chars for dedup" << std::endl;
-
-    // Pass A: select which entries survive all filters, collect them and their counts.
-    // We need the total accepted count sum BEFORE calling addPiece so that initial
-    // scores are proper log-probabilities: log(count / sum_accepted_counts).
-    // Using total_chars (character corpus size) as denominator was wrong — it mixes
-    // incompatible units (n-gram occurrence count vs character count).
+    // Pass A: select which entries survive encoding-safety and repetition filters.
+    // Initial scores are log(count / sum_accepted_counts).
     struct AcceptedPiece { std::string text; int count; };
     std::vector<AcceptedPiece> accepted;
     accepted.reserve(std::min<size_t>(max_to_add, ranked_subwords.size()));
@@ -1931,98 +1652,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             continue;
         }
 
-        std::string norm = normalizeForDedup(subword);
-        if (norm.empty()) {
-            filtered++;
-            continue;
-        }
-        if (normalized_added.count(norm)) {
-            near_duplicates++;
-            continue;
-        }
-        normalized_added.insert(norm);
-
         accepted.push_back({subword, count});
-    }
-
-    // Pass A.5: Substring deduplication.
-    // Remove entries that are strict prefixes or suffixes of a longer accepted entry.
-    // This eliminates cascades like "probl"/"proble"/"problem"/"roblem" — only
-    // "problem" (highest frequency, longest form) survives.
-    //
-    // Algorithm: build a set of all accepted normalized forms, then for each entry
-    // (shortest first) check if it's a prefix or suffix of any longer entry.
-    // We process shortest-first so that when we remove "probl", it doesn't prevent
-    // "proble" from also being removed (both are substrings of "problem").
-    {
-        // Sort indices by length ascending so we evaluate shortest pieces first.
-        std::vector<size_t> len_order(accepted.size());
-        std::iota(len_order.begin(), len_order.end(), 0);
-        std::sort(len_order.begin(), len_order.end(),
-                  [&](size_t a, size_t b) {
-                      return accepted[a].text.size() < accepted[b].text.size();
-                  });
-
-        // Build a set of all normalized accepted texts for fast lookup.
-        // We'll also need the raw texts for prefix/suffix matching.
-        std::unordered_set<std::string> accepted_norms;
-        accepted_norms.reserve(accepted.size());
-        for (const auto& ap : accepted) {
-            accepted_norms.insert(normalizeForDedup(ap.text));
-        }
-
-        std::vector<bool> is_substring(accepted.size(), false);
-        int substring_dupes = 0;
-
-        for (size_t idx : len_order) {
-            const std::string& piece = accepted[idx].text;
-            std::string norm = normalizeForDedup(piece);
-            if (norm.size() < 3) continue;  // Don't remove very short pieces (common morphemes)
-
-            // Check if this piece is a strict prefix or suffix of any longer accepted piece.
-            // To avoid O(n²), we check a small set of plausible extensions:
-            //   - For prefix: try norm + each char a-z, space, hyphen (27 extensions)
-            //   - For suffix: try each char + norm (27 extensions)
-            // This catches the exact cascade pattern (probl→proble→problem).
-            // One-character extensions that exist imply the short piece is redundant.
-            bool found_superstring = false;
-            static const char ext_chars[] = "abcdefghijklmnopqrstuvwxyz -";
-            for (const char ec : ext_chars) {
-                if (ec == '\0') break;
-                // Prefix check: does norm + ec exist as a longer accepted piece?
-                std::string prefix_ext = norm + ec;
-                if (accepted_norms.count(prefix_ext)) {
-                    found_superstring = true;
-                    break;
-                }
-                // Suffix check: does ec + norm exist as a longer accepted piece?
-                std::string suffix_ext = std::string(1, ec) + norm;
-                if (accepted_norms.count(suffix_ext)) {
-                    found_superstring = true;
-                    break;
-                }
-            }
-
-            if (found_superstring) {
-                is_substring[idx] = true;
-                accepted_norms.erase(norm);  // Remove so even shorter pieces can't hide behind this one
-                substring_dupes++;
-            }
-        }
-
-        if (substring_dupes > 0) {
-            // Compact accepted vector, removing substring entries.
-            std::vector<AcceptedPiece> compacted;
-            compacted.reserve(accepted.size() - substring_dupes);
-            for (size_t i = 0; i < accepted.size(); ++i) {
-                if (!is_substring[i]) {
-                    compacted.push_back(std::move(accepted[i]));
-                }
-            }
-            accepted = std::move(compacted);
-            std::cout << "[UnigramLM] Substring dedup removed " << substring_dupes
-                      << " prefix/suffix fragments" << std::endl;
-        }
     }
 
     // Sum of all accepted mining counts — correct denominator for initial log-probs.
@@ -2043,10 +1673,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     if (repetition_filtered > 0) {
         std::cout << "[UnigramLM] Filtered " << repetition_filtered
                   << " repetition/stutter subword patterns" << std::endl;
-    }
-    if (near_duplicates > 0) {
-        std::cout << "[UnigramLM] Rejected " << near_duplicates 
-                  << " near-duplicate subwords (whitespace/case/repetition variants)" << std::endl;
     }
     std::cout << "[UnigramLM] Added " << added << " subwords (min_freq=" << MIN_SUBWORD_FREQ 
               << ", target=" << target_vocab_size << "), total vocab: " << pieces_.size() << std::endl;
@@ -2072,8 +1698,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         double total_tokens = 0.0;
         double log_likelihood = 0.0;
 
-        for (size_t text_idx = 0; text_idx < lowercase_texts.size(); ++text_idx) {
-            const auto& text = lowercase_texts[text_idx];
+        for (size_t text_idx = 0; text_idx < texts.size(); ++text_idx) {
+            const auto& text = texts[text_idx];
             const auto& spans = atom_spans[text_idx];
             if (text.empty()) continue;
 
@@ -2219,10 +1845,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 if (char_seeds.count(subword)) continue;
                 if (isRepetitionNoise(subword)) continue;
                 if (!isValidSubword(subword)) continue;
-                std::string norm = normalizeForDedup(subword);
-                if (norm.empty()) continue;
-                if (normalized_added.count(norm)) continue;
-                normalized_added.insert(norm);
 
                 // Seed with mining log-prob (will be refined by Phase C EM).
                 float score = static_cast<float>(std::log(static_cast<double>(count) / total_accepted_count));
@@ -2384,11 +2006,8 @@ std::vector<int> UnigramLM::backtrack(const std::vector<ViterbiNode>& nodes, int
 std::vector<int> UnigramLM::encode(const std::string& text) const {
     if (text.empty()) return {};
     
-    // Vocab was trained on lowercased text — normalize here so uppercase input
-    // doesn't fall through to byte fallback unnecessarily.
-    const std::string lower = toLowerASCII(text);
-    auto nodes = viterbi(lower);
-    return backtrack(nodes, static_cast<int>(lower.size()));
+    auto nodes = viterbi(text);
+    return backtrack(nodes, static_cast<int>(text.size()));
 }
 
 std::vector<UnigramPiece> UnigramLM::encodeWithPieces(const std::string& text) const {
