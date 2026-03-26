@@ -164,10 +164,34 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
             config.max_seq_len = hyperparams.max_seq_len;
             config.use_flash_attention = hyperparams.use_flash_attention;
             config.min_seq_len_for_flash = hyperparams.min_seq_len_for_flash;
+            // MTP: load() uses sidecar when checkpoint was saved with MTP
+            config.mtp_enabled = hyperparams.mtp_enabled;
+            config.mtp_k = hyperparams.mtp_k;
+            config.execution_block_enabled = hyperparams.execution_block_enabled;
+            config.scratch_block_execution_first_type_only = hyperparams.scratch_block_execution_first_type_only;
+            config.execution_block_layer = hyperparams.execution_block_layer;
+            config.execution_block_num_ops = hyperparams.execution_block_num_ops;
+            config.execution_block_num_slots = hyperparams.execution_block_num_slots;
+            config.execution_block_num_steps = hyperparams.execution_block_num_steps;
+            config.execution_block_d_key = hyperparams.execution_block_d_key;
+            config.execution_block_d_type = hyperparams.execution_block_d_type;
+            config.execution_block_cross_attn_head_dim = hyperparams.execution_block_cross_attn_head_dim;
+            config.execution_block_cross_attn_topk = hyperparams.execution_block_cross_attn_topk;
+            config.execution_block_usage_decay = hyperparams.execution_block_usage_decay;
+            config.execution_block_diversity_kappa = hyperparams.execution_block_diversity_kappa;
+            config.execution_block_memory_slot_bias = hyperparams.execution_block_memory_slot_bias;
+            config.execution_block_temp_start = hyperparams.execution_block_temp_start;
+            config.execution_block_temp_end = hyperparams.execution_block_temp_end;
+            config.execution_block_temp_schedule = hyperparams.execution_block_temp_schedule;
+            config.execution_block_entropy_weight = hyperparams.execution_block_entropy_weight;
+            config.execution_block_diag_logging = hyperparams.execution_block_diag_logging;
+            config.step_x_multiplier = hyperparams.execution_step_x_multiplier;
+            config.step_y_multiplier = hyperparams.execution_step_y_multiplier;
+            config.step_y_overrides_x = hyperparams.execution_step_y_overrides_x;
+            config.entropy_aux_weight = hyperparams.execution_entropy_aux_weight;
+            config.value_match_epsilon = hyperparams.execution_value_match_epsilon;
+            config.final_slot_consistency_weight = hyperparams.execution_final_slot_consistency_weight;
         }
-        // MTP: so load() will load the .mtp sidecar when loading a checkpoint that was saved with MTP
-        config.mtp_enabled = hyperparams.mtp_enabled;
-        config.mtp_k = hyperparams.mtp_k;
 
         config.computeDerivedValues();  // Compute head_dim = d_model / num_heads
         

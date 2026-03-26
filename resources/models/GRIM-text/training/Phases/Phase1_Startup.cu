@@ -950,6 +950,39 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
               ", max_atoms=" + std::to_string(model_config.scratch_block_max_atoms) +
               ", atom_scale=" + std::to_string(model_config.scratch_block_atom_scale));
 
+    model_config.execution_block_enabled = hp.execution_block_enabled;
+    model_config.scratch_block_execution_first_type_only = hp.scratch_block_execution_first_type_only;
+    model_config.execution_block_layer = hp.execution_block_layer;
+    model_config.execution_block_num_ops = hp.execution_block_num_ops;
+    model_config.execution_block_num_slots = hp.execution_block_num_slots;
+    model_config.execution_block_num_steps = hp.execution_block_num_steps;
+    model_config.execution_block_d_key = hp.execution_block_d_key;
+    model_config.execution_block_d_type = hp.execution_block_d_type;
+    model_config.execution_block_cross_attn_head_dim = hp.execution_block_cross_attn_head_dim;
+    model_config.execution_block_cross_attn_topk = hp.execution_block_cross_attn_topk;
+    model_config.execution_block_usage_decay = hp.execution_block_usage_decay;
+    model_config.execution_block_diversity_kappa = hp.execution_block_diversity_kappa;
+    model_config.execution_block_memory_slot_bias = hp.execution_block_memory_slot_bias;
+    model_config.execution_block_temp_start = hp.execution_block_temp_start;
+    model_config.execution_block_temp_end = hp.execution_block_temp_end;
+    model_config.execution_block_temp_schedule = hp.execution_block_temp_schedule;
+    model_config.execution_block_entropy_weight = hp.execution_block_entropy_weight;
+    model_config.execution_block_diag_logging = hp.execution_block_diag_logging;
+    model_config.step_x_multiplier = hp.execution_step_x_multiplier;
+    model_config.step_y_multiplier = hp.execution_step_y_multiplier;
+    model_config.step_y_overrides_x = hp.execution_step_y_overrides_x;
+    model_config.entropy_aux_weight = hp.execution_entropy_aux_weight;
+    model_config.value_match_epsilon = hp.execution_value_match_epsilon;
+    model_config.final_slot_consistency_weight = hp.execution_final_slot_consistency_weight;
+
+    logger.log("ExecutionBlock: enabled=" + std::string(model_config.execution_block_enabled ? "true" : "false") +
+              ", V=" + std::to_string(model_config.execution_block_num_slots) +
+              ", K=" + std::to_string(model_config.execution_block_num_steps) +
+              ", ops=" + std::to_string(model_config.execution_block_num_ops) +
+              ", layer=" + std::to_string(model_config.execution_block_layer) +
+              ", execution_first_type_only=" +
+              std::string(model_config.scratch_block_execution_first_type_only ? "true" : "false"));
+
     // LM Head centering configuration (Issue #37 / #40)
     model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
     model_config.project_out_pc1 = hp.project_out_pc1;

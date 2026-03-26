@@ -349,6 +349,13 @@ constexpr size_t DEFAULT_SCRATCH_NUM_BLOCKS = 2;  // Double buffer for pinned me
 constexpr bool DEFAULT_SCRATCH_WRITE_COMBINED = false;
 
 //======================================================//
+// ExecutionBlock (training.config.execution_block in ai_config.json)
+//
+// Parsed into GRIM::Config::TrainingHyperparameters (ai_config_paths.hpp).
+// Training startup maps those fields onto GRIM::LanguageModelConfig in Phase1_Startup.cu.
+//======================================================//
+
+//======================================================//
 // Model Architecture Validation & Computation
 //======================================================//
 struct ModelArchitecture {

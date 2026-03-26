@@ -828,6 +828,22 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
             sampling_cfg.bad_token_ids.end());
     }
+
+    // Step Z: <NUM> binds to ExecutionMemory write-slot. With ScratchBlock reasoning on but
+    // ExecutionBlock off, sampling <NUM> would always throw below — exclude it from the sampler.
+    {
+        const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
+                                                    config_.use_scratch_block &&
+                                                    isScratchBlockEnabled();
+        if (scratchblock_generation_active && !config_.execution_block_enabled) {
+            const int num_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
+            sampling_cfg.bad_token_ids.push_back(num_tid);
+            std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
+            sampling_cfg.bad_token_ids.erase(
+                std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
+                sampling_cfg.bad_token_ids.end());
+        }
+    }
     
     Sampling::SamplingPipeline pipeline(sampling_cfg);
     

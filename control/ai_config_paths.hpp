@@ -9,7 +9,7 @@
 // JSON Section                → C++ Struct
 // ----------------------------------------
 // paths.grim_text            → GrimTextPaths
-// training.config            → TrainingHyperparameters
+// training.config            → TrainingHyperparameters (incl. execution_block, scratch_blocks, …)
 // tokenizer                  → TokenizerConfig
 // data_collection            → DataCollectionConfig
 //
@@ -310,6 +310,33 @@ struct TrainingHyperparameters {
     int scratch_block_reasoning_atom_embedding_dim;
     int scratch_block_reasoning_max_atoms;
     float scratch_block_reasoning_atom_scale;
+
+    // ExecutionBlock + execution-first loss (training.config.execution_block) — NO DEFAULTS
+    bool execution_block_enabled;
+    /// When true with ExecutionBlock: ScratchBlock uses type embedding only (matches LanguageModelConfig).
+    bool scratch_block_execution_first_type_only;
+    int execution_block_layer;
+    int execution_block_num_ops;
+    int execution_block_num_slots;
+    int execution_block_num_steps;
+    int execution_block_d_key;
+    int execution_block_d_type;
+    int execution_block_cross_attn_head_dim;
+    int execution_block_cross_attn_topk;
+    float execution_block_usage_decay;
+    float execution_block_diversity_kappa;
+    float execution_block_memory_slot_bias;
+    float execution_block_temp_start;
+    float execution_block_temp_end;
+    int execution_block_temp_schedule;
+    float execution_block_entropy_weight;
+    bool execution_block_diag_logging;
+    float execution_step_x_multiplier;
+    float execution_step_y_multiplier;
+    bool execution_step_y_overrides_x;
+    float execution_entropy_aux_weight;
+    float execution_value_match_epsilon;
+    float execution_final_slot_consistency_weight;
     
     // Activation quantization - NO DEFAULTS
     bool activation_quantization_enabled;
@@ -659,6 +686,32 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Scratch block reasoning
         "scratch_block_reasoning.enabled", "scratch_block_reasoning.atom_embedding_dim",
         "scratch_block_reasoning.max_atoms", "scratch_block_reasoning.atom_scale",
+
+        // Execution block (differentiable register machine + execution-first loss weights)
+        "execution_block.enabled",
+        "execution_block.execution_first_type_only",
+        "execution_block.layer",
+        "execution_block.num_ops",
+        "execution_block.num_slots",
+        "execution_block.num_steps",
+        "execution_block.d_key",
+        "execution_block.d_type",
+        "execution_block.cross_attn_head_dim",
+        "execution_block.cross_attn_topk",
+        "execution_block.usage_decay",
+        "execution_block.diversity_kappa",
+        "execution_block.memory_slot_bias",
+        "execution_block.temp_start",
+        "execution_block.temp_end",
+        "execution_block.temp_schedule",
+        "execution_block.entropy_weight",
+        "execution_block.diag_logging",
+        "execution_block.step_x_multiplier",
+        "execution_block.step_y_multiplier",
+        "execution_block.step_y_overrides_x",
+        "execution_block.entropy_aux_weight",
+        "execution_block.value_match_epsilon",
+        "execution_block.final_slot_consistency_weight",
         
         // Activation quantization
         "activation_quantization.enabled",
@@ -1136,6 +1189,34 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.scratch_block_reasoning_atom_embedding_dim = sbr.value("atom_embedding_dim", params.scratch_block_reasoning_atom_embedding_dim);
         params.scratch_block_reasoning_max_atoms = sbr.value("max_atoms", params.scratch_block_reasoning_max_atoms);
         params.scratch_block_reasoning_atom_scale = sbr.value("atom_scale", params.scratch_block_reasoning_atom_scale);
+    }
+
+    if (auto it = trainConfig.find("execution_block"); it != trainConfig.end() && it->is_object()) {
+        const auto& eb = *it;
+        assignTrainingField(params.execution_block_enabled, eb, "enabled");
+        assignTrainingField(params.scratch_block_execution_first_type_only, eb, "execution_first_type_only");
+        assignTrainingField(params.execution_block_layer, eb, "layer");
+        assignTrainingField(params.execution_block_num_ops, eb, "num_ops");
+        assignTrainingField(params.execution_block_num_slots, eb, "num_slots");
+        assignTrainingField(params.execution_block_num_steps, eb, "num_steps");
+        assignTrainingField(params.execution_block_d_key, eb, "d_key");
+        assignTrainingField(params.execution_block_d_type, eb, "d_type");
+        assignTrainingField(params.execution_block_cross_attn_head_dim, eb, "cross_attn_head_dim");
+        assignTrainingField(params.execution_block_cross_attn_topk, eb, "cross_attn_topk");
+        assignTrainingField(params.execution_block_usage_decay, eb, "usage_decay");
+        assignTrainingField(params.execution_block_diversity_kappa, eb, "diversity_kappa");
+        assignTrainingField(params.execution_block_memory_slot_bias, eb, "memory_slot_bias");
+        assignTrainingField(params.execution_block_temp_start, eb, "temp_start");
+        assignTrainingField(params.execution_block_temp_end, eb, "temp_end");
+        assignTrainingField(params.execution_block_temp_schedule, eb, "temp_schedule");
+        assignTrainingField(params.execution_block_entropy_weight, eb, "entropy_weight");
+        assignTrainingField(params.execution_block_diag_logging, eb, "diag_logging");
+        assignTrainingField(params.execution_step_x_multiplier, eb, "step_x_multiplier");
+        assignTrainingField(params.execution_step_y_multiplier, eb, "step_y_multiplier");
+        assignTrainingField(params.execution_step_y_overrides_x, eb, "step_y_overrides_x");
+        assignTrainingField(params.execution_entropy_aux_weight, eb, "entropy_aux_weight");
+        assignTrainingField(params.execution_value_match_epsilon, eb, "value_match_epsilon");
+        assignTrainingField(params.execution_final_slot_consistency_weight, eb, "final_slot_consistency_weight");
     }
     
     // Load activation quantization configuration
