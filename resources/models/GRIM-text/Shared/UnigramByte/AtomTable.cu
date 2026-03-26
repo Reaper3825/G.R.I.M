@@ -594,8 +594,11 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     // Zero-copy: pass buffer pointer + length directly to string pool!
     std::lock_guard<std::mutex> lock(mutex_);
     
-    // Get string_view from span (no allocation)
-    std::string_view raw_text = span.view();
+    // Use contentView (atom content WITHOUT leading whitespace from span widening).
+    // The widened whitespace is emitted as separate tokens by encodeInternal;
+    // storing it here causes atomToString() to return " 80" instead of "80",
+    // producing double-spaces when decoded alongside the whitespace tokens.
+    std::string_view raw_text = span.contentView();
     
     // Compute hash for deduplication
     uint64_t hash = computeHash(span.atom_type, raw_text);
@@ -634,21 +637,18 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     entry.confidence = 1.0f;
     entry.created_at = getCurrentTimestamp();
     
-    // ZERO-COPY INTERNING: Pass buffer pointer + length directly!
-    entry.raw_text_ref = internString(span.buffer_ptr + span.offset, span.length);
+    // Intern the atom CONTENT (without widened whitespace)
+    entry.raw_text_ref = internString(span.buffer_ptr + span.content_offset, span.content_length);
     
     // Pack numeric value
     packNumericValue(entry, parsed);
     
     // Skip serialization for types where raw_text == parsed representation
     // Only serialize if we need a different string representation
-    if (needsSerialization(span.atom_type) && !hasEdgeWhitespace(raw_text)) {
+    if (needsSerialization(span.atom_type)) {
         std::string serialized = atomValueToString(span.atom_type, parsed);
-        if (!serialized.empty()) {
-            std::string_view raw = span.view();
-            if (serialized != raw) {
-                entry.parsed_ref = internString(serialized);
-            }
+        if (!serialized.empty() && serialized != raw_text) {
+            entry.parsed_ref = internString(serialized);
         }
     }
     

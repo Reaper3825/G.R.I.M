@@ -190,7 +190,12 @@ if [[ "$USE_SBATCH" == true ]]; then
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $BRIDGES2_DIR/scripts $BRIDGES2_DIR/logs"
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/scripts/train_bridges2.sbatch" < "$SBATCH_PATH"
   echo "Submitting batch job (partition=$PARTITION, gpu=$GPU_TYPE)..."
-  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t 4:00:00 scripts/train_bridges2.sbatch")
+  # Batch script defaults to ai_config.json at repo root (same as transferred file). Pass through --config when set.
+  SBATCH_EXPORT="ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR"
+  if [[ "$CONFIG" != "../../../../ai_config.json" ]] && [[ "$CONFIG" != "ai_config.json" ]]; then
+    SBATCH_EXPORT="$SBATCH_EXPORT,GRIM_TRAIN_CONFIG=$CONFIG"
+  fi
+  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t 24:00:00 scripts/train_bridges2.sbatch")
   echo "$SUBMIT_OUT"
   exit 0
 fi
@@ -198,7 +203,7 @@ fi
 # Interactive: srun (load cuda module + set LD_LIBRARY_PATH so compute node finds libcudart)
 BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; exec \"$REMOTE_EXE\" --config \"$BRIDGES2_DIR/ai_config.json\"'"
 echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
-SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 4:00:00 --pty"
+SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 24:00:00 --pty"
 if [[ -t 0 ]]; then
   ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
 else

@@ -609,7 +609,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             bool has_parsed = false;
             
             // Parse atom for both numeric and text features
-            auto parsed = AtomTable::parseAtom(span.atom_type, std::string(span.view()));
+            auto parsed = AtomTable::parseAtom(span.atom_type, std::string(span.contentView()));
             if (parsed.success) {
                 has_parsed = true;
                 parsed_value = parsed.value;
@@ -677,7 +677,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             uint16_t text_features[kTextFeatureDim];
             encodeAtomTextFeatures(
                 span.atom_type, 
-                span.view(), 
+                span.contentView(), 
                 has_parsed ? &parsed_value : nullptr,
                 text_features
             );
