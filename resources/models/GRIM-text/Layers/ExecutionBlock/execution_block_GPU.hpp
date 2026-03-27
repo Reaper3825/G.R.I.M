@@ -82,6 +82,17 @@ struct ExecutionBlockConfig {
     float entropy_collapse_threshold = 0.01f;
     float write_collapse_threshold   = 0.98f;
     float magnitude_limit            = 1e6f;
+
+    // Causal state loss (plan: persistantExecutionMemory)
+    float transition_hard_threshold  = 0.0f;  // Fix 1: hard gate threshold (0 = disabled)
+    int   exec_gate_warmup_steps     = 0;     // Fix 8: suppress hard gates before this step
+    float causal_w1_transition       = 1.0f;  // Fix 4+6: transition_loss weight
+    float causal_w2_state_integrity  = 0.5f;  // Fix 2+9: state_integrity_loss weight
+    float causal_w3_write_consistency= 0.5f;  // Fix 3: write_consistency_loss weight
+    float causal_w4_write_mismatch   = 0.25f; // Fix 5: write_mismatch_loss weight
+    float causal_w5_write_entropy    = 0.0f;  // Fix 5: write_entropy_penalty weight
+    float causal_w6_read_consistency = 0.0f;  // Fix 7: read_consistency_loss weight (requires teacher)
+
     cudaStream_t stream      = nullptr;
     cublasHandle_t cublas_handle = nullptr;
 };
@@ -129,6 +140,17 @@ struct ExecutionBlockStepOutput {
     Tensor state_after_valid;    // [V]    M.valid_mask snapshot after this step
     ExecutionRecord record;   // filled when diag_out != nullptr (host copy at step sync)
     ExecStepMetrics metrics;  // populated when debug_mode is enabled
+
+    // Causal state loss tensors (Fix 1-9, all [1,1] scalars)
+    Tensor transition_error_hard;    // |v_out - expected_internal| (Fix 1 gate)
+    Tensor transition_loss;          // |v_soft - target_or_expected| (Fixes 4+6)
+    Tensor state_integrity_loss;     // hinge on non-write slot deltas (Fix 2+9)
+    Tensor write_consistency_loss;   // |state_before[ws] - v_out| (Fix 3)
+    Tensor write_mismatch_loss;      // max(p_write) * transition_error (Fix 5)
+    Tensor write_entropy_penalty;    // low entropy(p_write) penalty (Fix 5)
+    Tensor read_consistency_loss;    // |v_actual - v_expected_from_teacher| (Fix 7)
+    Tensor exec_step_loss;           // L_exec aggregate for this step
+    bool   used_expected_target = false;  // whether teacher target was used for transition_loss
 };
 
 //======================================================//
@@ -183,7 +205,11 @@ public:
         int token_offset,
         int row_tokens,
         Tensor& trace_state,
-        const std::vector<ExecutionRecord>& prior_records
+        const std::vector<ExecutionRecord>& prior_records,
+        uint64_t training_step = 0,                 // Fix 8: curriculum gate
+        const float* expected_target = nullptr,     // Fix 6: optional teacher scalar (device [1])
+        const float* expected_read_v1 = nullptr,    // Fix 7: optional teacher operand (device [1])
+        const float* expected_read_v2 = nullptr      // Fix 7: optional teacher operand (device [1])
     );
 
     //--------------------------------------------------//

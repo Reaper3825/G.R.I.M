@@ -48,6 +48,35 @@ void flash_attn_fwd_ex(const void* q,
                        uint64_t dropout_seed,
                        cudaStream_t stream);
 
+// FlashAttention v2 forward with KV cache (inference-only, no backward).
+//
+// For autoregressive decoding: Q has seqlen_q new tokens, K/V cache has
+// seqlen_k total tokens (including the new ones already appended by caller).
+//
+// Q:       [batch, seqlen_q, n_heads, head_dim]      (BF16)
+// K_cache: [batch, seqlen_k, n_kv_heads, head_dim]   (BF16) — full cache including new tokens
+// V_cache: [batch, seqlen_k, n_kv_heads, head_dim]   (BF16) — full cache including new tokens
+// O:       [batch, seqlen_q, n_heads, head_dim]       (BF16)
+// LSE:     [batch, n_heads, seqlen_q]                 (FP32)
+//
+// Typical decode usage: seqlen_q=1, seqlen_k=total_cached_tokens
+// Prefill usage: seqlen_q=seqlen_k=prompt_length (equivalent to flash_attn_fwd_ex)
+void flash_attn_fwd_kvcache(const void* q,
+                            const void* k_cache,
+                            const void* v_cache,
+                            void* out,
+                            void* softmax_lse,
+                            const float* alibi_slopes,
+                            int batch,
+                            int seqlen_q,
+                            int seqlen_k,
+                            int n_heads,
+                            int n_kv_heads,
+                            int head_dim,
+                            bool causal,
+                            bool is_bf16,
+                            cudaStream_t stream);
+
 // FlashAttention v2 backward.
 // Requires softmax_lse from the matching forward pass.
 void flash_attn_bwd_ex(const void* q,

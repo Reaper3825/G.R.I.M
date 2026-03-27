@@ -473,7 +473,8 @@ __global__ void ropeRotationGQAKernel(
     int seq_len,
     int head_dim,
     int rotary_dim,
-    bool is_q_pass
+    bool is_q_pass,
+    int pos_offset
 ) {
     const int pos_idx = blockIdx.x * blockDim.x + threadIdx.x;
     const int head_idx = blockIdx.y;
@@ -493,7 +494,7 @@ __global__ void ropeRotationGQAKernel(
         const int dim_j = pair_idx * 2 + 1;
         
         const float freq = inv_freq[pair_idx];
-        const float theta = static_cast<float>(pos_idx) * freq;
+        const float theta = static_cast<float>(pos_idx + pos_offset) * freq;
         const float cos_val = cosf(theta);
         const float sin_val = sinf(theta);
         
@@ -588,7 +589,8 @@ void launchRoPERotationGQA(
     int seq_len,
     int head_dim,
     int rotary_dim,
-    cudaStream_t stream
+    cudaStream_t stream,
+    int pos_offset
 ) {
     // Rule 20: Crash loud on invalid inputs — silent return hides bugs
     if (Q == nullptr || K == nullptr || inv_freq == nullptr) {
@@ -633,7 +635,8 @@ void launchRoPERotationGQA(
         ropeRotationGQAKernel<<<grid, block, 0, stream>>>(
             Q, K, inv_freq,
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
-            true  // Q pass
+            true,  // Q pass
+            pos_offset
         );
         
         cudaError_t err = cudaGetLastError();
@@ -655,7 +658,8 @@ void launchRoPERotationGQA(
         ropeRotationGQAKernel<<<grid, block, 0, stream>>>(
             Q, K, inv_freq,
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
-            false  // K pass
+            false,  // K pass
+            pos_offset
         );
         
         cudaError_t err = cudaGetLastError();

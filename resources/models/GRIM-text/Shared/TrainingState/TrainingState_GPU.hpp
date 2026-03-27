@@ -96,6 +96,19 @@ struct TrainingState {
     int kv_cache_capacity = 0;      // Maximum tokens the cache can hold
     float cached_numeric_pred[2] = {0.0f, 0.0f};  // Last-token numeric head output (host-side)
 
+    // Per-layer KV cache tensors (BF16, BSHD layout for FlashAttention)
+    // Shape per entry: [1, num_kv_heads, kv_cache_capacity, head_dim]
+    // Allocated in initInferenceState, sized by num_layers.
+    std::vector<void*> kv_cache_k;    // BF16 device pointers, one per encoder layer
+    std::vector<void*> kv_cache_v;    // BF16 device pointers, one per encoder layer
+    float* kv_cache_softmax_lse = nullptr;  // [num_layers, num_heads, kv_cache_capacity] FP32
+
+    // Decode scratch buffers (tiny, pre-allocated for single-token KV cache decode)
+    void* decode_q_bf16 = nullptr;        // [num_heads * head_dim] BF16
+    void* decode_kv_bf16 = nullptr;       // [num_kv_heads * head_dim] BF16 (reused for K then V)
+    void* decode_attn_out_bf16 = nullptr; // [num_heads * head_dim] BF16
+    float* decode_attn_out_fp32 = nullptr;// [num_heads * head_dim] FP32 (= [d_model])
+
     //======================================================//
     //  PERSISTENT EXECUTION TRACE (per-forward lifecycle)
     //  Reset at the start of every forward that runs ExecutionBlock.

@@ -365,6 +365,16 @@ struct LanguageModelConfig {
     float execution_block_entropy_weight = 0.01f;
     bool  execution_block_diag_logging = false;
 
+    // Causal state loss weights (Fixes 1-9)
+    float execution_block_transition_hard_threshold = 0.0f; // 0 = disabled
+    int   execution_block_gate_warmup_steps = 0;
+    float execution_block_causal_w1_transition = 1.0f;
+    float execution_block_causal_w2_state_integrity = 0.5f;
+    float execution_block_causal_w3_write_consistency = 0.5f;
+    float execution_block_causal_w4_write_mismatch = 0.25f;
+    float execution_block_causal_w5_write_entropy = 0.0f;
+    float execution_block_causal_w6_read_consistency = 0.0f;
+
     // Execution-first structured CE loss config (Step X / Y multipliers)
     float step_x_multiplier = 2.0f;
     float step_y_multiplier = 2.0f;
@@ -761,7 +771,14 @@ private:
     // Runs autograd forward, extracts last-token logits, returns them.
     // All public inference methods (forwardGPU, getNextTokenLogitsGPU,
     // forwardInit, forwardStep) copy their data to cached tensors then call this.
-    Vector executeInferenceForward_(int seq_len);
+    // When populate_kv_cache=true, extracts K,V from autograd intermediates
+    // into BF16 KV cache buffers before clearing intermediates.
+    Vector executeInferenceForward_(int seq_len, bool populate_kv_cache = false);
+
+    // KV-cached decode: processes a single token at position token_pos
+    // through all encoder layers using cached K,V from prior tokens.
+    // Returns logits vector for the new token.
+    Vector executeDecodeForward_(int token_pos);
 
     LanguageModelConfig config_;
     std::unique_ptr<GrimEmbeddingStack> embedder_;

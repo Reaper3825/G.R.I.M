@@ -55,6 +55,19 @@ TrainingState::~TrainingState() {
 	// Free class-balanced loss weights (raw cudaMalloc)
 	if (d_class_weights) { cudaFree(d_class_weights); d_class_weights = nullptr; }
 	
+	// Free per-layer KV cache (raw cudaMalloc, BF16)
+	for (auto& ptr : kv_cache_k) { if (ptr) { cudaFree(ptr); ptr = nullptr; } }
+	for (auto& ptr : kv_cache_v) { if (ptr) { cudaFree(ptr); ptr = nullptr; } }
+	kv_cache_k.clear();
+	kv_cache_v.clear();
+	if (kv_cache_softmax_lse) { cudaFree(kv_cache_softmax_lse); kv_cache_softmax_lse = nullptr; }
+	
+	// Free decode scratch buffers (raw cudaMalloc, BF16/FP32)
+	if (decode_q_bf16) { cudaFree(decode_q_bf16); decode_q_bf16 = nullptr; }
+	if (decode_kv_bf16) { cudaFree(decode_kv_bf16); decode_kv_bf16 = nullptr; }
+	if (decode_attn_out_bf16) { cudaFree(decode_attn_out_bf16); decode_attn_out_bf16 = nullptr; }
+	if (decode_attn_out_fp32) { cudaFree(decode_attn_out_fp32); decode_attn_out_fp32 = nullptr; }
+	
 	// Free ScratchBlockPool (pinned memory blocks)
 	if (scratch_pool) {
 		delete scratch_pool;

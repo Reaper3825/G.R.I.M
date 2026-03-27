@@ -337,6 +337,16 @@ struct TrainingHyperparameters {
     float execution_entropy_aux_weight;
     float execution_value_match_epsilon;
     float execution_final_slot_consistency_weight;
+
+    // Causal state loss (Fixes 1-9)
+    float execution_block_transition_hard_threshold;
+    int   execution_block_gate_warmup_steps;
+    float execution_block_causal_w1_transition;
+    float execution_block_causal_w2_state_integrity;
+    float execution_block_causal_w3_write_consistency;
+    float execution_block_causal_w4_write_mismatch;
+    float execution_block_causal_w5_write_entropy;
+    float execution_block_causal_w6_read_consistency;
     
     // Activation quantization - NO DEFAULTS
     bool activation_quantization_enabled;
@@ -1217,6 +1227,14 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_entropy_aux_weight, eb, "entropy_aux_weight");
         assignTrainingField(params.execution_value_match_epsilon, eb, "value_match_epsilon");
         assignTrainingField(params.execution_final_slot_consistency_weight, eb, "final_slot_consistency_weight");
+        assignTrainingField(params.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
+        assignTrainingField(params.execution_block_gate_warmup_steps, eb, "gate_warmup_steps");
+        assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
+        assignTrainingField(params.execution_block_causal_w2_state_integrity, eb, "causal_w2_state_integrity");
+        assignTrainingField(params.execution_block_causal_w3_write_consistency, eb, "causal_w3_write_consistency");
+        assignTrainingField(params.execution_block_causal_w4_write_mismatch, eb, "causal_w4_write_mismatch");
+        assignTrainingField(params.execution_block_causal_w5_write_entropy, eb, "causal_w5_write_entropy");
+        assignTrainingField(params.execution_block_causal_w6_read_consistency, eb, "causal_w6_read_consistency");
     }
     
     // Load activation quantization configuration

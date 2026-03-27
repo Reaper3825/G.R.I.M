@@ -14,10 +14,14 @@
 #include <cstdint>
 #include <string>
 #include <cuda_runtime.h>
+#include <cuda_bf16.h>
 #include <stdexcept>
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "Autograd/AutogradTraining.hpp"
+#include "../Layers/Encoding/Encoding_GPU.hpp"
+#include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
+#include "../Shared/TensorConversion/TensorConversion.hpp"
 
 namespace GRIM {
 
@@ -57,8 +61,10 @@ void copyTokenSlotMapH2D(TrainingState& ts, cudaStream_t stream, int seq_len,
 //  executeInferenceForward_ - THE single inference forward path
 //  Assumes all data already in cached_* tensors.
 //  Creates autograd context, runs forward, returns last-token logits.
+//  When populate_kv_cache=true, extracts per-layer K,V from autograd
+//  intermediates and converts to BF16 BSHD format in KV cache buffers.
 //======================================================//
-Vector LanguageModel::executeInferenceForward_(int seq_len) {
+Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cache) {
     if (!training_state_.initialized) {
         throw std::runtime_error("executeInferenceForward_: training state not initialized");
     }
@@ -134,6 +140,34 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
         }
     }
 
+    // Populate KV cache from autograd intermediates (prefill mode).
+    // Must happen BEFORE clear() which destroys the intermediate tensors.
+    if (populate_kv_cache && !training_state_.kv_cache_k.empty()) {
+        const int num_kv_heads = training_state_.num_kv_heads;
+        const int head_dim = config_.d_model / config_.num_heads;
+        const auto& layers = training_state_.autograd_intermediates.layer_intermediates.layers;
+        const int num_layers = static_cast<int>(layers.size());
+
+        for (int i = 0; i < num_layers; ++i) {
+            const auto& layer_ints = layers[i];
+            if (!layer_ints.K_bhsd.data || !layer_ints.V_bhsd.data) {
+                throw std::runtime_error("executeInferenceForward_: layer " + std::to_string(i) +
+                                         " K_bhsd/V_bhsd is NULL during KV cache population");
+            }
+            // K_bhsd: [1, nkv, seq_len, hd] BHSD FP32 (post-RoPE)
+            // V_bhsd: [1, nkv, seq_len, hd] BHSD FP32
+            // Convert to BSHD BF16 → [1, seq_len, nkv, hd] in cache
+            TensorConversion::convert_BHSD_to_BSHD_bf16(
+                layer_ints.K_bhsd.data,
+                static_cast<__nv_bfloat16*>(training_state_.kv_cache_k[i]),
+                1, num_kv_heads, seq_len, head_dim, stream);
+            TensorConversion::convert_BHSD_to_BSHD_bf16(
+                layer_ints.V_bhsd.data,
+                static_cast<__nv_bfloat16*>(training_state_.kv_cache_v[i]),
+                1, num_kv_heads, seq_len, head_dim, stream);
+        }
+    }
+
     // Free all autograd intermediates — inference never runs backward.
     // Without this, grad_fn chains and cached tensors leak across generation steps.
     training_state_.autograd_intermediates.clear();
@@ -192,11 +226,12 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     // Store sequence length for subsequent forwardStep() calls
     training_state_.kv_cache_len = seq_len;
     
-    return executeInferenceForward_(seq_len);
+    // Prefill: populate KV cache from autograd intermediates
+    return executeInferenceForward_(seq_len, /*populate_kv_cache=*/true);
 }
 
 //======================================================//
-//  forwardStep - Decode phase: append token, recompute full sequence
+//  forwardStep - Decode phase: single token with KV cache
 //======================================================//
 Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
                                   int32_t new_token_slot_id) {
@@ -207,31 +242,34 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
         throw std::runtime_error("forwardStep: call forwardInit first");
     }
 
-    const int new_pos = training_state_.kv_cache_len;
-    const int new_seq_len = new_pos + 1;
+    const int token_pos = training_state_.kv_cache_len;
+    const int new_seq_len = token_pos + 1;
     
     if (new_seq_len > config_.max_seq_len) {
         throw std::runtime_error("forwardStep: sequence exceeds max_seq_len");
     }
+    if (training_state_.kv_cache_k.empty()) {
+        throw std::runtime_error("forwardStep: KV cache not allocated — call initInferenceState first");
+    }
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
     
-    // Append new token
+    // Append new token to device buffer (needed for embedding lookup)
     int* token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
-    cudaMemcpyAsync(token_ids_ptr + new_pos,
+    cudaMemcpyAsync(token_ids_ptr + token_pos,
                     &new_token, sizeof(int),
                     cudaMemcpyHostToDevice, stream);
     
     // Append numeric side-channel
-    cudaMemcpyAsync(training_state_.cached_token_numeric_values.data + new_pos,
+    cudaMemcpyAsync(training_state_.cached_token_numeric_values.data + token_pos,
                     &numeric_value, sizeof(float),
                     cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data) + new_pos,
+    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data) + token_pos,
                     &atom_mask, sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
 
     if (training_state_.cached_token_to_slot_map.data) {
-        auto* slot_dst = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data) + new_pos;
+        auto* slot_dst = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data) + token_pos;
         cudaError_t serr = cudaMemcpyAsync(slot_dst, &new_token_slot_id, sizeof(int32_t),
                                            cudaMemcpyHostToDevice, stream);
         if (serr != cudaSuccess) {
@@ -241,7 +279,209 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
 
     training_state_.kv_cache_len = new_seq_len;
     
-    return executeInferenceForward_(new_seq_len);
+    // Use KV-cached decode (O(1) per layer instead of O(n²))
+    return executeDecodeForward_(token_pos);
+}
+
+//======================================================//
+//  executeDecodeForward_ - KV-cached single-token decode
+//  Processes one token through all encoder layers using
+//  cached K,V from prior tokens. O(n) per layer instead of O(n²).
+//======================================================//
+Vector LanguageModel::executeDecodeForward_(int token_pos) {
+    if (!training_state_.initialized) {
+        throw std::runtime_error("executeDecodeForward_: training state not initialized");
+    }
+    if (training_state_.kv_cache_k.empty()) {
+        throw std::runtime_error("executeDecodeForward_: KV cache not allocated");
+    }
+
+    using namespace TensorContract;
+    namespace ag = autograd;
+
+    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+    const auto& cfg = config_;
+    auto& ts = training_state_;
+
+    const int d_model = cfg.d_model;
+    const int num_heads = cfg.num_heads;
+    const int num_kv_heads = ts.num_kv_heads;
+    const int head_dim = d_model / num_heads;
+    const int kv_dim = num_kv_heads * head_dim;
+    const int num_layers = cfg.num_layers;
+    const float rms_eps = cfg.rms_epsilon;
+    const int seqlen_k = token_pos + 1;  // K cache has [0..token_pos] inclusive
+
+    // Set cuBLAS handle for autograd matmul calls
+    ag::set_autograd_cublas_handle(ts.cublas_handle);
+
+    // ── Step 1: Embedding lookup for the single new token ──
+    EmbeddingLayer* emb_layer = getEmbeddingLayer();
+    if (!emb_layer) {
+        throw std::runtime_error("executeDecodeForward_: embedding layer is NULL");
+    }
+    Tensor& emb_weights = emb_layer->tokenWeights();
+    emb_weights.requires_grad = false;
+
+    // Token ID is at device offset token_pos
+    const int* token_id_ptr = reinterpret_cast<const int*>(ts.cached_token_ids_tensor.data) + token_pos;
+
+    Tensor hidden = ag::embedding(emb_weights, token_id_ptr, 1, stream, 1.0f);
+    // hidden: [1, d_model]
+
+    // ── Step 2: PBM validation ──
+    if (!ts.pbm_spec.valid || !ts.pbm_spec.rope_inv_freq || !ts.pbm_spec.alibi_slopes) {
+        throw std::runtime_error("executeDecodeForward_: PBM (RoPE/ALiBi) not initialized");
+    }
+
+    // ── Step 3: Process through all encoder layers ──
+    for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+        auto* enc = getGpuEncoder().getLayer(layer_idx);
+        if (!enc) {
+            throw std::runtime_error("executeDecodeForward_: encoder layer " +
+                                     std::to_string(layer_idx) + " is NULL");
+        }
+
+        // 3a. RMSNorm1
+        enc->rms1Gamma().requires_grad = false;
+        Tensor ln1_out = ag::rms_norm(hidden, enc->rms1Gamma(), rms_eps, stream);
+
+        // 3b. QKV projection: [1, d_model] @ W_qkv^T → [1, qkv_dim]
+        enc->attnWqkv().requires_grad = false;
+        Tensor qkv = ag::matmul(ln1_out, enc->attnWqkv(), stream,
+                                nullptr, nullptr, true);
+        if (enc->attnBqkv().data) {
+            enc->attnBqkv().requires_grad = false;
+            qkv = ag::broadcast_add(qkv, enc->attnBqkv(), stream);
+        }
+
+        // 3c. Split QKV → Q [1,nh,1,hd], K [1,nkv,1,hd], V [1,nkv,1,hd]
+        auto [Q, K, V] = ag::split_and_reshape_qkv(
+            qkv, 1, 1, num_heads, num_kv_heads, head_dim, stream);
+
+        // 3d. RoPE rotation with position offset
+        // For S=1, Q is [1,nh,1,hd] and K is [1,nkv,1,hd]
+        PBM::launchRoPERotationGQA(
+            Q.data, K.data, ts.pbm_spec.rope_inv_freq,
+            1, num_heads, num_kv_heads, 1, head_dim,
+            ts.pbm_spec.rotary_dim, stream, token_pos);
+
+        // 3e. Convert K,V to BF16 and write to KV cache at position token_pos
+        // For S=1: BHSD [1,H,1,D] = BSHD [1,1,H,D] — same contiguous layout [H*D]
+        // Cache layout: [kv_capacity, nkv, hd] BSHD
+        const size_t kv_slot_offset = static_cast<size_t>(token_pos) * num_kv_heads * head_dim;
+        auto* k_cache = static_cast<__nv_bfloat16*>(ts.kv_cache_k[layer_idx]);
+        auto* v_cache = static_cast<__nv_bfloat16*>(ts.kv_cache_v[layer_idx]);
+
+        TensorConversion::convert_BHSD_to_BSHD_bf16(
+            K.data, k_cache + kv_slot_offset,
+            1, num_kv_heads, 1, head_dim, stream);
+        TensorConversion::convert_BHSD_to_BSHD_bf16(
+            V.data, v_cache + kv_slot_offset,
+            1, num_kv_heads, 1, head_dim, stream);
+
+        // 3f. Convert Q to BF16 for flash attention
+        auto* q_bf16 = static_cast<__nv_bfloat16*>(ts.decode_q_bf16);
+        TensorConversion::convert_BHSD_to_BSHD_bf16(
+            Q.data, q_bf16, 1, num_heads, 1, head_dim, stream);
+
+        // 3g. Flash attention with KV cache
+        // Q: [1, 1, nh, hd] BSHD BF16 (seqlen_q=1)
+        // K cache: [1, kv_capacity, nkv, hd] BSHD BF16 (seqlen_k=token_pos+1)
+        auto* attn_out_bf16 = static_cast<__nv_bfloat16*>(ts.decode_attn_out_bf16);
+        flash_attn_fwd_kvcache(
+            q_bf16,
+            k_cache,
+            v_cache,
+            attn_out_bf16,
+            ts.kv_cache_softmax_lse,
+            ts.pbm_spec.alibi_slopes,
+            1,              // batch=1
+            1,              // seqlen_q=1
+            seqlen_k,       // cached tokens including current
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            true,           // causal
+            true,           // is_bf16
+            stream);
+
+        // 3h. Convert attention output BF16 → FP32
+        // [1,1,nh,hd] BSHD → [1,nh,1,hd] BHSD (same memory for S=1)
+        TensorConversion::convert_BSHD_bf16_to_BHSD(
+            attn_out_bf16, ts.decode_attn_out_fp32,
+            1, 1, num_heads, head_dim, stream);
+
+        // 3i. Wrap attention output as non-owning Tensor [1, d_model]
+        Tensor attn_flat;
+        attn_flat.data = ts.decode_attn_out_fp32;
+        attn_flat.shape = TensorShape::make_BSM(1, d_model);
+        attn_flat.requires_grad = false;
+        attn_flat.owns_data = false;
+        attn_flat.stream = stream;
+
+        // 3j. Output projection: [1, d_model] @ W_o^T
+        enc->attnWo().requires_grad = false;
+        Tensor proj = ag::matmul(attn_flat, enc->attnWo(), stream,
+                                 nullptr, nullptr, true);
+        if (enc->attnBo().data) {
+            enc->attnBo().requires_grad = false;
+            proj = ag::broadcast_add(proj, enc->attnBo(), stream);
+        }
+
+        // 3k. LayerScale + residual
+        if (enc->layerScale1().data) {
+            enc->layerScale1().requires_grad = false;
+            proj = ag::layer_scale(proj, enc->layerScale1(), stream);
+        }
+        hidden = ag::add(hidden, proj, stream);
+        // Skip center_columns for S=1 (centering a single vector is a no-op)
+
+        // 3l. RMSNorm2
+        enc->rms2Gamma().requires_grad = false;
+        Tensor ln2_out = ag::rms_norm(hidden, enc->rms2Gamma(), rms_eps, stream);
+
+        // 3m. FFN (SwiGLU)
+        ForwardIntermediates ffn_ints;
+        auto* ffn_layer = enc->getFfnLayer();
+        if (!ffn_layer) {
+            throw std::runtime_error("executeDecodeForward_: FFN layer is NULL at layer " +
+                                     std::to_string(layer_idx));
+        }
+        Tensor ffn_out = ffn_layer->forward(ln2_out, ffn_ints, 0, layer_idx);
+
+        // 3n. LayerScale + residual
+        if (enc->layerScale2().data) {
+            enc->layerScale2().requires_grad = false;
+            ffn_out = ag::layer_scale(ffn_out, enc->layerScale2(), stream);
+        }
+        hidden = ag::add(hidden, ffn_out, stream);
+        // Skip center_columns for S=1
+    }
+
+    // ── Step 4: LM Head (RMSNorm → optional centering → W @ hidden^T) ──
+    LMHeadLayer* lm_head = getLmHeadLayer();
+    if (!lm_head) {
+        throw std::runtime_error("executeDecodeForward_: LM head is NULL");
+    }
+    lm_head->setStream(stream);
+    lm_head->setCublasHandle(ts.cublas_handle);
+
+    Tensor centered_hidden;
+    Tensor logits_tensor = lm_head->forward(hidden, centered_hidden);
+
+    // ── Step 5: Extract logits to host ──
+    Vector logits(cfg.vocab_size);
+    if (!logits_tensor.data) {
+        throw std::runtime_error("executeDecodeForward_: logits_tensor.data is NULL after LM head");
+    }
+    // logits_tensor is [1, vocab_size] — copy the single row
+    cudaMemcpyAsync(logits.data.data(), logits_tensor.data,
+                    cfg.vocab_size * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+
+    return logits;
 }
 
 //======================================================//
@@ -252,6 +492,21 @@ void LanguageModel::resetKVCache() {
         training_state_.kv_cache_len = 0;
         training_state_.has_inference_exec_memory = false;
         training_state_.inference_exec_last_write_slot = -1;
+
+        // Zero BF16 KV cache buffers
+        const auto& cfg = getConfig();
+        const int num_kv_heads = training_state_.num_kv_heads;
+        const int head_dim = cfg.d_model / cfg.num_heads;
+        const size_t kv_bytes_per_layer = static_cast<size_t>(num_kv_heads) *
+            training_state_.kv_cache_capacity * head_dim * sizeof(__nv_bfloat16);
+        cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+
+        for (size_t l = 0; l < training_state_.kv_cache_k.size(); ++l) {
+            if (training_state_.kv_cache_k[l])
+                cudaMemsetAsync(training_state_.kv_cache_k[l], 0, kv_bytes_per_layer, stream);
+            if (training_state_.kv_cache_v[l])
+                cudaMemsetAsync(training_state_.kv_cache_v[l], 0, kv_bytes_per_layer, stream);
+        }
     }
 }
 

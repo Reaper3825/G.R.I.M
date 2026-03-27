@@ -432,6 +432,14 @@ void LanguageModel::initGPU() {
             eb_config.temp_schedule = cfg.execution_block_temp_schedule;
             eb_config.entropy_weight = cfg.execution_block_entropy_weight;
             eb_config.diag_logging = cfg.execution_block_diag_logging;
+            eb_config.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
+            eb_config.exec_gate_warmup_steps = cfg.execution_block_gate_warmup_steps;
+            eb_config.causal_w1_transition = cfg.execution_block_causal_w1_transition;
+            eb_config.causal_w2_state_integrity = cfg.execution_block_causal_w2_state_integrity;
+            eb_config.causal_w3_write_consistency = cfg.execution_block_causal_w3_write_consistency;
+            eb_config.causal_w4_write_mismatch = cfg.execution_block_causal_w4_write_mismatch;
+            eb_config.causal_w5_write_entropy = cfg.execution_block_causal_w5_write_entropy;
+            eb_config.causal_w6_read_consistency = cfg.execution_block_causal_w6_read_consistency;
             eb_config.stream = primary_stream;
             eb_config.cublas_handle = training_state_.cublas_handle;
 

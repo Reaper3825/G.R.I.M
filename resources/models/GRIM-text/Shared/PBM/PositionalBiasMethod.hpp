@@ -139,7 +139,8 @@ void launchRoPERotationGQA(
     int seq_len,
     int head_dim,
     int rotary_dim,
-    cudaStream_t stream = nullptr
+    cudaStream_t stream = nullptr,
+    int pos_offset = 0                  // Position offset for KV cache decode (default 0)
 );
 
 // ═══════════════════════════════════════════════════════════════════════════

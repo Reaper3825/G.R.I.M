@@ -155,6 +155,14 @@ void LanguageModel::initInferenceState() {
         eb_cfg.temp_schedule = cfg.execution_block_temp_schedule;
         eb_cfg.entropy_weight = cfg.execution_block_entropy_weight;
         eb_cfg.diag_logging = cfg.execution_block_diag_logging;
+        eb_cfg.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
+        eb_cfg.exec_gate_warmup_steps = cfg.execution_block_gate_warmup_steps;
+        eb_cfg.causal_w1_transition = cfg.execution_block_causal_w1_transition;
+        eb_cfg.causal_w2_state_integrity = cfg.execution_block_causal_w2_state_integrity;
+        eb_cfg.causal_w3_write_consistency = cfg.execution_block_causal_w3_write_consistency;
+        eb_cfg.causal_w4_write_mismatch = cfg.execution_block_causal_w4_write_mismatch;
+        eb_cfg.causal_w5_write_entropy = cfg.execution_block_causal_w5_write_entropy;
+        eb_cfg.causal_w6_read_consistency = cfg.execution_block_causal_w6_read_consistency;
         eb_cfg.stream = primary_stream;
         eb_cfg.cublas_handle = training_state_.cublas_handle;
 
@@ -275,6 +283,59 @@ void LanguageModel::initInferenceState() {
     training_state_.kv_cache_capacity = max_seq_len_cache;
     std::cout << "  ✓ Allocated single-token buffers for incremental generation" << std::endl;
     std::cout << "    KV cache capacity: " << training_state_.kv_cache_capacity << " tokens" << std::endl;
+
+    // 5. Allocate per-layer KV cache (BF16, BSHD layout for FlashAttention direct use)
+    {
+        const int head_dim = cfg.d_model / cfg.num_heads;
+        const int n_layers = cfg.num_layers;
+        const size_t kv_elems_per_layer = static_cast<size_t>(num_kv_heads) * max_seq_len_cache * head_dim;
+        const size_t kv_bytes_per_layer = kv_elems_per_layer * sizeof(__nv_bfloat16);
+
+        training_state_.kv_cache_k.resize(n_layers, nullptr);
+        training_state_.kv_cache_v.resize(n_layers, nullptr);
+
+        for (int l = 0; l < n_layers; ++l) {
+            cudaError_t err_k = cudaMalloc(&training_state_.kv_cache_k[l], kv_bytes_per_layer);
+            if (err_k != cudaSuccess)
+                throw std::runtime_error("[InitInferenceState] KV cache K alloc failed layer " +
+                                         std::to_string(l) + ": " + cudaGetErrorString(err_k));
+            cudaError_t err_v = cudaMalloc(&training_state_.kv_cache_v[l], kv_bytes_per_layer);
+            if (err_v != cudaSuccess)
+                throw std::runtime_error("[InitInferenceState] KV cache V alloc failed layer " +
+                                         std::to_string(l) + ": " + cudaGetErrorString(err_v));
+            cudaMemsetAsync(training_state_.kv_cache_k[l], 0, kv_bytes_per_layer, primary_stream);
+            cudaMemsetAsync(training_state_.kv_cache_v[l], 0, kv_bytes_per_layer, primary_stream);
+        }
+
+        // Shared softmax LSE scratch for decode: [num_heads, kv_cache_capacity_rounded]
+        const int kv_cap_rounded = ((static_cast<int>(max_seq_len_cache) + 127) / 128) * 128;
+        const size_t lse_bytes = static_cast<size_t>(cfg.num_heads) * kv_cap_rounded * sizeof(float);
+        cudaError_t err_lse = cudaMalloc(&training_state_.kv_cache_softmax_lse, lse_bytes);
+        if (err_lse != cudaSuccess)
+            throw std::runtime_error("[InitInferenceState] KV cache LSE alloc failed: " +
+                                     std::string(cudaGetErrorString(err_lse)));
+        cudaMemsetAsync(training_state_.kv_cache_softmax_lse, 0, lse_bytes, primary_stream);
+
+        const size_t total_kv_bytes = n_layers * 2 * kv_bytes_per_layer + lse_bytes;
+        std::cout << "  ✓ Allocated per-layer KV cache: " << n_layers << " layers × "
+                  << (kv_bytes_per_layer / 1024.0 / 1024.0) << " MB each (K+V) = "
+                  << (total_kv_bytes / 1024.0 / 1024.0) << " MB total (BF16)" << std::endl;
+
+        // Decode scratch buffers (tiny, reused per layer per decode step)
+        const size_t q_bf16_bytes = static_cast<size_t>(cfg.num_heads) * head_dim * sizeof(__nv_bfloat16);
+        const size_t kv_bf16_bytes = static_cast<size_t>(num_kv_heads) * head_dim * sizeof(__nv_bfloat16);
+        cudaError_t err;
+        err = cudaMalloc(&training_state_.decode_q_bf16, q_bf16_bytes);
+        if (err != cudaSuccess) throw std::runtime_error("[InitInferenceState] decode_q_bf16 alloc failed");
+        err = cudaMalloc(&training_state_.decode_kv_bf16, kv_bf16_bytes);
+        if (err != cudaSuccess) throw std::runtime_error("[InitInferenceState] decode_kv_bf16 alloc failed");
+        err = cudaMalloc(&training_state_.decode_attn_out_bf16, q_bf16_bytes);
+        if (err != cudaSuccess) throw std::runtime_error("[InitInferenceState] decode_attn_out_bf16 alloc failed");
+        err = cudaMalloc(&training_state_.decode_attn_out_fp32, static_cast<size_t>(cfg.d_model) * sizeof(float));
+        if (err != cudaSuccess) throw std::runtime_error("[InitInferenceState] decode_attn_out_fp32 alloc failed");
+        std::cout << "  ✓ Allocated decode scratch buffers ("
+                  << ((q_bf16_bytes * 2 + kv_bf16_bytes + cfg.d_model * sizeof(float)) / 1024.0) << " KB)" << std::endl;
+    }
     
     // NOTE: encoder_workspace DELETED (Rule 20/26) — autograd forward creates its own Tensors.
 

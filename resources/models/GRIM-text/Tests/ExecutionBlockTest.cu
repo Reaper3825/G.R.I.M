@@ -133,6 +133,26 @@ bool testStateTransitionSnapshotFields(std::string& message) {
     EB_ASSERT_TRUE(!sout.state_after_valid.data,
                     "state_after_valid should start null");
 
+    // Causal loss tensors should start null
+    EB_ASSERT_TRUE(!sout.transition_error_hard.data,
+                    "transition_error_hard should start null");
+    EB_ASSERT_TRUE(!sout.transition_loss.data,
+                    "transition_loss should start null");
+    EB_ASSERT_TRUE(!sout.state_integrity_loss.data,
+                    "state_integrity_loss should start null");
+    EB_ASSERT_TRUE(!sout.write_consistency_loss.data,
+                    "write_consistency_loss should start null");
+    EB_ASSERT_TRUE(!sout.write_mismatch_loss.data,
+                    "write_mismatch_loss should start null");
+    EB_ASSERT_TRUE(!sout.write_entropy_penalty.data,
+                    "write_entropy_penalty should start null");
+    EB_ASSERT_TRUE(!sout.read_consistency_loss.data,
+                    "read_consistency_loss should start null");
+    EB_ASSERT_TRUE(!sout.exec_step_loss.data,
+                    "exec_step_loss should start null");
+    EB_ASSERT_TRUE(!sout.used_expected_target,
+                    "used_expected_target should default false");
+
     return true;
 }
 
@@ -160,6 +180,24 @@ bool testExecutionDependencyConfig(std::string& message) {
                     "Default value_match_epsilon");
     EB_ASSERT_NEAR(cfg.final_slot_consistency_weight, 0.0f, 1e-6f,
                     "Default final_slot_consistency_weight");
+
+    // Causal loss config defaults (Fixes 1-9)
+    EB_ASSERT_NEAR(cfg.execution_block_transition_hard_threshold, 0.0f, 1e-6f,
+                    "Default transition_hard_threshold (disabled)");
+    EB_ASSERT_EQ(cfg.execution_block_gate_warmup_steps, 0,
+                    "Default gate_warmup_steps");
+    EB_ASSERT_NEAR(cfg.execution_block_causal_w1_transition, 1.0f, 1e-6f,
+                    "Default causal_w1_transition");
+    EB_ASSERT_NEAR(cfg.execution_block_causal_w2_state_integrity, 0.5f, 1e-6f,
+                    "Default causal_w2_state_integrity");
+    EB_ASSERT_NEAR(cfg.execution_block_causal_w3_write_consistency, 0.5f, 1e-6f,
+                    "Default causal_w3_write_consistency");
+    EB_ASSERT_NEAR(cfg.execution_block_causal_w4_write_mismatch, 0.25f, 1e-6f,
+                    "Default causal_w4_write_mismatch");
+    EB_ASSERT_NEAR(cfg.execution_block_causal_w5_write_entropy, 0.0f, 1e-6f,
+                    "Default causal_w5_write_entropy");
+    EB_ASSERT_NEAR(cfg.execution_block_causal_w6_read_consistency, 0.0f, 1e-6f,
+                    "Default causal_w6_read_consistency");
 
     return true;
 }

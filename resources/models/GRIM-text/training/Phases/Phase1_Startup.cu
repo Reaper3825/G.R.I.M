@@ -974,6 +974,14 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.entropy_aux_weight = hp.execution_entropy_aux_weight;
     model_config.value_match_epsilon = hp.execution_value_match_epsilon;
     model_config.final_slot_consistency_weight = hp.execution_final_slot_consistency_weight;
+    model_config.execution_block_transition_hard_threshold = hp.execution_block_transition_hard_threshold;
+    model_config.execution_block_gate_warmup_steps = hp.execution_block_gate_warmup_steps;
+    model_config.execution_block_causal_w1_transition = hp.execution_block_causal_w1_transition;
+    model_config.execution_block_causal_w2_state_integrity = hp.execution_block_causal_w2_state_integrity;
+    model_config.execution_block_causal_w3_write_consistency = hp.execution_block_causal_w3_write_consistency;
+    model_config.execution_block_causal_w4_write_mismatch = hp.execution_block_causal_w4_write_mismatch;
+    model_config.execution_block_causal_w5_write_entropy = hp.execution_block_causal_w5_write_entropy;
+    model_config.execution_block_causal_w6_read_consistency = hp.execution_block_causal_w6_read_consistency;
 
     logger.log("ExecutionBlock: enabled=" + std::string(model_config.execution_block_enabled ? "true" : "false") +
               ", V=" + std::to_string(model_config.execution_block_num_slots) +

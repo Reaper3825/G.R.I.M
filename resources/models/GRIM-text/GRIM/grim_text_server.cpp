@@ -185,6 +185,14 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
             config.execution_block_temp_schedule = hyperparams.execution_block_temp_schedule;
             config.execution_block_entropy_weight = hyperparams.execution_block_entropy_weight;
             config.execution_block_diag_logging = hyperparams.execution_block_diag_logging;
+            config.execution_block_transition_hard_threshold = hyperparams.execution_block_transition_hard_threshold;
+            config.execution_block_gate_warmup_steps = hyperparams.execution_block_gate_warmup_steps;
+            config.execution_block_causal_w1_transition = hyperparams.execution_block_causal_w1_transition;
+            config.execution_block_causal_w2_state_integrity = hyperparams.execution_block_causal_w2_state_integrity;
+            config.execution_block_causal_w3_write_consistency = hyperparams.execution_block_causal_w3_write_consistency;
+            config.execution_block_causal_w4_write_mismatch = hyperparams.execution_block_causal_w4_write_mismatch;
+            config.execution_block_causal_w5_write_entropy = hyperparams.execution_block_causal_w5_write_entropy;
+            config.execution_block_causal_w6_read_consistency = hyperparams.execution_block_causal_w6_read_consistency;
             config.step_x_multiplier = hyperparams.execution_step_x_multiplier;
             config.step_y_multiplier = hyperparams.execution_step_y_multiplier;
             config.step_y_overrides_x = hyperparams.execution_step_y_overrides_x;
@@ -260,10 +268,8 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
         // CRITICAL: Set EOS/PAD token IDs from tokenizer (not default 0!)
         gen_config.eos_token_id = g_tokenizer->eosId();
         gen_config.pad_token_id = g_tokenizer->padId();
-        
         std::cout << "[Generate] EOS token ID: " << gen_config.eos_token_id 
                   << ", PAD token ID: " << gen_config.pad_token_id << std::endl;
-
         std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
         auto start_gen = std::chrono::high_resolution_clock::now();
         auto results = g_model->generate(tokens, numeric_values, atom_mask, &gen_config,
@@ -278,7 +284,6 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
 
         std::cout << "[Generate] Generated " << results[0].token_ids.size() << " tokens in " << gen_ms << "ms" << std::endl;
         std::cout << "[Generate] Tokens/sec: " << (results[0].token_ids.size() * 1000.0 / gen_ms) << std::endl;
-
         std::cout << "[Generate] Decoding..." << std::flush;
         auto start_decode = std::chrono::high_resolution_clock::now();
 

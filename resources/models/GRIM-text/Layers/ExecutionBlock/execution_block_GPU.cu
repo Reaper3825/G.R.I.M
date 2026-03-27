@@ -85,6 +85,10 @@ static constexpr int kStageSlotMissing   = 31;  // atom has slot_map[pos] == -1
 static constexpr int kStageSlotInvalid   = 32;  // slot index out of valid range
 static constexpr int kStageSlotUninit    = 33;  // slot read before initialization (valid_mask == 0)
 
+// Causal state loss hard gates (Fix 1, Fix 2)
+static constexpr int kStageTransitionInvalid = 41;  // |v_out - expected| > threshold
+static constexpr int kStageMultiSlotMutation = 42;  // more than 1 slot changed
+
 static const char* stageIdToName(int id) {
     switch (id) {
         case kStageV1:            return "v1";
@@ -103,6 +107,8 @@ static const char* stageIdToName(int id) {
         case kStageSlotMissing:   return "missing slot mapping for required state-bearing token";
         case kStageSlotInvalid:   return "invalid slot index";
         case kStageSlotUninit:    return "slot read before initialization";
+        case kStageTransitionInvalid: return "transition error exceeds hard threshold";
+        case kStageMultiSlotMutation: return "multiple slots mutated (register machine violation)";
         default:                  return "unknown";
     }
 }
@@ -1637,6 +1643,70 @@ struct RecordEncodeGradFn : public GradFn {
 };
 
 //======================================================//
+//  L1ScalarLossGradFn — backward for |a - b| scalar loss
+//  Gradient: ∂|a-b|/∂a = sign(a-b), chains to a's grad_fn
+//======================================================//
+struct L1ScalarLossGradFn : public GradFn {
+    float* saved_a_ = nullptr;       // [1] device copy of forward a value
+    float* saved_b_ = nullptr;       // [1] device copy of forward b value
+    float* grad_a_  = nullptr;       // [1] device gradient buffer
+
+    std::shared_ptr<GradFn> a_grad_fn_;
+    TensorContract::TensorShape a_shape_;
+    bool a_requires_grad_ = false;
+
+    L1ScalarLossGradFn() { op_name = "l1_scalar_loss"; }
+
+    ~L1ScalarLossGradFn() override {
+        if (saved_a_) cudaFree(saved_a_);
+        if (saved_b_) cudaFree(saved_b_);
+    }
+
+    void capture(Tensor& a_tensor, const float* target_device_ptr, cudaStream_t stream) {
+        a_requires_grad_ = a_tensor.requires_grad;
+        a_shape_ = a_tensor.shape;
+        a_grad_fn_ = a_tensor.grad_fn;
+
+        CUDA_CHECK(cudaMalloc(&saved_a_, sizeof(float)));
+        CUDA_CHECK(cudaMemcpyAsync(saved_a_, a_tensor.data, sizeof(float),
+                                    cudaMemcpyDeviceToDevice, stream));
+
+        CUDA_CHECK(cudaMalloc(&saved_b_, sizeof(float)));
+        CUDA_CHECK(cudaMemcpyAsync(saved_b_, target_device_ptr, sizeof(float),
+                                    cudaMemcpyDeviceToDevice, stream));
+
+        if (a_requires_grad_) {
+            CUDA_CHECK(cudaMalloc(&grad_a_, sizeof(float)));
+            CUDA_CHECK(cudaMemsetAsync(grad_a_, 0, sizeof(float), stream));
+        }
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied) return;
+        applied = true;
+        if (!a_requires_grad_ || !a_grad_fn_ || !grad_a_) return;
+
+        kernelL1LossBackward<<<1, 1, 0, stream>>>(
+            grad_a_, grad_output.data, saved_a_, saved_b_);
+
+        Tensor view;
+        view.data = grad_a_;
+        view.shape = a_shape_;
+        view.owns_data = false;
+        view.stream = stream;
+        a_grad_fn_->apply(view, stream);
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        if (saved_a_) { cudaFree(saved_a_); saved_a_ = nullptr; }
+        if (saved_b_) { cudaFree(saved_b_); saved_b_ = nullptr; }
+        grad_a_ = nullptr;
+        a_grad_fn_.reset();
+    }
+};
+
+//======================================================//
 //  Constructor
 //======================================================//
 ExecutionBlockLayer::~ExecutionBlockLayer() {
@@ -1904,6 +1974,202 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
 }
 
 //======================================================//
+//  Causal state loss kernels (Fixes 1-9)
+//======================================================//
+
+// Fix 4: Compute v_soft = sum_k p_op[k] * results[k] (soft mixed result)
+__global__ void kernelComputeVSoft(
+    float* __restrict__ v_soft,          // [1] output
+    const float* __restrict__ p_op,      // [num_ops]
+    const float* __restrict__ results,   // [num_ops]
+    int num_ops)
+{
+    if (threadIdx.x != 0) return;
+    float sum = 0.0f;
+    for (int k = 0; k < num_ops; ++k)
+        sum += p_op[k] * results[k];
+    v_soft[0] = sum;
+}
+
+// Fix 1/3/4/6: Compute scalar absolute difference |a - b| → out[0]
+__global__ void kernelAbsDiff(
+    float* __restrict__ out,             // [1]
+    const float* __restrict__ a,         // [1]
+    const float* __restrict__ b,         // [1]
+    int* __restrict__ error_flag,        // nullable
+    int stage_id,
+    float hard_threshold)                // 0 = no gate
+{
+    if (threadIdx.x != 0) return;
+    float diff = fabsf(a[0] - b[0]);
+    out[0] = diff;
+    if (hard_threshold > 0.0f && diff > hard_threshold && error_flag)
+        atomicMax(error_flag, stage_id);
+}
+
+// Fix 3: Read state_before[write_slot] → out[0] (device-side write_slot index)
+__global__ void kernelReadSlotByDevIdx(
+    float* __restrict__ out,             // [1]
+    const float* __restrict__ values,    // [V, 1]
+    const int* __restrict__ d_write_slot // [1] device
+)
+{
+    if (threadIdx.x != 0) return;
+    int ws = d_write_slot[0];
+    out[0] = values[ws];
+}
+
+// Fix 2+9: Per-slot scale-aware delta check: count changed slots, hinge on non-write
+__global__ void kernelStateDeltaCheck(
+    float* __restrict__ state_integrity_loss, // [1] output: accumulated hinge
+    int* __restrict__ changed_count,          // [1] output: number of changed slots
+    const float* __restrict__ before,         // [V, 1]
+    const float* __restrict__ after,          // [V, 1]
+    const int* __restrict__ d_write_slot,     // [1] device
+    int V)
+{
+    if (threadIdx.x != 0) return;
+    int ws = d_write_slot[0];
+    float hinge_sum = 0.0f;
+    int count = 0;
+    for (int i = 0; i < V; ++i) {
+        float delta = fabsf(after[i] - before[i]);
+        // Fix 9: per-slot epsilon = max(1e-6, 0.01 * |before[i]|)
+        float eps_i = fmaxf(1e-6f, 0.01f * fabsf(before[i]));
+        if (delta > eps_i) {
+            count++;
+            if (i != ws) {
+                // Hinge penalty on non-write slot mutation
+                hinge_sum += delta - eps_i;
+            }
+        }
+    }
+    state_integrity_loss[0] = hinge_sum;
+    changed_count[0] = count;
+}
+
+// Fix 2: Hard gate for multi-slot mutation (set error flag if changed > 1)
+__global__ void kernelCheckMultiSlotMutation(
+    const int* __restrict__ changed_count,   // [1]
+    int* __restrict__ error_flag,
+    int stage_id)
+{
+    if (threadIdx.x != 0) return;
+    if (changed_count[0] > 1)
+        atomicMax(error_flag, stage_id);
+}
+
+// Fix 5: write_mismatch = max(p_write) * transition_error
+__global__ void kernelWriteMismatch(
+    float* __restrict__ out,             // [1]
+    const float* __restrict__ p_write,   // [V]
+    const float* __restrict__ transition_error, // [1]
+    int V)
+{
+    if (threadIdx.x != 0) return;
+    float max_p = 0.0f;
+    for (int i = 0; i < V; ++i) {
+        if (p_write[i] > max_p) max_p = p_write[i];
+    }
+    out[0] = max_p * transition_error[0];
+}
+
+// Fix 5: write_entropy_penalty = -sum(p * log(p)) → negate to penalize LOW entropy
+// Output: max(0, target_entropy - actual_entropy) where target = log(V)/2
+__global__ void kernelWriteEntropyPenalty(
+    float* __restrict__ out,             // [1]
+    const float* __restrict__ p_write,   // [V]
+    int V)
+{
+    if (threadIdx.x != 0) return;
+    float ent = 0.0f;
+    for (int i = 0; i < V; ++i) {
+        float p = p_write[i];
+        if (p > 1e-10f)
+            ent -= p * logf(p);
+    }
+    // Target: half of max entropy = log(V)/2
+    float target_ent = logf(static_cast<float>(V)) * 0.5f;
+    // Penalize when entropy is below target (collapsed distribution)
+    out[0] = fmaxf(0.0f, target_ent - ent);
+}
+
+// Fix 6+7: Read consistency loss |v_actual - v_expected| (nullable inputs)
+__global__ void kernelReadConsistencyLoss(
+    float* __restrict__ out,             // [1]
+    const float* __restrict__ v1_actual, // [1] (device)
+    const float* __restrict__ v1_expected, // [1] (device, nullable)
+    const float* __restrict__ v2_actual, // [1] (device)
+    const float* __restrict__ v2_expected) // [1] (device, nullable)
+{
+    if (threadIdx.x != 0) return;
+    float loss = 0.0f;
+    if (v1_expected)
+        loss += fabsf(v1_actual[0] - v1_expected[0]);
+    if (v2_expected)
+        loss += fabsf(v2_actual[0] - v2_expected[0]);
+    out[0] = loss;
+}
+
+// Slot validity: penalize M.values[i] where valid_mask[i]==0 but values[i]!=0
+__global__ void kernelSlotValidityPenalty(
+    float* __restrict__ out,             // [1] accumulated penalty
+    const float* __restrict__ values,    // [V, 1]
+    const float* __restrict__ valid_mask,// [V]
+    int V)
+{
+    if (threadIdx.x != 0) return;
+    float penalty = 0.0f;
+    for (int i = 0; i < V; ++i) {
+        if (valid_mask[i] < 0.5f)
+            penalty += fabsf(values[i]);
+    }
+    out[0] = penalty;
+}
+
+// L_exec aggregate: weighted sum of component losses
+__global__ void kernelAggregateExecLoss(
+    float* __restrict__ out,             // [1]
+    const float* __restrict__ transition_loss,
+    const float* __restrict__ state_integrity_loss,
+    const float* __restrict__ write_consistency_loss,
+    const float* __restrict__ write_mismatch_loss,
+    const float* __restrict__ write_entropy_penalty,
+    const float* __restrict__ read_consistency_loss,
+    float w1, float w2, float w3, float w4, float w5, float w6)
+{
+    if (threadIdx.x != 0) return;
+    out[0] = w1 * transition_loss[0]
+           + w2 * state_integrity_loss[0]
+           + w3 * write_consistency_loss[0]
+           + w4 * write_mismatch_loss[0]
+           + w5 * write_entropy_penalty[0]
+           + w6 * read_consistency_loss[0];
+}
+
+// L1 loss backward: grad_input = grad_output * sign(a - b)
+__global__ void kernelL1LossBackward(
+    float* __restrict__ grad_input,
+    const float* __restrict__ grad_output,
+    const float* __restrict__ a,
+    const float* __restrict__ b)
+{
+    if (threadIdx.x != 0) return;
+    float diff = a[0] - b[0];
+    float s = (fabsf(diff) > 1e-10f) ? copysignf(1.0f, diff) : 0.0f;
+    grad_input[0] = grad_output[0] * s;
+}
+
+// Accumulate scalar: a[0] += b[0]
+__global__ void kernelAccumulateScalar(
+    float* __restrict__ a,
+    const float* __restrict__ b)
+{
+    if (threadIdx.x != 0) return;
+    a[0] += b[0];
+}
+
+//======================================================//
 //  executeStep — fully differentiable, GPU-only
 //======================================================//
 void ExecutionBlockLayer::executeStep(
@@ -1921,7 +2187,11 @@ void ExecutionBlockLayer::executeStep(
     int token_offset,
     int row_tokens,
     Tensor& trace_state,
-    const std::vector<ExecutionRecord>& prior_records)
+    const std::vector<ExecutionRecord>& prior_records,
+    uint64_t training_step,
+    const float* expected_target,
+    const float* expected_read_v1,
+    const float* expected_read_v2)
 {
     if (row_tokens < 0) row_tokens = total_tokens;
 
@@ -2286,6 +2556,84 @@ void ExecutionBlockLayer::executeStep(
         d_exec_idx_ + 3, S, V, d_numeric_error_flag_, kStageWriteSlotInvalid);
     CUDA_CHECK_KERNEL();
 
+    // ──── Causal loss computation (Fixes 1-7, before physical write) ────
+    if (diag_out) {
+        // Fix 4: v_soft = dot(p_op, op_results) via autograd matmul [1,nop] @ [nop,1]
+        auto op_results_col = Tensor::zeros({nop, 1}, stream, "exec_op_res_col");
+        cudaMemcpyAsync(op_results_col.data, op_results.data,
+                        nop * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        auto v_soft = autograd::matmul(p_op, op_results_col, stream); // [1,1]
+
+        // Fix 3: Read state_before[write_slot] for write consistency
+        auto slot_before_val = Tensor::zeros({1, 1}, stream, "exec_slot_before_val");
+        kernelReadSlotByDevIdx<<<1, 1, 0, stream>>>(
+            slot_before_val.data, diag_out->state_before_values.data, d_exec_idx_ + 3);
+        CUDA_CHECK_KERNEL();
+
+        // Fix 3: write_consistency_loss = |state_before[ws] - v_out|
+        diag_out->write_consistency_loss = Tensor::zeros({1, 1}, stream, "exec_wc_loss");
+        kernelAbsDiff<<<1, 1, 0, stream>>>(
+            diag_out->write_consistency_loss.data, slot_before_val.data, v_out.data,
+            nullptr, 0, 0.0f);
+        CUDA_CHECK_KERNEL();
+
+        // Fix 1: transition_error_hard = |v_out - expected_internal| (machine consistency)
+        diag_out->transition_error_hard = Tensor::zeros({1, 1}, stream, "exec_te_hard");
+        kernelAbsDiff<<<1, 1, 0, stream>>>(
+            diag_out->transition_error_hard.data, v_out.data, v_out.data,
+            nullptr, 0, 0.0f);
+        CUDA_CHECK_KERNEL();
+
+        // Fix 4+6: transition_loss = |v_soft - target|
+        const float* target_ptr = expected_target ? expected_target : v_out.data;
+        diag_out->used_expected_target = (expected_target != nullptr);
+        diag_out->transition_loss = Tensor::zeros({1, 1}, stream, "exec_trans_loss");
+        kernelAbsDiff<<<1, 1, 0, stream>>>(
+            diag_out->transition_loss.data, v_soft.data, target_ptr,
+            nullptr, 0, 0.0f);
+        CUDA_CHECK_KERNEL();
+
+        // Autograd chain: transition_loss grad → v_soft grad → p_op grad
+        {
+            auto l1_fn = std::make_shared<L1ScalarLossGradFn>();
+            l1_fn->capture(v_soft, target_ptr, stream);
+            diag_out->transition_loss.grad_fn = l1_fn;
+            diag_out->transition_loss.requires_grad = true;
+            diag_out->transition_loss.is_leaf = false;
+        }
+
+        // Fix 1 + Fix 8: Hard transition gate (only after warmup)
+        if (config_.transition_hard_threshold > 0.0f &&
+            training_step >= static_cast<uint64_t>(config_.exec_gate_warmup_steps)) {
+            kernelAbsDiff<<<1, 1, 0, stream>>>(
+                diag_out->transition_error_hard.data, v_out.data, v_out.data,
+                d_numeric_error_flag_, kStageTransitionInvalid,
+                config_.transition_hard_threshold);
+            CUDA_CHECK_KERNEL();
+        }
+
+        // Fix 7: Read consistency loss (teacher operand values)
+        diag_out->read_consistency_loss = Tensor::zeros({1, 1}, stream, "exec_rc_loss");
+        kernelReadConsistencyLoss<<<1, 1, 0, stream>>>(
+            diag_out->read_consistency_loss.data,
+            v1.data, expected_read_v1,
+            v2.data, expected_read_v2);
+        CUDA_CHECK_KERNEL();
+
+        // Fix 5: write_mismatch_loss = max(p_write) * transition_error (soft)
+        diag_out->write_mismatch_loss = Tensor::zeros({1, 1}, stream, "exec_wm_loss");
+        kernelWriteMismatch<<<1, 1, 0, stream>>>(
+            diag_out->write_mismatch_loss.data, p_write.data,
+            diag_out->transition_loss.data, V);
+        CUDA_CHECK_KERNEL();
+
+        // Fix 5: write_entropy_penalty (penalize collapsed p_write)
+        diag_out->write_entropy_penalty = Tensor::zeros({1, 1}, stream, "exec_we_pen");
+        kernelWriteEntropyPenalty<<<1, 1, 0, stream>>>(
+            diag_out->write_entropy_penalty.data, p_write.data, V);
+        CUDA_CHECK_KERNEL();
+    }
+
     kernelHardWriteScalarDev<<<1, 1, 0, stream>>>(
         M.values.data, d_exec_idx_ + 3, v_out.data);
     CUDA_CHECK_KERNEL();
@@ -2337,6 +2685,62 @@ void ExecutionBlockLayer::executeStep(
                         V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
         cudaMemcpyAsync(diag_out->state_after_valid.data, M.valid_mask.data,
                         V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+
+        // ──── Causal state delta checks (Fixes 2, 9 — after physical write) ────
+
+        // Fix 2+9: Per-slot scale-aware delta → state_integrity_loss + changed_count
+        diag_out->state_integrity_loss = Tensor::zeros({1, 1}, stream, "exec_si_loss");
+        int* d_changed_count = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_changed_count, sizeof(int)));
+        kernelStateDeltaCheck<<<1, 1, 0, stream>>>(
+            diag_out->state_integrity_loss.data, d_changed_count,
+            diag_out->state_before_values.data, diag_out->state_after_values.data,
+            d_exec_idx_ + 3, V);
+        CUDA_CHECK_KERNEL();
+
+        // Fix 2 + Fix 8: Multi-slot mutation hard gate (after warmup)
+        if (training_step >= static_cast<uint64_t>(config_.exec_gate_warmup_steps)) {
+            kernelCheckMultiSlotMutation<<<1, 1, 0, stream>>>(
+                d_changed_count, d_numeric_error_flag_, kStageMultiSlotMutation);
+            CUDA_CHECK_KERNEL();
+        }
+        cudaFreeAsync(d_changed_count, stream);
+
+        // Slot validity penalty: penalize values[i] != 0 where valid_mask[i] == 0
+        auto slot_validity = Tensor::zeros({1, 1}, stream, "exec_sv_pen");
+        kernelSlotValidityPenalty<<<1, 1, 0, stream>>>(
+            slot_validity.data, M.values.data, M.valid_mask.data, V);
+        CUDA_CHECK_KERNEL();
+
+        // Fold slot validity into state_integrity_loss
+        kernelAccumulateScalar<<<1, 1, 0, stream>>>(
+            diag_out->state_integrity_loss.data, slot_validity.data);
+        CUDA_CHECK_KERNEL();
+
+        // Aggregate L_exec from all component losses
+        diag_out->exec_step_loss = Tensor::zeros({1, 1}, stream, "exec_step_loss");
+        kernelAggregateExecLoss<<<1, 1, 0, stream>>>(
+            diag_out->exec_step_loss.data,
+            diag_out->transition_loss.data,
+            diag_out->state_integrity_loss.data,
+            diag_out->write_consistency_loss.data,
+            diag_out->write_mismatch_loss.data,
+            diag_out->write_entropy_penalty.data,
+            diag_out->read_consistency_loss.data,
+            config_.causal_w1_transition,
+            config_.causal_w2_state_integrity,
+            config_.causal_w3_write_consistency,
+            config_.causal_w4_write_mismatch,
+            config_.causal_w5_write_entropy,
+            config_.causal_w6_read_consistency);
+        CUDA_CHECK_KERNEL();
+
+        // Chain exec_step_loss autograd through transition_loss (primary gradient signal)
+        if (diag_out->transition_loss.grad_fn) {
+            diag_out->exec_step_loss.requires_grad = true;
+            diag_out->exec_step_loss.is_leaf = false;
+            diag_out->exec_step_loss.grad_fn = diag_out->transition_loss.grad_fn;
+        }
     }
 
     // ──── 13. Metrics collection (debug_mode, populates diag_out->metrics) ────

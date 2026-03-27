@@ -560,6 +560,104 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
     params.seqlenq_ngroups_swapped = false;
 }
 
+// KV-cache variant: Q has seqlen_q tokens, K/V cache has seqlen_k tokens.
+// No dropout (inference only). No knew/vnew (caller pre-appends to cache).
+void init_fwd_params_kvcache(Flash_fwd_params& params,
+                             const void* q, const void* k_cache, const void* v_cache,
+                             void* out, void* softmax_lse,
+                             const float* alibi_slopes,
+                             int batch, int seqlen_q, int seqlen_k,
+                             int n_heads, int n_kv_heads, int head_dim,
+                             bool is_bf16, bool is_causal) {
+    params = {};
+    params.is_bf16 = is_bf16;
+    params.q_ptr = const_cast<void*>(q);
+    params.k_ptr = const_cast<void*>(k_cache);
+    params.v_ptr = const_cast<void*>(v_cache);
+    params.o_ptr = out;
+    params.softmax_lse_ptr = softmax_lse;
+
+    params.q_head_stride = head_dim;
+    params.k_head_stride = head_dim;
+    params.v_head_stride = head_dim;
+    params.o_head_stride = head_dim;
+
+    params.q_row_stride = n_heads * head_dim;
+    params.k_row_stride = n_kv_heads * head_dim;
+    params.v_row_stride = n_kv_heads * head_dim;
+    params.o_row_stride = n_heads * head_dim;
+
+    // Q uses seqlen_q, K/V use seqlen_k for batch strides
+    params.q_batch_stride = seqlen_q * params.q_row_stride;
+    params.k_batch_stride = seqlen_k * params.k_row_stride;
+    params.v_batch_stride = seqlen_k * params.v_row_stride;
+    params.o_batch_stride = seqlen_q * params.o_row_stride;
+
+    params.b = batch;
+    params.h = n_heads;
+    params.h_k = n_kv_heads;
+    params.h_h_k_ratio = n_heads / n_kv_heads;
+    params.seqlen_q = seqlen_q;
+    params.seqlen_k = seqlen_k;
+    params.seqlen_knew = 0;
+    params.d = head_dim;
+    params.seqlen_q_rounded = round_multiple(seqlen_q, 128);
+    params.seqlen_k_rounded = round_multiple(seqlen_k, 128);
+    params.d_rounded = round_multiple(head_dim, head_dim <= 128 ? 32 : 64);
+    params.rotary_dim = 0;
+    params.total_q = batch * seqlen_q;
+
+    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    params.scale_softmax = scale;
+    params.scale_softmax_log2 = scale * kLog2e;
+    params.softcap = 0.0f;
+
+    params.p_ptr = nullptr;
+    params.oaccum_ptr = nullptr;
+    params.softmax_lseaccum_ptr = nullptr;
+    params.cu_seqlens_q = nullptr;
+    params.cu_seqlens_k = nullptr;
+    params.leftpad_k = nullptr;
+    params.seqused_k = nullptr;
+    params.blockmask = nullptr;
+
+    params.knew_ptr = nullptr;
+    params.vnew_ptr = nullptr;
+    params.knew_batch_stride = 0;
+    params.vnew_batch_stride = 0;
+    params.knew_row_stride = 0;
+    params.vnew_row_stride = 0;
+    params.knew_head_stride = 0;
+    params.vnew_head_stride = 0;
+
+    params.rotary_cos_ptr = nullptr;
+    params.rotary_sin_ptr = nullptr;
+    params.cache_batch_idx = nullptr;
+    params.block_table = nullptr;
+    params.block_table_batch_stride = 0;
+    params.page_block_size = 0;
+
+    // No dropout for inference
+    params.p_dropout = 1.0f;
+    params.p_dropout_in_uint8_t = 255;
+    params.rp_dropout = 1.0f;
+    params.scale_softmax_rp_dropout = scale;
+    params.philox_args = {0ull, 0ull};
+    params.rng_state = nullptr;
+
+    params.window_size_left = is_causal ? -1 : -1;
+    params.window_size_right = is_causal ? 0 : -1;
+    params.is_causal = is_causal;
+    params.is_seqlens_k_cumulative = false;
+    params.is_rotary_interleaved = false;
+
+    params.num_splits = 1;
+    params.alibi_slopes_ptr = const_cast<float*>(alibi_slopes);
+    params.alibi_slopes_batch_stride = 0;
+    params.unpadded_lse = false;
+    params.seqlenq_ngroups_swapped = false;
+}
+
 void init_bwd_params_contiguous(Flash_bwd_params& params,
                                 const void* q, const void* k, const void* v,
                                 const void* out, const void* dout,
@@ -1124,6 +1222,113 @@ extern "C" void flash_attn_fwd_ex(
     }
 
     } // end if constexpr ENABLE_FA_EQUATION_DIAGNOSTICS (post-kernel)
+}
+
+// ============================================================================
+// KV-cache forward: inference-only, supports seqlen_q != seqlen_k.
+// Caller is responsible for pre-appending new K/V to cache before calling.
+// No dropout, no RNG state, no backward.
+// ============================================================================
+extern "C" void flash_attn_fwd_kvcache(
+    const void* q,
+    const void* k_cache,
+    const void* v_cache,
+    void* out,
+    void* softmax_lse,
+    const float* alibi_slopes,
+    int batch,
+    int seqlen_q,
+    int seqlen_k,
+    int n_heads,
+    int n_kv_heads,
+    int head_dim,
+    bool causal,
+    bool is_bf16,
+    cudaStream_t stream)
+{
+    // --- Validation (Rule 20: crash on bad input) ---
+    if (!q) throw std::runtime_error("flash_attn_fwd_kvcache: q is NULL");
+    if (!k_cache) throw std::runtime_error("flash_attn_fwd_kvcache: k_cache is NULL");
+    if (!v_cache) throw std::runtime_error("flash_attn_fwd_kvcache: v_cache is NULL");
+    if (!out) throw std::runtime_error("flash_attn_fwd_kvcache: out is NULL");
+    if (!softmax_lse) throw std::runtime_error("flash_attn_fwd_kvcache: softmax_lse is NULL");
+    if (head_dim != 32 && head_dim != 64)
+        throw std::runtime_error("flash_attn_fwd_kvcache: head_dim must be 32 or 64, got " + std::to_string(head_dim));
+    if (n_heads % n_kv_heads != 0)
+        throw std::runtime_error("flash_attn_fwd_kvcache: n_heads (" + std::to_string(n_heads) +
+                                 ") must be divisible by n_kv_heads (" + std::to_string(n_kv_heads) + ")");
+    if (seqlen_q > seqlen_k)
+        throw std::runtime_error("flash_attn_fwd_kvcache: seqlen_q (" + std::to_string(seqlen_q) +
+                                 ") > seqlen_k (" + std::to_string(seqlen_k) + ")");
+    if (batch <= 0)
+        throw std::runtime_error("flash_attn_fwd_kvcache: batch must be > 0, got " + std::to_string(batch));
+    if (seqlen_q <= 0)
+        throw std::runtime_error("flash_attn_fwd_kvcache: seqlen_q must be > 0, got " + std::to_string(seqlen_q));
+    if (seqlen_k <= 0)
+        throw std::runtime_error("flash_attn_fwd_kvcache: seqlen_k must be > 0, got " + std::to_string(seqlen_k));
+
+    // --- Init params ---
+    Flash_fwd_params params;
+    grim_flash::detail::init_fwd_params_kvcache(
+        params, q, k_cache, v_cache, out, softmax_lse, alibi_slopes,
+        batch, seqlen_q, seqlen_k, n_heads, n_kv_heads, head_dim,
+        is_bf16, causal);
+
+    // --- Kernel dispatch (same template dispatch as flash_attn_fwd_ex) ---
+#if defined(GRIM_FLASHATTN_HDIM64_ONLY)
+    grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+#else
+    if (head_dim == 32) {
+#if defined(GRIM_FLASHATTN_CAUSAL_ONLY) && defined(GRIM_FLASHATTN_BF16_ONLY)
+        grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+#elif defined(GRIM_FLASHATTN_CAUSAL_ONLY)
+        if (is_bf16) grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+        else         grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, true>(params, stream);
+#elif defined(GRIM_FLASHATTN_BF16_ONLY)
+        if (causal) grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+        else        grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
+#else
+        if (causal) {
+            if (is_bf16) grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+            else         grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, true>(params, stream);
+        } else {
+            if (is_bf16) grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
+            else         grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, false>(params, stream);
+        }
+#endif
+    } else {
+#if defined(GRIM_FLASHATTN_CAUSAL_ONLY) && defined(GRIM_FLASHATTN_BF16_ONLY)
+        grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+#elif defined(GRIM_FLASHATTN_CAUSAL_ONLY)
+        if (is_bf16) grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        else         grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, true>(params, stream);
+#elif defined(GRIM_FLASHATTN_BF16_ONLY)
+        if (causal) grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        else        grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+#else
+        if (causal) {
+            if (is_bf16) grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+            else         grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, true>(params, stream);
+        } else {
+            if (is_bf16) grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+            else         grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, false>(params, stream);
+        }
+#endif
+    }
+#endif
+
+    // --- Error check (Rule 20: crash on failure) ---
+    cudaError_t err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error("flash_attn_fwd_kvcache: kernel failed: " +
+                                 std::string(cudaGetErrorString(err)) +
+                                 " (batch=" + std::to_string(batch) +
+                                 " seqlen_q=" + std::to_string(seqlen_q) +
+                                 " seqlen_k=" + std::to_string(seqlen_k) +
+                                 " n_heads=" + std::to_string(n_heads) +
+                                 " n_kv_heads=" + std::to_string(n_kv_heads) +
+                                 " head_dim=" + std::to_string(head_dim) + ")");
+    }
 }
 
 extern "C" void flash_attn_bwd_ex(

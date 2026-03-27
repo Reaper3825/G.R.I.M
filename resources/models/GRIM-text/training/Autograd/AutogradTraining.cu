@@ -681,6 +681,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     ts->trace_state_by_row[b].ensure_grad();
                 }
 
+                // Teacher target buffer for causal loss (Fix 6)
+                const bool have_exec_teacher = (ctx.payload && !ctx.payload->teacher_steps.empty());
+                const int B_teacher = have_exec_teacher
+                    ? static_cast<int>(ctx.payload->teacher_steps.size()) : 0;
+                float* d_expected_target_buf = nullptr;
+                CUDA_CHECK(cudaMalloc(&d_expected_target_buf, sizeof(float)));
+
                 for (int b = 0; b < B; ++b) {
                     auto& M_b = intermediates.exec_memories[b];
                     M_b.allocate(V, ae, cfg->d_model, dk, dt, ctx.stream);
@@ -699,6 +706,19 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
                     for (int step = 0; step < exec_K; ++step) {
                         ExecutionBlockStepOutput step_diag;
+
+                        // Upload teacher expected_value for this step (Fix 6)
+                        const float* d_expected_target = nullptr;
+                        if (have_exec_teacher && b < B_teacher) {
+                            const auto& teacher_row = ctx.payload->teacher_steps[b];
+                            if (step < static_cast<int>(teacher_row.size())) {
+                                float h_val = teacher_row[step].expected_value;
+                                cudaMemcpyAsync(d_expected_target_buf, &h_val,
+                                                sizeof(float), cudaMemcpyHostToDevice, ctx.stream);
+                                d_expected_target = d_expected_target_buf;
+                            }
+                        }
+
                         ctx.execution_block->executeStep(
                             layer_output, M_b,
                             ctx.scratch_block->atomEmbeddingsBuffer(),
@@ -709,11 +729,15 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                             &step_diag,
                             tok_off, sl,
                             ts->trace_state_by_row[b],
-                            ts->execution_trace_by_row[b]);
+                            ts->execution_trace_by_row[b],
+                            ctx.step,
+                            d_expected_target,
+                            nullptr, nullptr);
                         ts->execution_trace_by_row[b].push_back(step_diag.record);
                         intermediates.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
                     }
                 }
+                cudaFreeAsync(d_expected_target_buf, ctx.stream);
             }
 
             // ExecutionBlock: gated cross-attention read at every layer >= exec_layer (per-row)
@@ -1244,6 +1268,7 @@ LossResult computeAutogradLoss(
     // ═══════════════════════════════════════════════════════════════════════════
     float exec_structured_ce = 0.0f;
     float exec_entropy_loss = 0.0f;
+    float exec_causal_loss = 0.0f;
 
     if (cfg->execution_block_enabled && ctx.execution_block
         && !intermediates.exec_outputs_per_row.empty()) {
@@ -1349,6 +1374,40 @@ LossResult computeAutogradLoss(
             if (ctx.batch_size > 0)
                 exec_entropy_loss /= static_cast<float>(ctx.batch_size);
         }
+
+        // L_exec: merge causal state losses into autograd loss_tensor (Fixes 1-9)
+        float exec_causal_loss_sum = 0.0f;
+        int exec_causal_count = 0;
+        for (int b = 0; b < ctx.batch_size; ++b) {
+            const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
+            for (int k = 0; k < static_cast<int>(row_steps.size()); ++k) {
+                const auto& sout = row_steps[k];
+
+                // Add transition_loss to autograd graph (primary gradient signal)
+                if (sout.transition_loss.data && sout.transition_loss.grad_fn) {
+                    auto scaled = autograd::scale_scalar(
+                        sout.transition_loss,
+                        cfg->execution_block_causal_w1_transition,
+                        ctx.stream);
+                    intermediates.loss_tensor = autograd::add(
+                        intermediates.loss_tensor, scaled, ctx.stream);
+                }
+
+                // Aggregate exec_step_loss for monitoring (host D2H)
+                if (sout.exec_step_loss.data) {
+                    float h_val = 0.0f;
+                    cudaMemcpyAsync(&h_val, sout.exec_step_loss.data,
+                                    sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                    cudaStreamSynchronize(ctx.stream);
+                    if (std::isfinite(h_val)) {
+                        exec_causal_loss_sum += h_val;
+                        exec_causal_count++;
+                    }
+                }
+            }
+        }
+        exec_causal_loss = (exec_causal_count > 0)
+            ? exec_causal_loss_sum / static_cast<float>(exec_causal_count) : 0.0f;
     }
 
     // Optional Spec Step 9: final slot vs target MSE penalty
@@ -1381,7 +1440,8 @@ LossResult computeAutogradLoss(
     }
 
     result.numeric_loss = numeric_loss;
-    result.loss_value = text_loss + exec_structured_ce + exec_entropy_loss + final_consistency_loss;
+    result.loss_value = text_loss + exec_structured_ce + exec_entropy_loss
+                      + exec_causal_loss + final_consistency_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
@@ -1389,10 +1449,12 @@ LossResult computeAutogradLoss(
             + std::to_string(text_loss) + " numeric=" + std::to_string(numeric_loss)
             + " exec_ce=" + std::to_string(exec_structured_ce)
             + " exec_entropy=" + std::to_string(exec_entropy_loss)
+            + " exec_causal=" + std::to_string(exec_causal_loss)
             + " final_consistency=" + std::to_string(final_consistency_loss) + ")");
     }
     
     AG_INFO("Loss computed: text_ce=" << text_loss << " exec_ce=" << exec_structured_ce
+            << " exec_causal=" << exec_causal_loss
             << " exec_entropy_aux=" << exec_entropy_loss << " valid_tokens=" << valid_tokens);
     
     result.success = true;
