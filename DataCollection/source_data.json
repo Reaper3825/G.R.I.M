@@ -889,6 +889,16 @@
       "requires_auth": false,
       "source_type": "html_crawl",
       "url": ""
+    },
+    {
+      "crawl_depth": 2,
+      "enabled": true,
+      "fetch_limit": 100,
+      "name": "JORurnals",
+      "priority": 5,
+      "requires_auth": false,
+      "source_type": "html_crawl",
+      "url": "https://dl.acm.org/journals"
     }
   ],
   "description": "GRIM Web Data Collection Configuration - Intelligent Multi-Tier Strategy",

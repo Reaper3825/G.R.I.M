@@ -252,6 +252,9 @@ struct FeedbackLoopDiagnostic {
     
     // Statistics
     int valid_position_count = 0;
+
+    // Diagnostic context (for log interpretation)
+    bool lm_head_center_hidden_states = false;  // Buffer used: centered vs raw encoder output
     
     // NOTE: Cross-batch tracking state (prev_hidden_rms, prev_weight_rms, etc.)
     // is stored as file-level statics in TrainingDiagnostics.cu, NOT as struct members.

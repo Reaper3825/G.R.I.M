@@ -183,7 +183,18 @@
     "slist": "cpp"
   },
   "git.ignoredRepositories": [
-    "${workspaceFolder}/external"
+    "${workspaceFolder}/external",
+    "${workspaceFolder}/external/bgfx.cmake",
+    "${workspaceFolder}/external/bgfx.cmake/bgfx",
+    "${workspaceFolder}/external/bgfx.cmake/bimg",
+    "${workspaceFolder}/external/bgfx.cmake/bx",
+    "${workspaceFolder}/external/flash-attention",
+    "${workspaceFolder}/external/vcpkg",
+    "${workspaceFolder}/external/whisper.cpp",
+    "${workspaceFolder}/openal-soft",
+    "${workspaceFolder}/osint/sherlock",
+    "${workspaceFolder}/resources/models/llama.cpp",
+    "${workspaceFolder}/vcpkg"
   ],
   "files.exclude": {
     "**/external/**/.git": true,

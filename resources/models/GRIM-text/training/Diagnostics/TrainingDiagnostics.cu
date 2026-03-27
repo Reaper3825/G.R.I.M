@@ -576,6 +576,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
 ) {
     FeedbackLoopDiagnostic diag{};
     diag.tracked_token = tracked_token;
+    diag.lm_head_center_hidden_states = use_centering;
     
     if (tracked_token < 0 || tracked_token >= vocab_size) return diag;
     
@@ -1089,6 +1090,12 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
         anom << "COSINE_COLLAPSE(avg_cos=" << std::setprecision(3) << d.avg_hidden_cosine 
              << " vs expected=" << kExpectedRandomCosine << ")";
         anomalies.push_back(anom.str());
+    } else if (d.avg_hidden_cosine > 0.1f) {
+        std::ostringstream anom;
+        anom << "COSINE_ELEVATED(avg_cos=" << std::setprecision(3) << d.avg_hidden_cosine
+             << " ~" << std::setprecision(1) << (d.avg_hidden_cosine / kExpectedRandomCosine)
+             << "x expected); check lm_head_center_hidden_states and encoder centering";
+        anomalies.push_back(anom.str());
     }
     
     // Weight paradox (Issue #114: grad·W > 0 means optimizer wants ||W|| to decrease, but it grew)
@@ -1121,6 +1128,7 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     // ==========================================
     // Hidden State Correlation Analysis
     // ==========================================
+    oss << "  CENTERING: lm_head_center_hidden_states=" << (d.lm_head_center_hidden_states ? "true" : "false") << "\n";
     if (d.hidden_cosine_samples > 0) {
         oss << "  HIDDEN_CORRELATION: avg|cos(h_i,h_j)|=" << std::setprecision(4) << d.avg_hidden_cosine
             << " (sampled " << d.hidden_cosine_samples << " pairs, expected~" << kExpectedRandomCosine << ")\n";

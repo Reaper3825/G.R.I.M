@@ -2890,17 +2890,24 @@ BatchResult processBatch(
                 }
                 hidden_stats << "]";
                 
-                // Compute average pairwise cosine (measure of hidden state isotropy)
+                // Compute average pairwise cosine over the sampled positions.
+                // Log both signed cosine and average absolute cosine so this can be
+                // compared directly with HIDDEN_CORRELATION diagnostics.
                 float cos_sum = 0.0f;
+                float abs_cos_sum = 0.0f;
                 int cos_count = 0;
                 for (int i = 0; i < std::min(10, sample_positions); ++i) {
                     for (int j = i + 1; j < std::min(10, sample_positions); ++j) {
-                        cos_sum += compute_cosine(i, j);
+                        float c = compute_cosine(i, j);
+                        cos_sum += c;
+                        abs_cos_sum += std::abs(c);
                         cos_count++;
                     }
                 }
                 float avg_cos = (cos_count > 0) ? cos_sum / cos_count : 0.0f;
-                hidden_stats << " avg_cos=" << Internal::formatScalar(avg_cos, 8);
+                float avg_abs_cos = (cos_count > 0) ? abs_cos_sum / cos_count : 0.0f;
+                hidden_stats << " avg_cos=" << Internal::formatScalar(avg_cos, 8)
+                            << " avg|cos|=" << Internal::formatScalar(avg_abs_cos, 8);
                 ctx.logging.logger->log(hidden_stats.str());
             }
             
