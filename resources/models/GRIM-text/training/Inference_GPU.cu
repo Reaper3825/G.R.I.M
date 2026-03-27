@@ -22,6 +22,7 @@
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/TensorConversion/TensorConversion.hpp"
+#include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 namespace GRIM {
 
@@ -227,7 +228,14 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     training_state_.kv_cache_len = seq_len;
     
     // Prefill: populate KV cache from autograd intermediates
-    return executeInferenceForward_(seq_len, /*populate_kv_cache=*/true);
+    Vector logits = executeInferenceForward_(seq_len, /*populate_kv_cache=*/true);
+
+    // Prepare execution trace state for inference decode (no autograd needed)
+    if (!training_state_.trace_state_by_row.empty()) {
+        training_state_.trace_state_by_row[0].requires_grad = false;
+    }
+
+    return logits;
 }
 
 //======================================================//
@@ -332,6 +340,25 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     // ── Step 2: PBM validation ──
     if (!ts.pbm_spec.valid || !ts.pbm_spec.rope_inv_freq || !ts.pbm_spec.alibi_slopes) {
         throw std::runtime_error("executeDecodeForward_: PBM (RoPE/ALiBi) not initialized");
+    }
+
+    // ── ExecutionBlock setup ──
+    ExecutionBlockLayer* exec_block = getExecutionBlockLayer();
+    const bool exec_block_active = cfg.execution_block_enabled
+        && exec_block != nullptr
+        && ts.has_inference_exec_memory
+        && !ts.trace_state_by_row.empty();
+
+    int exec_layer = -1;
+    int exec_K = 0;
+    if (exec_block_active) {
+        exec_layer = cfg.execution_block_layer;
+        if (exec_layer < 0) exec_layer = num_layers - 2;
+        if (exec_layer < 0) exec_layer = 0;
+        if (exec_layer >= num_layers) exec_layer = num_layers - 1;
+        exec_K = cfg.execution_block_num_steps;
+        exec_block->setStream(stream);
+        exec_block->setCublasHandle(ts.cublas_handle);
     }
 
     // ── Step 3: Process through all encoder layers ──
@@ -457,6 +484,56 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         }
         hidden = ag::add(hidden, ffn_out, stream);
         // Skip center_columns for S=1
+
+        // ── ExecutionBlock: K execution steps at exec_layer ──
+        if (exec_block_active && layer_idx == exec_layer) {
+            const float T = cfg.execution_block_temp_start;
+            const int32_t* slot_ptr = ts.cached_token_to_slot_map.data
+                ? reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos
+                : nullptr;
+
+            ExecutionBlockStepOutput last_step_diag;
+            for (int step = 0; step < exec_K; ++step) {
+                ExecutionBlockStepOutput step_diag;
+                exec_block->executeStep(
+                    hidden, ts.inference_exec_memory,
+                    nullptr,   // atom_embeddings (no ScratchBlock during single-token decode)
+                    nullptr,   // atom_positions
+                    slot_ptr,  // device pointer to current token's slot_id
+                    0,         // num_atoms
+                    1,         // total_tokens (single token)
+                    step, T, stream,
+                    &step_diag,
+                    0, 1,      // token_offset, row_tokens
+                    ts.trace_state_by_row[0],
+                    ts.execution_trace_by_row[0],
+                    static_cast<uint64_t>(-1));  // bypass warmup gates
+                ts.execution_trace_by_row[0].push_back(step_diag.record);
+                if (step == exec_K - 1) {
+                    last_step_diag = std::move(step_diag);
+                }
+            }
+
+            // Update last write slot from final step's p_write distribution
+            const int V = cfg.execution_block_num_slots;
+            if (last_step_diag.p_write.data && V > 0) {
+                std::vector<float> h_pw(V);
+                cudaMemcpyAsync(h_pw.data(), last_step_diag.p_write.data,
+                                V * sizeof(float), cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream);
+                int best = 0;
+                for (int i = 1; i < V; ++i)
+                    if (h_pw[i] > h_pw[best]) best = i;
+                ts.inference_exec_last_write_slot = best;
+            }
+        }
+
+        // ── ExecutionBlock: cross-attention read at layers >= exec_layer ──
+        if (exec_block_active && layer_idx >= exec_layer) {
+            exec_block->crossAttentionRead(
+                hidden, ts.inference_exec_memory,
+                1, stream, 0, 1);
+        }
     }
 
     // ── Step 4: LM Head (RMSNorm → optional centering → W @ hidden^T) ──
@@ -492,6 +569,10 @@ void LanguageModel::resetKVCache() {
         training_state_.kv_cache_len = 0;
         training_state_.has_inference_exec_memory = false;
         training_state_.inference_exec_last_write_slot = -1;
+
+        // Clear execution trace state (persisted across decode steps)
+        training_state_.execution_trace_by_row.clear();
+        training_state_.trace_state_by_row.clear();
 
         // Zero BF16 KV cache buffers
         const auto& cfg = getConfig();
