@@ -21,6 +21,12 @@ namespace GRIM {
 static constexpr int kBlockSize = 256;
 static constexpr float kEps = 1e-7f;
 
+__global__ void kernelL1LossBackward(
+    float* __restrict__ grad_input,
+    const float* __restrict__ grad_output,
+    const float* __restrict__ a,
+    const float* __restrict__ b);
+
 //======================================================//
 //  Shape validation macro — hard-fail with context
 //======================================================//
@@ -1747,6 +1753,7 @@ ExecutionBlockLayer::ExecutionBlockLayer(const ExecutionBlockConfig& config,
     const int dt  = config_.d_type;
     const int hd  = config_.cross_attn_head_dim;
     const int nop = config_.num_ops;   // 4
+    const int V   = config_.num_slots;
     const int K   = config_.num_exec_steps;
     const int vid = config_.value_decode_input_dim;
     const int vhd = config_.value_decode_hidden_dim;
