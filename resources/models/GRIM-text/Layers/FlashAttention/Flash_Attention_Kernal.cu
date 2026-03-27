@@ -1268,7 +1268,7 @@ extern "C" void flash_attn_fwd_kvcache(
         throw std::runtime_error("flash_attn_fwd_kvcache: seqlen_k must be > 0, got " + std::to_string(seqlen_k));
 
     // --- Init params ---
-    Flash_fwd_params params;
+    grim_flash::Flash_fwd_params params;
     grim_flash::detail::init_fwd_params_kvcache(
         params, q, k_cache, v_cache, out, softmax_lse, alibi_slopes,
         batch, seqlen_q, seqlen_k, n_heads, n_kv_heads, head_dim,

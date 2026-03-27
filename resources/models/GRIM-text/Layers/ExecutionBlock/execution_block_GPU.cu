@@ -1748,7 +1748,6 @@ ExecutionBlockLayer::ExecutionBlockLayer(const ExecutionBlockConfig& config,
     CUDA_CHECK(cudaMalloc(&d_exec_record_f_, 3 * sizeof(float)));
 
     const int dm  = config_.d_model;
-    const int ae  = config_.atom_embedding_dim;
     const int dk  = config_.d_key;
     const int dt  = config_.d_type;
     const int hd  = config_.cross_attn_head_dim;
