@@ -182,6 +182,12 @@ struct SerializationExecutionBlockReadView {
 	DeviceReadView W_O_read;
 	DeviceReadView W_gate_read;
 	DeviceReadView tau;
+	DeviceReadView E_slot;
+	DeviceReadView E_op;
+	DeviceReadView W_scal;
+	DeviceReadView b_scal;
+	DeviceReadView W_trace;
+	DeviceReadView b_trace;
 	bool enabled = false;
 };
 
@@ -209,6 +215,12 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView W_O_read;
 	DeviceWriteView W_gate_read;
 	DeviceWriteView tau;
+	DeviceWriteView E_slot;
+	DeviceWriteView E_op;
+	DeviceWriteView W_scal;
+	DeviceWriteView b_scal;
+	DeviceWriteView W_trace;
+	DeviceWriteView b_trace;
 };
 
 } // namespace GRIM

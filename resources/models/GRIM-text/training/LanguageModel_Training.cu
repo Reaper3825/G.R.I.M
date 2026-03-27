@@ -265,6 +265,13 @@ void LanguageModel::buildParameterGroups() {
         registerTensor("exec_block_W_O_read", execution_block_layer_->W_O_read(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_gate_read", execution_block_layer_->W_gate_read(), ParamGroupType::EXECUTION_BLOCK);
         registerNonDecayTensor("exec_block_tau", execution_block_layer_->tau(), ParamGroupType::EXECUTION_BLOCK);
+        // Trace encoding weights
+        registerTensor("exec_block_E_slot", execution_block_layer_->E_slot(), ParamGroupType::EXECUTION_BLOCK);
+        registerTensor("exec_block_E_op", execution_block_layer_->E_op(), ParamGroupType::EXECUTION_BLOCK);
+        registerTensor("exec_block_W_scal", execution_block_layer_->W_scal(), ParamGroupType::EXECUTION_BLOCK);
+        registerNonDecayTensor("exec_block_b_scal", execution_block_layer_->b_scal(), ParamGroupType::EXECUTION_BLOCK);
+        registerTensor("exec_block_W_trace", execution_block_layer_->W_trace(), ParamGroupType::EXECUTION_BLOCK);
+        registerNonDecayTensor("exec_block_b_trace", execution_block_layer_->b_trace(), ParamGroupType::EXECUTION_BLOCK);
         fprintf(stderr, "[buildParameterGroups] DIAG-D4d: execution block v2 registered\n"); fflush(stderr);
     }
 

@@ -331,6 +331,12 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         eb_ok = eb_ok && ul(fb_eb->w_o_read_data(), eb.W_O_read, "EB W_O_read");
         eb_ok = eb_ok && ul(fb_eb->w_gate_read_data(), eb.W_gate_read, "EB W_gate_read");
         eb_ok = eb_ok && ul(fb_eb->tau_data(), eb.tau, "EB tau");
+        eb_ok = eb_ok && ul(fb_eb->e_slot_data(), eb.E_slot, "EB E_slot");
+        eb_ok = eb_ok && ul(fb_eb->e_op_data(), eb.E_op, "EB E_op");
+        eb_ok = eb_ok && ul(fb_eb->w_scal_data(), eb.W_scal, "EB W_scal");
+        eb_ok = eb_ok && ul(fb_eb->b_scal_data(), eb.b_scal, "EB b_scal");
+        eb_ok = eb_ok && ul(fb_eb->w_trace_data(), eb.W_trace, "EB W_trace");
+        eb_ok = eb_ok && ul(fb_eb->b_trace_data(), eb.b_trace, "EB b_trace");
         if (!eb_ok) return false;
         request.report.execution_block_loaded = true;
         Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v2 weights loaded");

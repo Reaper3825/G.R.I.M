@@ -97,6 +97,18 @@ struct TrainingState {
     float cached_numeric_pred[2] = {0.0f, 0.0f};  // Last-token numeric head output (host-side)
 
     //======================================================//
+    //  PERSISTENT EXECUTION TRACE (per-forward lifecycle)
+    //  Reset at the start of every forward that runs ExecutionBlock.
+    //  execution_trace_by_row: host-side record log per batch row.
+    //  trace_state_by_row:    device [1, d_model] running sum of
+    //                         step_emb per row — autograd Tensor,
+    //                         updated via autograd::add in executeStep.
+    //  Do NOT recompute trace_state from execution_trace_by_row.
+    //======================================================//
+    std::vector<std::vector<ExecutionRecord>> execution_trace_by_row;
+    std::vector<Tensor> trace_state_by_row;
+
+    //======================================================//
     //  PERSISTENT EXECUTION MEMORY (Step Z — generation)
     //  Survives across forwardStep calls during autoregressive decode.
     //  Reset only on resetKVCache (session boundary).

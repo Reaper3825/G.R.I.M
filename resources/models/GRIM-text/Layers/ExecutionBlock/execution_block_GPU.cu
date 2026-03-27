@@ -1485,6 +1485,158 @@ struct ReduceMeanGradFn : public GradFn {
 };
 
 //======================================================//
+//  Trace encoding kernels — encode ExecutionRecord(s) into d_model vectors
+//  Forward:  out[j] = E_slot[s1, j] + E_slot[s2, j] + E_op[op, j]
+//                     + Σ_k scalars[k] * W_scal[k, j] + b_scal[j]
+//  Used for both batch history encoding (trace_vec) and single-record
+//  encoding (step_emb for trace_state accumulation).
+//======================================================//
+
+__global__ void kernelEncodeRecords(
+    float* __restrict__ out,           // [N, d_model]
+    const float* __restrict__ E_slot,  // [num_slots, d_model]
+    const float* __restrict__ E_op,    // [num_ops, d_model]
+    const float* __restrict__ W_scal,  // [3, d_model]
+    const float* __restrict__ b_scal,  // [d_model]
+    const int* __restrict__ slot1_ids, // [N]
+    const int* __restrict__ slot2_ids, // [N]
+    const int* __restrict__ op_ids,    // [N]
+    const float* __restrict__ scalars, // [N, 3] = (v1, v2, v_out) per record
+    int N, int num_slots, int num_ops, int d_model
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = N * d_model;
+    if (idx >= total) return;
+    int i = idx / d_model;
+    int j = idx % d_model;
+
+    float val = b_scal[j];
+    int s1 = slot1_ids[i];
+    if (s1 >= 0 && s1 < num_slots) val += E_slot[s1 * d_model + j];
+    int s2 = slot2_ids[i];
+    if (s2 >= 0 && s2 < num_slots) val += E_slot[s2 * d_model + j];
+    int op = op_ids[i];
+    if (op >= 0 && op < num_ops)    val += E_op[op * d_model + j];
+    for (int k = 0; k < 3; ++k)
+        val += scalars[i * 3 + k] * W_scal[k * d_model + j];
+
+    out[idx] = val;
+}
+
+__global__ void kernelEncodeRecordsBackward(
+    const float* __restrict__ grad_out,      // [N, d_model]
+    float* __restrict__ E_slot_grad,         // [num_slots, d_model]
+    float* __restrict__ E_op_grad,           // [num_ops, d_model]
+    float* __restrict__ W_scal_grad,         // [3, d_model]
+    float* __restrict__ b_scal_grad,         // [d_model]
+    const int* __restrict__ slot1_ids,       // [N]
+    const int* __restrict__ slot2_ids,       // [N]
+    const int* __restrict__ op_ids,          // [N]
+    const float* __restrict__ scalars,       // [N, 3]
+    int N, int num_slots, int num_ops, int d_model
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = N * d_model;
+    if (idx >= total) return;
+    int i = idx / d_model;
+    int j = idx % d_model;
+    float g = grad_out[idx];
+
+    int s1 = slot1_ids[i];
+    if (s1 >= 0 && s1 < num_slots)
+        atomicAdd(&E_slot_grad[s1 * d_model + j], g);
+    int s2 = slot2_ids[i];
+    if (s2 >= 0 && s2 < num_slots)
+        atomicAdd(&E_slot_grad[s2 * d_model + j], g);
+    int op = op_ids[i];
+    if (op >= 0 && op < num_ops)
+        atomicAdd(&E_op_grad[op * d_model + j], g);
+    for (int k = 0; k < 3; ++k)
+        atomicAdd(&W_scal_grad[k * d_model + j], scalars[i * 3 + k] * g);
+    atomicAdd(&b_scal_grad[j], g);
+}
+
+//======================================================//
+//  RecordEncodeGradFn — backward for kernelEncodeRecords
+//  Scatters gradient to E_slot_, E_op_, W_scal_, b_scal_.
+//  Saves device copies of record fields for backward pass.
+//======================================================//
+struct RecordEncodeGradFn : public GradFn {
+    int N_ = 0;
+    int num_slots_ = 0;
+    int num_ops_ = 0;
+    int d_model_ = 0;
+
+    int* saved_slot1_ = nullptr;   // [N] device
+    int* saved_slot2_ = nullptr;   // [N] device
+    int* saved_ops_ = nullptr;     // [N] device
+    float* saved_scalars_ = nullptr; // [N, 3] device
+
+    float* E_slot_grad_ = nullptr;
+    float* E_op_grad_ = nullptr;
+    float* W_scal_grad_ = nullptr;
+    float* b_scal_grad_ = nullptr;
+
+    std::shared_ptr<GradFn> E_slot_grad_fn_;
+    std::shared_ptr<GradFn> E_op_grad_fn_;
+    std::shared_ptr<GradFn> W_scal_grad_fn_;
+    std::shared_ptr<GradFn> b_scal_grad_fn_;
+
+    RecordEncodeGradFn() { op_name = "record_encode"; }
+
+    ~RecordEncodeGradFn() override {
+        if (saved_slot1_)   cudaFree(saved_slot1_);
+        if (saved_slot2_)   cudaFree(saved_slot2_);
+        if (saved_ops_)     cudaFree(saved_ops_);
+        if (saved_scalars_) cudaFree(saved_scalars_);
+    }
+
+    void capture(int N, int num_slots, int num_ops, int d_model,
+                 const int* d_slot1, const int* d_slot2,
+                 const int* d_ops, const float* d_scalars,
+                 Tensor& E_slot, Tensor& E_op,
+                 Tensor& W_scal, Tensor& b_scal,
+                 cudaStream_t stream) {
+        N_ = N; num_slots_ = num_slots; num_ops_ = num_ops; d_model_ = d_model;
+
+        CUDA_CHECK(cudaMalloc(&saved_slot1_, N * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&saved_slot2_, N * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&saved_ops_, N * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&saved_scalars_, N * 3 * sizeof(float)));
+        CUDA_CHECK(cudaMemcpyAsync(saved_slot1_, d_slot1, N * sizeof(int), cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(saved_slot2_, d_slot2, N * sizeof(int), cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(saved_ops_, d_ops, N * sizeof(int), cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(saved_scalars_, d_scalars, N * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+
+        E_slot_grad_ = E_slot.grad_data();
+        E_op_grad_ = E_op.grad_data();
+        W_scal_grad_ = W_scal.grad_data();
+        b_scal_grad_ = b_scal.grad_data();
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied) return;
+        applied = true;
+        int total = N_ * d_model_;
+        int blocks = (total + kBlockSize - 1) / kBlockSize;
+        kernelEncodeRecordsBackward<<<blocks, kBlockSize, 0, stream>>>(
+            grad_output.data, E_slot_grad_, E_op_grad_,
+            W_scal_grad_, b_scal_grad_,
+            saved_slot1_, saved_slot2_, saved_ops_, saved_scalars_,
+            N_, num_slots_, num_ops_, d_model_);
+        CUDA_CHECK_KERNEL();
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        if (saved_slot1_)   { cudaFree(saved_slot1_);   saved_slot1_ = nullptr; }
+        if (saved_slot2_)   { cudaFree(saved_slot2_);   saved_slot2_ = nullptr; }
+        if (saved_ops_)     { cudaFree(saved_ops_);     saved_ops_ = nullptr; }
+        if (saved_scalars_) { cudaFree(saved_scalars_); saved_scalars_ = nullptr; }
+    }
+};
+
+//======================================================//
 //  Constructor
 //======================================================//
 ExecutionBlockLayer::~ExecutionBlockLayer() {
@@ -1605,6 +1757,14 @@ ExecutionBlockLayer::ExecutionBlockLayer(const ExecutionBlockConfig& config,
 
     // Temperature (init 1.0)
     tau_ = make_scalar(1.0f, "exec_block.tau");
+
+    // Trace encoding weights
+    E_slot_  = make_param(V, dm, seed + 16, "exec_block.E_slot");
+    E_op_    = make_param(nop, dm, seed + 17, "exec_block.E_op");
+    W_scal_  = make_param(3, dm, seed + 18, "exec_block.W_scal");
+    b_scal_  = make_bias(dm,                "exec_block.b_scal");
+    W_trace_ = make_param(K * dm, dm, seed + 19, "exec_block.W_trace");
+    b_trace_ = make_bias(dm,                "exec_block.b_trace");
 }
 
 //======================================================//
@@ -1639,7 +1799,13 @@ ExecutionBlockLayer::ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept
       W_V_read_(std::move(other.W_V_read_)),
       W_O_read_(std::move(other.W_O_read_)),
       W_gate_read_(std::move(other.W_gate_read_)),
-      tau_(std::move(other.tau_))
+      tau_(std::move(other.tau_)),
+      E_slot_(std::move(other.E_slot_)),
+      E_op_(std::move(other.E_op_)),
+      W_scal_(std::move(other.W_scal_)),
+      b_scal_(std::move(other.b_scal_)),
+      W_trace_(std::move(other.W_trace_)),
+      b_trace_(std::move(other.b_trace_))
 {
     other.d_numeric_error_flag_ = nullptr;
     other.d_div_clamp_count_ = nullptr;
@@ -1689,6 +1855,12 @@ ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other)
         W_O_read_      = std::move(other.W_O_read_);
         W_gate_read_   = std::move(other.W_gate_read_);
         tau_           = std::move(other.tau_);
+        E_slot_        = std::move(other.E_slot_);
+        E_op_          = std::move(other.E_op_);
+        W_scal_        = std::move(other.W_scal_);
+        b_scal_        = std::move(other.b_scal_);
+        W_trace_       = std::move(other.W_trace_);
+        b_trace_       = std::move(other.b_trace_);
     }
     return *this;
 }
@@ -1747,7 +1919,9 @@ void ExecutionBlockLayer::executeStep(
     cudaStream_t stream,
     ExecutionBlockStepOutput* diag_out,
     int token_offset,
-    int row_tokens)
+    int row_tokens,
+    Tensor& trace_state,
+    const std::vector<ExecutionRecord>& prior_records)
 {
     if (row_tokens < 0) row_tokens = total_tokens;
 
@@ -1874,8 +2048,89 @@ void ExecutionBlockLayer::executeStep(
     }
 
     // ──── 7. Op selection (autograd: concat + matmul + softmax) ────
-    auto pool12 = autograd::concat(h_arg1, h_arg2, stream);  // [1, 2*dm]
-    auto pool = autograd::concat(pool12, context, stream);     // [1, 3*dm]
+    // Build trace_vec from prior execution records [1, dm]
+    Tensor trace_vec;
+    const int K = config_.num_exec_steps;
+    const int N_prior = static_cast<int>(prior_records.size());
+    if (N_prior > 0) {
+        // Upload record fields to device
+        std::vector<int> h_slot1(N_prior), h_slot2(N_prior), h_ops(N_prior);
+        std::vector<float> h_scalars(N_prior * 3);
+        for (int i = 0; i < N_prior; ++i) {
+            h_slot1[i]  = prior_records[i].arg1_slot;
+            h_slot2[i]  = prior_records[i].arg2_slot;
+            h_ops[i]    = prior_records[i].op_id;
+            h_scalars[i * 3 + 0] = prior_records[i].value_before_1;
+            h_scalars[i * 3 + 1] = prior_records[i].value_before_2;
+            h_scalars[i * 3 + 2] = prior_records[i].value_after;
+        }
+        int *d_slot1, *d_slot2, *d_ops;
+        float *d_scalars;
+        CUDA_CHECK(cudaMalloc(&d_slot1, N_prior * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&d_slot2, N_prior * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&d_ops, N_prior * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&d_scalars, N_prior * 3 * sizeof(float)));
+        CUDA_CHECK(cudaMemcpyAsync(d_slot1, h_slot1.data(), N_prior * sizeof(int), cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_slot2, h_slot2.data(), N_prior * sizeof(int), cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_ops, h_ops.data(), N_prior * sizeof(int), cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_scalars, h_scalars.data(), N_prior * 3 * sizeof(float), cudaMemcpyHostToDevice, stream));
+
+        // Forward: [N_prior, dm]
+        auto encoded_records = Tensor::zeros({N_prior, dm}, stream, "exec_encoded_records");
+        encoded_records.requires_grad = true;
+        encoded_records.is_leaf = false;
+        int total_enc = N_prior * dm;
+        kernelEncodeRecords<<<(total_enc + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            encoded_records.data, E_slot_.data, E_op_.data, W_scal_.data, b_scal_.data,
+            d_slot1, d_slot2, d_ops, d_scalars,
+            N_prior, V, nop, dm);
+        CUDA_CHECK_KERNEL();
+
+        // Attach GradFn for backward
+        {
+            auto enc_fn = std::make_shared<RecordEncodeGradFn>();
+            enc_fn->capture(N_prior, V, nop, dm,
+                            d_slot1, d_slot2, d_ops, d_scalars,
+                            E_slot_, E_op_, W_scal_, b_scal_, stream);
+            encoded_records.grad_fn = enc_fn;
+        }
+
+        // Pad/truncate to [K, dm], then flatten to [1, K*dm]
+        auto padded = Tensor::zeros({K, dm}, stream, "exec_trace_padded");
+        int copy_rows = (N_prior < K) ? N_prior : K;
+        // Copy last copy_rows records (most recent history)
+        int src_offset = (N_prior > K) ? (N_prior - K) : 0;
+        CUDA_CHECK(cudaMemcpyAsync(padded.data,
+            encoded_records.data + static_cast<size_t>(src_offset) * dm,
+            copy_rows * dm * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+        padded.requires_grad = encoded_records.requires_grad;
+        padded.is_leaf = false;
+
+        auto flattened = Tensor::zeros({1, K * dm}, stream, "exec_trace_flat");
+        CUDA_CHECK(cudaMemcpyAsync(flattened.data, padded.data,
+            K * dm * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+        flattened.requires_grad = padded.requires_grad;
+        flattened.is_leaf = false;
+
+        // Project: [1, K*dm] @ [K*dm, dm] + bias = [1, dm]
+        trace_vec = autograd::matmul(flattened, W_trace_, stream);
+        trace_vec = autograd::add(trace_vec, b_trace_, stream);
+
+        // Free device staging buffers (data already captured by GradFn)
+        cudaFreeAsync(d_slot1, stream);
+        cudaFreeAsync(d_slot2, stream);
+        cudaFreeAsync(d_ops, stream);
+        cudaFreeAsync(d_scalars, stream);
+    } else {
+        trace_vec = Tensor::zeros({1, dm}, stream, "exec_trace_vec_zero");
+    }
+
+    // Fuse: context' = context + trace_vec + trace_state
+    auto context_prime = autograd::add(context, trace_vec, stream);
+    context_prime = autograd::add(context_prime, trace_state, stream);
+
+    auto pool12 = autograd::concat(h_arg1, h_arg2, stream);       // [1, 2*dm]
+    auto pool = autograd::concat(pool12, context_prime, stream);   // [1, 3*dm]
 
     auto op_logits = autograd::matmul(pool, W_op_select_, stream); // [1, nop]
     auto p_op = autograd::softmax(op_logits, temperature, stream);  // [1, nop]
@@ -1909,6 +2164,38 @@ void ExecutionBlockLayer::executeStep(
         d_exec_idx_, d_exec_idx_ + 1, d_exec_idx_ + 2,
         v1.data, v2.data, v_out.data, S);
     CUDA_CHECK_KERNEL();
+
+    // ──── 8b. Encode current step record → update trace_state ────
+    {
+        // Encode current record on device using d_exec_record_i_ (s1, s2, op)
+        // and d_exec_record_f_ (v1, v2, v_out) already assembled above.
+        auto cur_encoded = Tensor::zeros({1, dm}, stream, "exec_cur_step_enc");
+        cur_encoded.requires_grad = true;
+        cur_encoded.is_leaf = false;
+
+        // d_exec_record_i_ contains [arg1_slot, arg2_slot, op_id]
+        // d_exec_record_f_ reinterpret as 3 scalars
+        kernelEncodeRecords<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            cur_encoded.data, E_slot_.data, E_op_.data, W_scal_.data, b_scal_.data,
+            d_exec_record_i_, d_exec_record_i_ + 1,  // slot1, slot2
+            d_exec_record_i_ + 2,                     // op
+            d_exec_record_f_,                         // [v1, v2, v_out] as 3 scalars
+            1, V, nop, dm);
+        CUDA_CHECK_KERNEL();
+
+        // Attach GradFn
+        {
+            auto enc_fn = std::make_shared<RecordEncodeGradFn>();
+            enc_fn->capture(1, V, nop, dm,
+                            d_exec_record_i_, d_exec_record_i_ + 1,
+                            d_exec_record_i_ + 2, d_exec_record_f_,
+                            E_slot_, E_op_, W_scal_, b_scal_, stream);
+            cur_encoded.grad_fn = enc_fn;
+        }
+
+        // Accumulate into trace_state
+        trace_state = autograd::add(trace_state, cur_encoded, stream);
+    }
 
     // ──── 9. Linear value embedding (autograd: matmul + add) ────
     auto result_emb = autograd::matmul(v_out, W_value_to_emb_, stream);
@@ -1955,7 +2242,7 @@ void ExecutionBlockLayer::executeStep(
     }
 
     auto write_ctx_12 = autograd::concat(h_arg1, h_arg2, stream);
-    auto write_ctx_123 = autograd::concat(write_ctx_12, context, stream);
+    auto write_ctx_123 = autograd::concat(write_ctx_12, context_prime, stream);
     auto write_ctx = autograd::concat(write_ctx_123, result_emb, stream);
 
     auto q_write = autograd::matmul(write_ctx, W_write_query_, stream);

@@ -299,6 +299,12 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(request.sources.execution_block.W_O_read, execution_block_layer_->W_O_read());
         assignRead(request.sources.execution_block.W_gate_read, execution_block_layer_->W_gate_read());
         assignRead(request.sources.execution_block.tau, execution_block_layer_->tau());
+        assignRead(request.sources.execution_block.E_slot, execution_block_layer_->E_slot());
+        assignRead(request.sources.execution_block.E_op, execution_block_layer_->E_op());
+        assignRead(request.sources.execution_block.W_scal, execution_block_layer_->W_scal());
+        assignRead(request.sources.execution_block.b_scal, execution_block_layer_->b_scal());
+        assignRead(request.sources.execution_block.W_trace, execution_block_layer_->W_trace());
+        assignRead(request.sources.execution_block.b_trace, execution_block_layer_->b_trace());
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
     }
 
@@ -511,6 +517,12 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(request.execution_block.W_O_read, execution_block_layer_->W_O_read().data, static_cast<std::size_t>(execution_block_layer_->W_O_read().numel()));
         assignWrite(request.execution_block.W_gate_read, execution_block_layer_->W_gate_read().data, static_cast<std::size_t>(execution_block_layer_->W_gate_read().numel()));
         assignWrite(request.execution_block.tau, execution_block_layer_->tau().data, static_cast<std::size_t>(execution_block_layer_->tau().numel()));
+        assignWrite(request.execution_block.E_slot, execution_block_layer_->E_slot().data, static_cast<std::size_t>(execution_block_layer_->E_slot().numel()));
+        assignWrite(request.execution_block.E_op, execution_block_layer_->E_op().data, static_cast<std::size_t>(execution_block_layer_->E_op().numel()));
+        assignWrite(request.execution_block.W_scal, execution_block_layer_->W_scal().data, static_cast<std::size_t>(execution_block_layer_->W_scal().numel()));
+        assignWrite(request.execution_block.b_scal, execution_block_layer_->b_scal().data, static_cast<std::size_t>(execution_block_layer_->b_scal().numel()));
+        assignWrite(request.execution_block.W_trace, execution_block_layer_->W_trace().data, static_cast<std::size_t>(execution_block_layer_->W_trace().numel()));
+        assignWrite(request.execution_block.b_trace, execution_block_layer_->b_trace().data, static_cast<std::size_t>(execution_block_layer_->b_trace().numel()));
     }
 
     // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer

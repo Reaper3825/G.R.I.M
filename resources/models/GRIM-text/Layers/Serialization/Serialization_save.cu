@@ -332,7 +332,13 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             builder.CreateVector(dl(eb_view.W_V_read, "EB W_V_read")),
             builder.CreateVector(dl(eb_view.W_O_read, "EB W_O_read")),
             builder.CreateVector(dl(eb_view.W_gate_read, "EB W_gate_read")),
-            builder.CreateVector(dl(eb_view.tau, "EB tau")));
+            builder.CreateVector(dl(eb_view.tau, "EB tau")),
+            builder.CreateVector(dl(eb_view.E_slot, "EB E_slot")),
+            builder.CreateVector(dl(eb_view.E_op, "EB E_op")),
+            builder.CreateVector(dl(eb_view.W_scal, "EB W_scal")),
+            builder.CreateVector(dl(eb_view.b_scal, "EB b_scal")),
+            builder.CreateVector(dl(eb_view.W_trace, "EB W_trace")),
+            builder.CreateVector(dl(eb_view.b_trace, "EB b_trace")));
         Logging::EmitModuleInfo(kLogModule, "[save] ExecutionBlock v2 weights serialized");
     }
 

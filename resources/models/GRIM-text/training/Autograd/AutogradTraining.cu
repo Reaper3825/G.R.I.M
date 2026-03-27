@@ -671,6 +671,16 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     ? reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data)
                     : nullptr;
 
+                // Initialize persistent execution trace per row
+                ts->execution_trace_by_row.resize(B);
+                ts->trace_state_by_row.resize(B);
+                for (int b = 0; b < B; ++b) {
+                    ts->execution_trace_by_row[b].clear();
+                    ts->trace_state_by_row[b] = Tensor::zeros({1, cfg->d_model}, ctx.stream, "trace_state_row");
+                    ts->trace_state_by_row[b].requires_grad_();
+                    ts->trace_state_by_row[b].ensure_grad();
+                }
+
                 for (int b = 0; b < B; ++b) {
                     auto& M_b = intermediates.exec_memories[b];
                     M_b.allocate(V, ae, cfg->d_model, dk, dt, ctx.stream);
@@ -697,7 +707,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                             num_atoms, total_tokens,
                             step, T, ctx.stream,
                             &step_diag,
-                            tok_off, sl);
+                            tok_off, sl,
+                            ts->trace_state_by_row[b],
+                            ts->execution_trace_by_row[b]);
+                        ts->execution_trace_by_row[b].push_back(step_diag.record);
                         intermediates.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
                     }
                 }

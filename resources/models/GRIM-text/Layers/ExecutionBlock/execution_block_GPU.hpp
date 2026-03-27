@@ -162,7 +162,11 @@ public:
     // token_offset / row_tokens enable per-batch-row processing:
     //   context = reduce_mean(H[token_offset : token_offset + row_tokens])
     //   injection at H[token_offset + row_tokens - 1]
-    // When row_tokens == -1 (default), uses full total_tokens (legacy single-row).
+    //
+    // trace_state:     [1, d_model] running accumulator for this row (mutated:
+    //                  trace_state = autograd::add(trace_state, step_emb)).
+    // prior_records:   host-side ExecutionRecord history for this row (read-only).
+    //                  Used to build trace_vec = f(encoded history).
     //--------------------------------------------------//
     void executeStep(
         Tensor& H,                          // [total_tokens, d_model] mutated in place
@@ -175,9 +179,11 @@ public:
         int step,
         float temperature,
         cudaStream_t stream,
-        ExecutionBlockStepOutput* diag_out = nullptr,
-        int token_offset = 0,
-        int row_tokens = -1
+        ExecutionBlockStepOutput* diag_out,
+        int token_offset,
+        int row_tokens,
+        Tensor& trace_state,
+        const std::vector<ExecutionRecord>& prior_records
     );
 
     //--------------------------------------------------//
@@ -263,6 +269,12 @@ public:
     Tensor& W_O_read()        { return W_O_read_; }
     Tensor& W_gate_read()     { return W_gate_read_; }
     Tensor& tau()             { return tau_; }
+    Tensor& E_slot()          { return E_slot_; }
+    Tensor& E_op()            { return E_op_; }
+    Tensor& W_scal()          { return W_scal_; }
+    Tensor& b_scal()          { return b_scal_; }
+    Tensor& W_trace()         { return W_trace_; }
+    Tensor& b_trace()         { return b_trace_; }
 
     const Tensor& w_decode_1()    const { return w_decode_1_; }
     const Tensor& b_decode_1()    const { return b_decode_1_; }
@@ -287,6 +299,12 @@ public:
     const Tensor& W_O_read()      const { return W_O_read_; }
     const Tensor& W_gate_read()   const { return W_gate_read_; }
     const Tensor& tau()           const { return tau_; }
+    const Tensor& E_slot()        const { return E_slot_; }
+    const Tensor& E_op()          const { return E_op_; }
+    const Tensor& W_scal()        const { return W_scal_; }
+    const Tensor& b_scal()        const { return b_scal_; }
+    const Tensor& W_trace()       const { return W_trace_; }
+    const Tensor& b_trace()       const { return b_trace_; }
 
     void setStream(cudaStream_t s)       { config_.stream = s; }
     void setCublasHandle(cublasHandle_t h){ config_.cublas_handle = h; }
@@ -347,6 +365,14 @@ private:
     Tensor W_O_read_;       // [head_dim, d_model]
     Tensor W_gate_read_;    // [d_model, 1] per-token read gate
     Tensor tau_;            // [1] learnable temperature (init 1.0)
+
+    // Trace encoding weights (Pattern B: owned by layer)
+    Tensor E_slot_;          // [num_slots, d_model] slot embedding for record encoding
+    Tensor E_op_;            // [num_ops, d_model]   op embedding for record encoding
+    Tensor W_scal_;          // [3, d_model]          scalar projection for (v1, v2, v_out)
+    Tensor b_scal_;          // [1, d_model]          scalar projection bias
+    Tensor W_trace_;         // [K * d_model, d_model] flattened history → d_model
+    Tensor b_trace_;         // [1, d_model]           trace projection bias
 };
 
 }  // namespace GRIM
