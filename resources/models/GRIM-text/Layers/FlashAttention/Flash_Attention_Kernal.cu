@@ -311,11 +311,11 @@ inline size_t dsoftmax_sum_bytes(int batch, int seqlen, int n_heads) {
 }
 
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN,
-         bool Is_even_K, bool Is_softcap, bool Return_softmax>
+         bool Is_even_K, bool Return_softmax>
 __global__ void flash_fwd_kernel(const FLASH_PARAMS_NS::Flash_fwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     FLASH_UPSTREAM_NS::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
-                       Is_even_MN, Is_even_K, Is_softcap, Return_softmax>(params);
+                       Is_even_MN, Is_even_K, Return_softmax>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
@@ -386,7 +386,6 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
                                                 HasAlibi,
                                                 IsEvenMNConst && IsEvenKConst,
                                                 IsEvenKConst,
-                                                /*Is_softcap=*/false,
                                                 /*Return_softmax=*/false>;
                 if (smem_size >= 48 * 1024) {
                     check_cuda(cudaFuncSetAttribute(kernel,
