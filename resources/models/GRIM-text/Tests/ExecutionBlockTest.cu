@@ -89,8 +89,10 @@ bool testTeacherStepValidation(std::string& message) {
     payload.target_ids.resize(16, -1);
     payload.numeric_values.resize(16, 0.0f);
     payload.atom_mask.resize(16, 0);
+    payload.atom_flags.resize(16, 0);
     payload.text_features.resize(16 * BatchPayload::kTextFeatureDim, 0);
     payload.token_to_slot_map.resize(16, -1);
+    payload.fits_in_cache = true;
 
     // Valid teacher steps
     TeacherStep ts{0, 0, 1, 2, 5.0f};
