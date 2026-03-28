@@ -129,31 +129,6 @@
       "comm_type": "unknown",
       "confidence": 0.800000011920929,
       "context": "monitor",
-      "id": 17580443901393398427,
-      "importance": 1.0,
-      "intent": "inform",
-      "intent_name": "",
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3209 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3209 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "source": "grim.internal",
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-1"
-      ],
-      "timestamp": 1773771676,
-      "type": "event"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.800000011920929,
-      "context": "monitor",
       "id": 1164387843312393746,
       "importance": 1.0,
       "intent": "inform",
@@ -173,6 +148,31 @@
         "monitor-1"
       ],
       "timestamp": 1772914849,
+      "type": "event"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "monitor",
+      "id": 4604987747581525783,
+      "importance": 1.0,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OF Administrator Windows Pom X= = + Y\n\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_lLoad:\n\nn_audio_\nn_audio_\nn_audio_\nlayer\nn_text_ctx\nn_text_state\nn_text_head\nn_text_Layer\n\nn_audio.\n\nn_mels\nftype\nype,\n\n1500\n512\n8\n\n6\n4ug\n512\n8\n\n6\n\n80\n\n1\n\nio}\n\n2 (base)\n\nctx\nstate\nhead\n\n[2026-03-17 12:48: 12] THEBUG] [Voice /Br... (2696 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OF Administrator Windows Pom X= = + Y\n\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_lLoad:\n\nn_audio_\nn_audio_\nn_audio_\nlayer\nn_text_ctx\nn_text_state\nn_text_head\nn_text_Layer\n\nn_audio.\n\nn_mels\nftype\nype,\n\n1500\n512\n8\n\n6\n4ug\n512\n8\n\n6\n\n80\n\n1\n\nio}\n\n2 (base)\n\nctx\nstate\nhead\n\n[2026-03-17 12:48: 12] THEBUG] [Voice /Br... (2696 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "grim.internal",
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773766114,
       "type": "event"
     },
     {
@@ -204,14 +204,14 @@
       "comm_type": "unknown",
       "confidence": 0.800000011920929,
       "context": "monitor",
-      "id": 4604987747581525783,
+      "id": 17580443901393398427,
       "importance": 1.0,
       "intent": "inform",
       "intent_name": "",
       "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OF Administrator Windows Pom X= = + Y\n\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_lLoad:\n\nn_audio_\nn_audio_\nn_audio_\nlayer\nn_text_ctx\nn_text_state\nn_text_head\nn_text_Layer\n\nn_audio.\n\nn_mels\nftype\nype,\n\n1500\n512\n8\n\n6\n4ug\n512\n8\n\n6\n\n80\n\n1\n\nio}\n\n2 (base)\n\nctx\nstate\nhead\n\n[2026-03-17 12:48: 12] THEBUG] [Voice /Br... (2696 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3209 total chars)\n",
       "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OF Administrator Windows Pom X= = + Y\n\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_load:\nwhisper_model_lLoad:\n\nn_audio_\nn_audio_\nn_audio_\nlayer\nn_text_ctx\nn_text_state\nn_text_head\nn_text_Layer\n\nn_audio.\n\nn_mels\nftype\nype,\n\n1500\n512\n8\n\n6\n4ug\n512\n8\n\n6\n\n80\n\n1\n\nio}\n\n2 (base)\n\nctx\nstate\nhead\n\n[2026-03-17 12:48: 12] THEBUG] [Voice /Br... (2696 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X + oy - a x\n\ncollected: D:/G.R.I.M\\resources/models/GRIM-text/data/collected\n\nverified: D:/G.R.1I.M\\resources/models/GRIN-text/data/verified\n\nlogs: D:/G.R.I.M\\resources/models/GRIM-text/training/logs\n\ntraining_status: D:/G.R.I.M\\resources/models/GRIM-text/training\\training_status.fb\n\nmerge_checkpoints_exe: D:/G.R.I.M\\resources/models/GRIM-text/DataCoLllection/Release/merge_checkpoints.exe\ncollector_log: D:/G.R.I.M\\resources/models/GRIM-text/training/logs/collec... (3209 total chars)\n",
       "recency_weight": 1.0,
       "related_ids": [],
       "source": "grim.internal",
@@ -222,7 +222,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1773766114,
+      "timestamp": 1773771676,
       "type": "event"
     },
     {
@@ -1756,6 +1756,56 @@
         "monitor-2"
       ],
       "timestamp": 1773802913,
+      "type": "event"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "monitor",
+      "id": 15092646874337345410,
+      "importance": 1.0,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X\n\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n202... (3244 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X\n\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n2026-03-19 18:02:32\n202... (3244 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "grim.internal",
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773957764,
+      "type": "event"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "monitor",
+      "id": 5403179172373057550,
+      "importance": 1.0,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X\n\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n202... (3261 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: (© MF Administrator: Windows Pow X\n\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n2026-03-19 18:37:54\n202... (3261 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "grim.internal",
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
+      ],
+      "timestamp": 1773959885,
       "type": "event"
     }
   ]

@@ -602,6 +602,48 @@ target_include_directories(gradient_verification_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers
 )
 
+# ExecutionBlock test executable
+add_executable(execution_block_test
+    ../../Tests/ExecutionBlockTest.cu
+    ../../Layers/ExecutionBlock/execution_block_GPU.cu
+    ../../Shared/Batching/BatchPayload.cu
+    ../../Shared/TensorContract/TensorContract_GPU.cu
+    ../../Shared/TensorConversion/TensorConversion.cu
+)
+
+set_target_properties(execution_block_test PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
+     CUDA_RUNTIME_LIBRARY Shared
+)
+
+target_compile_options(execution_block_test PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+
+)
+
+target_compile_definitions(execution_block_test PRIVATE
+    USE_CUDA
+)
+
+target_link_libraries(execution_block_test PRIVATE
+    nlohmann_json::nlohmann_json
+    CUDA::cudart
+    CUDA::cublas
+    grim_flash_attention
+    grim_unigrambyte_tokenizer
+)
+
+target_include_directories(execution_block_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers
+)
+
 # ============================================================================
 # DIAGNOSTIC MINIMAL TRAINING LOOP
 # Barebones training loop for isolating plateau bug
@@ -662,4 +704,5 @@ message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suit
 message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
 message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
 message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
+message(STATUS "  - execution_block_test: ExecutionBlock batching, state transitions, and config tests")
 message(STATUS "  - grim_unigrambyte_tokenizer: Unigram LM + Byte fallback + AtomTable")
