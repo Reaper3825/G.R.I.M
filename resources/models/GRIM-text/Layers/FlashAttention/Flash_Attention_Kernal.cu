@@ -70,21 +70,28 @@ inline bool isEquationLoggingEnabled() {
 // Reconcile flash-attention namespace across platforms:
 //
 // Windows (MSVC/nvcc): upstream headers respect FLASH_NAMESPACE macro, so
-//   compute_attn etc. land in namespace grim_flash.
+//   kernel traits, compute_* functions, and their Params typedefs all resolve
+//   to grim_flash::. We define param structs directly in grim_flash.
 //
 // Linux (GCC/nvcc): upstream headers hardcode namespace flash, ignoring
-//   FLASH_NAMESPACE. compute_attn etc. live in ::flash.
-//
-// The param structs (Flash_fwd_params, Flash_bwd_params) are our own copies
-// of flash.h (ATen removed via stub). They live in grim_flash:: on both
-// platforms. The compute_* functions take a templated Params& so they accept
-// our structs regardless of namespace.
+//   FLASH_NAMESPACE. Kernel traits define Params = flash::Flash_fwd_params,
+//   so compute_attn's template substitution requires Flash_fwd_params to
+//   exist in namespace flash. We define structs there, then alias into
+//   grim_flash so all downstream code uses grim_flash:: uniformly.
 //
 // FLASH_UPSTREAM_NS (defined above) dispatches the compute_* calls to the
 // correct namespace per platform.
 // ============================================================================
 
-namespace grim_flash {
+// The namespace where param structs must be defined so that upstream kernel
+// traits (Params typedef) resolve correctly during template substitution.
+#ifdef _WIN32
+#define FLASH_PARAMS_NS grim_flash
+#else
+#define FLASH_PARAMS_NS flash
+#endif
+
+namespace FLASH_PARAMS_NS {
 // Copy of flash.h parameter structs (ATen removed via philox_unpack.cuh stub).
 struct Qkv_params {
     using index_t = int64_t;
@@ -217,7 +224,18 @@ struct Flash_bwd_params : public Flash_fwd_params {
     bool deterministic;
     index_t dq_accum_split_stride;
 };
+}  // namespace FLASH_PARAMS_NS
 
+// On Linux, alias flash:: param types into grim_flash:: so all downstream
+// code can use grim_flash::Flash_fwd_params uniformly.
+#ifndef _WIN32
+namespace grim_flash {
+    using Flash_fwd_params = ::flash::Flash_fwd_params;
+    using Flash_bwd_params = ::flash::Flash_bwd_params;
+}
+#endif
+
+namespace grim_flash {
 namespace detail {
 
 constexpr float kLog2e = 1.4426950408889634f;
