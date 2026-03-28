@@ -56,6 +56,17 @@ inline bool isEquationLoggingEnabled() {
 #include "flash_bwd_preprocess_kernel.h"
 #include "flash_bwd_kernel.h"
 
+// Reconcile flash-attention namespace across platforms:
+// Windows: upstream headers respect FLASH_NAMESPACE → functions land in grim_flash::
+// Linux:   upstream headers hardcode namespace flash → import into grim_flash::
+#ifndef _WIN32
+namespace grim_flash {
+    using ::flash::compute_attn;
+    using ::flash::compute_dq_dk_dv;
+    using ::flash::compute_dot_do_o;
+}
+#endif 
+
 namespace grim_flash {
 // Copy of flash.h parameter structs (ATen removed via philox_unpack.cuh stub).
 struct Qkv_params {
