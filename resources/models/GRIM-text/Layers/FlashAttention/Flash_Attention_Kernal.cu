@@ -70,16 +70,19 @@ inline bool isEquationLoggingEnabled() {
 // Reconcile flash-attention namespace across platforms:
 //
 // Windows (MSVC/nvcc): upstream headers respect FLASH_NAMESPACE macro, so
-//   all types (Flash_fwd_params, etc.) and device functions (compute_attn,
-//   etc.) land in namespace grim_flash. We provide our own param struct
-//   definitions here (copies of flash.h with ATen removed via stub).
+//   compute_attn etc. land in namespace grim_flash.
 //
 // Linux (GCC/nvcc): upstream headers hardcode namespace flash, ignoring
-//   FLASH_NAMESPACE. The types and compute_* functions live in ::flash.
-//   We alias them into grim_flash so all downstream code compiles unchanged.
+//   FLASH_NAMESPACE. compute_attn etc. live in ::flash.
+//
+// The param structs (Flash_fwd_params, Flash_bwd_params) are our own copies
+// of flash.h (ATen removed via stub). They live in grim_flash:: on both
+// platforms. The compute_* functions take a templated Params& so they accept
+// our structs regardless of namespace.
+//
+// FLASH_UPSTREAM_NS (defined above) dispatches the compute_* calls to the
+// correct namespace per platform.
 // ============================================================================
-
-#ifdef _WIN32
 
 namespace grim_flash {
 // Copy of flash.h parameter structs (ATen removed via philox_unpack.cuh stub).
@@ -214,15 +217,6 @@ struct Flash_bwd_params : public Flash_fwd_params {
     bool deterministic;
     index_t dq_accum_split_stride;
 };
-
-#else  // Linux: alias upstream flash:: types and functions into grim_flash::
-
-namespace grim_flash {
-    using Flash_fwd_params = ::flash::Flash_fwd_params;
-    using Flash_bwd_params = ::flash::Flash_bwd_params;
-}
-
-#endif  // _WIN32
 
 namespace detail {
 
