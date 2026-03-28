@@ -43,6 +43,16 @@ inline bool isEquationLoggingEnabled() {
 #include <ATen/cuda/detail/UnpackRaw.cuh>
 
 #define FLASH_NAMESPACE grim_flash
+
+// The namespace the upstream flash-attention headers ACTUALLY place kernel
+// functions in. On Windows (MSVC) they respect FLASH_NAMESPACE; on Linux
+// (GCC) they hardcode namespace flash.
+#ifdef _WIN32
+#define FLASH_UPSTREAM_NS grim_flash
+#else
+#define FLASH_UPSTREAM_NS flash
+#endif
+
 #include "namespace_config.h"
 #include "static_switch.h"
 #include "hardware_info.h"
@@ -56,16 +66,20 @@ inline bool isEquationLoggingEnabled() {
 #include "flash_bwd_preprocess_kernel.h"
 #include "flash_bwd_kernel.h"
 
+// ============================================================================
 // Reconcile flash-attention namespace across platforms:
-// Windows: upstream headers respect FLASH_NAMESPACE → functions land in grim_flash::
-// Linux:   upstream headers hardcode namespace flash → import into grim_flash::
-#ifndef _WIN32
-namespace grim_flash {
-    using ::flash::compute_attn;
-    using ::flash::compute_dq_dk_dv;
-    using ::flash::compute_dot_do_o;
-}
-#endif 
+//
+// Windows (MSVC/nvcc): upstream headers respect FLASH_NAMESPACE macro, so
+//   all types (Flash_fwd_params, etc.) and device functions (compute_attn,
+//   etc.) land in namespace grim_flash. We provide our own param struct
+//   definitions here (copies of flash.h with ATen removed via stub).
+//
+// Linux (GCC/nvcc): upstream headers hardcode namespace flash, ignoring
+//   FLASH_NAMESPACE. The types and compute_* functions live in ::flash.
+//   We alias them into grim_flash so all downstream code compiles unchanged.
+// ============================================================================
+
+#ifdef _WIN32
 
 namespace grim_flash {
 // Copy of flash.h parameter structs (ATen removed via philox_unpack.cuh stub).
@@ -201,6 +215,15 @@ struct Flash_bwd_params : public Flash_fwd_params {
     index_t dq_accum_split_stride;
 };
 
+#else  // Linux: alias upstream flash:: types and functions into grim_flash::
+
+namespace grim_flash {
+    using Flash_fwd_params = ::flash::Flash_fwd_params;
+    using Flash_bwd_params = ::flash::Flash_bwd_params;
+}
+
+#endif  // _WIN32
+
 namespace detail {
 
 constexpr float kLog2e = 1.4426950408889634f;
@@ -279,7 +302,7 @@ template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local,
          bool Is_even_K, bool Is_softcap, bool Return_softmax>
 __global__ void flash_fwd_kernel(const Flash_fwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    grim_flash::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
+    FLASH_UPSTREAM_NS::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
                        Is_even_MN, Is_even_K, Is_softcap, Return_softmax>(params);
 #else
     if (threadIdx.x == 0) {
@@ -291,7 +314,7 @@ __global__ void flash_fwd_kernel(const Flash_fwd_params params) {
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Is_even_M, bool Is_even_K>
 __global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    grim_flash::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K>(params);
+    FLASH_UPSTREAM_NS::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
@@ -320,7 +343,7 @@ __global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
 template<bool Clear_dQaccum, typename Kernel_traits>
 __global__ void flash_bwd_dot_do_o_kernel(const Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    grim_flash::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
+    FLASH_UPSTREAM_NS::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
