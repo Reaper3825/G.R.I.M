@@ -90,6 +90,7 @@ inline constexpr ConceptFormatPreset kConceptPresets[] = {
     { "definition",       "Definition",       "Term",       "Examples / Notes", "Summary", 2 },
     { "proof",            "Proof",            "Theorem",    "Proof Steps",      "QED",     3 },
     { "derivation",       "Derivation",       "Expression", "Derivation Steps", "Result",  2 },
+    { "conversation",     "Conversation",     "User",       "Turns",            "Response", 2 },
 };
 
 inline constexpr int kConceptPresetCount = sizeof(kConceptPresets) / sizeof(kConceptPresets[0]);

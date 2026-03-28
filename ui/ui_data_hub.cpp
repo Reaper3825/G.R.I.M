@@ -3687,9 +3687,10 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     btnCBGenerate_->drawOverlay(renderer, position);
     cx += btnW + gap;
 
-    // Type filter dropdown pinned to the right end of the toolbar
-    float filterDdW = 150.0f;
-    float filterDdX = x + fullW - filterDdW;
+    // Type filter dropdown pinned to the right end of the toolbar.
+    // Must be > 160px wide: UIDropdown hit area is position.x+150 to position.x+size.x-10
+    float filterDdW = 200.0f;
+    float filterDdX = x + fullW - filterDdW - 8.0f;
 
     float searchW = filterDdX - cx - gap - 2.0f;
     if (searchW < 100.0f) searchW = 100.0f;
