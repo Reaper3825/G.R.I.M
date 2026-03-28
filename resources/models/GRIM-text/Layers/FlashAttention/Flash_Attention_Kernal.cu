@@ -312,7 +312,7 @@ inline size_t dsoftmax_sum_bytes(int batch, int seqlen, int n_heads) {
 
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN,
          bool Is_even_K, bool Is_softcap, bool Return_softmax>
-__global__ void flash_fwd_kernel(const Flash_fwd_params params) {
+__global__ void flash_fwd_kernel(const FLASH_PARAMS_NS::Flash_fwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     FLASH_UPSTREAM_NS::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
                        Is_even_MN, Is_even_K, Is_softcap, Return_softmax>(params);
@@ -324,7 +324,7 @@ __global__ void flash_fwd_kernel(const Flash_fwd_params params) {
 }
 
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Is_even_M, bool Is_even_K>
-__global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
+__global__ void flash_bwd_dq_dk_dv_loop_kernel(const FLASH_PARAMS_NS::Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     FLASH_UPSTREAM_NS::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K>(params);
 #else
@@ -353,7 +353,7 @@ __global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
 //   (first 2 layers' starting m_blocks got valid data from inline dot_do_o)
 // ============================================================================
 template<bool Clear_dQaccum, typename Kernel_traits>
-__global__ void flash_bwd_dot_do_o_kernel(const Flash_bwd_params params) {
+__global__ void flash_bwd_dot_do_o_kernel(const FLASH_PARAMS_NS::Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     FLASH_UPSTREAM_NS::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
 #else
