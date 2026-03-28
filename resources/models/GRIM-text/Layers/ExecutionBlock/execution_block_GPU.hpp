@@ -93,6 +93,16 @@ struct ExecutionBlockConfig {
     float causal_w5_write_entropy    = 0.0f;  // Fix 5: write_entropy_penalty weight
     float causal_w6_read_consistency = 0.0f;  // Fix 7: read_consistency_loss weight (requires teacher)
 
+    // Dual transition supervision (Fix 1)
+    float lambda_soft_transition     = 1.0f;
+    float lambda_hard_transition     = 1.0f;
+
+    // Write overwrite penalty (Fix 4)
+    float overwrite_penalty_weight   = 1.0f;
+
+    // Argument duplication penalty (Fix 5)
+    float arg_duplicate_penalty_weight = 1.0f;
+
     cudaStream_t stream      = nullptr;
     cublasHandle_t cublas_handle = nullptr;
 };
@@ -149,6 +159,8 @@ struct ExecutionBlockStepOutput {
     Tensor write_mismatch_loss;      // max(p_write) * transition_error (Fix 5)
     Tensor write_entropy_penalty;    // low entropy(p_write) penalty (Fix 5)
     Tensor read_consistency_loss;    // |v_actual - v_expected_from_teacher| (Fix 7)
+    Tensor overwrite_penalty;        // 1.0 if writing to already-valid slot (Fix 4)
+    Tensor duplicate_penalty;        // 1.0 if arg1_slot == arg2_slot (Fix 5)
     Tensor exec_step_loss;           // L_exec aggregate for this step
     bool   used_expected_target = false;  // whether teacher target was used for transition_loss
 };

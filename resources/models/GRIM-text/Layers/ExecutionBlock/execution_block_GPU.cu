@@ -1786,18 +1786,18 @@ ExecutionBlockLayer::ExecutionBlockLayer(const ExecutionBlockConfig& config,
     b_decode_1_ = make_bias(vhd,                 "exec_block.b_decode_1");
     w_decode_2_ = make_param(vhd, 1, seed + 1,   "exec_block.w_decode_2");
 
-    // Arg selection: [1, d_model] for matmul as [1,dm] @ [dm,C]^T = [1,C]
-    w_arg1_select_ = make_param(1, dm, seed + 2, "exec_block.w_arg1_select");
-    w_arg2_select_ = make_param(1, dm, seed + 3, "exec_block.w_arg2_select");
+    // Arg selection: decision_input [1, 3*dm] → query [1, dm] via w_arg_select [3*dm, dm]
+    w_arg1_select_ = make_param(3 * dm, dm, seed + 2, "exec_block.w_arg1_select");
+    w_arg2_select_ = make_param(3 * dm, dm, seed + 3, "exec_block.w_arg2_select");
 
-    // Context-aware op selection (4 ops)
-    W_op_select_ = make_param(3 * dm, nop, seed + 4, "exec_block.W_op_select");
+    // Context-aware op selection: pool [1, 5*dm] → logits [1, nop]
+    W_op_select_ = make_param(5 * dm, nop, seed + 4, "exec_block.W_op_select");
 
     // Key projection from result embedding
     W_key_proj_ = make_param(dm, dk, seed + 5, "exec_block.W_key_proj");
 
-    // Write-head (write_context = 4*d_model -> d_key query)
-    W_write_query_ = make_param(4 * dm, dk, seed + 7, "exec_block.W_write_query");
+    // Write-head (write_context = 6*d_model -> d_key query)
+    W_write_query_ = make_param(6 * dm, dk, seed + 7, "exec_block.W_write_query");
     W_write_key_   = make_param(dk, dk, seed + 8, "exec_block.W_write_key");
 
     // Learned scalars (init 1.0)
@@ -1815,11 +1815,14 @@ ExecutionBlockLayer::ExecutionBlockLayer(const ExecutionBlockConfig& config,
     W_value_to_emb_ = make_param(1, dm, seed + 15, "exec_block.W_value_to_emb");
     b_value_to_emb_ = make_bias(dm,                "exec_block.b_value_to_emb");
 
-    // Injection gate: zeros so gate starts at sigmoid(0) = 0.5
+    // Injection gate: init to -2.0 so gate starts at sigmoid(-2) ≈ 0.12
     w_inject_gate_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(dm, 1),
                                    true, init_stream, "exec_block.w_inject_gate");
     w_inject_gate_.requires_grad_();
     w_inject_gate_.ensure_grad();
+    kernelFillConstant<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, init_stream>>>(
+        w_inject_gate_.data, -2.0f, dm);
+    CUDA_CHECK_KERNEL();
 
     // Cross-attention read
     W_Q_read_    = make_param(dm, hd, seed + 11, "exec_block.W_Q_read");
@@ -1995,6 +1998,41 @@ __global__ void kernelComputeVSoft(
     for (int k = 0; k < num_ops; ++k)
         sum += p_op[k] * results[k];
     v_soft[0] = sum;
+}
+
+// Fix 2: Compute STE diff = one_hot(argmax) - soft; added to soft gives STE gradient path
+__global__ void kernelComputeSTEDiff(
+    float* __restrict__ out,             // [V] output: hard - soft
+    const float* __restrict__ soft,      // [V] softmax probs
+    const int* __restrict__ d_argmax,    // [1] device ptr to argmax index
+    int V)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= V) return;
+    float hard = (i == d_argmax[0]) ? 1.0f : 0.0f;
+    out[i] = hard - soft[i];
+}
+
+// Fix 4: Overwrite penalty = 1.0 if writing to already-valid slot, 0.0 otherwise
+__global__ void kernelOverwritePenalty(
+    float* __restrict__ out,             // [1] output
+    const float* __restrict__ valid_mask, // [V]
+    const int* __restrict__ d_write_slot, // [1] device
+    int S)                               // scratch offset
+{
+    if (threadIdx.x != 0) return;
+    int ws = d_write_slot[0];
+    out[0] = (valid_mask[ws] > 0.5f) ? 1.0f : 0.0f;
+}
+
+// Fix 5: Arg duplicate penalty = 1.0 if both args selected same slot
+__global__ void kernelArgDuplicatePenalty(
+    float* __restrict__ out,             // [1] output
+    const int* __restrict__ d_arg1_idx,  // [1] device
+    const int* __restrict__ d_arg2_idx)  // [1] device
+{
+    if (threadIdx.x != 0) return;
+    out[0] = (d_arg1_idx[0] == d_arg2_idx[0]) ? 1.0f : 0.0f;
 }
 
 // Fix 1/3/4/6: Compute scalar absolute difference |a - b| → out[0]

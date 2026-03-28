@@ -374,6 +374,10 @@ struct LanguageModelConfig {
     float execution_block_causal_w4_write_mismatch = 0.25f;
     float execution_block_causal_w5_write_entropy = 0.0f;
     float execution_block_causal_w6_read_consistency = 0.0f;
+    float execution_block_lambda_soft_transition = 1.0f;
+    float execution_block_lambda_hard_transition = 1.0f;
+    float execution_block_overwrite_penalty_weight = 1.0f;
+    float execution_block_arg_duplicate_penalty_weight = 1.0f;
 
     // Execution-first structured CE loss config (Step X / Y multipliers)
     float step_x_multiplier = 2.0f;

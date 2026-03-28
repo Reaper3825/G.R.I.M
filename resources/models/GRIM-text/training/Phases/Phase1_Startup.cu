@@ -982,6 +982,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.execution_block_causal_w4_write_mismatch = hp.execution_block_causal_w4_write_mismatch;
     model_config.execution_block_causal_w5_write_entropy = hp.execution_block_causal_w5_write_entropy;
     model_config.execution_block_causal_w6_read_consistency = hp.execution_block_causal_w6_read_consistency;
+    model_config.execution_block_lambda_soft_transition = hp.execution_block_lambda_soft_transition;
+    model_config.execution_block_lambda_hard_transition = hp.execution_block_lambda_hard_transition;
+    model_config.execution_block_overwrite_penalty_weight = hp.execution_block_overwrite_penalty_weight;
+    model_config.execution_block_arg_duplicate_penalty_weight = hp.execution_block_arg_duplicate_penalty_weight;
 
     logger.log("ExecutionBlock: enabled=" + std::string(model_config.execution_block_enabled ? "true" : "false") +
               ", V=" + std::to_string(model_config.execution_block_num_slots) +
