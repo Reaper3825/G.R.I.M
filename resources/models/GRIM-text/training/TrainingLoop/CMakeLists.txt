@@ -606,7 +606,9 @@ target_include_directories(gradient_verification_test PRIVATE
 add_executable(execution_block_test
     ../../Tests/ExecutionBlockTest.cu
     ../../Layers/ExecutionBlock/execution_block_GPU.cu
+    ../../Layers/Attention/QKV_Projector.cu
     ../../Shared/Batching/BatchPayload.cu
+    ../../Shared/PBM/PositionalBiasMethod.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu
     ../../Shared/TensorConversion/TensorConversion.cu
 )

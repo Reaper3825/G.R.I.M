@@ -248,6 +248,10 @@ bool testOpStringMapping(std::string& message) {
 //  Entry point
 //======================================================//
 
+int main() {
+    return GRIM::Test::runExecutionBlockTests();
+}
+
 int GRIM::Test::runExecutionBlockTests() {
     ExecutionBlockTestSuite suite;
 
