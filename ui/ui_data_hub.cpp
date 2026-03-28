@@ -603,6 +603,20 @@ UIDataHubPanel::UIDataHubPanel()
         });
     cbListTypeDropdown_->setMaxVisibleItems(6);
 
+    {
+        std::vector<std::string> typeFilterItems;
+        typeFilterItems.push_back("All Types");
+        for (int i = 0; i < GRIM::kConceptPresetCount; ++i)
+            typeFilterItems.push_back(GRIM::kConceptPresets[i].label);
+        cbTypeFilterDropdown_ = std::make_shared<UIDropdown>(
+            "", typeFilterItems, 0,
+            [this](int idx, const std::string&) {
+                cbFormatFilterIdx_ = idx;
+                cbFilterDirty_ = true;
+            });
+        cbTypeFilterDropdown_->setMaxVisibleItems(8);
+    }
+
     cbSearchInput_ = std::make_shared<UIInputBox>();
     cbSearchInput_->setPlaceholder("Search concept blocks...");
 
@@ -766,7 +780,8 @@ UIDataHubPanel::UIDataHubPanel()
     });
 
     curriculumWidgets_ = {
-        cbModelDropdown_, cbFormatDropdown_, cbListTypeDropdown_, cbSearchInput_,
+        cbModelDropdown_, cbFormatDropdown_, cbListTypeDropdown_,
+        cbTypeFilterDropdown_, cbSearchInput_,
         cbNameInput_, cbQuestionArea_, cbAnswerArea_, cbCustomPromptArea_,
         btnCBGenerate_, btnCBAddStep_, btnCBRemoveStep_,
         btnCBNew_, btnCBSave_, btnCBDelete_,
@@ -1201,6 +1216,11 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                     cbFilterSearch_ = curSearch;
                     cbFilterDirty_ = true;
                 }
+                int curTypeIdx = cbTypeFilterDropdown_ ? cbTypeFilterDropdown_->getSelectedIndex() : 0;
+                if (curTypeIdx != cbFormatFilterIdx_) {
+                    cbFormatFilterIdx_ = curTypeIdx;
+                    cbFilterDirty_ = true;
+                }
                 if (cbFilterDirty_) rebuildFilteredCBList();
 
                 Vec2 m = input.mousePos;
@@ -1314,6 +1334,8 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         cbFormatDropdown_->drawExpandedList(renderer, position);
     if (cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded())
         cbListTypeDropdown_->drawExpandedList(renderer, position);
+    if (cbTypeFilterDropdown_ && cbTypeFilterDropdown_->isExpanded())
+        cbTypeFilterDropdown_->drawExpandedList(renderer, position);
 
     renderer.popClipRect();
     return true;
@@ -3665,11 +3687,19 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     btnCBGenerate_->drawOverlay(renderer, position);
     cx += btnW + gap;
 
-    float searchW = fullW - (cx - x) - 2.0f;
+    // Type filter dropdown pinned to the right end of the toolbar
+    float filterDdW = 150.0f;
+    float filterDdX = x + fullW - filterDdW;
+
+    float searchW = filterDdX - cx - gap - 2.0f;
     if (searchW < 100.0f) searchW = 100.0f;
     cbSearchInput_->setPosition(cx, y + 4.0f);
     cbSearchInput_->setSize(searchW, rowH - 8.0f);
     cbSearchInput_->drawOverlay(renderer, position);
+
+    cbTypeFilterDropdown_->setPosition(filterDdX, y);
+    cbTypeFilterDropdown_->setSize(filterDdW, rowH);
+    cbTypeFilterDropdown_->drawOverlay(renderer, position);
 
     y += rowH + 12.0f;
 
@@ -3901,7 +3931,10 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     renderer.drawRoundedRect({x, statusY}, {fullW, statusBarH},
                              UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
     std::string status = "Blocks: " + std::to_string(cbTotalCount_)
+                       + "  |  Showing: " + std::to_string(filteredCBIndices_.size())
                        + "  |  Assigned: " + std::to_string(cbAssignedCount_);
+    if (cbFormatFilterIdx_ > 0 && cbFormatFilterIdx_ <= GRIM::kConceptPresetCount)
+        status += std::string("  |  Filter: ") + GRIM::kConceptPresets[cbFormatFilterIdx_ - 1].label;
     if (presetIdx >= 0 && presetIdx < GRIM::kConceptPresetCount)
         status += std::string("  |  Format: ") + GRIM::kConceptPresets[presetIdx].label;
     renderer.drawText({x + 10.0f, statusY + 5.0f}, status, UITheme::Colors::TextSecondary);
@@ -3927,10 +3960,11 @@ void UIDataHubPanel::rebuildFilteredCBList() {
     if (!datasetTarget_) return;
 
     std::string formatFilter;
-    if (cbFormatFilterIdx_ > 0 && cbFormatFilterIdx_ < GRIM::kConceptPresetCount) {
-        // Index 0 could mean "show all" or the first preset; treat dropdown literally
+    if (cbFormatFilterIdx_ > 0 && cbFormatFilterIdx_ <= GRIM::kConceptPresetCount) {
+        // Index 0 = "All Types"; indices 1..N map to kConceptPresets[0..N-1]
+        formatFilter = GRIM::kConceptPresets[cbFormatFilterIdx_ - 1].key;
     }
-    filteredCBIndices_ = datasetTarget_->filterConceptBlocks("", cbFilterSearch_);
+    filteredCBIndices_ = datasetTarget_->filterConceptBlocks(formatFilter, cbFilterSearch_);
     cbTotalCount_ = datasetTarget_->conceptBlockCount();
 }
 

@@ -347,6 +347,8 @@ private:
     std::shared_ptr<UIDropdown>  cbFormatDropdown_;
     /// Shown in the ConceptBlock list on the selected row (format / type).
     std::shared_ptr<UIDropdown>  cbListTypeDropdown_;
+    /// Toolbar filter-by-type dropdown ("All", "Q/A", "Chain of Thought", etc.).
+    std::shared_ptr<UIDropdown>  cbTypeFilterDropdown_;
     std::shared_ptr<UIInputBox>  cbSearchInput_;
     std::shared_ptr<UIInputBox>  cbNameInput_;
     std::shared_ptr<UITextArea>  cbQuestionArea_;

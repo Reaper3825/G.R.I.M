@@ -7,7 +7,7 @@
     },
     "backend": "openai",
     "blur": {
-        "enabled": false,
+        "enabled": true,
         "opacity": 1.0
     },
     "conversation_history_size": 10,

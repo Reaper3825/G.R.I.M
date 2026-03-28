@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-`
+
 # Platform-specific vcpkg triplet (user can override with -DVCPKG_TARGET_TRIPLET=...)
 # On Apple Silicon, default to arm64-osx; vcpkg may otherwise pick x64-osx from host.
 if(NOT DEFINED VCPKG_TARGET_TRIPLET)
