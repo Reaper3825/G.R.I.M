@@ -43,17 +43,17 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ## Current cutover status
 
 - **Overall status:** In progress
-- **Active workstream:** Workstream 0 — execution_block file deflation before semantic cutover
-- **Last completed gate:** None
-- **Next gate:** Finish Workstream 0 caller/build/doc reconciliation and validate the split build
-- **Current implementation posture:** Initial Workstream 0 slice landed; public layer surface trimmed and the first private split files now exist
+- **Active workstream:** Workstream 1 — canonical structured execution source-of-truth model
+- **Last completed gate:** Workstream 0 — execution_block file deflation before semantic cutover
+- **Next gate:** Begin Workstream 1 semantic metadata ownership without re-expanding the ExecutionBlock boundary
+- **Current implementation posture:** Workstream 0 execution boundary is locked: thin coordinator, private split files, row-local atom contract, no decode-time last-write `<NUM>` fallback
 
 ## Workstream-specific update contract
 
 ### Workstream 0 — execution_block file deflation before semantic cutover
 
 **Status**
-- In progress
+- Completed
 
 **Each update must record**
 - deleted kernels, deleted APIs, and deleted `ExecutionBlockConfig` surface
@@ -298,6 +298,100 @@ For each qualifying refactor step, append an entry under the relevant workstream
 - Finish moving surviving helpers out of `execution_block_GPU.cu` so the coordinator is genuinely thin.
 - Confirm no batch-global atom adaptation or invalid decode-time `<NUM>` fallback remains inside the layer/runtime path.
 - Run build/error validation on the split target set.
+
+### 2026-03-29 — Workstream 0 — closure: docs/tests aligned and decode-time last-write fallback deleted
+
+**Status transition**
+- `In progress -> Completed`
+
+**What changed**
+- Verified the split boundary on disk: `execution_block_GPU.cu` is now a thin public coordinator and the live runtime is owned by the memory-stream and data-stream files.
+- Deleted the remaining decode-time `<NUM>` last-write heuristic outside the layer/runtime path. Generation now masks `<NUM>` while ScratchBlock generation is active until the explicit decode-time selector workstream exists.
+- Removed persistent `inference_exec_last_write_slot` state tracking and the code that derived it from `p_write` during inference.
+- Rewrote `Layers/ExecutionBlock/DOCUMENTATION.md` so it matches the current code instead of documenting deleted kernels, deleted weights, blended-write behavior, or stale candidate-pool semantics.
+- Rewrote `Tests/ExecutionBlockTest.cu` so Workstream 0 coverage now targets the surviving layer-owned surface instead of BatchPayload / teacher-step / orchestration concerns.
+
+**Changed files**
+- `resources/models/GRIM-text/Common/grim_language_model_gpu.cu`
+- `resources/models/GRIM-text/training/Inference_GPU.cu`
+- `resources/models/GRIM-text/Shared/TrainingState/TrainingState_GPU.hpp`
+- `resources/models/GRIM-text/Layers/ExecutionBlock/DOCUMENTATION.md`
+- `resources/models/GRIM-text/Tests/ExecutionBlockTest.cu`
+
+**Ownership after change**
+- Decode-time generation no longer owns or consults a heuristic "last write" selector surrogate.
+- The current generation contract is explicit: `<NUM>` is masked pre-sampling until Workstream 9 introduces a real selector.
+- ExecutionBlock docs/tests now cover only the live layer boundary and current runtime semantics.
+
+**Integration points / migrated consumers**
+- `generateSequenceGPU(...)` now masks `<NUM>` instead of attempting slot/value binding from inference runtime state.
+- Inference forward paths still preserve persistent `ExecutionMemory`, but no longer derive or export a last-write slot heuristic.
+- `execution_block_test` now exercises only the surviving ExecutionBlock public surface.
+
+**Legacy deleted**
+- decode-time `<NUM>` binding from `inference_exec_last_write_slot`
+- persistent `inference_exec_last_write_slot` field/state
+- stale ExecutionBlock docs for blended writes, deleted tensors, and deleted candidate-pool behavior
+- unrelated BatchPayload / teacher-step / orchestration assertions in `ExecutionBlockTest.cu`
+
+**Validation**
+- Static search confirmed `execution_block_internal.hpp` remains private to `Layers/ExecutionBlock/`.
+- Static search confirmed deleted public APIs/kernels (`encodeState`, `lastDivClampCount`, `expected_read_v1`, `expected_read_v2`, `kernelSliceColumns`, `kernelFourOpMixForward`) remain absent.
+- Static search confirmed the decode-time last-write `<NUM>` fallback is removed from code paths.
+- Editor diagnostics for CUDA-heavy files remain dominated by missing local CUDA headers/toolchain, so full compile validation is still blocked locally.
+
+**Flow diagram delta**
+- Updated the flow companion to reflect the current enforced runtime: Workstream 0 complete, ExecutionBlock split locked, and generation masks `<NUM>` until an explicit selector exists.
+
+**Remaining gaps / next gate**
+- Start Workstream 1 without reintroducing orchestration or metadata semantics into the ExecutionBlock layer.
+
+### 2026-03-29 — Workstream 0 — explicit row-local atom views for training + decode runtime
+
+**Status transition**
+- `In progress -> In progress`
+
+**What changed**
+- Tightened the live `ExecutionBlockLayer::executeStep(...)` contract so callers must provide non-null row-local atom buffers even when a row has zero atoms.
+- Added `ScratchBlockLayer::extractRowLocalAtomView(...)`, which compacts batch-global ScratchBlock atom buffers into row-local positions and embeddings with row-relative positions.
+- Updated training orchestration to build one row-local atom view per batch row and pass only row-local atom positions, row-local atom embeddings, and the row-local slot-map base pointer into `executeStep(...)`.
+- Updated decode-time execution to build a one-token ScratchBlock atom view before executing the block and to fail hard if a slot-bound decode token cannot produce that atom view.
+- Hardened `ExecutionBlock` atom-slot validation so row-local atom positions are bounds-checked against `row_tokens` before indexing the row-local slot map.
+
+**Changed files**
+- `resources/models/GRIM-text/Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp`
+- `resources/models/GRIM-text/Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu`
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.hpp`
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.cu`
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_internal.hpp`
+- `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu`
+- `resources/models/GRIM-text/training/Inference_GPU.cu`
+- `resources/models/GRIM-text/Layers/ExecutionBlock/DOCUMENTATION.md`
+
+**Ownership after change**
+- `ScratchBlockLayer` now owns row-local atom-view extraction from its batch-global detection buffers.
+- Training and inference orchestration own construction/use of those row-local views at the call boundary.
+- `ExecutionBlockLayer` now treats atom positions and slot maps as row-scoped runtime inputs and no longer accepts null atom-pointer callers as a tolerated contract.
+
+**Integration points / migrated consumers**
+- `AutogradTraining.cu` now extracts one row-local atom view per batch row and reuses it for all execution steps on that row.
+- `Inference_GPU.cu` now routes decode-time execution through a ScratchBlock-backed one-token atom view instead of null atom pointers.
+
+**Legacy deleted**
+- batch-global ScratchBlock atom buffers passed directly into per-row `executeStep(...)` from training orchestration
+- decode-time `executeStep(...)` calls with `nullptr` atom buffers during active execution
+
+**Validation**
+- Static runtime-path audit completed for training and inference callers.
+- Row-local atom-slot validation now includes an explicit out-of-range stage for row-relative atom positions.
+- Full CUDA compile/runtime validation is still blocked on the local environment lacking CUDA toolchain support.
+
+**Flow diagram delta**
+- Updated the flow companion so training and inference both show explicit row-local ScratchBlock atom-view wiring into ExecutionBlock runtime.
+
+**Remaining gaps / next gate**
+- Finish thinning `execution_block_GPU.cu` further so stream-local helpers own more of the live implementation.
+- Validate the new row-local atom-view plumbing on a CUDA-capable build/test environment.
 
 ### 2026-03-29 — Cutover companion created
 

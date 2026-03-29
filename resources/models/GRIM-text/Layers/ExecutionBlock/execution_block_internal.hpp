@@ -29,6 +29,7 @@ inline constexpr int kStageEntropyArg2 = 22;
 inline constexpr int kStageEntropyOp = 23;
 inline constexpr int kStageWriteCollapse = 24;
 inline constexpr int kStageWriteSlotInvalid = 25;
+inline constexpr int kStageAtomPosInvalid = 30;
 
 inline constexpr int kStageSlotMissing = 31;
 inline constexpr int kStageSlotInvalid = 32;
@@ -52,6 +53,7 @@ inline const char* stageIdToName(int id) {
 		case kStageEntropyOp: return "entropy collapse (p_op)";
 		case kStageWriteCollapse: return "write collapse (max p_write)";
 		case kStageWriteSlotInvalid: return "write slot not in value range [S,V)";
+		case kStageAtomPosInvalid: return "row-local atom position out of range";
 		case kStageSlotMissing: return "missing slot mapping for required state-bearing token";
 		case kStageSlotInvalid: return "invalid slot index";
 		case kStageSlotUninit: return "slot read before initialization";
@@ -60,6 +62,40 @@ inline const char* stageIdToName(int id) {
 		default: return "unknown";
 	}
 }
+
+struct LayerAccess {
+	static int* numericErrorFlag(ExecutionBlockLayer& layer) { return layer.d_numeric_error_flag_; }
+	static int* divClampCount(ExecutionBlockLayer& layer) { return layer.d_div_clamp_count_; }
+	static int* execIndices(ExecutionBlockLayer& layer) { return layer.d_exec_idx_; }
+	static int* execRecordI(ExecutionBlockLayer& layer) { return layer.d_exec_record_i_; }
+	static float* execRecordF(ExecutionBlockLayer& layer) { return layer.d_exec_record_f_; }
+};
+
+struct StepWorkingSet {
+	Tensor cand_hidden;
+	Tensor cand_mask;
+	Tensor slot_values;
+	Tensor context;
+	Tensor trace_vec;
+	Tensor context_enriched;
+	Tensor step_emb;
+	Tensor h_arg1;
+	Tensor h_arg2;
+	Tensor p_arg1;
+	Tensor p_arg2;
+	Tensor v1;
+	Tensor v2;
+	Tensor p_op;
+	Tensor op_results;
+	Tensor v_out;
+	Tensor atom_new;
+	Tensor v_decoded;
+	Tensor result_emb;
+	Tensor p_write;
+	Tensor state_new;
+	Tensor key_new;
+	int result_slot = -1;
+};
 
 }  // namespace GRIM::ExecutionBlockInternal
 

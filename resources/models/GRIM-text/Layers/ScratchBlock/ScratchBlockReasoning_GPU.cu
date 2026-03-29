@@ -272,6 +272,41 @@ __global__ void kernelAccumulateAtomTypeGradients(
     atomicAdd(&grad_atom_type_embeddings[atom_type * atom_embedding_dim + k_idx], grad);
 }
 
+__global__ void kernelExtractRowLocalAtoms(
+    const int* __restrict__ atom_positions,
+    const float* __restrict__ atom_embeddings,
+    int num_atoms,
+    int token_offset,
+    int row_tokens,
+    int atom_embedding_dim,
+    int* __restrict__ out_positions,
+    float* __restrict__ out_embeddings,
+    int* __restrict__ out_num_atoms
+) {
+    const int atom_idx = blockIdx.x;
+    if (atom_idx >= num_atoms) return;
+
+    const int pos = atom_positions[atom_idx];
+    const bool in_row = pos >= token_offset && pos < token_offset + row_tokens;
+
+    __shared__ int row_idx;
+    if (threadIdx.x == 0) {
+        row_idx = -1;
+        if (in_row) {
+            row_idx = atomicAdd(out_num_atoms, 1);
+            out_positions[row_idx] = pos - token_offset;
+        }
+    }
+    __syncthreads();
+
+    if (!in_row || row_idx < 0) return;
+
+    for (int d = threadIdx.x; d < atom_embedding_dim; d += blockDim.x) {
+        out_embeddings[static_cast<size_t>(row_idx) * atom_embedding_dim + d] =
+            atom_embeddings[static_cast<size_t>(atom_idx) * atom_embedding_dim + d];
+    }
+}
+
 //======================================================//
 //  Xavier Init — splitmix64 PRNG (replaces broken LCG)
 //======================================================//
@@ -744,6 +779,75 @@ void ScratchBlockLayer::runForwardKernels(
         config_.atom_embedding_dim, config_.d_model, config_.atom_scale);
     // NOTE: Text features are now absorbed into dims 48-63 of atom embeddings above.
     // The separate text feature injection path (Path B) has been eliminated.
+}
+
+ScratchBlockLayer::RowLocalAtomView ScratchBlockLayer::extractRowLocalAtomView(
+    int token_offset,
+    int row_tokens,
+    cudaStream_t stream) const
+{
+    auto throwCuda = [](const char* what, cudaError_t err) {
+        throw std::runtime_error(std::string("ScratchBlockLayer::extractRowLocalAtomView: ") +
+                                 what + ": " + cudaGetErrorString(err));
+    };
+
+    if (!weights_allocated_ || !d_num_atoms_ || !d_atom_positions_ || !d_atom_embeddings_) {
+        throw std::runtime_error("ScratchBlockLayer::extractRowLocalAtomView: ScratchBlock buffers are not allocated");
+    }
+    if (token_offset < 0) {
+        throw std::runtime_error("ScratchBlockLayer::extractRowLocalAtomView: token_offset must be non-negative");
+    }
+    if (row_tokens <= 0) {
+        throw std::runtime_error("ScratchBlockLayer::extractRowLocalAtomView: row_tokens must be positive");
+    }
+    if (!stream) {
+        throw std::runtime_error("ScratchBlockLayer::extractRowLocalAtomView: stream is NULL");
+    }
+
+    int num_atoms_host = 0;
+    cudaError_t err = cudaMemcpyAsync(&num_atoms_host, d_num_atoms_, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) throwCuda("cudaMemcpyAsync(num_atoms)", err);
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) throwCuda("cudaStreamSynchronize(num_atoms)", err);
+    num_atoms_host = std::clamp(num_atoms_host, 0, config_.max_atoms);
+
+    RowLocalAtomView view;
+    const int alloc_atoms = std::max(1, num_atoms_host);
+    view.atom_positions = Tensor::zeros({alloc_atoms}, stream, "scratch_row_atom_positions");
+    view.atom_embeddings = Tensor::zeros({alloc_atoms, config_.atom_embedding_dim}, stream, "scratch_row_atom_embeddings");
+    view.num_atoms = 0;
+
+    int* d_row_num_atoms = nullptr;
+    err = cudaMalloc(&d_row_num_atoms, sizeof(int));
+    if (err != cudaSuccess) throwCuda("cudaMalloc(d_row_num_atoms)", err);
+    err = cudaMemsetAsync(d_row_num_atoms, 0, sizeof(int), stream);
+    if (err != cudaSuccess) throwCuda("cudaMemsetAsync(d_row_num_atoms)", err);
+
+    if (num_atoms_host > 0) {
+        const int block_size = std::min(config_.atom_embedding_dim, 256);
+        kernelExtractRowLocalAtoms<<<num_atoms_host, block_size, 0, stream>>>(
+            d_atom_positions_,
+            d_atom_embeddings_,
+            num_atoms_host,
+            token_offset,
+            row_tokens,
+            config_.atom_embedding_dim,
+            reinterpret_cast<int*>(view.atom_positions.data),
+            view.atom_embeddings.data,
+            d_row_num_atoms);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) throwCuda("kernelExtractRowLocalAtoms launch", err);
+    }
+
+            err = cudaMemcpyAsync(&view.num_atoms, d_row_num_atoms, sizeof(int), cudaMemcpyDeviceToHost, stream);
+            if (err != cudaSuccess) throwCuda("cudaMemcpyAsync(row_num_atoms)", err);
+            err = cudaStreamSynchronize(stream);
+            if (err != cudaSuccess) throwCuda("cudaStreamSynchronize(row_num_atoms)", err);
+    view.num_atoms = std::clamp(view.num_atoms, 0, num_atoms_host);
+            err = cudaFreeAsync(d_row_num_atoms, stream);
+            if (err != cudaSuccess) throwCuda("cudaFreeAsync(d_row_num_atoms)", err);
+
+    return view;
 }
 
 //======================================================//

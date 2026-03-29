@@ -1,6 +1,6 @@
 # ExecutionBlock Structured Execution Cutover Plan
 
-**Status:** Workstream 0 in progress  
+**Status:** Workstream 0 complete; Workstream 1 next  
 **Scope:** `token_to_slot_map`, `teacher_steps`, row-local ExecutionBlock execution, GRMT cutover, inference alignment  
 **Policy:** **No backwards compatibility**. Delete legacy behavior instead of preserving it.
 
@@ -911,7 +911,7 @@ This table controls implementation order. The codoc and flow artifacts must trac
 
 ## Workstream 0 — execution_block file deflation before semantic cutover
 
-**Progress note (2026-03-29):** initial implementation has started. The public `ExecutionBlockLayer` surface has already been trimmed, the first private split files have been introduced, and caller/build/doc reconciliation is underway. Workstream 0 is not complete yet: the coordinator file still needs additional thinning and the split needs build validation.
+**Progress note (2026-03-29):** Workstream 0 is complete. The public `ExecutionBlockLayer` surface has been trimmed, the implementation is split into a thin coordinator plus private memory/data stream files, `executeStep()` now enforces explicit row-local atom views, the null-atom decode path is gone, and the old decode-time `<NUM>` last-write fallback has been deleted in favor of pre-sampling masking until the explicit selector workstream lands. Layer docs/tests are now aligned with the surviving surface. Full CUDA build validation remains locally blocked by the missing toolchain/header environment, but the Workstream 0 architecture gate is closed.
 
 ### Files
 

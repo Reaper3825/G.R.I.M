@@ -22,6 +22,10 @@
 
 namespace GRIM {
 
+namespace ExecutionBlockInternal {
+struct LayerAccess;
+}
+
 //======================================================//
 //  ExecutionMemory — addressable register file
 //
@@ -38,7 +42,7 @@ struct ExecutionMemory {
     Tensor usage;             // [V]          decayed cross-attn read weight
     Tensor key_embeds;        // [V, d_key]   addressing keys
     Tensor type_embed;        // [V, d_type]  type tag per slot
-    Tensor recent_write_mask; // [V]          last-step write probability distribution
+    Tensor recent_write_mask; // [V]          one-hot mask of the most recent hard write
 
     void clear(cudaStream_t stream);
     void allocate(int V, int atom_dim, int d_model, int d_key, int d_type, cudaStream_t stream);
@@ -101,8 +105,8 @@ struct ExecutionRecord {
 };
 
 //======================================================//
-//  ExecutionBlockStepOutput — per-step diagnostics + supervision tensors
-//  p_arg1/p_arg2/p_op/p_write are detached copies for CE loss.
+//  ExecutionBlockStepOutput — per-step diagnostics + auxiliary-loss tensors
+//  p_arg1/p_arg2/p_op/p_write are detached copies for diagnostics / entropy loss.
 //  state_before_values / state_after_values enable transition validity checks.
 //======================================================//
 struct ExecutionBlockStepOutput {
@@ -110,7 +114,7 @@ struct ExecutionBlockStepOutput {
     Tensor p_arg2;      // [1, V_val]
     Tensor p_op;        // [1, num_ops]
     Tensor p_write;     // [1, V]
-    Tensor v_out;       // [1, 1] scalar result (hard op on hard slot reads)
+    Tensor v_out;       // [1, 1] scalar result (hard forward selection; soft backward path)
     Tensor result_emb;  // [1, d_model]
     Tensor state_before_values;  // [V, 1] M.values snapshot before this step
     Tensor state_before_valid;   // [V]    M.valid_mask snapshot before this step
@@ -165,9 +169,9 @@ public:
     void executeStep(
         Tensor& H,                          // [total_tokens, d_model] mutated in place
         ExecutionMemory& M,
-        const float* atom_embeddings,       // [num_atoms, atom_embedding_dim]
-        const int* atom_positions,          // [num_atoms]
-        const int32_t* token_to_slot_map,   // [total_tokens] slot_id per token position (-1 = non-state-bearing)
+        const float* atom_embeddings,       // row-local [max(1, num_atoms), atom_embedding_dim] (empty buffer allowed when num_atoms == 0)
+        const int* atom_positions,          // row-local [max(1, num_atoms)] positions relative to current row [0, row_tokens)
+        const int32_t* token_to_slot_map,   // row-local [row_tokens] slot_id per token position (-1 = non-state-bearing)
         int num_atoms,
         int total_tokens,
         int step,
@@ -227,7 +231,9 @@ public:
         int num_atoms,
         int total_tokens,
         const ExecutionMemory& M,
-        int step) const;
+        int step,
+        int token_offset,
+        int row_tokens) const;
     void validateCrossAttentionInputsOrThrow(
         const Tensor& hidden_states,
         const ExecutionMemory& M,
@@ -299,6 +305,8 @@ public:
     const ExecutionBlockConfig& config() const { return config_; }
 
 private:
+    friend struct ExecutionBlockInternal::LayerAccess;
+
     ExecutionBlockConfig config_;
 
     // Production hardening: persistent device-side error tracking

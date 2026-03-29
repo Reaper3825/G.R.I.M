@@ -647,11 +647,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             // ExecutionBlock: run K execution steps at the configured layer
             // Per-row isolation: each batch row gets its own ExecutionMemory
             if (layer_idx == exec_layer && ctx.execution_block) {
-                int num_atoms = 0;
-                cudaMemcpyAsync(&num_atoms, ctx.scratch_block->numAtomsBuffer(),
-                                sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
-                cudaStreamSynchronize(ctx.stream);
-
                 const int ae = cfg->scratch_block_atom_embedding_dim;
                 const int V = cfg->execution_block_num_slots;
                 const int dk = cfg->execution_block_d_key;
@@ -692,12 +687,18 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     intermediates.exec_outputs_per_row[b].steps.clear();
 
                     const int tok_off = b * sl;
+                    const int32_t* d_slot_map_row = d_slot_map_full
+                        ? d_slot_map_full + tok_off
+                        : nullptr;
+
+                    auto row_atom_view = ctx.scratch_block->extractRowLocalAtomView(
+                        tok_off, sl, ctx.stream);
 
                     if (d_slot_map_full && ts->cached_token_numeric_values.data) {
                         ctx.execution_block->bootstrapMemoryFromSlotMap(
                             M_b,
                             ts->cached_token_numeric_values.data + tok_off,
-                            d_slot_map_full + tok_off,
+                            d_slot_map_row,
                             sl, ctx.stream);
                     }
 
@@ -718,10 +719,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
                         ctx.execution_block->executeStep(
                             layer_output, M_b,
-                            ctx.scratch_block->atomEmbeddingsBuffer(),
-                            ctx.scratch_block->atomPositionsBuffer(),
-                            d_slot_map_full,
-                            num_atoms, total_tokens,
+                            row_atom_view.atom_embeddings.data,
+                            reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
+                            d_slot_map_row,
+                            row_atom_view.num_atoms, total_tokens,
                             step, T, ctx.stream,
                             &step_diag,
                             tok_off, sl,

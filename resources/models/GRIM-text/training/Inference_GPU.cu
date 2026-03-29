@@ -28,6 +28,8 @@ namespace GRIM {
 
 namespace {
 
+constexpr int kScratchTextFeatureDim = 16;
+
 void copyTokenSlotMapH2D(TrainingState& ts, cudaStream_t stream, int seq_len,
                          const std::vector<int32_t>& prompt_map) {
     if (!ts.cached_token_to_slot_map.data || seq_len <= 0)
@@ -54,6 +56,76 @@ void copyTokenSlotMapH2D(TrainingState& ts, cudaStream_t stream, int seq_len,
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("copyTokenSlotMapH2D: ") + cudaGetErrorString(err));
     }
+}
+
+ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
+    ScratchBlockLayer& scratch_block,
+    const LanguageModelConfig& cfg,
+    TrainingState& ts,
+    cudaStream_t stream,
+    int token_pos)
+{
+    auto throwCuda = [](const char* what, cudaError_t err) {
+        throw std::runtime_error(std::string("buildDecodeExecutionAtomView: ") +
+                                 what + ": " + cudaGetErrorString(err));
+    };
+
+    if (!ts.cached_token_ids_tensor.data) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_ids_tensor is NULL");
+    }
+    if (!ts.cached_token_numeric_values.data) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_numeric_values is NULL");
+    }
+    if (!ts.cached_token_text_features.data) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_text_features is NULL");
+    }
+    if (!ts.cached_token_atom_mask.data) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_atom_mask is NULL");
+    }
+    if (!ts.cached_token_atom_flags.data) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_atom_flags is NULL");
+    }
+    if (!ts.cached_token_to_slot_map.data) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_to_slot_map is NULL during decode-time execution");
+    }
+
+    auto dummy_hidden = Tensor::zeros({1, cfg.d_model}, stream, "decode_exec_atom_dummy_hidden");
+    const bool exec_first_type_only =
+        cfg.execution_block_enabled && cfg.scratch_block_execution_first_type_only;
+
+    scratch_block.runForwardKernels(
+        dummy_hidden.data,
+        1,
+        reinterpret_cast<const int*>(ts.cached_token_ids_tensor.data) + token_pos,
+        ts.cached_token_numeric_values.data + token_pos,
+        reinterpret_cast<const uint16_t*>(ts.cached_token_text_features.data) +
+            static_cast<size_t>(token_pos) * kScratchTextFeatureDim,
+        reinterpret_cast<const uint8_t*>(ts.cached_token_atom_mask.data) + token_pos,
+        reinterpret_cast<const uint32_t*>(ts.cached_token_atom_flags.data) + token_pos,
+        reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos,
+        stream,
+        exec_first_type_only);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) throwCuda("ScratchBlock decode atom path", err);
+
+    auto view = scratch_block.extractRowLocalAtomView(0, 1, stream);
+
+    int32_t slot_id = -1;
+    err = cudaMemcpyAsync(&slot_id,
+                          reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos,
+                          sizeof(int32_t),
+                          cudaMemcpyDeviceToHost,
+                          stream);
+    if (err != cudaSuccess) throwCuda("cudaMemcpyAsync(slot_id)", err);
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) throwCuda("cudaStreamSynchronize(slot_id)", err);
+
+    if (slot_id >= 0 && view.num_atoms == 0) {
+        throw std::runtime_error(
+            "buildDecodeExecutionAtomView: decode-time execution token is slot-bound but ScratchBlock produced no row-local atom view");
+    }
+
+    return view;
 }
 
 }  // namespace
@@ -118,27 +190,12 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
 
     cudaStreamSynchronize(stream);
 
-    // Persist ExecutionMemory for Step Z <NUM> slot binding during generation.
+    // Persist ExecutionMemory so decode-time execution state survives across
+    // autoregressive forwardStep calls.
     if (!training_state_.autograd_intermediates.exec_memories.empty()) {
         training_state_.inference_exec_memory =
             std::move(training_state_.autograd_intermediates.exec_memories[0]);
         training_state_.has_inference_exec_memory = true;
-        // Track last write slot from the final execution step
-        const auto& row_out = training_state_.autograd_intermediates.exec_outputs_per_row;
-        if (!row_out.empty() && !row_out[0].steps.empty()) {
-            const auto& last_step = row_out[0].steps.back();
-            const int V = config_.execution_block_num_slots;
-            if (last_step.p_write.data && V > 0) {
-                std::vector<float> h_pw(V);
-                cudaMemcpyAsync(h_pw.data(), last_step.p_write.data,
-                                V * sizeof(float), cudaMemcpyDeviceToHost, stream);
-                cudaStreamSynchronize(stream);
-                int best = 0;
-                for (int i = 1; i < V; ++i)
-                    if (h_pw[i] > h_pw[best]) best = i;
-                training_state_.inference_exec_last_write_slot = best;
-            }
-        }
     }
 
     // Populate KV cache from autograd intermediates (prefill mode).
@@ -350,8 +407,16 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
 
     // ── ExecutionBlock setup ──
     ExecutionBlockLayer* exec_block = getExecutionBlockLayer();
+    ScratchBlockLayer* scratch_block = getScratchBlockLayer();
+    const bool exec_block_configured = cfg.execution_block_enabled && exec_block != nullptr;
+    if (exec_block_configured && (!scratch_block || !scratch_block->isEnabled())) {
+        throw std::runtime_error(
+            "executeDecodeForward_: execution_block_enabled requires an enabled ScratchBlock for row-local decode atom views");
+    }
     const bool exec_block_active = cfg.execution_block_enabled
         && exec_block != nullptr
+        && scratch_block != nullptr
+        && scratch_block->isEnabled()
         && ts.has_inference_exec_memory
         && !ts.trace_state_by_row.empty()
         && !ts.execution_trace_by_row.empty();
@@ -496,6 +561,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             const int32_t* slot_ptr = ts.cached_token_to_slot_map.data
                 ? reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos
                 : nullptr;
+            auto row_atom_view = buildDecodeExecutionAtomView(
+                *scratch_block, cfg, ts, stream, token_pos);
 
             // Bootstrap the new token's slot binding into execution memory.
             // During prefill, bootstrap runs inside AutogradTraining. During
@@ -514,10 +581,10 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                 ExecutionBlockStepOutput step_diag;
                 exec_block->executeStep(
                     hidden, ts.inference_exec_memory,
-                    nullptr,   // atom_embeddings (no ScratchBlock during single-token decode)
-                    nullptr,   // atom_positions
+                    row_atom_view.atom_embeddings.data,
+                    reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
                     slot_ptr,  // device pointer to current token's slot_id
-                    0,         // num_atoms
+                    row_atom_view.num_atoms,
                     1,         // total_tokens (single token)
                     step, T, stream,
                     &step_diag,
@@ -531,18 +598,6 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                 }
             }
 
-            // Update last write slot from final step's p_write distribution
-            const int V = cfg.execution_block_num_slots;
-            if (last_step_diag.p_write.data && V > 0) {
-                std::vector<float> h_pw(V);
-                cudaMemcpyAsync(h_pw.data(), last_step_diag.p_write.data,
-                                V * sizeof(float), cudaMemcpyDeviceToHost, stream);
-                cudaStreamSynchronize(stream);
-                int best = 0;
-                for (int i = 1; i < V; ++i)
-                    if (h_pw[i] > h_pw[best]) best = i;
-                ts.inference_exec_last_write_slot = best;
-            }
         }
 
         // ── ExecutionBlock: cross-attention read at layers >= exec_layer ──
@@ -585,7 +640,6 @@ void LanguageModel::resetKVCache() {
     if (training_state_.initialized) {
         training_state_.kv_cache_len = 0;
         training_state_.has_inference_exec_memory = false;
-        training_state_.inference_exec_last_write_slot = -1;
 
         // Clear execution trace state (persisted across decode steps)
         training_state_.execution_trace_by_row.clear();

@@ -59,57 +59,34 @@ flowchart LR
     Gate -- Yes --> Advance[Advance to next workstream<br/>and update status]
 ```
 
-## Structured execution cutover flow
+## Current enforced runtime flow
 
 ```mermaid
 flowchart TD
-    subgraph Authoring[Canonical authoring + compilation]
-        Record[StructuredExecutionRecord]
-        Builder[ConceptExecutionSequenceBuilder]
-        Compiled[CompiledStructuredExecutionPayload<br/>execution_active + token_exec_slots<br/>+ compiled_bootstrap_bindings<br/>+ teacher_steps<br/>+ slot_selection_targets]
-        Record --> Builder --> Compiled
+    subgraph Training[Training / validation runtime today]
+        Batch[Batch/runtime metadata]
+        Train[AutogradTraining row loop]
+        Scratch[ScratchBlock row-local atom view]
+        Exec[ExecutionBlock executeStep / crossAttentionRead]
+        Batch --> Train --> Scratch --> Exec
     end
 
-    subgraph Dataset[Dataset + sequence transport]
-        Sequence[TrainingSequence]
-        Phase1[Phase1 remap<br/>BOS/EOS + padding +<br/>fragmentation rejection]
-        SampleView[TrainingSampleView]
-        Batch[BatchPayload]
-        Compiled --> Sequence --> Phase1 --> SampleView --> Batch
+    subgraph Inference[Inference / generation today]
+        Prompt[Prompt slot map + decode token metadata]
+        DecodeScratch[Decode-time ScratchBlock row-local atom view]
+        DecodeExec[ExecutionBlock decode runtime]
+        Sampler[Sampler]
+        MaskNUM[Mask <NUM> before sampling<br/>until explicit selector exists]
+        Prompt --> DecodeScratch --> DecodeExec
+        Sampler --> MaskNUM
     end
-
-    subgraph Validation[Shared gate]
-        Validator[ExecutionPayloadValidation]
-        Batch --> Validator
-    end
-
-    subgraph Training[Training / validation runtime]
-        LossPath[computeLossBatch]
-        TrainPath[autogradTrainingStep]
-        ExecBlock[ExecutionBlock row-local runtime]
-        Validator --> LossPath
-        Validator --> TrainPath
-        TrainPath --> ExecBlock
-    end
-
-    subgraph Inference[Inference / generation]
-        PromptMap[Explicit prompt slot map]
-        Policy[DecodeTimeNumPolicy<br/>candidate set + fixed slot_features +<br/>null/ambiguity/bind-or-mask]
-        Selector[DecodeTimeSlotSelectorLayer<br/>learned scoring over {NULL} ∪ L]
-        Sampler[Sampler<br/>mask or bind <NUM> before sampling]
-        PromptMap --> Policy
-        Policy --> Selector --> Policy --> Sampler
-    end
-
-    Phase1 -. compiled metadata .-> Validator
-    ExecBlock -. row-local memory/state .-> Policy
 ```
 
 ## Current artifact status
 
-- **Workstream flow status:** Workstream 0 in progress
+- **Workstream flow status:** Workstream 0 complete; Workstream 1 next
 - **Maintenance flow status:** Active immediately
-- **Structured execution flow status:** Target cutover contract established; initial ExecutionBlock deflation/split work has started
+- **Structured execution flow status:** Current enforced runtime reflects the locked Workstream 0 boundary; future metadata/selector workstreams are still pending
 
 ## Workstream 0 implementation note
 
@@ -127,6 +104,24 @@ flowchart LR
     Coord --> Data
     Mem --> Internal
     Data --> Internal
+```
+
+## Current runtime-side Workstream 0 hardening
+
+```mermaid
+flowchart TD
+    Scratch[ScratchBlock buffers\nbatch-global detect state]
+    Extract[extractRowLocalAtomView(...)]
+    Train[AutogradTraining row loop]
+    Decode[Inference decode step]
+    Exec[executeStep(...)]
+    Generate[Generation sampler]
+    MaskNUM[Mask <NUM>\nuntil explicit selector exists]
+
+    Scratch --> Extract
+    Train --> Extract --> Exec
+    Decode --> Extract --> Exec
+    Generate --> MaskNUM
 ```
 
 ## Diagram update checklist

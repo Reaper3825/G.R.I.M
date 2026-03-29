@@ -829,13 +829,14 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             sampling_cfg.bad_token_ids.end());
     }
 
-    // Step Z: <NUM> binds to ExecutionMemory write-slot. With ScratchBlock reasoning on but
-    // ExecutionBlock off, sampling <NUM> would always throw below — exclude it from the sampler.
+    // Decode-time <NUM> binding is forbidden until the explicit slot-selector
+    // workstream lands. While ScratchBlock generation is active, mask <NUM>
+    // before sampling rather than guessing from runtime state.
     {
         const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
                                                     config_.use_scratch_block &&
                                                     isScratchBlockEnabled();
-        if (scratchblock_generation_active && !config_.execution_block_enabled) {
+        if (scratchblock_generation_active) {
             const int num_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
             sampling_cfg.bad_token_ids.push_back(num_tid);
             std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
@@ -903,27 +904,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             token_atom_mask_val = 1;
             if (GRIM::Tokenizer::tokenIdToAtomType(sample.token_id)
                 == GRIM::Tokenizer::AtomType::ATOM_NUM) {
-                // Step Z: bind <NUM> to the last-written execution slot
-                if (config_.execution_block_enabled
-                    && training_state_.has_inference_exec_memory
-                    && training_state_.inference_exec_last_write_slot >= 0) {
-                    const int slot = training_state_.inference_exec_last_write_slot;
-                    const int V = config_.execution_block_num_slots;
-                    if (slot < 0 || slot >= V) {
-                        throw std::runtime_error(
-                            "generateSequenceGPU: <NUM> write_slot=" + std::to_string(slot) +
-                            " out of range [0, " + std::to_string(V) + ")");
-                    }
-                    // Read slot value from persistent ExecutionMemory
-                    float slot_val = 0.0f;
-                    cudaMemcpy(&slot_val,
-                               training_state_.inference_exec_memory.values.data + slot,
-                               sizeof(float), cudaMemcpyDeviceToHost);
-                    token_numeric_value = slot_val;
-                    new_token_slot_id = slot;
-                }
-                // When execution block is disabled or has no valid slot binding,
-                // <NUM> is emitted with numeric_value=0.0 and slot_id=-1.
+                throw std::runtime_error(
+                    "generateSequenceGPU: sampled <NUM> while decode-time slot selection is unavailable; generation MUST mask <NUM> until the explicit selector exists");
             }
         }
         

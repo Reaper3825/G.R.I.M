@@ -209,5 +209,6 @@
   "git.autoRepositoryDetection": false,
   "makefile.makefilePath": "${workspaceFolder}/CMakeLists.txt",
   "python.analysis.autoImportCompletions": true,
-  "python.analysis.typeCheckingMode": "standard"
+  "python.analysis.typeCheckingMode": "standard",
+  "makefile.configureOnOpen": false
 }

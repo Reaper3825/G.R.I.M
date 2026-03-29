@@ -107,6 +107,12 @@ class ScratchBlockLayer final : public Layer<ScratchBlockLayer, float> {
 public:
     static constexpr LayerType layer_type = LayerType::kUnknown;
 
+    struct RowLocalAtomView {
+        Tensor atom_positions;    // int32 payload in Tensor storage; row-relative [0, row_tokens)
+        Tensor atom_embeddings;   // [max(1, num_atoms), atom_embedding_dim]
+        int num_atoms = 0;
+    };
+
     ScratchBlockLayer();
     explicit ScratchBlockLayer(const ScratchBlockConfig& config);
     ~ScratchBlockLayer();
@@ -169,6 +175,14 @@ public:
     int*   atomPositionsBuffer()   { return d_atom_positions_; }
     int*   numAtomsBuffer()        { return d_num_atoms_; }
     float* atomEmbeddingsBuffer()  { return d_atom_embeddings_; }
+
+    /// Build a row-local atom view from the batch-global ScratchBlock buffers.
+    /// Returned positions are relative to the requested row span [0, row_tokens).
+    /// Empty rows still return non-null buffers; num_atoms reports the actual count.
+    RowLocalAtomView extractRowLocalAtomView(
+        int token_offset,
+        int row_tokens,
+        cudaStream_t stream) const;
 
     /// Run forward CUDA kernels (atom detect, embed lookup, projection+inject, text inject).
     /// Modifies output in-place. Returns device-side atom count via numAtomsBuffer().
