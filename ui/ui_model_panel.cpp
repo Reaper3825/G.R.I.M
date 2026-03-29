@@ -141,11 +141,11 @@ UIModelPanel::UIModelPanel()
     creatorBackendDropdown_->setSize(200.0f, 26.0f);
 
     creatorRamSlider_ = std::make_shared<UISlider>(
-        "Est. RAM (MB)", 0.0f, 64000.0f, 0.0f, [](float) {});
+        "Est. RAM (MB)", 0.0f, 64000.0f, 0.0f, [](float) {}, 256.0f);
     creatorRamSlider_->setSize(400.0f, 26.0f);
 
     creatorVramSlider_ = std::make_shared<UISlider>(
-        "Est. VRAM (MB)", 0.0f, 48000.0f, 0.0f, [](float) {});
+        "Est. VRAM (MB)", 0.0f, 48000.0f, 0.0f, [](float) {}, 256.0f);
     creatorVramSlider_->setSize(400.0f, 26.0f);
 
     creatorStatusLabel_ = std::make_shared<UILabel>("", 0xFFFFFFFF);

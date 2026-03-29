@@ -183,33 +183,33 @@ UIDataCollectionPanel::UIDataCollectionPanel()
     loadHFTokenFromConfig();
     
     // Initialize sliders with save-on-change callbacks
-    fetchLimitSlider = std::make_shared<UISlider>("Fetch Limit", 10.0f, 1000.0f, 
+    fetchLimitSlider = std::make_shared<UISlider>("Fetch Limit", 10.0f, 1000.0f,
         static_cast<float>(fetchLimit),
-        [this](float val) { 
-            fetchLimit = static_cast<int>(val); 
+        [this](float val) {
+            fetchLimit = static_cast<int>(val);
             saveUIConfig();  // Persist change
-        });
+        }, 10.0f);
     
     vocabSizeSlider = std::make_shared<UISlider>("Vocab Size", 5000.0f, 100000.0f,
         static_cast<float>(vocabSize),
-        [this](float val) { 
-            vocabSize = static_cast<int>(val); 
+        [this](float val) {
+            vocabSize = static_cast<int>(val);
             saveUIConfig();  // Persist change
-        });
+        }, 1000.0f);
     
     verificationThresholdSlider = std::make_shared<UISlider>("Verify Threshold", 0.0f, 1.0f,
         verificationThreshold,
-        [this](float val) { 
-            verificationThreshold = val; 
+        [this](float val) {
+            verificationThreshold = val;
             saveUIConfig();  // Persist change
-        });
+        }, 0.01f);
     
     maxHFResultsSlider = std::make_shared<UISlider>("Max HF Results", 1.0f, 20.0f,
         static_cast<float>(maxHFResults),
-        [this](float val) { 
-            maxHFResults = static_cast<int>(val); 
+        [this](float val) {
+            maxHFResults = static_cast<int>(val);
             saveUIConfig();  // Persist change
-        });
+        }, 1.0f);
     
     // Initialize progress bar with theme colors
     collectionProgressBar = std::make_shared<UIProgressBar>("Collection Progress", 1.0f);

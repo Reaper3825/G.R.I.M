@@ -82,6 +82,48 @@
       }
     },
     {
+      "name": "macos-debug",
+      "displayName": "Debug (macOS arm64)",
+      "description": "Build GRIM on macOS arm64 with Ninja, vcpkg, and Metal",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build-macos-debug/",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/arm64-osx/share",
+        "CMAKE_MAKE_PROGRAM": "/opt/homebrew/bin/ninja",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "GRIM_USE_CUDA": "OFF",
+        "GRIM_USE_METAL": "ON",
+        "GRIM_USE_VULKAN": "OFF",
+        "GRIM_USE_OPENCL": "OFF",
+        "GRIM_USE_PERCEPTION": "ON",
+        "GRIM_PORTABLE_ONLY": "OFF"
+      }
+    },
+    {
+      "name": "macos-release",
+      "displayName": "Release (macOS arm64)",
+      "description": "Build GRIM on macOS arm64 with Ninja, vcpkg, and Metal",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build-macos-release/",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/arm64-osx/share",
+        "CMAKE_MAKE_PROGRAM": "/opt/homebrew/bin/ninja",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "GRIM_USE_CUDA": "OFF",
+        "GRIM_USE_METAL": "ON",
+        "GRIM_USE_VULKAN": "OFF",
+        "GRIM_USE_OPENCL": "OFF",
+        "GRIM_USE_PERCEPTION": "ON",
+        "GRIM_PORTABLE_ONLY": "OFF"
+      }
+    },
+    {
       "name": "ninja-multi-release",
       "displayName": "Release (Ninja Multi-Config)",
       "description": "Build GRIM with Ninja Multi-Config (may avoid PDB flag injection)",
@@ -143,6 +185,24 @@
       "configurePreset": "ninja-multi-release",
       "displayName": "Build GRIM (Ninja Multi-Config Release)",
       "description": "Builds GRIM with Ninja Multi-Config in Release configuration",
+      "configuration": "Release",
+      "jobs": 0,
+      "inheritConfigureEnvironment": true
+    },
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug",
+      "displayName": "Build GRIM (macOS Debug)",
+      "description": "Builds GRIM on macOS arm64 in Debug configuration",
+      "configuration": "Debug",
+      "jobs": 0,
+      "inheritConfigureEnvironment": true
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-release",
+      "displayName": "Build GRIM (macOS Release)",
+      "description": "Builds GRIM on macOS arm64 in Release configuration",
       "configuration": "Release",
       "jobs": 0,
       "inheritConfigureEnvironment": true

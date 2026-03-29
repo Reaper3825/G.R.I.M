@@ -212,7 +212,7 @@ UIDataHubPanel::UIDataHubPanel()
 
     sliderMaxHFResults_ = std::make_shared<UISlider>(
         "Max Results", 1.0f, 20.0f, static_cast<float>(maxHFResults_),
-        [this](float v) { maxHFResults_ = static_cast<int>(v); });
+        [this](float v) { maxHFResults_ = static_cast<int>(v); }, 1.0f);
 
     hfPreviewArea_ = std::make_shared<UITextArea>(
         "Sample rows", "Click a dataset in the list above to load a preview (Hugging Face datasets-server API).",
@@ -447,8 +447,8 @@ UIDataHubPanel::UIDataHubPanel()
         }
     });
 
-    sliderMaxEntries_ = std::make_shared<UISlider>("Max Entries", 0.0f, 1000.0f, 0.0f, [](float) {});
-    sliderParallel_   = std::make_shared<UISlider>("Parallel",    1.0f, 16.0f,   4.0f, [](float) {});
+    sliderMaxEntries_ = std::make_shared<UISlider>("Max Entries", 0.0f, 1000.0f, 0.0f, [](float) {}, 10.0f);
+    sliderParallel_   = std::make_shared<UISlider>("Parallel",    1.0f, 16.0f,   4.0f, [](float) {}, 1.0f);
 
     // ── Curriculum view widgets ──────────────────────────
 
@@ -2815,15 +2815,15 @@ UIDataHubPanel::SourceCard UIDataHubPanel::buildSourceCard(
 
     card.prioritySlider = std::make_shared<UISlider>(
         "Priority", 1.0f, 10.0f, static_cast<float>(priority),
-        [this](float) { sourcesDirty_ = true; });
+        [this](float) { sourcesDirty_ = true; }, 1.0f);
 
     card.depthSlider = std::make_shared<UISlider>(
         "Crawl Depth", 1.0f, 5.0f, static_cast<float>(depth),
-        [this](float) { sourcesDirty_ = true; });
+        [this](float) { sourcesDirty_ = true; }, 1.0f);
 
     card.limitSlider = std::make_shared<UISlider>(
         "Fetch Limit", 0.0f, 5000.0f, static_cast<float>(limit),
-        [this](float) { sourcesDirty_ = true; });
+        [this](float) { sourcesDirty_ = true; }, 50.0f);
 
     card.enabledToggle = std::make_shared<UIToggle>(
         "", enabled, [this](bool) { sourcesDirty_ = true; });

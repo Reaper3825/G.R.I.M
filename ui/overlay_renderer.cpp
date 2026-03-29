@@ -1194,6 +1194,22 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
 }
 
 // ---------------------------------------------------------------
+// Text measurement (mirrors drawText advance logic without pixel writes)
+// ---------------------------------------------------------------
+
+float OverlayRenderer::measureTextWidth(const std::string& text) const
+{
+    if (!m_fontLoaded || text.empty()) return 0.0f;
+    float width = 0.0f;
+    for (char c : text) {
+        if (c == '\n') break; // single-line measurement
+        if (c < kFirstChar || c >= kFirstChar + kCharCount) c = '?';
+        width += m_bakedChars[c - kFirstChar].xadvance;
+    }
+    return width;
+}
+
+// ---------------------------------------------------------------
 // Drawing: line (Bresenham with thickness)
 // ---------------------------------------------------------------
 

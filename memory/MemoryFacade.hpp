@@ -15,9 +15,9 @@
 //======================================================//
 #pragma once
 
-#include "memory/unified_memory.hpp"
-#include "SessionContextManager.hpp"
-#include "memory/memory_router.hpp"
+#include "unified_memory.hpp"
+#include "../MMO/Core/SessionContextManager.hpp"
+#include "memory_router.hpp"
 
 #include <mutex>
 #include <string>

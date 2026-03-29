@@ -47,6 +47,4 @@ private:
     float repeatDelay = 0.40f;  // seconds before first repeat
     float repeatRate = 0.035f;  // seconds between repeats
     bool repeatFiring = false;
-
-    static constexpr float kCharWidth = 8.0f; // approximate monospace glyph advance
 };

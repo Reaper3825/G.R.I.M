@@ -11,8 +11,8 @@
 #include <iomanip>
 
 UISlider::UISlider(const std::string& lbl, float minVal, float maxVal, float initialVal,
-                   std::function<void(float)> onChange)
-    : label(lbl), minValue(minVal), maxValue(maxVal), value(initialVal), callback(std::move(onChange))
+                   std::function<void(float)> onChange, float step)
+    : label(lbl), minValue(minVal), maxValue(maxVal), value(initialVal), callback(std::move(onChange)), stepSize(step)
 {
     // Generate unique focus ID
     focusID = UIFocusManager::getInstance().generateUniqueID();
@@ -23,6 +23,15 @@ UISlider::UISlider(const std::string& lbl, float minVal, float maxVal, float ini
     } else {
         LOG_DEBUG("UISlider", "Constructed: " + label);
     }
+}
+
+// Strip trailing zeros after the decimal point from a fixed-precision string.
+static std::string trimTrailingZeros(std::string s) {
+    if (s.find('.') != std::string::npos) {
+        s.erase(s.find_last_not_of('0') + 1, std::string::npos);
+        if (s.back() == '.') s.pop_back();
+    }
+    return s;
 }
 
 void UISlider::setValue(float val) {
@@ -184,6 +193,9 @@ void UISlider::update(const InputState& input, float dt) {
             normalized = std::clamp(normalized, 0.0f, 1.0f);
             
             float newValue = minValue + normalized * (maxValue - minValue);
+            if (stepSize > 0.0f)
+                newValue = minValue + std::round((newValue - minValue) / stepSize) * stepSize;
+            newValue = std::clamp(newValue, minValue, maxValue);
             
             if (newValue != value) {
                 value = newValue;
@@ -226,7 +238,7 @@ void UISlider::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     std::string displayText;
     uint32_t textColor;
     if (editingText) {
-        displayText = textBuffer + "|";
+        displayText = textBuffer;
         textColor = Colors::Warning;
     } else {
         std::ostringstream oss;
@@ -236,12 +248,18 @@ void UISlider::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         else if (maxValue - minValue < 100.0f) oss << std::setprecision(2);
         else oss << std::setprecision(0);
         oss << value;
-        displayText = oss.str();
+        displayText = trimTrailingZeros(oss.str());
         textColor = Colors::TextValue;
     }
     float textY = barPos.y + (barSize.y - 14) * 0.5f;
     float textX = barPos.x + barSize.x - 52;  // Right side of bar, room for value
     renderer.drawText({textX, textY}, displayText, textColor);
+
+    // Draw caret as a separate vertical line (avoids font xoff shift from '|' glyph)
+    if (editingText) {
+        float caretX = textX + renderer.measureTextWidth(displayText);
+        renderer.drawRect({caretX, barPos.y + 4.0f}, {1.5f, barSize.y - 8.0f}, Colors::Warning);
+    }
     
     // Handle on the bar (only when not editing)
     if (!editingText) {

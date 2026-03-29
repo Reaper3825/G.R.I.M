@@ -1040,6 +1040,10 @@ std::string answerVisionQuestionWithContext(const std::string& question) {
 
 // ✅ NEW: Continuous capture implementation
 void PerceptionContextManager::startContinuousCapture(const ContinuousCaptureConfig& config) {
+    if (!pImpl->featureVisionAI) {
+        throw std::runtime_error("startContinuousCapture called but vision is disabled in config (vision.enabled=false)");
+    }
+
     if (m_captureThreadRunning) {
         LOG_DEBUG("PerceptionContext", "Continuous capture already running");
         return;

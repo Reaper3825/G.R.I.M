@@ -307,19 +307,22 @@ int main(int argc, char* argv[])
     GRIM::TaskPlanner::init();
     LOG_PHASE("Task planner initialized", true);
     
-    // Start continuous screen awareness
-    bool useContinuousCapture = true;
-    if (useContinuousCapture) {
-    GRIM::Perception::ContinuousCaptureConfig captureConfig;
-    captureConfig.frameSkip = 30;              // Capture every 30 frames (~1/sec at 30fps)
-    captureConfig.captureIntervalMs = 1000;    // Or every 1000ms
-    captureConfig.useFrameSkip = false;        // Use time-based for consistency
-    captureConfig.captureAllMonitors = false;  // Just active monitor
-    captureConfig.changeThreshold = 1.0;     // 5% change detection
-    captureConfig.useVisionAI = false;         // ✅ Vision AI too slow for background capture (only on-demand)
-    GRIM::Perception::g_contextManager->startContinuousCapture(captureConfig);
+    // Start continuous screen awareness — gated by vision.enabled in ai_config.json
+    bool visionEnabled = aiConfig.contains("vision") &&
+                         aiConfig["vision"].is_object() &&
+                         aiConfig["vision"].contains("enabled") &&
+                         aiConfig["vision"]["enabled"].get<bool>();
+    if (visionEnabled) {
+        GRIM::Perception::ContinuousCaptureConfig captureConfig;
+        captureConfig.frameSkip = 30;           // Capture every 30 frames (~1/sec at 30fps)
+        captureConfig.captureIntervalMs = 1000; // Or every 1000ms
+        captureConfig.useFrameSkip = false;     // Use time-based for consistency
+        captureConfig.captureAllMonitors = false; // Just active monitor
+        captureConfig.changeThreshold = 1.0;    // 5% change detection
+        captureConfig.useVisionAI = false;      // Vision AI too slow for background capture (only on-demand)
+        GRIM::Perception::g_contextManager->startContinuousCapture(captureConfig);
     }
-        LOG_PHASE("Continuous screen capture started", useContinuousCapture);
+    LOG_PHASE("Continuous screen capture started", visionEnabled);
     // ======================================================
     // 7. Initialize BGFX global context (platform window)
     // ======================================================

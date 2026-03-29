@@ -7,7 +7,7 @@
 #include "../MMO/Core/ModelLoader.hpp"
 #include "../MMO/Core/ProcessManager.hpp"
 #include "../MMO/Core/Orchestrator.hpp"
-#include "../MMO/Core/MemoryFacade.hpp"
+#include "../memory/MemoryFacade.hpp"
 #include "../MMO/Core/SessionContextManager.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
 #include "../MMO/Core/ActionPolicyRegistry.hpp"

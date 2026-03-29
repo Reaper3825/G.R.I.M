@@ -1,6 +1,6 @@
 #include "MemoryFacade.hpp"
-#include "SessionContextManager.hpp"
-#include "logger.hpp"
+#include "../MMO/Core/SessionContextManager.hpp"
+#include "../logger.hpp"
 
 #include <algorithm>
 

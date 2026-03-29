@@ -57,6 +57,8 @@ file(GLOB hardware_SOURCES "hardware/*.cpp")
 file(GLOB hardware_HEADERS "hardware/*.hpp")
 file(GLOB_RECURSE MMO_SOURCES "MMO/*.cpp")
 file(GLOB_RECURSE MMO_HEADERS "MMO/*.hpp")
+file(GLOB settings_SOURCES "settings/*.cpp")
+file(GLOB settings_HEADERS "settings/*.hpp")
 # Exclude standalone entry point files (these have main() functions)
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_data_collection\\.cpp$")
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "merge_checkpoints\\.cpp$")
@@ -108,6 +110,7 @@ set(GRIM_SOURCES
     ${DataCollection_IO_SOURCES}
     ${hardware_SOURCES}
     ${MMO_SOURCES}
+    ${settings_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -145,4 +148,5 @@ set(GRIM_HEADERS
     ${DataCollection_IO_HEADERS}
     ${hardware_HEADERS}
     ${MMO_HEADERS}
+    ${settings_HEADERS}
 )

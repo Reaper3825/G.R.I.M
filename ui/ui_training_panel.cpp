@@ -85,40 +85,40 @@ UITrainingPanel::UITrainingPanel()
     collectionManager = std::make_unique<GRIM::Pipeline::PipelineOrchestrator>();
     
     // Initialize configuration sliders
-    epochsSlider = std::make_shared<UISlider>("Epochs", 1.0f, 50.0f, 
+    epochsSlider = std::make_shared<UISlider>("Epochs", 1.0f, 50.0f,
         static_cast<float>(currentConfig.epochs),
-        [this](float val) { 
+        [this](float val) {
             currentConfig.epochs = static_cast<int>(val);
             calculateTrainingEstimate();
-        });
+        }, 1.0f);
     
     batchSizeSlider = std::make_shared<UISlider>("Batch Size", 1.0f, 128.0f,
         static_cast<float>(currentConfig.batchSize),
         [this](float val) {
             currentConfig.batchSize = static_cast<int>(val);
             calculateTrainingEstimate();
-        });
+        }, 1.0f);
     
     learningRateSlider = std::make_shared<UISlider>("Learning Rate", 0.000001f, 0.01f,
         currentConfig.learningRate,
         [this](float val) {
             currentConfig.learningRate = val;
             calculateTrainingEstimate();
-        });
+        }, 0.000001f);
     
     maxSeqLenSlider = std::make_shared<UISlider>("Max Seq Length", 512.0f, 16384.0f,
         static_cast<float>(currentConfig.maxSeqLen),
         [this](float val) {
             currentConfig.maxSeqLen = static_cast<int>(val);
             calculateTrainingEstimate();
-        });
+        }, 128.0f);
     
     warmupStepsSlider = std::make_shared<UISlider>("Warmup Steps", 0.0f, 5000.0f,
         static_cast<float>(currentConfig.warmupSteps),
         [this](float val) {
             currentConfig.warmupSteps = static_cast<int>(val);
             calculateTrainingEstimate();
-        });
+        }, 10.0f);
     
     // Initialize widgets - simplified
     startButton = std::make_unique<UIButton>("Start Training", [this]() { 

@@ -5,9 +5,10 @@
 #include "nlp/nlp.hpp"
 #include "console_history.hpp"
 #include "ai/ai.hpp"
-#include "ai/grim_backend.hpp"  // ✅ Native GRIM backend (external reference)
+#include "ai/grim_backend.hpp"
 #include "logger.hpp"
-#include "nlp/grammar_parser.hpp"  // ✅ NEW: Grammar parser
+#include "nlp/grammar_parser.hpp"
+#include "../settings/runtime_ai_config.hpp"
 
 namespace fs = std::filesystem;
 
@@ -93,59 +94,29 @@ bool loadConfig(const fs::path& path,
 
 // ----------------- entry -----------------
 void initAll() {
-    // ai_config.json - Simple load from root
+    // ai_config.json — load via canonical Settings module
     try {
-        std::ifstream f(AI_CONFIG_FILE);
-        if (f.is_open()) {
-            f >> aiConfig;
-            LOG_PHASE("AI config load", true);
+        Settings::loadRuntimeAiConfig();
+        LOG_PHASE("AI config load", true);
 
-            // Machine-specific secrets (gitignored); shallow-merge nested objects (e.g. api_keys)
-            try {
-                fs::path localPath(AI_CONFIG_LOCAL_FILE);
-                if (fs::exists(localPath)) {
-                    std::ifstream fl(localPath);
-                    nlohmann::json local;
-                    fl >> local;
-                    if (local.is_object()) {
-                        for (auto& [key, val] : local.items()) {
-                            if (val.is_object() && aiConfig.contains(key) && aiConfig[key].is_object()) {
-                                for (auto& [k2, v2] : val.items())
-                                    aiConfig[key][k2] = v2;
-                            } else {
-                                aiConfig[key] = val;
-                            }
-                        }
-                    }
-                    LOG_DEBUG("Config", "Merged " + std::string(AI_CONFIG_LOCAL_FILE));
-                }
-            } catch (const std::exception& e) {
-                LOG_ERROR("Config", std::string(AI_CONFIG_LOCAL_FILE) + " merge error: " + e.what());
+        // Initialize native GRIM backend if configured
+        if (aiConfig.value("backend", "") == "grim_native") {
+            std::string modelPath = aiConfig.value("model_path", "resources/models/GRIM-text/training/checkpoints/model_embeddings.npy");
+            std::string tokenizerPath = "resources/models/GRIM-text/training/models/vocab.bin";
+            if (aiConfig.contains("paths") && aiConfig["paths"].contains("grim_text") && 
+                aiConfig["paths"]["grim_text"].contains("vocab")) {
+                tokenizerPath = aiConfig["paths"]["grim_text"]["vocab"].get<std::string>();
             }
             
-            // ✅ Initialize native GRIM backend if configured
-            if (aiConfig.value("backend", "") == "grim_native") {
-                std::string modelPath = aiConfig.value("model_path", "resources/models/GRIM-text/training/checkpoints/model_embeddings.npy");
-                // Use paths.grim_text.vocab as primary source, fall back to default
-                std::string tokenizerPath = "resources/models/GRIM-text/training/models/vocab.bin";
-                if (aiConfig.contains("paths") && aiConfig["paths"].contains("grim_text") && 
-                    aiConfig["paths"]["grim_text"].contains("vocab")) {
-                    tokenizerPath = aiConfig["paths"]["grim_text"]["vocab"].get<std::string>();
-                }
-                
-                if (GRIM::initGRIMBackend(modelPath, tokenizerPath)) {
-                    LOG_PHASE("Native GRIM model initialized", true);
-                } else {
-                    LOG_ERROR("AI", "Failed to initialize native GRIM backend");
-                    LOG_PHASE("Native GRIM model initialization", false);
-                }
+            if (GRIM::initGRIMBackend(modelPath, tokenizerPath)) {
+                LOG_PHASE("Native GRIM model initialized", true);
+            } else {
+                LOG_ERROR("AI", "Failed to initialize native GRIM backend");
+                LOG_PHASE("Native GRIM model initialization", false);
             }
-        } else {
-            LOG_ERROR("Config", "ai_config.json not found");
-            LOG_PHASE("AI config load", false);
         }
     } catch (const std::exception& e) {
-        LOG_ERROR("Config", std::string("ai_config.json parse error: ") + e.what());
+        LOG_ERROR("Config", std::string("ai_config load error: ") + e.what());
         LOG_PHASE("AI config load", false);
     }
 

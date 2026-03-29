@@ -7,12 +7,73 @@
 #include "helpers/mouse.hpp"
 #include "helpers/key.hpp"
 #include "ui_focus_manager.hpp"
+#include "ui_root.hpp"
 #include "logger.hpp"
 #include "core/grim_platform.h"
 #include "core/platform_clipboard.hpp"
 #include <algorithm>
 
 static UIInputBox* g_activeInputBox = nullptr;
+
+namespace {
+constexpr float kTextPaddingX = 6.0f;
+constexpr const char* kOverflowPrefix = "...";
+
+struct InputBoxDisplayLayout {
+    std::string prefix;
+    std::string display;
+    int displayOffset = 0;
+};
+
+InputBoxDisplayLayout buildDisplayLayout(const std::string& buffer,
+                                         float boxWidth,
+                                         const OverlayRenderer& renderer)
+{
+    InputBoxDisplayLayout layout;
+    if (buffer.empty()) return layout;
+
+    const float availableWidth = std::max(0.0f, boxWidth - (kTextPaddingX * 2.0f));
+    if (availableWidth <= 0.0f) {
+        layout.displayOffset = static_cast<int>(buffer.length());
+        return layout;
+    }
+
+    if (renderer.measureTextWidth(buffer) <= availableWidth) {
+        layout.display = buffer;
+        return layout;
+    }
+
+    const float ellipsisWidth = renderer.measureTextWidth(kOverflowPrefix);
+    if (ellipsisWidth <= availableWidth) {
+        layout.prefix = kOverflowPrefix;
+    }
+
+    float visibleWidth = layout.prefix.empty() ? 0.0f : ellipsisWidth;
+    int suffixStart = static_cast<int>(buffer.length());
+
+    for (int i = static_cast<int>(buffer.length()) - 1; i >= 0; --i) {
+        const float charWidth = renderer.measureTextWidth(std::string(1, buffer[static_cast<size_t>(i)]));
+        if (visibleWidth + charWidth > availableWidth) {
+            break;
+        }
+
+        visibleWidth += charWidth;
+        suffixStart = i;
+    }
+
+    layout.displayOffset = suffixStart;
+    layout.display = layout.prefix + buffer.substr(static_cast<size_t>(layout.displayOffset));
+    return layout;
+}
+
+float measureDisplayPrefixWidth(const OverlayRenderer& renderer,
+                                const InputBoxDisplayLayout& layout,
+                                int displayIndex)
+{
+    const int clampedIndex = std::clamp(displayIndex, 0, static_cast<int>(layout.display.length()));
+    return renderer.measureTextWidth(layout.display.substr(0, static_cast<size_t>(clampedIndex)));
+}
+}
 
 UIInputBox::UIInputBox(std::string* bind)
     : externalBind(bind) 
@@ -32,22 +93,31 @@ void UIInputBox::setPlaceholder(const std::string& t) {
 // ---------------------------------------------------------------
 
 int UIInputBox::charIndexAtX(float clickX) const {
-    float textStartX = position.x + 6.0f;
+    if (buffer.empty()) return 0;
+
+    const OverlayRenderer& renderer = UIRoot::get().getRenderer();
+    const InputBoxDisplayLayout layout = buildDisplayLayout(buffer, size.x, renderer);
+
+    float textStartX = position.x + kTextPaddingX;
     float relX = clickX - textStartX;
     if (relX <= 0.0f) return 0;
 
-    // Account for display truncation (leading "..." when text overflows)
-    int maxChars = static_cast<int>(size.x / kCharWidth) - 2;
-    int displayOffset = 0;
-    if (static_cast<int>(buffer.length()) > maxChars && maxChars > 3) {
-        displayOffset = static_cast<int>(buffer.length()) - maxChars + 3;
+    const std::string visibleBuffer = buffer.substr(static_cast<size_t>(layout.displayOffset));
+    float prevCaretX = layout.prefix.empty() ? 0.0f : renderer.measureTextWidth(layout.prefix);
+
+    for (int i = 0; i < static_cast<int>(visibleBuffer.length()); ++i) {
+        const float nextCaretX = renderer.measureTextWidth(
+            layout.prefix + visibleBuffer.substr(0, static_cast<size_t>(i + 1)));
+        const float midpoint = prevCaretX + ((nextCaretX - prevCaretX) * 0.5f);
+
+        if (relX < midpoint) {
+            return layout.displayOffset + i;
+        }
+
+        prevCaretX = nextCaretX;
     }
 
-    int idx = static_cast<int>(relX / kCharWidth);
-    if (displayOffset > 0) {
-        idx += displayOffset; // map from display space to buffer space
-    }
-    return std::clamp(idx, 0, static_cast<int>(buffer.length()));
+    return static_cast<int>(buffer.length());
 }
 
 void UIInputBox::deleteSelection() {
@@ -350,20 +420,8 @@ void UIInputBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     using namespace UITheme;
     if (!isVisible()) return;
 
-    int maxChars = static_cast<int>(size.x / kCharWidth) - 2;
-    if (maxChars < 1) maxChars = 1;
-
-    // Build display string, handling overflow with leading "..."
-    std::string display;
-    int displayOffset = 0; // first buffer index shown
-    if (buffer.empty()) {
-        display = placeholder;
-    } else if (static_cast<int>(buffer.length()) > maxChars && maxChars > 3) {
-        displayOffset = static_cast<int>(buffer.length()) - maxChars + 3;
-        display = "..." + buffer.substr(displayOffset);
-    } else {
-        display = buffer;
-    }
+    const InputBoxDisplayLayout layout = buildDisplayLayout(buffer, size.x, renderer);
+    const std::string display = buffer.empty() ? placeholder : layout.display;
 
     uint32_t textColor = buffer.empty() ? Colors::TextDisabled : Colors::TextLight;
 
@@ -371,31 +429,30 @@ void UIInputBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     if (focused && hasSelection() && !buffer.empty()) {
         int lo = std::min(selStart, selEnd);
         int hi = std::max(selStart, selEnd);
-        // Map buffer indices to display coordinates
-        int dispLo = std::max(0, lo - displayOffset);
-        int dispHi = std::min(static_cast<int>(display.length()), hi - displayOffset);
-        if (displayOffset > 0) {
-            dispLo = std::max(3, dispLo + 3);
-            dispHi = std::min(static_cast<int>(display.length()), dispHi + 3);
-        }
+
+        const int prefixChars = static_cast<int>(layout.prefix.length());
+        const int visibleBufferLen = static_cast<int>(buffer.length()) - layout.displayOffset;
+        const int dispLo = prefixChars + std::clamp(lo - layout.displayOffset, 0, visibleBufferLen);
+        const int dispHi = prefixChars + std::clamp(hi - layout.displayOffset, 0, visibleBufferLen);
+
         if (dispHi > dispLo) {
-            float selX = position.x + 6.0f + dispLo * kCharWidth;
-            float selW = (dispHi - dispLo) * kCharWidth;
+            float selX = position.x + kTextPaddingX + measureDisplayPrefixWidth(renderer, layout, dispLo);
+            float selEndX = position.x + kTextPaddingX + measureDisplayPrefixWidth(renderer, layout, dispHi);
+            float selW = std::max(0.0f, selEndX - selX);
             renderer.drawRect({selX, position.y + 3.0f}, {selW, size.y - 6.0f}, 0x604488CC);
         }
     }
 
-    renderer.drawText({position.x + 6, position.y + 6}, display, textColor);
+    renderer.drawText({position.x + kTextPaddingX, position.y + 6}, display, textColor);
 
     // Draw caret
     if (focused && caretVisible && !buffer.empty()) {
-        int dispCursorPos = cursorPos - displayOffset;
-        if (displayOffset > 0) dispCursorPos += 3;
-        dispCursorPos = std::clamp(dispCursorPos, 0, static_cast<int>(display.length()));
-        float caretX = position.x + 6.0f + dispCursorPos * kCharWidth;
+        int dispCursorPos = cursorPos - layout.displayOffset + static_cast<int>(layout.prefix.length());
+        dispCursorPos = std::clamp(dispCursorPos, 0, static_cast<int>(layout.display.length()));
+        float caretX = position.x + kTextPaddingX + measureDisplayPrefixWidth(renderer, layout, dispCursorPos);
         renderer.drawRect({caretX, position.y + 4.0f}, {1.5f, size.y - 8.0f}, Colors::TextLight);
     } else if (focused && caretVisible && buffer.empty()) {
-        renderer.drawRect({position.x + 6.0f, position.y + 4.0f}, {1.5f, size.y - 8.0f}, Colors::TextLight);
+        renderer.drawRect({position.x + kTextPaddingX, position.y + 4.0f}, {1.5f, size.y - 8.0f}, Colors::TextLight);
     }
 }
 

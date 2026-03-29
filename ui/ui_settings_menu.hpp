@@ -4,7 +4,8 @@
 #include "ui_slider.hpp"
 #include "ui_toggle.hpp"
 #include "ui_scrollbox.hpp"
-#include "ui_dropdown.hpp"  // ? NEW: Include dropdown
+#include "ui_dropdown.hpp"
+#include "ui_textarea.hpp"
 #include <vector>
 #include <unordered_map>
 #include <memory>
@@ -13,6 +14,16 @@
 class OverlayRenderer;
 struct InputState;
 
+enum class SettingsTab : uint8_t {
+    General     = 0,
+    Voice       = 1,
+    Audio       = 2,
+    Vision      = 3,
+    UIGraphics  = 4,
+    Preferences = 5,
+    Memory      = 6
+};
+
 class UISettingsMenu : public UIPanel {
 public:
     UISettingsMenu();
@@ -20,11 +31,23 @@ public:
     void update(const InputState& input, float dt) override;
     bool drawOverlay(OverlayRenderer& renderer) override;
 
+    void setTab(SettingsTab tab);
+    SettingsTab currentTab() const { return activeTab_; }
+
 private:
     void loadConfig();
     void saveConfig();
     void applyChanges();
     void createWidgets();
+    
+    // Per-tab widget creation
+    void createGeneralWidgets();
+    void createVoiceWidgets();
+    void createAudioWidgets();
+    void createVisionWidgets();
+    void createUIGraphicsWidgets();
+    void createPreferencesWidgets();
+    void createMemoryWidgets();
     
     void cycleBackend();
     void cycleVoice();
@@ -34,18 +57,24 @@ private:
     void doSaveAndClose();
     void doCancel();
     
-    // ? NEW: Helper to scan for available speaker embeddings
     std::vector<std::string> getSpeakerEmbeddings();
-    
-    // ? NEW: Helper to scan for available fonts
     std::vector<std::string> getFontList();
 
     nlohmann::json config;
     nlohmann::json pendingConfig;
     
+    // Tab system
+    SettingsTab activeTab_ = SettingsTab::General;
+    std::shared_ptr<UIButton> tabGeneralBtn_;
+    std::shared_ptr<UIButton> tabVoiceBtn_;
+    std::shared_ptr<UIButton> tabAudioBtn_;
+    std::shared_ptr<UIButton> tabVisionBtn_;
+    std::shared_ptr<UIButton> tabUIGraphicsBtn_;
+    std::shared_ptr<UIButton> tabPreferencesBtn_;
+    std::shared_ptr<UIButton> tabMemoryBtn_;
+    
     std::shared_ptr<UIScrollBox> scrollBox;
     
-    // Keep references to action buttons for external access (Save/Cancel)
     std::shared_ptr<UIButton> saveButton;
     std::shared_ptr<UIButton> cancelButton;
     

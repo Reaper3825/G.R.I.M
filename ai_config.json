@@ -30,9 +30,9 @@
     "default_model": "llama3.1:8b",
     "grim_text_url": "http://127.0.0.1:11435",
     "localai_url": "http://127.0.0.1:8080/v1",
-    "max_tokens": 256,
+    "max_tokens": 32,
     "mmo": {
-        "enabled": false,
+        "enabled": true,
         "mode": "shadow",
         "model_loader": {
             "hot_ttl_cap_ms": 300000,
@@ -158,7 +158,7 @@
                 "plateau_min_delta": 0.004,
                 "plateau_patience": 18
             },
-            "batch_size": 12,
+            "batch_size": 24,
             "batch_strategy": "RANDOM",
             "checkpoint_interval": 2000,
             "cosine_decay": {
@@ -494,7 +494,7 @@
         "silence_threshold": 0.015,
         "silence_timeout_ms": 1200,
         "speaker": "grim",
-        "speed": 1.0
+        "speed": 1.0012195110321045
     },
     "whisper": {
         "beam_size": 2,

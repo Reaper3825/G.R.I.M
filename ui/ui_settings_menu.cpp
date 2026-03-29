@@ -1,261 +1,96 @@
 #include "ui_settings_menu.hpp"
 #include "overlay_renderer.hpp"
 #include "ui_theme.hpp"
+#include "ui_draw_helpers.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
 #include "ui_root.hpp"
-#include "../voice/voice_speak.hpp"
-#include "../resources.hpp"
-#include "../perception/perception_context.hpp"  // For vision AI control
 #include "core/platform_window.hpp"
-#include <fstream>
+#include "../settings/runtime_ai_config.hpp"
+#include "../settings/settings_apply.hpp"
 #include <functional>
-#include <filesystem>
 
-// External global aiConfig that needs to be updated when settings change
-extern nlohmann::json aiConfig;
+static constexpr float kTabBarY     = 35.0f;
+static constexpr float kContentTopY = 68.0f;
 
 UISettingsMenu::UISettingsMenu()
     : UIPanel("Settings", true), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
 {
-    position = { 200, 425 };
-    size = { 500, 600 };  // Increased height to accommodate scrollbox
+    position = { 200, 200 };
+    size = { 620, 700 };
     setVisible(false);
     setBackground(UITheme::Colors::PanelBg);
     
-    // Create scroll box for content
     scrollBox = std::make_shared<UIScrollBox>();
-    scrollBox->setPosition(position.x + 10, position.y + 40);  // Below title bar
-    scrollBox->setSize(size.x - 20, size.y - 50);  // Leave room for title
     scrollBox->setChildSpacing(5.0f);
+    
+    // Create tab buttons
+    tabGeneralBtn_ = std::make_shared<UIButton>("General", [this]() { setTab(SettingsTab::General); });
+    tabGeneralBtn_->setSize(70.0f, 26.0f);
+    tabVoiceBtn_ = std::make_shared<UIButton>("Voice", [this]() { setTab(SettingsTab::Voice); });
+    tabVoiceBtn_->setSize(60.0f, 26.0f);
+    tabAudioBtn_ = std::make_shared<UIButton>("Audio", [this]() { setTab(SettingsTab::Audio); });
+    tabAudioBtn_->setSize(60.0f, 26.0f);
+    tabVisionBtn_ = std::make_shared<UIButton>("Vision", [this]() { setTab(SettingsTab::Vision); });
+    tabVisionBtn_->setSize(62.0f, 26.0f);
+    tabUIGraphicsBtn_ = std::make_shared<UIButton>("UI", [this]() { setTab(SettingsTab::UIGraphics); });
+    tabUIGraphicsBtn_->setSize(40.0f, 26.0f);
+    tabPreferencesBtn_ = std::make_shared<UIButton>("Prefs", [this]() { setTab(SettingsTab::Preferences); });
+    tabPreferencesBtn_->setSize(55.0f, 26.0f);
+    tabMemoryBtn_ = std::make_shared<UIButton>("Memory", [this]() { setTab(SettingsTab::Memory); });
+    tabMemoryBtn_->setSize(68.0f, 26.0f);
     
     loadConfig();
 }
 
-// ? NEW: Scan for available speaker embeddings
+// =========================================================
+// Tab management
+// =========================================================
+
+void UISettingsMenu::setTab(SettingsTab tab) {
+    if (tab == activeTab_ && !needsWidgetRefresh) return;
+    activeTab_ = tab;
+    needsWidgetRefresh = true;
+    LOG_DEBUG("UISettingsMenu", "Switched to tab " + std::to_string(static_cast<int>(tab)));
+}
+
 std::vector<std::string> UISettingsMenu::getSpeakerEmbeddings() {
-    std::vector<std::string> embeddings;
-    embeddings.push_back("default");  // Always include default
-    
-    try {
-        std::string embeddingDir = "D:/G.R.I.M/resources/voices/embeddings";
-        
-        if (std::filesystem::exists(embeddingDir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(embeddingDir)) {
-                if (entry.path().extension() == ".npz") {
-                    std::string speakerName = entry.path().stem().string();
-                    if (speakerName != "default") {  // Don't duplicate default
-                        embeddings.push_back(speakerName);
-                    }
-                }
-            }
-        }
-        
-        LOG_DEBUG("UISettingsMenu", "Found " + std::to_string(embeddings.size()) + " speaker embeddings");
-    } catch (const std::exception& e) {
-        LOG_ERROR("UISettingsMenu", std::string("Failed to scan embeddings: ") + e.what());
-    }
-    
-    // If only default found, add a helpful message option
-    if (embeddings.size() == 1) {
-        embeddings.push_back("(no custom voices)");
-    }
-    
-    return embeddings;
+    return Settings::scanSpeakerEmbeddings();
 }
 
 std::vector<std::string> UISettingsMenu::getFontList() {
-    std::vector<std::string> fonts;
-    m_fontPathMap.clear();
-
-    auto scanDir = [&](const std::filesystem::path& dir) {
-        if (!std::filesystem::exists(dir)) return;
-        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-            if (!entry.is_regular_file()) continue;
-            auto ext = entry.path().extension().string();
-            if (ext != ".ttf" && ext != ".otf") continue;
-            std::string name = entry.path().stem().string();
-            if (m_fontPathMap.count(name)) continue;
-            m_fontPathMap[name] = entry.path().string();
-            fonts.push_back(name);
-        }
-    };
-
-    try {
-        scanDir(std::filesystem::path(getResourcePath()));
-        scanDir(std::filesystem::path(getGrimRootDir()) / "resources" / "fonts");
-
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(
-                 std::filesystem::path(getGrimRootDir()) / "resources" / "fonts",
-                 std::filesystem::directory_options::skip_permission_denied)) {
-            if (!entry.is_regular_file()) continue;
-            auto ext = entry.path().extension().string();
-            if (ext != ".ttf" && ext != ".otf") continue;
-            std::string name = entry.path().stem().string();
-            if (m_fontPathMap.count(name)) continue;
-            m_fontPathMap[name] = entry.path().string();
-            fonts.push_back(name);
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("UISettingsMenu", std::string("Failed to scan fonts: ") + e.what());
-    }
-
-    if (fonts.empty()) {
-        fonts.push_back("(no fonts found)");
-    }
-
-    LOG_DEBUG("UISettingsMenu", "Found " + std::to_string(fonts.size()) + " TTF/OTF fonts");
-    return fonts;
+    return Settings::scanFonts(m_fontPathMap);
 }
 
 void UISettingsMenu::loadConfig() {
-    try {
-        std::ifstream f("ai_config.json");
-        if (f.is_open()) {
-            f >> config;
-        } else {
-            // Match the actual default structure from bootstrap_config
-            config = {
-                {"backend", "auto"},
-                {"voice", {
-                    {"engine", "coqui"},
-                    {"speaker", "default"},
-                    {"available_speakers", nlohmann::json::array({"default", "p226", "grim"})}
-                }},
-                {"whisper", {
-                    {"whisper_model", "ggml-base.en.bin"},
-                    {"temperature", 0.0},
-                    {"beam_size", 5},
-                    {"suppress_blank", true}
-                }},
-                {"personality", {
-                    {"custom_prompt", "You are GRIM, a helpful AI assistant. Be concise and professional."},
-                    {"use_custom_prompt", false}
-                }},
-                {"vision", {
-                    {"enabled", true}
-                }},
-                {"blur", {
-                    {"enabled", true},
-                    {"opacity", 0.99},
-                    {"intensity", 2}
-                }}
-            };
-        }
-        LOG_DEBUG("UISettingsMenu", "Config loaded successfully");
-    } catch (const std::exception& e) {
-        LOG_ERROR("UISettingsMenu", std::string("Failed to load ai_config.json: ") + e.what());
-    } catch (...) {
-        LOG_ERROR("UISettingsMenu", "Failed to load ai_config.json (unknown error)");
-    }
-    
+    config = Settings::loadRuntimeAiConfig();
     pendingConfig = config;
     hasChanges = false;
-    
-    // ? FIX: DON'T create widgets in constructor!
-    // createWidgets() will be called on first update() instead
-    needsWidgetRefresh = true;  // ? Flag to create widgets on first update
-    
-    LOG_DEBUG("UISettingsMenu", "Config loaded, widgets will be created on first update");
+    needsWidgetRefresh = true;
 }
 
 void UISettingsMenu::saveConfig() {
-    try {
-        std::ofstream f("ai_config.json");
-        if (!f.is_open()) {
-            LOG_ERROR("UISettingsMenu", "Failed to open ai_config.json for writing");
-            return;
-        }
-        
-        f << config.dump(4);
-        f.close();
-        
-        // Update the global aiConfig so changes take effect immediately
-        aiConfig = config;
-        
-        LOG_DEBUG("UISettingsMenu", "Saved ai_config.json and updated global aiConfig");
-        
-        // Log whisper settings for verification
-        if (config.contains("whisper")) {
-            LOG_DEBUG("UISettingsMenu", "Whisper settings in saved config: " + config["whisper"].dump());
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("UISettingsMenu", std::string("Failed to save ai_config.json: ") + e.what());
-    } catch (...) {
-        LOG_ERROR("UISettingsMenu", "Failed to save ai_config.json (unknown error)");
-    }
+    config = Settings::saveRuntimeAiConfig(pendingConfig);
 }
 
 void UISettingsMenu::applyChanges() {
-    if (!hasChanges) {
-        LOG_DEBUG("UISettingsMenu", "No changes to apply");
-        return;
-    }
-    
-    LOG_DEBUG("UISettingsMenu", "Applying changes to config");
-    
-    // Log whisper settings being applied for debugging
-    if (pendingConfig.contains("whisper")) {
-        LOG_DEBUG("UISettingsMenu", "Whisper settings being applied:");
-        LOG_DEBUG("UISettingsMenu", "  temperature: " + std::to_string(pendingConfig["whisper"].value("temperature", 0.0f)));
-        LOG_DEBUG("UISettingsMenu", "  beam_size: " + std::to_string(pendingConfig["whisper"].value("beam_size", 5)));
-        LOG_DEBUG("UISettingsMenu", "  suppress_blank: " + std::string(pendingConfig["whisper"].value("suppress_blank", true) ? "true" : "false"));
-        if (pendingConfig["whisper"].contains("whisper_model")) {
-            LOG_DEBUG("UISettingsMenu", "  whisper_model: " + pendingConfig["whisper"]["whisper_model"].get<std::string>());
-        }
-    }
-    
-    config = pendingConfig;
+    if (!hasChanges) return;
+
     saveConfig();
     hasChanges = false;
-    
-    // ? NEW: Update Voice module speaker if it changed
-    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
-        pendingConfig["voice"].contains("speaker")) {
-        std::string newSpeaker = pendingConfig["voice"]["speaker"].get<std::string>();
-        Voice::setSpeaker(newSpeaker);
-        LOG_DEBUG("UISettingsMenu", "Voice speaker updated to: " + newSpeaker);
-    }
-    
-    // Update Vision AI feature if it changed
-    if (pendingConfig.contains("vision") && pendingConfig["vision"].is_object() &&
-        pendingConfig["vision"].contains("enabled")) {
-        bool visionEnabled = pendingConfig["vision"]["enabled"].get<bool>();
-        if (GRIM::Perception::g_contextManager) {
-            GRIM::Perception::g_contextManager->setFeatureEnabled("vision_ai", visionEnabled);
-            LOG_DEBUG("UISettingsMenu", "Vision AI " + std::string(visionEnabled ? "enabled" : "disabled"));
-        }
-    }
-    
-    if (pendingConfig.contains("ui") && pendingConfig["ui"].is_object() &&
-        pendingConfig["ui"].contains("font_name")) {
-        std::string fontName = pendingConfig["ui"]["font_name"].get<std::string>();
-        int fontSize = 16;
-        if (pendingConfig["ui"].contains("font_size")) {
-            fontSize = pendingConfig["ui"]["font_size"].get<int>();
-        }
 
-        if (m_fontPathMap.empty()) getFontList();
+    if (m_fontPathMap.empty()) getFontList();
 
-        auto it = m_fontPathMap.find(fontName);
-        if (it != m_fontPathMap.end()) {
-            UIRoot::get().getRenderer().setFont(it->second, fontSize);
-            LOG_DEBUG("UISettingsMenu", "UI font updated to: " + fontName + " (" + it->second + ", size " + std::to_string(fontSize) + ")");
-        } else {
-            LOG_ERROR("UISettingsMenu", "Font file not found for: " + fontName);
-        }
-    }
-    
-    if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object()) {
-        bool blurEnabled = pendingConfig["blur"].value("enabled", true);
-        float blurOpacity = pendingConfig["blur"].value("opacity", 0.99f);
-        int blurIntensity = pendingConfig["blur"].value("intensity", 2);
-        PlatformWindow::setOverlayBlurStyle(
-            UIRoot::get().getHWND(),
-            blurEnabled, blurOpacity, blurIntensity);
-    }
-
-    LOG_DEBUG("UISettingsMenu", "Settings applied and saved successfully");
+    Settings::applyRuntimeSideEffects(
+        config,
+        m_fontPathMap,
+        [](const std::string& path, int sz) {
+            UIRoot::get().getRenderer().setFont(path, sz);
+        },
+        [](bool enabled, float opacity, int intensity) {
+            PlatformWindow::setOverlayBlurStyle(
+                UIRoot::get().getHWND(), enabled, opacity, intensity);
+        });
 }
 
 // ? Action handlers - these can safely be called from callbacks
@@ -503,296 +338,28 @@ void UISettingsMenu::createWidgets() {
     }
     
     isRefreshing = true;
-    LOG_DEBUG("UISettingsMenu", "createWidgets() START - using container system");
+    LOG_DEBUG("UISettingsMenu", "createWidgets() START - tab " + std::to_string(static_cast<int>(activeTab_)));
     
     try {
-        // Clear all existing children from scrollbox
         scrollBox->clearChildren();
         
-        float widgetWidth = scrollBox->getSize().x - 30;  // Leave room for scrollbar
-        float widgetHeight = 45.0f;
-        
-        // ===== Button 1: Backend =====
-        std::string backend = pendingConfig.value("backend", "auto");
-        auto backendButton = std::make_shared<UIButton>(
-            "Backend: " + backend,
-            [this]() { cycleBackend(); }
-        );
-        backendButton->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(backendButton);
-        
-        // ===== Button 2: Voice Engine =====
-        std::string voiceEngine = "coqui";
-        if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
-            pendingConfig["voice"].contains("engine")) {
-            voiceEngine = pendingConfig["voice"]["engine"].get<std::string>();
-        }
-        auto voiceButton = std::make_shared<UIButton>(
-            "Voice: " + voiceEngine,
-            [this]() { cycleVoice(); }
-        );
-        voiceButton->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(voiceButton);
-        
-        // ===== Button 3: Speaker (conditional on Coqui) =====
-        if (voiceEngine == "coqui") {
-            std::string currentSpeaker = "default";
-            if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
-                pendingConfig["voice"].contains("speaker")) {
-                currentSpeaker = pendingConfig["voice"]["speaker"].get<std::string>();
-            }
-            
-            auto speakerButton = std::make_shared<UIButton>(
-                "Speaker: " + currentSpeaker,
-                [this]() { cycleSpeaker(); }
-            );
-            speakerButton->setSize(widgetWidth, widgetHeight);
-            scrollBox->addChild(speakerButton);
+        switch (activeTab_) {
+            case SettingsTab::General:     createGeneralWidgets();     break;
+            case SettingsTab::Voice:       createVoiceWidgets();       break;
+            case SettingsTab::Audio:       createAudioWidgets();       break;
+            case SettingsTab::Vision:      createVisionWidgets();      break;
+            case SettingsTab::UIGraphics:  createUIGraphicsWidgets();  break;
+            case SettingsTab::Preferences: createPreferencesWidgets(); break;
+            case SettingsTab::Memory:      createMemoryWidgets();      break;
         }
         
-        // ===== Button 4: Whisper Model =====
-        std::string model = "ggml-base.en.bin";
-        if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
-            pendingConfig["whisper"].contains("whisper_model")) {
-            model = pendingConfig["whisper"]["whisper_model"].get<std::string>();
-        }
-        auto modelButton = std::make_shared<UIButton>(
-            "Model: " + model,
-            [this]() { cycleModel(); }
-        );
-        modelButton->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(modelButton);
-        
-        // ===== Button 5: Personality =====
-        std::string personalityLabel = "Professional";
-        if (pendingConfig.contains("personality") && pendingConfig["personality"].is_object() &&
-            pendingConfig["personality"].contains("custom_prompt")) {
-            std::string prompt = pendingConfig["personality"]["custom_prompt"].get<std::string>();
-            
-            if (prompt.find("helpful AI assistant") != std::string::npos) personalityLabel = "Professional";
-            else if (prompt.find("sarcastic") != std::string::npos) personalityLabel = "Sarcastic";
-            else if (prompt.find("friendly and enthusiastic") != std::string::npos) personalityLabel = "Friendly";
-            else if (prompt.find("military") != std::string::npos) personalityLabel = "Military";
-            else if (prompt.find("brief and direct") != std::string::npos) personalityLabel = "Short";
-            else if (prompt.find("concise but warm") != std::string::npos) personalityLabel = "Short & Sweet";
-            else personalityLabel = "Custom";
-        }
-        auto personalityButton = std::make_shared<UIButton>(
-            "Personality: " + personalityLabel,
-            [this]() { cyclePersonality(); }
-        );
-        personalityButton->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(personalityButton);
-        
-        // ===== Dropdown 1: Font Selection =====
-        std::vector<std::string> availableFonts = getFontList();
-        std::string currentFont = "Consolas";
-        if (pendingConfig.contains("ui") && pendingConfig["ui"].is_object() &&
-            pendingConfig["ui"].contains("font_name")) {
-            currentFont = pendingConfig["ui"]["font_name"].get<std::string>();
-        }
-        
-        // Find current font index
-        int fontIndex = 0;
-        for (size_t i = 0; i < availableFonts.size(); ++i) {
-            if (availableFonts[i] == currentFont) {
-                fontIndex = static_cast<int>(i);
-                break;
-            }
-        }
-        
-        auto fontDropdown = std::make_shared<UIDropdown>(
-            "Font:",
-            availableFonts,
-            fontIndex,
-            [this](int idx, const std::string& fontName) {
-                if (!pendingConfig.contains("ui") || !pendingConfig["ui"].is_object()) {
-                    pendingConfig["ui"] = nlohmann::json::object();
-                }
-                pendingConfig["ui"]["font_name"] = fontName;
-                hasChanges = true;
-                LOG_DEBUG("UISettingsMenu", "Font selected: " + fontName);
-            }
-        );
-        fontDropdown->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(fontDropdown);
-        
-        // ===== Slider 1: Temperature =====
-        float temperature = 0.0f;
-        if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
-            pendingConfig["whisper"].contains("temperature")) {
-            temperature = pendingConfig["whisper"]["temperature"].get<float>();
-        }
-        auto tempSlider = std::make_shared<UISlider>(
-            "Temperature:",
-            0.0f, 1.0f, temperature,
-            [this](float value) {
-                if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object()) {
-                    pendingConfig["whisper"] = nlohmann::json::object();
-                }
-                pendingConfig["whisper"]["temperature"] = value;
-                hasChanges = true;
-            }
-        );
-        tempSlider->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(tempSlider);
-        
-        // ===== Slider 2: Beam Size =====
-        int beamSize = 5;
-        if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
-            pendingConfig["whisper"].contains("beam_size")) {
-            beamSize = pendingConfig["whisper"]["beam_size"].get<int>();
-        }
-        auto beamSlider = std::make_shared<UISlider>(
-            "Beam Size:",
-            1.0f, 10.0f, static_cast<float>(beamSize),
-            [this](float value) {
-                if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object()) {
-                    pendingConfig["whisper"] = nlohmann::json::object();
-                }
-                pendingConfig["whisper"]["beam_size"] = static_cast<int>(value);
-                hasChanges = true;
-            }
-        );
-        beamSlider->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(beamSlider);
-        
-        // ===== Toggle 1: Suppress Blank =====
-        bool suppressBlank = true;
-        if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
-            pendingConfig["whisper"].contains("suppress_blank")) {
-            suppressBlank = pendingConfig["whisper"]["suppress_blank"].get<bool>();
-        }
-        auto suppressToggle = std::make_shared<UIToggle>(
-            "Suppress Blank:",
-            suppressBlank,
-            [this](bool value) {
-                if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object()) {
-                    pendingConfig["whisper"] = nlohmann::json::object();
-                }
-                pendingConfig["whisper"]["suppress_blank"] = value;
-                hasChanges = true;
-            }
-        );
-        suppressToggle->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(suppressToggle);
-        
-        // ===== Toggle 2: Custom Personality =====
-        bool useCustom = false;
-        if (pendingConfig.contains("personality") && pendingConfig["personality"].is_object() &&
-            pendingConfig["personality"].contains("use_custom_prompt")) {
-            useCustom = pendingConfig["personality"]["use_custom_prompt"].get<bool>();
-        }
-        auto customToggle = std::make_shared<UIToggle>(
-            "Custom Personality:",
-            useCustom,
-            [this](bool value) {
-                if (!pendingConfig.contains("personality") || !pendingConfig["personality"].is_object()) {
-                    pendingConfig["personality"] = nlohmann::json::object();
-                }
-                pendingConfig["personality"]["use_custom_prompt"] = value;
-                hasChanges = true;
-            }
-        );
-        customToggle->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(customToggle);
-        
-        // ===== Toggle 3: Vision AI =====
-        bool visionEnabled = true;
-        if (pendingConfig.contains("vision") && pendingConfig["vision"].is_object() &&
-            pendingConfig["vision"].contains("enabled")) {
-            visionEnabled = pendingConfig["vision"]["enabled"].get<bool>();
-        }
-        auto visionToggle = std::make_shared<UIToggle>(
-            "Vision AI:",
-            visionEnabled,
-            [this](bool value) {
-                if (!pendingConfig.contains("vision") || !pendingConfig["vision"].is_object()) {
-                    pendingConfig["vision"] = nlohmann::json::object();
-                }
-                pendingConfig["vision"]["enabled"] = value;
-                hasChanges = true;
-                LOG_DEBUG("UISettingsMenu", "Vision AI toggle changed to: " + std::string(value ? "ON" : "OFF"));
-            }
-        );
-        visionToggle->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(visionToggle);
-        
-        // ===== Toggle 4: Blur Enabled =====
-        bool blurEnabled = true;
-        if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object() &&
-            pendingConfig["blur"].contains("enabled")) {
-            blurEnabled = pendingConfig["blur"]["enabled"].get<bool>();
-        }
-        auto blurToggle = std::make_shared<UIToggle>(
-            "Glass Blur:",
-            blurEnabled,
-            [this](bool value) {
-                if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object()) {
-                    pendingConfig["blur"] = nlohmann::json::object();
-                }
-                pendingConfig["blur"]["enabled"] = value;
-                hasChanges = true;
-            }
-        );
-        blurToggle->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(blurToggle);
-
-        // ===== Slider 3: Blur Opacity =====
-        float blurOpacity = 0.99f;
-        if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object() &&
-            pendingConfig["blur"].contains("opacity")) {
-            blurOpacity = pendingConfig["blur"]["opacity"].get<float>();
-        }
-        auto blurOpacitySlider = std::make_shared<UISlider>(
-            "Blur Opacity:",
-            0.0f, 1.0f, blurOpacity,
-            [this](float value) {
-                if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object()) {
-                    pendingConfig["blur"] = nlohmann::json::object();
-                }
-                pendingConfig["blur"]["opacity"] = value;
-                hasChanges = true;
-            }
-        );
-        blurOpacitySlider->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(blurOpacitySlider);
-
-        // ===== Slider 4: Blur Intensity (number of stacked blur layers) =====
-        int blurIntensity = 2;
-        if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object() &&
-            pendingConfig["blur"].contains("intensity")) {
-            blurIntensity = pendingConfig["blur"]["intensity"].get<int>();
-        }
-        auto blurIntensitySlider = std::make_shared<UISlider>(
-            "Blur Intensity:",
-            1.0f, 5.0f, static_cast<float>(blurIntensity),
-            [this](float value) {
-                if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object()) {
-                    pendingConfig["blur"] = nlohmann::json::object();
-                }
-                pendingConfig["blur"]["intensity"] = static_cast<int>(value);
-                hasChanges = true;
-            }
-        );
-        blurIntensitySlider->setSize(widgetWidth, widgetHeight);
-        scrollBox->addChild(blurIntensitySlider);
-
-        // Auto-layout all children in the scrollbox
         scrollBox->setChildSpacing(5.0f);
         scrollBox->autoLayoutChildren(10.0f);
         
-        // Create Save & Close button (outside scrollbox)
-        saveButton = std::make_shared<UIButton>("Save & Close", [this]() {
-            doSaveAndClose();
-        });
+        saveButton = std::make_shared<UIButton>("Save & Close", [this]() { doSaveAndClose(); });
+        cancelButton = std::make_shared<UIButton>("Cancel", [this]() { doCancel(); });
         
-        // Create Cancel button (outside scrollbox)
-        cancelButton = std::make_shared<UIButton>("Cancel", [this]() {
-            doCancel();
-        });
-        
-        LOG_DEBUG("UISettingsMenu", "Widgets created successfully - using container system");
+        LOG_DEBUG("UISettingsMenu", "Widgets created successfully for tab " + std::to_string(static_cast<int>(activeTab_)));
     }
     catch (const std::exception& e) {
         LOG_ERROR("UISettingsMenu", std::string("createWidgets() exception: ") + e.what());
@@ -808,6 +375,876 @@ void UISettingsMenu::createWidgets() {
     isRefreshing = false;
 }
 
+// =========================================================
+// General Tab — system-level settings (backend, URLs, tokens)
+// =========================================================
+void UISettingsMenu::createGeneralWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+    
+    // --- Backend ---
+    std::string backend = pendingConfig.value("backend", "auto");
+    auto backendButton = std::make_shared<UIButton>(
+        "Backend: " + backend,
+        [this]() { cycleBackend(); }
+    );
+    backendButton->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(backendButton);
+    
+    // --- Default Model ---
+    std::string defaultModel = pendingConfig.value("default_model", "llama3.1:8b");
+    std::vector<std::string> modelOptions = {"llama3.1:8b", "llama3.2:3b", "mistral:7b", "grim-text"};
+    int modelIdx = 0;
+    for (size_t i = 0; i < modelOptions.size(); ++i) {
+        if (modelOptions[i] == defaultModel) { modelIdx = static_cast<int>(i); break; }
+    }
+    auto modelDropdown = std::make_shared<UIDropdown>(
+        "Default Model:", modelOptions, modelIdx,
+        [this](int, const std::string& val) {
+            pendingConfig["default_model"] = val;
+            hasChanges = true;
+        }
+    );
+    modelDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(modelDropdown);
+    
+    // --- Max Tokens ---
+    int maxTokens = pendingConfig.value("max_tokens", 256);
+    auto maxTokensSlider = std::make_shared<UISlider>(
+        "Max Tokens:", 32.0f, 2048.0f, static_cast<float>(maxTokens),
+        [this](float val) {
+            pendingConfig["max_tokens"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 32.0f
+    );
+    maxTokensSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(maxTokensSlider);
+    
+    // --- Conversation History Size ---
+    int historySize = pendingConfig.value("conversation_history_size", 10);
+    auto historySlider = std::make_shared<UISlider>(
+        "History Size:", 1.0f, 50.0f, static_cast<float>(historySize),
+        [this](float val) {
+            pendingConfig["conversation_history_size"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 1.0f
+    );
+    historySlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(historySlider);
+    
+    // --- MMO Enabled ---
+    bool mmoEnabled = false;
+    if (pendingConfig.contains("mmo") && pendingConfig["mmo"].is_object()) {
+        mmoEnabled = pendingConfig["mmo"].value("enabled", false);
+    }
+    auto mmoToggle = std::make_shared<UIToggle>(
+        "MMO (Multi-Model):", mmoEnabled,
+        [this](bool val) {
+            if (!pendingConfig.contains("mmo") || !pendingConfig["mmo"].is_object())
+                pendingConfig["mmo"] = nlohmann::json::object();
+            pendingConfig["mmo"]["enabled"] = val;
+            hasChanges = true;
+        }
+    );
+    mmoToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(mmoToggle);
+}
+
+// =========================================================
+// Voice Tab — TTS engine, speaker, speed, voice rules
+// =========================================================
+void UISettingsMenu::createVoiceWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+    
+    // --- Voice Engine ---
+    std::string voiceEngine = "coqui";
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
+        pendingConfig["voice"].contains("engine")) {
+        voiceEngine = pendingConfig["voice"]["engine"].get<std::string>();
+    }
+    auto voiceButton = std::make_shared<UIButton>(
+        "Voice Engine: " + voiceEngine,
+        [this]() { cycleVoice(); }
+    );
+    voiceButton->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(voiceButton);
+    
+    // --- Speaker ---
+    std::string currentSpeaker = "default";
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
+        pendingConfig["voice"].contains("speaker")) {
+        currentSpeaker = pendingConfig["voice"]["speaker"].get<std::string>();
+    }
+    auto speakerButton = std::make_shared<UIButton>(
+        "Speaker: " + currentSpeaker,
+        [this]() { cycleSpeaker(); }
+    );
+    speakerButton->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(speakerButton);
+    
+    // --- Voice Mode ---
+    std::string voiceMode = "local";
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object()) {
+        voiceMode = pendingConfig["voice"].value("mode", "local");
+    }
+    std::vector<std::string> modeOptions = {"local", "remote"};
+    int modeIdx = (voiceMode == "remote") ? 1 : 0;
+    auto modeDropdown = std::make_shared<UIDropdown>(
+        "Voice Mode:", modeOptions, modeIdx,
+        [this](int, const std::string& val) {
+            if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object())
+                pendingConfig["voice"] = nlohmann::json::object();
+            pendingConfig["voice"]["mode"] = val;
+            hasChanges = true;
+        }
+    );
+    modeDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(modeDropdown);
+    
+    // --- Speed ---
+    float speed = 1.0f;
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object()) {
+        speed = pendingConfig["voice"].value("speed", 1.0f);
+    }
+    auto speedSlider = std::make_shared<UISlider>(
+        "Voice Speed:", 0.5f, 2.0f, speed,
+        [this](float val) {
+            if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object())
+                pendingConfig["voice"] = nlohmann::json::object();
+            pendingConfig["voice"]["speed"] = val;
+            hasChanges = true;
+        }, 0.05f
+    );
+    speedSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(speedSlider);
+    
+    // --- Filter Low Confidence ---
+    bool filterConf = true;
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object()) {
+        filterConf = pendingConfig["voice"].value("filter_low_confidence", true);
+    }
+    auto filterToggle = std::make_shared<UIToggle>(
+        "Filter Low Confidence:", filterConf,
+        [this](bool val) {
+            if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object())
+                pendingConfig["voice"] = nlohmann::json::object();
+            pendingConfig["voice"]["filter_low_confidence"] = val;
+            hasChanges = true;
+        }
+    );
+    filterToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(filterToggle);
+    
+    // --- Confidence Threshold ---
+    float confThresh = 0.6f;
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object()) {
+        confThresh = pendingConfig["voice"].value("confidence_threshold", 0.6f);
+    }
+    auto confSlider = std::make_shared<UISlider>(
+        "Confidence Threshold:", 0.0f, 1.0f, confThresh,
+        [this](float val) {
+            if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object())
+                pendingConfig["voice"] = nlohmann::json::object();
+            pendingConfig["voice"]["confidence_threshold"] = val;
+            hasChanges = true;
+        }, 0.01f
+    );
+    confSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(confSlider);
+    
+    // --- Max Commands Per Input ---
+    int maxCmds = 3;
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object()) {
+        maxCmds = pendingConfig["voice"].value("max_commands_per_input", 3);
+    }
+    auto maxCmdsSlider = std::make_shared<UISlider>(
+        "Max Commands/Input:", 1.0f, 10.0f, static_cast<float>(maxCmds),
+        [this](float val) {
+            if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object())
+                pendingConfig["voice"] = nlohmann::json::object();
+            pendingConfig["voice"]["max_commands_per_input"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 1.0f
+    );
+    maxCmdsSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(maxCmdsSlider);
+    
+    // --- Require Multi-Command Confirmation ---
+    bool reqConfirm = true;
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object()) {
+        reqConfirm = pendingConfig["voice"].value("require_multi_command_confirmation", true);
+    }
+    auto reqConfirmToggle = std::make_shared<UIToggle>(
+        "Multi-Cmd Confirm:", reqConfirm,
+        [this](bool val) {
+            if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object())
+                pendingConfig["voice"] = nlohmann::json::object();
+            pendingConfig["voice"]["require_multi_command_confirmation"] = val;
+            hasChanges = true;
+        }
+    );
+    reqConfirmToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(reqConfirmToggle);
+}
+
+// =========================================================
+// Audio Tab — Whisper STT, silence detection, mic settings
+// =========================================================
+void UISettingsMenu::createAudioWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+    
+    // --- Whisper Model ---
+    std::string model = "ggml-base.en.bin";
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
+        pendingConfig["whisper"].contains("whisper_model")) {
+        model = pendingConfig["whisper"]["whisper_model"].get<std::string>();
+    }
+    auto modelButton = std::make_shared<UIButton>(
+        "Whisper Model: " + model,
+        [this]() { cycleModel(); }
+    );
+    modelButton->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(modelButton);
+    
+    // --- Temperature ---
+    float temperature = 0.0f;
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        temperature = pendingConfig["whisper"].value("temperature", 0.0f);
+    }
+    auto tempSlider = std::make_shared<UISlider>(
+        "Whisper Temp:", 0.0f, 1.0f, temperature,
+        [this](float val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["temperature"] = val;
+            hasChanges = true;
+        }, 0.05f
+    );
+    tempSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(tempSlider);
+    
+    // --- Beam Size ---
+    int beamSize = 5;
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        beamSize = pendingConfig["whisper"].value("beam_size", 5);
+    }
+    auto beamSlider = std::make_shared<UISlider>(
+        "Beam Size:", 1.0f, 10.0f, static_cast<float>(beamSize),
+        [this](float val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["beam_size"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 1.0f
+    );
+    beamSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(beamSlider);
+    
+    // --- Suppress Blank ---
+    bool suppressBlank = true;
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        suppressBlank = pendingConfig["whisper"].value("suppress_blank", true);
+    }
+    auto suppressToggle = std::make_shared<UIToggle>(
+        "Suppress Blank:", suppressBlank,
+        [this](bool val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["suppress_blank"] = val;
+            hasChanges = true;
+        }
+    );
+    suppressToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(suppressToggle);
+    
+    // --- Sampling Strategy ---
+    std::string sampStrategy = "beam";
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        sampStrategy = pendingConfig["whisper"].value("sampling_strategy", "beam");
+    }
+    std::vector<std::string> sampOptions = {"beam", "greedy"};
+    int sampIdx = (sampStrategy == "greedy") ? 1 : 0;
+    auto sampDropdown = std::make_shared<UIDropdown>(
+        "Sampling Strategy:", sampOptions, sampIdx,
+        [this](int, const std::string& val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["sampling_strategy"] = val;
+            hasChanges = true;
+        }
+    );
+    sampDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(sampDropdown);
+    
+    // --- Language ---
+    std::string lang = "en";
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        lang = pendingConfig["whisper"].value("language", "en");
+    }
+    std::vector<std::string> langOptions = {"en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "auto"};
+    int langIdx = 0;
+    for (size_t i = 0; i < langOptions.size(); ++i) {
+        if (langOptions[i] == lang) { langIdx = static_cast<int>(i); break; }
+    }
+    auto langDropdown = std::make_shared<UIDropdown>(
+        "Language:", langOptions, langIdx,
+        [this](int, const std::string& val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["language"] = val;
+            hasChanges = true;
+        }
+    );
+    langDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(langDropdown);
+    
+    // --- No Speech Threshold ---
+    float noSpeechThresh = 0.6f;
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        noSpeechThresh = pendingConfig["whisper"].value("no_speech_threshold", 0.6f);
+    }
+    auto noSpeechSlider = std::make_shared<UISlider>(
+        "No Speech Threshold:", 0.0f, 1.0f, noSpeechThresh,
+        [this](float val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["no_speech_threshold"] = val;
+            hasChanges = true;
+        }, 0.01f
+    );
+    noSpeechSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(noSpeechSlider);
+    
+    // --- Entropy Threshold ---
+    float entropyThresh = 2.4f;
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        entropyThresh = pendingConfig["whisper"].value("entropy_threshold", 2.4f);
+    }
+    auto entropySlider = std::make_shared<UISlider>(
+        "Entropy Threshold:", 0.0f, 5.0f, entropyThresh,
+        [this](float val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["entropy_threshold"] = val;
+            hasChanges = true;
+        }, 0.1f
+    );
+    entropySlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(entropySlider);
+    
+    // --- Silence Threshold (global) ---
+    float silenceThresh = pendingConfig.value("silence_threshold", 0.02f);
+    auto silenceSlider = std::make_shared<UISlider>(
+        "Silence Threshold:", 0.0f, 0.1f, silenceThresh,
+        [this](float val) {
+            pendingConfig["silence_threshold"] = val;
+            hasChanges = true;
+        }, 0.001f
+    );
+    silenceSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(silenceSlider);
+    
+    // --- Silence Timeout ---
+    int silenceTimeout = pendingConfig.value("silence_timeout_ms", 4000);
+    auto silenceTimeoutSlider = std::make_shared<UISlider>(
+        "Silence Timeout (ms):", 500.0f, 10000.0f, static_cast<float>(silenceTimeout),
+        [this](float val) {
+            pendingConfig["silence_timeout_ms"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 100.0f
+    );
+    silenceTimeoutSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(silenceTimeoutSlider);
+    
+    // --- Max Listening Time ---
+    int maxListening = 10000;
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        maxListening = pendingConfig["whisper"].value("max_listening_ms", 10000);
+    }
+    auto maxListenSlider = std::make_shared<UISlider>(
+        "Max Listen (ms):", 1000.0f, 30000.0f, static_cast<float>(maxListening),
+        [this](float val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["max_listening_ms"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 500.0f
+    );
+    maxListenSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(maxListenSlider);
+    
+    // --- Min Speech Duration ---
+    int minSpeech = 500;
+    if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object()) {
+        minSpeech = pendingConfig["whisper"].value("min_speech_ms", 500);
+    }
+    auto minSpeechSlider = std::make_shared<UISlider>(
+        "Min Speech (ms):", 100.0f, 2000.0f, static_cast<float>(minSpeech),
+        [this](float val) {
+            if (!pendingConfig.contains("whisper") || !pendingConfig["whisper"].is_object())
+                pendingConfig["whisper"] = nlohmann::json::object();
+            pendingConfig["whisper"]["min_speech_ms"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 50.0f
+    );
+    minSpeechSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(minSpeechSlider);
+}
+
+// =========================================================
+// Vision Tab — Vision AI toggle and model
+// =========================================================
+void UISettingsMenu::createVisionWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+    
+    // --- Vision AI Enabled ---
+    bool visionEnabled = false;
+    if (pendingConfig.contains("vision") && pendingConfig["vision"].is_object()) {
+        visionEnabled = pendingConfig["vision"].value("enabled", false);
+    }
+    auto visionToggle = std::make_shared<UIToggle>(
+        "Vision AI:", visionEnabled,
+        [this](bool val) {
+            if (!pendingConfig.contains("vision") || !pendingConfig["vision"].is_object())
+                pendingConfig["vision"] = nlohmann::json::object();
+            pendingConfig["vision"]["enabled"] = val;
+            hasChanges = true;
+        }
+    );
+    visionToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(visionToggle);
+    
+    // --- Vision Model ---
+    std::string visionModel = pendingConfig.value("vision_model", "llama3.2-vision:11b");
+    std::vector<std::string> visionModels = {"llama3.2-vision:11b", "llava:7b", "llava:13b"};
+    int vmIdx = 0;
+    for (size_t i = 0; i < visionModels.size(); ++i) {
+        if (visionModels[i] == visionModel) { vmIdx = static_cast<int>(i); break; }
+    }
+    auto visionModelDropdown = std::make_shared<UIDropdown>(
+        "Vision Model:", visionModels, vmIdx,
+        [this](int, const std::string& val) {
+            pendingConfig["vision_model"] = val;
+            hasChanges = true;
+        }
+    );
+    visionModelDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(visionModelDropdown);
+}
+
+// =========================================================
+// UI/Graphics Tab — fonts, blur, window behavior
+// =========================================================
+void UISettingsMenu::createUIGraphicsWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+    
+    // --- Font Selection ---
+    std::vector<std::string> availableFonts = getFontList();
+    std::string currentFont = "Consolas";
+    if (pendingConfig.contains("ui") && pendingConfig["ui"].is_object() &&
+        pendingConfig["ui"].contains("font_name")) {
+        currentFont = pendingConfig["ui"]["font_name"].get<std::string>();
+    }
+    int fontIndex = 0;
+    for (size_t i = 0; i < availableFonts.size(); ++i) {
+        if (availableFonts[i] == currentFont) { fontIndex = static_cast<int>(i); break; }
+    }
+    auto fontDropdown = std::make_shared<UIDropdown>(
+        "Font:", availableFonts, fontIndex,
+        [this](int, const std::string& fontName) {
+            if (!pendingConfig.contains("ui") || !pendingConfig["ui"].is_object())
+                pendingConfig["ui"] = nlohmann::json::object();
+            pendingConfig["ui"]["font_name"] = fontName;
+            hasChanges = true;
+        }
+    );
+    fontDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(fontDropdown);
+    
+    // --- Font Size ---
+    int fontSize = 16;
+    if (pendingConfig.contains("ui") && pendingConfig["ui"].is_object()) {
+        fontSize = pendingConfig["ui"].value("font_size", 16);
+    }
+    auto fontSizeSlider = std::make_shared<UISlider>(
+        "Font Size:", 8.0f, 32.0f, static_cast<float>(fontSize),
+        [this](float val) {
+            if (!pendingConfig.contains("ui") || !pendingConfig["ui"].is_object())
+                pendingConfig["ui"] = nlohmann::json::object();
+            pendingConfig["ui"]["font_size"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 1.0f
+    );
+    fontSizeSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(fontSizeSlider);
+    
+    // --- Minimize Behavior ---
+    std::string minimize = "Side";
+    if (pendingConfig.contains("ui") && pendingConfig["ui"].is_object()) {
+        minimize = pendingConfig["ui"].value("Minimize", "Side");
+    }
+    std::vector<std::string> minOptions = {"Side", "Taskbar", "Close"};
+    int minIdx = 0;
+    for (size_t i = 0; i < minOptions.size(); ++i) {
+        if (minOptions[i] == minimize) { minIdx = static_cast<int>(i); break; }
+    }
+    auto minDropdown = std::make_shared<UIDropdown>(
+        "Minimize:", minOptions, minIdx,
+        [this](int, const std::string& val) {
+            if (!pendingConfig.contains("ui") || !pendingConfig["ui"].is_object())
+                pendingConfig["ui"] = nlohmann::json::object();
+            pendingConfig["ui"]["Minimize"] = val;
+            hasChanges = true;
+        }
+    );
+    minDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(minDropdown);
+    
+    // --- Glass Blur ---
+    bool blurEnabled = true;
+    if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object()) {
+        blurEnabled = pendingConfig["blur"].value("enabled", true);
+    }
+    auto blurToggle = std::make_shared<UIToggle>(
+        "Glass Blur:", blurEnabled,
+        [this](bool val) {
+            if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object())
+                pendingConfig["blur"] = nlohmann::json::object();
+            pendingConfig["blur"]["enabled"] = val;
+            hasChanges = true;
+        }
+    );
+    blurToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(blurToggle);
+    
+    // --- Blur Opacity ---
+    float blurOpacity = 0.99f;
+    if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object()) {
+        blurOpacity = pendingConfig["blur"].value("opacity", 0.99f);
+    }
+    auto blurOpacitySlider = std::make_shared<UISlider>(
+        "Blur Opacity:", 0.0f, 1.0f, blurOpacity,
+        [this](float val) {
+            if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object())
+                pendingConfig["blur"] = nlohmann::json::object();
+            pendingConfig["blur"]["opacity"] = val;
+            hasChanges = true;
+        }, 0.01f
+    );
+    blurOpacitySlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(blurOpacitySlider);
+    
+    // --- Blur Intensity ---
+    int blurIntensity = 2;
+    if (pendingConfig.contains("blur") && pendingConfig["blur"].is_object()) {
+        blurIntensity = pendingConfig["blur"].value("intensity", 2);
+    }
+    auto blurIntensitySlider = std::make_shared<UISlider>(
+        "Blur Intensity:", 1.0f, 5.0f, static_cast<float>(blurIntensity),
+        [this](float val) {
+            if (!pendingConfig.contains("blur") || !pendingConfig["blur"].is_object())
+                pendingConfig["blur"] = nlohmann::json::object();
+            pendingConfig["blur"]["intensity"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 1.0f
+    );
+    blurIntensitySlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(blurIntensitySlider);
+}
+
+// =========================================================
+// Preferences Tab — personality, custom prompts, behavior
+// =========================================================
+void UISettingsMenu::createPreferencesWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+    
+    // --- Personality ---
+    std::string personalityLabel = "Professional";
+    if (pendingConfig.contains("personality") && pendingConfig["personality"].is_object() &&
+        pendingConfig["personality"].contains("custom_prompt")) {
+        std::string prompt = pendingConfig["personality"]["custom_prompt"].get<std::string>();
+        if (prompt.find("helpful AI assistant") != std::string::npos) personalityLabel = "Professional";
+        else if (prompt.find("sarcastic") != std::string::npos) personalityLabel = "Sarcastic";
+        else if (prompt.find("friendly and enthusiastic") != std::string::npos) personalityLabel = "Friendly";
+        else if (prompt.find("military") != std::string::npos) personalityLabel = "Military";
+        else if (prompt.find("brief and direct") != std::string::npos) personalityLabel = "Short";
+        else if (prompt.find("concise but warm") != std::string::npos) personalityLabel = "Short & Sweet";
+        else personalityLabel = "Custom";
+    }
+    auto personalityButton = std::make_shared<UIButton>(
+        "Personality: " + personalityLabel,
+        [this]() { cyclePersonality(); }
+    );
+    personalityButton->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(personalityButton);
+    
+    // --- Use Custom Prompt ---
+    bool useCustom = false;
+    if (pendingConfig.contains("personality") && pendingConfig["personality"].is_object()) {
+        useCustom = pendingConfig["personality"].value("use_custom_prompt", false);
+    }
+    auto customToggle = std::make_shared<UIToggle>(
+        "Use Custom Prompt:", useCustom,
+        [this](bool val) {
+            if (!pendingConfig.contains("personality") || !pendingConfig["personality"].is_object())
+                pendingConfig["personality"] = nlohmann::json::object();
+            pendingConfig["personality"]["use_custom_prompt"] = val;
+            hasChanges = true;
+        }
+    );
+    customToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(customToggle);
+    
+    // --- Custom Prompt Text ---
+    std::string customPrompt = "";
+    if (pendingConfig.contains("personality") && pendingConfig["personality"].is_object()) {
+        customPrompt = pendingConfig["personality"].value("custom_prompt", "");
+    }
+    auto promptArea = std::make_shared<UITextArea>(
+        "Custom Prompt:", customPrompt,
+        [this](const std::string& val) {
+            if (!pendingConfig.contains("personality") || !pendingConfig["personality"].is_object())
+                pendingConfig["personality"] = nlohmann::json::object();
+            pendingConfig["personality"]["custom_prompt"] = val;
+            hasChanges = true;
+        }
+    );
+    promptArea->setSize(widgetWidth, 100.0f);
+    scrollBox->addChild(promptArea);
+    
+    // --- Ollama Options ---
+    // Temperature
+    float ollamaTemp = 0.7f;
+    if (pendingConfig.contains("ollama_options") && pendingConfig["ollama_options"].is_object()) {
+        ollamaTemp = pendingConfig["ollama_options"].value("temperature", 0.7f);
+    }
+    auto ollamaTempSlider = std::make_shared<UISlider>(
+        "Ollama Temperature:", 0.0f, 2.0f, ollamaTemp,
+        [this](float val) {
+            if (!pendingConfig.contains("ollama_options") || !pendingConfig["ollama_options"].is_object())
+                pendingConfig["ollama_options"] = nlohmann::json::object();
+            pendingConfig["ollama_options"]["temperature"] = val;
+            hasChanges = true;
+        }, 0.05f
+    );
+    ollamaTempSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(ollamaTempSlider);
+    
+    // Top P
+    float topP = 0.9f;
+    if (pendingConfig.contains("ollama_options") && pendingConfig["ollama_options"].is_object()) {
+        topP = pendingConfig["ollama_options"].value("top_p", 0.9f);
+    }
+    auto topPSlider = std::make_shared<UISlider>(
+        "Top P:", 0.0f, 1.0f, topP,
+        [this](float val) {
+            if (!pendingConfig.contains("ollama_options") || !pendingConfig["ollama_options"].is_object())
+                pendingConfig["ollama_options"] = nlohmann::json::object();
+            pendingConfig["ollama_options"]["top_p"] = val;
+            hasChanges = true;
+        }, 0.01f
+    );
+    topPSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(topPSlider);
+    
+    // Top K
+    int topK = 40;
+    if (pendingConfig.contains("ollama_options") && pendingConfig["ollama_options"].is_object()) {
+        topK = pendingConfig["ollama_options"].value("top_k", 40);
+    }
+    auto topKSlider = std::make_shared<UISlider>(
+        "Top K:", 1.0f, 100.0f, static_cast<float>(topK),
+        [this](float val) {
+            if (!pendingConfig.contains("ollama_options") || !pendingConfig["ollama_options"].is_object())
+                pendingConfig["ollama_options"] = nlohmann::json::object();
+            pendingConfig["ollama_options"]["top_k"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 1.0f
+    );
+    topKSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(topKSlider);
+    
+    // Repeat Penalty
+    float repeatPenalty = 1.1f;
+    if (pendingConfig.contains("ollama_options") && pendingConfig["ollama_options"].is_object()) {
+        repeatPenalty = pendingConfig["ollama_options"].value("repeat_penalty", 1.1f);
+    }
+    auto repeatSlider = std::make_shared<UISlider>(
+        "Repeat Penalty:", 1.0f, 2.0f, repeatPenalty,
+        [this](float val) {
+            if (!pendingConfig.contains("ollama_options") || !pendingConfig["ollama_options"].is_object())
+                pendingConfig["ollama_options"] = nlohmann::json::object();
+            pendingConfig["ollama_options"]["repeat_penalty"] = val;
+            hasChanges = true;
+        }, 0.05f
+    );
+    repeatSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(repeatSlider);
+    
+    // Context Size
+    int numCtx = 4096;
+    if (pendingConfig.contains("ollama_options") && pendingConfig["ollama_options"].is_object()) {
+        numCtx = pendingConfig["ollama_options"].value("num_ctx", 4096);
+    }
+    auto ctxSlider = std::make_shared<UISlider>(
+        "Context Size:", 512.0f, 32768.0f, static_cast<float>(numCtx),
+        [this](float val) {
+            if (!pendingConfig.contains("ollama_options") || !pendingConfig["ollama_options"].is_object())
+                pendingConfig["ollama_options"] = nlohmann::json::object();
+            pendingConfig["ollama_options"]["num_ctx"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 512.0f
+    );
+    ctxSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(ctxSlider);
+}
+
+// =========================================================
+// Memory Tab — data collection, cache management
+// =========================================================
+void UISettingsMenu::createMemoryWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+    
+    // --- Data Collection: Max New Entries ---
+    int maxEntries = 100000;
+    if (pendingConfig.contains("data_collection") && pendingConfig["data_collection"].is_object()) {
+        maxEntries = pendingConfig["data_collection"].value("max_new_entries_per_run", 100000);
+    }
+    auto maxEntriesSlider = std::make_shared<UISlider>(
+        "Max Entries/Run:", 1000.0f, 500000.0f, static_cast<float>(maxEntries),
+        [this](float val) {
+            if (!pendingConfig.contains("data_collection") || !pendingConfig["data_collection"].is_object())
+                pendingConfig["data_collection"] = nlohmann::json::object();
+            pendingConfig["data_collection"]["max_new_entries_per_run"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 1000.0f
+    );
+    maxEntriesSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(maxEntriesSlider);
+    
+    // --- Clear Merged Cache on Merge ---
+    bool clearCache = false;
+    if (pendingConfig.contains("data_collection") && pendingConfig["data_collection"].is_object()) {
+        clearCache = pendingConfig["data_collection"].value("clear_merged_cache_on_merge", false);
+    }
+    auto clearCacheToggle = std::make_shared<UIToggle>(
+        "Clear Cache on Merge:", clearCache,
+        [this](bool val) {
+            if (!pendingConfig.contains("data_collection") || !pendingConfig["data_collection"].is_object())
+                pendingConfig["data_collection"] = nlohmann::json::object();
+            pendingConfig["data_collection"]["clear_merged_cache_on_merge"] = val;
+            hasChanges = true;
+        }
+    );
+    clearCacheToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(clearCacheToggle);
+    
+    // --- Data Structuring Enabled ---
+    bool structEnabled = true;
+    if (pendingConfig.contains("data_collection") && pendingConfig["data_collection"].is_object() &&
+        pendingConfig["data_collection"].contains("data_structuring") && pendingConfig["data_collection"]["data_structuring"].is_object()) {
+        structEnabled = pendingConfig["data_collection"]["data_structuring"].value("enabled", true);
+    }
+    auto structToggle = std::make_shared<UIToggle>(
+        "Data Structuring:", structEnabled,
+        [this](bool val) {
+            if (!pendingConfig.contains("data_collection") || !pendingConfig["data_collection"].is_object())
+                pendingConfig["data_collection"] = nlohmann::json::object();
+            if (!pendingConfig["data_collection"].contains("data_structuring") || !pendingConfig["data_collection"]["data_structuring"].is_object())
+                pendingConfig["data_collection"]["data_structuring"] = nlohmann::json::object();
+            pendingConfig["data_collection"]["data_structuring"]["enabled"] = val;
+            hasChanges = true;
+        }
+    );
+    structToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(structToggle);
+    
+    // --- Structuring Mode ---
+    std::string structMode = "qa";
+    if (pendingConfig.contains("data_collection") && pendingConfig["data_collection"].is_object() &&
+        pendingConfig["data_collection"].contains("data_structuring") && pendingConfig["data_collection"]["data_structuring"].is_object()) {
+        structMode = pendingConfig["data_collection"]["data_structuring"].value("mode", "qa");
+    }
+    std::vector<std::string> modeOptions = {"qa", "summary", "raw"};
+    int modeIdx = 0;
+    for (size_t i = 0; i < modeOptions.size(); ++i) {
+        if (modeOptions[i] == structMode) { modeIdx = static_cast<int>(i); break; }
+    }
+    auto structModeDropdown = std::make_shared<UIDropdown>(
+        "Structuring Mode:", modeOptions, modeIdx,
+        [this](int, const std::string& val) {
+            if (!pendingConfig.contains("data_collection") || !pendingConfig["data_collection"].is_object())
+                pendingConfig["data_collection"] = nlohmann::json::object();
+            if (!pendingConfig["data_collection"].contains("data_structuring") || !pendingConfig["data_collection"]["data_structuring"].is_object())
+                pendingConfig["data_collection"]["data_structuring"] = nlohmann::json::object();
+            pendingConfig["data_collection"]["data_structuring"]["mode"] = val;
+            hasChanges = true;
+        }
+    );
+    structModeDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(structModeDropdown);
+    
+    // --- Parallel Requests ---
+    int parallelReq = 4;
+    if (pendingConfig.contains("data_collection") && pendingConfig["data_collection"].is_object() &&
+        pendingConfig["data_collection"].contains("data_structuring") && pendingConfig["data_collection"]["data_structuring"].is_object()) {
+        parallelReq = pendingConfig["data_collection"]["data_structuring"].value("parallel_requests", 4);
+    }
+    auto parallelSlider = std::make_shared<UISlider>(
+        "Parallel Requests:", 1.0f, 16.0f, static_cast<float>(parallelReq),
+        [this](float val) {
+            if (!pendingConfig.contains("data_collection") || !pendingConfig["data_collection"].is_object())
+                pendingConfig["data_collection"] = nlohmann::json::object();
+            if (!pendingConfig["data_collection"].contains("data_structuring") || !pendingConfig["data_collection"]["data_structuring"].is_object())
+                pendingConfig["data_collection"]["data_structuring"] = nlohmann::json::object();
+            pendingConfig["data_collection"]["data_structuring"]["parallel_requests"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 1.0f
+    );
+    parallelSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(parallelSlider);
+    
+    // --- HuggingFace PDFs per Dataset ---
+    int maxPdfsPerDS = 2000;
+    if (pendingConfig.contains("data_collection") && pendingConfig["data_collection"].is_object()) {
+        maxPdfsPerDS = pendingConfig["data_collection"].value("max_huggingface_pdfs_per_dataset", 2000);
+    }
+    auto pdfsPerDsSlider = std::make_shared<UISlider>(
+        "HF PDFs/Dataset:", 100.0f, 10000.0f, static_cast<float>(maxPdfsPerDS),
+        [this](float val) {
+            if (!pendingConfig.contains("data_collection") || !pendingConfig["data_collection"].is_object())
+                pendingConfig["data_collection"] = nlohmann::json::object();
+            pendingConfig["data_collection"]["max_huggingface_pdfs_per_dataset"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 100.0f
+    );
+    pdfsPerDsSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(pdfsPerDsSlider);
+    
+    // --- HuggingFace Total PDFs ---
+    int maxPdfsTotal = 10000;
+    if (pendingConfig.contains("data_collection") && pendingConfig["data_collection"].is_object()) {
+        maxPdfsTotal = pendingConfig["data_collection"].value("max_huggingface_pdfs_total", 10000);
+    }
+    auto pdfsTotalSlider = std::make_shared<UISlider>(
+        "HF PDFs Total:", 100.0f, 50000.0f, static_cast<float>(maxPdfsTotal),
+        [this](float val) {
+            if (!pendingConfig.contains("data_collection") || !pendingConfig["data_collection"].is_object())
+                pendingConfig["data_collection"] = nlohmann::json::object();
+            pendingConfig["data_collection"]["max_huggingface_pdfs_total"] = static_cast<int>(val);
+            hasChanges = true;
+        }, 500.0f
+    );
+    pdfsTotalSlider->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(pdfsTotalSlider);
+}
+
 void UISettingsMenu::update(const InputState& input, float dt) {
     UIPanel::update(input, dt);
     
@@ -819,17 +1256,42 @@ void UISettingsMenu::update(const InputState& input, float dt) {
         needsWidgetRefresh = false;
         LOG_DEBUG("UISettingsMenu", "Refreshing widgets at START of frame (before update)");
         createWidgets();
-        return;  // Skip this frame's widget updates - fresh widgets will update next frame
+        return;
     }
     
-    // Update scroll box position to follow panel
-    scrollBox->setPosition(position.x + 10, position.y + 40);
-    scrollBox->setSize(size.x - 20, size.y - 50);
+    // Position and update tab buttons
+    float tabX = position.x + 10.0f;
+    float tabW = (size.x - 20.0f) / 7.0f;  // 7 tabs
     
-    // Scrollbox handles all child updates internally
+    tabGeneralBtn_->setPosition(tabX, position.y + kTabBarY);
+    tabGeneralBtn_->setSize(tabW - 2, 28);
+    tabVoiceBtn_->setPosition(tabX + tabW, position.y + kTabBarY);
+    tabVoiceBtn_->setSize(tabW - 2, 28);
+    tabAudioBtn_->setPosition(tabX + tabW * 2, position.y + kTabBarY);
+    tabAudioBtn_->setSize(tabW - 2, 28);
+    tabVisionBtn_->setPosition(tabX + tabW * 3, position.y + kTabBarY);
+    tabVisionBtn_->setSize(tabW - 2, 28);
+    tabUIGraphicsBtn_->setPosition(tabX + tabW * 4, position.y + kTabBarY);
+    tabUIGraphicsBtn_->setSize(tabW - 2, 28);
+    tabPreferencesBtn_->setPosition(tabX + tabW * 5, position.y + kTabBarY);
+    tabPreferencesBtn_->setSize(tabW - 2, 28);
+    tabMemoryBtn_->setPosition(tabX + tabW * 6, position.y + kTabBarY);
+    tabMemoryBtn_->setSize(tabW - 2, 28);
+    
+    tabGeneralBtn_->update(input, dt);
+    tabVoiceBtn_->update(input, dt);
+    tabAudioBtn_->update(input, dt);
+    tabVisionBtn_->update(input, dt);
+    tabUIGraphicsBtn_->update(input, dt);
+    tabPreferencesBtn_->update(input, dt);
+    tabMemoryBtn_->update(input, dt);
+    
+    // Update scroll box position below tab bar
+    scrollBox->setPosition(position.x + 10, position.y + kContentTopY);
+    scrollBox->setSize(size.x - 20, size.y - kContentTopY - 20 - 50);
     scrollBox->update(input, dt);
     
-    // Update Save & Close button (outside scrollbox)
+    // Update Save & Close button
     if (saveButton) {
         float yPos = position.y + size.y - 50;
         saveButton->setPosition(position.x + 10, yPos);
@@ -837,7 +1299,7 @@ void UISettingsMenu::update(const InputState& input, float dt) {
         saveButton->update(input, dt);
     }
     
-    // Update Cancel button (outside scrollbox)
+    // Update Cancel button
     if (cancelButton) {
         float yPos = position.y + size.y - 50;
         cancelButton->setPosition(position.x + 10 + (size.x - 30) / 2 + 10, yPos);
@@ -850,9 +1312,31 @@ bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
 {
     if (!UIPanel::drawOverlay(renderer)) return false;
     
+    using namespace UITheme;
+    
+    // Draw tab buttons
+    tabGeneralBtn_->drawOverlay(renderer, position);
+    tabVoiceBtn_->drawOverlay(renderer, position);
+    tabAudioBtn_->drawOverlay(renderer, position);
+    tabVisionBtn_->drawOverlay(renderer, position);
+    tabUIGraphicsBtn_->drawOverlay(renderer, position);
+    tabPreferencesBtn_->drawOverlay(renderer, position);
+    tabMemoryBtn_->drawOverlay(renderer, position);
+    
+    // Active tab indicator (2px underline)
+    float tabX = position.x + 10.0f;
+    float tabW = (size.x - 20.0f) / 7.0f;
+    int tabIdx = static_cast<int>(activeTab_);
+    float indicatorX = tabX + tabW * tabIdx;
+    renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {tabW - 2, 2.0f}, Colors::Primary);
+    
+    // Draw separator line under tab bar
+    renderer.drawRect({position.x + 10, position.y + kContentTopY - 2}, {size.x - 20, 1.0f}, Colors::BorderSubtle);
+    
+    // Draw scroll box content
     scrollBox->drawOverlay(renderer, position);
     
-    using namespace UITheme;
+    // Save button
     if (saveButton) {
         Vec2 btnPos = saveButton->getPosition();
         Vec2 btnSize = saveButton->getSize();
@@ -864,6 +1348,7 @@ bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
         renderer.drawText({btnPos.x + 10, textY}, "Save & Close", Colors::TextWhite);
     }
     
+    // Cancel button
     if (cancelButton) {
         Vec2 btnPos = cancelButton->getPosition();
         Vec2 btnSize = cancelButton->getSize();
@@ -875,6 +1360,7 @@ bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
         renderer.drawText({btnPos.x + 10, textY}, "Cancel", Colors::TextWhite);
     }
     
+    // Unsaved indicator
     if (hasChanges) {
         renderer.drawText({position.x + size.x - 150, position.y + 8}, "* Unsaved", Colors::WarningLight);
     }

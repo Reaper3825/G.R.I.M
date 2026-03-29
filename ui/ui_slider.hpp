@@ -5,8 +5,8 @@
 
 class UISlider : public Widget {
 public:
-    UISlider(const std::string& label, float minVal, float maxVal, float initialVal, 
-             std::function<void(float)> onChange);
+    UISlider(const std::string& label, float minVal, float maxVal, float initialVal,
+             std::function<void(float)> onChange, float step = 0.0f);
 
     void update(const InputState& input, float dt) override;
     void draw(class UIRenderer& renderer) override;
@@ -28,6 +28,8 @@ private:
     float value;
     std::function<void(float)> callback;
     
+    float stepSize = 0.0f;  // 0 = continuous; >0 = snap to this increment
+
     bool dragging = false;
     Vec2 sliderStart{0, 0};
     Vec2 sliderSize{0, 0};

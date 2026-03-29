@@ -36,6 +36,7 @@ public:
     void drawSoftGlow(const Vec2& pos, const Vec2& size, float radius,
                       uint32_t color, float spread);
     void drawText(const Vec2& pos, const std::string& text, uint32_t color);
+    float measureTextWidth(const std::string& text) const;
     void drawLine(const Vec2& start, const Vec2& end, uint32_t color, float thickness = 1.0f);
     
     // Load a TTF/OTF font from a file path. fontSize is in pixels.
