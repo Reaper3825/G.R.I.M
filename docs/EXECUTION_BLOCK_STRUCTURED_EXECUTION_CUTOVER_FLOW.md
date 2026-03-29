@@ -84,9 +84,9 @@ flowchart TD
 
 ## Current artifact status
 
-- **Workstream flow status:** Workstream 1 complete; Workstream 2 next
+- **Workstream flow status:** Workstream 2 complete; Workstream 3 next
 - **Maintenance flow status:** Active immediately
-- **Structured execution flow status:** Current enforced runtime reflects the locked Workstream 0 boundary with Workstream 1 metadata types canonicalized; compiled execution payload flows through TrainingSequence → TrainingSampleView → BatchPayload; future builder/format/selector workstreams are still pending
+- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`; concept JSON → `ConceptExecutionSequenceBuilder` → canonical text + `CompiledStructuredExecutionPayload` → DataLoader tokenizes → GRMT; compiled execution payload flows through TrainingSequence → TrainingSampleView → BatchPayload; GRMT format cutover (WS3) and downstream workstreams still pending
 
 ## Workstream 0 implementation note
 
@@ -158,6 +158,62 @@ flowchart TD
     BP --> Loss
     BP --> ExecBlock
     BP --> Validator
+```
+
+## Workstream 2 — canonical builder replaces `__SLOTS__`
+
+```mermaid
+flowchart TD
+    subgraph Builder[ConceptExecutionSequenceBuilder — single builder pass]
+        JSON[concept_blocks.jsonl\nJSON row]
+        BuildRecord[buildStructuredExecutionRecord\nJSON → StructuredExecutionRecord]
+        Render[renderCanonicalText\ncanonical text NO __SLOTS__]
+        Tokenize[UniByte.encodeWithMetadata\ntokenize canonical text]
+        Compile[compileExecutionPayload\nrecord + tokens → compiled payload]
+        BuildSeq[buildConceptSequence\nfull pipeline orchestrator]
+
+        JSON --> BuildSeq
+        BuildSeq --> BuildRecord
+        BuildSeq --> Render
+        BuildSeq --> Tokenize
+        Tokenize --> Compile
+    end
+
+    subgraph Outputs[Paired outputs — same builder pass]
+        Text[canonical_text]
+        TES[token_exec_slots]
+        TSt[teacher_steps]
+        CBB[compiled_bootstrap_bindings]
+    end
+
+    BuildSeq --> Text
+    Compile --> TES
+    Compile --> TSt
+    Compile --> CBB
+
+    subgraph DataLoader[DataLoader.cu]
+        Load[loadConceptBlocksJson\nreturns vector of json]
+        Loop[Concept processing loop\ncalls buildConceptSequence per row]
+        BSeq[build_sequence lambda\ntokenizes canonical text]
+        GRMT[GRMT serialization]
+    end
+
+    Load --> Loop
+    Loop --> BuildSeq
+    Text --> BSeq
+    BSeq --> GRMT
+    TES --> GRMT
+
+    subgraph Deleted[DELETED — WS2]
+        direction LR
+        SLOTS["__SLOTS__ text block"]
+        SlotOrder[slotOrderFromConceptJson]
+        TailRecover[assignExecSlotsFromOrder]
+        OldRender[conceptJsonToTrainingText]
+        OldTeacher[teacherStepsFromConceptJson]
+    end
+
+    style Deleted fill:#fcc,stroke:#c33
 ```
 
 ## Diagram update checklist

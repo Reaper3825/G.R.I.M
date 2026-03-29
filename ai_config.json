@@ -233,7 +233,7 @@
                 "pattern": "random_centered"
             },
             "layer_scale": {
-                "enabled": false,
+                "enabled": true,
                 "init_value": 1.0
             },
             "learning_rate": 0.0006,

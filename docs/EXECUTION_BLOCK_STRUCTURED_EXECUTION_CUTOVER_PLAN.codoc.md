@@ -43,10 +43,10 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ## Current cutover status
 
 - **Overall status:** In progress
-- **Active workstream:** Workstream 2 — canonical structured sequence builder replaces `__SLOTS__`
-- **Last completed gate:** Workstream 1 — canonical structured execution source-of-truth model
-- **Next gate:** Begin Workstream 2 sequence builder replacement without re-expanding the ExecutionBlock boundary
-- **Current implementation posture:** Workstream 1 semantic metadata types canonicalized in `ExecutionMetadata.hpp`; compiled execution payload plumbed through `TrainingSequence` → `TrainingSampleView` → `BatchPayload`; activation bit, bootstrap bindings, teacher steps, and slot selection targets flow end-to-end through batch builder
+- **Active workstream:** Workstream 3 — GRMT format cutover
+- **Last completed gate:** Workstream 2 — canonical structured sequence builder replaces `__SLOTS__`
+- **Next gate:** Begin Workstream 3 GRMT format cutover to serialize compiled execution payloads
+- **Current implementation posture:** Workstream 2 canonical builder (`ConceptExecutionSequenceBuilder`) replaces the `__SLOTS__` debug path; concept JSON → `StructuredExecutionRecord` → canonical text → tokenize → `CompiledStructuredExecutionPayload` with paired `token_exec_slots` + `teacher_steps` + `compiled_bootstrap_bindings` in a single builder pass; DataLoader uses the canonical builder exclusively
 
 ## Workstream-specific update contract
 
@@ -77,7 +77,7 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ### Workstream 2 — canonical structured sequence builder replaces `__SLOTS__`
 
 **Status**
-- Not started
+- Completed
 
 **Each update must record**
 - builder inputs/outputs changed
@@ -516,3 +516,66 @@ For each qualifying refactor step, append an entry under the relevant workstream
 
 **Remaining gaps / next gate**
 - Workstream 1 is fully aligned with all completion criteria. Proceed to Workstream 2.
+
+### 2025-07-27 — Workstream 2 — canonical structured sequence builder replaces `__SLOTS__`
+
+**Status transition**
+- `Not started -> Completed`
+
+**What changed**
+- Created `ConceptExecutionSequenceBuilder.hpp` / `.cu` — the canonical builder that replaces the `__SLOTS__` debug serialization path.
+- The builder provides a single-pass pipeline: `buildConceptSequence()` calls `buildStructuredExecutionRecord()` → `renderCanonicalText()` → tokenize → `compileExecutionPayload()`.
+- `buildStructuredExecutionRecord()` parses concept JSON `state_0.atoms` into `BootstrapLiteralBinding` entries with sequential slot IDs, builds `ExecutionStep` structs from `execution[]` array with explicit arg-slot resolution and write-slot allocation.
+- `renderCanonicalText()` emits Q/STATE0/EXEC/STATE1/EXP/A text format — NO `__SLOTS__` block.
+- `compileExecutionPayload()` maps bootstrap bindings to ATOM_NUM token positions in document order, emits `token_exec_slots`, `teacher_steps`, and `compiled_bootstrap_bindings` as a single paired output from one builder pass.
+- Builder enforces all structural violations: zero bootstrap bindings on active row, duplicate slot_id, duplicate token_pos, missing ATOM_NUM token for bound literal, execution steps with fewer than 2 args, arg slots not found.
+- DataLoader.cu: deleted `slotOrderFromConceptJson()`, `conceptJsonToTrainingText()`, `nearEqualConceptNumeric()`, `assignExecSlotsFromOrder()`, `opStringToId()`, `teacherStepsFromConceptJson()`, `formatNumberForConcept()`, and the old `loadConceptBlocksCorpus()`.
+- DataLoader.cu: replaced `concept_entries` (pair<string, vector<double>>) with `concept_json_entries` (vector<json>), new `loadConceptBlocksJson()` returns raw parsed JSON objects.
+- DataLoader.cu: concept processing loop now calls `buildConceptSequence()` for each JSON entry, populating `token_exec_slots` from the compiled payload.
+- DataLoader.cu: vocab training corpus for concept entries now uses `renderCanonicalText()` instead of the deleted `conceptJsonToTrainingText()`.
+- DataLoader.hpp: updated header comment to reference canonical builder instead of `__SLOTS__` debug path.
+
+**Changed files**
+- `resources/models/GRIM-text/Shared/DataLoader/ConceptExecutionSequenceBuilder.hpp` (NEW)
+- `resources/models/GRIM-text/Shared/DataLoader/ConceptExecutionSequenceBuilder.cu` (NEW)
+- `resources/models/GRIM-text/Shared/DataLoader/DataLoader.cu`
+- `resources/models/GRIM-text/Shared/DataLoader/DataLoader.hpp`
+
+**Ownership after change**
+- `ConceptExecutionSequenceBuilder` is the single canonical builder for execution-active concept rows.
+- `DataLoader.cu` owns corpus loading and GRMT serialization but delegates all concept execution building to the canonical builder.
+- `ExecutionMetadata.hpp` (WS1) remains the single definition site for all semantic types.
+- No other path can produce `token_exec_slots`, `teacher_steps`, or `compiled_bootstrap_bindings` for concept rows.
+
+**Non-responsibilities**
+- The builder does NOT write GRMT — DataLoader owns serialization (WS3).
+- The builder does NOT produce `slot_selection_targets` with real supervision — all positions are `Ignore` until a selector supervision pipeline exists (WS9).
+
+**Integration points / migrated consumers**
+- `DataLoader.cu`'s concept processing loop is the sole consumer of `buildConceptSequence()`.
+- Vocab training corpus construction now calls `renderCanonicalText()`.
+- `build_sequence()` lambda (DataLoader-internal) tokenizes the canonical text output.
+
+**Legacy deleted**
+- `__SLOTS__` text block emission in `conceptJsonToTrainingText()`
+- `slotOrderFromConceptJson()` — flat numeric sequence extraction for tail-number slot recovery
+- `conceptJsonToTrainingText()` — old text renderer WITH `__SLOTS__` block
+- `nearEqualConceptNumeric()` — float comparator (equivalent now internal to builder)
+- `assignExecSlotsFromOrder()` — backward tail-number slot recovery from trailing ATOM_NUM tokens
+- `opStringToId()` — moved to builder namespace
+- `teacherStepsFromConceptJson()` — value-matching teacher step builder (was unreferenced in the concept processing loop)
+- `formatNumberForConcept()` — moved to builder as internal helper
+- `loadConceptBlocksCorpus()` — old loader returning pair<string, vector<double>>
+- `concept_entries` variable (pair<string, vector<double>> type) in DataLoader
+
+**Validation**
+- Static search confirms zero remaining references to `__SLOTS__` in code paths.
+- Static search confirms zero remaining references to `assignExecSlotsFromOrder`, `slotOrderFromConceptJson`, `conceptJsonToTrainingText`, `nearEqualConceptNumeric`, `teacherStepsFromConceptJson`.
+- Builder enforces all plan-specified structural violations at build time.
+- Full CUDA compile validation is blocked on local macOS environment lacking CUDA toolchain.
+
+**Flow diagram delta**
+- Updated flow diagram: concept JSON → `ConceptExecutionSequenceBuilder` → canonical text + `CompiledStructuredExecutionPayload` → DataLoader tokenizes text, populates `TokenizedSequence.token_exec_slots` from compiled payload → GRMT output.
+
+**Remaining gaps / next gate**
+- Workstream 2 is complete. Proceed to Workstream 3: GRMT format cutover to serialize compiled execution payloads alongside tokenized sequences.

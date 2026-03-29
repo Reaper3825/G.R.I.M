@@ -24,6 +24,7 @@
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../Batching/BatchPayload.hpp"
 #include "../../../../control/ai_config_paths.hpp"
+#include "ConceptExecutionSequenceBuilder.hpp"
 
 namespace fs = std::filesystem;
 
@@ -216,219 +217,19 @@ namespace {
 	}
 }
 
-// ─── Concept blocks → training text + register slot order (ExecutionBlock) ───
+// ─── Concept blocks corpus loading ──────────────────────────────────────────
 //
-// DEBUG / EXPEDIENT: We serialize each concept_blocks.jsonl row into text + __SLOTS__
-// and append as GRMT sequences. Long-term, concept blocks should be curriculum IDs
-// that resolve to mass_dataset / cache rows (source_sequence_id); encoding should run
-// on that canonical payload only — see ADDITION_SEQUENCES_AND_ARG_LEARNING.md.
+// Loads concept_blocks.jsonl and returns parsed JSON objects.
+// The canonical builder (ConceptExecutionSequenceBuilder) handles all
+// structured execution record building, text rendering, and payload
+// compilation — no __SLOTS__ debug path.
 //
 namespace {
 
 using json = nlohmann::json;
 
-std::string formatNumberForConcept(double x) {
-	if (x == std::floor(x) && std::fabs(x) < 1e12)
-		return std::to_string(static_cast<long long>(x));
-	std::ostringstream oss;
-	oss << x;
-	return oss.str();
-}
-
-std::vector<double> slotOrderFromConceptJson(const json& j) {
-	std::vector<double> order;
-	if (j.contains("state_0") && j["state_0"].is_object()) {
-		const auto& s0 = j["state_0"];
-		if (s0.contains("atoms") && s0["atoms"].is_array()) {
-			for (const auto& a : s0["atoms"]) {
-				if (a.is_number()) order.push_back(a.get<double>());
-			}
-		}
-	}
-	if (j.contains("execution") && j["execution"].is_array()) {
-		for (const auto& e : j["execution"]) {
-			if (!e.is_object()) continue;
-			if (e.contains("args") && e["args"].is_array()) {
-				for (const auto& a : e["args"]) {
-					if (a.is_number()) order.push_back(a.get<double>());
-				}
-			}
-			if (e.contains("result") && e["result"].is_number())
-				order.push_back(e["result"].get<double>());
-		}
-	}
-	return order;
-}
-
-std::string conceptJsonToTrainingText(const json& j) {
-	std::ostringstream os;
-	if (j.contains("name") && j["name"].is_string() && !j["name"].get<std::string>().empty())
-		os << "[[" << j["name"].get<std::string>() << "]]\n";
-	if (j.contains("question") && j["question"].is_string() && !j["question"].get<std::string>().empty())
-		os << "Q: " << j["question"].get<std::string>() << "\n";
-
-	if (j.contains("state_0") && j["state_0"].is_object()) {
-		const auto& s0 = j["state_0"];
-		if (s0.contains("type") && s0["type"].is_string() && !s0["type"].get<std::string>().empty())
-			os << "STATE0 type=" << s0["type"].get<std::string>() << "\n";
-	}
-
-	if (j.contains("execution") && j["execution"].is_array()) {
-		for (const auto& e : j["execution"]) {
-			if (!e.is_object()) continue;
-			std::string op = e.value("op", std::string());
-			os << "EXEC " << op;
-			if (e.contains("args") && e["args"].is_array()) {
-				for (const auto& a : e["args"]) {
-					if (a.is_number()) os << " " << formatNumberForConcept(a.get<double>());
-				}
-			}
-			if (e.contains("result") && e["result"].is_number())
-				os << " => " << formatNumberForConcept(e["result"].get<double>());
-			os << "\n";
-		}
-	}
-
-	if (j.contains("state_1") && j["state_1"].is_object()) {
-		const auto& s1 = j["state_1"];
-		if (s1.contains("result") && s1["result"].is_number())
-			os << "STATE1 result=" << formatNumberForConcept(s1["result"].get<double>()) << "\n";
-	}
-
-	const json* expl = nullptr;
-	if (j.contains("explanation") && j["explanation"].is_array())
-		expl = &j["explanation"];
-	else if (j.contains("intermediates") && j["intermediates"].is_array())
-		expl = &j["intermediates"];
-	if (expl) {
-		for (const auto& s : *expl) {
-			if (s.is_string()) os << "EXP: " << s.get<std::string>() << "\n";
-		}
-	}
-
-	if (j.contains("answer") && j["answer"].is_string() && !j["answer"].get<std::string>().empty())
-		os << "A: " << j["answer"].get<std::string>() << "\n";
-
-	std::vector<double> slot_order = slotOrderFromConceptJson(j);
-	if (!slot_order.empty()) {
-		os << "__SLOTS__\n";
-		for (double v : slot_order) os << formatNumberForConcept(v) << "\n";
-	}
-	return os.str();
-}
-
-bool nearEqualConceptNumeric(double expected, float got) {
-	const double g = static_cast<double>(got);
-	const double tol = 1e-3 * std::max(1.0, std::fabs(expected));
-	return std::fabs(expected - g) <= tol;
-}
-
-void assignExecSlotsFromOrder(
-	std::vector<int32_t>& exec_slots,
-	const std::vector<uint8_t>& atom_mask,
-	const std::vector<float>& numeric_values,
-	const std::vector<double>& slot_order,
-	int base_slot) {
-
-	const int n = static_cast<int>(atom_mask.size());
-	exec_slots.assign(n, -1);
-	if (slot_order.empty()) return;
-
-	std::vector<int> num_positions;
-	num_positions.reserve(n);
-	for (int t = n - 1; t >= 0; --t) {
-		if (t < static_cast<int>(atom_mask.size()) && atom_mask[t])
-			num_positions.push_back(t);
-	}
-	if (num_positions.size() < slot_order.size()) {
-		throw std::runtime_error(
-			"assignExecSlotsFromOrder: need " + std::to_string(slot_order.size()) +
-			" trailing numeric atoms for slot map, found " + std::to_string(num_positions.size()));
-	}
-
-	for (size_t i = 0; i < slot_order.size(); ++i) {
-		const int t         = num_positions[i];
-		const size_t sidx   = slot_order.size() - 1 - i;
-		const double expect = slot_order[sidx];
-		if (t >= static_cast<int>(numeric_values.size()) ||
-		    !nearEqualConceptNumeric(expect, numeric_values[t])) {
-			throw std::runtime_error(
-				"assignExecSlotsFromOrder: slot value mismatch at tail index " +
-				std::to_string(i) + " pos=" + std::to_string(t) +
-				" expected=" + std::to_string(expect) +
-				" got=" + std::to_string(
-					t < static_cast<int>(numeric_values.size())
-					? static_cast<double>(numeric_values[t]) : 0.0));
-		}
-		exec_slots[t] = static_cast<int32_t>(base_slot + static_cast<int>(sidx));
-	}
-}
-
-int opStringToId(const std::string& op) {
-	if (op == "add" || op == "+") return 0;
-	if (op == "sub" || op == "-") return 1;
-	if (op == "mul" || op == "*") return 2;
-	if (op == "div" || op == "/") return 3;
-	throw std::runtime_error("opStringToId: unknown op '" + op + "'");
-}
-
-std::vector<GRIM::Batching::TeacherStep> teacherStepsFromConceptJson(
-		const json& j, int num_slots) {
-	std::vector<GRIM::Batching::TeacherStep> steps;
-	if (!j.contains("execution") || !j["execution"].is_array()) return steps;
-
-	// Build value→slot mapping from state_0 atoms (initial slots)
-	std::vector<double> slot_values;
-	if (j.contains("state_0") && j["state_0"].is_object()) {
-		const auto& s0 = j["state_0"];
-		if (s0.contains("atoms") && s0["atoms"].is_array()) {
-			for (const auto& a : s0["atoms"])
-				if (a.is_number()) slot_values.push_back(a.get<double>());
-		}
-	}
-
-	auto findSlot = [&](double val) -> int {
-		for (int i = static_cast<int>(slot_values.size()) - 1; i >= 0; --i) {
-			if (nearEqualConceptNumeric(slot_values[i], static_cast<float>(val)))
-				return i;
-		}
-		return -1;
-	};
-
-	for (const auto& e : j["execution"]) {
-		if (!e.is_object()) continue;
-		GRIM::Batching::TeacherStep ts{};
-		ts.op_id = opStringToId(e.value("op", std::string()));
-
-		std::vector<double> args;
-		if (e.contains("args") && e["args"].is_array()) {
-			for (const auto& a : e["args"])
-				if (a.is_number()) args.push_back(a.get<double>());
-		}
-		if (args.size() < 2)
-			throw std::runtime_error("teacherStepsFromConceptJson: exec step needs >= 2 args");
-
-		ts.arg1_slot = findSlot(args[0]);
-		ts.arg2_slot = findSlot(args[1]);
-		if (ts.arg1_slot < 0 || ts.arg2_slot < 0)
-			throw std::runtime_error("teacherStepsFromConceptJson: arg slot not found");
-
-		double result = e.value("result", 0.0);
-		ts.expected_value = static_cast<float>(result);
-
-		int write_slot = static_cast<int>(slot_values.size());
-		if (write_slot >= num_slots)
-			throw std::runtime_error("teacherStepsFromConceptJson: write_slot " +
-				std::to_string(write_slot) + " >= num_slots " + std::to_string(num_slots));
-		ts.write_slot = write_slot;
-		slot_values.push_back(result);
-		steps.push_back(ts);
-	}
-	return steps;
-}
-
-void loadConceptBlocksCorpus(const fs::path& cache_dir,
-                             std::vector<std::pair<std::string, std::vector<double>>>& out) {
+void loadConceptBlocksJson(const fs::path& cache_dir,
+                           std::vector<json>& out) {
 	fs::path p = cache_dir / "concept_blocks.jsonl";
 	std::ifstream in(p);
 	if (!in.is_open()) {
@@ -441,16 +242,13 @@ void loadConceptBlocksCorpus(const fs::path& cache_dir,
 	while (std::getline(in, line)) {
 		if (line.empty()) continue;
 		try {
-			json j = json::parse(line);
-			std::string text = conceptJsonToTrainingText(j);
-			if (text.size() < kMinCleanedTextLength) continue;
-			out.emplace_back(std::move(text), slotOrderFromConceptJson(j));
+			out.push_back(json::parse(line));
 			++lines;
 		} catch (const std::exception& e) {
 			std::cerr << "[DataLoader] concept_blocks.jsonl skip line: " << e.what() << "\n";
 		}
 	}
-	std::cout << "[DataLoader] Loaded " << lines << " concept block training lines from "
+	std::cout << "[DataLoader] Loaded " << lines << " concept block entries from "
 	          << p.string() << std::endl;
 }
 
@@ -618,15 +416,15 @@ bool PrepareTrainingDataFromCache(
 		}
 	}
 
-	std::vector<std::pair<std::string, std::vector<double>>> concept_entries;
-	loadConceptBlocksCorpus(cache_dir, concept_entries);
+	std::vector<nlohmann::json> concept_json_entries;
+	loadConceptBlocksJson(cache_dir, concept_json_entries);
 
 	if (malformed_lines > 0) {
 		std::cerr << "[DataLoader] Skipped " << malformed_lines 
 				  << " malformed JSONL lines in cache file" << std::endl;
 	}
 
-	if (texts.empty() && concept_entries.empty()) {
+	if (texts.empty() && concept_json_entries.empty()) {
 		std::cout << "[DataLoader] No cache texts and no concept_blocks.jsonl entries; nothing to tokenize." << std::endl;
 		return false;
 	}
@@ -688,9 +486,9 @@ bool PrepareTrainingDataFromCache(
 		std::cout << "[DataLoader] Training new tokenizer vocab from cache (target: " 
 				  << target_vocab_size << " tokens)..." << std::endl;
 		std::vector<std::string> vocab_corpus = texts;
-		vocab_corpus.reserve(texts.size() + concept_entries.size());
-		for (const auto& ce : concept_entries)
-			vocab_corpus.push_back(ce.first);
+		vocab_corpus.reserve(texts.size() + concept_json_entries.size());
+		for (const auto& cj : concept_json_entries)
+			vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
 		tokenizer.train(vocab_corpus);
 		if (!out_vocab_path.empty()) {
 			std::cout << "[DataLoader] Saving vocab to " << out_vocab_path << "..." << std::endl << std::flush;
@@ -827,23 +625,28 @@ bool PrepareTrainingDataFromCache(
 	};
 
 	std::cout << "[DataLoader] Encoding " << texts.size() << " cache + "
-	          << concept_entries.size() << " concept sequences..." << std::endl << std::flush;
+	          << concept_json_entries.size() << " concept sequences..." << std::endl << std::flush;
 	std::vector<TokenizedSequence> all_tokens;
-	all_tokens.reserve(concept_entries.size() + texts.size());
+	all_tokens.reserve(concept_json_entries.size() + texts.size());
 	int concept_exec_base_slot = 0;
 	if (const char* ev = std::getenv("GRIM_CONCEPT_EXEC_BASE_SLOT")) {
 		try {
 			concept_exec_base_slot = std::stoi(ev);
 		} catch (...) {}
 	}
-	for (const auto& ce : concept_entries) {
-		auto seq = build_sequence(ce.first);
-		if (!seq) continue;
-		if (!ce.second.empty()) {
-			assignExecSlotsFromOrder(seq->token_exec_slots, seq->atom_mask, seq->numeric_values,
-			                         ce.second, concept_exec_base_slot);
+	for (const auto& cj : concept_json_entries) {
+		try {
+			auto built = GRIM::DataLoader::buildConceptSequence(cj, tokenizer, concept_exec_base_slot);
+			if (built.canonical_text.size() < kMinCleanedTextLength) continue;
+			auto seq = build_sequence(built.canonical_text);
+			if (!seq) continue;
+			if (built.payload.execution_active) {
+				seq->token_exec_slots = std::move(built.payload.token_exec_slots);
+			}
+			all_tokens.push_back(std::move(*seq));
+		} catch (const std::exception& e) {
+			std::cerr << "[DataLoader] concept build failed: " << e.what() << "\n";
 		}
-		all_tokens.push_back(std::move(*seq));
 	}
 	{
 		auto cache_tok = encode_texts(texts);
