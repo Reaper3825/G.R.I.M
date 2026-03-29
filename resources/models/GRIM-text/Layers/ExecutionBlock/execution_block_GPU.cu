@@ -2459,7 +2459,8 @@ void ExecutionBlockLayer::executeStep(
         flattened.is_leaf = false;
 
         // Project: [1, K*dm] @ [K*dm, dm] + bias = [1, dm]
-        trace_vec = autograd::matmul(flattened, W_trace_, stream);
+        trace_vec = autograd::matmul(flattened, W_trace_, stream,
+                                      flattened.data, nullptr);
         trace_vec = autograd::add(trace_vec, b_trace_, stream);
 
         // Free device staging buffers (data already captured by GradFn)
@@ -2489,7 +2490,8 @@ void ExecutionBlockLayer::executeStep(
 
     // Arg1: query = decision_input @ w_arg1_select_ [1,3*dm]@[3*dm,dm]=[1,dm]
     //        logits = query @ cand_hidden^T [1,dm]@[dm,V_val]=[1,V_val]
-    auto query1 = autograd::matmul(decision_input, w_arg1_select_, stream);
+    auto query1 = autograd::matmul(decision_input, w_arg1_select_, stream,
+                                    decision_input.data, nullptr);
     auto arg1_logits = autograd::matmul(query1, cand_hidden, stream,
                                          nullptr, nullptr, true);
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
@@ -2501,7 +2503,8 @@ void ExecutionBlockLayer::executeStep(
         p_arg1.data, V_val, d_numeric_error_flag_, kStageEntropyArg1, config_.entropy_collapse_threshold);
 
     // Arg2: same two-step projection with w_arg2_select_
-    auto query2 = autograd::matmul(decision_input, w_arg2_select_, stream);
+    auto query2 = autograd::matmul(decision_input, w_arg2_select_, stream,
+                                    decision_input.data, nullptr);
     auto arg2_logits = autograd::matmul(query2, cand_hidden, stream,
                                          nullptr, nullptr, true);
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
@@ -2555,7 +2558,8 @@ void ExecutionBlockLayer::executeStep(
     auto pool_1234 = autograd::concat(pool_123, trace_state, stream);          // [1, 4*dm]
     auto pool      = autograd::concat(pool_1234, step_emb, stream);            // [1, 5*dm]
 
-    auto op_logits = autograd::matmul(pool, W_op_select_, stream); // [1, nop]
+    auto op_logits = autograd::matmul(pool, W_op_select_, stream,
+                                       pool.data, nullptr); // [1, nop]
     auto p_op = autograd::softmax(op_logits, temperature, stream);  // [1, nop]
     kernelValidateSoftmax<<<1, 1, 0, stream>>>(p_op.data, nop, d_numeric_error_flag_, kStagePOp);
     kernelCheckEntropyCollapse<<<1, 1, 0, stream>>>(
@@ -2621,7 +2625,8 @@ void ExecutionBlockLayer::executeStep(
         // update = matmul(update_input, W_reason_gate_) [1, dm]
         // trace_state = trace_state + update
         auto update_input = autograd::concat(trace_state, cur_encoded, stream);    // [1, 2*dm]
-        auto update = autograd::matmul(update_input, W_reason_gate_, stream);      // [1, dm]
+        auto update = autograd::matmul(update_input, W_reason_gate_, stream,
+                                          update_input.data, nullptr);      // [1, dm]
         trace_state = autograd::add(trace_state, update, stream);
     }
 
@@ -2640,7 +2645,8 @@ void ExecutionBlockLayer::executeStep(
                     vid * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
     // Layer 1: [1,vid] @ [vid,vhd] + [1,vhd] → [1,vhd]
-    auto decode_h = autograd::matmul(decode_input, w_decode_1_, stream);
+    auto decode_h = autograd::matmul(decode_input, w_decode_1_, stream,
+                                      decode_input.data, nullptr);
     decode_h = autograd::add(decode_h, b_decode_1_, stream);
 
     // ReLU activation
@@ -2657,10 +2663,12 @@ void ExecutionBlockLayer::executeStep(
     }
 
     // Layer 2: [1,vhd] @ [vhd,1] → [1,1]  (v_decoded)
-    auto v_decoded = autograd::matmul(decode_relu, w_decode_2_, stream);
+    auto v_decoded = autograd::matmul(decode_relu, w_decode_2_, stream,
+                                       decode_relu.data, nullptr);
 
     // ──── 9c. Value embedding from decoded scalar ────
-    auto result_emb = autograd::matmul(v_decoded, W_value_to_emb_, stream);
+    auto result_emb = autograd::matmul(v_decoded, W_value_to_emb_, stream,
+                                        v_decoded.data, nullptr);
     result_emb = autograd::add(result_emb, b_value_to_emb_, stream);
     kernelCheckFinite<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         result_emb.data, dm, d_numeric_error_flag_, kStageResultEmb, config_.magnitude_limit);
@@ -2711,7 +2719,8 @@ void ExecutionBlockLayer::executeStep(
     auto write_ctx_12345= autograd::concat(write_ctx_1234, trace_state, stream);     // [1, 5*dm]
     auto write_ctx      = autograd::concat(write_ctx_12345, step_emb, stream);       // [1, 6*dm]
 
-    auto q_write = autograd::matmul(write_ctx, W_write_query_, stream);
+    auto q_write = autograd::matmul(write_ctx, W_write_query_, stream,
+                                      write_ctx.data, nullptr);
     kernelL2Normalize<<<1, 1, 0, stream>>>(q_write.data, dk);
     CUDA_CHECK_KERNEL();
 
