@@ -813,7 +813,7 @@ A direct audit of the current file shows:
 - at least two kernels with no launch site in the file: `kernelSliceColumns`, `kernelFourOpMixForward`,
 - unused public layer surface: `encodeState()` and `lastDivClampCount()` currently appear as header/docs/definition surface, not as live runtime call paths,
 - unused `executeStep(...)` inputs: `expected_read_v1`, `expected_read_v2`,
-- `ExecutionBlockConfig` currently carries several fields that do not participate in `execution_block_GPU.cu` behavior at all (`execution_block_layer`, `memory_slot_bias`, `temp_start`, `temp_end`, `temp_schedule`, `entropy_weight`, `diag_logging`, `exec_gate_warmup_steps`, `causal_w1_transition`, `cublas_handle`; `deterministic` is not used for layer control flow here either).
+- `ExecutionBlockConfig` currently carries several fields that do not participate in `execution_block_GPU.cu` behavior at all, including orchestration-owned knobs and globally dead config surface that must be removed or moved back to the orchestration boundary.
 
 That means the cutover must start by deleting stale layer-local code and evicting orchestration-only knobs from the layer boundary. Do this before adding new metadata or validator complexity.
 
@@ -947,7 +947,7 @@ This table controls implementation order. The codoc and flow artifacts must trac
 	- Do not preserve batch-global atom arrays plus internal row filtering as an interim adapter.
 	- Do not preserve the old decode-time `<NUM>` invalid slot/value emission branch until later “cleanup”.
 5. Shrink `ExecutionBlockConfig` so it contains only layer-owned behavior.
-	- Delete globally dead config surface that no live layer code reads: `memory_slot_bias`, `diag_logging`, `deterministic`, `cublas_handle`
+	- Delete globally dead config surface that no live layer code reads.
 	- Move orchestration-owned knobs out of `ExecutionBlockConfig` and back to the training/inference orchestration boundary: `execution_block_layer`, `temp_start`, `temp_end`, `temp_schedule`, `entropy_weight`, `exec_gate_warmup_steps`, `causal_w1_transition`
 	- Keep only fields that `execution_block_GPU.cu` actually consumes
 6. Rewrite `ExecutionBlockTest.cu` so it validates only the surviving layer surface.

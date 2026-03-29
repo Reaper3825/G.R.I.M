@@ -325,12 +325,10 @@ struct TrainingHyperparameters {
     int execution_block_cross_attn_topk;
     float execution_block_usage_decay;
     float execution_block_diversity_kappa;
-    float execution_block_memory_slot_bias;
     float execution_block_temp_start;
     float execution_block_temp_end;
     int execution_block_temp_schedule;
     float execution_block_entropy_weight;
-    bool execution_block_diag_logging;
     float execution_step_x_multiplier;
     float execution_step_y_multiplier;
     bool execution_step_y_overrides_x;
@@ -706,12 +704,10 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "execution_block.cross_attn_topk",
         "execution_block.usage_decay",
         "execution_block.diversity_kappa",
-        "execution_block.memory_slot_bias",
         "execution_block.temp_start",
         "execution_block.temp_end",
         "execution_block.temp_schedule",
         "execution_block.entropy_weight",
-        "execution_block.diag_logging",
         "execution_block.step_x_multiplier",
         "execution_block.step_y_multiplier",
         "execution_block.step_y_overrides_x",
@@ -1211,12 +1207,10 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_block_cross_attn_topk, eb, "cross_attn_topk");
         assignTrainingField(params.execution_block_usage_decay, eb, "usage_decay");
         assignTrainingField(params.execution_block_diversity_kappa, eb, "diversity_kappa");
-        assignTrainingField(params.execution_block_memory_slot_bias, eb, "memory_slot_bias");
         assignTrainingField(params.execution_block_temp_start, eb, "temp_start");
         assignTrainingField(params.execution_block_temp_end, eb, "temp_end");
         assignTrainingField(params.execution_block_temp_schedule, eb, "temp_schedule");
         assignTrainingField(params.execution_block_entropy_weight, eb, "entropy_weight");
-        assignTrainingField(params.execution_block_diag_logging, eb, "diag_logging");
         assignTrainingField(params.execution_step_x_multiplier, eb, "step_x_multiplier");
         assignTrainingField(params.execution_step_y_multiplier, eb, "step_y_multiplier");
         assignTrainingField(params.execution_step_y_overrides_x, eb, "step_y_overrides_x");

@@ -962,12 +962,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.execution_block_cross_attn_topk = hp.execution_block_cross_attn_topk;
     model_config.execution_block_usage_decay = hp.execution_block_usage_decay;
     model_config.execution_block_diversity_kappa = hp.execution_block_diversity_kappa;
-    model_config.execution_block_memory_slot_bias = hp.execution_block_memory_slot_bias;
     model_config.execution_block_temp_start = hp.execution_block_temp_start;
     model_config.execution_block_temp_end = hp.execution_block_temp_end;
     model_config.execution_block_temp_schedule = hp.execution_block_temp_schedule;
     model_config.execution_block_entropy_weight = hp.execution_block_entropy_weight;
-    model_config.execution_block_diag_logging = hp.execution_block_diag_logging;
     model_config.step_x_multiplier = hp.execution_step_x_multiplier;
     model_config.step_y_multiplier = hp.execution_step_y_multiplier;
     model_config.step_y_overrides_x = hp.execution_step_y_overrides_x;

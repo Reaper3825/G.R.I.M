@@ -358,12 +358,10 @@ struct LanguageModelConfig {
     int execution_block_cross_attn_topk = 1;
     float execution_block_usage_decay = 0.9f;
     float execution_block_diversity_kappa = 2.0f;
-    float execution_block_memory_slot_bias = 0.5f;
     float execution_block_temp_start = 2.0f;
     float execution_block_temp_end = 0.5f;
     int   execution_block_temp_schedule = 0;   // 0=linear, 1=cosine
     float execution_block_entropy_weight = 0.01f;
-    bool  execution_block_diag_logging = false;
 
     // Causal state loss weights (Fixes 1-9)
     float execution_block_transition_hard_threshold = 0.0f; // 0 = disabled

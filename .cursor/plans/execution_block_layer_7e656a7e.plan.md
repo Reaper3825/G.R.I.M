@@ -21,7 +21,7 @@ todos:
     content: Wire K-step execution loop in executeAutogradForward. Each step builds unified candidate pool, selects args/op/slot, executes, writes to M. K configurable (default 2).
     status: completed
   - id: model-config-wiring
-    content: Add config fields to LanguageModelConfig (enabled, layer, num_ops, num_slots, exec_steps, d_key, d_type, cross_attn_head_dim, topk, usage_decay, memory_slot_bias). LanguageModel ownership, TrainingOps/InitInferenceState construction, CMakeLists.
+    content: Add config fields to LanguageModelConfig (enabled, layer, num_ops, num_slots, exec_steps, d_key, d_type, cross_attn_head_dim, topk, usage_decay). LanguageModel ownership, TrainingOps/InitInferenceState construction, CMakeLists.
     status: completed
   - id: autograd-integration
     content: "Wire into AutogradContext, AutogradIntermediates (ExecutionMemory + output). Modify encoder loop: K-step exec at configured layer, gated cross-attention read at every layer >= exec_layer. Hard-fail if num_atoms, atom buffers, or execution memory shapes are inconsistent."
@@ -634,7 +634,6 @@ struct ExecutionBlockConfig {
     float usage_decay = 0.9f;       // decay factor for usage accumulation
     float empty_slot_bonus = 10.0f;
     float diversity_kappa = 2.0f;   // penalty for recently-written slots
-    float memory_slot_bias = 0.5f;  // initial bias penalty for memory slot candidates
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;
 };
@@ -781,7 +780,6 @@ int execution_block_cross_attn_head_dim = 64;
 int execution_block_cross_attn_topk = 1;       // 1 = one slot per query
 float execution_block_usage_decay = 0.9f;
 float execution_block_diversity_kappa = 2.0f;
-float execution_block_memory_slot_bias = 0.5f;  // initial penalty on memory candidates
 ```
 
 Add to `LanguageModel`:

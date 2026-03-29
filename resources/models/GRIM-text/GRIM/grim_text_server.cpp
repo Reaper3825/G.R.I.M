@@ -179,12 +179,10 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
             config.execution_block_cross_attn_topk = hyperparams.execution_block_cross_attn_topk;
             config.execution_block_usage_decay = hyperparams.execution_block_usage_decay;
             config.execution_block_diversity_kappa = hyperparams.execution_block_diversity_kappa;
-            config.execution_block_memory_slot_bias = hyperparams.execution_block_memory_slot_bias;
             config.execution_block_temp_start = hyperparams.execution_block_temp_start;
             config.execution_block_temp_end = hyperparams.execution_block_temp_end;
             config.execution_block_temp_schedule = hyperparams.execution_block_temp_schedule;
             config.execution_block_entropy_weight = hyperparams.execution_block_entropy_weight;
-            config.execution_block_diag_logging = hyperparams.execution_block_diag_logging;
             config.execution_block_transition_hard_threshold = hyperparams.execution_block_transition_hard_threshold;
             config.execution_block_gate_warmup_steps = hyperparams.execution_block_gate_warmup_steps;
             config.execution_block_causal_w1_transition = hyperparams.execution_block_causal_w1_transition;
