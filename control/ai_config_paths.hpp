@@ -342,15 +342,7 @@ struct TrainingHyperparameters {
     float execution_block_transition_hard_threshold;
     int   execution_block_gate_warmup_steps;
     float execution_block_causal_w1_transition;
-    float execution_block_causal_w2_state_integrity;
-    float execution_block_causal_w3_write_consistency;
-    float execution_block_causal_w4_write_mismatch;
-    float execution_block_causal_w5_write_entropy;
-    float execution_block_causal_w6_read_consistency;
-    float execution_block_lambda_soft_transition;
-    float execution_block_lambda_hard_transition;
-    float execution_block_overwrite_penalty_weight;
-    float execution_block_arg_duplicate_penalty_weight;
+
     
     // Activation quantization - NO DEFAULTS
     bool activation_quantization_enabled;
@@ -1234,15 +1226,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
         assignTrainingField(params.execution_block_gate_warmup_steps, eb, "gate_warmup_steps");
         assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
-        assignTrainingField(params.execution_block_causal_w2_state_integrity, eb, "causal_w2_state_integrity");
-        assignTrainingField(params.execution_block_causal_w3_write_consistency, eb, "causal_w3_write_consistency");
-        assignTrainingField(params.execution_block_causal_w4_write_mismatch, eb, "causal_w4_write_mismatch");
-        assignTrainingField(params.execution_block_causal_w5_write_entropy, eb, "causal_w5_write_entropy");
-        assignTrainingField(params.execution_block_causal_w6_read_consistency, eb, "causal_w6_read_consistency");
-        assignTrainingField(params.execution_block_lambda_soft_transition, eb, "lambda_soft_transition");
-        assignTrainingField(params.execution_block_lambda_hard_transition, eb, "lambda_hard_transition");
-        assignTrainingField(params.execution_block_overwrite_penalty_weight, eb, "overwrite_penalty_weight");
-        assignTrainingField(params.execution_block_arg_duplicate_penalty_weight, eb, "arg_duplicate_penalty_weight");
+
     }
     
     // Load activation quantization configuration

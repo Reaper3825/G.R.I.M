@@ -188,11 +188,6 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
             config.execution_block_transition_hard_threshold = hyperparams.execution_block_transition_hard_threshold;
             config.execution_block_gate_warmup_steps = hyperparams.execution_block_gate_warmup_steps;
             config.execution_block_causal_w1_transition = hyperparams.execution_block_causal_w1_transition;
-            config.execution_block_causal_w2_state_integrity = hyperparams.execution_block_causal_w2_state_integrity;
-            config.execution_block_causal_w3_write_consistency = hyperparams.execution_block_causal_w3_write_consistency;
-            config.execution_block_causal_w4_write_mismatch = hyperparams.execution_block_causal_w4_write_mismatch;
-            config.execution_block_causal_w5_write_entropy = hyperparams.execution_block_causal_w5_write_entropy;
-            config.execution_block_causal_w6_read_consistency = hyperparams.execution_block_causal_w6_read_consistency;
             config.step_x_multiplier = hyperparams.execution_step_x_multiplier;
             config.step_y_multiplier = hyperparams.execution_step_y_multiplier;
             config.step_y_overrides_x = hyperparams.execution_step_y_overrides_x;

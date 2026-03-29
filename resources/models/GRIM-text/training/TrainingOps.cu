@@ -435,15 +435,7 @@ void LanguageModel::initGPU() {
             eb_config.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
             eb_config.exec_gate_warmup_steps = cfg.execution_block_gate_warmup_steps;
             eb_config.causal_w1_transition = cfg.execution_block_causal_w1_transition;
-            eb_config.causal_w2_state_integrity = cfg.execution_block_causal_w2_state_integrity;
-            eb_config.causal_w3_write_consistency = cfg.execution_block_causal_w3_write_consistency;
-            eb_config.causal_w4_write_mismatch = cfg.execution_block_causal_w4_write_mismatch;
-            eb_config.causal_w5_write_entropy = cfg.execution_block_causal_w5_write_entropy;
-            eb_config.causal_w6_read_consistency = cfg.execution_block_causal_w6_read_consistency;
-            eb_config.lambda_soft_transition = cfg.execution_block_lambda_soft_transition;
-            eb_config.lambda_hard_transition = cfg.execution_block_lambda_hard_transition;
-            eb_config.overwrite_penalty_weight = cfg.execution_block_overwrite_penalty_weight;
-            eb_config.arg_duplicate_penalty_weight = cfg.execution_block_arg_duplicate_penalty_weight;
+
             eb_config.stream = primary_stream;
             eb_config.cublas_handle = training_state_.cublas_handle;
 

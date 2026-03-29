@@ -140,18 +140,6 @@ bool testStateTransitionSnapshotFields(std::string& message) {
                     "transition_error_hard should start null");
     EB_ASSERT_TRUE(!sout.transition_loss.data,
                     "transition_loss should start null");
-    EB_ASSERT_TRUE(!sout.state_integrity_loss.data,
-                    "state_integrity_loss should start null");
-    EB_ASSERT_TRUE(!sout.write_consistency_loss.data,
-                    "write_consistency_loss should start null");
-    EB_ASSERT_TRUE(!sout.write_mismatch_loss.data,
-                    "write_mismatch_loss should start null");
-    EB_ASSERT_TRUE(!sout.write_entropy_penalty.data,
-                    "write_entropy_penalty should start null");
-    EB_ASSERT_TRUE(!sout.read_consistency_loss.data,
-                    "read_consistency_loss should start null");
-    EB_ASSERT_TRUE(!sout.exec_step_loss.data,
-                    "exec_step_loss should start null");
     EB_ASSERT_TRUE(!sout.used_expected_target,
                     "used_expected_target should default false");
 
@@ -190,16 +178,6 @@ bool testExecutionDependencyConfig(std::string& message) {
                     "Default gate_warmup_steps");
     EB_ASSERT_NEAR(cfg.execution_block_causal_w1_transition, 1.0f, 1e-6f,
                     "Default causal_w1_transition");
-    EB_ASSERT_NEAR(cfg.execution_block_causal_w2_state_integrity, 0.5f, 1e-6f,
-                    "Default causal_w2_state_integrity");
-    EB_ASSERT_NEAR(cfg.execution_block_causal_w3_write_consistency, 0.5f, 1e-6f,
-                    "Default causal_w3_write_consistency");
-    EB_ASSERT_NEAR(cfg.execution_block_causal_w4_write_mismatch, 0.25f, 1e-6f,
-                    "Default causal_w4_write_mismatch");
-    EB_ASSERT_NEAR(cfg.execution_block_causal_w5_write_entropy, 0.0f, 1e-6f,
-                    "Default causal_w5_write_entropy");
-    EB_ASSERT_NEAR(cfg.execution_block_causal_w6_read_consistency, 0.0f, 1e-6f,
-                    "Default causal_w6_read_consistency");
 
     return true;
 }
@@ -269,7 +247,6 @@ bool testExecutionMemoryAllocateShapes(std::string& message) {
     EB_ASSERT_EQ(M.state_embeds.shape[1], dm, "state_embeds cols");
     EB_ASSERT_EQ(M.valid_mask.shape[1], V, "valid_mask dim");
     EB_ASSERT_EQ(M.usage.shape[1], V, "usage dim");
-    EB_ASSERT_EQ(M.write_score.shape[1], V, "write_score dim");
     EB_ASSERT_EQ(M.key_embeds.shape[0], V, "key_embeds rows");
     EB_ASSERT_EQ(M.key_embeds.shape[1], dk, "key_embeds cols");
     EB_ASSERT_EQ(M.type_embed.shape[0], V, "type_embed rows");
@@ -283,7 +260,6 @@ bool testExecutionMemoryAllocateShapes(std::string& message) {
     EB_ASSERT_TRUE(M.state_embeds.data != nullptr, "state_embeds allocated");
     EB_ASSERT_TRUE(M.valid_mask.data != nullptr, "valid_mask allocated");
     EB_ASSERT_TRUE(M.usage.data != nullptr, "usage allocated");
-    EB_ASSERT_TRUE(M.write_score.data != nullptr, "write_score allocated");
     EB_ASSERT_TRUE(M.key_embeds.data != nullptr, "key_embeds allocated");
     EB_ASSERT_TRUE(M.type_embed.data != nullptr, "type_embed allocated");
     EB_ASSERT_TRUE(M.recent_write_mask.data != nullptr, "recent_write_mask allocated");
@@ -418,15 +394,6 @@ bool testExecutionBlockConfigDefaults(std::string& message) {
     EB_ASSERT_NEAR(cfg.transition_hard_threshold, 0.0f, 1e-6f, "transition_hard_threshold default");
     EB_ASSERT_EQ(cfg.exec_gate_warmup_steps, 0, "exec_gate_warmup_steps default");
     EB_ASSERT_NEAR(cfg.causal_w1_transition, 1.0f, 1e-6f, "causal_w1_transition default");
-    EB_ASSERT_NEAR(cfg.causal_w2_state_integrity, 0.5f, 1e-6f, "causal_w2_state_integrity default");
-    EB_ASSERT_NEAR(cfg.causal_w3_write_consistency, 0.5f, 1e-6f, "causal_w3_write_consistency default");
-    EB_ASSERT_NEAR(cfg.causal_w4_write_mismatch, 0.25f, 1e-6f, "causal_w4_write_mismatch default");
-    EB_ASSERT_NEAR(cfg.causal_w5_write_entropy, 0.0f, 1e-6f, "causal_w5_write_entropy default");
-    EB_ASSERT_NEAR(cfg.causal_w6_read_consistency, 0.0f, 1e-6f, "causal_w6_read_consistency default");
-    EB_ASSERT_NEAR(cfg.lambda_soft_transition, 1.0f, 1e-6f, "lambda_soft_transition default");
-    EB_ASSERT_NEAR(cfg.lambda_hard_transition, 1.0f, 1e-6f, "lambda_hard_transition default");
-    EB_ASSERT_NEAR(cfg.overwrite_penalty_weight, 1.0f, 1e-6f, "overwrite_penalty_weight default");
-    EB_ASSERT_NEAR(cfg.arg_duplicate_penalty_weight, 1.0f, 1e-6f, "arg_duplicate_penalty_weight default");
 
     // Stream/handle should be null
     EB_ASSERT_TRUE(cfg.stream == nullptr, "stream default null");
@@ -600,12 +567,7 @@ bool testBootstrapSlotMap(std::string& message) {
 bool testStepOutputCausalLossFields(std::string& message) {
     ExecutionBlockStepOutput sout{};
 
-    // Verify all Fix 1-9 causal loss tensors exist and start null
-    EB_ASSERT_TRUE(!sout.overwrite_penalty.data,
-                    "overwrite_penalty should start null");
-    EB_ASSERT_TRUE(!sout.duplicate_penalty.data,
-                    "duplicate_penalty should start null");
-
+    // Verify causal loss tensors start null
     // ExecutionRecord inside step output should have defaults
     EB_ASSERT_EQ(sout.record.arg1_slot, -1, "record.arg1_slot default");
     EB_ASSERT_EQ(sout.record.arg2_slot, -1, "record.arg2_slot default");

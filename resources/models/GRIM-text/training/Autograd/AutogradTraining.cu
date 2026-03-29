@@ -1393,17 +1393,6 @@ LossResult computeAutogradLoss(
                         intermediates.loss_tensor, scaled, ctx.stream);
                 }
 
-                // Aggregate exec_step_loss for monitoring (host D2H)
-                if (sout.exec_step_loss.data) {
-                    float h_val = 0.0f;
-                    cudaMemcpyAsync(&h_val, sout.exec_step_loss.data,
-                                    sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                    cudaStreamSynchronize(ctx.stream);
-                    if (std::isfinite(h_val)) {
-                        exec_causal_loss_sum += h_val;
-                        exec_causal_count++;
-                    }
-                }
             }
         }
         exec_causal_loss = (exec_causal_count > 0)

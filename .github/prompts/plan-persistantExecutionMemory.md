@@ -1,286 +1,240 @@
-You are modifying the existing ExecutionBlock implementation.
-Do NOT redesign the system. Do NOT change structure.
-Apply ONLY the following targeted corrections.
+You are updating the GRIM Execution Block plan and implementation notes.
+
+Your job is **not** to redesign the system from scratch.
+Your job is to make the existing execution block plan **correct, internally consistent, future-facing, and aligned with the actual execution model already present in code**.
+
+Treat the current CUDA file as the source of truth for what already exists and what must be fixed surgically, not replaced wholesale. The current implementation is in `execution_block_GPU.cu`. :contentReference[oaicite:0]{index=0}
+
+# Mission
+
+Refactor the plan so the Execution Block is treated as what it actually is:
+
+- a **deterministic register-machine execution core**
+- with **authoritative slot state**
+- with **hard fail-fast invariants**
+- and only **gradient plumbing where it genuinely supports learning**
+
+Do **not** describe it like a generic neural layer.
+Do **not** soften hard guarantees into warnings.
+Do **not** propose backwards-compatibility scaffolding.
+Do **not** add filler architecture prose.
+
+The output should be a **clear corrective plan** for the existing system.
 
 ---
 
-## OBJECTIVE
+# Non-negotiable framing
 
-Fix the mismatch between:
+The updated plan must explicitly recognize these truths:
 
-* soft training path
-* hard execution path
+1. **ExecutionMemory is authoritative state**
+   - `M.values` is the scalar truth.
+   - `M.state_embeds` is the embedding view of state.
+   - `valid_mask` defines initialized slots.
+   - The model is not the source of truth for numeric state. Memory is.
 
-Ensure:
+2. **This is a register machine**
+   Each execution step is:
+   - choose arg1
+   - choose arg2
+   - read slots
+   - choose op
+   - compute result
+   - choose exactly one write slot
+   - mutate exactly one authoritative slot
+   - update embedding/key state for that slot
 
-1. Causal consistency between training and execution
-2. Write head produces deterministic behavior
-3. Trace/state becomes REQUIRED for decision making
+3. **Fail-hard behavior is intentional**
+   The system must continue to treat the following as hard failures, not soft warnings:
+   - invalid slot
+   - missing slot mapping
+   - slot read before initialization
+   - invalid softmax
+   - entropy collapse if configured as fatal
+   - write collapse if configured as fatal
+   - multi-slot mutation
+   - transition error over threshold
 
----
+4. **No fake “the model reasoned it internally” language**
+   If the state transition is not represented in authoritative execution state, it did not happen.
 
-## FIX 1 — DUAL TRANSITION SUPERVISION (CRITICAL)
-
-### PROBLEM
-
-Current:
-transition_loss = |v_soft - target|
-
-But execution uses v_out (hard), not v_soft.
-
-### CHANGE
-
-Replace transition loss with:
-
-L_transition =
-λ_soft * |v_soft - target|
-
-* λ_hard * |v_out - target|
-
-### IMPLEMENTATION
-
-Inside executeStep:
-
-* Keep existing v_soft computation
-* Add:
-
-Tensor hard_transition_loss = Tensor::zeros({1,1}, stream);
-
-kernelAbsDiff<<<1,1,0,stream>>>(
-hard_transition_loss.data,
-v_out.data,
-target_ptr,
-nullptr, 0, 0.0f
-);
-
-* Modify aggregation:
-
-transition_loss =
-lambda_soft * soft_transition_loss
-
-* lambda_hard * hard_transition_loss
-
-Use config:
-config_.lambda_soft_transition
-config_.lambda_hard_transition
-
-DEFAULT:
-lambda_soft = 1.0
-lambda_hard = 1.0
+5. **Future-facing direction is slot-space architecture**
+   This is not “number vs non-number.”
+   This is “slot type vs slot type.”
+   `<NUM>` is only the first atom class.
+   The plan must preserve future expansion to other authoritative slot spaces later.
 
 ---
 
-## FIX 2 — WRITE HEAD STRAIGHT-THROUGH ESTIMATOR (CRITICAL)
+# What is wrong in the current conceptual plan
 
-### PROBLEM
+You must correct the plan around these concrete issues:
 
-Write selection is:
+## 1. Transition validation is conceptually broken
+The current logic effectively computes a “hard transition error” using `v_out` against itself in one path, which cannot validate anything meaningful.
 
-* forward: argmax
-* backward: softmax
+The corrected plan must require:
 
-This creates non-deterministic learning.
+- explicit recomputation of the expected result from:
+  - selected arg1 value
+  - selected arg2 value
+  - selected op id
+- comparison of:
+  - executed result
+  - expected deterministic result
+- hard failure if absolute error exceeds threshold after warmup
 
-### CHANGE
-
-Introduce STE for write distribution.
-
-### IMPLEMENTATION
-
-After computing p_write:
-
-1. Compute one-hot:
-
-int write_idx = argmax(p_write)
-
-Tensor p_write_hard = zeros_like(p_write)
-p_write_hard[write_idx] = 1
-
-2. Replace gradient path:
-
-p_write = stop_grad(p_write_hard - p_write) + p_write
-
-3. Use:
-
-* p_write_hard for forward execution
-* p_write (STE version) for gradients
+State clearly:
+**transition validity must compare executed state against recomputed machine truth, not against itself.**
 
 ---
 
-## FIX 3 — MAKE TRACE/STATE MANDATORY INPUT (CRITICAL)
+## 2. The system still mixes deterministic execution with probabilistic training language in the wrong places
+The current setup uses soft distributions for learning but hard argmax for execution.
 
-### PROBLEM
+That is acceptable **only** if the plan clearly separates:
 
-Current:
-context' = context + trace_vec + trace_state
+- **execution path** = authoritative, discrete, single-path
+- **training path** = auxiliary gradient approximation
 
-This allows model to ignore trace.
+The updated plan must explicitly say:
 
-### CHANGE
-
-Replace ADD with CONCAT.
-
-### IMPLEMENTATION
-
-Replace:
-
-context_prime = add(add(context, trace_vec), trace_state)
-
-WITH:
-
-Tensor decision_input = concat(context, trace_vec, trace_state)
-
-Then:
-
-* Replace ALL uses of context/context_prime in:
-
-  * arg selection
-  * op selection
-  * write head
-
-With decision_input
-
-### REQUIRED DIMENSION UPDATE
-
-Update:
-W_op_select_
-w_arg1_select_
-w_arg2_select_
-
-Input dim becomes:
-3 * d_model
-
-DO NOT change output shapes.
+- forward execution is discrete
+- backward learning may use STE or soft surrogate paths
+- surrogate gradients must never be mistaken for authoritative state updates
+- any plan text that implies soft distributions are “the executed state” is wrong and must be removed
 
 ---
 
-## FIX 4 — WRITE OVERWRITE PENALTY
+## 3. Write-slot learning is over-described as a distribution problem when execution is actually single-slot mutation
+The plan must stop treating write behavior like a generic dense attention problem.
 
-### PROBLEM
+The corrected plan must state:
 
-Model can overwrite existing valid slots without penalty.
-
-### CHANGE
-
-Add penalty when writing to already valid slot.
-
-### IMPLEMENTATION
-
-Before write:
-
-Tensor overwrite_penalty = zeros({1,1})
-
-if (M.valid_mask[write_slot] == 1):
-overwrite_penalty = 1.0
-
-Add to loss:
-
-L_exec += config_.overwrite_penalty_weight * overwrite_penalty
+- only one value slot may be mutated per step
+- write-slot selection is a routing problem, not a blended write problem
+- write entropy regularization is secondary, not the core correctness mechanism
+- correctness comes from:
+  - selecting the correct slot
+  - mutating only that slot
+  - leaving all other authoritative slots unchanged
 
 ---
 
-## FIX 5 — ARGUMENT DUPLICATION PENALTY
+## 4. State integrity is being checked after mutation, but the plan must elevate the invariant
+The plan must explicitly define this invariant:
 
-### PROBLEM
+> Per execution step, exactly one authoritative value slot may change, and all non-target value slots must remain numerically unchanged within tolerance.
 
-Model can select same slot twice (v1 == v2)
-
-### IMPLEMENTATION
-
-After arg selection:
-
-if (arg1_slot == arg2_slot):
-duplicate_penalty = 1.0
-else:
-duplicate_penalty = 0.0
-
-Add to loss:
-
-L_exec += config_.arg_duplicate_penalty_weight * duplicate_penalty
+And it must say that:
+- post-write delta checks are required
+- multi-slot mutation is a hard failure
+- non-write-slot drift is a correctness violation, not just a training penalty
 
 ---
 
-## FIX 6 — TRACE STATE NORMALIZATION
+## 5. The current plan is missing a true reasoning-state feedback path
+Right now the implementation has trace accumulation and injection, but the plan must acknowledge that this is not yet a full internal reasoning loop.
 
-### PROBLEM
+The corrected plan must identify the missing capability precisely:
 
-trace_state grows unbounded.
+- execution results need to feed back into subsequent step decisions in a stronger and more explicit way
+- a dedicated **reasoning state** or **execution state summary** should exist as an evolving per-step latent
+- this state must influence:
+  - arg selection
+  - op selection
+  - write-slot selection
+- simple one-token injection alone is not enough as the long-term design
 
-### IMPLEMENTATION
-
-After:
-trace_state = trace_state + encoded_step
-
-Add:
-
-kernelL2Normalize<<<1,1,0,stream>>>(
-trace_state.data,
-d_model
-)
+Do **not** turn this into vague “add chain-of-thought” language.
+Keep it mechanical and architectural.
 
 ---
 
-## FIX 7 — INJECTION GATE INITIALIZATION
+# What the updated plan must add
 
-### PROBLEM
+Produce the revised plan so it includes these sections.
 
-sigmoid(0) = 0.5 → too strong early injection
+## Section A — Correct execution model
+Define the execution block as:
 
-### CHANGE
+- deterministic execution core
+- authoritative slot memory
+- one-step register-machine transition
+- discrete forward path
+- surrogate backward path only for learning
 
-Initialize gate bias negative.
+## Section B — Hard invariants
+List the exact invariants that must always hold:
+- only valid value slots are readable
+- only value slots `[S, V)` are writable
+- exactly one authoritative slot mutation per step
+- no uninitialized slot reads
+- result must match deterministic recomputation
+- non-target slots must remain unchanged
+- invalid numeric states crash immediately
 
-### IMPLEMENTATION
+## Section C — Immediate surgical fixes
+Require the plan to specify concrete near-term fixes:
 
-In constructor:
+1. replace bogus transition self-comparison with recomputed-op validation
+2. make executed op correctness explicit and hard-checked
+3. keep STE clearly labeled as gradient approximation only
+4. tighten write-slot correctness language around single-slot mutation
+5. define state-integrity checking as a first-class invariant, not a side metric
 
-Initialize w_inject_gate_ with small negative bias:
+## Section D — Missing medium-term capability
+Require the plan to identify the next real architectural step:
 
-for each j:
-w_inject_gate_[j] = -2.0f
+- add a persistent per-step reasoning/execution summary state
+- feed that state back into future execution decisions
+- strengthen state reinjection beyond a single result-slot injection
+- preserve hard authoritative slot ownership
 
-This gives:
-sigmoid ≈ 0.12 initial gate
+## Section E — Future scaling rule
+Require the plan to state that this design is the first instance of a broader pattern:
 
----
-
-## FIX 8 — LOSS NORMALIZATION (STABILITY)
-
-### PROBLEM
-
-Loss terms can dominate unevenly.
-
-### IMPLEMENTATION
-
-For each loss component L_i:
-
-L_i = L_i / (mean(L_i over batch) + 1e-6)
-
-Apply BEFORE aggregation.
-
----
-
-## CONSTRAINTS
-
-* Do NOT change kernel structure
-* Do NOT remove any existing validation
-* Do NOT alter ExecutionMemory layout
-* Do NOT introduce new global systems
-* All changes must remain GPU-compatible
-* Preserve fail-hard behavior
-
----
-
-## SUCCESS CONDITION
-
-After patch:
-
-1. v_soft ≈ v_out during training
-2. Write head produces stable deterministic slot selection
-3. Model behavior depends on trace_state (cannot ignore it)
-4. No multi-slot mutation violations
-5. Loss remains stable across steps
+- slot-authoritative execution spaces
+- `<NUM>` is only one atom family
+- later spaces may include object/tool/other slot types
+- ownership boundaries must remain explicit
+- semantic hidden state must not become authority over numeric truth
 
 ---
 
-Apply ONLY these changes. No extra improvements.
+# Style requirements for the rewritten plan
+
+- Be blunt.
+- Be technical.
+- No motivational filler.
+- No generic “consider” language.
+- No hedging.
+- No backwards-compatibility padding.
+- No pretending the current system is more complete than it is.
+- No vague “reasoning” language without defining state, mutation, and feedback.
+
+When identifying what is missing, use direct language like:
+- “missing”
+- “incorrect”
+- “not authoritative”
+- “must be replaced”
+- “must remain hard-fail”
+
+---
+
+# Required output format
+
+Return the result as a structured engineering correction document with these exact headings:
+
+1. `## What the Execution Block Actually Is`
+2. `## Hard Invariants`
+3. `## Immediate Corrections Required`
+4. `## What Is Still Missing`
+5. `## Forward-Compatible Design Rule`
+
+Under each heading, write the corrected plan content directly.
+
+Do not output code.
+Do not output commentary about the prompt.
+Do not summarize.
+Just produce the corrected engineering plan.

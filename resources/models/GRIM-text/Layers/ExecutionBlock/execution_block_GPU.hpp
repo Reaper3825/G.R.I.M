@@ -37,7 +37,6 @@ struct ExecutionMemory {
     Tensor state_embeds;      // [V, d_model] value projection for cross-attn V
     Tensor valid_mask;        // [V]          1.0 if filled, 0.0 if empty
     Tensor usage;             // [V]          decayed cross-attn read weight
-    Tensor write_score;       // [V]          learned overwrite preference bias
     Tensor key_embeds;        // [V, d_key]   addressing keys
     Tensor type_embed;        // [V, d_type]  type tag per slot
     Tensor recent_write_mask; // [V]          last-step write probability distribution
@@ -76,7 +75,6 @@ struct ExecutionBlockConfig {
     int   result_slot_mode   = 0;     // 0 = last token, 1 = fixed index
     int   result_slot_index  = -1;    // used when result_slot_mode == 1
     bool  diag_logging       = false;
-    // Reserved: executeStep currently always uses softmax + STE; no argmax-only path wired yet.
     bool  deterministic      = false;
     bool  debug_mode         = true;  // extra diagnostics only; does not relax validation
     float entropy_collapse_threshold = 0.01f;
@@ -86,22 +84,7 @@ struct ExecutionBlockConfig {
     // Causal state loss (plan: persistantExecutionMemory)
     float transition_hard_threshold  = 0.0f;  // Fix 1: hard gate threshold (0 = disabled)
     int   exec_gate_warmup_steps     = 0;     // Fix 8: suppress hard gates before this step
-    float causal_w1_transition       = 1.0f;  // Fix 4+6: transition_loss weight
-    float causal_w2_state_integrity  = 0.5f;  // Fix 2+9: state_integrity_loss weight
-    float causal_w3_write_consistency= 0.5f;  // Fix 3: write_consistency_loss weight
-    float causal_w4_write_mismatch   = 0.25f; // Fix 5: write_mismatch_loss weight
-    float causal_w5_write_entropy    = 0.0f;  // Fix 5: write_entropy_penalty weight
-    float causal_w6_read_consistency = 0.0f;  // Fix 7: read_consistency_loss weight (requires teacher)
-
-    // Dual transition supervision (Fix 1)
-    float lambda_soft_transition     = 1.0f;
-    float lambda_hard_transition     = 1.0f;
-
-    // Write overwrite penalty (Fix 4)
-    float overwrite_penalty_weight   = 1.0f;
-
-    // Argument duplication penalty (Fix 5)
-    float arg_duplicate_penalty_weight = 1.0f;
+    float causal_w1_transition       = 1.0f;  // transition_loss weight
 
     cudaStream_t stream      = nullptr;
     cublasHandle_t cublas_handle = nullptr;
@@ -152,16 +135,8 @@ struct ExecutionBlockStepOutput {
     ExecStepMetrics metrics;  // populated when debug_mode is enabled
 
     // Causal state loss tensors (Fix 1-9, all [1,1] scalars)
-    Tensor transition_error_hard;    // |v_out - expected_internal| (Fix 1 gate)
-    Tensor transition_loss;          // |v_soft - target_or_expected| (Fixes 4+6)
-    Tensor state_integrity_loss;     // hinge on non-write slot deltas (Fix 2+9)
-    Tensor write_consistency_loss;   // |state_before[ws] - v_out| (Fix 3)
-    Tensor write_mismatch_loss;      // max(p_write) * transition_error (Fix 5)
-    Tensor write_entropy_penalty;    // low entropy(p_write) penalty (Fix 5)
-    Tensor read_consistency_loss;    // |v_actual - v_expected_from_teacher| (Fix 7)
-    Tensor overwrite_penalty;        // 1.0 if writing to already-valid slot (Fix 4)
-    Tensor duplicate_penalty;        // 1.0 if arg1_slot == arg2_slot (Fix 5)
-    Tensor exec_step_loss;           // L_exec aggregate for this step
+    Tensor transition_error_hard;    // |v_out - expected_internal| (hard gate)
+    Tensor transition_loss;          // |v_soft - target| (autograd via L1ScalarLossGradFn)
     bool   used_expected_target = false;  // whether teacher target was used for transition_loss
 };
 
@@ -295,7 +270,6 @@ public:
     Tensor& W_write_key()     { return W_write_key_; }
     Tensor& alpha()           { return alpha_; }
     Tensor& beta()            { return beta_; }
-    Tensor& gamma()           { return gamma_; }
     Tensor& step_embeddings() { return step_embeddings_; }
     Tensor& type_num_embed()  { return type_num_embed_; }
     Tensor& W_value_to_emb()  { return W_value_to_emb_; }
@@ -313,6 +287,7 @@ public:
     Tensor& b_scal()          { return b_scal_; }
     Tensor& W_trace()         { return W_trace_; }
     Tensor& b_trace()         { return b_trace_; }
+    Tensor& W_reason_gate()   { return W_reason_gate_; }
 
     const Tensor& w_decode_1()    const { return w_decode_1_; }
     const Tensor& b_decode_1()    const { return b_decode_1_; }
@@ -325,7 +300,6 @@ public:
     const Tensor& W_write_key()   const { return W_write_key_; }
     const Tensor& alpha()         const { return alpha_; }
     const Tensor& beta()          const { return beta_; }
-    const Tensor& gamma()         const { return gamma_; }
     const Tensor& step_embeddings() const { return step_embeddings_; }
     const Tensor& type_num_embed()  const { return type_num_embed_; }
     const Tensor& W_value_to_emb()  const { return W_value_to_emb_; }
@@ -343,6 +317,7 @@ public:
     const Tensor& b_scal()        const { return b_scal_; }
     const Tensor& W_trace()       const { return W_trace_; }
     const Tensor& b_trace()       const { return b_trace_; }
+    const Tensor& W_reason_gate() const { return W_reason_gate_; }
 
     void setStream(cudaStream_t s)       { config_.stream = s; }
     void setCublasHandle(cublasHandle_t h){ config_.cublas_handle = h; }
@@ -366,22 +341,21 @@ private:
     Tensor b_decode_1_;     // [16]
     Tensor w_decode_2_;     // [16, 1]
 
-    // Arg selection (transposed for matmul: [1,dm] @ [dm,C]^T = [1,C])
-    Tensor w_arg1_select_;  // [1, d_model]
-    Tensor w_arg2_select_;  // [1, d_model]
+    // Arg selection: decision_input [1,3*dm] @ [3*dm,dm] → query [1,dm] → @ cand^T → [1,V_val]
+    Tensor w_arg1_select_;  // [3 * d_model, d_model]
+    Tensor w_arg2_select_;  // [3 * d_model, d_model]
 
-    // Context-aware op selection (4 ops only: +, -, *, /)
-    Tensor W_op_select_;    // [3 * d_model, 4]
+    // Op selection: pool [1,5*dm] = (h_arg1,h_arg2,context,trace_state,step_emb) → [1,nop]
+    Tensor W_op_select_;    // [5 * d_model, num_ops]
 
     // Key generation from result embedding
     Tensor W_key_proj_;     // [d_model, d_key]
 
-    // Write-head (write_context = concat(h1,h2,ctx,result_emb) -> d_key query)
-    Tensor W_write_query_;  // [4 * d_model, d_key]
+    // Write-head: write_ctx [1,6*dm] = (h1,h2,ctx,result_emb,trace_state,step_emb) → d_key query
+    Tensor W_write_query_;  // [6 * d_model, d_key]
     Tensor W_write_key_;    // [d_key, d_key]
     Tensor alpha_;          // [1] learned content score scalar (init 1.0)
     Tensor beta_;           // [1] learned usage penalty scalar (init 1.0)
-    Tensor gamma_;          // [1] learned write score scalar (init 1.0)
 
     // Step encoding
     Tensor step_embeddings_; // [K, d_model]
@@ -411,6 +385,9 @@ private:
     Tensor b_scal_;          // [1, d_model]          scalar projection bias
     Tensor W_trace_;         // [K * d_model, d_model] flattened history → d_model
     Tensor b_trace_;         // [1, d_model]           trace projection bias
+
+    // Reasoning state update gate (learned residual transform)
+    Tensor W_reason_gate_;   // [2 * d_model, d_model] concat(trace_state, cur_enc) → update
 };
 
 }  // namespace GRIM

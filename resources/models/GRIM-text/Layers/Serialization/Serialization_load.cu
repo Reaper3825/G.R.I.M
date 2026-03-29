@@ -319,7 +319,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         eb_ok = eb_ok && ul(fb_eb->w_write_key_data(), eb.W_write_key, "EB W_write_key");
         eb_ok = eb_ok && ul(fb_eb->alpha_data(), eb.alpha, "EB alpha");
         eb_ok = eb_ok && ul(fb_eb->beta_data(), eb.beta, "EB beta");
-        eb_ok = eb_ok && ul(fb_eb->gamma_data(), eb.gamma, "EB gamma");
         eb_ok = eb_ok && ul(fb_eb->step_embeddings_data(), eb.step_embeddings, "EB step_embeddings");
         eb_ok = eb_ok && ul(fb_eb->type_num_embed_data(), eb.type_num_embed, "EB type_num_embed");
         eb_ok = eb_ok && ul(fb_eb->w_value_to_emb_data(), eb.W_value_to_emb, "EB W_value_to_emb");
@@ -337,6 +336,7 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         eb_ok = eb_ok && ul(fb_eb->b_scal_data(), eb.b_scal, "EB b_scal");
         eb_ok = eb_ok && ul(fb_eb->w_trace_data(), eb.W_trace, "EB W_trace");
         eb_ok = eb_ok && ul(fb_eb->b_trace_data(), eb.b_trace, "EB b_trace");
+        eb_ok = eb_ok && ul(fb_eb->w_reason_gate_data(), eb.W_reason_gate, "EB W_reason_gate");
         if (!eb_ok) return false;
         request.report.execution_block_loaded = true;
         Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v2 weights loaded");

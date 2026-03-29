@@ -279,7 +279,6 @@ bool validate_checkpoint_capabilities(
         ok = ok && eb_field(fb_eb->w_write_key_data(), eb.W_write_key, "EB W_write_key");
         ok = ok && eb_field(fb_eb->alpha_data(), eb.alpha, "EB alpha");
         ok = ok && eb_field(fb_eb->beta_data(), eb.beta, "EB beta");
-        ok = ok && eb_field(fb_eb->gamma_data(), eb.gamma, "EB gamma");
         ok = ok && eb_field(fb_eb->step_embeddings_data(), eb.step_embeddings, "EB step_embeddings");
         ok = ok && eb_field(fb_eb->type_num_embed_data(), eb.type_num_embed, "EB type_num_embed");
         ok = ok && eb_field(fb_eb->w_value_to_emb_data(), eb.W_value_to_emb, "EB W_value_to_emb");

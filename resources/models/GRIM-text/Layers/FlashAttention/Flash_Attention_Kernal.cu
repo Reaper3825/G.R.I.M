@@ -39,6 +39,23 @@ inline bool isEquationLoggingEnabled() {
 // NOTE: FLASHATTENTION_DISABLE_DROPOUT removed per Rule 20 - feature dropout is now enabled
 // (was silently ignored before despite config having attention_dropout parameter)
 
+// ============================================================================
+// IMPORTANT: FlashAttention forward API mismatch across environments.
+//
+// Windows build environment expects a forward signature shaped like:
+//   compute_attn<..., Is_even_K, Is_softcap, Return_softmax>(params)
+//
+// Linux / Anvil vendored header in THIS repo currently expects:
+//   compute_attn<..., Is_even_K, Return_softmax>(params)
+//
+// In other words: Windows expects the extra Is_softcap template parameter,
+// Linux does not. If `compute_attn` starts failing template substitution again,
+// check API/signature drift FIRST before chasing namespace/type issues.
+//
+// Do not "simplify" this reconciliation unless both environments are moved to
+// the same flash-attention revision.
+// ============================================================================
+
 // ATen stub required before flash-attention headers (flash_fwd_kernel.h uses at::cuda::philox::unpack).
 #include <ATen/cuda/detail/UnpackRaw.cuh>
 

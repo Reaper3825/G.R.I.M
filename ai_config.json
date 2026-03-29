@@ -100,7 +100,7 @@
         }
     },
     "personality": {
-        "custom_prompt": "You are GRIM, a friendly and enthusiastic AI assistant. Use warm, conversational language and show excitement when helping users. Be supportive and encouraging.",
+        "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
         "use_custom_prompt": true
     },
     "silence_threshold": 0.02,
@@ -150,7 +150,7 @@
                 "head": 0,
                 "layer": -1
             },
-            "attention_dropout": 0.12,
+            "attention_dropout": 0.1,
             "auto_stop": {
                 "enabled": true,
                 "high_loss_patience": 12,
@@ -240,7 +240,7 @@
             },
             "learning_rate": 0.0006,
             "lm_head_centering": {
-                "center_encoder_residuals": false,
+                "center_encoder_residuals": true,
                 "center_hidden_states": false,
                 "center_logits": false,
                 "enabled": false,
@@ -475,7 +475,7 @@
             "model": "tts_models/en/vctk/vits",
             "speaker": "p226"
         },
-        "engine": "coqui",
+        "engine": "sapi",
         "filter_low_confidence": true,
         "input_device_index": -1,
         "local_engine": "en_US-amy-medium.onnx",

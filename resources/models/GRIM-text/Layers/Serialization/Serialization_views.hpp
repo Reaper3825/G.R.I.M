@@ -170,7 +170,6 @@ struct SerializationExecutionBlockReadView {
 	DeviceReadView W_write_key;
 	DeviceReadView alpha;
 	DeviceReadView beta;
-	DeviceReadView gamma;
 	DeviceReadView step_embeddings;
 	DeviceReadView type_num_embed;
 	DeviceReadView W_value_to_emb;
@@ -188,6 +187,7 @@ struct SerializationExecutionBlockReadView {
 	DeviceReadView b_scal;
 	DeviceReadView W_trace;
 	DeviceReadView b_trace;
+	DeviceReadView W_reason_gate;
 	bool enabled = false;
 };
 
@@ -203,7 +203,6 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView W_write_key;
 	DeviceWriteView alpha;
 	DeviceWriteView beta;
-	DeviceWriteView gamma;
 	DeviceWriteView step_embeddings;
 	DeviceWriteView type_num_embed;
 	DeviceWriteView W_value_to_emb;
@@ -221,6 +220,7 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView b_scal;
 	DeviceWriteView W_trace;
 	DeviceWriteView b_trace;
+	DeviceWriteView W_reason_gate;
 };
 
 } // namespace GRIM

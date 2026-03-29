@@ -1465,7 +1465,6 @@ struct ExecutionBlockWeightsT : public ::flatbuffers::NativeTable {
   std::vector<float> w_write_key_data{};
   std::vector<float> alpha_data{};
   std::vector<float> beta_data{};
-  std::vector<float> gamma_data{};
   std::vector<float> step_embeddings_data{};
   std::vector<float> type_num_embed_data{};
   std::vector<float> w_value_to_emb_data{};
@@ -1483,6 +1482,7 @@ struct ExecutionBlockWeightsT : public ::flatbuffers::NativeTable {
   std::vector<float> b_scal_data{};
   std::vector<float> w_trace_data{};
   std::vector<float> b_trace_data{};
+  std::vector<float> w_reason_gate_data{};
 };
 
 struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -1500,7 +1500,6 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
     VT_W_WRITE_KEY_DATA = 20,
     VT_ALPHA_DATA = 22,
     VT_BETA_DATA = 24,
-    VT_GAMMA_DATA = 26,
     VT_STEP_EMBEDDINGS_DATA = 28,
     VT_TYPE_NUM_EMBED_DATA = 30,
     VT_W_VALUE_TO_EMB_DATA = 32,
@@ -1517,7 +1516,8 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
     VT_W_SCAL_DATA = 54,
     VT_B_SCAL_DATA = 56,
     VT_W_TRACE_DATA = 58,
-    VT_B_TRACE_DATA = 60
+    VT_B_TRACE_DATA = 60,
+    VT_W_REASON_GATE_DATA = 62
   };
   const ::flatbuffers::Vector<float> *w_decode_1_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_DECODE_1_DATA); }
   const ::flatbuffers::Vector<float> *b_decode_1_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_DECODE_1_DATA); }
@@ -1530,7 +1530,6 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
   const ::flatbuffers::Vector<float> *w_write_key_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_WRITE_KEY_DATA); }
   const ::flatbuffers::Vector<float> *alpha_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ALPHA_DATA); }
   const ::flatbuffers::Vector<float> *beta_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_BETA_DATA); }
-  const ::flatbuffers::Vector<float> *gamma_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_GAMMA_DATA); }
   const ::flatbuffers::Vector<float> *step_embeddings_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_STEP_EMBEDDINGS_DATA); }
   const ::flatbuffers::Vector<float> *type_num_embed_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_TYPE_NUM_EMBED_DATA); }
   const ::flatbuffers::Vector<float> *w_value_to_emb_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_VALUE_TO_EMB_DATA); }
@@ -1548,6 +1547,7 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
   const ::flatbuffers::Vector<float> *b_scal_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_SCAL_DATA); }
   const ::flatbuffers::Vector<float> *w_trace_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_TRACE_DATA); }
   const ::flatbuffers::Vector<float> *b_trace_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_TRACE_DATA); }
+  const ::flatbuffers::Vector<float> *w_reason_gate_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_REASON_GATE_DATA); }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_W_DECODE_1_DATA) && verifier.VerifyVector(w_decode_1_data()) &&
@@ -1561,7 +1561,6 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
            VerifyOffset(verifier, VT_W_WRITE_KEY_DATA) && verifier.VerifyVector(w_write_key_data()) &&
            VerifyOffset(verifier, VT_ALPHA_DATA) && verifier.VerifyVector(alpha_data()) &&
            VerifyOffset(verifier, VT_BETA_DATA) && verifier.VerifyVector(beta_data()) &&
-           VerifyOffset(verifier, VT_GAMMA_DATA) && verifier.VerifyVector(gamma_data()) &&
            VerifyOffset(verifier, VT_STEP_EMBEDDINGS_DATA) && verifier.VerifyVector(step_embeddings_data()) &&
            VerifyOffset(verifier, VT_TYPE_NUM_EMBED_DATA) && verifier.VerifyVector(type_num_embed_data()) &&
            VerifyOffset(verifier, VT_W_VALUE_TO_EMB_DATA) && verifier.VerifyVector(w_value_to_emb_data()) &&
@@ -1579,6 +1578,7 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
            VerifyOffset(verifier, VT_B_SCAL_DATA) && verifier.VerifyVector(b_scal_data()) &&
            VerifyOffset(verifier, VT_W_TRACE_DATA) && verifier.VerifyVector(w_trace_data()) &&
            VerifyOffset(verifier, VT_B_TRACE_DATA) && verifier.VerifyVector(b_trace_data()) &&
+           VerifyOffset(verifier, VT_W_REASON_GATE_DATA) && verifier.VerifyVector(w_reason_gate_data()) &&
            verifier.EndTable();
   }
   ExecutionBlockWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -1601,7 +1601,6 @@ struct ExecutionBlockWeightsBuilder {
   void add_w_write_key_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_WRITE_KEY_DATA, v); }
   void add_alpha_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_ALPHA_DATA, v); }
   void add_beta_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_BETA_DATA, v); }
-  void add_gamma_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_GAMMA_DATA, v); }
   void add_step_embeddings_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_STEP_EMBEDDINGS_DATA, v); }
   void add_type_num_embed_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_TYPE_NUM_EMBED_DATA, v); }
   void add_w_value_to_emb_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_VALUE_TO_EMB_DATA, v); }
@@ -1619,6 +1618,7 @@ struct ExecutionBlockWeightsBuilder {
   void add_b_scal_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_B_SCAL_DATA, v); }
   void add_w_trace_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_TRACE_DATA, v); }
   void add_b_trace_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_B_TRACE_DATA, v); }
+  void add_w_reason_gate_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(ExecutionBlockWeights::VT_W_REASON_GATE_DATA, v); }
   explicit ExecutionBlockWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1643,7 +1643,6 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_write_key_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> alpha_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> beta_data = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> gamma_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> step_embeddings_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> type_num_embed_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_value_to_emb_data = 0,
@@ -1660,8 +1659,10 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_scal_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_scal_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_trace_data = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_trace_data = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_trace_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_reason_gate_data = 0) {
   ExecutionBlockWeightsBuilder builder_(_fbb);
+  builder_.add_w_reason_gate_data(w_reason_gate_data);
   builder_.add_b_trace_data(b_trace_data);
   builder_.add_w_trace_data(w_trace_data);
   builder_.add_b_scal_data(b_scal_data);
@@ -1679,7 +1680,6 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
   builder_.add_w_value_to_emb_data(w_value_to_emb_data);
   builder_.add_type_num_embed_data(type_num_embed_data);
   builder_.add_step_embeddings_data(step_embeddings_data);
-  builder_.add_gamma_data(gamma_data);
   builder_.add_beta_data(beta_data);
   builder_.add_alpha_data(alpha_data);
   builder_.add_w_write_key_data(w_write_key_data);
@@ -3083,7 +3083,6 @@ inline void ExecutionBlockWeights::UnPackTo(ExecutionBlockWeightsT *_o, const ::
   { auto _e = w_write_key_data(); if (_e) { _o->w_write_key_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_write_key_data[_i] = _e->Get(_i); } } else { _o->w_write_key_data.resize(0); } }
   { auto _e = alpha_data(); if (_e) { _o->alpha_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->alpha_data[_i] = _e->Get(_i); } } else { _o->alpha_data.resize(0); } }
   { auto _e = beta_data(); if (_e) { _o->beta_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->beta_data[_i] = _e->Get(_i); } } else { _o->beta_data.resize(0); } }
-  { auto _e = gamma_data(); if (_e) { _o->gamma_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->gamma_data[_i] = _e->Get(_i); } } else { _o->gamma_data.resize(0); } }
   { auto _e = step_embeddings_data(); if (_e) { _o->step_embeddings_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->step_embeddings_data[_i] = _e->Get(_i); } } else { _o->step_embeddings_data.resize(0); } }
   { auto _e = type_num_embed_data(); if (_e) { _o->type_num_embed_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->type_num_embed_data[_i] = _e->Get(_i); } } else { _o->type_num_embed_data.resize(0); } }
   { auto _e = w_value_to_emb_data(); if (_e) { _o->w_value_to_emb_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_value_to_emb_data[_i] = _e->Get(_i); } } else { _o->w_value_to_emb_data.resize(0); } }
@@ -3101,6 +3100,7 @@ inline void ExecutionBlockWeights::UnPackTo(ExecutionBlockWeightsT *_o, const ::
   { auto _e = b_scal_data(); if (_e) { _o->b_scal_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_scal_data[_i] = _e->Get(_i); } } else { _o->b_scal_data.resize(0); } }
   { auto _e = w_trace_data(); if (_e) { _o->w_trace_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_trace_data[_i] = _e->Get(_i); } } else { _o->w_trace_data.resize(0); } }
   { auto _e = b_trace_data(); if (_e) { _o->b_trace_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_trace_data[_i] = _e->Get(_i); } } else { _o->b_trace_data.resize(0); } }
+  { auto _e = w_reason_gate_data(); if (_e) { _o->w_reason_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_reason_gate_data[_i] = _e->Get(_i); } } else { _o->w_reason_gate_data.resize(0); } }
 }
 
 inline ::flatbuffers::Offset<ExecutionBlockWeights> ExecutionBlockWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3122,7 +3122,6 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
   auto _w_write_key_data = _o->w_write_key_data.size() ? _fbb.CreateVector(_o->w_write_key_data) : 0;
   auto _alpha_data = _o->alpha_data.size() ? _fbb.CreateVector(_o->alpha_data) : 0;
   auto _beta_data = _o->beta_data.size() ? _fbb.CreateVector(_o->beta_data) : 0;
-  auto _gamma_data = _o->gamma_data.size() ? _fbb.CreateVector(_o->gamma_data) : 0;
   auto _step_embeddings_data = _o->step_embeddings_data.size() ? _fbb.CreateVector(_o->step_embeddings_data) : 0;
   auto _type_num_embed_data = _o->type_num_embed_data.size() ? _fbb.CreateVector(_o->type_num_embed_data) : 0;
   auto _w_value_to_emb_data = _o->w_value_to_emb_data.size() ? _fbb.CreateVector(_o->w_value_to_emb_data) : 0;
@@ -3140,19 +3139,20 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
   auto _b_scal_data = _o->b_scal_data.size() ? _fbb.CreateVector(_o->b_scal_data) : 0;
   auto _w_trace_data = _o->w_trace_data.size() ? _fbb.CreateVector(_o->w_trace_data) : 0;
   auto _b_trace_data = _o->b_trace_data.size() ? _fbb.CreateVector(_o->b_trace_data) : 0;
+  auto _w_reason_gate_data = _o->w_reason_gate_data.size() ? _fbb.CreateVector(_o->w_reason_gate_data) : 0;
   return GRIMTransformer::CreateExecutionBlockWeights(
       _fbb,
       _w_decode_1_data, _b_decode_1_data, _w_decode_2_data,
       _w_arg1_select_data, _w_arg2_select_data, _w_op_select_data,
       _w_key_proj_data,
       _w_write_query_data, _w_write_key_data,
-      _alpha_data, _beta_data, _gamma_data,
+      _alpha_data, _beta_data,
       _step_embeddings_data, _type_num_embed_data,
       _w_value_to_emb_data, _b_value_to_emb_data, _w_inject_gate_data,
       _w_q_read_data, _w_k_read_data, _w_v_read_data, _w_o_read_data,
       _w_gate_read_data, _tau_data,
       _e_slot_data, _e_op_data, _w_scal_data, _b_scal_data,
-      _w_trace_data, _b_trace_data);
+      _w_trace_data, _b_trace_data, _w_reason_gate_data);
 }
 
 // ─── End ExecutionBlockWeights Pack/UnPack ────────────────────────────────────

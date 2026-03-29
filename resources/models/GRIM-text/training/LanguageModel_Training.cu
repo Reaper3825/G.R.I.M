@@ -253,7 +253,6 @@ void LanguageModel::buildParameterGroups() {
         registerTensor("exec_block_W_write_key", execution_block_layer_->W_write_key(), ParamGroupType::EXECUTION_BLOCK);
         registerNonDecayTensor("exec_block_alpha", execution_block_layer_->alpha(), ParamGroupType::EXECUTION_BLOCK);
         registerNonDecayTensor("exec_block_beta", execution_block_layer_->beta(), ParamGroupType::EXECUTION_BLOCK);
-        registerNonDecayTensor("exec_block_gamma", execution_block_layer_->gamma(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_step_embeddings", execution_block_layer_->step_embeddings(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_type_num_embed", execution_block_layer_->type_num_embed(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_value_to_emb", execution_block_layer_->W_value_to_emb(), ParamGroupType::EXECUTION_BLOCK);
@@ -272,6 +271,8 @@ void LanguageModel::buildParameterGroups() {
         registerNonDecayTensor("exec_block_b_scal", execution_block_layer_->b_scal(), ParamGroupType::EXECUTION_BLOCK);
         registerTensor("exec_block_W_trace", execution_block_layer_->W_trace(), ParamGroupType::EXECUTION_BLOCK);
         registerNonDecayTensor("exec_block_b_trace", execution_block_layer_->b_trace(), ParamGroupType::EXECUTION_BLOCK);
+        // Reasoning state update gate
+        registerTensor("exec_block_W_reason_gate", execution_block_layer_->W_reason_gate(), ParamGroupType::EXECUTION_BLOCK);
         fprintf(stderr, "[buildParameterGroups] DIAG-D4d: execution block v2 registered\n"); fflush(stderr);
     }
 
