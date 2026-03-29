@@ -678,6 +678,15 @@ __global__ void kernelFillConstant(
     out[i] = val;
 }
 
+// Accumulate scalar: a[0] += b[0]
+__global__ void kernelAccumulateScalar(
+    float* __restrict__ a,
+    const float* __restrict__ b)
+{
+    if (threadIdx.x != 0) return;
+    a[0] += b[0];
+}
+
 // Execute all 4 ops: results[0]=v1+v2, [1]=v1-v2, [2]=v1*v2, [3]=v1/safe(v2)
 __global__ void kernelFourOps(
     float* __restrict__ results,    // [4]
@@ -2141,15 +2150,6 @@ __global__ void kernelL1LossBackward(
     float diff = a[0] - b[0];
     float s = (fabsf(diff) > 1e-10f) ? copysignf(1.0f, diff) : 0.0f;
     grad_input[0] = grad_output[0] * s;
-}
-
-// Accumulate scalar: a[0] += b[0]
-__global__ void kernelAccumulateScalar(
-    float* __restrict__ a,
-    const float* __restrict__ b)
-{
-    if (threadIdx.x != 0) return;
-    a[0] += b[0];
 }
 
 //======================================================//
