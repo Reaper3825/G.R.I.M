@@ -8,147 +8,18 @@
 //  No serialization code.
 //======================================================//
 
-#include "execution_block_GPU.hpp"
-
-#include <stdexcept>
-#include <cstdio>
-#include <cmath>
-#include <algorithm>
-#include <cfloat>
+#include "execution_block_internal.hpp"
+#include "execution_block_memory_stream_GPU.hpp"
+#include "execution_block_data_stream_GPU.hpp"
 
 namespace GRIM {
-
-static constexpr int kBlockSize = 256;
-static constexpr float kEps = 1e-7f;
+using namespace ExecutionBlockInternal;
 
 __global__ void kernelL1LossBackward(
     float* __restrict__ grad_input,
     const float* __restrict__ grad_output,
     const float* __restrict__ a,
     const float* __restrict__ b);
-
-//======================================================//
-//  Shape validation macro — hard-fail with context
-//======================================================//
-#define EXEC_CHECK(cond, msg) \
-    do { if (!(cond)) { \
-        char buf[512]; \
-        snprintf(buf, sizeof(buf), "ExecutionBlock FATAL [%s:%d]: %s", __FILE__, __LINE__, msg); \
-        throw std::runtime_error(buf); \
-    }} while(0)
-
-#define EXEC_CHECK_SHAPE2(tensor, name, expected_r, expected_c) \
-    do { \
-        if ((tensor).data == nullptr) { \
-            char buf[256]; snprintf(buf, sizeof(buf), "%s: null data pointer", name); \
-            EXEC_CHECK(false, buf); \
-        } \
-        if ((tensor).shape.flat.rows != (expected_r) || (tensor).shape.flat.cols != (expected_c)) { \
-            char buf[256]; snprintf(buf, sizeof(buf), \
-                "%s: expected [%d, %d], got [%d, %d]", \
-                name, (int)(expected_r), (int)(expected_c), \
-                (tensor).shape.flat.rows, (tensor).shape.flat.cols); \
-            EXEC_CHECK(false, buf); \
-        } \
-    } while(0)
-
-#define EXEC_CHECK_SHAPE1(tensor, name, expected_n) \
-    EXEC_CHECK_SHAPE2(tensor, name, 1, expected_n)
-
-#define CUDA_CHECK(call) \
-    do { \
-        cudaError_t err__ = (call); \
-        if (err__ != cudaSuccess) { \
-            char buf[512]; \
-            snprintf(buf, sizeof(buf), \
-                "ExecutionBlock CUDA FATAL [%s:%d]: %s", \
-                __FILE__, __LINE__, cudaGetErrorString(err__)); \
-            throw std::runtime_error(buf); \
-        } \
-    } while(0)
-
-#define CUDA_CHECK_KERNEL() CUDA_CHECK(cudaGetLastError())
-
-// Hard-error stage IDs (NaN/Inf/magnitude/softmax violation → crash)
-static constexpr int kStageV1        = 1;
-static constexpr int kStageV2        = 2;
-static constexpr int kStageVOut      = 3;
-static constexpr int kStageResultEmb = 4;
-static constexpr int kStagePArg1     = 5;
-static constexpr int kStagePArg2     = 6;
-static constexpr int kStagePOp       = 7;
-static constexpr int kStagePWrite    = 8;
-
-// Collapse / distribution shape (fatal — same flag as numeric errors)
-static constexpr int kStageEntropyArg1   = 21;
-static constexpr int kStageEntropyArg2   = 22;
-static constexpr int kStageEntropyOp     = 23;
-static constexpr int kStageWriteCollapse = 24;
-static constexpr int kStageWriteSlotInvalid = 25;
-
-// Slot validation (fail-hard per unified spec)
-static constexpr int kStageSlotMissing   = 31;  // atom has slot_map[pos] == -1
-static constexpr int kStageSlotInvalid   = 32;  // slot index out of valid range
-static constexpr int kStageSlotUninit    = 33;  // slot read before initialization (valid_mask == 0)
-
-// Causal state loss hard gates (Fix 1, Fix 2)
-static constexpr int kStageTransitionInvalid = 41;  // |v_out - expected| > threshold
-static constexpr int kStageMultiSlotMutation = 42;  // more than 1 slot changed
-
-static const char* stageIdToName(int id) {
-    switch (id) {
-        case kStageV1:            return "v1";
-        case kStageV2:            return "v2";
-        case kStageVOut:          return "v_out";
-        case kStageResultEmb:     return "result_emb";
-        case kStagePArg1:         return "p_arg1 (softmax validity)";
-        case kStagePArg2:         return "p_arg2 (softmax validity)";
-        case kStagePOp:           return "p_op (softmax validity)";
-        case kStagePWrite:        return "p_write (softmax validity)";
-        case kStageEntropyArg1:   return "entropy collapse (p_arg1)";
-        case kStageEntropyArg2:   return "entropy collapse (p_arg2)";
-        case kStageEntropyOp:     return "entropy collapse (p_op)";
-        case kStageWriteCollapse: return "write collapse (max p_write)";
-        case kStageWriteSlotInvalid: return "write slot not in value range [S,V)";
-        case kStageSlotMissing:   return "missing slot mapping for required state-bearing token";
-        case kStageSlotInvalid:   return "invalid slot index";
-        case kStageSlotUninit:    return "slot read before initialization";
-        case kStageTransitionInvalid: return "transition error exceeds hard threshold";
-        case kStageMultiSlotMutation: return "multiple slots mutated (register machine violation)";
-        default:                  return "unknown";
-    }
-}
-
-//======================================================//
-//  ExecutionMemory — allocate / clear
-//======================================================//
-void ExecutionMemory::allocate(int V, int atom_dim, int d_model, int d_key, int d_type, cudaStream_t stream) {
-    EXEC_CHECK(V > 0, "ExecutionMemory::allocate: V must be positive");
-    EXEC_CHECK(atom_dim > 0, "ExecutionMemory::allocate: atom_dim must be positive");
-    EXEC_CHECK(d_model > 0, "ExecutionMemory::allocate: d_model must be positive");
-    EXEC_CHECK(d_key > 0, "ExecutionMemory::allocate: d_key must be positive");
-    EXEC_CHECK(d_type > 0, "ExecutionMemory::allocate: d_type must be positive");
-
-    values            = Tensor::zeros({V, 1}, stream);
-    atom_embeds       = Tensor::zeros({V, atom_dim}, stream);
-    state_embeds      = Tensor::zeros({V, d_model}, stream);
-    valid_mask        = Tensor::zeros({1, V}, stream);
-    usage             = Tensor::zeros({1, V}, stream);
-    key_embeds        = Tensor::zeros({V, d_key}, stream);
-    type_embed        = Tensor::zeros({V, d_type}, stream);
-    recent_write_mask = Tensor::zeros({1, V}, stream);
-}
-
-void ExecutionMemory::clear(cudaStream_t stream) {
-    if (values.data)            cudaMemsetAsync(values.data, 0, values.size_bytes(), stream);
-    if (atom_embeds.data)       cudaMemsetAsync(atom_embeds.data, 0, atom_embeds.size_bytes(), stream);
-    if (state_embeds.data)      cudaMemsetAsync(state_embeds.data, 0, state_embeds.size_bytes(), stream);
-    if (valid_mask.data)        cudaMemsetAsync(valid_mask.data, 0, valid_mask.size_bytes(), stream);
-    if (usage.data)             cudaMemsetAsync(usage.data, 0, usage.size_bytes(), stream);
-    if (key_embeds.data)        cudaMemsetAsync(key_embeds.data, 0, key_embeds.size_bytes(), stream);
-    if (type_embed.data)        cudaMemsetAsync(type_embed.data, 0, type_embed.size_bytes(), stream);
-    if (recent_write_mask.data) cudaMemsetAsync(recent_write_mask.data, 0, recent_write_mask.size_bytes(), stream);
-}
 
 //======================================================//
 //  Validation helpers
@@ -575,117 +446,6 @@ __global__ void kernelApplyLogitMask(
     masked_logits[i] = logits[i] + (1.0f - mask[i]) * (-1e9f);
 }
 
-// StateEncoder: derive a [1, d_model] summary from M.values via weighted mean
-// over valid slots, projected through state_embeds.
-// state[d] = sum_s(M.valid_mask[s] * M.state_embeds[s,d]) / max(sum_s(M.valid_mask[s]), eps)
-__global__ void kernelStateEncoderMean(
-    float* __restrict__ state_out,           // [1, d_model]
-    const float* __restrict__ state_embeds,  // [V, d_model]
-    const float* __restrict__ valid_mask,    // [V]
-    int V, int d_model
-) {
-    const int d = blockIdx.x * blockDim.x + threadIdx.x;
-    if (d >= d_model) return;
-
-    float sum = 0.0f;
-    float valid_count = 0.0f;
-    for (int s = 0; s < V; ++s) {
-        float v = valid_mask[s];
-        sum += v * state_embeds[s * d_model + d];
-        if (d == 0) valid_count += v;
-    }
-    // Recompute valid_count for all threads (cheap for small V)
-    valid_count = 0.0f;
-    for (int s = 0; s < V; ++s) valid_count += valid_mask[s];
-    float denom = fmaxf(valid_count, 1e-7f);
-    state_out[d] = sum / denom;
-}
-
-// Bootstrap M.values from literal numeric values via token_to_slot_map.
-// For each token position, if slot_id >= 0 AND slot_id < V, copy the literal
-// into M.values[slot_id] and set M.valid_mask[slot_id] = 1.0.
-// Runs once after memory init; detached (no gradient through the copy).
-__global__ void kernelBootstrapSlotValues(
-    float* __restrict__ M_values,        // [V, 1]
-    float* __restrict__ M_valid_mask,    // [V]
-    const float* __restrict__ numeric_values,  // [total_tokens]
-    const int32_t* __restrict__ slot_map,      // [total_tokens]
-    int total_tokens, int V
-) {
-    const int pos = blockIdx.x * blockDim.x + threadIdx.x;
-    if (pos >= total_tokens) return;
-    const int slot = slot_map[pos];
-    if (slot >= 0 && slot < V) {
-        M_values[slot] = numeric_values[pos];
-        M_valid_mask[slot] = 1.0f;
-    }
-}
-
-// After bootstrap scatters values + valid_mask, derive state_embeds and key_embeds
-// for each filled slot so representations match the normal write path:
-//   result_emb[d]          = value * W_val2emb[d] + b_val2emb[d]
-//   state_embeds[slot, d]  = result_emb[d]            (no step embedding for bootstrap)
-//   key_embeds[slot, dk]   = sum_d result_emb[d] * W_key_proj[d, dk]
-//
-// Grid: one block per slot.  Threads handle the d_model / d_key dimensions.
-__global__ void kernelBootstrapSlotEmbeddings(
-    float* __restrict__ state_embeds,       // [V, d_model]
-    float* __restrict__ key_embeds,         // [V, d_key]
-    const float* __restrict__ values,       // [V, 1]
-    const float* __restrict__ valid_mask,   // [V]
-    const float* __restrict__ W_val2emb,    // [1, d_model]
-    const float* __restrict__ b_val2emb,    // [1, d_model]
-    const float* __restrict__ W_key_proj,   // [d_model, d_key]
-    int V, int d_model, int d_key
-) {
-    const int slot = blockIdx.x;
-    if (slot >= V || valid_mask[slot] == 0.0f) return;
-
-    const float val = values[slot];
-    // Phase 1: compute result_emb and write state_embeds (shared memory for phase 2)
-    extern __shared__ float smem[];           // d_model floats for result_emb
-    for (int d = threadIdx.x; d < d_model; d += blockDim.x) {
-        float emb_d = val * W_val2emb[d] + b_val2emb[d];
-        state_embeds[static_cast<size_t>(slot) * d_model + d] = emb_d;
-        smem[d] = emb_d;
-    }
-    __syncthreads();
-
-    // Phase 2: key_embeds[slot, :] = result_emb @ W_key_proj
-    for (int k = threadIdx.x; k < d_key; k += blockDim.x) {
-        float sum = 0.0f;
-        for (int d = 0; d < d_model; ++d)
-            sum += smem[d] * W_key_proj[d * d_key + k];
-        key_embeds[static_cast<size_t>(slot) * d_key + k] = sum;
-    }
-}
-
-// Copy type_num_embed to type_embed[slot] for each valid slot during bootstrap.
-// Grid: one block per slot.  Threads handle d_type dimension.
-__global__ void kernelBootstrapTypeEmbed(
-    float* __restrict__ type_embed,          // [V, d_type]
-    const float* __restrict__ valid_mask,    // [V]
-    const float* __restrict__ type_num_emb,  // [1, d_type]
-    int V, int d_type
-) {
-    const int slot = blockIdx.x;
-    if (slot >= V || valid_mask[slot] == 0.0f) return;
-    for (int j = threadIdx.x; j < d_type; j += blockDim.x)
-        type_embed[static_cast<size_t>(slot) * d_type + j] = type_num_emb[j];
-}
-
-// Extract a contiguous column slice: out[i, j] = in[i, start_col + j]
-__global__ void kernelSliceColumns(
-    float* __restrict__ out,      // [rows, width]
-    const float* __restrict__ in, // [rows, in_cols]
-    int rows, int in_cols, int start_col, int width
-) {
-    const int i = blockIdx.x;
-    if (i >= rows) return;
-    for (int j = threadIdx.x; j < width; j += blockDim.x)
-        out[i * width + j] = in[i * in_cols + start_col + j];
-}
-
 __global__ void kernelFillConstant(
     float* __restrict__ out, float val, int N
 ) {
@@ -722,20 +482,6 @@ __global__ void kernelFourOps(
     if (abs_v2 <= eps && div_clamp_counter)
         atomicAdd(div_clamp_counter, 1);
     results[3] = v1 / denom;
-}
-
-// FourOpMix forward: v_out = sum_k p_op[k] * results[k]
-__global__ void kernelFourOpMixForward(
-    float* __restrict__ v_out,      // [1]
-    const float* __restrict__ p_op, // [4]
-    const float* __restrict__ results, // [4]
-    int num_ops
-) {
-    if (threadIdx.x != 0) return;
-    float s = 0.0f;
-    for (int k = 0; k < num_ops; ++k)
-        s += p_op[k] * results[k];
-    v_out[0] = s;
 }
 
 // FourOpMix backward: compute gradients for v1, v2, and p_op (all device pointers, null-safe)
@@ -948,42 +694,6 @@ __global__ void kernelComputeWriteLogits(
     logit += (1.0f - valid_mask[i]) * empty_bonus;
     logit -= kappa * recent_wr[i];
     logits[i] = logit;
-}
-
-// Entropy: H(p) = -sum_i p_i * log(p_i + eps)
-__global__ void kernelEntropy(
-    float* __restrict__ out,        // [1]
-    const float* __restrict__ probs, // [N]
-    int N
-) {
-    if (threadIdx.x != 0) return;
-    float ent = 0.0f;
-    for (int i = 0; i < N; ++i) {
-        float p = probs[i];
-        if (p > 1e-10f)
-            ent -= p * logf(p + 1e-10f);
-    }
-    out[0] = ent;
-}
-
-// Accumulate: out[0] += in[0]
-__global__ void kernelAccumScalar(
-    float* __restrict__ out,
-    const float* __restrict__ in
-) {
-    if (threadIdx.x == 0)
-        out[0] += in[0];
-}
-
-// Scale and negate: out[0] = -weight * (in[0] / count)
-__global__ void kernelScaleNegAvg(
-    float* __restrict__ out,
-    const float* __restrict__ in,
-    float weight,
-    int count
-) {
-    if (threadIdx.x == 0)
-        out[0] = -weight * (in[0] / fmaxf(static_cast<float>(count), 1.0f));
 }
 
 // Element-wise vector addition: out[i] = a[i] + b[i]
@@ -1907,14 +1617,6 @@ ExecutionBlockLayer::~ExecutionBlockLayer() {
     if (d_exec_record_f_)      cudaFree(d_exec_record_f_);
 }
 
-int ExecutionBlockLayer::lastDivClampCount(cudaStream_t stream) const {
-    if (!d_div_clamp_count_) return 0;
-    int count = 0;
-    cudaMemcpyAsync(&count, d_div_clamp_count_, sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
-    return count;
-}
-
 ExecutionBlockLayer::ExecutionBlockLayer(const ExecutionBlockConfig& config,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
@@ -2130,64 +1832,6 @@ ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other)
     return *this;
 }
 
-//======================================================//
-//  encodeState — derive [1, d_model] summary from memory (always derived, never stored)
-//======================================================//
-Tensor ExecutionBlockLayer::encodeState(const ExecutionMemory& M, cudaStream_t stream) {
-    validateMemoryOrThrow(M);
-    const int dm = config_.d_model;
-    const int V = config_.num_slots;
-    auto state = Tensor::zeros({1, dm}, stream, "exec_state_encoded");
-    kernelStateEncoderMean<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        state.data, M.state_embeds.data, M.valid_mask.data, V, dm);
-    CUDA_CHECK_KERNEL();
-    return state;
-}
-
-//======================================================//
-//  bootstrapMemoryFromSlotMap — populate M.values from literals (detached)
-//======================================================//
-void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
-    ExecutionMemory& M,
-    const float* device_numeric_values,
-    const int32_t* device_slot_map,
-    int total_tokens,
-    cudaStream_t stream)
-{
-    EXEC_CHECK(device_numeric_values != nullptr, "bootstrapMemoryFromSlotMap: device_numeric_values is null");
-    EXEC_CHECK(device_slot_map != nullptr, "bootstrapMemoryFromSlotMap: device_slot_map is null");
-    EXEC_CHECK(total_tokens > 0, "bootstrapMemoryFromSlotMap: total_tokens must be positive");
-    validateMemoryOrThrow(M);
-
-    const int V = config_.num_slots;
-    const int blocks = (total_tokens + kBlockSize - 1) / kBlockSize;
-    kernelBootstrapSlotValues<<<blocks, kBlockSize, 0, stream>>>(
-        M.values.data, M.valid_mask.data,
-        device_numeric_values, device_slot_map,
-        total_tokens, V);
-    CUDA_CHECK_KERNEL();
-
-    // Derive state_embeds and key_embeds for newly-filled slots so representations
-    // are coherent with the normal write path (scalar → embedding → key projection).
-    const int dm = config_.d_model;
-    const int dk = config_.d_key;
-    const size_t smem_bytes = dm * sizeof(float);
-    kernelBootstrapSlotEmbeddings<<<V, kBlockSize, smem_bytes, stream>>>(
-        M.state_embeds.data, M.key_embeds.data,
-        M.values.data, M.valid_mask.data,
-        W_value_to_emb_.data, b_value_to_emb_.data,
-        W_key_proj_.data,
-        V, dm, dk);
-    CUDA_CHECK_KERNEL();
-
-    // Write type tag for all bootstrapped slots
-    const int dt = config_.d_type;
-    kernelBootstrapTypeEmbed<<<V, kBlockSize, 0, stream>>>(
-        M.type_embed.data, M.valid_mask.data,
-        type_num_embed_.data, V, dt);
-    CUDA_CHECK_KERNEL();
-}
-
 // Fix 1/3/4/6: Compute scalar absolute difference |a - b| → out[0]
 __global__ void kernelAbsDiff(
     float* __restrict__ out,             // [1]
@@ -2318,9 +1962,7 @@ void ExecutionBlockLayer::executeStep(
     int row_tokens,
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records,
-    const float* expected_target,
-    const float* expected_read_v1,
-    const float* expected_read_v2)
+    const float* expected_target)
 {
     if (row_tokens < 0) row_tokens = total_tokens;
 
@@ -2340,8 +1982,8 @@ void ExecutionBlockLayer::executeStep(
     const int vhd = config_.value_decode_hidden_dim;
     EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
 
-    // Guard: skip execution when no value-slots are populated (valid_mask all zeros).
-    // This happens for rows without numeric atoms — no register operands available.
+    // Fail loud when an execution-active row reaches the block with no bootstrapped
+    // value slots. Silent skip is forbidden by the cutover plan.
     {
         float h_valid_sum = 0.0f;
         // Sum valid_mask[S..V-1] — V is small (8-16), cheap D2H copy.
@@ -2350,10 +1992,8 @@ void ExecutionBlockLayer::executeStep(
                                     V_val * sizeof(float), cudaMemcpyDeviceToHost, stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
         for (int i = 0; i < V_val; ++i) h_valid_sum += h_mask[i];
-        if (h_valid_sum < 0.5f) {
-            // No valid slots — nothing to compute. Leave H unmodified.
-            return;
-        }
+        EXEC_CHECK(h_valid_sum >= 0.5f,
+                   "executeStep: execution-active row reached ExecutionBlock with no bootstrapped value slots");
     }
 
     // Snapshot state_before for transition validity
@@ -2973,42 +2613,6 @@ void ExecutionBlockLayer::executeStep(
             throw std::runtime_error(buf);
         }
     }
-}
-
-//======================================================//
-//  computeEntropyLoss
-//======================================================//
-Tensor ExecutionBlockLayer::computeEntropyLoss(
-    const std::vector<ExecutionBlockStepOutput>& steps,
-    float weight,
-    cudaStream_t stream) const
-{
-    // Entropy loss is a non-differentiable monitoring regularizer.
-    // It is computed via raw CUDA kernels and is NOT connected to the autograd graph.
-    if (steps.empty() || weight <= 0.0f) {
-        return Tensor::zeros({1, 1}, stream, "exec_entropy_zero");
-    }
-
-    auto accum = Tensor::zeros({1, 1}, stream, "exec_entropy_accum");
-    auto tmp   = Tensor::zeros({1, 1}, stream, "exec_entropy_tmp");
-    int count = 0;
-
-    for (const auto& s : steps) {
-        auto accum_ent = [&](const Tensor& probs, int n) {
-            if (!probs.data || n <= 0) return;
-            kernelEntropy<<<1, 1, 0, stream>>>(tmp.data, probs.data, n);
-            kernelAccumScalar<<<1, 1, 0, stream>>>(accum.data, tmp.data);
-            count++;
-        };
-        if (s.p_arg1.data) accum_ent(s.p_arg1, s.p_arg1.shape.flat.cols);
-        if (s.p_arg2.data) accum_ent(s.p_arg2, s.p_arg2.shape.flat.cols);
-        if (s.p_op.data)   accum_ent(s.p_op, s.p_op.shape.flat.cols);
-        if (s.p_write.data) accum_ent(s.p_write, s.p_write.shape.flat.cols);
-    }
-
-    auto result = Tensor::zeros({1, 1}, stream, "exec_entropy_loss");
-    kernelScaleNegAvg<<<1, 1, 0, stream>>>(result.data, accum.data, weight, count);
-    return result;
 }
 
 //======================================================//

@@ -360,7 +360,6 @@ bool testExecutionBlockConfigDefaults(std::string& message) {
     EB_ASSERT_EQ(cfg.num_slots, 4, "num_slots default 4");
     EB_ASSERT_EQ(cfg.num_scratch_slots, 0, "num_scratch_slots default 0");
     EB_ASSERT_EQ(cfg.num_exec_steps, 2, "num_exec_steps default 2");
-    EB_ASSERT_EQ(cfg.execution_block_layer, -1, "execution_block_layer default -1");
     EB_ASSERT_EQ(cfg.value_decode_input_dim, 24, "value_decode_input_dim default 24");
     EB_ASSERT_EQ(cfg.value_decode_hidden_dim, 16, "value_decode_hidden_dim default 16");
     EB_ASSERT_EQ(cfg.d_key, 64, "d_key default 64");
@@ -370,16 +369,9 @@ bool testExecutionBlockConfigDefaults(std::string& message) {
     EB_ASSERT_NEAR(cfg.usage_decay, 0.9f, 1e-6f, "usage_decay default");
     EB_ASSERT_NEAR(cfg.empty_slot_bonus, 10.0f, 1e-6f, "empty_slot_bonus default");
     EB_ASSERT_NEAR(cfg.diversity_kappa, 2.0f, 1e-6f, "diversity_kappa default");
-    EB_ASSERT_NEAR(cfg.memory_slot_bias, 0.5f, 1e-6f, "memory_slot_bias default");
     EB_ASSERT_NEAR(cfg.inject_gate_temp, 0.5f, 1e-6f, "inject_gate_temp default");
-    EB_ASSERT_NEAR(cfg.temp_start, 2.0f, 1e-6f, "temp_start default");
-    EB_ASSERT_NEAR(cfg.temp_end, 0.5f, 1e-6f, "temp_end default");
-    EB_ASSERT_EQ(cfg.temp_schedule, 0, "temp_schedule default 0 (linear)");
-    EB_ASSERT_NEAR(cfg.entropy_weight, 0.01f, 1e-6f, "entropy_weight default");
     EB_ASSERT_EQ(cfg.result_slot_mode, 0, "result_slot_mode default 0");
     EB_ASSERT_EQ(cfg.result_slot_index, -1, "result_slot_index default -1");
-    EB_ASSERT_TRUE(!cfg.diag_logging, "diag_logging default false");
-    EB_ASSERT_TRUE(!cfg.deterministic, "deterministic default false");
     EB_ASSERT_TRUE(cfg.debug_mode, "debug_mode default true");
     EB_ASSERT_NEAR(cfg.entropy_collapse_threshold, 0.01f, 1e-6f, "entropy_collapse_threshold default");
     EB_ASSERT_NEAR(cfg.write_collapse_threshold, 0.98f, 1e-6f, "write_collapse_threshold default");
@@ -387,12 +379,6 @@ bool testExecutionBlockConfigDefaults(std::string& message) {
 
     // Causal loss defaults
     EB_ASSERT_NEAR(cfg.transition_hard_threshold, 0.0f, 1e-6f, "transition_hard_threshold default");
-    EB_ASSERT_EQ(cfg.exec_gate_warmup_steps, 0, "exec_gate_warmup_steps default");
-    EB_ASSERT_NEAR(cfg.causal_w1_transition, 1.0f, 1e-6f, "causal_w1_transition default");
-
-    // Stream/handle should be null
-    EB_ASSERT_TRUE(cfg.stream == nullptr, "stream default null");
-    EB_ASSERT_TRUE(cfg.cublas_handle == nullptr, "cublas_handle default null");
 
     return true;
 }

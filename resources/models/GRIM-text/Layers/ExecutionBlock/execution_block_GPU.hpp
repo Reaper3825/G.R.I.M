@@ -15,7 +15,6 @@
 #ifdef USE_CUDA
 
 #include <cuda_runtime.h>
-#include <cublas_v2.h>
 #include <cstdint>
 #include <vector>
 
@@ -55,7 +54,6 @@ struct ExecutionBlockConfig {
     int num_slots            = 4;   // V — max memory slots
     int num_scratch_slots    = 0;   // S — scratch-only slots [0..S-1]; value slots are [S..V-1]
     int num_exec_steps       = 2;   // K — execution steps per forward
-    int execution_block_layer= -1;  // encoder layer to run after (-1 = num_layers - 2)
     int value_decode_input_dim  = 24;
     int value_decode_hidden_dim = 16;
     int d_key                = 64;
@@ -65,16 +63,9 @@ struct ExecutionBlockConfig {
     float usage_decay        = 0.9f;
     float empty_slot_bonus   = 10.0f;
     float diversity_kappa    = 2.0f;
-    float memory_slot_bias   = 0.5f;
     float inject_gate_temp   = 0.5f;
-    float temp_start         = 2.0f;
-    float temp_end           = 0.5f;
-    int   temp_schedule      = 0;   // 0=linear, 1=cosine
-    float entropy_weight     = 0.01f;
     int   result_slot_mode   = 0;     // 0 = last token, 1 = fixed index
     int   result_slot_index  = -1;    // used when result_slot_mode == 1
-    bool  diag_logging       = false;
-    bool  deterministic      = false;
     bool  debug_mode         = true;  // extra diagnostics only; does not relax validation
     float entropy_collapse_threshold = 0.01f;
     float write_collapse_threshold   = 0.98f;
@@ -82,11 +73,6 @@ struct ExecutionBlockConfig {
 
     // Causal state loss (plan: persistantExecutionMemory)
     float transition_hard_threshold  = 0.0f;  // Fix 1: hard gate threshold (0 = disabled)
-    int   exec_gate_warmup_steps     = 0;     // Fix 8: suppress hard gates before this step
-    float causal_w1_transition       = 1.0f;  // transition_loss weight
-
-    cudaStream_t stream      = nullptr;
-    cublasHandle_t cublas_handle = nullptr;
 };
 
 //======================================================//
@@ -192,15 +178,8 @@ public:
         int row_tokens,
         Tensor& trace_state,
         const std::vector<ExecutionRecord>& prior_records,
-        const float* expected_target = nullptr,     // Fix 6: optional teacher scalar (device [1])
-        const float* expected_read_v1 = nullptr,    // Fix 7: optional teacher operand (device [1])
-        const float* expected_read_v2 = nullptr      // Fix 7: optional teacher operand (device [1])
+        const float* expected_target = nullptr      // Fix 6: optional teacher scalar (device [1])
     );
-
-    //--------------------------------------------------//
-    // StateEncoder: derive [1, d_model] from M.values/state_embeds (always derived, never stored)
-    //--------------------------------------------------//
-    Tensor encodeState(const ExecutionMemory& M, cudaStream_t stream);
 
     //--------------------------------------------------//
     // Bootstrap: copy literal values into M.values via slot map (detached, no grad)
@@ -317,12 +296,7 @@ public:
     const Tensor& b_trace()       const { return b_trace_; }
     const Tensor& W_reason_gate() const { return W_reason_gate_; }
 
-    void setStream(cudaStream_t s)       { config_.stream = s; }
-    void setCublasHandle(cublasHandle_t h){ config_.cublas_handle = h; }
-
     const ExecutionBlockConfig& config() const { return config_; }
-
-    int lastDivClampCount(cudaStream_t stream) const;
 
 private:
     ExecutionBlockConfig config_;

@@ -1,10 +1,10 @@
-# Execution Block — Documentation (v2.1)
+# Execution Block — Documentation (v2.2)
 
 This document describes the **Execution Block** (differentiable register machine), how it fits into training/inference, configuration, public APIs, data flow, and checkpoints.
 
 > **Breaking change.** This version is a complete rewrite. Old (v1) checkpoints are **not loadable**; serialization hard-fails on schema mismatch.
 
-**v2.1 doc update** (implementation alignment): differentiable context mean, no logit detach for arg softmax, atom-only decode MLP + row assembly, `inject_gate_temp`, all-`V` cross-attention with `valid_mask` gating, `num_ops > 0` / no sequential `num_filled` growth.
+**v2.2 doc update** (Workstream 0 alignment): dead public APIs removed, layer config trimmed to layer-owned behavior, and the implementation split into a thin coordinator plus private memory/data stream files.
 
 ---
 
@@ -37,7 +37,6 @@ Later encoder layers can also read memory through **gated cross-attention**.
 - **Hard fail on NaN/Inf/magnitude.** Every step validates v1, v2, v_out, result_emb. Crashes if `isnan`, `isinf`, or `abs(x) > magnitude_limit` (default `1e6`).
 - **Softmax validation.** Every softmax output (p_arg1, p_arg2, p_op, p_write) is validated: sum ≈ 1.0 (±1e-3), no NaN, no negatives. Violation throws.
 - **CUDA_CHECK after every kernel.** All kernel launches and async memcpy calls are followed by `CUDA_CHECK` / `CUDA_CHECK_KERNEL()`.
-- **Division clamp monitoring.** `kernelFourOps` increments a device counter when `abs(v2) <= eps` triggers the safe-division clamp. Readable via `lastDivClampCount(stream)`.
 - **Atom embedding path is intentionally non-differentiable.** `kernelGatherCandidateAtomEmb` gathers from raw `float*` (ScratchBlock), not autograd tensors. Documented as constant input; gradients flow through the decode MLP weights only.
 - **Injection grad_fn chaining.** `ExecutionBlockInjectGradFn::capture()` saves H's existing `grad_fn` before replacing it; backward chains to the saved parent, preserving the full upstream graph.
 - **Fail-fast collapse (always fatal).** After each softmax: `p_arg1`, `p_arg2`, and `p_op` must have entropy ≥ `entropy_collapse_threshold` (default `0.01`); `p_write` must satisfy `max(p_write) ≤ write_collapse_threshold` (default `0.98`). Checked **before** downstream use. Same `d_numeric_error_flag_` as numeric/softmax errors; end-of-step sync throws `std::runtime_error` (no warn-and-continue).
@@ -70,7 +69,7 @@ Execution Block adds **entropy regularization** (not supervision CE):
 L_entropy = -weight * sum_distributions( sum_i( p_i * log(p_i + eps) ) )
 ```
 
-Applied to `p_arg1`, `p_arg2`, `p_op`, `p_write` distributions across all K steps. Prevents distribution collapse to one-hot. Weight controlled by `execution_block_entropy_weight` (default `0.01`).
+Applied to `p_arg1`, `p_arg2`, `p_op`, `p_write` distributions across all K steps. Prevents distribution collapse to one-hot. The layer exposes `computeEntropyLoss(...)`; orchestration code decides when and with what weight to apply that auxiliary term.
 
 ---
 
@@ -81,7 +80,6 @@ Fields in `grim_language_model_cuda.hpp`:
 | Field | Default | Role |
 |-------|---------|------|
 | `execution_block_enabled` | `false` | Master switch |
-| `execution_block_layer` | `-1` | Encoder layer index (resolved: `-1` → `num_layers - 2`, clamped to `[0, num_layers-1]`) |
 | `execution_block_num_ops` | `4` | Must be `> 0`; default 4 matches the built-in `+`, `-`, `*`, `/` mix (see hard rules) |
 | `execution_block_num_slots` | `4` | **V** — max memory slots |
 | `execution_block_num_steps` | `2` | **K** — execution steps per forward |
@@ -91,14 +89,20 @@ Fields in `grim_language_model_cuda.hpp`:
 | `execution_block_cross_attn_topk` | `1` | Top-k keys per query |
 | `execution_block_usage_decay` | `0.9` | Decay for slot usage after reads |
 | `execution_block_diversity_kappa` | `2.0` | Penalty for rewriting the same slot |
-| `execution_block_memory_slot_bias` | `0.5` | Bias against picking memory slots as args |
-| `execution_block_temp_start` | `2.0` | Temperature at start of training |
-| `execution_block_temp_end` | `0.5` | Temperature at end of training |
-| `execution_block_temp_schedule` | `0` | `0` = linear, `1` = cosine |
-| `execution_block_entropy_weight` | `0.01` | Weight for entropy regularization loss |
-| `execution_block_diag_logging` | `false` | Log diagnostic metrics per step |
 
-`ExecutionBlockConfig` in `execution_block_GPU.hpp` mirrors these fields plus decode MLP sizes (`value_decode_input_dim`, `value_decode_hidden_dim`), `empty_slot_bonus`, **`inject_gate_temp`** (default `0.5` — scales the pre-sigmoid dot product for injection; **not** a learnable parameter), **`deterministic`** (default `false` — reserved for fixed-seed / stable-order execution), **`debug_mode`** (default `false` — extra logging + `ExecStepMetrics` when diagnostics are enabled; **does not** change fail-fast behavior), **`entropy_collapse_threshold`** (default `0.01` — fatal if distribution entropy falls below), **`write_collapse_threshold`** (default `0.98` — fatal if `max(p_write)` exceeds), **`magnitude_limit`** (default `1e6` — fatal in `kernelCheckFinite` if any element exceeds `abs` bound), stream, and cuBLAS handle. Construction in `TrainingOps.cu` and `InitinferenceState.cu` maps `LanguageModelConfig` fields into `ExecutionBlockConfig` (if you add new config fields to `LanguageModelConfig`, wire them there; otherwise the C++ default applies).
+`ExecutionBlockConfig` in `execution_block_GPU.hpp` now contains only layer-owned behavior: decode MLP sizes (`value_decode_input_dim`, `value_decode_hidden_dim`), slot counts, cross-attention dimensions, numeric limits, and injection/collapse thresholds. Orchestration-owned knobs such as layer placement, temperature schedule, entropy scheduling, and stream/cuBLAS wiring stay outside the layer config.
+
+## File ownership after the initial split
+
+| File | Responsibility |
+|------|----------------|
+| `execution_block_GPU.hpp` | Minimal public API / config / diagnostic structs |
+| `execution_block_GPU.cu` | Public coordinator + layer construction / validation entrypoints |
+| `execution_block_internal.hpp` | Private shared internals for split implementation files |
+| `execution_block_memory_stream_GPU.cu` | `ExecutionMemory`, slot bootstrap, memory-side helpers |
+| `execution_block_data_stream_GPU.cu` | data-stream helpers such as entropy utilities and step-local token-side math |
+
+Only `execution_block_GPU.hpp` is intended for non-ExecutionBlock includes.
 
 ---
 
@@ -232,12 +236,18 @@ void executeStep(
     ExecutionMemory& M,                 // mutated in place
     const float* atom_embeddings,       // [num_atoms, atom_embedding_dim]
     const int* atom_positions,          // [num_atoms]
+    const int32_t* token_to_slot_map,   // [total_tokens]
     int num_atoms,
     int total_tokens,
     int step,
     float temperature,
     cudaStream_t stream,
-    ExecutionBlockStepOutput* diag_out = nullptr  // optional diagnostics
+    ExecutionBlockStepOutput* diag_out,
+    int token_offset,
+    int row_tokens,
+    Tensor& trace_state,
+    const std::vector<ExecutionRecord>& prior_records,
+    const float* expected_target = nullptr
 );
 ```
 
@@ -345,7 +355,7 @@ All registered under `ParamGroupType::EXECUTION_BLOCK`. 23 tensors total:
 
 ## Diagnostic logging
 
-When `execution_block_diag_logging = true`, each `executeStep` call logs:
+When layer `debug_mode` is enabled and diagnostics are requested, each `executeStep` call surfaces:
 
 | Metric | Description |
 |--------|-------------|
@@ -397,7 +407,6 @@ Gather / layout:
 | `kernelScatterAddHidden` | Backward kernel for differentiable gather: scatter-add gradients from `[C, d_model]` back to `[total_tokens, d_model]` at atom positions (`atomicAdd` for safety) |
 | `kernelGatherCandidateAtomEmb` | Collect atom embeddings into `[C, atom_dim]` (non-differentiable) |
 | `kernelBuildCandidateMask` | Build candidate mask `[C]` from atom count + memory `valid_mask` |
-| `kernelSliceColumns` | Column slice of atom embeddings (used for **atom-only** decode input) |
 | `kernelFillConstant` | Fill buffer with a scalar (e.g. `1/total_tokens` for differentiable mean context) |
 
 Masking / assembly helpers:
@@ -412,7 +421,6 @@ Arithmetic + mixing:
 | Kernel | Purpose |
 |--------|---------|
 | `kernelFourOps` | Compute built-in op results: `v1+v2`, `v1-v2`, `v1*v2`, `v1/max(abs(v2),eps)`; increments `div_clamp_counter` when clamp triggers |
-| `kernelFourOpMixForward` | `v_out = Σ_k p_op[k] * results[k]` |
 | `kernelFourOpMixBackward` | Analytical gradients for `FourOpMixGradFn` (parameterized by `num_ops`) |
 
 Injection (single result row):
@@ -458,11 +466,11 @@ Diagnostics / validation:
 ## Quick checklist for a new experiment
 
 1. Enable ScratchBlock + Execution Block in config.
-2. Set `execution_block_layer` (or rely on `-1` default for `num_layers - 2`).
+2. Set `execution_block_layer` at the orchestration/model-config level (or rely on `-1` default for `num_layers - 2`).
 3. Tune `execution_block_num_slots` (V) and `execution_block_num_steps` (K).
-4. Set temperature schedule: `temp_start` (warm), `temp_end` (cool), and `temp_schedule`.
-5. Adjust `entropy_weight` if distributions collapse too fast or too slow.
+4. Set the temperature schedule at the orchestration boundary: `temp_start` (warm), `temp_end` (cool), and `temp_schedule`.
+5. Adjust the entropy auxiliary weight at the orchestration boundary if distributions collapse too fast or too slow.
 6. Tune **`inject_gate_temp`** in `ExecutionBlockConfig` (lower → softer injection gate; default `0.5`) if the gate saturates too early.
-7. Enable `diag_logging` for debugging; disable for production runs.
+7. Enable `debug_mode` if you want extra runtime metrics while debugging.
 8. Verify checkpoint save/load — old checkpoints **will not load**.
 9. Use `getExecutionBlockLayer()` only when `execution_block_enabled` is true; otherwise `nullptr`.

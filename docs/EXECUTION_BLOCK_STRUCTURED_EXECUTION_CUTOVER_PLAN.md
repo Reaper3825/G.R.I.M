@@ -1,8 +1,14 @@
 # ExecutionBlock Structured Execution Cutover Plan
 
-**Status:** Proposed implementation plan  
+**Status:** Workstream 0 in progress  
 **Scope:** `token_to_slot_map`, `teacher_steps`, row-local ExecutionBlock execution, GRMT cutover, inference alignment  
 **Policy:** **No backwards compatibility**. Delete legacy behavior instead of preserving it.
+
+> Living refactor companion: [`EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_PLAN.codoc.md`](EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_PLAN.codoc.md)
+>
+> Living flow diagram: [`EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_FLOW.md`](EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_FLOW.md)
+>
+> Any change that affects ownership boundaries, file splits, payload shape, validation rules, execution gating, selector behavior, runtime flow, or deleted legacy paths must update both living artifacts in the **same change**.
 
 ---
 
@@ -15,6 +21,8 @@ Make structured execution in GRIM-text behave as a single, explicit system:
 - execution-active rows carry explicit register metadata,
 - training and validation enforce the exact same contract,
 - ExecutionBlock only consumes row-local state,
+- execution / selector learned parameters are real tensor state, optimizer-visible through `ParameterGroup`, and checkpointed through the main serialization layer,
+- `BatchPayload` is the only batched transport for compiled execution metadata, while `TensorContract` and `TensorConversion` stay narrow tensor-contract/layout-conversion boundaries,
 - old debug-only serialization paths are removed.
 
 The current codebase mixes two incompatible assumptions:
@@ -23,6 +31,60 @@ The current codebase mixes two incompatible assumptions:
 2. Every `<NUM>` token must have a slot when `execution_block_enabled=true`.
 
 This plan removes that ambiguity completely.
+
+---
+
+## Mandatory living artifacts during the cutover
+
+These artifacts are not optional project decoration. They are part of the cutover contract.
+
+### Companion codoc contract
+
+`EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_PLAN.codoc.md` is the **living refactor ledger** for this cutover.
+
+Every qualifying change must update the codoc in the same change with, at minimum:
+
+1. active workstream id and status delta
+2. changed files
+3. what changed structurally
+4. what now owns the concern
+5. allowed integration / hook points after the change
+6. migrated callers or consumers
+7. deleted or removed legacy paths
+8. validation performed, skipped, or still blocked
+9. remaining gaps / next gate
+10. diagram delta summary
+
+If code changes the architecture but the codoc does not change, the refactor step is incomplete.
+
+### Flow diagram contract
+
+`EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_FLOW.md` is the maintained flow artifact for this cutover.
+
+Every qualifying change must update the flow artifact in the same change when it alters:
+
+- workstream sequencing
+- ownership boundaries
+- data transport shape
+- validation entry points
+- runtime execution flow
+- inference / selector flow
+- deleted fallback or legacy paths
+
+The flow artifact must:
+
+- keep a Mermaid diagram that reflects the **current enforced flow**, not stale target-state wishful thinking
+- remove deleted legacy nodes/edges immediately
+- show where validation gates occur
+- show where the codoc/plan expect same-change documentation maintenance
+
+### Global completion gate for every workstream
+
+No workstream is complete until all three artifacts are current in the same change:
+
+- this implementation plan
+- the living codoc companion
+- the maintained flow diagram
 
 ---
 
@@ -76,6 +138,23 @@ They are a paired, compiled representation of one upstream structured record:
 - `teacher_steps` = execution supervision view
 
 The pipeline must derive both from the same builder pass and validate that they remain consistent.
+
+### Compiled structured-execution payload authority
+
+Runtime, batching, validation, and orchestration must consume one **compiled structured-execution payload** derived from the canonical `StructuredExecutionRecord`.
+
+Suggested compiled form:
+
+- `CompiledStructuredExecutionPayload { execution_active, token_exec_slots, compiled_bootstrap_bindings, teacher_steps, slot_selection_targets }`
+
+If some storage or transport layer keeps these as adjacent fields instead of one nested C++ object, they still form one conceptual compiled payload and `execution_active` is the authoritative activation bit.
+
+Rules:
+
+- runtime/batching/validation decide whether a row is execution-active from compiled payload activation state, **not** from `teacher_steps.size()`
+- `teacher_steps` being non-empty is a supervised-training payload validity rule in this cutover, not the activation source
+- non-execution rows serialize/transport `execution_active = false`
+- execution-active rows serialize/transport `execution_active = true`
 
 ---
 
@@ -205,6 +284,23 @@ Configured slot ranges such as `[S, V)` are only outer bounds. They are **not** 
 
 If `StructuredExecutionRecord` carries an explicit `slot_domain` field, that field must equal `D_row` exactly rather than acting as a loose superset or advisory hint.
 
+### Runtime materialization of `D_row`
+
+For this cutover, GRMT and `BatchPayload` do **not** serialize a separate runtime `D_row` field.
+
+Whenever runtime or validation code needs the row-local slot domain, it must reconstruct:
+
+$$
+D_{row}^{runtime} = \{\, b.slot\_id \mid b \in compiled\_bootstrap\_bindings \,\} \cup \{\, step.arg1\_slot,\; step.arg2\_slot,\; step.write\_slot \mid step \in teacher\_steps \,\}
+$$
+
+Rules:
+
+- runtime `D_row` comes only from the union of slot ids referenced by `compiled_bootstrap_bindings` and `teacher_steps`
+- selector supervision targets do **not** add slot-domain membership
+- configured slot ranges `[S, V)` remain outer bounds only
+- if a future schema later serializes `D_row` explicitly, loader/validator code must require exact equality with `D_row^{runtime}`; until then, the reconstructed union is the only legal runtime materialization
+
 ### Slot identity and teacher-step write rules
 
 Slot identity is **stable for the entire lifetime of one row**.
@@ -229,14 +325,15 @@ Under this contract, teacher-step write targets do **not** need to be bootstrap-
 
 ### Builder-time invalid execution rows
 
-An execution-active row with:
+An execution-active row whose compiled structured-execution payload would be emitted with `execution_active = true`, but whose canonical structured record has:
 
-- `teacher_steps.size() > 0`, and
 - `bootstrap_bindings.empty()`
 
 is malformed and must be rejected by the builder **before** tokenization/serialization is emitted.
 
 This is a builder-time validity rule, not merely a validator-time warning. The shared validator should still reject such a row if corrupted data somehow reaches runtime, but the canonical builder is not allowed to produce it.
+
+For supervised training rows in this cutover, the same active compiled payload must also produce non-empty `teacher_steps`; that remains a payload validity requirement, but it is not the source of execution-active status.
 
 ### Role of expected scalar results
 
@@ -355,15 +452,21 @@ It must never:
 	- It must not see invalid slots, dead slots, out-of-range slots, or slots from other rows.
 
 3. **Slot-state representations**
-	- For each `s in L`, provide a slot-state vector.
-	- Minimum required contents:
-		- slot id embedding
-		- current numeric value embedding
+	- For each `s in L`, first assemble a deterministic raw slot-feature record from row-local runtime state.
+	- Suggested fixed form:
+		- `slot_features[s] = { slot_id, numeric_value, valid_bit, recent_write_bit, usage_scalar, optional domain_id, optional provenance_id, optional state_flags }`
+	- Ownership boundary:
+		- `DecodeTimeNumPolicy.hpp/.cu` constructs `L` and assembles ordered `slot_features[s]` for `s in L` from row-local `ExecutionMemory` plus compiled provenance/runtime metadata only.
+		- `DecodeTimeSlotSelectorLayer` consumes those fixed features, applies all learned embeddings / learned slot-state encoding, and produces `slot_repr[s]`.
+	- Minimum fixed contents before learned encoding:
+		- slot id
+		- current numeric value
 		- valid/live bit
 		- last-write / usage features
-		- provenance features where available
-	- Suggested form: `slot_repr[s] = SlotEncoder(slot_id, value, usage, provenance, state_flags)`
-	- The selector chooses slot identity from these representations, not from raw numeric values alone.
+		- provenance/domain identifiers where available
+	- Suggested learned form: `slot_repr[s] = DecodeTimeSlotSelectorLayer::encodeSlotFeatures(slot_features[s])`
+	- Slot/domain/provenance information enters fixed feature assembly as ids/scalars; embeddings for those ids, when used, are owned and applied only by `DecodeTimeSlotSelectorLayer`.
+	- The selector chooses slot identity from these learned representations, not from raw numeric values alone.
 
 4. **Optional selector policy inputs**
 	- Allowed:
@@ -375,6 +478,53 @@ It must never:
 		- text-span proximity shortcuts
 		- `latest write` shortcuts
 		- `first valid` shortcuts
+
+#### Concrete selector owner module and tensor inventory
+
+For this cutover, trainable decode-time selector state has **one** owner module only:
+
+- `resources/models/GRIM-text/Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp/.cu` **(new)**
+- implemented as `DecodeTimeSlotSelectorLayer`
+- model-owned through `LanguageModel`
+
+`DecodeTimeNumPolicy.hpp/.cu` does **not** own trainable selector tensors. It consumes scores/logits from `DecodeTimeSlotSelectorLayer` and applies the policy decision over $\{ NULL \} \cup L$.
+
+`ExecutionBlockLayer`, `Common/grim_language_model_gpu.cu`, and `training/Inference_GPU.cu` may call the selector, but they may not own selector weights, null-option parameters, or learned ambiguity state.
+
+The required minimal trainable selector tensor set for the cutover pointer-selector baseline is:
+
+- `W_q_select` — query projection from decode hidden state to selector space
+- `W_k_select` — key projection from slot-state vector to selector space
+- `null_key_select` — learnable key/vector representing the explicit `NULL` choice
+- `null_logit_bias` — learnable scalar/logit bias for the explicit `NULL` choice
+
+Optional selector tensors are allowed only when explicitly adopted by the architecture, and if present they must live in the same owner module and checkpoint path:
+
+- `E_slot_select` — slot-id embedding table
+- `E_slot_domain_select` / `E_slot_provenance_select` — optional domain/provenance embedding tables
+- `ambiguity_margin_param` — learned scalar ambiguity threshold; if ambiguity margin is fixed instead, it remains config-only and is **not** serialized as a tensor
+- `W_score_*` / `b_score_*` — explicit richer pairwise scorer MLP weights if the architecture uses MLP scoring instead of the minimal pointer-selector baseline
+- `W_slot_state_encode_*` / `b_slot_state_encode_*` — any learned slot-state encoder tensors beyond the fixed baseline slot feature assembly
+
+No other learned selector tensors are allowed to appear “incidentally” in other modules. If a new selector-side learned quantity is added later, it must be declared here as part of the same owner-module contract.
+
+The slot-state construction boundary is therefore explicit:
+
+- `DecodeTimeNumPolicy.hpp/.cu` owns **fixed, non-trainable** assembly of ordered `slot_features[s]` for `s in L`
+- `DecodeTimeSlotSelectorLayer` owns **all learned** slot-state encoding, embeddings, query/key projections, `NULL` representation, and score production
+
+`slot_repr[s]` is not an independently-owned artifact elsewhere in the model; it exists only as the selector layer's learned encoding of fixed row-local slot features.
+
+#### Selector / policy score interface
+
+`DecodeTimeSlotSelectorLayer` returns a **single ordered score/logit vector over $\{ NULL \} \cup L$**.
+
+Required output ordering for the cutover contract:
+
+- index `0` = explicit `NULL` option
+- indices `1..|L|` = candidates corresponding to the row-local ordered members of `L`
+
+`DecodeTimeNumPolicy.hpp/.cu` consumes that complete score vector. It does **not** inject, append, or separately score the `NULL` option after the selector runs.
 
 #### Outputs
 
@@ -562,8 +712,8 @@ Fail hard if:
 2. **ExecutionBlock is explicit, not implicit.**  
 	A numeric atom is **not** automatically a register operand.
 
-3. **Training rows are execution-active only when they carry structured execution metadata.**  
-	For training, the canonical marker is `teacher_steps.size() > 0`.
+3. **Training rows are execution-active only when their compiled structured-execution payload marks them active.**  
+	For supervised training rows in this cutover, non-empty `teacher_steps` remains a required payload invariant, but it is not the activation source.
 
 4. **Plain corpus numbers stay plain.**  
 	They keep `token_to_slot_map = -1` and must never be rejected for that.
@@ -589,28 +739,52 @@ Fail hard if:
 11. **Decode-time slot selection is reference resolution, not number prediction.**  
 	The selector chooses one legal live slot, `Null`, or `Ambiguous`; it does not regress numeric values and it does not infer slot identity after token sampling.
 
+12. **Execution / selector learned parameters introduced by this cutover are tensor-backed model state only.**  
+	No raw host-side learnable floats, vectors, or config-owned trainable values are allowed.
+
+13. **Trainable execution / selector tensors must participate in the same optimizer contract as the rest of the model.**  
+	They are surfaced through `ParameterGroup`, not hidden behind side structures.
+
+14. **`BatchPayload` is the only batch-time transport for compiled execution metadata.**  
+	Learned weights, optimizer state, and checkpoint blobs never travel there.
+
+15. **`TensorContract` owns tensor/autograd/layout/`ParameterGroup` semantics; `TensorConversion` owns only layout conversion between declared tensor layouts.**  
+	Neither may become an alternate semantic metadata layer.
+
+16. **Checkpoint persistence for learned execution / selector tensors goes through `grim_model_serialization.cu` + `Layers/Serialization/*` only.**  
+	No sidecars, no loader reconstruction, no compatibility shims.
+
+17. **Decode-time selector tensors have one owner module only: `DecodeTimeSlotSelectorLayer`.**  
+	They do not live in `ExecutionBlockLayer`, `DecodeTimeNumPolicy`, inference-only orchestration, or loose `LanguageModel` core fields.
+
+18. **If ambiguity thresholding is learned, that threshold is a selector tensor and lives in the selector owner module.**  
+	If it is fixed, it remains config-only and is not checkpointed as a tensor.
+
 ---
 
 ## End-state contract
 
 ### Non-execution training row
 
+- `CompiledStructuredExecutionPayload.execution_active == false` (or the equivalent serialized/transported activation bit)
 - `teacher_steps.empty() == true`
+- `compiled_bootstrap_bindings.empty() == true`
 - every `token_exec_slots[pos] == -1`
 - numeric atoms are allowed
 - ExecutionBlock is not entered for that row
 
 ### Execution-active training row
 
-- `teacher_steps.empty() == false`
-- `bootstrap_bindings.empty() == false` at builder time, therefore compiled rows with non-empty `teacher_steps` must carry at least one compiled bootstrap binding
-- `D_row` is the exact immutable set of legal slot ids for the row; it is defined by the row's canonical structured execution record, not by the full configured slot range
+- `CompiledStructuredExecutionPayload.execution_active == true` (or the equivalent serialized/transported activation bit)
+- for supervised training rows in this cutover, `teacher_steps.empty() == false`
+- `bootstrap_bindings.empty() == false` at builder time, therefore compiled rows with active execution payload must carry at least one compiled bootstrap binding
+- runtime `D_row` is reconstructed as the union of slot ids referenced by `compiled_bootstrap_bindings` and `teacher_steps`; configured slot ranges remain outer bounds only
 - every required state-bearing token position `pos in R` has `token_exec_slots[pos] in [num_scratch_slots, num_slots)`
 - every non-state token has `token_exec_slots[pos] == -1`
 - `teacher_steps.size()` equals the row's compiled execution-step count; no implicit coupling to a global `execution_block_num_steps` is allowed unless fixed-step execution is made an explicit architecture rule and enforced as such
 - all `TeacherStep` slot indices are in range
-- every bootstrap/read/write slot referenced by the row belongs to `D_row`
-- teacher-step write targets may be first-written later, but they must already belong to `D_row`; no step may invent or rebind slot identity
+- every bootstrap/read/write slot referenced by the row belongs to reconstructed `D_row`
+- teacher-step write targets may be first-written later, but they must already belong to reconstructed `D_row`; no step may invent or rebind slot identity
 - row must fit in one sequence window; no sliding-window fragmentation
 - ExecutionBlock is entered for that row only
 
@@ -655,29 +829,89 @@ The plan assumes **zero fallback logic** for those paths.
 
 ## File separation of concerns
 
+The split must create **layers with one-way ownership**, not just smaller files. Semantic definitions, compiled artifacts, transport, validation, runtime execution, and orchestration must stay separate.
+
 | File / Module | Owns after refactor | Must not own |
 |---|---|---|
-| `resources/models/GRIM-text/Shared/Execution/ExecutionMetadata.hpp` **(new)** | Canonical structured execution record (`StructuredExecutionRecord`, `BootstrapLiteralBinding`, `CompiledBootstrapBinding`, ordered steps) plus derived metadata types (`TeacherStep`, `SlotSelectionTarget`) | Data loading logic, batching, GPU execution |
-| `resources/models/GRIM-text/Shared/Execution/DecodeTimeNumPolicy.hpp/.cu` **(new)** | Deterministic generation-time `<NUM>` admission/binding mechanism, selector contract types (`SlotSelectionStatus`, `SlotSelectionResult`), legal live-slot candidate set construction, explicit decode-time slot selection, null/ambiguity handling | Sampling implementation internals unrelated to decode-time register semantics |
-| `resources/models/GRIM-text/Shared/DataLoader/ConceptExecutionSequenceBuilder.hpp/.cu` **(new)** | Build structured concept rows into `TrainingSequence` + execution metadata | Batch flattening, runtime validation |
-| `resources/models/GRIM-text/Shared/DataLoader/DataLoader.cu` | Cache ingestion, tokenizer training, GRMT writing, invokes concept builder | Ad-hoc execution contract rules spread across unrelated helpers |
-| `resources/models/GRIM-text/training/training_data_loader.hpp` | Serialized training schema (`TrainingSequence`, loader) carrying compiled execution projections + compiled provenance | Runtime execution policy |
-| `resources/models/GRIM-text/Shared/Batching/BatchPayload.hpp/.cu` | Padded batch flattening and batch-level execution metadata transport, including compiled bootstrap provenance | Tokenization, execution runtime, duplicate validation |
-| `resources/models/GRIM-text/Shared/Execution/ExecutionPayloadValidation.hpp/.cu` **(new)** | Single source of truth for execution-row validation | GPU kernels, file IO |
-| `resources/models/GRIM-text/Shared/Loss/ComputeLoss/ComputeLossBatch.cu` | Validation-time payload validation + H2D + forward/loss path | Unique execution contract logic not shared with training |
-| `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu` | Training-time payload validation + row-local execution orchestration | Private copy of validation rules |
-| `resources/models/GRIM-text/Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp/.cu` | Atom detection and row-local atom index extraction support | Deciding whether a row is execution-active |
-| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.hpp` | Minimal public ExecutionBlock API: config, memory/diagnostic structs, `ExecutionBlockLayer` declaration | Bulk private kernel/helper declarations |
-| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_internal.hpp` **(new, private)** | Shared private stage IDs, macros, internal helper declarations used by the split implementation files | Public API surface, training metadata contracts |
-| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.cu` | Thin layer façade/orchestrator: constructor, destructor, config validation, top-level method wiring between internal modules | Monolithic kernel inventory, mixed memory/data helper implementations |
-| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu/.hpp` **(new)** | Register-memory stream ops: `ExecutionMemory` lifecycle, bootstrap, slot gather/read/write, valid-mask/recent-write/usage maintenance, memory-side read helpers | Token-stream context/trace logic, semantic row activation, compiled execution metadata validation |
-| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_data_stream_GPU.cu/.hpp` **(new)** | Token/data stream ops: context reduction, trace encoding, arg/op selection, result decode, result injection into `H`, token-stream-side step assembly | `ExecutionMemory` ownership/lifecycle, bootstrap/write bookkeeping |
-| `resources/models/GRIM-text/training/Phases/Phase1_Startup.cu` | BOS/EOS insertion, padding, splitting policy | Inventing execution metadata |
-| `resources/models/GRIM-text/Common/grim_model_serialization_version.hpp` | GRMT version bump and explicit incompatibility | Compatibility shims |
+| `resources/models/GRIM-text/Shared/Execution/ExecutionMetadata.hpp` **(new)** | Canonical semantic/compiled execution data types only: `StructuredExecutionRecord`, `CompiledStructuredExecutionPayload`, `BootstrapLiteralBinding`, `CompiledBootstrapBinding`, `TeacherStep`, `SlotSelectionTarget`, `D_row`-related types/invariants | JSON parsing, tokenization, padding/remap, validation logic, CUDA/autograd code, GRMT IO |
+| `resources/models/GRIM-text/Shared/Execution/DecodeTimeNumPolicy.hpp/.cu` **(new)** | Decode-time `<NUM>` policy only: selector result types, legal candidate-set construction, fixed row-local `slot_features[s]` assembly, null/ambiguity rules, narrow policy interface for mask-or-bind decisions using scores from the selector layer | Sampler state ownership, sampler mask application, `ExecutionMemory` allocation/lifecycle, GRMT IO, training batching, trainable selector tensors, learned slot-state encoding |
+| `resources/models/GRIM-text/Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp/.cu` **(new)** | Sole owner of trainable decode-time selector tensors, learned slot-state encoding, and selector forward pass returning ordered scores over $\{ NULL \} \cup L$; required baseline tensors are `W_q_select`, `W_k_select`, `null_key_select`, `null_logit_bias` | Sampler masking policy, candidate-set construction, `ExecutionMemory` ownership, GRMT row metadata, heuristic fallback policy, checkpoint schema decisions outside the serialization layer |
+| `resources/models/GRIM-text/Shared/DataLoader/ConceptExecutionSequenceBuilder.hpp/.cu` **(new)** | Canonical build from structured concept source into `TrainingSequence` plus compiled execution metadata | Batch padding/flattening, runtime validation, GPU execution, sampler policy |
+| `resources/models/GRIM-text/Shared/DataLoader/DataLoader.cu` | Dataset/cache orchestration, tokenizer training, GRMT read/write orchestration, invokes concept builder | Ad-hoc execution semantics, duplicated validator rules, per-row execution runtime |
+| `resources/models/GRIM-text/training/training_data_loader.hpp` | Serialized `TrainingSequence` schema and loader/storage helpers for compiled artifacts, including explicit compiled payload activation state | Semantic derivation rules, runtime validation policy, GPU execution |
+| `resources/models/GRIM-text/Shared/Batching/BatchPayload.hpp/.cu` | Padded/remapped batch transport of already-compiled row metadata into batch form, including explicit execution-payload activation state | Deriving execution semantics, inferring `R`/`D_row`, duplicate validation logic, GPU execution |
+| `resources/models/GRIM-text/Shared/TensorContract/TensorContract_GPU.hpp/.cu` | Cross-layer tensor contract only: `Tensor`, `TensorShape`, autograd behavior, layout validation, `ParameterGroup` semantics for learned state | Execution metadata semantics, batch transport, checkpoint schema selection, loader/builder policy |
+| `resources/models/GRIM-text/Shared/TensorConversion/TensorConversion.hpp/.cu` | Pure layout conversion kernels between already-declared tensor layouts (`BHSD`, `BSHD`, `BSM`, fused QKV forms) | Learned-parameter ownership, semantic reinterpretation, checkpoint IO, hidden host/device shadow state |
+| `resources/models/GRIM-text/Shared/Execution/ExecutionPayloadValidation.hpp/.cu` **(new)** | Host-side semantic validation of compiled/batched execution payloads | Padding/remap, H2D, file IO, source JSON reconstruction, GPU execution |
+| `resources/models/GRIM-text/Shared/Loss/ComputeLoss/ComputeLossBatch.cu` | Validation-path orchestration: call shared validator, H2D, forward/loss path | Owning execution validation rules, selector policy internals, metadata derivation |
+| `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu` | Training-path orchestration: call shared validator, build row-local views, invoke ExecutionBlock | Owning execution validation rules, metadata derivation, private ExecutionBlock internals |
+| `resources/models/GRIM-text/training/Inference_GPU.cu` | Inference-side row-local atom hookup and ExecutionBlock orchestration | Fixed slot-feature assembly rules, selector scoring/policy internals, trainable selector tensor ownership, null-atom fallback, duplicated validation rules |
+| `resources/models/GRIM-text/GRIM/grim_language_model_cuda.hpp` | Public model declaration surface for tensor-owned modules, including model-owned `DecodeTimeSlotSelectorLayer`, plus `parameterGroups()`, `buildParameterGroups()`, `save()`, and `load()` entrypoints | Schema-specific checkpoint packing, batch metadata derivation, tensor-conversion internals, loose selector tensors outside a dedicated owner module |
+| `resources/models/GRIM-text/Common/grim_language_model_gpu.cu` | Sampler integration: call `DecodeTimeNumPolicy`, apply `<NUM>` mask/binding result to generation flow | Selector scoring, candidate construction, fixed slot-feature assembly, `ExecutionMemory` ownership, heuristic fallback policy |
+| `resources/models/GRIM-text/Common/grim_model_serialization.cu` | Single model-checkpoint bridge from model-owned tensors to `SerializationSaveRequest` / `SerializationLoadRequest` | GRMT row metadata, sidecar persistence for cutover-added tensors, heuristic reconstruction of missing weights |
+| `resources/models/GRIM-text/Layers/Serialization/Serialization_*.{hpp,cu}` | Schema-specific checkpoint request/view/save/load/validate path for model tensors and capability gates | Runtime layer ownership, `ParameterGroup` construction, batch payload semantics, semantic execution metadata |
+| `resources/models/GRIM-text/Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp/.cu` | Atom detection plus row-local atom view extraction support | Row activation policy, slot validation semantics, execution-program logic |
+| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.hpp` | Only the public ExecutionBlock API: public config, public memory/diagnostic structs, `ExecutionBlockLayer` declaration | Private kernels/helpers, `TeacherStep`/`BatchPayload` types, builder/validator contracts |
+| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_internal.hpp` **(new, private)** | Private stream-local view types, stage IDs, macros, and internal helper declarations shared only inside the split ExecutionBlock implementation | Public API surface, training/data-loader types, validator or selector policy types |
+| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.cu` | Public entrypoints and orchestration between memory-stream and data-stream internals | Monolithic kernel inventory, semantic validation, batch-global data assumptions |
+| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu/.hpp` **(new)** | `ExecutionMemory` ownership/lifecycle, bootstrap, slot read/write, valid-mask/recent-write/usage maintenance, memory-side helpers | Token-context reduction, trace encoding, `TeacherStep` semantics, `BatchPayload`/GRMT knowledge |
+| `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_data_stream_GPU.cu/.hpp` **(new)** | Token/data-stream compute: context reduction, trace encoding, arg/op/write logits, result decode, result injection into `H`, step-local token-side assembly | `ExecutionMemory` ownership/lifecycle, metadata parsing, semantic validation |
+| `resources/models/GRIM-text/training/Phases/Phase1_Startup.cu` | BOS/EOS insertion, padding/remap, sequence splitting policy, fragmentation rejection | Deriving new execution semantics |
+| `resources/models/GRIM-text/Common/grim_model_serialization_version.hpp` | Checkpoint model version + GRMT format version constants and explicit incompatibility gates | Migration heuristics, compatibility shims |
+
+### Hard boundary rules
+
+1. `ExecutionMetadata.hpp` is the **only** cross-layer definition site for semantic execution types.
+2. `ExecutionPayloadValidation.hpp/.cu` is the **only** semantic execution validator. Other files call it; they do not clone it.
+3. `BatchPayload.hpp/.cu` is transport only. It may carry, pad, and remap compiled metadata, but it may not derive or reinterpret execution semantics.
+4. `DecodeTimeNumPolicy.hpp/.cu` owns candidate construction and null/ambiguity/mask-or-bind policy over selector outputs. Callers consume the result; they do not re-implement the policy.
+5. `execution_block_internal.hpp` is private to `Layers/ExecutionBlock/` and must not be included from outside that folder.
+6. `execution_block_GPU.hpp` is the only public include path for non-ExecutionBlock code. The split stream files are not public extension points.
+7. The split ExecutionBlock files must communicate through narrow internal view/POD types declared in `execution_block_internal.hpp`; they must not include batching, loader, or validator headers to reach across layers.
+8. No file may both derive execution metadata and validate it.
+9. No file may both validate execution metadata and execute the runtime program.
+10. Configured slot ranges, GRMT fields, and batch transport are all downstream artifacts; none of them may redefine semantic truth owned by `ExecutionMetadata.hpp`.
+11. `TensorContract_GPU.hpp/.cu` is the only cross-layer contract for learned tensor shape/layout/autograd/`ParameterGroup` semantics.
+12. `TensorConversion.hpp/.cu` only converts between layouts already declared by `TensorContract`; it may not own trainable state or invent semantic meaning.
+13. Every learned execution / selector parameter introduced by this cutover must exist as a `GRIM::Tensor` owned by model/layer code. No host-only source of truth is allowed.
+14. Every trainable execution / selector tensor introduced by this cutover must be surfaced through `LanguageModel::buildParameterGroups()` / `parameterGroups()` so optimizer, grad diagnostics, and checkpoint save/load see the same object.
+15. `BatchPayload` may carry per-row numeric values, slot ids, and supervision metadata only. It must never carry learned weights, Adam moments, or checkpoint blobs.
+16. `grim_model_serialization.cu` + `Layers/Serialization/*` are the only checkpoint persistence path for learned execution / selector tensors; loaders fail if required tensors are missing or shape-mismatched.
+17. `DecodeTimeSlotSelectorLayer` is the only legal owner of trainable decode-time selector tensors (`W_q_select`, `W_k_select`, `null_key_select`, `null_logit_bias`, plus any explicit optional selector tensors).
+18. `DecodeTimeNumPolicy.hpp/.cu` owns no trainable selector state; it consumes selector outputs and applies policy only.
+19. `ExecutionBlockLayer`, `Common/grim_language_model_gpu.cu`, and `training/Inference_GPU.cu` may not keep duplicate selector weights, shadow null parameters, or learned ambiguity tensors.
+20. If a richer selector scorer or learned slot-state encoder is introduced later, its tensors must live in `DecodeTimeSlotSelectorLayer`; do not spread them across execution, inference, or policy files.
+21. `DecodeTimeNumPolicy.hpp/.cu` is the only place that may assemble fixed ordered `slot_features[s]` for `s in L` from row-local runtime/provenance state; that assembly is deterministic and non-trainable.
+22. `DecodeTimeSlotSelectorLayer` is the only place that may apply learned slot-state encoding/embeddings/projections, and it must return the complete ordered score vector over $\{ NULL \} \cup L$; policy must not inject `NULL` after the fact.
+23. Compiled payload activation state is the only legal runtime/batch execution-active signal; code must not infer row activity solely from `teacher_steps.size()`.
+24. For this cutover, runtime `D_row` is reconstructed exactly as the union of slot ids referenced by `compiled_bootstrap_bindings` and `teacher_steps`; no other runtime source may invent the row-local slot domain.
+
+## Chronological workstream order
+
+Treat the workstreams below as **gated phases**, not a grab bag. The workstream numbers remain stable identifiers; the table below is the authoritative execution order. Do not begin the next workstream until the current workstream satisfies its completion criteria.
+
+This table controls implementation order. The codoc and flow artifacts must track status transitions through this order as the refactor advances.
+
+| Execution order | Workstream | Why it must finish first |
+|---|---|---|
+| 1 | Workstream 0 — execution_block file deflation before semantic cutover | Deletes dead layer surface and locks the ExecutionBlock split boundary before semantic refactor work starts. |
+| 2 | Workstream 1 — canonical structured execution source-of-truth model | Establishes the semantic types and compiled payload contract that every downstream stage consumes. |
+| 3 | Workstream 2 — canonical structured sequence builder replaces `__SLOTS__` | The builder must emit the canonical compiled payload before storage, remap, or validation can be trusted. |
+| 4 | Workstream 3 — GRMT format cutover | Freezes the on-disk compiled payload only after the canonical builder and metadata contract exist. |
+| 5 | Workstream 5 — Phase1 sequence handling rules | BOS/EOS/padding/remap semantics must be fixed before the shared validator can enforce post-Phase1 alignment invariants. |
+| 6 | Workstream 4 — single shared execution payload validator | The validator becomes the common gate before runtime orchestration changes rely on fail-fast metadata checks. |
+| 7 | Workstream 6 — row-local execution orchestration | Runtime execution can become row-local only after the payload contract and validator are stable. |
+| 8 | Workstream 7 — delete silent execution skips | Fail-loud execution behavior belongs after row-local orchestration and validator-backed activation checks exist. |
+| 9 | Workstream 8 — align validation path and training path | Training and validation should be unified only after both use the same validator and execution gating model. |
+| 10 | Workstream 3A — tensor-backed learned parameter and checkpoint ownership | Selector/runtime learning state should be formalized only once the data/runtime contract is already stable. |
+| 11 | Workstream 9 — inference and generation alignment | Decode-time bind-or-mask behavior depends on selector ownership, compiled metadata, and row-local runtime state. |
+| 12 | Workstream 10 — tests that lock the contract in place | Tests close the cutover only after every behavior they assert is actually implemented. |
 
 ---
 
 ## Workstream 0 — execution_block file deflation before semantic cutover
+
+**Progress note (2026-03-29):** initial implementation has started. The public `ExecutionBlockLayer` surface has already been trimmed, the first private split files have been introduced, and caller/build/doc reconciliation is underway. Workstream 0 is not complete yet: the coordinator file still needs additional thinning and the split needs build validation.
 
 ### Files
 
@@ -693,6 +927,8 @@ The plan assumes **zero fallback logic** for those paths.
 - Update: `resources/models/GRIM-text/GRIM/grim_language_model_cuda.hpp`
 - Update: `resources/models/GRIM-text/Tests/ExecutionBlockTest.cu`
 - Update: `resources/models/GRIM-text/Layers/ExecutionBlock/DOCUMENTATION.md`
+
+**Suggested tools:** `search_subagent`, `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
 
 ### Operations
 
@@ -733,6 +969,13 @@ The plan assumes **zero fallback logic** for those paths.
 	- If a `GradFn` naturally belongs to register-memory flow, keep it in `execution_block_memory_stream_GPU.cu`.
 	- Do **not** create a third junk-drawer `.cu` just to move clutter sideways.
 11. Add one mechanical rule for this cutover: every helper or kernel that remains in the ExecutionBlock implementation must have a direct live call path in the same architecture. If not, delete it.
+12. Define narrow internal interface/view types in `execution_block_internal.hpp`.
+	- Stream files must exchange row-local/token-local/memory-local views through those internal types instead of reaching into batching, loader, or validator types.
+	- `execution_block_internal.hpp` is the only place shared private stream-facing structs/macros are allowed to live.
+13. Enforce include boundaries mechanically.
+	- `execution_block_internal.hpp` may be included only by `execution_block_GPU.cu`, `execution_block_memory_stream_GPU.*`, and `execution_block_data_stream_GPU.*`.
+	- Non-ExecutionBlock code must include only `execution_block_GPU.hpp`.
+	- The split stream files must not include `BatchPayload.hpp`, `training_data_loader.hpp`, `ExecutionPayloadValidation.hpp`, or builder headers.
 
 ### No-backwards-compatibility rule
 
@@ -743,9 +986,18 @@ The plan assumes **zero fallback logic** for those paths.
 - Do **not** split the file first and carry dead code into multiple smaller files.
 - Do **not** let memory-stream and data-stream responsibilities collapse back into one new private junk drawer.
 - Do **not** move orchestration policy into the stream files.
+- Do **not** let the split stream files include batching, loader, validator, or builder headers to reach across layers.
+- Do **not** expose `execution_block_internal.hpp` outside `Layers/ExecutionBlock/`.
 - Do **not** preserve silent execution skip as an interim safety valve.
 - Do **not** preserve batch-global atom context feeding per-row execution behind internal filtering logic.
 - Do **not** preserve the old decode-time `<NUM>` invalid slot/value emission branch while waiting for a later inference cleanup.
+
+### Completion criteria
+
+- `execution_block_GPU.cu` is reduced to a thin public coordinator and the surviving live implementation is split cleanly across the memory-stream and data-stream files.
+- Deleted kernels, deleted APIs, deleted `executeStep(...)` inputs, and deleted/moved config knobs are absent from code, docs, and tests.
+- `execution_block_internal.hpp` remains private to `Layers/ExecutionBlock/`, and the split stream files respect the include-boundary rules.
+- No renamed or hidden version of silent execution skip, batch-global atom adaptation, or invalid-slot/value decode-time `<NUM>` fallback remains in the ExecutionBlock layer.
 
 ---
 
@@ -757,9 +1009,11 @@ The plan assumes **zero fallback logic** for those paths.
 - Update: `resources/models/GRIM-text/training/training_data_loader.hpp`
 - Update: `resources/models/GRIM-text/Shared/Batching/BatchPayload.hpp`
 
+**Suggested tools:** `search_subagent`, `read_file`, `apply_patch`, `get_errors`, `get_changed_files`
+
 ### Operations
 
-1. Define `StructuredExecutionRecord` in `ExecutionMetadata.hpp` as the single semantic source of truth for execution-active rows.
+1. Define `StructuredExecutionRecord` in `ExecutionMetadata.hpp` as the single semantic source of truth for execution-active rows, and define `CompiledStructuredExecutionPayload` as the compiled runtime/supervision payload derived from it.
 	- initial literals / slot identities
 	- explicit row-local slot domain `D_row`
 	- `bootstrap_bindings[]` that define the only literals allowed to seed registers
@@ -770,30 +1024,39 @@ The plan assumes **zero fallback logic** for those paths.
 	- ordered execution steps
 	- expected scalar results with explicit supervision/debug-only semantics
 2. Move `TeacherStep` out of `BatchPayload.hpp` into the shared execution metadata header as a **derived supervision view**, not a source object.
-3. Extend `TrainingSequence` to carry compiled training-time execution projections:
+3. Extend `TrainingSequence` to carry compiled training-time execution payload with explicit activation state:
+	- `bool execution_active` (or equivalent explicit compiled-payload activation bit)
 	- `std::vector<int32_t> token_exec_slots`
 	- `std::vector<GRIM::Execution::TeacherStep> teacher_steps`
  	- `std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings`
 	- `std::vector<GRIM::Execution::SlotSelectionTarget> slot_selection_targets` for supervised decode-time slot reference resolution (exactly one of legal slot id / `NULL` / `IGNORE` per supervised decode position)
+	- runtime `D_row` is reconstructed from `compiled_bootstrap_bindings` and `teacher_steps`, not serialized separately for this cutover
 4. Extend `TrainingSampleView` to expose the compiled execution metadata needed downstream:
+	- `execution_active`
 	- `teacher_steps`
 	- `compiled_bootstrap_bindings`
 	so batching/validation can consume provenance without re-reading or reconstructing it elsewhere.
 5. Extend `BatchPayload` to remain the padded transport for:
+	- explicit `execution_active` bit from the compiled structured-execution payload
 	- `token_to_slot_map`
 	- `teacher_steps`
  	- compiled bootstrap provenance per row
 	- selector supervision targets for decode-time slot selection training
-6. Define the row activation rule in one place:
-	- **training row is execution-active iff `teacher_steps` is non-empty**
-7. State explicitly in code comments and docs that runtime sees a compiled pair:
+6. Make `TrainingSequence -> TrainingSampleView -> BatchPayload` the only batched transport path for compiled execution metadata.
+	- No parallel side-channel vectors, maps, or ad-hoc structs may bypass `BatchPayload` once batch assembly begins.
+7. Define the row activation rule in one place:
+	- **training row is execution-active iff the compiled structured-execution payload marks it active**
+	- non-empty `teacher_steps` is a supervised-training payload validity rule in this cutover, not the activation source
+8. State explicitly in code comments and docs that runtime sees one compiled payload containing:
+	- `execution_active` = authoritative activation bit
 	- `token_exec_slots` = runtime binding projection
 	- `teacher_steps` = supervision projection
-	- both derived from `StructuredExecutionRecord`
-8. State explicitly that `token_exec_slots` is compiled only from `bootstrap_bindings[]`, not from arbitrary numeric tokens in rendered text.
-9. State explicitly that execution-active rows with non-empty `teacher_steps` and zero `bootstrap_bindings[]` are malformed and must be rejected by the builder.
-10. Define `SlotSelectionTarget` as reference-resolution supervision: target per supervised decode timestep is one of legal slot id / `NULL` / `IGNORE`, never a numeric scalar regression target.
-11. Define selector supervision alignment explicitly.
+	- all derived from `StructuredExecutionRecord`
+9. State explicitly that `token_exec_slots` is compiled only from `bootstrap_bindings[]`, not from arbitrary numeric tokens in rendered text.
+10. State explicitly that, for this cutover, runtime `D_row` is reconstructed as the union of slot ids referenced by `compiled_bootstrap_bindings` and `teacher_steps`, and is not serialized separately in GRMT/`BatchPayload`.
+11. State explicitly that execution-active rows with active compiled payload and zero `bootstrap_bindings[]` are malformed and must be rejected by the builder.
+12. Define `SlotSelectionTarget` as reference-resolution supervision: target per supervised decode timestep is one of legal slot id / `NULL` / `IGNORE`, never a numeric scalar regression target.
+13. Define selector supervision alignment explicitly.
 	- Dense form only: target index is decode-position aligned.
 	- Sparse form is forbidden unless a later measured-justification redesign explicitly replaces this policy.
 	- `slot_selection_targets[i]` is the selector supervision target for decode position `i` in the row's post-Phase1 sequence representation.
@@ -811,8 +1074,16 @@ The plan assumes **zero fallback logic** for those paths.
 - Do **not** allow teacher steps to invent or rebind slot identity mid-row.
 - Do **not** treat configured slot ranges as equivalent to `D_row`.
 - Do **not** drop compiled bootstrap provenance from the serialized/training artifact if the validator depends on exact `R` membership.
-- Do **not** allow execution-active rows without `teacher_steps`.
-- Do **not** allow execution-active rows with non-empty `teacher_steps` and zero `bootstrap_bindings[]` to survive builder emission.
+- Do **not** infer execution-active status from `teacher_steps.size()` when the compiled payload activation bit is available.
+- Do **not** allow supervised execution-active training rows without `teacher_steps`.
+- Do **not** allow execution-active rows with active compiled payload and zero `bootstrap_bindings[]` to survive builder emission.
+
+### Completion criteria
+
+- `ExecutionMetadata.hpp` is the single cross-layer definition site for semantic execution metadata types, including `StructuredExecutionRecord`, `TeacherStep`, `CompiledBootstrapBinding`, and `SlotSelectionTarget`.
+- `TrainingSequence`, `TrainingSampleView`, and `BatchPayload` all carry the same explicit compiled payload fields: `execution_active`, `token_exec_slots`, `teacher_steps`, `compiled_bootstrap_bindings`, and `slot_selection_targets`.
+- Activation state is explicit and authoritative everywhere; no downstream contract still treats `teacher_steps.size()` as the execution-activation signal.
+- Code comments and docs explicitly state that `token_exec_slots` and `teacher_steps` are paired projections of one canonical record, while runtime `D_row` is reconstructed rather than inferred from configured slot ranges.
 
 ---
 
@@ -824,6 +1095,8 @@ The plan assumes **zero fallback logic** for those paths.
 - **New:** `resources/models/GRIM-text/Shared/DataLoader/ConceptExecutionSequenceBuilder.cu`
 - Update: `resources/models/GRIM-text/Shared/DataLoader/DataLoader.cu`
 - Update: `resources/models/GRIM-text/Shared/DataLoader/DataLoader.hpp`
+
+**Suggested tools:** `search_subagent`, `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`
 
 ### Operations
 
@@ -837,7 +1110,7 @@ The plan assumes **zero fallback logic** for those paths.
 	- requires each bound literal span to compile to exactly one `ATOM_NUM` token,
 	- rejects duplicate bootstrap `slot_id` initialization,
 	- rejects duplicate compiled `token_pos` targeting,
-	- rejects execution-active rows with non-empty `teacher_steps` and zero `bootstrap_bindings[]`,
+	- rejects execution-active rows with active compiled payload and zero `bootstrap_bindings[]`,
 	- derives `token_exec_slots` and `teacher_steps` from the same `StructuredExecutionRecord`,
 	- emits `compiled_bootstrap_bindings` from the same builder pass,
 	- writes those compiled projections directly into `TrainingSequence`.
@@ -857,6 +1130,13 @@ The plan assumes **zero fallback logic** for those paths.
 
 The current expedient path is explicitly documented as temporary. This cutover removes the temporary architecture instead of preserving it.
 
+### Completion criteria
+
+- `ConceptExecutionSequenceBuilder` is the only builder that emits execution-active concept rows into `TrainingSequence`.
+- The `__SLOTS__` tail block, tail-number slot recovery, and the superseded slot/teacher-step helper paths are deleted rather than retained beside the new builder.
+- Builder-time failures exist for every structural violation the plan calls out: zero bootstrap bindings on an active row, duplicate `slot_id` initialization, duplicate compiled `token_pos` targeting, and bound literals that do not compile to exactly one `ATOM_NUM` token.
+- `token_exec_slots`, `teacher_steps`, and `compiled_bootstrap_bindings` are emitted together from one builder pass and are never authored independently.
+
 ---
 
 ## Workstream 3 — GRMT format cutover
@@ -867,26 +1147,30 @@ The current expedient path is explicitly documented as temporary. This cutover r
 - Update: `resources/models/GRIM-text/Shared/DataLoader/DataLoader.cu`
 - Update: `resources/models/GRIM-text/training/training_data_loader.hpp`
 
+**Suggested tools:** `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
+
 ### Operations
 
 1. Bump `GRMT_FORMAT_VERSION` from `10` to `11`.
-2. Serialize compiled bootstrap provenance in GRMT beside `token_exec_slots`.
-3. Serialize `teacher_steps` in GRMT beside `token_exec_slots`.
-4. Serialize `slot_selection_targets` in GRMT beside `teacher_steps` for decode-time selector supervision.
-5. Reject GRMT v10 unconditionally at load time.
-6. Force rebuild of `.grmt` data from source JSON/cache.
+2. Serialize explicit compiled payload activation state in GRMT.
+3. Serialize compiled bootstrap provenance in GRMT beside `token_exec_slots`.
+4. Serialize `teacher_steps` in GRMT beside `token_exec_slots`.
+5. Serialize `slot_selection_targets` in GRMT beside `teacher_steps` for decode-time selector supervision.
+6. Reject GRMT v10 unconditionally at load time.
+7. Force rebuild of `.grmt` data from source JSON/cache.
 
 ### Suggested serialization order
 
 After the existing per-sequence fields:
 
-1. `token_exec_slots[len]`
-2. `uint32_t compiled_bootstrap_binding_count`
-3. `CompiledBootstrapBinding[compiled_bootstrap_binding_count]`
-4. `uint32_t teacher_step_count`
-5. `TeacherStep[teacher_step_count]`
-6. `uint32_t slot_selection_target_count`
-7. `SlotSelectionTarget[slot_selection_target_count]`
+1. `uint8_t execution_payload_active`
+2. `token_exec_slots[len]`
+3. `uint32_t compiled_bootstrap_binding_count`
+4. `CompiledBootstrapBinding[compiled_bootstrap_binding_count]`
+5. `uint32_t teacher_step_count`
+6. `TeacherStep[teacher_step_count]`
+7. `uint32_t slot_selection_target_count`
+8. `SlotSelectionTarget[slot_selection_target_count]`
 
 ### Storage policy
 
@@ -899,15 +1183,100 @@ GRMT stores the compiled runtime/supervision artifact plus enough compiled prove
 - `teacher_steps`
 - `slot_selection_targets`
 
+GRMT stores compiled per-row metadata only. It does **not** store learned execution / selector weights, optimizer state, or tensor layout contract data; those belong to model checkpoints, not dataset payload.
+
+For this cutover, GRMT does **not** serialize `D_row` separately. Runtime reconstructs `D_row^{runtime}` from `compiled_bootstrap_bindings` and `teacher_steps` exactly as defined above.
+
 `slot_selection_targets` is serialized only as a dense decode-position-aligned array. Sparse selector-supervision encodings are forbidden for this cutover.
 
 ### No-backwards-compatibility rule
 
 - No dual loader for v10/v11.
+- No loader that infers execution-active status solely from `teacher_steps.size()`.
 - No translation shim from v10 “slot-only” rows to v11 “slot + teacher” rows.
 - No loader that fabricates selector supervision from heuristics after deserialization.
 - No loader that conflates `IGNORE` with `NULL` in selector supervision.
 - No validator that depends on rebuilding semantic intent from source JSON after GRMT load.
+- No GRMT field or `BatchPayload` transport blob used to persist learned parameters or optimizer state.
+
+### Completion criteria
+
+- GRMT read/write uses the new compiled payload layout with explicit activation state, compiled bootstrap provenance, teacher steps, and dense selector supervision targets.
+- GRMT v10 is rejected immediately with no translation shim, no compatibility mode, and no heuristic reconstruction path.
+- Loader logic does not fabricate execution activation, bootstrap provenance, or selector supervision after deserialization.
+- The required dataset/cache regeneration step is documented as part of the cutover and old GRMT artifacts are treated as invalid inputs.
+
+---
+
+## Workstream 3A — tensor-backed learned parameter and checkpoint ownership
+
+**Chronology note:** Keep this workstream grouped near serialization concerns in the document, but execute it only after Workstream 8 is complete and immediately before Workstream 9 begins.
+
+### Files
+
+- Update: `resources/models/GRIM-text/GRIM/grim_language_model_cuda.hpp`
+- **New:** `resources/models/GRIM-text/Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp`
+- **New:** `resources/models/GRIM-text/Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.cu`
+- Update: `resources/models/GRIM-text/Shared/TensorContract/TensorContract_GPU.hpp`
+- Update: `resources/models/GRIM-text/Shared/TensorConversion/TensorConversion.hpp`
+- Update: `resources/models/GRIM-text/Common/grim_model_serialization.cu`
+- Update: `resources/models/GRIM-text/Common/grim_model_serialization_version.hpp`
+- Update: `resources/models/GRIM-text/Layers/Serialization/Serialization_requests.hpp`
+- Update: `resources/models/GRIM-text/Layers/Serialization/Serialization_validate.hpp`
+- Update: `resources/models/GRIM-text/Layers/Serialization/Serialization_validate.cu`
+- Update: `resources/models/GRIM-text/training/schemas/grim_transformer_model.fbs`
+
+**Suggested tools:** `search_subagent`, `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
+
+### Operations
+
+1. Introduce `DecodeTimeSlotSelectorLayer` in `Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp/.cu` as the **sole owner module** for trainable decode-time selector tensors. `LanguageModel` owns exactly one instance when selector functionality is enabled and exposes stable accessors.
+2. The required minimal trainable selector tensor set for the cutover pointer-selector baseline is:
+	- `W_q_select`
+	- `W_k_select`
+	- `null_key_select`
+	- `null_logit_bias`
+3. Optional selector tensors are legal only when explicitly adopted by the architecture, and if present they must still live in `DecodeTimeSlotSelectorLayer` and checkpoint through the same path:
+	- `E_slot_select`
+	- `E_slot_domain_select` / `E_slot_provenance_select`
+	- `ambiguity_margin_param` when ambiguity thresholding is learned
+	- `W_score_*` / `b_score_*` for richer scorer MLPs
+	- `W_slot_state_encode_*` / `b_slot_state_encode_*` for learned slot-state encoders beyond the baseline feature assembly
+4. If ambiguity thresholding is fixed instead of learned, it remains a config scalar owned by policy/config code and is **not** serialized as a tensor.
+5. Fixed raw `slot_features[s]` (slot id, scalar value, valid/live bits, usage/recent-write stats, optional provenance/domain ids) are assembled by `DecodeTimeNumPolicy.hpp/.cu` and are **not** trainable tensors.
+6. Every selector tensor listed above must be represented as `GRIM::Tensor` with explicit `TensorContract::TensorShape`; no host-only shadow state may act as the semantic source of truth.
+7. Every trainable tensor introduced by this cutover must be surfaced through `LanguageModel::buildParameterGroups()` / `parameterGroups()` so optimizer stepping, gradient diagnostics, and checkpoint save/load all reference the same object.
+8. If optimizer state is needed for those tensors, it remains tensor-backed through `ParameterGroup::m_tensor` / `v_tensor`; do not create parallel raw-array ownership models.
+9. `BatchPayload` remains batch metadata transport only. Training/validation/runtime consume compiled execution metadata through `BatchPayload`, but learned tensors never travel through batch payloads, GRMT rows, or config JSON.
+10. `TensorContract` remains the single contract for layout, gradient presence, and parameter grouping of learned tensors. New code must not hand-roll raw pointer + shape conventions for trainable state.
+11. `TensorConversion` is restricted to converting between declared tensor layouts required by kernels. It may not own trainable tensors, stash shadow copies, or reinterpret batch metadata as learned state.
+12. Extend the checkpoint request/view types so every selector tensor introduced by this cutover has an explicit save/load field and, when the owning module is optional, an explicit capability requirement bit.
+13. Extend `grim_model_serialization.cu` so save/load wires the exact tensors owned by `DecodeTimeSlotSelectorLayer` into `SerializationSaveRequest` / `SerializationLoadRequest`.
+14. `DecodeTimeSlotSelectorLayer` returns the complete ordered score vector over $\{ NULL \} \cup L$; policy does not append or separately score `NULL` after layer execution.
+15. Bump `GRIM_MODEL_VERSION` when the checkpoint tensor set changes. If the GRMT dataset payload changes too, bump `GRMT_FORMAT_VERSION` separately in the same version header; both loaders reject prior versions unconditionally.
+16. Loader validation must fail if a required execution / selector tensor is missing, shape-mismatched, or absent from a checkpoint that claims the feature is enabled. No silent reinitialization, heuristic fill-in, or compatibility reconstruction is allowed.
+17. This cutover may not introduce any new sidecar or ad-hoc checkpoint path for learned parameters. If the schema cannot represent a required trainable tensor, update the schema instead of adding an auxiliary file.
+18. `DecodeTimeNumPolicy`, `ExecutionBlockLayer`, `Common/grim_language_model_gpu.cu`, and `training/Inference_GPU.cu` must not own duplicate selector tensors or alternate selector parameter stores.
+
+### No-backwards-compatibility rule
+
+- Do **not** keep learned execution / selector state as raw `float`, `std::vector<float>`, or config-only trainable values.
+- Do **not** keep host mirrors as the semantic source of truth for learned tensors.
+- Do **not** omit a trainable execution / selector tensor from `ParameterGroup` construction while still expecting it to learn.
+- Do **not** serialize learned execution / selector tensors through sidecar files, debug dumps, or loader-time reconstruction.
+- Do **not** store learned parameters or optimizer state in GRMT payloads or `BatchPayload`.
+- Do **not** let `TensorConversion` become a second ownership layer for trainable state.
+- Do **not** split selector tensor ownership across `LanguageModel` core fields, `ExecutionBlockLayer`, policy code, and inference-only code.
+- Do **not** treat `DecodeTimeNumPolicy` as a convenient place to stash trainable selector weights just because it already owns policy logic.
+- Do **not** move learned slot-state encoding into `DecodeTimeNumPolicy`; it assembles fixed features only.
+- Do **not** inject a learned or separately-scored `NULL` option in policy after selector-layer scoring.
+
+### Completion criteria
+
+- `DecodeTimeSlotSelectorLayer` is the only owner of trainable decode-time selector tensors.
+- Every required baseline selector tensor is represented as a `GRIM::Tensor` with explicit shape metadata and is surfaced through `LanguageModel::buildParameterGroups()` / `parameterGroups()`.
+- Checkpoint request/load/validate paths include every required selector tensor and fail hard on missing, shape-mismatched, or capability-inconsistent state.
+- No sidecar file, GRMT field, `BatchPayload` field, policy-owned shadow state, or inference-only mirror carries learned selector parameters or optimizer state.
 
 ---
 
@@ -921,18 +1290,23 @@ GRMT stores the compiled runtime/supervision artifact plus enough compiled prove
 - Update: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/ComputeLossBatch.cu`
 - Update: `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu`
 
+**Suggested tools:** `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
+
 ### Operations
 
 Implement one validator that enforces:
 
 1. Non-execution row:
+	- `execution_payload_active == false`
 	- `teacher_steps.empty()`
+	- `compiled_bootstrap_bindings.empty()`
 	- all slots must be `-1`
 
 2. Execution-active row:
-	- `teacher_steps.size()` equals the row's compiled execution-step count derived from the canonical structured execution record
+	- `execution_payload_active == true`
+	- for supervised training rows in this cutover, `teacher_steps.size()` equals the row's compiled execution-step count derived from the canonical structured execution record
 	- `compiled_bootstrap_bindings` is non-empty
-	- every slot referenced anywhere in the row belongs to `D_row`
+	- `D_row^{runtime}` is reconstructed as the union of slot ids referenced by `compiled_bootstrap_bindings` and `teacher_steps`
 	- every referenced slot is in range
 	- compiled bootstrap bindings are injective in `token_pos`
 	- compiled bootstrap bindings are injective in `slot_id`
@@ -945,9 +1319,10 @@ Implement one validator that enforces:
 3. Batch-level consistency:
 	- execution metadata dimensions match batch geometry
 	- no row is “half execution-active”
+	- rows with `execution_payload_active == false` must not carry active execution semantics by implication from non-empty `teacher_steps`
 	- `token_exec_slots` and `teacher_steps` are mutually consistent projections of one execution row
 	- `R = { pos | token_exec_slots[pos] != -1 }` matches serialized `compiled_bootstrap_bindings` exactly
-	- `D_row` matches the exact slot ids referenced by the row's bootstrap bindings and teacher steps; validator must not substitute `[S, V)` for `D_row`
+	- `D_row^{runtime}` is reconstructed exactly from the row's bootstrap bindings and teacher steps; validator must not substitute `[S, V)` for `D_row`
 	- for every serialized compiled binding `(token_pos, slot_id)`, `token_exec_slots[token_pos] == slot_id`
 	- dense selector supervision length equals the row's post-Phase1 decode-position length exactly
 	- `slot_selection_targets[i]` supervises post-Phase1 decode position `i`
@@ -961,7 +1336,15 @@ Implement one validator that enforces:
 ### No-backwards-compatibility rule
 
 - Delete `computeLossBatch()`-only `<NUM>` slot validation logic after the shared validator is in place.
+- Do **not** move semantic validator rules into `BatchPayload.hpp/.cu`, H2D helpers, or other orchestration call sites.
 - Do **not** keep separate training/validation execution rules.
+
+### Completion criteria
+
+- One shared validator exists and is callable from `buildBatchPayload()`, `computeLossBatch()`, and `autogradTrainingStep()`.
+- The validator reconstructs `R` from `compiled_bootstrap_bindings` and reconstructs `D_row` from compiled bootstrap bindings plus teacher steps rather than substituting configured slot ranges.
+- Invalid execution metadata fails before GPU work begins in both training and validation paths.
+- Duplicate semantic validation logic is removed from `BatchPayload`, `computeLossBatch()`, and training-only helpers.
 
 ---
 
@@ -971,9 +1354,11 @@ Implement one validator that enforces:
 
 - Update: `resources/models/GRIM-text/training/Phases/Phase1_Startup.cu`
 
+**Suggested tools:** `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
+
 ### Operations
 
-1. Preserve `teacher_steps` and `token_exec_slots` through BOS/EOS insertion.
+1. Preserve compiled structured-execution payload activation state, `teacher_steps`, and `token_exec_slots` through BOS/EOS insertion.
 2. Preserve and remap `compiled_bootstrap_bindings` through BOS/EOS insertion by applying the exact token-position offset introduced by inserted special tokens.
 	- If BOS shifts the sequence right by one token, every bound `token_pos` shifts right by one token.
 	- If EOS is appended at the tail, existing bound `token_pos` values remain unchanged.
@@ -1006,6 +1391,13 @@ Implement one validator that enforces:
 - No selector-supervision remap that conflates `IGNORE` with `NULL`.
 - No sparse selector supervision at all until there is measured justification and an explicit replacement contract.
 
+### Completion criteria
+
+- BOS/EOS insertion and padding preserve `token_exec_slots`, `compiled_bootstrap_bindings`, `teacher_steps`, and `slot_selection_targets` with exact position-sensitive remap semantics.
+- Newly inserted BOS/EOS/pad positions receive only the legal defaults required by the contract (`-1` for slot maps and `IGNORE` for dense selector supervision unless explicitly supervised otherwise).
+- Execution-active rows that do not fit in one sequence window fail immediately instead of being fragmented.
+- Post-Phase1 decode-position length is the explicit alignment target for dense selector supervision and is treated as such in code comments and checks.
+
 ---
 
 ## Workstream 6 — row-local execution orchestration
@@ -1021,6 +1413,8 @@ Implement one validator that enforces:
 - Update: `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_memory_stream_GPU.hpp`
 - Update: `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu`
 - Update: `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.cu`
+
+**Suggested tools:** `search_subagent`, `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
 
 ### Operations
 
@@ -1045,6 +1439,13 @@ Implement one validator that enforces:
 - Do **not** continue passing full-batch atom lists into per-row execution.
 - Do **not** treat cross-row visibility as acceptable behavior.
 
+### Completion criteria
+
+- ScratchBlock and training orchestration produce row-local atom index lists/views and pass only row-local state into `executeStep()`.
+- `ExecutionBlock` public and private interfaces accept only row-local atom views and row-local slot-map views; batch-global atom arrays are no longer part of the runtime contract.
+- The split memory-stream and data-stream files enforce row-scoped validation and computation rather than compensating internally for full-batch inputs.
+- Mixed-batch/runtime tests show that one row cannot inspect atoms from a neighboring row.
+
 ---
 
 ## Workstream 7 — delete silent execution skips
@@ -1056,11 +1457,13 @@ Implement one validator that enforces:
 - Update: `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.cu`
 - Update: `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu`
 
+**Suggested tools:** `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
+
 ### Operations
 
 1. Remove the silent `return` path in `executeStep()` that skips when `M.valid_mask` has no populated value slots.
 	- During the split, move the empty-memory check into `execution_block_memory_stream_GPU.cu` and make it fail-loud there; do not preserve a silent skip behind the new file boundary.
-2. Move the “should this row execute?” decision to the orchestrator (`AutogradTraining.cu`).
+2. Move the “should this row execute?” decision to the orchestrator (`AutogradTraining.cu`) and base it on compiled payload activation state, not `teacher_steps.size()`.
 3. New behavior:
 	- non-execution row: skip before calling `executeStep()`
 	- execution-active row with empty memory / no valid slot bootstrap: **throw**
@@ -1069,6 +1472,13 @@ Implement one validator that enforces:
 
 - No runtime healing.
 - No “row had bad execution metadata, but we just left H untouched.”
+
+### Completion criteria
+
+- The orchestrator decides execution solely from compiled payload activation state.
+- Non-execution rows skip before `executeStep()` is called.
+- Execution-active rows with empty bootstrap memory or no valid slot initialization throw immediately from the runtime path.
+- No silent early-return path remains in `executeStep()` or in any split helper that replaced it.
 
 ---
 
@@ -1079,6 +1489,8 @@ Implement one validator that enforces:
 - Update: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/ComputeLossBatch.cu`
 - Update: `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu`
 - Update: `resources/models/GRIM-text/training/Phases/Phase2_TrainingLoop.cu`
+
+**Suggested tools:** `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
 
 ### Operations
 
@@ -1091,6 +1503,12 @@ Implement one validator that enforces:
 - No “validation is stricter than training.”
 - No “training path tolerates broken rows because bootstrap just skipped them.”
 
+### Completion criteria
+
+- `computeLossBatch()` and `autogradTrainingStep()` call the same shared validator and fail on the same invalid rows.
+- Validation-loop logging in `Phase2_TrainingLoop.cu` remains diagnostic only and does not introduce a separate acceptance/rejection policy.
+- No training-only or validation-only execution-metadata rule remains in the codebase.
+
 ---
 
 ## Workstream 9 — inference and generation alignment
@@ -1099,9 +1517,13 @@ Implement one validator that enforces:
 
 - **New:** `resources/models/GRIM-text/Shared/Execution/DecodeTimeNumPolicy.hpp`
 - **New:** `resources/models/GRIM-text/Shared/Execution/DecodeTimeNumPolicy.cu`
+- **New:** `resources/models/GRIM-text/Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp`
+- **New:** `resources/models/GRIM-text/Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.cu`
 - Update: `resources/models/GRIM-text/Common/grim_language_model_gpu.cu`
 - Update: `resources/models/GRIM-text/training/Inference_GPU.cu`
 - Update: `resources/models/GRIM-text/GRIM/grim_language_model_cuda.hpp`
+
+**Suggested tools:** `search_subagent`, `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
 
 ### Operations
 
@@ -1114,6 +1536,9 @@ Implement one validator that enforces:
 	- checks scratchblock generation activation
 	- checks `has_inference_exec_memory`
 	- builds the legal candidate set from **all valid live slots** in row-local execution memory
+	- assembles deterministic ordered fixed `slot_features[s]` for `s in L` inside `DecodeTimeNumPolicy.hpp/.cu`
+	- obtains selector scores/logits from model-owned `DecodeTimeSlotSelectorLayer`
+	- requires `DecodeTimeSlotSelectorLayer` to apply all learned slot-state encoding from `slot_features[s] -> slot_repr[s]` and return the complete ordered score vector over $\{ NULL \} \cup L$
 	- runs an explicit slot-selection policy over that candidate set **before** `<NUM>` is admissible
 	- returns either **mask `<NUM>`** or **bind `<NUM>` to one exact selected slot/value**
 4. Define the selection behavior explicitly:
@@ -1131,6 +1556,9 @@ Implement one validator that enforces:
 	- `Ambiguous`
 	- Do **not** collapse these into an unstructured score or a guessed top-1 slot.
 7. Implement selector scoring as a masked pointer over `\{ NULL \} \cup L`.
+	- `DecodeTimeNumPolicy.hpp/.cu` owns fixed feature assembly only; it does not learn or checkpoint `slot_features[s]`
+	- `DecodeTimeSlotSelectorLayer` alone converts `slot_features[s]` into learned `slot_repr[s]`
+	- `DecodeTimeSlotSelectorLayer` returns one ordered score vector with `index 0 = NULL` and `indices 1..|L| = ordered row-local candidates`
 	- clean form: `key[s] = W_k * slot_repr[s]`, `score[s] = q_t · key[s]`
 	- richer form allowed: `score[s] = MLP([q_t ; key[s] ; q_t * key[s]])`
 	- an explicit `NULL` option must exist in the selector choice set
@@ -1154,6 +1582,12 @@ Implement one validator that enforces:
 	- `-1` means non-state-bearing
 	- decode-time `<NUM>` binds only to an explicitly selected live slot
 	- otherwise `<NUM>` is masked and cannot be generated
+15. Keep decode-time file ownership explicit.
+	- `DecodeTimeSlotSelectorLayer` owns all trainable selector tensors and produces selector logits/scores.
+	- `DecodeTimeNumPolicy.hpp/.cu` owns candidate-set construction, deterministic fixed `slot_features[s]` assembly, and null/ambiguity/mask-or-bind policy over those selector outputs, but owns no trainable tensors.
+	- `DecodeTimeSlotSelectorLayer` alone applies learned slot-state encoding from fixed `slot_features[s]` to `slot_repr[s]` and returns the complete ordered score vector over $\{ NULL \} \cup L$.
+	- `Common/grim_language_model_gpu.cu` only consumes the returned decision to update sampler masks/bound token payloads.
+	- `training/Inference_GPU.cu` only supplies row-local execution inputs/state needed to ask the policy question.
 
 ### No-backwards-compatibility rule
 
@@ -1163,8 +1597,19 @@ Implement one validator that enforces:
 - No decode-time policy that binds `<NUM>` to `inference_exec_last_write_slot` merely because it was the latest write.
 - No decode-time heuristic stand-ins: no `last write`, `first valid`, nearest-by-position, text-matching, or other implicit selector.
 - No selector implementation that predicts numeric value directly instead of resolving slot identity.
+- No candidate-construction/null-ambiguity/mask-or-bind policy split across `DecodeTimeNumPolicy.hpp/.cu` and sampler/inference orchestration files.
+- No selector tensor ownership split across `DecodeTimeSlotSelectorLayer`, `ExecutionBlockLayer`, policy files, and inference-only code.
+- No learned slot-state encoding, embeddings, or selector-side `NULL` parameters owned by `DecodeTimeNumPolicy.hpp/.cu`.
+- No policy-side append/rescore/injection of `NULL` after `DecodeTimeSlotSelectorLayer` returns ordered scores over $\{ NULL \} \cup L$.
 - No decode-time `executeStep()` call with `nullptr` atom pointers / `num_atoms = 0` when ExecutionBlock decode is active.
 - No alternate decode-time slot policy unless it replaces this mechanism wholesale.
+
+### Completion criteria
+
+- `DecodeTimeNumPolicy.hpp/.cu` owns candidate construction, deterministic fixed `slot_features[s]` assembly, and bind-or-mask policy over selector outputs, while `DecodeTimeSlotSelectorLayer` owns learned slot scoring.
+- `<NUM>` admissibility is decided before sampling, and every emitted `<NUM>` carries a valid pre-resolved slot/value binding or the path fails hard.
+- No heuristic selector fallback (`last write`, `first valid`, positional, text-matching, or post-sample inference) remains anywhere in decode-time generation.
+- Decode-time ExecutionBlock uses the existing atom decode path rather than null atom pointers, and the public/docs surface explicitly describes `Selected`, `Null`, and `Ambiguous` outcomes.
 
 ---
 
@@ -1175,11 +1620,14 @@ Implement one validator that enforces:
 - Update: `resources/models/GRIM-text/Tests/ExecutionBlockTest.cu`
 - **New:** `resources/models/GRIM-text/Tests/BatchPayloadExecutionContractTest.cu`
 - **New:** `resources/models/GRIM-text/Tests/GRMTExecutionSerializationTest.cu`
+- **New:** `resources/models/GRIM-text/Tests/ExecutionTensorSerializationTest.cu`
+
+**Suggested tools:** `read_file`, `apply_patch`, `get_errors`, `Build_CMakeTools`, `get_changed_files`
 
 ### Required test cases
 
 1. Plain numeric text row with all `-1` slots passes validation.
-2. Execution-active row with valid slots and valid `teacher_steps` passes.
+2. Execution-active row with active compiled payload, valid slots, and valid `teacher_steps` passes.
 3. Execution-active row missing a required slot fails before GPU execution.
 4. Execution-active row with out-of-range slot fails.
 5. Mixed batch (plain numeric row + execution row) passes.
@@ -1194,7 +1642,7 @@ Implement one validator that enforces:
 	- shared validator rejects the row or batch before any GPU execution begins.
 12. Duplicate bootstrap initialization of the same `slot_id` fails hard.
 13. Two compiled bootstrap bindings targeting the same `token_pos` fail hard.
-14. Execution-active row with non-empty `teacher_steps` and zero bootstrap bindings fails at builder time.
+14. Execution-active row with active compiled payload and zero bootstrap bindings fails at builder time.
 15. Teacher-step first write to an in-range non-bootstrap slot is allowed, but any step that invents an out-of-domain slot id fails.
 16. Multiple live decode-time slots with a resolved explicit selection bind `<NUM>` to the selected slot/value, not merely the most recent write.
 17. Multiple live decode-time slots with no resolved selection cause `<NUM>` to be masked in generation.
@@ -1208,6 +1656,25 @@ Implement one validator that enforces:
 25. `slot_selection_targets[i]` is the selector supervision target for decode position `i` in the row's post-Phase1 sequence representation, and the dense array length equals that post-Phase1 decode-position length exactly.
 26. Any sparse selector-supervision payload/serialization path is rejected for this cutover.
 27. `IGNORE` excludes selector loss and is not treated as `NULL`.
+28. Every trainable execution / selector tensor introduced by this cutover appears in `ParameterGroup` construction and participates in checkpoint save/load through the main serialization layer.
+29. Checkpoint save/load round-trip preserves execution / selector tensor values without sidecar files.
+30. Checkpoint load fails when a required execution / selector tensor is missing, absent behind a claimed capability, or shape-mismatched.
+31. GRMT rows and `BatchPayload` transport do not contain learned weights, Adam moments, or checkpoint blobs.
+32. Selector-enabled checkpoints fail load if any required baseline selector tensor (`W_q_select`, `W_k_select`, `null_key_select`, `null_logit_bias`) is missing.
+33. If ambiguity thresholding is fixed, no selector ambiguity tensor is checkpointed; if it is learned, `ambiguity_margin_param` must round-trip through checkpoint save/load.
+34. Selector parameter ownership is single-site: no duplicate selector `ParameterGroup` entries originate from `ExecutionBlockLayer`, `DecodeTimeNumPolicy`, or inference-only code.
+35. `DecodeTimeNumPolicy` assembles deterministic fixed `slot_features[s]` from row-local runtime/provenance state only; those features are not trainable tensors and do not appear as checkpoint fields.
+36. `DecodeTimeSlotSelectorLayer` alone encodes `slot_features[s]` into learned `slot_repr[s]` and returns one ordered score vector with `index 0 = NULL` and `indices 1..|L| = ordered row-local members of L`.
+37. Policy consumes that selector-layer score vector as-is for null/ambiguity/selection decisions; it does not append, rescore, or inject a separate `NULL` option afterward.
+38. Row with `execution_payload_active = false` and non-empty `teacher_steps` fails validation; `teacher_steps` alone do not activate execution.
+39. Runtime/validator reconstruct `D_row` from `compiled_bootstrap_bindings ∪ teacher_steps` without any separate serialized `D_row` field.
+
+### Completion criteria
+
+- The required builder, GRMT, Phase1, validator, row-local runtime, selector, and checkpoint-ownership tests exist and pass.
+- Negative tests cover every forbidden compatibility/fallback behavior called out by the cutover plan.
+- Post-cutover smoke tests include GRMT regeneration, mixed-batch execution, and a short training/validation run.
+- The test suite proves both semantic correctness and ownership boundaries, not just happy-path runtime behavior.
 
 ---
 
@@ -1217,6 +1684,8 @@ Implement one validator that enforces:
 
 - Update: `resources/models/GRIM-text/Layers/ExecutionBlock/ADDITION_SEQUENCES_AND_ARG_LEARNING.md`
 - Update: `docs/PLATEAU_BUG_INVESTIGATION.md` only if this work affects the active bug narrative
+- Update: `docs/EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_PLAN.codoc.md`
+- Update: `docs/EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_FLOW.md`
 - Keep: `docs/EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_PLAN.md` as the implementation checklist
 
 ### Operations
@@ -1225,25 +1694,27 @@ Implement one validator that enforces:
 2. Document the final execution-row contract.
 3. Document that execution-active rows must fit inside one sequence.
 4. Document the GRMT cutover and required cache regeneration.
+5. Maintain the codoc companion in the same change as every qualifying refactor step.
+6. Maintain the Mermaid flow companion in the same change as every qualifying sequencing, ownership, validation, or runtime-flow change.
 
 ---
 
-## Ordered implementation sequence
+## Chronological implementation sequence
 
 1. Purge dead code and non-layer config/API baggage from `execution_block_GPU.*`.
-2. Split surviving ExecutionBlock code inside `Layers/ExecutionBlock/` into public façade + memory-stream + data-stream files.
+2. Split surviving ExecutionBlock code inside `Layers/ExecutionBlock/` into public façade + memory-stream + data-stream files, with explicit public/private include boundaries and narrow internal view types.
 3. Create shared execution metadata header.
 4. Define `StructuredExecutionRecord` + `BootstrapLiteralBinding` + `CompiledBootstrapBinding` and clarify expected-value semantics.
-5. Add compiled execution projections/provenance and selector supervision alignment to `TrainingSequence` / `TrainingSampleView` / `BatchPayload`.
-6. Implement explicit decode-time slot-selection mechanism, selector supervision, and `<NUM>` admission/binding.
+5. Add compiled execution-payload activation state, projections/provenance, runtime `D_row` reconstruction contract, and selector supervision alignment to `TrainingSequence` / `TrainingSampleView` / `BatchPayload`.
+6. Build canonical concept-row builder and remove `__SLOTS__` path.
 7. Add GRMT v11 serialization and loader rejection for old data.
-8. Build canonical concept-row builder and remove `__SLOTS__` path.
+8. Update Phase1 to preserve/remap compiled execution metadata exactly and reject fragmented execution rows.
 9. Add shared execution payload validator.
-10. Update Phase1 to reject fragmented execution rows.
-11. Refactor `AutogradTraining.cu` plus the split ExecutionBlock stream files to enforce row-local execution and delete batch-global atom compensation.
-12. Refactor `execution_block_GPU.cu` and `execution_block_memory_stream_GPU.cu` to remove silent skip behavior with zero fallback logic.
-13. Update `computeLossBatch()` to use the shared validator.
-14. Align inference-side validators and API comments, route decode-time ExecutionBlock through the existing atom decode path, and replace the old decode-time invalid-slot/value / heuristic `<NUM>` selector policies with explicit slot-selection mechanism plus bind-or-mask.
+10. Refactor `AutogradTraining.cu` plus the split ExecutionBlock stream files to enforce row-local execution and delete batch-global atom compensation.
+11. Refactor `execution_block_GPU.cu` and `execution_block_memory_stream_GPU.cu` to remove silent skip behavior with zero fallback logic and compiled-payload activation as the only runtime gate.
+12. Update `computeLossBatch()` and `Phase2_TrainingLoop.cu` so validation and training fail on the same invalid rows for the same reason.
+13. Introduce `DecodeTimeSlotSelectorLayer` plus tensor-backed learned parameter / checkpoint ownership rules for execution / selector modules, including explicit `ParameterGroup` participation and serialization request fields.
+14. Implement explicit decode-time slot-selection mechanism, fixed `slot_features[s]` assembly in policy, selector-layer learned slot encoding / full $\{ NULL \} \cup L$ scoring, selector supervision, and `<NUM>` admission/binding.
 15. Add/expand tests.
 16. Regenerate `.grmt` data and run validation/training smoke tests.
 
@@ -1272,13 +1743,27 @@ Delete these behaviors during cutover:
 17. Any validator that infers required slot-bearing positions by scanning raw `<NUM>` tokens instead of compiled bindings
 18. Any duplicate bootstrap initialization of the same `slot_id`
 19. Any two bootstrap bindings that target the same `token_pos`
-20. Any builder path that emits an execution-active row with non-empty `teacher_steps` and zero bootstrap bindings
+20. Any builder path that emits an execution-active row with active compiled payload and zero bootstrap bindings
 21. Any teacher-step path that invents or rebinds slot identity mid-row
 22. Any selector path that predicts numeric value directly instead of selecting slot identity from `\{ NULL \} \cup L`
 23. Any selector output that silently coerces ambiguity into a guessed slot
 24. Any selector-supervision path that conflates `IGNORE` with `NULL`
 25. Any sparse selector-supervision path or serialization form
 26. Any validator that requires rebuilding semantic intent after GRMT load in order to know exact `R`
+27. Any non-ExecutionBlock include of `execution_block_internal.hpp`
+28. Any split ExecutionBlock stream include of batching, loader, validator, or builder headers
+29. Any selector candidate-construction/null-ambiguity/mask-or-bind logic implemented outside `DecodeTimeNumPolicy.hpp/.cu`, or any trainable selector scoring implemented outside `DecodeTimeSlotSelectorLayer`
+30. Any execution / selector learned parameter stored as raw `float`, `std::vector<float>`, or config-owned trainable state instead of `GRIM::Tensor`
+31. Any execution / selector trainable tensor omitted from `ParameterGroup` construction while still participating in learning
+32. Any checkpoint path for execution / selector learned tensors that uses sidecar files, debug dumps, or loader-time reconstruction instead of `grim_model_serialization.cu` + `Layers/Serialization/*`
+33. Any GRMT or `BatchPayload` field used to carry learned weights, Adam moments, or checkpoint blobs
+34. Any `TensorConversion` helper that owns, caches, or reinterprets trainable state instead of only converting declared tensor layouts
+35. Any batched execution-metadata side channel that bypasses `BatchPayload`
+36. Any selector tensor owned directly by `ExecutionBlockLayer`, `DecodeTimeNumPolicy`, `Common/grim_language_model_gpu.cu`, or `training/Inference_GPU.cu` instead of `DecodeTimeSlotSelectorLayer`
+37. Any policy-side learned slot-state encoder, embedding table, or trainable fixed-feature representation for `slot_features[s]`
+38. Any policy-side or orchestration-side append/rescore/injection of explicit `NULL` after `DecodeTimeSlotSelectorLayer` has produced scores over $\{ NULL \} \cup L$
+39. Any code path that decides execution-active status solely from `teacher_steps.size() > 0` instead of compiled payload activation state
+40. Any runtime `D_row` source other than the exact union of slot ids referenced by `compiled_bootstrap_bindings` and `teacher_steps`
 
 ---
 
@@ -1313,7 +1798,7 @@ The cutover is complete only when all of the following are true:
 10. Bootstrap bindings are one-to-one in both dimensions: no duplicate `slot_id` initialization and no duplicate `token_pos` targeting.
 11. Generation emits `<NUM>` only when an explicit decode-time slot-selection mechanism resolves exactly one legal live slot from row-local execution memory; otherwise `<NUM>` is masked pre-sampling.
 12. Slot identity is stable across all steps in a row: teacher steps may first-write legal slots, but may not invent or rebind slot identity.
-13. Execution-active rows with non-empty `teacher_steps` and zero bootstrap bindings are rejected by the builder and by the validator if corrupted data slips through.
+13. Execution-active rows with active compiled payload and zero bootstrap bindings are rejected by the builder and by the validator if corrupted data slips through.
 14. GRMT contains enough compiled provenance to validate exact `R` membership without reconstructing semantic intent.
 15. No compensating runtime behavior remains: no silent execution skip, no batch-global atom feed into per-row execution, no invalid-slot/value decode-time `<NUM>` emission, no heuristic or implicit decode-time `<NUM>` selector, and no decode-time ExecutionBlock call that bypasses the existing atom decode path by passing null atom context.
 16. The cutover is not considered complete unless an explicit decode-time slot-selection mechanism exists; “we will add the selector later” is not an acceptable architecture state.
@@ -1323,6 +1808,23 @@ The cutover is complete only when all of the following are true:
 20. Dense selector supervision is the only legal representation for this cutover and remaps through BOS/EOS insertion and padding exactly like other position-sensitive metadata; sparse selector supervision is forbidden until there is measured justification for a replacement design.
 21. `slot_selection_targets[i]` is the selector supervision target for decode position `i` in the row's post-Phase1 sequence representation, and the dense array length equals that row's post-Phase1 decode-position length exactly.
 22. The row-local slot domain is explicit and immutable: `D_row` is the exact set of legal slot ids referenced by that row's canonical structured execution record, and configured slot ranges are only outer bounds, not the domain itself.
+23. Public/private include boundaries are enforced: non-ExecutionBlock code includes only `execution_block_GPU.hpp`, and `execution_block_internal.hpp` remains private to `Layers/ExecutionBlock/`.
+24. ExecutionBlock stream files remain runtime-only: they do not include batching, loader, validator, or builder headers to reach across layers.
+25. Decode-time selector policy ownership is centralized: `DecodeTimeNumPolicy.hpp/.cu` owns candidate construction and null/ambiguity/mask-or-bind rules over selector outputs, while sampler/inference orchestration only consumes the returned decision.
+26. Every learned execution / selector parameter introduced by this cutover is a `GRIM::Tensor` with explicit `TensorShape`; no host-only learnable source of truth remains.
+27. Every trainable execution / selector tensor introduced by this cutover is surfaced through `ParameterGroup`, so optimizer state, grad diagnostics, and checkpointing all operate on the same objects.
+28. `BatchPayload` is the only batched transport for compiled execution metadata; no parallel side channel feeds runtime or loss code.
+29. `TensorContract_GPU.hpp/.cu` remains the sole tensor/autograd/layout/`ParameterGroup` contract, and `TensorConversion.hpp/.cu` remains pure layout conversion with no trainable-state ownership.
+30. Checkpoint persistence for execution / selector tensors is centralized in `grim_model_serialization.cu` + `Layers/Serialization/*`, with explicit request fields, capability validation, and version bump.
+31. Required execution / selector tensors missing or shape-mismatched at load fail immediately; no sidecar compatibility path, silent reinitialization, or heuristic reconstruction remains.
+32. The concrete baseline selector tensor inventory is explicit and singly owned: `W_q_select`, `W_k_select`, `null_key_select`, and `null_logit_bias` live in `DecodeTimeSlotSelectorLayer`, while optional selector tensors (slot/domain embeddings, learned ambiguity margin, richer scorer weights) live there too if present.
+33. `DecodeTimeNumPolicy` owns policy but no trainable selector tensors, and `ExecutionBlock` / inference orchestration own no duplicate selector weights or shadow null-selection parameters.
+34. `DecodeTimeNumPolicy` assembles deterministic fixed row-local `slot_features[s]` only; `DecodeTimeSlotSelectorLayer` alone turns those features into learned `slot_repr[s]` and returns the complete ordered score vector over $\{ NULL \} \cup L$.
+35. Decode-time policy does not append, rescore, or inject `NULL` after selector-layer scoring; the selector output ordering is explicit with `index 0 = NULL` and `indices 1..|L|` matching the ordered row-local candidate set.
+36. Execution-active status is carried by explicit compiled structured-execution payload activation state all the way through builder, GRMT, `TrainingSequence`, `TrainingSampleView`, and `BatchPayload`; runtime code does not infer row activity from `teacher_steps.size()`.
+37. For this cutover, runtime `D_row` is not serialized separately; it is reconstructed exactly as the union of slot ids referenced by `compiled_bootstrap_bindings` and `teacher_steps`, with configured slot ranges remaining outer bounds only.
+38. `docs/EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_PLAN.codoc.md` is maintained throughout the refactor and updated in the same change for every architecture-affecting workstream delta, with explicit ownership, migrated-call-site, deletion, validation, and next-gate notes.
+39. `docs/EXECUTION_BLOCK_STRUCTURED_EXECUTION_CUTOVER_FLOW.md` is maintained throughout the refactor and its Mermaid diagrams reflect the current sequencing and flow contract, with deleted legacy paths removed instead of preserved as stale diagram branches.
 
 ---
 

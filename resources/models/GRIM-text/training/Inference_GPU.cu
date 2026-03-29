@@ -364,8 +364,6 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         if (exec_layer < 0) exec_layer = 0;
         if (exec_layer >= num_layers) exec_layer = num_layers - 1;
         exec_K = cfg.execution_block_num_steps;
-        exec_block->setStream(stream);
-        exec_block->setCublasHandle(ts.cublas_handle);
     }
 
     // ── Step 3: Process through all encoder layers ──
@@ -525,7 +523,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                     &step_diag,
                     0, 1,      // token_offset, row_tokens
                     ts.trace_state_by_row[0],
-                    ts.execution_trace_by_row[0]);
+                    ts.execution_trace_by_row[0],
+                    nullptr);
                 ts.execution_trace_by_row[0].push_back(step_diag.record);
                 if (step == exec_K - 1) {
                     last_step_diag = std::move(step_diag);

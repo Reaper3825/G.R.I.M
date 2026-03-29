@@ -264,6 +264,8 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/NumericHead/numeric_head_GPU.cu
     ../../Layers/ReasoningHead/reasoning_head_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_GPU.cu
+    ../../Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu
+    ../../Layers/ExecutionBlock/execution_block_data_stream_GPU.cu
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/DynaSeqs/DynaSeq_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
@@ -606,6 +608,8 @@ target_include_directories(gradient_verification_test PRIVATE
 add_executable(execution_block_test
     ../../Tests/ExecutionBlockTest.cu
     ../../Layers/ExecutionBlock/execution_block_GPU.cu
+    ../../Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu
+    ../../Layers/ExecutionBlock/execution_block_data_stream_GPU.cu
     ../../Layers/Attention/QKV_Projector.cu
     ../../Shared/Batching/BatchPayload.cu
     ../../Shared/PBM/PositionalBiasMethod.cu

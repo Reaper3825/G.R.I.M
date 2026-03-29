@@ -142,25 +142,13 @@ void LanguageModel::initInferenceState() {
         eb_cfg.num_ops = cfg.execution_block_num_ops;
         eb_cfg.num_slots = cfg.execution_block_num_slots;
         eb_cfg.num_exec_steps = cfg.execution_block_num_steps;
-        eb_cfg.execution_block_layer = cfg.execution_block_layer;
         eb_cfg.d_key = cfg.execution_block_d_key;
         eb_cfg.d_type = cfg.execution_block_d_type;
         eb_cfg.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
         eb_cfg.cross_attn_topk = cfg.execution_block_cross_attn_topk;
         eb_cfg.usage_decay = cfg.execution_block_usage_decay;
         eb_cfg.diversity_kappa = cfg.execution_block_diversity_kappa;
-        eb_cfg.memory_slot_bias = cfg.execution_block_memory_slot_bias;
-        eb_cfg.temp_start = cfg.execution_block_temp_start;
-        eb_cfg.temp_end = cfg.execution_block_temp_end;
-        eb_cfg.temp_schedule = cfg.execution_block_temp_schedule;
-        eb_cfg.entropy_weight = cfg.execution_block_entropy_weight;
-        eb_cfg.diag_logging = cfg.execution_block_diag_logging;
         eb_cfg.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
-        eb_cfg.exec_gate_warmup_steps = cfg.execution_block_gate_warmup_steps;
-        eb_cfg.causal_w1_transition = cfg.execution_block_causal_w1_transition;
-
-        eb_cfg.stream = primary_stream;
-        eb_cfg.cublas_handle = training_state_.cublas_handle;
 
         execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_cfg, /*seed=*/0, primary_stream);
         std::cout << "  ✓ ExecutionBlockLayer initialized (inference, V="

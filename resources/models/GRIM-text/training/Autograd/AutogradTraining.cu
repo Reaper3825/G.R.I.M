@@ -662,9 +662,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 intermediates.exec_memories.resize(B);
                 intermediates.exec_outputs_per_row.resize(B);
 
-                ctx.execution_block->setStream(ctx.stream);
-                ctx.execution_block->setCublasHandle(ctx.cublas_handle);
-
                 float T = cfg->execution_block_temp_start;
 
                 const int32_t* d_slot_map_full = ts->cached_token_to_slot_map.data
@@ -730,8 +727,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                             tok_off, sl,
                             ts->trace_state_by_row[b],
                             ts->execution_trace_by_row[b],
-                            d_expected_target,
-                            nullptr, nullptr);
+                            d_expected_target);
                         ts->execution_trace_by_row[b].push_back(step_diag.record);
                         intermediates.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
                     }
