@@ -2340,6 +2340,22 @@ void ExecutionBlockLayer::executeStep(
     const int vhd = config_.value_decode_hidden_dim;
     EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
 
+    // Guard: skip execution when no value-slots are populated (valid_mask all zeros).
+    // This happens for rows without numeric atoms — no register operands available.
+    {
+        float h_valid_sum = 0.0f;
+        // Sum valid_mask[S..V-1] — V is small (8-16), cheap D2H copy.
+        std::vector<float> h_mask(V_val);
+        CUDA_CHECK(cudaMemcpyAsync(h_mask.data(), M.valid_mask.data + S,
+                                    V_val * sizeof(float), cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        for (int i = 0; i < V_val; ++i) h_valid_sum += h_mask[i];
+        if (h_valid_sum < 0.5f) {
+            // No valid slots — nothing to compute. Leave H unmodified.
+            return;
+        }
+    }
+
     // Snapshot state_before for transition validity
     if (diag_out) {
         diag_out->state_before_values = Tensor::zeros({V, 1}, stream, "state_before_values");
