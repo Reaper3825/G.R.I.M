@@ -163,6 +163,9 @@ void ExecutionBlockLayer::validateConfigOrThrow() const {
     EXEC_CHECK(config_.d_type > 0,             "d_type must be positive");
     EXEC_CHECK(config_.cross_attn_head_dim > 0,"cross_attn_head_dim must be positive");
     EXEC_CHECK(config_.value_decode_input_dim > 0,    "value_decode_input_dim must be positive");
+    EXEC_CHECK(config_.value_decode_hidden_dim > 0,   "value_decode_hidden_dim must be positive");
+    EXEC_CHECK(config_.value_decode_input_dim + 16 <= config_.atom_embedding_dim,
+               "value_decode_input_dim + 16 must fit within atom_embedding_dim (decode slice out of bounds)");
     EXEC_CHECK(config_.d_key <= 64,                    "d_key must be <= 64 (kernelComputeWriteLogits uses float k_buf[64])");
     EXEC_CHECK(config_.num_scratch_slots >= 0, "num_scratch_slots must be non-negative");
     EXEC_CHECK(config_.num_scratch_slots < config_.num_slots,
@@ -982,6 +985,58 @@ __global__ void kernelAddVectors(
 }
 
 //======================================================//
+//  Sinusoidal atom encoding (matches ScratchBlock format)
+//======================================================//
+
+__global__ void kernelEncodeScalarToAtomEmbed(
+    float* __restrict__ out,         // [1, atom_dim]
+    const float* __restrict__ scalar, // [1]
+    int atom_dim
+) {
+    int d = threadIdx.x;
+    if (d >= atom_dim) return;
+
+    float v = *scalar;
+    float result = 0.0f;
+
+    // Dims 16-31: sinusoidal log2 magnitude (matches ScratchBlock encoding)
+    if (d >= 16 && d < 32) {
+        int bit = d - 16;
+        float log_mag = log2f(fabsf(v) + 1.0f);
+        float freq = (float)(bit + 1) * 0.5f;
+        result = 0.5f * sinf(log_mag * freq);
+    }
+    // Dims 32-39: sign + integer bits (matches ScratchBlock encoding)
+    else if (d >= 32 && d < 40) {
+        int feat = d - 32;
+        if (feat == 0) {
+            result = (v < 0.0f) ? 0.5f : -0.5f;
+        } else {
+            int int_val = (int)fabsf(v);
+            result = ((int_val >> (feat - 1)) & 1) ? 0.3f : -0.3f;
+        }
+    }
+    // Other dims: 0.0 (no type embedding for computed values)
+
+    out[d] = result;
+}
+
+//======================================================//
+//  ReLU forward/backward (for decode MLP)
+//======================================================//
+
+__global__ void kernelReluForward(float* out, const float* in, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = (in[i] > 0.0f) ? in[i] : 0.0f;
+}
+
+__global__ void kernelReluBackward(float* grad_input, const float* grad_output,
+                                   const float* fwd_input, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) grad_input[i] += (fwd_input[i] > 0.0f) ? grad_output[i] : 0.0f;
+}
+
+//======================================================//
 //  Cross-attention kernels (unchanged)
 //======================================================//
 
@@ -1089,6 +1144,78 @@ __global__ void kernelDecayedUsageUpdate(
         sum += attn[static_cast<size_t>(t) * num_valid + v];
     usage[v] = decay * usage[v] + sum;
 }
+
+//======================================================//
+//  ReluGradFn — backward for ReLU activation
+//  Forward: y = max(0, x)
+//  Backward: grad_x = grad_y * (x > 0 ? 1 : 0)
+//======================================================//
+struct ReluGradFn : public GradFn {
+    std::shared_ptr<GradFn> input_grad_fn;
+    TensorContract::TensorShape input_shape;
+    bool input_requires_grad = false;
+    float* grad_input = nullptr;
+    std::shared_ptr<float> owned_grad_input;
+    std::shared_ptr<float> owned_fwd_input;
+    const float* fwd_input = nullptr;
+    int count = 0;
+
+    ReluGradFn() { op_name = "relu"; }
+
+    void capture(Tensor& input, int n, cudaStream_t stream) {
+        input_requires_grad = input.requires_grad;
+        input_shape = input.shape;
+        input_grad_fn = input.grad_fn;
+        count = n;
+
+        // Save forward input for backward mask
+        float* buf = nullptr;
+        cudaMalloc(&buf, n * sizeof(float));
+        cudaMemcpyAsync(buf, input.data, n * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        owned_fwd_input = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
+        fwd_input = owned_fwd_input.get();
+
+        if (input_requires_grad) {
+            input.ensure_grad();
+            if (input.is_leaf) {
+                grad_input = input.grad_data();
+            } else {
+                float* gbuf = nullptr;
+                cudaMalloc(&gbuf, n * sizeof(float));
+                cudaMemsetAsync(gbuf, 0, n * sizeof(float), stream);
+                owned_grad_input = std::shared_ptr<float>(gbuf, [](float* p) { cudaFree(p); });
+                grad_input = owned_grad_input.get();
+            }
+        }
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied) return;
+        applied = true;
+        if (!input_requires_grad || !grad_input || !fwd_input) return;
+
+        kernelReluBackward<<<(count + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            grad_input, grad_output.data, fwd_input, count);
+
+        if (input_grad_fn) {
+            Tensor view;
+            view.data = grad_input;
+            view.shape = input_shape;
+            view.owns_data = false;
+            view.stream = stream;
+            input_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        owned_fwd_input.reset();
+        fwd_input = nullptr;
+        grad_input = nullptr;
+        owned_grad_input.reset();
+        input_grad_fn.reset();
+    }
+};
 
 //======================================================//
 //  SlotValueSTGradFn — forward: hard slot read; backward: softmax @ slot scalars
@@ -2186,6 +2313,9 @@ void ExecutionBlockLayer::executeStep(
     const int V_val = V - S;
     const int dk  = config_.d_key;
     const int nop = config_.num_ops;
+    const int ae  = config_.atom_embedding_dim;
+    const int vid = config_.value_decode_input_dim;
+    const int vhd = config_.value_decode_hidden_dim;
     EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
 
     // Snapshot state_before for transition validity
@@ -2473,8 +2603,42 @@ void ExecutionBlockLayer::executeStep(
         trace_state = autograd::add(trace_state, update, stream);
     }
 
-    // ──── 9. Linear value embedding (autograd: matmul + add) ────
-    auto result_emb = autograd::matmul(v_out, W_value_to_emb_, stream);
+    // ──── 9a. Encode v_out → atom embedding (sinusoidal, non-differentiable) ────
+    auto atom_new = Tensor::zeros({1, ae}, stream, "exec_atom_new");
+    kernelEncodeScalarToAtomEmbed<<<1, ae, 0, stream>>>(
+        atom_new.data, v_out.data, ae);
+    CUDA_CHECK_KERNEL();
+
+    // ──── 9b. Decode MLP: atom_embeds[16:16+vid] → scalar ────
+    // Slice dims [16, 16+vid) from atom embedding (non-differentiable — fixed encoding)
+    auto decode_input = Tensor::zeros({1, vid}, stream, "exec_decode_input");
+    decode_input.requires_grad = true;
+    decode_input.is_leaf = true;
+    cudaMemcpyAsync(decode_input.data, atom_new.data + 16,
+                    vid * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+
+    // Layer 1: [1,vid] @ [vid,vhd] + [1,vhd] → [1,vhd]
+    auto decode_h = autograd::matmul(decode_input, w_decode_1_, stream);
+    decode_h = autograd::add(decode_h, b_decode_1_, stream);
+
+    // ReLU activation
+    auto decode_relu = Tensor::zeros({1, vhd}, stream, "exec_decode_relu");
+    decode_relu.requires_grad = true;
+    decode_relu.is_leaf = false;
+    kernelReluForward<<<(vhd + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        decode_relu.data, decode_h.data, vhd);
+    CUDA_CHECK_KERNEL();
+    {
+        auto relu_fn = std::make_shared<ReluGradFn>();
+        relu_fn->capture(decode_h, vhd, stream);
+        decode_relu.grad_fn = relu_fn;
+    }
+
+    // Layer 2: [1,vhd] @ [vhd,1] → [1,1]  (v_decoded)
+    auto v_decoded = autograd::matmul(decode_relu, w_decode_2_, stream);
+
+    // ──── 9c. Value embedding from decoded scalar ────
+    auto result_emb = autograd::matmul(v_decoded, W_value_to_emb_, stream);
     result_emb = autograd::add(result_emb, b_value_to_emb_, stream);
     kernelCheckFinite<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         result_emb.data, dm, d_numeric_error_flag_, kStageResultEmb, config_.magnitude_limit);
@@ -2633,6 +2797,11 @@ void ExecutionBlockLayer::executeStep(
 
     kernelHardWriteRowDev<<<1, kBlockSize, 0, stream>>>(
         M.key_embeds.data, d_exec_idx_ + 3, dk, key_new.data);
+    CUDA_CHECK_KERNEL();
+
+    // Write atom embedding to M.atom_embeds[slot]
+    kernelHardWriteRowDev<<<1, kBlockSize, 0, stream>>>(
+        M.atom_embeds.data, d_exec_idx_ + 3, ae, atom_new.data);
     CUDA_CHECK_KERNEL();
 
     kernelSetValidMaskDev<<<1, 1, 0, stream>>>(M.valid_mask.data, d_exec_idx_ + 3);
