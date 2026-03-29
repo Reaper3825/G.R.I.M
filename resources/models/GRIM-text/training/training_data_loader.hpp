@@ -14,6 +14,7 @@
 #include "../Common/grim_model_serialization_version.hpp"
 #include "../Shared/DynaSeqs/DynaSeq_GPU.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"  // For kTextFeatureDim
+#include "../Shared/Execution/ExecutionMetadata.hpp"
 
 namespace fs = std::filesystem;
 
@@ -31,6 +32,20 @@ struct TrainingSequence {
     std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Atom registry (shared across sliding windows)
     std::vector<uint32_t> atom_entry_ids;                    // Per-token index into atom_table (kAtomEntryNone = no atom)
     std::vector<int32_t> token_exec_slots;                   // Per-token slot_id for execution: >=0 = valid slot, -1 = non-state-bearing
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // COMPILED STRUCTURED-EXECUTION PAYLOAD
+    // Derived from StructuredExecutionRecord by the canonical builder.
+    // execution_active is the AUTHORITATIVE activation bit.
+    // token_exec_slots (above) is the runtime binding projection.
+    // teacher_steps is the supervision projection.
+    // Both are paired projections of one canonical record.
+    // Runtime D_row is reconstructed from compiled_bootstrap_bindings ∪ teacher_steps.
+    // ═══════════════════════════════════════════════════════════════════════════
+    bool execution_active = false;
+    std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
+    std::vector<GRIM::Execution::TeacherStep> teacher_steps;
+    std::vector<GRIM::Execution::SlotSelectionTarget> slot_selection_targets;
 };
 
 //======================================================//
@@ -46,6 +61,15 @@ struct TrainingSampleView {
     const std::vector<uint32_t>* token_atom_flags;
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
     const std::vector<uint32_t>* atom_entry_ids;
+
+    // Compiled structured-execution payload access.
+    // execution_active is the authoritative activation bit.
+    // Downstream batching/validation consumes these without re-reading the source.
+    bool execution_active = false;
+    const std::vector<int32_t>* token_exec_slots = nullptr;
+    const std::vector<GRIM::Execution::TeacherStep>* teacher_steps = nullptr;
+    const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings = nullptr;
+    const std::vector<GRIM::Execution::SlotSelectionTarget>* slot_selection_targets = nullptr;
 };
 
 //======================================================//
@@ -141,15 +165,21 @@ bool load(const std::string& path) {
     std::optional<TrainingSampleView> getSample(uint32_t seq_id) {
         if (catalog_dirty_) rebuildCatalog();
         if (seq_id >= sequences_.size()) return std::nullopt;
+        const auto& seq = sequences_[seq_id];
         return TrainingSampleView{seq_id,
-                                  &sequences_[seq_id].token_ids,
-                                  &sequences_[seq_id].targets,
-                                  &sequences_[seq_id].token_numeric_values,
-                                  &sequences_[seq_id].token_atom_mask,
-                                  &sequences_[seq_id].token_text_features,
-                                  &sequences_[seq_id].token_atom_flags,
-                                  sequences_[seq_id].atom_table,
-                                  &sequences_[seq_id].atom_entry_ids};
+                                  &seq.token_ids,
+                                  &seq.targets,
+                                  &seq.token_numeric_values,
+                                  &seq.token_atom_mask,
+                                  &seq.token_text_features,
+                                  &seq.token_atom_flags,
+                                  seq.atom_table,
+                                  &seq.atom_entry_ids,
+                                  seq.execution_active,
+                                  &seq.token_exec_slots,
+                                  &seq.teacher_steps,
+                                  &seq.compiled_bootstrap_bindings,
+                                  &seq.slot_selection_targets};
     }
     
 private:

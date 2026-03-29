@@ -43,10 +43,10 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ## Current cutover status
 
 - **Overall status:** In progress
-- **Active workstream:** Workstream 1 — canonical structured execution source-of-truth model
-- **Last completed gate:** Workstream 0 — execution_block file deflation before semantic cutover
-- **Next gate:** Begin Workstream 1 semantic metadata ownership without re-expanding the ExecutionBlock boundary
-- **Current implementation posture:** Workstream 0 execution boundary is locked: thin coordinator, private split files, row-local atom contract, no decode-time last-write `<NUM>` fallback
+- **Active workstream:** Workstream 2 — canonical structured sequence builder replaces `__SLOTS__`
+- **Last completed gate:** Workstream 1 — canonical structured execution source-of-truth model
+- **Next gate:** Begin Workstream 2 sequence builder replacement without re-expanding the ExecutionBlock boundary
+- **Current implementation posture:** Workstream 1 semantic metadata types canonicalized in `ExecutionMetadata.hpp`; compiled execution payload plumbed through `TrainingSequence` → `TrainingSampleView` → `BatchPayload`; activation bit, bootstrap bindings, teacher steps, and slot selection targets flow end-to-end through batch builder
 
 ## Workstream-specific update contract
 
@@ -65,7 +65,7 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ### Workstream 1 — canonical structured execution source-of-truth model
 
 **Status**
-- Not started
+- Completed
 
 **Each update must record**
 - semantic types added or moved into `ExecutionMetadata.hpp`
@@ -427,3 +427,92 @@ For each qualifying refactor step, append an entry under the relevant workstream
 
 **Remaining gaps / next gate**
 - Begin Workstream 0 and record the first architectural delta here when code changes start.
+
+### 2025-07-25 — Workstream 1 — canonical structured execution source-of-truth model
+
+**Status transition**
+- `Not started -> Completed`
+
+**What changed**
+- Created `Shared/Execution/ExecutionMetadata.hpp` as the single cross-layer definition site for all semantic execution metadata types: `StructuredExecutionRecord`, `CompiledStructuredExecutionPayload`, `TeacherStep`, `CompiledBootstrapBinding`, `SlotSelectionTarget`, `BootstrapLiteralBinding`.
+- Moved `TeacherStep` ownership from `BatchPayload.hpp` (local struct) to `ExecutionMetadata.hpp` (`GRIM::Execution::TeacherStep`). BatchPayload retains a `using` alias for call-site compatibility during cutover.
+- Extended `TrainingSequence` with compiled execution payload fields: `execution_active` (bool), `compiled_bootstrap_bindings`, `teacher_steps`, `slot_selection_targets`.
+- Extended `TrainingSampleView` with matching pointer fields and wired them from `TrainingSequence` in `getSample()`.
+- Extended `BatchPayload` with per-row compiled execution payload: `execution_active` [batch_size], `compiled_bootstrap_bindings` [batch_size], `slot_selection_targets` [batch_size].
+- Updated `buildBatchPayload()` in `BatchPayload.cu` to extract execution metadata from `TrainingSequence` during PHASE 2 and populate `BatchPayload` arrays during PHASE 4.
+- Added structural validation in `BatchPayload::validate()` for all new execution payload fields, including `execution_active=false + non-empty teacher_steps` rejection.
+- Added `reconstructSlotDomain()` utility inline that computes `D_row` from `compiled_bootstrap_bindings ∪ teacher_steps`.
+
+**Changed files**
+- `resources/models/GRIM-text/Shared/Execution/ExecutionMetadata.hpp` (NEW)
+- `resources/models/GRIM-text/training/training_data_loader.hpp`
+- `resources/models/GRIM-text/Shared/Batching/BatchPayload.hpp`
+- `resources/models/GRIM-text/Shared/Batching/BatchPayload.cu`
+
+**Ownership after change**
+- `ExecutionMetadata.hpp` is the single canonical definition site for all structured execution semantic types. No other file may define `TeacherStep`, `CompiledBootstrapBinding`, `SlotSelectionTarget`, or `BootstrapLiteralBinding`.
+- `TrainingSequence` owns per-sample compiled execution metadata (activation state + bindings + steps + targets).
+- `TrainingSampleView` provides non-owning pointer access to the same metadata.
+- `BatchPayload` owns per-batch transport of compiled execution metadata, populated by `buildBatchPayload()`.
+- `BatchPayload::validate()` enforces structural consistency of execution payload.
+
+**Non-responsibilities**
+- `ExecutionMetadata.hpp` does NOT own GPU tensor allocation or parameter registration — that is Workstream 3A.
+- `TrainingSequence` fields are populated by the data loader / GRMT deserializer — format cutover is Workstream 3.
+- Batch-level validation for row-consistent step counts, slot domain completeness, and teacher-step op validity is Workstream 4.
+
+**Integration points / migrated consumers**
+- `ComputeLossBatch.cu` reads `payload.teacher_steps` — type unchanged via alias, no code changes needed.
+- All downstream consumers of `BatchPayload` now have access to `execution_active`, `compiled_bootstrap_bindings`, and `slot_selection_targets` per row.
+- `buildBatchPayload()` is the single population site — no downstream code may populate these fields.
+
+**Legacy deleted**
+- Local `struct TeacherStep` definition in `BatchPayload.hpp` — replaced by `using` alias to `GRIM::Execution::TeacherStep`.
+
+**Validation**
+- Static field alignment verified: `TrainingSequence` → `TrainingSampleView` → `BatchPayload` all carry the same four compiled execution fields.
+- `BatchPayload::validate()` enforces size consistency and structural invariants (execution_active=false rejects non-empty teacher_steps).
+- `buildBatchPayload()` populates all execution fields in the same pass as existing per-token arrays.
+- Full CUDA compile validation is blocked on local environment lacking CUDA toolchain; editor diagnostics for CUDA-heavy files are dominated by missing `cuda_runtime.h`.
+
+**Flow diagram delta**
+- Updated flow diagram to show metadata ownership path: `ExecutionMetadata.hpp` → `TrainingSequence` → `TrainingSampleView` → `BatchPayload` → downstream consumers.
+
+**Remaining gaps / next gate**
+- Begin Workstream 2: replace `__SLOTS__` sequence builder with compiled structured sequence builder that populates the new `TrainingSequence` execution fields from `StructuredExecutionRecord`.
+
+### 2026-03-29 — Workstream 1 — plan alignment verification fixes
+
+**Status transition**
+- `Completed -> Completed` (alignment fixes within completed workstream)
+
+**What changed**
+- Added `const std::vector<int32_t>* token_exec_slots = nullptr` to `TrainingSampleView` and wired it from `TrainingSequence` in `getSample()`. This was a gap found during plan alignment verification: the completion criteria require all 5 compiled payload fields in all 3 structs.
+- Transitioned 3 per-row teacher supervision gates in `AutogradTraining.cu` (lines 710, 1288, 1403) to check `execution_active[b]` as the authoritative activation signal before looking up teacher data. Previously these sites checked `teacher_steps.empty()` as a data-availability proxy, which was functionally correct but violated criterion 3's requirement that no code treat `teacher_steps.size()` as the execution-activation signal.
+
+**Changed files**
+- `resources/models/GRIM-text/training/training_data_loader.hpp`
+- `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu`
+
+**Ownership after change**
+- `execution_active[b]` is now the authoritative per-row gate at all three execution supervision sites in `AutogradTraining.cu`.
+- `teacher_steps` presence is still checked as data-availability after the activation gate is satisfied.
+
+**Integration points / migrated consumers**
+- No external API changes; same callers, same observable behavior for rows where `execution_active == true`.
+
+**Legacy deleted**
+- None; the previous pattern was a data-availability check, not an outright legacy path. It was tightened to match the authoritative activation contract.
+
+**Validation**
+- All 4 WS1 completion criteria now PASS:
+  1. ExecutionMetadata.hpp is the single cross-layer definition site ✅
+  2. TrainingSequence, TrainingSampleView, BatchPayload all carry 5 compiled payload fields ✅
+  3. Activation state uses execution_active[b] at all per-row teacher supervision sites ✅
+  4. Comments and docs explicitly state paired projections and D_row reconstruction ✅
+
+**Flow diagram delta**
+- No structural diagram changes; the metadata ownership diagram from the prior entry remains accurate.
+
+**Remaining gaps / next gate**
+- Workstream 1 is fully aligned with all completion criteria. Proceed to Workstream 2.

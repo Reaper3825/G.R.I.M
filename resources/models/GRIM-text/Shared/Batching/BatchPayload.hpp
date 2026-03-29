@@ -26,6 +26,7 @@
 #include <numeric>
 
 #include "../TNC/Token-normalized_clipping.hpp"
+#include "../Execution/ExecutionMetadata.hpp"
 
 // Forward declarations
 struct TrainingSequence;
@@ -44,16 +45,9 @@ struct BatchAssignment;
 
 namespace Batching {
 
-// =============================================================================
-// TeacherStep — per-step ground truth for structured CE supervision
-// =============================================================================
-struct TeacherStep {
-    int op_id;
-    int arg1_slot;
-    int arg2_slot;
-    int write_slot;
-    float expected_value;
-};
+// TeacherStep is now defined in Execution/ExecutionMetadata.hpp as GRIM::Execution::TeacherStep.
+// This alias preserves call-site compatibility during the cutover.
+using TeacherStep = GRIM::Execution::TeacherStep;
 
 // =============================================================================
 // BatchPayload — immutable batch datum
@@ -103,6 +97,24 @@ struct BatchPayload {
     // has exactly execution_block_num_steps entries (1:1 with ExecutionBlock steps).
     // ═══════════════════════════════════════════════════════════════════════════
     std::vector<std::vector<TeacherStep>> teacher_steps;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // COMPILED STRUCTURED-EXECUTION PAYLOAD
+    //
+    // execution_active[b] is the AUTHORITATIVE activation bit per row.
+    // Non-empty teacher_steps is a supervised-training payload validity
+    // requirement, NOT the activation source.
+    //
+    // token_to_slot_map (above) is the runtime binding projection.
+    // teacher_steps (above) is the supervision projection.
+    // compiled_bootstrap_bindings is the compiled provenance.
+    // slot_selection_targets is per-row dense selector supervision.
+    //
+    // Runtime D_row is reconstructed from compiled_bootstrap_bindings ∪ teacher_steps.
+    // ═══════════════════════════════════════════════════════════════════════════
+    std::vector<bool> execution_active;    // [batch_size] — authoritative per-row activation
+    std::vector<std::vector<GRIM::Execution::CompiledBootstrapBinding>> compiled_bootstrap_bindings;  // [batch_size]
+    std::vector<std::vector<GRIM::Execution::SlotSelectionTarget>> slot_selection_targets;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ATOM TABLE SIDE CHANNEL (host-only, NOT transferred to GPU)
@@ -235,6 +247,42 @@ struct BatchPayload {
                 throw std::runtime_error(
                     std::string(caller) + ": BatchPayload.teacher_steps.size()=" +
                     std::to_string(teacher_steps.size()) + " != batch_size=" +
+                    std::to_string(batch_size));
+            }
+        }
+
+        // Compiled execution payload validation
+        if (!execution_active.empty()) {
+            if (static_cast<int>(execution_active.size()) != batch_size) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.execution_active.size()=" +
+                    std::to_string(execution_active.size()) + " != batch_size=" +
+                    std::to_string(batch_size));
+            }
+            // execution_active with false + non-empty teacher_steps is a structural error
+            for (int b = 0; b < batch_size; ++b) {
+                if (!execution_active[b] && !teacher_steps.empty()
+                    && !teacher_steps[b].empty()) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": row " + std::to_string(b) +
+                        " has execution_active=false but non-empty teacher_steps — "
+                        "teacher_steps alone do not activate execution");
+                }
+            }
+        }
+        if (!compiled_bootstrap_bindings.empty()) {
+            if (static_cast<int>(compiled_bootstrap_bindings.size()) != batch_size) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.compiled_bootstrap_bindings.size()=" +
+                    std::to_string(compiled_bootstrap_bindings.size()) + " != batch_size=" +
+                    std::to_string(batch_size));
+            }
+        }
+        if (!slot_selection_targets.empty()) {
+            if (static_cast<int>(slot_selection_targets.size()) != batch_size) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.slot_selection_targets.size()=" +
+                    std::to_string(slot_selection_targets.size()) + " != batch_size=" +
                     std::to_string(batch_size));
             }
         }

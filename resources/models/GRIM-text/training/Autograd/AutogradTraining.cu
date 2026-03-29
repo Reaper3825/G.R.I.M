@@ -706,8 +706,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         ExecutionBlockStepOutput step_diag;
 
                         // Upload teacher expected_value for this step (Fix 6)
+                        // execution_active[b] is the authoritative per-row activation;
+                        // teacher_steps is supervision data, not the activation signal.
                         const float* d_expected_target = nullptr;
-                        if (have_exec_teacher && b < B_teacher) {
+                        if (have_exec_teacher && b < B_teacher
+                            && !ctx.payload->execution_active.empty()
+                            && ctx.payload->execution_active[b]) {
                             const auto& teacher_row = ctx.payload->teacher_steps[b];
                             if (step < static_cast<int>(teacher_row.size())) {
                                 float h_val = teacher_row[step].expected_value;
@@ -1284,6 +1288,12 @@ LossResult computeAutogradLoss(
         int ce_count = 0;
 
         for (int b = 0; b < ctx.batch_size; ++b) {
+            // execution_active[b] is the authoritative per-row activation;
+            // skip teacher CE logging for rows that aren't execution-active.
+            if (!ctx.payload->execution_active.empty()
+                && !ctx.payload->execution_active[b])
+                continue;
+
             const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
             const auto* teacher_row = (have_teacher && b < static_cast<int>(ctx.payload->teacher_steps.size()))
                 ? &ctx.payload->teacher_steps[b] : nullptr;
@@ -1404,6 +1414,10 @@ LossResult computeAutogradLoss(
         float mse_sum = 0.0f;
         int mse_count = 0;
         for (int b = 0; b < ctx.batch_size; ++b) {
+            // execution_active[b] is the authoritative per-row activation
+            if (!ctx.payload->execution_active.empty()
+                && !ctx.payload->execution_active[b])
+                continue;
             const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
             const auto& teacher_row = ctx.payload->teacher_steps[b];
             if (row_steps.empty() || teacher_row.empty()) continue;

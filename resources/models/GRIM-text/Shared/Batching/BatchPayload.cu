@@ -63,6 +63,12 @@ BatchPayload buildBatchPayload(
         const std::vector<uint32_t>* atom_entry_ids;
         const std::vector<int32_t>* exec_slots;
         int length;
+
+        // Compiled execution metadata (per-row, not per-token)
+        bool execution_active;
+        const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings;
+        const std::vector<GRIM::Execution::TeacherStep>* teacher_steps;
+        const std::vector<GRIM::Execution::SlotSelectionTarget>* slot_selection_targets;
     };
 
     std::vector<RawSeq> raw;
@@ -170,7 +176,11 @@ BatchPayload buildBatchPayload(
             seq->atom_table,
             &seq->atom_entry_ids,
             exec_slots_ptr,
-            seq_len
+            seq_len,
+            seq->execution_active,
+            &seq->compiled_bootstrap_bindings,
+            &seq->teacher_steps,
+            &seq->slot_selection_targets
         });
 
         payload.seq_lengths[b] = seq_len;
@@ -249,6 +259,12 @@ BatchPayload buildBatchPayload(
     payload.token_to_slot_map.assign(flat_size, -1);
     payload.seq_atom_tables.resize(payload.batch_size);
     payload.valid_target_counts.resize(payload.batch_size, 0);
+
+    // Compiled execution metadata arrays — sized to batch_size
+    payload.execution_active.resize(payload.batch_size, false);
+    payload.compiled_bootstrap_bindings.resize(payload.batch_size);
+    payload.teacher_steps.resize(payload.batch_size);
+    payload.slot_selection_targets.resize(payload.batch_size);
 
     payload.valid_tokens = 0;
 
@@ -329,6 +345,18 @@ BatchPayload buildBatchPayload(
 
         // Store AtomTable reference for this batch row
         payload.seq_atom_tables[b] = r.atom_table;
+
+        // Compiled execution metadata (per-row)
+        payload.execution_active[b] = r.execution_active;
+        if (r.compiled_bootstrap_bindings && !r.compiled_bootstrap_bindings->empty()) {
+            payload.compiled_bootstrap_bindings[b] = *r.compiled_bootstrap_bindings;
+        }
+        if (r.teacher_steps && !r.teacher_steps->empty()) {
+            payload.teacher_steps[b] = *r.teacher_steps;
+        }
+        if (r.slot_selection_targets && !r.slot_selection_targets->empty()) {
+            payload.slot_selection_targets[b] = *r.slot_selection_targets;
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

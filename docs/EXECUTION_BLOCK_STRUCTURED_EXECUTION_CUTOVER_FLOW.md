@@ -84,9 +84,9 @@ flowchart TD
 
 ## Current artifact status
 
-- **Workstream flow status:** Workstream 0 complete; Workstream 1 next
+- **Workstream flow status:** Workstream 1 complete; Workstream 2 next
 - **Maintenance flow status:** Active immediately
-- **Structured execution flow status:** Current enforced runtime reflects the locked Workstream 0 boundary; future metadata/selector workstreams are still pending
+- **Structured execution flow status:** Current enforced runtime reflects the locked Workstream 0 boundary with Workstream 1 metadata types canonicalized; compiled execution payload flows through TrainingSequence → TrainingSampleView → BatchPayload; future builder/format/selector workstreams are still pending
 
 ## Workstream 0 implementation note
 
@@ -122,6 +122,42 @@ flowchart TD
     Train --> Extract --> Exec
     Decode --> Extract --> Exec
     Generate --> MaskNUM
+```
+
+## Workstream 1 — metadata ownership and batch transport
+
+```mermaid
+flowchart TD
+    subgraph Canonical[ExecutionMetadata.hpp — single definition site]
+        TS[TeacherStep]
+        CBB[CompiledBootstrapBinding]
+        SST[SlotSelectionTarget]
+        BLB[BootstrapLiteralBinding]
+        SER[StructuredExecutionRecord]
+        CSEP[CompiledStructuredExecutionPayload]
+    end
+
+    subgraph DataPipeline[Data pipeline — compiled payload transport]
+        TSeq[TrainingSequence\nexecution_active + bindings + steps + targets]
+        TSV[TrainingSampleView\nnon-owning pointers]
+        BP[BatchPayload\nper-row arrays sized batch_size]
+        Builder[buildBatchPayload\nPHASE 2 extract + PHASE 4 populate]
+    end
+
+    SER -->|sequence builder\nWS2| TSeq
+    TSeq -->|getSample| TSV
+    TSV --> Builder
+    Builder --> BP
+
+    subgraph Consumers[Downstream consumers]
+        Loss[ComputeLossBatch\nteacher_steps]
+        ExecBlock[ExecutionBlock\nslot_map + bindings]
+        Validator[Shared validator\nWS4]
+    end
+
+    BP --> Loss
+    BP --> ExecBlock
+    BP --> Validator
 ```
 
 ## Diagram update checklist
