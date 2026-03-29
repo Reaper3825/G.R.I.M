@@ -137,7 +137,6 @@ void ExecutionMemory::allocate(int V, int atom_dim, int d_model, int d_key, int 
     key_embeds        = Tensor::zeros({V, d_key}, stream);
     type_embed        = Tensor::zeros({V, d_type}, stream);
     recent_write_mask = Tensor::zeros({1, V}, stream);
-    num_filled = 0;
 }
 
 void ExecutionMemory::clear(cudaStream_t stream) {
@@ -149,7 +148,6 @@ void ExecutionMemory::clear(cudaStream_t stream) {
     if (key_embeds.data)        cudaMemsetAsync(key_embeds.data, 0, key_embeds.size_bytes(), stream);
     if (type_embed.data)        cudaMemsetAsync(type_embed.data, 0, type_embed.size_bytes(), stream);
     if (recent_write_mask.data) cudaMemsetAsync(recent_write_mask.data, 0, recent_write_mask.size_bytes(), stream);
-    num_filled = 0;
 }
 
 //======================================================//
@@ -164,7 +162,8 @@ void ExecutionBlockLayer::validateConfigOrThrow() const {
     EXEC_CHECK(config_.d_key > 0,              "d_key must be positive");
     EXEC_CHECK(config_.d_type > 0,             "d_type must be positive");
     EXEC_CHECK(config_.cross_attn_head_dim > 0,"cross_attn_head_dim must be positive");
-    EXEC_CHECK(config_.value_decode_input_dim == 24,  "value_decode_input_dim must be 24");
+    EXEC_CHECK(config_.value_decode_input_dim > 0,    "value_decode_input_dim must be positive");
+    EXEC_CHECK(config_.d_key <= 64,                    "d_key must be <= 64 (kernelComputeWriteLogits uses float k_buf[64])");
     EXEC_CHECK(config_.num_scratch_slots >= 0, "num_scratch_slots must be non-negative");
     EXEC_CHECK(config_.num_scratch_slots < config_.num_slots,
                "num_scratch_slots must be < num_slots (need at least one value slot)");
@@ -2171,7 +2170,6 @@ void ExecutionBlockLayer::executeStep(
     int row_tokens,
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records,
-    uint64_t training_step,
     const float* expected_target,
     const float* expected_read_v1,
     const float* expected_read_v2)

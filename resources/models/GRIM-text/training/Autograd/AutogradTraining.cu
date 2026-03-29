@@ -730,7 +730,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                             tok_off, sl,
                             ts->trace_state_by_row[b],
                             ts->execution_trace_by_row[b],
-                            ctx.step,
                             d_expected_target,
                             nullptr, nullptr);
                         ts->execution_trace_by_row[b].push_back(step_diag.record);

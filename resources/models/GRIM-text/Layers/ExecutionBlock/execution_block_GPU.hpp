@@ -40,7 +40,6 @@ struct ExecutionMemory {
     Tensor key_embeds;        // [V, d_key]   addressing keys
     Tensor type_embed;        // [V, d_type]  type tag per slot
     Tensor recent_write_mask; // [V]          last-step write probability distribution
-    int num_filled = 0;
 
     void clear(cudaStream_t stream);
     void allocate(int V, int atom_dim, int d_model, int d_key, int d_type, cudaStream_t stream);
@@ -193,7 +192,6 @@ public:
         int row_tokens,
         Tensor& trace_state,
         const std::vector<ExecutionRecord>& prior_records,
-        uint64_t training_step = 0,                 // Fix 8: curriculum gate
         const float* expected_target = nullptr,     // Fix 6: optional teacher scalar (device [1])
         const float* expected_read_v1 = nullptr,    // Fix 7: optional teacher operand (device [1])
         const float* expected_read_v2 = nullptr      // Fix 7: optional teacher operand (device [1])

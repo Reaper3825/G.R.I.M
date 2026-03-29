@@ -506,8 +506,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                     &step_diag,
                     0, 1,      // token_offset, row_tokens
                     ts.trace_state_by_row[0],
-                    ts.execution_trace_by_row[0],
-                    static_cast<uint64_t>(-1));  // bypass warmup gates
+                    ts.execution_trace_by_row[0]);
                 ts.execution_trace_by_row[0].push_back(step_diag.record);
                 if (step == exec_K - 1) {
                     last_step_diag = std::move(step_diag);

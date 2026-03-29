@@ -252,7 +252,6 @@ bool testExecutionMemoryAllocateShapes(std::string& message) {
     EB_ASSERT_EQ(M.type_embed.shape[0], V, "type_embed rows");
     EB_ASSERT_EQ(M.type_embed.shape[1], dt, "type_embed cols");
     EB_ASSERT_EQ(M.recent_write_mask.shape[1], V, "recent_write_mask dim");
-    EB_ASSERT_EQ(M.num_filled, 0, "num_filled starts at 0");
 
     // Data pointers must be non-null
     EB_ASSERT_TRUE(M.values.data != nullptr, "values allocated");
@@ -313,7 +312,7 @@ bool testExecutionMemoryAllocateRejectsInvalid(std::string& message) {
 }
 
 //======================================================//
-//  9. ExecutionMemory clear zeros data and resets num_filled
+//  9. ExecutionMemory clear zeros data
 //======================================================//
 
 bool testExecutionMemoryClear(std::string& message) {
@@ -329,7 +328,6 @@ bool testExecutionMemoryClear(std::string& message) {
     float one = 1.0f;
     cudaMemcpyAsync(M.values.data, &val, sizeof(float), cudaMemcpyHostToDevice, stream);
     cudaMemcpyAsync(M.valid_mask.data, &one, sizeof(float), cudaMemcpyHostToDevice, stream);
-    M.num_filled = 3;
     cudaStreamSynchronize(stream);
 
     M.clear(stream);
@@ -344,9 +342,6 @@ bool testExecutionMemoryClear(std::string& message) {
     float read_mask = -1.0f;
     cudaMemcpy(&read_mask, M.valid_mask.data, sizeof(float), cudaMemcpyDeviceToHost);
     EB_ASSERT_NEAR(read_mask, 0.0f, 1e-6f, "clear zeros valid_mask");
-
-    // num_filled reset
-    EB_ASSERT_EQ(M.num_filled, 0, "clear resets num_filled");
 
     cudaStreamDestroy(stream);
     return true;
