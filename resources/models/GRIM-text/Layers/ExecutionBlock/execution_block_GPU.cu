@@ -660,6 +660,20 @@ __global__ void kernelBootstrapSlotEmbeddings(
     }
 }
 
+// Copy type_num_embed to type_embed[slot] for each valid slot during bootstrap.
+// Grid: one block per slot.  Threads handle d_type dimension.
+__global__ void kernelBootstrapTypeEmbed(
+    float* __restrict__ type_embed,          // [V, d_type]
+    const float* __restrict__ valid_mask,    // [V]
+    const float* __restrict__ type_num_emb,  // [1, d_type]
+    int V, int d_type
+) {
+    const int slot = blockIdx.x;
+    if (slot >= V || valid_mask[slot] == 0.0f) return;
+    for (int j = threadIdx.x; j < d_type; j += blockDim.x)
+        type_embed[static_cast<size_t>(slot) * d_type + j] = type_num_emb[j];
+}
+
 // Extract a contiguous column slice: out[i, j] = in[i, start_col + j]
 __global__ void kernelSliceColumns(
     float* __restrict__ out,      // [rows, width]
@@ -2165,6 +2179,13 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
         W_key_proj_.data,
         V, dm, dk);
     CUDA_CHECK_KERNEL();
+
+    // Write type tag for all bootstrapped slots
+    const int dt = config_.d_type;
+    kernelBootstrapTypeEmbed<<<V, kBlockSize, 0, stream>>>(
+        M.type_embed.data, M.valid_mask.data,
+        type_num_embed_.data, V, dt);
+    CUDA_CHECK_KERNEL();
 }
 
 // Fix 1/3/4/6: Compute scalar absolute difference |a - b| → out[0]
@@ -2314,6 +2335,7 @@ void ExecutionBlockLayer::executeStep(
     const int dk  = config_.d_key;
     const int nop = config_.num_ops;
     const int ae  = config_.atom_embedding_dim;
+    const int dt  = config_.d_type;
     const int vid = config_.value_decode_input_dim;
     const int vhd = config_.value_decode_hidden_dim;
     EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
@@ -2802,6 +2824,11 @@ void ExecutionBlockLayer::executeStep(
     // Write atom embedding to M.atom_embeds[slot]
     kernelHardWriteRowDev<<<1, kBlockSize, 0, stream>>>(
         M.atom_embeds.data, d_exec_idx_ + 3, ae, atom_new.data);
+    CUDA_CHECK_KERNEL();
+
+    // Write type tag to M.type_embed[slot]
+    kernelHardWriteRowDev<<<1, kBlockSize, 0, stream>>>(
+        M.type_embed.data, d_exec_idx_ + 3, dt, type_num_embed_.data);
     CUDA_CHECK_KERNEL();
 
     kernelSetValidMaskDev<<<1, 1, 0, stream>>>(M.valid_mask.data, d_exec_idx_ + 3);

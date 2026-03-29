@@ -904,32 +904,26 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             if (GRIM::Tokenizer::tokenIdToAtomType(sample.token_id)
                 == GRIM::Tokenizer::AtomType::ATOM_NUM) {
                 // Step Z: bind <NUM> to the last-written execution slot
-                if (!config_.execution_block_enabled
-                    || !training_state_.has_inference_exec_memory
-                    || training_state_.inference_exec_last_write_slot < 0) {
-                    throw std::runtime_error(
-                        "generateSequenceGPU: sampled <NUM> without valid execution slot binding "
-                        "(execution_block_enabled=" +
-                        std::to_string(config_.execution_block_enabled) +
-                        ", has_exec_mem=" +
-                        std::to_string(training_state_.has_inference_exec_memory) +
-                        ", last_write_slot=" +
-                        std::to_string(training_state_.inference_exec_last_write_slot) + ")");
+                if (config_.execution_block_enabled
+                    && training_state_.has_inference_exec_memory
+                    && training_state_.inference_exec_last_write_slot >= 0) {
+                    const int slot = training_state_.inference_exec_last_write_slot;
+                    const int V = config_.execution_block_num_slots;
+                    if (slot < 0 || slot >= V) {
+                        throw std::runtime_error(
+                            "generateSequenceGPU: <NUM> write_slot=" + std::to_string(slot) +
+                            " out of range [0, " + std::to_string(V) + ")");
+                    }
+                    // Read slot value from persistent ExecutionMemory
+                    float slot_val = 0.0f;
+                    cudaMemcpy(&slot_val,
+                               training_state_.inference_exec_memory.values.data + slot,
+                               sizeof(float), cudaMemcpyDeviceToHost);
+                    token_numeric_value = slot_val;
+                    new_token_slot_id = slot;
                 }
-                const int slot = training_state_.inference_exec_last_write_slot;
-                const int V = config_.execution_block_num_slots;
-                if (slot < 0 || slot >= V) {
-                    throw std::runtime_error(
-                        "generateSequenceGPU: <NUM> write_slot=" + std::to_string(slot) +
-                        " out of range [0, " + std::to_string(V) + ")");
-                }
-                // Read slot value from persistent ExecutionMemory
-                float slot_val = 0.0f;
-                cudaMemcpy(&slot_val,
-                           training_state_.inference_exec_memory.values.data + slot,
-                           sizeof(float), cudaMemcpyDeviceToHost);
-                token_numeric_value = slot_val;
-                new_token_slot_id = slot;
+                // When execution block is disabled or has no valid slot binding,
+                // <NUM> is emitted with numeric_value=0.0 and slot_id=-1.
             }
         }
         
