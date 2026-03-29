@@ -208,18 +208,24 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                     seq_len * sizeof(int),
                     cudaMemcpyHostToDevice, stream);
     
-    // Copy numeric side-channel
+    // Copy numeric side-channel (zero when empty to prevent stale bleed)
     if (!prompt_numeric_values.empty()) {
         cudaMemcpyAsync(training_state_.cached_token_numeric_values.data,
                         prompt_numeric_values.data(),
                         seq_len * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
+    } else {
+        cudaMemsetAsync(training_state_.cached_token_numeric_values.data,
+                        0, static_cast<size_t>(seq_len) * sizeof(float), stream);
     }
     if (!prompt_atom_mask.empty()) {
         cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data),
                         prompt_atom_mask.data(),
                         seq_len * sizeof(uint8_t),
                         cudaMemcpyHostToDevice, stream);
+    } else {
+        cudaMemsetAsync(training_state_.cached_token_atom_mask.data,
+                        0, static_cast<size_t>(seq_len) * sizeof(uint8_t), stream);
     }
 
     copyTokenSlotMapH2D(training_state_, stream, seq_len, prompt_token_to_slot_map);
@@ -347,7 +353,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     const bool exec_block_active = cfg.execution_block_enabled
         && exec_block != nullptr
         && ts.has_inference_exec_memory
-        && !ts.trace_state_by_row.empty();
+        && !ts.trace_state_by_row.empty()
+        && !ts.execution_trace_by_row.empty();
 
     int exec_layer = -1;
     int exec_K = 0;
@@ -491,6 +498,18 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             const int32_t* slot_ptr = ts.cached_token_to_slot_map.data
                 ? reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos
                 : nullptr;
+
+            // Bootstrap the new token's slot binding into execution memory.
+            // During prefill, bootstrap runs inside AutogradTraining. During
+            // decode, the single new token's numeric_value + slot_id must be
+            // injected here so the execution block can operate on it.
+            if (slot_ptr && ts.cached_token_numeric_values.data) {
+                exec_block->bootstrapMemoryFromSlotMap(
+                    ts.inference_exec_memory,
+                    ts.cached_token_numeric_values.data + token_pos,
+                    slot_ptr,
+                    1, stream);
+            }
 
             ExecutionBlockStepOutput last_step_diag;
             for (int step = 0; step < exec_K; ++step) {
