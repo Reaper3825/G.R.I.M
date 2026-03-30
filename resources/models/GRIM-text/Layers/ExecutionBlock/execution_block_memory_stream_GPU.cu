@@ -2,9 +2,7 @@
 
 #ifdef USE_CUDA
 
-namespace GRIM {
-
-using namespace ExecutionBlockInternal;
+namespace GRIM::ExecutionBlockInternal {
 
 __global__ void kernelBootstrapSlotValues(
     float* __restrict__ M_values,
@@ -757,6 +755,6 @@ void crossAttentionReadImpl(
     CUDA_CHECK_KERNEL();
 }
 
-}  // namespace GRIM
+}  // namespace GRIM::ExecutionBlockInternal
 
 #endif  // USE_CUDA

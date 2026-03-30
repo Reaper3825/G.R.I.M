@@ -1,6 +1,6 @@
 # ExecutionBlock Structured Execution Cutover Plan
 
-**Status:** Workstreams 3–6 complete; Workstream 7 next  
+**Status:** Workstreams 3–7 complete; Workstream 8 next  
 **Scope:** `token_to_slot_map`, `teacher_steps`, row-local ExecutionBlock execution, GRMT cutover, inference alignment  
 **Policy:** **No backwards compatibility**. Delete legacy behavior instead of preserving it.
 
@@ -1449,6 +1449,8 @@ Implement one validator that enforces:
 ---
 
 ## Workstream 7 — delete silent execution skips
+
+> **Progress:** Completed. Per-row `execution_active[b]` gating added to `AutogradTraining.cu` (bootstrap, executeStep, trace alloc, cross-attention read). Inference bootstrap conditional converted to hard throw. All four completion criteria verified. See codoc update log for details.
 
 ### Files
 

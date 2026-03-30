@@ -665,16 +665,21 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     : nullptr;
 
                 // Initialize persistent execution trace per row
+                // Vectors sized B for index stability; only active rows get allocated tensors.
                 ts->execution_trace_by_row.resize(B);
                 ts->trace_state_by_row.resize(B);
                 for (int b = 0; b < B; ++b) {
                     ts->execution_trace_by_row[b].clear();
-                    ts->trace_state_by_row[b] = Tensor::zeros({1, cfg->d_model}, ctx.stream, "trace_state_row");
-                    ts->trace_state_by_row[b].requires_grad_();
-                    ts->trace_state_by_row[b].ensure_grad();
+                    const bool row_active = !ctx.payload->execution_active.empty()
+                        && ctx.payload->execution_active[b];
+                    if (row_active) {
+                        ts->trace_state_by_row[b] = Tensor::zeros({1, cfg->d_model}, ctx.stream, "trace_state_row");
+                        ts->trace_state_by_row[b].requires_grad_();
+                        ts->trace_state_by_row[b].ensure_grad();
+                    }
                 }
 
-                // Teacher target buffer for causal loss (Fix 6)
+                // Teacher target buffer for causal loss
                 const bool have_exec_teacher = (ctx.payload && !ctx.payload->teacher_steps.empty());
                 const int B_teacher = have_exec_teacher
                     ? static_cast<int>(ctx.payload->teacher_steps.size()) : 0;
@@ -682,10 +687,17 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 CUDA_CHECK(cudaMalloc(&d_expected_target_buf, sizeof(float)));
 
                 for (int b = 0; b < B; ++b) {
+                    // WS7: Only allocate and execute for rows with active compiled payload.
+                    const bool row_exec_active = !ctx.payload->execution_active.empty()
+                        && ctx.payload->execution_active[b];
+
+                    intermediates.exec_outputs_per_row[b].steps.clear();
+
+                    if (!row_exec_active) continue;
+
                     auto& M_b = intermediates.exec_memories[b];
                     M_b.allocate(V, ae, cfg->d_model, dk, dt, ctx.stream);
                     M_b.clear(ctx.stream);
-                    intermediates.exec_outputs_per_row[b].steps.clear();
 
                     const int tok_off = b * sl;
                     const int32_t* d_slot_map_row = d_slot_map_full
@@ -695,24 +707,27 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     auto row_atom_view = ctx.scratch_block->extractRowLocalAtomView(
                         tok_off, sl, ctx.stream);
 
-                    if (d_slot_map_full && ts->cached_token_numeric_values.data) {
-                        ctx.execution_block->bootstrapMemoryFromSlotMap(
-                            M_b,
-                            ts->cached_token_numeric_values.data + tok_off,
-                            d_slot_map_row,
-                            sl, ctx.stream);
+                    // WS7: Execution-active rows MUST have bootstrap data.
+                    // Throw instead of silently entering executeStep with empty memory.
+                    if (!d_slot_map_full || !ts->cached_token_numeric_values.data) {
+                        throw std::runtime_error(
+                            "AutogradTraining: execution-active row " + std::to_string(b)
+                            + " has no slot map or numeric values for bootstrap — "
+                            "compiled payload marks row active but bootstrap data is missing");
                     }
+                    ctx.execution_block->bootstrapMemoryFromSlotMap(
+                        M_b,
+                        ts->cached_token_numeric_values.data + tok_off,
+                        d_slot_map_row,
+                        sl, ctx.stream);
 
                     for (int step = 0; step < exec_K; ++step) {
                         ExecutionBlockStepOutput step_diag;
 
-                        // Upload teacher expected_value for this step (Fix 6)
-                        // execution_active[b] is the authoritative per-row activation;
+                        // Upload teacher expected_value for this step.
                         // teacher_steps is supervision data, not the activation signal.
                         const float* d_expected_target = nullptr;
-                        if (have_exec_teacher && b < B_teacher
-                            && !ctx.payload->execution_active.empty()
-                            && ctx.payload->execution_active[b]) {
+                        if (have_exec_teacher && b < B_teacher) {
                             const auto& teacher_row = ctx.payload->teacher_steps[b];
                             if (step < static_cast<int>(teacher_row.size())) {
                                 float h_val = teacher_row[step].expected_value;
@@ -741,12 +756,16 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             }
 
             // ExecutionBlock: gated cross-attention read at every layer >= exec_layer (per-row)
+            // WS7: Only execution-active rows participate in cross-attention read.
             if (exec_layer >= 0 && layer_idx >= exec_layer
                 && ctx.execution_block
                 && !intermediates.exec_memories.empty()) {
                 const int B  = ctx.batch_size;
                 const int sl = ctx.seq_len;
                 for (int b = 0; b < B; ++b) {
+                    const bool row_exec_active = !ctx.payload->execution_active.empty()
+                        && ctx.payload->execution_active[b];
+                    if (!row_exec_active) continue;
                     ctx.execution_block->crossAttentionRead(
                         layer_output, intermediates.exec_memories[b],
                         total_tokens, ctx.stream,

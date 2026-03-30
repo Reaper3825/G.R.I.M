@@ -358,6 +358,7 @@ add_executable(train_gpu
     ../TrainingEvents.hpp
     ../../Shared/Dynamic_LR/DynamicLR.cu
     ../../Shared/DataLoader/DataLoader.cu
+    ../../Shared/DataLoader/ConceptExecutionSequenceBuilder.cu
     ../../Shared/TNC/Token-normalized_clipping.cu
     ../../Shared/SoftRestart/SoftRestart.cu
     ../../Layers/GRIMTS/GRIM-TS.cu

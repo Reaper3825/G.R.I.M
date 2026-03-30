@@ -3,9 +3,7 @@
 
 #ifdef USE_CUDA
 
-namespace GRIM {
-
-using namespace ExecutionBlockInternal;
+namespace GRIM::ExecutionBlockInternal {
 
 __global__ void kernelEntropy(
     float* __restrict__ out,
@@ -1723,6 +1721,6 @@ void executeStepCoordinatorImpl(
     finalizeStepOrThrow(layer, diag_out, step, stream);
 }
 
-}  // namespace GRIM
+}  // namespace GRIM::ExecutionBlockInternal
 
 #endif  // USE_CUDA

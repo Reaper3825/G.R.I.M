@@ -1,6 +1,6 @@
 # Execution Block — Current Implementation
 
-This document describes the **current** `ExecutionBlock` implementation after Workstream 0 of the structured-execution cutover.
+This document describes the **current** `ExecutionBlock` implementation after Workstream 6 of the structured-execution cutover.
 
 It is intentionally narrow:
 

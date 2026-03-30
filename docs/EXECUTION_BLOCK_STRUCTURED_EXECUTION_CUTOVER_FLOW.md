@@ -66,27 +66,32 @@ flowchart TD
     subgraph Training[Training / validation runtime today]
         Batch[Batch/runtime metadata]
         Train[AutogradTraining row loop]
+        Gate{execution_active b?}
         Scratch[ScratchBlock row-local atom view]
         Exec[ExecutionBlock executeStep / crossAttentionRead]
-        Batch --> Train --> Scratch --> Exec
+        Skip[Skip row — no execution ops]
+        Batch --> Train --> Gate
+        Gate -- Yes --> Scratch --> Exec
+        Gate -- No --> Skip
     end
 
     subgraph Inference[Inference / generation today]
         Prompt[Prompt slot map + decode token metadata]
         DecodeScratch[Decode-time ScratchBlock row-local atom view]
         DecodeExec[ExecutionBlock decode runtime]
+        BootstrapThrow[Bootstrap: throw if slot_ptr or numeric values missing]
         Sampler[Sampler]
         MaskNUM[Mask <NUM> before sampling<br/>until explicit selector exists]
-        Prompt --> DecodeScratch --> DecodeExec
+        Prompt --> DecodeScratch --> BootstrapThrow --> DecodeExec
         Sampler --> MaskNUM
     end
 ```
 
 ## Current artifact status
 
-- **Workstream flow status:** Workstreams 3–6 complete; Workstream 7 next
+- **Workstream flow status:** Workstreams 3–7 complete; Workstream 8 next
 - **Maintenance flow status:** Active immediately
-- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`, WS3 GRMT v11 serializes full compiled execution payload, WS4 single shared `validateExecutionPayload()` called from `buildBatchPayload()` / `computeLossBatch()` / `autogradTrainingStep()` before any GPU work; duplicate inline validation deleted from `ComputeLossBatch.cu`; WS5 Phase1 remap completed — BOS/EOS/padding preserve all compiled execution metadata with exact position-sensitive semantics, execution-active overlong rows throw instead of being windowed; WS6 row-local execution orchestration completed — dead `atom_embeddings` param removed from `executeStep()` chain, `bootstrapMemoryFromSlotMap()` param renamed `total_tokens` → `row_tokens`, unused `total_tokens` removed from internal `crossAttentionReadImpl()`; WS7+ pending
+- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`, WS3 GRMT v11 serializes full compiled execution payload, WS4 single shared `validateExecutionPayload()` called from `buildBatchPayload()` / `computeLossBatch()` / `autogradTrainingStep()` before any GPU work; duplicate inline validation deleted from `ComputeLossBatch.cu`; WS5 Phase1 remap completed — BOS/EOS/padding preserve all compiled execution metadata with exact position-sensitive semantics, execution-active overlong rows throw instead of being windowed; WS6 row-local execution orchestration completed — dead `atom_embeddings` param removed from `executeStep()` chain, `bootstrapMemoryFromSlotMap()` param renamed `total_tokens` → `row_tokens`, unused `total_tokens` removed from internal `crossAttentionReadImpl()`; WS7 silent execution skips deleted — per-row `execution_active[b]` gating in `AutogradTraining.cu` row loop (bootstrap, executeStep, trace alloc, cross-attention read all gated), `Inference_GPU.cu` bootstrap conditional converted to hard throw; WS8+ pending
 
 ## Workstream 0 implementation note
 

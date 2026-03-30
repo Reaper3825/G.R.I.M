@@ -43,10 +43,10 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ## Current cutover status
 
 - **Overall status:** In progress
-- **Active workstream:** Workstream 7 — delete silent execution skips
-- **Last completed gate:** Workstream 6 — row-local execution orchestration
-- **Next gate:** Begin Workstream 7 deletion of silent executeStep early-return and orchestrator execution gating
-- **Current implementation posture:** Workstream 6 completed: removed dead `atom_embeddings` parameter from entire `executeStep()` chain (public API, thin wrapper, coordinator impl, validation, both call sites in AutogradTraining.cu and Inference_GPU.cu); renamed `total_tokens` → `row_tokens` in `bootstrapMemoryFromSlotMap()` to match actual row-local semantics (callers already pass row-local token count); removed unused `total_tokens` from internal `crossAttentionReadImpl()` signature; all ExecutionBlock public and private interfaces now accept only row-local atom views; batch-global atom arrays are no longer part of the runtime contract
+- **Active workstream:** Workstream 8 — align validation path and training path
+- **Last completed gate:** Workstream 7 — delete silent execution skips
+- **Next gate:** Begin Workstream 8 alignment of training and validation paths
+- **Current implementation posture:** Workstream 7 completed: orchestrator gates all `executeStep()`, `bootstrapMemoryFromSlotMap()`, `crossAttentionRead()`, and trace-state allocation on `execution_active[b]` from compiled payload activation state; non-execution rows skip before any GPU work; execution-active rows with missing bootstrap data throw immediately; silent bootstrap skip in Inference_GPU.cu replaced with hard throw; no silent early-return path remains anywhere in the execution runtime
 
 ## Workstream-specific update contract
 
@@ -210,12 +210,12 @@ File modified: `training/Phases/Phase1_Startup.cu`
 - CUDA build validation deferred (no local CUDA toolchain)
 
 **Remaining gaps / next gate**
-- WS7: delete silent execution skips — remove early-return path in `executeStep()` when M.valid_mask has no populated value slots
+- WS7: delete silent execution skips — completed: orchestrator gates execution on compiled payload activation state; fail-loud for execution-active rows with missing bootstrap
 
 ### Workstream 7 — delete silent execution skips
 
 **Status**
-- Not started
+- Completed
 
 **Each update must record**
 - silent paths deleted
@@ -705,3 +705,53 @@ For each qualifying refactor step, append an entry under the relevant workstream
 
 **Remaining gaps / next gate**
 - Workstream 3 is complete. Proceed to Workstream 5: Phase1 BOS/EOS/padding remap semantics for execution-active rows.
+
+### 2026-03-30 — Workstream 7 — delete silent execution skips
+
+**Status transition**
+- `Not started -> Completed`
+
+**What changed**
+- Added per-row `execution_active[b]` gating in `AutogradTraining.cu` row loop: non-execution rows `continue` before `ExecutionMemory::allocate()`, `ensureBootstrappedValueSlotsOrThrow()`, `executeStep()`, trace state allocation, and teacher target upload. Only rows with `execution_active[b] == true` enter the execution path.
+- Gated trace state tensor allocation (`Tensor::zeros`, `requires_grad_()`, `ensure_grad()`) to active rows only. Non-active rows keep default-constructed empty `trace_state_by_row[b]` — no GPU allocation, no grad tracking.
+- Added per-row `execution_active[b]` gating on the cross-attention read loop: non-execution rows skip `crossAttentionRead()` entirely.
+- Converted the silent bootstrap conditional in `Inference_GPU.cu` (`if (!slot_ptr || !ts.cached_token_numeric_values.data)` → skip bootstrap) to a hard `std::runtime_error` throw. Decode-time execution now always requires both slot map and numeric values; missing either is a fatal error.
+- Simplified teacher target upload: removed redundant `execution_active[b]` check inside the loop body since only active rows enter the loop.
+
+**Changed files**
+- `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu`
+- `resources/models/GRIM-text/training/Inference_GPU.cu`
+
+**Ownership after change**
+- `AutogradTraining.cu` owns the per-row execution activation decision using `execution_active[b]` from `BatchPayload`.
+- `Inference_GPU.cu` unconditionally executes bootstrap when decode-time execution is active; missing prerequisites are fatal.
+- `execution_block_memory_stream_GPU.cu`'s `ensureBootstrappedValueSlotsOrThrow()` remains the layer-internal fail-loud validator (unchanged, already correct from WS0).
+- No code path silently skips execution for rows that are marked active.
+
+**Non-responsibilities**
+- WS7 does NOT change the `executeStep()` internal contract — the layer-internal throw from `ensureBootstrappedValueSlotsOrThrow()` was already correct.
+- WS7 does NOT modify the shared validator (WS4) — validation runs before execution and catches structural metadata problems.
+
+**Integration points / migrated consumers**
+- `AutogradTraining.cu` per-row loop: all execution operations (memory allocate, bootstrap, K-step loop, teacher upload, cross-attention read) are gated behind `execution_active[b]`.
+- `Inference_GPU.cu` decode path: bootstrap is unconditional when execution is active; the conditional skip path is deleted.
+
+**Legacy deleted**
+- Silent bootstrap skip in `Inference_GPU.cu` (`if (slot_ptr && ts.cached_token_numeric_values.data)` conditional that silently skipped bootstrap when data was missing)
+- Implicit "all rows execute" behavior in `AutogradTraining.cu` row loop (non-execution rows previously entered `executeStep()` and were caught by layer-internal validation instead of being skipped at the orchestrator level)
+
+**Validation**
+- All 4 WS7 completion criteria now PASS:
+  1. The orchestrator decides execution solely from compiled payload activation state (`execution_active[b]`) ✅
+  2. Non-execution rows skip before `executeStep()` is called ✅
+  3. Execution-active rows with empty bootstrap memory or no valid slot initialization throw immediately ✅
+  4. No silent early-return path remains in `executeStep()` or in any split helper ✅
+- Static audit: no remaining `if (slot_ptr &&` or `if (ts.cached_token_numeric_values` conditional-skip patterns in execution paths.
+- Full CUDA compile validation is blocked on local macOS environment lacking CUDA toolchain.
+
+**Flow diagram delta**
+- Updated "Current artifact status" from "Workstream 7 next" to "Workstreams 3–7 complete; Workstream 8 next".
+- Updated "Current enforced runtime flow" diagram: training row loop now shows explicit `execution_active[b]` gate before ExecutionBlock operations.
+
+**Remaining gaps / next gate**
+- Workstream 7 is complete. Proceed to Workstream 8: align validation path and training path so both call the same shared validator and fail on the same invalid rows.

@@ -568,13 +568,17 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             // During prefill, bootstrap runs inside AutogradTraining. During
             // decode, the single new token's numeric_value + slot_id must be
             // injected here so the execution block can operate on it.
-            if (slot_ptr && ts.cached_token_numeric_values.data) {
-                exec_block->bootstrapMemoryFromSlotMap(
-                    ts.inference_exec_memory,
-                    ts.cached_token_numeric_values.data + token_pos,
-                    slot_ptr,
-                    1, stream);
+            // WS7: Fail loud if bootstrap data is missing while execution is active.
+            if (!slot_ptr || !ts.cached_token_numeric_values.data) {
+                throw std::runtime_error(
+                    "Inference: decode-time execution is active but slot map or numeric values "
+                    "are missing for bootstrap at token_pos " + std::to_string(token_pos));
             }
+            exec_block->bootstrapMemoryFromSlotMap(
+                ts.inference_exec_memory,
+                ts.cached_token_numeric_values.data + token_pos,
+                slot_ptr,
+                1, stream);
 
             ExecutionBlockStepOutput last_step_diag;
             for (int step = 0; step < exec_K; ++step) {
