@@ -157,8 +157,8 @@ void DatasetTarget::setActiveModel(const std::string& model_id,
     assignedOrder_.clear();
     assignedSet_.clear();
     phaseMarkers_.clear();
-    assignedCBOrder_.clear();
-    assignedCBSet_.clear();
+    assignedCurrOrder_.clear();
+    assignedCurrSet_.clear();
 }
 
 std::string DatasetTarget::activeModelId() const { return activeModelId_; }
@@ -427,8 +427,8 @@ bool DatasetTarget::loadAssignments() {
     assignedOrder_.clear();
     assignedSet_.clear();
     phaseMarkers_.clear();
-    assignedCBOrder_.clear();
-    assignedCBSet_.clear();
+    assignedCurrOrder_.clear();
+    assignedCurrSet_.clear();
     fs::path cfgPath = configFilePath();
     if (cfgPath.empty() || !fs::exists(cfgPath)) return true;
 
@@ -445,13 +445,13 @@ bool DatasetTarget::loadAssignments() {
                 assignedSet_.insert(s);
             }
         }
-        if (j.contains("assigned_concept_block_ids") && j["assigned_concept_block_ids"].is_array()) {
-            for (const auto& id : j["assigned_concept_block_ids"]) {
+        if (j.contains("assigned_curriculum_ids") && j["assigned_curriculum_ids"].is_array()) {
+            for (const auto& id : j["assigned_curriculum_ids"]) {
                 if (!id.is_string()) continue;
                 std::string s = id.get<std::string>();
-                if (assignedCBSet_.count(s)) continue;
-                assignedCBOrder_.push_back(s);
-                assignedCBSet_.insert(s);
+                if (assignedCurrSet_.count(s)) continue;
+                assignedCurrOrder_.push_back(s);
+                assignedCurrSet_.insert(s);
             }
         }
         if (j.contains("curriculum_phases") && j["curriculum_phases"].is_array()) {
@@ -498,9 +498,9 @@ bool DatasetTarget::saveAssignments() const {
         j["assigned_sequence_ids"].push_back(id);
     }
 
-    j["assigned_concept_block_ids"] = json::array();
-    for (const auto& id : assignedCBOrder_) {
-        j["assigned_concept_block_ids"].push_back(id);
+    j["assigned_curriculum_ids"] = json::array();
+    for (const auto& id : assignedCurrOrder_) {
+        j["assigned_curriculum_ids"].push_back(id);
     }
 
     j["curriculum_phases"] = json::array();
@@ -520,7 +520,11 @@ bool DatasetTarget::saveAssignments() const {
         if (!out.good()) return false;
     }
     fs::rename(tmpPath, cfgPath, ec);
-    return !ec;
+    if (ec) return false;
+
+    // Keep curriculum manifest in sync with assignments.
+    exportCurriculumManifest();
+    return true;
 }
 
 // ─── Structured output I/O ──────────────────────────────
@@ -679,13 +683,14 @@ bool DatasetTarget::removeConceptBlock(const std::string& cb_id) {
                          static_cast<ptrdiff_t>(it->second));
     rebuildCBIndex();
 
-    if (assignedCBSet_.count(cb_id)) {
-        assignedCBSet_.erase(cb_id);
-        assignedCBOrder_.erase(
-            std::remove(assignedCBOrder_.begin(), assignedCBOrder_.end(), cb_id),
-            assignedCBOrder_.end());
-        saveAssignments();
+    // Remove from any curriculum that contains this block.
+    bool currChanged = false;
+    for (auto& curr : curriculums_) {
+        if (curr.removeBlock(cb_id))
+            currChanged = true;
     }
+    if (currChanged) saveCurriculumRegistry();
+
     return saveConceptBlocks();
 }
 
@@ -760,33 +765,246 @@ std::vector<size_t> DatasetTarget::filterConceptBlocks(
     return results;
 }
 
-// ─── ConceptBlock model assignment ──────────────────────
+// ─── Curriculum registry ─────────────────────────────────
 
-bool DatasetTarget::assignConceptBlockToModel(const std::string& cb_id) {
-    if (cb_id.empty() || activeModelId_.empty()) return false;
-    if (assignedCBSet_.count(cb_id)) return true;
-    assignedCBOrder_.push_back(cb_id);
-    assignedCBSet_.insert(cb_id);
+fs::path DatasetTarget::curriculumRegistryPath() const {
+    return massDatasetPath_.parent_path() / "curriculum_registry.json";
+}
+
+void DatasetTarget::rebuildCurrIndex() {
+    currIdIndex_.clear();
+    for (size_t i = 0; i < curriculums_.size(); ++i)
+        currIdIndex_[curriculums_[i].id] = i;
+}
+
+bool DatasetTarget::loadCurriculumRegistry() {
+    curriculums_.clear();
+    currIdIndex_.clear();
+    fs::path path = curriculumRegistryPath();
+    if (!fs::exists(path)) return true;
+
+    try {
+        std::ifstream file(path);
+        if (!file.is_open()) return false;
+        json j = json::parse(file);
+        if (j.contains("curriculums") && j["curriculums"].is_array()) {
+            for (const auto& cj : j["curriculums"]) {
+                GRIM::Curriculum curr;
+                curr.id        = cj.value("id", std::string());
+                curr.name      = cj.value("name", std::string());
+                curr.timestamp = cj.value("timestamp", int64_t(0));
+                if (cj.contains("concept_block_ids") && cj["concept_block_ids"].is_array()) {
+                    for (const auto& bid : cj["concept_block_ids"]) {
+                        if (bid.is_string())
+                            curr.concept_block_ids.push_back(bid.get<std::string>());
+                    }
+                }
+                if (!curr.id.empty())
+                    curriculums_.push_back(std::move(curr));
+            }
+        }
+        rebuildCurrIndex();
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "[DatasetTarget] Error loading curriculum registry: " << e.what() << "\n";
+        return false;
+    }
+}
+
+bool DatasetTarget::saveCurriculumRegistry() const {
+    fs::path path = curriculumRegistryPath();
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+
+    json j;
+    j["curriculums"] = json::array();
+    for (const auto& curr : curriculums_) {
+        json cj;
+        cj["id"]                = curr.id;
+        cj["name"]              = curr.name;
+        cj["timestamp"]         = curr.timestamp;
+        cj["concept_block_ids"] = curr.concept_block_ids;
+        j["curriculums"].push_back(std::move(cj));
+    }
+
+    fs::path tmpPath = path;
+    tmpPath += ".tmp";
+    {
+        std::ofstream out(tmpPath, std::ios::trunc);
+        if (!out.is_open()) return false;
+        out << j.dump(2) << "\n";
+        if (!out.good()) return false;
+    }
+    fs::rename(tmpPath, path, ec);
+    return !ec;
+}
+
+size_t DatasetTarget::curriculumCount() const {
+    return curriculums_.size();
+}
+
+const std::vector<GRIM::Curriculum>& DatasetTarget::getCurriculums() const {
+    return curriculums_;
+}
+
+GRIM::Curriculum DatasetTarget::getCurriculum(size_t index) const {
+    if (index >= curriculums_.size()) return {};
+    return curriculums_[index];
+}
+
+GRIM::Curriculum DatasetTarget::getCurriculumById(const std::string& curr_id) const {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end()) return {};
+    return curriculums_[it->second];
+}
+
+size_t DatasetTarget::getCurriculumIndexById(const std::string& curr_id) const {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end()) return SIZE_MAX;
+    return it->second;
+}
+
+bool DatasetTarget::addCurriculum(const GRIM::Curriculum& curr) {
+    if (curr.id.empty()) return false;
+    if (currIdIndex_.count(curr.id)) return false;
+    curriculums_.push_back(curr);
+    currIdIndex_[curr.id] = curriculums_.size() - 1;
+    return saveCurriculumRegistry();
+}
+
+bool DatasetTarget::updateCurriculum(const std::string& curr_id,
+                                     const GRIM::Curriculum& curr) {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end()) return false;
+    curriculums_[it->second] = curr;
+    curriculums_[it->second].id = curr_id;
+    return saveCurriculumRegistry();
+}
+
+bool DatasetTarget::removeCurriculum(const std::string& curr_id) {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end()) return false;
+    curriculums_.erase(curriculums_.begin() +
+                       static_cast<ptrdiff_t>(it->second));
+    rebuildCurrIndex();
+
+    // Also remove from model assignment if assigned.
+    if (assignedCurrSet_.count(curr_id)) {
+        assignedCurrSet_.erase(curr_id);
+        assignedCurrOrder_.erase(
+            std::remove(assignedCurrOrder_.begin(), assignedCurrOrder_.end(), curr_id),
+            assignedCurrOrder_.end());
+        saveAssignments();
+    }
+    return saveCurriculumRegistry();
+}
+
+// ─── Concept block ↔ curriculum assignment ───────────────
+
+bool DatasetTarget::addConceptBlockToCurriculum(const std::string& cb_id,
+                                                const std::string& curr_id) {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end()) return false;
+    if (!curriculums_[it->second].addBlock(cb_id)) return false;
+    return saveCurriculumRegistry();
+}
+
+bool DatasetTarget::removeConceptBlockFromCurriculum(const std::string& cb_id,
+                                                     const std::string& curr_id) {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end()) return false;
+    if (!curriculums_[it->second].removeBlock(cb_id)) return false;
+    return saveCurriculumRegistry();
+}
+
+bool DatasetTarget::isConceptBlockInCurriculum(const std::string& cb_id,
+                                               const std::string& curr_id) const {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end()) return false;
+    return curriculums_[it->second].containsBlock(cb_id);
+}
+
+size_t DatasetTarget::conceptBlockCountInCurriculum(const std::string& curr_id) const {
+    auto it = currIdIndex_.find(curr_id);
+    if (it == currIdIndex_.end()) return 0;
+    return curriculums_[it->second].concept_block_ids.size();
+}
+
+// ─── Curriculum ↔ model assignment ───────────────────────
+
+bool DatasetTarget::assignCurriculumToModel(const std::string& curr_id) {
+    if (curr_id.empty() || activeModelId_.empty()) return false;
+    if (assignedCurrSet_.count(curr_id)) return true;
+    assignedCurrOrder_.push_back(curr_id);
+    assignedCurrSet_.insert(curr_id);
     return saveAssignments();
 }
 
-bool DatasetTarget::removeConceptBlockFromModel(const std::string& cb_id) {
-    if (!assignedCBSet_.count(cb_id)) return false;
-    assignedCBSet_.erase(cb_id);
-    assignedCBOrder_.erase(
-        std::remove(assignedCBOrder_.begin(), assignedCBOrder_.end(), cb_id),
-        assignedCBOrder_.end());
+bool DatasetTarget::removeCurriculumFromModel(const std::string& curr_id) {
+    if (!assignedCurrSet_.count(curr_id)) return false;
+    assignedCurrSet_.erase(curr_id);
+    assignedCurrOrder_.erase(
+        std::remove(assignedCurrOrder_.begin(), assignedCurrOrder_.end(), curr_id),
+        assignedCurrOrder_.end());
     return saveAssignments();
 }
 
-bool DatasetTarget::isConceptBlockAssigned(const std::string& cb_id) const {
-    return assignedCBSet_.count(cb_id) > 0;
+bool DatasetTarget::isCurriculumAssigned(const std::string& curr_id) const {
+    return assignedCurrSet_.count(curr_id) > 0;
 }
 
-size_t DatasetTarget::assignedConceptBlockCount() const {
-    return assignedCBOrder_.size();
+size_t DatasetTarget::assignedCurriculumCount() const {
+    return assignedCurrOrder_.size();
 }
 
-const std::vector<std::string>& DatasetTarget::assignedConceptBlockOrder() const {
-    return assignedCBOrder_;
+const std::vector<std::string>& DatasetTarget::assignedCurriculumOrder() const {
+    return assignedCurrOrder_;
+}
+
+// ─── Curriculum manifest export ──────────────────────────
+
+bool DatasetTarget::exportCurriculumManifest() const {
+    // Collect the union of concept_block_ids from all assigned curricula.
+    std::set<std::string> id_set;
+    for (const auto& curr_id : assignedCurrOrder_) {
+        auto it = currIdIndex_.find(curr_id);
+        if (it == currIdIndex_.end()) continue;
+        const auto& curr = curriculums_[it->second];
+        for (const auto& cb_id : curr.concept_block_ids) {
+            id_set.insert(cb_id);
+        }
+    }
+
+    fs::path manifest_path = massDatasetPath_.parent_path() / "curriculum_manifest.json";
+
+    // If no curricula are assigned, remove the manifest so the DataLoader
+    // falls back to loading all concept blocks.
+    if (assignedCurrOrder_.empty()) {
+        std::error_code ec;
+        fs::remove(manifest_path, ec);
+        return true;
+    }
+
+    json j;
+    j["model_id"] = activeModelId_;
+    j["curriculum_ids"] = json::array();
+    for (const auto& curr_id : assignedCurrOrder_) {
+        j["curriculum_ids"].push_back(curr_id);
+    }
+    j["concept_block_ids"] = json::array();
+    for (const auto& cb_id : id_set) {
+        j["concept_block_ids"].push_back(cb_id);
+    }
+
+    fs::path tmpPath = manifest_path;
+    tmpPath += ".tmp";
+    {
+        std::ofstream out(tmpPath, std::ios::trunc);
+        if (!out.is_open()) return false;
+        out << j.dump(2) << "\n";
+        if (!out.good()) return false;
+    }
+    std::error_code ec;
+    fs::rename(tmpPath, manifest_path, ec);
+    return !ec;
 }

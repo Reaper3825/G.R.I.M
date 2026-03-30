@@ -225,18 +225,20 @@ UIDataHubPanel::UIDataHubPanel()
         addToDownloadQueue(hfPreviewDatasetId_, hfPreviewDisplayName_);
     });
 
-    btnProcessQueue_ = std::make_shared<UIButton>("Process Queue", [this]() {
+    queueActionMenu_ = std::make_shared<UIActionMenu>("Queue");
+    queueActionMenu_->addItem("Process Queue", [this]() {
         processDownloadQueue();
     });
-    btnClearQueue_ = std::make_shared<UIButton>("Clear Queue", [this]() {
+    queueActionMenu_->addSeparator();
+    queueActionMenu_->addItem("Clear Queue", [this]() {
         clearDownloadQueue();
-    });
+    }, UITheme::Colors::Danger);
 
     hfWidgets_ = {
         hfSearchInput_, btnSearchHF_, btnBrowseHF_, hfCategoryDropdown_,
         hfTokenInput_, hfResultsScrollBox_, sliderMaxHFResults_,
         hfPreviewArea_, btnHFQueuePreview_,
-        btnProcessQueue_, btnClearQueue_
+        queueActionMenu_
     };
 
     // ── Structurer tab widgets ──────────────────────────
@@ -278,7 +280,8 @@ UIDataHubPanel::UIDataHubPanel()
     structuredTextArea_ = std::make_shared<UITextArea>("Structured Output", "",
         [](const std::string&) {});
 
-    btnStructure_ = std::make_shared<UIButton>("Structure", [this]() {
+    structureActionMenu_ = std::make_shared<UIActionMenu>("Structure");
+    structureActionMenu_->addItem("Structure", [this]() {
         if (!structurer_ || !rawTextArea_) return;
         std::string raw = rawTextArea_->getText();
         if (raw.empty()) { addLog("No raw text to structure", 1); return; }
@@ -295,8 +298,7 @@ UIDataHubPanel::UIDataHubPanel()
         if (structuredTextArea_) structuredTextArea_->setText(combined);
         addLog("Structured into " + std::to_string(results.size()) + " pair(s)", 0);
     });
-
-    btnStructureAll_ = std::make_shared<UIButton>("Structure All", [this]() {
+    structureActionMenu_->addItem("Structure All", [this]() {
         if (!structurer_ || !datasetTarget_) return;
         addLog("Structure All — running in background...", 0);
         std::thread([this]() {
@@ -334,7 +336,8 @@ UIDataHubPanel::UIDataHubPanel()
         }).detach();
     });
 
-    btnSave_ = std::make_shared<UIButton>("Save", [this]() {
+    datasetActionMenu_ = std::make_shared<UIActionMenu>("Data");
+    datasetActionMenu_->addItem("Save", [this]() {
         if (!datasetTarget_ || !structuredTextArea_) return;
         std::string text = structuredTextArea_->getText();
         if (text.empty()) { addLog("Nothing to save", 1); return; }
@@ -359,21 +362,8 @@ UIDataHubPanel::UIDataHubPanel()
             }
         }
     });
-
-    btnPrevSeq_ = std::make_shared<UIButton>("<", [this]() {
-        if (currentSequenceIndex_ > 0) {
-            currentSequenceIndex_--;
-            loadCurrentSequence();
-        }
-    });
-    btnNextSeq_ = std::make_shared<UIButton>(">", [this]() {
-        if (currentSequenceIndex_ + 1 < totalSequences_) {
-            currentSequenceIndex_++;
-            loadCurrentSequence();
-        }
-    });
-
-    btnAssign_ = std::make_shared<UIButton>("Assign", [this]() {
+    datasetActionMenu_->addSeparator();
+    datasetActionMenu_->addItem("Assign to Model", [this]() {
         if (!datasetTarget_) return;
         if (datasetTarget_->activeModelId().empty()) {
             addLog("Select a model first", 1); return;
@@ -385,14 +375,26 @@ UIDataHubPanel::UIDataHubPanel()
             addLog("Failed to assign sequence", 2);
         }
     });
-
-    btnRemoveAssign_ = std::make_shared<UIButton>("Remove", [this]() {
+    datasetActionMenu_->addItem("Remove Assignment", [this]() {
         if (!datasetTarget_) return;
         if (datasetTarget_->removeSequenceFromModel(currentSequenceIndex_)) {
             assignedSequences_ = datasetTarget_->assignedCount();
             addLog("Removed assignment from " + datasetTarget_->activeModelName(), 0);
         } else {
             addLog("Failed to remove assignment", 2);
+        }
+    }, UITheme::Colors::Danger);
+
+    btnPrevSeq_ = std::make_shared<UIButton>("<", [this]() {
+        if (currentSequenceIndex_ > 0) {
+            currentSequenceIndex_--;
+            loadCurrentSequence();
+        }
+    });
+    btnNextSeq_ = std::make_shared<UIButton>(">", [this]() {
+        if (currentSequenceIndex_ + 1 < totalSequences_) {
+            currentSequenceIndex_++;
+            loadCurrentSequence();
         }
     });
 
@@ -495,7 +497,15 @@ UIDataHubPanel::UIDataHubPanel()
         addLog("Assigned " + std::to_string(seqIndices.size()) + " sequence(s)", 0);
     });
 
-    btnRemoveSelected_ = std::make_shared<UIButton>("<< Remove", [this]() {
+    currListActionMenu_ = std::make_shared<UIActionMenu>("Actions");
+    currListActionMenu_->addItem("+ Phase", [this]() {
+        if (!datasetTarget_) return;
+        size_t pos = (selectedCurrRow_ >= 0) ? static_cast<size_t>(selectedCurrRow_) : datasetTarget_->assignedCount();
+        datasetTarget_->insertPhaseMarker(pos, "New Phase");
+        addLog("Added phase marker", 0);
+    });
+    currListActionMenu_->addSeparator();
+    currListActionMenu_->addItem("<< Remove", [this]() {
         if (!datasetTarget_ || selectedCurrRow_ < 0) return;
         size_t ci = static_cast<size_t>(selectedCurrRow_);
         const auto& order = datasetTarget_->curriculumOrder();
@@ -506,14 +516,7 @@ UIDataHubPanel::UIDataHubPanel()
         poolFilterDirty_ = true;
         rebuildFilteredPool();
         addLog("Removed sequence from curriculum", 0);
-    });
-
-    btnAddPhase_ = std::make_shared<UIButton>("+ Phase", [this]() {
-        if (!datasetTarget_) return;
-        size_t pos = (selectedCurrRow_ >= 0) ? static_cast<size_t>(selectedCurrRow_) : datasetTarget_->assignedCount();
-        datasetTarget_->insertPhaseMarker(pos, "New Phase");
-        addLog("Added phase marker", 0);
-    });
+    }, UITheme::Colors::Danger);
 
     detailContentArea_ = std::make_shared<UITextArea>("Content", "",
         [](const std::string&) {});
@@ -535,11 +538,11 @@ UIDataHubPanel::UIDataHubPanel()
         modelDropdown_, formatDropdown_, viewModeDropdown_,
         structSearchInput_, searchPreviewScrollBox_,
         rawTextArea_, structuredTextArea_, customPromptArea_,
-        btnStructure_, btnStructureAll_, btnSave_, btnGenerate_,
-        btnPrevSeq_, btnNextSeq_, btnAssign_, btnRemoveAssign_,
+        structureActionMenu_, datasetActionMenu_, btnGenerate_,
+        btnPrevSeq_, btnNextSeq_,
         sliderMaxEntries_, sliderParallel_, btnAddSequence_, btnAppendEntry_,
         subjectFilterDropdown_, qualityFilterDropdown_, poolSearchInput_,
-        btnAssignSelected_, btnRemoveSelected_, btnAddPhase_,
+        btnAssignSelected_, currListActionMenu_,
         detailContentArea_, detailStructuredArea_, btnDetailSave_
     };
 
@@ -548,6 +551,12 @@ UIDataHubPanel::UIDataHubPanel()
     cbModelDropdown_ = std::make_shared<UIDropdown>(
         "Model", std::vector<std::string>{"(none)"}, 0,
         [this](int, const std::string&) {});
+
+    cbCurriculumDropdown_ = std::make_shared<UIDropdown>(
+        "Curriculum", std::vector<std::string>{"(none)"}, 0,
+        [this](int idx, const std::string&) {
+            selectActiveCurriculum(idx);
+        });
 
     cbFormatDropdown_ = std::make_shared<UIDropdown>(
         "Format", GRIM::presetLabels(), 1,
@@ -634,19 +643,20 @@ UIDataHubPanel::UIDataHubPanel()
         generateConceptBlock();
     });
 
-    btnCBAddStep_ = std::make_shared<UIButton>("+ Step", [this]() {
+    stepActionMenu_ = std::make_shared<UIActionMenu>("Steps");
+    stepActionMenu_->addItem("+ Step", [this]() {
         auto area = std::make_shared<UITextArea>(
             "Step " + std::to_string(cbIntermediateAreas_.size() + 1), "",
             [](const std::string&) {});
         cbIntermediateAreas_.push_back(area);
-    });
-
-    btnCBRemoveStep_ = std::make_shared<UIButton>("- Step", [this]() {
+    }, UITheme::Colors::Success);
+    stepActionMenu_->addItem("- Step", [this]() {
         if (!cbIntermediateAreas_.empty())
             cbIntermediateAreas_.pop_back();
-    });
+    }, UITheme::Colors::Danger);
 
-    btnCBNew_ = std::make_shared<UIButton>("New Block", [this]() {
+    blockActionMenu_ = std::make_shared<UIActionMenu>("Block");
+    blockActionMenu_->addItem("New Block", [this]() {
         clearCBEditor();
         cbDraftPreviewActive_ = true;
         selectedCBRow_        = 0;
@@ -655,9 +665,8 @@ UIDataHubPanel::UIDataHubPanel()
         if (presetIdx >= 0 && presetIdx < GRIM::kConceptPresetCount)
             syncIntermediateAreas(GRIM::kConceptPresets[presetIdx].defaultIntermediateCount);
         syncCBListTypeDropdownFromToolbar();
-    });
-
-    btnCBSave_ = std::make_shared<UIButton>("Save", [this]() {
+    }, UITheme::Colors::Success);
+    blockActionMenu_->addItem("Save", [this]() {
         if (!datasetTarget_) return;
         std::string name = cbNameInput_ ? cbNameInput_->getText() : "";
         std::string question = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
@@ -728,8 +737,8 @@ UIDataHubPanel::UIDataHubPanel()
         }
         refreshCurriculumTabState();
     });
-
-    btnCBDelete_ = std::make_shared<UIButton>("Delete", [this]() {
+    blockActionMenu_->addSeparator();
+    blockActionMenu_->addItem("Delete", [this]() {
         if (cbCurriculumRowIsDraft(selectedCBRow_)) {
             cbDraftPreviewActive_ = false;
             selectedCBRow_        = -1;
@@ -748,11 +757,18 @@ UIDataHubPanel::UIDataHubPanel()
             cbFilterDirty_ = true;
             refreshCurriculumTabState();
         }
-    });
+    }, UITheme::Colors::Danger);
 
-    btnCBAssign_ = std::make_shared<UIButton>("Assign", [this]() {
+    // ── Curriculum action menus ────────────────────────
+
+    blockCurriculumMenu_ = std::make_shared<UIActionMenu>("Curriculum");
+    blockCurriculumMenu_->addItem("Add to Curriculum", [this]() {
+        if (activeCurriculumId_.empty()) {
+            addLog("Select a curriculum first", 1);
+            return;
+        }
         if (cbCurriculumRowIsDraft(selectedCBRow_)) {
-            addLog("Save the block before assigning it to the model", 1);
+            addLog("Save the block before adding to curriculum", 1);
             return;
         }
         if (!datasetTarget_ || selectedCBRow_ < 0) return;
@@ -760,32 +776,88 @@ UIDataHubPanel::UIDataHubPanel()
         if (!cbCurriculumRowToBlockIndex(selectedCBRow_, idx))
             return;
         auto cb = datasetTarget_->getConceptBlock(idx);
-        if (datasetTarget_->assignConceptBlockToModel(cb.id)) {
-            addLog("Assigned: " + cb.name, 0);
+        if (datasetTarget_->addConceptBlockToCurriculum(cb.id, activeCurriculumId_)) {
+            addLog("Added to curriculum: " + cb.name, 0);
             refreshCurriculumTabState();
         }
     });
-
-    btnCBRemoveAssign_ = std::make_shared<UIButton>("Unassign", [this]() {
+    blockCurriculumMenu_->addItem("Remove from Curriculum", [this]() {
+        if (activeCurriculumId_.empty()) return;
         if (cbCurriculumRowIsDraft(selectedCBRow_)) return;
         if (!datasetTarget_ || selectedCBRow_ < 0) return;
         size_t idx = 0;
         if (!cbCurriculumRowToBlockIndex(selectedCBRow_, idx))
             return;
         auto cb = datasetTarget_->getConceptBlock(idx);
-        if (datasetTarget_->removeConceptBlockFromModel(cb.id)) {
-            addLog("Unassigned: " + cb.name, 0);
+        if (datasetTarget_->removeConceptBlockFromCurriculum(cb.id, activeCurriculumId_)) {
+            addLog("Removed from curriculum: " + cb.name, 0);
             refreshCurriculumTabState();
+        }
+    }, UITheme::Colors::Danger);
+
+    curriculumActionMenu_ = std::make_shared<UIActionMenu>("Manage");
+    curriculumActionMenu_->addItem("New Curriculum", [this]() {
+        if (!datasetTarget_) return;
+        GRIM::Curriculum curr;
+        curr.name = "Untitled Curriculum";
+        curr.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::string seed = curr.name + std::to_string(curr.timestamp)
+                         + std::to_string(datasetTarget_->curriculumCount());
+        uint64_t h = 14695981039346656037ULL;
+        for (auto c : seed) { h ^= static_cast<uint8_t>(c); h *= 1099511628211ULL; }
+        std::ostringstream oss;
+        oss << std::hex << std::setfill('0') << std::setw(16) << h;
+        curr.id = "curr_" + oss.str();
+
+        if (datasetTarget_->addCurriculum(curr)) {
+            addLog("Created curriculum: " + curr.name, 0);
+            activeCurriculumId_ = curr.id;
+            populateCBCurriculumDropdown();
+            refreshCurriculumTabState();
+        }
+    }, UITheme::Colors::Success);
+    curriculumActionMenu_->addSeparator();
+    curriculumActionMenu_->addItem("Delete Curriculum", [this]() {
+        if (activeCurriculumId_.empty() || !datasetTarget_) return;
+        auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        if (datasetTarget_->removeCurriculum(activeCurriculumId_)) {
+            addLog("Deleted curriculum: " + curr.name, 0);
+            activeCurriculumId_.clear();
+            populateCBCurriculumDropdown();
+            refreshCurriculumTabState();
+        }
+    }, UITheme::Colors::Danger);
+    curriculumActionMenu_->addSeparator();
+    curriculumActionMenu_->addItem("Assign to Model", [this]() {
+        if (activeCurriculumId_.empty()) {
+            addLog("Select a curriculum first", 1);
+            return;
+        }
+        if (!datasetTarget_ || datasetTarget_->activeModelId().empty()) {
+            addLog("Select a model first", 1);
+            return;
+        }
+        if (datasetTarget_->isCurriculumAssigned(activeCurriculumId_)) {
+            if (datasetTarget_->removeCurriculumFromModel(activeCurriculumId_)) {
+                addLog("Unassigned curriculum from model", 0);
+                refreshCurriculumTabState();
+            }
+        } else {
+            if (datasetTarget_->assignCurriculumToModel(activeCurriculumId_)) {
+                auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+                addLog("Assigned curriculum to model: " + curr.name, 0);
+                refreshCurriculumTabState();
+            }
         }
     });
 
     curriculumWidgets_ = {
-        cbModelDropdown_, cbFormatDropdown_, cbListTypeDropdown_,
-        cbTypeFilterDropdown_, cbSearchInput_,
+        cbModelDropdown_, cbCurriculumDropdown_, cbFormatDropdown_,
+        cbListTypeDropdown_, cbTypeFilterDropdown_, cbSearchInput_,
         cbNameInput_, cbQuestionArea_, cbAnswerArea_, cbCustomPromptArea_,
-        btnCBGenerate_, btnCBAddStep_, btnCBRemoveStep_,
-        btnCBNew_, btnCBSave_, btnCBDelete_,
-        btnCBAssign_, btnCBRemoveAssign_
+        btnCBGenerate_, stepActionMenu_, blockActionMenu_,
+        curriculumActionMenu_, blockCurriculumMenu_
     };
 
     // ── Hide non-active groups ──────────────────────────
@@ -843,6 +915,7 @@ UIDataHubPanel::UIDataHubPanel()
     refreshStructurerState();
 
     if (datasetTarget_) datasetTarget_->loadConceptBlocks();
+    if (datasetTarget_) datasetTarget_->loadCurriculumRegistry();
 
     addLog("DataHub initialized", 0);
     LOG_DEBUG("DataHub", "Panel initialized — 5 tabs ready");
@@ -1008,8 +1081,7 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             sliderMaxHFResults_->update(input, dt);
             if (hfPreviewArea_) hfPreviewArea_->update(input, dt);
             btnHFQueuePreview_->update(input, dt);
-            btnProcessQueue_->update(input, dt);
-            btnClearQueue_->update(input, dt);
+            queueActionMenu_->update(input, dt);
             break;
 
         case DataHubView::Structurer:
@@ -1052,8 +1124,7 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                 if (qualityFilterDropdown_) qualityFilterDropdown_->update(input, dt);
                 if (poolSearchInput_)       poolSearchInput_->update(input, dt);
                 if (btnAssignSelected_)     btnAssignSelected_->update(input, dt);
-                if (btnRemoveSelected_)     btnRemoveSelected_->update(input, dt);
-                if (btnAddPhase_)           btnAddPhase_->update(input, dt);
+                if (currListActionMenu_)    currListActionMenu_->update(input, dt);
                 if (detailPanelOpen_) {
                     if (detailContentArea_)     detailContentArea_->update(input, dt);
                     if (detailStructuredArea_)  detailStructuredArea_->update(input, dt);
@@ -1221,6 +1292,16 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                     cbFormatFilterIdx_ = curTypeIdx;
                     cbFilterDirty_ = true;
                 }
+                // Track curriculum dropdown selection change
+                if (cbCurriculumDropdown_) {
+                    int curCurrIdx = cbCurriculumDropdown_->getSelectedIndex();
+                    const auto& curricula = datasetTarget_ ? datasetTarget_->getCurriculums() : std::vector<GRIM::Curriculum>{};
+                    std::string selectedId;
+                    if (curCurrIdx > 0 && curCurrIdx <= static_cast<int>(curricula.size()))
+                        selectedId = curricula[curCurrIdx - 1].id;
+                    if (selectedId != activeCurriculumId_)
+                        selectActiveCurriculum(curCurrIdx);
+                }
                 if (cbFilterDirty_) rebuildFilteredCBList();
 
                 Vec2 m = input.mousePos;
@@ -1336,6 +1417,24 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         cbListTypeDropdown_->drawExpandedList(renderer, position);
     if (cbTypeFilterDropdown_ && cbTypeFilterDropdown_->isExpanded())
         cbTypeFilterDropdown_->drawExpandedList(renderer, position);
+    if (cbCurriculumDropdown_ && cbCurriculumDropdown_->isExpanded())
+        cbCurriculumDropdown_->drawExpandedList(renderer, position);
+    if (curriculumActionMenu_ && curriculumActionMenu_->isExpanded())
+        curriculumActionMenu_->drawExpandedList(renderer, position);
+    if (blockCurriculumMenu_ && blockCurriculumMenu_->isExpanded())
+        blockCurriculumMenu_->drawExpandedList(renderer, position);
+    if (structureActionMenu_ && structureActionMenu_->isExpanded())
+        structureActionMenu_->drawExpandedList(renderer, position);
+    if (datasetActionMenu_ && datasetActionMenu_->isExpanded())
+        datasetActionMenu_->drawExpandedList(renderer, position);
+    if (queueActionMenu_ && queueActionMenu_->isExpanded())
+        queueActionMenu_->drawExpandedList(renderer, position);
+    if (blockActionMenu_ && blockActionMenu_->isExpanded())
+        blockActionMenu_->drawExpandedList(renderer, position);
+    if (stepActionMenu_ && stepActionMenu_->isExpanded())
+        stepActionMenu_->drawExpandedList(renderer, position);
+    if (currListActionMenu_ && currListActionMenu_->isExpanded())
+        currListActionMenu_->drawExpandedList(renderer, position);
 
     renderer.popClipRect();
     return true;
@@ -1941,18 +2040,15 @@ void UIDataHubPanel::drawQueueSection(OverlayRenderer& renderer,
     }
     y += 10.0f;
 
-    // Queue control buttons
-    float qBtnW = 140.0f;
+    // Queue control menu
+    float qBtnW = 120.0f;
     float qBtnH = UITheme::Sizes::ButtonHeight;
 
-    btnProcessQueue_->setText(queueProcessing_.load() ? "Processing..." : "Process Queue");
-    btnProcessQueue_->setPosition(x, y);
-    btnProcessQueue_->setSize(qBtnW, qBtnH);
-    btnProcessQueue_->drawOverlay(renderer, position);
-
-    btnClearQueue_->setPosition(x + qBtnW + 10.0f, y);
-    btnClearQueue_->setSize(qBtnW, qBtnH);
-    btnClearQueue_->drawOverlay(renderer, position);
+    queueActionMenu_->setItemLabel(0, queueProcessing_.load() ? "Processing..." : "Process Queue");
+    queueActionMenu_->setTitle(queueProcessing_.load() ? "Processing..." : "Queue");
+    queueActionMenu_->setPosition(x, y);
+    queueActionMenu_->setSize(qBtnW, qBtnH);
+    queueActionMenu_->drawOverlay(renderer, position);
 
     y += qBtnH + 10.0f;
 }
@@ -1994,16 +2090,12 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
     viewModeDropdown_->drawOverlay(renderer, position);
 
     float rightX = x + fullW;
-    float structW = 100.0f, structAllW = 110.0f, saveW = 100.0f, assignW = 80.0f, removeW = 80.0f;
+    float menuW = 110.0f;
     float btnGap = 8.0f;
 
-    btnStructureAll_->setPosition(rightX - structAllW, y);
-    btnStructureAll_->setSize(structAllW, rowH);
-    btnStructureAll_->drawOverlay(renderer, position);
-
-    btnStructure_->setPosition(rightX - structAllW - btnGap - structW, y);
-    btnStructure_->setSize(structW, rowH);
-    btnStructure_->drawOverlay(renderer, position);
+    structureActionMenu_->setPosition(rightX - menuW, y);
+    structureActionMenu_->setSize(menuW, 28.0f);
+    structureActionMenu_->drawOverlay(renderer, position);
     y += rowH + kStructRowGap;
 
     // ── Toolbar row 2 ───────────────────────────────────
@@ -2016,17 +2108,9 @@ void UIDataHubPanel::drawStructurerTab(OverlayRenderer& renderer, const PanelRec
     sliderParallel_->setSize(sliderW, rowH);
     sliderParallel_->drawOverlay(renderer, position);
 
-    btnRemoveAssign_->setPosition(rightX - removeW, y);
-    btnRemoveAssign_->setSize(removeW, rowH);
-    btnRemoveAssign_->drawOverlay(renderer, position);
-
-    btnAssign_->setPosition(rightX - removeW - btnGap - assignW, y);
-    btnAssign_->setSize(assignW, rowH);
-    btnAssign_->drawOverlay(renderer, position);
-
-    btnSave_->setPosition(rightX - removeW - btnGap - assignW - btnGap - saveW, y);
-    btnSave_->setSize(saveW, rowH);
-    btnSave_->drawOverlay(renderer, position);
+    datasetActionMenu_->setPosition(rightX - menuW, y);
+    datasetActionMenu_->setSize(menuW, 28.0f);
+    datasetActionMenu_->drawOverlay(renderer, position);
     y += rowH + kStructRowGap;
 
     // ── Search bar (Dataset View) or header (Sequence View) ──
@@ -2441,19 +2525,14 @@ void UIDataHubPanel::drawCurriculumList(OverlayRenderer& renderer,
     renderer.drawRect({x, y}, {w, kPoolHeaderH}, UITheme::Colors::TableHeaderBg);
     renderer.drawText({x + 8.0f, y + 6.0f}, hdr, UITheme::Colors::TextWhite);
 
-    // Transfer buttons inline in header
-    float btnW = 80.0f;
+    // Curriculum list action menu in header
+    float menuW = 100.0f;
     float btnH = 22.0f;
     float btnY = y + 3.0f;
-    if (btnRemoveSelected_) {
-        btnRemoveSelected_->setPosition(x + w - btnW - 8.0f, btnY);
-        btnRemoveSelected_->setSize(btnW, btnH);
-        btnRemoveSelected_->drawOverlay(renderer, position);
-    }
-    if (btnAddPhase_) {
-        btnAddPhase_->setPosition(x + w - 2.0f * btnW - 16.0f, btnY);
-        btnAddPhase_->setSize(btnW, btnH);
-        btnAddPhase_->drawOverlay(renderer, position);
+    if (currListActionMenu_) {
+        currListActionMenu_->setPosition(x + w - menuW - 8.0f, btnY);
+        currListActionMenu_->setSize(menuW, btnH);
+        currListActionMenu_->drawOverlay(renderer, position);
     }
 
     float bodyY = y + kPoolHeaderH;
@@ -3665,11 +3744,15 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     float y     = content.origin.y + 10.0f;
     float fullW = content.size.x - 30.0f;
 
-    // ── Toolbar ──────────────────────────────────────────
-    float ddW   = 200.0f;
-    float gap   = 10.0f;
+    // ── Toolbar row 1: Model + Curriculum + Manage ────────
+    float gap   = 8.0f;
     float rowH  = 36.0f;
-    float btnW  = 90.0f;
+    float btnW  = 80.0f;
+    float menuW = 100.0f;
+
+    // Proportional: two dropdowns share remaining space after menu
+    float ddW = (fullW - menuW - 3.0f * gap) * 0.5f;
+    if (ddW < 220.0f) ddW = 220.0f;
 
     float cx = x;
     cbModelDropdown_->setPosition(cx, y);
@@ -3677,6 +3760,20 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     cbModelDropdown_->drawOverlay(renderer, position);
     cx += ddW + gap;
 
+    cbCurriculumDropdown_->setPosition(cx, y);
+    cbCurriculumDropdown_->setSize(ddW, rowH);
+    cbCurriculumDropdown_->drawOverlay(renderer, position);
+    cx += ddW + gap;
+
+    curriculumActionMenu_->setPosition(cx, y + 4.0f);
+    curriculumActionMenu_->setSize(menuW, rowH - 8.0f);
+    curriculumActionMenu_->drawOverlay(renderer, position);
+
+    y += rowH + 6.0f;
+
+    // ── Toolbar row 2: Format + Generate + Search + Filter ─
+    float filterDdW = 200.0f;
+    cx = x;
     cbFormatDropdown_->setPosition(cx, y);
     cbFormatDropdown_->setSize(ddW, rowH);
     cbFormatDropdown_->drawOverlay(renderer, position);
@@ -3687,9 +3784,6 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     btnCBGenerate_->drawOverlay(renderer, position);
     cx += btnW + gap;
 
-    // Type filter dropdown pinned to the right end of the toolbar.
-    // Must be > 160px wide: UIDropdown hit area is position.x+150 to position.x+size.x-10
-    float filterDdW = 200.0f;
     float filterDdX = x + fullW - filterDdW - 8.0f;
 
     float searchW = filterDdX - cx - gap - 2.0f;
@@ -3798,7 +3892,8 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         }
 
         if (!isDraft && datasetTarget_ && !blockId.empty()
-            && datasetTarget_->isConceptBlockAssigned(blockId))
+            && !activeCurriculumId_.empty()
+            && datasetTarget_->isConceptBlockInCurriculum(blockId, activeCurriculumId_))
             renderer.drawRoundedRect({x + listW - 14.0f, offsetY + 10.0f}, {8.0f, 8.0f},
                                      UITheme::Colors::Success, 4.0f);
 
@@ -3863,15 +3958,11 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
             ey += stepAreaH + 4.0f;
         }
 
-        // Add/Remove step buttons
-        float stepBtnW = 70.0f;
-        btnCBAddStep_->setPosition(editorX + ePad, ey);
-        btnCBAddStep_->setSize(stepBtnW, 24.0f);
-        btnCBAddStep_->drawOverlay(renderer, position);
-
-        btnCBRemoveStep_->setPosition(editorX + ePad + stepBtnW + 6.0f, ey);
-        btnCBRemoveStep_->setSize(stepBtnW, 24.0f);
-        btnCBRemoveStep_->drawOverlay(renderer, position);
+        // Add/Remove step menu
+        float stepMenuW = 80.0f;
+        stepActionMenu_->setPosition(editorX + ePad, ey);
+        stepActionMenu_->setSize(stepMenuW, 24.0f);
+        stepActionMenu_->drawOverlay(renderer, position);
         ey += 30.0f;
     }
 
@@ -3894,32 +3985,20 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     float bBtnW = 90.0f;
     float bBtnH = 28.0f;
 
-    btnCBNew_->setPosition(bx, barY + 4.0f);
-    btnCBNew_->setSize(bBtnW, bBtnH);
-    btnCBNew_->drawOverlay(renderer, position);
-    bx += bBtnW + bGap;
+    float blockMenuW = 90.0f;
+    blockActionMenu_->setPosition(bx, barY + 4.0f);
+    blockActionMenu_->setSize(blockMenuW, bBtnH);
+    blockActionMenu_->drawOverlay(renderer, position);
+    bx += blockMenuW + bGap;
 
-    btnCBDelete_->setPosition(bx, barY + 4.0f);
-    btnCBDelete_->setSize(bBtnW - 20.0f, bBtnH);
-    btnCBDelete_->drawOverlay(renderer, position);
-    bx += bBtnW - 20.0f + bGap;
-
-    btnCBSave_->setPosition(bx, barY + 4.0f);
-    btnCBSave_->setSize(bBtnW - 20.0f, bBtnH);
-    btnCBSave_->drawOverlay(renderer, position);
-    bx += bBtnW - 20.0f + bGap;
-
-    btnCBAssign_->setPosition(bx, barY + 4.0f);
-    btnCBAssign_->setSize(bBtnW, bBtnH);
-    btnCBAssign_->drawOverlay(renderer, position);
-    bx += bBtnW + bGap;
-
-    btnCBRemoveAssign_->setPosition(bx, barY + 4.0f);
-    btnCBRemoveAssign_->setSize(bBtnW, bBtnH);
-    btnCBRemoveAssign_->drawOverlay(renderer, position);
+    float menuW2 = 110.0f;
+    blockCurriculumMenu_->setPosition(bx, barY + 4.0f);
+    blockCurriculumMenu_->setSize(menuW2, bBtnH);
+    blockCurriculumMenu_->drawOverlay(renderer, position);
+    bx += menuW2;
 
     // Custom prompt (right side of action bar)
-    float promptW = fullW - (bx + bBtnW + bGap - x) - 10.0f;
+    float promptW = fullW - (bx + bGap - x) - 10.0f;
     if (promptW > 200.0f) {
         float promptX = bx + bBtnW + bGap + 10.0f;
         cbCustomPromptArea_->setPosition(promptX, barY);
@@ -3933,7 +4012,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
                              UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
     std::string status = "Blocks: " + std::to_string(cbTotalCount_)
                        + "  |  Showing: " + std::to_string(filteredCBIndices_.size())
-                       + "  |  Assigned: " + std::to_string(cbAssignedCount_);
+                       + "  |  In Curriculum: " + std::to_string(cbInCurrCount_);
     if (cbFormatFilterIdx_ > 0 && cbFormatFilterIdx_ <= GRIM::kConceptPresetCount)
         status += std::string("  |  Filter: ") + GRIM::kConceptPresets[cbFormatFilterIdx_ - 1].label;
     if (presetIdx >= 0 && presetIdx < GRIM::kConceptPresetCount)
@@ -3949,7 +4028,14 @@ void UIDataHubPanel::refreshCurriculumTabState() {
     if (!datasetTarget_) return;
     datasetTarget_->loadConceptBlocks();
     cbTotalCount_ = datasetTarget_->conceptBlockCount();
-    cbAssignedCount_ = datasetTarget_->assignedConceptBlockCount();
+    populateCBCurriculumDropdown();
+    // Count blocks in active curriculum
+    if (!activeCurriculumId_.empty()) {
+        auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        cbInCurrCount_ = curr.id.empty() ? 0 : static_cast<int>(curr.concept_block_ids.size());
+    } else {
+        cbInCurrCount_ = 0;
+    }
     cbFilterDirty_ = true;
     rebuildFilteredCBList();
     populateCBModelDropdown();
@@ -4112,8 +4198,46 @@ void UIDataHubPanel::populateCBModelDropdown() {
     if (names.empty()) names.push_back("(none)");
     cbModelDropdown_->setItems(names);
 
-    if (datasetTarget_)
-        cbAssignedCount_ = datasetTarget_->assignedConceptBlockCount();
+    if (datasetTarget_) {
+        // Update curriculum count for active curriculum
+        if (!activeCurriculumId_.empty()) {
+            auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+            cbInCurrCount_ = curr.id.empty() ? 0 : static_cast<int>(curr.concept_block_ids.size());
+        } else {
+            cbInCurrCount_ = 0;
+        }
+    }
+}
+
+// ── Curriculum dropdown helpers ─────────────────────────
+
+void UIDataHubPanel::populateCBCurriculumDropdown() {
+    if (!cbCurriculumDropdown_ || !datasetTarget_) return;
+    const auto& curricula = datasetTarget_->getCurriculums();
+    std::vector<std::string> names;
+    names.push_back("(none)");
+    int selectedIdx = 0;
+    for (size_t i = 0; i < curricula.size(); ++i) {
+        names.push_back(curricula[i].name);
+        if (curricula[i].id == activeCurriculumId_)
+            selectedIdx = static_cast<int>(i) + 1; // +1 for "(none)" entry
+    }
+    cbCurriculumDropdown_->setItems(names);
+    cbCurriculumDropdown_->setSelectedIndex(selectedIdx);
+}
+
+void UIDataHubPanel::selectActiveCurriculum(int dropdownIndex) {
+    if (!datasetTarget_) return;
+    const auto& curricula = datasetTarget_->getCurriculums();
+    if (dropdownIndex <= 0 || dropdownIndex > static_cast<int>(curricula.size())) {
+        activeCurriculumId_.clear();
+        cbInCurrCount_ = 0;
+    } else {
+        const auto& curr = curricula[dropdownIndex - 1]; // -1 for "(none)" entry
+        activeCurriculumId_ = curr.id;
+        cbInCurrCount_ = static_cast<int>(curr.concept_block_ids.size());
+    }
+    cbFilterDirty_ = true;
 }
 
 void UIDataHubPanel::loadHFTokenFromConfig() {

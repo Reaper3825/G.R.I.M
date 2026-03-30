@@ -30,6 +30,7 @@
 #include "ui_slider.hpp"
 #include "ui_textarea.hpp"
 #include "ui_toggle.hpp"
+#include "ui_action_menu.hpp"
 
 #include "DataCollection/pipeline/pipeline_orchestrator.hpp"
 #include "DataCollection/huggingface_webhook.hpp"
@@ -122,8 +123,7 @@ private:
     std::shared_ptr<UISlider>    sliderMaxHFResults_;
     std::shared_ptr<UITextArea>  hfPreviewArea_;
     std::shared_ptr<UIButton>    btnHFQueuePreview_;
-    std::shared_ptr<UIButton>    btnProcessQueue_;
-    std::shared_ptr<UIButton>    btnClearQueue_;
+    std::shared_ptr<UIActionMenu> queueActionMenu_;      // Process / Clear
     std::atomic<bool>            hfResultsNeedsPopulate_{false};
 
     // ═════════════════════════════════════════════════════
@@ -137,13 +137,10 @@ private:
     std::shared_ptr<UIScrollBox> searchPreviewScrollBox_;
     std::shared_ptr<UITextArea>  rawTextArea_;
     std::shared_ptr<UITextArea>  structuredTextArea_;
-    std::shared_ptr<UIButton>    btnStructure_;
-    std::shared_ptr<UIButton>    btnStructureAll_;
-    std::shared_ptr<UIButton>    btnSave_;
+    std::shared_ptr<UIActionMenu> structureActionMenu_;  // Structure / Structure All
+    std::shared_ptr<UIActionMenu> datasetActionMenu_;    // Save / Assign / Remove
     std::shared_ptr<UIButton>    btnPrevSeq_;
     std::shared_ptr<UIButton>    btnNextSeq_;
-    std::shared_ptr<UIButton>    btnAssign_;
-    std::shared_ptr<UIButton>    btnRemoveAssign_;
     std::shared_ptr<UIButton>    btnGenerate_;
     std::shared_ptr<UIButton>    btnAddSequence_;
     std::shared_ptr<UITextArea>  customPromptArea_;
@@ -330,8 +327,7 @@ private:
     std::shared_ptr<UIInputBox> poolSearchInput_;
 
     std::shared_ptr<UIButton>   btnAssignSelected_;
-    std::shared_ptr<UIButton>   btnRemoveSelected_;
-    std::shared_ptr<UIButton>   btnAddPhase_;
+    std::shared_ptr<UIActionMenu> currListActionMenu_;   // + Phase / << Remove
 
     std::shared_ptr<UITextArea> detailContentArea_;
     std::shared_ptr<UITextArea> detailStructuredArea_;
@@ -344,6 +340,7 @@ private:
     // ═════════════════════════════════════════════════════
 
     std::shared_ptr<UIDropdown>  cbModelDropdown_;
+    std::shared_ptr<UIDropdown>  cbCurriculumDropdown_;
     std::shared_ptr<UIDropdown>  cbFormatDropdown_;
     /// Shown in the ConceptBlock list on the selected row (format / type).
     std::shared_ptr<UIDropdown>  cbListTypeDropdown_;
@@ -357,13 +354,10 @@ private:
     std::vector<std::shared_ptr<UITextArea>> cbIntermediateAreas_;
 
     std::shared_ptr<UIButton>    btnCBGenerate_;
-    std::shared_ptr<UIButton>    btnCBAddStep_;
-    std::shared_ptr<UIButton>    btnCBRemoveStep_;
-    std::shared_ptr<UIButton>    btnCBNew_;
-    std::shared_ptr<UIButton>    btnCBSave_;
-    std::shared_ptr<UIButton>    btnCBDelete_;
-    std::shared_ptr<UIButton>    btnCBAssign_;
-    std::shared_ptr<UIButton>    btnCBRemoveAssign_;
+    std::shared_ptr<UIActionMenu> stepActionMenu_;       // + Step / - Step
+    std::shared_ptr<UIActionMenu> blockActionMenu_;      // New / Save / Delete
+    std::shared_ptr<UIActionMenu> curriculumActionMenu_;   // New / Delete / Assign
+    std::shared_ptr<UIActionMenu> blockCurriculumMenu_;     // + Curr / - Curr
 
     // ═════════════════════════════════════════════════════
     //  Curriculum tab state
@@ -377,7 +371,9 @@ private:
     std::string cbFilterSearch_;
     int    cbFormatFilterIdx_    = 0;
     size_t cbTotalCount_         = 0;
-    size_t cbAssignedCount_      = 0;
+    size_t cbInCurrCount_        = 0;
+    /// ID of the currently selected curriculum in the dropdown.
+    std::string activeCurriculumId_;
     /// Unsaved row pinned at list index 0; shows live name / question preview.
     bool   cbDraftPreviewActive_ = false;
 
@@ -461,6 +457,8 @@ private:
     void syncIntermediateAreas(int count);
     void generateConceptBlock();
     void populateCBModelDropdown();
+    void populateCBCurriculumDropdown();
+    void selectActiveCurriculum(int dropdownIndex);
 
     // ═════════════════════════════════════════════════════
     //  Config persistence

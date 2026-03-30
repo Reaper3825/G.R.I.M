@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -111,5 +112,33 @@ inline std::vector<std::string> presetLabels() {
         v.emplace_back(kConceptPresets[i].label);
     return v;
 }
+
+// ── Curriculum — Named group of ConceptBlock IDs ────────
+
+struct Curriculum {
+    std::string              id;
+    std::string              name;
+    std::vector<std::string> concept_block_ids;
+    int64_t                  timestamp = 0;
+
+    bool containsBlock(const std::string& cb_id) const {
+        for (const auto& bid : concept_block_ids)
+            if (bid == cb_id) return true;
+        return false;
+    }
+
+    bool addBlock(const std::string& cb_id) {
+        if (containsBlock(cb_id)) return false;
+        concept_block_ids.push_back(cb_id);
+        return true;
+    }
+
+    bool removeBlock(const std::string& cb_id) {
+        auto it = std::find(concept_block_ids.begin(), concept_block_ids.end(), cb_id);
+        if (it == concept_block_ids.end()) return false;
+        concept_block_ids.erase(it);
+        return true;
+    }
+};
 
 } // namespace GRIM

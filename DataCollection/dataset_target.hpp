@@ -163,13 +163,45 @@ public:
     std::vector<size_t> filterConceptBlocks(const std::string& format_type,
                                             const std::string& search_query = "") const;
 
-    // ── ConceptBlock model assignment ────────────────────
+    // ── Curriculum registry CRUD ────────────────────────
 
-    bool assignConceptBlockToModel(const std::string& cb_id);
-    bool removeConceptBlockFromModel(const std::string& cb_id);
-    bool isConceptBlockAssigned(const std::string& cb_id) const;
-    size_t assignedConceptBlockCount() const;
-    const std::vector<std::string>& assignedConceptBlockOrder() const;
+    bool   loadCurriculumRegistry();
+    bool   saveCurriculumRegistry() const;
+    size_t curriculumCount() const;
+    const std::vector<GRIM::Curriculum>& getCurriculums() const;
+
+    GRIM::Curriculum getCurriculum(size_t index) const;
+    GRIM::Curriculum getCurriculumById(const std::string& curr_id) const;
+    size_t           getCurriculumIndexById(const std::string& curr_id) const;
+
+    bool addCurriculum(const GRIM::Curriculum& curr);
+    bool updateCurriculum(const std::string& curr_id, const GRIM::Curriculum& curr);
+    bool removeCurriculum(const std::string& curr_id);
+
+    // ── Concept block ↔ curriculum assignment ────────────
+
+    bool addConceptBlockToCurriculum(const std::string& cb_id,
+                                     const std::string& curr_id);
+    bool removeConceptBlockFromCurriculum(const std::string& cb_id,
+                                          const std::string& curr_id);
+    bool isConceptBlockInCurriculum(const std::string& cb_id,
+                                    const std::string& curr_id) const;
+    size_t conceptBlockCountInCurriculum(const std::string& curr_id) const;
+
+    // ── Curriculum ↔ model assignment ────────────────────
+
+    bool assignCurriculumToModel(const std::string& curr_id);
+    bool removeCurriculumFromModel(const std::string& curr_id);
+    bool isCurriculumAssigned(const std::string& curr_id) const;
+    size_t assignedCurriculumCount() const;
+    const std::vector<std::string>& assignedCurriculumOrder() const;
+
+    // ── Curriculum manifest export ───────────────────────
+    // Writes curriculum_manifest.json next to concept_blocks.jsonl.
+    // Contains the union of concept_block_ids from all assigned
+    // curricula so the GRIM-text DataLoader can filter at load time.
+
+    bool exportCurriculumManifest() const;
 
 private:
     std::filesystem::path       modelStoreRoot_;
@@ -184,11 +216,17 @@ private:
     // ConceptBlock storage
     std::vector<GRIM::ConceptBlock>                     conceptBlocks_;
     std::unordered_map<std::string, size_t>             cbIdIndex_;
-    std::vector<std::string>                            assignedCBOrder_;
-    std::set<std::string>                               assignedCBSet_;
+
+    // Curriculum registry
+    std::vector<GRIM::Curriculum>                       curriculums_;
+    std::unordered_map<std::string, size_t>             currIdIndex_;
+    std::vector<std::string>                            assignedCurrOrder_;
+    std::set<std::string>                               assignedCurrSet_;
 
     std::filesystem::path configFilePath() const;
     std::filesystem::path conceptBlocksPath() const;
+    std::filesystem::path curriculumRegistryPath() const;
     void rebuildSequenceCache(const std::vector<GRIM::Pipeline::TaggedEntry>& entries);
     void rebuildCBIndex();
+    void rebuildCurrIndex();
 };

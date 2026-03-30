@@ -12,6 +12,7 @@
 #include <memory>
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_set>
 #include <cstdint>
 #include <exception>
 #include <cmath>
@@ -220,6 +221,10 @@ namespace {
 // ─── Concept blocks corpus loading ──────────────────────────────────────────
 //
 // Loads concept_blocks.jsonl and returns parsed JSON objects.
+// If curriculum_manifest.json exists alongside the JSONL, only entries
+// whose "id" appears in the manifest's concept_block_ids are kept.
+// When no manifest is present, all entries are loaded (backward compat).
+//
 // The canonical builder (ConceptExecutionSequenceBuilder) handles all
 // structured execution record building, text rendering, and payload
 // compilation — no __SLOTS__ debug path.
@@ -227,6 +232,34 @@ namespace {
 namespace {
 
 using json = nlohmann::json;
+
+// Load concept_block_ids from curriculum_manifest.json if it exists.
+// Returns an empty set (meaning "no filter / include all") when the
+// manifest is absent.
+std::unordered_set<std::string> loadCurriculumManifest(const fs::path& dir) {
+	std::unordered_set<std::string> ids;
+	fs::path manifest = dir / "curriculum_manifest.json";
+	if (!fs::exists(manifest)) return ids;
+
+	std::ifstream in(manifest);
+	if (!in.is_open()) return ids;
+
+	try {
+		json j = json::parse(in);
+		if (j.contains("concept_block_ids") && j["concept_block_ids"].is_array()) {
+			for (const auto& id : j["concept_block_ids"]) {
+				if (id.is_string())
+					ids.insert(id.get<std::string>());
+			}
+		}
+		std::cout << "[DataLoader] Curriculum manifest: " << ids.size()
+		          << " concept block IDs from " << manifest.string() << std::endl;
+	} catch (const std::exception& e) {
+		std::cerr << "[DataLoader] Failed to parse curriculum_manifest.json: "
+		          << e.what() << "\n";
+	}
+	return ids;
+}
 
 void loadConceptBlocksJson(const fs::path& cache_dir,
                            std::vector<json>& out) {
@@ -237,19 +270,37 @@ void loadConceptBlocksJson(const fs::path& cache_dir,
 		          << " (optional)\n";
 		return;
 	}
+
+	// Load optional curriculum filter.
+	auto filter_ids = loadCurriculumManifest(cache_dir);
+	bool has_filter = !filter_ids.empty();
+
 	std::string line;
-	size_t lines = 0;
+	size_t total = 0;
+	size_t accepted = 0;
 	while (std::getline(in, line)) {
 		if (line.empty()) continue;
 		try {
-			out.push_back(json::parse(line));
-			++lines;
+			auto j = json::parse(line);
+			++total;
+			if (has_filter) {
+				std::string id = j.value("id", std::string());
+				if (filter_ids.find(id) == filter_ids.end()) continue;
+			}
+			out.push_back(std::move(j));
+			++accepted;
 		} catch (const std::exception& e) {
 			std::cerr << "[DataLoader] concept_blocks.jsonl skip line: " << e.what() << "\n";
 		}
 	}
-	std::cout << "[DataLoader] Loaded " << lines << " concept block entries from "
-	          << p.string() << std::endl;
+	if (has_filter) {
+		std::cout << "[DataLoader] Loaded " << accepted << "/" << total
+		          << " concept blocks (filtered by curriculum manifest) from "
+		          << p.string() << std::endl;
+	} else {
+		std::cout << "[DataLoader] Loaded " << accepted
+		          << " concept block entries from " << p.string() << std::endl;
+	}
 }
 
 }  // namespace
