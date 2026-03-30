@@ -1037,7 +1037,10 @@ void maybeRunMicroValidation(
         auto mv_payload = GRIM::Batching::buildBatchPayload(
             dyn_batch, ctx.data.val_views, ctx.config.actual_vocab_size,
             mv_token_layout,
-            mv_max_cached_batch, mv_max_cached_seq);
+            mv_max_cached_batch, mv_max_cached_seq,
+            mv_model_cfg.execution_block_num_slots,
+            mv_model_cfg.execution_block_num_ops,
+            mv_model_cfg.execution_block_num_steps);
         if (mv_payload.batch_size == 0) continue;
         
         float micro_batch_loss = ctx.model->computeLossBatch(mv_payload, /*is_training=*/false);
@@ -1464,7 +1467,10 @@ ValidationResult runValidation(TrainingContext& ctx) {
             auto val_payload = GRIM::Batching::buildBatchPayload(
                 val_batch, ctx.data.val_views, ctx.config.actual_vocab_size,
                 val_token_layout,
-                val_max_cached_batch, val_max_cached_seq);
+                val_max_cached_batch, val_max_cached_seq,
+                val_model_cfg.execution_block_num_slots,
+                val_model_cfg.execution_block_num_ops,
+                val_model_cfg.execution_block_num_steps);
             if (val_payload.batch_size == 0) continue;
             
             float batch_val_loss = ctx.model->computeLossBatch(val_payload, /*is_training=*/false);
@@ -4817,7 +4823,10 @@ EpochResult runEpoch(
         const auto& assignment = schedule.batches[single_batch_overfit ? 0 : batch_idx];
         GRIM::Batching::BatchPayload payload = GRIM::Batching::buildBatchPayload(
             assignment, ctx.data.train_views, ctx.config.actual_vocab_size,
-            token_layout, max_cached_batch, max_cached_seq);
+            token_layout, max_cached_batch, max_cached_seq,
+            model_cfg.execution_block_num_slots,
+            model_cfg.execution_block_num_ops,
+            model_cfg.execution_block_num_steps);
 
         // Log progress periodically (from payload — single source of truth)
         if (batch_idx % 5 == 0) {

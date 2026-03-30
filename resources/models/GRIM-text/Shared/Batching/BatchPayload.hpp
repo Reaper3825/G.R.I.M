@@ -325,6 +325,9 @@ struct BatchPayload {
  * @param vocab_size     Actual vocab size for target validation
  * @param max_cached_batch   GPU cache batch capacity
  * @param max_cached_seq_len GPU cache sequence length capacity
+ * @param execution_num_slots  ExecutionBlock slot count (from config)
+ * @param execution_num_ops    ExecutionBlock op count (from config)
+ * @param execution_num_steps  ExecutionBlock step count (from config)
  * @return Complete BatchPayload ready for downstream consumption
  */
 BatchPayload buildBatchPayload(

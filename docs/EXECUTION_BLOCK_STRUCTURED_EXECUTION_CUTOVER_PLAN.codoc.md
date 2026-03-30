@@ -44,9 +44,9 @@ A qualifying refactor step is not complete unless all three artifacts are update
 
 - **Overall status:** In progress
 - **Active workstream:** Workstream 5 — Phase1 sequence handling rules
-- **Last completed gate:** Workstream 3 — GRMT format cutover
+- **Last completed gate:** Workstream 4 — single shared execution payload validator
 - **Next gate:** Begin Workstream 5 Phase1 BOS/EOS/padding remap for execution-active rows
-- **Current implementation posture:** Workstream 3 GRMT v11 format serializes the full compiled structured-execution payload (`execution_payload_active`, `compiled_bootstrap_bindings`, `teacher_steps`, `slot_selection_targets`) alongside `token_exec_slots`; GRMT v10 is rejected unconditionally; auto-rebuild triggers on version mismatch; loader populates `TrainingSequence` execution metadata directly from GRMT without fabrication
+- **Current implementation posture:** Workstream 4 completed: single shared `validateExecutionPayload()` is called from `buildBatchPayload()`, `computeLossBatch()`, and `autogradTrainingStep()`; duplicate inline `<NUM>` slot validation and teacher-step range validation deleted from `ComputeLossBatch.cu`; validator enforces row-level and batch-level invariants including bootstrap binding injectivity, R↔compiled_bootstrap_bindings consistency, D_row reconstruction, teacher-step range checks, and selector supervision target validation; `buildBatchPayload()` signature extended with execution config params
 
 ## Workstream-specific update contract
 
@@ -114,14 +114,33 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ### Workstream 4 — single shared execution payload validator
 
 **Status**
-- Not started
+- Complete
 
-**Each update must record**
-- validator entry points added or removed
-- rules centralized into the shared validator
-- duplicated validation logic deleted from callers
-- exact failure point before GPU work
-- any new row/batch invariants enforced
+**Update log**
+
+1. **Validator created** — `ExecutionPayloadValidation.hpp` (header) and `ExecutionPayloadValidation.cu` (implementation, ~280 lines) in `Shared/Execution/`.
+2. **Validator entry points:**
+   - `buildBatchPayload()` — called after `payload.validate()`, before return. Signature extended with `execution_num_slots`, `execution_num_ops`, `execution_num_steps` params; all 3 Phase2 callers updated.
+   - `computeLossBatch()` — called after `payload.validate()`, before any GPU work. Uses `cfg.execution_block_num_slots/ops/steps`.
+   - `autogradTrainingStep()` — called after `payload.validate()`, before any GPU work. Uses `model.getConfig()` for params.
+3. **Rules centralized into shared validator:**
+   - Batch-level: execution_active / compiled_bootstrap_bindings / teacher_steps / slot_selection_targets dimension checks against batch_size
+   - Non-execution row: teacher_steps empty, bindings empty, all slots == -1
+   - Execution-active row: non-empty bindings, exactly num_steps teacher steps, bootstrap binding injectivity (token_pos + slot_id), teacher step slot/op range checks, D_row reconstruction via `reconstructSlotDomain()`, R↔compiled_bootstrap_bindings mutual consistency, selector supervision target validation (Slot/Null/Ignore), dense selector supervision length == seq_len
+4. **Duplicated validation deleted from callers:**
+   - Deleted from `ComputeLossBatch.cu`: inline `<NUM>` token slot range check loop (~10 lines) and teacher-steps size + per-field range validation loop (~30 lines)
+5. **CMake:** Added `ExecutionPayloadValidation.cu` to both `grim_language_model_gpu_impl` and `execution_block_test` targets
+6. **No new legacy paths.** No backwards compatibility code added.
+
+**Changed files**
+- `Shared/Execution/ExecutionPayloadValidation.hpp` — NEW
+- `Shared/Execution/ExecutionPayloadValidation.cu` — NEW
+- `Shared/Batching/BatchPayload.hpp` — signature extended with execution config params
+- `Shared/Batching/BatchPayload.cu` — include + validator call added, signature extended
+- `Shared/Loss/ComputeLoss/ComputeLossBatch.cu` — include + validator call added, duplicate inline validation deleted
+- `training/Autograd/AutogradTraining.cu` — include + validator call added
+- `training/Phases/Phase2_TrainingLoop.cu` — all 3 buildBatchPayload callers updated with execution config params
+- `training/TrainingLoop/CMakeLists.txt` — new .cu added to both targets
 
 ### Workstream 5 — Phase1 sequence handling rules for execution-active rows
 

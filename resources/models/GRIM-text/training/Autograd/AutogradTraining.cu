@@ -17,6 +17,7 @@
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
+#include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
 
 #include <iostream>
 #include <cmath>
@@ -1736,6 +1737,12 @@ LossResult autogradTrainingStep(
     payload.validate("autogradTrainingStep");
     
     const auto& cfg = model.getConfig();
+
+    // Execution payload validation (WS4: single shared validator)
+    GRIM::Execution::validateExecutionPayload(
+        payload, "autogradTrainingStep",
+        cfg.execution_block_num_slots, cfg.execution_block_num_ops, cfg.execution_block_num_steps);
+
     const int total_tokens = payload.total_tokens;
     
     // Get encoder for autograd forward

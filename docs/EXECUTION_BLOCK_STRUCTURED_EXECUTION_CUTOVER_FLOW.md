@@ -84,9 +84,9 @@ flowchart TD
 
 ## Current artifact status
 
-- **Workstream flow status:** Workstream 3 complete; Workstream 5 next
+- **Workstream flow status:** Workstreams 3–4 complete; Workstream 5 next
 - **Maintenance flow status:** Active immediately
-- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`, WS3 GRMT v11 serializes full compiled execution payload (`execution_payload_active` + `compiled_bootstrap_bindings` + `teacher_steps` + `slot_selection_targets`); GRMT v10 rejected unconditionally; auto-rebuild on version mismatch; loader populates `TrainingSequence` directly from GRMT without fabrication; concept JSON → `ConceptExecutionSequenceBuilder` → `TokenizedSequence` → `save_grmt` → GRMT v11 → `loadGRMTFormat()` → `TrainingSequence` → `TrainingSampleView` → `BatchPayload`; Phase1 remap (WS5) and downstream workstreams still pending
+- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`, WS3 GRMT v11 serializes full compiled execution payload, WS4 single shared `validateExecutionPayload()` called from `buildBatchPayload()` / `computeLossBatch()` / `autogradTrainingStep()` before any GPU work; duplicate inline validation deleted from `ComputeLossBatch.cu`; Phase1 remap (WS5) and downstream workstreams still pending
 
 ## Workstream 0 implementation note
 
@@ -220,6 +220,49 @@ flowchart TD
         TailRecover[assignExecSlotsFromOrder]
         OldRender[conceptJsonToTrainingText]
         OldTeacher[teacherStepsFromConceptJson]
+    end
+
+    style Deleted fill:#fcc,stroke:#c33
+```
+
+## Workstream 4 — single shared execution payload validator
+
+```mermaid
+flowchart TD
+    subgraph Validator[ExecutionPayloadValidation.cu — single validator]
+        VE[validateExecutionPayload]
+        BatchDim[Batch-level dimension checks]
+        NonExec[Non-execution row invariants]
+        ExecActive[Execution-active row invariants]
+        Inject[Bootstrap binding injectivity]
+        DRow[D_row reconstruction via reconstructSlotDomain]
+        RConsist[R ↔ compiled_bootstrap_bindings consistency]
+        TSRange[Teacher-step slot/op range checks]
+        SSTCheck[Selector supervision target validation]
+
+        VE --> BatchDim --> NonExec
+        VE --> BatchDim --> ExecActive
+        ExecActive --> Inject
+        ExecActive --> DRow
+        ExecActive --> RConsist
+        ExecActive --> TSRange
+        ExecActive --> SSTCheck
+    end
+
+    subgraph CallSites[Three required call sites]
+        Build[buildBatchPayload\nafter payload.validate]
+        Loss[computeLossBatch\nafter payload.validate]
+        Autograd[autogradTrainingStep\nafter payload.validate]
+    end
+
+    Build --> VE
+    Loss --> VE
+    Autograd --> VE
+
+    subgraph Deleted[DELETED — WS4]
+        direction LR
+        InlineNUM["inline <NUM> slot check\nin ComputeLossBatch.cu"]
+        InlineTS["inline teacher_steps\nrange validation\nin ComputeLossBatch.cu"]
     end
 
     style Deleted fill:#fcc,stroke:#c33

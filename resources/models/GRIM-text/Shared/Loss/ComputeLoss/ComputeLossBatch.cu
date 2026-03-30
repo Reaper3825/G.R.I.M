@@ -95,6 +95,11 @@ float LanguageModel::computeLossBatch(
 
 	const auto& cfg = getConfig();
 
+	// Execution payload validation (WS4: single shared validator)
+	GRIM::Execution::validateExecutionPayload(
+		payload, "computeLossBatch",
+		cfg.execution_block_num_slots, cfg.execution_block_num_ops, cfg.execution_block_num_steps);
+
 	// Execution dependency: arithmetic batches (identified by teacher_steps) MUST use ExecutionBlock
 	if (!payload.teacher_steps.empty() && !cfg.execution_block_enabled) {
 		throw std::runtime_error(
@@ -111,55 +116,8 @@ float LanguageModel::computeLossBatch(
 			throw std::runtime_error(
 				"computeLossBatch: execution_block_enabled requires ScratchBlock enabled");
 		}
-		const int num_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
-		const int num_slots = cfg.execution_block_num_slots;
-		for (int t = 0; t < payload.total_tokens; ++t) {
-			if (payload.input_ids[static_cast<size_t>(t)] == num_tid
-			    && payload.atom_mask[static_cast<size_t>(t)] != 0) {
-				const int32_t s = payload.token_to_slot_map[static_cast<size_t>(t)];
-				if (s < 0 || s >= num_slots) {
-					throw std::runtime_error(
-						"computeLossBatch: <NUM> at flat index " + std::to_string(t) +
-						" requires token_to_slot_map in [0, " + std::to_string(num_slots) +
-						"), got " + std::to_string(s));
-				}
-			}
-		}
 		// Per-row ExecutionMemory isolation: each batch row gets its own M in
 		// executeAutogradForward (vector<ExecutionMemory>). No shared state across rows.
-
-		// Validate teacher steps if present
-		if (!payload.teacher_steps.empty()) {
-			const int K = cfg.execution_block_num_steps;
-			const int num_slots = cfg.execution_block_num_slots;
-			for (int b = 0; b < payload.batch_size; ++b) {
-				if (static_cast<int>(payload.teacher_steps[b].size()) != K) {
-					throw std::runtime_error(
-						"computeLossBatch: teacher_steps[" + std::to_string(b) + "].size()=" +
-						std::to_string(payload.teacher_steps[b].size()) +
-						" != execution_block_num_steps=" + std::to_string(K));
-				}
-				for (int k = 0; k < K; ++k) {
-					const auto& ts = payload.teacher_steps[b][k];
-					if (ts.op_id < 0 || ts.op_id >= cfg.execution_block_num_ops)
-						throw std::runtime_error(
-							"computeLossBatch: teacher_steps[" + std::to_string(b) + "][" +
-							std::to_string(k) + "].op_id=" + std::to_string(ts.op_id) + " out of range");
-					if (ts.arg1_slot < 0 || ts.arg1_slot >= num_slots)
-						throw std::runtime_error(
-							"computeLossBatch: teacher_steps[" + std::to_string(b) + "][" +
-							std::to_string(k) + "].arg1_slot=" + std::to_string(ts.arg1_slot) + " out of range");
-					if (ts.arg2_slot < 0 || ts.arg2_slot >= num_slots)
-						throw std::runtime_error(
-							"computeLossBatch: teacher_steps[" + std::to_string(b) + "][" +
-							std::to_string(k) + "].arg2_slot=" + std::to_string(ts.arg2_slot) + " out of range");
-					if (ts.write_slot < 0 || ts.write_slot >= num_slots)
-						throw std::runtime_error(
-							"computeLossBatch: teacher_steps[" + std::to_string(b) + "][" +
-							std::to_string(k) + "].write_slot=" + std::to_string(ts.write_slot) + " out of range");
-				}
-			}
-		}
 	}
 
 	GPUGrimEncoder* gpu_encoder = nullptr;
