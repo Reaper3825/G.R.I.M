@@ -5,6 +5,17 @@
 //  Replaces the old __SLOTS__ debug serialization path.
 //  Emits paired token_exec_slots + teacher_steps +
 //  compiled_bootstrap_bindings from a single builder pass.
+//
+//  Provenance model:
+//    renderWithSpans() → RenderedLiteralSpan per bootstrap literal
+//    encodeWithMetadata() → StructuralSpan per detected atom
+//    compileExecutionPayload() → match by content_offset intersection
+//                                 (not document-order claiming)
+//  Runtime proofs:
+//    - Coordinate alignment: atom content bytes == rendered literal bytes
+//    - Render-order: literal_spans monotonic + binding_index == index
+//    - Arg slot identity: canonical via "arg_slots" when available,
+//      value-based + result validation as fallback
 //======================================================//
 
 #include "ConceptExecutionSequenceBuilder.hpp"
@@ -36,13 +47,170 @@ std::string formatNumber(double x) {
     return oss.str();
 }
 
-bool nearEqual(double expected, float got) {
-    const double g = static_cast<double>(got);
-    const double tol = 1e-3 * std::max(1.0, std::fabs(expected));
-    return std::fabs(expected - g) <= tol;
+// Compute an arithmetic operation for result validation.
+double computeOp(int op_id, double a, double b) {
+    switch (op_id) {
+        case 0: return a + b;
+        case 1: return a - b;
+        case 2: return a * b;
+        case 3:
+            if (b == 0.0)
+                throw std::runtime_error("computeOp: division by zero");
+            return a / b;
+        default:
+            throw std::runtime_error("computeOp: unknown op_id " + std::to_string(op_id));
+    }
 }
 
-}  // namespace
+// Tight relative tolerance for result validation.
+// Values originate from the same JSON source so should be nearly identical;
+// the only divergence is from floating-point computation (e.g., division).
+bool resultMatches(double computed, double expected) {
+    if (computed == expected) return true;
+    const double denom = std::max(1.0, std::fabs(expected));
+    return std::fabs(computed - expected) <= 1e-9 * denom;
+}
+
+// ─── compileExecutionPayload ────────────────────────────
+//
+// File-local: only called from buildConceptSequence().
+//
+// Maps bootstrap bindings to token positions via character-offset
+// intersection between RenderedLiteralSpan (from renderer) and
+// StructuralSpan::content_offset (from atom detector).
+//
+// Contract: each rendered literal span must intersect EXACTLY ONE
+// ATOM_NUM token's StructuralSpan. Zero matches or multiple matches
+// are structural violations (throw).
+
+Execution::CompiledStructuredExecutionPayload
+compileExecutionPayload(
+    const Execution::StructuredExecutionRecord& record,
+    const std::vector<RenderedLiteralSpan>& literal_spans,
+    const std::string& rendered_text,
+    const std::vector<int>& token_ids,
+    const std::vector<const Tokenizer::StructuralSpan*>& token_to_span,
+    int seq_len)
+{
+    Execution::CompiledStructuredExecutionPayload payload;
+
+    if (!record.execution_active) {
+        payload.execution_active = false;
+        payload.token_exec_slots.assign(seq_len, -1);
+        return payload;
+    }
+
+    payload.execution_active = true;
+    payload.token_exec_slots.assign(seq_len, -1);
+
+    const int atom_num_token_id = GRIM::Tokenizer::atomTypeToTokenId(
+        GRIM::Tokenizer::AtomType::ATOM_NUM);
+
+    if (literal_spans.size() != record.bootstrap_bindings.size()) {
+        throw std::runtime_error(
+            "compileExecutionPayload: literal_spans.size()=" + std::to_string(literal_spans.size())
+            + " != bootstrap_bindings.size()=" + std::to_string(record.bootstrap_bindings.size()));
+    }
+
+    std::unordered_set<int32_t> claimed_token_positions;
+
+    for (size_t b_idx = 0; b_idx < record.bootstrap_bindings.size(); ++b_idx) {
+        const auto& binding = record.bootstrap_bindings[b_idx];
+        const auto& lit = literal_spans[b_idx];
+
+        // Find the ATOM_NUM token whose StructuralSpan content_offset
+        // falls within this rendered literal span.
+        int matched_pos = -1;
+        int match_count = 0;
+
+        for (int t = 0; t < seq_len; ++t) {
+            if (token_ids[t] != atom_num_token_id) continue;
+            if (!token_to_span[t]) continue;
+
+            const auto* span = token_to_span[t];
+            const size_t atom_start = static_cast<size_t>(span->content_offset);
+            const size_t atom_end   = atom_start + static_cast<size_t>(span->content_length);
+
+            // Exact containment: the atom's content range must fall within
+            // the rendered literal span's byte range.
+            if (atom_start >= lit.byte_start && atom_end <= lit.byte_end) {
+                // ── Coordinate-system alignment proof ──
+                // Verify that the bytes the atom detector found match the bytes
+                // the renderer placed. This proves both coordinate systems refer
+                // to the same string and the offsets are mutually consistent.
+                std::string_view atom_content = span->contentView();
+                std::string_view rendered_literal(
+                    rendered_text.data() + lit.byte_start,
+                    lit.byte_end - lit.byte_start);
+                if (atom_content != rendered_literal) {
+                    throw std::runtime_error(
+                        "compileExecutionPayload: coordinate mismatch at binding "
+                        + std::to_string(b_idx) + ": atom detector content=\""
+                        + std::string(atom_content) + "\" vs rendered literal=\""
+                        + std::string(rendered_literal) + "\" — byte spaces diverged");
+                }
+
+                matched_pos = t;
+                match_count++;
+            }
+        }
+
+        if (match_count == 0) {
+            throw std::runtime_error(
+                "compileExecutionPayload: bootstrap binding " + std::to_string(b_idx)
+                + " (slot_id=" + std::to_string(binding.slot_id)
+                + ") rendered span [" + std::to_string(lit.byte_start)
+                + "," + std::to_string(lit.byte_end)
+                + ") matched zero ATOM_NUM tokens");
+        }
+        if (match_count > 1) {
+            throw std::runtime_error(
+                "compileExecutionPayload: bootstrap binding " + std::to_string(b_idx)
+                + " (slot_id=" + std::to_string(binding.slot_id)
+                + ") rendered span [" + std::to_string(lit.byte_start)
+                + "," + std::to_string(lit.byte_end)
+                + ") matched " + std::to_string(match_count) + " ATOM_NUM tokens (must be exactly 1)");
+        }
+
+        if (!claimed_token_positions.insert(matched_pos).second) {
+            throw std::runtime_error(
+                "compileExecutionPayload: token_pos " + std::to_string(matched_pos)
+                + " claimed by multiple bootstrap bindings");
+        }
+
+        payload.token_exec_slots[matched_pos] = binding.slot_id;
+
+        Execution::CompiledBootstrapBinding compiled;
+        compiled.binding_id = static_cast<int32_t>(b_idx);
+        compiled.token_pos = matched_pos;
+        compiled.slot_id = binding.slot_id;
+        payload.compiled_bootstrap_bindings.push_back(compiled);
+    }
+
+    // ── Teacher steps from execution steps ──
+    for (const auto& step : record.steps) {
+        Execution::TeacherStep ts;
+        ts.op_id = step.op_id;
+        ts.arg1_slot = step.arg1_slot;
+        ts.arg2_slot = step.arg2_slot;
+        ts.write_slot = step.write_slot;
+        ts.expected_value = step.expected_value;
+        payload.teacher_steps.push_back(ts);
+    }
+
+    // ── Slot selection targets: IGNORE for all token positions ──
+    // Dense, decode-position aligned. For concept rows in this cutover,
+    // the builder does not yet have per-position selector supervision data.
+    payload.slot_selection_targets.resize(seq_len);
+    for (int t = 0; t < seq_len; ++t) {
+        payload.slot_selection_targets[t].kind = Execution::SlotSelectionTargetKind::Ignore;
+        payload.slot_selection_targets[t].slot_id = -1;
+    }
+
+    return payload;
+}
+
+}  // namespace (anonymous)
 
 // ─── opStringToId ───────────────────────────────────────
 
@@ -54,12 +222,21 @@ int opStringToId(const std::string& op) {
     throw std::runtime_error("opStringToId: unknown op '" + op + "'");
 }
 
-// ─── renderCanonicalText ────────────────────────────────
+// ─── renderWithSpans ────────────────────────────────────
 //
-// Human-readable training text from concept JSON.
-// NO __SLOTS__ block — that debug path is deleted.
+// Canonical text rendering with bound-span provenance.
+//
+// STATE0 section renders bootstrap literal values explicitly so
+// the atom detector sees them. Character offsets are tracked via
+// ostringstream::tellp() and recorded in literal_spans.
+//
+// The rendered literal span for binding i is the byte range
+// [byte_start, byte_end) of the formatted number in the output.
+// This is later intersected with StructuralSpan::content_offset
+// from the atom detector to locate the unique ATOM_NUM token.
 
-std::string renderCanonicalText(const json& j) {
+CanonicalRenderResult renderWithSpans(const json& j) {
+    CanonicalRenderResult result;
     std::ostringstream os;
 
     if (j.contains("name") && j["name"].is_string() && !j["name"].get<std::string>().empty())
@@ -70,8 +247,28 @@ std::string renderCanonicalText(const json& j) {
 
     if (j.contains("state_0") && j["state_0"].is_object()) {
         const auto& s0 = j["state_0"];
+        os << "STATE0";
+
         if (s0.contains("type") && s0["type"].is_string() && !s0["type"].get<std::string>().empty())
-            os << "STATE0 type=" << s0["type"].get<std::string>() << "\n";
+            os << " type=" << s0["type"].get<std::string>();
+
+        // Render bootstrap literal values with explicit span tracking.
+        // Each atom value appears in the text at a known byte offset;
+        // this is the ONLY place bootstrap literals are rendered.
+        if (s0.contains("atoms") && s0["atoms"].is_array()) {
+            int binding_idx = 0;
+            for (const auto& a : s0["atoms"]) {
+                if (!a.is_number()) continue;
+                os << " ";
+                const size_t byte_start = static_cast<size_t>(os.tellp());
+                os << formatNumber(a.get<double>());
+                const size_t byte_end = static_cast<size_t>(os.tellp());
+                result.literal_spans.push_back({binding_idx, byte_start, byte_end});
+                binding_idx++;
+            }
+        }
+
+        os << "\n";
     }
 
     if (j.contains("execution") && j["execution"].is_array()) {
@@ -110,22 +307,42 @@ std::string renderCanonicalText(const json& j) {
     if (j.contains("answer") && j["answer"].is_string() && !j["answer"].get<std::string>().empty())
         os << "A: " << j["answer"].get<std::string>() << "\n";
 
-    // NO __SLOTS__ block — deleted per WS2 cutover.
-    return os.str();
+    result.text = os.str();
+    return result;
+}
+
+// ─── renderCanonicalText ────────────────────────────────
+//
+// Convenience wrapper: returns plain text for vocab corpus building.
+
+std::string renderCanonicalText(const json& j) {
+    return renderWithSpans(j).text;
 }
 
 // ─── buildStructuredExecutionRecord ─────────────────────
 //
 // Parse concept JSON into canonical StructuredExecutionRecord.
-// bootstrap_bindings are built from state_0.atoms: each atom
-// gets a unique slot starting at base_slot.
-// Execution steps are parsed from JSON "execution" array.
+// Bootstrap bindings from state_0.atoms; execution steps from
+// JSON "execution" array.
+//
+// Arg slot resolution:
+//   The concept JSON carries VALUES (not slot references) for execution
+//   step args. Slot identity is resolved by:
+//   1. Exact double equality against known slot values
+//   2. Explicit candidate enumeration (all matching slots collected)
+//   3. If unique match for both args: provably correct
+//   4. If ambiguous: enumerate all (slot1, slot2) candidate pairs,
+//      compute op(val1, val2), accept the unique pair matching expected
+//      result. Throw on zero or multiple valid resolutions.
+//
+// This is value-based resolution — inherent to the JSON format which
+// carries numeric values, not slot identifiers. The result validation
+// provides a mathematical proof of correctness for each step.
 
 Execution::StructuredExecutionRecord
 buildStructuredExecutionRecord(const json& j, int base_slot) {
     Execution::StructuredExecutionRecord record;
 
-    // Check if this row has execution content
     const bool has_state0 = j.contains("state_0") && j["state_0"].is_object()
                          && j["state_0"].contains("atoms") && j["state_0"]["atoms"].is_array()
                          && !j["state_0"]["atoms"].empty();
@@ -133,7 +350,6 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
                             && !j["execution"].empty();
 
     if (!has_state0 && !has_execution) {
-        // Non-execution row
         record.execution_active = false;
         return record;
     }
@@ -147,7 +363,6 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
     record.execution_active = true;
 
     // ── Bootstrap bindings from state_0.atoms ──
-    // Each initial atom gets one slot. Slot IDs are [base_slot, base_slot + N).
     const auto& atoms = j["state_0"]["atoms"];
     std::unordered_set<int32_t> used_slots;
 
@@ -168,19 +383,16 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
         Execution::BootstrapLiteralBinding binding;
         binding.literal_id = static_cast<int32_t>(i);
         binding.slot_id = slot_id;
-        binding.occurrence_role = 0;  // Primary literal occurrence
+        binding.occurrence_role = 0;
         binding.rendered_span_id = static_cast<int32_t>(i);
         record.bootstrap_bindings.push_back(binding);
     }
 
-    // ── Slot domain starts with bootstrap slots ──
     for (const auto& b : record.bootstrap_bindings) {
         record.slot_domain.push_back(b.slot_id);
     }
 
-    // ── Execution steps ──
-    // Track slot values for slot-domain bookkeeping.
-    // Initial slots hold atom values; execution results fill new slots.
+    // ── Execution steps with result-validated arg resolution ──
     std::vector<double> slot_values;
     for (const auto& a : atoms) {
         slot_values.push_back(a.get<double>());
@@ -206,34 +418,101 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
                     + " needs >= 2 args, got " + std::to_string(args.size()));
             }
 
-            // Find arg slots by value matching against known slot values
-            auto findSlot = [&](double val) -> int {
-                for (int i = static_cast<int>(slot_values.size()) - 1; i >= 0; --i) {
-                    if (nearEqual(slot_values[i], static_cast<float>(val)))
-                        return base_slot + i;
-                }
-                return -1;
-            };
+            const double expected_result = e.value("result", 0.0);
 
-            step.arg1_slot = findSlot(args[0]);
-            step.arg2_slot = findSlot(args[1]);
-            if (step.arg1_slot < 0 || step.arg2_slot < 0) {
-                throw std::runtime_error(
-                    "buildStructuredExecutionRecord: execution step " + std::to_string(step_idx)
-                    + " arg slot not found (arg1=" + std::to_string(args[0])
-                    + " arg2=" + std::to_string(args[1]) + ")");
+            int resolved_1 = -1, resolved_2 = -1;
+
+            // ── Canonical path: JSON carries explicit slot indices ──
+            // When "arg_slots" is present, slot identity is canonical —
+            // no value-based resolution needed.
+            if (e.contains("arg_slots") && e["arg_slots"].is_array()
+                && e["arg_slots"].size() >= 2) {
+                resolved_1 = e["arg_slots"][0].get<int>();
+                resolved_2 = e["arg_slots"][1].get<int>();
+
+                if (resolved_1 < 0 || resolved_1 >= static_cast<int>(slot_values.size())) {
+                    throw std::runtime_error(
+                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                        + " arg_slots[0]=" + std::to_string(resolved_1)
+                        + " out of range [0, " + std::to_string(slot_values.size()) + ")");
+                }
+                if (resolved_2 < 0 || resolved_2 >= static_cast<int>(slot_values.size())) {
+                    throw std::runtime_error(
+                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                        + " arg_slots[1]=" + std::to_string(resolved_2)
+                        + " out of range [0, " + std::to_string(slot_values.size()) + ")");
+                }
+
+                // Even with canonical slot refs, validate the result.
+                const double computed = computeOp(step.op_id,
+                    slot_values[resolved_1], slot_values[resolved_2]);
+                if (!resultMatches(computed, expected_result)) {
+                    throw std::runtime_error(
+                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                        + " arg_slots [" + std::to_string(resolved_1) + ","
+                        + std::to_string(resolved_2) + "] produce "
+                        + std::to_string(computed) + " but expected "
+                        + std::to_string(expected_result));
+                }
+            } else {
+                // ── Fallback: value-based resolution with result validation ──
+                // JSON lacks slot references. Collect ALL candidate slot indices
+                // for each arg value and disambiguate via result validation.
+                std::vector<int> candidates_1, candidates_2;
+                for (int i = 0; i < static_cast<int>(slot_values.size()); ++i) {
+                    if (slot_values[i] == args[0]) candidates_1.push_back(i);
+                    if (slot_values[i] == args[1]) candidates_2.push_back(i);
+                }
+
+                if (candidates_1.empty()) {
+                    throw std::runtime_error(
+                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                        + " arg1=" + std::to_string(args[0]) + " matches no slot");
+                }
+                if (candidates_2.empty()) {
+                    throw std::runtime_error(
+                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                        + " arg2=" + std::to_string(args[1]) + " matches no slot");
+                }
+
+                int valid_count = 0;
+                for (int c1 : candidates_1) {
+                    for (int c2 : candidates_2) {
+                        const double computed = computeOp(step.op_id, slot_values[c1], slot_values[c2]);
+                        if (resultMatches(computed, expected_result)) {
+                            resolved_1 = c1;
+                            resolved_2 = c2;
+                            valid_count++;
+                        }
+                    }
+                }
+
+                if (valid_count == 0) {
+                    throw std::runtime_error(
+                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                        + " no (slot1, slot2) pair produces expected result "
+                        + std::to_string(expected_result)
+                        + " (arg1=" + std::to_string(args[0])
+                        + " arg2=" + std::to_string(args[1])
+                        + " op=" + std::to_string(step.op_id) + ")");
+                }
+                if (valid_count > 1) {
+                    throw std::runtime_error(
+                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                        + " ambiguous: " + std::to_string(valid_count)
+                        + " (slot1, slot2) pairs produce expected result "
+                        + std::to_string(expected_result));
+                }
             }
 
-            double result = e.value("result", 0.0);
-            step.expected_value = static_cast<float>(result);
+            step.arg1_slot = base_slot + resolved_1;
+            step.arg2_slot = base_slot + resolved_2;
+            step.expected_value = static_cast<float>(expected_result);
 
-            // Write slot: next available slot
             step.write_slot = base_slot + static_cast<int>(slot_values.size());
-            slot_values.push_back(result);
+            slot_values.push_back(expected_result);
 
-            // Add write slot to domain
             record.slot_domain.push_back(step.write_slot);
-
             record.steps.push_back(step);
         }
     }
@@ -244,7 +523,6 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
         std::unique(record.slot_domain.begin(), record.slot_domain.end()),
         record.slot_domain.end());
 
-    // ── Validate: execution-active with zero bootstrap bindings is malformed ──
     if (record.execution_active && record.bootstrap_bindings.empty()) {
         throw std::runtime_error(
             "buildStructuredExecutionRecord: execution-active row has zero bootstrap bindings");
@@ -253,160 +531,10 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
     return record;
 }
 
-// ─── compileExecutionPayload ────────────────────────────
-//
-// Compile a StructuredExecutionRecord against tokenized output.
-// Maps bootstrap bindings to token positions by scanning for
-// ATOM_NUM tokens that match the expected bootstrap literal values.
-//
-// Contract: each bound literal must compile to EXACTLY ONE ATOM_NUM token.
-
-Execution::CompiledStructuredExecutionPayload
-compileExecutionPayload(
-    const Execution::StructuredExecutionRecord& record,
-    const std::vector<int>& token_ids,
-    const std::vector<uint8_t>& atom_mask,
-    const std::vector<float>& numeric_values,
-    int seq_len)
-{
-    Execution::CompiledStructuredExecutionPayload payload;
-
-    if (!record.execution_active) {
-        payload.execution_active = false;
-        payload.token_exec_slots.assign(seq_len, -1);
-        return payload;
-    }
-
-    payload.execution_active = true;
-    payload.token_exec_slots.assign(seq_len, -1);
-
-    // ── Build bootstrap binding → atom value map ──
-    // Each bootstrap binding carries a slot_id. The atom value for that slot
-    // is the initial literal from state_0.atoms at index (slot_id - base_slot(implicit)).
-    // We need to find the matching ATOM_NUM token for each binding.
-
-    // Collect all ATOM_NUM token positions with their numeric values
-    struct AtomNumPos {
-        int pos;
-        float value;
-    };
-    std::vector<AtomNumPos> atom_num_positions;
-    const int atom_num_token_id = GRIM::Tokenizer::atomTypeToTokenId(
-        GRIM::Tokenizer::AtomType::ATOM_NUM);
-
-    for (int t = 0; t < seq_len; ++t) {
-        if (t < static_cast<int>(token_ids.size()) &&
-            token_ids[t] == atom_num_token_id &&
-            t < static_cast<int>(atom_mask.size()) && atom_mask[t]) {
-            atom_num_positions.push_back({t, numeric_values[t]});
-        }
-    }
-
-    // For each bootstrap binding, find its matching ATOM_NUM token.
-    // The bootstrap bindings correspond to state_0.atoms in order.
-    // We need to match the i-th bootstrap binding's literal value to
-    // a token position. We scan in order — bindings are ordered by
-    // literal_id, so we consume atom positions in document order.
-    std::vector<bool> pos_claimed(atom_num_positions.size(), false);
-    std::unordered_set<int32_t> claimed_token_positions;
-
-    // Extract the literal values that correspond to each bootstrap binding.
-    // binding.literal_id tells us which state_0.atom this is.
-    // We need the actual atom values — reconstruct from the record's bootstrap_bindings
-    // and the known slot assignment scheme: slot_id = base_slot + literal_id.
-    // The actual numeric values come from the tokenized text's numeric_values array.
-
-    for (size_t b_idx = 0; b_idx < record.bootstrap_bindings.size(); ++b_idx) {
-        const auto& binding = record.bootstrap_bindings[b_idx];
-
-        // Find a matching ATOM_NUM position for this binding.
-        // Scan in document order; claim the first unclaimed match.
-        int matched_pos = -1;
-        size_t matched_idx = 0;
-        int match_count = 0;
-
-        // We need the expected value for this binding. Since the builder
-        // stores literal values in state_0.atoms[literal_id], and we have
-        // the full numeric_values from tokenization, we find the ATOM_NUM
-        // token whose value matches by scanning unclaimed positions in
-        // document order. The first unclaimed forward match is claimed.
-        //
-        // For the case where multiple ATOM_NUM tokens have the same value
-        // (e.g., "3 + 3"), the ordering is determined by document position:
-        // binding 0 gets the first occurrence, binding 1 gets the second.
-        for (size_t a = 0; a < atom_num_positions.size(); ++a) {
-            if (pos_claimed[a]) continue;
-
-            // We match based on which ATOM_NUM positions exist in the rendered
-            // text. Since bindings are ordered by literal_id (= order in state_0.atoms,
-            // = order these values appear in the rendered text), we claim the
-            // first unclaimed ATOM_NUM position per binding.
-            // Note: the rendered text places state_0 atom values before
-            // EXEC lines, but EXEC lines also contain numeric args.
-            // We only want to match state_0 atoms (bootstrap values).
-            //
-            // Strategy: for binding b_idx, we're looking for the atom value
-            // at literal position b_idx. Since we're scanning rendered text
-            // forward and state_0 atom values appear first in the canonical
-            // text format, we just claim in order.
-            if (!pos_claimed[a]) {
-                matched_pos = atom_num_positions[a].pos;
-                matched_idx = a;
-                match_count++;
-                break;  // Claim first unclaimed in document order
-            }
-        }
-
-        if (matched_pos < 0) {
-            throw std::runtime_error(
-                "compileExecutionPayload: bootstrap binding " + std::to_string(b_idx)
-                + " (slot_id=" + std::to_string(binding.slot_id)
-                + ") found no matching ATOM_NUM token");
-        }
-
-        if (!claimed_token_positions.insert(matched_pos).second) {
-            throw std::runtime_error(
-                "compileExecutionPayload: duplicate token_pos " + std::to_string(matched_pos)
-                + " for bootstrap binding " + std::to_string(b_idx));
-        }
-
-        pos_claimed[matched_idx] = true;
-        payload.token_exec_slots[matched_pos] = binding.slot_id;
-
-        Execution::CompiledBootstrapBinding compiled;
-        compiled.binding_id = static_cast<int32_t>(b_idx);
-        compiled.token_pos = matched_pos;
-        compiled.slot_id = binding.slot_id;
-        payload.compiled_bootstrap_bindings.push_back(compiled);
-    }
-
-    // ── Teacher steps from execution steps ──
-    for (const auto& step : record.steps) {
-        Execution::TeacherStep ts;
-        ts.op_id = step.op_id;
-        ts.arg1_slot = step.arg1_slot;
-        ts.arg2_slot = step.arg2_slot;
-        ts.write_slot = step.write_slot;
-        ts.expected_value = step.expected_value;
-        payload.teacher_steps.push_back(ts);
-    }
-
-    // ── Slot selection targets: IGNORE for all token positions ──
-    // Dense, decode-position aligned. For concept rows in this cutover,
-    // the builder does not yet have per-position selector supervision data.
-    // All positions are IGNORE until a selector supervision pipeline exists.
-    payload.slot_selection_targets.resize(seq_len);
-    for (int t = 0; t < seq_len; ++t) {
-        payload.slot_selection_targets[t].kind = Execution::SlotSelectionTargetKind::Ignore;
-        payload.slot_selection_targets[t].slot_id = -1;
-    }
-
-    return payload;
-}
-
 // ─── buildConceptSequence ───────────────────────────────
 //
-// Full pipeline: JSON → record → text → tokenize → compile.
+// Full pipeline: JSON → record → render with spans → tokenize
+// → build token-to-span correlation → compile via offset intersection.
 
 ConceptBuildResult buildConceptSequence(
     const json& j,
@@ -415,14 +543,43 @@ ConceptBuildResult buildConceptSequence(
 {
     ConceptBuildResult result;
 
-    // 1. Build canonical record from JSON
+    // 1. Build canonical record from JSON (with result-validated arg resolution)
     result.record = buildStructuredExecutionRecord(j, base_slot);
 
-    // 2. Render canonical text (no __SLOTS__)
-    result.canonical_text = renderCanonicalText(j);
+    // 2. Render canonical text with bound-span provenance
+    auto render = renderWithSpans(j);
+    result.canonical_text = render.text;
+
+    // ── Render-order structural invariant ──
+    // Verify literal_spans are monotonically ordered and index-aligned.
+    // A renderer bug or reordering would silently break provenance
+    // pairing with bootstrap_bindings (which pair by index).
+    for (size_t i = 0; i < render.literal_spans.size(); ++i) {
+        const auto& span = render.literal_spans[i];
+        if (span.binding_index != static_cast<int>(i)) {
+            throw std::runtime_error(
+                "buildConceptSequence: literal_spans[" + std::to_string(i)
+                + "].binding_index=" + std::to_string(span.binding_index)
+                + " (expected " + std::to_string(i)
+                + ") — renderer emitted bindings out of order");
+        }
+        if (span.byte_start >= span.byte_end) {
+            throw std::runtime_error(
+                "buildConceptSequence: literal_spans[" + std::to_string(i)
+                + "] has empty range [" + std::to_string(span.byte_start)
+                + "," + std::to_string(span.byte_end) + ")");
+        }
+        if (i > 0 && span.byte_start < render.literal_spans[i - 1].byte_end) {
+            throw std::runtime_error(
+                "buildConceptSequence: literal_spans[" + std::to_string(i)
+                + "].byte_start=" + std::to_string(span.byte_start)
+                + " overlaps previous span ending at "
+                + std::to_string(render.literal_spans[i - 1].byte_end)
+                + " — renderer produced overlapping or non-monotonic spans");
+        }
+    }
 
     if (!result.record.execution_active) {
-        // Non-execution row: payload is trivially inactive
         result.payload.execution_active = false;
         return result;
     }
@@ -434,13 +591,41 @@ ConceptBuildResult buildConceptSequence(
             "buildConceptSequence: tokenization produced zero tokens for concept row");
     }
 
-    // 4. Compile the record against tokenized output
+    const int seq_len = static_cast<int>(encoded.token_ids.size());
+
+    // 4. Build token-position → StructuralSpan correlation.
+    //    The encoder pushes to result.atoms in the same order as atom tokens
+    //    appear in the output. Walking token_atom_mask and atoms in parallel
+    //    yields a per-token span pointer.
+    std::vector<const Tokenizer::StructuralSpan*> token_to_span(seq_len, nullptr);
+    size_t atom_span_idx = 0;
+    for (int t = 0; t < seq_len; ++t) {
+        if (encoded.token_atom_mask[t]) {
+            if (atom_span_idx >= encoded.atoms.size()) {
+                throw std::runtime_error(
+                    "buildConceptSequence: atom token at position " + std::to_string(t)
+                    + " has no corresponding StructuralSpan (atoms.size()="
+                    + std::to_string(encoded.atoms.size()) + ")");
+            }
+            token_to_span[t] = &encoded.atoms[atom_span_idx];
+            atom_span_idx++;
+        }
+    }
+    if (atom_span_idx != encoded.atoms.size()) {
+        throw std::runtime_error(
+            "buildConceptSequence: " + std::to_string(encoded.atoms.size())
+            + " StructuralSpans but only " + std::to_string(atom_span_idx)
+            + " atom tokens found");
+    }
+
+    // 5. Compile the record against tokenized output using span provenance
     result.payload = compileExecutionPayload(
         result.record,
+        render.literal_spans,
+        result.canonical_text,
         encoded.token_ids,
-        encoded.token_atom_mask,
-        encoded.token_numeric_values,
-        static_cast<int>(encoded.token_ids.size()));
+        token_to_span,
+        seq_len);
 
     return result;
 }

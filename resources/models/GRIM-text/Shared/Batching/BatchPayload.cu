@@ -15,6 +15,7 @@
 #include "Batching_GPU.hpp"
 #include "../../training/training_data_loader.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"  // TokenLayout
+#include "../Execution/ExecutionPayloadValidation.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -32,7 +33,10 @@ BatchPayload buildBatchPayload(
     int vocab_size,
     const GRIM::Tokenizer::TokenLayout& token_layout,
     size_t max_cached_batch,
-    size_t max_cached_seq_len)
+    size_t max_cached_seq_len,
+    int execution_num_slots,
+    int execution_num_ops,
+    int execution_num_steps)
 {
     BatchPayload payload;
 
@@ -379,6 +383,11 @@ BatchPayload buildBatchPayload(
 
     // Cross-check geometry invariants (Rule 20: crash if anything is wrong)
     payload.validate("buildBatchPayload");
+
+    // Execution payload validation (WS4: single shared validator)
+    GRIM::Execution::validateExecutionPayload(
+        payload, "buildBatchPayload",
+        execution_num_slots, execution_num_ops, execution_num_steps);
 
     return payload;
 }

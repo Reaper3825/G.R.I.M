@@ -333,7 +333,10 @@ BatchPayload buildBatchPayload(
     int vocab_size,
     const GRIM::Tokenizer::TokenLayout& token_layout,
     size_t max_cached_batch,
-    size_t max_cached_seq_len);
+    size_t max_cached_seq_len,
+    int execution_num_slots,
+    int execution_num_ops,
+    int execution_num_steps);
 
 }  // namespace Batching
 }  // namespace GRIM

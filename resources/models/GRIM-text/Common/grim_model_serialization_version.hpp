@@ -21,6 +21,15 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 9;
 // GRMT training tensor stream may advance without bumping checkpoint MODEL_VERSION.
 // v10: After per-token atom length-prefixed strings, append int32 token_exec_slots[len]
 //      (ExecutionBlock bootstrap / token_to_slot_map).
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 10;
+// v11: After per-token atom strings, append compiled structured-execution payload:
+//      uint8  execution_payload_active
+//      int32  token_exec_slots[len]
+//      uint32 compiled_bootstrap_binding_count
+//      CompiledBootstrapBinding[count]  (binding_id, token_pos, slot_id — 12 bytes each)
+//      uint32 teacher_step_count
+//      TeacherStep[count]               (op_id, arg1_slot, arg2_slot, write_slot, expected_value — 20 bytes each)
+//      uint32 slot_selection_target_count
+//      SlotSelectionTarget[count]       (uint8 kind + int32 slot_id — 5 bytes each, serialized field-by-field)
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 11;
 
 } // namespace GRIM

@@ -270,6 +270,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/DynaSeqs/DynaSeq_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchPayload.cu
+    ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
     ../../Shared/ScratchBlock/ScratchBlockPool_GPU.cu
@@ -612,6 +613,7 @@ add_executable(execution_block_test
     ../../Layers/ExecutionBlock/execution_block_data_stream_GPU.cu
     ../../Layers/Attention/QKV_Projector.cu
     ../../Shared/Batching/BatchPayload.cu
+    ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Shared/PBM/PositionalBiasMethod.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu
     ../../Shared/TensorConversion/TensorConversion.cu

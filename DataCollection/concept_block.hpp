@@ -30,6 +30,9 @@ struct ConceptBlockState0 {
 struct ConceptExecutionStep {
     std::string          op;
     std::vector<double>  args;
+    std::vector<int>     arg_slots;  // Optional: canonical slot indices for args.
+                                     // When present, slot identity is explicit —
+                                     // no value-based resolution needed.
     double               result = 0.0;
 };
 

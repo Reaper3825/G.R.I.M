@@ -290,11 +290,53 @@ private:
                     nonfinite_sequences++;
                 }
 
-                // GRMT v10: per-token execution slot map (after atom strings)
-                if (version >= 10) {
+                // GRMT v11: compiled structured-execution payload
+                // Order follows plan: exec_active, token_exec_slots, then bindings/steps/targets
+                {
+                    uint8_t exec_active = 0;
+                    file.read(reinterpret_cast<char*>(&exec_active), sizeof(uint8_t));
+                    seq.execution_active = (exec_active != 0);
+
                     seq.token_exec_slots.resize(seq_len);
                     file.read(reinterpret_cast<char*>(seq.token_exec_slots.data()),
                               seq_len * sizeof(int32_t));
+
+                    // Compiled bootstrap bindings
+                    uint32_t cbb_count = 0;
+                    file.read(reinterpret_cast<char*>(&cbb_count), sizeof(uint32_t));
+                    static_assert(sizeof(GRIM::Execution::CompiledBootstrapBinding) == 12,
+                        "CompiledBootstrapBinding must be 12 bytes for bulk GRMT deserialization");
+                    if (cbb_count > 0) {
+                        seq.compiled_bootstrap_bindings.resize(cbb_count);
+                        file.read(reinterpret_cast<char*>(seq.compiled_bootstrap_bindings.data()),
+                                  cbb_count * sizeof(GRIM::Execution::CompiledBootstrapBinding));
+                    }
+
+                    // Teacher steps
+                    uint32_t ts_count = 0;
+                    file.read(reinterpret_cast<char*>(&ts_count), sizeof(uint32_t));
+                    static_assert(sizeof(GRIM::Execution::TeacherStep) == 20,
+                        "TeacherStep must be 20 bytes for bulk GRMT deserialization");
+                    if (ts_count > 0) {
+                        seq.teacher_steps.resize(ts_count);
+                        file.read(reinterpret_cast<char*>(seq.teacher_steps.data()),
+                                  ts_count * sizeof(GRIM::Execution::TeacherStep));
+                    }
+
+                    // Slot selection targets (field-by-field due to struct padding)
+                    uint32_t sst_count = 0;
+                    file.read(reinterpret_cast<char*>(&sst_count), sizeof(uint32_t));
+                    if (sst_count > 0) {
+                        seq.slot_selection_targets.resize(sst_count);
+                        for (uint32_t si = 0; si < sst_count; ++si) {
+                            uint8_t kind = 0;
+                            file.read(reinterpret_cast<char*>(&kind), sizeof(uint8_t));
+                            seq.slot_selection_targets[si].kind =
+                                static_cast<GRIM::Execution::SlotSelectionTargetKind>(kind);
+                            file.read(reinterpret_cast<char*>(&seq.slot_selection_targets[si].slot_id),
+                                      sizeof(int32_t));
+                        }
+                    }
                 }
             }
 

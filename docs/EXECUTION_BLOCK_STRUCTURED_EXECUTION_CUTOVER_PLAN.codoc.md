@@ -43,10 +43,10 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ## Current cutover status
 
 - **Overall status:** In progress
-- **Active workstream:** Workstream 3 — GRMT format cutover
-- **Last completed gate:** Workstream 2 — canonical structured sequence builder replaces `__SLOTS__`
-- **Next gate:** Begin Workstream 3 GRMT format cutover to serialize compiled execution payloads
-- **Current implementation posture:** Workstream 2 canonical builder (`ConceptExecutionSequenceBuilder`) replaces the `__SLOTS__` debug path; concept JSON → `StructuredExecutionRecord` → canonical text → tokenize → `CompiledStructuredExecutionPayload` with paired `token_exec_slots` + `teacher_steps` + `compiled_bootstrap_bindings` in a single builder pass; DataLoader uses the canonical builder exclusively
+- **Active workstream:** Workstream 5 — Phase1 sequence handling rules
+- **Last completed gate:** Workstream 3 — GRMT format cutover
+- **Next gate:** Begin Workstream 5 Phase1 BOS/EOS/padding remap for execution-active rows
+- **Current implementation posture:** Workstream 3 GRMT v11 format serializes the full compiled structured-execution payload (`execution_payload_active`, `compiled_bootstrap_bindings`, `teacher_steps`, `slot_selection_targets`) alongside `token_exec_slots`; GRMT v10 is rejected unconditionally; auto-rebuild triggers on version mismatch; loader populates `TrainingSequence` execution metadata directly from GRMT without fabrication
 
 ## Workstream-specific update contract
 
@@ -89,7 +89,7 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ### Workstream 3 — GRMT format cutover
 
 **Status**
-- Not started
+- Completed
 
 **Each update must record**
 - GRMT version change and serialized field layout
@@ -579,3 +579,64 @@ For each qualifying refactor step, append an entry under the relevant workstream
 
 **Remaining gaps / next gate**
 - Workstream 2 is complete. Proceed to Workstream 3: GRMT format cutover to serialize compiled execution payloads alongside tokenized sequences.
+
+### 2026-03-29 — Workstream 3 — GRMT v11 compiled structured-execution payload serialization
+
+**Status transition**
+- `Not started -> Completed`
+
+**What changed**
+- Bumped `GRMT_FORMAT_VERSION` from `10` to `11` in `grim_model_serialization_version.hpp` with full version comment documenting the new binary layout.
+- Extended `TokenizedSequence` (DataLoader.cu internal struct) with four new compiled execution payload fields: `execution_active`, `compiled_bootstrap_bindings`, `teacher_steps`, `slot_selection_targets`.
+- Updated concept processing loop in DataLoader.cu to transfer all five compiled payload fields from `ConceptExecutionSequenceBuilder` output into `TokenizedSequence` (previously only `token_exec_slots` was transferred).
+- Updated `save_grmt` lambda to serialize the full compiled structured-execution payload after `token_exec_slots[len]`:
+  - `uint8_t execution_payload_active`
+  - `uint32_t compiled_bootstrap_binding_count` + bulk `CompiledBootstrapBinding[count]` (12 bytes each, `static_assert`-guarded)
+  - `uint32_t teacher_step_count` + bulk `TeacherStep[count]` (20 bytes each, `static_assert`-guarded)
+  - `uint32_t slot_selection_target_count` + per-element field-by-field `SlotSelectionTarget` (uint8 kind + int32 slot_id, 5 bytes each to avoid struct padding)
+- Updated `loadGRMTFormat()` in `training_data_loader.hpp` to deserialize all v11 payload fields directly into `TrainingSequence`:
+  - `execution_active` from `uint8_t`
+  - `compiled_bootstrap_bindings` bulk-read with `static_assert` size guard
+  - `teacher_steps` bulk-read with `static_assert` size guard
+  - `slot_selection_targets` read field-by-field (kind as `uint8_t`, slot_id as `int32_t`)
+- Removed conditional `version >= 10` gate on `token_exec_slots` read — v11 always includes it.
+- GRMT v10 rejection is implicit: existing `version != GRMT_FORMAT_VERSION` check rejects any non-v11 file with a clear fatal error message instructing the user to delete and regenerate `.grmt` files.
+- Auto-rebuild: `PrepareTrainingDataFromCache()` already compares GRMT header version against `GRMT_FORMAT_VERSION`; old v10 files trigger `grmt_version_mismatch = true` and automatic regeneration.
+
+**Changed files**
+- `resources/models/GRIM-text/Common/grim_model_serialization_version.hpp`
+- `resources/models/GRIM-text/Shared/DataLoader/DataLoader.cu`
+- `resources/models/GRIM-text/training/training_data_loader.hpp`
+
+**Ownership after change**
+- `grim_model_serialization_version.hpp` is the single source of truth for `GRMT_FORMAT_VERSION`.
+- `save_grmt` in DataLoader.cu owns the GRMT write path and serializes all compiled execution payload fields.
+- `loadGRMTFormat()` in `training_data_loader.hpp` owns the GRMT read path and deserializes compiled payload directly into `TrainingSequence`.
+- Loader does NOT fabricate or reconstruct execution metadata — all fields come from the serialized GRMT stream.
+
+**Non-responsibilities**
+- `save_grmt` does NOT store learned execution/selector weights, optimizer state, or tensor layout — that is Workstream 3A (checkpoint serialization).
+- Loader does NOT infer execution-active status from `teacher_steps.size()` — it reads the explicit `execution_payload_active` flag.
+- No `D_row` serialization — runtime reconstructs it from `compiled_bootstrap_bindings` ∪ `teacher_steps` per the plan contract.
+
+**Integration points / migrated consumers**
+- `TrainingSequence` now has all compiled execution payload fields populated directly from GRMT load, removing the previous gap where only `token_exec_slots` survived serialization.
+- `TrainingSampleView` (via `getSample()`) and `BatchPayload` (via `buildBatchPayload()`) automatically see the populated fields — no additional wiring changes needed for downstream consumers.
+- `ConceptExecutionSequenceBuilder` output flows through `TokenizedSequence` → `save_grmt` → GRMT file → `loadGRMTFormat()` → `TrainingSequence` with full metadata preservation.
+
+**Legacy deleted**
+- Conditional `version >= 10` gate on `token_exec_slots` read — v11 always includes this field.
+- GRMT v10 files are no longer loadable (no dual loader, no translation shim, no compatibility mode).
+
+**Validation**
+- Serialization format uses `static_assert` to verify `CompiledBootstrapBinding` is exactly 12 bytes and `TeacherStep` is exactly 20 bytes for safe bulk binary read/write.
+- `SlotSelectionTarget` is serialized field-by-field (uint8 + int32) to avoid struct padding ambiguity.
+- Version rejection: loader's existing `version != GRMT_FORMAT_VERSION` check rejects non-v11 files with explicit regeneration instructions.
+- Auto-rebuild: DataLoader's `PrepareTrainingDataFromCache()` detects version mismatch in GRMT header and forces full regeneration.
+- Full CUDA compile validation is blocked on local macOS environment lacking CUDA toolchain.
+
+**Flow diagram delta**
+- Updated flow diagram to show GRMT v11 serialization carrying full compiled execution payload alongside token data; updated workstream status and structured execution flow status.
+
+**Remaining gaps / next gate**
+- Workstream 3 is complete. Proceed to Workstream 5: Phase1 BOS/EOS/padding remap semantics for execution-active rows.

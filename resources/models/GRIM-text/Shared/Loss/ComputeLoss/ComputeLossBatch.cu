@@ -1,4 +1,5 @@
 #include "../../Batching/BatchPayload.hpp"
+#include "../../Execution/ExecutionPayloadValidation.hpp"
 
 #include <algorithm>
 #include <atomic>

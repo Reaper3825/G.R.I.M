@@ -84,9 +84,9 @@ flowchart TD
 
 ## Current artifact status
 
-- **Workstream flow status:** Workstream 2 complete; Workstream 3 next
+- **Workstream flow status:** Workstream 3 complete; Workstream 5 next
 - **Maintenance flow status:** Active immediately
-- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`; concept JSON → `ConceptExecutionSequenceBuilder` → canonical text + `CompiledStructuredExecutionPayload` → DataLoader tokenizes → GRMT; compiled execution payload flows through TrainingSequence → TrainingSampleView → BatchPayload; GRMT format cutover (WS3) and downstream workstreams still pending
+- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`, WS3 GRMT v11 serializes full compiled execution payload (`execution_payload_active` + `compiled_bootstrap_bindings` + `teacher_steps` + `slot_selection_targets`); GRMT v10 rejected unconditionally; auto-rebuild on version mismatch; loader populates `TrainingSequence` directly from GRMT without fabrication; concept JSON → `ConceptExecutionSequenceBuilder` → `TokenizedSequence` → `save_grmt` → GRMT v11 → `loadGRMTFormat()` → `TrainingSequence` → `TrainingSampleView` → `BatchPayload`; Phase1 remap (WS5) and downstream workstreams still pending
 
 ## Workstream 0 implementation note
 
@@ -195,7 +195,7 @@ flowchart TD
         Load[loadConceptBlocksJson\nreturns vector of json]
         Loop[Concept processing loop\ncalls buildConceptSequence per row]
         BSeq[build_sequence lambda\ntokenizes canonical text]
-        GRMT[GRMT serialization]
+        GRMT[GRMT v11 serialization\nfull compiled payload]
     end
 
     Load --> Loop
@@ -203,6 +203,15 @@ flowchart TD
     Text --> BSeq
     BSeq --> GRMT
     TES --> GRMT
+    TSt --> GRMT
+    CBB --> GRMT
+
+    subgraph GRMTLoad[GRMT v11 deserialization]
+        LoadGRMT[loadGRMTFormat\nreads all compiled payload fields]
+        TrainSeq[TrainingSequence\nexecution_active + token_exec_slots\n+ compiled_bootstrap_bindings\n+ teacher_steps + slot_selection_targets]
+    end
+
+    GRMT --> LoadGRMT --> TrainSeq
 
     subgraph Deleted[DELETED — WS2]
         direction LR

@@ -513,7 +513,13 @@ bool PrepareTrainingDataFromCache(
 		std::vector<uint8_t> atom_mask;       // Unified per-token atom mask
 		std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Per-sequence atom registry
 		std::vector<uint32_t> atom_entry_ids;  // Per-token index into atom_table
-		std::vector<int32_t> token_exec_slots;   // GRMT v10: -1 = none; else value-slot id for bootstrap
+		std::vector<int32_t> token_exec_slots;   // -1 = none; else value-slot id for bootstrap
+
+		// Compiled structured-execution payload (GRMT v11)
+		bool execution_active = false;
+		std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
+		std::vector<GRIM::Execution::TeacherStep> teacher_steps;
+		std::vector<GRIM::Execution::SlotSelectionTarget> slot_selection_targets;
 	};
 
 	// BOS/EOS are NOT added here — Phase1_Startup owns boundary token
@@ -640,8 +646,12 @@ bool PrepareTrainingDataFromCache(
 			if (built.canonical_text.size() < kMinCleanedTextLength) continue;
 			auto seq = build_sequence(built.canonical_text);
 			if (!seq) continue;
+			seq->execution_active = built.payload.execution_active;
 			if (built.payload.execution_active) {
 				seq->token_exec_slots = std::move(built.payload.token_exec_slots);
+				seq->compiled_bootstrap_bindings = std::move(built.payload.compiled_bootstrap_bindings);
+				seq->teacher_steps = std::move(built.payload.teacher_steps);
+				seq->slot_selection_targets = std::move(built.payload.slot_selection_targets);
 			}
 			all_tokens.push_back(std::move(*seq));
 		} catch (const std::exception& e) {
@@ -767,11 +777,46 @@ bool PrepareTrainingDataFromCache(
 					file.write(s.data(), slen);
 				}
 			}
+			// GRMT v11: compiled structured-execution payload
+			// Order follows plan: exec_active, token_exec_slots, then bindings/steps/targets
+			uint8_t exec_active = seq.execution_active ? 1 : 0;
+			file.write(reinterpret_cast<const char*>(&exec_active), sizeof(uint8_t));
+
 			std::vector<int32_t> slots = seq.token_exec_slots;
 			if (slots.size() != len) {
 				slots.assign(len, -1);
 			}
 			file.write(reinterpret_cast<const char*>(slots.data()), len * sizeof(int32_t));
+
+			// Compiled bootstrap bindings
+			uint32_t cbb_count = static_cast<uint32_t>(seq.compiled_bootstrap_bindings.size());
+			file.write(reinterpret_cast<const char*>(&cbb_count), sizeof(uint32_t));
+			static_assert(sizeof(GRIM::Execution::CompiledBootstrapBinding) == 12,
+				"CompiledBootstrapBinding must be 12 bytes for bulk GRMT serialization");
+			if (cbb_count > 0) {
+				file.write(reinterpret_cast<const char*>(seq.compiled_bootstrap_bindings.data()),
+					cbb_count * sizeof(GRIM::Execution::CompiledBootstrapBinding));
+			}
+
+			// Teacher steps
+			uint32_t ts_count = static_cast<uint32_t>(seq.teacher_steps.size());
+			file.write(reinterpret_cast<const char*>(&ts_count), sizeof(uint32_t));
+			static_assert(sizeof(GRIM::Execution::TeacherStep) == 20,
+				"TeacherStep must be 20 bytes for bulk GRMT serialization");
+			if (ts_count > 0) {
+				file.write(reinterpret_cast<const char*>(seq.teacher_steps.data()),
+					ts_count * sizeof(GRIM::Execution::TeacherStep));
+			}
+
+			// Slot selection targets (field-by-field due to struct padding)
+			uint32_t sst_count = static_cast<uint32_t>(seq.slot_selection_targets.size());
+			file.write(reinterpret_cast<const char*>(&sst_count), sizeof(uint32_t));
+			for (uint32_t si = 0; si < sst_count; ++si) {
+				uint8_t kind = static_cast<uint8_t>(seq.slot_selection_targets[si].kind);
+				file.write(reinterpret_cast<const char*>(&kind), sizeof(uint8_t));
+				file.write(reinterpret_cast<const char*>(&seq.slot_selection_targets[si].slot_id),
+					sizeof(int32_t));
+			}
 		}
 		return file.good();
 	};
