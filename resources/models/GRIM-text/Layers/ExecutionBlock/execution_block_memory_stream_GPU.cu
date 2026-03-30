@@ -2,7 +2,9 @@
 
 #ifdef USE_CUDA
 
-namespace GRIM::ExecutionBlockInternal {
+namespace GRIM {
+
+using namespace ExecutionBlockInternal;
 
 __global__ void kernelBootstrapSlotValues(
     float* __restrict__ M_values,
@@ -484,6 +486,8 @@ static void ensureBootstrappedValueSlotsOrThrow(
         "executeStep: execution-active row reached ExecutionBlock with no bootstrapped value slots");
 }
 
+namespace ExecutionBlockInternal {
+
 void prepareMemoryStepOrThrow(
     ExecutionBlockLayer& layer,
     const ExecutionMemory& memory,
@@ -755,6 +759,8 @@ void crossAttentionReadImpl(
     CUDA_CHECK_KERNEL();
 }
 
-}  // namespace GRIM::ExecutionBlockInternal
+}  // namespace ExecutionBlockInternal
+
+}  // namespace GRIM
 
 #endif  // USE_CUDA
