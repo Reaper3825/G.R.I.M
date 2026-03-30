@@ -23,6 +23,8 @@
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/TensorConversion/TensorConversion.hpp"
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
+#include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
 
 namespace GRIM {
 
@@ -608,6 +610,50 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             exec_block->crossAttentionRead(
                 hidden, ts.inference_exec_memory,
                 1, stream, 0, 1);
+        }
+    }
+
+    // ── Decode-time slot selector: evaluate selection before LM head ──
+    ts.decode_selector_valid = false;
+    ts.decode_selector_status = static_cast<uint8_t>(SlotSelectionStatus::Null);
+    ts.decode_selected_slot = -1;
+    ts.decode_selected_value = 0.0f;
+
+    {
+        auto* selector = getDecodeTimeSlotSelectorLayer();
+        auto* policy   = getDecodeTimeNumPolicy();
+        if (cfg.selector_enabled && selector && policy
+            && exec_block_active && ts.has_inference_exec_memory) {
+            const auto& mem = ts.inference_exec_memory;
+            policy->buildCandidateSet(
+                mem.valid_mask.data,
+                mem.values.data,
+                mem.recent_write_mask.data,
+                mem.usage.data,
+                policy->config().num_slots,
+                policy->config().scratch_slots,
+                stream);
+            const auto& cands = policy->candidates();
+            if (cands.num_live_slots > 0) {
+                SelectorScoreResult scores = selector->forward(
+                    hidden.data, cands.d_slot_features,
+                    cands.num_live_slots, stream);
+                SlotSelectionResult result = policy->evaluateScores(
+                    scores.d_scores, scores.num_live_slots, stream);
+                ts.decode_selector_status = static_cast<uint8_t>(result.status);
+                ts.decode_selected_slot = result.selected_slot;
+                if (result.status == SlotSelectionStatus::Selected
+                    && result.selected_slot >= 0) {
+                    // Read numeric value from the selected slot
+                    float val = 0.0f;
+                    cudaMemcpyAsync(&val,
+                        mem.values.data + result.selected_slot,
+                        sizeof(float), cudaMemcpyDeviceToHost, stream);
+                    cudaStreamSynchronize(stream);
+                    ts.decode_selected_value = val;
+                }
+            }
+            ts.decode_selector_valid = true;
         }
     }
 

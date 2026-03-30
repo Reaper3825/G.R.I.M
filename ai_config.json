@@ -200,7 +200,12 @@
                 "temp_schedule": 0,
                 "temp_start": 2.0,
                 "usage_decay": 0.9,
-                "value_match_epsilon": 1e-06
+                "value_match_epsilon": 1e-06,
+                "selector": {
+                    "enabled": true,
+                    "d_selector": 64,
+                    "selection_margin": 1.0
+                }
             },
             "force_rebuild_vocab": false,
             "generation": {

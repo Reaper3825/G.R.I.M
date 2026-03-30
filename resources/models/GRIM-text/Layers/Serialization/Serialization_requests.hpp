@@ -14,6 +14,7 @@ struct SerializationConfig {
 
 struct CheckpointCapabilityRequirements {
 	bool requires_execution_block = false;
+	bool requires_slot_selector = false;
 	bool requires_numeric_head = false;
 	bool requires_reasoning_head = false;
 	bool requires_scratch_block = false;
@@ -22,6 +23,7 @@ struct CheckpointCapabilityRequirements {
 
 struct SerializationLoadReport {
 	bool execution_block_loaded = false;
+	bool slot_selector_loaded = false;
 	bool numeric_head_loaded = false;
 	bool reasoning_head_loaded = false;
 	bool scratch_block_loaded = false;
@@ -37,6 +39,7 @@ struct SerializationSaveSources {
 	SerializationNumericHeadReadView numeric_head;
 	SerializationReasoningHeadReadView reasoning_head;
 	SerializationExecutionBlockReadView execution_block;
+	SerializationSlotSelectorReadView slot_selector;
 	DeviceReadView final_rms_gamma;
 };
 
@@ -59,6 +62,7 @@ struct SerializationLoadRequest {
 	SerializationNumericHeadWriteView numeric_head;
 	SerializationReasoningHeadWriteView reasoning_head;
 	SerializationExecutionBlockWriteView execution_block;
+	SerializationSlotSelectorWriteView slot_selector;
 	DeviceWriteView final_rms_gamma;
 };
 

@@ -342,6 +342,20 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         Logging::EmitModuleInfo(kLogModule, "[save] ExecutionBlock v2 weights serialized");
     }
 
+    // DecodeTimeSlotSelector weights (gated by enabled flag)
+    flatbuffers::Offset<GRIMTransformer::DecodeTimeSlotSelectorWeights> fb_slot_selector = 0;
+    const auto& ss_view = request.sources.slot_selector;
+    if (ss_view.enabled && ss_view.w_q_select.ptr) {
+        auto dl = [&](const DeviceReadView& v, const char* n) { return download_device_vector(v, n); };
+        fb_slot_selector = GRIMTransformer::CreateDecodeTimeSlotSelectorWeights(
+            builder,
+            builder.CreateVector(dl(ss_view.w_q_select, "SS w_q_select")),
+            builder.CreateVector(dl(ss_view.w_k_select, "SS w_k_select")),
+            builder.CreateVector(dl(ss_view.null_key_select, "SS null_key_select")),
+            builder.CreateVector(dl(ss_view.null_logit_bias, "SS null_logit_bias")));
+        Logging::EmitModuleInfo(kLogModule, "[save] SlotSelector weights serialized");
+    }
+
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_final_rms_gamma = 0;
     const auto& final_rms_view = request.sources.final_rms_gamma;
     if (final_rms_view.ptr && final_rms_view.count > 0) {
@@ -378,7 +392,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         0, 0,
         timestamp, timestamp,
         fb_reasoning_head,
-        fb_execution_block);
+        fb_execution_block,
+        fb_slot_selector);
 
     builder.Finish(fb_model, "GRMT");
 

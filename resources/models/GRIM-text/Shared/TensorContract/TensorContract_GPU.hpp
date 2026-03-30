@@ -730,7 +730,8 @@ enum class ParamGroupType : uint8_t {
     MTP = 7,            ///< Multi-token prediction auxiliary heads (weight + bias per head)
     REASONING_HEAD = 8, ///< Reasoning head weights (W_op, b_op, w_arg1, w_arg2)
     EXECUTION_BLOCK = 9,///< Execution block weights (decode MLP, arg/op/slot select, cross-attn)
-    COUNT = 10          ///< Number of parameter group types
+    SLOT_SELECTOR = 10, ///< Decode-time slot selector (W_q, W_k, null_key, null_bias)
+    COUNT = 11          ///< Number of parameter group types
 };
 
 //======================================================//

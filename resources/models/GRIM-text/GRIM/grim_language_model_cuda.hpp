@@ -37,6 +37,8 @@
 #include "../Layers/LMHead/lm_head_GPU.hpp"
 #include "../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
+#include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -367,6 +369,11 @@ struct LanguageModelConfig {
     float execution_block_transition_hard_threshold = 0.0f; // 0 = disabled
     int   execution_block_gate_warmup_steps = 0;
     float execution_block_causal_w1_transition = 1.0f;
+
+    // Decode-time slot selector config
+    bool  selector_enabled = false;       // Enable decode-time selector layer
+    int   selector_d_selector = 64;       // Query/key projection dimension
+    float selector_selection_margin = 1.0f; // top1 - top2 >= margin → Selected
 
     // Execution-first structured CE loss config (Step X / Y multipliers)
     float step_x_multiplier = 2.0f;
@@ -736,6 +743,14 @@ public:
     ExecutionBlockLayer* getExecutionBlockLayer() { return execution_block_layer_.get(); }
     const ExecutionBlockLayer* getExecutionBlockLayer() const { return execution_block_layer_.get(); }
 
+    // Decode-time slot selector layer (nullptr when disabled)
+    DecodeTimeSlotSelectorLayer* getDecodeTimeSlotSelectorLayer() { return decode_time_slot_selector_layer_.get(); }
+    const DecodeTimeSlotSelectorLayer* getDecodeTimeSlotSelectorLayer() const { return decode_time_slot_selector_layer_.get(); }
+
+    // Decode-time <NUM> policy (nullptr when selector disabled)
+    DecodeTimeNumPolicy* getDecodeTimeNumPolicy() { return decode_time_num_policy_.get(); }
+    const DecodeTimeNumPolicy* getDecodeTimeNumPolicy() const { return decode_time_num_policy_.get(); }
+
     // Multi-token prediction (MTP) auxiliary heads - one weight + bias per head (indices 0..mtp_k-1)
     struct MTPHead {
         Tensor weight;  // [vocab_size, d_model] same layout as LM head
@@ -815,6 +830,12 @@ private:
 
     // Execution Block layer (differentiable register machine — internal numeric reasoning)
     std::unique_ptr<ExecutionBlockLayer> execution_block_layer_;
+
+    // Decode-time slot selector (trainable pointer-selector for <NUM> binding)
+    std::unique_ptr<DecodeTimeSlotSelectorLayer> decode_time_slot_selector_layer_;
+
+    // Decode-time <NUM> policy (candidate construction + bind-or-mask decisions)
+    std::unique_ptr<DecodeTimeNumPolicy> decode_time_num_policy_;
 
     // Multi-token prediction (MTP) auxiliary heads - K independent linear heads (not tied to embedding)
     std::vector<MTPHead> mtp_heads_;

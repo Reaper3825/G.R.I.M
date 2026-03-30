@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Run GRIM-text training on PSC Bridges-2 via SSH.
-# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--config CONFIG] [--sbatch]
+# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--config CONFIG] [--sbatch] [--sync-all|--sync-mcs|--sync-cbs|--sync-fas]
 #
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
 #   - Allocation: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. abc1234p)
 #   - Path: Set GRIM_BRIDGES2_DIR to your repo path, e.g. /ocean/projects/<alloc_id>/<username>/G.R.I.M (default: cis210058p/uwadkins)
-#   - Data: Pushes merged_verified_cache.jsonl and (if present) concept_blocks.jsonl to
-#     resources/models/GRIM-text/training/data/ on Bridges-2 (same layout as local).
-#   - Submodules: flash-attention (script runs git submodule update --init before build)
+#   - Remote git: Each run still git fetch + reset on Bridges-2 unless GRIM_BRIDGES2_SKIP_PULL is set (unrelated to MCS/CBS/FAS).
+#   - Data: By default does NOT push merged_verified_cache.jsonl or concept_blocks.jsonl, and does NOT run
+#     the flash-attention submodule step on --build. Opt in with --sync-all or --sync-mcs|--sync-cbs|--sync-fas,
+#     or env GRIM_BRIDGES2_SYNC_ALL=1 / GRIM_BRIDGES2_SYNC_MCS|CBS|FAS=1.
+#   - Submodules: With --sync-fas / SYNC_FAS, flash-attention is refreshed via bridges2_ensure_flash_attention.sh
+#     (no forced submodule update when the expected commits are already checked out on the remote).
 #   - vcpkg: Script clones to GRIM_BRIDGES2_DIR/vcpkg if missing
 #   - CUDA 12+ for training (flash-attention). Bridges-2: module load cuda (check with module avail cuda)
 #
@@ -22,6 +25,11 @@
 #   --partition P    GPU-shared (default) or GPU.
 #   --gpu-type T     h100-80 (default), v100-32, v100-16, or l40s-48.
 #   --account A      Override GRIM_BRIDGES2_ACCOUNT.
+#   --sync-all       Enable MCS + CBS + FAS (push caches + flash-attention submodule on --build).
+#   --sync-mcs       Push merged_verified_cache.jsonl.
+#   --sync-cbs       Push concept_blocks.jsonl (if present locally).
+#   --sync-fas       On --build, run scripts/bridges2_ensure_flash_attention.sh (skips forced git pull if FA
+#                    gitlink + pinned Cutlass SHA already match remote; still applies patches).
 
 set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,6 +51,10 @@ DO_BUILD=false
 USE_SBATCH=false
 DO_INCREMENTAL=false
 DO_CLEAN_BUILD=false
+FLAG_SYNC_ALL=false
+FLAG_SYNC_MCS=false
+FLAG_SYNC_CBS=false
+FLAG_SYNC_FAS=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -54,9 +66,31 @@ while [[ $# -gt 0 ]]; do
     --partition)      PARTITION="$2"; shift 2 ;;
     --gpu-type)       GPU_TYPE="$2"; shift 2 ;;
     --account)        ACCOUNT="$2"; shift 2 ;;
+    --sync-all)       FLAG_SYNC_ALL=true; shift ;;
+    --sync-mcs)       FLAG_SYNC_MCS=true; shift ;;
+    --sync-cbs)       FLAG_SYNC_CBS=true; shift ;;
+    --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
     *)                echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+# MCS/CBS/FAS = merged cache / concept blocks / flash-attention (build). Default: skip all; opt in via flags or SYNC_* env.
+SKIP_MCS=1
+SKIP_CBS=1
+SKIP_FAS=1
+if [[ "$FLAG_SYNC_ALL" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_ALL:-0}" == "1" ]]; then
+  SKIP_MCS=0
+  SKIP_CBS=0
+  SKIP_FAS=0
+fi
+[[ "$FLAG_SYNC_MCS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_MCS:-0}" == "1" ]] && SKIP_MCS=0
+[[ "$FLAG_SYNC_CBS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_CBS:-0}" == "1" ]] && SKIP_CBS=0
+[[ "$FLAG_SYNC_FAS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_FAS:-0}" == "1" ]] && SKIP_FAS=0
+
+_assets_mcs=$([[ "$SKIP_MCS" == 0 ]] && echo sync || echo off)
+_assets_cbs=$([[ "$SKIP_CBS" == 0 ]] && echo sync || echo off)
+_assets_fas=$([[ "$SKIP_FAS" == 0 ]] && echo sync || echo off)
+echo "[Bridges-2] training assets: MCS=$_assets_mcs  CBS=$_assets_cbs  FAS=$_assets_fas  (default off — use --sync-all or --sync-{mcs,cbs,fas})"
 
 # Validate (path/account have defaults; override with env if needed)
 if [[ -z "$BRIDGES2_DIR" ]]; then
@@ -128,14 +162,18 @@ if [[ -z "${GRIM_VCPKG_ROOT:-}" ]]; then
 fi
 BRIDGES2_MANIFEST_ENSURE="mkdir -p $BRIDGES2_DIR/$TRAINING_DIR && [ -f $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json ] || printf '%s' '$TRAINING_VCPKG_JSON' > $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json"
 
-# Submodule + flash-attention patch (same as Anvil)
+# Flash-attention + Cutlass: remote script skips forced submodule pull when gitlink + pin already match.
 CUTLASS_PIN="bbe579a9e3beb6ea6626d9227ec32d0dae119a49"
-if [[ "${GRIM_USE_LATEST_CUTLASS:-}" == "1" ]]; then
-  BRIDGES2_SUBMODULE="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init --force external/flash-attention && (cd external/flash-attention && git submodule update --init csrc/cutlass)"
+if [[ "$SKIP_FAS" == "1" ]]; then
+  BRIDGES2_SUBMODULE="true"
   BRIDGES2_CLEAN=""
 else
-  BRIDGES2_SUBMODULE="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init --force external/flash-attention && (cd external/flash-attention && git submodule update --init --force csrc/cutlass) && (cd external/flash-attention/csrc/cutlass && git fetch origin && git checkout -f $CUTLASS_PIN) && (cd external/flash-attention/csrc/cutlass && git apply -p1 < ../../../../scripts/patches/cutlass-stride-nvcc-fix.patch 2>/dev/null || true) && (cd external/flash-attention && (git apply -p1 < ../../scripts/patches/flash-attention-bwd-template-fix.patch 2>/dev/null || (sed -i.bak -e 's/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, true>/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, true, true>/g' -e 's/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, false>/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, true, false>/g' -e 's/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, false>/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, false, false>/g' -e 's/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, true>/compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, false, Has_alibi, Is_even_M, Is_even_K, false, false, true>/g' csrc/flash_attn/src/flash_bwd_kernel.h))) || true"
-  [[ "$DO_INCREMENTAL" == true ]] && [[ "$DO_CLEAN_BUILD" != true ]] && BRIDGES2_CLEAN="" || BRIDGES2_CLEAN="rm -rf $BRIDGES2_DIR/$BUILD_DIR && "
+  BRIDGES2_SUBMODULE="export CUTLASS_PIN='${CUTLASS_PIN}' GRIM_USE_LATEST_CUTLASS='${GRIM_USE_LATEST_CUTLASS:-0}'; bash scripts/bridges2_ensure_flash_attention.sh ."
+  if [[ "${GRIM_USE_LATEST_CUTLASS:-}" == "1" ]]; then
+    BRIDGES2_CLEAN=""
+  else
+    [[ "$DO_INCREMENTAL" == true ]] && [[ "$DO_CLEAN_BUILD" != true ]] && BRIDGES2_CLEAN="" || BRIDGES2_CLEAN="rm -rf $BRIDGES2_DIR/$BUILD_DIR && "
+  fi
 fi
 
 # CUDA arch: sm_90 for H100, sm_80 for V100
@@ -155,17 +193,24 @@ if [[ "$DO_BUILD" == true ]]; then
 fi
 
 # Transfer data
-if [[ ! -f "$CACHE_PATH_EXPANDED" ]]; then
-  echo "ERROR: merged_verified_cache.jsonl not found at $CACHE_PATH_EXPANDED"
-  exit 1
+if [[ "$SKIP_MCS" == "1" ]]; then
+  :
+else
+  if [[ ! -f "$CACHE_PATH_EXPANDED" ]]; then
+    echo "ERROR: merged_verified_cache.jsonl not found at $CACHE_PATH_EXPANDED"
+    exit 1
+  fi
+  echo "Transferring merged_verified_cache.jsonl..."
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_DATA"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CACHE" < "$CACHE_PATH_EXPANDED"
+  echo "  -> $REMOTE_CACHE"
 fi
-echo "Transferring merged_verified_cache.jsonl..."
-ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_DATA"
-ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CACHE" < "$CACHE_PATH_EXPANDED"
-echo "  -> $REMOTE_CACHE"
 
-if [[ -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
+if [[ "$SKIP_CBS" == "1" ]]; then
+  :
+elif [[ -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
   echo "Transferring concept_blocks.jsonl..."
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_DATA"
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CONCEPT_BLOCKS" < "$CONCEPT_BLOCKS_PATH_EXPANDED"
   echo "  -> $REMOTE_CONCEPT_BLOCKS"
 else

@@ -432,6 +432,27 @@ void LanguageModel::initGPU() {
             std::cout << "✓ ExecutionBlock layer created (V=" << eb_config.num_slots
                       << ", K=" << eb_config.num_exec_steps
                       << ", ops=" << eb_config.num_ops << ")\n";
+
+            // Decode-time slot selector (pointer-selector baseline)
+            if (cfg.selector_enabled) {
+                DecodeTimeSlotSelectorConfig sel_config;
+                sel_config.d_model = cfg.d_model;
+                sel_config.d_selector = cfg.selector_d_selector;
+                sel_config.d_slot_features = kSlotFeatureDim;
+
+                const uint64_t sel_seed = training_state_.weight_init_seed + 30;
+                decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
+                    sel_config, sel_seed, primary_stream);
+
+                NumPolicyConfig pol_config;
+                pol_config.selection_margin = cfg.selector_selection_margin;
+                pol_config.num_slots = cfg.execution_block_num_slots;
+                pol_config.scratch_slots = 0; // num_scratch_slots defaults to 0
+                decode_time_num_policy_ = std::make_unique<DecodeTimeNumPolicy>(pol_config);
+
+                std::cout << "✓ DecodeTimeSlotSelector created (d_selector=" << sel_config.d_selector
+                          << ", margin=" << pol_config.selection_margin << ")\n";
+            }
         }
 
         // Multi-token prediction (MTP) auxiliary heads: K independent linear heads (not tied to embedding)

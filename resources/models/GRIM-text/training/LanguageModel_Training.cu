@@ -276,6 +276,16 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D4d: execution block v2 registered\n"); fflush(stderr);
     }
 
+    // Decode-time slot selector (gated by selector_enabled inside execution_block_enabled)
+    if (config_.selector_enabled && decode_time_slot_selector_layer_) {
+        auto& sel = *decode_time_slot_selector_layer_;
+        registerTensor("selector_W_q_select", sel.W_q_select(), ParamGroupType::SLOT_SELECTOR);
+        registerTensor("selector_W_k_select", sel.W_k_select(), ParamGroupType::SLOT_SELECTOR);
+        registerTensor("selector_null_key_select", sel.null_key_select(), ParamGroupType::SLOT_SELECTOR);
+        registerNonDecayTensor("selector_null_logit_bias", sel.null_logit_bias(), ParamGroupType::SLOT_SELECTOR);
+        fprintf(stderr, "[buildParameterGroups] DIAG-D4e: slot selector registered (4 tensors)\n"); fflush(stderr);
+    }
+
     // Multi-token prediction (MTP) auxiliary heads
     const int mtp_k = (config_.mtp_enabled ? config_.mtp_k : 0);
     for (int k = 0; k < mtp_k; ++k) {

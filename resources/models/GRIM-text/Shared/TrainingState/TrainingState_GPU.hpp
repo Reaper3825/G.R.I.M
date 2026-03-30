@@ -30,6 +30,8 @@
 namespace GRIM {
     class EmbeddingLayer;
     struct FlashAttentionBF16Scratch;
+    enum class SlotSelectionStatus : uint8_t;
+    struct SlotSelectionResult;
 }
 
 // AutogradIntermediates: owns all intermediate tensors during forward→backward
@@ -131,6 +133,17 @@ struct TrainingState {
     //======================================================//
     ExecutionMemory inference_exec_memory;
     bool has_inference_exec_memory = false;
+
+    //======================================================//
+    //  DECODE-TIME SLOT SELECTOR RESULT
+    //  Written by executeDecodeForward_ when selector is active.
+    //  Consumed by generateSequenceGPU to decide <NUM> admissibility.
+    //  Reset to invalid each step; valid only after executeDecodeForward_.
+    //======================================================//
+    bool decode_selector_valid = false;
+    int32_t decode_selected_slot = -1;       // Real slot index when Selected
+    float decode_selected_value = 0.0f;      // Numeric value from selected slot
+    uint8_t decode_selector_status = 0;      // Cast of SlotSelectionStatus
     
     // Single-token buffers for incremental generation
     Tensor single_token_logits;      // [vocab_size]

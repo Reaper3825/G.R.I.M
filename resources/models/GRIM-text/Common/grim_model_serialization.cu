@@ -308,6 +308,20 @@ bool LanguageModel::save(const std::string& path) {
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
     }
 
+    // DecodeTimeSlotSelector weights — serialized via FlatBuffer
+    if (decode_time_slot_selector_layer_) {
+        auto assignRead = [](DeviceReadView& v, const Tensor& t) {
+            v.ptr = t.data;
+            v.count = static_cast<std::size_t>(t.numel());
+        };
+        request.sources.slot_selector.enabled = true;
+        assignRead(request.sources.slot_selector.w_q_select, decode_time_slot_selector_layer_->W_q_select());
+        assignRead(request.sources.slot_selector.w_k_select, decode_time_slot_selector_layer_->W_k_select());
+        assignRead(request.sources.slot_selector.null_key_select, decode_time_slot_selector_layer_->null_key_select());
+        assignRead(request.sources.slot_selector.null_logit_bias, decode_time_slot_selector_layer_->null_logit_bias());
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing SlotSelector weights for FlatBuffer serialization");
+    }
+
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head) — owned by LMHeadLayer
     if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data) {
         request.sources.final_rms_gamma.ptr = lm_head_layer_->finalRmsGamma().data;
@@ -362,6 +376,7 @@ bool LanguageModel::load(const std::string& path) {
 
     // Pattern B: call site is the sole authority for what the model requires.
     request.capabilities.requires_execution_block = (execution_block_layer_ != nullptr);
+    request.capabilities.requires_slot_selector     = (decode_time_slot_selector_layer_ != nullptr);
     request.capabilities.requires_numeric_head    = false;
     request.capabilities.requires_reasoning_head  = (reasoning_head_layer_ != nullptr);
     request.capabilities.requires_scratch_block   = (scratch_block_layer_ != nullptr && scratch_block_layer_->isEnabled());
@@ -522,6 +537,14 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(request.execution_block.b_scal, execution_block_layer_->b_scal().data, static_cast<std::size_t>(execution_block_layer_->b_scal().numel()));
         assignWrite(request.execution_block.W_trace, execution_block_layer_->W_trace().data, static_cast<std::size_t>(execution_block_layer_->W_trace().numel()));
         assignWrite(request.execution_block.b_trace, execution_block_layer_->b_trace().data, static_cast<std::size_t>(execution_block_layer_->b_trace().numel()));
+    }
+
+    // DecodeTimeSlotSelector weight destinations — loaded via FlatBuffer
+    if (decode_time_slot_selector_layer_) {
+        assignWrite(request.slot_selector.w_q_select, decode_time_slot_selector_layer_->W_q_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer_->W_q_select().numel()));
+        assignWrite(request.slot_selector.w_k_select, decode_time_slot_selector_layer_->W_k_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer_->W_k_select().numel()));
+        assignWrite(request.slot_selector.null_key_select, decode_time_slot_selector_layer_->null_key_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer_->null_key_select().numel()));
+        assignWrite(request.slot_selector.null_logit_bias, decode_time_slot_selector_layer_->null_logit_bias().data, static_cast<std::size_t>(decode_time_slot_selector_layer_->null_logit_bias().numel()));
     }
 
     // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer

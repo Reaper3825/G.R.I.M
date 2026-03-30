@@ -64,6 +64,10 @@ struct ExecutionBlockWeights;
 struct ExecutionBlockWeightsBuilder;
 struct ExecutionBlockWeightsT;
 
+struct DecodeTimeSlotSelectorWeights;
+struct DecodeTimeSlotSelectorWeightsBuilder;
+struct DecodeTimeSlotSelectorWeightsT;
+
 struct ModelConfig;
 struct ModelConfigBuilder;
 struct ModelConfigT;
@@ -1698,6 +1702,79 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
 
 // ─── End ExecutionBlockWeights ───────────────────────────────────────────────
 
+// ─── DecodeTimeSlotSelectorWeights ───────────────────────────────────────────
+
+struct DecodeTimeSlotSelectorWeightsT : public ::flatbuffers::NativeTable {
+  typedef DecodeTimeSlotSelectorWeights TableType;
+  std::vector<float> w_q_select_data{};
+  std::vector<float> w_k_select_data{};
+  std::vector<float> null_key_select_data{};
+  std::vector<float> null_logit_bias_data{};
+};
+
+struct DecodeTimeSlotSelectorWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef DecodeTimeSlotSelectorWeightsT NativeTableType;
+  typedef DecodeTimeSlotSelectorWeightsBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_W_Q_SELECT_DATA = 4,
+    VT_W_K_SELECT_DATA = 6,
+    VT_NULL_KEY_SELECT_DATA = 8,
+    VT_NULL_LOGIT_BIAS_DATA = 10
+  };
+  const ::flatbuffers::Vector<float> *w_q_select_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_Q_SELECT_DATA); }
+  const ::flatbuffers::Vector<float> *w_k_select_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_K_SELECT_DATA); }
+  const ::flatbuffers::Vector<float> *null_key_select_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_NULL_KEY_SELECT_DATA); }
+  const ::flatbuffers::Vector<float> *null_logit_bias_data() const { return GetPointer<const ::flatbuffers::Vector<float> *>(VT_NULL_LOGIT_BIAS_DATA); }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_W_Q_SELECT_DATA) && verifier.VerifyVector(w_q_select_data()) &&
+           VerifyOffset(verifier, VT_W_K_SELECT_DATA) && verifier.VerifyVector(w_k_select_data()) &&
+           VerifyOffset(verifier, VT_NULL_KEY_SELECT_DATA) && verifier.VerifyVector(null_key_select_data()) &&
+           VerifyOffset(verifier, VT_NULL_LOGIT_BIAS_DATA) && verifier.VerifyVector(null_logit_bias_data()) &&
+           verifier.EndTable();
+  }
+  DecodeTimeSlotSelectorWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(DecodeTimeSlotSelectorWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const DecodeTimeSlotSelectorWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct DecodeTimeSlotSelectorWeightsBuilder {
+  typedef DecodeTimeSlotSelectorWeights Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_w_q_select_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(DecodeTimeSlotSelectorWeights::VT_W_Q_SELECT_DATA, v); }
+  void add_w_k_select_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(DecodeTimeSlotSelectorWeights::VT_W_K_SELECT_DATA, v); }
+  void add_null_key_select_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(DecodeTimeSlotSelectorWeights::VT_NULL_KEY_SELECT_DATA, v); }
+  void add_null_logit_bias_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> v) { fbb_.AddOffset(DecodeTimeSlotSelectorWeights::VT_NULL_LOGIT_BIAS_DATA, v); }
+  explicit DecodeTimeSlotSelectorWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> CreateDecodeTimeSlotSelectorWeights(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_q_select_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_k_select_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> null_key_select_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> null_logit_bias_data = 0) {
+  DecodeTimeSlotSelectorWeightsBuilder builder_(_fbb);
+  builder_.add_null_logit_bias_data(null_logit_bias_data);
+  builder_.add_null_key_select_data(null_key_select_data);
+  builder_.add_w_k_select_data(w_k_select_data);
+  builder_.add_w_q_select_data(w_q_select_data);
+  return builder_.Finish();
+}
+
+::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> CreateDecodeTimeSlotSelectorWeights(::flatbuffers::FlatBufferBuilder &_fbb, const DecodeTimeSlotSelectorWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
+// ─── End DecodeTimeSlotSelectorWeights ───────────────────────────────────────
+
 struct ScratchBlockWeightsT : public ::flatbuffers::NativeTable {
   typedef ScratchBlockWeights TableType;
   std::vector<float> atom_type_embeddings{};
@@ -2353,6 +2430,7 @@ struct TransformerModelT : public ::flatbuffers::NativeTable {
   std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT> scratch_block{};
   std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT> reasoning_head{};
   std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT> execution_block{};
+  std::unique_ptr<GRIMTransformer::DecodeTimeSlotSelectorWeightsT> slot_selector{};
   std::vector<float> final_rms_gamma{};
   std::unique_ptr<GRIMTransformer::LossWeightingWeightsT> loss_weighting{};
   std::unique_ptr<GRIMTransformer::TrainingMetadataT> training_metadata{};
@@ -2385,7 +2463,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_CREATION_TIMESTAMP = 28,
     VT_LAST_MODIFIED_TIMESTAMP = 30,
     VT_REASONING_HEAD = 32,
-    VT_EXECUTION_BLOCK = 34
+    VT_EXECUTION_BLOCK = 34,
+    VT_SLOT_SELECTOR = 36
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -2413,6 +2492,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const GRIMTransformer::ExecutionBlockWeights *execution_block() const {
     return GetPointer<const GRIMTransformer::ExecutionBlockWeights *>(VT_EXECUTION_BLOCK);
+  }
+  const GRIMTransformer::DecodeTimeSlotSelectorWeights *slot_selector() const {
+    return GetPointer<const GRIMTransformer::DecodeTimeSlotSelectorWeights *>(VT_SLOT_SELECTOR);
   }
   const ::flatbuffers::Vector<float> *final_rms_gamma() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_FINAL_RMS_GAMMA);
@@ -2455,6 +2537,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(reasoning_head()) &&
            VerifyOffset(verifier, VT_EXECUTION_BLOCK) &&
            verifier.VerifyTable(execution_block()) &&
+           VerifyOffset(verifier, VT_SLOT_SELECTOR) &&
+           verifier.VerifyTable(slot_selector()) &&
            VerifyOffset(verifier, VT_FINAL_RMS_GAMMA) &&
            verifier.VerifyVector(final_rms_gamma()) &&
            VerifyOffset(verifier, VT_LOSS_WEIGHTING) &&
@@ -2502,6 +2586,9 @@ struct TransformerModelBuilder {
   }
   void add_execution_block(::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block) {
     fbb_.AddOffset(TransformerModel::VT_EXECUTION_BLOCK, execution_block);
+  }
+  void add_slot_selector(::flatbuffers::Offset<GRIMTransformer::DecodeTimeSlotSelectorWeights> slot_selector) {
+    fbb_.AddOffset(TransformerModel::VT_SLOT_SELECTOR, slot_selector);
   }
   void add_final_rms_gamma(::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma) {
     fbb_.AddOffset(TransformerModel::VT_FINAL_RMS_GAMMA, final_rms_gamma);
@@ -2556,7 +2643,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     uint64_t creation_timestamp = 0,
     uint64_t last_modified_timestamp = 0,
     ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
+    ::flatbuffers::Offset<GRIMTransformer::DecodeTimeSlotSelectorWeights> slot_selector = 0) {
   TransformerModelBuilder builder_(_fbb);
   builder_.add_last_modified_timestamp(last_modified_timestamp);
   builder_.add_creation_timestamp(creation_timestamp);
@@ -2564,6 +2652,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
   builder_.add_checksum_crc32(checksum_crc32);
   builder_.add_training_metadata(training_metadata);
   builder_.add_loss_weighting(loss_weighting);
+  builder_.add_slot_selector(slot_selector);
   builder_.add_execution_block(execution_block);
   builder_.add_reasoning_head(reasoning_head);
   builder_.add_final_rms_gamma(final_rms_gamma);
@@ -2594,7 +2683,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     uint64_t creation_timestamp = 0,
     uint64_t last_modified_timestamp = 0,
     ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
+    ::flatbuffers::Offset<GRIMTransformer::DecodeTimeSlotSelectorWeights> slot_selector = 0) {
   auto encoder_layers__ = encoder_layers ? _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>(*encoder_layers) : 0;
   auto final_rms_gamma__ = final_rms_gamma ? _fbb.CreateVector<float>(*final_rms_gamma) : 0;
   return GRIMTransformer::CreateTransformerModel(
@@ -2614,7 +2704,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       creation_timestamp,
       last_modified_timestamp,
       reasoning_head,
-      execution_block);
+      execution_block,
+      slot_selector);
 }
 
 ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -3157,6 +3248,45 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
 
 // ─── End ExecutionBlockWeights Pack/UnPack ────────────────────────────────────
 
+// ─── DecodeTimeSlotSelectorWeights Pack/UnPack ───────────────────────────────
+
+inline DecodeTimeSlotSelectorWeightsT *DecodeTimeSlotSelectorWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<DecodeTimeSlotSelectorWeightsT>(new DecodeTimeSlotSelectorWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void DecodeTimeSlotSelectorWeights::UnPackTo(DecodeTimeSlotSelectorWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = w_q_select_data(); if (_e) { _o->w_q_select_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_q_select_data[_i] = _e->Get(_i); } } else { _o->w_q_select_data.resize(0); } }
+  { auto _e = w_k_select_data(); if (_e) { _o->w_k_select_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_k_select_data[_i] = _e->Get(_i); } } else { _o->w_k_select_data.resize(0); } }
+  { auto _e = null_key_select_data(); if (_e) { _o->null_key_select_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->null_key_select_data[_i] = _e->Get(_i); } } else { _o->null_key_select_data.resize(0); } }
+  { auto _e = null_logit_bias_data(); if (_e) { _o->null_logit_bias_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->null_logit_bias_data[_i] = _e->Get(_i); } } else { _o->null_logit_bias_data.resize(0); } }
+}
+
+inline ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> DecodeTimeSlotSelectorWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const DecodeTimeSlotSelectorWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateDecodeTimeSlotSelectorWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> CreateDecodeTimeSlotSelectorWeights(::flatbuffers::FlatBufferBuilder &_fbb, const DecodeTimeSlotSelectorWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const DecodeTimeSlotSelectorWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _w_q_select_data = _o->w_q_select_data.size() ? _fbb.CreateVector(_o->w_q_select_data) : 0;
+  auto _w_k_select_data = _o->w_k_select_data.size() ? _fbb.CreateVector(_o->w_k_select_data) : 0;
+  auto _null_key_select_data = _o->null_key_select_data.size() ? _fbb.CreateVector(_o->null_key_select_data) : 0;
+  auto _null_logit_bias_data = _o->null_logit_bias_data.size() ? _fbb.CreateVector(_o->null_logit_bias_data) : 0;
+  return GRIMTransformer::CreateDecodeTimeSlotSelectorWeights(
+      _fbb,
+      _w_q_select_data,
+      _w_k_select_data,
+      _null_key_select_data,
+      _null_logit_bias_data);
+}
+
+// ─── End DecodeTimeSlotSelectorWeights Pack/UnPack ───────────────────────────
+
 inline ScratchBlockWeightsT *ScratchBlockWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ScratchBlockWeightsT>(new ScratchBlockWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -3372,6 +3502,7 @@ inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
         scratch_block((o.scratch_block) ? new GRIMTransformer::ScratchBlockWeightsT(*o.scratch_block) : nullptr),
         reasoning_head((o.reasoning_head) ? new GRIMTransformer::ReasoningHeadWeightsT(*o.reasoning_head) : nullptr),
         execution_block((o.execution_block) ? new GRIMTransformer::ExecutionBlockWeightsT(*o.execution_block) : nullptr),
+        slot_selector((o.slot_selector) ? new GRIMTransformer::DecodeTimeSlotSelectorWeightsT(*o.slot_selector) : nullptr),
         final_rms_gamma(o.final_rms_gamma),
         loss_weighting((o.loss_weighting) ? new GRIMTransformer::LossWeightingWeightsT(*o.loss_weighting) : nullptr),
         training_metadata((o.training_metadata) ? new GRIMTransformer::TrainingMetadataT(*o.training_metadata) : nullptr),
@@ -3393,6 +3524,7 @@ inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLAT
   std::swap(scratch_block, o.scratch_block);
   std::swap(reasoning_head, o.reasoning_head);
   std::swap(execution_block, o.execution_block);
+  std::swap(slot_selector, o.slot_selector);
   std::swap(final_rms_gamma, o.final_rms_gamma);
   std::swap(loss_weighting, o.loss_weighting);
   std::swap(training_metadata, o.training_metadata);
@@ -3421,6 +3553,7 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = scratch_block(); if (_e) { if(_o->scratch_block) { _e->UnPackTo(_o->scratch_block.get(), _resolver); } else { _o->scratch_block = std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->scratch_block) { _o->scratch_block.reset(); } }
   { auto _e = reasoning_head(); if (_e) { if(_o->reasoning_head) { _e->UnPackTo(_o->reasoning_head.get(), _resolver); } else { _o->reasoning_head = std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->reasoning_head) { _o->reasoning_head.reset(); } }
   { auto _e = execution_block(); if (_e) { if(_o->execution_block) { _e->UnPackTo(_o->execution_block.get(), _resolver); } else { _o->execution_block = std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->execution_block) { _o->execution_block.reset(); } }
+  { auto _e = slot_selector(); if (_e) { if(_o->slot_selector) { _e->UnPackTo(_o->slot_selector.get(), _resolver); } else { _o->slot_selector = std::unique_ptr<GRIMTransformer::DecodeTimeSlotSelectorWeightsT>(_e->UnPack(_resolver)); } } else if (_o->slot_selector) { _o->slot_selector.reset(); } }
   { auto _e = final_rms_gamma(); if (_e) { _o->final_rms_gamma.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->final_rms_gamma[_i] = _e->Get(_i); } } else { _o->final_rms_gamma.resize(0); } }
   { auto _e = loss_weighting(); if (_e) { if(_o->loss_weighting) { _e->UnPackTo(_o->loss_weighting.get(), _resolver); } else { _o->loss_weighting = std::unique_ptr<GRIMTransformer::LossWeightingWeightsT>(_e->UnPack(_resolver)); } } else if (_o->loss_weighting) { _o->loss_weighting.reset(); } }
   { auto _e = training_metadata(); if (_e) { if(_o->training_metadata) { _e->UnPackTo(_o->training_metadata.get(), _resolver); } else { _o->training_metadata = std::unique_ptr<GRIMTransformer::TrainingMetadataT>(_e->UnPack(_resolver)); } } else if (_o->training_metadata) { _o->training_metadata.reset(); } }
@@ -3447,6 +3580,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
   auto _scratch_block = _o->scratch_block ? CreateScratchBlockWeights(_fbb, _o->scratch_block.get(), _rehasher) : 0;
   auto _reasoning_head = _o->reasoning_head ? CreateReasoningHeadWeights(_fbb, _o->reasoning_head.get(), _rehasher) : 0;
   auto _execution_block = _o->execution_block ? CreateExecutionBlockWeights(_fbb, _o->execution_block.get(), _rehasher) : 0;
+  auto _slot_selector = _o->slot_selector ? CreateDecodeTimeSlotSelectorWeights(_fbb, _o->slot_selector.get(), _rehasher) : 0;
   auto _final_rms_gamma = _o->final_rms_gamma.size() ? _fbb.CreateVector(_o->final_rms_gamma) : 0;
   auto _loss_weighting = _o->loss_weighting ? CreateLossWeightingWeights(_fbb, _o->loss_weighting.get(), _rehasher) : 0;
   auto _training_metadata = _o->training_metadata ? CreateTrainingMetadata(_fbb, _o->training_metadata.get(), _rehasher) : 0;
@@ -3471,7 +3605,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
       _creation_timestamp,
       _last_modified_timestamp,
       _reasoning_head,
-      _execution_block);
+      _execution_block,
+      _slot_selector);
 }
 
 inline const GRIMTransformer::TransformerModel *GetTransformerModel(const void *buf) {

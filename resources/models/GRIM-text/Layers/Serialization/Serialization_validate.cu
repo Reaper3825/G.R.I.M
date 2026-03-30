@@ -293,6 +293,39 @@ bool validate_checkpoint_capabilities(
         if (!ok) return false;
     }
 
+    // ─── SlotSelector ───
+    if (req.requires_slot_selector) {
+        const auto* fb_ss = model_fb->slot_selector();
+        if (!fb_ss) {
+            Logging::EmitModuleError(kLogModule, "[load] FATAL: SlotSelector required but missing in checkpoint");
+            return false;
+        }
+        auto ss_field = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            if (!src) {
+                Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: missing required SS field: ", name));
+                return false;
+            }
+            if (!dst.ptr) {
+                Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: null model destination for SS field: ", name));
+                return false;
+            }
+            if (static_cast<std::size_t>(src->size()) != dst.count) {
+                Logging::EmitModuleError(kLogModule,
+                    Msg("[load] FATAL: SS field ", name, " size mismatch: checkpoint=",
+                        src->size(), " model_numel=", dst.count));
+                return false;
+            }
+            return true;
+        };
+        const auto& ss = load_req.slot_selector;
+        ok = true;
+        ok = ok && ss_field(fb_ss->w_q_select_data(), ss.w_q_select, "SS w_q_select");
+        ok = ok && ss_field(fb_ss->w_k_select_data(), ss.w_k_select, "SS w_k_select");
+        ok = ok && ss_field(fb_ss->null_key_select_data(), ss.null_key_select, "SS null_key_select");
+        ok = ok && ss_field(fb_ss->null_logit_bias_data(), ss.null_logit_bias, "SS null_logit_bias");
+        if (!ok) return false;
+    }
+
     // ─── final_rms_gamma ───
     if (req.requires_final_rms_gamma) {
         const auto* fb_frg = model_fb->final_rms_gamma();

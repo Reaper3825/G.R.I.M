@@ -1000,6 +1000,11 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.execution_block_gate_warmup_steps = hp.execution_block_gate_warmup_steps;
     model_config.execution_block_causal_w1_transition = hp.execution_block_causal_w1_transition;
 
+    // Decode-time slot selector config
+    model_config.selector_enabled = hp.selector_enabled;
+    model_config.selector_d_selector = hp.selector_d_selector;
+    model_config.selector_selection_margin = hp.selector_selection_margin;
+
     logger.log("ExecutionBlock: enabled=" + std::string(model_config.execution_block_enabled ? "true" : "false") +
               ", V=" + std::to_string(model_config.execution_block_num_slots) +
               ", K=" + std::to_string(model_config.execution_block_num_steps) +

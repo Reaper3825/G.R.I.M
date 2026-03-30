@@ -38,6 +38,7 @@
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"                 // Unified PBM (ALiBi + RoPE)
 #include "../Shared/Sampling/Sampling.hpp"                        // SamplingPipeline
+#include "../Shared/Execution/DecodeTimeNumPolicy.hpp"            // SlotSelectionStatus
 
 namespace GRIM {
 
@@ -829,10 +830,15 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             sampling_cfg.bad_token_ids.end());
     }
 
-    // Decode-time <NUM> binding is forbidden until the explicit slot-selector
-    // workstream lands. While ScratchBlock generation is active, mask <NUM>
-    // before sampling rather than guessing from runtime state.
-    {
+    // Decode-time <NUM> admissibility: when selector is active, <NUM> is allowed
+    // only when the selector has resolved a slot (Selected status). When the
+    // selector is inactive or unavailable, <NUM> remains masked as before.
+    const bool selector_active = config_.selector_enabled
+        && getDecodeTimeSlotSelectorLayer() != nullptr
+        && getDecodeTimeNumPolicy() != nullptr
+        && config_.execution_block_enabled;
+    if (!selector_active) {
+        // No selector → hard-mask <NUM> when scratchblock generation is active
         const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
                                                     config_.use_scratch_block &&
                                                     isScratchBlockEnabled();
@@ -845,6 +851,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                 sampling_cfg.bad_token_ids.end());
         }
     }
+    // When selector IS active, <NUM> masking is decided per-step below
     
     Sampling::SamplingPipeline pipeline(sampling_cfg);
     
@@ -881,6 +888,20 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         }
         
         // =====================================================================
+        // Selector-aware <NUM> masking (per step)
+        // When selector is active, executeDecodeForward_ populates
+        // training_state_.decode_selector_* with the selection result.
+        // Allow <NUM> only when status == Selected; otherwise mask it.
+        // =====================================================================
+        if (selector_active && training_state_.decode_selector_valid) {
+            const int num_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
+            if (training_state_.decode_selector_status
+                != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
+                logits_vec.data[num_tid] = -1e30f;
+            }
+        }
+
+        // =====================================================================
         // Sample next token using SamplingPipeline
         // Pipeline handles: penalties → n-gram blocking → token masking →
         //                   temperature+softmax → filter → renorm → sample
@@ -904,8 +925,16 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             token_atom_mask_val = 1;
             if (GRIM::Tokenizer::tokenIdToAtomType(sample.token_id)
                 == GRIM::Tokenizer::AtomType::ATOM_NUM) {
-                throw std::runtime_error(
-                    "generateSequenceGPU: sampled <NUM> while decode-time slot selection is unavailable; generation MUST mask <NUM> until the explicit selector exists");
+                // <NUM> was sampled — selector MUST have resolved a slot
+                if (!selector_active || !training_state_.decode_selector_valid
+                    || training_state_.decode_selector_status
+                       != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
+                    throw std::runtime_error(
+                        "generateSequenceGPU: sampled <NUM> but selector did not resolve a slot "
+                        "(status=" + std::to_string(training_state_.decode_selector_status) + ")");
+                }
+                new_token_slot_id = training_state_.decode_selected_slot;
+                token_numeric_value = training_state_.decode_selected_value;
             }
         }
         

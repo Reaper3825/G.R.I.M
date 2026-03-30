@@ -341,6 +341,11 @@ struct TrainingHyperparameters {
     int   execution_block_gate_warmup_steps;
     float execution_block_causal_w1_transition;
 
+    // Decode-time slot selector
+    bool  selector_enabled;
+    int   selector_d_selector;
+    float selector_selection_margin;
+
     
     // Activation quantization - NO DEFAULTS
     bool activation_quantization_enabled;
@@ -1221,6 +1226,13 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_block_gate_warmup_steps, eb, "gate_warmup_steps");
         assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
 
+        // Decode-time slot selector (nested under execution_block)
+        if (auto sit = eb.find("selector"); sit != eb.end() && sit->is_object()) {
+            const auto& sel = *sit;
+            assignTrainingField(params.selector_enabled, sel, "enabled");
+            assignTrainingField(params.selector_d_selector, sel, "d_selector");
+            assignTrainingField(params.selector_selection_margin, sel, "selection_margin");
+        }
     }
     
     // Load activation quantization configuration

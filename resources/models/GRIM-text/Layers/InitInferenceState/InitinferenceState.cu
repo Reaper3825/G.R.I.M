@@ -153,6 +153,26 @@ void LanguageModel::initInferenceState() {
         execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_cfg, /*seed=*/0, primary_stream);
         std::cout << "  ✓ ExecutionBlockLayer initialized (inference, V="
                   << eb_cfg.num_slots << ", K=" << eb_cfg.num_exec_steps << ")" << std::endl;
+
+        // Decode-time slot selector (inference — loaded from checkpoint)
+        if (cfg.selector_enabled) {
+            DecodeTimeSlotSelectorConfig sel_cfg;
+            sel_cfg.d_model = cfg.d_model;
+            sel_cfg.d_selector = cfg.selector_d_selector;
+            sel_cfg.d_slot_features = kSlotFeatureDim;
+
+            decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
+                sel_cfg, /*seed=*/0, primary_stream);
+
+            NumPolicyConfig pol_cfg;
+            pol_cfg.selection_margin = cfg.selector_selection_margin;
+            pol_cfg.num_slots = cfg.execution_block_num_slots;
+            pol_cfg.scratch_slots = 0;
+            decode_time_num_policy_ = std::make_unique<DecodeTimeNumPolicy>(pol_cfg);
+
+            std::cout << "  ✓ DecodeTimeSlotSelector initialized (inference, d_selector="
+                      << sel_cfg.d_selector << ")" << std::endl;
+        }
     }
 
     // MTP heads (inference: allocate so load() can fill from .mtp sidecar; not used in forward)
