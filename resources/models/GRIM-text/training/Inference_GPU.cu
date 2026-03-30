@@ -32,12 +32,24 @@ namespace {
 
 constexpr int kScratchTextFeatureDim = 16;
 
+// Copy per-token slot assignment map from host to device.
+//
+//   prompt_map semantics:
+//     - Empty vector → all tokens mapped to -1 (non-state-bearing).
+//     - Entry == -1  → this token is non-state-bearing (no slot selected).
+//     - Entry in [0, num_slots) → token is bound to that execution slot.
+//
+//   At decode time, <NUM> can only be generated when the selector
+//   resolves to a single live slot (Selected). Otherwise <NUM> is
+//   masked out of the vocabulary and cannot be sampled.
 void copyTokenSlotMapH2D(TrainingState& ts, cudaStream_t stream, int seq_len,
-                         const std::vector<int32_t>& prompt_map) {
+                         const std::vector<int32_t>& prompt_map,
+                         int num_slots) {
     if (!ts.cached_token_to_slot_map.data || seq_len <= 0)
         return;
     auto* dst = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
     if (prompt_map.empty()) {
+        // Empty prompt map → all tokens are non-state-bearing (slot_id = -1)
         std::vector<int32_t> neg(static_cast<size_t>(seq_len), -1);
         cudaError_t err = cudaMemcpyAsync(dst, neg.data(),
             static_cast<size_t>(seq_len) * sizeof(int32_t),
@@ -51,6 +63,16 @@ void copyTokenSlotMapH2D(TrainingState& ts, cudaStream_t stream, int seq_len,
     if (static_cast<int>(prompt_map.size()) != seq_len) {
         throw std::runtime_error(
             "token_to_slot_map size must match sequence length (or pass empty for all -1)");
+    }
+    // Validate slot-range: each entry must be -1 (non-state-bearing) or in [0, num_slots)
+    for (int i = 0; i < seq_len; ++i) {
+        int32_t sid = prompt_map[i];
+        if (sid != -1 && (sid < 0 || sid >= num_slots)) {
+            throw std::runtime_error(
+                "copyTokenSlotMapH2D: slot_id=" + std::to_string(sid) +
+                " at position " + std::to_string(i) + " out of range [0, " +
+                std::to_string(num_slots) + ") — must be -1 or valid slot index");
+        }
     }
     cudaError_t err = cudaMemcpyAsync(dst, prompt_map.data(),
         static_cast<size_t>(seq_len) * sizeof(int32_t),
@@ -237,6 +259,14 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
 
 //======================================================//
 //  forwardInit - Prefill phase: copy prompt to device, run forward
+//
+//  prompt_token_to_slot_map:
+//    - Empty vector → all tokens are non-state-bearing (slot_id = -1).
+//    - Entry == -1  → non-state-bearing token (no execution slot).
+//    - Entry in [0, num_slots) → token bound to that execution slot.
+//
+//  During subsequent decode steps, <NUM> can only be generated when the
+//  selector resolves exactly one live slot. Otherwise <NUM> is masked.
 //======================================================//
 Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                                   const std::vector<float>& prompt_numeric_values,
@@ -287,7 +317,8 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                         0, static_cast<size_t>(seq_len) * sizeof(uint8_t), stream);
     }
 
-    copyTokenSlotMapH2D(training_state_, stream, seq_len, prompt_token_to_slot_map);
+    copyTokenSlotMapH2D(training_state_, stream, seq_len, prompt_token_to_slot_map,
+                        config_.execution_block_num_slots);
     
     // Store sequence length for subsequent forwardStep() calls
     training_state_.kv_cache_len = seq_len;
@@ -614,47 +645,20 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     }
 
     // ── Decode-time slot selector: evaluate selection before LM head ──
-    ts.decode_selector_valid = false;
-    ts.decode_selector_status = static_cast<uint8_t>(SlotSelectionStatus::Null);
-    ts.decode_selected_slot = -1;
-    ts.decode_selected_value = 0.0f;
-
     {
-        auto* selector = getDecodeTimeSlotSelectorLayer();
-        auto* policy   = getDecodeTimeNumPolicy();
-        if (cfg.selector_enabled && selector && policy
-            && exec_block_active && ts.has_inference_exec_memory) {
-            const auto& mem = ts.inference_exec_memory;
-            policy->buildCandidateSet(
-                mem.valid_mask.data,
-                mem.values.data,
-                mem.recent_write_mask.data,
-                mem.usage.data,
-                policy->config().num_slots,
-                policy->config().scratch_slots,
-                stream);
-            const auto& cands = policy->candidates();
-            if (cands.num_live_slots > 0) {
-                SelectorScoreResult scores = selector->forward(
-                    hidden.data, cands.d_slot_features,
-                    cands.num_live_slots, stream);
-                SlotSelectionResult result = policy->evaluateScores(
-                    scores.d_scores, scores.num_live_slots, stream);
-                ts.decode_selector_status = static_cast<uint8_t>(result.status);
-                ts.decode_selected_slot = result.selected_slot;
-                if (result.status == SlotSelectionStatus::Selected
-                    && result.selected_slot >= 0) {
-                    // Read numeric value from the selected slot
-                    float val = 0.0f;
-                    cudaMemcpyAsync(&val,
-                        mem.values.data + result.selected_slot,
-                        sizeof(float), cudaMemcpyDeviceToHost, stream);
-                    cudaStreamSynchronize(stream);
-                    ts.decode_selected_value = val;
-                }
-            }
-            ts.decode_selector_valid = true;
-        }
+        DecodeTimeResolveResult sel = resolveDecodeTimeNumSlotSelectionOrMask(
+            getDecodeTimeSlotSelectorLayer(),
+            getDecodeTimeNumPolicy(),
+            cfg.selector_enabled,
+            exec_block_active,
+            ts.has_inference_exec_memory,
+            ts.inference_exec_memory,
+            hidden.data,
+            stream);
+        ts.decode_selector_valid  = sel.valid;
+        ts.decode_selector_status = static_cast<uint8_t>(sel.status);
+        ts.decode_selected_slot   = sel.selected_slot;
+        ts.decode_selected_value  = sel.selected_value;
     }
 
     // ── Step 4: LM Head (RMSNorm → optional centering → W @ hidden^T) ──

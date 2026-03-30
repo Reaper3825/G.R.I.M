@@ -525,12 +525,24 @@ Vector LanguageModel::getNextTokenLogits(const std::vector<int>& context_tokens,
 
 namespace {
 
+// Copy per-token slot assignment map from host to device (inference path).
+//
+//   prompt_map semantics:
+//     - Empty vector → all tokens mapped to -1 (non-state-bearing).
+//     - Entry == -1  → this token is non-state-bearing (no slot selected).
+//     - Entry in [0, num_slots) → token is bound to that execution slot.
+//
+//   At decode time, <NUM> can only be generated when the selector
+//   resolves to a single live slot (Selected). Otherwise <NUM> is
+//   masked out of the vocabulary and cannot be sampled.
 void copyTokenSlotMapH2D_Inference(TrainingState& ts, cudaStream_t stream, int seq_len,
-                                    const std::vector<int32_t>& prompt_map) {
+                                    const std::vector<int32_t>& prompt_map,
+                                    int num_slots) {
     if (!ts.cached_token_to_slot_map.data || seq_len <= 0)
         return;
     auto* dst = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
     if (prompt_map.empty()) {
+        // Empty prompt map → all tokens are non-state-bearing (slot_id = -1)
         std::vector<int32_t> neg(static_cast<size_t>(seq_len), -1);
         cudaError_t err = cudaMemcpyAsync(dst, neg.data(),
             static_cast<size_t>(seq_len) * sizeof(int32_t),
@@ -544,6 +556,16 @@ void copyTokenSlotMapH2D_Inference(TrainingState& ts, cudaStream_t stream, int s
     if (static_cast<int>(prompt_map.size()) != seq_len) {
         throw std::runtime_error(
             "token_to_slot_map size must match sequence length (or pass empty for all -1)");
+    }
+    // Validate slot-range: each entry must be -1 (non-state-bearing) or in [0, num_slots)
+    for (int i = 0; i < seq_len; ++i) {
+        int32_t sid = prompt_map[i];
+        if (sid != -1 && (sid < 0 || sid >= num_slots)) {
+            throw std::runtime_error(
+                "copyTokenSlotMapH2D_Inference: slot_id=" + std::to_string(sid) +
+                " at position " + std::to_string(i) + " out of range [0, " +
+                std::to_string(num_slots) + ") — must be -1 or valid slot index");
+        }
     }
     cudaError_t err = cudaMemcpyAsync(dst, prompt_map.data(),
         static_cast<size_t>(seq_len) * sizeof(int32_t),
@@ -610,7 +632,8 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
                     seq_len * sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
 
-    copyTokenSlotMapH2D_Inference(training_state_, stream, seq_len, token_to_slot_map);
+    copyTokenSlotMapH2D_Inference(training_state_, stream, seq_len, token_to_slot_map,
+                                   config_.execution_block_num_slots);
     
     // Single inference forward path
     return executeInferenceForward_(seq_len);
@@ -736,6 +759,16 @@ GeneratedSequence LanguageModel::generateStream(
 }
 
 
+// Generate a token sequence from prompt, applying autoregressive decoding.
+//
+//   prompt_token_to_slot_map semantics:
+//     - Empty vector → all prompt tokens treated as non-state-bearing (-1).
+//     - Entry == -1  → non-state-bearing token (no execution slot selected).
+//     - Entry in [0, num_slots) → this token is bound to that execution slot.
+//
+//   During generation, the decode-time <NUM> token is only bindable when
+//   the slot selector resolves status == Selected for exactly one live slot.
+//   Otherwise <NUM> is masked and cannot be generated at that step.
 GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& prompt_tokens,
                                                      const std::vector<float>& prompt_numeric_values,
                                                      const std::vector<uint8_t>& prompt_atom_mask,

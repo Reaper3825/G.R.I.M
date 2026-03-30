@@ -17,6 +17,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
+#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
+
 namespace GRIM {
 
 #define POLICY_CUDA_CHECK(expr) do { \
@@ -267,6 +270,60 @@ SlotSelectionResult DecodeTimeNumPolicy::evaluateScores(
     }
 
     return result;
+}
+
+//══════════════════════════════════════════════════════════════════════════════
+//  resolveDecodeTimeNumSlotSelectionOrMask — shared selector evaluation
+//══════════════════════════════════════════════════════════════════════════════
+
+DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
+    DecodeTimeSlotSelectorLayer* selector,
+    DecodeTimeNumPolicy* policy,
+    bool selector_enabled,
+    bool exec_block_active,
+    bool has_exec_memory,
+    const ExecutionMemory& exec_memory,
+    const float* d_hidden_state,
+    cudaStream_t stream)
+{
+    DecodeTimeResolveResult out;
+
+    if (!selector_enabled || !selector || !policy
+        || !exec_block_active || !has_exec_memory) {
+        return out;  // valid=false → caller knows selector didn't run
+    }
+
+    policy->buildCandidateSet(
+        exec_memory.valid_mask.data,
+        exec_memory.values.data,
+        exec_memory.recent_write_mask.data,
+        exec_memory.usage.data,
+        policy->config().num_slots,
+        policy->config().scratch_slots,
+        stream);
+
+    const auto& cands = policy->candidates();
+    if (cands.num_live_slots > 0) {
+        SelectorScoreResult scores = selector->forward(
+            d_hidden_state, cands.d_slot_features,
+            cands.num_live_slots, stream);
+        SlotSelectionResult result = policy->evaluateScores(
+            scores.d_scores, scores.num_live_slots, stream);
+        out.status = result.status;
+        out.selected_slot = result.selected_slot;
+        if (result.status == SlotSelectionStatus::Selected
+            && result.selected_slot >= 0) {
+            float val = 0.0f;
+            cudaMemcpyAsync(&val,
+                exec_memory.values.data + result.selected_slot,
+                sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            out.selected_value = val;
+        }
+    }
+
+    out.valid = true;
+    return out;
 }
 
 } // namespace GRIM

@@ -7,6 +7,9 @@
 //    - Fixed deterministic slot_features[s] assembly (non-trainable)
 //    - Null / Ambiguity / Selected policy decision from selector scores
 //    - Mask-or-bind interface consumed by generation path
+//    - resolveDecodeTimeNumSlotSelectionOrMask(): shared entry-point
+//      for decode-time selector evaluation, consumed by both
+//      inference (executeDecodeForward_) and generation paths.
 //
 //  Does NOT own:
 //    - Trainable selector tensors (DecodeTimeSlotSelectorLayer)
@@ -141,5 +144,59 @@ private:
     float* h_usage_ = nullptr;
     float* h_scores_ = nullptr;
 };
+
+//──────────────────────────────────────────────────────
+// resolveDecodeTimeNumSlotSelectionOrMask
+//
+// Shared entry-point for decode-time selector evaluation.
+// Called by both inference (executeDecodeForward_) and
+// generation paths to produce a SlotSelectionResult.
+//
+// Semantics:
+//   - Empty prompt_token_to_slot_map → all tokens mapped to -1
+//     (non-state-bearing).
+//   - slot_id == -1 → this token is non-state-bearing
+//     (no slot selected).
+//   - When selector resolves status == Selected, the
+//     specific live slot's value is bound to the generated
+//     <NUM> token. Otherwise <NUM> is masked (cannot be
+//     generated).
+//
+// Writes result to out_* parameters. Sets out_valid=true
+// when evaluation completes (even if result is Null).
+//──────────────────────────────────────────────────────
+
+// Forward declarations for types used by the resolver
+class DecodeTimeSlotSelectorLayer;
+struct ExecutionMemory;
+
+struct DecodeTimeResolveResult {
+    bool valid = false;
+    SlotSelectionStatus status = SlotSelectionStatus::Null;
+    int32_t selected_slot = -1;
+    float selected_value = 0.0f;
+};
+
+/// Evaluate the decode-time slot selector against the current execution memory.
+///
+/// @param selector       Trainable selector layer (nullable — returns invalid if null)
+/// @param policy         Decode-time policy (nullable — returns invalid if null)
+/// @param selector_enabled  Config flag controlling selector
+/// @param exec_block_active Whether execution block was active for this sequence
+/// @param has_exec_memory   Whether inference exec memory is populated
+/// @param exec_memory       Current ExecutionMemory state (read-only)
+/// @param d_hidden_state    Device pointer to hidden state [1, d_model]
+/// @param stream            CUDA stream
+///
+/// @return DecodeTimeResolveResult with valid/status/selected_slot/selected_value
+DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
+    DecodeTimeSlotSelectorLayer* selector,
+    DecodeTimeNumPolicy* policy,
+    bool selector_enabled,
+    bool exec_block_active,
+    bool has_exec_memory,
+    const ExecutionMemory& exec_memory,
+    const float* d_hidden_state,
+    cudaStream_t stream);
 
 } // namespace GRIM

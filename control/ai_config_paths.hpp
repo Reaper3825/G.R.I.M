@@ -345,6 +345,7 @@ struct TrainingHyperparameters {
     bool  selector_enabled;
     int   selector_d_selector;
     float selector_selection_margin;
+    float selector_supervision_weight;
 
     
     // Activation quantization - NO DEFAULTS
@@ -1232,6 +1233,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             assignTrainingField(params.selector_enabled, sel, "enabled");
             assignTrainingField(params.selector_d_selector, sel, "d_selector");
             assignTrainingField(params.selector_selection_margin, sel, "selection_margin");
+            assignTrainingField(params.selector_supervision_weight, sel, "supervision_weight");
         }
     }
     

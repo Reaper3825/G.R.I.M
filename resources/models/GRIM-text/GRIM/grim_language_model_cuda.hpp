@@ -374,6 +374,7 @@ struct LanguageModelConfig {
     bool  selector_enabled = false;       // Enable decode-time selector layer
     int   selector_d_selector = 64;       // Query/key projection dimension
     float selector_selection_margin = 1.0f; // top1 - top2 >= margin → Selected
+    float selector_supervision_weight = 0.0f; // Training-time supervision loss weight
 
     // Execution-first structured CE loss config (Step X / Y multipliers)
     float step_x_multiplier = 2.0f;

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run GRIM-text training on PSC Bridges-2 via SSH.
-# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--config CONFIG] [--sbatch] [--sync-all|--sync-mcs|--sync-cbs|--sync-fas]
+# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--config CONFIG] [--sbatch] [--sync-all|--sync-mcs|--sync-cbs|--sync-fas]
 #
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
@@ -30,6 +30,7 @@
 #   --sync-cbs       Push concept_blocks.jsonl (if present locally).
 #   --sync-fas       On --build, run scripts/bridges2_ensure_flash_attention.sh (skips forced git pull if FA
 #                    gitlink + pinned Cutlass SHA already match remote; still applies patches).
+#   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
 
 set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,6 +48,7 @@ BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
 ACCOUNT="${GRIM_BRIDGES2_ACCOUNT:-cis210058p}"
 PARTITION="${PARTITION:-GPU-shared}"
 GPU_TYPE="${GPU_TYPE:-h100-80}"
+BRIDGES2_MAKE_JOBS="${GRIM_BRIDGES2_MAKE_JOBS:-100}"
 DO_BUILD=false
 USE_SBATCH=false
 DO_INCREMENTAL=false
@@ -70,6 +72,12 @@ while [[ $# -gt 0 ]]; do
     --sync-mcs)       FLAG_SYNC_MCS=true; shift ;;
     --sync-cbs)       FLAG_SYNC_CBS=true; shift ;;
     --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
+    --jobs)
+      [[ $# -lt 2 ]] && { echo "ERROR: --jobs requires a positive integer"; exit 1; }
+      [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --jobs must be a positive integer"; exit 1; }
+      BRIDGES2_MAKE_JOBS="$2"
+      shift 2
+      ;;
     *)                echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -150,7 +158,8 @@ fi
 BRIDGES2_MODULES="source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || module load cuda/12 2>/dev/null || module load cuda/12.0 2>/dev/null || true; module load gcc 2>/dev/null || true; module load cmake 2>/dev/null || true"
 # Default to project CUDA 12 when 11.x is detected (CUTLASS requires 12+). Uses GRIM_PROJECT_DIR=$BRIDGES2_DIR to find cuda-12.0.
 BRIDGES2_ENSURE_CUDA12="export GRIM_PROJECT_DIR=\$BRIDGES2_DIR; source \"\$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true"
-BRIDGES2_CUDA_ROOT='NVCC=$(which nvcc 2>/dev/null); if [ -z "$NVCC" ]; then echo "ERROR: nvcc not found. module load cuda" >&2; exit 1; fi; CUDAToolkit_ROOT=$(dirname "$(dirname "$NVCC")"); echo "[Bridges-2] $(nvcc --version | grep release | head -1)"'
+# CUDAToolkit_ROOT for cmake comes from GRIM_CUDA_ROOT (set by ensure_cuda12_for_training.sh). Do not inline
+# nvcc discovery here — unescaped \" and \$( in a var would break the local ssh \"...\" string (parse errors like SH_OPTS).
 
 # vcpkg
 BRIDGES2_VCPKG="${GRIM_VCPKG_ROOT:-$BRIDGES2_DIR/vcpkg}"
@@ -188,8 +197,8 @@ BRIDGES2_CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TO
 # --build
 if [[ "$DO_BUILD" == true ]]; then
   echo "Building train_gpu on Bridges-2 ($BRIDGES2_DIR/$BUILD_DIR)..."
-  echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80)"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_CUDA_ROOT && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$CUDAToolkit_ROOT && make -j \$(nproc) train_gpu"
+  echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80), make -j $BRIDGES2_MAKE_JOBS"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT && make -j $BRIDGES2_MAKE_JOBS train_gpu"
 fi
 
 # Transfer data

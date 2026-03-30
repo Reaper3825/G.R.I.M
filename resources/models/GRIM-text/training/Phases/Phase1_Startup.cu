@@ -1004,6 +1004,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.selector_enabled = hp.selector_enabled;
     model_config.selector_d_selector = hp.selector_d_selector;
     model_config.selector_selection_margin = hp.selector_selection_margin;
+    model_config.selector_supervision_weight = hp.selector_supervision_weight;
 
     logger.log("ExecutionBlock: enabled=" + std::string(model_config.execution_block_enabled ? "true" : "false") +
               ", V=" + std::to_string(model_config.execution_block_num_slots) +

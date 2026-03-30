@@ -204,7 +204,8 @@
                 "selector": {
                     "enabled": true,
                     "d_selector": 64,
-                    "selection_margin": 1.0
+                    "selection_margin": 1.0,
+                    "supervision_weight": 0.0
                 }
             },
             "force_rebuild_vocab": false,

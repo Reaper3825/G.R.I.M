@@ -18,6 +18,8 @@
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
+#include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
+#include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
 
 #include <iostream>
 #include <cmath>
@@ -1458,8 +1460,125 @@ LossResult computeAutogradLoss(
     }
 
     result.numeric_loss = numeric_loss;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SELECTOR SUPERVISION LOSS — masked CE over {NULL}∪L from slot_selection_targets
+    // For each supervised decode position (kind != Ignore), runs selector forward
+    // on the encoder hidden state and computes CE against the target slot / NULL.
+    // Weighted by cfg->selector_supervision_weight (0 = disabled).
+    // ═══════════════════════════════════════════════════════════════════════════
+    float selector_supervision_loss = 0.0f;
+    if (cfg->selector_enabled && cfg->selector_supervision_weight > 0.0f
+        && cfg->execution_block_enabled && ctx.model
+        && ctx.payload && !ctx.payload->slot_selection_targets.empty()
+        && !intermediates.exec_memories.empty()) {
+
+        auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
+        auto* policy   = ctx.model->getDecodeTimeNumPolicy();
+
+        if (selector && policy) {
+            const int d_model = cfg->d_model;
+            const int seq_len = ctx.seq_len;
+            const float* d_hidden = intermediates.centered_encoder_output.data
+                                  ? intermediates.centered_encoder_output.data
+                                  : intermediates.encoder_output_tensor.data;
+            if (!d_hidden) {
+                throw std::runtime_error("computeAutogradLoss: encoder output tensor is NULL for selector supervision");
+            }
+
+            float ce_sum = 0.0f;
+            int   ce_count = 0;
+
+            for (int b = 0; b < ctx.batch_size; ++b) {
+                if (!ctx.payload->execution_active.empty()
+                    && !ctx.payload->execution_active[b])
+                    continue;
+                if (b >= static_cast<int>(ctx.payload->slot_selection_targets.size()))
+                    continue;
+                const auto& row_targets = ctx.payload->slot_selection_targets[b];
+                if (row_targets.empty()) continue;
+                if (b >= static_cast<int>(intermediates.exec_memories.size()))
+                    continue;
+                const auto& mem = intermediates.exec_memories[b];
+                if (!mem.valid_mask.data) continue;
+
+                // Build candidate set for this row's memory state
+                policy->buildCandidateSet(
+                    mem.valid_mask.data,
+                    mem.values.data,
+                    mem.recent_write_mask.data,
+                    mem.usage.data,
+                    policy->config().num_slots,
+                    policy->config().scratch_slots,
+                    ctx.stream);
+                const auto& cands = policy->candidates();
+
+                const int row_len = std::min(seq_len, static_cast<int>(row_targets.size()));
+                for (int t = 0; t < row_len; ++t) {
+                    const auto& tgt = row_targets[t];
+                    if (tgt.kind == Execution::SlotSelectionTargetKind::Ignore)
+                        continue;
+
+                    // Hidden state for this position
+                    const float* h_t = d_hidden + (static_cast<size_t>(b) * seq_len + t) * d_model;
+
+                    // Determine target index: 0 = NULL, 1+candidate_offset = Slot
+                    int target_idx = -1;
+                    if (tgt.kind == Execution::SlotSelectionTargetKind::Null) {
+                        target_idx = 0;  // NULL score is index 0
+                    } else if (tgt.kind == Execution::SlotSelectionTargetKind::Slot) {
+                        // Find which candidate position corresponds to tgt.slot_id
+                        for (int c = 0; c < cands.num_live_slots; ++c) {
+                            if (cands.live_slot_ids[c] == tgt.slot_id) {
+                                target_idx = 1 + c;  // Scores are [NULL, cand0, cand1, ...]
+                                break;
+                            }
+                        }
+                        if (target_idx < 0) continue;  // Target slot not in candidate set — skip
+                    }
+
+                    if (cands.num_live_slots <= 0 && target_idx > 0)
+                        continue;  // No candidates but target is a slot — skip
+
+                    // Run selector forward
+                    int num_live = cands.num_live_slots > 0 ? cands.num_live_slots : 0;
+                    if (target_idx == 0 && num_live == 0) {
+                        // NULL target with no candidates: correct by definition, loss = 0
+                        continue;
+                    }
+                    SelectorScoreResult scores = selector->forward(
+                        h_t, cands.d_slot_features, num_live, ctx.stream);
+
+                    // Copy scores to host for CE computation
+                    const int score_len = 1 + num_live;
+                    std::vector<float> h_scores(score_len);
+                    cudaMemcpyAsync(h_scores.data(), scores.d_scores,
+                                    score_len * sizeof(float),
+                                    cudaMemcpyDeviceToHost, ctx.stream);
+                    cudaStreamSynchronize(ctx.stream);
+
+                    // Compute softmax CE:  -log(softmax(scores)[target_idx])
+                    float max_s = *std::max_element(h_scores.begin(), h_scores.end());
+                    float sum_exp = 0.0f;
+                    for (int i = 0; i < score_len; ++i)
+                        sum_exp += std::exp(h_scores[i] - max_s);
+                    float log_prob = (h_scores[target_idx] - max_s) - std::log(sum_exp);
+                    ce_sum += -log_prob;
+                    ce_count++;
+                }
+            }
+
+            if (ce_count > 0) {
+                selector_supervision_loss = cfg->selector_supervision_weight
+                    * (ce_sum / static_cast<float>(ce_count));
+            }
+        }
+    }
+    result.selector_loss = selector_supervision_loss;
+
     result.loss_value = text_loss + exec_structured_ce + exec_entropy_loss
-                      + exec_causal_loss + final_consistency_loss;
+                      + exec_causal_loss + final_consistency_loss
+                      + selector_supervision_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
@@ -1468,12 +1587,15 @@ LossResult computeAutogradLoss(
             + " exec_ce=" + std::to_string(exec_structured_ce)
             + " exec_entropy=" + std::to_string(exec_entropy_loss)
             + " exec_causal=" + std::to_string(exec_causal_loss)
-            + " final_consistency=" + std::to_string(final_consistency_loss) + ")");
+            + " final_consistency=" + std::to_string(final_consistency_loss)
+            + " selector=" + std::to_string(selector_supervision_loss) + ")");
     }
     
     AG_INFO("Loss computed: text_ce=" << text_loss << " exec_ce=" << exec_structured_ce
             << " exec_causal=" << exec_causal_loss
-            << " exec_entropy_aux=" << exec_entropy_loss << " valid_tokens=" << valid_tokens);
+            << " exec_entropy_aux=" << exec_entropy_loss
+            << " selector=" << selector_supervision_loss
+            << " valid_tokens=" << valid_tokens);
     
     result.success = true;
     return result;
