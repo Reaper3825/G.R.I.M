@@ -37,12 +37,9 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <nlohmann/json_fwd.hpp>
 
 #include "../Execution/ExecutionMetadata.hpp"
-
-// Forward-declare nlohmann::json to avoid header dependency here.
-// Callers that need the full type include <nlohmann/json.hpp> themselves.
-namespace nlohmann { class json; }
 
 namespace GRIM {
 
