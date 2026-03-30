@@ -43,10 +43,10 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ## Current cutover status
 
 - **Overall status:** In progress
-- **Active workstream:** Workstream 5 — Phase1 sequence handling rules
-- **Last completed gate:** Workstream 4 — single shared execution payload validator
-- **Next gate:** Begin Workstream 5 Phase1 BOS/EOS/padding remap for execution-active rows
-- **Current implementation posture:** Workstream 4 completed: single shared `validateExecutionPayload()` is called from `buildBatchPayload()`, `computeLossBatch()`, and `autogradTrainingStep()`; duplicate inline `<NUM>` slot validation and teacher-step range validation deleted from `ComputeLossBatch.cu`; validator enforces row-level and batch-level invariants including bootstrap binding injectivity, R↔compiled_bootstrap_bindings consistency, D_row reconstruction, teacher-step range checks, and selector supervision target validation; `buildBatchPayload()` signature extended with execution config params
+- **Active workstream:** Workstream 7 — delete silent execution skips
+- **Last completed gate:** Workstream 6 — row-local execution orchestration
+- **Next gate:** Begin Workstream 7 deletion of silent executeStep early-return and orchestrator execution gating
+- **Current implementation posture:** Workstream 6 completed: removed dead `atom_embeddings` parameter from entire `executeStep()` chain (public API, thin wrapper, coordinator impl, validation, both call sites in AutogradTraining.cu and Inference_GPU.cu); renamed `total_tokens` → `row_tokens` in `bootstrapMemoryFromSlotMap()` to match actual row-local semantics (callers already pass row-local token count); removed unused `total_tokens` from internal `crossAttentionReadImpl()` signature; all ExecutionBlock public and private interfaces now accept only row-local atom views; batch-global atom arrays are no longer part of the runtime contract
 
 ## Workstream-specific update contract
 
@@ -145,7 +145,7 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ### Workstream 5 — Phase1 sequence handling rules for execution-active rows
 
 **Status**
-- Not started
+- Complete
 
 **Each update must record**
 - BOS/EOS remap behavior for compiled metadata
@@ -154,17 +154,63 @@ A qualifying refactor step is not complete unless all three artifacts are update
 - any decode-position alignment changes
 - validation or tests proving remap correctness
 
+**Summary of changes**
+
+File modified: `training/Phases/Phase1_Startup.cu`
+
+- **BOS insertion remap**: When BOS is inserted at position 0, all `compiled_bootstrap_bindings[].token_pos` are incremented by 1 to maintain position-sensitive alignment. A `SlotSelectionTarget{Ignore, -1}` is inserted at position 0 of `slot_selection_targets`.
+- **EOS insertion remap**: When EOS is appended at the tail, a `SlotSelectionTarget{Ignore, -1}` is appended to `slot_selection_targets`. No binding remap is needed because EOS at the tail does not shift existing positions.
+- **Padding preservation**: `PadToSeqMaxLen` resizes `slot_selection_targets` to `max_seq_len` filled with `SlotSelectionTarget{Ignore, -1}`. `compiled_bootstrap_bindings`, `teacher_steps`, and `execution_active` are not position-indexed arrays and are preserved without modification.
+- **Sliding-window rejection**: Execution-active rows that exceed `max_seq_len` throw `std::runtime_error` immediately instead of being fragmented. Non-execution rows continue on the existing sliding-window path.
+- **Short sequence copy**: The default copy constructor preserves all execution fields (`execution_active`, `compiled_bootstrap_bindings`, `teacher_steps`, `slot_selection_targets`, `token_exec_slots`) for sequences that fit within `max_seq_len`.
+
 ### Workstream 6 — row-local execution orchestration
 
 **Status**
-- Not started
+- Completed
 
-**Each update must record**
-- row-local atom extraction or view changes
-- exact `executeStep()` input contract after the change
-- batch-global assumptions removed
-- row-local validation and runtime checks introduced
-- mixed-batch validation proving no cross-row atom leakage
+**Summary**
+- Removed dead `atom_embeddings` parameter from entire `executeStep()` chain — was void-cast in coordinator, never consumed by data-stream path
+- Renamed `total_tokens` → `row_tokens` in `bootstrapMemoryFromSlotMap()` — callers always passed row-local `sl`, parameter name was misleading
+- Removed unused `total_tokens` from internal `crossAttentionReadImpl()` — function body never referenced it
+- Verified all internal kernels (`kernelValidateAtomSlots`, `kernelReduceMeanForward`, `kernelBootstrapSlotValues`, cross-attention) operate on row-local bounds
+- H tensor remains batch-global `[total_tokens, d_model]` in `executeStep()` — this is correct because backward GradFns (ReduceMeanGradFn, ExecutionBlockInjectGradFn) need full H shape for gradient scattering
+
+**Changed files**
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.hpp` — removed `atom_embeddings` from `executeStep()` and `validateExecuteStepInputsOrThrow()` declarations; renamed `total_tokens` → `row_tokens` in `bootstrapMemoryFromSlotMap()` declaration
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_GPU.cu` — removed `atom_embeddings` from `executeStep()` wrapper and `validateExecuteStepInputsOrThrow()` impl; removed atom_embeddings null check; updated `crossAttentionReadImpl()` call to drop `total_tokens`
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_data_stream_GPU.hpp` — removed `atom_embeddings` from `executeStepCoordinatorImpl()` declaration
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_data_stream_GPU.cu` — removed `atom_embeddings` from `executeStepCoordinatorImpl()` definition; deleted `(void)atom_embeddings;` line
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_memory_stream_GPU.hpp` — removed `total_tokens` from `crossAttentionReadImpl()` declaration
+- `resources/models/GRIM-text/Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu` — renamed `total_tokens` → `row_tokens` in `bootstrapMemoryFromSlotMap()` impl; removed `total_tokens` from `crossAttentionReadImpl()` definition
+- `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu` — removed `row_atom_view.atom_embeddings.data` argument from `executeStep()` call
+- `resources/models/GRIM-text/training/Inference_GPU.cu` — removed `row_atom_view.atom_embeddings.data` argument from `executeStep()` call
+- `resources/models/GRIM-text/Layers/ExecutionBlock/DOCUMENTATION.md` — updated to reflect deleted `atom_embeddings` from contract
+
+**New ownership boundary**
+- `executeStep()` accepts only: `atom_positions` (row-local), `token_to_slot_map` (row-local), `num_atoms` (row-local count), `total_tokens` + `token_offset` + `row_tokens` (batch-global H windowing)
+- `bootstrapMemoryFromSlotMap()` accepts `row_tokens` (row-local count, renamed from misleading `total_tokens`)
+- `crossAttentionReadImpl()` accepts only `token_offset` + `row_tokens` (no `total_tokens` — unused)
+
+**Explicit non-responsibilities**
+- `atom_embeddings` no longer part of `executeStep()` contract — consumed only by ReasoningHead and loss paths
+- `extractRowLocalAtomView()` still produces `.atom_embeddings` in `RowLocalAtomView` struct for non-ExecutionBlock consumers
+
+**Deleted legacy / fallback paths**
+- Dead `atom_embeddings` parameter thread through 6 function signatures
+- `(void)atom_embeddings;` void-cast in coordinator
+- `atom_embeddings != nullptr` validation check in `validateExecuteStepInputsOrThrow`
+
+**Validation performed**
+- Verified all 3 call sites (`AutogradTraining.cu`, `Inference_GPU.cu`, `execution_block_GPU.cu` thin wrapper) updated consistently
+- Verified all 4 signature sites (`.hpp` declaration, `.cu` impl, data_stream `.hpp`, data_stream `.cu`) match
+- Verified `crossAttentionReadImpl` body truly does not reference `total_tokens`
+- Verified `bootstrapMemoryFromSlotMap` callers (`AutogradTraining.cu`: passes `sl`, `Inference_GPU.cu`: passes `1`) are already row-local
+- Verified `kernelValidateAtomSlots` bounds-checks against row-local `num_atoms` and `row_tokens`
+- CUDA build validation deferred (no local CUDA toolchain)
+
+**Remaining gaps / next gate**
+- WS7: delete silent execution skips — remove early-return path in `executeStep()` when M.valid_mask has no populated value slots
 
 ### Workstream 7 — delete silent execution skips
 

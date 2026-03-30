@@ -1318,7 +1318,6 @@ void executeStepCoordinatorImpl(
     ExecutionBlockLayer& layer,
     Tensor& H,
     ExecutionMemory& memory,
-    const float* atom_embeddings,
     const int* atom_positions,
     const int32_t* token_to_slot_map,
     int num_atoms,
@@ -1333,8 +1332,6 @@ void executeStepCoordinatorImpl(
     const std::vector<ExecutionRecord>& prior_records,
     const float* expected_target
 ) {
-    (void)atom_embeddings;
-
     const int dm = layer.config().d_model;
     const int V = layer.config().num_slots;
     const int S = layer.config().num_scratch_slots;

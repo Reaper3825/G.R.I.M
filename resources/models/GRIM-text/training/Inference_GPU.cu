@@ -581,7 +581,6 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                 ExecutionBlockStepOutput step_diag;
                 exec_block->executeStep(
                     hidden, ts.inference_exec_memory,
-                    row_atom_view.atom_embeddings.data,
                     reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
                     slot_ptr,  // device pointer to current token's slot_id
                     row_atom_view.num_atoms,

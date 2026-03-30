@@ -9,7 +9,6 @@ void executeStepCoordinatorImpl(
 	ExecutionBlockLayer& layer,
 	Tensor& H,
 	ExecutionMemory& memory,
-	const float* atom_embeddings,
 	const int* atom_positions,
 	const int32_t* token_to_slot_map,
 	int num_atoms,

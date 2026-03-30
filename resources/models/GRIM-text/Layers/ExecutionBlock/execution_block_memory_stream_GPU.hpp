@@ -49,7 +49,6 @@ void crossAttentionReadImpl(
 	ExecutionBlockLayer& layer,
 	Tensor& hidden_states,
 	ExecutionMemory& memory,
-	int total_tokens,
 	cudaStream_t stream,
 	int token_offset,
 	int row_tokens);

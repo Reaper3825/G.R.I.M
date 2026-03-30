@@ -1,6 +1,6 @@
 # ExecutionBlock Structured Execution Cutover Plan
 
-**Status:** Workstreams 3–4 complete; Workstream 5 next  
+**Status:** Workstreams 3–6 complete; Workstream 7 next  
 **Scope:** `token_to_slot_map`, `teacher_steps`, row-local ExecutionBlock execution, GRMT cutover, inference alignment  
 **Policy:** **No backwards compatibility**. Delete legacy behavior instead of preserving it.
 

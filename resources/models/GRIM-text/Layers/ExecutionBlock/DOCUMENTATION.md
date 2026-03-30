@@ -99,7 +99,6 @@ The layer fail-loud checks:
 - `row_tokens > 0`
 - `token_offset + row_tokens <= total_tokens`
 - `token_to_slot_map != nullptr`
-- `atom_embeddings != nullptr`
 - `atom_positions != nullptr`
 - every row-local atom position is in `[0, row_tokens)`
 - every slot-bearing atom position maps to an initialized value-slot in `[S, V)`
@@ -110,7 +109,7 @@ Important current nuance:
 - validation uses row-local atom positions,
 - but the **current step-local math reads operands only from value slots**.
 
-So `atom_embeddings` are part of the enforced runtime contract today, but the current data-stream path does not yet consume them in operand selection.
+`atom_embeddings` were removed from the `executeStep()` contract (WS6) because the data-stream path does not consume them.
 
 ## What one `executeStep(...)` does today
 

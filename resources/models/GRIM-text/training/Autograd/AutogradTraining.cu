@@ -724,7 +724,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
                         ctx.execution_block->executeStep(
                             layer_output, M_b,
-                            row_atom_view.atom_embeddings.data,
                             reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
                             d_slot_map_row,
                             row_atom_view.num_atoms, total_tokens,

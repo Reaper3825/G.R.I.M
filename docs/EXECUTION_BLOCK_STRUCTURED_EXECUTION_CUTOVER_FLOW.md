@@ -84,9 +84,9 @@ flowchart TD
 
 ## Current artifact status
 
-- **Workstream flow status:** Workstreams 3–4 complete; Workstream 5 next
+- **Workstream flow status:** Workstreams 3–6 complete; Workstream 7 next
 - **Maintenance flow status:** Active immediately
-- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`, WS3 GRMT v11 serializes full compiled execution payload, WS4 single shared `validateExecutionPayload()` called from `buildBatchPayload()` / `computeLossBatch()` / `autogradTrainingStep()` before any GPU work; duplicate inline validation deleted from `ComputeLossBatch.cu`; Phase1 remap (WS5) and downstream workstreams still pending
+- **Structured execution flow status:** Current enforced runtime reflects: WS0 locked boundary, WS1 metadata types canonicalized, WS2 canonical builder replaces `__SLOTS__`, WS3 GRMT v11 serializes full compiled execution payload, WS4 single shared `validateExecutionPayload()` called from `buildBatchPayload()` / `computeLossBatch()` / `autogradTrainingStep()` before any GPU work; duplicate inline validation deleted from `ComputeLossBatch.cu`; WS5 Phase1 remap completed — BOS/EOS/padding preserve all compiled execution metadata with exact position-sensitive semantics, execution-active overlong rows throw instead of being windowed; WS6 row-local execution orchestration completed — dead `atom_embeddings` param removed from `executeStep()` chain, `bootstrapMemoryFromSlotMap()` param renamed `total_tokens` → `row_tokens`, unused `total_tokens` removed from internal `crossAttentionReadImpl()`; WS7+ pending
 
 ## Workstream 0 implementation note
 

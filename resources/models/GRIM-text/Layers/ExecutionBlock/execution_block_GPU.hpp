@@ -169,7 +169,6 @@ public:
     void executeStep(
         Tensor& H,                          // [total_tokens, d_model] mutated in place
         ExecutionMemory& M,
-        const float* atom_embeddings,       // row-local [max(1, num_atoms), atom_embedding_dim] (empty buffer allowed when num_atoms == 0)
         const int* atom_positions,          // row-local [max(1, num_atoms)] positions relative to current row [0, row_tokens)
         const int32_t* token_to_slot_map,   // row-local [row_tokens] slot_id per token position (-1 = non-state-bearing)
         int num_atoms,
@@ -190,9 +189,9 @@ public:
     //--------------------------------------------------//
     void bootstrapMemoryFromSlotMap(
         ExecutionMemory& M,
-        const float* device_numeric_values,  // [total_tokens]
-        const int32_t* device_slot_map,      // [total_tokens]
-        int total_tokens,
+        const float* device_numeric_values,  // [row_tokens]
+        const int32_t* device_slot_map,      // [row_tokens]
+        int row_tokens,
         cudaStream_t stream
     );
 
@@ -225,7 +224,6 @@ public:
     void validateMemoryOrThrow(const ExecutionMemory& M) const;
     void validateExecuteStepInputsOrThrow(
         const Tensor& H,
-        const float* atom_embeddings,
         const int* atom_positions,
         const int32_t* token_to_slot_map,
         int num_atoms,

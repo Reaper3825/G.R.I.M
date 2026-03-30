@@ -610,6 +610,13 @@ SequenceData loadTrainingData(
             seq.targets.insert(seq.targets.begin(), -1);
             if (!seq.token_exec_slots.empty())
                 seq.token_exec_slots.insert(seq.token_exec_slots.begin(), static_cast<int32_t>(-1));
+            if (!seq.slot_selection_targets.empty())
+                seq.slot_selection_targets.insert(seq.slot_selection_targets.begin(),
+                    GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
+            // BOS insertion shifted all existing token positions right by 1.
+            // Remap compiled_bootstrap_bindings token_pos to match.
+            for (auto& b : seq.compiled_bootstrap_bindings)
+                b.token_pos += 1;
             added_bos++;
         }
 
@@ -631,6 +638,9 @@ SequenceData loadTrainingData(
             seq.targets.push_back(-1);  // EOS position itself: nothing follows
             if (!seq.token_exec_slots.empty())
                 seq.token_exec_slots.push_back(static_cast<int32_t>(-1));
+            if (!seq.slot_selection_targets.empty())
+                seq.slot_selection_targets.push_back(
+                    GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
             added_eos++;
         }
     }
@@ -676,6 +686,9 @@ SequenceData loadTrainingData(
                     max_seq_len * GRIM::Tokenizer::kTextFeatureDim, 0);
                 if (!seq.token_exec_slots.empty())
                     seq.token_exec_slots.resize(max_seq_len, static_cast<int32_t>(-1));
+                if (!seq.slot_selection_targets.empty())
+                    seq.slot_selection_targets.resize(max_seq_len,
+                        GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
                 padded_count++;
             }
         };
@@ -687,6 +700,17 @@ SequenceData loadTrainingData(
                 PadToSeqMaxLen(copy);
                 windowed.push_back(std::move(copy));
                 continue;
+            }
+            
+            // Execution-active rows MUST NOT be fragmented — compiled_bootstrap_bindings
+            // and teacher_steps are whole-sequence structures with no windowing semantics.
+            if (seq.execution_active) {
+                throw std::runtime_error(
+                    "Execution-active sequence exceeds max_seq_len (" +
+                    std::to_string(seq.token_ids.size()) + " > " +
+                    std::to_string(max_seq_len) +
+                    "). Execution rows cannot be split by sliding window. "
+                    "Increase max_seq_len or shorten the source data.");
             }
             
             long_seq_count++;

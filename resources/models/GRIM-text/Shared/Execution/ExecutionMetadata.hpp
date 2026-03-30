@@ -188,6 +188,9 @@ struct CompiledStructuredExecutionPayload {
 // Selector supervision targets do NOT add slot-domain membership.
 // Configured slot ranges [S, V) remain outer bounds only.
 // =============================================================================
+#ifdef __CUDACC__
+__host__
+#endif
 inline std::vector<int32_t> reconstructSlotDomain(
     const std::vector<CompiledBootstrapBinding>& bootstrap_bindings,
     const std::vector<TeacherStep>& teacher_steps)

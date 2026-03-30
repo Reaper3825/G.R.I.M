@@ -54,7 +54,7 @@ void ExecutionBlockLayer::validateMemoryOrThrow(const ExecutionMemory& M) const 
 }
 
 void ExecutionBlockLayer::validateExecuteStepInputsOrThrow(
-    const Tensor& H, const float* atom_embeddings,
+    const Tensor& H,
     const int* atom_positions, const int32_t* token_to_slot_map,
     int num_atoms, int total_tokens,
     const ExecutionMemory& M, int step,
@@ -62,8 +62,6 @@ void ExecutionBlockLayer::validateExecuteStepInputsOrThrow(
 {
     const int dm = config_.d_model;
     EXEC_CHECK_SHAPE2(H, "H (executeStep)", total_tokens, dm);
-    EXEC_CHECK(atom_embeddings != nullptr,
-               "atom_embeddings is null - caller MUST provide a row-local atom view (empty buffer allowed)");
     EXEC_CHECK(atom_positions != nullptr,
                "atom_positions is null - caller MUST provide a row-local atom view (empty buffer allowed)");
     EXEC_CHECK(token_to_slot_map != nullptr, "token_to_slot_map is null");
@@ -329,7 +327,6 @@ ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other)
 void ExecutionBlockLayer::executeStep(
     Tensor& H,
     ExecutionMemory& M,
-    const float* atom_embeddings,
     const int* atom_positions,
     const int32_t* token_to_slot_map,
     int num_atoms,
@@ -345,14 +342,13 @@ void ExecutionBlockLayer::executeStep(
     const float* expected_target)
 {
     if (row_tokens < 0) row_tokens = total_tokens;
-    validateExecuteStepInputsOrThrow(H, atom_embeddings, atom_positions,
+    validateExecuteStepInputsOrThrow(H, atom_positions,
                                      token_to_slot_map, num_atoms, total_tokens, M, step,
                                      token_offset, row_tokens);
     executeStepCoordinatorImpl(
         *this,
         H,
         M,
-        atom_embeddings,
         atom_positions,
         token_to_slot_map,
         num_atoms,
@@ -385,7 +381,7 @@ void ExecutionBlockLayer::crossAttentionRead(
     EXEC_CHECK(row_tokens > 0, "row_tokens must be positive");
     EXEC_CHECK(token_offset + row_tokens <= total_tokens,
                "crossAttentionRead row-local span exceeds total token extent");
-    crossAttentionReadImpl(*this, hidden_states, M, total_tokens, stream, token_offset, row_tokens);
+    crossAttentionReadImpl(*this, hidden_states, M, stream, token_offset, row_tokens);
 }
 
 }  // namespace GRIM

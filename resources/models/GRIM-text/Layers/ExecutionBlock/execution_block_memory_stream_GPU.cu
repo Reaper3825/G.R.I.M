@@ -431,20 +431,20 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     ExecutionMemory& M,
     const float* device_numeric_values,
     const int32_t* device_slot_map,
-    int total_tokens,
+    int row_tokens,
     cudaStream_t stream)
 {
     EXEC_CHECK(device_numeric_values != nullptr, "bootstrapMemoryFromSlotMap: device_numeric_values is null");
     EXEC_CHECK(device_slot_map != nullptr, "bootstrapMemoryFromSlotMap: device_slot_map is null");
-    EXEC_CHECK(total_tokens > 0, "bootstrapMemoryFromSlotMap: total_tokens must be positive");
+    EXEC_CHECK(row_tokens > 0, "bootstrapMemoryFromSlotMap: row_tokens must be positive");
     validateMemoryOrThrow(M);
 
     const int V = config_.num_slots;
-    const int blocks = (total_tokens + kBlockSize - 1) / kBlockSize;
+    const int blocks = (row_tokens + kBlockSize - 1) / kBlockSize;
     kernelBootstrapSlotValues<<<blocks, kBlockSize, 0, stream>>>(
         M.values.data, M.valid_mask.data,
         device_numeric_values, device_slot_map,
-        total_tokens, V);
+        row_tokens, V);
     CUDA_CHECK_KERNEL();
 
     const int dm = config_.d_model;
@@ -709,7 +709,6 @@ void crossAttentionReadImpl(
     ExecutionBlockLayer& layer,
     Tensor& hidden_states,
     ExecutionMemory& memory,
-    int total_tokens,
     cudaStream_t stream,
     int token_offset,
     int row_tokens
