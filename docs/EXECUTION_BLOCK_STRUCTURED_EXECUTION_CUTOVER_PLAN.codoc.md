@@ -43,10 +43,10 @@ A qualifying refactor step is not complete unless all three artifacts are update
 ## Current cutover status
 
 - **Overall status:** In progress
-- **Active workstream:** Workstream 8 — align validation path and training path
-- **Last completed gate:** Workstream 7 — delete silent execution skips
-- **Next gate:** Begin Workstream 8 alignment of training and validation paths
-- **Current implementation posture:** Workstream 7 completed: orchestrator gates all `executeStep()`, `bootstrapMemoryFromSlotMap()`, `crossAttentionRead()`, and trace-state allocation on `execution_active[b]` from compiled payload activation state; non-execution rows skip before any GPU work; execution-active rows with missing bootstrap data throw immediately; silent bootstrap skip in Inference_GPU.cu replaced with hard throw; no silent early-return path remains anywhere in the execution runtime
+- **Active workstream:** Workstream 9 — inference and generation alignment
+- **Last completed gate:** Workstream 8 — align validation path and training path
+- **Next gate:** Begin Workstream 9 inference and generation alignment
+- **Current implementation posture:** Workstream 8 completed: `computeLossBatch()` and `autogradTrainingStep()` now share identical entry-level execution-metadata validation — both call `validateExecutionPayload()`, both throw on teacher_steps without execution_block_enabled, both throw on null ExecutionBlock layer or disabled ScratchBlock, and both apply Spec Step 10 digit byte target masking when `execution_block_enabled`; Phase2_TrainingLoop.cu remains diagnostic-only with no separate acceptance/rejection policy; zero training-only or validation-only execution-metadata rules remain
 
 ## Workstream-specific update contract
 
@@ -227,7 +227,7 @@ File modified: `training/Phases/Phase1_Startup.cu`
 ### Workstream 8 — align validation path and training path
 
 **Status**
-- Not started
+- Complete
 
 **Each update must record**
 - training/validation call sites aligned
@@ -755,3 +755,33 @@ For each qualifying refactor step, append an entry under the relevant workstream
 
 **Remaining gaps / next gate**
 - Workstream 7 is complete. Proceed to Workstream 8: align validation path and training path so both call the same shared validator and fail on the same invalid rows.
+
+### 2025-07-29 — Workstream 8 — align validation path and training path
+
+**Status transition**
+- `Not started -> Complete`
+
+**What changed**
+- Added teacher_steps/execution_block_enabled architectural dependency check to `autogradTrainingStep()` entry (lines 1766-1771 in AutogradTraining.cu), mirroring `computeLossBatch()` lines 104-107. Both now throw `std::runtime_error` when batch has `teacher_steps` but `execution_block_enabled=false`.
+- Added structural layer availability checks to `autogradTrainingStep()` entry (lines 1773-1783 in AutogradTraining.cu), mirroring `computeLossBatch()` lines 110-117. Both now throw when `execution_block_enabled=true` but `ExecutionBlockLayer` is null or `ScratchBlock` is not enabled.
+- Added Spec Step 10 digit byte target masking to `autogradTrainingStep()` target upload section (lines 1829-1845 in AutogradTraining.cu), mirroring `computeLossBatch()` lines 205-214. When `execution_block_enabled`, ASCII digit byte targets ('0'..'9', token IDs `BYTE_TOKEN_OFFSET+0x30` through `BYTE_TOKEN_OFFSET+0x39`) are masked to -1 before GPU upload so `unified_loss` ignores them. Training path uses a local `std::vector<int>` copy for masking (vs validation path's pinned-memory staging buffer), but the result is identical.
+
+**Deleted rules**
+- Validation-only teacher_steps/execution_block_enabled check (was only in `computeLossBatch`)
+- Validation-only layer null/ScratchBlock-enabled check (was only in `computeLossBatch` at entry level)
+- Validation-only digit byte target masking (was only in `computeLossBatch`)
+
+**Validation**
+- All 3 WS8 completion criteria now PASS:
+  1. `computeLossBatch()` and `autogradTrainingStep()` call the same shared `validateExecutionPayload()` with identical parameter patterns and fail on the same 8 entry-level conditions ✅
+  2. Validation-loop logging in `Phase2_TrainingLoop.cu` remains diagnostic only — catches exceptions, logs them, tracks failure count; no acceptance/rejection policy ✅
+  3. Zero training-only or validation-only execution-metadata rules remain — all entry-level checks (teacher_steps, execution_block_enabled, layer availability, digit masking) are shared between both paths ✅
+- Static audit: every `execution_block_enabled` gate, `teacher_steps` check, and digit masking operation at the function entry level exists symmetrically in both `computeLossBatch` and `autogradTrainingStep`.
+- Full CUDA compile validation is blocked on local macOS environment lacking CUDA toolchain.
+
+**Flow diagram delta**
+- Updated "Current artifact status" from "Workstreams 3–7 complete; Workstream 8 next" to "Workstreams 3–8 complete; Workstream 9 next".
+- Updated "Structured execution flow status" to include WS8 alignment.
+
+**Remaining gaps / next gate**
+- Workstream 8 is complete. Proceed to Workstream 9: inference and generation alignment.

@@ -38,37 +38,6 @@ __global__ void kernelScaleNegAvg(
         out[0] = -weight * (in[0] / fmaxf(static_cast<float>(count), 1.0f));
 }
 
-Tensor ExecutionBlockLayer::computeEntropyLoss(
-    const std::vector<ExecutionBlockStepOutput>& steps,
-    float weight,
-    cudaStream_t stream) const
-{
-    if (steps.empty() || weight <= 0.0f) {
-        return Tensor::zeros({1, 1}, stream, "exec_entropy_zero");
-    }
-
-    auto accum = Tensor::zeros({1, 1}, stream, "exec_entropy_accum");
-    auto tmp   = Tensor::zeros({1, 1}, stream, "exec_entropy_tmp");
-    int count = 0;
-
-    for (const auto& s : steps) {
-        auto accum_ent = [&](const Tensor& probs, int n) {
-            if (!probs.data || n <= 0) return;
-            kernelEntropy<<<1, 1, 0, stream>>>(tmp.data, probs.data, n);
-            kernelAccumScalar<<<1, 1, 0, stream>>>(accum.data, tmp.data);
-            count++;
-        };
-        if (s.p_arg1.data) accum_ent(s.p_arg1, s.p_arg1.shape.flat.cols);
-        if (s.p_arg2.data) accum_ent(s.p_arg2, s.p_arg2.shape.flat.cols);
-        if (s.p_op.data) accum_ent(s.p_op, s.p_op.shape.flat.cols);
-        if (s.p_write.data) accum_ent(s.p_write, s.p_write.shape.flat.cols);
-    }
-
-    auto result = Tensor::zeros({1, 1}, stream, "exec_entropy_loss");
-    kernelScaleNegAvg<<<1, 1, 0, stream>>>(result.data, accum.data, weight, count);
-    return result;
-}
-
 __global__ void kernelCheckFinite(
     const float* __restrict__ data,
     int N,
@@ -1722,5 +1691,36 @@ void executeStepCoordinatorImpl(
 }
 
 }  // namespace GRIM::ExecutionBlockInternal
+
+GRIM::Tensor GRIM::ExecutionBlockLayer::computeEntropyLoss(
+    const std::vector<GRIM::ExecutionBlockStepOutput>& steps,
+    float weight,
+    cudaStream_t stream) const
+{
+    if (steps.empty() || weight <= 0.0f) {
+        return GRIM::Tensor::zeros({1, 1}, stream, "exec_entropy_zero");
+    }
+
+    auto accum = GRIM::Tensor::zeros({1, 1}, stream, "exec_entropy_accum");
+    auto tmp   = GRIM::Tensor::zeros({1, 1}, stream, "exec_entropy_tmp");
+    int count = 0;
+
+    for (const auto& s : steps) {
+        auto accum_ent = [&](const GRIM::Tensor& probs, int n) {
+            if (!probs.data || n <= 0) return;
+            GRIM::ExecutionBlockInternal::kernelEntropy<<<1, 1, 0, stream>>>(tmp.data, probs.data, n);
+            GRIM::ExecutionBlockInternal::kernelAccumScalar<<<1, 1, 0, stream>>>(accum.data, tmp.data);
+            count++;
+        };
+        if (s.p_arg1.data) accum_ent(s.p_arg1, s.p_arg1.shape.flat.cols);
+        if (s.p_arg2.data) accum_ent(s.p_arg2, s.p_arg2.shape.flat.cols);
+        if (s.p_op.data) accum_ent(s.p_op, s.p_op.shape.flat.cols);
+        if (s.p_write.data) accum_ent(s.p_write, s.p_write.shape.flat.cols);
+    }
+
+    auto result = GRIM::Tensor::zeros({1, 1}, stream, "exec_entropy_loss");
+    GRIM::ExecutionBlockInternal::kernelScaleNegAvg<<<1, 1, 0, stream>>>(result.data, accum.data, weight, count);
+    return result;
+}
 
 #endif  // USE_CUDA

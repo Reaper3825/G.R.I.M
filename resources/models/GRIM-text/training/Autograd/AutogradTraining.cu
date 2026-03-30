@@ -1761,6 +1761,28 @@ LossResult autogradTrainingStep(
         payload, "autogradTrainingStep",
         cfg.execution_block_num_slots, cfg.execution_block_num_ops, cfg.execution_block_num_steps);
 
+    // WS8: Execution dependency — arithmetic batches MUST use ExecutionBlock
+    // (mirrors computeLossBatch; ensures both paths throw on same condition)
+    if (!payload.teacher_steps.empty() && !cfg.execution_block_enabled) {
+        throw std::runtime_error(
+            "autogradTrainingStep: batch has teacher_steps (arithmetic) but execution_block_enabled=false; "
+            "arithmetic batches MUST use ExecutionBlock");
+    }
+
+    // WS8: Structural layer availability — crash loud if config says enabled but layers are missing
+    // (mirrors computeLossBatch; ensures both paths throw on same condition)
+    if (cfg.execution_block_enabled) {
+        if (!model.getExecutionBlockLayer()) {
+            throw std::runtime_error(
+                "autogradTrainingStep: execution_block_enabled but ExecutionBlock layer is null");
+        }
+        ScratchBlockLayer* sb_check = model.getScratchBlockLayer();
+        if (!sb_check || !sb_check->isEnabled()) {
+            throw std::runtime_error(
+                "autogradTrainingStep: execution_block_enabled requires ScratchBlock enabled");
+        }
+    }
+
     const int total_tokens = payload.total_tokens;
     
     // Get encoder for autograd forward
@@ -1800,9 +1822,26 @@ LossResult autogradTrainingStep(
     if (!training_state.cached_targets_tensor.data) {
         throw std::runtime_error("autogradTrainingStep: cached_targets_tensor.data is NULL");
     }
+
+    // WS8 Spec Step 10: LM does not supervise numeric magnitudes.
+    // Mask digit byte target tokens (ASCII '0'..'9') to -1 so unified_loss ignores them.
+    // (mirrors computeLossBatch; ensures training and validation share identical target masking)
+    std::vector<int> masked_targets;
+    const int* target_src = payload.target_ids.data();
+    if (cfg.execution_block_enabled) {
+        masked_targets.assign(payload.target_ids.begin(), payload.target_ids.end());
+        constexpr int DIGIT_LO = Tokenizer::BYTE_TOKEN_OFFSET + 0x30;
+        constexpr int DIGIT_HI = Tokenizer::BYTE_TOKEN_OFFSET + 0x39;
+        for (int t = 0; t < total_tokens; ++t) {
+            if (masked_targets[t] >= DIGIT_LO && masked_targets[t] <= DIGIT_HI)
+                masked_targets[t] = -1;
+        }
+        target_src = masked_targets.data();
+    }
+
     CUDA_CHECK(cudaMemcpyAsync(
         reinterpret_cast<int*>(training_state.cached_targets_tensor.data),
-        payload.target_ids.data(),
+        target_src,
         payload.targetIdBytes(),
         cudaMemcpyHostToDevice, stream));
     
