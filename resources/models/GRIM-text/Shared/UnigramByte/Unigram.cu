@@ -2184,28 +2184,30 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
             continue;  // Skip trie search — punctuation is always isolated
         }
         
-        // Try all pieces starting at pos
-        int node = 0;
-        for (size_t len = 1; len <= MAX_PIECE_LENGTH && pos + len <= n; ++len) {
-            unsigned char c = static_cast<unsigned char>(text[pos + len - 1]);
-            
-            // PUNCTUATION ISOLATION GUARD:
-            // Stop extending the piece if we hit a punctuation character.
-            // This prevents the trie from matching tokens that contain
-            // punctuation mixed with letters (e.g., "al.", "et al.,").
-            if (isPunctBoundary(c)) break;
-            
-            if (trie_[node].children[c] < 0) break;
-            node = trie_[node].children[c];
-            
-            if (trie_[node].token_id >= 0) {
-                float score = nodes[pos].score + trie_[node].score;
+        // Try all pieces starting at pos (skip if trie is empty — pure byte fallback)
+        if (!trie_.empty()) {
+            int node = 0;
+            for (size_t len = 1; len <= MAX_PIECE_LENGTH && pos + len <= n; ++len) {
+                unsigned char c = static_cast<unsigned char>(text[pos + len - 1]);
                 
-                if (score > nodes[pos + len].score) {
-                    nodes[pos + len].score = score;
-                    nodes[pos + len].prev_pos = static_cast<int>(pos);
-                    nodes[pos + len].token_id = trie_[node].token_id;
-                    nodes[pos + len].piece_length = static_cast<int>(len);
+                // PUNCTUATION ISOLATION GUARD:
+                // Stop extending the piece if we hit a punctuation character.
+                // This prevents the trie from matching tokens that contain
+                // punctuation mixed with letters (e.g., "al.", "et al.,").
+                if (isPunctBoundary(c)) break;
+                
+                if (trie_[node].children[c] < 0) break;
+                node = trie_[node].children[c];
+                
+                if (trie_[node].token_id >= 0) {
+                    float score = nodes[pos].score + trie_[node].score;
+                    
+                    if (score > nodes[pos + len].score) {
+                        nodes[pos + len].score = score;
+                        nodes[pos + len].prev_pos = static_cast<int>(pos);
+                        nodes[pos + len].token_id = trie_[node].token_id;
+                        nodes[pos + len].piece_length = static_cast<int>(len);
+                    }
                 }
             }
         }
