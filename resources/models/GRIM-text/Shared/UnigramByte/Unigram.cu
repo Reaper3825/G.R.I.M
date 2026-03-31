@@ -211,10 +211,10 @@ static std::string normalizeWithSpans(const std::string& text,
 }
 
 // Public static method wrappers (accessible from other TUs via Unigram.hpp)
-std::string UnigramLM::normalizeForTokenization(const std::string& text) {
+std::string Tokenizer::UnigramLM::normalizeForTokenization(const std::string& text) {
     return normalizeSpaces(text);
 }
-std::string UnigramLM::denormalizeFromTokenization(const std::string& text) {
+std::string Tokenizer::UnigramLM::denormalizeFromTokenization(const std::string& text) {
     return denormalizeSpaces(text);
 }
 
