@@ -549,6 +549,7 @@ target_link_libraries(grmt_vocab_metrics_test PRIVATE
     nlohmann_json::nlohmann_json
     CUDA::cudart
     grim_unigrambyte_tokenizer
+    stdc++fs
 )
 
 target_include_directories(grmt_vocab_metrics_test PRIVATE
