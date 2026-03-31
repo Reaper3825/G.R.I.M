@@ -84,6 +84,7 @@ message(STATUS "CUDAToolkit version: ${CUDAToolkit_VERSION}")
 
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(flatbuffers CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 # CUDA compilation flags
 # -diag-suppress=550: suppress "variable set but never used" warnings from third-party headers (FlatBuffers)
@@ -521,6 +522,7 @@ target_link_libraries(unigrambyte_self_test PRIVATE
     nlohmann_json::nlohmann_json
     CUDA::cudart
     grim_unigrambyte_tokenizer
+    Threads::Threads
 )
 
 target_include_directories(unigrambyte_self_test PRIVATE
