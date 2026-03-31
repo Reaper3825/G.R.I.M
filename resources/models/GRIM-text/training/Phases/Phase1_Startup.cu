@@ -1585,17 +1585,13 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             std::string training_path = ctx->config.paths.data_path;
             std::string vocab_path_str = ctx->config.paths.vocab_path;
             bool prepared = false;
-            // Load data_collection config to check clear_merged_cache_on_merge flag
-            GRIM::Config::DataCollectionConfig dc_config{};
-            GRIM::Config::loadDataCollectionConfig(dc_config);
 
             try {
                 prepared = GRIM::PrepareTrainingDataFromCache(
                     grim_paths,
                     training_path,
                     vocab_path_str,
-                    ctx->config.force_rebuild_vocab,
-                    dc_config.clear_merged_cache_on_merge);
+                    ctx->config.force_rebuild_vocab);
             } catch (const std::exception& e) {
                 if (ctx->logging.logger) {
                     ctx->logging.logger->log(std::string("[Phase1] Auto-prepare exception: ") + e.what());

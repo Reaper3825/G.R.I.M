@@ -144,6 +144,10 @@ struct LogRecorderConfig {
  */
 struct TrainingHyperparameters {
     
+    // Training run selectors — which model and curriculum to use
+    std::string current_model_training;
+    std::string current_curriculum;
+
     // Log Recorder configuration
     LogRecorderConfig log_recorder;
 
@@ -1304,7 +1308,12 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
 
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
     if (config.contains("training") && config["training"].contains("config")) {
-        const auto& trainConfig = config["training"]["config"];
+        const auto& training = config["training"];
+        // Parse training-level selectors (sibling to "config")
+        assignTrainingField(params.current_model_training, training, "current_model_training");
+        assignTrainingField(params.current_curriculum, training, "current_curriculum");
+
+        const auto& trainConfig = training["config"];
         // Rule 20: Validate required fields BEFORE parsing (fail fast)
         validateTrainingConfigJson(trainConfig);
         applyTrainingConfigObject(trainConfig, params);

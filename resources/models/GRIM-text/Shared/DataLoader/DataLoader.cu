@@ -236,9 +236,12 @@ using json = nlohmann::json;
 // Load concept_block_ids from curriculum_manifest.json if it exists.
 // Returns an empty set (meaning "no filter / include all") when the
 // manifest is absent.
-std::unordered_set<std::string> loadCurriculumManifest(const fs::path& dir) {
+std::unordered_set<std::string> loadCurriculumManifest(const fs::path& dir, const std::string& curriculum_name) {
 	std::unordered_set<std::string> ids;
-	fs::path manifest = dir / "curriculum_manifest.json";
+	// Use named curriculum file if specified, otherwise default manifest
+	fs::path manifest = curriculum_name.empty()
+		? (dir / "curriculum_manifest.json")
+		: (dir / (curriculum_name + ".json"));
 	if (!fs::exists(manifest)) return ids;
 
 	std::ifstream in(manifest);
@@ -262,7 +265,8 @@ std::unordered_set<std::string> loadCurriculumManifest(const fs::path& dir) {
 }
 
 void loadConceptBlocksJson(const fs::path& cache_dir,
-                           std::vector<json>& out) {
+                           std::vector<json>& out,
+                           const std::string& curriculum_name = "") {
 	fs::path p = cache_dir / "concept_blocks.jsonl";
 	std::ifstream in(p);
 	if (!in.is_open()) {
@@ -272,7 +276,7 @@ void loadConceptBlocksJson(const fs::path& cache_dir,
 	}
 
 	// Load optional curriculum filter.
-	auto filter_ids = loadCurriculumManifest(cache_dir);
+	auto filter_ids = loadCurriculumManifest(cache_dir, curriculum_name);
 	bool has_filter = !filter_ids.empty();
 
 	std::string line;
@@ -309,8 +313,7 @@ bool PrepareTrainingDataFromCache(
 	const GrimTextPaths& paths,
 	std::string& out_training_data_path,
 	std::string& out_vocab_path,
-	bool force_rebuild,
-	bool clear_cache) {
+	bool force_rebuild) {
 
 	// Resolve primary paths from config
 	if (!paths.training_data.empty()) {
@@ -421,63 +424,30 @@ bool PrepareTrainingDataFromCache(
 		std::cout << "[DataLoader] Both files missing; building from cache..." << std::endl;
 	}
 
-	// Determine where the merged cache should live. We expect
-	// grim_text.training_data in ai_config.json to point to the
-	// desired final GRMT file; its parent directory is where
-	// grim_data_pipeline wrote merged_verified_cache.jsonl.
+	// Derive the data directory from the configured GRMT path.
 	fs::path training_path(out_training_data_path);
 	fs::path cache_dir = training_path.parent_path();
-	fs::path cache_path = cache_dir / "merged_verified_cache.jsonl";
 
-	if (!fs::exists(cache_path)) {
-		std::cout << "[DataLoader] No merged_verified_cache.jsonl found at '"
-				  << cache_path.string() << "'; nothing to prepare." << std::endl;
-		return false;
-	}
-
-	std::cout << "[DataLoader] Preparing GRMT from cache: "
-			  << cache_path.string() << std::endl;
-
-	// Load cleaned texts from cache
-	std::vector<std::string> texts;
-	size_t malformed_lines = 0;
-	{
-		std::ifstream in(cache_path);
-		if (!in.is_open()) {
-			std::cerr << "[DataLoader] Failed to open cache file: "
-					  << cache_path.string() << std::endl;
-			return false;
-		}
-		std::string line;
-		while (std::getline(in, line)) {
-			if (line.empty()) continue;
-			try {
-				auto j = nlohmann::json::parse(line);
-				if (j.contains("content")) {
-					std::string raw_text = j["content"].get<std::string>();
-					std::string cleaned = cleanText(raw_text);
-					if (cleaned.length() >= kMinCleanedTextLength) {
-						texts.push_back(cleaned);
-					}
-				}
-			} catch (const std::exception&) {
-				++malformed_lines;
-				continue;
-			}
-		}
-	}
+	std::cout << "[DataLoader] Preparing GRMT from concept blocks in: "
+			  << cache_dir.string() << std::endl;
 
 	std::vector<nlohmann::json> concept_json_entries;
-	loadConceptBlocksJson(cache_dir, concept_json_entries);
+	loadConceptBlocksJson(cache_dir, concept_json_entries, train_config.current_curriculum);
 
-	if (malformed_lines > 0) {
-		std::cerr << "[DataLoader] Skipped " << malformed_lines 
-				  << " malformed JSONL lines in cache file" << std::endl;
+	if (!train_config.current_curriculum.empty()) {
+		std::cout << "[DataLoader] Using curriculum: " << train_config.current_curriculum << std::endl;
+	}
+	if (!train_config.current_model_training.empty()) {
+		std::cout << "[DataLoader] Training model: " << train_config.current_model_training << std::endl;
 	}
 
-	if (texts.empty() && concept_json_entries.empty()) {
-		std::cout << "[DataLoader] No cache texts and no concept_blocks.jsonl entries; nothing to tokenize." << std::endl;
-		return false;
+	if (concept_json_entries.empty()) {
+		std::cerr << "[DataLoader] FATAL: No concept_blocks.jsonl entries found in "
+				  << cache_dir.string()
+				  << "; all training data must come from curriculum concept blocks."
+				  << std::endl;
+		throw std::runtime_error(
+			"DataLoader: concept_blocks.jsonl is required but empty or missing");
 	}
 
 	// No train/val/test split here — Phase1_Startup owns that decision.  
@@ -534,10 +504,10 @@ bool PrepareTrainingDataFromCache(
 		}
 	}
 	if (!vocab_loaded) {
-		std::cout << "[DataLoader] Training new tokenizer vocab from cache (target: " 
+		std::cout << "[DataLoader] Training new tokenizer vocab from concept blocks (target: " 
 				  << target_vocab_size << " tokens)..." << std::endl;
-		std::vector<std::string> vocab_corpus = texts;
-		vocab_corpus.reserve(texts.size() + concept_json_entries.size());
+		std::vector<std::string> vocab_corpus;
+		vocab_corpus.reserve(concept_json_entries.size());
 		for (const auto& cj : concept_json_entries)
 			vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
 		tokenizer.train(vocab_corpus);
@@ -607,84 +577,10 @@ bool PrepareTrainingDataFromCache(
 		return seq;
 	};
 
-	auto encode_texts = [&](const std::vector<std::string>& corpus) -> std::vector<TokenizedSequence> {
-		std::vector<TokenizedSequence> tokens;
-		tokens.reserve(corpus.size());
-
-		const unsigned int workers = resolveTokenizerWorkerCount(config_tok, corpus.size());
-		if (workers <= 1) {
-			for (const auto& text : corpus) {
-				auto seq = build_sequence(text);
-				if (seq) {
-					tokens.push_back(std::move(*seq));
-				}
-			}
-			return tokens;
-		}
-
-		std::cout << "[DataLoader] Parallel tokenization: workers=" << workers
-				  << " threshold=" << std::max(1, config_tok.parallel_threshold)
-				  << " sequences=" << corpus.size() << std::endl;
-
-		std::vector<std::unique_ptr<TokenizedSequence>> staged(corpus.size());
-
-		const size_t chunk_size = resolveTokenizerChunkSize(workers, corpus.size());
-		std::atomic<size_t> next_index{0};
-		std::atomic<bool> abort{false};
-		std::exception_ptr first_error = nullptr;
-		std::mutex error_mutex;
-
-		auto worker_fn = [&]() {
-			while (!abort.load(std::memory_order_relaxed)) {
-				const size_t begin = next_index.fetch_add(chunk_size, std::memory_order_relaxed);
-				if (begin >= corpus.size()) break;
-				const size_t end = std::min(begin + chunk_size, corpus.size());
-
-				for (size_t i = begin; i < end; ++i) {
-					if (abort.load(std::memory_order_relaxed)) return;
-					try {
-						auto seq = build_sequence(corpus[i]);
-						if (seq) {
-							staged[i] = std::make_unique<TokenizedSequence>(std::move(*seq));
-						}
-					} catch (...) {
-						abort.store(true, std::memory_order_relaxed);
-						std::lock_guard<std::mutex> lock(error_mutex);
-						if (!first_error) {
-							first_error = std::current_exception();
-						}
-						return;
-					}
-				}
-			}
-		};
-
-		std::vector<std::thread> pool;
-		pool.reserve(workers);
-		for (unsigned int w = 0; w < workers; ++w) {
-			pool.emplace_back(worker_fn);
-		}
-		for (auto& thread : pool) {
-			thread.join();
-		}
-
-		if (first_error) {
-			std::rethrow_exception(first_error);
-		}
-
-		// Preserve original sequence order for deterministic GRMT output.
-		for (size_t i = 0; i < corpus.size(); ++i) {
-			if (!staged[i]) continue;
-			tokens.push_back(std::move(*staged[i]));
-		}
-
-		return tokens;
-	};
-
-	std::cout << "[DataLoader] Encoding " << texts.size() << " cache + "
-	          << concept_json_entries.size() << " concept sequences..." << std::endl << std::flush;
+	std::cout << "[DataLoader] Encoding " << concept_json_entries.size()
+	          << " concept sequences..." << std::endl << std::flush;
 	std::vector<TokenizedSequence> all_tokens;
-	all_tokens.reserve(concept_json_entries.size() + texts.size());
+	all_tokens.reserve(concept_json_entries.size());
 	int concept_exec_base_slot = 0;
 	if (const char* ev = std::getenv("GRIM_CONCEPT_EXEC_BASE_SLOT")) {
 		try {
@@ -708,10 +604,6 @@ bool PrepareTrainingDataFromCache(
 		} catch (const std::exception& e) {
 			std::cerr << "[DataLoader] concept build failed: " << e.what() << "\n";
 		}
-	}
-	{
-		auto cache_tok = encode_texts(texts);
-		all_tokens.insert(all_tokens.end(), cache_tok.begin(), cache_tok.end());
 	}
 
 	// Write single GRMT file — Phase1_Startup handles train/val splitting
@@ -879,16 +771,6 @@ bool PrepareTrainingDataFromCache(
 
 	std::cout << "[DataLoader] Wrote " << all_tokens.size() << " sequences to "
 			  << train_grmt.string() << std::endl;
-
-	// Optionally clear the cache now that it has been consumed.
-	if (clear_cache) {
-		std::error_code ec;
-		fs::remove(cache_path, ec);
-		if (ec) {
-			std::cerr << "[DataLoader] Warning: failed to remove cache file: "
-					  << cache_path.string() << " (" << ec.message() << ")" << std::endl;
-		}
-	}
 
 	return true;
 }
