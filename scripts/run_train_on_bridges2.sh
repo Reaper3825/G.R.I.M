@@ -268,7 +268,7 @@ if [[ "$DO_TD" == true ]]; then
   REMOTE_TD_EXE="$BRIDGES2_DIR/$BUILD_DIR/grmt_vocab_metrics_test"
   REMOTE_VOCAB="$BRIDGES2_DIR/resources/models/GRIM-text/training/data/vocab.bin"
   REMOTE_GRMT="$BRIDGES2_DIR/resources/models/GRIM-text/training/data/training_data.grmt"
-  TD_RUN_WRAPPER="bash -c 'exec \"$REMOTE_TD_EXE\" --vocab \"$REMOTE_VOCAB\" --grmt \"$REMOTE_GRMT\"'"
+  TD_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; exec \"$REMOTE_TD_EXE\" --vocab \"$REMOTE_VOCAB\" --grmt \"$REMOTE_GRMT\"'"
   echo "Running grmt_vocab_metrics_test on Bridges-2 (partition=RM-shared, no GPU)..."
   TD_SRUN_ARGS="-p RM-shared $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=4 --mem-per-cpu=2000M -t 0:30:00 --pty"
   if [[ -t 0 ]]; then

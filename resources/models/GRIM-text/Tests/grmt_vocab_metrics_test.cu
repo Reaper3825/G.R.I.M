@@ -2,15 +2,14 @@
 //  grmt_vocab_metrics_test.cu
 //  Streaming corpus + vocabulary diagnostics for .grmt
 //
-//  Computes Shannon entropy, bytes-per-token, fertility,
-//  and sequence-length statistics in a single pass without
-//  loading the entire corpus into memory.
+//  Single scan → full metrics dump. No test framework.
+//  Prints numbers you can actually use.
 //
 //  Build:
 //    cmake --build build --config Release \
 //          --target grmt_vocab_metrics_test
 //  Run:
-//    ./build/Release/grmt_vocab_metrics_test \
+//    ./grmt_vocab_metrics_test \
 //        --vocab  <path-to-vocab.bin> \
 //        --grmt   <path-to-training_data.grmt>
 //======================================================//
@@ -27,6 +26,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <string>
@@ -42,7 +42,7 @@ namespace fs = std::filesystem;
 //  Vocab loader — builds id-to-text map from vocab.bin
 // ════════════════════════════════════════════════════════
 
-static std::unordered_map<int, std::string> loadVocabMap(const std::string& path) {
+std::unordered_map<int, std::string> GRIM::Test::loadVocabMap(const std::string& path) {
     std::unordered_map<int, std::string> id_to_text;
 
     // Special tokens
@@ -124,7 +124,7 @@ static std::unordered_map<int, std::string> loadVocabMap(const std::string& path
 //  Streaming GRMT scanner — one-pass metrics
 // ════════════════════════════════════════════════════════
 
-static GRMTCorpusMetrics scanGRMT(
+GRMTCorpusMetrics GRIM::Test::scanGRMT(
     const std::string& grmt_path,
     const std::unordered_map<int, std::string>& vocab)
 {
@@ -147,25 +147,22 @@ static GRMTCorpusMetrics scanGRMT(
     f.read(reinterpret_cast<char*>(&m.num_sequences), 4);
     f.read(reinterpret_cast<char*>(&m.vocab_size), 4);
 
-    std::cout << "[grmt-metrics] GRMT v" << m.grmt_version
-              << ", " << m.num_sequences << " sequences"
-              << ", vocab_size=" << m.vocab_size << "\n";
-
     // Token ID histogram (sparse — only observed IDs)
-    std::unordered_map<uint32_t, uint64_t> token_hist;
-    token_hist.reserve(m.vocab_size);
+    m.token_hist.reserve(m.vocab_size);
 
     uint64_t total_utf8_bytes = 0;
     uint64_t total_words      = 0;
     m.seq_len_min = UINT32_MAX;
     m.seq_len_max = 0;
     uint64_t seq_len_sum = 0;
+    double   seq_len_sum_sq = 0.0;   // for stddev
 
     // Reusable per-sequence buffers
     std::vector<int32_t> token_ids;
     std::string decoded;
 
-    for (uint32_t s = 0; s < m.num_sequences; ++s) {
+    uint32_t s = 0;
+    for (; s < m.num_sequences; ++s) {
         uint32_t seq_len;
         f.read(reinterpret_cast<char*>(&seq_len), 4);
         if (!f || seq_len == 0 || seq_len > 1'000'000) break;
@@ -174,14 +171,29 @@ static GRMTCorpusMetrics scanGRMT(
         m.seq_len_min = std::min(m.seq_len_min, seq_len);
         m.seq_len_max = std::max(m.seq_len_max, seq_len);
         seq_len_sum += seq_len;
+        seq_len_sum_sq += static_cast<double>(seq_len) * seq_len;
 
         // ── Read token_ids ──
         token_ids.resize(seq_len);
         f.read(reinterpret_cast<char*>(token_ids.data()), seq_len * sizeof(int32_t));
 
-        // ── Histogram ──
+        // ── Histogram + token class breakdown ──
         for (uint32_t t = 0; t < seq_len; ++t) {
-            ++token_hist[static_cast<uint32_t>(token_ids[t])];
+            uint32_t tid = static_cast<uint32_t>(token_ids[t]);
+            ++m.token_hist[tid];
+
+            // Classify token
+            if (tid == UNK_TOKEN_ID) {
+                ++m.unk_count;
+            } else if (tid == PAD_TOKEN_ID || tid == BOS_TOKEN_ID || tid == EOS_TOKEN_ID) {
+                ++m.special_count;
+            } else if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
+                ++m.byte_fallback_count;
+            } else if (tid >= ATOM_TOKEN_OFFSET && tid < static_cast<uint32_t>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)) {
+                ++m.atom_count;
+            } else {
+                ++m.unigram_count;
+            }
         }
         m.total_tokens += seq_len;
 
@@ -271,16 +283,22 @@ static GRMTCorpusMetrics scanGRMT(
     }
 
     // ── Derived metrics ──
-    m.distinct_ids = static_cast<uint32_t>(token_hist.size());
+    m.sequences_scanned = s;
+    m.scan_ok = f.good() || f.eof();
+    m.distinct_ids = static_cast<uint32_t>(m.token_hist.size());
     m.seq_len_mean = m.num_sequences > 0
         ? static_cast<double>(seq_len_sum) / m.num_sequences
         : 0.0;
+    if (m.num_sequences > 1) {
+        double var = (seq_len_sum_sq / m.num_sequences) - (m.seq_len_mean * m.seq_len_mean);
+        m.seq_len_stddev = var > 0.0 ? std::sqrt(var) : 0.0;
+    }
 
     // Shannon entropy H(token) in bits
     if (m.total_tokens > 0) {
         double h = 0.0;
         double N = static_cast<double>(m.total_tokens);
-        for (auto& [id, count] : token_hist) {
+        for (auto& [id, count] : m.token_hist) {
             double p = static_cast<double>(count) / N;
             if (p > 0.0) h -= p * std::log2(p);
         }
@@ -297,215 +315,214 @@ static GRMTCorpusMetrics scanGRMT(
         ? static_cast<double>(m.total_tokens) / static_cast<double>(total_words)
         : 0.0;
 
+    // Vocab utilization
+    m.vocab_utilization = m.vocab_size > 0
+        ? 100.0 * m.distinct_ids / m.vocab_size
+        : 0.0;
+    m.dead_vocab_ids = (m.vocab_size > m.distinct_ids)
+        ? m.vocab_size - m.distinct_ids : 0;
+
+    if (m.seq_len_min == UINT32_MAX) m.seq_len_min = 0;
+
     return m;
 }
 
 // ════════════════════════════════════════════════════════
-//  Test registration
+//  Metrics report — actionable numbers
 // ════════════════════════════════════════════════════════
 
-void GRIM::Test::registerGRMTVocabMetricsTests(
-    UnigramByteTestSuite& suite,
+void GRIM::Test::printMetricsReport(
+    const GRMTCorpusMetrics& m,
+    const std::unordered_map<int, std::string>& vocab,
     const std::string& vocab_path,
     const std::string& grmt_path)
 {
-    // ── 1. Vocab file loads correctly ──
-    suite.addTest("grmt-vocab: vocab.bin loads", [vocab_path](std::string& message) -> bool {
-        auto vocab = loadVocabMap(vocab_path);
-        ASSERT_TRUE(vocab.size() > 260,
-            "Vocab too small (" + std::to_string(vocab.size()) + " entries). "
-            "Expected at least 260 (specials + byte fallback).");
-        message = std::to_string(vocab.size()) + " entries";
-        return true;
-    });
+    auto pct = [&](uint64_t n) -> double {
+        return m.total_tokens > 0 ? 100.0 * n / m.total_tokens : 0.0;
+    };
 
-    // ── 2. GRMT header is valid ──
-    suite.addTest("grmt-vocab: GRMT header valid", [grmt_path](std::string& message) -> bool {
-        std::ifstream f(grmt_path, std::ios::binary);
-        ASSERT_TRUE(f.is_open(), "Cannot open GRMT file: " + grmt_path);
+    std::cout << std::fixed;
 
-        uint32_t magic, version, num_seq, vocab_size;
-        f.read(reinterpret_cast<char*>(&magic), 4);
-        f.read(reinterpret_cast<char*>(&version), 4);
-        f.read(reinterpret_cast<char*>(&num_seq), 4);
-        f.read(reinterpret_cast<char*>(&vocab_size), 4);
+    std::cout << "\n"
+        << "╔══════════════════════════════════════════════════════════════╗\n"
+        << "║              GRMT Corpus + Vocabulary Metrics              ║\n"
+        << "╠══════════════════════════════════════════════════════════════╣\n"
+        << "║  FILES                                                     ║\n"
+        << "║    vocab.bin:        " << vocab_path << "\n"
+        << "║    training_data:    " << grmt_path << "\n"
+        << "║    GRMT version:     " << m.grmt_version << "\n"
+        << "╠══════════════════════════════════════════════════════════════╣\n"
+        << "║  CORPUS SIZE                                               ║\n"
+        << "║    sequences:        " << m.num_sequences << "\n"
+        << "║    total tokens:     " << m.total_tokens << "\n"
+        << "║    scanned OK:       " << m.sequences_scanned << "/" << m.num_sequences
+        << (m.scan_ok ? "" : "  *** READ ERROR ***") << "\n"
+        << "╠══════════════════════════════════════════════════════════════╣\n"
+        << "║  SEQUENCE LENGTHS                                          ║\n"
+        << "║    min:              " << m.seq_len_min << "\n"
+        << "║    max:              " << m.seq_len_max << "\n"
+        << "║    mean:             " << std::setprecision(1) << m.seq_len_mean << "\n"
+        << "║    stddev:           " << std::setprecision(1) << m.seq_len_stddev << "\n"
+        << "╠══════════════════════════════════════════════════════════════╣\n"
+        << "║  VOCABULARY UTILIZATION                                    ║\n"
+        << "║    vocab_size (hdr): " << m.vocab_size << "\n"
+        << "║    distinct IDs:     " << m.distinct_ids << "\n"
+        << "║    utilization:      " << std::setprecision(2) << m.vocab_utilization << "%\n"
+        << "║    dead IDs:         " << m.dead_vocab_ids
+        << " (never appear in corpus)\n"
+        << "╠══════════════════════════════════════════════════════════════╣\n"
+        << "║  TOKEN CLASS BREAKDOWN      count          % of total      ║\n"
+        << "║    unigram pieces:   " << std::setw(12) << m.unigram_count
+        << "    " << std::setprecision(2) << std::setw(7) << pct(m.unigram_count) << "%\n"
+        << "║    byte fallback:    " << std::setw(12) << m.byte_fallback_count
+        << "    " << std::setprecision(2) << std::setw(7) << pct(m.byte_fallback_count) << "%\n"
+        << "║    atom tokens:      " << std::setw(12) << m.atom_count
+        << "    " << std::setprecision(2) << std::setw(7) << pct(m.atom_count) << "%\n"
+        << "║    <unk>:            " << std::setw(12) << m.unk_count
+        << "    " << std::setprecision(2) << std::setw(7) << pct(m.unk_count) << "%\n"
+        << "║    special (s/pad):  " << std::setw(12) << m.special_count
+        << "    " << std::setprecision(2) << std::setw(7) << pct(m.special_count) << "%\n"
+        << "╠══════════════════════════════════════════════════════════════╣\n"
+        << "║  QUALITY METRICS                                           ║\n"
+        << "║    Shannon entropy:  " << std::setprecision(4) << m.shannon_entropy << " bits"
+        << "  (theoretical max: " << std::setprecision(2) << std::log2(std::max(1u, m.distinct_ids)) << ")\n"
+        << "║    Bytes per token:  " << std::setprecision(4) << m.bytes_per_token << "\n"
+        << "║    Fertility:        " << std::setprecision(4) << m.fertility << " tok/word\n"
+        << "╠══════════════════════════════════════════════════════════════╣\n";
 
-        ASSERT_EQ(magic, 0x474D5254u, "Bad GRMT magic");
-        ASSERT_TRUE(version >= 4, "GRMT version too old: " + std::to_string(version));
-        ASSERT_TRUE(num_seq > 0, "Zero sequences in GRMT");
-        ASSERT_TRUE(vocab_size > 0, "Zero vocab_size in GRMT header");
+    // ── Top 30 most frequent tokens ──
+    std::cout << "║  TOP 30 TOKENS (by frequency)                              ║\n";
+    {
+        std::vector<std::pair<uint32_t, uint64_t>> sorted_tokens(
+            m.token_hist.begin(), m.token_hist.end());
+        std::sort(sorted_tokens.begin(), sorted_tokens.end(),
+            [](const auto& a, const auto& b) { return a.second > b.second; });
 
-        message = "v" + std::to_string(version) + ", "
-                + std::to_string(num_seq) + " seqs, vocab=" + std::to_string(vocab_size);
-        return true;
-    });
+        int shown = 0;
+        for (const auto& [id, count] : sorted_tokens) {
+            if (shown >= 30) break;
 
-    // ── 3. Vocab/GRMT vocab_size match ──
-    suite.addTest("grmt-vocab: vocab sizes match", [vocab_path, grmt_path](std::string& message) -> bool {
-        auto vocab = loadVocabMap(vocab_path);
-        uint32_t vocab_total = static_cast<uint32_t>(vocab.size());
-
-        std::ifstream f(grmt_path, std::ios::binary);
-        ASSERT_TRUE(f.is_open(), "Cannot open GRMT file");
-
-        uint32_t magic, version, num_seq, grmt_vocab_size;
-        f.read(reinterpret_cast<char*>(&magic), 4);
-        f.read(reinterpret_cast<char*>(&version), 4);
-        f.read(reinterpret_cast<char*>(&num_seq), 4);
-        f.read(reinterpret_cast<char*>(&grmt_vocab_size), 4);
-
-        ASSERT_EQ(vocab_total, grmt_vocab_size,
-            "vocab.bin total (" + std::to_string(vocab_total) + ") != "
-            "GRMT header vocab_size (" + std::to_string(grmt_vocab_size) + ")");
-
-        message = "both report " + std::to_string(grmt_vocab_size);
-        return true;
-    });
-
-    // ── 4. Full corpus metrics scan ──
-    suite.addTest("grmt-vocab: corpus metrics", [vocab_path, grmt_path](std::string& message) -> bool {
-        auto vocab = loadVocabMap(vocab_path);
-        auto m = scanGRMT(grmt_path, vocab);
-
-        ASSERT_TRUE(m.total_tokens > 0, "No tokens scanned from GRMT");
-        ASSERT_TRUE(m.distinct_ids > 1, "Only " + std::to_string(m.distinct_ids) + " distinct token IDs");
-
-        // Print the metrics report
-        std::cout << "\n"
-            << "╔══════════════════════════════════════════════════╗\n"
-            << "║        GRMT Corpus + Vocabulary Metrics         ║\n"
-            << "╠══════════════════════════════════════════════════╣\n"
-            << "║  vocab.bin:       " << vocab_path << "\n"
-            << "║  training_data:   " << grmt_path << "\n"
-            << "║  GRMT version:    " << m.grmt_version << "\n"
-            << "╠══════════════════════════════════════════════════╣\n"
-            << "║  sequences:       " << m.num_sequences << "\n"
-            << "║  total_tokens:    " << m.total_tokens << "\n"
-            << "║  |V| observed:    " << m.distinct_ids << " distinct IDs\n"
-            << "║  vocab_size (hdr): " << m.vocab_size << "\n"
-            << "╠══════════════════════════════════════════════════╣\n"
-            << "║  seq_len min:     " << m.seq_len_min << "\n"
-            << "║  seq_len max:     " << m.seq_len_max << "\n"
-            << "║  seq_len mean:    " << std::fixed << std::setprecision(1) << m.seq_len_mean << "\n"
-            << "╠══════════════════════════════════════════════════╣\n"
-            << "║  Shannon entropy: " << std::fixed << std::setprecision(6) << m.shannon_entropy << " bits\n"
-            << "║  Bytes per token: " << std::fixed << std::setprecision(6) << m.bytes_per_token << "\n"
-            << "║  Fertility:       " << std::fixed << std::setprecision(6) << m.fertility << " tok/word\n"
-            << "╚══════════════════════════════════════════════════╝\n";
-
-        message = "H=" + std::to_string(m.shannon_entropy).substr(0, 8) + " bits"
-                + ", B/T=" + std::to_string(m.bytes_per_token).substr(0, 6)
-                + ", fert=" + std::to_string(m.fertility).substr(0, 6);
-        return true;
-    });
-
-    // ── 5. Shannon entropy sanity check ──
-    suite.addTest("grmt-vocab: entropy range", [vocab_path, grmt_path](std::string& message) -> bool {
-        auto vocab = loadVocabMap(vocab_path);
-        auto m = scanGRMT(grmt_path, vocab);
-
-        // For a reasonable subword tokenizer on natural language:
-        //   H should be between ~5 and ~16 bits.
-        //   <5 implies near-uniform tokens or pathologically small vocab.
-        //   >16 implies >65k distinct buckets with near-uniform usage.
-        ASSERT_TRUE(m.shannon_entropy > 3.0,
-            "Shannon entropy suspiciously low (" + std::to_string(m.shannon_entropy) + " bits)");
-        ASSERT_TRUE(m.shannon_entropy < 20.0,
-            "Shannon entropy suspiciously high (" + std::to_string(m.shannon_entropy) + " bits)");
-
-        message = std::to_string(m.shannon_entropy) + " bits (expected 5-16)";
-        return true;
-    });
-
-    // ── 6. Bytes per token sanity ──
-    suite.addTest("grmt-vocab: bytes/token range", [vocab_path, grmt_path](std::string& message) -> bool {
-        auto vocab = loadVocabMap(vocab_path);
-        auto m = scanGRMT(grmt_path, vocab);
-
-        // Reasonable range: 1.0 (pure byte) to ~12 (very aggressive merges).
-        ASSERT_TRUE(m.bytes_per_token >= 1.0,
-            "bytes/token < 1.0 (" + std::to_string(m.bytes_per_token) + ") — impossible");
-        ASSERT_TRUE(m.bytes_per_token < 20.0,
-            "bytes/token too high (" + std::to_string(m.bytes_per_token) + ") — vocab may be corrupt");
-
-        message = std::to_string(m.bytes_per_token);
-        return true;
-    });
-
-    // ── 7. Fertility sanity ──
-    suite.addTest("grmt-vocab: fertility range", [vocab_path, grmt_path](std::string& message) -> bool {
-        auto vocab = loadVocabMap(vocab_path);
-        auto m = scanGRMT(grmt_path, vocab);
-
-        // Typical unigram tokenizers: 1.1 – 2.5 tokens per word.
-        // Byte-level fallback can push higher, but >10 signals a problem.
-        ASSERT_TRUE(m.fertility > 0.5,
-            "Fertility too low (" + std::to_string(m.fertility) + ") — possibly no words decoded");
-        ASSERT_TRUE(m.fertility < 15.0,
-            "Fertility too high (" + std::to_string(m.fertility) + ") — tokenizer may be mostly byte-level");
-
-        message = std::to_string(m.fertility) + " tok/word";
-        return true;
-    });
-
-    // ── 8. No unknown tokens dominate ──
-    suite.addTest("grmt-vocab: <unk> usage", [vocab_path, grmt_path](std::string& message) -> bool {
-        auto vocab = loadVocabMap(vocab_path);
-
-        // Quick scan just for UNK token count
-        std::ifstream f(grmt_path, std::ios::binary);
-        ASSERT_TRUE(f.is_open(), "Cannot open GRMT file");
-
-        uint32_t magic, version, num_seq, vocab_size;
-        f.read(reinterpret_cast<char*>(&magic), 4);
-        f.read(reinterpret_cast<char*>(&version), 4);
-        f.read(reinterpret_cast<char*>(&num_seq), 4);
-        f.read(reinterpret_cast<char*>(&vocab_size), 4);
-
-        uint64_t unk_count = 0;
-        uint64_t total = 0;
-        std::vector<int32_t> tokens;
-
-        for (uint32_t s = 0; s < num_seq; ++s) {
-            uint32_t seq_len;
-            f.read(reinterpret_cast<char*>(&seq_len), 4);
-            if (!f || seq_len == 0 || seq_len > 1'000'000) break;
-
-            tokens.resize(seq_len);
-            f.read(reinterpret_cast<char*>(tokens.data()), seq_len * sizeof(int32_t));
-            total += seq_len;
-            for (int32_t tid : tokens) {
-                if (tid == UNK_TOKEN_ID) ++unk_count;
+            // Get display text
+            std::string display;
+            auto it = vocab.find(static_cast<int>(id));
+            if (it != vocab.end()) {
+                display = it->second;
+            } else {
+                display = "ID:" + std::to_string(id);
             }
-
-            // Skip remaining fields (same layout as scanGRMT)
-            f.seekg(seq_len * sizeof(int32_t), std::ios::cur);  // targets
-            f.seekg(seq_len * sizeof(float), std::ios::cur);    // numeric_values
-            f.seekg(seq_len * sizeof(uint8_t), std::ios::cur);  // atom_mask
-            f.seekg(seq_len * kTextFeatureDim * sizeof(uint16_t), std::ios::cur); // text_features
-            f.seekg(seq_len * sizeof(uint32_t), std::ios::cur); // atom_flags
-            for (uint32_t j = 0; j < seq_len; ++j) {           // atom text strings
-                uint16_t slen = 0;
-                f.read(reinterpret_cast<char*>(&slen), sizeof(uint16_t));
-                if (slen > 0) f.seekg(slen, std::ios::cur);
+            // Escape control chars for display
+            for (char& c : display) {
+                if (c == '\n') c = 'N';  // visual indicator
+                else if (c == '\t') c = 'T';
+                else if (c == '\r') c = 'R';
+                else if (static_cast<unsigned char>(c) < 32) c = '.';
             }
-            f.seekg(sizeof(uint8_t), std::ios::cur);            // exec_active
-            f.seekg(seq_len * sizeof(int32_t), std::ios::cur);  // token_exec_slots
-            { uint32_t n = 0; f.read(reinterpret_cast<char*>(&n), 4); if (n) f.seekg(n * 12, std::ios::cur); }
-            { uint32_t n = 0; f.read(reinterpret_cast<char*>(&n), 4); if (n) f.seekg(n * 20, std::ios::cur); }
-            { uint32_t n = 0; f.read(reinterpret_cast<char*>(&n), 4); if (n) f.seekg(n * 5, std::ios::cur); }
+            if (display.size() > 20) display = display.substr(0, 17) + "...";
 
-            if (!f) break;
+            double p = 100.0 * count / m.total_tokens;
+            std::cout << "║    " << std::setw(5) << (shown + 1) << ". "
+                      << std::left << std::setw(22) << display << std::right
+                      << " id=" << std::setw(6) << id
+                      << "  n=" << std::setw(10) << count
+                      << "  " << std::setprecision(3) << std::setw(7) << p << "%\n";
+            ++shown;
         }
+    }
 
-        double unk_pct = total > 0 ? 100.0 * unk_count / total : 0.0;
-        ASSERT_TRUE(unk_pct < 1.0,
-            "<unk> tokens are " + std::to_string(unk_pct) + "% of corpus — too high");
+    // ── Bottom 20 least frequent tokens (likely dead/waste) ──
+    std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
+    std::cout << "║  BOTTOM 20 TOKENS (rarest observed)                        ║\n";
+    {
+        std::vector<std::pair<uint32_t, uint64_t>> sorted_tokens(
+            m.token_hist.begin(), m.token_hist.end());
+        std::sort(sorted_tokens.begin(), sorted_tokens.end(),
+            [](const auto& a, const auto& b) { return a.second < b.second; });
 
-        message = std::to_string(unk_count) + " <unk> out of "
-                + std::to_string(total) + " (" + std::to_string(unk_pct).substr(0, 6) + "%)";
-        return true;
-    });
+        int shown = 0;
+        for (const auto& [id, count] : sorted_tokens) {
+            if (shown >= 20) break;
+
+            std::string display;
+            auto it = vocab.find(static_cast<int>(id));
+            if (it != vocab.end()) {
+                display = it->second;
+            } else {
+                display = "ID:" + std::to_string(id);
+            }
+            for (char& c : display) {
+                if (static_cast<unsigned char>(c) < 32) c = '.';
+            }
+            if (display.size() > 20) display = display.substr(0, 17) + "...";
+
+            std::cout << "║    " << std::setw(5) << (shown + 1) << ". "
+                      << std::left << std::setw(22) << display << std::right
+                      << " id=" << std::setw(6) << id
+                      << "  n=" << std::setw(10) << count << "\n";
+            ++shown;
+        }
+    }
+
+    std::cout
+        << "╚══════════════════════════════════════════════════════════════╝\n\n";
+}
+
+// ════════════════════════════════════════════════════════
+//  Sanity checks — returns warning count
+// ════════════════════════════════════════════════════════
+
+int GRIM::Test::checkSanity(const GRMTCorpusMetrics& m) {
+    int warnings = 0;
+    auto warn = [&](const std::string& msg) {
+        std::cout << "[WARNING] " << msg << "\n";
+        ++warnings;
+    };
+
+    if (m.total_tokens == 0) {
+        warn("No tokens scanned from GRMT file");
+        return warnings;
+    }
+    if (!m.scan_ok) {
+        warn("Read error during scan — only " + std::to_string(m.sequences_scanned) +
+             "/" + std::to_string(m.num_sequences) + " sequences read");
+    }
+    if (m.shannon_entropy < 3.0)
+        warn("Shannon entropy very low (" + std::to_string(m.shannon_entropy) +
+             " bits) — corpus may lack diversity");
+    if (m.shannon_entropy > 18.0)
+        warn("Shannon entropy very high (" + std::to_string(m.shannon_entropy) +
+             " bits) — possible near-uniform distribution");
+    if (m.bytes_per_token < 1.0)
+        warn("Bytes/token < 1.0 (" + std::to_string(m.bytes_per_token) +
+             ") — impossible, data may be corrupt");
+    if (m.bytes_per_token > 12.0)
+        warn("Bytes/token > 12 (" + std::to_string(m.bytes_per_token) +
+             ") — very aggressive subword merges");
+    if (m.fertility > 10.0)
+        warn("Fertility > 10 (" + std::to_string(m.fertility) +
+             " tok/word) — tokenizer may be mostly byte-level");
+    if (m.fertility < 0.5)
+        warn("Fertility < 0.5 (" + std::to_string(m.fertility) +
+             ") — word counting may be broken");
+
+    double unk_pct = m.total_tokens > 0 ? 100.0 * m.unk_count / m.total_tokens : 0.0;
+    if (unk_pct > 1.0)
+        warn("<unk> rate is " + std::to_string(unk_pct) + "% — too many unknown tokens");
+
+    double byte_pct = m.total_tokens > 0 ? 100.0 * m.byte_fallback_count / m.total_tokens : 0.0;
+    if (byte_pct > 30.0)
+        warn("Byte fallback rate is " + std::to_string(byte_pct) +
+             "% — tokenizer may need a larger vocab or better training data");
+
+    if (m.vocab_utilization < 50.0)
+        warn("Only " + std::to_string(m.vocab_utilization) +
+             "% of vocab IDs appear in corpus — " +
+             std::to_string(m.dead_vocab_ids) + " dead entries");
+
+    if (m.seq_len_max > 100000)
+        warn("Max sequence length is " + std::to_string(m.seq_len_max) +
+             " — suspiciously long");
+
+    return warnings;
 }
 
 // ════════════════════════════════════════════════════════
@@ -513,10 +530,8 @@ void GRIM::Test::registerGRMTVocabMetricsTests(
 // ════════════════════════════════════════════════════════
 
 int main(int argc, char** argv) {
-    // Configure token layout (must happen before using ATOM_VOCAB_SIZE etc.)
     GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
 
-    // Parse --vocab and --grmt from command line
     std::string vocab_path;
     std::string grmt_path;
 
@@ -534,14 +549,9 @@ int main(int argc, char** argv) {
 
     // Default paths relative to expected training data directory
     if (vocab_path.empty() || grmt_path.empty()) {
-        // Try to locate from known relative paths
         std::vector<std::string> search_roots;
-
-        // Check GRIM_REPO_ROOT environment variable
         const char* repo_root = std::getenv("GRIM_REPO_ROOT");
         if (repo_root) search_roots.push_back(std::string(repo_root));
-
-        // Common relative paths from build directory
         search_roots.push_back("../../../data");
         search_roots.push_back("../../../../resources/models/GRIM-text/training/data");
         search_roots.push_back("resources/models/GRIM-text/training/data");
@@ -566,7 +576,6 @@ int main(int argc, char** argv) {
         std::cerr << "ERROR: --grmt <path> required (or set GRIM_REPO_ROOT)\n";
         return 1;
     }
-
     if (!fs::exists(vocab_path)) {
         std::cerr << "ERROR: vocab.bin not found: " << vocab_path << "\n";
         return 1;
@@ -576,18 +585,24 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cout << "vocab:  " << vocab_path << "\n";
-    std::cout << "grmt:   " << grmt_path << "\n\n";
+    // ── Single scan ──
+    std::cout << "Loading vocab: " << vocab_path << "\n";
+    auto vocab = GRIM::Test::loadVocabMap(vocab_path);
+    std::cout << "Loaded " << vocab.size() << " vocab entries\n\n";
 
-    UnigramByteTestSuite suite;
-    registerGRMTVocabMetricsTests(suite, vocab_path, grmt_path);
+    std::cout << "Scanning GRMT: " << grmt_path << "\n";
+    auto metrics = GRIM::Test::scanGRMT(grmt_path, vocab);
 
-    auto results = suite.runAll();
+    // ── Print everything ──
+    GRIM::Test::printMetricsReport(metrics, vocab, vocab_path, grmt_path);
 
-    int failed = 0;
-    for (const auto& r : results) {
-        if (!r.passed) ++failed;
+    // ── Sanity checks ──
+    int warnings = GRIM::Test::checkSanity(metrics);
+    if (warnings > 0) {
+        std::cout << "\n" << warnings << " warning(s) detected.\n";
+        return 1;
     }
 
-    return failed > 0 ? 1 : 0;
+    std::cout << "All sanity checks passed.\n";
+    return 0;
 }
