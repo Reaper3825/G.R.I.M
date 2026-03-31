@@ -523,6 +523,7 @@ target_link_libraries(unigrambyte_self_test PRIVATE
     CUDA::cudart
     grim_unigrambyte_tokenizer
     Threads::Threads
+    stdc++fs
 )
 
 target_include_directories(unigrambyte_self_test PRIVATE
