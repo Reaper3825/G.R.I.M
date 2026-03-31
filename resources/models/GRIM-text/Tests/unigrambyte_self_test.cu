@@ -1035,14 +1035,14 @@ bool testFullPipeline(std::string& message) {
     
     // Add vocabulary via unigramLM
     // Start after pre-existing special tokens
-    tokenizer.unigramLM().addPiece("the", -1.0f, false);
-    tokenizer.unigramLM().addPiece("is", -1.1f, false);
-    tokenizer.unigramLM().addPiece("price", -1.5f, false);
-    tokenizer.unigramLM().addPiece("visit", -1.6f, false);
-    tokenizer.unigramLM().addPiece("for", -1.7f, false);
-    tokenizer.unigramLM().addPiece("more", -1.8f, false);
-    tokenizer.unigramLM().addPiece("info", -1.9f, false);
-    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
+    // Pieces use \xe2\x96\x81 (U+2581 ▁) prefix — SentencePiece whitespace normalization
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81the", -1.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81is", -1.1f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81price", -1.5f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81visit", -1.6f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81for", -1.7f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81more", -1.8f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81info", -1.9f, false);
     tokenizer.unigramLM().addPiece(".", -0.6f, false);
     
     // Mixed input: numbers become atoms, URLs remain plain text.
@@ -1162,8 +1162,9 @@ bool testEdgeCaseOnlyWhitespace(std::string& message) {
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
-    // Add space to vocab
-    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
+    // After ▁ normalization, spaces become ▁ characters
+    // Add ▁ piece to vocab so whitespace-only input has vocab matches
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81", -0.5f, false);
     tokenizer.unigramLM().buildTrie();
     
     std::string input = "   ";
@@ -1204,19 +1205,18 @@ bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
     config.enable_scratch_block_reasoning = false;
     UniByte tokenizer(config);
     
-    // Add vocab pieces for common words to reduce byte fallback
-    tokenizer.unigramLM().addPiece("This", -1.0f, false);
-    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
-    tokenizer.unigramLM().addPiece("is", -1.0f, false);
-    tokenizer.unigramLM().addPiece("not", -1.0f, false);
-    tokenizer.unigramLM().addPiece("a", -1.0f, false);
-    tokenizer.unigramLM().addPiece("special", -1.0f, false);
-    tokenizer.unigramLM().addPiece("token", -1.0f, false);
+    // Add vocab pieces for common words — ▁-prefixed for SentencePiece normalization
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81This", -1.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81is", -1.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81not", -1.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81a", -1.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81special", -1.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81token", -1.0f, false);
     // Add the literal special token strings as regular vocab pieces
-    tokenizer.unigramLM().addPiece("<unk>", -2.0f, false);
-    tokenizer.unigramLM().addPiece("<s>", -2.0f, false);
-    tokenizer.unigramLM().addPiece("</s>", -2.0f, false);
-    tokenizer.unigramLM().addPiece("<pad>", -2.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81<unk>", -2.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81<s>", -2.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81</s>", -2.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81<pad>", -2.0f, false);
     tokenizer.unigramLM().buildTrie();
     
     // Input contains literal special token strings
@@ -1564,8 +1564,8 @@ bool testMixedVocabAndByteFallback(std::string& message) {
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
-    // Add partial vocab
-    tokenizer.unigramLM().addPiece("hello", -1.0f, false);
+    // Add partial vocab — ▁-prefixed for SentencePiece whitespace normalization
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81hello", -1.0f, false);
     tokenizer.unigramLM().buildTrie();
     
     // Input has both vocab word and unknown
@@ -1673,10 +1673,9 @@ bool testVocabCapSize(std::string& message) {
 bool testGPUDecode(std::string& message) {
     UnigramLM unigram;
     
-    // Add vocab
-    unigram.addPiece("gpu", -1.0f, false);
-    unigram.addPiece("decode", -1.5f, false);
-    unigram.addPiece(" ", -0.5f, false);
+    // Add vocab — ▁-prefixed for SentencePiece whitespace normalization
+    unigram.addPiece("\xe2\x96\x81gpu", -1.0f, false);
+    unigram.addPiece("\xe2\x96\x81decode", -1.5f, false);
     unigram.buildTrie();
     
     // Init GPU

@@ -32,6 +32,7 @@
 #                    gitlink + pinned Cutlass SHA already match remote; still applies patches).
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
 #   --TD             Run grmt_vocab_metrics_test instead of full training (no GPU needed, uses RM-shared).
+#   --UT             Run unigrambyte_self_test instead of full training (needs GPU for GPU decode test).
 
 set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -59,6 +60,7 @@ FLAG_SYNC_MCS=false
 FLAG_SYNC_CBS=false
 FLAG_SYNC_FAS=false
 DO_TD=false
+DO_UT=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -75,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --sync-cbs)       FLAG_SYNC_CBS=true; shift ;;
     --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
     --TD)             DO_TD=true; shift ;;
+    --UT)             DO_UT=true; shift ;;
     --jobs)
       [[ $# -lt 2 ]] && { echo "ERROR: --jobs requires a positive integer"; exit 1; }
       [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --jobs must be a positive integer"; exit 1; }
@@ -201,6 +204,8 @@ BRIDGES2_CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TO
 BUILD_TARGET="train_gpu"
 if [[ "$DO_TD" == true ]]; then
   BUILD_TARGET="grmt_vocab_metrics_test"
+elif [[ "$DO_UT" == true ]]; then
+  BUILD_TARGET="unigrambyte_self_test"
 fi
 
 if [[ "$DO_BUILD" == true ]]; then
@@ -263,7 +268,18 @@ if [[ "$USE_SBATCH" == true ]]; then
 fi
 
 # Interactive run
-if [[ "$DO_TD" == true ]]; then
+if [[ "$DO_UT" == true ]]; then
+  # --UT: run unigrambyte_self_test (needs GPU for GPU decode test)
+  REMOTE_UT_EXE="$BRIDGES2_DIR/$BUILD_DIR/unigrambyte_self_test"
+  UT_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; exec \"$REMOTE_UT_EXE\"'"
+  echo "Running unigrambyte_self_test on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
+  UT_SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 0:10:00 --pty"
+  if [[ -t 0 ]]; then
+    ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $UT_SRUN_ARGS $UT_RUN_WRAPPER"
+  else
+    ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $UT_SRUN_ARGS $UT_RUN_WRAPPER"
+  fi
+elif [[ "$DO_TD" == true ]]; then
   # --TD: run grmt_vocab_metrics_test on RM-shared (no GPU needed)
   REMOTE_TD_EXE="$BRIDGES2_DIR/$BUILD_DIR/grmt_vocab_metrics_test"
   REMOTE_VOCAB="$BRIDGES2_DIR/resources/models/GRIM-text/training/data/vocab.bin"
