@@ -354,6 +354,20 @@ int main(int argc, char* argv[])
     WindowManager::processMainThreadUpdates();  // Apply BGFX to main window
     PlatformWindow::setWindowVisible(tempHwnd, true);
 #else
+    // On Windows: register tempHwnd as the BGFX primary window (hidden) so
+    // bgfx::frame() has a valid render target. The overlay is software-rendered
+    // via OverlayRenderer → UpdateLayeredWindow and must NOT host BGFX.
+    {
+        auto mainWin = std::make_unique<GRIMWindow>();
+        mainWin->hwnd = static_cast<HWND>(tempHwnd);
+        mainWin->name = "main";
+        mainWin->visible = false;
+        mainWin->isOverlay = false;
+        mainWin->width = 1;
+        mainWin->height = 1;
+        WindowManager::registerWindow(std::move(mainWin));
+        WindowManager::processMainThreadUpdates();
+    }
     PlatformWindow::setWindowVisible(tempHwnd, false);
 #endif
     LOG_PHASE("BGFX initialized successfully", true);
@@ -378,10 +392,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-#if !defined(__APPLE__)
-    // On Windows/Linux, BGFX renders to the overlay. On macOS, BGFX stays on main window so overlay stays transparent.
-    WindowManager::initGlobalBGFX(overlayWin->hwnd);
-#endif
+    // BGFX stays on tempHwnd (hidden on Windows, visible on macOS).
+    // The overlay is software-rendered via OverlayRenderer → UpdateLayeredWindow.
+    // Do NOT redirect BGFX to the overlay — it conflicts with layered window rendering.
     WindowManager::updateWindowDimensions("overlay", virtualWidth, virtualHeight);
     WindowManager::processMainThreadUpdates();
     
@@ -474,32 +487,36 @@ int main(int argc, char* argv[])
     {
         auto frameStart = std::chrono::steady_clock::now();
 
-        // Capture input and convert to client coordinates for UI
-        InputState input;
-        input.captureFromHWND(overlayWin->hwnd);
-
+        // Pump OS messages first so GetKeyboardState reflects latest input
         float wheelDelta = 0.0f;
         bool quitRequested = false;
         PlatformWindow::pumpEvents(wheelDelta, quitRequested);
-        input.mouseWheelDelta = wheelDelta;
         if (quitRequested)
             WindowManager::requestMainLoopStop();
+
+        // Capture input after message pump so keyboard state is current
+        InputState input;
+        input.captureFromHWND(overlayWin->hwnd);
+        input.mouseWheelDelta = wheelDelta;
 
         // Update Mouse class state from InputState for better reliability
         Mouse::updateFromInput(input);
         Key::updateFromInput(input);
 
+        UIRoot::get().update(input, 0.016f);
+
         // Per-frame overlay click-through: allow clicks to pass through to
         // other apps when the cursor is not over any visible GRIM panel.
         // On macOS this toggles NSWindow.ignoresMouseEvents; on Windows the
         // WM_NCHITTEST handler in OverlayWndProc does position-based testing.
+        // Uses cached panel rects (populated by update()) to avoid redundant
+        // mutex lock + vector copy.
         {
-            bool overUI = UIRoot::get().shouldReceiveInputAt(input.mousePos.x, input.mousePos.y)
-                          || UIRoot::get().isAnyPanelDragging();
+            bool overUI = UIRoot::get().shouldReceiveInputAtCached(input.mousePos.x, input.mousePos.y)
+                          || UIRoot::get().isAnyPanelDraggingCached();
             PlatformWindow::setOverlayClickThrough(overlayWin->hwnd, !overUI);
         }
 
-        UIRoot::get().update(input, 0.016f);
         UIRoot::get().draw();
         WindowManager::processMainThreadUpdates();
         WindowManager::renderFrame();

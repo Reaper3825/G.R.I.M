@@ -198,8 +198,11 @@ static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         pt.y = GET_Y_LPARAM(lParam);
         ScreenToClient(hwnd, &pt);
 
-        if (UIRoot::get().shouldReceiveInputAt(static_cast<float>(pt.x), static_cast<float>(pt.y))
-            || UIRoot::get().isAnyPanelDragging()
+        // Use cached panel rects (lock-free) — avoids mutex lock + vector
+        // copy on every mouse message. Cache is refreshed each frame in
+        // UIRoot::update().
+        if (UIRoot::get().shouldReceiveInputAtCached(static_cast<float>(pt.x), static_cast<float>(pt.y))
+            || UIRoot::get().isAnyPanelDraggingCached()
             || isPopupVisible())
         {
             return HTCLIENT;
@@ -323,11 +326,14 @@ GRIMWindow* WindowManager::createOverlay(const std::string& name, int w, int h, 
         }
 
         UpdateWindow(hwnd);
+        ShowWindow(hwnd, SW_SHOW);
 
-#ifdef _WIN32
-        // Blur the real desktop behind the overlay window.
-        enableDwmBlurBehind(hwnd);
-#endif
+        // NOTE: Do NOT call enableDwmBlurBehind() on the overlay.
+        // DWM blur fills the ENTIRE window area with blurred desktop,
+        // covering all UI content. On macOS, NSVisualEffectView is
+        // constrained to panel rects via setOverlayBlurMask(). On
+        // Windows, the per-panel glass effect is handled in software
+        // by drawGlassPanel() → captureDesktopBehindOverlay().
 #else
         int virtualX = 0, virtualY = 0, virtualWidth = 0, virtualHeight = 0;
         PlatformWindow::getVirtualScreenRect(virtualX, virtualY, virtualWidth, virtualHeight);
@@ -352,11 +358,7 @@ GRIMWindow* WindowManager::createOverlay(const std::string& name, int w, int h, 
         win->hwnd = hwnd;
         win->name = name;
         win->visible = true;
-#if defined(__APPLE__)
         win->isOverlay = true;  // BGFX stays on main window; overlay is UI-only so background stays transparent
-#else
-        win->isOverlay = false;
-#endif
         win->width = virtualWidth;
         win->height = virtualHeight;
 
@@ -639,6 +641,14 @@ void WindowManager::renderFrame()
 {
     if (!s_bgfxInitialized)
         return;
+
+    // BGFX is initialized but renders to a hidden 1x1 window — no visible
+    // output. Throttle to every 30th call (~2 fps) to keep bgfx alive
+    // without burning GPU submit cycles every frame.
+    static int s_frameSkipCounter = 0;
+    if (++s_frameSkipCounter < 30)
+        return;
+    s_frameSkipCounter = 0;
 
     HWND primary = nullptr;
     uint32_t targetWidth = 0;

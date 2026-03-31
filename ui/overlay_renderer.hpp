@@ -78,6 +78,11 @@ private:
     // Animated grain seed (changes per frame) for glass noise.
     uint32_t m_grainSeed = 0xA53C9E17u;
 
+    // Dirty region tracking: only memset/blit the area that was drawn to
+    int m_dirtyX1 = 0, m_dirtyY1 = 0, m_dirtyX2 = 0, m_dirtyY2 = 0;
+    int m_prevDirtyX1 = 0, m_prevDirtyY1 = 0, m_prevDirtyX2 = 0, m_prevDirtyY2 = 0;
+    void expandDirtyRect(int x, int y, int w, int h);
+
     std::mutex m_renderMutex;
     std::vector<ClipRect> m_clipStack;
     ClipRect activeClip() const;
@@ -88,6 +93,8 @@ private:
 
     // Temp buffer for blur passes (lazily allocated)
     std::vector<uint32_t> m_blurTemp;
+    // Separate buffer for desktop capture (not shared with blur)
+    std::vector<uint32_t> m_captureTemp;
     // Gaussian kernel for per-pixel blur (1D, half window)
     std::vector<float> m_gaussianKernel;
 

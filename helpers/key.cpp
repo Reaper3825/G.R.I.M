@@ -115,27 +115,24 @@ void Key::shutdown()
 
 void Key::updateFromInput(const InputState& input)
 {
-    for (const auto& entry : input.keyPressed)
+    for (int i = 0; i < 256; ++i)
     {
-        if (!entry.second) continue;
-        KeyCode code = fromVirtualKey(entry.first);
-        if (code != KeyCode::Unknown)
-            setDown(code);
-    }
+        if (input.keyPressed[i])
+        {
+            KeyCode code = fromVirtualKey(i);
+            if (code != KeyCode::Unknown)
+                setDown(code);
+        }
+        if (input.keyReleased[i])
+        {
+            KeyCode code = fromVirtualKey(i);
+            if (code != KeyCode::Unknown)
+                setUp(code);
+        }
 
-    for (const auto& entry : input.keyReleased)
-    {
-        if (!entry.second) continue;
-        KeyCode code = fromVirtualKey(entry.first);
+        KeyCode code = fromVirtualKey(i);
         if (code != KeyCode::Unknown)
-            setUp(code);
-    }
-
-    for (const auto& entry : input.keysDown)
-    {
-        KeyCode code = fromVirtualKey(entry.first);
-        if (code == KeyCode::Unknown) continue;
-        keyStates[code].down = entry.second;
+            keyStates[code].down = input.keysDown[i];
     }
 }
 

@@ -11,10 +11,10 @@ UIConsoleView::UIConsoleView(ConsoleHistory* h)
 
 void UIConsoleView::update(const InputState& input, float) {
     // Scroll using keys
-    if (input.keysDown.count(VK_PRIOR) && input.keysDown.at(VK_PRIOR)) {
+    if (input.keysDown[VK_PRIOR]) {
         scroll(-3); // Page Up
     }
-    if (input.keysDown.count(VK_NEXT) && input.keysDown.at(VK_NEXT)) {
+    if (input.keysDown[VK_NEXT]) {
         scroll(3); // Page Down
     }
 }

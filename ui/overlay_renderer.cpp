@@ -240,6 +240,29 @@ ClipRect OverlayRenderer::activeClip() const
 }
 
 // ---------------------------------------------------------------
+// Dirty region tracking
+// ---------------------------------------------------------------
+
+void OverlayRenderer::expandDirtyRect(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    int x2 = x + w;
+    int y2 = y + h;
+    if (m_dirtyX1 >= m_dirtyX2) {
+        // First dirty rect this frame
+        m_dirtyX1 = x;
+        m_dirtyY1 = y;
+        m_dirtyX2 = x2;
+        m_dirtyY2 = y2;
+    } else {
+        m_dirtyX1 = std::min(m_dirtyX1, x);
+        m_dirtyY1 = std::min(m_dirtyY1, y);
+        m_dirtyX2 = std::max(m_dirtyX2, x2);
+        m_dirtyY2 = std::max(m_dirtyY2, y2);
+    }
+}
+
+// ---------------------------------------------------------------
 // Frame management
 // ---------------------------------------------------------------
 
@@ -257,14 +280,33 @@ void OverlayRenderer::beginFrame()
 
     m_clipStack.clear();
 
+    // Only clear the region that was drawn last frame (union of prev + current dirty).
+    // For a multi-monitor overlay this avoids memset on millions of untouched pixels.
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
-    int pixelCount = m_width * m_height;
-    std::memset(pixels, 0, pixelCount * sizeof(uint32_t));
+    int cx1 = std::max(0, std::min(m_prevDirtyX1, m_width));
+    int cy1 = std::max(0, std::min(m_prevDirtyY1, m_height));
+    int cx2 = std::max(0, std::min(m_prevDirtyX2, m_width));
+    int cy2 = std::max(0, std::min(m_prevDirtyY2, m_height));
+
+    if (cx2 > cx1 && cy2 > cy1) {
+        int clearW = cx2 - cx1;
+        for (int y = cy1; y < cy2; ++y)
+            std::memset(pixels + y * m_width + cx1, 0, clearW * sizeof(uint32_t));
+    }
+
+    // Reset dirty rect for this frame
+    m_dirtyX1 = m_dirtyX2 = m_dirtyY1 = m_dirtyY2 = 0;
 }
 
 void OverlayRenderer::endFrame()
 {
     std::lock_guard<std::mutex> lock(m_renderMutex);
+
+    // Save dirty rect for next frame's clear pass
+    m_prevDirtyX1 = m_dirtyX1;
+    m_prevDirtyY1 = m_dirtyY1;
+    m_prevDirtyX2 = m_dirtyX2;
+    m_prevDirtyY2 = m_dirtyY2;
 
 #ifdef _WIN32
     if (!m_hwnd || !m_hdcMem || !m_hdcScreen)
@@ -436,6 +478,7 @@ void OverlayRenderer::copyBackdropRegion(int dstX, int dstY, int w, int h)
 
 void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color)
 {
+    expandDirtyRect((int)pos.x, (int)pos.y, (int)size.x, (int)size.y);
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
     if (!m_pixels)
@@ -473,6 +516,7 @@ void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color
 
 void OverlayRenderer::drawRoundedRect(const Vec2& pos, const Vec2& size, uint32_t color, float radius)
 {
+    expandDirtyRect((int)pos.x - 1, (int)pos.y - 1, (int)size.x + 2, (int)size.y + 2);
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
     if (!m_pixels || size.x <= 0 || size.y <= 0)
@@ -564,6 +608,7 @@ void OverlayRenderer::drawRoundedRect(const Vec2& pos, const Vec2& size, uint32_
 
 void OverlayRenderer::drawRoundedBorder(const Vec2& pos, const Vec2& size, uint32_t color, float radius, float thickness)
 {
+    expandDirtyRect((int)pos.x - 1, (int)pos.y - 1, (int)size.x + 2, (int)size.y + 2);
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
     if (!m_pixels || size.x <= 0 || size.y <= 0)
@@ -650,6 +695,8 @@ void OverlayRenderer::drawRoundedBorder(const Vec2& pos, const Vec2& size, uint3
 void OverlayRenderer::drawSoftGlow(const Vec2& pos, const Vec2& size, float radius,
                                     uint32_t color, float spread)
 {
+    int sp = (int)spread + 1;
+    expandDirtyRect((int)pos.x - sp, (int)pos.y - sp, (int)size.x + sp * 2, (int)size.y + sp * 2);
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
     if (!m_pixels || size.x <= 0 || size.y <= 0 || spread <= 0)
@@ -786,6 +833,8 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
 {
     int rx = (int)pos.x, ry = (int)pos.y;
     int rw = (int)size.x, rh = (int)size.y;
+    // Track the full panel area (including shadow offset) as dirty
+    expandDirtyRect(rx - 1, ry - 1, rw + (int)shadowOffset + 2, rh + (int)shadowOffset + 2);
 
     // 1-2. Real refraction: capture pixels behind the overlay and distort them.
     // This is the only way to get true "desktop refraction" in our software renderer.
@@ -800,7 +849,7 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
         const int capW = std::max(1, rw);
         const int capH = std::max(1, rh);
         const size_t needed = (size_t)capW * (size_t)capH;
-        if (m_blurTemp.size() < needed) m_blurTemp.resize(needed);
+        if (m_captureTemp.size() < needed) m_captureTemp.resize(needed);
 
         bool ok = PlatformWindow::captureDesktopBehindOverlay(
 #if defined(__APPLE__)
@@ -808,10 +857,10 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
 #else
             (void*)m_hwnd,
 #endif
-            rx, ry, capW, capH, m_blurTemp.data());
+            rx, ry, capW, capH, m_captureTemp.data());
 
         if (ok) {
-            uint64_t contentHash = computeContentHash(m_blurTemp.data(), needed);
+            uint64_t contentHash = computeContentHash(m_captureTemp.data(), needed);
 
             // Dirty detection: if content unchanged and rect matches, reuse cached result
             bool usedCache = false;
@@ -911,16 +960,16 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
                             int sx = std::clamp((int)((x - rx) + ox), 0, capW - 1);
                             int sy = std::clamp((int)(sy0 + oy), 0, capH - 1);
 
-                            pixels[y * m_width + x] = m_blurTemp[sy * capW + sx];
+                            pixels[y * m_width + x] = m_captureTemp[sy * capW + sx];
                         }
                     }
                 }
 
                 // Slight blur to soften distortion and mimic glass diffusion.
+                // 2 passes with moderate radius gives good frosted glass appearance
+                // without the extreme cost of 4 passes.
                 int frostRadius = (int)std::round(blurRadius / 2.5f);
                 frostRadius = std::clamp(frostRadius, 8, 32);
-                blurRegion(rx, ry, capW, capH, frostRadius);
-                blurRegion(rx, ry, capW, capH, frostRadius);
                 blurRegion(rx, ry, capW, capH, frostRadius);
                 blurRegion(rx, ry, capW, capH, frostRadius);
 
@@ -1117,6 +1166,9 @@ void OverlayRenderer::applyGlassGrain(const Vec2& pos, const Vec2& size, float r
 
 void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_t color)
 {
+    // Approximate text bounding box for dirty tracking
+    float textW = measureTextWidth(text);
+    expandDirtyRect((int)pos.x, (int)pos.y, (int)textW + 2, (int)m_fontSize + 2);
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
     if (!m_pixels || !m_fontLoaded || text.empty())
@@ -1215,6 +1267,11 @@ float OverlayRenderer::measureTextWidth(const std::string& text) const
 
 void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t color, float thickness)
 {
+    int lx1 = (int)std::min(start.x, end.x) - (int)thickness;
+    int ly1 = (int)std::min(start.y, end.y) - (int)thickness;
+    int lx2 = (int)std::max(start.x, end.x) + (int)thickness + 1;
+    int ly2 = (int)std::max(start.y, end.y) + (int)thickness + 1;
+    expandDirtyRect(lx1, ly1, lx2 - lx1, ly2 - ly1);
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
     if (!m_pixels)

@@ -65,6 +65,9 @@ void UIRoot::update(const InputState& input, float dt)
     processPendingTasks();
     UIPanel::setCanvasSize({static_cast<float>(m_width), static_cast<float>(m_height)});
     
+    // Refresh cached panel rects + dragging state for lock-free WM_NCHITTEST
+    updateHitTestCache();
+    
     // Create a modified input state with injected text
     InputState modifiedInput = input;
     modifiedInput.textInput = consumeTextInput();
@@ -412,6 +415,46 @@ bool UIRoot::isAnyPanelDragging() const
     for (const auto& panel : panels)
     {
         if (panel && panel->isVisible() && (panel->isDragging() || panel->isResizing()))
+            return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------
+// Cached hit-test: updated once per frame, read lock-free from
+// WM_NCHITTEST which Windows calls per mouse message (~100s/sec).
+// ---------------------------------------------------------------
+void UIRoot::updateHitTestCache()
+{
+    auto panels = snapshotPanels();
+    int count = 0;
+    bool dragging = false;
+
+    for (const auto& panel : panels)
+    {
+        if (!panel || !panel->isVisible()) continue;
+        if (panel->isDragging() || panel->isResizing()) dragging = true;
+        if (count < kMaxCachedPanels)
+        {
+            Vec2 pos = panel->getPosition();
+            Vec2 size = panel->getSize();
+            m_cachedRects[count] = {pos.x, pos.y, size.x, size.y};
+            ++count;
+        }
+    }
+
+    m_cachedRectCount.store(count, std::memory_order_release);
+    m_cachedDragging.store(dragging, std::memory_order_release);
+}
+
+bool UIRoot::shouldReceiveInputAtCached(float x, float y) const
+{
+    int count = m_cachedRectCount.load(std::memory_order_acquire);
+    for (int i = 0; i < count; ++i)
+    {
+        const auto& r = m_cachedRects[i];
+        if (x >= r.x && x <= r.x + r.w &&
+            y >= r.y && y <= r.y + r.h)
             return true;
     }
     return false;

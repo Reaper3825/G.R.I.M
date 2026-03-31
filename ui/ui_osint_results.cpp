@@ -210,10 +210,10 @@ void UIOsintResults::update(const InputState& input, float dt) {
     
     // Handle keyboard scrolling (fallback)
     if (hovered) {
-        if (input.keysDown.count(VK_DOWN) && input.keyPressed.count(VK_DOWN)) {
+        if (input.keysDown[VK_DOWN] && input.keyPressed[VK_DOWN]) {
             scrollOffset += rowHeight;
         }
-        if (input.keysDown.count(VK_UP) && input.keyPressed.count(VK_UP)) {
+        if (input.keysDown[VK_UP] && input.keyPressed[VK_UP]) {
             scrollOffset -= rowHeight;
         }
         
@@ -259,7 +259,7 @@ void UIOsintResults::update(const InputState& input, float dt) {
         hoveredRow = -1;  // Clear hover while detail panel is open
         
         // Close detail panel with ESC
-        if (input.keysDown.count(VK_ESCAPE) && input.keyPressed.count(VK_ESCAPE)) {
+        if (input.keysDown[VK_ESCAPE] && input.keyPressed[VK_ESCAPE]) {
             showDetailPanel = false;
             LOG_DEBUG("OSINT-UI", "Detail panel closed via ESC");
         }

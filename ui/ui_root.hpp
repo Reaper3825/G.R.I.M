@@ -41,11 +41,17 @@ public:
     // Check if a screen position should receive input (is over visible UI)
     bool shouldReceiveInputAt(float x, float y) const;
     
+    // Fast lock-free hit test using cached panel rects (for WM_NCHITTEST)
+    bool shouldReceiveInputAtCached(float x, float y) const;
+    
     // Check if any UI panel is currently visible
     bool hasVisiblePanels() const;
     
     // Check if any panel is currently being dragged or resized
     bool isAnyPanelDragging() const;
+    
+    // Cached dragging state (lock-free read for WM_NCHITTEST)
+    bool isAnyPanelDraggingCached() const { return m_cachedDragging.load(std::memory_order_relaxed); }
     
     // Check if UI consumed input this frame (for blocking pass-through)
     bool didConsumeInput() const { return m_inputConsumed; }
@@ -92,4 +98,13 @@ private:
     std::mutex m_taskMutex;
     std::vector<std::function<void()>> m_pendingTasks;
     std::atomic_flag m_drawGuard = ATOMIC_FLAG_INIT;
+
+    // Cached hit-test data: updated once per frame on main thread,
+    // read lock-free from WM_NCHITTEST (called per mouse message).
+    struct CachedRect { float x, y, w, h; };
+    static constexpr int kMaxCachedPanels = 32;
+    CachedRect m_cachedRects[kMaxCachedPanels]{};
+    std::atomic<int> m_cachedRectCount{0};
+    std::atomic<bool> m_cachedDragging{false};
+    void updateHitTestCache();
 };

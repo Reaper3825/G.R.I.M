@@ -263,7 +263,10 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     }
 
     UpdateWindow(hwnd);
-    enableDwmBlurBehind(hwnd);
+    // NOTE: Do NOT call enableDwmBlurBehind() on the popup.
+    // DWM blur fills the ENTIRE popup window with blurred desktop,
+    // producing a blurred square instead of showing the sprite with
+    // per-pixel alpha transparency via UpdateLayeredWindow(ULW_ALPHA).
     ShowWindow(hwnd, SW_SHOWDEFAULT);
 
     LOG_DEBUG("PopupWindow", "HWND created successfully (" +

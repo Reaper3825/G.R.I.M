@@ -103,39 +103,56 @@ bool captureDesktopBehindOverlay(void* overlayWindowHandle,
     const int screenX = wr.left + x;
     const int screenY = wr.top + y;
 
-    HDC hdcScreen = GetDC(nullptr);
-    if (!hdcScreen) return false;
+    // Reuse cached GDI resources when the capture dimensions haven't changed.
+    // Creating/destroying HDC+HBITMAP per call per panel per frame is extremely
+    // expensive on Windows (~0.5ms each).
+    static thread_local HDC s_hdcScreen = nullptr;
+    static thread_local HDC s_hdcMem = nullptr;
+    static thread_local HBITMAP s_hbm = nullptr;
+    static thread_local HGDIOBJ s_oldObj = nullptr;
+    static thread_local void* s_dibBits = nullptr;
+    static thread_local int s_cachedW = 0;
+    static thread_local int s_cachedH = 0;
 
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    if (!hdcMem) {
-        ReleaseDC(nullptr, hdcScreen);
-        return false;
+    if (!s_hdcScreen) {
+        s_hdcScreen = GetDC(nullptr);
+        if (!s_hdcScreen) return false;
     }
 
-    BITMAPINFO bmi{};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height; // top-down
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
+    // Recreate memory DC and DIB section only when size changes
+    if (!s_hdcMem || s_cachedW != width || s_cachedH != height) {
+        if (s_oldObj && s_hdcMem) SelectObject(s_hdcMem, s_oldObj);
+        if (s_hbm) DeleteObject(s_hbm);
+        if (s_hdcMem) DeleteDC(s_hdcMem);
 
-    void* dibBits = nullptr;
-    HBITMAP hbm = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &dibBits, nullptr, 0);
-    if (!hbm || !dibBits) {
-        if (hbm) DeleteObject(hbm);
-        DeleteDC(hdcMem);
-        ReleaseDC(nullptr, hdcScreen);
-        return false;
+        s_hdcMem = CreateCompatibleDC(s_hdcScreen);
+        if (!s_hdcMem) return false;
+
+        BITMAPINFO bmi{};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height; // top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        s_hbm = CreateDIBSection(s_hdcScreen, &bmi, DIB_RGB_COLORS, &s_dibBits, nullptr, 0);
+        if (!s_hbm || !s_dibBits) {
+            if (s_hbm) { DeleteObject(s_hbm); s_hbm = nullptr; }
+            DeleteDC(s_hdcMem); s_hdcMem = nullptr;
+            s_dibBits = nullptr;
+            return false;
+        }
+        s_oldObj = SelectObject(s_hdcMem, s_hbm);
+        s_cachedW = width;
+        s_cachedH = height;
     }
 
-    HGDIOBJ old = SelectObject(hdcMem, hbm);
-
-    // Capture desktop pixels. Note: this may include our previous frame for overlapping areas.
-    BitBlt(hdcMem, 0, 0, width, height, hdcScreen, screenX, screenY, SRCCOPY);
+    // Capture desktop pixels.
+    BitBlt(s_hdcMem, 0, 0, width, height, s_hdcScreen, screenX, screenY, SRCCOPY);
 
     // Convert BGRA (little-endian DIB) to packed ARGB.
-    const uint8_t* src = static_cast<const uint8_t*>(dibBits);
+    const uint8_t* src = static_cast<const uint8_t*>(s_dibBits);
     for (int yy = 0; yy < height; ++yy) {
         const uint8_t* row = src + (size_t)yy * (size_t)width * 4;
         for (int xx = 0; xx < width; ++xx) {
@@ -146,10 +163,6 @@ bool captureDesktopBehindOverlay(void* overlayWindowHandle,
         }
     }
 
-    SelectObject(hdcMem, old);
-    DeleteObject(hbm);
-    DeleteDC(hdcMem);
-    ReleaseDC(nullptr, hdcScreen);
     return true;
 }
 
