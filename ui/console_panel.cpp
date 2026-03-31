@@ -1,5 +1,4 @@
 #include "console_panel.hpp"
-#include "ui_training_panel.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
 #include "overlay_renderer.hpp"
@@ -43,17 +42,6 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "Training panel not found - may not be initialized yet");
           }
-      })),
-      modelsButton(std::make_shared<UIButton>(" Models ", []() {
-          auto panel = UIRoot::get().getPanel("GRIM-text Training Control");
-          if (panel) {
-              panel->setVisible(true);
-              auto* tp = dynamic_cast<UITrainingPanel*>(panel.get());
-              if (tp) tp->setView(TrainingPanelTab::Home);
-              LOG_DEBUG("ConsolePanel", "Opened models tab via button");
-          } else {
-              LOG_DEBUG("ConsolePanel", "Training panel not found - may not be initialized yet");
-          }
       }))
 {
     position = { 100, 300 };
@@ -91,10 +79,8 @@ ConsolePanel::ConsolePanel()
     if (settingsButton) settingsButton->setSize(btnW, btnH);
     if (DCButton)       DCButton->setSize(btnW, btnH);
     if (trainingButton) trainingButton->setSize(btnW, btnH);
-    if (modelsButton)   modelsButton->setSize(btnW, btnH);
     
     toolbarBox = std::make_shared<UIHBox>(LayoutDirection::Horizontal, 8.0f);
-    toolbarBox->addWidget(modelsButton);
     toolbarBox->addWidget(DCButton);
     toolbarBox->addWidget(trainingButton);
     toolbarBox->addWidget(settingsButton);

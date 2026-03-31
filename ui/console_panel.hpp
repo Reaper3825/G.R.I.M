@@ -32,7 +32,6 @@ private:
     std::shared_ptr<UIButton> settingsButton;  // Settings button
     std::shared_ptr<UIButton> trainingButton;  // Training control button
     std::shared_ptr<UIButton> DCButton;        // Data Collection button
-    std::shared_ptr<UIButton> modelsButton;    // Model Registry button
     std::shared_ptr<UIHBox> toolbarBox;         // Horizontal layout for toolbar buttons
     
     // Helper to get current time string

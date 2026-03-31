@@ -16,6 +16,7 @@
 #include <ctime>
 #include <fstream>
 #include <algorithm>
+#include <cmath>
 #include <nlohmann/json.hpp>
 #include "core/grim_platform.h"
 #include "core/input_parser.hpp"
@@ -50,6 +51,102 @@ static constexpr float kBottomBarH    = 50.0f;
 static constexpr float kStatCardH     = 60.0f;
 static constexpr float kStatCardGap   = 10.0f;
 static constexpr float kLogLineH      = 18.0f;
+
+namespace {
+
+constexpr float kParamBrowserWheelPixelsPerStep = 22.0f;
+constexpr float kParamBrowserScrollbarWidth = 12.0f;
+constexpr float kParamBrowserScrollbarInset = 2.0f;
+constexpr float kParamBrowserScrollbarMinThumbH = 24.0f;
+
+struct ParamScrollbarMetrics {
+    bool visible = false;
+    float trackX = 0.0f;
+    float trackY = 0.0f;
+    float trackW = 0.0f;
+    float trackH = 0.0f;
+    float thumbY = 0.0f;
+    float thumbH = 0.0f;
+    float maxScroll = 0.0f;
+    float maxThumbTravel = 0.0f;
+};
+
+static float normalizeMouseWheelDelta(float rawDelta) {
+    if (std::fabs(rawDelta) >= 120.0f) {
+        return rawDelta / 120.0f;
+    }
+    return rawDelta;
+}
+
+static bool pointInRect(const Vec2& point, float x, float y, float w, float h) {
+    return point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h;
+}
+
+static size_t countParamCategoryHeaderRows(
+    const std::vector<const GRIM::Config::HyperparamEntry*>& params,
+    const std::string& activeCategory)
+{
+    if (!activeCategory.empty()) {
+        return 0;
+    }
+
+    size_t headerCount = 0;
+    std::string lastCategory;
+    for (const auto* entry : params) {
+        if (!entry) continue;
+        if (entry->category != lastCategory) {
+            lastCategory = entry->category;
+            ++headerCount;
+        }
+    }
+    return headerCount;
+}
+
+static float computeParamBrowserContentHeight(
+    const std::vector<const GRIM::Config::HyperparamEntry*>& params,
+    const std::string& activeCategory,
+    float rowH)
+{
+    const size_t headerRows = countParamCategoryHeaderRows(params, activeCategory);
+    return static_cast<float>(params.size() + headerRows) * rowH;
+}
+
+static ParamScrollbarMetrics computeParamScrollbarMetrics(
+    float x,
+    float y,
+    float w,
+    float listH,
+    float totalContentH,
+    float scrollOffset)
+{
+    ParamScrollbarMetrics metrics;
+    metrics.maxScroll = std::max(0.0f, totalContentH - listH);
+    metrics.visible = metrics.maxScroll > 0.0f;
+    metrics.trackW = kParamBrowserScrollbarWidth;
+    metrics.trackX = x + w - metrics.trackW - kParamBrowserScrollbarInset;
+    metrics.trackY = y + kParamBrowserScrollbarInset;
+    metrics.trackH = std::max(0.0f, listH - 2.0f * kParamBrowserScrollbarInset);
+
+    if (!metrics.visible || metrics.trackH <= 0.0f) {
+        metrics.thumbY = metrics.trackY;
+        metrics.thumbH = metrics.trackH;
+        return metrics;
+    }
+
+    const float visibleRatio = listH / totalContentH;
+    metrics.thumbH = std::clamp(metrics.trackH * visibleRatio,
+                                kParamBrowserScrollbarMinThumbH,
+                                metrics.trackH);
+    metrics.maxThumbTravel = std::max(0.0f, metrics.trackH - metrics.thumbH);
+
+    const float scrollRatio = (metrics.maxScroll > 0.0f)
+        ? std::clamp(scrollOffset / metrics.maxScroll, 0.0f, 1.0f)
+        : 0.0f;
+    metrics.thumbY = metrics.trackY + scrollRatio * metrics.maxThumbTravel;
+    return metrics;
+}
+
+} // namespace
 
 // =========================================================
 // Helpers
@@ -396,6 +493,36 @@ UITrainingPanel::UITrainingPanel()
 
     updateHardwareInfo();
     calculateTrainingEstimate();
+
+    // ══════════════════════════════════════════════════════
+    //  Hyperparameter registry + param browser widgets
+    // ══════════════════════════════════════════════════════
+
+    paramScrollBox_ = std::make_shared<UIScrollBox>();
+    paramScrollBox_->setSize(340.0f, 400.0f);
+
+    loadHyperparamSnapshot();
+
+    // Category filter dropdown — built after loading snapshot
+    std::vector<std::string> filterItems = {"All"};
+    if (hyperparamsLoaded_) {
+        for (const auto& cat : hyperparamRegistry_.categories()) {
+            filterItems.push_back(cat);
+        }
+    }
+    paramCategoryFilter_ = std::make_shared<UIDropdown>(
+        "Filter", filterItems, 0,
+        [this](int idx, const std::string& /*name*/) {
+            selectedParamCategory_ = idx;
+            paramScrollOffset_ = 0.0f;
+            hoveredParamRow_ = -1;
+        });
+    paramCategoryFilter_->setSize(200.0f, 26.0f);
+
+    // Inline param editor — shared input box, hidden until a row is clicked
+    paramEditInput_ = std::make_shared<UIInputBox>(&editParamBuffer_);
+    paramEditInput_->setSize(120.0f, 20.0f);
+    paramEditInput_->OnTextSubmitted.Bind([this](const std::string&) { commitParamEdit(); });
 }
 
 UITrainingPanel::~UITrainingPanel() = default;
@@ -480,8 +607,6 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     if (!isVisible()) return;
     UIPanel::update(input, dt);
 
-    updateResourceMonitoring(dt);
-
     // Tab buttons — always update
     tabHomeBtn_->update(input, dt);
     tabKnowledgeGapsBtn_->update(input, dt);
@@ -543,14 +668,121 @@ void UITrainingPanel::update(const InputState& input, float dt) {
             break;
         }
         case TrainingPanelTab::Training: {
-            if (epochsSlider) epochsSlider->update(input, dt);
-            if (batchSizeSlider) batchSizeSlider->update(input, dt);
-            if (learningRateSlider) learningRateSlider->update(input, dt);
-            if (maxSeqLenSlider) maxSeqLenSlider->update(input, dt);
-            if (warmupStepsSlider) warmupStepsSlider->update(input, dt);
-            if (saveConfigButton) saveConfigButton->update(input, dt);
             if (curriculumDropdown_) curriculumDropdown_->update(input, dt);
             if (trainModelDropdown_) trainModelDropdown_->update(input, dt);
+            if (paramCategoryFilter_) paramCategoryFilter_->update(input, dt);
+
+            // Param browser scroll + hover — check if mouse is over left panel area
+            {
+                auto content = getContentRect();
+                content.origin.y += (kContentTopY - kTabBarY);
+                content.size.y -= (kContentTopY - kTabBarY);
+                content.size.y -= kBottomBarH;
+                constexpr float kParamBrowserW = 350.0f;
+                constexpr float rowH = 22.0f;
+                Vec2 m = input.mousePos;
+
+                float bx = content.origin.x;
+                float by = content.origin.y;
+                // Skip same layout offsets as drawParamBrowser
+                by += Sizes::HeaderHeight + Spacing::Small;   // section header
+                by += 26.0f + Spacing::Small;                 // category dropdown
+                float listH = content.size.y - (by - content.origin.y) - Spacing::Small;
+                if (listH < 60.0f) listH = 60.0f;
+
+                std::string catFilter;
+                if (hyperparamsLoaded_ && paramCategoryFilter_ && selectedParamCategory_ > 0) {
+                    const auto& cats = hyperparamRegistry_.categories();
+                    if (selectedParamCategory_ - 1 < static_cast<int>(cats.size())) {
+                        catFilter = cats[static_cast<size_t>(selectedParamCategory_ - 1)];
+                    }
+                }
+                auto params = hyperparamRegistry_.filtered(catFilter);
+                const float totalContentH = computeParamBrowserContentHeight(params, catFilter, rowH);
+                const float maxScroll = std::max(0.0f, totalContentH - listH);
+                paramScrollOffset_ = std::clamp(paramScrollOffset_, 0.0f, maxScroll);
+
+                const ParamScrollbarMetrics scrollbar = computeParamScrollbarMetrics(
+                    bx, by, kParamBrowserW, listH, totalContentH, paramScrollOffset_);
+                const bool overPanel = pointInRect(m, bx, content.origin.y, kParamBrowserW, content.size.y);
+                const bool overList = pointInRect(m, bx, by, kParamBrowserW, listH);
+                const bool overScrollbarTrack = scrollbar.visible &&
+                    pointInRect(m, scrollbar.trackX, scrollbar.trackY, scrollbar.trackW, scrollbar.trackH);
+                const bool overScrollbarThumb = scrollbar.visible &&
+                    pointInRect(m, scrollbar.trackX, scrollbar.thumbY, scrollbar.trackW, scrollbar.thumbH);
+
+                hoveredParamScrollbar_ = overScrollbarThumb;
+
+                if (scrollbar.visible && input.mousePressed[0] && overScrollbarTrack) {
+                    draggingParamScrollbar_ = true;
+                    if (!overScrollbarThumb && scrollbar.maxThumbTravel > 0.0f) {
+                        const float targetThumbY = std::clamp(
+                            m.y - scrollbar.thumbH * 0.5f,
+                            scrollbar.trackY,
+                            scrollbar.trackY + scrollbar.maxThumbTravel);
+                        const float thumbRatio = (targetThumbY - scrollbar.trackY) / scrollbar.maxThumbTravel;
+                        paramScrollOffset_ = thumbRatio * scrollbar.maxScroll;
+                    }
+                    paramScrollbarDragStartY_ = m.y;
+                    paramScrollbarDragStartOffset_ = paramScrollOffset_;
+                }
+
+                if (draggingParamScrollbar_) {
+                    if (input.mouseDown[0]) {
+                        if (scrollbar.maxThumbTravel > 0.0f && scrollbar.maxScroll > 0.0f) {
+                            const float deltaY = m.y - paramScrollbarDragStartY_;
+                            const float scrollDelta = (deltaY / scrollbar.maxThumbTravel) * scrollbar.maxScroll;
+                            paramScrollOffset_ = std::clamp(
+                                paramScrollbarDragStartOffset_ + scrollDelta,
+                                0.0f,
+                                scrollbar.maxScroll);
+                        }
+                    } else {
+                        draggingParamScrollbar_ = false;
+                    }
+                }
+
+                if (overList && !draggingParamScrollbar_ && input.mouseWheelDelta != 0.0f) {
+                    const float wheelSteps = normalizeMouseWheelDelta(input.mouseWheelDelta);
+                    paramScrollOffset_ = std::clamp(
+                        paramScrollOffset_ - wheelSteps * kParamBrowserWheelPixelsPerStep,
+                        0.0f,
+                        maxScroll);
+                }
+
+                if (!overPanel && !draggingParamScrollbar_) {
+                    hoveredParamScrollbar_ = false;
+                }
+
+                // Hover detection — must match drawParamBrowser geometry exactly
+                hoveredParamRow_ = -1;
+                if (hyperparamsLoaded_ && overList && !draggingParamScrollbar_ &&
+                    (!scrollbar.visible || m.x < scrollbar.trackX)) {
+                    float drawY = by + 2.0f - paramScrollOffset_;
+                    std::string lastCat;
+                    for (size_t i = 0; i < params.size(); ++i) {
+                        const auto* entry = params[i];
+                        if (catFilter.empty() && entry->category != lastCat) {
+                            lastCat = entry->category;
+                            drawY += rowH; // category sub-header row
+                        }
+                        if (drawY + rowH >= by && drawY <= by + listH &&
+                            m.y >= drawY && m.y < drawY + rowH) {
+                            hoveredParamRow_ = static_cast<int>(i);
+                            break;
+                        }
+                        drawY += rowH;
+                    }
+                }
+            }
+
+            // Inline param edit input
+            if (editingParamIndex_ >= 0 && paramEditInput_) {
+                paramEditInput_->update(input, dt);
+            }
+
+            // Click handling for param browser rows
+            processParamBrowserClicks(input);
             break;
         }
     }
@@ -703,6 +935,13 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     }
 
     // ── Dropdowns on top ──
+    if (paramCategoryFilter_ && paramCategoryFilter_->isExpanded())
+        paramCategoryFilter_->drawExpandedList(renderer, position);
+    if (curriculumDropdown_ && curriculumDropdown_->isExpanded())
+        curriculumDropdown_->drawExpandedList(renderer, position);
+    if (trainModelDropdown_ && trainModelDropdown_->isExpanded())
+        trainModelDropdown_->drawExpandedList(renderer, position);
+
     renderer.popClipRect();
     return true;
 }
@@ -1458,51 +1697,549 @@ void UITrainingPanel::processToolGapClicks(const InputState& input, const PanelR
 }
 
 // ============================================================
+// Hyperparameter Snapshot Loader
+// ============================================================
+
+void UITrainingPanel::loadHyperparamSnapshot() {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot("ai_config.json");
+    if (!snapshot || !snapshot->has_training) {
+        hyperparamsLoaded_ = false;
+        return;
+    }
+    hyperparamSnapshot_ = snapshot->hyperparameters;
+    hyperparamRegistry_.populate(hyperparamSnapshot_);
+    hyperparamsLoaded_ = true;
+}
+
+// ============================================================
+// Parameter Browser (left-side scroll panel)
+// ============================================================
+
+void UITrainingPanel::drawParamBrowser(OverlayRenderer& renderer, const Vec2& origin, const Vec2& sz) {
+    float x = origin.x;
+    float y = origin.y;
+    float w = sz.x;
+    float h = sz.y;
+
+    // Header
+    UIDrawHelpers::drawSectionHeader(renderer, {x, y}, w,
+                                     "Model Parameters", Colors::SectionAI);
+    y += Sizes::HeaderHeight + Spacing::Small;
+
+    // Category filter dropdown
+    if (paramCategoryFilter_) {
+        paramCategoryFilter_->setPosition(x + Spacing::PaddingX, y);
+        paramCategoryFilter_->setSize(w - 2.0f * Spacing::PaddingX, 26.0f);
+        paramCategoryFilter_->drawOverlay(renderer, position);
+        y += 26.0f + Spacing::Small;
+    }
+
+    if (!hyperparamsLoaded_) {
+        renderer.drawText({x + Spacing::PaddingX, y + 10.0f},
+                          "No hyperparameters loaded", Colors::TextMuted);
+        return;
+    }
+
+    // Determine active category filter
+    std::string activeCategory;
+    if (selectedParamCategory_ > 0) {
+        const auto& cats = hyperparamRegistry_.categories();
+        int catIdx = selectedParamCategory_ - 1; // 0 = "All"
+        if (catIdx >= 0 && catIdx < static_cast<int>(cats.size())) {
+            activeCategory = cats[static_cast<size_t>(catIdx)];
+        }
+    }
+
+    auto filteredParams = hyperparamRegistry_.filtered(activeCategory);
+    if (filteredParams.empty()) {
+        renderer.drawText({x + Spacing::PaddingX, y + 10.0f},
+                          "No parameters in this category", Colors::TextMuted);
+        return;
+    }
+
+    // Scroll area background
+    float listH = h - (y - origin.y) - Spacing::Small;
+    if (listH < 60.0f) listH = 60.0f;
+
+    renderer.drawRoundedRect({x, y}, {w, listH}, Colors::ContentAreaBg, Sizes::WidgetRadius);
+    renderer.drawRoundedBorder({x, y}, {w, listH}, Colors::BorderSubtle, Sizes::WidgetRadius);
+
+    // Row dimensions
+    constexpr float rowH = 22.0f;
+    constexpr float padX = 8.0f;
+    float nameColW = w * 0.55f;
+    // Scroll content
+    float totalContentH = computeParamBrowserContentHeight(filteredParams, activeCategory, rowH);
+    float maxScroll = std::max(0.0f, totalContentH - listH);
+    if (paramScrollOffset_ > maxScroll) paramScrollOffset_ = maxScroll;
+    if (paramScrollOffset_ < 0.0f) paramScrollOffset_ = 0.0f;
+
+    const ParamScrollbarMetrics scrollbar = computeParamScrollbarMetrics(
+        x, y, w, listH, totalContentH, paramScrollOffset_);
+
+    float drawY = y + 2.0f - paramScrollOffset_;
+    std::string lastCategory;
+
+    for (size_t i = 0; i < filteredParams.size(); ++i) {
+        const auto* entry = filteredParams[i];
+
+        // Category sub-header (when showing "All")
+        if (activeCategory.empty() && entry->category != lastCategory) {
+            lastCategory = entry->category;
+            // Draw category label row
+            if (drawY + rowH >= y && drawY <= y + listH) {
+                renderer.drawRect({x + 2.0f, drawY}, {w - 4.0f, rowH}, Colors::TableHeaderBg);
+                renderer.drawText({x + padX, drawY + 3.0f}, entry->category, Colors::TextHeader);
+            }
+            drawY += rowH;
+            if (drawY > y + listH) break;
+        }
+
+        // Skip rows above visible area
+        if (drawY + rowH < y) { drawY += rowH; continue; }
+        // Stop below visible area
+        if (drawY > y + listH) break;
+
+        // Only draw visible rows
+        if (drawY >= y && drawY + rowH <= y + listH) {
+            // Alternating row background
+            uint32_t rowBg = (i % 2 == 0) ? Colors::RowEven : Colors::RowOdd;
+            if (static_cast<int>(i) == hoveredParamRow_) {
+                rowBg = Colors::RowHover;
+            }
+            renderer.drawRect({x + 2.0f, drawY}, {w - 4.0f, rowH}, rowBg);
+
+            // Parameter name
+            renderer.drawText({x + padX, drawY + 3.0f}, entry->display_name, Colors::TextLight);
+
+            // Value column — inline edit or read-only display
+            if (static_cast<int>(i) == editingParamIndex_ && paramEditInput_ &&
+                entry->type != GRIM::Config::HyperparamType::Bool) {
+                // Draw the input box for the editing row
+                float editX = x + nameColW - 2.0f;
+                float editRightPad = scrollbar.visible ? (kParamBrowserScrollbarWidth + 8.0f) : 8.0f;
+                float editW = w - nameColW - padX - editRightPad;
+                paramEditInput_->setPosition(editX, drawY);
+                paramEditInput_->setSize(editW, rowH);
+                paramEditInput_->drawOverlay(renderer, position);
+            } else {
+                std::string valStr = entry->valueAsString();
+
+                // Color-code booleans
+                uint32_t valColor = Colors::TextValue;
+                if (entry->type == GRIM::Config::HyperparamType::Bool) {
+                    valColor = (entry->ptr_bool && *entry->ptr_bool) ? Colors::Success : Colors::TextMuted;
+                }
+
+                renderer.drawText({x + nameColW, drawY + 3.0f}, valStr, valColor);
+            }
+        }
+
+        drawY += rowH;
+    }
+
+    // Scrollbar indicator if content overflows
+    if (scrollbar.visible) {
+        renderer.drawRoundedRect({scrollbar.trackX, scrollbar.trackY},
+                                 {scrollbar.trackW, scrollbar.trackH},
+                                 Colors::TableHeaderBg,
+                                 3.0f);
+        const uint32_t thumbColor = draggingParamScrollbar_
+            ? Colors::ScrollThumbDrag
+            : (hoveredParamScrollbar_ ? Colors::ScrollThumbHover : Colors::ScrollThumb);
+        renderer.drawRoundedRect({scrollbar.trackX, scrollbar.thumbY},
+                                 {scrollbar.trackW, scrollbar.thumbH},
+                                 thumbColor,
+                                 3.0f);
+        renderer.drawRoundedBorder({scrollbar.trackX, scrollbar.thumbY},
+                                   {scrollbar.trackW, scrollbar.thumbH},
+                                   Colors::BorderPrimary,
+                                   3.0f);
+    }
+}
+
+// ============================================================
+// Param Browser Click Handling
+// ============================================================
+
+void UITrainingPanel::processParamBrowserClicks(const InputState& input) {
+    using namespace UITheme;
+
+    if (!hyperparamsLoaded_) return;
+    if (!input.mousePressed[0]) return;  // left click only
+
+    // Reconstruct the same geometry as drawParamBrowser
+    auto content = getContentRect();
+    content.origin.y += (kContentTopY - kTabBarY);
+    content.size.y -= (kContentTopY - kTabBarY);
+    content.size.y -= kBottomBarH;
+    constexpr float kParamBrowserW = 350.0f;
+
+    float x = content.origin.x;
+    float w = kParamBrowserW;
+    float y = content.origin.y;
+
+    // Skip header + dropdown (must match drawParamBrowser layout)
+    y += Sizes::HeaderHeight + Spacing::Small;   // "Model Parameters" header
+    y += 26.0f + Spacing::Small;                 // category dropdown
+
+    float listH = content.size.y - (y - content.origin.y) - Spacing::Small;
+    if (listH < 60.0f) listH = 60.0f;
+    float nameColW = w * 0.55f;
+    constexpr float rowH = 22.0f;
+
+    Vec2 m = input.mousePos;
+
+    // Check if click is within the list area at all
+    if (m.x < x || m.x > x + w || m.y < y || m.y > y + listH) {
+        // Clicked outside the param browser — commit any active edit
+        if (editingParamIndex_ >= 0) commitParamEdit();
+        return;
+    }
+
+    // Get the current filtered list
+    std::string catFilter;
+    if (paramCategoryFilter_ && selectedParamCategory_ > 0) {
+        const auto& cats = hyperparamRegistry_.categories();
+        if (selectedParamCategory_ - 1 < static_cast<int>(cats.size())) {
+            catFilter = cats[selectedParamCategory_ - 1];
+        }
+    }
+    auto params = hyperparamRegistry_.filtered(catFilter);
+    const float totalContentH = computeParamBrowserContentHeight(params, catFilter, rowH);
+    const ParamScrollbarMetrics scrollbar = computeParamScrollbarMetrics(
+        x, y, w, listH, totalContentH, std::clamp(paramScrollOffset_, 0.0f, std::max(0.0f, totalContentH - listH)));
+
+    if (draggingParamScrollbar_ ||
+        (scrollbar.visible && pointInRect(input.mousePos, scrollbar.trackX, scrollbar.trackY, scrollbar.trackW, scrollbar.trackH))) {
+        return;
+    }
+
+    // Find which row was clicked — must match drawParamBrowser geometry exactly
+    float drawY = y + 2.0f - paramScrollOffset_;
+    std::string lastCategory;
+    for (size_t i = 0; i < params.size(); ++i) {
+        const auto* entry = params[i];
+
+        // Account for category sub-header rows (when showing "All")
+        if (catFilter.empty() && entry->category != lastCategory) {
+            lastCategory = entry->category;
+            drawY += rowH; // skip category header row
+        }
+
+        if (drawY + rowH < y || drawY > y + listH) {
+            drawY += rowH;
+            continue;  // clipped
+        }
+
+        if (m.y >= drawY && m.y < drawY + rowH) {
+            bool clickedValue = (m.x >= x + nameColW);
+
+            if (!clickedValue) {
+                // Clicked on name column — just commit any open edit
+                if (editingParamIndex_ >= 0) commitParamEdit();
+                return;
+            }
+
+            // Clicked on value column
+            if (entry->type == GRIM::Config::HyperparamType::Bool) {
+                // Toggle booleans immediately
+                if (editingParamIndex_ >= 0) commitParamEdit();
+                if (entry->ptr_bool) {
+                    *entry->ptr_bool = !(*entry->ptr_bool);
+                    persistHyperparamToJSON(*entry);
+                }
+            } else {
+                // Open inline editor for non-bool types
+                if (editingParamIndex_ >= 0) commitParamEdit();
+                editingParamIndex_ = static_cast<int>(i);
+                editParamBuffer_ = entry->valueAsString();
+                if (paramEditInput_) {
+                    paramEditInput_->setText(editParamBuffer_);
+                }
+            }
+            return;
+        }
+        drawY += rowH;
+    }
+
+    // Click was in list area but not on any row — commit
+    if (editingParamIndex_ >= 0) commitParamEdit();
+}
+
+// ============================================================
+// Commit / Cancel inline param edit
+// ============================================================
+
+void UITrainingPanel::commitParamEdit() {
+    if (editingParamIndex_ < 0) return;
+
+    // Get filtered list to find the entry
+    std::string catFilter;
+    if (paramCategoryFilter_ && selectedParamCategory_ > 0) {
+        const auto& cats = hyperparamRegistry_.categories();
+        if (selectedParamCategory_ - 1 < static_cast<int>(cats.size())) {
+            catFilter = cats[selectedParamCategory_ - 1];
+        }
+    }
+    auto params = hyperparamRegistry_.filtered(catFilter);
+
+    if (editingParamIndex_ >= 0 && editingParamIndex_ < static_cast<int>(params.size())) {
+        const auto* entry = params[editingParamIndex_];
+        const std::string& val = editParamBuffer_;
+
+        try {
+            switch (entry->type) {
+                case GRIM::Config::HyperparamType::Int:
+                    if (entry->ptr_int) *entry->ptr_int = std::stoi(val);
+                    break;
+                case GRIM::Config::HyperparamType::Int64:
+                    if (entry->ptr_int64) *entry->ptr_int64 = std::stoll(val);
+                    break;
+                case GRIM::Config::HyperparamType::Float:
+                    if (entry->ptr_float) *entry->ptr_float = std::stof(val);
+                    break;
+                case GRIM::Config::HyperparamType::String:
+                    if (entry->ptr_string) *entry->ptr_string = val;
+                    break;
+                case GRIM::Config::HyperparamType::SizeT:
+                    if (entry->ptr_sizet) *entry->ptr_sizet = static_cast<size_t>(std::stoull(val));
+                    break;
+                case GRIM::Config::HyperparamType::Bool:
+                    // Bools are toggled on click, not edited via text
+                    break;
+            }
+            persistHyperparamToJSON(*entry);
+        } catch (const std::exception&) {
+            // Invalid input — discard change silently (value stays as-is)
+        }
+    }
+
+    editingParamIndex_ = -1;
+    editParamBuffer_.clear();
+}
+
+void UITrainingPanel::cancelParamEdit() {
+    editingParamIndex_ = -1;
+    editParamBuffer_.clear();
+}
+
+// ============================================================
+// Persist single hyperparam value to ai_config.json
+// ============================================================
+
+bool UITrainingPanel::persistHyperparamToJSON(const GRIM::Config::HyperparamEntry& entry) {
+    try {
+        std::ifstream fileIn("ai_config.json");
+        nlohmann::json j;
+        if (fileIn.is_open()) { fileIn >> j; fileIn.close(); }
+
+        if (!j.contains("training")) j["training"] = nlohmann::json::object();
+        if (!j["training"].contains("config")) j["training"]["config"] = nlohmann::json::object();
+        auto& tc = j["training"]["config"];
+
+        // Get the value as a JSON type
+        nlohmann::json val;
+        switch (entry.type) {
+            case GRIM::Config::HyperparamType::Bool:   val = entry.ptr_bool   ? *entry.ptr_bool   : false; break;
+            case GRIM::Config::HyperparamType::Int:    val = entry.ptr_int    ? *entry.ptr_int    : 0;     break;
+            case GRIM::Config::HyperparamType::Int64:  val = entry.ptr_int64  ? *entry.ptr_int64  : 0;     break;
+            case GRIM::Config::HyperparamType::Float:  val = entry.ptr_float  ? *entry.ptr_float  : 0.0f;  break;
+            case GRIM::Config::HyperparamType::String: val = entry.ptr_string ? *entry.ptr_string : "";    break;
+            case GRIM::Config::HyperparamType::SizeT:  val = entry.ptr_sizet  ? static_cast<int64_t>(*entry.ptr_sizet) : 0; break;
+        }
+
+        // ── Nested JSON path mapping ──
+        // The loader (applyTrainingConfigObject) reads many fields from nested objects.
+        // We must write to the same nested path so changes round-trip correctly.
+        // Keys not matched here are written as flat keys to training.config.
+        const std::string& k = entry.key;
+
+        auto setNested = [&](const std::string& section, const std::string& field) {
+            if (!tc.contains(section) || !tc[section].is_object())
+                tc[section] = nlohmann::json::object();
+            tc[section][field] = val;
+        };
+        auto setDoubleNested = [&](const std::string& s1, const std::string& s2, const std::string& field) {
+            if (!tc.contains(s1) || !tc[s1].is_object())
+                tc[s1] = nlohmann::json::object();
+            if (!tc[s1].contains(s2) || !tc[s1][s2].is_object())
+                tc[s1][s2] = nlohmann::json::object();
+            tc[s1][s2][field] = val;
+        };
+
+        bool handled = false;
+
+        // Cosine decay
+        if (k == "cosine_decay_enabled")  { setNested("cosine_decay", "enabled"); handled = true; }
+        if (k == "cosine_decay_min_lr")   { setNested("cosine_decay", "min_lr");  handled = true; }
+
+        // Soft restart
+        if (!handled && k.rfind("soft_restart_", 0) == 0) {
+            setNested("soft_restart", k.substr(13)); handled = true;
+        }
+        // Auto stop
+        if (!handled && k.rfind("auto_stop_", 0) == 0) {
+            setNested("auto_stop", k.substr(10)); handled = true;
+        }
+        // Micro validation
+        if (!handled && k.rfind("micro_validation_", 0) == 0) {
+            std::string suffix = k.substr(17);
+            if (suffix == "batch_limit") suffix = "batch_limit";  // direct map
+            setNested("micro_validation", suffix); handled = true;
+        }
+        // Shuffle
+        if (!handled && k == "shuffle_train_enabled") { setNested("shuffle", "enabled"); handled = true; }
+        if (!handled && k == "shuffle_train_epochs")  { setNested("shuffle", "epochs");  handled = true; }
+        // Guess aux
+        if (!handled && k.rfind("guess_aux_", 0) == 0) {
+            setNested("guess_aux", k.substr(10)); handled = true;
+        }
+        // Loss (double-nested under loss.subsection)
+        if (!handled && k.rfind("loss_label_smoothing_", 0) == 0) {
+            setDoubleNested("loss", "label_smoothing", k.substr(21)); handled = true;
+        }
+        if (!handled && k.rfind("loss_focal_", 0) == 0) {
+            setDoubleNested("loss", "focal", k.substr(11)); handled = true;
+        }
+        if (!handled && k.rfind("loss_preference_", 0) == 0) {
+            setDoubleNested("loss", "preference", k.substr(16)); handled = true;
+        }
+        if (!handled && k.rfind("loss_distillation_", 0) == 0) {
+            setDoubleNested("loss", "distillation", k.substr(18)); handled = true;
+        }
+        if (!handled && k.rfind("loss_masking_", 0) == 0) {
+            setDoubleNested("loss", "masking", k.substr(13)); handled = true;
+        }
+        if (!handled && k.rfind("loss_entropy_reg_", 0) == 0) {
+            setDoubleNested("loss", "entropy_reg", k.substr(17)); handled = true;
+        }
+        if (!handled && k.rfind("loss_class_balanced_", 0) == 0) {
+            setDoubleNested("loss", "class_balanced", k.substr(20)); handled = true;
+        }
+        // LM head centering
+        if (!handled && k == "lm_head_centering_enabled")     { setNested("lm_head_centering", "enabled"); handled = true; }
+        if (!handled && k == "lm_head_center_hidden_states")  { setNested("lm_head_centering", "center_hidden_states"); handled = true; }
+        if (!handled && k == "center_logits")                 { setNested("lm_head_centering", "center_logits"); handled = true; }
+        if (!handled && k == "center_encoder_residuals")      { setNested("lm_head_centering", "center_encoder_residuals"); handled = true; }
+        if (!handled && k == "project_out_pc1")               { setNested("lm_head_centering", "project_out_pc1"); handled = true; }
+        if (!handled && k == "pc1_power_iters")               { setNested("lm_head_centering", "pc1_power_iters"); handled = true; }
+        // Layer scale
+        if (!handled && k == "use_layer_scale")  { setNested("layer_scale", "enabled");    handled = true; }
+        if (!handled && k == "layer_scale_init") { setNested("layer_scale", "init_value"); handled = true; }
+        // QK-norm
+        if (!handled && k == "qk_norm_enabled") { setNested("qk_norm", "enabled"); handled = true; }
+        // Attention diagnostics
+        if (!handled && k == "attention_diag_enabled") { setNested("attention_diagnostics", "enabled"); handled = true; }
+        if (!handled && k == "attention_diag_layer")   { setNested("attention_diagnostics", "layer");   handled = true; }
+        if (!handled && k == "attention_diag_head")    { setNested("attention_diagnostics", "head");    handled = true; }
+        // Scratch blocks
+        if (!handled && k == "scratch_blocks_enabled")       { setNested("scratch_blocks", "enabled"); handled = true; }
+        if (!handled && k == "scratch_max_tokens_per_block") { setNested("scratch_blocks", "max_tokens_per_block"); handled = true; }
+        if (!handled && k == "scratch_num_blocks")           { setNested("scratch_blocks", "num_blocks"); handled = true; }
+        if (!handled && k == "scratch_write_combined")       { setNested("scratch_blocks", "use_write_combined"); handled = true; }
+        // Scratch block reasoning
+        if (!handled && k.rfind("scratch_block_reasoning_", 0) == 0) {
+            setNested("scratch_block_reasoning", k.substr(24)); handled = true;
+        }
+        // Execution block
+        if (!handled && k.rfind("execution_block_", 0) == 0) {
+            setNested("execution_block", k.substr(16)); handled = true;
+        }
+        if (!handled && k.rfind("execution_step_", 0) == 0) {
+            setNested("execution_block", k.substr(10)); handled = true;
+        }
+        if (!handled && k.rfind("execution_entropy_", 0) == 0) {
+            setNested("execution_block", k.substr(10)); handled = true;
+        }
+        if (!handled && k.rfind("execution_value_", 0) == 0) {
+            setNested("execution_block", k.substr(10)); handled = true;
+        }
+        if (!handled && k.rfind("execution_final_", 0) == 0) {
+            setNested("execution_block", k.substr(10)); handled = true;
+        }
+        // Selector (nested under execution_block.selector)
+        if (!handled && k.rfind("selector_", 0) == 0) {
+            setDoubleNested("execution_block", "selector", k.substr(9)); handled = true;
+        }
+        // Embedding freeze
+        if (!handled && k == "embedding_freeze_enabled")    { setNested("embedding_freeze", "enabled"); handled = true; }
+        if (!handled && k == "embedding_freeze_after_step") { setNested("embedding_freeze", "freeze_after_step"); handled = true; }
+        // Stability overrides
+        if (!handled && k.rfind("stability_override_", 0) == 0 && k != "stability_overrides_enabled") {
+            setNested("stability_overrides", k.substr(19)); handled = true;
+        }
+        // CUDA execution
+        if (!handled && (k == "single_stream_mode" || k == "disable_async_frees" || k == "synchronize_after_kernels")) {
+            setNested("cuda_execution", k); handled = true;
+        }
+        // MTP
+        if (!handled && k.rfind("mtp_", 0) == 0) {
+            setNested("multi_token_prediction", k.substr(4)); handled = true;
+        }
+        // Telemetry control (top-level enable; sub-sections like spike_thresholds
+        // are deeply nested and written as flat keys as a best-effort fallback)
+        if (!handled && k == "telemetry_control_enabled") {
+            setNested("telemetry_control", "enabled"); handled = true;
+        }
+        if (!handled && k == "telemetry_verbose_logging") {
+            setDoubleNested("telemetry_control", "logging", "verbose"); handled = true;
+        }
+        if (!handled && k == "telemetry_fail_loud_on_accumulation_bug") {
+            setDoubleNested("telemetry_control", "logging", "fail_loud_on_accumulation_bug"); handled = true;
+        }
+        if (!handled && k == "telemetry_plateau_noise_enabled") {
+            setDoubleNested("telemetry_control", "plateau_noise", "enabled"); handled = true;
+        }
+
+        // Fallback: write as flat key (works for core/optimizer fields
+        // like learning_rate, epochs, batch_size, warmup_steps, etc.)
+        if (!handled) {
+            tc[k] = val;
+        }
+
+        // Write back
+        std::ofstream fileOut("ai_config.json");
+        if (!fileOut.is_open()) return false;
+        fileOut << std::setw(4) << j << std::endl;
+        return true;
+
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+// ============================================================
 // Training Tab
 // ============================================================
 
 void UITrainingPanel::drawTrainingTab(OverlayRenderer& renderer, const PanelRect& content) {
-    float x = content.origin.x + Spacing::PaddingX;
+    // ── Split layout: left param browser | right controls ──
+    constexpr float kParamBrowserW = 350.0f;
+    constexpr float kGutterW = 10.0f;
+
+    float fullW = content.size.x;
+    float fullH = content.size.y;
+
+    // Left: parameter browser
+    drawParamBrowser(renderer,
+                     {content.origin.x, content.origin.y},
+                     {kParamBrowserW, fullH});
+
+    // Right: existing training controls
+    float rightX = content.origin.x + kParamBrowserW + kGutterW;
+    float rightW = fullW - kParamBrowserW - kGutterW - 2.0f * Spacing::PaddingX;
+
+    float x = rightX + Spacing::PaddingX;
     float y = content.origin.y + Spacing::Small;
-    float w = content.size.x - 2.0f * Spacing::PaddingX;
-    float sliderW = w;
-    float sliderH = Sizes::SliderHeight;
-
-    // ── Section: Hyperparameters ──
-    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
-                                     "Hyperparameters", Colors::SectionAI);
-    y += Sizes::HeaderHeight + Spacing::Small;
-
-    auto drawSlider = [&](std::shared_ptr<UISlider>& slider) {
-        if (!slider) return;
-        slider->setPosition(x, y);
-        slider->setSize(sliderW, sliderH);
-        slider->drawOverlay(renderer, position);
-        y += sliderH + Spacing::Tiny;
-    };
-
-    drawSlider(epochsSlider);
-    drawSlider(batchSizeSlider);
-    drawSlider(learningRateSlider);
-    drawSlider(maxSeqLenSlider);
-    drawSlider(warmupStepsSlider);
-
-    y += Spacing::Small;
-
-    // Save Config button
-    if (saveConfigButton) {
-        saveConfigButton->setPosition(x, y);
-        saveConfigButton->setSize(sliderW, Sizes::ButtonHeight);
-        saveConfigButton->drawOverlay(renderer, position);
-        y += Sizes::ButtonHeight + Spacing::Medium;
-    }
+    float w = rightW;
 
     // Curriculum selection
     UIDrawHelpers::drawLabeledValue(renderer, {x, y}, "Curriculum:", "");
     y += 20.0f;
     if (curriculumDropdown_) {
         curriculumDropdown_->setPosition(x, y);
-        curriculumDropdown_->setSize(sliderW, 26.0f);
+        curriculumDropdown_->setSize(w, 26.0f);
         curriculumDropdown_->drawOverlay(renderer, position);
         y += 26.0f + Spacing::Small;
     }
@@ -1512,7 +2249,7 @@ void UITrainingPanel::drawTrainingTab(OverlayRenderer& renderer, const PanelRect
     y += 20.0f;
     if (trainModelDropdown_) {
         trainModelDropdown_->setPosition(x, y);
-        trainModelDropdown_->setSize(sliderW, 26.0f);
+        trainModelDropdown_->setSize(w, 26.0f);
         trainModelDropdown_->drawOverlay(renderer, position);
         y += 26.0f + Spacing::Medium;
     }
@@ -1530,7 +2267,7 @@ void UITrainingPanel::drawTrainingTab(OverlayRenderer& renderer, const PanelRect
     y += Spacing::Medium;
 
     // ── Section: Monitoring ──
-    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
+    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, w + 2.0f * Spacing::PaddingX,
                                      "Monitoring", Colors::SectionNeutral);
     y += Sizes::HeaderHeight + Spacing::Small;
 
@@ -1563,15 +2300,6 @@ void UITrainingPanel::drawTrainingTab(OverlayRenderer& renderer, const PanelRect
         y += 22.0f;
     }
 
-    // System Resources graph
-    if (resourceMonitorGraph) {
-        float graphH = 140.0f;
-        resourceMonitorGraph->setPosition({x, y});
-        resourceMonitorGraph->setSize({w, graphH});
-        resourceMonitorGraph->drawOverlay(renderer, position);
-        y += graphH + Spacing::Medium;
-    }
-
     // Progress bar
     float barH = Sizes::ProgressBarHeight;
     if (trainingProgressBar) {
@@ -1584,7 +2312,7 @@ void UITrainingPanel::drawTrainingTab(OverlayRenderer& renderer, const PanelRect
     }
 
     // Training Logs
-    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
+    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, w + 2.0f * Spacing::PaddingX,
                                      "Training Logs", Colors::SectionNeutral);
     y += Sizes::HeaderHeight;
 

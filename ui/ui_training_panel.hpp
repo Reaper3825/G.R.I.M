@@ -25,6 +25,7 @@
 #include "ui_graph.hpp"
 #include "ui_training_config.hpp"
 #include "control/training_controller.hpp"
+#include "control/hyperparameter_registry.hpp"
 #include "../MMO/Shared/MMD.hpp"
 #include "../MMO/Core/ToolGapPlanner.hpp"
 #include "../hardware/resource_values.hpp"
@@ -347,4 +348,34 @@ private:
     // Config scroll
     float configScrollOffset = 0.0f;
     float configContentHeight = 0.0f;
+
+    // ═════════════════════════════════════════════════════
+    //  Hyperparameter Registry (filterable param browser)
+    // ═════════════════════════════════════════════════════
+    GRIM::Config::HyperparameterRegistry hyperparamRegistry_;
+    GRIM::Config::TrainingHyperparameters hyperparamSnapshot_;
+    bool hyperparamsLoaded_ = false;
+
+    std::shared_ptr<UIDropdown> paramCategoryFilter_;
+    std::shared_ptr<UIScrollBox> paramScrollBox_;
+    float paramScrollOffset_ = 0.0f;
+    int selectedParamCategory_ = 0;        // 0 = "All"
+    int hoveredParamRow_ = -1;
+    bool hoveredParamScrollbar_ = false;
+    bool draggingParamScrollbar_ = false;
+    float paramScrollbarDragStartY_ = 0.0f;
+    float paramScrollbarDragStartOffset_ = 0.0f;
+
+    // Inline editing state
+    int editingParamIndex_ = -1;              // index into current filtered list (-1 = none)
+    std::string editParamBuffer_;             // backing string for the input box
+    std::shared_ptr<UIInputBox> paramEditInput_;
+    bool paramEditDirty_ = false;             // true when a value was changed (pending save)
+
+    void loadHyperparamSnapshot();
+    void drawParamBrowser(OverlayRenderer& renderer, const Vec2& origin, const Vec2& sz);
+    void processParamBrowserClicks(const InputState& input);
+    void commitParamEdit();
+    void cancelParamEdit();
+    bool persistHyperparamToJSON(const GRIM::Config::HyperparamEntry& entry);
 };

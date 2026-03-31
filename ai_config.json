@@ -174,7 +174,7 @@
             "d_model": 768,
             "dropout_rate": 0.1,
             "embedding_freeze": {
-                "enabled": false,
+                "enabled": true,
                 "freeze_after_step": 0
             },
             "epochs": 25,
@@ -388,7 +388,7 @@
                 "lr_min": 0.0005,
                 "max_seq_len": 1024
             },
-            "stability_overrides_enabled": false,
+            "stability_overrides_enabled": true,
             "telemetry_control": {
                 "accumulation_guard": {
                     "loss_threshold": 0.01,
