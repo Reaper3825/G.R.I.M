@@ -436,6 +436,9 @@ bool PrepareTrainingDataFromCache(
 
 	if (!train_config.current_curriculum.empty()) {
 		std::cout << "[DataLoader] Using curriculum: " << train_config.current_curriculum << std::endl;
+	} else {
+		std::cout << "[DataLoader] WARNING: No curriculum set in ai_config.json (training.current_curriculum is empty).\n"
+		          << "[DataLoader]          Loading ALL concept blocks from concept_blocks.jsonl without filtering." << std::endl;
 	}
 	if (!train_config.current_model_training.empty()) {
 		std::cout << "[DataLoader] Training model: " << train_config.current_model_training << std::endl;

@@ -216,10 +216,13 @@ compileExecutionPayload(
 // ─── opStringToId ───────────────────────────────────────
 
 int opStringToId(const std::string& op) {
-    if (op == "add" || op == "+") return 0;
-    if (op == "sub" || op == "-") return 1;
-    if (op == "mul" || op == "*") return 2;
-    if (op == "div" || op == "/") return 3;
+    std::string lower;
+    lower.reserve(op.size());
+    for (char c : op) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower == "add" || lower == "+") return 0;
+    if (lower == "sub" || lower == "-") return 1;
+    if (lower == "mul" || lower == "*") return 2;
+    if (lower == "div" || lower == "/") return 3;
     throw std::runtime_error("opStringToId: unknown op '" + op + "'");
 }
 
