@@ -57,7 +57,8 @@ bool g_layer_enables[static_cast<int>(LayerType::kCount)] = {
     true,   // kFeedForward
     true,   // kResidual
     true,   // kEncoding
-    true    // kSerialization
+    true,   // kSerialization
+    true    // kExecutionBlock
 };
 
 std::string SafeString(const char* buffer, std::size_t max_len) {
@@ -223,6 +224,7 @@ std::string layerTypeToString(LayerType type) {
         case LayerType::kResidual: return "Residual";
         case LayerType::kEncoding: return "Encoding";
         case LayerType::kSerialization: return "Serialization";
+        case LayerType::kExecutionBlock: return "ExecutionBlock";
         case LayerType::kUnknown:
         default:
             return "Unknown";
@@ -259,6 +261,7 @@ const char* ModuleIdToString(ModuleId id) {
         case ModuleId::Loss: return "Loss";
         case ModuleId::Attention: return "Attention";
         case ModuleId::Autograd: return "Autograd";
+        case ModuleId::ExecutionBlock: return "ExecutionBlock";
         case ModuleId::Custom:
         default:
             return "Custom";
@@ -626,7 +629,8 @@ void ConfigureLayerLogging(bool master_enabled,
                            bool feed_forward,
                            bool residual,
                            bool encoding,
-                           bool serialization) {
+                           bool serialization,
+                           bool execution_block) {
     std::lock_guard<std::mutex> lock(g_host_mutex);
     g_layer_logging_master_enabled = master_enabled;
     g_layer_enables[static_cast<int>(LayerType::kUnknown)] = false;
@@ -638,6 +642,7 @@ void ConfigureLayerLogging(bool master_enabled,
     g_layer_enables[static_cast<int>(LayerType::kResidual)] = residual;
     g_layer_enables[static_cast<int>(LayerType::kEncoding)] = encoding;
     g_layer_enables[static_cast<int>(LayerType::kSerialization)] = serialization;
+    g_layer_enables[static_cast<int>(LayerType::kExecutionBlock)] = execution_block;
 }
 
 bool IsLayerLoggingEnabled(LayerType type) {

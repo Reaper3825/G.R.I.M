@@ -130,6 +130,7 @@ struct LogRecorderConfig {
         bool residual = true;
         bool encoding = true;     // Aggregate gradient logs
         bool serialization = true;
+        bool execution_block = true;
     } layers;
 };
 
@@ -1017,6 +1018,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
                 params.log_recorder.layers.residual = layers.value("residual", params.log_recorder.layers.residual);
                 params.log_recorder.layers.encoding = layers.value("encoding", params.log_recorder.layers.encoding);
                 params.log_recorder.layers.serialization = layers.value("serialization", params.log_recorder.layers.serialization);
+                params.log_recorder.layers.execution_block = layers.value("execution_block", params.log_recorder.layers.execution_block);
             }
         }
     }

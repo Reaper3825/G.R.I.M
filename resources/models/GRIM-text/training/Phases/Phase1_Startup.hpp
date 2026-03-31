@@ -190,6 +190,7 @@ struct LoggingContext {
     std::unique_ptr<GRIM::Logging::ModuleLogSink> checkpoint_sink;
     std::unique_ptr<GRIM::Logging::ModuleLogSink> activations_sink;
     std::unique_ptr<GRIM::Logging::ModuleLogSink> guess_cache_sink;
+    std::unique_ptr<GRIM::Logging::ModuleLogSink> execution_block_sink;
 };
 
 /**

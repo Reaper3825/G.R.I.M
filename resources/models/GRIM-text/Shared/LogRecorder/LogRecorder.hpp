@@ -104,7 +104,8 @@ enum class ModuleId : int {
     Loss = 14,
     Attention = 15,
     Custom = 16,
-    Autograd = 17
+    Autograd = 17,
+    ExecutionBlock = 18
 };
 
 struct ModuleLogOverride {
@@ -256,7 +257,8 @@ void ConfigureLayerLogging(bool master_enabled,
                            bool feed_forward,
                            bool residual,
                            bool encoding,
-                           bool serialization);
+                           bool serialization,
+                           bool execution_block);
 
 // Check if a specific layer type is enabled for logging
 bool IsLayerLoggingEnabled(LayerType type);

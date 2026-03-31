@@ -1,4 +1,5 @@
 #include "execution_block_memory_stream_GPU.hpp"
+#include "../../Shared/LogRecorder/LogRecorder.hpp"
 
 #ifdef USE_CUDA
 
@@ -702,7 +703,8 @@ void finalizeStepOrThrow(
             "ExecutionBlock FATAL: invalid state at step %d — %s (stage id=%d)",
             step, stageIdToName(h_error), h_error);
         if (layer.config().debug_mode)
-            fprintf(stderr, "[ExecutionBlock debug] %s\n", buf);
+            GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::ExecutionBlock,
+                std::string("[ExecutionBlock debug] ") + buf);
         throw std::runtime_error(buf);
     }
 }

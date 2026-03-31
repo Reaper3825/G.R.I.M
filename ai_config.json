@@ -179,7 +179,7 @@
                 "enabled": true,
                 "freeze_after_step": 0
             },
-            "epochs": 25,
+            "epochs": 1,
             "execution_block": {
                 "cross_attn_head_dim": 64,
                 "cross_attn_topk": 1,
@@ -261,18 +261,20 @@
                     "attention": true,
                     "embedding": true,
                     "encoding": true,
+                    "execution_block": true,
                     "feed_forward": true,
                     "residual": true,
                     "rms_norm": true,
                     "serialization": true
                 },
                 "modules": {
-                    "Activations": "WARN",
-                    "BackwardPass": "WARN",
+                    "Activations": "Info",
+                    "BackwardPass": "Info",
                     "Checkpoint": "Info",
                     "Custom": "Info",
                     "DataLoader": "Info",
-                    "ForwardPass": "WARN",
+                    "ExecutionBlock": "Info",
+                    "ForwardPass": "Info",
                     "GuessCache": "Info",
                     "Inference": "Info",
                     "LogRecorder": "Info",
@@ -305,11 +307,11 @@
                 "focal": {
                     "alpha": 1.0,
                     "enabled": true,
-                    "gamma": 0.8
+                    "gamma": 1.0
                 },
                 "label_smoothing": {
                     "enabled": true,
-                    "epsilon": 0.05
+                    "epsilon": 0.1
                 },
                 "masking": {
                     "enabled": true,

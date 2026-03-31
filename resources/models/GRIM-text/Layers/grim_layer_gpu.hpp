@@ -26,7 +26,8 @@ enum class LayerType : std::uint8_t {
     kFeedForward,
     kResidual,
     kEncoding,
-    kSerialization, 
+    kSerialization,
+    kExecutionBlock,
     kCount
 };
 

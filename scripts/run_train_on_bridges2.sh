@@ -31,6 +31,7 @@
 #   --sync-fas       On --build, run scripts/bridges2_ensure_flash_attention.sh (skips forced git pull if FA
 #                    gitlink + pinned Cutlass SHA already match remote; still applies patches).
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
+#   --TD             Run grmt_vocab_metrics_test instead of full training (no GPU needed, uses RM-shared).
 
 set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,6 +58,7 @@ FLAG_SYNC_ALL=false
 FLAG_SYNC_MCS=false
 FLAG_SYNC_CBS=false
 FLAG_SYNC_FAS=false
+DO_TD=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --sync-mcs)       FLAG_SYNC_MCS=true; shift ;;
     --sync-cbs)       FLAG_SYNC_CBS=true; shift ;;
     --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
+    --TD)             DO_TD=true; shift ;;
     --jobs)
       [[ $# -lt 2 ]] && { echo "ERROR: --jobs requires a positive integer"; exit 1; }
       [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --jobs must be a positive integer"; exit 1; }
@@ -195,10 +198,15 @@ fi
 BRIDGES2_CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_DIR=$BRIDGES2_DIR/$TRAINING_DIR"
 
 # --build
+BUILD_TARGET="train_gpu"
+if [[ "$DO_TD" == true ]]; then
+  BUILD_TARGET="grmt_vocab_metrics_test"
+fi
+
 if [[ "$DO_BUILD" == true ]]; then
-  echo "Building train_gpu on Bridges-2 ($BRIDGES2_DIR/$BUILD_DIR)..."
+  echo "Building $BUILD_TARGET on Bridges-2 ($BRIDGES2_DIR/$BUILD_DIR)..."
   echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80), make -j $BRIDGES2_MAKE_JOBS"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT && make -j $BRIDGES2_MAKE_JOBS train_gpu"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT && make -j $BRIDGES2_MAKE_JOBS $BUILD_TARGET"
 fi
 
 # Transfer data
@@ -254,12 +262,28 @@ if [[ "$USE_SBATCH" == true ]]; then
   exit 0
 fi
 
-# Interactive: srun (load cuda module + set LD_LIBRARY_PATH so compute node finds libcudart)
-BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; exec \"$REMOTE_EXE\" --config \"$BRIDGES2_DIR/ai_config.json\"'"
-echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
-SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 24:00:00 --pty"
-if [[ -t 0 ]]; then
-  ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
+# Interactive run
+if [[ "$DO_TD" == true ]]; then
+  # --TD: run grmt_vocab_metrics_test on RM-shared (no GPU needed)
+  REMOTE_TD_EXE="$BRIDGES2_DIR/$BUILD_DIR/grmt_vocab_metrics_test"
+  REMOTE_VOCAB="$BRIDGES2_DIR/resources/models/GRIM-text/training/data/vocab.bin"
+  REMOTE_GRMT="$BRIDGES2_DIR/resources/models/GRIM-text/training/data/training_data.grmt"
+  TD_RUN_WRAPPER="bash -c 'exec \"$REMOTE_TD_EXE\" --vocab \"$REMOTE_VOCAB\" --grmt \"$REMOTE_GRMT\"'"
+  echo "Running grmt_vocab_metrics_test on Bridges-2 (partition=RM-shared, no GPU)..."
+  TD_SRUN_ARGS="-p RM-shared $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=4 --mem-per-cpu=2000M -t 0:30:00 --pty"
+  if [[ -t 0 ]]; then
+    ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $TD_SRUN_ARGS $TD_RUN_WRAPPER"
+  else
+    ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $TD_SRUN_ARGS $TD_RUN_WRAPPER"
+  fi
 else
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
+  # Normal: srun train_gpu (load cuda module + set LD_LIBRARY_PATH so compute node finds libcudart)
+  BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; exec \"$REMOTE_EXE\" --config \"$BRIDGES2_DIR/ai_config.json\"'"
+  echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
+  SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 24:00:00 --pty"
+  if [[ -t 0 ]]; then
+    ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
+  else
+    ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
+  fi
 fi

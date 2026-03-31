@@ -531,6 +531,34 @@ target_include_directories(unigrambyte_self_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared             # Shared/ folder for TrainingState, etc.
 )
 
+# GRMT vocab metrics test executable
+add_executable(grmt_vocab_metrics_test
+    ../../Tests/grmt_vocab_metrics_test.cu
+)
+
+set_target_properties(grmt_vocab_metrics_test PROPERTIES
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
+    CUDA_RUNTIME_LIBRARY Shared
+)
+
+target_compile_options(grmt_vocab_metrics_test PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+)
+
+target_link_libraries(grmt_vocab_metrics_test PRIVATE
+    nlohmann_json::nlohmann_json
+    CUDA::cudart
+    grim_unigrambyte_tokenizer
+)
+
+target_include_directories(grmt_vocab_metrics_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
+)
+
 # Flash Attention test executable
 add_executable(flash_attention_test
     ../../Tests/flash_attention_test.cu
@@ -713,6 +741,7 @@ message(STATUS "  - train_gpu: GPU-accelerated training with comprehensive loggi
 message(STATUS "  - diagnostic_train_minimal: Barebones training for plateau debugging")
 message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suite (BPE)")
 message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
+message(STATUS "  - grmt_vocab_metrics_test: GRMT corpus + vocabulary metrics diagnostics")
 message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
 message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
 message(STATUS "  - execution_block_test: ExecutionBlock batching, state transitions, and config tests")

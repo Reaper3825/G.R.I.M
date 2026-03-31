@@ -265,10 +265,11 @@ StartupConfig loadConfiguration(int argc, char** argv) {
             layers.feed_forward,
             layers.residual,
             layers.encoding,
-            layers.serialization);
+            layers.serialization,
+            layers.execution_block);
     } else {
         // Disable all layer logging if master disabled
-        GRIM::Logging::ConfigureLayerLogging(false, false, false, false, false, false, false, false);
+        GRIM::Logging::ConfigureLayerLogging(false, false, false, false, false, false, false, false, false);
     }
     
     // Map loss options
@@ -1521,6 +1522,12 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->logging.guess_cache_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
     if (!ctx->logging.guess_cache_sink->bind("GuessCache", formatter)) {
         ctx->logging.logger->log("[WARNING] Failed to bind GuessCache module logger - cache diagnostics may not appear in logs");
+    }
+
+    // Forward ExecutionBlock module logs to training logger (differentiable register machine diagnostics)
+    ctx->logging.execution_block_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
+    if (!ctx->logging.execution_block_sink->bind("ExecutionBlock", formatter)) {
+        ctx->logging.logger->log("[WARNING] Failed to bind ExecutionBlock module logger - execution block diagnostics may not appear in logs");
     }
     
     // Initialize EquationLogger for kernel diagnostic logging (Rule 21 equation tracing)
