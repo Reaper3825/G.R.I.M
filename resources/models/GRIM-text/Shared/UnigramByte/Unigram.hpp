@@ -227,6 +227,10 @@ public:
     // Cap vocabulary to top-K pieces by score (keeps most frequent)
     void capVocabSize(int max_size);
     
+    // SentencePiece-style whitespace normalization (▁ ↔ space)
+    static std::string normalizeForTokenization(const std::string& text);
+    static std::string denormalizeFromTokenization(const std::string& text);
+    
     // Special token IDs
     int padId() const { return pad_id_; }
     int bosId() const { return bos_id_; }

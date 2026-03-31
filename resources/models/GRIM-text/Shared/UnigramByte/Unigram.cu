@@ -124,6 +124,101 @@ static bool isStructuralEdgeWhitespace(uint32_t cp) {
 }
 
 //======================================================//
+//  SentencePiece-style Whitespace Normalization
+//  Replaces spaces with ▁ (U+2581) and prepends ▁ at the start.
+//  This makes word-boundary spaces part of vocab pieces ("▁the",
+//  "▁and") instead of falling back to byte token 36.
+//======================================================//
+
+// U+2581 LOWER ONE EIGHTH BLOCK — the SentencePiece word-boundary marker
+static constexpr const char SPIECE_UNDERLINE[] = "\xE2\x96\x81";
+static constexpr size_t SPIECE_UNDERLINE_LEN = 3;
+
+// Normalize text for tokenization: prepend ▁, replace all spaces with ▁.
+// "Hello World" → "▁Hello▁World"
+static std::string normalizeSpaces(const std::string& text) {
+    if (text.empty()) return text;
+
+    size_t space_count = 0;
+    for (char c : text) {
+        if (c == ' ') ++space_count;
+    }
+
+    std::string result;
+    result.reserve(text.size() + SPIECE_UNDERLINE_LEN + space_count * 2);
+    result.append(SPIECE_UNDERLINE, SPIECE_UNDERLINE_LEN);
+
+    for (char c : text) {
+        if (c == ' ') {
+            result.append(SPIECE_UNDERLINE, SPIECE_UNDERLINE_LEN);
+        } else {
+            result.push_back(c);
+        }
+    }
+    return result;
+}
+
+// Reverse normalization: replace ▁ → space, strip leading space.
+// "▁Hello▁World" → "Hello World"
+static std::string denormalizeSpaces(const std::string& text) {
+    std::string result;
+    result.reserve(text.size());
+
+    for (size_t i = 0; i < text.size(); ) {
+        if (i + SPIECE_UNDERLINE_LEN <= text.size() &&
+            static_cast<unsigned char>(text[i])   == 0xE2 &&
+            static_cast<unsigned char>(text[i+1]) == 0x96 &&
+            static_cast<unsigned char>(text[i+2]) == 0x81) {
+            result.push_back(' ');
+            i += SPIECE_UNDERLINE_LEN;
+        } else {
+            result.push_back(text[i]);
+            ++i;
+        }
+    }
+
+    // Strip leading space (from the prepended ▁)
+    if (!result.empty() && result[0] == ' ') {
+        result.erase(0, 1);
+    }
+    return result;
+}
+
+// Normalize text and adjust atom span byte offsets to match.
+// Each space (1 byte) expands to ▁ (3 bytes), plus 3-byte prepend.
+static std::string normalizeWithSpans(const std::string& text,
+                                      std::vector<Tokenizer::AtomSpan>& spans) {
+    if (text.empty()) return text;
+
+    // Build orig→norm byte offset mapping
+    std::vector<size_t> orig_to_norm(text.size() + 1);
+    size_t norm_pos = SPIECE_UNDERLINE_LEN; // 3-byte prepend
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        orig_to_norm[i] = norm_pos;
+        norm_pos += (text[i] == ' ') ? SPIECE_UNDERLINE_LEN : 1;
+    }
+    orig_to_norm[text.size()] = norm_pos;
+
+    for (auto& span : spans) {
+        size_t new_start = (span.start <= text.size()) ? orig_to_norm[span.start] : norm_pos;
+        size_t new_end   = (span.end   <= text.size()) ? orig_to_norm[span.end]   : norm_pos;
+        span.start = new_start;
+        span.end   = new_end;
+    }
+
+    return normalizeSpaces(text);
+}
+
+// Public static method wrappers (accessible from other TUs via Unigram.hpp)
+std::string UnigramLM::normalizeForTokenization(const std::string& text) {
+    return normalizeSpaces(text);
+}
+std::string UnigramLM::denormalizeFromTokenization(const std::string& text) {
+    return denormalizeSpaces(text);
+}
+
+//======================================================//
 //  Character-Level Validator
 //  Rejects garbage characters BEFORE they enter the vocab.
 //  Applied to single-character seeds in Step 2 of training.
@@ -970,12 +1065,12 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
         throw std::runtime_error("[UnigramLM] Invalid binary vocab magic header - file corrupted or not a KTMG vocab file");
     }
     
-    // Read version (2 bytes) - v3 required (includes token_id)
+    // Read version (2 bytes) - v4 required (SentencePiece ▁ normalization)
     uint16_t version;
     bin_file.read(reinterpret_cast<char*>(&version), 2);
-    if (version != 3) {
+    if (version != 4) {
         throw std::runtime_error("[UnigramLM] Vocab file version " + std::to_string(version) + 
-            " is not supported. Required version 3. Re-save vocab with current tooling.");
+            " is not supported. Required version 4 (SentencePiece normalization). Retrain tokenizer.");
     }
     
     // Skip checksum (4 bytes)
@@ -1083,8 +1178,8 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format) const
     const char magic[4] = {'K', 'T', 'M', 'G'};
     bin_file.write(magic, 4);
     
-    // Version (2 bytes) - version 3 (includes token_id per piece)
-    uint16_t version = 3;
+    // Version (2 bytes) - version 4 (SentencePiece ▁-normalized pieces)
+    uint16_t version = 4;
     bin_file.write(reinterpret_cast<const char*>(&version), 2);
     
     // Checksum placeholder (4 bytes) - not used currently
@@ -1285,6 +1380,24 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Segmented " << texts.size() << " documents into " 
               << sentences.size() << " sentences for subword mining" << std::endl;
     
+    // SentencePiece-style whitespace normalization: replace spaces with ▁ (U+2581).
+    // Applied to both full documents (for char counting + EM) and sentences (for mining).
+    // Sentence segmentation ran on ORIGINAL text (to find ". T" patterns correctly),
+    // now we normalize everything before any tokenizer operations.
+    std::vector<std::string> norm_texts;
+    std::vector<std::vector<AtomSpan>> norm_atom_spans;
+    norm_texts.reserve(texts.size());
+    norm_atom_spans.reserve(texts.size());
+    for (size_t i = 0; i < texts.size(); ++i) {
+        auto spans_copy = atom_spans[i];
+        norm_texts.push_back(normalizeWithSpans(texts[i], spans_copy));
+        norm_atom_spans.push_back(std::move(spans_copy));
+    }
+    for (size_t i = 0; i < sentences.size(); ++i) {
+        sentences[i] = normalizeWithSpans(sentences[i], sentence_atom_spans[i]);
+    }
+    std::cout << "[UnigramLM] Applied SentencePiece whitespace normalization (space -> ▁)" << std::endl;
+
     // Use sentences instead of full documents for the rest of training
     const std::vector<std::string>& training_units = sentences;
     
@@ -1333,16 +1446,16 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                   << (sampled_bytes / (1024*1024)) << " MB) for subword mining" << std::endl;
     }
     
-    // Step 1: Count character frequencies (use ALL texts, lowercased)
+    // Step 1: Count character frequencies (use ALL normalized texts)
     // Skip bytes inside atom spans — atom internals (://@.com digits etc.)
     // should NOT inflate character counts.
     std::unordered_map<std::string, int> char_counts;
     size_t total_chars = 0;
     size_t atom_chars_skipped = 0;
     
-    for (size_t text_idx = 0; text_idx < texts.size(); ++text_idx) {
-        const auto& text = texts[text_idx];
-        const auto& spans = atom_spans[text_idx];
+    for (size_t text_idx = 0; text_idx < norm_texts.size(); ++text_idx) {
+        const auto& text = norm_texts[text_idx];
+        const auto& spans = norm_atom_spans[text_idx];
         size_t span_i = 0;  // Current atom span index
         
         for (size_t i = 0; i < text.size(); ) {
@@ -1821,15 +1934,15 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     constexpr double EM_CONVERGENCE_THRESH = 0.0001; // 0.01% relative change in log-likelihood
     constexpr double SMOOTHING             = 0.1;    // Add-k smoothing for M-step
 
-    // Lambda: run one E-step (Viterbi over corpus), return {token_counts, total_tokens, log_likelihood}.
+    // Lambda: run one E-step (Viterbi over normalized corpus), return {token_counts, total_tokens, log_likelihood}.
     auto runEStep = [&]() -> std::tuple<std::unordered_map<int, double>, double, double> {
         std::unordered_map<int, double> token_counts;
         double total_tokens = 0.0;
         double log_likelihood = 0.0;
 
-        for (size_t text_idx = 0; text_idx < texts.size(); ++text_idx) {
-            const auto& text = texts[text_idx];
-            const auto& spans = atom_spans[text_idx];
+        for (size_t text_idx = 0; text_idx < norm_texts.size(); ++text_idx) {
+            const auto& text = norm_texts[text_idx];
+            const auto& spans = norm_atom_spans[text_idx];
             if (text.empty()) continue;
 
             auto processSegment = [&](const std::string& segment) {
@@ -2138,9 +2251,11 @@ std::vector<int> UnigramLM::backtrack(const std::vector<ViterbiNode>& nodes, int
 
 std::vector<int> UnigramLM::encode(const std::string& text) const {
     if (text.empty()) return {};
-    
-    auto nodes = viterbi(text);
-    return backtrack(nodes, static_cast<int>(text.size()));
+
+    // SentencePiece-style normalization: spaces → ▁, prepend ▁
+    std::string normalized = normalizeSpaces(text);
+    auto nodes = viterbi(normalized);
+    return backtrack(nodes, static_cast<int>(normalized.size()));
 }
 
 std::vector<UnigramPiece> UnigramLM::encodeWithPieces(const std::string& text) const {
@@ -2209,7 +2324,7 @@ std::string UnigramLM::decode(const int* token_ids, size_t count) const {
         // Atom tokens are handled by ScratchBlock
     }
     
-    return result;
+    return denormalizeSpaces(result);
 }
 
 void UnigramLM::capVocabSize(int max_size) {

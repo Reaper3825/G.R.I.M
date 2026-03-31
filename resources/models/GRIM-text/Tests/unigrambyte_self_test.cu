@@ -219,12 +219,13 @@ bool testUnigramDecode(std::string& message) {
     UnigramLM unigram;
     
     // Start after pre-existing special tokens
-    unigram.addPiece("hello", -1.0f, false);
-    unigram.addPiece("world", -1.2f, false);
-    unigram.addPiece(" ", -0.5f, false);
+    // Pieces use \xe2\x96\x81 (U+2581 ▁) prefix — SentencePiece whitespace normalization
+    unigram.addPiece("\xe2\x96\x81hello", -1.0f, false);
+    unigram.addPiece("\xe2\x96\x81world", -1.2f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
-    // Encode then decode
+    // encode() normalizes "hello world" → "▁hello▁world", Viterbi matches ▁-prefixed pieces
+    // decode() denormalizes: "▁hello▁world" → "hello world"
     std::vector<int> tokens = unigram.encode("hello world");
     std::string decoded = unigram.decode(tokens);
     
@@ -271,7 +272,8 @@ bool testUnigramTrainFiltersRepetitionNoise(std::string& message) {
     );
     ASSERT_TRUE(trained, "trainFromCorpus should succeed");
 
-    const bool has_gonna = unigram.hasPiece("gonna") || unigram.hasPiece(" gonna");
+    // After ▁ normalization, pieces are ▁-prefixed ("▁gonna") or bare ("gonna")
+    const bool has_gonna = unigram.hasPiece("gonna") || unigram.hasPiece("\xe2\x96\x81gonna");
     ASSERT_TRUE(has_gonna, "Expected natural speech token variant for 'gonna' to remain");
     ASSERT_FALSE(unigram.hasPiece("hahaha"), "Repeated-pattern token 'hahaha' should be filtered");
     ASSERT_FALSE(unigram.hasPiece("aaaaaa"), "Excessive run-length token 'aaaaaa' should be filtered");
@@ -299,8 +301,9 @@ bool testUnigramTrainDedupsRepeatedVariants(std::string& message) {
     );
     ASSERT_TRUE(trained, "trainFromCorpus should succeed");
 
-    const bool has_soo = unigram.hasPiece("soo");
-    const bool has_sooo = unigram.hasPiece("sooo");
+    // After ▁ normalization, pieces may be ▁-prefixed or bare
+    const bool has_soo = unigram.hasPiece("soo") || unigram.hasPiece("\xe2\x96\x81soo");
+    const bool has_sooo = unigram.hasPiece("sooo") || unigram.hasPiece("\xe2\x96\x81sooo");
     ASSERT_TRUE(has_soo || has_sooo, "Expected at least one repeated-char variant to survive");
     ASSERT_FALSE(has_soo && has_sooo, "Repeated-char variants should deduplicate to one form");
 
@@ -524,9 +527,9 @@ bool testUniByteBasicEncode(std::string& message) {
     
     // Initialize with a simple vocab via unigramLM
     // Start after pre-existing special tokens
-    tokenizer.unigramLM().addPiece("hello", -1.0f, false);
-    tokenizer.unigramLM().addPiece("world", -1.2f, false);
-    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
+    // Pieces use ▁ (U+2581) prefix — SentencePiece whitespace normalization
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81hello", -1.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81world", -1.2f, false);
     tokenizer.unigramLM().buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = tokenizer.encode("hello world");
@@ -655,17 +658,16 @@ bool testUniByteRoundTrip(std::string& message) {
     std::cout << "[RoundTrip] UNIGRAM_VOCAB_OFFSET = " << UNIGRAM_VOCAB_OFFSET << "\n";
     std::cout << "[RoundTrip] Pre-existing vocab size = " << tokenizer.unigramLM().vocabSize() << "\n";
     
+    // Pieces use ▁ (U+2581) prefix — SentencePiece whitespace normalization
     std::cout << "[RoundTrip] Adding pieces:\n";
-    tokenizer.unigramLM().addPiece("the", -1.0f, false);
-    std::cout << "  'the'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
-    tokenizer.unigramLM().addPiece("quick", -1.5f, false);
-    std::cout << "  'quick' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
-    tokenizer.unigramLM().addPiece("brown", -1.6f, false);
-    std::cout << "  'brown' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
-    tokenizer.unigramLM().addPiece("fox", -1.7f, false);
-    std::cout << "  'fox'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
-    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
-    std::cout << "  ' '     -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81the", -1.0f, false);
+    std::cout << "  '▁the'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81quick", -1.5f, false);
+    std::cout << "  '▁quick' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81brown", -1.6f, false);
+    std::cout << "  '▁brown' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81fox", -1.7f, false);
+    std::cout << "  '▁fox'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
     
     std::cout << "[RoundTrip] Final vocab size = " << tokenizer.unigramLM().vocabSize() << "\n";
     

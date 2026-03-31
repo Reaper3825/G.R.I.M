@@ -770,7 +770,7 @@ std::string UniByte::decode(const int* token_ids, size_t count) const {
         }
     }
     
-    return result;
+    return UnigramLM::denormalizeFromTokenization(result);
 }
 
 std::string UniByte::decodeWithAtoms(const std::vector<int>& token_ids,
@@ -796,7 +796,7 @@ std::string UniByte::decodeWithAtoms(const std::vector<int>& token_ids,
         }
     }
     
-    return result;
+    return UnigramLM::denormalizeFromTokenization(result);
 }
 
 //--------------------------------------------------//
