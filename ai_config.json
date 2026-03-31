@@ -193,6 +193,12 @@
                 "num_ops": 4,
                 "num_slots": 4,
                 "num_steps": 2,
+                "selector": {
+                    "d_selector": 64,
+                    "enabled": true,
+                    "selection_margin": 1.0,
+                    "supervision_weight": 0.0
+                },
                 "step_x_multiplier": 2.0,
                 "step_y_multiplier": 2.0,
                 "step_y_overrides_x": false,
@@ -200,13 +206,7 @@
                 "temp_schedule": 0,
                 "temp_start": 2.0,
                 "usage_decay": 0.9,
-                "value_match_epsilon": 1e-06,
-                "selector": {
-                    "enabled": true,
-                    "d_selector": 64,
-                    "selection_margin": 1.0,
-                    "supervision_weight": 0.0
-                }
+                "value_match_epsilon": 1e-06
             },
             "force_rebuild_vocab": false,
             "generation": {

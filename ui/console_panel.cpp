@@ -1,4 +1,5 @@
 #include "console_panel.hpp"
+#include "ui_training_panel.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
 #include "overlay_renderer.hpp"
@@ -44,12 +45,14 @@ ConsolePanel::ConsolePanel()
           }
       })),
       modelsButton(std::make_shared<UIButton>(" Models ", []() {
-          auto modelPanel = UIRoot::get().getPanel("Model Registry");
-          if (modelPanel) {
-              modelPanel->setVisible(true);
-              LOG_DEBUG("ConsolePanel", "Opened model registry panel via button");
+          auto panel = UIRoot::get().getPanel("GRIM-text Training Control");
+          if (panel) {
+              panel->setVisible(true);
+              auto* tp = dynamic_cast<UITrainingPanel*>(panel.get());
+              if (tp) tp->setView(TrainingPanelTab::Home);
+              LOG_DEBUG("ConsolePanel", "Opened models tab via button");
           } else {
-              LOG_DEBUG("ConsolePanel", "Model registry panel not found - may not be initialized yet");
+              LOG_DEBUG("ConsolePanel", "Training panel not found - may not be initialized yet");
           }
       }))
 {

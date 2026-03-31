@@ -27,7 +27,6 @@
 #include "ui/ui_settings_menu.hpp"
 #include "ui/ui_training_panel.hpp"
 #include "ui/ui_data_hub.hpp"
-#include "ui/ui_model_panel.hpp"
 #include "ui/ui_surface_renderer_bridge.hpp"
 #include "resources.hpp"
 #include "nlp/nlp.hpp"
@@ -406,15 +405,6 @@ int main(int argc, char* argv[])
     auto settingsPanel = std::make_shared<UISettingsMenu>();
     auto trainingPanel = std::make_shared<UITrainingPanel>();
     auto dataHubPanel = std::make_shared<UIDataHubPanel>();
-    auto modelPanel = std::make_shared<UIModelPanel>();
-    {
-        // Center on screen
-        const float pw = 700.0f, ph = 550.0f;
-        float cx = (static_cast<float>(UIRoot::get().getWidth())  - pw) * 0.5f;
-        float cy = (static_cast<float>(UIRoot::get().getHeight()) - ph) * 0.5f;
-        modelPanel->setPosition(cx, cy);
-        modelPanel->setSize(pw, ph);
-    }
     
     // Assign to global for command access
     g_trainingPanel = trainingPanel;
@@ -427,13 +417,11 @@ int main(int argc, char* argv[])
     settingsPanel->setVisible(false);
     trainingPanel->setVisible(false);
     dataHubPanel->setVisible(false);
-    modelPanel->setVisible(false);
 
     UIRoot::get().addPanel(consolePanel);
     UIRoot::get().addPanel(settingsPanel);
     UIRoot::get().addPanel(trainingPanel);
     UIRoot::get().addPanel(dataHubPanel);
-    UIRoot::get().addPanel(modelPanel);
 
 #if defined(__APPLE__)
     // macOS: inject typed characters into text input (Windows uses WM_CHAR in OverlayWndProc)

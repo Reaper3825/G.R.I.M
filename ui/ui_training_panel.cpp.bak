@@ -1,0 +1,1367 @@
+
+// ============================================================
+// UITrainingPanel — GRIM-text Training Control
+//
+// Two-tab interface:
+//   Configure: hyperparameter sliders, data sources, pipeline
+//   Monitor:   stats cards, resource graph, progress, logs
+//
+// Bottom action bar always visible with session controls.
+// ============================================================
+#include <sstream>
+#include <iomanip>
+#include <thread>
+#include <chrono>
+#include <ctime>
+#include <fstream>
+#include <algorithm>
+#include <nlohmann/json.hpp>
+#include "core/grim_platform.h"
+#include <filesystem>
+#include "ui_training_panel.hpp"
+#include "ui_slider.hpp"
+#include "ui_graph.hpp"
+#include "overlay_renderer.hpp"
+#include "ui_theme.hpp"
+#include "ui_draw_helpers.hpp"
+#include "logger.hpp"
+#include "../MMO/Core/HardwareInventory.hpp"
+#include "ai/training_server_manager.hpp"
+#include "resources.hpp"
+#include "control/ai_config_paths.hpp"
+
+using namespace GRIMText;
+using namespace UITheme;
+
+extern GRIM::MMO::HardwareInventory g_hardwareInventory;
+
+// Layout constants
+static constexpr float kTabBarH        = 32.0f;
+static constexpr float kTabGap         = 6.0f;
+static constexpr float kBottomBarH     = 50.0f;
+static constexpr float kStatCardH      = 60.0f;
+static constexpr float kStatCardGap    = 10.0f;
+static constexpr float kLogLineH       = 18.0f;
+
+// ============================================================
+// Constructor
+// ============================================================
+
+UITrainingPanel::UITrainingPanel()
+    : UIPanel("GRIM-text Training Control", true),
+      currentState(Control::TrainingState_Idle),
+      serverConnected(false),
+      serverStarting(false),
+      dataCollectionActive(false),
+      dataCollectionCompleted(false),
+      pipelineRequestPending(false),
+      pollTimer(0.0f),
+      pollInterval(0.2f),
+      maxLogEntries(1000),
+      logScrollPosition(0.0f),
+      autoScrollLogs(true),
+      maxLossHistory(500),
+      collectionAnimTime(0.0f),
+      datasetUpdateTimer(0.0f),
+      datasetUpdateInterval(2.0f)
+{
+    position = { 200, 80 };
+    size     = { 1100, 800 };
+    setVisible(false);
+    setBackground(Colors::PanelBg);
+
+    if (position.y < 50.0f) position.y = 50.0f;
+
+    resetState();
+    loadConfigFromJSON();
+
+    // Training controller
+    std::string host = TrainingConfigManager::getServerHost();
+    int port = TrainingConfigManager::getServerPort();
+    try {
+        trainingController = std::make_unique<GRIM::UI::UITrainingController>(host, port);
+        setupCallbacks();
+    } catch (const std::exception& e) {
+        LOG_ERROR("UITrainingPanel", std::string("Controller init failed: ") + e.what());
+        lastError = std::string("Controller init failed: ") + e.what();
+    }
+
+    collectionManager = std::make_unique<GRIM::Pipeline::PipelineOrchestrator>();
+
+    // ── Tab buttons ──
+    tabConfigBtn_ = std::make_shared<UIButton>("Configure", [this]() {
+        activeTab_ = TrainingPanelTab::Configure;
+    });
+    tabConfigBtn_->setSize(100.0f, kTabBarH - 4.0f);
+
+    tabMonitorBtn_ = std::make_shared<UIButton>("Monitor", [this]() {
+        activeTab_ = TrainingPanelTab::Monitor;
+    });
+    tabMonitorBtn_->setSize(100.0f, kTabBarH - 4.0f);
+
+    // ── Configuration sliders ──
+    epochsSlider = std::make_shared<UISlider>("Epochs", 1.0f, 50.0f,
+        static_cast<float>(currentConfig.epochs),
+        [this](float v) { currentConfig.epochs = static_cast<int>(v); calculateTrainingEstimate(); }, 1.0f);
+
+    batchSizeSlider = std::make_shared<UISlider>("Batch Size", 1.0f, 128.0f,
+        static_cast<float>(currentConfig.batchSize),
+        [this](float v) { currentConfig.batchSize = static_cast<int>(v); calculateTrainingEstimate(); }, 1.0f);
+
+    learningRateSlider = std::make_shared<UISlider>("Learning Rate", 0.000001f, 0.01f,
+        currentConfig.learningRate,
+        [this](float v) { currentConfig.learningRate = v; calculateTrainingEstimate(); }, 0.000001f);
+
+    maxSeqLenSlider = std::make_shared<UISlider>("Max Seq Length", 512.0f, 16384.0f,
+        static_cast<float>(currentConfig.maxSeqLen),
+        [this](float v) { currentConfig.maxSeqLen = static_cast<int>(v); calculateTrainingEstimate(); }, 128.0f);
+
+    warmupStepsSlider = std::make_shared<UISlider>("Warmup Steps", 0.0f, 5000.0f,
+        static_cast<float>(currentConfig.warmupSteps),
+        [this](float v) { currentConfig.warmupSteps = static_cast<int>(v); calculateTrainingEstimate(); }, 10.0f);
+
+    // ── Config tab buttons ──
+    saveConfigButton = std::make_shared<UIButton>("Save Config", [this]() { saveConfigToJSON(); });
+
+    sourceUrlInput = std::make_shared<UIInputBox>(&sourceUrlBuffer);
+    sourceUrlInput->setPlaceholder("Enter data source URL...");
+
+    addSourceButton = std::make_shared<UIButton>("Add Source", [this]() {
+        if (!sourceUrlBuffer.empty()) { addDataSource(sourceUrlBuffer); sourceUrlBuffer.clear(); }
+    });
+
+    collectDataButton = std::make_shared<UIButton>("Run Data Pipeline", [this]() { startDataCollection(); });
+
+    trainingDataPathInput = std::make_shared<UIInputBox>(&trainingDataPathBuffer);
+    trainingDataPathInput->setPlaceholder("Training data path (.grmt or .bin)");
+
+    loadPathsFromConfig();
+
+    // ── Bottom action buttons ──
+    startButton = std::make_shared<UIButton>("Start", [this]() {
+        if (serverStarting) { addLog("Server startup already in progress...", 1); return; }
+        addLog("Starting training session...", 0);
+        serverStarting = true;
+
+        std::thread([this]() {
+            addLog("Checking for training control server...", 0);
+            bool ready = GRIM::isTrainingServerRunning();
+            if (ready) {
+                addLog("Training server already running", 0);
+            } else {
+                addLog("Starting training server...", 0);
+                if (!GRIM::startTrainingServer()) {
+                    addLog("Failed to start server, attempting connection...", 1);
+                } else {
+                    addLog("Server launch initiated", 0);
+                }
+                addLog("Waiting for server...", 0);
+                for (int i = 0; i < 10; i++) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    if (GRIM::isTrainingServerRunning()) { ready = true; addLog("Server ready", 0); break; }
+                    if ((i + 1) % 4 == 0) addLog("Still waiting... (" + std::to_string((i + 1) / 2) + "s)", 0);
+                }
+                if (!ready) {
+                    addLog("Server not responding — check port 11436", 2);
+                    serverStarting = false;
+                    return;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            pollServer();
+            addLog("Sending training start command...", 0);
+            startTrainingSession();
+            serverStarting = false;
+        }).detach();
+    });
+
+    stopButton = std::make_shared<UIButton>("Stop", [this]() {
+        if (currentState == Control::TrainingState_Training || currentState == Control::TrainingState_Paused) {
+            stopTrainingSession();
+        }
+    });
+
+    pauseResumeButton = std::make_shared<UIButton>("Pause", [this]() {
+        if (currentState == Control::TrainingState_Training) { pauseTrainingSession(); }
+        else if (currentState == Control::TrainingState_Paused) { resumeTrainingSession(); }
+    });
+
+    resetStatusButton = std::make_shared<UIButton>("Reset", [this]() {
+        resetState();
+        checkpointMergeStatus = "";
+        addLog("Training status reset", 0);
+        std::string statusFilePath = getResourcePath() + "/models/GRIM-text/training/training_status.fb";
+        if (std::filesystem::exists(statusFilePath)) {
+            std::filesystem::remove(statusFilePath);
+            addLog("Cleared stale status file", 0);
+        }
+    });
+
+    closeButton = std::make_shared<UIButton>("Close", [this]() {
+        setVisible(false);
+    });
+
+    // ── Progress bars ──
+    trainingProgressBar = std::make_shared<UIProgressBar>("Training Progress", 1.0f);
+    trainingProgressBar->setFillColor(Colors::Success);
+    trainingProgressBar->setBackgroundColor(Colors::ContentAreaBg);
+
+    collectionProgressBar = std::make_shared<UIProgressBar>("Data Collection", 1.0f);
+    collectionProgressBar->setFillColor(Colors::AccentBlue);
+    collectionProgressBar->setBackgroundColor(Colors::ContentAreaBg);
+
+    // ── Resource monitor graph ──
+    resourceMonitorGraph = std::make_shared<UIGraph>("System Resources", GraphType::Area);
+    resourceSampleTimer = 0.0f;
+    resourceSampleInterval = 1.0f;
+    resourceSampleCount = 0;
+    maxResourceSamples = 30;
+
+    GraphConfig& gc = resourceMonitorGraph->getConfig();
+    gc.showGrid = true;
+    gc.showAxes = true;
+    gc.showLegend = true;
+    gc.showLabels = true;
+    gc.autoScale = false;
+    gc.minValue = 0.0f;
+    gc.maxValue = 100.0f;
+    gc.gridLines = 5;
+    gc.lineThickness = 2.0f;
+    gc.backgroundColor = Colors::ContentAreaBg;
+    gc.gridColor = Colors::DividerFaint;
+    gc.axisColor = Colors::BorderMedium;
+    gc.textColor = Colors::TextSecondary;
+    gc.paddingLeft = 50.0f;
+    gc.paddingRight = 15.0f;
+    gc.paddingTop = 30.0f;
+    gc.paddingBottom = 50.0f;
+
+    resourceMonitorGraph->addSeries("CPU", {}, Colors::AccentBlue);
+    resourceMonitorGraph->addSeries("Memory", {}, Colors::Success);
+    resourceMonitorGraph->addSeries("GPU", {}, Colors::Warning);
+
+    ResourceMonitor::getInstance().initialize();
+
+    updateHardwareInfo();
+    calculateTrainingEstimate();
+}
+
+UITrainingPanel::~UITrainingPanel() = default;
+
+// ============================================================
+// Callbacks
+// ============================================================
+
+void UITrainingPanel::setupCallbacks() {
+    if (!trainingController) return;
+
+    trainingController->setProgressCallback([this](const GRIMText::TrainingStats& stats) {
+        currentStats = stats;
+    });
+    trainingController->setStateChangeCallback([this](Control::TrainingState oldS, Control::TrainingState newS) {
+        addLog("State: " + getStateString(oldS) + " -> " + getStateString(newS), 1);
+    });
+    trainingController->setErrorCallback([this](const std::string& error) {
+        lastError = error;
+        addLog("Error: " + error, 2);
+    });
+}
+
+void UITrainingPanel::resetState() {
+    currentState = Control::TrainingState_Idle;
+    serverStarting = false;
+    dataCollectionActive = false;
+    dataCollectionCompleted = false;
+    pipelineRequestPending = false;
+    memset(&currentStats, 0, sizeof(currentStats));
+    memset(&currentConfig, 0, sizeof(currentConfig));
+
+    currentConfig.epochs = 5;
+    currentConfig.batchSize = 16;
+    currentConfig.learningRate = 0.000001f;
+}
+
+// ============================================================
+// Update
+// ============================================================
+
+void UITrainingPanel::update(const InputState& input, float dt) {
+    if (!isVisible()) return;
+    UIPanel::update(input, dt);
+
+    if (currentState == Control::TrainingState_Collecting) {
+        collectionAnimTime += dt * 2.0f;
+    }
+
+    updateResourceMonitoring(dt);
+
+    // Tab buttons
+    tabConfigBtn_->setPosition(position.x + Spacing::PaddingX, position.y + 38.0f);
+    tabMonitorBtn_->setPosition(position.x + Spacing::PaddingX + 106.0f, position.y + 38.0f);
+    tabConfigBtn_->update(input, dt);
+    tabMonitorBtn_->update(input, dt);
+
+    // Bottom bar buttons — always active
+    startButton->update(input, dt);
+    stopButton->update(input, dt);
+    pauseResumeButton->update(input, dt);
+    resetStatusButton->update(input, dt);
+    closeButton->update(input, dt);
+
+    // Tab-specific updates
+    switch (activeTab_) {
+        case TrainingPanelTab::Configure: {
+            if (epochsSlider) epochsSlider->update(input, dt);
+            if (batchSizeSlider) batchSizeSlider->update(input, dt);
+            if (learningRateSlider) learningRateSlider->update(input, dt);
+            if (maxSeqLenSlider) maxSeqLenSlider->update(input, dt);
+            if (warmupStepsSlider) warmupStepsSlider->update(input, dt);
+            if (saveConfigButton) saveConfigButton->update(input, dt);
+            if (sourceUrlInput) sourceUrlInput->update(input, dt);
+            if (addSourceButton) addSourceButton->update(input, dt);
+            if (collectDataButton) collectDataButton->update(input, dt);
+            if (trainingDataPathInput) trainingDataPathInput->update(input, dt);
+
+            static std::string lastTrainingDataPath;
+            if (trainingDataPathBuffer != lastTrainingDataPath) {
+                lastTrainingDataPath = trainingDataPathBuffer;
+                savePathsToConfig();
+            }
+            break;
+        }
+        case TrainingPanelTab::Monitor:
+            break;
+    }
+
+    // Poll server
+    pollTimer += dt;
+    if (pollTimer >= pollInterval) {
+        pollTimer = 0.0f;
+        pollServer();
+    }
+
+    // Poll data collection
+    if (dataCollectionActive && collectionManager) {
+        auto status = collectionManager->getStatus();
+        currentStats.collectionProgress = status.progress;
+        if (!status.isRunning && status.progress >= 99.0f) {
+            dataCollectionActive = false;
+            dataCollectionCompleted = true;
+            pipelineRequestPending = false;
+            if (status.state == GRIM::Pipeline::PipelineState::Complete)
+                addLog("Data collection completed", 0);
+            else if (status.state == GRIM::Pipeline::PipelineState::Error)
+                addLog("Data collection failed: " + status.message, 2);
+        }
+    }
+
+    // Dataset snapshot I/O
+    datasetUpdateTimer += dt;
+    if (datasetUpdateTimer >= datasetUpdateInterval) {
+        datasetUpdateTimer = 0.0f;
+        requestDatasetSnapshot();
+    }
+    if (datasetSizeInfo.empty() && !datasetSnapshotInFlight.load()) {
+        requestDatasetSnapshot();
+    }
+    applyPendingDatasetSnapshot();
+}
+
+// ============================================================
+// Server Polling
+// ============================================================
+
+void UITrainingPanel::pollServer() {
+    if (!trainingController) return;
+
+    bool previouslyConnected = serverConnected;
+    serverConnected = trainingController->isServerRunning();
+
+    if (previouslyConnected && !serverConnected) {
+        if (currentState == Control::TrainingState_Training ||
+            currentState == Control::TrainingState_Collecting ||
+            currentState == Control::TrainingState_Verifying) {
+            addLog("Server disconnected during operation", 2);
+            currentState = Control::TrainingState_Error;
+            currentStats.lastError = "Server disconnected unexpectedly";
+            checkpointMergeStatus = "";
+        }
+    }
+
+    if (serverConnected) {
+        if (trainingController->pollStatus()) {
+            Control::TrainingState prev = currentState;
+            currentState = trainingController->getCurrentState();
+            currentStats = trainingController->getCurrentStats();
+            currentConfig = trainingController->getCurrentConfig();
+
+            if (prev != currentState) {
+                if (prev == Control::TrainingState_Training && currentState == Control::TrainingState_Completed) {
+                    addLog("Training completed!", 0); checkpointMergeStatus = "";
+                } else if (prev == Control::TrainingState_Training && currentState == Control::TrainingState_Error) {
+                    addLog("Training error: " + currentStats.lastError, 2); checkpointMergeStatus = "";
+                } else if (prev == Control::TrainingState_Training && currentState == Control::TrainingState_Paused) {
+                    addLog("Training paused", 1);
+                } else if (prev == Control::TrainingState_Paused && currentState == Control::TrainingState_Training) {
+                    addLog("Training resumed", 0);
+                } else if (prev == Control::TrainingState_Training && currentState == Control::TrainingState_Idle) {
+                    addLog("Training stopped unexpectedly", 2);
+                    currentStats.lastError = "Training process terminated"; checkpointMergeStatus = "";
+                }
+            }
+
+            dataCollectionActive = (currentState == Control::TrainingState_Collecting ||
+                                    currentState == Control::TrainingState_Verifying);
+
+            static std::string lastPhase;
+            if (currentState == Control::TrainingState_Collecting &&
+                !currentStats.currentPhase.empty() && currentStats.currentPhase != lastPhase) {
+                addLog("  Phase: " + currentStats.currentPhase, 0);
+                lastPhase = currentStats.currentPhase;
+            } else if (currentState != Control::TrainingState_Collecting) {
+                lastPhase = "";
+            }
+        } else if (currentState == Control::TrainingState_Training) {
+            addLog("Failed to communicate with training server", 2);
+        }
+    } else {
+        dataCollectionActive = false;
+    }
+}
+
+// ============================================================
+// Draw — Main entry + tab dispatch
+// ============================================================
+
+bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
+    if (!UIPanel::drawOverlay(renderer)) return false;
+
+    PanelRect content = getContentRect();
+
+    // ── Tab bar ──
+    float tabY = content.origin.y;
+    tabConfigBtn_->setPosition(content.origin.x + Spacing::Small, tabY + 2.0f);
+    tabMonitorBtn_->setPosition(content.origin.x + Spacing::Small + 106.0f, tabY + 2.0f);
+    tabConfigBtn_->drawOverlay(renderer, position);
+    tabMonitorBtn_->drawOverlay(renderer, position);
+
+    // Active tab indicator (2px accent underline)
+    float indicatorX = content.origin.x + Spacing::Small;
+    if (activeTab_ == TrainingPanelTab::Monitor) indicatorX += 106.0f;
+    renderer.drawRect({indicatorX, tabY + kTabBarH - 2.0f}, {100.0f, 2.0f}, Colors::Primary);
+
+    // Divider below tabs
+    UIDrawHelpers::drawDivider(renderer, {content.origin.x, tabY + kTabBarH}, content.size.x);
+
+    // ── Status pill (top-right) ──
+    {
+        std::string stateText = getStateString(currentState);
+        uint32_t sc = getStateColor(currentState);
+        float tw = UIDrawHelpers::getTextWidth(stateText);
+        float px = content.origin.x + content.size.x - tw - Spacing::Large;
+        renderer.drawText({px, tabY + 8.0f}, stateText, sc);
+
+        // Connection dot
+        float dotX = px - 14.0f;
+        float dotY = tabY + 12.0f;
+        uint32_t dotColor = serverConnected ? Colors::Success : Colors::Danger;
+        renderer.drawRoundedRect({dotX, dotY}, {8.0f, 8.0f}, dotColor, 4.0f);
+    }
+
+    // ── Tab content area ──
+    PanelRect tabContent;
+    tabContent.origin = {content.origin.x, tabY + kTabBarH + 4.0f};
+    tabContent.size = {content.size.x, content.size.y - kTabBarH - 4.0f - kBottomBarH};
+
+    switch (activeTab_) {
+        case TrainingPanelTab::Configure:
+            drawConfigureTab(renderer, tabContent);
+            break;
+        case TrainingPanelTab::Monitor:
+            drawMonitorTab(renderer, tabContent);
+            break;
+    }
+
+    // ── Bottom action bar ──
+    float barY = content.origin.y + content.size.y - kBottomBarH;
+    UIDrawHelpers::drawDivider(renderer, {content.origin.x, barY}, content.size.x);
+    drawBottomBar(renderer, barY + 8.0f, content.size.x, content.origin.x);
+
+    renderer.popClipRect();
+    return true;
+}
+
+// ============================================================
+// Configure Tab
+// ============================================================
+
+void UITrainingPanel::drawConfigureTab(OverlayRenderer& renderer, const PanelRect& content) {
+    float x = content.origin.x + Spacing::PaddingX;
+    float y = content.origin.y + Spacing::Small;
+    float w = content.size.x - 2.0f * Spacing::PaddingX;
+    float sliderW = w;
+    float sliderH = Sizes::SliderHeight;
+
+    // ── Section: Hyperparameters ──
+    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
+                                     "Hyperparameters", Colors::SectionAI);
+    y += Sizes::HeaderHeight + Spacing::Small;
+
+    auto drawSlider = [&](std::shared_ptr<UISlider>& slider) {
+        if (!slider) return;
+        slider->setPosition(x, y);
+        slider->setSize(sliderW, sliderH);
+        slider->drawOverlay(renderer, position);
+        y += sliderH + Spacing::Tiny;
+    };
+
+    drawSlider(epochsSlider);
+    drawSlider(batchSizeSlider);
+    drawSlider(learningRateSlider);
+    drawSlider(maxSeqLenSlider);
+    drawSlider(warmupStepsSlider);
+
+    y += Spacing::Small;
+
+    // Save Config button
+    if (saveConfigButton) {
+        saveConfigButton->setPosition(x, y);
+        saveConfigButton->setSize(sliderW, Sizes::ButtonHeight);
+        saveConfigButton->drawOverlay(renderer, position);
+        y += Sizes::ButtonHeight + Spacing::Large;
+    }
+
+    // ── Section: Data Sources ──
+    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
+                                     "Data Sources", Colors::SectionWhisper);
+    y += Sizes::HeaderHeight + Spacing::Small;
+
+    if (sourceUrlInput) {
+        sourceUrlInput->setPosition(x, y);
+        sourceUrlInput->setSize(sliderW, 28.0f);
+        sourceUrlInput->drawOverlay(renderer, position);
+        y += 28.0f + Spacing::Small;
+    }
+
+    if (addSourceButton) {
+        addSourceButton->setPosition(x, y);
+        addSourceButton->setSize(sliderW, Sizes::ButtonHeight);
+        addSourceButton->drawOverlay(renderer, position);
+        y += Sizes::ButtonHeight + Spacing::Large;
+    }
+
+    // ── Section: Data Pipeline ──
+    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
+                                     "Data Pipeline", Colors::SectionPersonality);
+    y += Sizes::HeaderHeight + Spacing::Small;
+
+    // Pipeline status
+    {
+        std::string statusText;
+        uint32_t statusColor;
+        if (dataCollectionActive) {
+            statusText = "Collecting...";
+            statusColor = Colors::AccentBlue;
+        } else if (dataCollectionCompleted && currentStats.collectionProgress >= 99.0f) {
+            statusText = "Complete";
+            statusColor = Colors::Success;
+        } else {
+            statusText = "Ready";
+            statusColor = Colors::TextMuted;
+        }
+
+        UIDrawHelpers::drawLabeledValue(renderer, {x, y}, "Status:", statusText);
+        y += 22.0f;
+
+        if ((dataCollectionActive || dataCollectionCompleted) && currentStats.collectionProgress > 0.0f) {
+            std::string pctText = std::to_string(static_cast<int>(currentStats.collectionProgress)) + "%";
+            UIDrawHelpers::drawLabeledValue(renderer, {x, y}, "Progress:", pctText);
+            y += 22.0f;
+        }
+    }
+
+    if (collectDataButton) {
+        collectDataButton->setPosition(x, y);
+        collectDataButton->setSize(sliderW, Sizes::ButtonHeight);
+        collectDataButton->drawOverlay(renderer, position);
+        y += Sizes::ButtonHeight + Spacing::Medium;
+    }
+
+    // Training data path
+    UIDrawHelpers::drawLabeledValue(renderer, {x, y}, "Data Path:", "");
+    y += 20.0f;
+
+    if (trainingDataPathInput) {
+        trainingDataPathInput->setPosition(x, y);
+        trainingDataPathInput->setSize(sliderW, 26.0f);
+        trainingDataPathInput->drawOverlay(renderer, position);
+        y += 26.0f + Spacing::Medium;
+    }
+
+    // Dataset info
+    if (!datasetSizeInfo.empty()) {
+        renderer.drawText({x, y}, datasetSizeInfo, Colors::Success);
+        y += 20.0f;
+    }
+    if (!checkpointStatsInfo.empty()) {
+        renderer.drawText({x, y}, checkpointStatsInfo, Colors::TextSecondary);
+        y += 20.0f;
+    }
+
+    configContentHeight = y - content.origin.y;
+}
+
+// ============================================================
+// Monitor Tab
+// ============================================================
+
+void UITrainingPanel::drawMonitorTab(OverlayRenderer& renderer, const PanelRect& content) {
+    float x = content.origin.x + Spacing::PaddingX;
+    float y = content.origin.y + Spacing::Small;
+    float w = content.size.x - 2.0f * Spacing::PaddingX;
+
+    // ── Stat cards row ──
+    if (serverConnected) {
+        float cardW = (w - 3.0f * kStatCardGap) / 4.0f;
+        char buf[64];
+
+        snprintf(buf, sizeof(buf), "%d / %d", currentStats.currentEpoch, currentStats.totalEpochs);
+        drawStatCard(renderer, {x, y}, {cardW, kStatCardH}, "Epoch", buf, Colors::AccentBlue);
+
+        snprintf(buf, sizeof(buf), "%d / %d", currentStats.currentBatch, currentStats.totalBatches);
+        drawStatCard(renderer, {x + cardW + kStatCardGap, y}, {cardW, kStatCardH}, "Batch", buf, Colors::Primary);
+
+        snprintf(buf, sizeof(buf), "%.4f", currentStats.currentLoss);
+        drawStatCard(renderer, {x + 2.0f * (cardW + kStatCardGap), y}, {cardW, kStatCardH}, "Loss", buf, Colors::Warning);
+
+        snprintf(buf, sizeof(buf), "%.2f", currentStats.perplexity);
+        drawStatCard(renderer, {x + 3.0f * (cardW + kStatCardGap), y}, {cardW, kStatCardH}, "Perplexity", buf, Colors::Success);
+
+        y += kStatCardH + Spacing::Medium;
+    } else {
+        renderer.drawText({x, y + 10.0f}, "Server offline — connect to see metrics", Colors::TextMuted);
+        y += 40.0f;
+    }
+
+    // ── Checkpoint merge status ──
+    if (!checkpointMergeStatus.empty() &&
+        (currentState == Control::TrainingState_Collecting || currentState == Control::TrainingState_Verifying)) {
+        renderer.drawText({x, y}, checkpointMergeStatus, Colors::Warning);
+        y += 22.0f;
+    }
+
+    // ── System Resources graph ──
+    if (resourceMonitorGraph) {
+        float graphH = 160.0f;
+        resourceMonitorGraph->setPosition({x, y});
+        resourceMonitorGraph->setSize({w, graphH});
+        resourceMonitorGraph->drawOverlay(renderer, position);
+        y += graphH + Spacing::Medium;
+    }
+
+    // ── Progress bars ──
+    float barH = Sizes::ProgressBarHeight;
+
+    if (trainingProgressBar) {
+        float progress = currentStats.trainingProgress / 100.0f;
+        trainingProgressBar->setValue(progress);
+        trainingProgressBar->setPosition({x, y});
+        trainingProgressBar->setSize({w, barH});
+        trainingProgressBar->drawOverlay(renderer, position);
+        y += barH + Spacing::Small;
+    }
+
+    if (collectionProgressBar) {
+        float target = currentStats.collectionProgress / 100.0f;
+        if (!wasCollectionActiveLastFrame && dataCollectionActive) smoothedCollectionProgress = 0.0f;
+        wasCollectionActiveLastFrame = dataCollectionActive;
+        if (dataCollectionActive && target > smoothedCollectionProgress) {
+            smoothedCollectionProgress = smoothedCollectionProgress * 0.7f + target * 0.3f;
+        }
+        collectionProgressBar->setValue(smoothedCollectionProgress);
+        collectionProgressBar->setPosition({x, y});
+        collectionProgressBar->setSize({w, barH});
+        collectionProgressBar->drawOverlay(renderer, position);
+        y += barH + Spacing::Tiny;
+
+        if (dataCollectionActive && !currentStats.currentPhase.empty()) {
+            renderer.drawText({x, y}, "Phase: " + std::string(currentStats.currentPhase), Colors::AccentBlue);
+            y += 18.0f;
+        }
+        y += Spacing::Small;
+    }
+
+    // ── Training Logs ──
+    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
+                                     "Training Logs", Colors::SectionNeutral);
+    y += Sizes::HeaderHeight;
+
+    float logAreaH = content.origin.y + content.size.y - y - Spacing::Small;
+    if (logAreaH < 40.0f) logAreaH = 40.0f;
+
+    renderer.drawRoundedRect({x, y}, {w, logAreaH}, Colors::ContentAreaBg, Sizes::WidgetRadius);
+    renderer.drawRoundedBorder({x, y}, {w, logAreaH}, Colors::BorderSubtle, Sizes::WidgetRadius);
+
+    {
+        std::lock_guard<std::mutex> lock(logMutex);
+        float logY = y + 4.0f;
+        int visibleLines = static_cast<int>(logAreaH / kLogLineH);
+        int startIdx = std::max(0, static_cast<int>(logEntries.size()) - visibleLines);
+
+        for (size_t i = startIdx; i < logEntries.size(); i++) {
+            const auto& entry = logEntries[i];
+            uint32_t color = Colors::Success;
+            if (entry.level == 1) color = Colors::Warning;
+            else if (entry.level == 2) color = Colors::Danger;
+
+            renderer.drawText({x + Spacing::Small, logY}, entry.timestamp + " " + entry.message, color);
+            logY += kLogLineH;
+            if (logY > y + logAreaH - 4.0f) break;
+        }
+    }
+}
+
+// ============================================================
+// Bottom Action Bar
+// ============================================================
+
+void UITrainingPanel::drawBottomBar(OverlayRenderer& renderer, float barY, float barWidth, float barX) {
+    float btnW = 90.0f;
+    float btnH = Sizes::ButtonHeight;
+    float gap = Spacing::Small;
+    float totalW = btnW * 5.0f + gap * 4.0f;
+    float startX = barX + (barWidth - totalW) / 2.0f;
+
+    auto placeBtn = [&](std::shared_ptr<UIButton>& btn, int idx) {
+        if (!btn) return;
+        float bx = startX + idx * (btnW + gap);
+        btn->setPosition(bx, barY);
+        btn->setSize(btnW, btnH);
+        btn->drawOverlay(renderer, position);
+    };
+
+    placeBtn(startButton, 0);
+    placeBtn(stopButton, 1);
+    placeBtn(pauseResumeButton, 2);
+    placeBtn(resetStatusButton, 3);
+    placeBtn(closeButton, 4);
+}
+
+// ============================================================
+// Stat Card Helper
+// ============================================================
+
+void UITrainingPanel::drawStatCard(OverlayRenderer& renderer, const Vec2& pos, const Vec2& sz,
+                                    const std::string& label, const std::string& value, uint32_t accentColor) {
+    renderer.drawRoundedRect(pos, sz, Colors::CardSurface, Sizes::WidgetRadius);
+    renderer.drawRoundedBorder(pos, sz, Colors::BorderSubtle, Sizes::WidgetRadius);
+    // Accent bar on left
+    renderer.drawRect({pos.x, pos.y + 6.0f}, {3.0f, sz.y - 12.0f}, accentColor);
+    // Label
+    renderer.drawText({pos.x + 12.0f, pos.y + 8.0f}, label, Colors::TextSecondary);
+    // Value
+    renderer.drawText({pos.x + 12.0f, pos.y + 30.0f}, value, Colors::TextPrimary);
+}
+
+// ============================================================
+// Public Control Functions
+// ============================================================
+
+void UITrainingPanel::startTrainingSession() {
+    if (!trainingController) { addLog("Cannot start: controller not initialized", 2); return; }
+    if (!serverConnected) {
+        addLog("Server not connected, checking...", 0);
+        pollServer();
+        if (!serverConnected) { addLog("Cannot start: server not connected", 2); return; }
+    }
+    if (currentState == Control::TrainingState_Training) {
+        addLog("Training already in progress", 1); return;
+    }
+
+    updateConfigFromSliders();
+    currentStats = TrainingStats();
+    if (trainingProgressBar) trainingProgressBar->setValue(0.0f);
+
+    std::string grmtPath = "resources/models/GRIM-text/training/data/training_data.grmt";
+    std::ifstream checkGrmt(grmtPath, std::ios::binary | std::ios::ate);
+    bool hasGrmt = checkGrmt.is_open() && checkGrmt.tellg() > 0;
+    checkGrmt.close();
+
+    if (!hasGrmt) {
+        addLog("No training data found — run data pipeline first", 2);
+        addLog("Expected: " + grmtPath, 1);
+        currentState = Control::TrainingState_Idle;
+        return;
+    }
+
+    addLog("Training data found", 0);
+    currentConfig.dataPath = "data/training_data.grmt";
+
+    GRIM::Config::GrimTextPaths paths;
+    if (GRIM::Config::loadGrimTextPaths(paths)) {
+        currentConfig.vocabPath = paths.vocab;
+        currentConfig.outputPath = paths.model;
+        addLog("Vocab: " + currentConfig.vocabPath, 0);
+        addLog("Output: " + currentConfig.outputPath, 0);
+    } else {
+        addLog("Failed to load paths from config, using defaults", 1);
+    }
+
+    checkpointMergeStatus = "";
+    if (trainingController && trainingController->startTraining(currentConfig)) {
+        addLog("Training launched — monitoring progress", 0);
+        currentState = Control::TrainingState_Training;
+    } else {
+        std::string error = "Failed to start training";
+        if (trainingController) error += ": " + trainingController->getLastError();
+        addLog(error, 2);
+        currentState = Control::TrainingState_Idle;
+    }
+}
+
+void UITrainingPanel::stopTrainingSession() {
+    if (!trainingController || !serverConnected) { addLog("Cannot stop: not connected", 2); return; }
+    if (currentState != Control::TrainingState_Training && currentState != Control::TrainingState_Paused) {
+        addLog("No active session to stop", 1); return;
+    }
+    addLog("Stopping training...", 0);
+    if (trainingController->stopTraining()) {
+        addLog("Training stopped", 0);
+        currentState = Control::TrainingState_Idle;
+        if (trainingProgressBar) trainingProgressBar->setValue(0.0f);
+    } else {
+        addLog("Failed to stop: " + trainingController->getLastError(), 2);
+    }
+}
+
+void UITrainingPanel::pauseTrainingSession() {
+    if (!trainingController || !serverConnected) { addLog("Cannot pause: not connected", 2); return; }
+    if (currentState != Control::TrainingState_Training) { addLog("Cannot pause: not training", 1); return; }
+    addLog("Pausing training...", 1);
+    currentState = Control::TrainingState_Paused;
+}
+
+void UITrainingPanel::resumeTrainingSession() {
+    if (!trainingController || !serverConnected) { addLog("Cannot resume: not connected", 2); return; }
+    if (currentState != Control::TrainingState_Paused) { addLog("Cannot resume: not paused", 1); return; }
+    addLog("Resuming training...", 0);
+    currentState = Control::TrainingState_Training;
+}
+
+void UITrainingPanel::shutdownTrainingServer() {
+    if (!trainingController) { addLog("Cannot shutdown: controller not initialized", 2); return; }
+    if (serverConnected && currentState == Control::TrainingState_Training) stopTrainingSession();
+    addLog("Shutting down server...", 1);
+    if (trainingController->stopServer()) {
+        addLog("Server shutdown successful", 0);
+        serverConnected = false;
+        currentState = Control::TrainingState_Idle;
+    } else {
+        addLog("Failed to shutdown: " + trainingController->getLastError(), 2);
+    }
+}
+
+void UITrainingPanel::handleStartTraining() { startTrainingSession(); }
+void UITrainingPanel::handleStopTraining() { stopTrainingSession(); }
+void UITrainingPanel::handlePauseResume() {
+    if (currentState == Control::TrainingState_Training) pauseTrainingSession();
+    else if (currentState == Control::TrainingState_Paused) resumeTrainingSession();
+}
+
+// ============================================================
+// Logging
+// ============================================================
+
+void UITrainingPanel::addLog(const std::string& message, int level) {
+    std::lock_guard<std::mutex> lock(logMutex);
+
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    std::tm tm = *std::localtime(&time);
+
+    char timeBuf[32];
+    std::strftime(timeBuf, sizeof(timeBuf), "%H:%M:%S", &tm);
+
+    LogEntry entry;
+    entry.timestamp = timeBuf;
+    entry.message = message;
+    entry.level = level;
+    logEntries.push_back(entry);
+
+    if (logEntries.size() > maxLogEntries) logEntries.erase(logEntries.begin());
+
+    if (level == 1) LOG_TRACE("TrainingPanel", message);
+    else if (level == 2) LOG_ERROR("TrainingPanel", message);
+}
+
+// ============================================================
+// State Helpers
+// ============================================================
+
+std::string UITrainingPanel::getStateString(Control::TrainingState state) const {
+    switch (state) {
+        case Control::TrainingState_Idle:       return "Idle";
+        case Control::TrainingState_Collecting:  return "Collecting";
+        case Control::TrainingState_Verifying:   return "Verifying";
+        case Control::TrainingState_Training:    return "Training";
+        case Control::TrainingState_Paused:      return "Paused";
+        case Control::TrainingState_Completed:   return "Completed";
+        case Control::TrainingState_Error:       return "Error";
+        default: return "Unknown";
+    }
+}
+
+uint32_t UITrainingPanel::getStateColor(Control::TrainingState state) const {
+    switch (state) {
+        case Control::TrainingState_Idle:       return Colors::TextMuted;
+        case Control::TrainingState_Collecting:  return Colors::AccentBlue;
+        case Control::TrainingState_Verifying:   return Colors::Info;
+        case Control::TrainingState_Training:    return Colors::Success;
+        case Control::TrainingState_Paused:      return Colors::Warning;
+        case Control::TrainingState_Completed:   return Colors::Primary;
+        case Control::TrainingState_Error:       return Colors::Danger;
+        default: return Colors::TextPrimary;
+    }
+}
+
+// ============================================================
+// Config Persistence
+// ============================================================
+
+void UITrainingPanel::loadConfigFromJSON() {
+    currentConfig = TrainingConfigManager::loadFromJSON();
+    updateSlidersFromConfig();
+    addLog("Configuration loaded from ai_config.json", 0);
+}
+
+void UITrainingPanel::saveConfigToJSON() {
+    updateConfigFromSliders();
+    if (TrainingConfigManager::saveToJSON(currentConfig))
+        addLog("Configuration saved", 0);
+    else
+        addLog("Failed to save configuration", 2);
+}
+
+void UITrainingPanel::updateConfigFromSliders() {
+    if (epochsSlider) currentConfig.epochs = static_cast<int>(epochsSlider->getValue());
+    if (batchSizeSlider) currentConfig.batchSize = static_cast<int>(batchSizeSlider->getValue());
+    if (learningRateSlider) currentConfig.learningRate = learningRateSlider->getValue();
+    if (maxSeqLenSlider) currentConfig.maxSeqLen = static_cast<int>(maxSeqLenSlider->getValue());
+    if (warmupStepsSlider) currentConfig.warmupSteps = static_cast<int>(warmupStepsSlider->getValue());
+}
+
+void UITrainingPanel::updateSlidersFromConfig() {
+    if (epochsSlider) epochsSlider->setValue(static_cast<float>(currentConfig.epochs));
+    if (batchSizeSlider) batchSizeSlider->setValue(static_cast<float>(currentConfig.batchSize));
+    if (learningRateSlider) learningRateSlider->setValue(currentConfig.learningRate);
+    if (maxSeqLenSlider) maxSeqLenSlider->setValue(static_cast<float>(currentConfig.maxSeqLen));
+    if (warmupStepsSlider) warmupStepsSlider->setValue(static_cast<float>(currentConfig.warmupSteps));
+}
+
+// ============================================================
+// Hardware & Estimation
+// ============================================================
+
+void UITrainingPanel::updateHardwareInfo() {
+    std::stringstream ss;
+    if (g_hardwareInventory.hasGPU() && g_hardwareInventory.hasCUDA()) {
+        std::string gpuName = g_hardwareInventory.gpus.empty() ? "Unknown" : g_hardwareInventory.gpus[0].name;
+        long vramMB = g_hardwareInventory.gpus.empty() ? 0 : g_hardwareInventory.gpus[0].vram_mb;
+        ss << "GPU: " << gpuName << " (" << vramMB << " MB VRAM)\nCUDA: Available\n";
+    } else if (g_hardwareInventory.hasGPU()) {
+        std::string gpuName = g_hardwareInventory.gpus.empty() ? "Unknown" : g_hardwareInventory.gpus[0].name;
+        ss << "GPU: " << gpuName << " (No CUDA)\n";
+    } else {
+        ss << "GPU: None (CPU training only)\n";
+    }
+    ss << "CPU: " << g_hardwareInventory.cpu_cores << " cores\n";
+    ss << "RAM: " << g_hardwareInventory.ram_total_mb << " MB";
+    hardwareInfo = ss.str();
+}
+
+void UITrainingPanel::calculateTrainingEstimate() {
+    float timePerBatch = 1.0f;
+
+    if (g_hardwareInventory.hasGPU() && g_hardwareInventory.hasCUDA()) {
+        timePerBatch = 0.15f;
+        long vramMB = g_hardwareInventory.gpus.empty() ? 0 : g_hardwareInventory.gpus[0].vram_mb;
+        if (vramMB >= 12000) timePerBatch *= 0.8f;
+        else if (vramMB >= 8000) timePerBatch *= 0.9f;
+        else if (vramMB >= 4000) timePerBatch *= 1.1f;
+    } else {
+        timePerBatch = 8.0f;
+        if (g_hardwareInventory.cpu_cores >= 16) timePerBatch *= 0.6f;
+        else if (g_hardwareInventory.cpu_cores >= 8) timePerBatch *= 0.75f;
+    }
+
+    timePerBatch *= (currentConfig.maxSeqLen / 512.0f);
+
+    if (currentConfig.batchSize >= 32) timePerBatch *= 1.5f;
+    else if (currentConfig.batchSize >= 16) timePerBatch *= 1.2f;
+    else if (currentConfig.batchSize >= 4) timePerBatch *= 0.7f;
+    else timePerBatch *= 0.5f;
+
+    int estimatedDatasetSize = 500;
+    std::string sourcePath = getResourcePath() + "/models/GRIM-text/training/source_data.json";
+    try {
+        if (std::filesystem::exists(sourcePath)) {
+            std::ifstream sourceFile(sourcePath);
+            nlohmann::json sourceData;
+            sourceFile >> sourceData;
+            sourceFile.close();
+
+            int enabledSourceCount = 0;
+            int totalFetchLimit = 0;
+            if (sourceData.contains("data_sources")) {
+                for (const auto& source : sourceData["data_sources"]) {
+                    if (source.value("enabled", false)) {
+                        enabledSourceCount++;
+                        totalFetchLimit += source.value("fetch_limit", 100);
+                    }
+                }
+            }
+            if (totalFetchLimit > 0)
+                estimatedDatasetSize = static_cast<int>(totalFetchLimit * 0.6f);
+            else if (enabledSourceCount > 0)
+                estimatedDatasetSize = enabledSourceCount * 200;
+        }
+    } catch (...) {}
+
+    int batchesPerEpoch = estimatedDatasetSize / std::max(1, currentConfig.batchSize);
+    int totalBatches = batchesPerEpoch * currentConfig.epochs;
+    estimatedTrainingTimeSeconds = totalBatches * timePerBatch;
+    if (currentConfig.warmupSteps > 0)
+        estimatedTrainingTimeSeconds += currentConfig.warmupSteps * timePerBatch;
+
+    std::stringstream ss;
+    int hours = static_cast<int>(estimatedTrainingTimeSeconds / 3600);
+    int minutes = static_cast<int>((estimatedTrainingTimeSeconds - hours * 3600) / 60);
+    int seconds = static_cast<int>(estimatedTrainingTimeSeconds) % 60;
+    if (hours > 0) ss << hours << "h " << minutes << "m " << seconds << "s";
+    else if (minutes > 0) ss << minutes << "m " << seconds << "s";
+    else ss << seconds << "s";
+    estimatedTimeStr = ss.str();
+}
+
+// ============================================================
+// Data Sources & Pipeline
+// ============================================================
+
+void UITrainingPanel::addDataSource(const std::string& url) {
+    if (url.empty()) { addLog("Cannot add empty URL", 1); return; }
+    if (url.find("http://") != 0 && url.find("https://") != 0) {
+        addLog("Invalid URL - must start with http:// or https://", 2); return;
+    }
+    addLog("Adding data source: " + url, 0);
+    saveSourceToJSON(url);
+}
+
+void UITrainingPanel::saveSourceToJSON(const std::string& url) {
+    std::string sourcePath = getResourcePath() + "/models/GRIM-text/training/source_data.json";
+    try {
+        nlohmann::json sourceData;
+        std::ifstream inFile(sourcePath);
+        if (inFile.good()) { inFile >> sourceData; inFile.close(); }
+        else {
+            sourceData = {
+                {"version", "1.0.0"},
+                {"description", "GRIM Web Data Collection Configuration"},
+                {"data_sources", nlohmann::json::array()}
+            };
+        }
+
+        nlohmann::json newSource = {
+            {"name", "Custom Source"}, {"url", url}, {"source_type", "custom"},
+            {"enabled", true}, {"priority", 5}, {"requires_auth", false}
+        };
+        if (!sourceData.contains("data_sources"))
+            sourceData["data_sources"] = nlohmann::json::array();
+        sourceData["data_sources"].push_back(newSource);
+
+        std::ofstream outFile(sourcePath);
+        if (outFile.is_open()) { outFile << sourceData.dump(2); outFile.close(); addLog("Data source added", 0); }
+        else addLog("Failed to write source_data.json", 2);
+    } catch (const std::exception& e) {
+        addLog(std::string("Error saving source: ") + e.what(), 2);
+    }
+}
+
+void UITrainingPanel::updateVerificationStats() {
+    std::string statsPath = getResourcePath() + "/models/GRIM-text/training/data/verification_stats.json";
+    try {
+        if (std::filesystem::exists(statsPath)) {
+            std::ifstream statsFile(statsPath);
+            nlohmann::json statsData;
+            statsFile >> statsData;
+            statsFile.close();
+            if (statsData.contains("total_processed")) {
+                int total = statsData["total_processed"];
+                int passed = statsData.value("passed_verification", 0);
+                int failed = statsData.value("failed_verification", 0);
+                std::stringstream ss;
+                ss << "Processed: " << total << "\nPassed: " << passed << "\nFailed: " << failed;
+                verificationStats = ss.str();
+            }
+        }
+    } catch (const std::exception& e) {
+        addLog(std::string("Error reading stats: ") + e.what(), 2);
+    }
+}
+
+void UITrainingPanel::startDataCollection() {
+    if (dataCollectionActive) { addLog("Collection already active", 1); return; }
+    if (pipelineRequestPending) { addLog("Pipeline request already pending", 1); return; }
+
+    dataCollectionActive = true;
+    dataCollectionCompleted = false;
+    pipelineRequestPending = true;
+
+    addLog("Launching data pipeline...", 0);
+    collectionManager->startPipeline(GRIM::Pipeline::PipelineMode::Full);
+    addLog("Data pipeline started", 0);
+}
+
+// ============================================================
+// Dataset Size & Checkpoint I/O
+// ============================================================
+
+void UITrainingPanel::updateDatasetSize() {
+    datasetSizeInfo = readDatasetSizeSnapshot();
+}
+
+void UITrainingPanel::updateCheckpointStats() {
+    checkpointStatsInfo = readCheckpointStatsSnapshot();
+}
+
+std::string UITrainingPanel::readDatasetSizeSnapshot() {
+    GRIM::Config::GrimTextPaths paths;
+    if (!GRIM::Config::loadGrimTextPaths(paths))
+        return "Dataset: Config error";
+
+    const std::string grmtPath = paths.training_data;
+    try {
+        if (std::filesystem::exists(grmtPath)) {
+            auto fileSize = std::filesystem::file_size(grmtPath);
+            std::stringstream ss;
+            if (fileSize >= 1024ull * 1024ull * 1024ull)
+                ss << std::fixed << std::setprecision(2) << (fileSize / (1024.0 * 1024.0 * 1024.0)) << " GB";
+            else if (fileSize >= 1024ull * 1024ull)
+                ss << std::fixed << std::setprecision(2) << (fileSize / (1024.0 * 1024.0)) << " MB";
+            else if (fileSize >= 1024ull)
+                ss << std::fixed << std::setprecision(2) << (fileSize / 1024.0) << " KB";
+            else
+                ss << fileSize << " bytes";
+
+            int estimatedSamples = static_cast<int>(fileSize / 2048);
+            return "Dataset: " + ss.str() + " (~" + std::to_string(estimatedSamples) + " samples)";
+        }
+        return "Dataset: Not found";
+    } catch (const std::exception& e) {
+        return "Dataset: Error reading size";
+    }
+}
+
+std::string UITrainingPanel::readCheckpointStatsSnapshot() {
+    std::string checkpointDir = getResourcePath() + "/models/GRIM-text/DataCollection/data";
+    try {
+        if (!std::filesystem::exists(checkpointDir))
+            return "Raw Data: No checkpoints";
+
+        int totalEntries = 0;
+        uintmax_t totalSize = 0;
+        std::filesystem::path latestCheckpoint;
+        std::filesystem::file_time_type latestTime;
+        bool hasCheckpoints = false;
+
+        for (const auto& entry : std::filesystem::directory_iterator(checkpointDir)) {
+            if (entry.is_regular_file() && entry.path().filename().string().rfind("checkpoint_", 0) == 0) {
+                totalSize += entry.file_size();
+                auto modTime = entry.last_write_time();
+                if (!hasCheckpoints || modTime > latestTime) {
+                    latestTime = modTime;
+                    latestCheckpoint = entry.path();
+                    hasCheckpoints = true;
+                }
+            }
+        }
+        if (!hasCheckpoints) return "Raw Data: No checkpoints";
+
+        std::ifstream latestFile(latestCheckpoint);
+        if (latestFile.is_open()) {
+            totalEntries = std::count(std::istreambuf_iterator<char>(latestFile),
+                                      std::istreambuf_iterator<char>(), '\n');
+            latestFile.close();
+        }
+
+        std::stringstream ss;
+        ss << "Raw Data: " << totalEntries << " entries";
+        if (totalSize >= 1024ull * 1024ull)
+            ss << " (" << std::fixed << std::setprecision(1) << (totalSize / (1024.0 * 1024.0)) << " MB)";
+        else if (totalSize >= 1024ull)
+            ss << " (" << std::fixed << std::setprecision(1) << (totalSize / 1024.0) << " KB)";
+        return ss.str();
+    } catch (const std::exception& e) {
+        return "Raw Data: Error reading checkpoints";
+    }
+}
+
+void UITrainingPanel::requestDatasetSnapshot() {
+    if (datasetSnapshotInFlight.exchange(true)) return;
+
+    std::thread([this]() {
+        DatasetSnapshotResult snapshot;
+        snapshot.datasetInfo = readDatasetSizeSnapshot();
+        snapshot.checkpointInfo = readCheckpointStatsSnapshot();
+        {
+            std::lock_guard<std::mutex> lock(datasetSnapshotMutex);
+            pendingDatasetSnapshot = std::move(snapshot);
+        }
+        datasetSnapshotInFlight.store(false);
+    }).detach();
+}
+
+void UITrainingPanel::applyPendingDatasetSnapshot() {
+    std::optional<DatasetSnapshotResult> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(datasetSnapshotMutex);
+        if (!pendingDatasetSnapshot.has_value()) return;
+        snapshot = std::move(pendingDatasetSnapshot);
+        pendingDatasetSnapshot.reset();
+    }
+    if (snapshot) {
+        datasetSizeInfo = snapshot->datasetInfo;
+        checkpointStatsInfo = snapshot->checkpointInfo;
+    }
+}
+
+bool UITrainingPanel::isAnySliderEditing() const {
+    if (epochsSlider && epochsSlider->isEditing()) return true;
+    if (batchSizeSlider && batchSizeSlider->isEditing()) return true;
+    if (learningRateSlider && learningRateSlider->isEditing()) return true;
+    if (maxSeqLenSlider && maxSeqLenSlider->isEditing()) return true;
+    if (warmupStepsSlider && warmupStepsSlider->isEditing()) return true;
+    if (trainingDataPathInput && trainingDataPathInput->isFocused()) return true;
+    if (sourceUrlInput && sourceUrlInput->isFocused()) return true;
+    return false;
+}
+
+// ============================================================
+// Resource Monitoring
+// ============================================================
+
+void UITrainingPanel::updateResourceMonitoring(float dt) {
+    resourceSampleTimer += dt;
+    if (resourceSampleTimer < resourceSampleInterval) return;
+    resourceSampleTimer = 0.0f;
+
+    ResourceMonitor::getInstance().update();
+    ResourceUsage usage = ResourceMonitor::getInstance().getCurrentUsage();
+    std::string label = std::to_string(resourceSampleCount);
+
+    cpuHistory.push_back(DataPoint(usage.cpuUsage, label));
+    if (cpuHistory.size() > static_cast<size_t>(maxResourceSamples)) cpuHistory.erase(cpuHistory.begin());
+
+    memoryHistory.push_back(DataPoint(usage.memoryUsage, label));
+    if (memoryHistory.size() > static_cast<size_t>(maxResourceSamples)) memoryHistory.erase(memoryHistory.begin());
+
+    gpuHistory.push_back(DataPoint(usage.gpuUsage, label));
+    if (gpuHistory.size() > static_cast<size_t>(maxResourceSamples)) gpuHistory.erase(gpuHistory.begin());
+
+    if (resourceMonitorGraph) {
+        resourceMonitorGraph->clearSeries();
+        resourceMonitorGraph->addSeries("CPU", cpuHistory, Colors::AccentBlue);
+        resourceMonitorGraph->addSeries("Memory", memoryHistory, Colors::Success);
+        resourceMonitorGraph->addSeries("GPU", gpuHistory, Colors::Warning);
+    }
+    resourceSampleCount++;
+}
+
+// ============================================================
+// Path Configuration I/O
+// ============================================================
+
+void UITrainingPanel::loadPathsFromConfig() {
+    try {
+        std::ifstream configFile("ai_config.json");
+        if (!configFile.is_open()) return;
+
+        nlohmann::json config;
+        configFile >> config;
+
+        if (config.contains("paths") && config["paths"].contains("grim_text")) {
+            auto& paths = config["paths"]["grim_text"];
+            if (paths.contains("vocab")) vocabPathBuffer = paths["vocab"].get<std::string>();
+            if (paths.contains("model")) modelPathBuffer = paths["model"].get<std::string>();
+            if (paths.contains("training_data")) {
+                trainingDataPathBuffer = paths["training_data"].get<std::string>();
+                if (trainingDataPathInput) trainingDataPathInput->setText(trainingDataPathBuffer);
+            }
+            if (paths.contains("checkpoints")) checkpointsPathBuffer = paths["checkpoints"].get<std::string>();
+            if (paths.contains("logs")) logsPathBuffer = paths["logs"].get<std::string>();
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("UITrainingPanel", "Error loading paths: " + std::string(e.what()));
+    }
+}
+
+static std::string makeRelativeToGrimRoot(const std::string& pathStr) {
+    namespace fs = std::filesystem;
+    if (pathStr.empty()) return pathStr;
+    fs::path path(pathStr);
+    if (!path.is_absolute()) return pathStr;
+
+    fs::path grimRoot = fs::current_path();
+    for (int i = 0; i < 10 && grimRoot.has_parent_path(); ++i) {
+        if (fs::exists(grimRoot / "control") && fs::exists(grimRoot / "resources")) break;
+        grimRoot = grimRoot.parent_path();
+    }
+    try {
+        fs::path relativePath = fs::relative(path, grimRoot);
+        if (!relativePath.empty() && !relativePath.string().starts_with(".."))
+            return relativePath.string();
+    } catch (...) {}
+    return pathStr;
+}
+
+void UITrainingPanel::savePathsToConfig() {
+    try {
+        std::ifstream configFileIn("ai_config.json");
+        if (!configFileIn.is_open()) return;
+
+        nlohmann::json config;
+        configFileIn >> config;
+        configFileIn.close();
+
+        if (!config.contains("paths")) config["paths"] = nlohmann::json::object();
+        if (!config["paths"].contains("grim_text")) config["paths"]["grim_text"] = nlohmann::json::object();
+
+        config["paths"]["grim_text"]["vocab"] = makeRelativeToGrimRoot(vocabPathBuffer);
+        config["paths"]["grim_text"]["model"] = makeRelativeToGrimRoot(modelPathBuffer);
+        config["paths"]["grim_text"]["training_data"] = makeRelativeToGrimRoot(trainingDataPathBuffer);
+        config["paths"]["grim_text"]["checkpoints"] = makeRelativeToGrimRoot(checkpointsPathBuffer);
+        config["paths"]["grim_text"]["logs"] = makeRelativeToGrimRoot(logsPathBuffer);
+
+        std::filesystem::path trainingDataPath(trainingDataPathBuffer);
+        std::filesystem::path trainingDir = trainingDataPath.parent_path().parent_path();
+        std::filesystem::path statusPath = trainingDir / "training_status.fb";
+        config["paths"]["grim_text"]["training_status"] = makeRelativeToGrimRoot(statusPath.string());
+
+        auto preserveRelative = [&](const std::string& key) {
+            if (config["paths"]["grim_text"].contains(key))
+                config["paths"]["grim_text"][key] = makeRelativeToGrimRoot(config["paths"]["grim_text"][key].get<std::string>());
+        };
+        preserveRelative("collected");
+        preserveRelative("verified");
+        preserveRelative("collector_log");
+        preserveRelative("merge_checkpoints_exe");
+        preserveRelative("source_config");
+
+        std::ofstream configFileOut("ai_config.json");
+        if (!configFileOut.is_open()) return;
+        configFileOut << config.dump(4);
+        configFileOut.close();
+    } catch (const std::exception& e) {
+        LOG_ERROR("UITrainingPanel", "Error saving paths: " + std::string(e.what()));
+    }
+}
+

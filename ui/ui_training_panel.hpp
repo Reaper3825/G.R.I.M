@@ -1,15 +1,33 @@
 #pragma once
+//======================================================//
+//  UITrainingPanel — Unified Model + Training Hub
+//
+//  Four tabs: Home | Knowledge Gaps | Tool Gaps | Training
+//
+//  Merges the former ModelRegistry panel and Training panel
+//  into a single DataHub-style tabbed interface.
+//
+//  - Home:           model browser (registry status, resource bars)
+//  - Knowledge Gaps: gap queue (router misses → create model)
+//  - Tool Gaps:      tool-gap proposals (ToolGapPlanner)
+//  - Training:       hyperparameters, training controls, monitoring
+//======================================================//
+
 #include "ui_panel.hpp"
 #include "ui_button.hpp"
 #include "ui_slider.hpp"
 #include "ui_progress_bar.hpp"
 #include "ui_layout_box.hpp"
 #include "ui_inputbox.hpp"
+#include "ui_dropdown.hpp"
+#include "ui_label.hpp"
+#include "ui_scrollbox.hpp"
 #include "ui_graph.hpp"
 #include "ui_training_config.hpp"
 #include "control/training_controller.hpp"
-#include "DataCollection/pipeline/pipeline_orchestrator.hpp"
-#include "hardware/resource_values.hpp"
+#include "../MMO/Shared/MMD.hpp"
+#include "../MMO/Core/ToolGapPlanner.hpp"
+#include "../hardware/resource_values.hpp"
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,10 +35,35 @@
 #include <chrono>
 #include <optional>
 #include <atomic>
+#include "DataCollection/dataset_target.hpp"
 
 class OverlayRenderer;
 struct InputState;
 
+// ─────────────────────────────────────────────────────────
+//  Knowledge gap entry (from router → gap queue)
+// ─────────────────────────────────────────────────────────
+struct KnowledgeGapEntry {
+    std::string subject;
+    std::vector<std::string> tags;
+    std::string original_context;
+    std::string request_id;
+    std::chrono::steady_clock::time_point timestamp;
+};
+
+// ─────────────────────────────────────────────────────────
+//  View enum — DataHub-style tabs
+// ─────────────────────────────────────────────────────────
+enum class TrainingPanelTab : uint8_t {
+    Home          = 0,
+    KnowledgeGaps = 1,
+    ToolGaps      = 2,
+    Training      = 3
+};
+
+// ─────────────────────────────────────────────────────────
+//  UITrainingPanel — Unified Model + Training Hub
+// ─────────────────────────────────────────────────────────
 class UITrainingPanel : public UIPanel {
 public:
     UITrainingPanel();
@@ -28,18 +71,243 @@ public:
 
     void update(const InputState& input, float dt) override;
     bool drawOverlay(OverlayRenderer& renderer) override;
-    
-    // Public control functions for commands
+
+    // --- View control (DataHub pattern) -------------------------
+    void setView(TrainingPanelTab tab);
+    TrainingPanelTab currentView() const { return activeTab_; }
+
+    // --- Public training control (used by commands_training.cpp) ─
     void startTrainingSession();
     void stopTrainingSession();
     void pauseTrainingSession();
     void resumeTrainingSession();
     void shutdownTrainingServer();
-    
-    // Check if any slider is currently editing text
+
+    // --- Knowledge gap intake -----------------------------------
+    void pushKnowledgeGap(KnowledgeGapEntry entry);
+    size_t pendingGapCount() const;
+
+    // --- Tool gap intake ----------------------------------------
+    void pushToolGap(GRIM::MMO::ToolGapProposal proposal);
+    size_t pendingToolGapCount() const;
+
+    // --- Model browser ------------------------------------------
+    void refreshModelList();
+
+    // --- Model creator (pre-fill from gap) ----------------------
+    void prefillCreatorFromGap(const KnowledgeGapEntry& gap);
+
+    // --- Focus query --------------------------------------------
     bool isAnySliderEditing() const;
+    bool isAnyInputEditing() const;
 
 private:
+    // ═════════════════════════════════════════════════════
+    //  Tab state
+    // ═════════════════════════════════════════════════════
+    TrainingPanelTab activeTab_ = TrainingPanelTab::Home;
+
+    std::shared_ptr<UIButton> tabHomeBtn_;
+    std::shared_ptr<UIButton> tabKnowledgeGapsBtn_;
+    std::shared_ptr<UIButton> tabToolGapsBtn_;
+    std::shared_ptr<UIButton> tabTrainingBtn_;
+
+    // ═════════════════════════════════════════════════════
+    //  Home tab — Model Browser
+    // ═════════════════════════════════════════════════════
+    struct ModelListEntry {
+        std::string id;
+        std::string name;
+        std::string subject;
+        std::string backend;
+        std::string status;
+        uint32_t    statusColor = 0xFFFFFFFF;
+        long        ram_mb  = 0;
+        long        vram_mb = 0;
+        bool        is_router = false;
+    };
+
+    std::vector<ModelListEntry> modelEntries_;
+    std::shared_ptr<UIScrollBox> browserScrollBox_;
+    std::shared_ptr<UIProgressBar> vramBar_;
+    std::shared_ptr<UIProgressBar> ramBar_;
+    float browserRefreshTimer_ = 0.0f;
+    float browserRefreshInterval_ = 2.0f;
+    int   hoveredBrowserRow_ = -1;
+
+    static constexpr float kRowHeight  = 20.0f;
+
+    // Model Creator (sub-view of Home tab)
+    bool showCreatorForm_ = false;
+    std::shared_ptr<UIButton> createModelBtn_;
+
+    std::shared_ptr<UIInputBox> creatorNameInput_;
+    std::shared_ptr<UIInputBox> creatorParamInput_;
+    std::shared_ptr<UIInputBox> creatorSubjectInput_;
+    std::shared_ptr<UIInputBox> creatorTagsInput_;
+    std::shared_ptr<UIInputBox> creatorDescInput_;
+    std::shared_ptr<UIButton>   creatorRegisterBtn_;
+    std::shared_ptr<UIButton>   creatorCancelBtn_;
+    std::shared_ptr<UILabel>    creatorStatusLabel_;
+
+    std::string bufId_;
+    std::string bufName_;
+    std::string bufParamStr_;
+    std::string bufSubject_;
+    std::string bufTags_;
+    std::string bufDesc_;
+
+    float totalVramMb_ = 0.0f;
+    float usedVramMb_  = 0.0f;
+    float totalRamMb_  = 0.0f;
+    float usedRamMb_   = 0.0f;
+
+    void drawHomeTab(OverlayRenderer& renderer, const PanelRect& content);
+    void drawBrowserView(OverlayRenderer& renderer, const PanelRect& content);
+    void processBrowserClicks(const InputState& input, const PanelRect& content);
+    void handleModelAction(const std::string& model_id, const std::string& action);
+    void drawCreatorForm(OverlayRenderer& renderer, const PanelRect& content);
+    void clearCreatorFields();
+    bool validateCreatorFields(std::string& out_error) const;
+    void submitNewModel();
+    void regenerateId();
+    static std::string formatParamCount(int64_t params);
+    static int64_t parseParamStr(const std::string& s);
+    static std::string slugifyName(const std::string& name);
+    static int nextVersionForBase(const std::string& base);
+    void updateResourceBars();
+    bool persistSubModel(const GRIM::MMO::ModelInfo& model);
+    bool removeSubModelFromConfig(const std::string& model_id);
+
+    // ═════════════════════════════════════════════════════
+    //  Knowledge Gaps tab
+    // ═════════════════════════════════════════════════════
+    std::vector<KnowledgeGapEntry> gapQueue_;
+    mutable std::mutex gapMutex_;
+    std::shared_ptr<UIScrollBox> gapScrollBox_;
+    int hoveredGapRow_ = -1;
+
+    void drawKnowledgeGapsTab(OverlayRenderer& renderer, const PanelRect& content);
+    void processGapClicks(const InputState& input, const PanelRect& content);
+    void dismissGap(size_t index);
+    void createFromGap(size_t index);
+
+    // ═════════════════════════════════════════════════════
+    //  Tool Gaps tab
+    // ═════════════════════════════════════════════════════
+    std::vector<GRIM::MMO::ToolGapProposal> toolGapQueue_;
+    mutable std::mutex toolGapMutex_;
+    std::shared_ptr<UIScrollBox> toolGapScrollBox_;
+    int hoveredToolGapRow_ = -1;
+
+    void drawToolGapsTab(OverlayRenderer& renderer, const PanelRect& content);
+    void processToolGapClicks(const InputState& input, const PanelRect& content);
+
+    // ═════════════════════════════════════════════════════
+    //  Training tab
+    // ═════════════════════════════════════════════════════
+
+    // Training controller
+    std::unique_ptr<GRIM::UI::UITrainingController> trainingController;
+    GRIMText::TrainingState currentState;
+    GRIMText::TrainingStats currentStats;
+    GRIMText::TrainingConfig currentConfig;
+
+    bool serverConnected;
+    bool serverStarting;
+    std::string lastError;
+    std::string checkpointMergeStatus;
+    float pollTimer;
+    float pollInterval;
+
+    // Configuration sliders
+    std::shared_ptr<UISlider> epochsSlider;
+    std::shared_ptr<UISlider> batchSizeSlider;
+    std::shared_ptr<UISlider> learningRateSlider;
+    std::shared_ptr<UISlider> maxSeqLenSlider;
+    std::shared_ptr<UISlider> warmupStepsSlider;
+
+    // Config buttons
+    std::shared_ptr<UIButton> saveConfigButton;
+
+    // Action buttons (bottom bar)
+    std::shared_ptr<UIButton> startButton;
+    std::shared_ptr<UIButton> stopButton;
+    std::shared_ptr<UIButton> pauseResumeButton;
+    std::shared_ptr<UIButton> resetStatusButton;
+    std::shared_ptr<UIButton> closeButton;
+
+    // Curriculum + Model selection
+    std::shared_ptr<UIDropdown> curriculumDropdown_;
+    std::shared_ptr<UIDropdown> trainModelDropdown_;
+    std::string selectedCurriculumId_;
+    std::string selectedTrainModelId_;
+    std::unique_ptr<DatasetTarget> trainingDatasetTarget_;
+
+    std::string vocabPathBuffer;
+    std::string modelPathBuffer;
+    std::string checkpointsPathBuffer;
+    std::string logsPathBuffer;
+
+    // Progress bars
+    std::shared_ptr<UIProgressBar> trainingProgressBar;
+
+    // System resource monitoring
+    std::shared_ptr<UIGraph> resourceMonitorGraph;
+    float resourceSampleTimer;
+    float resourceSampleInterval;
+    std::vector<DataPoint> cpuHistory;
+    std::vector<DataPoint> memoryHistory;
+    std::vector<DataPoint> gpuHistory;
+    int resourceSampleCount;
+    int maxResourceSamples;
+
+    // Loss tracking
+    struct LossPoint {
+        int step;
+        float loss;
+    };
+    std::vector<LossPoint> lossHistory;
+    size_t maxLossHistory;
+
+    // Dataset tracking
+    std::string datasetSizeInfo;
+    std::string checkpointStatsInfo;
+    float datasetUpdateTimer;
+    float datasetUpdateInterval;
+
+    struct DatasetSnapshotResult {
+        std::string datasetInfo;
+        std::string checkpointInfo;
+    };
+    std::atomic<bool> datasetSnapshotInFlight{false};
+    std::mutex datasetSnapshotMutex;
+    std::optional<DatasetSnapshotResult> pendingDatasetSnapshot;
+
+    // Hardware info
+    std::string hardwareInfo;
+    std::string estimatedTimeStr;
+    float estimatedTrainingTimeSeconds = 0.0f;
+
+    // Logs
+    struct LogEntry {
+        std::string timestamp;
+        std::string message;
+        int level = 0;
+    };
+    std::vector<LogEntry> logEntries;
+    std::mutex logMutex;
+    size_t maxLogEntries;
+    float logScrollPosition;
+    bool autoScrollLogs;
+
+    // Training tab draw methods
+    void drawTrainingTab(OverlayRenderer& renderer, const PanelRect& content);
+    void drawBottomBar(OverlayRenderer& renderer, float barY, float barWidth, float barX);
+    void drawStatCard(OverlayRenderer& renderer, const Vec2& pos, const Vec2& sz,
+                      const std::string& label, const std::string& value, uint32_t accentColor);
+
+    // Training internals
     void initializeController();
     void setupCallbacks();
     void resetState();
@@ -51,144 +319,32 @@ private:
     void saveConfigToJSON();
     void updateConfigFromSliders();
     void updateSlidersFromConfig();
-    
-    // Callbacks for training controller
-    void onProgressUpdate(const GRIMText::TrainingStats& stats);
-    void onStateChange(GRIMText::TrainingState oldState, GRIMText::TrainingState newState);
-    void onError(const std::string& error);
-    
-    struct LogEntry {
-        std::string timestamp;
-        std::string message;
-        int level = 0;
-    };
-    
-    void addLog(const std::string& message, int level);
-    std::string getStateString(GRIMText::TrainingState state) const;
-    uint32_t getStateColor(GRIMText::TrainingState state) const;
-    
-    // Training controller (replaces direct client usage)
-    std::unique_ptr<GRIM::UI::UITrainingController> trainingController;
-    
-    GRIMText::TrainingState currentState;
-    GRIMText::TrainingStats currentStats;
-    GRIMText::TrainingConfig currentConfig;
-    
-    // Data collection manager (in-process)
-    std::unique_ptr<GRIM::Pipeline::PipelineOrchestrator> collectionManager;
-    
-    bool serverConnected;
-    bool serverStarting;  // Flag to prevent duplicate server starts
-    bool dataCollectionActive;  // Flag to track if data collection is in progress
-    bool dataCollectionCompleted;  // Flag to track if current collection has completed (prevents re-logging)
-    bool pipelineRequestPending;  // Flag to track if a pipeline request is in flight
-    std::string lastError;
-    std::string checkpointMergeStatus;  // Status message for checkpoint merge operations
-    float pollTimer;
-    float pollInterval;
-    
-    std::shared_ptr<UIButton> startButton;
-    std::shared_ptr<UIButton> stopButton;
-    std::shared_ptr<UIButton> pauseResumeButton;
-    std::shared_ptr<UIButton> saveConfigButton;
-    std::shared_ptr<UIButton> shutdownServerButton;
-    std::shared_ptr<UIButton> resetStatusButton;
-    std::shared_ptr<UIButton> addSourceButton;
-    
-    // Layout boxes for organizing buttons
-    std::shared_ptr<UIVBox> buttonVBox;  // Vertical box for stacking 4 buttons
-    
-    // Source entry
-    std::shared_ptr<UIInputBox> sourceUrlInput;
-    std::string sourceUrlBuffer;
-    void addDataSource(const std::string& url);
-    void loadSourcesFromJSON();
-    void saveSourceToJSON(const std::string& url);
-    
-    // Unified data pipeline system (collect → verify → merge)
-    std::shared_ptr<UIButton> collectDataButton;
-    void startDataCollection();
-    std::string verificationStats;
-    void updateVerificationStats();
-    
-    // GRIM-text path configuration - only training data path shown in UI
-    std::shared_ptr<UIInputBox> trainingDataPathInput;
-    std::string vocabPathBuffer;
-    std::string modelPathBuffer;
-    std::string trainingDataPathBuffer;
-    std::string checkpointsPathBuffer;
-    std::string logsPathBuffer;
     void loadPathsFromConfig();
     void savePathsToConfig();
-    
-    // Data size tracking
-    std::string datasetSizeInfo;
-    std::string checkpointStatsInfo;  // Info about collected checkpoints
-    float datasetUpdateTimer;  // Timer to throttle expensive file operations
-    float datasetUpdateInterval;  // Update interval (e.g., 2.0 seconds)
+    void refreshCurriculumDropdown();
+    void refreshModelDropdown();
+    void refreshTrainingDropdowns();
+    void updateResourceMonitoring(float dt);
+    void updateHardwareInfo();
+    void calculateTrainingEstimate();
     void updateDatasetSize();
     void updateCheckpointStats();
     std::string readDatasetSizeSnapshot();
     std::string readCheckpointStatsSnapshot();
     void requestDatasetSnapshot();
     void applyPendingDatasetSnapshot();
-    
-    struct DatasetSnapshotResult {
-        std::string datasetInfo;
-        std::string checkpointInfo;
-    };
-    std::atomic<bool> datasetSnapshotInFlight{false};
-    std::mutex datasetSnapshotMutex;
-    std::optional<DatasetSnapshotResult> pendingDatasetSnapshot;
-    
-    // Progress bars
-    std::shared_ptr<UIProgressBar> trainingProgressBar;
-    std::shared_ptr<UIProgressBar> collectionProgressBar;
-    float collectionAnimTime;  // For animated progress during collection
-    
-    // Hardware info and estimation
-    std::string hardwareInfo;
-    std::string estimatedTimeStr;
-    float estimatedTrainingTimeSeconds;
-    
-    void updateHardwareInfo();
-    void calculateTrainingEstimate();
-    
-    // Configuration sliders
-    std::shared_ptr<UISlider> epochsSlider;
-    std::shared_ptr<UISlider> batchSizeSlider;
-    std::shared_ptr<UISlider> learningRateSlider;
-    std::shared_ptr<UISlider> maxSeqLenSlider;
-    std::shared_ptr<UISlider> warmupStepsSlider;
-    
-    std::vector<LogEntry> logEntries;
-    std::mutex logMutex;
-    size_t maxLogEntries;
-    float logScrollPosition;
-    bool autoScrollLogs;
-    
-    // Left panel scrolling
-    float leftPanelScrollPosition;
-    float leftPanelContentHeight;
-    bool leftPanelScrolling;
-    Vec2 leftPanelScrollStartPos;
-    
-    struct LossPoint {
-        int step;
-        float loss;
-    };
-    std::vector<LossPoint> lossHistory;
-    size_t maxLossHistory;
-    
-    // System resource monitoring
-    std::shared_ptr<UIGraph> resourceMonitorGraph;
-    float resourceSampleTimer;
-    float resourceSampleInterval;  // Sample every 0.5 seconds
-    std::vector<DataPoint> cpuHistory;
-    std::vector<DataPoint> memoryHistory;
-    std::vector<DataPoint> gpuHistory;
-    int resourceSampleCount;
-    int maxResourceSamples;
-    
-    void updateResourceMonitoring(float dt);
+
+    // Callbacks
+    void onProgressUpdate(const GRIMText::TrainingStats& stats);
+    void onStateChange(GRIMText::TrainingState oldState, GRIMText::TrainingState newState);
+    void onError(const std::string& error);
+
+    // Logging
+    void addLog(const std::string& message, int level);
+    std::string getStateString(GRIMText::TrainingState state) const;
+    uint32_t getStateColor(GRIMText::TrainingState state) const;
+
+    // Config scroll
+    float configScrollOffset = 0.0f;
+    float configContentHeight = 0.0f;
 };
