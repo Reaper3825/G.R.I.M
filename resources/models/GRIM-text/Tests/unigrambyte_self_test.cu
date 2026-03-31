@@ -23,6 +23,24 @@
 using namespace GRIM::Tokenizer;
 using namespace GRIM::Test;
 
+// Helper: add minimal ▁-prefixed vocab to a UniByte tokenizer so viterbi() has a valid trie.
+// Without this, viterbi() crashes (Rule 20: trie_ must not be empty).
+static void addMinimalVocab(UniByte& tok) {
+    tok.unigramLM().addPiece("\xe2\x96\x81" "the",     -1.0f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "is",      -1.1f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "price",   -1.2f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "dollars", -1.3f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "on",      -1.4f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "for",     -1.5f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "more",    -1.6f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "info",    -1.7f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "us",      -1.8f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "at",      -1.9f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "meeting", -2.0f, false);
+    tok.unigramLM().addPiece("\xe2\x96\x81" "Count",   -2.1f, false);
+    tok.unigramLM().buildTrie();
+}
+
 //======================================================//
 //  Section 1: Byte Fallback Tests
 //======================================================//

@@ -2184,8 +2184,13 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
             continue;  // Skip trie search — punctuation is always isolated
         }
         
-        // Try all pieces starting at pos (skip if trie is empty — pure byte fallback)
-        if (!trie_.empty()) {
+        // Try all pieces starting at pos
+        {
+            if (trie_.empty()) {
+                throw std::runtime_error("viterbi(): trie_ is empty — buildTrie() was never called. "
+                                         "Caller MUST build trie before encoding at " + 
+                                         std::string(__FILE__) + ":" + std::to_string(__LINE__));
+            }
             int node = 0;
             for (size_t len = 1; len <= MAX_PIECE_LENGTH && pos + len <= n; ++len) {
                 unsigned char c = static_cast<unsigned char>(text[pos + len - 1]);

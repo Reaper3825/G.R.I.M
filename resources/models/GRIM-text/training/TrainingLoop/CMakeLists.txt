@@ -563,6 +563,50 @@ target_include_directories(grmt_vocab_metrics_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
 )
 
+# ============================================================================
+# STANDALONE TOKENIZER TRAINING
+# Runs full tokenizer pipeline on entire corpus: train vocab + encode GRMT
+# No model training, no GPU kernels beyond tokenizer
+# Usage: train_tokenizer [--force]
+# ============================================================================
+add_executable(train_tokenizer
+    ../train_tokenizer.cu
+    ../../Shared/DataLoader/DataLoader.cu
+    ../../Shared/DataLoader/ConceptExecutionSequenceBuilder.cu
+)
+
+set_target_properties(train_tokenizer PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
+    CUDA_RUNTIME_LIBRARY Shared
+)
+
+target_compile_definitions(train_tokenizer PRIVATE USE_CUDA)
+
+target_compile_options(train_tokenizer PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+)
+
+target_link_libraries(train_tokenizer PRIVATE
+    nlohmann_json::nlohmann_json
+    CUDA::cudart
+    grim_unigrambyte_tokenizer
+    Threads::Threads
+)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(train_tokenizer PRIVATE stdc++fs pthread gomp)
+endif()
+
+target_include_directories(train_tokenizer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control
+)
+
 # Flash Attention test executable
 add_executable(flash_attention_test
     ../../Tests/flash_attention_test.cu

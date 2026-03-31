@@ -33,6 +33,8 @@
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
 #   --TD             Run grmt_vocab_metrics_test instead of full training (no GPU needed, uses RM-shared).
 #   --UT             Run unigrambyte_self_test instead of full training (needs GPU for GPU decode test).
+#   --TT             Run train_tokenizer: full tokenizer training on entire corpus (vocab.bin + .grmt).
+#                    Pass --force to rebuild even if files exist: --TT --force
 
 set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -61,6 +63,8 @@ FLAG_SYNC_CBS=false
 FLAG_SYNC_FAS=false
 DO_TD=false
 DO_UT=false
+DO_TT=false
+TT_FORCE=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -78,6 +82,8 @@ while [[ $# -gt 0 ]]; do
     --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
     --TD)             DO_TD=true; shift ;;
     --UT)             DO_UT=true; shift ;;
+    --TT)             DO_TT=true; shift ;;
+    --force)          TT_FORCE=true; shift ;;
     --jobs)
       [[ $# -lt 2 ]] && { echo "ERROR: --jobs requires a positive integer"; exit 1; }
       [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --jobs must be a positive integer"; exit 1; }
@@ -206,6 +212,8 @@ if [[ "$DO_TD" == true ]]; then
   BUILD_TARGET="grmt_vocab_metrics_test"
 elif [[ "$DO_UT" == true ]]; then
   BUILD_TARGET="unigrambyte_self_test"
+elif [[ "$DO_TT" == true ]]; then
+  BUILD_TARGET="train_tokenizer"
 fi
 
 if [[ "$DO_BUILD" == true ]]; then
@@ -278,6 +286,24 @@ if [[ "$DO_UT" == true ]]; then
     ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $UT_SRUN_ARGS $UT_RUN_WRAPPER"
   else
     ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $UT_SRUN_ARGS $UT_RUN_WRAPPER"
+  fi
+elif [[ "$DO_TT" == true ]]; then
+  # --TT: run train_tokenizer (full tokenizer training on entire corpus)
+  REMOTE_TT_EXE="$BRIDGES2_DIR/$BUILD_DIR/train_tokenizer"
+  TT_FORCE_ARG=""
+  if [[ "$TT_FORCE" == true ]]; then
+    TT_FORCE_ARG="--force"
+  fi
+  TT_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; cd \"$BRIDGES2_DIR\" && exec \"$REMOTE_TT_EXE\" $TT_FORCE_ARG'"
+  echo "Running train_tokenizer on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
+  if [[ "$TT_FORCE" == true ]]; then
+    echo "  Mode: FORCE REBUILD"
+  fi
+  TT_SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 2:00:00 --pty"
+  if [[ -t 0 ]]; then
+    ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $TT_SRUN_ARGS $TT_RUN_WRAPPER"
+  else
+    ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $TT_SRUN_ARGS $TT_RUN_WRAPPER"
   fi
 elif [[ "$DO_TD" == true ]]; then
   # --TD: run grmt_vocab_metrics_test on RM-shared (no GPU needed)
