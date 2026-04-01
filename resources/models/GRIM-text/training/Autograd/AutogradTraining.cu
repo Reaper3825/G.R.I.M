@@ -1304,6 +1304,7 @@ LossResult computeAutogradLoss(
         const float eps_match = cfg->value_match_epsilon;
 
         const bool have_teacher = (ctx.payload && !ctx.payload->teacher_steps.empty());
+        const bool have_step_mask = (ctx.payload && !ctx.payload->teacher_step_mask.empty());
 
         float total_ce = 0.0f;
         int ce_count = 0;
@@ -1320,6 +1321,13 @@ LossResult computeAutogradLoss(
                 ? &ctx.payload->teacher_steps[b] : nullptr;
 
             for (int k = 0; k < static_cast<int>(row_steps.size()); ++k) {
+                // Skip padded steps — they don't contribute to loss
+                if (have_step_mask
+                    && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
+                    && k < static_cast<int>(ctx.payload->teacher_step_mask[b].size())
+                    && ctx.payload->teacher_step_mask[b][k] == 0)
+                    continue;
+
                 const auto& sout = row_steps[k];
                 if (!sout.p_op.data || !sout.p_arg1.data || !sout.p_arg2.data || !sout.p_write.data)
                     continue;
@@ -1389,8 +1397,23 @@ LossResult computeAutogradLoss(
         // Optional entropy auxiliary (non-differentiable monitoring term)
         if (cfg->entropy_aux_weight > 0.0f) {
             for (int b = 0; b < ctx.batch_size; ++b) {
+                // Filter out padded steps — their entropy should not affect the loss
+                const auto& all_steps = intermediates.exec_outputs_per_row[b].steps;
+                std::vector<ExecutionBlockStepOutput> real_steps;
+                if (have_step_mask
+                    && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
+                    && !ctx.payload->teacher_step_mask[b].empty()) {
+                    for (int k = 0; k < static_cast<int>(all_steps.size()); ++k) {
+                        if (k < static_cast<int>(ctx.payload->teacher_step_mask[b].size())
+                            && ctx.payload->teacher_step_mask[b][k] == 0)
+                            continue;
+                        real_steps.push_back(all_steps[k]);
+                    }
+                } else {
+                    real_steps = all_steps;
+                }
                 Tensor ent = ctx.execution_block->computeEntropyLoss(
-                    intermediates.exec_outputs_per_row[b].steps,
+                    real_steps,
                     cfg->entropy_aux_weight,
                     ctx.stream);
                 float h_ent = 0.0f;
@@ -1408,6 +1431,13 @@ LossResult computeAutogradLoss(
         for (int b = 0; b < ctx.batch_size; ++b) {
             const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
             for (int k = 0; k < static_cast<int>(row_steps.size()); ++k) {
+                // Skip padded steps — no gradient contribution
+                if (have_step_mask
+                    && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
+                    && k < static_cast<int>(ctx.payload->teacher_step_mask[b].size())
+                    && ctx.payload->teacher_step_mask[b][k] == 0)
+                    continue;
+
                 const auto& sout = row_steps[k];
 
                 // Add transition_loss to autograd graph (primary gradient signal)

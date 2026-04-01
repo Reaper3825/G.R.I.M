@@ -99,6 +99,14 @@ struct BatchPayload {
     std::vector<std::vector<TeacherStep>> teacher_steps;
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // TEACHER STEP MASK (for padded-step loss zeroing)
+    // teacher_step_mask[b][k] = 1 for real steps, 0 for padded steps.
+    // Constructed at batch-build time from original teacher_steps count vs
+    // execution_block_num_steps. Loss loops skip steps where mask == 0.
+    // ═══════════════════════════════════════════════════════════════════════════
+    std::vector<std::vector<uint8_t>> teacher_step_mask;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // COMPILED STRUCTURED-EXECUTION PAYLOAD
     //
     // execution_active[b] is the AUTHORITATIVE activation bit per row.

@@ -268,6 +268,7 @@ BatchPayload buildBatchPayload(
     payload.execution_active.resize(payload.batch_size, false);
     payload.compiled_bootstrap_bindings.resize(payload.batch_size);
     payload.teacher_steps.resize(payload.batch_size);
+    payload.teacher_step_mask.resize(payload.batch_size);
     payload.slot_selection_targets.resize(payload.batch_size);
 
     payload.valid_tokens = 0;
@@ -356,7 +357,20 @@ BatchPayload buildBatchPayload(
             payload.compiled_bootstrap_bindings[b] = *r.compiled_bootstrap_bindings;
         }
         if (r.teacher_steps && !r.teacher_steps->empty()) {
+            const int real_count = static_cast<int>(r.teacher_steps->size());
             payload.teacher_steps[b] = *r.teacher_steps;
+
+            // Pad to execution_num_steps by repeating last step
+            if (real_count < execution_num_steps) {
+                const auto& last = payload.teacher_steps[b].back();
+                payload.teacher_steps[b].resize(execution_num_steps, last);
+            }
+
+            // Build step mask: 1 = real step, 0 = padded step
+            payload.teacher_step_mask[b].assign(execution_num_steps, 0);
+            for (int k = 0; k < std::min(real_count, execution_num_steps); ++k) {
+                payload.teacher_step_mask[b][k] = 1;
+            }
         }
         if (r.slot_selection_targets && !r.slot_selection_targets->empty()) {
             payload.slot_selection_targets[b] = *r.slot_selection_targets;

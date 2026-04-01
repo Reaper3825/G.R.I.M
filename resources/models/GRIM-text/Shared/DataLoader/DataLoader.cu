@@ -591,7 +591,6 @@ bool PrepareTrainingDataFromCache(
 		} catch (...) {}
 	}
 	const int expected_exec_steps = train_config.execution_block_num_steps;
-	int concept_exec_padded_count = 0;
 	for (const auto& cj : concept_json_entries) {
 		try {
 			auto built = GRIM::DataLoader::buildConceptSequence(cj, tokenizer, concept_exec_base_slot);
@@ -616,16 +615,8 @@ bool PrepareTrainingDataFromCache(
 						+ " > execution_block_num_steps=" + std::to_string(expected_exec_steps)
 						+ " — truncation would lose computation; fix data or increase config num_steps");
 				}
-				if (actual_steps < expected_exec_steps) {
-					// Pad by repeating the last step up to execution_block_num_steps.
-					// The repeated step re-executes the same operation on the same slots,
-					// writing the same expected_value — semantically idempotent.
-					const auto& last_step = built.payload.teacher_steps.back();
-					while (static_cast<int>(built.payload.teacher_steps.size()) < expected_exec_steps) {
-						built.payload.teacher_steps.push_back(last_step);
-					}
-					++concept_exec_padded_count;
-				}
+				// Padding deferred to buildBatchPayload where step_mask is constructed.
+				// GRMT stores original step count; batch builder pads + masks.
 			}
 
 			auto seq = build_sequence(built.canonical_text);
@@ -641,12 +632,6 @@ bool PrepareTrainingDataFromCache(
 		} catch (const std::exception& e) {
 			std::cerr << "[DataLoader] concept build failed: " << e.what() << "\n";
 		}
-	}
-
-	if (concept_exec_padded_count > 0) {
-		std::cout << "[DataLoader] Padded " << concept_exec_padded_count
-		          << " execution-active entries from fewer steps to execution_block_num_steps="
-		          << expected_exec_steps << " (repeated last step)" << std::endl;
 	}
 
 	// Write single GRMT file — Phase1_Startup handles train/val splitting
