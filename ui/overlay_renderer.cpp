@@ -849,34 +849,37 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
         const int capW = std::max(1, rw);
         const int capH = std::max(1, rh);
         const size_t needed = (size_t)capW * (size_t)capH;
-        if (m_captureTemp.size() < needed) m_captureTemp.resize(needed);
 
-        bool ok = PlatformWindow::captureDesktopBehindOverlay(
-#if defined(__APPLE__)
-            m_nativeWindow,
-#else
-            (void*)m_hwnd,
-#endif
-            rx, ry, capW, capH, m_captureTemp.data());
-
-        if (ok) {
-            uint64_t contentHash = computeContentHash(m_captureTemp.data(), needed);
-
-            // Dirty detection: if content unchanged and rect matches, reuse cached result
-            bool usedCache = false;
-            if (panelId != 0) {
-                auto it = m_glassCache.find(panelId);
-                if (it != m_glassCache.end() &&
-                    it->second.rectX == rx && it->second.rectY == ry &&
-                    it->second.rectW == capW && it->second.rectH == capH &&
-                    it->second.contentHash == contentHash &&
-                    it->second.pixels.size() >= needed) {
-                    blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, pos, size, radius);
-                    usedCache = true;
-                }
+        // Fast path: if panel hasn't moved/resized and we have a cached result,
+        // skip the expensive captureDesktopBehindOverlay + hash entirely.
+        // The desktop behind a stationary panel changes (windows moving, video
+        // playing), but through a heavy frosted-glass blur the difference is
+        // invisible — same approach macOS uses with NSVisualEffectView caching.
+        bool usedCache = false;
+        if (panelId != 0) {
+            auto it = m_glassCache.find(panelId);
+            if (it != m_glassCache.end() &&
+                it->second.rectX == rx && it->second.rectY == ry &&
+                it->second.rectW == capW && it->second.rectH == capH &&
+                it->second.pixels.size() >= needed) {
+                blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, pos, size, radius);
+                usedCache = true;
             }
+        }
 
-            if (!usedCache) {
+        if (!usedCache) {
+            // Panel moved, resized, or first frame — do the full capture pipeline.
+            if (m_captureTemp.size() < needed) m_captureTemp.resize(needed);
+
+            bool ok = PlatformWindow::captureDesktopBehindOverlay(
+#if defined(__APPLE__)
+                m_nativeWindow,
+#else
+                (void*)m_hwnd,
+#endif
+                rx, ry, capW, capH, m_captureTemp.data());
+
+            if (ok) {
                 // Distort + write into panel area (inside rounded rect only).
                 {
                     std::lock_guard<std::mutex> lock(m_renderMutex);
@@ -976,7 +979,7 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
                 // Cache result for next frame (when panelId provided)
                 if (panelId != 0) {
                     auto& cache = m_glassCache[panelId];
-                    cache.contentHash = contentHash;
+                    cache.contentHash = 0;
                     cache.rectX = rx;
                     cache.rectY = ry;
                     cache.rectW = capW;
