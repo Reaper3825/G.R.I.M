@@ -307,11 +307,11 @@
                 "focal": {
                     "alpha": 1.0,
                     "enabled": true,
-                    "gamma": 1.0
+                    "gamma": 0.75
                 },
                 "label_smoothing": {
                     "enabled": true,
-                    "epsilon": 0.1
+                    "epsilon": 0.05
                 },
                 "masking": {
                     "enabled": true,

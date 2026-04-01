@@ -1,5 +1,6 @@
 #include "execution_block_data_stream_GPU.hpp"
 #include "execution_block_memory_stream_GPU.hpp"
+#include "../../Shared/LogRecorder/LogRecorder.hpp"
 
 #ifdef USE_CUDA
 
@@ -1277,6 +1278,22 @@ static void collectStepMetrics(ExecutionBlockLayer& layer,
     diag_out->metrics.div_clamp_count = div_count;
     for (int k = 0; k < 4; ++k)
         diag_out->metrics.op_distribution[k] = (k < op_copy) ? op_dist[k] : 0.0f;
+
+    // Emit per-step metrics via module log system
+    {
+        char msg[384];
+        snprintf(msg, sizeof(msg),
+            "[EXEC_STEP_EQUATION] entropy: H(arg1)=%.4f H(arg2)=%.4f H(op)=%.4f H(write)=%.4f "
+            "max_p_write=%.4f div_clamps=%d op_dist=[%.3f,%.3f,%.3f,%.3f]",
+            d_metrics[0], d_metrics[1], d_metrics[2], d_metrics[3],
+            d_metrics[4], div_count,
+            diag_out->metrics.op_distribution[0],
+            diag_out->metrics.op_distribution[1],
+            diag_out->metrics.op_distribution[2],
+            diag_out->metrics.op_distribution[3]);
+        GRIM::Logging::EmitModuleInfo(
+            GRIM::Logging::ModuleId::ExecutionBlock, msg);
+    }
 
     cudaFree(d_buf);
 }

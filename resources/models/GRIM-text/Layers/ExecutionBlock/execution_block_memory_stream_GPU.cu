@@ -695,6 +695,16 @@ void finalizeStepOrThrow(
         diag_out->record.value_before_1 = rf[0];
         diag_out->record.value_before_2 = rf[1];
         diag_out->record.value_after = rf[2];
+
+        // Emit execution record via module log system
+        static const char* op_names[] = {"+", "-", "*", "/"};
+        const char* op_str = (ri[2] >= 0 && ri[2] < 4) ? op_names[ri[2]] : "?";
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+            "[EXEC_RECORD_EQUATION] step=%d: slot[%d](%.4f) %s slot[%d](%.4f) = %.4f",
+            step, ri[0], rf[0], op_str, ri[1], rf[1], rf[2]);
+        GRIM::Logging::EmitModuleInfo(
+            GRIM::Logging::ModuleId::ExecutionBlock, msg);
     }
 
     if (h_error > 0) {
