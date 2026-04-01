@@ -104,6 +104,8 @@ static bool            s_appInitialized = false;
 static const NSInteger kOverlayHostTag = 0x4752494D; // 'GRIM' for viewWithTag
 static std::function<void(const std::string&)> s_textInputCallback;
 
+static void stopScreenCapture();
+
 static void ensureNSApp() {
     if (s_appInitialized) return;
 
@@ -417,7 +419,7 @@ void setOverlayBlurMask(void* overlayWindowHandle,
                          int panelCount,
                          float cornerRadius)
 {
-    if (!overlayWindowHandle || !panelRects || panelCount <= 0)
+    if (!overlayWindowHandle)
         return;
 
     @autoreleasepool {
@@ -426,6 +428,23 @@ void setOverlayBlurMask(void* overlayWindowHandle,
 
         NSView* containerView = [window contentView];
         if (!containerView) return;
+
+        // No visible panels — hide blur views entirely so no grey tint remains,
+        // and stop the screen capture stream to save resources.
+        if (!panelRects || panelCount <= 0) {
+            for (NSView* sub in containerView.subviews) {
+                if (![sub isKindOfClass:[NSVisualEffectView class]]) continue;
+                [sub setHidden:YES];
+            }
+            stopScreenCapture();
+            return;
+        }
+
+        // Panels visible — ensure blur views are unhidden.
+        for (NSView* sub in containerView.subviews) {
+            if (![sub isKindOfClass:[NSVisualEffectView class]]) continue;
+            [sub setHidden:NO];
+        }
 
         // Build path using CoreGraphics directly (avoids ObjC NSBezierPath overhead).
         CGMutablePathRef path = CGPathCreateMutable();
@@ -581,6 +600,27 @@ void setOverlayClickThrough(void* overlayWindowHandle, bool clickThrough) {
 static GRIMScreenCapture* s_screenCap = nil;
 static SCStream* s_stream = nil;
 os_unfair_lock g_grimScreenCapLock = OS_UNFAIR_LOCK_INIT;
+
+static void stopScreenCapture() {
+    if (s_stream) {
+        [s_stream stopCaptureWithCompletionHandler:^(NSError* err) {
+            if (err) {
+                LOG_ERROR("PlatformWindow", std::string("ScreenCaptureKit stop error: ") + [[err localizedDescription] UTF8String]);
+            } else {
+                LOG_DEBUG("PlatformWindow", "ScreenCaptureKit capture stopped (no visible panels)");
+            }
+        }];
+        s_stream = nil;
+    }
+    if (s_screenCap) {
+        s_screenCap.running = NO;
+        os_unfair_lock_lock(&g_grimScreenCapLock);
+        CVPixelBufferRef old = s_screenCap.latestBuffer;
+        s_screenCap.latestBuffer = nil;
+        os_unfair_lock_unlock(&g_grimScreenCapLock);
+        if (old) CVPixelBufferRelease(old);
+    }
+}
 
 static void ensureScreenCaptureStarted(NSWindow* overlayWindow) {
     if (s_screenCap && s_screenCap.running) return;
