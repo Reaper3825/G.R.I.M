@@ -648,6 +648,11 @@ public:
     /// Removed: NumericHead / value prediction. Do not call.
     float predictNumericValue() const;
 
+    // Ensure KV cache + decode scratch buffers are allocated.
+    // Safe to call repeatedly — skips if already allocated.
+    // Required before any incremental generation (prefill + decode).
+    void ensureKVCacheAllocated();
+
     // Clear KV cache (call before starting new generation)
     void resetKVCache();
     

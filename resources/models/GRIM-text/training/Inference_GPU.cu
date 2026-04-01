@@ -224,6 +224,10 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
 
     // Populate KV cache from autograd intermediates (prefill mode).
     // Must happen BEFORE clear() which destroys the intermediate tensors.
+    if (populate_kv_cache && training_state_.kv_cache_k.empty()) {
+        throw std::runtime_error("executeInferenceForward_: populate_kv_cache=true but KV cache not allocated — "
+                                 "call ensureKVCacheAllocated() before generation");
+    }
     if (populate_kv_cache && !training_state_.kv_cache_k.empty()) {
         const int num_kv_heads = training_state_.num_kv_heads;
         const int head_dim = config_.d_model / config_.num_heads;
@@ -687,8 +691,105 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
 }
 
 //======================================================//
-//  resetKVCache - Clear sequence state
+//  ensureKVCacheAllocated - Allocate KV cache + decode scratch
+//  buffers if they haven't been allocated yet.
+//
+//  During pure inference, initInferenceState() handles this.
+//  During training, initTrainingState() sets kv_cache_capacity
+//  but does NOT allocate the actual BF16 KV buffers or decode
+//  scratch.  This helper fills that gap so training-time
+//  sample generation (logInferenceSample) can use forwardStep.
+//
+//  Safe to call repeatedly — early-returns if already allocated.
+//  Cleanup is already handled by TrainingState::cleanup().
 //======================================================//
+void LanguageModel::ensureKVCacheAllocated() {
+    if (!training_state_.initialized) {
+        throw std::runtime_error("ensureKVCacheAllocated: training state not initialized");
+    }
+
+    // Already allocated? Nothing to do.
+    if (!training_state_.kv_cache_k.empty()) {
+        return;
+    }
+
+    const auto& cfg = getConfig();
+    const int num_kv_heads = (training_state_.num_kv_heads > 0)
+        ? training_state_.num_kv_heads
+        : ((cfg.num_kv_heads > 0) ? cfg.num_kv_heads : cfg.num_heads);
+    const int head_dim = cfg.d_model / cfg.num_heads;
+    const int n_layers = cfg.num_layers;
+    const int kv_cap = training_state_.kv_cache_capacity;
+
+    if (kv_cap <= 0) {
+        throw std::runtime_error("ensureKVCacheAllocated: kv_cache_capacity is 0 — "
+                                 "initTrainingState or initInferenceState must set it first");
+    }
+
+    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+
+    // ---- Per-layer KV cache (BF16, BSHD layout for FlashAttention) ----
+    const size_t kv_elems_per_layer = static_cast<size_t>(num_kv_heads) * kv_cap * head_dim;
+    const size_t kv_bytes_per_layer = kv_elems_per_layer * sizeof(__nv_bfloat16);
+
+    training_state_.kv_cache_k.resize(n_layers, nullptr);
+    training_state_.kv_cache_v.resize(n_layers, nullptr);
+
+    for (int l = 0; l < n_layers; ++l) {
+        cudaError_t err_k = cudaMalloc(&training_state_.kv_cache_k[l], kv_bytes_per_layer);
+        if (err_k != cudaSuccess)
+            throw std::runtime_error("ensureKVCacheAllocated: KV cache K alloc failed layer " +
+                                     std::to_string(l) + ": " + cudaGetErrorString(err_k));
+        cudaError_t err_v = cudaMalloc(&training_state_.kv_cache_v[l], kv_bytes_per_layer);
+        if (err_v != cudaSuccess)
+            throw std::runtime_error("ensureKVCacheAllocated: KV cache V alloc failed layer " +
+                                     std::to_string(l) + ": " + cudaGetErrorString(err_v));
+        cudaMemsetAsync(training_state_.kv_cache_k[l], 0, kv_bytes_per_layer, stream);
+        cudaMemsetAsync(training_state_.kv_cache_v[l], 0, kv_bytes_per_layer, stream);
+    }
+
+    // ---- Softmax LSE scratch: [num_heads, kv_cache_capacity_rounded] ----
+    const int kv_cap_rounded = ((kv_cap + 127) / 128) * 128;
+    const size_t lse_bytes = static_cast<size_t>(cfg.num_heads) * kv_cap_rounded * sizeof(float);
+    cudaError_t err_lse = cudaMalloc(&training_state_.kv_cache_softmax_lse, lse_bytes);
+    if (err_lse != cudaSuccess)
+        throw std::runtime_error("ensureKVCacheAllocated: KV cache LSE alloc failed: " +
+                                 std::string(cudaGetErrorString(err_lse)));
+    cudaMemsetAsync(training_state_.kv_cache_softmax_lse, 0, lse_bytes, stream);
+
+    // ---- Decode scratch buffers (tiny, reused per layer per decode step) ----
+    const size_t q_bf16_bytes = static_cast<size_t>(cfg.num_heads) * head_dim * sizeof(__nv_bfloat16);
+    const size_t kv_bf16_bytes = static_cast<size_t>(num_kv_heads) * head_dim * sizeof(__nv_bfloat16);
+    cudaError_t err;
+    err = cudaMalloc(&training_state_.decode_q_bf16, q_bf16_bytes);
+    if (err != cudaSuccess) throw std::runtime_error("ensureKVCacheAllocated: decode_q_bf16 alloc failed");
+    err = cudaMalloc(&training_state_.decode_kv_bf16, kv_bf16_bytes);
+    if (err != cudaSuccess) throw std::runtime_error("ensureKVCacheAllocated: decode_kv_bf16 alloc failed");
+    err = cudaMalloc(&training_state_.decode_attn_out_bf16, q_bf16_bytes);
+    if (err != cudaSuccess) throw std::runtime_error("ensureKVCacheAllocated: decode_attn_out_bf16 alloc failed");
+    err = cudaMalloc(&training_state_.decode_attn_out_fp32, static_cast<size_t>(cfg.d_model) * sizeof(float));
+    if (err != cudaSuccess) throw std::runtime_error("ensureKVCacheAllocated: decode_attn_out_fp32 alloc failed");
+
+    // ---- Single-token buffers for incremental generation ----
+    using TC = TensorContract::TensorShape;
+    if (!training_state_.single_token_embedding.data) {
+        training_state_.single_token_embedding = Tensor::zeros(
+            TC::make_BSM(1, cfg.d_model), false, stream, "single_token_embedding_kv");
+    }
+    if (!training_state_.single_token_hidden.data) {
+        training_state_.single_token_hidden = Tensor::zeros(
+            TC::make_BSM(1, cfg.d_model), false, stream, "single_token_hidden_kv");
+    }
+    if (!training_state_.single_token_logits.data) {
+        training_state_.single_token_logits = Tensor::zeros(
+            TC::make_BSM(1, cfg.vocab_size), false, stream, "single_token_logits_kv");
+    }
+
+    const size_t total_kv_bytes = n_layers * 2 * kv_bytes_per_layer + lse_bytes;
+    std::cout << "[ensureKVCacheAllocated] Allocated KV cache: " << n_layers << " layers, "
+              << (total_kv_bytes / 1024.0 / 1024.0) << " MB (BF16)" << std::endl;
+}
+
 void LanguageModel::resetKVCache() {
     if (training_state_.initialized) {
         training_state_.kv_cache_len = 0;

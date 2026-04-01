@@ -900,6 +900,9 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
     // Total: O(n) instead of O(n²)
     // =========================================================================
     
+    // Ensure KV cache buffers exist (training path skips allocation)
+    ensureKVCacheAllocated();
+
     // Reset KV cache for new generation
     resetKVCache();
     

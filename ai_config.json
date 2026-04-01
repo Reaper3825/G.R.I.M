@@ -268,8 +268,8 @@
                     "serialization": true
                 },
                 "modules": {
-                    "Activations": "Info",
-                    "BackwardPass": "Info",
+                    "Activations": "WARN",
+                    "BackwardPass": "WARN",
                     "Checkpoint": "Info",
                     "Custom": "Info",
                     "DataLoader": "Info",
