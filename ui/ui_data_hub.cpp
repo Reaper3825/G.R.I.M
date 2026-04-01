@@ -163,10 +163,15 @@ UIDataHubPanel::UIDataHubPanel()
     btnRebuild_ = std::make_shared<UIButton>("Force Rebuild",  [this]() { startCollection("merge-rebuild"); });
     btnStop_    = std::make_shared<UIButton>("Stop",           [this]() { stopCollection(); });
     btnRefreshStats_ = std::make_shared<UIButton>("Refresh Stats", [this]() { updateDatasetStats(); });
+    btnCollectDir_ = std::make_shared<UIButton>("Collect Dir", [this]() { collectFromDirectory(); });
+
+    dirPathInput_ = std::make_shared<UIInputBox>();
+    dirPathInput_->setPlaceholder("Directory path for file collection...");
 
     homeWidgets_ = {
         btnFull_, btnCollect_, btnVerify_, btnMerge_,
-        btnRebuild_, btnStop_, btnRefreshStats_
+        btnRebuild_, btnStop_, btnRefreshStats_, btnCollectDir_,
+        dirPathInput_
     };
 
     // ── Sources tab widgets ─────────────────────────────
@@ -907,6 +912,7 @@ UIDataHubPanel::UIDataHubPanel()
     // ── Load persisted state ────────────────────────────
 
     loadUIConfig();
+    loadDirectoryCollectionPathFromConfig();
     loadSourceCards();
     loadDownloadQueue();
     loadHFTokenFromConfig();
@@ -983,6 +989,16 @@ void UIDataHubPanel::setView(DataHubView view) {
 void UIDataHubPanel::update(const InputState& input, float dt) {
     if (!isVisible()) return;
     UIPanel::update(input, dt);
+    // Cache edge-triggered click for directory file list (consumed in draw)
+    if (input.mousePressed[0]) {
+        Vec2 m = input.mousePos;
+        if (!dirFileEntries_.empty() &&
+            m.x >= dirScrollAreaRect_.x && m.x <= dirScrollAreaRect_.x + dirScrollAreaRect_.w &&
+            m.y >= dirScrollAreaRect_.y && m.y <= dirScrollAreaRect_.y + dirScrollAreaRect_.h) {
+            dirClickPending_ = true;
+            dirClickPos_     = m;
+        }
+    }
 
     // Tab buttons (always active)
     float tabX = position.x + 10.0f;
@@ -1012,6 +1028,19 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
     switch (activeView_) {
         case DataHubView::Home:
             for (auto& w : homeWidgets_) w->update(input, dt);
+
+            // Directory file list scroll wheel
+            if (!dirFileEntries_.empty()) {
+                Vec2 m = input.mousePos;
+                if (m.x >= dirScrollAreaRect_.x && m.x <= dirScrollAreaRect_.x + dirScrollAreaRect_.w &&
+                    m.y >= dirScrollAreaRect_.y && m.y <= dirScrollAreaRect_.y + dirScrollAreaRect_.h) {
+                    dirScrollOffset_ -= input.mouseWheelDelta;
+                    static constexpr float kDirRowH = 28.0f;
+                    float totalH  = dirFileEntries_.size() * kDirRowH;
+                    float maxScr  = std::max(0.0f, totalH - (dirScrollAreaRect_.h - 18.0f));
+                    dirScrollOffset_ = std::clamp(dirScrollOffset_, 0.0f, maxScr);
+                }
+            }
             break;
 
         case DataHubView::Sources: {
@@ -1455,7 +1484,7 @@ void UIDataHubPanel::drawHomeTab(OverlayRenderer& renderer, const PanelRect& con
     static constexpr float kBtnW        = 130.0f;
     static constexpr float kBtnH        = 32.0f;
     static constexpr float kBtnGap      = 8.0f;
-    static constexpr int   kBtnCount    = 7;
+    static constexpr int   kBtnCount    = 8;
 
     float x     = content.origin.x + 15.0f;
     float y     = content.origin.y + 10.0f;
@@ -1628,7 +1657,7 @@ void UIDataHubPanel::drawHomeTab(OverlayRenderer& renderer, const PanelRect& con
 
         std::shared_ptr<UIButton>* btns[kBtnCount] = {
             &btnFull_, &btnCollect_, &btnVerify_, &btnMerge_,
-            &btnRebuild_, &btnStop_, &btnRefreshStats_
+            &btnRebuild_, &btnStop_, &btnRefreshStats_, &btnCollectDir_
         };
 
         for (int i = 0; i < kBtnCount; i++) {
@@ -1639,6 +1668,136 @@ void UIDataHubPanel::drawHomeTab(OverlayRenderer& renderer, const PanelRect& con
         }
 
         y += kBtnH + 12.0f;
+    }
+
+    // ── Directory collection ────────────────────────────
+
+    {
+        UIDrawHelpers::drawSectionHeader(renderer, {x, y}, fullW, "Directory Collection",
+                                         UITheme::Colors::SectionNeutral);
+        y += UITheme::Sizes::HeaderHeight;
+
+        // Directory path input
+        dirPathInput_->setPosition(x, y);
+        dirPathInput_->setSize({fullW, 28.0f});
+        dirPathInput_->drawOverlay(renderer, position);
+        y += 34.0f;
+
+        // Rescan when path changes
+        std::string currentPath = dirPathInput_->getText();
+        if (currentPath != dirScanPath_) {
+            dirScanPath_ = currentPath;
+            dirNeedsScan_ = true;
+        }
+        if (dirNeedsScan_ && !dirScanPath_.empty()) {
+            dirNeedsScan_ = false;
+            scanDirectory();
+        }
+
+        // File scrollbox
+        static constexpr float kDirRowH = 28.0f;
+        size_t fileCount = dirFileEntries_.size();
+        float scrollH = std::min(160.0f, content.origin.y + content.size.y - y - 200.0f);
+        if (scrollH < 60.0f) scrollH = 60.0f;
+
+        renderer.drawRoundedRect({x, y}, {fullW, scrollH},
+                                 UITheme::Colors::ContentAreaBg, UITheme::Sizes::WidgetRadius);
+        renderer.drawRoundedBorder({x, y}, {fullW, scrollH},
+                                   UITheme::Colors::BorderSubtle, UITheme::Sizes::WidgetRadius);
+
+        if (fileCount == 0) {
+            std::string emptyMsg = dirScanPath_.empty()
+                ? "Enter a directory path above"
+                : "No files found";
+            float msgW = UIDrawHelpers::getTextWidth(emptyMsg);
+            renderer.drawText({x + (fullW - msgW) / 2.0f, y + scrollH / 2.0f - 6.0f},
+                              emptyMsg, UITheme::Colors::TextDisabled);
+        } else {
+            renderer.pushClipRect({x, y}, {fullW, scrollH});
+
+            float colCheckX   = x + 8.0f;
+            float colNameX    = x + 38.0f;
+            float colToggleX  = x + fullW - 90.0f;
+            float headerRowY  = y + 2.0f;
+            renderer.drawText({colCheckX, headerRowY}, "Collect", UITheme::Colors::TextMuted);
+            renderer.drawText({colNameX,  headerRowY}, "File", UITheme::Colors::TextMuted);
+            renderer.drawText({colToggleX, headerRowY}, "Del After", UITheme::Colors::TextMuted);
+
+            float listTop = y + 18.0f;
+            float totalH  = fileCount * kDirRowH;
+            float maxScroll = std::max(0.0f, totalH - (scrollH - 18.0f));
+            dirScrollOffset_ = std::clamp(dirScrollOffset_, 0.0f, maxScroll);
+
+            bool clicked = dirClickPending_;
+            Vec2 clickM  = dirClickPos_;
+            if (clicked) dirClickPending_ = false;  // consume once
+
+            for (size_t i = 0; i < fileCount; ++i) {
+                float rowY = listTop + i * kDirRowH - dirScrollOffset_;
+                if (rowY + kDirRowH < listTop || rowY > y + scrollH) continue;
+
+                auto& entry = dirFileEntries_[i];
+
+                // Alternating row background
+                if (i % 2 == 0) {
+                    renderer.drawRect({x + 2.0f, rowY}, {fullW - 4.0f, kDirRowH},
+                                      (UITheme::Colors::CardSurface & 0x00FFFFFF) | 0x18000000);
+                }
+
+                // Collect checkbox
+                float cbX = colCheckX;
+                float cbY = rowY + 4.0f;
+                float cbSz = 18.0f;
+                renderer.drawRoundedRect({cbX, cbY}, {cbSz, cbSz},
+                                         UITheme::Colors::Background, 3.0f);
+                renderer.drawRoundedBorder({cbX, cbY}, {cbSz, cbSz},
+                                           UITheme::Colors::BorderSubtle, 3.0f);
+                if (entry.collect) {
+                    renderer.drawRoundedRect({cbX + 3.0f, cbY + 3.0f},
+                                             {cbSz - 6.0f, cbSz - 6.0f},
+                                             UITheme::Colors::Primary, 2.0f);
+                }
+
+                // Click on checkbox
+                if (clicked &&
+                    clickM.x >= cbX && clickM.x <= cbX + cbSz &&
+                    clickM.y >= cbY && clickM.y <= cbY + cbSz) {
+                    entry.collect = !entry.collect;
+                }
+
+                // File name
+                renderer.drawText({colNameX, rowY + 6.0f}, entry.filename,
+                                  UITheme::Colors::TextPrimary);
+
+                // Delete-after toggle (pill shape)
+                float tgX = colToggleX + 10.0f;
+                float tgY = rowY + 5.0f;
+                float tgW = 36.0f;
+                float tgH = 18.0f;
+                uint32_t tgBg = entry.deleteAfter ? UITheme::Colors::Danger
+                                                  : UITheme::Colors::SliderTrack;
+                renderer.drawRoundedRect({tgX, tgY}, {tgW, tgH}, tgBg, tgH / 2.0f);
+                float knobX = entry.deleteAfter ? tgX + tgW - tgH + 2.0f : tgX + 2.0f;
+                renderer.drawRoundedRect({knobX, tgY + 2.0f},
+                                         {tgH - 4.0f, tgH - 4.0f},
+                                         UITheme::Colors::TextPrimary,
+                                         (tgH - 4.0f) / 2.0f);
+
+                // Click on toggle
+                if (clicked &&
+                    clickM.x >= tgX && clickM.x <= tgX + tgW &&
+                    clickM.y >= tgY && clickM.y <= tgY + tgH) {
+                    entry.deleteAfter = !entry.deleteAfter;
+                }
+            }
+
+            renderer.popClipRect();
+        }
+
+        // Cache scroll area rect for update() scroll handling
+        dirScrollAreaRect_ = {x, y, fullW, scrollH};
+
+        y += scrollH + 8.0f;
     }
 
     // ── Collection log viewer ───────────────────────────
@@ -2865,6 +3024,151 @@ void UIDataHubPanel::addLog(const std::string& message, int level) {
 
     if (level >= 1)
         LOG_DEBUG("DataHub", message);
+}
+
+// =========================================================
+// Directory collection
+// =========================================================
+
+void UIDataHubPanel::loadDirectoryCollectionPathFromConfig() {
+    if (!dirPathInput_) {
+        throw std::runtime_error("dirPathInput_ is NULL - Home tab directory input must exist");
+    }
+
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (!snapshot || !snapshot->has_grim_paths) {
+        addLog("Failed to load ai_config.json paths for directory collection", 2);
+        return;
+    }
+
+    if (snapshot->grim_paths.directory_collection.empty()) {
+        addLog("ai_config.json missing paths.grim_text.directory_collection for directory collection", 2);
+        return;
+    }
+
+    dirPathInput_->setText(snapshot->grim_paths.directory_collection);
+    dirScanPath_ = snapshot->grim_paths.directory_collection;
+    dirNeedsScan_ = true;
+    addLog("Loaded directory collection path from ai_config.json", 0);
+}
+
+void UIDataHubPanel::scanDirectory() {
+    dirFileEntries_.clear();
+    dirScrollOffset_ = 0.0f;
+
+    if (dirScanPath_.empty()) return;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::exists(dirScanPath_, ec)) {
+        addLog("Directory collection path does not exist: " + dirScanPath_, 2);
+        return;
+    }
+    if (!fs::is_directory(dirScanPath_, ec)) {
+        addLog("Directory collection path is not a directory: " + dirScanPath_, 2);
+        return;
+    }
+
+    for (const auto& entry : fs::directory_iterator(dirScanPath_, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file(ec)) continue;
+        DirFileEntry fe;
+        fe.filename    = entry.path().filename().string();
+        fe.collect     = true;
+        fe.deleteAfter = false;
+        dirFileEntries_.push_back(std::move(fe));
+    }
+
+    std::sort(dirFileEntries_.begin(), dirFileEntries_.end(),
+              [](const DirFileEntry& a, const DirFileEntry& b) {
+                  return a.filename < b.filename;
+              });
+
+    addLog("Scanned directory: " + std::to_string(dirFileEntries_.size()) + " file(s)", 0);
+}
+
+void UIDataHubPanel::collectFromDirectory() {
+    if (!datasetTarget_) {
+        addLog("Dataset target not initialized", 2);
+        return;
+    }
+    if (dirScanPath_.empty()) {
+        addLog("No directory path specified", 1);
+        return;
+    }
+
+    namespace fs = std::filesystem;
+    int collected = 0;
+    int failed    = 0;
+
+    for (auto it = dirFileEntries_.begin(); it != dirFileEntries_.end(); ) {
+        if (!it->collect) { ++it; continue; }
+
+        fs::path filePath = fs::path(dirScanPath_) / it->filename;
+        std::error_code ec;
+        if (!fs::exists(filePath, ec) || !fs::is_regular_file(filePath, ec)) {
+            addLog("File not found: " + it->filename, 2);
+            ++failed;
+            ++it;
+            continue;
+        }
+
+        // Read file content
+        std::ifstream ifs(filePath, std::ios::in | std::ios::binary);
+        if (!ifs.is_open()) {
+            addLog("Cannot open: " + it->filename, 2);
+            ++failed;
+            ++it;
+            continue;
+        }
+        std::ostringstream oss;
+        oss << ifs.rdbuf();
+        ifs.close();
+        std::string content = oss.str();
+
+        if (content.empty()) {
+            addLog("Empty file skipped: " + it->filename, 1);
+            ++it;
+            continue;
+        }
+
+        // Determine source type from extension
+        std::string ext = filePath.extension().string();
+        std::string sourceType = "file";
+        if (ext == ".txt")       sourceType = "text_file";
+        else if (ext == ".json") sourceType = "json_file";
+        else if (ext == ".jsonl") sourceType = "jsonl_file";
+        else if (ext == ".md")   sourceType = "markdown_file";
+        else if (ext == ".csv")  sourceType = "csv_file";
+        else if (ext == ".html" || ext == ".htm") sourceType = "html_file";
+
+        if (datasetTarget_->appendStructuredEntry(content, "", sourceType, filePath.string())) {
+            ++collected;
+
+            // Delete the file if flagged
+            if (it->deleteAfter) {
+                std::error_code delEc;
+                fs::remove(filePath, delEc);
+                if (delEc)
+                    addLog("Collected but failed to delete: " + it->filename, 1);
+                it = dirFileEntries_.erase(it);
+                continue;
+            }
+        } else {
+            addLog("Failed to append: " + it->filename, 2);
+            ++failed;
+        }
+        ++it;
+    }
+
+    totalSequences_ = datasetTarget_->massDatasetSize();
+    updateDatasetStats();
+
+    addLog("Directory collection: " + std::to_string(collected) + " collected, "
+         + std::to_string(failed) + " failed", collected > 0 ? 0 : 1);
+
+    // Rescan to refresh the file list
+    dirNeedsScan_ = true;
 }
 
 // =========================================================

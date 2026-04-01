@@ -5,7 +5,7 @@
         "huggingface": "",
         "openai": ""
     },
-    "backend": "openai",
+    "backend": "auto",
     "blur": {
         "enabled": true,
         "opacity": 1.0
@@ -32,7 +32,7 @@
     "localai_url": "http://127.0.0.1:8080/v1",
     "max_tokens": 32,
     "mmo": {
-        "enabled": true,
+        "enabled": false,
         "mode": "shadow",
         "model_loader": {
             "hot_ttl_cap_ms": 300000,
@@ -88,6 +88,7 @@
         "grim_text": {
             "checkpoints": "resources/models/GRIM-text/checkpoints",
             "collected": "resources/models/GRIM-text/data/collected",
+            "directory_collection": "resources/models/GRIM-text/data/collected",
             "collector_log": "resources/models/GRIM-text/training/logs/collector.log",
             "logs": "resources/models/GRIM-text/training/logs",
             "merge_checkpoints_exe": "resources/models/GRIM-text/DataCollection/Release/merge_checkpoints.exe",
@@ -129,8 +130,6 @@
         "vocab_size": 10000
     },
     "training": {
-        "current_model_training": "",
-        "current_curriculum": "",
         "config": {
             "activation_quantization": {
                 "apply_to_embeddings": false,
@@ -181,20 +180,28 @@
             },
             "epochs": 1,
             "execution_block": {
-                "enabled": true,
-                "execution_first_type_only": true,
+                "causal_w1_transition": 1.5,
                 "cross_attn_head_dim": 64,
                 "cross_attn_topk": 2,
                 "d_key": 64,
                 "d_type": 16,
                 "diversity_kappa": 2.0,
+                "enabled": true,
                 "entropy_aux_weight": 0.01,
                 "entropy_weight": 0.01,
+                "execution_first_type_only": true,
                 "final_slot_consistency_weight": 0.1,
+                "gate_warmup_steps": 0,
                 "layer": -1,
                 "num_ops": 4,
                 "num_slots": 8,
                 "num_steps": 4,
+                "selector": {
+                    "d_selector": 64,
+                    "enabled": true,
+                    "selection_margin": 1.0,
+                    "supervision_weight": 1.0
+                },
                 "step_x_multiplier": 2.0,
                 "step_y_multiplier": 3.0,
                 "step_y_overrides_x": false,
@@ -202,16 +209,8 @@
                 "temp_schedule": 0,
                 "temp_start": 1.5,
                 "transition_hard_threshold": 0.0,
-                "gate_warmup_steps": 0,
-                "causal_w1_transition": 1.5,
                 "usage_decay": 0.95,
-                "value_match_epsilon": 1e-04,
-                "selector": {
-                    "enabled": true,
-                    "d_selector": 64,
-                    "selection_margin": 1.0,
-                    "supervision_weight": 1.0
-                }
+                "value_match_epsilon": 0.0001
             },
             "force_rebuild_vocab": false,
             "generation": {
@@ -463,6 +462,8 @@
             "warmup_steps": 2000,
             "weight_decay": 0.01
         },
+        "current_curriculum": "",
+        "current_model_training": "",
         "server_host": "127.0.0.1",
         "server_port": 11436
     },

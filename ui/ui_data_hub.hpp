@@ -103,6 +103,11 @@ private:
     std::shared_ptr<UIButton>      btnRebuild_;
     std::shared_ptr<UIButton>      btnStop_;
     std::shared_ptr<UIButton>      btnRefreshStats_;
+    std::shared_ptr<UIButton>      btnCollectDir_;
+
+    // ── Directory collection widgets ────────────────────
+
+    std::shared_ptr<UIInputBox>    dirPathInput_;
 
     // ═════════════════════════════════════════════════════
     //  Sources tab widgets
@@ -197,6 +202,26 @@ private:
     int   fetchLimit_             = 100;
     float verificationThreshold_  = 0.7f;
     int   maxHFResults_           = 4;
+
+    // ── Directory collection state ──────────────────────
+
+    struct DirFileEntry {
+        std::string filename;
+        bool        collect     = true;
+        bool        deleteAfter = false;
+    };
+    std::vector<DirFileEntry> dirFileEntries_;
+    float  dirScrollOffset_       = 0.0f;
+    bool   dirNeedsScan_          = true;
+    std::string dirScanPath_;
+
+    struct { float x=0, y=0, w=0, h=0; } dirScrollAreaRect_;
+    bool  dirClickPending_ = false;
+    Vec2  dirClickPos_{};
+
+    void loadDirectoryCollectionPathFromConfig();
+    void scanDirectory();
+    void collectFromDirectory();
 
     struct LogEntry {
         std::string timestamp;

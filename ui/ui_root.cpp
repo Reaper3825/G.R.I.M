@@ -163,7 +163,7 @@ void UIRoot::draw()
     // rectangles by updating the blur mask each frame.
     {
         std::vector<float> blurRects;
-        blurRects.reserve(panels.size() * 4);
+        blurRects.reserve(panels.size() * 5);
 
         for (auto& panel : panels) {
             if (!panel || !panel->isVisible())
@@ -171,20 +171,21 @@ void UIRoot::draw()
 
             Vec2 pos = panel->getPosition();
             Vec2 size = panel->getSize();
+            float cr = panel->isMaximized() ? 0.0f : UITheme::Sizes::BorderRadius;
 
             blurRects.push_back(pos.x);
             blurRects.push_back(pos.y);
             blurRects.push_back(size.x);
             blurRects.push_back(size.y);
+            blurRects.push_back(cr);
         }
 
         if (!blurRects.empty()) {
             PlatformWindow::setOverlayBlurMask(m_hwnd,
                                                 blurRects.data(),
-                                                static_cast<int>(blurRects.size() / 4),
-                                                UITheme::Sizes::BorderRadius);
+                                                static_cast<int>(blurRects.size() / 5));
         } else {
-            PlatformWindow::setOverlayBlurMask(m_hwnd, nullptr, 0, UITheme::Sizes::BorderRadius);
+            PlatformWindow::setOverlayBlurMask(m_hwnd, nullptr, 0);
         }
     }
 #endif

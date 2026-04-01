@@ -3,6 +3,7 @@
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
 #include "helpers/mouse.hpp"
+#include "core/platform_window.hpp"
 #include "logger.hpp"
 #include "ui_focus_manager.hpp"
 #include "ui_root.hpp"
@@ -112,11 +113,11 @@ void UIPanel::toggleMaximize() {
         Vec2 center{ position.x + size.x * 0.5f,
                      position.y + size.y * 0.5f };
         auto monitorRect = UIRoot::get().getMonitorRectAt(center);
-        float margin = 10.0f;
-        position.x = monitorRect.origin.x + margin;
-        position.y = monitorRect.origin.y + margin;
-        size.x = std::max(200.0f, monitorRect.size.x - margin * 2.0f);
-        size.y = std::max(titleBarHeight + 20.0f, monitorRect.size.y - margin * 2.0f);
+        float menuBarH = PlatformWindow::getMenuBarHeight();
+        position.x = monitorRect.origin.x;
+        position.y = monitorRect.origin.y + menuBarH;
+        size.x = monitorRect.size.x;
+        size.y = monitorRect.size.y - menuBarH;
     } else {
         maximized = false;
         position = storedPosition;
@@ -220,7 +221,8 @@ bool UIPanel::drawOverlay(OverlayRenderer& renderer) {
     if (!isVisible()) return false;
     
     // Full glassmorphism panel: blur + shadow + translucent fill + glow + border
-    renderer.drawGlassPanel(position, size, Sizes::BorderRadius,
+    float cornerRadius = maximized ? 0.0f : Sizes::BorderRadius;
+    renderer.drawGlassPanel(position, size, cornerRadius,
                             bgColor,
                             Colors::BorderPrimary,
                             Colors::GlassHighlight,

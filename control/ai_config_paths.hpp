@@ -71,6 +71,7 @@ struct GrimTextPaths {
     std::string training_data;
     std::string checkpoints;
     std::string collected;
+    std::string directory_collection;
     std::string verified;
     std::string logs;
     std::string training_status;
@@ -91,6 +92,7 @@ struct GrimTextPaths {
         std::cout << "  training_data: " << (training_data.empty() ? "(not set)" : training_data) << std::endl;
         std::cout << "  checkpoints: " << (checkpoints.empty() ? "(not set)" : checkpoints) << std::endl;
         std::cout << "  collected: " << (collected.empty() ? "(not set)" : collected) << std::endl;
+        std::cout << "  directory_collection: " << (directory_collection.empty() ? "(not set)" : directory_collection) << std::endl;
         std::cout << "  verified: " << (verified.empty() ? "(not set)" : verified) << std::endl;
         std::cout << "  logs: " << (logs.empty() ? "(not set)" : logs) << std::endl;
         std::cout << "  training_status: " << (training_status.empty() ? "(not set)" : training_status) << std::endl;
@@ -570,6 +572,7 @@ inline bool populateGrimTextPathsFromConfig(const nlohmann::json& config, GrimTe
     assignIfPresent("training_data", paths.training_data);
     assignIfPresent("checkpoints", paths.checkpoints);
     assignIfPresent("collected", paths.collected);
+    assignIfPresent("directory_collection", paths.directory_collection);
     assignIfPresent("verified", paths.verified);
     assignIfPresent("logs", paths.logs);
     assignIfPresent("training_status", paths.training_status);
@@ -1451,7 +1454,7 @@ inline bool loadGrimTextPaths(GrimTextPaths& paths, const std::string& configPat
     const std::string signature =
         snapshot->config_path.string() + "|" +
         paths.vocab + "|" + paths.model + "|" + paths.training_data + "|" +
-        paths.checkpoints + "|" + paths.collected + "|" + paths.verified + "|" +
+        paths.checkpoints + "|" + paths.collected + "|" + paths.directory_collection + "|" + paths.verified + "|" +
         paths.logs + "|" + paths.training_status + "|" + paths.merge_checkpoints_exe +
         "|" + paths.collector_log + "|" + paths.source_config +
         "|" + paths.model_store;

@@ -36,11 +36,14 @@ void* createOverlayWindow(int x, int y, int width, int height);
 
 // macOS: Constrain NSVisualEffectView blur so it only appears behind UI panels.
 // For other platforms this can be a no-op.
-// panelRects is an array of [x, y, w, h] tuples in overlay coordinate space.
+// panelRects is an array of [x, y, w, h, cornerRadius] tuples (5 floats each).
 void setOverlayBlurMask(void* overlayWindowHandle,
                          const float* panelRects,
-                         int panelCount,
-                         float cornerRadius);
+                         int panelCount);
+
+// Height of the macOS menu bar (or 0 on other platforms).
+// Used to offset maximized panels below the system chrome.
+float getMenuBarHeight();
 
 // Update blur style at runtime: toggle, opacity (0..1), and intensity (layer count).
 void setOverlayBlurStyle(void* overlayWindowHandle,

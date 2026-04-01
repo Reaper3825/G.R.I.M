@@ -59,13 +59,16 @@ void* createOverlayWindow(int x, int y, int width, int height) {
 
 void setOverlayBlurMask(void* overlayWindowHandle,
                          const float* panelRects,
-                         int panelCount,
-                         float cornerRadius)
+                         int panelCount)
 {
     (void)overlayWindowHandle;
     (void)panelRects;
     (void)panelCount;
-    (void)cornerRadius;
+}
+
+float getMenuBarHeight()
+{
+    return 0.0f;
 }
 
 void setOverlayBlurStyle(void* overlayWindowHandle,

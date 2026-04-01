@@ -416,8 +416,7 @@ void* createOverlayWindow(int x, int y, int width, int height) {
 
 void setOverlayBlurMask(void* overlayWindowHandle,
                          const float* panelRects,
-                         int panelCount,
-                         float cornerRadius)
+                         int panelCount)
 {
     if (!overlayWindowHandle)
         return;
@@ -447,14 +446,15 @@ void setOverlayBlurMask(void* overlayWindowHandle,
         }
 
         // Build path using CoreGraphics directly (avoids ObjC NSBezierPath overhead).
+        // Each panel has 5 floats: [x, y, w, h, cornerRadius].
         CGMutablePathRef path = CGPathCreateMutable();
-        const float r = std::max(0.0f, cornerRadius);
 
         for (int i = 0; i < panelCount; ++i) {
-            const float x = panelRects[i * 4 + 0];
-            const float y = panelRects[i * 4 + 1];
-            const float w = panelRects[i * 4 + 2];
-            const float h = panelRects[i * 4 + 3];
+            const float x = panelRects[i * 5 + 0];
+            const float y = panelRects[i * 5 + 1];
+            const float w = panelRects[i * 5 + 2];
+            const float h = panelRects[i * 5 + 3];
+            const float r = std::max(0.0f, panelRects[i * 5 + 4]);
             if (w <= 0.0f || h <= 0.0f) continue;
             CGPathAddRoundedRect(path, nullptr, CGRectMake(x, y, w, h), r, r);
         }
@@ -790,6 +790,19 @@ bool captureDesktopBehindOverlay(void* overlayWindowHandle,
         CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
         CVPixelBufferRelease(pb);
         return true;
+    }
+}
+
+float getMenuBarHeight()
+{
+    @autoreleasepool {
+        NSScreen* screen = [NSScreen mainScreen];
+        if (!screen) return 0.0f;
+        NSRect frame = [screen frame];
+        NSRect visible = [screen visibleFrame];
+        // Menu bar is at top: frame.height - (visibleFrame.origin.y + visibleFrame.height)
+        float menuBarH = (float)(frame.size.height - (visible.origin.y + visible.size.height));
+        return std::max(0.0f, menuBarH);
     }
 }
 
