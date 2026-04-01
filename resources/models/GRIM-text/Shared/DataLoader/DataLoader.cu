@@ -590,10 +590,44 @@ bool PrepareTrainingDataFromCache(
 			concept_exec_base_slot = std::stoi(ev);
 		} catch (...) {}
 	}
+	const int expected_exec_steps = train_config.execution_block_num_steps;
+	int concept_exec_padded_count = 0;
 	for (const auto& cj : concept_json_entries) {
 		try {
 			auto built = GRIM::DataLoader::buildConceptSequence(cj, tokenizer, concept_exec_base_slot);
 			if (built.canonical_text.size() < kMinCleanedTextLength) continue;
+
+			if (built.payload.execution_active) {
+				const int actual_steps = static_cast<int>(built.payload.teacher_steps.size());
+				if (actual_steps == 0) {
+					throw std::runtime_error(
+						"DataLoader: execution-active concept entry has 0 teacher_steps "
+						"— cannot pad from nothing");
+				}
+				if (actual_steps > expected_exec_steps) {
+					std::string entry_id = "(unknown)";
+					if (cj.contains("id") && cj["id"].is_string())
+						entry_id = cj["id"].get<std::string>();
+					else if (cj.contains("name") && cj["name"].is_string())
+						entry_id = cj["name"].get<std::string>();
+					throw std::runtime_error(
+						"DataLoader: execution-active concept entry \"" + entry_id
+						+ "\" has teacher_steps=" + std::to_string(actual_steps)
+						+ " > execution_block_num_steps=" + std::to_string(expected_exec_steps)
+						+ " — truncation would lose computation; fix data or increase config num_steps");
+				}
+				if (actual_steps < expected_exec_steps) {
+					// Pad by repeating the last step up to execution_block_num_steps.
+					// The repeated step re-executes the same operation on the same slots,
+					// writing the same expected_value — semantically idempotent.
+					const auto& last_step = built.payload.teacher_steps.back();
+					while (static_cast<int>(built.payload.teacher_steps.size()) < expected_exec_steps) {
+						built.payload.teacher_steps.push_back(last_step);
+					}
+					++concept_exec_padded_count;
+				}
+			}
+
 			auto seq = build_sequence(built.canonical_text);
 			if (!seq) continue;
 			seq->execution_active = built.payload.execution_active;
@@ -607,6 +641,12 @@ bool PrepareTrainingDataFromCache(
 		} catch (const std::exception& e) {
 			std::cerr << "[DataLoader] concept build failed: " << e.what() << "\n";
 		}
+	}
+
+	if (concept_exec_padded_count > 0) {
+		std::cout << "[DataLoader] Padded " << concept_exec_padded_count
+		          << " execution-active entries from fewer steps to execution_block_num_steps="
+		          << expected_exec_steps << " (repeated last step)" << std::endl;
 	}
 
 	// Write single GRMT file — Phase1_Startup handles train/val splitting
