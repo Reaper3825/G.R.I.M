@@ -76,7 +76,7 @@ std::unordered_map<int, std::string> GRIM::Test::loadVocabMap(const std::string&
 
     uint16_t version;
     f.read(reinterpret_cast<char*>(&version), 2);
-    if (version != 3) {
+    if (version != 3 && version != 4) {
         throw std::runtime_error("loadVocabMap: unsupported vocab version " + std::to_string(version));
     }
 
