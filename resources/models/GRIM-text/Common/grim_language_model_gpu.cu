@@ -925,14 +925,21 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         
         // =====================================================================
         // Selector-aware <NUM> masking (per step)
-        // When selector is active, executeDecodeForward_ populates
-        // training_state_.decode_selector_* with the selection result.
+        // When selector is active, both forwardInit (prefill) and
+        // forwardStep (decode) evaluate the selector, so
+        // decode_selector_valid MUST be true by this point.
         // Allow <NUM> only when status == Selected; otherwise mask it.
         // =====================================================================
-        if (selector_active && training_state_.decode_selector_valid) {
+        if (selector_active) {
+            if (!training_state_.decode_selector_valid) {
+                throw std::runtime_error(
+                    "generateSequenceGPU: selector_active but decode_selector_valid is false at step "
+                    + std::to_string(step) + " — selector was not evaluated after "
+                    + (step == 0 ? "forwardInit (prefill)" : "forwardStep (decode)"));
+            }
             const int num_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
             if (training_state_.decode_selector_status
-                != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
+                   != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
                 logits_vec.data[num_tid] = -1e30f;
             }
         }

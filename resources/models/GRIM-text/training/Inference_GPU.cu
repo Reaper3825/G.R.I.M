@@ -335,6 +335,50 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
         training_state_.trace_state_by_row[0].requires_grad = false;
     }
 
+    // ── Run decode-time slot selector on prefill's last-token hidden state ──
+    // executeDecodeForward_ runs this on every decode step, but prefill
+    // (executeInferenceForward_) skips it because the autograd forward path
+    // has no selector hook.  Without this, decode_selector_valid is false for
+    // step 0, and <NUM> admissibility cannot be evaluated — a real gap, not
+    // something to mask around.
+    {
+        cudaStream_t sel_stream = training_state_.stream_ctrl.getPrimaryStream();
+        const bool exec_block_active = config_.execution_block_enabled
+            && getExecutionBlockLayer() != nullptr
+            && getScratchBlockLayer() != nullptr
+            && getScratchBlockLayer()->isEnabled()
+            && training_state_.has_inference_exec_memory
+            && !training_state_.trace_state_by_row.empty()
+            && !training_state_.execution_trace_by_row.empty();
+
+        // Last token's hidden state lives at the tail of cached_encoder_output
+        const float* last_hidden = training_state_.cached_encoder_output.data
+            ? training_state_.cached_encoder_output.data
+              + static_cast<size_t>(seq_len - 1) * config_.d_model
+            : nullptr;
+
+        if (!last_hidden && config_.selector_enabled) {
+            throw std::runtime_error(
+                "forwardInit: selector_enabled but cached_encoder_output is NULL "
+                "after prefill — cannot evaluate decode-time slot selector");
+        }
+
+        DecodeTimeResolveResult sel = resolveDecodeTimeNumSlotSelectionOrMask(
+            getDecodeTimeSlotSelectorLayer(),
+            getDecodeTimeNumPolicy(),
+            config_.selector_enabled,
+            exec_block_active,
+            training_state_.has_inference_exec_memory,
+            training_state_.inference_exec_memory,
+            last_hidden,
+            sel_stream);
+
+        training_state_.decode_selector_valid  = sel.valid;
+        training_state_.decode_selector_status = static_cast<uint8_t>(sel.status);
+        training_state_.decode_selected_slot   = sel.selected_slot;
+        training_state_.decode_selected_value  = sel.selected_value;
+    }
+
     return logits;
 }
 
