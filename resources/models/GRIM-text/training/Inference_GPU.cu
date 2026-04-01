@@ -330,9 +330,23 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     // Prefill: populate KV cache from autograd intermediates
     Vector logits = executeInferenceForward_(seq_len, /*populate_kv_cache=*/true);
 
-    // Prepare execution trace state for inference decode (no autograd needed)
-    if (!training_state_.trace_state_by_row.empty()) {
+    // ── Initialize trace structures for subsequent decode steps ──
+    // resetKVCache() clears these, and executeInferenceForward_ (autograd path)
+    // doesn't recreate them.  executeDecodeForward_ needs them for exec block
+    // stepping + selector gating, so bootstrap them here.
+    cudaStream_t post_stream = training_state_.stream_ctrl.getPrimaryStream();
+    if (training_state_.has_inference_exec_memory
+        && training_state_.trace_state_by_row.empty()) {
+        training_state_.trace_state_by_row.resize(1);
+        training_state_.trace_state_by_row[0] = Tensor::zeros(
+            {1, config_.d_model}, post_stream, "trace_state_decode");
+        // Inference — no gradient tracking
         training_state_.trace_state_by_row[0].requires_grad = false;
+    }
+    if (training_state_.has_inference_exec_memory
+        && training_state_.execution_trace_by_row.empty()) {
+        training_state_.execution_trace_by_row.resize(1);
+        training_state_.execution_trace_by_row[0].clear();
     }
 
     // ── Run decode-time slot selector on prefill's last-token hidden state ──
@@ -341,15 +355,18 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     // has no selector hook.  Without this, decode_selector_valid is false for
     // step 0, and <NUM> admissibility cannot be evaluated — a real gap, not
     // something to mask around.
+    //
+    // The selector needs: selector/policy layers + exec_memory data.
+    // It does NOT need trace_state_by_row or execution_trace_by_row — those
+    // are for exec block stepping, which doesn't happen during prefill.
     {
-        cudaStream_t sel_stream = training_state_.stream_ctrl.getPrimaryStream();
-        const bool exec_block_active = config_.execution_block_enabled
+        // For the selector, exec_block_active = "execution block system is
+        // configured and memory is live."  Trace structures are irrelevant.
+        const bool selector_can_run = config_.execution_block_enabled
             && getExecutionBlockLayer() != nullptr
             && getScratchBlockLayer() != nullptr
             && getScratchBlockLayer()->isEnabled()
-            && training_state_.has_inference_exec_memory
-            && !training_state_.trace_state_by_row.empty()
-            && !training_state_.execution_trace_by_row.empty();
+            && training_state_.has_inference_exec_memory;
 
         // Last token's hidden state lives at the tail of cached_encoder_output
         const float* last_hidden = training_state_.cached_encoder_output.data
@@ -367,11 +384,11 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
             getDecodeTimeSlotSelectorLayer(),
             getDecodeTimeNumPolicy(),
             config_.selector_enabled,
-            exec_block_active,
+            selector_can_run,
             training_state_.has_inference_exec_memory,
             training_state_.inference_exec_memory,
             last_hidden,
-            sel_stream);
+            post_stream);
 
         training_state_.decode_selector_valid  = sel.valid;
         training_state_.decode_selector_status = static_cast<uint8_t>(sel.status);
