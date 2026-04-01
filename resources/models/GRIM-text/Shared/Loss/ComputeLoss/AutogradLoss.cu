@@ -1408,10 +1408,5 @@ __host__ Tensor unified_loss(
     return loss;
     // log_probs goes out of scope: data NOT freed (transferred), grad_fn NOT deleted (transferred)
 }
-
-// Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
-// Was a thin wrapper calling unified_loss() with hardcoded plain CE config.
-// All callers now use unified_loss() directly with real LossConfig from model.
-
 }  // namespace autograd
 }  // namespace GRIM
