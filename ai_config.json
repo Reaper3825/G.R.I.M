@@ -181,6 +181,8 @@
             "epochs": 1,
             "execution_block": {
                 "causal_w1_transition": 1.5,
+                "structured_ce_enabled": true,
+                "structured_ce_weight": 0.1,
                 "cross_attn_head_dim": 64,
                 "cross_attn_topk": 2,
                 "d_key": 64,

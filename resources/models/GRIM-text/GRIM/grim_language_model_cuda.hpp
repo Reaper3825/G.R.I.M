@@ -370,6 +370,10 @@ struct LanguageModelConfig {
     int   execution_block_gate_warmup_steps = 0;
     float execution_block_causal_w1_transition = 1.0f;
 
+    // Autograd-connected structured CE for execution selection decisions
+    bool  structured_ce_enabled = false;  // Enable device-side logits-space CE on teacher targets
+    float structured_ce_weight  = 0.0f;   // Weight for selection CE (0 = must be set if enabled)
+
     // Decode-time slot selector config
     bool  selector_enabled = false;       // Enable decode-time selector layer
     int   selector_d_selector = 64;       // Query/key projection dimension

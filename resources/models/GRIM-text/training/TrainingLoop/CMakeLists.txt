@@ -354,6 +354,8 @@ add_executable(train_gpu
     ../Diagnostics/TrainingDiagnostics.hpp
     ../Phases/Phase3_Cleanup.cu
     ../Phases/Phase3_Cleanup.hpp
+    ../OptimizerCheckpoint.cu
+    ../OptimizerCheckpoint.hpp
     ../training_status_writer.hpp
     ../training_logger.hpp
     ../training_data_loader.hpp

@@ -105,6 +105,20 @@ struct ExecutionRecord {
 };
 
 //======================================================//
+//  TeacherSelectionTargets — normalized teacher targets for one step
+//  All indices are in the runtime index space used by softmax distributions.
+//  Produced by normalizeTeacherSelectionTargets(); consumed by selection CE.
+//======================================================//
+struct TeacherSelectionTargets {
+    int op_target      = -1;  // in [0, num_ops)
+    int arg1_target    = -1;  // in [0, V_val)   — value-slot index (arg softmax space)
+    int arg2_target    = -1;  // in [0, V_val)
+    int write_target   = -1;  // in [0, V)       — full slot index (write softmax space)
+    float expected_value = 0.0f;
+    bool valid = false;       // true iff all targets passed normalization
+};
+
+//======================================================//
 //  ExecutionBlockStepOutput — per-step diagnostics + auxiliary-loss tensors
 //  p_arg1/p_arg2/p_op/p_write are detached copies for diagnostics / entropy loss.
 //  state_before_values / state_after_values enable transition validity checks.
@@ -127,6 +141,15 @@ struct ExecutionBlockStepOutput {
     Tensor transition_error_hard;    // |v_out - expected_internal| (hard gate)
     Tensor transition_loss;          // |v_soft - target| (autograd via L1ScalarLossGradFn)
     bool   used_expected_target = false;  // whether teacher target was used for transition_loss
+
+    // Selection CE tensors (autograd-connected, logits-space CE on teacher targets)
+    // Each is a [1,1] scalar loss tensor with grad_fn → logits → selection weights.
+    // Only populated when teacher supervision is available for this (batch, step).
+    Tensor selection_ce_op;     // CE(op_logits, op_target)
+    Tensor selection_ce_arg1;   // CE(arg1_logits, arg1_target)
+    Tensor selection_ce_arg2;   // CE(arg2_logits, arg2_target)
+    Tensor selection_ce_write;  // CE(write_logits, write_target)
+    bool   has_selection_ce = false;  // true iff selection CE tensors are populated
 };
 
 //======================================================//
@@ -181,7 +204,8 @@ public:
         int row_tokens,
         Tensor& trace_state,
         const std::vector<ExecutionRecord>& prior_records,
-        const float* expected_target = nullptr      // Fix 6: optional teacher scalar (device [1])
+        const float* expected_target = nullptr,      // Fix 6: optional teacher scalar (device [1])
+        const TeacherSelectionTargets* selection_targets = nullptr  // autograd selection CE targets
     );
 
     //--------------------------------------------------//

@@ -21,7 +21,8 @@ void executeStepCoordinatorImpl(
 	int row_tokens,
 	Tensor& trace_state,
 	const std::vector<ExecutionRecord>& prior_records,
-	const float* expected_target);
+	const float* expected_target,
+	const TeacherSelectionTargets* selection_targets);
 }
 
 #endif  // USE_CUDA

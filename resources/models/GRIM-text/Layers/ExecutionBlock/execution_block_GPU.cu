@@ -339,7 +339,8 @@ void ExecutionBlockLayer::executeStep(
     int row_tokens,
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records,
-    const float* expected_target)
+    const float* expected_target,
+    const TeacherSelectionTargets* selection_targets)
 {
     if (row_tokens < 0) row_tokens = total_tokens;
     validateExecuteStepInputsOrThrow(H, atom_positions,
@@ -361,7 +362,8 @@ void ExecutionBlockLayer::executeStep(
         row_tokens,
         trace_state,
         prior_records,
-        expected_target);
+        expected_target,
+        selection_targets);
 }
 
 //======================================================//

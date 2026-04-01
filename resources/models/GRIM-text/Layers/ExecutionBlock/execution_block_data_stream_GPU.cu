@@ -1219,6 +1219,172 @@ struct L1ScalarLossGradFn : public GradFn {
     }
 };
 
+//======================================================//
+//  SelectionCrossEntropyGradFn — logits-space CE for tiny distributions
+//
+//  Forward:  L = log(sum_j exp(z_j - z_max)) + z_max - z_t
+//  Backward: dL/dz_j = softmax(z)_j - 1[j == t]
+//
+//  Saved state: owned copy of softmax probabilities + target index.
+//  Lifetime: owned-copy contract (mirrors SoftmaxGradFn::save()).
+//======================================================//
+
+__global__ void kernelSelectionCEForward(
+    float* __restrict__ loss_out,         // [1] scalar loss
+    float* __restrict__ saved_probs_out,  // [N] saved softmax for backward
+    const float* __restrict__ logits,     // [N] raw logits
+    int target,                           // target index in [0, N)
+    int N                                 // distribution size
+) {
+    if (threadIdx.x != 0) return;
+    // Stable log-sum-exp
+    float z_max = logits[0];
+    for (int i = 1; i < N; ++i) {
+        if (logits[i] > z_max) z_max = logits[i];
+    }
+    float sum_exp = 0.0f;
+    for (int i = 0; i < N; ++i) {
+        float e = expf(logits[i] - z_max);
+        saved_probs_out[i] = e;
+        sum_exp += e;
+    }
+    // Normalize saved probs (softmax)
+    float inv_sum = 1.0f / fmaxf(sum_exp, 1e-10f);
+    for (int i = 0; i < N; ++i) {
+        saved_probs_out[i] *= inv_sum;
+    }
+    // CE = log(sum_exp) + z_max - z_t
+    loss_out[0] = logf(fmaxf(sum_exp, 1e-10f)) + z_max - logits[target];
+}
+
+__global__ void kernelSelectionCEBackward(
+    float* __restrict__ grad_logits,       // [N] output gradient (accumulated)
+    const float* __restrict__ grad_output, // [1] upstream scalar gradient
+    const float* __restrict__ saved_probs, // [N] saved softmax
+    int target,                            // target index
+    int N
+) {
+    if (threadIdx.x != 0) return;
+    float g = grad_output[0];
+    for (int i = 0; i < N; ++i) {
+        float indicator = (i == target) ? 1.0f : 0.0f;
+        grad_logits[i] += g * (saved_probs[i] - indicator);
+    }
+}
+
+struct SelectionCrossEntropyGradFn : public GradFn {
+    float* saved_probs_ = nullptr;  // owned [N] device buffer
+    float* logits_grad_ = nullptr;  // accumulated into logits tensor grad
+    std::shared_ptr<float> owned_logits_grad_;
+    std::shared_ptr<GradFn> logits_grad_fn_;
+    TensorContract::TensorShape logits_shape_;
+    bool logits_requires_grad_ = false;
+    int target_ = -1;
+    int N_ = 0;
+
+    SelectionCrossEntropyGradFn() { op_name = "selection_cross_entropy"; }
+
+    ~SelectionCrossEntropyGradFn() override {
+        if (saved_probs_) { cudaFree(saved_probs_); saved_probs_ = nullptr; }
+    }
+
+    void capture(Tensor& logits, int target, int N, float* saved_probs, cudaStream_t stream) {
+        target_ = target;
+        N_ = N;
+        saved_probs_ = saved_probs;  // takes ownership of already-allocated buffer
+        logits_requires_grad_ = logits.requires_grad;
+        logits_shape_ = logits.shape;
+        logits_grad_fn_ = logits.grad_fn;
+
+        if (logits_requires_grad_) {
+            logits.ensure_grad();
+            if (logits.is_leaf) {
+                logits_grad_ = logits.grad_data();
+            } else {
+                float* buffer = nullptr;
+                CUDA_CHECK(cudaMalloc(&buffer, static_cast<size_t>(N) * sizeof(float)));
+                CUDA_CHECK(cudaMemsetAsync(buffer, 0, static_cast<size_t>(N) * sizeof(float), stream));
+                owned_logits_grad_ = std::shared_ptr<float>(buffer, [](float* p) {
+                    queueForDeferredCleanup(p);
+                });
+                logits_grad_ = owned_logits_grad_.get();
+            }
+        }
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied) return;
+        applied = true;
+        if (!logits_requires_grad_) return;
+        if (!saved_probs_) {
+            throw std::runtime_error(
+                "SelectionCrossEntropyGradFn::apply: saved_probs is NULL — "
+                "buffer was freed before backward (lifetime contract violated)");
+        }
+        if (!logits_grad_) {
+            throw std::runtime_error(
+                "SelectionCrossEntropyGradFn::apply: logits_grad buffer is NULL");
+        }
+
+        kernelSelectionCEBackward<<<1, 1, 0, stream>>>(
+            logits_grad_, grad_output.data, saved_probs_, target_, N_);
+        CUDA_CHECK_KERNEL();
+
+        if (logits_grad_fn_) {
+            Tensor view;
+            view.data = logits_grad_;
+            view.shape = logits_shape_;
+            view.owns_data = false;
+            view.stream = stream;
+            logits_grad_fn_->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        if (saved_probs_) { cudaFree(saved_probs_); saved_probs_ = nullptr; }
+        logits_grad_ = nullptr;
+        logits_grad_fn_.reset();
+    }
+};
+
+// Compute logits-space CE on a tiny distribution.
+// Returns a scalar [1,1] Tensor with grad_fn → logits.
+// logits_tensor must still carry its grad_fn chain (not detached).
+static Tensor computeSelectionCE(
+    Tensor& logits_tensor,  // [1, N] logits with live grad_fn chain
+    int target,             // normalized target index in [0, N)
+    int N,                  // distribution size
+    cudaStream_t stream,
+    const char* label
+) {
+    if (target < 0 || target >= N) {
+        throw std::runtime_error(
+            std::string("computeSelectionCE(") + label + "): target=" +
+            std::to_string(target) + " out of range [0, " + std::to_string(N) + ")");
+    }
+
+    // Allocate saved probs buffer (owned by GradFn)
+    float* saved_probs = nullptr;
+    CUDA_CHECK(cudaMalloc(&saved_probs, static_cast<size_t>(N) * sizeof(float)));
+
+    // Forward: compute loss + save softmax probs
+    Tensor loss = Tensor::zeros({1, 1}, stream, label);
+    loss.requires_grad = true;
+    loss.is_leaf = false;
+
+    kernelSelectionCEForward<<<1, 1, 0, stream>>>(
+        loss.data, saved_probs, logits_tensor.data, target, N);
+    CUDA_CHECK_KERNEL();
+
+    // Attach grad_fn
+    auto grad_fn = std::make_shared<SelectionCrossEntropyGradFn>();
+    grad_fn->capture(logits_tensor, target, N, saved_probs, stream);
+    loss.grad_fn = grad_fn;
+
+    return loss;
+}
+
 static void copyStepDiagnostics(const StepWorkingSet& work,
                                 ExecutionBlockStepOutput* diag_out,
                                 int V_val,
@@ -1314,7 +1480,8 @@ void executeStepCoordinatorImpl(
     int row_tokens,
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records,
-    const float* expected_target
+    const float* expected_target,
+    const TeacherSelectionTargets* selection_targets
 ) {
     const int dm = layer.config().d_model;
     const int V = layer.config().num_slots;
@@ -1443,6 +1610,12 @@ void executeStepCoordinatorImpl(
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         arg1_logits.data, arg1_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
+    // ── Selection CE for arg1 (logits-space, before softmax) ──
+    if (selection_targets && selection_targets->valid) {
+        if (!diag_out) throw std::runtime_error("selection_targets->valid requires diag_out != nullptr");
+        diag_out->selection_ce_arg1 = computeSelectionCE(
+            arg1_logits, selection_targets->arg1_target, V_val, stream, "sel_ce_arg1");
+    }
     work.p_arg1 = autograd::softmax(arg1_logits, temperature, stream);
     kernelValidateSoftmax<<<1, 1, 0, stream>>>(work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStagePArg1);
     kernelCheckEntropyCollapse<<<1, 1, 0, stream>>>(
@@ -1453,6 +1626,11 @@ void executeStepCoordinatorImpl(
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         arg2_logits.data, arg2_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
+    // ── Selection CE for arg2 (logits-space, before softmax) ──
+    if (selection_targets && selection_targets->valid) {
+        diag_out->selection_ce_arg2 = computeSelectionCE(
+            arg2_logits, selection_targets->arg2_target, V_val, stream, "sel_ce_arg2");
+    }
     work.p_arg2 = autograd::softmax(arg2_logits, temperature, stream);
     kernelValidateSoftmax<<<1, 1, 0, stream>>>(work.p_arg2.data, V_val, LayerAccess::numericErrorFlag(layer), kStagePArg2);
     kernelCheckEntropyCollapse<<<1, 1, 0, stream>>>(
@@ -1484,6 +1662,11 @@ void executeStepCoordinatorImpl(
     auto pool = autograd::concat(pool_1234, work.step_emb, stream);
 
     auto op_logits = autograd::matmul(pool, layer.W_op_select(), stream, pool.data, nullptr);
+    // ── Selection CE for op (logits-space, before softmax) ──
+    if (selection_targets && selection_targets->valid) {
+        diag_out->selection_ce_op = computeSelectionCE(
+            op_logits, selection_targets->op_target, nop, stream, "sel_ce_op");
+    }
     work.p_op = autograd::softmax(op_logits, temperature, stream);
     kernelValidateSoftmax<<<1, 1, 0, stream>>>(work.p_op.data, nop, LayerAccess::numericErrorFlag(layer), kStagePOp);
     kernelCheckEntropyCollapse<<<1, 1, 0, stream>>>(
@@ -1643,6 +1826,13 @@ void executeStepCoordinatorImpl(
     if (S > 0) {
         kernelMaskScratchSlots<<<(S + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(write_logits.data, S);
         CUDA_CHECK_KERNEL();
+    }
+
+    // ── Selection CE for write (logits-space, before softmax) ──
+    if (selection_targets && selection_targets->valid) {
+        diag_out->selection_ce_write = computeSelectionCE(
+            write_logits, selection_targets->write_target, V, stream, "sel_ce_write");
+        diag_out->has_selection_ce = true;
     }
 
     work.p_write = autograd::softmax(write_logits, temperature, stream);

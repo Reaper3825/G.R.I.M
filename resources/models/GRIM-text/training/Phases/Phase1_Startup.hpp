@@ -301,6 +301,9 @@ struct TrainingContext {
     /** Number of epochs actually completed (set by Phase 2; used by Phase 3 for summary). */
     int epochs_completed = 0;
     
+    /** Path to the checkpoint that was loaded at startup (empty if fresh start). */
+    std::string loaded_checkpoint_path;
+    
     // Auto-stop state
     bool auto_stop_triggered = false;
     std::string auto_stop_reason;

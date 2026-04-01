@@ -20,6 +20,7 @@
 //======================================================//
 
 #include "Phase1_Startup.hpp"
+#include "../OptimizerCheckpoint.hpp"
 
 // MUST be first - defines GRIM_CONFIG_AI_CONFIG_PATHS_HPP_INCLUDED
 #include "../../../../../control/ai_config_paths.hpp"
@@ -1000,6 +1001,12 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.execution_block_transition_hard_threshold = hp.execution_block_transition_hard_threshold;
     model_config.execution_block_gate_warmup_steps = hp.execution_block_gate_warmup_steps;
     model_config.execution_block_causal_w1_transition = hp.execution_block_causal_w1_transition;
+    model_config.structured_ce_enabled = hp.structured_ce_enabled;
+    model_config.structured_ce_weight  = hp.structured_ce_weight;
+    if (model_config.structured_ce_enabled && model_config.structured_ce_weight <= 0.0f) {
+        throw std::runtime_error("structured_ce_enabled=true but structured_ce_weight=" +
+                                 std::to_string(model_config.structured_ce_weight) + " (must be > 0)");
+    }
 
     // Decode-time slot selector config
     model_config.selector_enabled = hp.selector_enabled;
@@ -1725,6 +1732,47 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     // 10. Initialize optimizer
     ctx->optimizer = Internal::initializeOptimizer(*ctx->model, ctx->config, *ctx->logging.logger);
+    
+    // 10a. Restore optimizer state from sidecar if a checkpoint was loaded
+    // Scan for newest checkpoint (same logic as initializeModel) to find matching .opt sidecar
+    {
+        std::vector<std::pair<int, std::string>> opt_candidates;
+        if (fs::exists(ctx->config.paths.checkpoint_dir) && fs::is_directory(ctx->config.paths.checkpoint_dir)) {
+            for (const auto& entry : fs::directory_iterator(ctx->config.paths.checkpoint_dir)) {
+                const auto& p = entry.path();
+                if (p.extension() == ".bin" && p.stem().string().rfind("checkpoint_epoch_", 0) == 0) {
+                    std::string stem = p.stem().string();
+                    std::string epoch_str = stem.substr(std::string("checkpoint_epoch_").size());
+                    try {
+                        int epoch = std::stoi(epoch_str);
+                        opt_candidates.emplace_back(epoch, p.string());
+                    } catch (...) {}
+                }
+            }
+        }
+        std::sort(opt_candidates.begin(), opt_candidates.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+        
+        for (const auto& [epoch, ckpt_path] : opt_candidates) {
+            std::string opt_path = optimizerSidecarPath(ckpt_path);
+            if (fs::exists(opt_path)) {
+                ctx->logging.logger->log("Found optimizer sidecar: " + opt_path);
+                try {
+                    loadOptimizerState(*ctx, opt_path);
+                    ctx->loaded_checkpoint_path = ckpt_path;
+                    ctx->logging.logger->log("✓ Optimizer state restored (step=" + 
+                        std::to_string(ctx->optimizer.optimizer_state.step) +
+                        ", global_step=" + std::to_string(ctx->global_step) +
+                        ", best_val_loss=" + std::to_string(ctx->best_val_loss) +
+                        ", epochs_completed=" + std::to_string(ctx->epochs_completed) + ")");
+                } catch (const std::exception& e) {
+                    ctx->logging.logger->log(std::string("⚠ Optimizer sidecar load failed: ") + e.what());
+                    ctx->logging.logger->log("  Continuing with fresh optimizer state");
+                }
+                break;
+            }
+        }
+    }
     
     // 10b. Compute class-balanced loss weights if enabled
     // w_v = 1/freq(v)^β where freq(v) = count(v) / total_targets

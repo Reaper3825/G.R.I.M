@@ -20,6 +20,7 @@
 //======================================================//
 
 #include "Phase2_TrainingLoop.hpp"
+#include "../OptimizerCheckpoint.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
@@ -1344,6 +1345,13 @@ bool maybeSaveCheckpoint(
             if (fs::exists(checkpoint_path)) {
                 auto file_size = fs::file_size(checkpoint_path);
                 ctx.logging.logger->log("  File size: " + std::to_string(file_size / (1024*1024)) + " MB");
+            }
+            // Save optimizer sidecar (.opt) alongside model checkpoint
+            try {
+                std::string opt_path = optimizerSidecarPath(checkpoint_path);
+                saveOptimizerState(ctx, opt_path);
+            } catch (const std::exception& e) {
+                ctx.logging.logger->log(std::string("  ⚠ Optimizer state save failed: ") + e.what());
             }
             return true;
         } else {

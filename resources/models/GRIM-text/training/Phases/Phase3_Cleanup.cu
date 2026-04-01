@@ -17,6 +17,7 @@
 //======================================================//
 
 #include "Phase3_Cleanup.hpp"
+#include "../OptimizerCheckpoint.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
@@ -152,6 +153,14 @@ std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
                 auto file_size = fs::file_size(final_path);
                 EmitModuleInfo(ModuleId::Checkpoint, 
                     "File size: " + std::to_string(file_size / (1024*1024)) + " MB", ctx.global_step);
+            }
+            // Save optimizer sidecar (.opt) alongside final checkpoint
+            try {
+                std::string opt_path = optimizerSidecarPath(final_path);
+                saveOptimizerState(ctx, opt_path);
+            } catch (const std::exception& e) {
+                EmitModuleWarning(ModuleId::Checkpoint,
+                    std::string("Optimizer state save failed: ") + e.what(), ctx.global_step);
             }
             return final_path;
         } else {

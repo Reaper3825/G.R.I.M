@@ -348,6 +348,10 @@ struct TrainingHyperparameters {
     int   execution_block_gate_warmup_steps;
     float execution_block_causal_w1_transition;
 
+    // Autograd structured CE
+    bool  structured_ce_enabled;
+    float structured_ce_weight;
+
     // Decode-time slot selector
     bool  selector_enabled;
     int   selector_d_selector;
@@ -1235,6 +1239,8 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
         assignTrainingField(params.execution_block_gate_warmup_steps, eb, "gate_warmup_steps");
         assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
+        assignTrainingField(params.structured_ce_enabled, eb, "structured_ce_enabled");
+        assignTrainingField(params.structured_ce_weight, eb, "structured_ce_weight");
 
         // Decode-time slot selector (nested under execution_block)
         if (auto sit = eb.find("selector"); sit != eb.end() && sit->is_object()) {
