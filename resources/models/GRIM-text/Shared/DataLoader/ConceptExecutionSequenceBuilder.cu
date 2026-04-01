@@ -330,18 +330,10 @@ std::string renderCanonicalText(const json& j) {
 // JSON "execution" array.
 //
 // Arg slot resolution:
-//   The concept JSON carries VALUES (not slot references) for execution
-//   step args. Slot identity is resolved by:
-//   1. Exact double equality against known slot values
-//   2. Explicit candidate enumeration (all matching slots collected)
-//   3. If unique match for both args: provably correct
-//   4. If ambiguous: enumerate all (slot1, slot2) candidate pairs,
-//      compute op(val1, val2), accept the unique pair matching expected
-//      result. Throw on zero or multiple valid resolutions.
-//
-// This is value-based resolution — inherent to the JSON format which
-// carries numeric values, not slot identifiers. The result validation
-// provides a mathematical proof of correctness for each step.
+//   Each execution step MUST carry "arg_slots": [i, j] with explicit
+//   slot indices. The builder validates that op(slot_values[i], slot_values[j])
+//   matches the expected result. Value-based fallback resolution is deleted
+//   per Rule 20 — it produced ambiguities for duplicate/coincident values.
 
 Execution::StructuredExecutionRecord
 buildStructuredExecutionRecord(const json& j, int base_slot) {
@@ -426,87 +418,41 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
 
             int resolved_1 = -1, resolved_2 = -1;
 
-            // ── Canonical path: JSON carries explicit slot indices ──
-            // When "arg_slots" is present, slot identity is canonical —
-            // no value-based resolution needed.
-            if (e.contains("arg_slots") && e["arg_slots"].is_array()
-                && e["arg_slots"].size() >= 2) {
-                resolved_1 = e["arg_slots"][0].get<int>();
-                resolved_2 = e["arg_slots"][1].get<int>();
+            // ── arg_slots is REQUIRED — no value-based fallback (Rule 20) ──
+            if (!e.contains("arg_slots") || !e["arg_slots"].is_array()
+                || e["arg_slots"].size() < 2) {
+                throw std::runtime_error(
+                    "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                    + " missing required \"arg_slots\" array — value-based resolution "
+                    "is deleted (Rule 20). Add \"arg_slots\": [i, j] to the concept JSON.");
+            }
 
-                if (resolved_1 < 0 || resolved_1 >= static_cast<int>(slot_values.size())) {
-                    throw std::runtime_error(
-                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
-                        + " arg_slots[0]=" + std::to_string(resolved_1)
-                        + " out of range [0, " + std::to_string(slot_values.size()) + ")");
-                }
-                if (resolved_2 < 0 || resolved_2 >= static_cast<int>(slot_values.size())) {
-                    throw std::runtime_error(
-                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
-                        + " arg_slots[1]=" + std::to_string(resolved_2)
-                        + " out of range [0, " + std::to_string(slot_values.size()) + ")");
-                }
+            resolved_1 = e["arg_slots"][0].get<int>();
+            resolved_2 = e["arg_slots"][1].get<int>();
 
-                // Even with canonical slot refs, validate the result.
-                const double computed = computeOp(step.op_id,
-                    slot_values[resolved_1], slot_values[resolved_2]);
-                if (!resultMatches(computed, expected_result)) {
-                    throw std::runtime_error(
-                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
-                        + " arg_slots [" + std::to_string(resolved_1) + ","
-                        + std::to_string(resolved_2) + "] produce "
-                        + std::to_string(computed) + " but expected "
-                        + std::to_string(expected_result));
-                }
-            } else {
-                // ── Fallback: value-based resolution with result validation ──
-                // JSON lacks slot references. Collect ALL candidate slot indices
-                // for each arg value and disambiguate via result validation.
-                std::vector<int> candidates_1, candidates_2;
-                for (int i = 0; i < static_cast<int>(slot_values.size()); ++i) {
-                    if (slot_values[i] == args[0]) candidates_1.push_back(i);
-                    if (slot_values[i] == args[1]) candidates_2.push_back(i);
-                }
+            if (resolved_1 < 0 || resolved_1 >= static_cast<int>(slot_values.size())) {
+                throw std::runtime_error(
+                    "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                    + " arg_slots[0]=" + std::to_string(resolved_1)
+                    + " out of range [0, " + std::to_string(slot_values.size()) + ")");
+            }
+            if (resolved_2 < 0 || resolved_2 >= static_cast<int>(slot_values.size())) {
+                throw std::runtime_error(
+                    "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                    + " arg_slots[1]=" + std::to_string(resolved_2)
+                    + " out of range [0, " + std::to_string(slot_values.size()) + ")");
+            }
 
-                if (candidates_1.empty()) {
-                    throw std::runtime_error(
-                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
-                        + " arg1=" + std::to_string(args[0]) + " matches no slot");
-                }
-                if (candidates_2.empty()) {
-                    throw std::runtime_error(
-                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
-                        + " arg2=" + std::to_string(args[1]) + " matches no slot");
-                }
-
-                int valid_count = 0;
-                for (int c1 : candidates_1) {
-                    for (int c2 : candidates_2) {
-                        const double computed = computeOp(step.op_id, slot_values[c1], slot_values[c2]);
-                        if (resultMatches(computed, expected_result)) {
-                            resolved_1 = c1;
-                            resolved_2 = c2;
-                            valid_count++;
-                        }
-                    }
-                }
-
-                if (valid_count == 0) {
-                    throw std::runtime_error(
-                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
-                        + " no (slot1, slot2) pair produces expected result "
-                        + std::to_string(expected_result)
-                        + " (arg1=" + std::to_string(args[0])
-                        + " arg2=" + std::to_string(args[1])
-                        + " op=" + std::to_string(step.op_id) + ")");
-                }
-                if (valid_count > 1) {
-                    throw std::runtime_error(
-                        "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
-                        + " ambiguous: " + std::to_string(valid_count)
-                        + " (slot1, slot2) pairs produce expected result "
-                        + std::to_string(expected_result));
-                }
+            // Validate: canonical slot refs must produce the expected result.
+            const double computed = computeOp(step.op_id,
+                slot_values[resolved_1], slot_values[resolved_2]);
+            if (!resultMatches(computed, expected_result)) {
+                throw std::runtime_error(
+                    "buildStructuredExecutionRecord: step " + std::to_string(step_idx)
+                    + " arg_slots [" + std::to_string(resolved_1) + ","
+                    + std::to_string(resolved_2) + "] produce "
+                    + std::to_string(computed) + " but expected "
+                    + std::to_string(expected_result));
             }
 
             step.arg1_slot = base_slot + resolved_1;

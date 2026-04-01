@@ -44,6 +44,8 @@ static json conceptBlockToJson(const GRIM::ConceptBlock& cb) {
             e["op"]     = st.op;
             e["args"]   = st.args;
             e["result"] = st.result;
+            if (!st.arg_slots.empty())
+                e["arg_slots"] = st.arg_slots;
             arr.push_back(std::move(e));
         }
         j["execution"] = std::move(arr);
@@ -93,6 +95,11 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
             if (e.contains("args") && e["args"].is_array()) {
                 for (const auto& a : e["args"]) {
                     if (a.is_number()) step.args.push_back(a.get<double>());
+                }
+            }
+            if (e.contains("arg_slots") && e["arg_slots"].is_array()) {
+                for (const auto& s : e["arg_slots"]) {
+                    if (s.is_number_integer()) step.arg_slots.push_back(s.get<int>());
                 }
             }
             cb.execution.push_back(std::move(step));
