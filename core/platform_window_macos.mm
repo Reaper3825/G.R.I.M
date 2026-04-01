@@ -12,11 +12,13 @@
 #import <CoreVideo/CoreVideo.h>
 #import <os/lock.h>
 #include "platform_window.hpp"
+#include "platform_input.hpp"
 #include "logger.hpp"
 #include <string>
 #include <functional>
 #include <vector>
 #include <cstring>
+#import <Carbon/Carbon.h>
 
 // =============================================================================
 // Metal-backed NSView for BGFX
@@ -220,17 +222,98 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
                               dequeue:YES];
             if (!event) break;
 
-            if ([event type] == NSEventTypeScrollWheel) {
+            NSEventType etype = [event type];
+
+            if (etype == NSEventTypeScrollWheel) {
                 mouseWheelDeltaOut += static_cast<float>([event scrollingDeltaY]) * 120.0f;
             }
 
-            if ([event type] == NSEventTypeApplicationDefined &&
+            if (etype == NSEventTypeApplicationDefined &&
                 [event subtype] == NSEventSubtypeApplicationActivated) {
+            }
+
+            // ---------------------------------------------------------------
+            // Event-driven key state tracking (replaces CGEventSourceKeyState polling)
+            // ---------------------------------------------------------------
+            if (etype == NSEventTypeKeyDown || etype == NSEventTypeKeyUp) {
+                bool down = (etype == NSEventTypeKeyDown);
+                unsigned short macKeyCode = [event keyCode];
+                // Use the reverse mapping in PlatformInput to get VK code
+                // We call the macKeyCodeToVK helper indirectly via setKeyDownFromEvent
+                int vk = -1;
+                switch (macKeyCode) {
+                    case kVK_Delete:         vk = 0x08; break;
+                    case kVK_Tab:            vk = 0x09; break;
+                    case kVK_Return:         vk = 0x0D; break;
+                    case kVK_Escape:         vk = 0x1B; break;
+                    case kVK_Space:          vk = 0x20; break;
+                    case kVK_LeftArrow:      vk = 0x25; break;
+                    case kVK_UpArrow:        vk = 0x26; break;
+                    case kVK_RightArrow:     vk = 0x27; break;
+                    case kVK_DownArrow:      vk = 0x28; break;
+                    case kVK_ForwardDelete:  vk = 0x2E; break;
+                    case kVK_Home:           vk = 0x24; break;
+                    case kVK_End:            vk = 0x23; break;
+                    case kVK_PageUp:         vk = 0x21; break;
+                    case kVK_PageDown:       vk = 0x22; break;
+                    case kVK_Shift:          // fall through
+                    case kVK_RightShift:     vk = 0x10; break;
+                    case kVK_Control:        // fall through
+                    case kVK_RightControl:   vk = 0x11; break;
+                    case kVK_Option:         // fall through
+                    case kVK_RightOption:    vk = 0x12; break;
+                    case kVK_Command:        // fall through
+                    case kVK_RightCommand:   vk = 0x11; break; // Cmd → Ctrl VK
+                    case kVK_ANSI_A: vk = 'A'; break; case kVK_ANSI_B: vk = 'B'; break;
+                    case kVK_ANSI_C: vk = 'C'; break; case kVK_ANSI_D: vk = 'D'; break;
+                    case kVK_ANSI_E: vk = 'E'; break; case kVK_ANSI_F: vk = 'F'; break;
+                    case kVK_ANSI_G: vk = 'G'; break; case kVK_ANSI_H: vk = 'H'; break;
+                    case kVK_ANSI_I: vk = 'I'; break; case kVK_ANSI_J: vk = 'J'; break;
+                    case kVK_ANSI_K: vk = 'K'; break; case kVK_ANSI_L: vk = 'L'; break;
+                    case kVK_ANSI_M: vk = 'M'; break; case kVK_ANSI_N: vk = 'N'; break;
+                    case kVK_ANSI_O: vk = 'O'; break; case kVK_ANSI_P: vk = 'P'; break;
+                    case kVK_ANSI_Q: vk = 'Q'; break; case kVK_ANSI_R: vk = 'R'; break;
+                    case kVK_ANSI_S: vk = 'S'; break; case kVK_ANSI_T: vk = 'T'; break;
+                    case kVK_ANSI_U: vk = 'U'; break; case kVK_ANSI_V: vk = 'V'; break;
+                    case kVK_ANSI_W: vk = 'W'; break; case kVK_ANSI_X: vk = 'X'; break;
+                    case kVK_ANSI_Y: vk = 'Y'; break; case kVK_ANSI_Z: vk = 'Z'; break;
+                    case kVK_ANSI_0: vk = '0'; break; case kVK_ANSI_1: vk = '1'; break;
+                    case kVK_ANSI_2: vk = '2'; break; case kVK_ANSI_3: vk = '3'; break;
+                    case kVK_ANSI_4: vk = '4'; break; case kVK_ANSI_5: vk = '5'; break;
+                    case kVK_ANSI_6: vk = '6'; break; case kVK_ANSI_7: vk = '7'; break;
+                    case kVK_ANSI_8: vk = '8'; break; case kVK_ANSI_9: vk = '9'; break;
+                    case kVK_ANSI_Grave: vk = 0xC0; break;
+                    case kVK_F1:  vk = 0x70; break; case kVK_F2:  vk = 0x71; break;
+                    case kVK_F3:  vk = 0x72; break; case kVK_F4:  vk = 0x73; break;
+                    case kVK_F5:  vk = 0x74; break; case kVK_F6:  vk = 0x75; break;
+                    case kVK_F7:  vk = 0x76; break; case kVK_F8:  vk = 0x77; break;
+                    case kVK_F9:  vk = 0x78; break; case kVK_F10: vk = 0x79; break;
+                    case kVK_F11: vk = 0x7A; break; case kVK_F12: vk = 0x7B; break;
+                    default: break;
+                }
+                if (vk >= 0) {
+                    PlatformInput::setKeyDownFromEvent(vk, down);
+                }
+                // Update Command key state for isCommandDown()
+                if (macKeyCode == kVK_Command || macKeyCode == kVK_RightCommand) {
+                    PlatformInput::setCommandDownFromEvent(down);
+                }
+            }
+
+            // Also track modifier flag changes (covers modifier-only presses without keyDown)  
+            if (etype == NSEventTypeFlagsChanged) {
+                NSEventModifierFlags mods = [event modifierFlags];
+                PlatformInput::setKeyDownFromEvent(0x10, (mods & NSEventModifierFlagShift) != 0);
+                PlatformInput::setKeyDownFromEvent(0x11, (mods & NSEventModifierFlagControl) != 0);
+                PlatformInput::setKeyDownFromEvent(0x12, (mods & NSEventModifierFlagOption) != 0);
+                bool cmdDown = (mods & NSEventModifierFlagCommand) != 0;
+                PlatformInput::setCommandDownFromEvent(cmdDown);
+                // Map Cmd to Ctrl VK for shortcuts
+                if (cmdDown) PlatformInput::setKeyDownFromEvent(0x11, true);
             }
 
             // macOS equivalent of WM_CHAR: inject printable characters into text input
             // Skip injection when Cmd is held (let clipboard shortcuts pass through to polling)
-            NSEventType etype = [event type];
             if (etype == NSEventTypeKeyDown && s_textInputCallback) {
                 NSEventModifierFlags mods = [event modifierFlags];
                 bool cmdHeld = (mods & NSEventModifierFlagCommand) != 0;

@@ -29,6 +29,10 @@ namespace PlatformInput {
     // On macOS, returns true when Command is held (used so Cmd maps to Ctrl for shortcuts)
     bool isCommandDown();
 
+    // Event-driven key state tracking (called from platform event pump)
+    void setKeyDownFromEvent(int keyCode, bool down);
+    void setCommandDownFromEvent(bool down);
+
     // Virtual key code mappings (cross-platform)
     enum class Key : int {
         // Mouse buttons

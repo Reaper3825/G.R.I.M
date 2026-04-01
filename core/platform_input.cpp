@@ -31,6 +31,9 @@ namespace PlatformInput {
     bool isCommandDown() {
         return false; // Command key is macOS-only
     }
+
+    void setKeyDownFromEvent(int, bool) {} // No-op on Windows (uses GetAsyncKeyState)
+    void setCommandDownFromEvent(bool) {}
     
     void getCursorPos(int& x, int& y) {
         POINT p{};
@@ -104,6 +107,9 @@ namespace PlatformInput {
     bool isCommandDown() {
         return false; // Command key is macOS-only
     }
+
+    void setKeyDownFromEvent(int, bool) {} // No-op on Linux (uses X11 polling)
+    void setCommandDownFromEvent(bool) {}
     
     void getCursorPos(int& x, int& y) {
         if (!display) {
@@ -142,88 +148,91 @@ namespace PlatformInput {
 }
 
 #elif __APPLE__
-// macOS implementation using Cocoa/Quartz
+// macOS implementation — event-driven key state from NSEvent callbacks
+// CGEventSourceKeyState polling removed (requires Accessibility permissions)
 #include <ApplicationServices/ApplicationServices.h>
 #include <Carbon/Carbon.h>
 
 namespace PlatformInput {
 
-    // Map Windows VK code to macOS CGKeyCode (from Carbon Events.h).
-    // Returns -1 if no mapping (key not supported for polling).
-    static int vkToMacKeyCode(int vk) {
-        switch (vk) {
-            case 0x08: return kVK_Delete;           // Backspace
-            case 0x09: return kVK_Tab;
-            case 0x0D: return kVK_Return;
-            case 0x10: return kVK_Shift;            // Shift
-            case 0x11: return kVK_Control;
-            case 0x12: return kVK_Option;          // Alt -> Option
-            case 0x1B: return kVK_Escape;
-            case 0x20: return kVK_Space;
-            case 0x25: return kVK_LeftArrow;
-            case 0x26: return kVK_UpArrow;
-            case 0x27: return kVK_RightArrow;
-            case 0x28: return kVK_DownArrow;
-            case 0x2E: return kVK_ForwardDelete;    // Delete
-            case 0x30: return kVK_ANSI_0;
-            case 0x31: return kVK_ANSI_1;
-            case 0x32: return kVK_ANSI_2;
-            case 0x33: return kVK_ANSI_3;
-            case 0x34: return kVK_ANSI_4;
-            case 0x35: return kVK_ANSI_5;
-            case 0x36: return kVK_ANSI_6;
-            case 0x37: return kVK_ANSI_7;
-            case 0x38: return kVK_ANSI_8;
-            case 0x39: return kVK_ANSI_9;
-            case 0x41: return kVK_ANSI_A;
-            case 0x42: return kVK_ANSI_B;
-            case 0x43: return kVK_ANSI_C;
-            case 0x44: return kVK_ANSI_D;
-            case 0x45: return kVK_ANSI_E;
-            case 0x46: return kVK_ANSI_F;
-            case 0x47: return kVK_ANSI_G;
-            case 0x48: return kVK_ANSI_H;
-            case 0x49: return kVK_ANSI_I;
-            case 0x4A: return kVK_ANSI_J;
-            case 0x4B: return kVK_ANSI_K;
-            case 0x4C: return kVK_ANSI_L;
-            case 0x4D: return kVK_ANSI_M;
-            case 0x4E: return kVK_ANSI_N;
-            case 0x4F: return kVK_ANSI_O;
-            case 0x50: return kVK_ANSI_P;
-            case 0x51: return kVK_ANSI_Q;
-            case 0x52: return kVK_ANSI_R;
-            case 0x53: return kVK_ANSI_S;
-            case 0x54: return kVK_ANSI_T;
-            case 0x55: return kVK_ANSI_U;
-            case 0x56: return kVK_ANSI_V;
-            case 0x57: return kVK_ANSI_W;
-            case 0x58: return kVK_ANSI_X;
-            case 0x59: return kVK_ANSI_Y;
-            case 0x5A: return kVK_ANSI_Z;
-            case 0x70: return kVK_F1;
-            case 0x71: return kVK_F2;
-            case 0x72: return kVK_F3;
-            case 0x73: return kVK_F4;
-            case 0x74: return kVK_F5;
-            case 0x75: return kVK_F6;
-            case 0x76: return kVK_F7;
-            case 0x77: return kVK_F8;
-            case 0x78: return kVK_F9;
-            case 0x79: return kVK_F10;
-            case 0x7A: return kVK_F11;
-            case 0x7B: return kVK_F12;
-            case 0xC0: return kVK_ANSI_Grave;     // VK_OEM_3 = ` / ~ (console toggle hotkey)
-            default:   return -1;
+    // Event-driven key state arrays, indexed by VK code (0-255)
+    static bool s_eventKeyStates[256] = {};
+    static bool s_eventCommandDown = false;
+
+    // Reverse mapping: macOS keyCode (kVK_*) → Windows VK code
+    static int macKeyCodeToVK(int macCode) {
+        switch (macCode) {
+            case kVK_Delete:         return 0x08; // VK_BACK (Backspace)
+            case kVK_Tab:            return 0x09;
+            case kVK_Return:         return 0x0D;
+            case kVK_Escape:         return 0x1B;
+            case kVK_Space:          return 0x20;
+            case kVK_LeftArrow:      return 0x25;
+            case kVK_UpArrow:        return 0x26;
+            case kVK_RightArrow:     return 0x27;
+            case kVK_DownArrow:      return 0x28;
+            case kVK_ForwardDelete:  return 0x2E; // VK_DELETE
+            case kVK_Home:           return 0x24;
+            case kVK_End:            return 0x23;
+            case kVK_PageUp:         return 0x21;
+            case kVK_PageDown:       return 0x22;
+
+            case kVK_Shift:          return 0x10;
+            case kVK_RightShift:     return 0x10;
+            case kVK_Control:        return 0x11;
+            case kVK_RightControl:   return 0x11;
+            case kVK_Option:         return 0x12;
+            case kVK_RightOption:    return 0x12;
+            case kVK_Command:        return 0x11; // Map Cmd → Ctrl VK
+            case kVK_RightCommand:   return 0x11;
+
+            case kVK_ANSI_A: return 'A'; case kVK_ANSI_B: return 'B';
+            case kVK_ANSI_C: return 'C'; case kVK_ANSI_D: return 'D';
+            case kVK_ANSI_E: return 'E'; case kVK_ANSI_F: return 'F';
+            case kVK_ANSI_G: return 'G'; case kVK_ANSI_H: return 'H';
+            case kVK_ANSI_I: return 'I'; case kVK_ANSI_J: return 'J';
+            case kVK_ANSI_K: return 'K'; case kVK_ANSI_L: return 'L';
+            case kVK_ANSI_M: return 'M'; case kVK_ANSI_N: return 'N';
+            case kVK_ANSI_O: return 'O'; case kVK_ANSI_P: return 'P';
+            case kVK_ANSI_Q: return 'Q'; case kVK_ANSI_R: return 'R';
+            case kVK_ANSI_S: return 'S'; case kVK_ANSI_T: return 'T';
+            case kVK_ANSI_U: return 'U'; case kVK_ANSI_V: return 'V';
+            case kVK_ANSI_W: return 'W'; case kVK_ANSI_X: return 'X';
+            case kVK_ANSI_Y: return 'Y'; case kVK_ANSI_Z: return 'Z';
+
+            case kVK_ANSI_0: return '0'; case kVK_ANSI_1: return '1';
+            case kVK_ANSI_2: return '2'; case kVK_ANSI_3: return '3';
+            case kVK_ANSI_4: return '4'; case kVK_ANSI_5: return '5';
+            case kVK_ANSI_6: return '6'; case kVK_ANSI_7: return '7';
+            case kVK_ANSI_8: return '8'; case kVK_ANSI_9: return '9';
+
+            case kVK_F1:  return 0x70; case kVK_F2:  return 0x71;
+            case kVK_F3:  return 0x72; case kVK_F4:  return 0x73;
+            case kVK_F5:  return 0x74; case kVK_F6:  return 0x75;
+            case kVK_F7:  return 0x76; case kVK_F8:  return 0x77;
+            case kVK_F9:  return 0x78; case kVK_F10: return 0x79;
+            case kVK_F11: return 0x7A; case kVK_F12: return 0x7B;
+
+            case kVK_ANSI_Grave: return 0xC0; // VK_OEM_3
+
+            default: return -1;
         }
     }
 
     void initialize() {
-        // No initialization needed
+        memset(s_eventKeyStates, 0, sizeof(s_eventKeyStates));
+        s_eventCommandDown = false;
     }
 
-    void shutdown() {
-        // No cleanup needed
+    void shutdown() {}
+
+    void setKeyDownFromEvent(int vkCode, bool down) {
+        if (vkCode >= 0 && vkCode < 256)
+            s_eventKeyStates[vkCode] = down;
+    }
+
+    void setCommandDownFromEvent(bool down) {
+        s_eventCommandDown = down;
     }
 
     bool isMouseButtonDown(int button) {
@@ -241,14 +250,13 @@ namespace PlatformInput {
     }
 
     bool isKeyDown(int keyCode) {
-        int macCode = vkToMacKeyCode(keyCode);
-        if (macCode < 0) return false;
-        return CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, static_cast<CGKeyCode>(macCode));
+        if (keyCode >= 0 && keyCode < 256)
+            return s_eventKeyStates[keyCode];
+        return false;
     }
 
     bool isCommandDown() {
-        return CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, static_cast<CGKeyCode>(kVK_Command))
-            || CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, static_cast<CGKeyCode>(kVK_RightCommand));
+        return s_eventCommandDown;
     }
     
     void getCursorPos(int& x, int& y) {
@@ -275,6 +283,8 @@ namespace PlatformInput {
     bool isMouseButtonDown(int) { return false; }
     bool isKeyDown(int) { return false; }
     bool isCommandDown() { return false; }
+    void setKeyDownFromEvent(int, bool) {}
+    void setCommandDownFromEvent(bool) {}
     void getCursorPos(int& x, int& y) { x = y = 0; }
     void getCursorPosRelative(void*, int& x, int& y) { x = y = 0; }
 }
