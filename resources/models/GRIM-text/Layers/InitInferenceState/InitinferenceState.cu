@@ -160,6 +160,7 @@ void LanguageModel::initInferenceState() {
             sel_cfg.d_model = cfg.d_model;
             sel_cfg.d_selector = cfg.selector_d_selector;
             sel_cfg.d_slot_features = kSlotFeatureDim;
+            sel_cfg.cublas_handle = training_state_.cublas_handle;
 
             decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
                 sel_cfg, /*seed=*/0, primary_stream);

@@ -15,12 +15,18 @@
 //
 //  No other module may own trainable decode-time selector
 //  tensors. Policy code consumes the score vector as-is.
+//
+//  Pattern B (self-managed autograd): forward uses
+//  autograd::matmul, autograd::add, autograd::concat.
+//  Backward is automatic via the grad_fn chain.
 //======================================================//
 
 #ifdef __CUDACC__
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #else
 using cudaStream_t = void*;
+using cublasHandle_t = void*;
 #endif
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -31,13 +37,18 @@ struct DecodeTimeSlotSelectorConfig {
     int d_model = 0;         // Hidden state dimension (query source)
     int d_selector = 0;      // Selector key/query projection dimension
     int d_slot_features = 0; // Fixed slot feature vector size from policy
+    cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle
 };
 
-// Score result: ordered over { NULL } ∪ L
-// Index 0 = NULL, indices 1..|L| = candidates in L-order
-struct SelectorScoreResult {
-    float* d_scores = nullptr;  // Device pointer, length = 1 + num_live_slots
+// Forward result: autograd-tracked score tensor + keep-alive intermediates
+struct SelectorForwardResult {
+    Tensor scores;           // [1, 1+num_live_slots] — logits over { NULL } ∪ L
     int num_live_slots = 0;
+
+    // Keep-alive: intermediate Tensors whose .data is cached by upstream MatMulGradFn nodes.
+    // These MUST stay alive until backward() completes.
+    Tensor q;                // [1, d_selector]
+    Tensor slot_keys;        // [num_live, d_selector] (empty if no slots)
 };
 
 class DecodeTimeSlotSelectorLayer {
@@ -53,19 +64,19 @@ public:
     DecodeTimeSlotSelectorLayer(const DecodeTimeSlotSelectorLayer&) = delete;
     DecodeTimeSlotSelectorLayer& operator=(const DecodeTimeSlotSelectorLayer&) = delete;
 
-    // Forward: compute scores over { NULL } ∪ L
+    // Forward: compute scores over { NULL } ∪ L using autograd primitives.
     //
-    // h_t:             device pointer to decode hidden state [1, d_model]
-    // slot_features:   device pointer to fixed slot features [num_live, d_slot_features]
+    // h_t:             [1, d_model] hidden state (non-owning view OK)
+    // slot_features:   [num_live, d_slot_features] fixed slot features (non-owning view OK)
     // num_live_slots:  number of live candidates in L
     // stream:          CUDA stream for async execution
     //
-    // Returns scores written to internal buffer d_score_buffer_.
-    // Index 0 = NULL score, indices 1..num_live = candidate scores.
-    SelectorScoreResult forward(const float* h_t,
-                                const float* slot_features,
-                                int num_live_slots,
-                                cudaStream_t stream);
+    // Returns SelectorForwardResult with autograd-tracked scores tensor.
+    // Caller MUST keep the result alive until backward() completes.
+    SelectorForwardResult forward(const Tensor& h_t,
+                                  const Tensor& slot_features,
+                                  int num_live_slots,
+                                  cudaStream_t stream);
 
     const DecodeTimeSlotSelectorConfig& config() const { return config_; }
 
@@ -91,12 +102,7 @@ private:
     Tensor null_key_select_;  // [1, d_selector]
     Tensor null_logit_bias_;  // [1, 1] scalar
 
-    // Internal scratch buffers
-    float* d_query_buf_ = nullptr;   // [1, d_selector]
-    float* d_keys_buf_ = nullptr;    // [max_slots + 1, d_selector]
-    float* d_score_buffer_ = nullptr; // [max_slots + 1]
-
-    static constexpr int kMaxSlots = 16; // Upper bound for buffer allocation
+    static constexpr int kMaxSlots = 16; // Upper bound for validation
 };
 
 } // namespace GRIM

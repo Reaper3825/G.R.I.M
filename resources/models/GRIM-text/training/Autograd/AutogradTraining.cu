@@ -729,13 +729,68 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         // Upload teacher expected_value for this step.
                         // teacher_steps is supervision data, not the activation signal.
                         const float* d_expected_target = nullptr;
+                        TeacherSelectionTargets selection_targets;  // valid=false by default
+
                         if (have_exec_teacher && b < B_teacher) {
                             const auto& teacher_row = ctx.payload->teacher_steps[b];
                             if (step < static_cast<int>(teacher_row.size())) {
-                                float h_val = teacher_row[step].expected_value;
+                                const auto& ts_k = teacher_row[step];
+                                float h_val = ts_k.expected_value;
                                 cudaMemcpyAsync(d_expected_target_buf, &h_val,
                                                 sizeof(float), cudaMemcpyHostToDevice, ctx.stream);
                                 d_expected_target = d_expected_target_buf;
+
+                                // Build selection targets for autograd CE if enabled.
+                                // Teacher emits absolute slot indices with base_slot=0.
+                                // arg softmax spans [0, V-S), write softmax spans [0, V).
+                                // S=0 currently, so arg targets = arg_slot directly.
+                                if (cfg->structured_ce_enabled) {
+                                    const int S_scratch = 0;  // scratch slots not yet used
+                                    const int V_val = V - S_scratch;
+
+                                    // Bounds-check every target index before marking valid.
+                                    const int arg1_idx = ts_k.arg1_slot - S_scratch;
+                                    const int arg2_idx = ts_k.arg2_slot - S_scratch;
+                                    const int write_idx = ts_k.write_slot;
+
+                                    if (ts_k.op_id < 0 || ts_k.op_id >= nop)
+                                        throw std::runtime_error(
+                                            "AutogradTraining: teacher op_id=" + std::to_string(ts_k.op_id)
+                                            + " out of range [0," + std::to_string(nop) + ") at row="
+                                            + std::to_string(b) + " step=" + std::to_string(step));
+                                    if (arg1_idx < 0 || arg1_idx >= V_val)
+                                        throw std::runtime_error(
+                                            "AutogradTraining: teacher arg1_slot=" + std::to_string(ts_k.arg1_slot)
+                                            + " maps to index " + std::to_string(arg1_idx)
+                                            + " out of range [0," + std::to_string(V_val) + ") at row="
+                                            + std::to_string(b) + " step=" + std::to_string(step));
+                                    if (arg2_idx < 0 || arg2_idx >= V_val)
+                                        throw std::runtime_error(
+                                            "AutogradTraining: teacher arg2_slot=" + std::to_string(ts_k.arg2_slot)
+                                            + " maps to index " + std::to_string(arg2_idx)
+                                            + " out of range [0," + std::to_string(V_val) + ") at row="
+                                            + std::to_string(b) + " step=" + std::to_string(step));
+                                    if (write_idx < 0 || write_idx >= V)
+                                        throw std::runtime_error(
+                                            "AutogradTraining: teacher write_slot=" + std::to_string(ts_k.write_slot)
+                                            + " out of range [0," + std::to_string(V) + ") at row="
+                                            + std::to_string(b) + " step=" + std::to_string(step));
+
+                                    selection_targets.op_target    = ts_k.op_id;
+                                    selection_targets.arg1_target  = arg1_idx;
+                                    selection_targets.arg2_target  = arg2_idx;
+                                    selection_targets.write_target = write_idx;
+                                    selection_targets.valid = true;
+
+                                    // Step mask check: if step is masked, don't supervise
+                                    const bool have_step_mask_here =
+                                        (ctx.payload && !ctx.payload->teacher_step_mask.empty()
+                                         && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
+                                         && step < static_cast<int>(ctx.payload->teacher_step_mask[b].size()));
+                                    if (have_step_mask_here && ctx.payload->teacher_step_mask[b][step] == 0) {
+                                        selection_targets.valid = false;
+                                    }
+                                }
                             }
                         }
 
@@ -749,7 +804,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                             tok_off, sl,
                             ts->trace_state_by_row[b],
                             ts->execution_trace_by_row[b],
-                            d_expected_target);
+                            d_expected_target,
+                            cfg->structured_ce_enabled ? &selection_targets : nullptr);
                         ts->execution_trace_by_row[b].push_back(step_diag.record);
                         intermediates.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
                     }
@@ -1283,45 +1339,38 @@ LossResult computeAutogradLoss(
     constexpr float numeric_loss = 0.0f;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // STRUCTURED CE LOSS on ExecutionBlock outputs (REPLACES entropy as primary)
-    // Per (batch_row, step): CE(p_op, op_id) + CE(p_arg1, arg1) + CE(p_arg2, arg2) + CE(p_write, write)
-    // Step X/Y multipliers amplify CE terms on value mismatch.
+    // EXECUTION BLOCK LOSS — autograd-connected CE + transition loss
+    //
+    // Two gradient-connected paths:
+    //   1. transition_loss — L1 on soft-computed value vs teacher expected_value
+    //   2. selection CE — logits-space CE on op/arg1/arg2/write selections
+    //      (computed inside executeStep via SelectionCrossEntropyGradFn)
+    //
+    // Monitoring-only (host scalars, no gradients):
+    //   - exec_entropy_loss — distribution collapse detection
+    //   - exec_structured_ce — scalar readback of device CE for logging parity
     // ═══════════════════════════════════════════════════════════════════════════
     float exec_structured_ce = 0.0f;
     float exec_entropy_loss = 0.0f;
-    float exec_causal_loss = 0.0f;
 
     if (cfg->execution_block_enabled && ctx.execution_block
         && !intermediates.exec_outputs_per_row.empty()) {
 
-        const int V   = cfg->execution_block_num_slots;
-        const int S   = 0; // TODO: read from ExecutionBlockConfig if scratch slots are used
-        const int V_val = V - S;
-        const int nop = cfg->execution_block_num_ops;
-        const float m_x = cfg->step_x_multiplier;
-        const float m_y = cfg->step_y_multiplier;
-        const bool override_x = cfg->step_y_overrides_x;
-        const float eps_match = cfg->value_match_epsilon;
-
-        const bool have_teacher = (ctx.payload && !ctx.payload->teacher_steps.empty());
         const bool have_step_mask = (ctx.payload && !ctx.payload->teacher_step_mask.empty());
+        const float ce_weight = cfg->structured_ce_weight;
 
-        float total_ce = 0.0f;
-        int ce_count = 0;
+        // Accumulate autograd losses: transition_loss + selection CE tensors
+        int ce_tensor_count = 0;
+        float ce_scalar_sum = 0.0f;
 
         for (int b = 0; b < ctx.batch_size; ++b) {
-            // execution_active[b] is the authoritative per-row activation;
-            // skip teacher CE logging for rows that aren't execution-active.
             if (!ctx.payload->execution_active.empty()
                 && !ctx.payload->execution_active[b])
                 continue;
 
             const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
-            const auto* teacher_row = (have_teacher && b < static_cast<int>(ctx.payload->teacher_steps.size()))
-                ? &ctx.payload->teacher_steps[b] : nullptr;
-
             for (int k = 0; k < static_cast<int>(row_steps.size()); ++k) {
-                // Skip padded steps — they don't contribute to loss
+                // Skip padded steps — no gradient contribution
                 if (have_step_mask
                     && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
                     && k < static_cast<int>(ctx.payload->teacher_step_mask[b].size())
@@ -1329,75 +1378,57 @@ LossResult computeAutogradLoss(
                     continue;
 
                 const auto& sout = row_steps[k];
-                if (!sout.p_op.data || !sout.p_arg1.data || !sout.p_arg2.data || !sout.p_write.data)
-                    continue;
 
-                if (!teacher_row || k >= static_cast<int>(teacher_row->size()))
-                    continue;
-
-                const auto& ts_k = (*teacher_row)[k];
-
-                // Host-side copies of probability distributions
-                std::vector<float> h_p_op(nop), h_p_arg1(V_val), h_p_arg2(V_val), h_p_write(V);
-                cudaMemcpyAsync(h_p_op.data(), sout.p_op.data, nop * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                cudaMemcpyAsync(h_p_arg1.data(), sout.p_arg1.data, V_val * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                cudaMemcpyAsync(h_p_arg2.data(), sout.p_arg2.data, V_val * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                cudaMemcpyAsync(h_p_write.data(), sout.p_write.data, V * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                cudaStreamSynchronize(ctx.stream);
-
-                auto safe_nll = [](const std::vector<float>& p, int target) -> float {
-                    if (target < 0 || target >= static_cast<int>(p.size())) return 20.0f;
-                    float prob = p[target];
-                    if (prob < 1e-10f) prob = 1e-10f;
-                    return -logf(prob);
-                };
-
-                float ce_op = safe_nll(h_p_op, ts_k.op_id);
-                float ce_arg1 = safe_nll(h_p_arg1, ts_k.arg1_slot - S);
-                float ce_arg2 = safe_nll(h_p_arg2, ts_k.arg2_slot - S);
-                float ce_write = safe_nll(h_p_write, ts_k.write_slot);
-
-                // Value mismatch check for Step X / Y multipliers
-                bool value_match = true;
-                if (sout.state_after_values.data) {
-                    float v_out_host = 0.0f;
-                    cudaMemcpy(&v_out_host, sout.state_after_values.data + ts_k.write_slot,
-                               sizeof(float), cudaMemcpyDeviceToHost);
-                    float diff = fabsf(v_out_host - ts_k.expected_value);
-                    if (ts_k.expected_value == truncf(ts_k.expected_value)) {
-                        value_match = (v_out_host == ts_k.expected_value);
-                    } else {
-                        value_match = (diff <= eps_match);
-                    }
+                // transition_loss → autograd graph (L1 value supervision)
+                if (sout.transition_loss.data && sout.transition_loss.grad_fn) {
+                    auto scaled = autograd::scale_scalar(
+                        sout.transition_loss,
+                        cfg->execution_block_causal_w1_transition,
+                        ctx.stream);
+                    intermediates.loss_tensor = autograd::add(
+                        intermediates.loss_tensor, scaled, ctx.stream);
                 }
 
-                if (!value_match) {
-                    if (override_x) {
-                        ce_op    *= m_y;
-                        ce_arg1  *= m_y;
-                        ce_arg2  *= m_y;
-                        ce_write *= m_y;
-                    } else {
-                        ce_op    *= m_y;
-                        ce_write *= m_y;
-                        ce_arg1  *= m_x * m_y;
-                        ce_arg2  *= m_x * m_y;
-                    }
-                }
+                // selection CE → autograd graph (direct per-decision supervision)
+                if (cfg->structured_ce_enabled && sout.has_selection_ce) {
+                    auto accumulate_ce = [&](const Tensor& ce_tensor, const char* name) {
+                        if (!ce_tensor.data || !ce_tensor.grad_fn)
+                            throw std::runtime_error(
+                                std::string("AutogradTraining: selection CE tensor '")
+                                + name + "' has no data/grad_fn at row=" + std::to_string(b)
+                                + " step=" + std::to_string(k)
+                                + " — SelectionCrossEntropyGradFn was not attached");
+                        auto scaled = autograd::scale_scalar(ce_tensor, ce_weight, ctx.stream);
+                        intermediates.loss_tensor = autograd::add(
+                            intermediates.loss_tensor, scaled, ctx.stream);
+                    };
 
-                total_ce += ce_op + ce_arg1 + ce_arg2 + ce_write;
-                ce_count++;
+                    accumulate_ce(sout.selection_ce_op,    "selection_ce_op");
+                    accumulate_ce(sout.selection_ce_arg1,  "selection_ce_arg1");
+                    accumulate_ce(sout.selection_ce_arg2,  "selection_ce_arg2");
+                    accumulate_ce(sout.selection_ce_write, "selection_ce_write");
+
+                    // Scalar readback for logging parity (one sync per step is acceptable
+                    // since we're already doing cudaMemcpy for expected_value upload)
+                    float h_ce[4];
+                    cudaMemcpyAsync(&h_ce[0], sout.selection_ce_op.data,    sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                    cudaMemcpyAsync(&h_ce[1], sout.selection_ce_arg1.data,  sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                    cudaMemcpyAsync(&h_ce[2], sout.selection_ce_arg2.data,  sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                    cudaMemcpyAsync(&h_ce[3], sout.selection_ce_write.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+                    cudaStreamSynchronize(ctx.stream);
+                    ce_scalar_sum += h_ce[0] + h_ce[1] + h_ce[2] + h_ce[3];
+                    ce_tensor_count++;
+                }
             }
         }
 
-        if (ce_count > 0) {
-            exec_structured_ce = total_ce / static_cast<float>(ce_count);
+        if (ce_tensor_count > 0) {
+            exec_structured_ce = ce_scalar_sum / static_cast<float>(ce_tensor_count);
         }
 
         // Optional entropy auxiliary (non-differentiable monitoring term)
         if (cfg->entropy_aux_weight > 0.0f) {
             for (int b = 0; b < ctx.batch_size; ++b) {
-                // Filter out padded steps — their entropy should not affect the loss
                 const auto& all_steps = intermediates.exec_outputs_per_row[b].steps;
                 std::vector<ExecutionBlockStepOutput> real_steps;
                 if (have_step_mask
@@ -1424,36 +1455,6 @@ LossResult computeAutogradLoss(
             if (ctx.batch_size > 0)
                 exec_entropy_loss /= static_cast<float>(ctx.batch_size);
         }
-
-        // L_exec: merge causal state losses into autograd loss_tensor (Fixes 1-9)
-        float exec_causal_loss_sum = 0.0f;
-        int exec_causal_count = 0;
-        for (int b = 0; b < ctx.batch_size; ++b) {
-            const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
-            for (int k = 0; k < static_cast<int>(row_steps.size()); ++k) {
-                // Skip padded steps — no gradient contribution
-                if (have_step_mask
-                    && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
-                    && k < static_cast<int>(ctx.payload->teacher_step_mask[b].size())
-                    && ctx.payload->teacher_step_mask[b][k] == 0)
-                    continue;
-
-                const auto& sout = row_steps[k];
-
-                // Add transition_loss to autograd graph (primary gradient signal)
-                if (sout.transition_loss.data && sout.transition_loss.grad_fn) {
-                    auto scaled = autograd::scale_scalar(
-                        sout.transition_loss,
-                        cfg->execution_block_causal_w1_transition,
-                        ctx.stream);
-                    intermediates.loss_tensor = autograd::add(
-                        intermediates.loss_tensor, scaled, ctx.stream);
-                }
-
-            }
-        }
-        exec_causal_loss = (exec_causal_count > 0)
-            ? exec_causal_loss_sum / static_cast<float>(exec_causal_count) : 0.0f;
     }
 
     // Optional Spec Step 9: final slot vs target MSE penalty
@@ -1492,12 +1493,15 @@ LossResult computeAutogradLoss(
     result.numeric_loss = numeric_loss;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // SELECTOR SUPERVISION LOSS — masked CE over {NULL}∪L from slot_selection_targets
+    // SELECTOR SUPERVISION LOSS — autograd CE through TensorContract
     // For each supervised decode position (kind != Ignore), runs selector forward
-    // on the encoder hidden state and computes CE against the target slot / NULL.
+    // (autograd::matmul/concat chain), computes CE via autograd::cross_entropy_logits,
+    // and accumulates into loss_tensor for automatic backward.
     // Weighted by cfg->selector_supervision_weight (0 = disabled).
     // ═══════════════════════════════════════════════════════════════════════════
     float selector_supervision_loss = 0.0f;
+    // Keep SelectorForwardResult objects alive until backward completes
+    std::vector<SelectorForwardResult> selector_fwd_results;
     if (cfg->selector_enabled && cfg->selector_supervision_weight > 0.0f
         && cfg->execution_block_enabled && ctx.model
         && ctx.payload && !ctx.payload->slot_selection_targets.empty()
@@ -1516,9 +1520,9 @@ LossResult computeAutogradLoss(
                 throw std::runtime_error("computeAutogradLoss: encoder output tensor is NULL for selector supervision");
             }
 
-            float ce_sum = 0.0f;
-            int   ce_count = 0;
+            int ce_count = 0;
 
+            // First pass: count supervised positions for loss_scale denominator
             for (int b = 0; b < ctx.batch_size; ++b) {
                 if (!ctx.payload->execution_active.empty()
                     && !ctx.payload->execution_active[b])
@@ -1531,83 +1535,120 @@ LossResult computeAutogradLoss(
                     continue;
                 const auto& mem = intermediates.exec_memories[b];
                 if (!mem.valid_mask.data) continue;
-
-                // Build candidate set for this row's memory state
-                policy->buildCandidateSet(
-                    mem.valid_mask.data,
-                    mem.values.data,
-                    mem.recent_write_mask.data,
-                    mem.usage.data,
-                    policy->config().num_slots,
-                    policy->config().scratch_slots,
-                    ctx.stream);
-                const auto& cands = policy->candidates();
-
                 const int row_len = std::min(seq_len, static_cast<int>(row_targets.size()));
                 for (int t = 0; t < row_len; ++t) {
-                    const auto& tgt = row_targets[t];
-                    if (tgt.kind == Execution::SlotSelectionTargetKind::Ignore)
-                        continue;
-
-                    // Hidden state for this position
-                    const float* h_t = d_hidden + (static_cast<size_t>(b) * seq_len + t) * d_model;
-
-                    // Determine target index: 0 = NULL, 1+candidate_offset = Slot
-                    int target_idx = -1;
-                    if (tgt.kind == Execution::SlotSelectionTargetKind::Null) {
-                        target_idx = 0;  // NULL score is index 0
-                    } else if (tgt.kind == Execution::SlotSelectionTargetKind::Slot) {
-                        // Find which candidate position corresponds to tgt.slot_id
-                        for (int c = 0; c < cands.num_live_slots; ++c) {
-                            if (cands.live_slot_ids[c] == tgt.slot_id) {
-                                target_idx = 1 + c;  // Scores are [NULL, cand0, cand1, ...]
-                                break;
-                            }
-                        }
-                        if (target_idx < 0) continue;  // Target slot not in candidate set — skip
-                    }
-
-                    if (cands.num_live_slots <= 0 && target_idx > 0)
-                        continue;  // No candidates but target is a slot — skip
-
-                    // Run selector forward
-                    int num_live = cands.num_live_slots > 0 ? cands.num_live_slots : 0;
-                    if (target_idx == 0 && num_live == 0) {
-                        // NULL target with no candidates: correct by definition, loss = 0
-                        continue;
-                    }
-                    SelectorScoreResult scores = selector->forward(
-                        h_t, cands.d_slot_features, num_live, ctx.stream);
-
-                    // Copy scores to host for CE computation
-                    const int score_len = 1 + num_live;
-                    std::vector<float> h_scores(score_len);
-                    cudaMemcpyAsync(h_scores.data(), scores.d_scores,
-                                    score_len * sizeof(float),
-                                    cudaMemcpyDeviceToHost, ctx.stream);
-                    cudaStreamSynchronize(ctx.stream);
-
-                    // Compute softmax CE:  -log(softmax(scores)[target_idx])
-                    float max_s = *std::max_element(h_scores.begin(), h_scores.end());
-                    float sum_exp = 0.0f;
-                    for (int i = 0; i < score_len; ++i)
-                        sum_exp += std::exp(h_scores[i] - max_s);
-                    float log_prob = (h_scores[target_idx] - max_s) - std::log(sum_exp);
-                    ce_sum += -log_prob;
-                    ce_count++;
+                    if (row_targets[t].kind != Execution::SlotSelectionTargetKind::Ignore)
+                        ce_count++;
                 }
             }
 
             if (ce_count > 0) {
-                selector_supervision_loss = cfg->selector_supervision_weight
-                    * (ce_sum / static_cast<float>(ce_count));
+                // weight per position = supervision_weight / count
+                const float per_pos_weight = cfg->selector_supervision_weight
+                                           / static_cast<float>(ce_count);
+
+                selector_fwd_results.reserve(static_cast<size_t>(ce_count));
+
+                // Second pass: autograd forward + CE for each supervised position
+                for (int b = 0; b < ctx.batch_size; ++b) {
+                    if (!ctx.payload->execution_active.empty()
+                        && !ctx.payload->execution_active[b])
+                        continue;
+                    if (b >= static_cast<int>(ctx.payload->slot_selection_targets.size()))
+                        continue;
+                    const auto& row_targets = ctx.payload->slot_selection_targets[b];
+                    if (row_targets.empty()) continue;
+                    if (b >= static_cast<int>(intermediates.exec_memories.size()))
+                        continue;
+                    const auto& mem = intermediates.exec_memories[b];
+                    if (!mem.valid_mask.data) continue;
+
+                    // Build candidate set for this row's memory state
+                    policy->buildCandidateSet(
+                        mem.valid_mask.data,
+                        mem.values.data,
+                        mem.recent_write_mask.data,
+                        mem.usage.data,
+                        policy->config().num_slots,
+                        policy->config().scratch_slots,
+                        ctx.stream);
+                    const auto& cands = policy->candidates();
+
+                    const int row_len = std::min(seq_len, static_cast<int>(row_targets.size()));
+                    for (int t = 0; t < row_len; ++t) {
+                        const auto& tgt = row_targets[t];
+                        if (tgt.kind == Execution::SlotSelectionTargetKind::Ignore)
+                            continue;
+
+                        // Hidden state for this position — non-owning Tensor view
+                        float* h_t_ptr = const_cast<float*>(d_hidden + (static_cast<size_t>(b) * seq_len + t) * d_model);
+                        Tensor h_t_view = Tensor::from_ptr(h_t_ptr,
+                            TensorContract::TensorShape::make_BSM(1, d_model),
+                            /*takes_ownership=*/false, /*requires_grad=*/false,
+                            "selector_h_t_view");
+
+                        // Slot features — non-owning Tensor view
+                        Tensor slot_feat_view;
+                        int num_live = cands.num_live_slots > 0 ? cands.num_live_slots : 0;
+                        if (num_live > 0 && cands.d_slot_features) {
+                            slot_feat_view = Tensor::from_ptr(
+                                const_cast<float*>(cands.d_slot_features),
+                                TensorContract::TensorShape::make_BSM(num_live, kSlotFeatureDim),
+                                /*takes_ownership=*/false, /*requires_grad=*/false,
+                                "selector_slot_feat_view");
+                        }
+
+                        // Determine target index: 0 = NULL, 1+candidate_offset = Slot
+                        int target_idx = -1;
+                        if (tgt.kind == Execution::SlotSelectionTargetKind::Null) {
+                            target_idx = 0;
+                        } else if (tgt.kind == Execution::SlotSelectionTargetKind::Slot) {
+                            for (int c = 0; c < cands.num_live_slots; ++c) {
+                                if (cands.live_slot_ids[c] == tgt.slot_id) {
+                                    target_idx = 1 + c;
+                                    break;
+                                }
+                            }
+                            if (target_idx < 0) continue;  // Target slot not in candidate set
+                        }
+
+                        if (num_live <= 0 && target_idx > 0)
+                            continue;
+                        if (target_idx == 0 && num_live == 0)
+                            continue;  // NULL with no candidates: trivially correct
+
+                        // Autograd forward: builds grad_fn chain
+                        SelectorForwardResult fwd = selector->forward(
+                            h_t_view, slot_feat_view, num_live, ctx.stream);
+
+                        // CE loss from logits → scalar [1,1] in autograd graph
+                        Tensor ce = autograd::cross_entropy_logits(
+                            fwd.scores, target_idx, ctx.stream);
+
+                        // Scale by per-position weight
+                        Tensor ce_scaled = autograd::scale_scalar(ce, per_pos_weight, ctx.stream);
+
+                        // Accumulate into total loss tensor
+                        intermediates.loss_tensor = autograd::add(
+                            intermediates.loss_tensor, ce_scaled, ctx.stream);
+
+                        // Read CE for reporting
+                        float ce_val = 0.0f;
+                        cudaMemcpyAsync(&ce_val, ce.data, sizeof(float),
+                                        cudaMemcpyDeviceToHost, ctx.stream);
+                        selector_supervision_loss += per_pos_weight * ce_val;
+
+                        // Keep forward result alive for backward
+                        selector_fwd_results.push_back(std::move(fwd));
+                    }
+                }
             }
         }
     }
     result.selector_loss = selector_supervision_loss;
 
     result.loss_value = text_loss + exec_structured_ce + exec_entropy_loss
-                      + exec_causal_loss + final_consistency_loss
+                      + final_consistency_loss
                       + selector_supervision_loss;
     result.weight_text = 1.0f;
     
@@ -1616,13 +1657,11 @@ LossResult computeAutogradLoss(
             + std::to_string(text_loss) + " numeric=" + std::to_string(numeric_loss)
             + " exec_ce=" + std::to_string(exec_structured_ce)
             + " exec_entropy=" + std::to_string(exec_entropy_loss)
-            + " exec_causal=" + std::to_string(exec_causal_loss)
             + " final_consistency=" + std::to_string(final_consistency_loss)
             + " selector=" + std::to_string(selector_supervision_loss) + ")");
     }
     
     AG_INFO("Loss computed: text_ce=" << text_loss << " exec_ce=" << exec_structured_ce
-            << " exec_causal=" << exec_causal_loss
             << " exec_entropy_aux=" << exec_entropy_loss
             << " selector=" << selector_supervision_loss
             << " valid_tokens=" << valid_tokens);

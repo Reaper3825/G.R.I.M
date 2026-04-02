@@ -1471,6 +1471,20 @@ Tensor softmax(const Tensor& x, float temperature = 1.0f, cudaStream_t stream = 
  */
 Tensor concat(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 
+/**
+ * Cross-entropy loss from logits (stable log-sum-exp formulation).
+ * Input:  logits [1, num_classes] — raw scores (NOT probabilities)
+ * Target: single integer class index in [0, num_classes)
+ * Output: scalar CE tensor [1, 1]
+ *
+ * Forward:  CE = log(sum(exp(z_i - z_max))) + z_max - z[target]
+ * Backward: d_logits[i] = softmax(z)[i] - 1_{i == target}
+ *
+ * Creates CrossEntropyLogitsGradFn if input requires_grad.
+ * Designed for small classification heads (selector, execution block).
+ */
+Tensor cross_entropy_logits(const Tensor& logits, int target_idx, cudaStream_t stream = nullptr);
+
 }  // namespace autograd
 
 }  // namespace GRIM

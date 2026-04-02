@@ -304,11 +304,25 @@ DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
 
     const auto& cands = policy->candidates();
     if (cands.num_live_slots > 0) {
-        SelectorScoreResult scores = selector->forward(
-            d_hidden_state, cands.d_slot_features,
+        // Create non-owning Tensor views for inference forward
+        Tensor h_t_view = Tensor::from_ptr(
+            const_cast<float*>(d_hidden_state),
+            TensorContract::TensorShape::make_BSM(1, selector->config().d_model),
+            /*takes_ownership=*/false, /*requires_grad=*/false,
+            "policy_h_t_view");
+        Tensor slot_feat_view;
+        if (cands.d_slot_features && cands.num_live_slots > 0) {
+            slot_feat_view = Tensor::from_ptr(
+                const_cast<float*>(cands.d_slot_features),
+                TensorContract::TensorShape::make_BSM(cands.num_live_slots, selector->config().d_slot_features),
+                /*takes_ownership=*/false, /*requires_grad=*/false,
+                "policy_slot_feat_view");
+        }
+        SelectorForwardResult fwd = selector->forward(
+            h_t_view, slot_feat_view,
             cands.num_live_slots, stream);
         SlotSelectionResult result = policy->evaluateScores(
-            scores.d_scores, scores.num_live_slots, stream);
+            fwd.scores.data, fwd.num_live_slots, stream);
         out.status = result.status;
         out.selected_slot = result.selected_slot;
         if (result.status == SlotSelectionStatus::Selected

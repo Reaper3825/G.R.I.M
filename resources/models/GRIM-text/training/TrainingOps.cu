@@ -439,6 +439,7 @@ void LanguageModel::initGPU() {
                 sel_config.d_model = cfg.d_model;
                 sel_config.d_selector = cfg.selector_d_selector;
                 sel_config.d_slot_features = kSlotFeatureDim;
+                sel_config.cublas_handle = training_state_.cublas_handle;
 
                 const uint64_t sel_seed = training_state_.weight_init_seed + 30;
                 decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
