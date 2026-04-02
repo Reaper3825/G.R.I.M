@@ -17,6 +17,7 @@
 #include "decode_time_slot_selector_GPU.hpp"
 #include <cuda_runtime.h>
 #include <stdexcept>
+#include <utility>
 #include <cstdio>
 
 namespace GRIM {
@@ -177,7 +178,7 @@ SelectorForwardResult DecodeTimeSlotSelectorLayer::forward(
         result.scores = autograd::concat(null_score_biased, slot_scores, stream);
     } else {
         // No live slots: scores = null_score_biased  →  [1, 1]
-        result.scores = null_score_biased;
+        result.scores = std::move(null_score_biased);
     }
 
     return result;

@@ -652,6 +652,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             if (layer_idx == exec_layer && ctx.execution_block) {
                 const int ae = cfg->scratch_block_atom_embedding_dim;
                 const int V = cfg->execution_block_num_slots;
+                const int nop = cfg->execution_block_num_ops;
                 const int dk = cfg->execution_block_d_key;
                 const int dt = cfg->execution_block_d_type;
                 const int B  = ctx.batch_size;
