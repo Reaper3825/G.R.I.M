@@ -869,7 +869,10 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
     const bool selector_active = config_.selector_enabled
         && getDecodeTimeSlotSelectorLayer() != nullptr
         && getDecodeTimeNumPolicy() != nullptr
-        && config_.execution_block_enabled;
+        && config_.execution_block_enabled
+        && getScratchBlockLayer() != nullptr
+        && isScratchBlockEnabled()
+        && training_state_.has_inference_exec_memory;
     if (!selector_active) {
         // No selector → hard-mask <NUM> when scratchblock generation is active
         const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
@@ -932,6 +935,19 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         // =====================================================================
         if (selector_active) {
             if (!training_state_.decode_selector_valid) {
+                std::fprintf(stderr,
+                    "[Selector Debug] step=%d  selector_enabled=%d  selectorLayer=%d  numPolicy=%d"
+                    "  exec_block_enabled=%d  scratchLayer=%d  scratchEnabled=%d  has_exec_mem=%d"
+                    "  decode_selector_valid=%d\n",
+                    step,
+                    (int)config_.selector_enabled,
+                    (int)(getDecodeTimeSlotSelectorLayer() != nullptr),
+                    (int)(getDecodeTimeNumPolicy() != nullptr),
+                    (int)config_.execution_block_enabled,
+                    (int)(getScratchBlockLayer() != nullptr),
+                    (int)isScratchBlockEnabled(),
+                    (int)training_state_.has_inference_exec_memory,
+                    (int)training_state_.decode_selector_valid);
                 throw std::runtime_error(
                     "generateSequenceGPU: selector_active but decode_selector_valid is false at step "
                     + std::to_string(step) + " — selector was not evaluated after "
