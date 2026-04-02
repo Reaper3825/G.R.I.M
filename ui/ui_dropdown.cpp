@@ -37,6 +37,7 @@ void UIDropdown::update(const InputState& input, float dt) {
     
     bool overDropdown = (m.x >= dropdownPos.x && m.x <= dropdownPos.x + dropdownSize.x &&
                         m.y >= dropdownPos.y && m.y <= dropdownPos.y + dropdownSize.y);
+    hovered = overDropdown;
     
     bool leftPressed = Mouse::wasPressed(MouseButton::Left);
     
@@ -49,6 +50,17 @@ void UIDropdown::update(const InputState& input, float dt) {
     bool overExpandedList = expanded && 
                            (m.x >= expandedPos.x && m.x <= expandedPos.x + expandedSize.x &&
                             m.y >= expandedPos.y && m.y <= expandedPos.y + expandedSize.y);
+
+    hoveredItem = -1;
+    if (expanded && overExpandedList) {
+        float relativeY = m.y - expandedPos.y;
+        int localItem = static_cast<int>(relativeY / 25.0f);
+        if (localItem >= 0 && localItem < visibleItems) {
+            int itemIndex = scrollOffset + localItem;
+            if (itemIndex >= 0 && itemIndex < static_cast<int>(options.size()))
+                hoveredItem = itemIndex;
+        }
+    }
     
     // Handle mouse wheel scrolling when over expanded list
     if (expanded && overExpandedList && input.mouseWheelDelta != 0.0f) {
@@ -103,9 +115,15 @@ void UIDropdown::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     Vec2 currentDropdownPos = {position.x + 150, position.y + 5};
     Vec2 currentDropdownSize = {size.x - 160, 30};
     
+    uint32_t bgColor = expanded ? Colors::WidgetBgActive
+                                : (hovered ? Colors::WidgetBgHover : Colors::WidgetBg);
+    uint32_t borderColor = (expanded || hovered)
+                               ? Colors::BorderPrimary
+                               : Colors::BorderSubtle;
+
     // Draw dropdown box
-    renderer.drawRoundedRect(currentDropdownPos, currentDropdownSize, Colors::WidgetBg, Sizes::WidgetRadius);
-    renderer.drawRoundedBorder(currentDropdownPos, currentDropdownSize, Colors::BorderPrimary, Sizes::WidgetRadius);
+    renderer.drawRoundedRect(currentDropdownPos, currentDropdownSize, bgColor, Sizes::WidgetRadius);
+    renderer.drawRoundedBorder(currentDropdownPos, currentDropdownSize, borderColor, Sizes::WidgetRadius);
     
     // Draw selected item
     std::string selected = getSelectedItem();
@@ -130,6 +148,14 @@ void UIDropdown::drawExpandedList(OverlayRenderer& renderer, const Vec2& panelPo
     int visibleItems = std::min(maxVisibleItems, static_cast<int>(options.size()));
     int totalItems = static_cast<int>(options.size());
     bool needsScroll = totalItems > maxVisibleItems;
+    float listHeight = visibleItems * 25.0f;
+
+    renderer.drawRoundedRect({currentDropdownPos.x, currentDropdownPos.y + currentDropdownSize.y},
+                             {currentDropdownSize.x, listHeight},
+                             Colors::PanelBg, Sizes::SmallRadius);
+    renderer.drawRoundedBorder({currentDropdownPos.x, currentDropdownPos.y + currentDropdownSize.y},
+                               {currentDropdownSize.x, listHeight},
+                               Colors::BorderPrimary, Sizes::SmallRadius);
     
     // Draw scrollable options list
     for (int i = 0; i < visibleItems; ++i) {
@@ -139,9 +165,18 @@ void UIDropdown::drawExpandedList(OverlayRenderer& renderer, const Vec2& panelPo
         Vec2 optPos = {currentDropdownPos.x, currentDropdownPos.y + currentDropdownSize.y + i * 25};
         Vec2 optSize = {currentDropdownSize.x, 25};
         
-        uint32_t bgColor = (itemIndex == selectedIndex) ? Colors::WidgetBgHover : Colors::ContentAreaBg;
+        bool isHovered = (itemIndex == hoveredItem);
+        bool isSelected = (itemIndex == selectedIndex);
+        uint32_t bgColor = isHovered ? Colors::WidgetBgHover
+                           : isSelected ? Colors::WidgetBgActive
+                                        : Colors::ContentAreaBg;
         renderer.drawRect(optPos, optSize, bgColor);
         renderer.drawRect(optPos, {optSize.x, 1}, Colors::GlassHighlight);
+
+        if (isHovered) {
+            renderer.drawRoundedBorder(optPos, optSize,
+                                       Colors::BorderPrimary, Sizes::SmallRadius);
+        }
         
         renderer.drawText({optPos.x + 8, optPos.y + 5}, options[itemIndex], Colors::TextPrimary);
     }
@@ -150,8 +185,6 @@ void UIDropdown::drawExpandedList(OverlayRenderer& renderer, const Vec2& panelPo
     if (needsScroll) {
         float scrollbarX = currentDropdownPos.x + currentDropdownSize.x - 12;
         float listY = currentDropdownPos.y + currentDropdownSize.y;
-        float listHeight = visibleItems * 25.0f;
-        
         // Scrollbar background
         renderer.drawRoundedRect({scrollbarX, listY}, {8, listHeight}, Colors::ContentAreaBg, Sizes::SmallRadius);
         

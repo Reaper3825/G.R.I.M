@@ -1,5 +1,6 @@
 #pragma once
 #include "widget.hpp"
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <vector>
@@ -43,11 +44,13 @@ private:
     std::function<void(int, const std::string&)> callback;
     
     bool expanded = false;
+    bool hovered = false;
     Vec2 dropdownPos{0, 0};
     Vec2 dropdownSize{0, 0};
     
     // Scrolling support
     int maxVisibleItems = 8;  // Maximum items to show before scrolling
     int scrollOffset = 0;     // Current scroll position (in items)
+    int hoveredItem = -1;
 };
 

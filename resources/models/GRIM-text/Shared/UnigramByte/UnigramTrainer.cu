@@ -247,6 +247,42 @@ static bool isRepetitionNoise(const std::string& s) {
 }
 
 //======================================================//
+//  Prefix Extension Dedup
+//  Rejects candidates that are 1-3 UTF-8 char extensions of
+//  an already-accepted piece with the same corpus count.
+//  e.g., "an▁also" is rejected if "an▁als" was already
+//  accepted with the same count — they co-occur identically.
+//======================================================//
+
+static bool isPrefixExtensionDuplicate(
+    const std::string& dedup_key,
+    int count,
+    const std::unordered_set<std::string>& seen_keys,
+    const std::unordered_map<std::string, int>& key_to_count)
+{
+    // Try truncating 1, 2, 3 UTF-8 characters from the end.
+    // Walk backwards over continuation bytes to find char boundaries.
+    size_t end = dedup_key.size();
+    for (int trim = 0; trim < 3 && end > 0; ++trim) {
+        // Step back one UTF-8 character
+        --end;
+        while (end > 0 && (static_cast<unsigned char>(dedup_key[end]) & 0xC0) == 0x80) {
+            --end;
+        }
+        if (end == 0) break;  // Don't dedup against empty prefix
+
+        std::string prefix = dedup_key.substr(0, end);
+        if (seen_keys.count(prefix)) {
+            auto it = key_to_count.find(prefix);
+            if (it != key_to_count.end() && it->second == count) {
+                return true;  // Prefix with same count exists — this is a redundant extension
+            }
+        }
+    }
+    return false;
+}
+
+//======================================================//
 //  Subword Validity Gate
 //======================================================//
 
@@ -967,12 +1003,17 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int filtered = 0;
     int repetition_filtered = 0;
     int structural_dedup_rejected = 0;
+    int prefix_extension_rejected = 0;
     const int max_to_add = target_vocab_size > 0 ? target_vocab_size : std::numeric_limits<int>::max();
 
     std::unordered_set<std::string> dedup_keys_seen;
+    std::unordered_map<std::string, int> dedup_key_to_count;
     for (const auto& ch : char_seeds) {
         std::string key = structuralDedupKeyForCandidate(ch);
-        if (!key.empty()) dedup_keys_seen.insert(key);
+        if (!key.empty()) {
+            dedup_keys_seen.insert(key);
+            dedup_key_to_count[key] = 0;  // char seeds have no meaningful count
+        }
     }
     std::cout << "[UnigramLM] Pre-seeded " << dedup_keys_seen.size()
               << " structural dedup keys from byte-layer chars" << std::endl;
@@ -1006,7 +1047,15 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             structural_dedup_rejected++;
             continue;
         }
+        // Reject candidates that are 1-3 char extensions of an already-accepted
+        // piece with the same corpus count (e.g., "an▁also" when "an▁als" exists
+        // at the same frequency — they co-occur in identical contexts).
+        if (isPrefixExtensionDuplicate(dedup_key, count, dedup_keys_seen, dedup_key_to_count)) {
+            prefix_extension_rejected++;
+            continue;
+        }
         dedup_keys_seen.insert(dedup_key);
+        dedup_key_to_count[dedup_key] = count;
 
         accepted.push_back({dedup_key, count});
     }
@@ -1031,6 +1080,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     if (structural_dedup_rejected > 0) {
         std::cout << "[UnigramLM] Rejected " << structural_dedup_rejected
                   << " candidates (structural edge-trim dedup only)" << std::endl;
+    }
+    if (prefix_extension_rejected > 0) {
+        std::cout << "[UnigramLM] Rejected " << prefix_extension_rejected
+                  << " candidates (prefix-extension dedup, same-count near-duplicates)" << std::endl;
     }
     std::cout << "[UnigramLM] Added " << added << " subwords (min_freq=" << MIN_SUBWORD_FREQ 
               << ", target=" << target_vocab_size << "), total vocab: " << pieces_.size() << std::endl;
@@ -1184,7 +1237,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 std::string dedup_key = structuralDedupKeyForCandidate(subword);
                 if (dedup_key.empty()) continue;
                 if (dedup_keys_seen.count(dedup_key)) continue;
+                if (isPrefixExtensionDuplicate(dedup_key, count, dedup_keys_seen, dedup_key_to_count)) continue;
                 dedup_keys_seen.insert(dedup_key);
+                dedup_key_to_count[dedup_key] = count;
 
                 float score = static_cast<float>(std::log(static_cast<double>(count) / total_accepted_count));
                 addPiece(dedup_key, score, false);

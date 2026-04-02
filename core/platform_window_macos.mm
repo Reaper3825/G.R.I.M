@@ -41,6 +41,16 @@
     return [super resignFirstResponder];
 }
 
+// Swallow key events so the default NSResponder implementation doesn't call NSBeep().
+// All keyboard input is handled via PlatformInput polling + pumpEvents text injection.
+- (void)keyDown:(NSEvent*)event {
+    // Intentionally empty — consumed by our event loop
+}
+
+- (void)keyUp:(NSEvent*)event {
+    // Intentionally empty
+}
+
 + (Class)layerClass { return [CAMetalLayer class]; }
 
 - (CALayer*)makeBackingLayer {

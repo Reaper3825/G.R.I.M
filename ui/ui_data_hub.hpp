@@ -366,7 +366,6 @@ private:
 
     std::shared_ptr<UIDropdown>  cbModelDropdown_;
     std::shared_ptr<UIDropdown>  cbCurriculumDropdown_;
-    std::shared_ptr<UIDropdown>  cbFormatDropdown_;
     /// Shown in the ConceptBlock list on the selected row (format / type).
     std::shared_ptr<UIDropdown>  cbListTypeDropdown_;
     /// Toolbar filter-by-type dropdown ("All", "Q/A", "Chain of Thought", etc.).
@@ -381,8 +380,11 @@ private:
     std::shared_ptr<UIButton>    btnCBGenerate_;
     std::shared_ptr<UIActionMenu> stepActionMenu_;       // + Step / - Step
     std::shared_ptr<UIActionMenu> blockActionMenu_;      // New / Save / Delete
-    std::shared_ptr<UIActionMenu> curriculumActionMenu_;   // New / Delete / Assign
+    std::shared_ptr<UIActionMenu> curriculumActionMenu_;   // New / Delete / Assign / Rename
     std::shared_ptr<UIActionMenu> blockCurriculumMenu_;     // + Curr / - Curr
+    std::shared_ptr<UIInputBox>  cbCurriculumRenameInput_;  // inline rename field
+    bool renamingCurriculum_ = false;
+    bool renameJustActivated_ = false;  // one-frame guard to prevent same-click cancel
 
     // ═════════════════════════════════════════════════════
     //  Curriculum tab state

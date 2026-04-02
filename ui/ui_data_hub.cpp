@@ -111,6 +111,42 @@ static std::string getSourceConfigPath() {
     return (std::filesystem::path(getGrimRootDir()) / "DataCollection" / "source_data.json").string();
 }
 
+namespace {
+struct CurriculumTabLayout {
+    float listX   = 0.0f;
+    float listY   = 0.0f;
+    float listW   = 0.0f;
+    float listH   = 0.0f;
+    float editorX = 0.0f;
+    float editorW = 0.0f;
+    float bottomBarH = 36.0f;
+    float statusBarH = 25.0f;
+};
+
+CurriculumTabLayout computeCurriculumTabLayout(const PanelRect& content) {
+    CurriculumTabLayout layout;
+    layout.listX = content.origin.x + 15.0f;
+
+    float y = content.origin.y + 10.0f;
+    constexpr float kToolbarRowH = 36.0f;
+    y += kToolbarRowH + 6.0f;
+    y += kToolbarRowH + 12.0f;
+
+    const float fullW = content.size.x - 30.0f;
+
+    layout.listY = y;
+    layout.listW = fullW * 0.38f;
+    layout.listH = (content.origin.y + content.size.y) - y
+                 - layout.bottomBarH - layout.statusBarH - 10.0f;
+    if (layout.listH < 100.0f)
+        layout.listH = 100.0f;
+
+    layout.editorX = layout.listX + layout.listW + 10.0f;
+    layout.editorW = fullW - layout.listW - 10.0f;
+    return layout;
+}
+}
+
 // =========================================================
 // Constructor
 // =========================================================
@@ -563,38 +599,9 @@ UIDataHubPanel::UIDataHubPanel()
             selectActiveCurriculum(idx);
         });
 
-    cbFormatDropdown_ = std::make_shared<UIDropdown>(
-        "Format", GRIM::presetLabels(), 1,
-        [this](int idx, const std::string&) {
-            cbFormatFilterIdx_ = idx;
-            if (cbListTypeDropdown_)
-                cbListTypeDropdown_->setSelectedIndex(idx);
-            const bool draftRow = (cbDraftPreviewActive_ && selectedCBRow_ == 0);
-            if (draftRow || selectedCBRow_ < 0) {
-                if (idx >= 0 && idx < GRIM::kConceptPresetCount)
-                    syncIntermediateAreas(GRIM::kConceptPresets[idx].defaultIntermediateCount);
-                return;
-            }
-            size_t dsIdx = 0;
-            if (!datasetTarget_ || !cbCurriculumRowToBlockIndex(selectedCBRow_, dsIdx))
-                return;
-            if (idx < 0 || idx >= GRIM::kConceptPresetCount)
-                return;
-            auto cb = datasetTarget_->getConceptBlock(dsIdx);
-            const char* newKey = GRIM::kConceptPresets[idx].key;
-            if (cb.format_type == newKey)
-                return;
-            cb.format_type = newKey;
-            cb.recomputeDerived();
-            if (datasetTarget_->updateConceptBlock(cb.id, cb))
-                addLog("Updated block type", 0);
-        });
-
     cbListTypeDropdown_ = std::make_shared<UIDropdown>(
         "", GRIM::presetLabels(), 1,
         [this](int idx, const std::string&) {
-            if (cbFormatDropdown_)
-                cbFormatDropdown_->setSelectedIndex(idx);
             const bool draftRow = (cbDraftPreviewActive_ && selectedCBRow_ == 0);
             if (draftRow || selectedCBRow_ < 0) {
                 if (idx >= 0 && idx < GRIM::kConceptPresetCount)
@@ -666,10 +673,9 @@ UIDataHubPanel::UIDataHubPanel()
         cbDraftPreviewActive_ = true;
         selectedCBRow_        = 0;
         cbListScrollOffset_   = 0.0f;
-        int presetIdx = cbFormatDropdown_ ? cbFormatDropdown_->getSelectedIndex() : 1;
+        int presetIdx = cbListTypeDropdown_ ? cbListTypeDropdown_->getSelectedIndex() : 1;
         if (presetIdx >= 0 && presetIdx < GRIM::kConceptPresetCount)
             syncIntermediateAreas(GRIM::kConceptPresets[presetIdx].defaultIntermediateCount);
-        syncCBListTypeDropdownFromToolbar();
     }, UITheme::Colors::Success);
     blockActionMenu_->addItem("Save", [this]() {
         if (!datasetTarget_) return;
@@ -680,7 +686,7 @@ UIDataHubPanel::UIDataHubPanel()
             return;
         }
 
-        int presetIdx = cbFormatDropdown_ ? cbFormatDropdown_->getSelectedIndex() : 1;
+        int presetIdx = cbListTypeDropdown_ ? cbListTypeDropdown_->getSelectedIndex() : 1;
         std::string formatKey = (presetIdx >= 0 && presetIdx < GRIM::kConceptPresetCount)
             ? GRIM::kConceptPresets[presetIdx].key : "chain_of_thought";
 
@@ -822,6 +828,18 @@ UIDataHubPanel::UIDataHubPanel()
             refreshCurriculumTabState();
         }
     }, UITheme::Colors::Success);
+    curriculumActionMenu_->addItem("Rename Curriculum", [this]() {
+        if (activeCurriculumId_.empty() || !datasetTarget_) {
+            addLog("Select a curriculum first", 1);
+            return;
+        }
+        auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        if (cbCurriculumRenameInput_) {
+            cbCurriculumRenameInput_->setText(curr.name);
+        }
+        renamingCurriculum_ = true;
+        renameJustActivated_ = true;
+    });
     curriculumActionMenu_->addSeparator();
     curriculumActionMenu_->addItem("Delete Curriculum", [this]() {
         if (activeCurriculumId_.empty() || !datasetTarget_) return;
@@ -857,8 +875,25 @@ UIDataHubPanel::UIDataHubPanel()
         }
     });
 
+    // ── Curriculum rename input ──────────────────────
+    cbCurriculumRenameInput_ = std::make_shared<UIInputBox>();
+    cbCurriculumRenameInput_->setPlaceholder("Curriculum name...");
+    cbCurriculumRenameInput_->OnTextSubmitted.Bind([this](const std::string& newName) {
+        if (newName.empty() || activeCurriculumId_.empty() || !datasetTarget_) {
+            renamingCurriculum_ = false;
+            return;
+        }
+        auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        curr.name = newName;
+        if (datasetTarget_->updateCurriculum(activeCurriculumId_, curr)) {
+            addLog("Renamed curriculum to: " + newName, 0);
+            populateCBCurriculumDropdown();
+        }
+        renamingCurriculum_ = false;
+    });
+
     curriculumWidgets_ = {
-        cbModelDropdown_, cbCurriculumDropdown_, cbFormatDropdown_,
+        cbModelDropdown_, cbCurriculumDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbSearchInput_,
         cbNameInput_, cbQuestionArea_, cbAnswerArea_, cbCustomPromptArea_,
         btnCBGenerate_, stepActionMenu_, blockActionMenu_,
@@ -1298,11 +1333,17 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             break;
 
         case DataHubView::Curriculum: {
-            PanelRect cRect = getContentRect();
-            float cbListX = cRect.origin.x + 15.0f;
-            float cbListY = cRect.origin.y + 10.0f + 36.0f + 12.0f;
-            float cbListW = (cRect.size.x - 30.0f) * 0.38f;
-            float cbListH = cRect.size.y - 120.0f - 36.0f - 12.0f;
+                PanelRect content = getContentRect();
+                content.origin.y += (kContentTopY - kTabBarY);
+                content.size.y   -= (kContentTopY - kTabBarY);
+
+                const CurriculumTabLayout layout = computeCurriculumTabLayout(content);
+                const float cbListX = layout.listX;
+                const float cbListY = layout.listY;
+                const float cbListW = layout.listW;
+                const float cbListH = layout.listH;
+                const bool cbListTypeDropdownWasExpanded =
+                    cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded();
 
             layoutCBListTypeDropdownInList(cbListX, cbListY, cbListW);
 
@@ -1322,7 +1363,14 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                     cbFilterDirty_ = true;
                 }
                 // Track curriculum dropdown selection change
-                if (cbCurriculumDropdown_) {
+                if (renamingCurriculum_ && cbCurriculumRenameInput_) {
+                    if (renameJustActivated_) {
+                        // Skip cancel check on the frame the rename was activated
+                        renameJustActivated_ = false;
+                    } else if (!cbCurriculumRenameInput_->isFocused() && input.mousePressed[0]) {
+                        renamingCurriculum_ = false;
+                    }
+                } else if (cbCurriculumDropdown_) {
                     int curCurrIdx = cbCurriculumDropdown_->getSelectedIndex();
                     const auto& curricula = datasetTarget_ ? datasetTarget_->getCurriculums() : std::vector<GRIM::Curriculum>{};
                     std::string selectedId;
@@ -1335,7 +1383,11 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
 
                 Vec2 m = input.mousePos;
                 const int rowCount = cbCurriculumListRowCount();
-                if (m.x >= cbListX && m.x <= cbListX + cbListW &&
+                const bool cbListTypeDropdownOwnsInput =
+                    cbListTypeDropdownWasExpanded ||
+                    (cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded());
+                if (!cbListTypeDropdownOwnsInput &&
+                    m.x >= cbListX && m.x <= cbListX + cbListW &&
                     m.y >= cbListY + kPoolHeaderH && m.y <= cbListY + cbListH) {
                     float bodyY = cbListY + kPoolHeaderH;
                     int startRow = static_cast<int>(cbListScrollOffset_ / kCBListRowH);
@@ -1346,12 +1398,10 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                     else
                         hoveredCBRow_ = -1;
 
-                    const bool ddExpanded =
-                        cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded();
                     const float typeColStart = cbListX + cbListW - 135.0f;
                     const bool inTypeBand =
                         m.x >= typeColStart && m.x <= cbListX + cbListW - 4.0f;
-                    if (input.mousePressed[0] && hoveredCBRow_ >= 0 && !ddExpanded) {
+                    if (input.mousePressed[0] && hoveredCBRow_ >= 0) {
                         if (!(inTypeBand && hoveredCBRow_ == selectedCBRow_)) {
                             selectedCBRow_ = hoveredCBRow_;
                             if (!cbCurriculumRowIsDraft(selectedCBRow_)) {
@@ -1440,8 +1490,6 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
     }
     if (cbModelDropdown_ && cbModelDropdown_->isExpanded())
         cbModelDropdown_->drawExpandedList(renderer, position);
-    if (cbFormatDropdown_ && cbFormatDropdown_->isExpanded())
-        cbFormatDropdown_->drawExpandedList(renderer, position);
     if (cbListTypeDropdown_ && cbListTypeDropdown_->isExpanded())
         cbListTypeDropdown_->drawExpandedList(renderer, position);
     if (cbTypeFilterDropdown_ && cbTypeFilterDropdown_->isExpanded())
@@ -4064,9 +4112,15 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     cbModelDropdown_->drawOverlay(renderer, position);
     cx += ddW + gap;
 
-    cbCurriculumDropdown_->setPosition(cx, y);
-    cbCurriculumDropdown_->setSize(ddW, rowH);
-    cbCurriculumDropdown_->drawOverlay(renderer, position);
+    if (renamingCurriculum_ && cbCurriculumRenameInput_) {
+        cbCurriculumRenameInput_->setPosition(cx, y);
+        cbCurriculumRenameInput_->setSize(ddW, rowH);
+        cbCurriculumRenameInput_->drawOverlay(renderer, position);
+    } else {
+        cbCurriculumDropdown_->setPosition(cx, y);
+        cbCurriculumDropdown_->setSize(ddW, rowH);
+        cbCurriculumDropdown_->drawOverlay(renderer, position);
+    }
     cx += ddW + gap;
 
     curriculumActionMenu_->setPosition(cx, y + 4.0f);
@@ -4075,42 +4129,36 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
     y += rowH + 6.0f;
 
-    // ── Toolbar row 2: Format + Generate + Search + Filter ─
-    float filterDdW = 200.0f;
+    // ── Toolbar row 2: Filter + Generate + Search ──────────
+    float filterDdW = 275.0f;
     cx = x;
-    cbFormatDropdown_->setPosition(cx, y);
-    cbFormatDropdown_->setSize(ddW, rowH);
-    cbFormatDropdown_->drawOverlay(renderer, position);
-    cx += ddW + gap;
+    cbTypeFilterDropdown_->setPosition(cx, y);
+    cbTypeFilterDropdown_->setSize(filterDdW, rowH);
+    cbTypeFilterDropdown_->drawOverlay(renderer, position);
+    cx += filterDdW + gap;
 
     btnCBGenerate_->setPosition(cx, y + 4.0f);
     btnCBGenerate_->setSize(btnW, rowH - 8.0f);
     btnCBGenerate_->drawOverlay(renderer, position);
     cx += btnW + gap;
 
-    float filterDdX = x + fullW - filterDdW - 8.0f;
-
-    float searchW = filterDdX - cx - gap - 2.0f;
+    float searchW = x + fullW - cx - 8.0f;
     if (searchW < 100.0f) searchW = 100.0f;
     cbSearchInput_->setPosition(cx, y + 4.0f);
     cbSearchInput_->setSize(searchW, rowH - 8.0f);
     cbSearchInput_->drawOverlay(renderer, position);
 
-    cbTypeFilterDropdown_->setPosition(filterDdX, y);
-    cbTypeFilterDropdown_->setSize(filterDdW, rowH);
-    cbTypeFilterDropdown_->drawOverlay(renderer, position);
-
     y += rowH + 12.0f;
 
     // ── Split: list left (38%) | editor right (62%) ─────
-    float bottomBarH = 36.0f;
-    float statusBarH = 25.0f;
-    float availH = (content.origin.y + content.size.y) - y - bottomBarH - statusBarH - 10.0f;
-    if (availH < 100.0f) availH = 100.0f;
-
-    float listW   = fullW * 0.38f;
-    float editorX = x + listW + 10.0f;
-    float editorW = fullW - listW - 10.0f;
+    const CurriculumTabLayout layout = computeCurriculumTabLayout(content);
+    y = layout.listY;
+    float availH = layout.listH;
+    float listW  = layout.listW;
+    float editorX = layout.editorX;
+    float editorW = layout.editorW;
+    float bottomBarH = layout.bottomBarH;
+    float statusBarH = layout.statusBarH;
 
     // ── ConceptBlock list ────────────────────────────────
     renderer.drawRoundedRect({x, y}, {listW, availH},
@@ -4148,7 +4196,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         if (isDraft) {
             nameStr = cbNameInput_ ? cbNameInput_->getText() : "";
             qRaw    = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
-            int pti = cbFormatDropdown_ ? cbFormatDropdown_->getSelectedIndex() : 1;
+            int pti = cbListTypeDropdown_ ? cbListTypeDropdown_->getSelectedIndex() : 1;
             if (pti >= 0 && pti < GRIM::kConceptPresetCount)
                 formatKey = GRIM::kConceptPresets[pti].key;
             if (nameStr.empty())
@@ -4219,7 +4267,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     float fieldH = 28.0f;
     float areaH  = 55.0f;
 
-    int presetIdx = cbFormatDropdown_ ? cbFormatDropdown_->getSelectedIndex() : 1;
+    int presetIdx = cbListTypeDropdown_ ? cbListTypeDropdown_->getSelectedIndex() : 1;
     if (presetIdx < 0 || presetIdx >= GRIM::kConceptPresetCount) presetIdx = 1;
     const auto& preset = GRIM::kConceptPresets[presetIdx];
 
@@ -4369,13 +4417,12 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
     if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
 
     int pi = GRIM::presetIndexForKey(cb.format_type);
-    if (cbFormatDropdown_ && pi >= 0) cbFormatDropdown_->setSelectedIndex(pi);
+    if (cbListTypeDropdown_ && pi >= 0) cbListTypeDropdown_->setSelectedIndex(pi);
 
     syncIntermediateAreas(static_cast<int>(cb.intermediates.size()));
     for (size_t i = 0; i < cb.intermediates.size() && i < cbIntermediateAreas_.size(); ++i) {
         cbIntermediateAreas_[i]->setText(cb.intermediates[i]);
     }
-    syncCBListTypeDropdownFromToolbar();
 }
 
 void UIDataHubPanel::clearCBEditor() {
@@ -4460,8 +4507,7 @@ bool UIDataHubPanel::cbCurriculumRowToBlockIndex(int listRow, size_t& outBlockIn
 }
 
 void UIDataHubPanel::syncCBListTypeDropdownFromToolbar() {
-    if (!cbListTypeDropdown_ || !cbFormatDropdown_) return;
-    cbListTypeDropdown_->setSelectedIndex(cbFormatDropdown_->getSelectedIndex());
+    // No-op: toolbar format dropdown removed; cbListTypeDropdown_ is now the single source of truth.
 }
 
 void UIDataHubPanel::layoutCBListTypeDropdownInList(float listX, float listY, float listW) {

@@ -6,6 +6,7 @@
 #include "helpers/key.hpp"
 #include "core/grim_platform.h"
 #include "core/platform_clipboard.hpp"
+#include "ui_root.hpp"
 #include "logger.hpp"
 #include <algorithm>
 #include <chrono>
@@ -333,7 +334,20 @@ void UITextArea::update(const InputState& input, float dt) {
                                     std::max(0, static_cast<int>(wrappedLines.size()) - 1));
 
         float relX = m.x - (position.x + kTextPad);
-        int clickedCol = static_cast<int>(relX / kCharWidth);
+        // Use actual font metrics to find the clicked column
+        const OverlayRenderer& overlayRenderer = UIRoot::get().getRenderer();
+        int clickedCol = 0;
+        if (clickedWrapIdx >= 0 && clickedWrapIdx < static_cast<int>(wrappedLines.size())) {
+            const auto& wl = wrappedLines[clickedWrapIdx];
+            float prevW = 0.0f;
+            for (int ci = 0; ci < static_cast<int>(wl.text.size()); ++ci) {
+                float nextW = overlayRenderer.measureTextWidth(wl.text.substr(0, ci + 1));
+                float midpoint = prevW + (nextW - prevW) * 0.5f;
+                if (relX < midpoint) break;
+                clickedCol = ci + 1;
+                prevW = nextW;
+            }
+        }
 
         cursorPos = cursorFromWrappedClick(clickedWrapIdx, clickedCol);
 
@@ -414,7 +428,7 @@ void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
                     cursorToLineCol(cursorPos, curLine, curCol);
                     int dispCol = curCol - wrappedLines[wIdx].colStart;
                     dispCol = std::clamp(dispCol, 0, static_cast<int>(wrappedLines[wIdx].text.size()));
-                    float caretX = position.x + kTextPad + dispCol * kCharWidth;
+                    float caretX = position.x + kTextPad + renderer.measureTextWidth(wrappedLines[wIdx].text.substr(0, dispCol));
                     float caretY = position.y + kTextPad + visRow * kLineHeight;
                     renderer.drawRect({caretX, caretY}, {1.5f, kLineHeight}, Colors::TextLight);
                 }
