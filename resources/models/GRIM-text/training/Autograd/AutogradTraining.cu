@@ -1431,7 +1431,7 @@ LossResult computeAutogradLoss(
         if (cfg->entropy_aux_weight > 0.0f) {
             for (int b = 0; b < ctx.batch_size; ++b) {
                 const auto& all_steps = intermediates.exec_outputs_per_row[b].steps;
-                std::vector<ExecutionBlockStepOutput> real_steps;
+                std::vector<const ExecutionBlockStepOutput*> real_steps;
                 if (have_step_mask
                     && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
                     && !ctx.payload->teacher_step_mask[b].empty()) {
@@ -1439,10 +1439,11 @@ LossResult computeAutogradLoss(
                         if (k < static_cast<int>(ctx.payload->teacher_step_mask[b].size())
                             && ctx.payload->teacher_step_mask[b][k] == 0)
                             continue;
-                        real_steps.push_back(all_steps[k]);
+                        real_steps.push_back(&all_steps[k]);
                     }
                 } else {
-                    real_steps = all_steps;
+                    for (const auto& s : all_steps)
+                        real_steps.push_back(&s);
                 }
                 Tensor ent = ctx.execution_block->computeEntropyLoss(
                     real_steps,
