@@ -6,17 +6,7 @@
 //  has a log probability (score). Encoding finds the most
 //  likely segmentation using Viterbi algorithm.
 //  
-//  Key advantages over BPE:
-//  - Multiple valid segmentations (can sample)
-//  - Better handling of rare/OOV words
-//  - Naturally integrates with byte fallback
-//  - Trains on actual language model objective
-//  
-//  Token ID layout:
-//    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
-//    [4-259]                  = Reserved for byte fallback
-//    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Reserved for atoms (ScratchBlock)
-//    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary (regular pieces only)
+//  Token ID layout is defined in TokenLayout.hpp.
 //  
 //  Author: GRIM Team
 //  Date: December 2025
@@ -32,35 +22,10 @@
 #include <unordered_map>
 #include <memory>
 
-#include "Byte.hpp"  // For BYTE_TOKEN_OFFSET, BYTE_VOCAB_SIZE, special token IDs
+#include "TokenLayout.hpp"  // AtomType, token ID constants, layout helpers
 
 namespace GRIM {
 namespace Tokenizer {
-
-//======================================================//
-//  Atom Types — single <NUM> token for numeric scratchpad reasoning
-//======================================================//
-enum class AtomType : int {
-    ATOM_NONE = 0,
-    ATOM_NUM  = 1,
-    ATOM_ACTIVE_COUNT,
-    ATOM_TYPE_COUNT
-};
-
-constexpr int kAtomTypeCount = static_cast<int>(AtomType::ATOM_ACTIVE_COUNT);
-
-//======================================================//
-//  Constants
-//======================================================//
-constexpr int ATOM_TOKEN_OFFSET = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE;  // Atoms start after byte tokens (260)
-inline int ATOM_VOCAB_SIZE = kAtomTypeCount;  // Atom slots derived from AtomType count
-inline int UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
-inline uint32_t ATOM_TOKEN_BASE = static_cast<uint32_t>(ATOM_TOKEN_OFFSET);
-inline uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
-// Sentinel: position has no registered AtomTable entry (0 is a valid AtomTable ID)
-constexpr uint32_t kAtomEntryNone = UINT32_MAX;
-constexpr int MAX_PIECE_LENGTH = 32;           // Maximum token length in bytes
-constexpr float UNKNOWN_SCORE = -100.0f;       // Score for unknown pieces
 
 //======================================================//
 //  Atom Span for Training Pipeline
@@ -73,13 +38,6 @@ struct AtomSpan {
     size_t start;  // Start byte offset in text (inclusive)
     size_t end;    // End byte offset in text (exclusive)
 };
-
-inline void configureTokenLayout(int /*atom_vocab_size*/) {
-    // Atom tokens are reserved for type-only placeholders; size derived from AtomType.
-    ATOM_VOCAB_SIZE = kAtomTypeCount;
-    UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
-    ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
-}
 
 //======================================================//
 //  Unigram Token
@@ -306,24 +264,6 @@ private:
     // Backtrack Viterbi path
     std::vector<int> backtrack(const std::vector<ViterbiNode>& nodes, int end_pos) const;
 };
-
-// Convert atom type to token ID
-inline int atomTypeToTokenId(AtomType type) {
-    return ATOM_TOKEN_OFFSET + static_cast<int>(type);
-}
-
-// Convert token ID to atom type
-inline AtomType tokenIdToAtomType(int token_id) {
-    if (token_id < ATOM_TOKEN_OFFSET || token_id >= UNIGRAM_VOCAB_OFFSET) {
-        return AtomType::ATOM_NONE;
-    }
-    return static_cast<AtomType>(token_id - ATOM_TOKEN_OFFSET);
-}
-
-// Check if token ID is an atom
-inline bool isAtomToken(int token_id) {
-    return token_id >= ATOM_TOKEN_OFFSET && token_id < UNIGRAM_VOCAB_OFFSET;
-}
 
 } // namespace Tokenizer
 } // namespace GRIM

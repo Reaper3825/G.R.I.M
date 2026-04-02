@@ -422,7 +422,7 @@ struct TokenizerConfig {
     bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if RAM is plentiful)
     bool enable_parallel_subword_mining = true;  // Parallelize subword mining during vocab training
     int subword_mining_workers = 0;  // 0 = auto, >0 fixed worker count
-    size_t subword_mining_max_bytes = 0;  // 0 = use tokenizer default cap
+    size_t subword_mining_max_bytes = 0;  // 0 = use tokenizer default ceap
     std::string model_type = "unibytes";
     std::vector<std::string> special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
     bool add_bos = true;

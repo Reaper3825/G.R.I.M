@@ -458,6 +458,9 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/UniByte.cu
     ../../Shared/UnigramByte/AtomTable.cu
     ../../Shared/UnigramByte/AhoCorasick.cu
+    ../../Shared/UnigramByte/TextUtils.cu
+    ../../Shared/UnigramByte/Detectors.cu
+    ../../Shared/UnigramByte/UnigramTrainer.cu
 )
 set_target_properties(grim_unigrambyte_tokenizer PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON

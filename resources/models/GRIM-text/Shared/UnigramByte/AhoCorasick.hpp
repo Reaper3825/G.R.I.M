@@ -25,7 +25,7 @@
 
 #pragma once
 
-#include "Unigram.hpp"  // For AtomType
+#include "TokenLayout.hpp"  // For AtomType
 #include <cstdint>
 #include <string>
 #include <string_view>

@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "Unigram.hpp"  // For AtomType
+#include "TokenLayout.hpp"  // For AtomType, atomTypeName, isNumericAtom
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -57,65 +57,6 @@ struct AtomFloat {
     int exponent;
 };
 
-// URL atom: parsed components
-struct AtomURL {
-    std::string scheme;      // http, https, ftp
-    std::string host;
-    int port;                // -1 if not specified
-    std::string path;
-    std::string query;
-    std::string fragment;
-};
-
-// Email atom: parsed components
-struct AtomEmail {
-    std::string local;       // before @
-    std::string domain;      // after @
-};
-
-// Path atom: parsed components
-struct AtomPath {
-    bool is_absolute;
-    bool is_windows;         // Uses backslashes
-    std::vector<std::string> components;
-    std::string extension;   // File extension if present
-};
-
-// Date atom: parsed components
-struct AtomDate {
-    int year;
-    int month;
-    int day;
-    enum Format { ISO, US, EU } format;
-};
-
-// Time atom: parsed components
-struct AtomTime {
-    int hour;
-    int minute;
-    int second;
-    bool is_24h;
-    bool is_pm;  // Only valid if !is_24h
-};
-
-// IP Address atom
-struct AtomIP {
-    uint8_t octets[4];
-    bool is_valid;
-};
-
-// String literal atom
-struct AtomString {
-    std::string value;       // Unescaped content
-    char quote_char;         // ' or "
-    bool has_escapes;
-};
-
-// Identifier atom
-struct AtomIdentifier {
-    std::string name;
-    enum Style { SNAKE_CASE, CAMEL_CASE, PASCAL_CASE, SCREAMING_SNAKE, UNKNOWN } style;
-};
 
 // Generic/unknown atom
 struct AtomGeneric {
@@ -128,14 +69,6 @@ struct AtomGeneric {
 using AtomValue = std::variant<
     AtomInteger,
     AtomFloat,
-    AtomURL,
-    AtomEmail,
-    AtomPath,
-    AtomDate,
-    AtomTime,
-    AtomIP,
-    AtomString,
-    AtomIdentifier,
     AtomGeneric
 >;
 
@@ -305,14 +238,7 @@ public:
     static ParseResult parseFloat(const std::string& text);
     static ParseResult parseHex(const std::string& text);
     static ParseResult parseBinary(const std::string& text);
-    static ParseResult parseURL(const std::string& text);
-    static ParseResult parseEmail(const std::string& text);
-    static ParseResult parsePath(const std::string& text);
-    static ParseResult parseDate(const std::string& text);
-    static ParseResult parseTime(const std::string& text);
-    static ParseResult parseIP(const std::string& text);
-    static ParseResult parseStringLiteral(const std::string& text);
-    static ParseResult parseIdentifier(const std::string& text);
+
 
     //--------------------------------------------------//
     // Serialization
@@ -443,18 +369,6 @@ private:
 //======================================================//
 //  Inline Helpers
 //======================================================//
-
-inline const char* atomTypeName(AtomType type) {
-    switch (type) {
-        case AtomType::ATOM_NONE: return "NONE";
-        case AtomType::ATOM_NUM:  return "NUM";
-        default: return "UNKNOWN";
-    }
-}
-
-inline bool isNumericAtom(AtomType type) {
-    return type == AtomType::ATOM_NUM;
-}
 
 /// Deterministic formatting of a predicted numeric value.
 /// - double precision to avoid premature rounding

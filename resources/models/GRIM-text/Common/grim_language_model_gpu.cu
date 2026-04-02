@@ -977,7 +977,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         
         float token_numeric_value = 0.0f;
         uint8_t token_atom_mask_val = 0;
-
+        
         int32_t new_token_slot_id = -1;
 
         if (scratchblock_active && GRIM::Tokenizer::isAtomToken(sample.token_id)) {

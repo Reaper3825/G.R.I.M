@@ -359,44 +359,7 @@ private:
                                   const std::vector<StructuralSpan>& structures) const;
 };
 
-//======================================================//
-//  Structural Pattern Detectors
-//======================================================//
-namespace Detector {
-
-// Detect integers: 42, -17, +5
-bool detectInteger(const std::string& text, size_t pos, size_t& end);
-
-// Detect floats: 3.14, -2.5e10, .5
-bool detectFloat(const std::string& text, size_t pos, size_t& end);
-
-// Detect hex: 0xFF, 0x1A2B
-bool detectHex(const std::string& text, size_t pos, size_t& end);
-
-// Detect binary: 0b1010
-bool detectBinary(const std::string& text, size_t pos, size_t& end);
-
-// NOTE: detectURL and detectEmail removed - Aho-Corasick in detectStructures() handles these
-
-// Detect file paths: /usr/bin, C:\Windows, ./relative
-bool detectPath(const std::string& text, size_t pos, size_t& end);
-
-// Detect dates: 2025-12-08, 12/08/2025
-bool detectDate(const std::string& text, size_t pos, size_t& end);
-
-// Detect times: 14:30:00, 2:30pm
-bool detectTime(const std::string& text, size_t pos, size_t& end);
-
-// Detect IP addresses: 192.168.1.1
-bool detectIPAddress(const std::string& text, size_t pos, size_t& end);
-
-// Detect string literals: "hello", 'world'
-bool detectStringLiteral(const std::string& text, size_t pos, size_t& end);
-
-// Detect identifiers: variable_name, functionName
-bool detectIdentifier(const std::string& text, size_t pos, size_t& end);
-
-} // namespace Detector
-
 } // namespace Tokenizer
 } // namespace GRIM
+
+#include "Detectors.hpp"
