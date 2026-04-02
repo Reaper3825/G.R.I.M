@@ -236,7 +236,7 @@ public:
     // Entropy loss over arg/op/write distributions
     //--------------------------------------------------//
     Tensor computeEntropyLoss(
-        const std::vector<ExecutionBlockStepOutput>& steps,
+        const std::vector<const ExecutionBlockStepOutput*>& steps,
         float weight,
         cudaStream_t stream
     ) const;
