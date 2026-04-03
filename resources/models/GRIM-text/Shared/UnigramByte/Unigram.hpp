@@ -134,7 +134,9 @@ public:
     //--------------------------------------------------//
     
     // Encode text using Viterbi (best segmentation)
-    std::vector<int> encode(const std::string& text) const;
+    // prepend_space=true: prepend ▁ (start of text / first segment)
+    // prepend_space=false: skip prepend (mid-text segment after atom)
+    std::vector<int> encode(const std::string& text, bool prepend_space = true) const;
     
     // Encode with token info
     std::vector<UnigramPiece> encodeWithPieces(const std::string& text) const;

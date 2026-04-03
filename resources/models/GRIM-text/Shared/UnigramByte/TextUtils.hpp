@@ -58,7 +58,9 @@ bool isStructuralEdgeWhitespace(uint32_t cp);
 //======================================================//
 
 // "Hello World" → "▁Hello▁World"
-std::string normalizeSpaces(const std::string& text);
+// prepend_space=true: prepend ▁ at start (first segment / full text)
+// prepend_space=false: only replace spaces (mid-text segment after atom)
+std::string normalizeSpaces(const std::string& text, bool prepend_space = true);
 
 // "▁Hello▁World" → "Hello World"
 std::string denormalizeSpaces(const std::string& text);

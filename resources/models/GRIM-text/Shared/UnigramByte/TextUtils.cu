@@ -104,7 +104,7 @@ bool isStructuralEdgeWhitespace(uint32_t cp) {
 //  SentencePiece Normalization
 //======================================================//
 
-std::string normalizeSpaces(const std::string& text) {
+std::string normalizeSpaces(const std::string& text, bool prepend_space) {
     if (text.empty()) return text;
 
     size_t space_count = 0;
@@ -113,8 +113,10 @@ std::string normalizeSpaces(const std::string& text) {
     }
 
     std::string result;
-    result.reserve(text.size() + SPIECE_UNDERLINE_LEN + space_count * 2);
-    result.append(SPIECE_UNDERLINE, SPIECE_UNDERLINE_LEN);
+    result.reserve(text.size() + (prepend_space ? SPIECE_UNDERLINE_LEN : 0) + space_count * 2);
+    if (prepend_space) {
+        result.append(SPIECE_UNDERLINE, SPIECE_UNDERLINE_LEN);
+    }
 
     for (char c : text) {
         if (c == ' ') {
@@ -170,7 +172,7 @@ std::string normalizeWithSpans(const std::string& text, std::vector<AtomSpan>& s
         span.end   = new_end;
     }
 
-    return normalizeSpaces(text);
+    return normalizeSpaces(text, true);
 }
 
 } // namespace Tokenizer

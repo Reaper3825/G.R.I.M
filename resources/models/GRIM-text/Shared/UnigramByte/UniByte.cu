@@ -553,6 +553,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
     size_t pos = 0;
     size_t struct_idx = 0;
     
+    bool is_first_segment = true;
     auto appendSegmentTokens = [&](size_t start, size_t end) {
         if (end <= start) {
             return;
@@ -560,7 +561,10 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
         std::string segment = text.substr(start, end - start);
         // encode() returns token IDs directly — no need for encodeWithPieces
         // Note: UnigramLM::encode() normalizes to lowercase internally.
-        auto segment_ids = unigram_.encode(segment);
+        // Only prepend ▁ for the first text segment; subsequent segments
+        // after atoms already have their leading space as a regular character.
+        auto segment_ids = unigram_.encode(segment, is_first_segment);
+        is_first_segment = false;
                         
         for (int tid : segment_ids) {
             result.token_ids.push_back(tid);

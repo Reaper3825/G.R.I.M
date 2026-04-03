@@ -789,11 +789,13 @@ std::vector<int> UnigramLM::backtrack(const std::vector<ViterbiNode>& nodes, int
     return tokens;
 }
 
-std::vector<int> UnigramLM::encode(const std::string& text) const {
+std::vector<int> UnigramLM::encode(const std::string& text, bool prepend_space) const {
     if (text.empty()) return {};
 
-    // SentencePiece-style normalization: spaces → ▁, prepend ▁
-    std::string normalized = normalizeSpaces(text);
+    // SentencePiece-style normalization: spaces → ▁
+    // prepend_space=true adds leading ▁ (start of text / first segment)
+    // prepend_space=false skips prepend (mid-text segment after atom)
+    std::string normalized = normalizeSpaces(text, prepend_space);
     auto nodes = viterbi(normalized);
     return backtrack(nodes, static_cast<int>(normalized.size()));
 }
