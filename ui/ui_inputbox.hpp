@@ -41,6 +41,9 @@ private:
     bool caretVisible = true;
     uint64_t lastBlink = 0;
 
+    // Mouse drag-to-select state
+    bool dragging = false;
+
     // Key repeat state
     int heldKeyVK = -1;
     float heldKeyTimer = 0.0f;

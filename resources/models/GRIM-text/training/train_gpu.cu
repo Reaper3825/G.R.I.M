@@ -42,8 +42,6 @@ void printBanner() {
     EmitModuleInfo(ModuleId::TrainingOrchestrator, 
         "║          GRIM-text Training v3.0.0                     ║", 0);
     EmitModuleInfo(ModuleId::TrainingOrchestrator, 
-        "║          Three-Phase Architecture                       ║", 0);
-    EmitModuleInfo(ModuleId::TrainingOrchestrator, 
         "╚════════════════════════════════════════════════════════╝", 0);
 }
 

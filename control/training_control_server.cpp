@@ -44,6 +44,8 @@
 #ifdef _WIN32
 #include "core/grim_platform.h"
 #include <processthreadsapi.h>
+#else
+#include <sys/wait.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -822,6 +824,127 @@ void setupAPI(httplib::Server& server) {
             std::cout << "[Server] Stopping HTTP server..." << std::endl;
             server.stop();
         }).detach();
+    });
+    
+    //======================================================//
+    //  Tokenizer Runner — Run standalone tokenizer validation
+    //  Returns JSON payload with vocab info and test results
+    //======================================================//
+    server.Post("/api/tokenizer/run", [](const httplib::Request& req, httplib::Response& res) {
+        // Parse optional config from JSON body
+        std::string vocab_path;
+        std::string data_path;
+        std::string config_path;
+        
+        if (!req.body.empty()) {
+            try {
+                auto body = nlohmann::json::parse(req.body);
+                vocab_path = body.value("vocab_path", "");
+                data_path = body.value("data_path", "");
+                config_path = body.value("config_path", "");
+            } catch (...) {
+                // Ignore parse errors — use defaults
+            }
+        }
+        
+        // Find tokenizer_runner executable
+        std::string runnerPath = GRIM::Training::getSafeResourcePath(
+            "resources/models/GRIM-text/training/TrainingLoop/build/Release/tokenizer_runner"
+#ifdef _WIN32
+            ".exe"
+#endif
+            ,
+            GRIM::Training::PathResolutionMode::Relative
+        );
+        
+        if (runnerPath.empty()) {
+            runnerPath = GRIM::Training::getSafeResourcePath(
+                "tokenizer_runner"
+#ifdef _WIN32
+                ".exe"
+#endif
+                ,
+                GRIM::Training::PathResolutionMode::Search
+            );
+        }
+        
+        if (runnerPath.empty()) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "tokenizer_runner executable not found — build with: cmake --build build --config Release --target tokenizer_runner";
+            err["phase"] = "launch";
+            res.status = 500;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+        
+        // Build command
+        std::ostringstream cmd;
+        cmd << "\"" << runnerPath << "\"";
+        if (!vocab_path.empty()) cmd << " --vocab \"" << vocab_path << "\"";
+        if (!data_path.empty()) cmd << " --data \"" << data_path << "\"";
+        if (!config_path.empty()) cmd << " --config \"" << config_path << "\"";
+        cmd << " --verbose";
+        
+        std::cout << "[Server] Running tokenizer: " << cmd.str() << std::endl;
+        
+        // Launch and capture stdout
+#ifdef _WIN32
+        FILE* pipe = _popen(cmd.str().c_str(), "r");
+#else
+        FILE* pipe = popen(cmd.str().c_str(), "r");
+#endif
+        if (!pipe) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "Failed to launch tokenizer_runner process";
+            err["phase"] = "launch";
+            res.status = 500;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+        
+        std::string output;
+        char buffer[4096];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            output += buffer;
+        }
+        
+#ifdef _WIN32
+        int exit_code = _pclose(pipe);
+#else
+        int raw_status = pclose(pipe);
+        int exit_code = WEXITSTATUS(raw_status);
+#endif
+        
+        std::cout << "[Server] Tokenizer runner exit code: " << exit_code << std::endl;
+        
+        // Forward the JSON output directly
+        if (output.empty()) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "tokenizer_runner produced no output (exit code " + std::to_string(exit_code) + ")";
+            err["phase"] = "execution";
+            res.status = 500;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+        
+        // Validate it's valid JSON before forwarding
+        try {
+            auto parsed = nlohmann::json::parse(output);
+            std::string status = parsed.value("status", "");
+            res.status = (status == "success") ? 200 : 422;
+            res.set_content(output, "application/json");
+        } catch (const nlohmann::json::parse_error& e) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "tokenizer_runner produced invalid JSON: " + std::string(e.what());
+            err["phase"] = "parse";
+            err["raw_output"] = output.substr(0, 1000);
+            res.status = 500;
+            res.set_content(err.dump(), "application/json");
+        }
     });
     
 }

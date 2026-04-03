@@ -237,6 +237,7 @@ private:
     std::shared_ptr<UIButton> pauseResumeButton;
     std::shared_ptr<UIButton> resetStatusButton;
     std::shared_ptr<UIButton> closeButton;
+    std::shared_ptr<UIButton> runTokenizerButton;
 
     // Curriculum + Model selection
     std::shared_ptr<UIDropdown> curriculumDropdown_;
@@ -344,6 +345,15 @@ private:
     void addLog(const std::string& message, int level);
     std::string getStateString(GRIMText::TrainingState state) const;
     uint32_t getStateColor(GRIMText::TrainingState state) const;
+
+    // Tokenizer runner state
+    bool tokenizerRunning_ = false;
+    bool tokenizerComplete_ = false;
+    bool tokenizerSuccess_ = false;
+    std::string tokenizerStatusMessage_;
+    GRIMText::TrainingControlClient::TokenizerResult lastTokenizerResult_;
+    void handleRunTokenizer();
+    void drawTokenizerStatus(OverlayRenderer& renderer, float x, float y, float width);
 
     // Config scroll
     float configScrollOffset = 0.0f;

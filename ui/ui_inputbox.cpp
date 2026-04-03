@@ -159,12 +159,11 @@ void UIInputBox::update(const InputState& input, float dt) {
     bool overBox = (m.x >= position.x && m.x <= position.x + size.x &&
                     m.y >= position.y && m.y <= position.y + size.y);
 
-    bool leftPressed = Mouse::wasPressed(MouseButton::Left);
-
     // -------------------------------------------------------
-    // Focus management
+    // Unified mouse: click-to-cursor + drag-to-select
+    // Uses InputState directly (no Mouse:: static class mixing)
     // -------------------------------------------------------
-    if (leftPressed) {
+    if (input.mousePressed[0]) {
         if (overBox) {
             if (!focused) {
                 if (g_activeInputBox != nullptr && g_activeInputBox != this) {
@@ -175,13 +174,14 @@ void UIInputBox::update(const InputState& input, float dt) {
                 setFocused(true);
                 g_activeInputBox = this;
             }
-            // Click-to-position cursor
             cursorPos = charIndexAtX(m.x);
             if (input.shift) {
                 selEnd = cursorPos;
             } else {
-                clearSelection();
+                selStart = cursorPos;
+                selEnd = cursorPos;
             }
+            dragging = true;
             caretVisible = true;
             lastBlink = now;
         } else {
@@ -190,10 +190,27 @@ void UIInputBox::update(const InputState& input, float dt) {
                 g_activeInputBox = nullptr;
                 if (externalBind) *externalBind = buffer;
             }
+            dragging = false;
+        }
+    } else if (dragging) {
+        if (input.mouseDown[0]) {
+            int dragPos = charIndexAtX(m.x);
+            if (dragPos != selEnd) {
+                selEnd = dragPos;
+                cursorPos = dragPos;
+                caretVisible = true;
+                lastBlink = now;
+            }
+        } else {
+            dragging = false;
         }
     }
 
     if (!focused || g_activeInputBox != this) return;
+
+    // While mouse is actively dragging, skip keyboard input so
+    // arrow keys / text input don't clobber the drag selection.
+    if (dragging) return;
 
     // -------------------------------------------------------
     // Key repeat logic
@@ -275,10 +292,14 @@ void UIInputBox::update(const InputState& input, float dt) {
     // Arrow keys (with shift for selection, with repeat)
     // -------------------------------------------------------
     if (processActionKey(KeyCode::Left, VK_LEFT)) {
-        if (cursorPos > 0) cursorPos--;
         if (input.shift) {
+            if (cursorPos > 0) cursorPos--;
             selEnd = cursorPos;
-        } else {
+        } else if (hasSelection()) {
+            cursorPos = std::min(selStart, selEnd);
+            clearSelection();
+        } else if (cursorPos > 0) {
+            cursorPos--;
             clearSelection();
         }
         caretVisible = true;
@@ -286,10 +307,14 @@ void UIInputBox::update(const InputState& input, float dt) {
     }
 
     if (processActionKey(KeyCode::Right, VK_RIGHT)) {
-        if (cursorPos < static_cast<int>(buffer.length())) cursorPos++;
         if (input.shift) {
+            if (cursorPos < static_cast<int>(buffer.length())) cursorPos++;
             selEnd = cursorPos;
-        } else {
+        } else if (hasSelection()) {
+            cursorPos = std::max(selStart, selEnd);
+            clearSelection();
+        } else if (cursorPos < static_cast<int>(buffer.length())) {
+            cursorPos++;
             clearSelection();
         }
         caretVisible = true;
@@ -439,7 +464,7 @@ void UIInputBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
             float selX = position.x + kTextPaddingX + measureDisplayPrefixWidth(renderer, layout, dispLo);
             float selEndX = position.x + kTextPaddingX + measureDisplayPrefixWidth(renderer, layout, dispHi);
             float selW = std::max(0.0f, selEndX - selX);
-            renderer.drawRect({selX, position.y + 3.0f}, {selW, size.y - 6.0f}, 0x604488CC);
+            renderer.drawRect({selX, position.y + 3.0f}, {selW, size.y - 6.0f}, 0xE63366AA);
         }
     }
 

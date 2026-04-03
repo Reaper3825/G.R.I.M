@@ -158,6 +158,48 @@ void UITextArea::ensureCursorVisible() {
         scrollOffset = static_cast<float>(wIdx - maxVisLines + 1);
 }
 
+// ─── Selection helpers ──────────────────────────────────
+
+std::string UITextArea::selectedText() const {
+    if (!hasSelection()) return "";
+    int lo = std::min(selStart, selEnd);
+    int hi = std::max(selStart, selEnd);
+    return text.substr(lo, hi - lo);
+}
+
+void UITextArea::deleteSelection() {
+    if (!hasSelection()) return;
+    int lo = std::min(selStart, selEnd);
+    int hi = std::max(selStart, selEnd);
+    text.erase(lo, hi - lo);
+    cursorPos = lo;
+    clearSelection();
+}
+
+int UITextArea::cursorFromMousePos(const Vec2& mousePos, const OverlayRenderer& overlayRenderer) const {
+    float relY = mousePos.y - (position.y + kTextPad);
+    int clickedVisRow = static_cast<int>(relY / kLineHeight);
+    int clickedWrapIdx = clickedVisRow + static_cast<int>(scrollOffset);
+    clickedWrapIdx = std::clamp(clickedWrapIdx, 0,
+                                std::max(0, static_cast<int>(wrappedLines.size()) - 1));
+
+    float relX = mousePos.x - (position.x + kTextPad);
+    int clickedCol = 0;
+    if (clickedWrapIdx >= 0 && clickedWrapIdx < static_cast<int>(wrappedLines.size())) {
+        const auto& wl = wrappedLines[clickedWrapIdx];
+        float prevW = 0.0f;
+        for (int ci = 0; ci < static_cast<int>(wl.text.size()); ++ci) {
+            float nextW = overlayRenderer.measureTextWidth(wl.text.substr(0, ci + 1));
+            float midpoint = prevW + (nextW - prevW) * 0.5f;
+            if (relX < midpoint) break;
+            clickedCol = ci + 1;
+            prevW = nextW;
+        }
+    }
+
+    return cursorFromWrappedClick(clickedWrapIdx, clickedCol);
+}
+
 // ─── Input handling ─────────────────────────────────────
 
 void UITextArea::handleInput(const InputState& input, float dt) {
@@ -211,7 +253,10 @@ void UITextArea::handleInput(const InputState& input, float dt) {
     bool changed = false;
 
     if (processActionKey(KeyCode::Backspace, VK_BACK)) {
-        if (cursorPos > 0) {
+        if (hasSelection()) {
+            deleteSelection();
+            changed = true;
+        } else if (cursorPos > 0) {
             text.erase(cursorPos - 1, 1);
             cursorPos--;
             changed = true;
@@ -220,7 +265,10 @@ void UITextArea::handleInput(const InputState& input, float dt) {
     }
 
     if (processActionKey(KeyCode::Delete, VK_DELETE)) {
-        if (cursorPos < static_cast<int>(text.length())) {
+        if (hasSelection()) {
+            deleteSelection();
+            changed = true;
+        } else if (cursorPos < static_cast<int>(text.length())) {
             text.erase(cursorPos, 1);
             changed = true;
         }
@@ -228,12 +276,30 @@ void UITextArea::handleInput(const InputState& input, float dt) {
     }
 
     if (processActionKey(KeyCode::Left, VK_LEFT)) {
-        if (cursorPos > 0) cursorPos--;
+        if (input.shift) {
+            if (cursorPos > 0) cursorPos--;
+            selEnd = cursorPos;
+        } else if (hasSelection()) {
+            cursorPos = std::min(selStart, selEnd);
+            clearSelection();
+        } else if (cursorPos > 0) {
+            cursorPos--;
+            clearSelection();
+        }
         caretVisible = true; lastBlink = now;
     }
 
     if (processActionKey(KeyCode::Right, VK_RIGHT)) {
-        if (cursorPos < static_cast<int>(text.length())) cursorPos++;
+        if (input.shift) {
+            if (cursorPos < static_cast<int>(text.length())) cursorPos++;
+            selEnd = cursorPos;
+        } else if (hasSelection()) {
+            cursorPos = std::max(selStart, selEnd);
+            clearSelection();
+        } else if (cursorPos < static_cast<int>(text.length())) {
+            cursorPos++;
+            clearSelection();
+        }
         caretVisible = true; lastBlink = now;
     }
 
@@ -246,6 +312,8 @@ void UITextArea::handleInput(const InputState& input, float dt) {
             int visualCol = curCol - wrappedLines[wIdx].colStart;
             cursorPos = cursorFromWrappedClick(wIdx - 1, visualCol);
         }
+        if (input.shift) selEnd = cursorPos;
+        else if (hasSelection()) clearSelection();
         caretVisible = true; lastBlink = now;
     }
 
@@ -257,6 +325,8 @@ void UITextArea::handleInput(const InputState& input, float dt) {
             int visualCol = curCol - wrappedLines[wIdx].colStart;
             cursorPos = cursorFromWrappedClick(wIdx + 1, visualCol);
         }
+        if (input.shift) selEnd = cursorPos;
+        else if (hasSelection()) clearSelection();
         caretVisible = true; lastBlink = now;
     }
 
@@ -264,42 +334,67 @@ void UITextArea::handleInput(const InputState& input, float dt) {
         int wIdx = wrapIndexForCursor();
         if (wIdx >= 0)
             cursorPos = cursorFromWrappedClick(wIdx, 0);
+        if (input.shift) selEnd = cursorPos;
+        else clearSelection();
     }
     if (Key::wasPressed(KeyCode::End)) {
         int wIdx = wrapIndexForCursor();
         if (wIdx >= 0)
             cursorPos = cursorFromWrappedClick(wIdx, static_cast<int>(wrappedLines[wIdx].text.size()));
+        if (input.shift) selEnd = cursorPos;
+        else clearSelection();
     }
 
     if (input.ctrl && Key::wasPressed(KeyCode::A)) {
-        cursorPos = static_cast<int>(text.length());
+        selStart = 0;
+        selEnd = static_cast<int>(text.length());
+        cursorPos = selEnd;
     }
 
     if (input.copyRequested) {
-        PlatformClipboard::copyText(text);
+        if (hasSelection()) {
+            PlatformClipboard::copyText(selectedText());
+        }
+    }
+
+    if (input.cutRequested) {
+        if (hasSelection()) {
+            PlatformClipboard::copyText(selectedText());
+            deleteSelection();
+            changed = true;
+        }
     }
 
     if (input.pasteRequested && !input.pastedText.empty()) {
+        if (hasSelection()) {
+            deleteSelection();
+            changed = true;
+        }
         std::string filtered;
         for (char c : input.pastedText) {
             if ((c >= 32 && c <= 126) || c == '\n' || c == '\t') filtered += c;
         }
         text.insert(cursorPos, filtered);
         cursorPos += static_cast<int>(filtered.length());
+        clearSelection();
         changed = true;
     }
 
     if (Key::wasPressed(KeyCode::Enter)) {
+        if (hasSelection()) { deleteSelection(); changed = true; }
         text.insert(text.begin() + cursorPos, '\n');
         cursorPos++;
+        clearSelection();
         changed = true;
         caretVisible = true; lastBlink = now;
     }
 
     for (char c : input.textInput) {
         if (c >= 32 && c <= 126) {
+            if (hasSelection()) { deleteSelection(); changed = true; }
             text.insert(text.begin() + cursorPos, c);
             cursorPos++;
+            clearSelection();
             changed = true;
             caretVisible = true; lastBlink = now;
         }
@@ -323,43 +418,53 @@ void UITextArea::update(const InputState& input, float dt) {
     float availW = size.x - kTextPad * 2.0f;
     if (availW != lastWrapWidth) rebuildWrappedLines();
 
-    if (hovered && Mouse::wasPressed(MouseButton::Left)) {
-        focused = true;
+    // ─── Unified mouse: click-to-cursor + drag-to-select ────
+    // Uses InputState directly (no Mouse:: static class mixing)
+    if (input.mousePressed[0]) {
+        if (hovered) {
+            focused = true;
 
-        // Map click to a visual wrapped line
-        float relY = m.y - (position.y + kTextPad);
-        int clickedVisRow = static_cast<int>(relY / kLineHeight);
-        int clickedWrapIdx = clickedVisRow + static_cast<int>(scrollOffset);
-        clickedWrapIdx = std::clamp(clickedWrapIdx, 0,
-                                    std::max(0, static_cast<int>(wrappedLines.size()) - 1));
+            const OverlayRenderer& overlayRenderer = UIRoot::get().getRenderer();
+            cursorPos = cursorFromMousePos(m, overlayRenderer);
 
-        float relX = m.x - (position.x + kTextPad);
-        // Use actual font metrics to find the clicked column
-        const OverlayRenderer& overlayRenderer = UIRoot::get().getRenderer();
-        int clickedCol = 0;
-        if (clickedWrapIdx >= 0 && clickedWrapIdx < static_cast<int>(wrappedLines.size())) {
-            const auto& wl = wrappedLines[clickedWrapIdx];
-            float prevW = 0.0f;
-            for (int ci = 0; ci < static_cast<int>(wl.text.size()); ++ci) {
-                float nextW = overlayRenderer.measureTextWidth(wl.text.substr(0, ci + 1));
-                float midpoint = prevW + (nextW - prevW) * 0.5f;
-                if (relX < midpoint) break;
-                clickedCol = ci + 1;
-                prevW = nextW;
+            if (input.shift) {
+                selEnd = cursorPos;
+            } else {
+                selStart = cursorPos;
+                selEnd = cursorPos;
             }
-        }
-
-        cursorPos = cursorFromWrappedClick(clickedWrapIdx, clickedCol);
+            dragging = true;
 
 #ifdef _WIN32
-        lastBlink = GetTickCount64();
+            lastBlink = GetTickCount64();
 #else
-        auto tp2 = std::chrono::steady_clock::now().time_since_epoch();
-        lastBlink = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(tp2).count());
+            auto tp2 = std::chrono::steady_clock::now().time_since_epoch();
+            lastBlink = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(tp2).count());
 #endif
-        caretVisible = true;
-    } else if (!hovered && Mouse::wasPressed(MouseButton::Left)) {
-        focused = false;
+            caretVisible = true;
+        } else {
+            focused = false;
+            dragging = false;
+        }
+    } else if (dragging) {
+        if (input.mouseDown[0]) {
+            const OverlayRenderer& overlayRenderer = UIRoot::get().getRenderer();
+            int dragPos = cursorFromMousePos(m, overlayRenderer);
+            if (dragPos != selEnd) {
+                selEnd = dragPos;
+                cursorPos = dragPos;
+                caretVisible = true;
+#ifdef _WIN32
+                lastBlink = GetTickCount64();
+#else
+                auto tp3 = std::chrono::steady_clock::now().time_since_epoch();
+                lastBlink = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(tp3).count());
+#endif
+                ensureCursorVisible();
+            }
+        } else {
+            dragging = false;
+        }
     }
 
     // Mouse wheel scroll (against wrapped line count)
@@ -382,7 +487,9 @@ void UITextArea::update(const InputState& input, float dt) {
         lastBlink = now;
     }
 
-    if (focused) handleInput(input, dt);
+    // While mouse is actively dragging, skip keyboard input so
+    // arrow keys / text input don't clobber the drag selection.
+    if (focused && !dragging) handleInput(input, dt);
 }
 
 // ─── Draw ───────────────────────────────────────────────
@@ -413,6 +520,34 @@ void UITextArea::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     } else {
         int startLine = static_cast<int>(scrollOffset);
         float yPos = position.y + kTextPad;
+
+        // Draw selection highlight
+        if (focused && hasSelection()) {
+            int lo = std::min(selStart, selEnd);
+            int hi = std::max(selStart, selEnd);
+
+            for (int i = startLine; i < static_cast<int>(wrappedLines.size()) && i < startLine + maxVisLines; ++i) {
+                const auto& wl = wrappedLines[i];
+                // Compute the absolute text range this wrapped line covers
+                int wrapAbsStart = lineStartOffset(wl.logicalLine) + wl.colStart;
+                int wrapAbsEnd = wrapAbsStart + static_cast<int>(wl.text.size());
+
+                // Intersect with selection
+                int selLo = std::max(lo, wrapAbsStart);
+                int selHi = std::min(hi, wrapAbsEnd);
+
+                if (selLo < selHi) {
+                    int localLo = selLo - wrapAbsStart;
+                    int localHi = selHi - wrapAbsStart;
+                    float selX = position.x + kTextPad + renderer.measureTextWidth(wl.text.substr(0, localLo));
+                    float selEndX = position.x + kTextPad + renderer.measureTextWidth(wl.text.substr(0, localHi));
+                    float selW = std::max(0.0f, selEndX - selX);
+                    float selY = position.y + kTextPad + (i - startLine) * kLineHeight;
+                    renderer.drawRect({selX, selY}, {selW, kLineHeight}, 0xE63366AA);
+                }
+            }
+        }
+
         for (int i = startLine; i < static_cast<int>(wrappedLines.size()) && i < startLine + maxVisLines; ++i) {
             renderer.drawText({position.x + kTextPad, yPos}, wrappedLines[i].text, 0xFFD0D0D0);
             yPos += kLineHeight;

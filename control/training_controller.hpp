@@ -343,6 +343,18 @@ public:
     }
     
     // ============================================================
+    // Tokenizer Operations
+    // ============================================================
+    
+    // Run standalone tokenizer validation
+    GRIMText::TrainingControlClient::TokenizerResult runTokenizer(
+        const std::string& vocab_path = "",
+        const std::string& data_path = "",
+        const std::string& config_path = "") {
+        return client_.runTokenizer(vocab_path, data_path, config_path);
+    }
+    
+    // ============================================================
     // Callbacks Registration
     // ============================================================
     

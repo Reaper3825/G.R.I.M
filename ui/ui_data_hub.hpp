@@ -370,6 +370,7 @@ private:
     std::shared_ptr<UIDropdown>  cbListTypeDropdown_;
     /// Toolbar filter-by-type dropdown ("All", "Q/A", "Chain of Thought", etc.).
     std::shared_ptr<UIDropdown>  cbTypeFilterDropdown_;
+    std::shared_ptr<UIToggle>    cbCurriculumFilterToggle_;
     std::shared_ptr<UIInputBox>  cbSearchInput_;
     std::shared_ptr<UIInputBox>  cbNameInput_;
     std::shared_ptr<UITextArea>  cbQuestionArea_;
@@ -397,6 +398,7 @@ private:
     bool   cbFilterDirty_        = true;
     std::string cbFilterSearch_;
     int    cbFormatFilterIdx_    = 0;
+    bool   cbCurriculumFilterActive_ = false;
     size_t cbTotalCount_         = 0;
     size_t cbInCurrCount_        = 0;
     /// ID of the currently selected curriculum in the dropdown.

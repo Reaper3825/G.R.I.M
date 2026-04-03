@@ -454,6 +454,10 @@ UITrainingPanel::UITrainingPanel()
         setVisible(false);
     });
 
+    runTokenizerButton = std::make_shared<UIButton>("Run Tokenizer", [this]() {
+        handleRunTokenizer();
+    });
+
     // ── Progress bars ──
     trainingProgressBar = std::make_shared<UIProgressBar>("Training Progress", 1.0f);
     trainingProgressBar->setFillColor(Colors::Success);
@@ -619,6 +623,7 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     pauseResumeButton->update(input, dt);
     resetStatusButton->update(input, dt);
     closeButton->update(input, dt);
+    runTokenizerButton->update(input, dt);
 
     // Tab-specific updates
     switch (activeTab_) {
@@ -2263,6 +2268,12 @@ void UITrainingPanel::drawTrainingTab(OverlayRenderer& renderer, const PanelRect
         renderer.drawText({x, y}, checkpointStatsInfo, Colors::TextSecondary);
         y += 20.0f;
     }
+    
+    // Tokenizer status
+    drawTokenizerStatus(renderer, x, y, w);
+    if (tokenizerComplete_ || tokenizerRunning_) {
+        y += tokenizerComplete_ && tokenizerSuccess_ ? 50.0f : 28.0f;
+    }
 
     y += Spacing::Medium;
 
@@ -2351,7 +2362,7 @@ void UITrainingPanel::drawBottomBar(OverlayRenderer& renderer, float barY, float
     float btnW = 90.0f;
     float btnH = Sizes::ButtonHeight;
     float gap = Spacing::Small;
-    float totalW = btnW * 5.0f + gap * 4.0f;
+    float totalW = btnW * 6.0f + gap * 5.0f;
     float startX = barX + (barWidth - totalW) / 2.0f;
 
     auto placeBtn = [&](std::shared_ptr<UIButton>& btn, int idx) {
@@ -2366,7 +2377,8 @@ void UITrainingPanel::drawBottomBar(OverlayRenderer& renderer, float barY, float
     placeBtn(stopButton, 1);
     placeBtn(pauseResumeButton, 2);
     placeBtn(resetStatusButton, 3);
-    placeBtn(closeButton, 4);
+    placeBtn(runTokenizerButton, 4);
+    placeBtn(closeButton, 5);
 }
 
 // ============================================================
@@ -2949,4 +2961,80 @@ void UITrainingPanel::refreshModelDropdown() {
 void UITrainingPanel::refreshTrainingDropdowns() {
     refreshCurriculumDropdown();
     refreshModelDropdown();
+}
+
+// ============================================================
+// Tokenizer Runner
+// ============================================================
+
+void UITrainingPanel::handleRunTokenizer() {
+    if (tokenizerRunning_) {
+        addLog("Tokenizer already running", 1);
+        return;
+    }
+    if (!trainingController) {
+        addLog("Cannot run tokenizer: controller not initialized", 2);
+        return;
+    }
+    if (!serverConnected) {
+        pollServer();
+        if (!serverConnected) {
+            addLog("Cannot run tokenizer: server not connected", 2);
+            return;
+        }
+    }
+    
+    tokenizerRunning_ = true;
+    tokenizerComplete_ = false;
+    tokenizerSuccess_ = false;
+    tokenizerStatusMessage_ = "Running tokenizer validation...";
+    addLog("Starting tokenizer validation...", 0);
+    
+    // Run async to avoid blocking UI
+    std::thread([this]() {
+        auto result = trainingController->runTokenizer();
+        
+        lastTokenizerResult_ = result;
+        tokenizerSuccess_ = result.success;
+        tokenizerComplete_ = true;
+        tokenizerRunning_ = false;
+        
+        if (result.success) {
+            tokenizerStatusMessage_ = "Tokenizer OK: " + 
+                std::to_string(result.total_vocab_size) + " tokens (" +
+                std::to_string(result.validation_tests_passed) + "/" +
+                std::to_string(result.validation_tests_total) + " tests passed)";
+            addLog(tokenizerStatusMessage_, 0);
+        } else {
+            tokenizerStatusMessage_ = "Tokenizer FAILED: " + result.error;
+            addLog(tokenizerStatusMessage_, 2);
+            for (const auto& f : result.failures) {
+                addLog("  - " + f, 2);
+            }
+        }
+    }).detach();
+}
+
+void UITrainingPanel::drawTokenizerStatus(OverlayRenderer& renderer, float x, float y, float width) {
+    if (!tokenizerComplete_ && !tokenizerRunning_) return;
+    
+    uint32_t bgColor = tokenizerRunning_ ? Colors::ContentAreaBg :
+                        (tokenizerSuccess_ ? 0xFF1A3A1A : 0xFF3A1A1A);
+    uint32_t textColor = tokenizerRunning_ ? Colors::TextSecondary :
+                          (tokenizerSuccess_ ? Colors::Success : Colors::Danger);
+    
+    float h = 24.0f;
+    renderer.drawRoundedRect({x, y}, {width, h}, bgColor, Sizes::WidgetRadius);
+    renderer.drawText({x + Spacing::Small, y + 4.0f}, tokenizerStatusMessage_, textColor);
+    
+    if (tokenizerComplete_ && tokenizerSuccess_) {
+        float detailY = y + h + 2.0f;
+        auto& r = lastTokenizerResult_;
+        std::string details = "Vocab: " + std::to_string(r.unigram_vocab_size) + " unigram + " +
+            std::to_string(r.byte_vocab_size) + " byte + " +
+            std::to_string(r.atom_vocab_size) + " atom | " +
+            "Load: " + std::to_string(static_cast<int>(r.load_time_ms)) + "ms | " +
+            "Val: " + std::to_string(static_cast<int>(r.validation_time_ms)) + "ms";
+        renderer.drawText({x + Spacing::Small, detailY}, details, Colors::TextSecondary);
+    }
 }

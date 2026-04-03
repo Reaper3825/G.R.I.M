@@ -32,6 +32,16 @@ private:
     int cursorPos = 0;
     float scrollOffset = 0.0f;
     
+    // Selection state
+    int selStart = 0;    // selection anchor
+    int selEnd = 0;      // selection moving end
+    bool dragging = false;
+    
+    bool hasSelection() const { return selStart != selEnd; }
+    void clearSelection() { selStart = selEnd = cursorPos; }
+    std::string selectedText() const;
+    void deleteSelection();
+    
     // Logical lines (split on '\n')
     std::vector<std::string> lines;
 
@@ -72,4 +82,5 @@ private:
 
     int wrapIndexForCursor() const;
     int cursorFromWrappedClick(int wrappedIdx, int clickCol) const;
+    int cursorFromMousePos(const Vec2& mousePos, const class OverlayRenderer& renderer) const;
 };

@@ -17,6 +17,7 @@
 #include <functional>
 #include <httplib.h>
 #include <flatbuffers/flatbuffers.h>
+#include <nlohmann/json.hpp>
 #include "training_control_generated.h"
 #include <memory>
 #include <mutex>
@@ -323,6 +324,87 @@ public:
     // Get last error message
     std::string getLastError() const {
         return lastError_;
+    }
+    
+    // Run tokenizer validation and get JSON result
+    struct TokenizerResult {
+        bool success = false;
+        int total_vocab_size = 0;
+        int unigram_vocab_size = 0;
+        int byte_vocab_size = 0;
+        int atom_vocab_size = 0;
+        int special_token_count = 0;
+        int pad_id = 0;
+        int unk_id = 0;
+        int bos_id = 0;
+        int eos_id = 0;
+        std::string vocab_path;
+        std::string data_path;
+        int validation_tests_passed = 0;
+        int validation_tests_total = 0;
+        double load_time_ms = 0.0;
+        double validation_time_ms = 0.0;
+        std::string error;
+        std::string phase;
+        std::vector<std::string> failures;
+    };
+    
+    TokenizerResult runTokenizer(const std::string& vocab_path = "",
+                                  const std::string& data_path = "",
+                                  const std::string& config_path = "") {
+        TokenizerResult result;
+        try {
+            auto client = getClient();
+            client->set_read_timeout(60);  // Tokenizer may take a while
+            
+            nlohmann::json body;
+            if (!vocab_path.empty()) body["vocab_path"] = vocab_path;
+            if (!data_path.empty()) body["data_path"] = data_path;
+            if (!config_path.empty()) body["config_path"] = config_path;
+            
+            std::string bodyStr = body.dump();
+            auto res = client->Post("/api/tokenizer/run", bodyStr, "application/json");
+            
+            if (!res) {
+                result.error = "Connection failed";
+                result.phase = "connection";
+                return result;
+            }
+            
+            auto j = nlohmann::json::parse(res->body);
+            std::string status = j.value("status", "");
+            result.success = (status == "success");
+            result.total_vocab_size = j.value("total_vocab_size", 0);
+            result.unigram_vocab_size = j.value("unigram_vocab_size", 0);
+            result.byte_vocab_size = j.value("byte_vocab_size", 0);
+            result.atom_vocab_size = j.value("atom_vocab_size", 0);
+            result.special_token_count = j.value("special_token_count", 0);
+            result.pad_id = j.value("pad_id", 0);
+            result.unk_id = j.value("unk_id", 0);
+            result.bos_id = j.value("bos_id", 0);
+            result.eos_id = j.value("eos_id", 0);
+            result.vocab_path = j.value("vocab_path", "");
+            result.data_path = j.value("data_path", "");
+            result.validation_tests_passed = j.value("validation_tests_passed", 0);
+            result.validation_tests_total = j.value("validation_tests_total", 0);
+            result.load_time_ms = j.value("load_time_ms", 0.0);
+            result.validation_time_ms = j.value("validation_time_ms", 0.0);
+            result.error = j.value("error", "");
+            result.phase = j.value("phase", "");
+            
+            if (j.contains("failures")) {
+                for (const auto& f : j["failures"]) {
+                    result.failures.push_back(f.get<std::string>());
+                }
+            }
+            
+            return result;
+        } catch (const std::exception& e) {
+            result.error = e.what();
+            result.phase = "client";
+            lastError_ = e.what();
+            return result;
+        }
     }
     
     // Checkpoint operations

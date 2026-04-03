@@ -22,6 +22,7 @@
 #include <iomanip>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 
 static constexpr float kPollInterval  = 0.2f;
 static constexpr float kStatsInterval = 2.0f;
@@ -638,6 +639,13 @@ UIDataHubPanel::UIDataHubPanel()
         cbTypeFilterDropdown_->setMaxVisibleItems(8);
     }
 
+    cbCurriculumFilterToggle_ = std::make_shared<UIToggle>(
+        "In Curriculum", false,
+        [this](bool state) {
+            cbCurriculumFilterActive_ = state;
+            cbFilterDirty_ = true;
+        });
+
     cbSearchInput_ = std::make_shared<UIInputBox>();
     cbSearchInput_->setPlaceholder("Search concept blocks...");
 
@@ -894,7 +902,7 @@ UIDataHubPanel::UIDataHubPanel()
 
     curriculumWidgets_ = {
         cbModelDropdown_, cbCurriculumDropdown_, cbCurriculumRenameInput_,
-        cbListTypeDropdown_, cbTypeFilterDropdown_, cbSearchInput_,
+        cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
         cbNameInput_, cbQuestionArea_, cbAnswerArea_, cbCustomPromptArea_,
         btnCBGenerate_, stepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_
@@ -4129,9 +4137,15 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
     y += rowH + 6.0f;
 
-    // ── Toolbar row 2: Filter + Generate + Search ──────────
-    float filterDdW = 275.0f;
+    // ── Toolbar row 2: Curriculum filter + Format filter + Generate + Search ──
+    float toggleW = 130.0f;
     cx = x;
+    cbCurriculumFilterToggle_->setPosition(cx, y + 4.0f);
+    cbCurriculumFilterToggle_->setSize(toggleW, rowH - 8.0f);
+    cbCurriculumFilterToggle_->drawOverlay(renderer, position);
+    cx += toggleW + gap;
+
+    float filterDdW = 275.0f;
     cbTypeFilterDropdown_->setPosition(cx, y);
     cbTypeFilterDropdown_->setSize(filterDdW, rowH);
     cbTypeFilterDropdown_->drawOverlay(renderer, position);
@@ -4404,6 +4418,24 @@ void UIDataHubPanel::rebuildFilteredCBList() {
         formatFilter = GRIM::kConceptPresets[cbFormatFilterIdx_ - 1].key;
     }
     filteredCBIndices_ = datasetTarget_->filterConceptBlocks(formatFilter, cbFilterSearch_);
+
+    // Optional: restrict to blocks in the active curriculum
+    if (cbCurriculumFilterActive_ && !activeCurriculumId_.empty()) {
+        auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        if (!curr.id.empty()) {
+            std::unordered_set<std::string> inCurr(
+                curr.concept_block_ids.begin(), curr.concept_block_ids.end());
+            std::vector<size_t> filtered;
+            filtered.reserve(filteredCBIndices_.size());
+            for (size_t idx : filteredCBIndices_) {
+                auto cb = datasetTarget_->getConceptBlock(idx);
+                if (inCurr.count(cb.id))
+                    filtered.push_back(idx);
+            }
+            filteredCBIndices_ = std::move(filtered);
+        }
+    }
+
     cbTotalCount_ = datasetTarget_->conceptBlockCount();
 }
 

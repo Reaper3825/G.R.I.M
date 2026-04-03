@@ -88,8 +88,8 @@
         "grim_text": {
             "checkpoints": "resources/models/GRIM-text/checkpoints",
             "collected": "resources/models/GRIM-text/data/collected",
-            "directory_collection": "resources/models/GRIM-text/data/collected",
             "collector_log": "resources/models/GRIM-text/training/logs/collector.log",
+            "directory_collection": "resources/models/GRIM-text/data/collected",
             "logs": "resources/models/GRIM-text/training/logs",
             "merge_checkpoints_exe": "resources/models/GRIM-text/DataCollection/Release/merge_checkpoints.exe",
             "model": "resources/models/GRIM-text/grim_text.bin",
@@ -144,6 +144,7 @@
                 "symmetric": false,
                 "zero_point": 0
             },
+            "activation_quantization_apply_to_embeddings": true,
             "atom_stats_interval": 200,
             "atom_stats_max_seqs": 32,
             "attention_diagnostics": {
@@ -181,8 +182,6 @@
             "epochs": 1,
             "execution_block": {
                 "causal_w1_transition": 1.5,
-                "structured_ce_enabled": true,
-                "structured_ce_weight": 0.1,
                 "cross_attn_head_dim": 64,
                 "cross_attn_topk": 2,
                 "d_key": 64,
@@ -207,6 +206,8 @@
                 "step_x_multiplier": 2.0,
                 "step_y_multiplier": 3.0,
                 "step_y_overrides_x": false,
+                "structured_ce_enabled": true,
+                "structured_ce_weight": 0.1,
                 "temp_end": 0.5,
                 "temp_schedule": 0,
                 "temp_start": 1.5,
