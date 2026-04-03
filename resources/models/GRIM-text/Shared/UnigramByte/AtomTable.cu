@@ -594,10 +594,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     // Zero-copy: pass buffer pointer + length directly to string pool!
     std::lock_guard<std::mutex> lock(mutex_);
     
-    // Use contentView (atom content WITHOUT leading whitespace from span widening).
-    // The widened whitespace is emitted as separate tokens by encodeInternal;
-    // storing it here causes atomToString() to return " 80" instead of "80",
-    // producing double-spaces when decoded alongside the whitespace tokens.
+    // Use contentView for the atom content text.
     std::string_view raw_text = span.contentView();
     
     // Compute hash for deduplication
@@ -637,7 +634,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     entry.confidence = 1.0f;
     entry.created_at = getCurrentTimestamp();
     
-    // Intern the atom CONTENT (without widened whitespace)
+    // Intern the atom content
     entry.raw_text_ref = internString(span.buffer_ptr + span.content_offset, span.content_length);
     
     // Pack numeric value

@@ -48,12 +48,12 @@ struct StructuralSpan {
     
     // Zero-copy buffer reference (NO std::string allocation!)
     const char* buffer_ptr; // Pointer to original text buffer
-    uint32_t offset;        // Offset in buffer for tokenization (may include whitespace)
-    uint32_t length;        // Length of span for tokenization (end - start)
+    uint32_t offset;        // Offset in buffer
+    uint32_t length;        // Length of span (end - start)
     
-    // Original content bounds (without whitespace widening)
-    uint32_t content_offset; // Offset to actual atom content
-    uint32_t content_length; // Length of actual atom content
+    // Content bounds (same as offset/length since no widening)
+    uint32_t content_offset; // Offset to atom content
+    uint32_t content_length; // Length of atom content
     
     int placeholder_id;     // Token ID of placeholder
     

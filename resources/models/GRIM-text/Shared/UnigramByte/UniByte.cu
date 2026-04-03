@@ -294,7 +294,6 @@ std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) c
         span.buffer_ptr = text.data();
         span.offset = static_cast<uint32_t>(start);
         span.length = static_cast<uint32_t>(end - start);
-        // Content bounds initially same as span bounds (before whitespace widening)
         span.content_offset = static_cast<uint32_t>(start);
         span.content_length = static_cast<uint32_t>(end - start);
         span.placeholder_id = atomTypeToTokenId(type);
@@ -361,25 +360,6 @@ std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) c
             non_overlapping.push_back(span);
             last_end = span.end;
         }
-    }
-
-    // Widen spans to include leading whitespace (avoids glued atoms)
-    // NOTE: content_offset/content_length preserve original atom bounds
-    size_t prev_end = 0;
-    for (auto& span : non_overlapping) {
-        size_t new_start = span.start;
-        while (new_start > prev_end &&
-               std::isspace(static_cast<unsigned char>(text[new_start - 1]))) {
-            --new_start;
-        }
-        if (new_start != span.start) {
-            // Widen tokenization bounds but preserve content bounds
-            span.start = new_start;
-            span.offset = static_cast<uint32_t>(new_start);
-            span.length = static_cast<uint32_t>(span.end - new_start);
-            // content_offset/content_length remain unchanged (original atom text)
-        }
-        prev_end = span.end;
     }
 
     return non_overlapping;
@@ -636,17 +616,6 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
                 pos = span.end;
                 struct_idx++;
                 continue;
-            }
-
-            // BUG FIX: Emit leading whitespace BEFORE the atom token
-            // The span was widened to include leading whitespace (detectStructures),
-            // but that whitespace must be tokenized separately to preserve it in output.
-            // span.start = widened start (may include whitespace)
-            // span.content_offset = original atom content start
-            if (span.content_offset > span.offset) {
-                size_t whitespace_start = span.offset;
-                size_t whitespace_end = span.content_offset;
-                appendSegmentTokens(whitespace_start, whitespace_end);
             }
 
             // Emit a single atom token with full AtomTable-backed side channels
