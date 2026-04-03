@@ -243,8 +243,9 @@ CanonicalRenderResult renderWithSpans(const json& j) {
     CanonicalRenderResult result;
     std::ostringstream os;
 
-    if (j.contains("name") && j["name"].is_string() && !j["name"].get<std::string>().empty())
-        os << "[[" << j["name"].get<std::string>() << "]]\n";
+    // NOTE: "name" is intentionally NOT rendered into canonical text.
+    // It is metadata only (filtering, UI, concept-block identity).
+    // Tokenizing it leaks IDs / labels into the training signal.
 
     if (j.contains("question") && j["question"].is_string() && !j["question"].get<std::string>().empty())
         os << "Q: " << j["question"].get<std::string>() << "\n";

@@ -518,80 +518,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                   << " atom spans (" << (total_atom_bytes / 1024) << " KB) will be skipped" << std::endl;
     }
     
-    // Segment documents into sentences BEFORE subword mining.
-    std::vector<std::string> sentences;
-    std::vector<std::vector<AtomSpan>> sentence_atom_spans;
-    sentences.reserve(texts.size() * 5);
-    sentence_atom_spans.reserve(texts.size() * 5);
-    
-    auto clipAtomSpans = [](const std::vector<AtomSpan>& doc_spans,
-                            size_t sent_start, size_t sent_end) -> std::vector<AtomSpan> {
-        std::vector<AtomSpan> result;
-        for (const auto& span : doc_spans) {
-            if (span.end <= sent_start) continue;
-            if (span.start >= sent_end) break;
-            size_t clipped_start = std::max(span.start, sent_start) - sent_start;
-            size_t clipped_end = std::min(span.end, sent_end) - sent_start;
-            if (clipped_end > clipped_start) {
-                result.push_back({clipped_start, clipped_end});
-            }
-        }
-        return result;
-    };
-    
-    auto addSentence = [&](const std::string& text, size_t raw_start, size_t raw_end,
-                           const std::vector<AtomSpan>& doc_spans) {
-        std::string sentence = text.substr(raw_start, raw_end - raw_start);
-        size_t first = sentence.find_first_not_of(" \t\n\r");
-        if (first != std::string::npos) {
-            size_t last = sentence.find_last_not_of(" \t\n\r");
-            size_t trimmed_len = last - first + 1;
-            if (trimmed_len >= 3) {
-                size_t doc_sent_start = raw_start + first;
-                size_t doc_sent_end = doc_sent_start + trimmed_len;
-                auto spans = clipAtomSpans(doc_spans, doc_sent_start, doc_sent_end);
-                sentences.push_back(sentence.substr(first, trimmed_len));
-                sentence_atom_spans.push_back(std::move(spans));
-            }
-        }
-    };
-    
-    for (size_t text_idx = 0; text_idx < texts.size(); ++text_idx) {
-        const auto& text = texts[text_idx];
-        const auto& doc_spans = atom_spans[text_idx];
-        if (text.empty()) continue;
-        
-        size_t start = 0;
-        for (size_t i = 0; i < text.size(); ++i) {
-            char c = text[i];
-            bool is_sentence_end = false;
-            
-            if ((c == '.' || c == '!' || c == '?') && i + 2 < text.size()) {
-                char next = text[i + 1];
-                char after = text[i + 2];
-                if ((next == ' ' || next == '\n' || next == '\t') && 
-                    (after >= 'A' && after <= 'Z')) {
-                    is_sentence_end = true;
-                }
-            }
-            else if (c == '\n' && i > start) {
-                is_sentence_end = true;
-            }
-            
-            if (is_sentence_end) {
-                size_t end = (c == '\n') ? i : i + 1;
-                addSentence(text, start, end, doc_spans);
-                start = (c == '\n') ? i + 1 : i + 2;
-            }
-        }
-        if (start < text.size()) {
-            addSentence(text, start, text.size(), doc_spans);
-        }
-    }
-    
-    std::cout << "[UnigramLM] Segmented " << texts.size() << " documents into " 
-              << sentences.size() << " sentences for subword mining" << std::endl;
-    
     // SentencePiece-style whitespace normalization
     std::vector<std::string> norm_texts;
     std::vector<std::vector<AtomSpan>> norm_atom_spans;
@@ -602,12 +528,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         norm_texts.push_back(normalizeWithSpans(texts[i], spans_copy));
         norm_atom_spans.push_back(std::move(spans_copy));
     }
-    for (size_t i = 0; i < sentences.size(); ++i) {
-        sentences[i] = normalizeWithSpans(sentences[i], sentence_atom_spans[i]);
-    }
     std::cout << "[UnigramLM] Applied SentencePiece whitespace normalization (space -> ▁)" << std::endl;
 
-    const std::vector<std::string>& training_units = sentences;
+    const std::vector<std::string>& training_units = norm_texts;
     const int MIN_SUBWORD_FREQ = min_subword_freq;
     
     size_t total_corpus_bytes = 0;
@@ -643,7 +566,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             sample_indices.push_back(idx);
             sampled_bytes += training_units[idx].size();
         }
-        std::cout << "[UnigramLM] Sampling " << sample_indices.size() << " sentences (" 
+        std::cout << "[UnigramLM] Sampling " << sample_indices.size() << " documents (" 
                   << (sampled_bytes / (1024*1024)) << " MB) for subword mining" << std::endl;
     }
     
@@ -773,7 +696,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     };
 
     auto sentenceAtomsForIndex = [&](size_t idx) -> const std::vector<AtomSpan>& {
-        return use_sampling ? sentence_atom_spans[sample_indices[idx]] : sentence_atom_spans[idx];
+        return use_sampling ? norm_atom_spans[sample_indices[idx]] : norm_atom_spans[idx];
     };
 
     unsigned int mining_workers = resolveSubwordMiningWorkerCount(
@@ -785,7 +708,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     }
 
     std::cout << "[UnigramLM] Mining subwords from " << num_texts_to_process
-              << " sentences (workers=" << mining_workers
+              << " documents (workers=" << mining_workers
               << ", max_len=" << max_len << ")..." << std::endl;
     const auto mining_start = std::chrono::steady_clock::now();
 
