@@ -379,14 +379,19 @@ static void mineSubwordsFromSentence(const std::string& text,
             std::string subword = text.substr(byte_start, byte_end - byte_start);
             if (!isValidSubword(subword)) continue;
 
-            if (subword.find(' ') != std::string::npos) {
-                bool starts_mid_word = (byte_start > 0 &&
-                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start])) &&
-                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start - 1])));
-                bool ends_mid_word = (byte_end < text.size() &&
-                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end - 1])) &&
-                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end])));
-                if (starts_mid_word || ends_mid_word) continue;
+            // ▁ marks word-initial position only. Reject pieces where ▁
+            // appears anywhere after byte 0 — that means the piece crosses
+            // a word boundary (e.g. "the▁", "▁the▁", "he▁").
+            {
+                size_t search_start = 0;
+                if (subword.size() >= SPIECE_UNDERLINE_LEN &&
+                    subword.compare(0, SPIECE_UNDERLINE_LEN, SPIECE_UNDERLINE) == 0) {
+                    search_start = SPIECE_UNDERLINE_LEN; // skip leading ▁
+                }
+                if (search_start < subword.size() &&
+                    subword.find(SPIECE_UNDERLINE, search_start, SPIECE_UNDERLINE_LEN) != std::string::npos) {
+                    continue;
+                }
             }
 
             subword_counts[subword]++;
@@ -445,14 +450,19 @@ static void mineSubwordsFromSentence(const std::string& text,
             std::string subword = text.substr(byte_start, byte_end - byte_start);
             if (!isValidSubword(subword)) continue;
 
-            if (subword.find(' ') != std::string::npos) {
-                bool starts_mid_word = (byte_start > 0 &&
-                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start])) &&
-                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start - 1])));
-                bool ends_mid_word = (byte_end < text.size() &&
-                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end - 1])) &&
-                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end])));
-                if (starts_mid_word || ends_mid_word) continue;
+            // ▁ marks word-initial position only. Reject pieces where ▁
+            // appears anywhere after byte 0 — that means the piece crosses
+            // a word boundary (e.g. "the▁", "▁the▁", "he▁").
+            {
+                size_t search_start = 0;
+                if (subword.size() >= SPIECE_UNDERLINE_LEN &&
+                    subword.compare(0, SPIECE_UNDERLINE_LEN, SPIECE_UNDERLINE) == 0) {
+                    search_start = SPIECE_UNDERLINE_LEN; // skip leading ▁
+                }
+                if (search_start < subword.size() &&
+                    subword.find(SPIECE_UNDERLINE, search_start, SPIECE_UNDERLINE_LEN) != std::string::npos) {
+                    continue;
+                }
             }
 
             subword_counts[subword]++;
