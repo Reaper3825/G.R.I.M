@@ -160,7 +160,7 @@
                 "plateau_min_delta": 0.004,
                 "plateau_patience": 18
             },
-            "batch_size": 24,
+            "batch_size": 12,
             "batch_strategy": "RANDOM",
             "checkpoint_interval": 2000,
             "cosine_decay": {

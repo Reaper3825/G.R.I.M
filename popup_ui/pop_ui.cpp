@@ -290,12 +290,14 @@ void runPopupUI(int width, int height)
                 g_popup3DInput.visible = g_popupVisible.load();
 
                 // Try to consume a rendered frame from the mailbox
-                PopupRenderFrame frame;
-                if (popupMailboxConsume(g_popup3D.mailbox, frame))
+                static std::vector<uint8_t> frameBuffer;
+                static uint64_t lastGen = 0;
+                uint32_t fw = 0, fh = 0;
+                if (popupMailboxConsume(g_popup3D.mailbox, frameBuffer, fw, fh, lastGen))
                 {
-                    presentPopup3DFrame(g_hwnd, frame.data, 
-                                        static_cast<int>(frame.width),
-                                        static_cast<int>(frame.height));
+                    presentPopup3DFrame(g_hwnd, frameBuffer.data(),
+                                        static_cast<int>(fw),
+                                        static_cast<int>(fh));
                 }
             }
             else

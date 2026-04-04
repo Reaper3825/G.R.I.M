@@ -177,14 +177,14 @@ namespace PlatformInput {
             case kVK_PageUp:         return 0x21;
             case kVK_PageDown:       return 0x22;
 
-            case kVK_Shift:          return 0x10;
-            case kVK_RightShift:     return 0x10;
-            case kVK_Control:        return 0x11;
-            case kVK_RightControl:   return 0x11;
-            case kVK_Option:         return 0x12;
-            case kVK_RightOption:    return 0x12;
-            case kVK_Command:        return 0x11; // Map Cmd → Ctrl VK
-            case kVK_RightCommand:   return 0x11;
+            case kVK_Shift:          return 0xA0; // VK_LSHIFT
+            case kVK_RightShift:     return 0xA1; // VK_RSHIFT
+            case kVK_Control:        return 0xA2; // VK_LCONTROL
+            case kVK_RightControl:   return 0xA3; // VK_RCONTROL
+            case kVK_Option:         return 0xA4; // VK_LMENU
+            case kVK_RightOption:    return 0xA5; // VK_RMENU
+            case kVK_Command:        return 0xA2; // Map Cmd → LCtrl VK (for shortcuts)
+            case kVK_RightCommand:   return 0xA2; // Map Cmd → LCtrl VK (for shortcuts)
 
             case kVK_ANSI_A: return 'A'; case kVK_ANSI_B: return 'B';
             case kVK_ANSI_C: return 'C'; case kVK_ANSI_D: return 'D';

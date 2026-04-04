@@ -492,12 +492,12 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     if (!emb_layer) {
         throw std::runtime_error("executeDecodeForward_: embedding layer is NULL");
     }
-    Tensor& emb_weights = emb_layer->tokenWeights();
+    Tensor emb_view = emb_layer->tokenWeights().detach(stream);
 
     // Token ID is at device offset token_pos
     const int* token_id_ptr = reinterpret_cast<const int*>(ts.cached_token_ids_tensor.data) + token_pos;
 
-    Tensor hidden = ag::embedding(emb_weights, token_id_ptr, 1, stream, 1.0f);
+    Tensor hidden = ag::embedding(emb_view, token_id_ptr, 1, stream, 1.0f);
     // hidden: [1, d_model]
 
     // ── Step 2: PBM validation ──
@@ -540,13 +540,16 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         }
 
         // 3a. RMSNorm1
-        Tensor ln1_out = ag::rms_norm(hidden, enc->rms1Gamma(), rms_eps, stream);
+        Tensor rms1_view = enc->rms1Gamma().detach(stream);
+        Tensor ln1_out = ag::rms_norm(hidden, rms1_view, rms_eps, stream);
 
         // 3b. QKV projection: [1, d_model] @ W_qkv^T → [1, qkv_dim]
-        Tensor qkv = ag::matmul(ln1_out, enc->attnWqkv(), stream,
+        Tensor wqkv_view = enc->attnWqkv().detach(stream);
+        Tensor qkv = ag::matmul(ln1_out, wqkv_view, stream,
                                 nullptr, nullptr, true);
         if (enc->attnBqkv().data) {
-            qkv = ag::broadcast_add(qkv, enc->attnBqkv(), stream);
+            Tensor bqkv_view = enc->attnBqkv().detach(stream);
+            qkv = ag::broadcast_add(qkv, bqkv_view, stream);
         }
 
         // 3c. Split QKV → Q [1,nh,1,hd], K [1,nkv,1,hd], V [1,nkv,1,hd]
@@ -615,21 +618,25 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         attn_flat.stream = stream;
 
         // 3j. Output projection: [1, d_model] @ W_o^T
-        Tensor proj = ag::matmul(attn_flat, enc->attnWo(), stream,
+        Tensor wo_view = enc->attnWo().detach(stream);
+        Tensor proj = ag::matmul(attn_flat, wo_view, stream,
                                  nullptr, nullptr, true);
         if (enc->attnBo().data) {
-            proj = ag::broadcast_add(proj, enc->attnBo(), stream);
+            Tensor bo_view = enc->attnBo().detach(stream);
+            proj = ag::broadcast_add(proj, bo_view, stream);
         }
 
         // 3k. LayerScale + residual
         if (enc->layerScale1().data) {
-            proj = ag::layer_scale(proj, enc->layerScale1(), stream);
+            Tensor ls1_view = enc->layerScale1().detach(stream);
+            proj = ag::layer_scale(proj, ls1_view, stream);
         }
         hidden = ag::add(hidden, proj, stream);
         // Skip center_columns for S=1 (centering a single vector is a no-op)
 
         // 3l. RMSNorm2
-        Tensor ln2_out = ag::rms_norm(hidden, enc->rms2Gamma(), rms_eps, stream);
+        Tensor rms2_view = enc->rms2Gamma().detach(stream);
+        Tensor ln2_out = ag::rms_norm(hidden, rms2_view, rms_eps, stream);
 
         // 3m. FFN (SwiGLU)
         ForwardIntermediates ffn_ints;
@@ -642,7 +649,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
 
         // 3n. LayerScale + residual
         if (enc->layerScale2().data) {
-            ffn_out = ag::layer_scale(ffn_out, enc->layerScale2(), stream);
+            Tensor ls2_view = enc->layerScale2().detach(stream);
+            ffn_out = ag::layer_scale(ffn_out, ls2_view, stream);
         }
         hidden = ag::add(hidden, ffn_out, stream);
         // Skip center_columns for S=1

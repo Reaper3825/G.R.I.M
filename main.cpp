@@ -341,18 +341,21 @@ int main(int argc, char* argv[])
     }
 
 #if defined(__APPLE__)
-    // On macOS: keep BGFX on the main window so the overlay has no BGFX clear (stays transparent).
-    auto mainWin = std::make_unique<GRIMWindow>();
-    mainWin->hwnd = tempHwnd;
-    mainWin->name = "main";
-    mainWin->visible = true;
-    mainWin->isOverlay = false;
-    mainWin->width = 320;
-    mainWin->height = 200;
-    WindowManager::registerWindow(std::move(mainWin));
-    WindowManager::updateWindowDimensions("main", 320, 200);
-    WindowManager::processMainThreadUpdates();  // Apply BGFX to main window
-    PlatformWindow::setWindowVisible(tempHwnd, true);
+    // On macOS: BGFX host window is a hidden 1x1 borderless window.
+    // Key input comes through NSApp event queue, not window focus.
+    // The overlay is software-rendered via grimOverlayBlit and stays transparent.
+    {
+        auto mainWin = std::make_unique<GRIMWindow>();
+        mainWin->hwnd = tempHwnd;
+        mainWin->name = "main";
+        mainWin->visible = false;
+        mainWin->isOverlay = false;
+        mainWin->width = 1;
+        mainWin->height = 1;
+        WindowManager::registerWindow(std::move(mainWin));
+        WindowManager::processMainThreadUpdates();
+    }
+    PlatformWindow::setWindowVisible(tempHwnd, false);
 #else
     // On Windows: register tempHwnd as the BGFX primary window (hidden) so
     // bgfx::frame() has a valid render target. The overlay is software-rendered

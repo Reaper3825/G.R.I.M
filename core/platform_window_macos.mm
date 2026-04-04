@@ -144,14 +144,11 @@ void* createBGFXInitWindow() {
     @autoreleasepool {
         ensureNSApp();
 
-        // Use a small visible size on macOS so the window can be focused for the backtick hotkey
-        NSRect frame = NSMakeRect(0, 0, 320, 200);
+        // Minimal 1x1 borderless window — exists only as a BGFX render target.
+        // Key input comes through NSApp event queue, not window focus.
+        NSRect frame = NSMakeRect(-1, -1, 1, 1);
 
-        NSWindowStyleMask style =
-            NSWindowStyleMaskTitled |
-            NSWindowStyleMaskClosable |
-            NSWindowStyleMaskMiniaturizable |
-            NSWindowStyleMaskResizable;
+        NSWindowStyleMask style = NSWindowStyleMaskBorderless;
 
         NSWindow* window = [[NSWindow alloc]
             initWithContentRect:frame
@@ -161,6 +158,9 @@ void* createBGFXInitWindow() {
 
         [window setTitle:@"GRIM"];
         [window setReleasedWhenClosed:NO];
+        [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        [window setLevel:NSNormalWindowLevel - 1];  // behind everything
 
         GRIMMetalView* metalView = [[GRIMMetalView alloc] initWithFrame:frame];
         [metalView setWantsLayer:YES];
@@ -268,14 +268,14 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
                     case kVK_End:            vk = 0x23; break;
                     case kVK_PageUp:         vk = 0x21; break;
                     case kVK_PageDown:       vk = 0x22; break;
-                    case kVK_Shift:          // fall through
-                    case kVK_RightShift:     vk = 0x10; break;
-                    case kVK_Control:        // fall through
-                    case kVK_RightControl:   vk = 0x11; break;
-                    case kVK_Option:         // fall through
-                    case kVK_RightOption:    vk = 0x12; break;
+                    case kVK_Shift:          vk = 0xA0; break; // VK_LSHIFT
+                    case kVK_RightShift:     vk = 0xA1; break; // VK_RSHIFT
+                    case kVK_Control:        vk = 0xA2; break; // VK_LCONTROL
+                    case kVK_RightControl:   vk = 0xA3; break; // VK_RCONTROL
+                    case kVK_Option:         vk = 0xA4; break; // VK_LMENU
+                    case kVK_RightOption:    vk = 0xA5; break; // VK_RMENU
                     case kVK_Command:        // fall through
-                    case kVK_RightCommand:   vk = 0x11; break; // Cmd → Ctrl VK
+                    case kVK_RightCommand:   vk = 0xA2; break; // Cmd → LCtrl VK
                     case kVK_ANSI_A: vk = 'A'; break; case kVK_ANSI_B: vk = 'B'; break;
                     case kVK_ANSI_C: vk = 'C'; break; case kVK_ANSI_D: vk = 'D'; break;
                     case kVK_ANSI_E: vk = 'E'; break; case kVK_ANSI_F: vk = 'F'; break;
@@ -315,13 +315,21 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
             // Also track modifier flag changes (covers modifier-only presses without keyDown)  
             if (etype == NSEventTypeFlagsChanged) {
                 NSEventModifierFlags mods = [event modifierFlags];
-                PlatformInput::setKeyDownFromEvent(0x10, (mods & NSEventModifierFlagShift) != 0);
-                PlatformInput::setKeyDownFromEvent(0x11, (mods & NSEventModifierFlagControl) != 0);
-                PlatformInput::setKeyDownFromEvent(0x12, (mods & NSEventModifierFlagOption) != 0);
+                unsigned short flagKey = [event keyCode];
+                // Only update the specific key that changed (flagKey identifies which)
+                switch (flagKey) {
+                    case kVK_Shift:        PlatformInput::setKeyDownFromEvent(0xA0, (mods & NSEventModifierFlagShift) != 0); break;
+                    case kVK_RightShift:   PlatformInput::setKeyDownFromEvent(0xA1, (mods & NSEventModifierFlagShift) != 0); break;
+                    case kVK_Control:      PlatformInput::setKeyDownFromEvent(0xA2, (mods & NSEventModifierFlagControl) != 0); break;
+                    case kVK_RightControl: PlatformInput::setKeyDownFromEvent(0xA3, (mods & NSEventModifierFlagControl) != 0); break;
+                    case kVK_Option:       PlatformInput::setKeyDownFromEvent(0xA4, (mods & NSEventModifierFlagOption) != 0); break;
+                    case kVK_RightOption:  PlatformInput::setKeyDownFromEvent(0xA5, (mods & NSEventModifierFlagOption) != 0); break;
+                    default: break;
+                }
                 bool cmdDown = (mods & NSEventModifierFlagCommand) != 0;
                 PlatformInput::setCommandDownFromEvent(cmdDown);
-                // Map Cmd to Ctrl VK for shortcuts
-                if (cmdDown) PlatformInput::setKeyDownFromEvent(0x11, true);
+                // Map Cmd to LCtrl VK for shortcuts
+                if (cmdDown) PlatformInput::setKeyDownFromEvent(0xA2, true);
             }
 
             // macOS equivalent of WM_CHAR: inject printable characters into text input
