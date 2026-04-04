@@ -15,6 +15,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#ifdef __OBJC__
+#import <objc/objc.h>
+#endif
+
 // Window/display types
 typedef void* HWND;
 typedef void* HDC;
@@ -28,7 +32,9 @@ typedef void* HANDLE;
 typedef unsigned long DWORD;
 typedef unsigned short WORD;
 typedef unsigned int UINT;
+#ifndef __OBJC__
 typedef int BOOL;
+#endif
 typedef unsigned char BYTE;
 typedef long LONG;
 typedef unsigned long ULONG;

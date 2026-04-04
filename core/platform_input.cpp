@@ -184,7 +184,7 @@ namespace PlatformInput {
             case kVK_Option:         return 0xA4; // VK_LMENU
             case kVK_RightOption:    return 0xA5; // VK_RMENU
             case kVK_Command:        return 0xA2; // Map Cmd → LCtrl VK (for shortcuts)
-            case kVK_RightCommand:   return 0xA2; // Map Cmd → LCtrl VK (for shortcuts)
+            case kVK_RightCommand:   return 0xA3; // Map Right Cmd → RCtrl VK (wake key)
 
             case kVK_ANSI_A: return 'A'; case kVK_ANSI_B: return 'B';
             case kVK_ANSI_C: return 'C'; case kVK_ANSI_D: return 'D';

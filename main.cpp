@@ -462,7 +462,11 @@ int main(int argc, char* argv[])
     }).detach();
     LOG_PHASE("Popup UI launched (layered window)", true);
 #else
-    LOG_DEBUG("Main", "Popup UI not yet implemented on this platform");
+    std::thread([]() {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        runPopupUI(256, 256);
+    }).detach();
+    LOG_PHASE("Popup UI launched (macOS NSWindow)", true);
 #endif
 
     WindowManager::processMainThreadUpdates();

@@ -113,8 +113,190 @@ static GRIMAppDelegate* s_appDelegate = nil;
 static bool            s_appInitialized = false;
 static const NSInteger kOverlayHostTag = 0x4752494D; // 'GRIM' for viewWithTag
 static std::function<void(const std::string&)> s_textInputCallback;
+static id              s_globalKeyMonitor = nil;
+static id              s_globalFlagsMonitor = nil;
 
 static void stopScreenCapture();
+
+namespace {
+
+const char* boolText(bool value) {
+    if (value) return "true";
+    return "false";
+}
+
+std::string macKeyCodeDebugName(unsigned short macKeyCode) {
+    switch (macKeyCode) {
+        case kVK_Shift: return "kVK_Shift";
+        case kVK_RightShift: return "kVK_RightShift";
+        case kVK_Control: return "kVK_Control";
+        case kVK_RightControl: return "kVK_RightControl";
+        case kVK_Option: return "kVK_Option";
+        case kVK_RightOption: return "kVK_RightOption";
+        case kVK_Command: return "kVK_Command";
+        case kVK_RightCommand: return "kVK_RightCommand";
+        case kVK_ANSI_Grave: return "kVK_ANSI_Grave";
+        default:
+            return std::string("macKeyCode(") + std::to_string(static_cast<unsigned int>(macKeyCode)) + ")";
+    }
+}
+
+std::string virtualKeyDebugName(int vk) {
+    switch (vk) {
+        case 0xA0: return "VK_LSHIFT";
+        case 0xA1: return "VK_RSHIFT";
+        case 0xA2: return "VK_LCONTROL";
+        case 0xA3: return "VK_RCONTROL";
+        case 0xA4: return "VK_LMENU";
+        case 0xA5: return "VK_RMENU";
+        case 0xC0: return "VK_OEM_3";
+        default:
+            return std::string("VK(") + std::to_string(vk) + ")";
+    }
+}
+
+bool shouldLogMacKeyDebug(unsigned short macKeyCode, int vk) {
+    switch (macKeyCode) {
+        case kVK_Shift:
+        case kVK_RightShift:
+        case kVK_Control:
+        case kVK_RightControl:
+        case kVK_Option:
+        case kVK_RightOption:
+        case kVK_Command:
+        case kVK_RightCommand:
+        case kVK_ANSI_Grave:
+            return true;
+        default:
+            break;
+    }
+
+    switch (vk) {
+        case 0xA0:
+        case 0xA1:
+        case 0xA2:
+        case 0xA3:
+        case 0xA4:
+        case 0xA5:
+        case 0xC0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void logMacKeyEvent(const char* eventName,
+                    unsigned short macKeyCode,
+                    int vk,
+                    bool down,
+                    NSEventModifierFlags modifiers)
+{
+    if (!shouldLogMacKeyDebug(macKeyCode, vk)) {
+        return;
+    }
+
+    LOG_DEBUG("MacKey",
+        std::string("event=") + eventName +
+        " macKeyCode=" + std::to_string(static_cast<unsigned int>(macKeyCode)) +
+        " (" + macKeyCodeDebugName(macKeyCode) + ")" +
+        " vk=" + std::to_string(vk) +
+        " (" + virtualKeyDebugName(vk) + ")" +
+        " down=" + boolText(down) +
+        " modifiers=" + std::to_string(static_cast<unsigned long long>(modifiers)));
+}
+
+// Shared key-event processor used by both the local event loop and the global monitor.
+// Returns the VK code mapped, or -1 if the macKeyCode wasn't recognized.
+int processKeyEvent(unsigned short macKeyCode, bool down, NSEventModifierFlags modifiers) {
+    int vk = -1;
+    switch (macKeyCode) {
+        case kVK_Delete:         vk = 0x08; break;
+        case kVK_Tab:            vk = 0x09; break;
+        case kVK_Return:         vk = 0x0D; break;
+        case kVK_Escape:         vk = 0x1B; break;
+        case kVK_Space:          vk = 0x20; break;
+        case kVK_LeftArrow:      vk = 0x25; break;
+        case kVK_UpArrow:        vk = 0x26; break;
+        case kVK_RightArrow:     vk = 0x27; break;
+        case kVK_DownArrow:      vk = 0x28; break;
+        case kVK_ForwardDelete:  vk = 0x2E; break;
+        case kVK_Home:           vk = 0x24; break;
+        case kVK_End:            vk = 0x23; break;
+        case kVK_PageUp:         vk = 0x21; break;
+        case kVK_PageDown:       vk = 0x22; break;
+        case kVK_Shift:          vk = 0xA0; break;
+        case kVK_RightShift:     vk = 0xA1; break;
+        case kVK_Control:        vk = 0xA2; break;
+        case kVK_RightControl:   vk = 0xA3; break;
+        case kVK_Option:         vk = 0xA4; break;
+        case kVK_RightOption:    vk = 0xA5; break;
+        case kVK_Command:        vk = 0xA2; break;
+        case kVK_RightCommand:   vk = 0xA3; break;
+        case kVK_ANSI_A: vk = 'A'; break; case kVK_ANSI_B: vk = 'B'; break;
+        case kVK_ANSI_C: vk = 'C'; break; case kVK_ANSI_D: vk = 'D'; break;
+        case kVK_ANSI_E: vk = 'E'; break; case kVK_ANSI_F: vk = 'F'; break;
+        case kVK_ANSI_G: vk = 'G'; break; case kVK_ANSI_H: vk = 'H'; break;
+        case kVK_ANSI_I: vk = 'I'; break; case kVK_ANSI_J: vk = 'J'; break;
+        case kVK_ANSI_K: vk = 'K'; break; case kVK_ANSI_L: vk = 'L'; break;
+        case kVK_ANSI_M: vk = 'M'; break; case kVK_ANSI_N: vk = 'N'; break;
+        case kVK_ANSI_O: vk = 'O'; break; case kVK_ANSI_P: vk = 'P'; break;
+        case kVK_ANSI_Q: vk = 'Q'; break; case kVK_ANSI_R: vk = 'R'; break;
+        case kVK_ANSI_S: vk = 'S'; break; case kVK_ANSI_T: vk = 'T'; break;
+        case kVK_ANSI_U: vk = 'U'; break; case kVK_ANSI_V: vk = 'V'; break;
+        case kVK_ANSI_W: vk = 'W'; break; case kVK_ANSI_X: vk = 'X'; break;
+        case kVK_ANSI_Y: vk = 'Y'; break; case kVK_ANSI_Z: vk = 'Z'; break;
+        case kVK_ANSI_0: vk = '0'; break; case kVK_ANSI_1: vk = '1'; break;
+        case kVK_ANSI_2: vk = '2'; break; case kVK_ANSI_3: vk = '3'; break;
+        case kVK_ANSI_4: vk = '4'; break; case kVK_ANSI_5: vk = '5'; break;
+        case kVK_ANSI_6: vk = '6'; break; case kVK_ANSI_7: vk = '7'; break;
+        case kVK_ANSI_8: vk = '8'; break; case kVK_ANSI_9: vk = '9'; break;
+        case kVK_ANSI_Grave: vk = 0xC0; break;
+        case kVK_F1:  vk = 0x70; break; case kVK_F2:  vk = 0x71; break;
+        case kVK_F3:  vk = 0x72; break; case kVK_F4:  vk = 0x73; break;
+        case kVK_F5:  vk = 0x74; break; case kVK_F6:  vk = 0x75; break;
+        case kVK_F7:  vk = 0x76; break; case kVK_F8:  vk = 0x77; break;
+        case kVK_F9:  vk = 0x78; break; case kVK_F10: vk = 0x79; break;
+        case kVK_F11: vk = 0x7A; break; case kVK_F12: vk = 0x7B; break;
+        default: break;
+    }
+    if (vk >= 0) {
+        logMacKeyEvent(down ? "keyDown" : "keyUp", macKeyCode, vk, down, modifiers);
+        PlatformInput::setKeyDownFromEvent(vk, down);
+    }
+    if (macKeyCode == kVK_Command || macKeyCode == kVK_RightCommand) {
+        PlatformInput::setCommandDownFromEvent(down);
+    }
+    return vk;
+}
+
+void processFlagsChanged(unsigned short flagKey, NSEventModifierFlags mods) {
+    int modifierVk = -1;
+    bool modifierDown = false;
+    switch (flagKey) {
+        case kVK_Shift:        modifierVk = 0xA0; modifierDown = (mods & NSEventModifierFlagShift) != 0; break;
+        case kVK_RightShift:   modifierVk = 0xA1; modifierDown = (mods & NSEventModifierFlagShift) != 0; break;
+        case kVK_Control:      modifierVk = 0xA2; modifierDown = (mods & NSEventModifierFlagControl) != 0; break;
+        case kVK_RightControl: modifierVk = 0xA3; modifierDown = (mods & NSEventModifierFlagControl) != 0; break;
+        case kVK_Option:       modifierVk = 0xA4; modifierDown = (mods & NSEventModifierFlagOption) != 0; break;
+        case kVK_RightOption:  modifierVk = 0xA5; modifierDown = (mods & NSEventModifierFlagOption) != 0; break;
+        default: break;
+    }
+    if (modifierVk >= 0) {
+        logMacKeyEvent("flagsChanged", flagKey, modifierVk, modifierDown, mods);
+        PlatformInput::setKeyDownFromEvent(modifierVk, modifierDown);
+    }
+    bool cmdDown = (mods & NSEventModifierFlagCommand) != 0;
+    PlatformInput::setCommandDownFromEvent(cmdDown);
+    if (flagKey == kVK_Command) {
+        logMacKeyEvent("flagsChanged", flagKey, 0xA2, cmdDown, mods);
+        PlatformInput::setKeyDownFromEvent(0xA2, cmdDown);
+    } else if (flagKey == kVK_RightCommand) {
+        logMacKeyEvent("flagsChanged", flagKey, 0xA3, cmdDown, mods);
+        PlatformInput::setKeyDownFromEvent(0xA3, cmdDown);
+    }
+}
+
+} // namespace
 
 static void ensureNSApp() {
     if (s_appInitialized) return;
@@ -127,6 +309,21 @@ static void ensureNSApp() {
         [NSApp setDelegate:s_appDelegate];
 
         [NSApp finishLaunching];
+
+        // Install global event monitors so key events arrive even when
+        // GRIM is NOT the focused app (no visible window to click).
+        // Global monitors observe events destined for OTHER apps.
+        NSEventMask keyMask = NSEventMaskKeyDown | NSEventMaskKeyUp;
+        s_globalKeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:keyMask
+            handler:^(NSEvent* event) {
+                bool down = ([event type] == NSEventTypeKeyDown);
+                processKeyEvent([event keyCode], down, [event modifierFlags]);
+            }];
+
+        s_globalFlagsMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
+            handler:^(NSEvent* event) {
+                processFlagsChanged([event keyCode], [event modifierFlags]);
+            }];
     }
     s_appInitialized = true;
 }
@@ -246,90 +443,17 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
 
             // ---------------------------------------------------------------
             // Event-driven key state tracking (replaces CGEventSourceKeyState polling)
+            // Uses shared helpers so both local events AND global monitors
+            // go through identical mapping logic.
             // ---------------------------------------------------------------
             if (etype == NSEventTypeKeyDown || etype == NSEventTypeKeyUp) {
                 bool down = (etype == NSEventTypeKeyDown);
-                unsigned short macKeyCode = [event keyCode];
-                // Use the reverse mapping in PlatformInput to get VK code
-                // We call the macKeyCodeToVK helper indirectly via setKeyDownFromEvent
-                int vk = -1;
-                switch (macKeyCode) {
-                    case kVK_Delete:         vk = 0x08; break;
-                    case kVK_Tab:            vk = 0x09; break;
-                    case kVK_Return:         vk = 0x0D; break;
-                    case kVK_Escape:         vk = 0x1B; break;
-                    case kVK_Space:          vk = 0x20; break;
-                    case kVK_LeftArrow:      vk = 0x25; break;
-                    case kVK_UpArrow:        vk = 0x26; break;
-                    case kVK_RightArrow:     vk = 0x27; break;
-                    case kVK_DownArrow:      vk = 0x28; break;
-                    case kVK_ForwardDelete:  vk = 0x2E; break;
-                    case kVK_Home:           vk = 0x24; break;
-                    case kVK_End:            vk = 0x23; break;
-                    case kVK_PageUp:         vk = 0x21; break;
-                    case kVK_PageDown:       vk = 0x22; break;
-                    case kVK_Shift:          vk = 0xA0; break; // VK_LSHIFT
-                    case kVK_RightShift:     vk = 0xA1; break; // VK_RSHIFT
-                    case kVK_Control:        vk = 0xA2; break; // VK_LCONTROL
-                    case kVK_RightControl:   vk = 0xA3; break; // VK_RCONTROL
-                    case kVK_Option:         vk = 0xA4; break; // VK_LMENU
-                    case kVK_RightOption:    vk = 0xA5; break; // VK_RMENU
-                    case kVK_Command:        // fall through
-                    case kVK_RightCommand:   vk = 0xA2; break; // Cmd → LCtrl VK
-                    case kVK_ANSI_A: vk = 'A'; break; case kVK_ANSI_B: vk = 'B'; break;
-                    case kVK_ANSI_C: vk = 'C'; break; case kVK_ANSI_D: vk = 'D'; break;
-                    case kVK_ANSI_E: vk = 'E'; break; case kVK_ANSI_F: vk = 'F'; break;
-                    case kVK_ANSI_G: vk = 'G'; break; case kVK_ANSI_H: vk = 'H'; break;
-                    case kVK_ANSI_I: vk = 'I'; break; case kVK_ANSI_J: vk = 'J'; break;
-                    case kVK_ANSI_K: vk = 'K'; break; case kVK_ANSI_L: vk = 'L'; break;
-                    case kVK_ANSI_M: vk = 'M'; break; case kVK_ANSI_N: vk = 'N'; break;
-                    case kVK_ANSI_O: vk = 'O'; break; case kVK_ANSI_P: vk = 'P'; break;
-                    case kVK_ANSI_Q: vk = 'Q'; break; case kVK_ANSI_R: vk = 'R'; break;
-                    case kVK_ANSI_S: vk = 'S'; break; case kVK_ANSI_T: vk = 'T'; break;
-                    case kVK_ANSI_U: vk = 'U'; break; case kVK_ANSI_V: vk = 'V'; break;
-                    case kVK_ANSI_W: vk = 'W'; break; case kVK_ANSI_X: vk = 'X'; break;
-                    case kVK_ANSI_Y: vk = 'Y'; break; case kVK_ANSI_Z: vk = 'Z'; break;
-                    case kVK_ANSI_0: vk = '0'; break; case kVK_ANSI_1: vk = '1'; break;
-                    case kVK_ANSI_2: vk = '2'; break; case kVK_ANSI_3: vk = '3'; break;
-                    case kVK_ANSI_4: vk = '4'; break; case kVK_ANSI_5: vk = '5'; break;
-                    case kVK_ANSI_6: vk = '6'; break; case kVK_ANSI_7: vk = '7'; break;
-                    case kVK_ANSI_8: vk = '8'; break; case kVK_ANSI_9: vk = '9'; break;
-                    case kVK_ANSI_Grave: vk = 0xC0; break;
-                    case kVK_F1:  vk = 0x70; break; case kVK_F2:  vk = 0x71; break;
-                    case kVK_F3:  vk = 0x72; break; case kVK_F4:  vk = 0x73; break;
-                    case kVK_F5:  vk = 0x74; break; case kVK_F6:  vk = 0x75; break;
-                    case kVK_F7:  vk = 0x76; break; case kVK_F8:  vk = 0x77; break;
-                    case kVK_F9:  vk = 0x78; break; case kVK_F10: vk = 0x79; break;
-                    case kVK_F11: vk = 0x7A; break; case kVK_F12: vk = 0x7B; break;
-                    default: break;
-                }
-                if (vk >= 0) {
-                    PlatformInput::setKeyDownFromEvent(vk, down);
-                }
-                // Update Command key state for isCommandDown()
-                if (macKeyCode == kVK_Command || macKeyCode == kVK_RightCommand) {
-                    PlatformInput::setCommandDownFromEvent(down);
-                }
+                processKeyEvent([event keyCode], down, [event modifierFlags]);
             }
 
-            // Also track modifier flag changes (covers modifier-only presses without keyDown)  
+            // Also track modifier flag changes (covers modifier-only presses without keyDown)
             if (etype == NSEventTypeFlagsChanged) {
-                NSEventModifierFlags mods = [event modifierFlags];
-                unsigned short flagKey = [event keyCode];
-                // Only update the specific key that changed (flagKey identifies which)
-                switch (flagKey) {
-                    case kVK_Shift:        PlatformInput::setKeyDownFromEvent(0xA0, (mods & NSEventModifierFlagShift) != 0); break;
-                    case kVK_RightShift:   PlatformInput::setKeyDownFromEvent(0xA1, (mods & NSEventModifierFlagShift) != 0); break;
-                    case kVK_Control:      PlatformInput::setKeyDownFromEvent(0xA2, (mods & NSEventModifierFlagControl) != 0); break;
-                    case kVK_RightControl: PlatformInput::setKeyDownFromEvent(0xA3, (mods & NSEventModifierFlagControl) != 0); break;
-                    case kVK_Option:       PlatformInput::setKeyDownFromEvent(0xA4, (mods & NSEventModifierFlagOption) != 0); break;
-                    case kVK_RightOption:  PlatformInput::setKeyDownFromEvent(0xA5, (mods & NSEventModifierFlagOption) != 0); break;
-                    default: break;
-                }
-                bool cmdDown = (mods & NSEventModifierFlagCommand) != 0;
-                PlatformInput::setCommandDownFromEvent(cmdDown);
-                // Map Cmd to LCtrl VK for shortcuts
-                if (cmdDown) PlatformInput::setKeyDownFromEvent(0xA2, true);
+                processFlagsChanged([event keyCode], [event modifierFlags]);
             }
 
             // macOS equivalent of WM_CHAR: inject printable characters into text input
@@ -359,6 +483,12 @@ bool pumpEvents(float& mouseWheelDeltaOut, bool& quitRequested) {
         }
 
         [NSApp updateWindows];
+
+        // Drain dispatch_get_main_queue() blocks (showPopupWindow,
+        // hidePopupWindow, presentPopup3DFrame, etc. dispatch async
+        // to the main queue — those blocks only execute when the
+        // main run loop actually runs).
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, false);
     }
 
     return true;

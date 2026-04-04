@@ -66,11 +66,15 @@ void start(ConsoleHistory* history,
     LOG_DEBUG("WakeKey", "Initializing Key system hook...");
     Key::initialize();
 
+    LOG_DEBUG("WakeKey", "Registering wake key callback for KeyCode::RCtrl (macOS maps Right Command here)");
+
     // Register callback for wake key press (voice command)
     Key::onPress(g_hotkey, [=, &timers, &longTermMemory, &nlp](KeyCode code) {
         LOG_DEBUG("WakeKey", "Wake key detected via Key system.");
         handleVoiceCommand(history, timers, longTermMemory, nlp);
     });
+
+    LOG_DEBUG("WakeKey", "Registering console toggle callback for KeyCode::Grave");
 
     // Register callback for console toggle key (grave/tilde) - Toggle OVERLAY console
     Key::onPress(g_consoleToggleKey, [](KeyCode code) {

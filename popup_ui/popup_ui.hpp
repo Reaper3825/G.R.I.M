@@ -21,15 +21,23 @@ float getPopupPulse();
 bool isPopupVisible();
 
 #else
-// Stubs for non-Windows platforms (popup not yet implemented)
-inline void runPopupUI(int, int) {}
-inline void showPopup() {}
-inline void hidePopup() {}
-inline void notifyPopupActivity() {}
-inline bool isPopupVisible() { return false; }
-inline float getPopupAlpha() { return 0.0f; }
-inline float getPopupScale() { return 1.0f; }
-inline float getPopupPulse() { return 0.0f; }
+#include "popup_anim.hpp"
+
+// ===========================================================
+// GRIM Popup UI Control Header (macOS)
+// ===========================================================
+
+void runPopupUI(int width, int height);
+void showPopup();
+void hidePopup();
+void notifyPopupActivity();
+
+PopupAnimState getPopupAnimState();
+float getPopupAlpha();
+float getPopupScale();
+float getPopupPulse();
+bool isPopupVisible();
+
 #endif
 
 namespace bx {

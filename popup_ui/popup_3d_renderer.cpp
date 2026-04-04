@@ -2,6 +2,7 @@
 #include "popup_3d_mesh.hpp"
 #include "popup_3d_shaders.hpp"
 #include "popup_3d_mailbox.hpp"
+#include "logger.hpp"
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 #include <stdexcept>
@@ -18,9 +19,10 @@ static constexpr bgfx::ViewId kPopupViewId = 31;
 // Offscreen framebuffer state (per readback slot)
 struct SlotGPU
 {
-    bgfx::TextureHandle colorTex = BGFX_INVALID_HANDLE;
-    bgfx::TextureHandle depthTex = BGFX_INVALID_HANDLE;
-    bgfx::FrameBufferHandle fb   = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle colorTex    = BGFX_INVALID_HANDLE; // RT-only
+    bgfx::TextureHandle readbackTex = BGFX_INVALID_HANDLE; // blit-dst + readback
+    bgfx::TextureHandle depthTex    = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle fb      = BGFX_INVALID_HANDLE;
 };
 
 static SlotGPU s_slotGPU[Popup3DRenderer::kSlotCount];
@@ -28,6 +30,8 @@ static SlotGPU s_slotGPU[Popup3DRenderer::kSlotCount];
 // -------------------------------------------------------
 // Slot GPU resource management
 // -------------------------------------------------------
+static constexpr bgfx::ViewId kPopupBlitViewId = 32;
+
 static void createSlotGPU(SlotGPU& sg, uint32_t w, uint32_t h)
 {
     sg.colorTex = bgfx::createTexture2D(
@@ -35,10 +39,20 @@ static void createSlotGPU(SlotGPU& sg, uint32_t w, uint32_t h)
         static_cast<uint16_t>(h),
         false, 1,
         bgfx::TextureFormat::BGRA8,
-        BGFX_TEXTURE_RT | BGFX_TEXTURE_READ_BACK
+        BGFX_TEXTURE_RT
     );
     if (!bgfx::isValid(sg.colorTex))
         throw std::runtime_error("Popup3DRenderer: failed to create color texture");
+
+    sg.readbackTex = bgfx::createTexture2D(
+        static_cast<uint16_t>(w),
+        static_cast<uint16_t>(h),
+        false, 1,
+        bgfx::TextureFormat::BGRA8,
+        BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK
+    );
+    if (!bgfx::isValid(sg.readbackTex))
+        throw std::runtime_error("Popup3DRenderer: failed to create readback texture");
 
     sg.depthTex = bgfx::createTexture2D(
         static_cast<uint16_t>(w),
@@ -58,12 +72,14 @@ static void createSlotGPU(SlotGPU& sg, uint32_t w, uint32_t h)
 
 static void destroySlotGPU(SlotGPU& sg)
 {
-    if (bgfx::isValid(sg.fb))       bgfx::destroy(sg.fb);
-    if (bgfx::isValid(sg.colorTex)) bgfx::destroy(sg.colorTex);
-    if (bgfx::isValid(sg.depthTex)) bgfx::destroy(sg.depthTex);
-    sg.fb       = BGFX_INVALID_HANDLE;
-    sg.colorTex = BGFX_INVALID_HANDLE;
-    sg.depthTex = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(sg.fb))          bgfx::destroy(sg.fb);
+    if (bgfx::isValid(sg.colorTex))    bgfx::destroy(sg.colorTex);
+    if (bgfx::isValid(sg.readbackTex)) bgfx::destroy(sg.readbackTex);
+    if (bgfx::isValid(sg.depthTex))    bgfx::destroy(sg.depthTex);
+    sg.fb          = BGFX_INVALID_HANDLE;
+    sg.colorTex    = BGFX_INVALID_HANDLE;
+    sg.readbackTex = BGFX_INVALID_HANDLE;
+    sg.depthTex    = BGFX_INVALID_HANDLE;
 }
 
 // -------------------------------------------------------
@@ -72,6 +88,8 @@ static void destroySlotGPU(SlotGPU& sg)
 static void validateCaps()
 {
     const bgfx::Caps* caps = bgfx::getCaps();
+    if (!(caps->supported & BGFX_CAPS_TEXTURE_BLIT))
+        throw std::runtime_error("Popup3DRenderer: BGFX_CAPS_TEXTURE_BLIT not supported");
     if (!(caps->supported & BGFX_CAPS_TEXTURE_READ_BACK))
         throw std::runtime_error("Popup3DRenderer: BGFX_CAPS_TEXTURE_READ_BACK not supported");
 }
@@ -126,6 +144,9 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     if (!input.visible)
         return;
 
+    static uint32_t s_submitCount = 0;
+    s_submitCount++;
+
     // ---- Poll completed readbacks ----
     int newestReady = -1;
     uint64_t newestGen = 0;
@@ -136,6 +157,12 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
             currentBgfxFrame >= slot.readyAfterFrame)
         {
             slot.state = PopupSlotState::Ready;
+            if (s_submitCount <= 10)
+            {
+                LOG_DEBUG("Popup3D", "Slot " + std::to_string(i) +
+                          " readback ready (bgfxFrame=" + std::to_string(currentBgfxFrame) +
+                          " readyAfter=" + std::to_string(slot.readyAfterFrame) + ")");
+            }
         }
         if (slot.state == PopupSlotState::Ready && slot.generation > newestGen)
         {
@@ -148,6 +175,22 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     if (newestReady >= 0)
     {
         auto& slot = r.slots[newestReady];
+
+        // Check if readback data is non-zero
+        if (s_submitCount <= 10)
+        {
+            uint32_t nonZero = 0;
+            size_t totalBytes = slot.rawStraightBgra.size();
+            for (size_t j = 0; j < totalBytes && j < 4096; j++)
+            {
+                if (slot.rawStraightBgra[j] != 0) nonZero++;
+            }
+            LOG_DEBUG("Popup3D", "Publishing slot " + std::to_string(newestReady) +
+                      " gen=" + std::to_string(slot.generation) +
+                      " size=" + std::to_string(slot.width) + "x" + std::to_string(slot.height) +
+                      " nonZeroBytes(first4k)=" + std::to_string(nonZero));
+        }
+
         popupMailboxPublish(r.mailbox,
                             slot.rawStraightBgra.data(),
                             slot.width, slot.height);
@@ -232,12 +275,25 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     // ---- Submit ----
     bgfx::submit(kPopupViewId, popupShadersGetProgram(r.shaders));
 
-    // ---- Queue readback ----
+    // ---- Blit RT → readback texture, then queue readback ----
     auto& slot = r.slots[idleSlot];
-    slot.readyAfterFrame = bgfx::readTexture(s_slotGPU[idleSlot].colorTex,
+    bgfx::blit(kPopupBlitViewId,
+               s_slotGPU[idleSlot].readbackTex, 0, 0,
+               s_slotGPU[idleSlot].colorTex,    0, 0,
+               static_cast<uint16_t>(r.renderWidth),
+               static_cast<uint16_t>(r.renderHeight));
+    slot.readyAfterFrame = bgfx::readTexture(s_slotGPU[idleSlot].readbackTex,
                                               slot.rawStraightBgra.data());
     slot.generation = r.nextGeneration++;
     slot.state = PopupSlotState::PendingReadback;
+
+    if (s_submitCount <= 10)
+    {
+        LOG_DEBUG("Popup3D", "Submit #" + std::to_string(s_submitCount) +
+                  " slot=" + std::to_string(idleSlot) +
+                  " readyAfterFrame=" + std::to_string(slot.readyAfterFrame) +
+                  " gen=" + std::to_string(slot.generation));
+    }
 }
 
 // -------------------------------------------------------

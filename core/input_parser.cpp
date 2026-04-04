@@ -15,6 +15,72 @@
 #include <unordered_map>
 #include "grim_platform.h"
 
+namespace {
+
+const char* boolText(bool value)
+{
+    if (value) return "true";
+    return "false";
+}
+
+bool shouldLogKeyDebugVK(int vk)
+{
+    switch (vk) {
+        case VK_LSHIFT:
+        case VK_RSHIFT:
+        case VK_LCONTROL:
+        case VK_RCONTROL:
+        case VK_LMENU:
+        case VK_RMENU:
+        case VK_OEM_3:
+            return true;
+        default:
+            return false;
+    }
+}
+
+std::string virtualKeyDebugName(int vk)
+{
+    switch (vk) {
+        case VK_LSHIFT: return "VK_LSHIFT";
+        case VK_RSHIFT: return "VK_RSHIFT";
+        case VK_LCONTROL: return "VK_LCONTROL";
+        case VK_RCONTROL: return "VK_RCONTROL";
+        case VK_LMENU: return "VK_LMENU";
+        case VK_RMENU: return "VK_RMENU";
+        case VK_OEM_3: return "VK_OEM_3";
+        default:
+            return std::string("VK(") + std::to_string(vk) + ")";
+    }
+}
+
+void logInputTransition(const char* source,
+                        int vk,
+                        bool down,
+                        bool pressed,
+                        bool released,
+                        bool ctrl,
+                        bool shift,
+                        bool alt)
+{
+    if (!shouldLogKeyDebugVK(vk)) {
+        return;
+    }
+
+    LOG_DEBUG("InputState",
+        std::string("source=") + source +
+        " vk=" + std::to_string(vk) +
+        " (" + virtualKeyDebugName(vk) + ")" +
+        " down=" + boolText(down) +
+        " pressed=" + boolText(pressed) +
+        " released=" + boolText(released) +
+        " ctrl=" + boolText(ctrl) +
+        " shift=" + boolText(shift) +
+        " alt=" + boolText(alt));
+}
+
+} // namespace
+
 // ====================================================
 // Check if mouse input should be processed by UI
 // ====================================================
@@ -65,6 +131,21 @@ InputState InputState::capture()
         }
 
         prevKeyDown[i] = down;
+    }
+
+    for (int i = 0; i < 256; ++i)
+    {
+        if (state.keyPressed[i] || state.keyReleased[i])
+        {
+            logInputTransition("capture",
+                               i,
+                               state.keysDown[i],
+                               state.keyPressed[i],
+                               state.keyReleased[i],
+                               state.ctrl,
+                               state.shift,
+                               state.alt);
+        }
     }
 
     return state;
@@ -175,6 +256,21 @@ void InputState::captureFromHWND(HWND hwnd)
     shift = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Shift));
     alt = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Alt));
 #endif
+
+    for (int i = 0; i < 256; ++i)
+    {
+        if (keyPressed[i] || keyReleased[i])
+        {
+            logInputTransition("captureFromHWND",
+                               i,
+                               keysDown[i],
+                               keyPressed[i],
+                               keyReleased[i],
+                               ctrl,
+                               shift,
+                               alt);
+        }
+    }
     
     // Detect clipboard shortcuts (Ctrl+C / Cmd+C, Ctrl+V / Cmd+V, Ctrl+X / Cmd+X)
     if (ctrl && !shift && !alt) {

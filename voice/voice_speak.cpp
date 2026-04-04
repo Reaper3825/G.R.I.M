@@ -20,6 +20,10 @@
     #include <windows.h>  // CreateProcess, pipes, etc.
 #endif
 
+#ifdef __APPLE__
+    #include "voice_tts_apple.hpp"
+#endif
+
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
@@ -333,6 +337,21 @@ namespace Voice {
             }
         }
 #endif
+
+#ifdef __APPLE__
+        // macOS: Use Apple TTS (AVSpeechSynthesizer) as the platform engine.
+        // This is not a degraded fallback — it is the correct TTS path when the
+        // Coqui Python bridge is unavailable (which on macOS is always).
+        if (!g_ttsReady) {
+            if (AppleTTS::init()) {
+                g_ttsReady = true;
+                g_engine = "apple";
+                LOG_DEBUG("Voice/Init", "Apple TTS (AVSpeechSynthesizer) initialized as platform engine");
+            } else {
+                LOG_ERROR("Voice/Init", "Apple TTS initialization failed — no TTS available on this platform");
+            }
+        }
+#endif
         return true;
     }
 
@@ -360,6 +379,10 @@ namespace Voice {
 #endif
         // ? Shutdown cache (saves index + cleanup)
         TTSCache::shutdown();
+
+#ifdef __APPLE__
+        AppleTTS::shutdown();
+#endif
         
         LOG_PHASE("Voice shutdownTTS complete", true);
         g_ttsReady = false;
@@ -393,7 +416,7 @@ namespace Voice {
 
             LOG_DEBUG("Voice/Worker", "Processing: " + item.text);
 
-            std::string engine = "coqui";
+            std::string engine = g_engine;
             auto it = g_rules.find(item.category);
             if (it != g_rules.end()) {
                 if (it->second == "coqui" || it->second == "sapi")
@@ -404,6 +427,16 @@ namespace Voice {
             double effectiveSpeed = g_speed * static_cast<double>(item.params.rate);
             double effectivePitch = static_cast<double>(item.params.pitch);
 
+#ifdef __APPLE__
+            if (engine == "apple") {
+                g_isSpeaking = true;
+                notifyPopupActivity();
+                AppleTTS::speak(item.text,
+                                static_cast<float>(effectiveSpeed),
+                                static_cast<float>(effectivePitch));
+                g_isSpeaking = false;
+            } else
+#endif
             if (engine == "coqui") {
                 std::string wavPath = coquiSpeak(item.text, g_speaker, effectiveSpeed, effectivePitch);
                 

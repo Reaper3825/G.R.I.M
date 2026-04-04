@@ -68,6 +68,9 @@ PopupObjectDefinition createCubeTestObject()
     };
 
     def.defaultTransform = {};  // identity
+    def.defaultTransform.scale[0] = 1.0f;
+    def.defaultTransform.scale[1] = 1.0f;
+    def.defaultTransform.scale[2] = 1.0f;
     def.defaultLight.direction[0] = -0.5f;
     def.defaultLight.direction[1] =  0.7f;
     def.defaultLight.direction[2] =  0.5f;

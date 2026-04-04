@@ -252,6 +252,7 @@ if(APPLE)
     "-framework AudioUnit"
     "-framework CoreServices"
     "-framework IOKit"
+    "-framework AVFoundation"
   )
 endif()
 
