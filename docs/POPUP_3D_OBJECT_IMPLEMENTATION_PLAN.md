@@ -14,14 +14,28 @@ These decisions are fixed for implementation unless a later explicit design revi
 |---|----------|
 | 1 | **No backwards compatibility.** The popup becomes a 3D object renderer only. No dual sprite/3D mode. |
 | 2 | **Single object path.** The system is built for one popup object at a time, not a general scene engine. |
-| 3 | **Transparent background remains mandatory.** The visible popup window stays a layered window with per-pixel alpha. |
-| 4 | **bgfx renders offscreen only.** The final visible popup is still presented via `UpdateLayeredWindow`, not direct bgfx presentation to the popup HWND. |
+| 3 | **Transparent background remains mandatory.** The visible popup uses a transparent platform window/surface with per-pixel alpha semantics. |
+| 4 | **bgfx renders offscreen only.** The final visible popup is presented through a platform-specific CPU-frame presenter, not direct bgfx presentation to the popup surface. |
 | 5 | **Project-native logic only.** Use existing project dependencies (`bgfx`, `bx`, `bimg`, `stb`) and local code only. No Assimp, no external scene system, no generic model framework. |
 | 6 | **Simple material model.** One albedo texture + one packed material texture. No full PBR, no shadow maps, no skeletons, no scene graph. |
 | 7 | **Modular file layout.** Rendering core, material handling, mesh handling, object definition, and window presentation live in separate files to avoid bloated includes and mixed responsibilities. |
 | 8 | **Plain-data architecture over inheritance.** Prefer small structs and explicit builder functions over deep abstract class hierarchies. |
 | 9 | **Cross-machine paths only.** No hardcoded `D:/...` resource paths remain in the popup pipeline. |
-| 10 | **Windows-first popup cutover.** The current popup system is `_WIN32`-scoped, so the first implementation targets Windows popup rendering cleanly. |
+| 10 | **Windows and macOS Metal are both supported targets.** The renderer core is shared; popup presentation is platform-specific (`UpdateLayeredWindow` on Windows, Cocoa/CALayer blit on macOS). |
+| 11 | **A single global bgfx API thread owns submission for the entire executable.** If bgfx is moved off the UI/main thread, that dedicated thread becomes the one global bgfx API thread for the whole process, not a popup-local second bgfx runtime. |
+| 12 | **Readback is asynchronous and delayed.** The renderer never blocks waiting for the frame it just submitted. |
+| 13 | **Readback staging is explicit.** The popup renderer uses a 3-slot readback ring plus one thread-safe mailbox copy for handoff to the presenter. |
+| 14 | **Popup offscreen format is locked for v1.** Color = `BGRA8`, depth = `D24S8`, single-sample only, `BGFX_TEXTURE_READ_BACK` enabled. |
+| 15 | **Premultiplication happens in the presenter.** Shaders and renderer produce straight-alpha color; `popup_window.cpp` converts to the platform-required CPU presentation format immediately before final presentation. |
+| 16 | **`WindowManager` remains the sole global bgfx owner.** It owns init/reset/shutdown/platform-data/frame pumping. The popup renderer owns only popup-scoped GPU resources. |
+| 17 | **Coordinate convention is fixed.** Right-handed world, `+X` right, `+Y` up, `+Z` toward camera, counter-clockwise front faces, `BGFX_STATE_CULL_CW`. |
+| 18 | **No per-frame GPU rebuilds.** Meshes, textures, shader programs, and static uniforms are created once and reused until shutdown or explicit resize/reset recreation. |
+| 19 | **Popup close/hide uses drain-then-destroy.** New popup submissions stop immediately; pending readbacks are drained before popup GPU resources are destroyed; unread completed frames are discarded. |
+| 20 | **Mailbox exchange is mutex-protected copy + generation counter.** No lock-free pointer aliasing or shared mutable buffer between renderer and presenter. |
+| 21 | **Uniform handles and uniform values have different lifetimes.** Handles are created once and destroyed at renderer teardown; values are uploaded at submit time only. |
+| 22 | **Popup renderer failures are fail-hard.** Missing shader binaries, missing texture assets, framebuffer creation failure, or readback invariant violations stop execution loudly rather than silently degrading. |
+| 23 | **macOS AppKit/Cocoa window mutations stay on the AppKit thread.** Only bgfx API submission moves to the dedicated submission thread. |
+| 24 | **Exactly one bgfx instance exists per executable.** No popup-local `bgfx::init`, no second `WindowManager`, no second platform-data owner, and no second independent bgfx frame loop. |
 
 ---
 
@@ -29,7 +43,7 @@ These decisions are fixed for implementation unless a later explicit design revi
 
 The current popup path is not a real 3D renderer:
 
-- `popup_ui/popup_window.cpp` creates a transparent layered window and performs CPU-side RGBA composition.
+- `popup_ui/popup_window.cpp` creates a transparent layered window and performs CPU-side pixel composition.
 - `popup_ui/popup_renderer.cpp` loads images on the CPU only.
 - `resources/shaders/vs_sprite.sc` and `resources/shaders/fs_sprite.sc` are only sufficient for a textured 2D quad with alpha.
 - Lighting is currently simulated by CPU-side mask blending rather than actual normals, camera transforms, or light equations.
@@ -38,9 +52,9 @@ That architecture cannot cleanly support a true textured 3D object with native l
 
 The correct architecture is:
 
-1. Render the 3D object offscreen with bgfx into an RGBA target cleared to transparent.
+1. Render the 3D object offscreen with bgfx into a straight-alpha `BGRA8` target cleared to transparent.
 2. Read back the rendered pixels.
-3. Premultiply alpha and present through the existing layered-window mechanism.
+3. Convert to the platform-required CPU presentation format and present through the platform presenter.
 
 This keeps the background fully transparent while allowing native 3D shading.
 
@@ -77,16 +91,27 @@ These are intentionally excluded from the first implementation:
 ### High-level data flow
 
 ```text
-pop_ui.cpp
-	-> updates PopupAnimState
-	-> asks Popup3DRenderer for current frame
-	-> passes frame pixels to PopupWindowPresenter
-	-> PopupWindowPresenter calls UpdateLayeredWindow
+Platform presenter/UI thread
+	Windows: popup UI thread
+	macOS: AppKit/main thread
+	pop_ui.cpp (or platform popup UI host)
+		-> updates PopupAnimState
+		-> writes latest PopupRenderInput snapshot
+	PopupWindowPresenter (popup_window.cpp)
+		-> reads PopupFrameMailbox
+		-> converts straight-alpha BGRA8 to premultiplied BGRA8 when needed
+		-> presents via platform-specific path
 
-Popup3DRenderer
-	-> builds mesh/material/object state
-	-> renders offscreen via bgfx
-	-> reads back RGBA pixels with alpha preserved
+Dedicated submission thread (single global bgfx API thread)
+	WindowManager submission-thread loop
+		-> owns the process-wide bgfx API submission path on the submission thread
+		-> pumps one bgfx frame while popup is visible or readback is pending
+		-> calls Popup3DRenderer::submitAndPoll()
+	Popup3DRenderer
+		-> reuses prebuilt mesh/material/object state
+		-> renders offscreen via bgfx into one staging slot
+		-> queues asynchronous texture readback
+		-> publishes newest completed raw BGRA8 frame to PopupFrameMailbox
 ```
 
 ### Responsibility split
@@ -94,8 +119,10 @@ Popup3DRenderer
 | Area | Responsibility |
 |------|----------------|
 | `pop_ui.cpp` | Popup loop, animation state updates, show/hide timing, render orchestration |
-| popup window presenter | Window creation and pixel presentation only |
+| `WindowManager` | Sole global bgfx owner: init/reset/shutdown/platform data/submission-thread lifetime/frame pump/reset epoch |
+| popup window presenter | Platform-specific window creation and pixel presentation only |
 | 3D renderer | bgfx resources, view/projection, offscreen render pass, readback |
+| frame mailbox | Mutex-protected full-frame raw-buffer copy plus generation counter handoff from the submission thread to the presenter/UI thread |
 | mesh module | Vertex/index buffer data and GPU upload |
 | material module | Texture load, uniform creation, shader binding |
 | object definition file | The actual popup object definition (geometry/material defaults/transform defaults) |
@@ -108,12 +135,13 @@ The new layout should stay intentionally small.
 
 ```text
 popup_ui/
-	popup_window.hpp/.cpp                # layered window creation + present RGBA buffer
+	popup_window.hpp/.cpp                # platform-specific popup presenter (Win32 layered window / macOS Cocoa blit)
 	popup_3d_types.hpp                  # tiny POD structs/enums only
 	popup_3d_mesh.hpp/.cpp              # mesh CPU data + bgfx buffer ownership
 	popup_3d_material.hpp/.cpp          # textures, uniforms, shader binding
 	popup_3d_shaders.hpp/.cpp           # program load/create + shader uniform handles
 	popup_3d_renderer.hpp/.cpp          # offscreen bgfx render + readback
+	popup_3d_mailbox.hpp/.cpp           # mutex-protected raw-frame handoff + generation counter
 	popup_3d_assets.hpp/.cpp            # cross-platform resource path resolution
 	objects/
 		grim_popup_object.hpp/.cpp        # concrete popup object definition
@@ -156,7 +184,10 @@ It should contain only plain structs such as:
 - `PopupVertex`
 - `PopupTransform`
 - `PopupLightParams`
+- `PopupRenderInput`
 - `PopupFrameBuffer`
+- `PopupReadbackSlot`
+- `PopupFrameMailbox`
 - `PopupObjectDefinition`
 - `PopupRenderFrame`
 
@@ -171,6 +202,113 @@ Rule for includes:
 - object-definition headers include only `popup_3d_types.hpp`
 
 This avoids include sprawl and keeps compile cost sane.
+
+---
+
+## Thread and Lifetime Ownership Contract
+
+This section is authoritative. If code and prose disagree, follow this section.
+
+### Thread model
+
+- **Single global bgfx API thread** owns all bgfx API calls for the entire executable.
+- If bgfx is moved off the UI/main thread, that thread is the dedicated submission thread.
+- The popup renderer is a client of that one global bgfx instance; it does not get its own bgfx lifecycle.
+- **Presenter/UI thread** owns popup visibility, timing, and CPU-frame presentation only.
+- `pop_ui.cpp` does **not** submit draw calls, call `bgfx::frame()`, or create/destroy popup GPU resources.
+- On **macOS**, `NSWindow` / `NSView` / `CALayer` creation and mutation remain on the AppKit/main thread.
+
+This is a target-state change from the current repo architecture.
+
+- today, bgfx is initialized and pumped from the main thread
+- if the app adopts a dedicated submission thread, that thread becomes the single global bgfx API thread for the whole process
+- platform window creation stays on the OS-required UI thread
+
+### Single bgfx instance rule
+
+The process owns exactly one bgfx runtime:
+
+- one `bgfx::init`
+- one `bgfx::shutdown`
+- one `bgfx::setPlatformData` owner
+- one `bgfx::frame` pump loop
+
+Popup 3D rendering must plug into that existing global runtime.
+
+Forbidden:
+
+- popup-local `bgfx::init`
+- popup-local `bgfx::shutdown`
+- second `WindowManager`
+- second independent bgfx frame loop
+- second platform-data owner
+
+### bgfx threading mode rule
+
+- Use a dedicated **process-wide bgfx API/submission thread** owned by `WindowManager`.
+- Do **not** call `bgfx::renderFrame()` before `bgfx::init()` as part of this design; that would force a different bgfx threading mode than this plan intends.
+- That submission thread uses the normal `bgfx::init()` + `bgfx::frame()` path.
+
+### Global ownership map
+
+| Owner | Owns |
+|------|------|
+| `WindowManager` | the single global `bgfx::init`, `bgfx::reset`, `bgfx::shutdown`, `bgfx::frame`, `bgfx::setPlatformData`, renderer reset epoch, and the dedicated submission-thread pump |
+| `Popup3DRenderer` | Popup view ID, popup shader program, immutable uniform handles, popup mesh/material GPU resources, offscreen framebuffer(s), readback ring, and mailbox publication |
+| `PopupWindowPresenter` (`popup_window.cpp`) | Platform popup window handle, presenter scratch objects/buffers, and OS-specific CPU-frame presentation |
+| `pop_ui.cpp` | Animation state, visibility state, and the latest `PopupRenderInput` snapshot |
+| object-definition files | Immutable CPU-side object description only |
+
+### View ID contract
+
+- Reserve a dedicated popup offscreen view ID: **`31`**.
+- No other subsystem may submit popup geometry through any other view.
+- `Popup3DRenderer` is the sole owner of view `31`.
+
+### Reset / resize contract
+
+- `WindowManager` remains the only code allowed to call `bgfx::reset`.
+- Add a monotonically increasing **reset epoch** to `WindowManager`.
+- `Popup3DRenderer` stores `lastSeenResetEpoch` and recreates size-dependent popup render targets whenever:
+	- the popup render size changes, or
+	- the reset epoch changes.
+- Static popup GPU resources (mesh, textures, shader program, static uniforms) are **not** rebuilt per frame.
+
+### Frame-pump contract
+
+The current hidden-window bgfx keepalive throttles to every 30th frame. That is not valid for popup readback.
+
+When the 3D popup renderer is active:
+
+- the dedicated submission-thread loop must advance **one bgfx frame every render tick** while:
+	- the popup is visible, or
+	- any popup readback slot is still pending.
+
+No 2-fps keepalive throttling is allowed in that state.
+
+This is still the **one global bgfx frame loop** for the executable, not a popup-local second loop.
+
+### Close / hide / shutdown drain contract
+
+Popup close/hide does **not** immediately destroy popup-scoped GPU resources.
+
+The rule is:
+
+1. stop enqueuing new popup draws and new popup readbacks immediately
+2. continue dedicated submission-thread bgfx frame pumping in **drain mode**
+3. keep polling until every readback slot is no longer `PendingReadback`
+4. discard any unread `Ready` slot contents and discard the mailbox contents
+5. destroy popup-scoped GPU resources
+
+Because the readback ring size is fixed at 3 and no new readbacks are queued during drain mode, draining is bounded to at most **3 additional bgfx frame advances**.
+
+Application shutdown follows the same rule:
+
+- popup renderer drain completes first
+- popup-scoped GPU resources are destroyed second
+- `WindowManager::shutdown()` may proceed last
+
+There is no “destroy immediately and hope pending readbacks don’t matter” path in v1.
 
 ---
 
@@ -202,7 +340,7 @@ The object definition file should describe:
 It should **not** own:
 
 - bgfx init/shutdown
-- layered window presentation
+- platform popup presentation
 - shader compilation
 - general popup loop timing
 
@@ -279,6 +417,36 @@ This matches the spirit of the current popup asset flow while moving the actual 
 - binding textures for a draw call
 - destroying texture and uniform handles
 
+### Uniform handle/value lifetime contract
+
+There are two distinct categories and they must not be mixed:
+
+#### Immutable handles (created once)
+
+Created during renderer/material/shader initialization and destroyed during popup renderer teardown:
+
+- sampler uniform handles
+- non-sampler uniform handles (alpha, emissive, light direction/intensity, material params)
+- shader program handles
+
+These are long-lived bgfx handles, not per-frame data.
+
+#### Per-frame values (uploaded at submit time)
+
+Updated every submit as plain POD values:
+
+- model matrix
+- view/projection matrices
+- alpha multiplier
+- emissive multiplier
+- light direction/intensity values
+- any per-frame material scalar values
+
+These are uploaded with `bgfx::setTransform` / `bgfx::setUniform` during submission and do not own bgfx lifetime.
+
+`Popup3DRenderer` owns the immutable uniform handles.
+Object-definition files never own bgfx handles.
+
 ---
 
 ## Shader Plan
@@ -306,7 +474,7 @@ The current sprite shaders are not sufficient.
 - compute ambient + directional light
 - optionally add roughness-driven highlight approximation
 - optionally add emissive boost
-- write final RGBA with preserved alpha
+- write final straight-alpha color with preserved alpha
 
 ### Lighting model
 
@@ -317,6 +485,14 @@ First implementation uses:
 - simple specular approximation
 
 Do **not** implement full PBR or shadow maps in the first cut.
+
+### Color-space contract
+
+- Albedo texture content is treated as artist-authored sRGB image data.
+- Lighting is computed in **linear** space.
+- Final RGB is converted back to display/gamma space in the fragment shader before writing to the offscreen color target.
+- Alpha is never gamma-corrected; it remains a straight coverage/opacity value.
+- The offscreen target itself is a plain `BGRA8` UNORM target for deterministic readback and deterministic presenter conversion.
 
 ---
 
@@ -336,13 +512,16 @@ It owns:
 - model transform submission
 - draw-state setup
 - bgfx frame submission
-- readback into CPU-visible RGBA buffer
+- readback into CPU-visible raw BGRA buffer
 
 ### Required render target properties
 
-- color format with alpha
-- depth buffer attached
-- clear color must be transparent: alpha = 0
+- color format = `bgfx::TextureFormat::BGRA8`
+- texture flags include `BGFX_TEXTURE_RT | BGFX_TEXTURE_READ_BACK`
+- depth format = `bgfx::TextureFormat::D24S8`
+- single-sample only in v1 (no MSAA on the popup readback path)
+- clear color must be transparent: `BGRA = (0, 0, 0, 0)`
+- renderer initialization must fail loudly if `BGFX_CAPS_TEXTURE_READ_BACK` is unavailable
 
 ### Required bgfx state
 
@@ -351,12 +530,177 @@ It owns:
 - depth write
 - depth test
 - cull back faces
-- MSAA if practical
+- no MSAA in v1
 - alpha blending enabled only if the object material actually requires it
 
 ### Important rule
 
 The renderer must never paint a full opaque background. If it clears to opaque, desktop transparency is gone.
+
+### Readback contract
+
+The readback path is **explicitly asynchronous**.
+
+Use bgfx semantics directly:
+
+- `bgfx::readTexture(...)` returns a **frame number when the result will be available**.
+- `bgfx::frame()` advances the frame pump and yields the current frame number.
+
+The popup renderer must never spin, wait, or block for the frame it just submitted.
+
+#### Required staging objects
+
+`Popup3DRenderer` owns:
+
+- `PopupReadbackSlot slots[3]`
+- one `PopupFrameMailbox latestCompletedFrame`
+
+Each readback slot contains:
+
+- one color texture (`BGRA8`, readback enabled)
+- one depth texture (`D24S8`)
+- one framebuffer handle
+- one raw **straight-alpha** CPU buffer sized `width * height * 4`
+- one `readyAfterFrame` value returned from `bgfx::readTexture`
+- one generation counter
+- one state enum: `Idle | PendingReadback | Ready`
+
+#### Submission and ownership sequence
+
+For each dedicated submission-thread popup render tick:
+
+1. Poll existing slots.
+2. If `currentBgfxFrame >= slot.readyAfterFrame`, that slot becomes `Ready`.
+3. Copy the newest ready slot into `PopupFrameMailbox` and increment mailbox generation.
+4. Choose the next `Idle` slot for rendering.
+5. If no slot is idle, **skip submission** and keep the last completed frame; do not stall.
+6. Render the popup object into that slot's framebuffer.
+7. Queue `bgfx::readTexture(slot.colorTexture, slot.rawStraightBgra.data())`.
+8. Record the returned `readyAfterFrame`.
+9. Mark the slot `PendingReadback`.
+
+#### Immediate vs delayed behavior
+
+- A frame submitted this tick is **not** eligible for presentation this tick.
+- Presentation always uses the **newest completed mailbox frame**, never the just-submitted frame.
+- If no new frame is ready, the presenter reuses the last premultiplied presentation buffer instead of blocking the app.
+
+#### CPU buffer ownership
+
+- Readback-slot raw buffers are owned exclusively by `Popup3DRenderer`.
+- `PopupFrameMailbox` owns one thread-safe copy of the newest completed **straight-alpha BGRA8** frame.
+- `PopupWindowPresenter` owns a separate **premultiplied BGRA8** presentation scratch buffer.
+- The presenter never mutates renderer-owned readback-slot buffers.
+
+#### Mailbox exchange model
+
+`PopupFrameMailbox` uses a **mutex-protected full-frame copy plus generation counter**.
+
+It owns:
+
+- one `std::vector<uint8_t>` straight-alpha raw `BGRA8` buffer
+- width/height/stride metadata
+- one monotonically increasing `generation`
+- one `std::mutex`
+
+Writer behavior (dedicated submission thread):
+
+1. lock mailbox mutex
+2. resize mailbox storage if dimensions changed
+3. copy newest completed readback-slot buffer into mailbox-owned storage
+4. update width/height/stride metadata
+5. increment `generation`
+6. unlock mutex
+
+Reader behavior (presenter/UI thread):
+
+1. lock mailbox mutex
+2. compare `generation` with `lastConsumedGeneration`
+3. if unchanged, unlock and reuse previous presenter buffers
+4. if changed, copy mailbox raw buffer into presenter-owned raw scratch, store new generation, unlock mutex
+5. perform premultiplication **after unlocking** into presenter-owned premultiplied scratch
+
+This means:
+
+- no zero-copy aliasing between threads
+- no atomic pointer/index handoff model
+- no possibility of the presenter reading a buffer while the renderer mutates that same storage
+
+#### Premultiplication location
+
+Premultiplication or equivalent platform-format conversion happens **only once**, in the presenter, on the mailbox copy immediately before final platform presentation.
+
+That means:
+
+- shader output = straight alpha
+- mailbox buffer = straight-alpha `BGRA8`
+- presenter scratch = premultiplied `BGRA8`
+
+### MSAA / resolve rule
+
+Version one intentionally forbids MSAA on the popup readback path.
+
+If MSAA is ever added later, the contract becomes:
+
+1. render into an MSAA target
+2. resolve/blit into a **single-sample `BGRA8` readback texture**
+3. call `bgfx::readTexture` only on the resolved single-sample texture
+
+Readback from an MSAA target directly is not part of the v1 contract.
+
+### Runtime invariant rule
+
+If a readback completes with a size that does not match the slot dimensions or the current mailbox copy contract after resize/reset, that is an invariant violation.
+
+In v1 this is **fail-hard**:
+
+- log a detailed error
+- stop popup rendering
+- request main-loop stop
+- do not continue with stale or partially sized buffers
+
+---
+
+## Camera and Mesh Convention Contract
+
+This section fixes all default spatial conventions for the popup object path.
+
+### Coordinate system
+
+- handedness: **right-handed**
+- `+X` = screen right
+- `+Y` = screen up
+- `+Z` = toward the camera
+
+### Camera defaults
+
+- camera position: `(0.0f, 0.0f, +2.5f)`
+- camera target: `(0.0f, 0.0f, 0.0f)`
+- up vector: `(0.0f, +1.0f, 0.0f)`
+- projection: perspective
+- vertical FOV: `30°`
+- near plane: `0.05f`
+- far plane: `10.0f`
+
+### Mesh authoring rules
+
+- the popup object is authored around the origin
+- the local pivot is at the origin
+- outward-facing triangles are **counter-clockwise** when viewed from outside the mesh
+- the renderer uses `BGFX_STATE_CULL_CW`, leaving CCW faces visible
+- normals point outward from the visible surface
+
+### Animation / pivot rules
+
+- uniform scale occurs around the local origin
+- idle rotation and voice pulse operate on the object, not on the camera
+- v1 does **not** orbit the camera; the object animates in place
+
+### Lighting-space rule
+
+- directional light is defined in world space
+- normals are transformed from model space into world or view space in the vertex shader
+- default light direction should be normalized and come from upper-front-left so the face visible to the user is lit by default
 
 ---
 
@@ -366,11 +710,11 @@ The renderer must never paint a full opaque background. If it clears to opaque, 
 
 ### After cutover, `popup_window.cpp` should only do:
 
-- create the popup HWND
-- own the layered-window presentation code
-- accept a prepared RGBA buffer
-- convert RGBA to premultiplied BGRA
-- call `UpdateLayeredWindow`
+- create/manage the platform popup window handle
+- own the platform-specific CPU-frame presentation code
+- accept a prepared straight-alpha BGRA buffer from `PopupFrameMailbox`
+- convert straight-alpha BGRA to the platform presentation format in presenter-owned scratch memory
+- call the platform-specific CPU-frame presenter
 
 ### It should no longer do:
 
@@ -381,6 +725,28 @@ The renderer must never paint a full opaque background. If it clears to opaque, 
 - sprite-specific asset loading
 
 This file becomes a presenter, not a renderer.
+
+### Presenter contract
+
+- the presenter never touches bgfx objects
+- the presenter never performs mesh/material/shader work
+- the presenter may cache and reuse the last good premultiplied frame when no newer readback has completed
+- the presenter is the only place where platform pixel-presentation rules are handled
+
+### Platform presenter contract
+
+#### Windows
+
+- presenter thread = popup UI thread
+- window type = Win32 layered popup window
+- presentation path = premultiplied `BGRA8` + `UpdateLayeredWindow`
+
+#### macOS
+
+- presenter thread = AppKit/main thread
+- window type = Cocoa popup/overlay window
+- presentation path = CPU pixel blit into a Cocoa/CoreAnimation-backed surface (same family as the existing `grimOverlayBlit` path)
+- `NSWindow` / `NSView` / `CALayer` mutations must never occur from the dedicated submission thread
 
 ---
 
@@ -406,7 +772,63 @@ That should continue.
 
 The animation loop should not know mesh or shader details.
 
-It should only prepare a simple render input struct and call the renderer.
+It should only prepare and publish a simple render input struct for the dedicated submission thread to consume.
+
+### Cross-thread input rule
+
+- `pop_ui.cpp` publishes a `PopupRenderInput` snapshot
+- the single global bgfx API thread consumes the newest snapshot during the submission-thread loop
+- no bgfx state is mutated directly from the presenter/UI thread
+
+---
+
+## One-Time vs Per-Frame Resource Contract
+
+The original phrase “renderer builds mesh/material/object state” is too loose and must not be implemented literally.
+
+### One-time creation only
+
+These are created once during popup renderer initialization and reused:
+
+- vertex layout
+- mesh GPU buffers
+- texture handles
+- immutable uniform handles
+- shader program
+- immutable object definition data
+
+### Recreated only on resize/reset
+
+These are recreated only when popup dimensions or reset epoch change:
+
+- offscreen color textures
+- offscreen depth textures
+- framebuffers
+- readback-slot CPU buffers sized to the target
+- presenter scratch buffer sized to the target
+
+### Per-frame updates only
+
+These are the only things allowed to change every frame:
+
+- model matrix
+- view/projection matrix if aspect ratio changed
+- alpha multiplier
+- emissive multiplier / voice-intensity uniforms
+- light direction/intensity uniforms
+- which readback slot is used for this frame
+
+### Forbidden per-frame work
+
+The render loop must **not** do any of the following every frame:
+
+- recreate mesh buffers
+- reload textures from disk
+- recreate shader programs
+- recreate static uniforms
+- rebuild object definitions
+
+If implementation does any of the above, it violates this plan.
 
 ---
 
@@ -450,6 +872,45 @@ That keeps `CMakeLists.txt` from becoming shader-tool glue soup.
 
 ---
 
+## Failure Policy (Fail-Hard)
+
+Popup 3D rendering follows GRIM fail-loud rules. There are no silent fallbacks, placeholder assets, or degraded legacy sprite paths.
+
+### Fatal initialization failures
+
+The following are fatal and must stop execution loudly:
+
+- shader binary missing
+- texture asset missing
+- popup offscreen color texture creation failure
+- popup depth texture creation failure
+- popup framebuffer creation failure
+- missing `BGFX_CAPS_TEXTURE_READ_BACK`
+
+Required behavior:
+
+- emit a detailed error message
+- abort popup renderer initialization immediately
+- if this occurs during startup, fail startup
+- if this occurs after startup, request main-loop stop
+
+### Fatal runtime invariant failures
+
+The following are also fatal:
+
+- readback size mismatch after resize/reset
+- invalid mailbox metadata after copy
+- unexpected invalid popup GPU handle in the live render path
+
+Required behavior:
+
+- emit a detailed error message with the expected vs actual values
+- stop popup rendering immediately
+- request main-loop stop
+- do not attempt recovery by switching formats, skipping premultiplication, or falling back to the deleted sprite path
+
+---
+
 ## Include Discipline Rules
 
 To avoid bloated includes, implementation must follow these rules:
@@ -488,10 +949,10 @@ From the popup module overall:
 
 ```text
 old:
-	load sprite textures -> derive CPU masks -> fake light on CPU -> UpdateLayeredWindow
+	load sprite textures -> derive CPU masks -> fake light on CPU -> platform popup presentation
 
 new:
-	render 3D object offscreen with bgfx -> read back RGBA -> UpdateLayeredWindow
+	render 3D object offscreen with bgfx -> read back straight-alpha BGRA8 -> platform popup presentation
 ```
 
 ---
@@ -507,6 +968,7 @@ Create the new file structure with empty/minimal implementations:
 - `popup_3d_material.hpp/.cpp`
 - `popup_3d_shaders.hpp/.cpp`
 - `popup_3d_renderer.hpp/.cpp`
+- `popup_3d_mailbox.hpp/.cpp`
 - `popup_3d_assets.hpp/.cpp`
 - `popup_ui/objects/grim_popup_object.hpp/.cpp`
 
@@ -514,6 +976,7 @@ Deliverable:
 
 - project builds with new modules present
 - no behavior change yet
+- ownership boundaries are declared in code skeletons
 
 ### Phase 2 — Add shader and asset plumbing
 
@@ -537,11 +1000,13 @@ Add:
 - offscreen framebuffer
 - camera/projection setup
 - transparent clear
-- readback path
+- 3-slot readback ring
+- mailbox publication path
+- `BGFX_CAPS_TEXTURE_READ_BACK` fail-loud validation
 
 Deliverable:
 
-- renderer can produce an RGBA frame with transparent background
+- renderer can produce a delayed straight-alpha `BGRA8` frame with transparent background
 
 ### Phase 4 — Define the first popup object
 
@@ -558,18 +1023,18 @@ Deliverable:
 
 ### Phase 5 — Replace the popup presentation input
 
-Refactor `popup_window.cpp` so it only presents provided RGBA buffers.
+Refactor `popup_window.cpp` so it only presents provided straight-alpha `BGRA8` buffers.
 
 Deliverable:
 
-- layered window presentation works with renderer output
+- platform popup presentation works from straight-alpha `BGRA8` mailbox input via presenter-side conversion/premultiplication
 
 ### Phase 6 — Integrate into `pop_ui.cpp`
 
 Replace the sprite/CPU shading path with:
 
 - animation update
-- renderer call
+- render-input snapshot publish
 - present call
 
 Deliverable:
@@ -604,6 +1069,17 @@ The cutover is not done until all of the following are true:
 - [ ] popup animation still responds to `scale`, `alpha`, and `voiceIntensity`
 - [ ] build includes shader assets and popup 3D textures correctly
 - [ ] no new include bloat or monolithic popup header was introduced
+- [ ] bgfx submission occurs on the single global bgfx API thread only
+- [ ] popup rendering does not create a second bgfx instance, second `WindowManager`, or second independent bgfx frame loop
+- [ ] no per-frame GPU resource rebuilds occur
+- [ ] readback follows frame-number ownership rules and never blocks current-frame presentation
+- [ ] popup offscreen format is `BGRA8 + D24S8`, single-sample, with no implicit MSAA readback
+- [ ] camera conventions, winding, and culling produce a front-facing correctly lit object
+- [ ] popup close/hide drains pending readbacks before popup GPU resource destruction
+- [ ] mailbox exchange uses mutex-protected full-frame copy with generation counter, not shared mutable storage
+- [ ] immutable uniform handles are created once while per-frame values upload only at submit time
+- [ ] missing shaders/assets, framebuffer creation failure, and readback invariant violations fail hard with no fallback path
+- [ ] macOS presenter uses Cocoa/CoreAnimation blit on the AppKit thread while bgfx stays on the dedicated submission thread
 
 ---
 
@@ -612,10 +1088,15 @@ The cutover is not done until all of the following are true:
 | Risk | Mitigation |
 |------|------------|
 | Offscreen alpha comes back opaque | Explicitly clear render target alpha to 0 and validate readback before presentation |
-| Readback stalls performance | Keep popup render target small and render one object only |
+| Readback stalls performance | Use delayed asynchronous readback, 3 staging slots, and reuse last completed frame instead of waiting |
+| Frame ownership becomes ambiguous | Use slot generation IDs, mailbox generation IDs, and frame-number readiness from `bgfx::readTexture` |
 | Shader asset loading fails | Add deterministic build/copy rules and startup validation with hard errors |
 | Include sprawl returns | Keep `popup_3d_types.hpp` tiny and split ownership by module |
 | Legacy code lingers | Delete/rename old files after cutover and remove all old call sites |
+| bgfx frame pump remains throttled | Make popup-active mode advance one bgfx frame every submission-thread tick |
+| Popup destroy races pending readbacks | Drain pending readbacks first, then destroy popup-scoped GPU resources |
+| Mailbox drift or torn reads | Use mutex-protected full-frame copy plus generation counter, and premultiply outside the lock |
+| AppKit/Cocoa calls leak onto the submission thread | Keep `NSWindow` / `NSView` / `CALayer` creation and mutation on the AppKit thread only |
 
 ---
 
@@ -623,13 +1104,14 @@ The cutover is not done until all of the following are true:
 
 When implementation starts, change files in this order:
 
-1. add new popup 3D core files
-2. add new shaders and asset-copy/build rules
-3. implement offscreen render path
-4. implement `grim_popup_object` definition
-5. simplify `popup_window.cpp` into presenter-only code
-6. wire `pop_ui.cpp` to the new renderer
-7. remove the sprite path entirely
+1. add new popup 3D core files and mailbox types
+2. add single-global-bgfx-thread ownership hooks (`reset epoch`, popup view ID reservation, popup-active frame-pump rules)
+3. add new shaders and asset-copy/build rules
+4. implement offscreen render path and delayed readback ring
+5. implement `grim_popup_object` definition
+6. simplify `popup_window.cpp` into presenter-only code with premultiplication
+7. wire `pop_ui.cpp` snapshot publishing to the new renderer handoff
+8. remove the sprite path entirely
 
 This order keeps the cutover controlled and avoids mixing deletion with unproven render code too early.
 
@@ -641,7 +1123,7 @@ After this plan is implemented, the popup system should be:
 
 - a **single 3D object popup renderer**
 - rendered offscreen through **bgfx**
-- presented through a **transparent layered window**
+- presented through a **transparent platform popup surface**
 - organized into **small focused files**
 - free of **sprite compatibility code**
 - free of **hardcoded asset paths**

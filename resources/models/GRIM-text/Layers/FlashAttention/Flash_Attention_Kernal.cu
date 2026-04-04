@@ -22,6 +22,9 @@
 #include "../../training/module_logger.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Shared/VerboseLogging.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 // Module logger for Flash Attention diagnostics
 namespace {
@@ -845,10 +848,7 @@ extern "C" void flash_attn_fwd_ex(
     // Without this, params.rng_state=nullptr causes illegal memory access (CUDA error 700).
     uint64_t* rng_state_buf = nullptr;
     if (attention_dropout_p > 0.0f && attention_dropout_p < 1.0f) {
-        cudaMalloc(&rng_state_buf, 2 * sizeof(uint64_t));
-        if (!rng_state_buf) {
-            throw std::runtime_error("flash_attn_fwd: cudaMalloc failed for rng_state (16 bytes)");
-        }
+        cudaMallocOrThrow(reinterpret_cast<void**>(&rng_state_buf), 2 * sizeof(uint64_t), "flash_attn_fwd_rng_state");
         params.rng_state = rng_state_buf;
     }
 
@@ -1509,10 +1509,7 @@ extern "C" void flash_attn_bwd_ex(
     // Pre-fill with the same seed/offset that the forward kernel wrote.
     uint64_t* rng_state_buf_bwd = nullptr;
     if (attention_dropout_p > 0.0f && attention_dropout_p < 1.0f) {
-        cudaMalloc(&rng_state_buf_bwd, 2 * sizeof(uint64_t));
-        if (!rng_state_buf_bwd) {
-            throw std::runtime_error("flash_attn_bwd: cudaMalloc failed for rng_state (16 bytes)");
-        }
+        cudaMallocOrThrow(reinterpret_cast<void**>(&rng_state_buf_bwd), 2 * sizeof(uint64_t), "flash_attn_bwd_rng_state");
         uint64_t host_rng[2] = {dropout_seed, 0ull};
         cudaMemcpyAsync(rng_state_buf_bwd, host_rng, 2 * sizeof(uint64_t), cudaMemcpyHostToDevice, stream);
         params.rng_state = rng_state_buf_bwd;

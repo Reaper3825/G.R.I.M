@@ -5,6 +5,7 @@
 #include "TensorContract_GPU.hpp"
 #include "HyperParameters/HyperParameters_GPU.hpp"
 #include "../VerboseLogging.hpp"
+#include "../CudaAllocUtils.hpp"
 #include "../TensorConversion/TensorConversion.hpp"  // Layout conversions - single source of truth
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
@@ -93,73 +94,9 @@ void initCleanupStream() {
     }
 }
 
-namespace {
-
-constexpr double kBytesPerMiB = 1024.0 * 1024.0;
-
-struct GpuMemSnapshot {
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    cudaError_t status = cudaSuccess;
-};
-
-inline GpuMemSnapshot captureGpuMemSnapshot() {
-    GpuMemSnapshot snapshot{};
-    snapshot.status = cudaMemGetInfo(&snapshot.free_bytes, &snapshot.total_bytes);
-    return snapshot;
-}
-
-inline std::string formatMiB(size_t bytes) {
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2) << (static_cast<double>(bytes) / kBytesPerMiB);
-    return oss.str();
-}
-
-inline void maybeLogGpuAllocationRequest(const char* label, size_t bytes) {
-    if constexpr (!GRIM::VerboseLogging::ENABLE_GPU_ALLOCATION_LOGS) {
-        return;
-    }
-
-    const GpuMemSnapshot snapshot = captureGpuMemSnapshot();
-    std::ostringstream oss;
-    oss << "[GPU_ALLOC] request label=" << (label ? label : "unnamed")
-        << " bytes=" << bytes << " (" << formatMiB(bytes) << " MiB)";
-    if (snapshot.status == cudaSuccess) {
-        oss << " free=" << formatMiB(snapshot.free_bytes) << " MiB"
-            << " total=" << formatMiB(snapshot.total_bytes) << " MiB";
-    } else {
-        oss << " mem_info_error=" << cudaGetErrorString(snapshot.status);
-    }
-    fprintf(stderr, "%s\n", oss.str().c_str());
-}
-
-inline std::string buildCudaAllocFailureMessage(const char* api, const char* label, size_t bytes, cudaError_t err) {
-    const GpuMemSnapshot snapshot = captureGpuMemSnapshot();
-
-    std::ostringstream oss;
-    oss << api << " failed for '" << (label ? label : "unnamed") << "': "
-        << cudaGetErrorString(err)
-        << " | request=" << bytes << " bytes (" << formatMiB(bytes) << " MiB)";
-
-    if (snapshot.status == cudaSuccess) {
-        oss << " | free=" << snapshot.free_bytes << " bytes (" << formatMiB(snapshot.free_bytes) << " MiB)"
-            << " | total=" << snapshot.total_bytes << " bytes (" << formatMiB(snapshot.total_bytes) << " MiB)";
-    } else {
-        oss << " | cudaMemGetInfo failed: " << cudaGetErrorString(snapshot.status);
-    }
-
-    return oss.str();
-}
-
-inline void cudaMallocOrThrow(void** ptr, size_t bytes, const char* label) {
-    maybeLogGpuAllocationRequest(label, bytes);
-    cudaError_t err = cudaMalloc(ptr, bytes);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(buildCudaAllocFailureMessage("cudaMalloc", label, bytes, err));
-    }
-}
-
-} // namespace
+// cudaMallocOrThrow and helpers now live in shared header
+using GRIM::CudaAlloc::cudaMallocOrThrow;
+using GRIM::CudaAlloc::detail::buildCudaAllocFailureMessage;
 
 //======================================================//
 //  KERNEL LAUNCH DIAGNOSTIC - Track which kernel is stuck
@@ -412,7 +349,7 @@ bool TensorBuffer::allocate(TensorShape shape, const char* name) {
     
     cudaError_t err = cudaMalloc(&ptr, bytes);
     if (err != cudaSuccess) {
-        return false;
+        throw std::runtime_error(buildCudaAllocFailureMessage("cudaMalloc", name ? name : "TensorBuffer", bytes, err));
     }
     
     view_ = TensorView(ptr, shape, name);
@@ -947,10 +884,7 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
     const size_t count = shape.total_elements();
     const size_t bytes = count * sizeof(float);
     
-    cudaError_t err = cudaMalloc(&t.data, bytes);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("Tensor::zeros cudaMalloc failed: ") + cudaGetErrorString(err));
-    }
+    cudaMallocOrThrow(reinterpret_cast<void**>(&t.data), bytes, name ? name : "Tensor::zeros");
     t.owns_data = true;
     TENSOR_LOG_LIFECYCLE(alloc_counter,
         "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
@@ -958,7 +892,7 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
     
     // Zero-initialize using cudaMemsetAsync (avoids kernel launch grid limits for large tensors).
     // 0.0f has all-zero bytes, so byte-wise memset is correct.
-    err = cudaMemsetAsync(t.data, 0, bytes, stream);
+    cudaError_t err = cudaMemsetAsync(t.data, 0, bytes, stream);
     if (err != cudaSuccess) {
         cudaFree(t.data);
         t.data = nullptr;
@@ -2207,7 +2141,7 @@ struct LayerScaleGradFn : public GradFn {
                 input_grad = input.grad_data();
             } else {
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, element_count * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), element_count * sizeof(float), "LayerScaleGradFn_input_grad");
                 cudaMemsetAsync(buffer, 0, element_count * sizeof(float), stream);
                 owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -2228,7 +2162,7 @@ struct LayerScaleGradFn : public GradFn {
             input_data = input.data;
         } else {
             float* buffer = nullptr;
-            cudaMalloc(&buffer, element_count * sizeof(float));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), element_count * sizeof(float), "LayerScaleGradFn_input_data");
             cudaMemcpyAsync(buffer, input.data, element_count * sizeof(float),
                            cudaMemcpyDeviceToDevice, stream);
             owned_input_data = std::shared_ptr<float>(buffer, [](float* p) {
@@ -2336,7 +2270,7 @@ struct CenterRowsGradFn : public GradFn {
         // corrupting the original CE gradients that LogSoftmaxGradFn wrote.
         // Always allocate our own buffer so we don't destroy upstream data.
         float* buf = nullptr;
-        cudaMalloc(&buf, element_count * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterRowsGradFn_input_grad");
         cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
         owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
         input_grad = owned_input_grad.get();
@@ -2418,7 +2352,7 @@ struct CenterColumnsGradFn : public GradFn {
             AG_TRACE("[CenterColumnsGradFn] Using persistent input_grad buffer (leaf): %p\n", (void*)input_grad);
         } else {
             float* buf = nullptr;
-            cudaMalloc(&buf, element_count * sizeof(float));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterColumnsGradFn_input_grad");
             cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
             owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
             input_grad = owned_input_grad.get();
@@ -2583,7 +2517,7 @@ struct ProjectOutPC1GradFn : public GradFn {
 
         // Save g direction (device copy, stop-gradient)
         float* gp = nullptr;
-        cudaMalloc(&gp, cols * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&gp), cols * sizeof(float), "ProjectOutPC1GradFn_g_saved");
         cudaMemcpyAsync(gp, g_ptr, cols * sizeof(float), cudaMemcpyDeviceToDevice, stream);
         owned_g.reset(gp, [](float* p) { queueForDeferredCleanup(p); });
         g_saved = owned_g.get();
@@ -2614,12 +2548,7 @@ struct ProjectOutPC1GradFn : public GradFn {
         // Allocate grad buffer on-demand for non-leaf inputs (deferred from capture_input)
         if (!input_grad) {
             float* buf = nullptr;
-            cudaError_t err = cudaMalloc(&buf, element_count * sizeof(float));
-            if (err != cudaSuccess || !buf) {
-                throw std::runtime_error("ProjectOutPC1GradFn::apply: cudaMalloc failed for input_grad (" +
-                                         std::to_string(element_count * sizeof(float)) + " bytes): " +
-                                         std::string(cudaGetErrorString(err)));
-            }
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "ProjectOutPC1GradFn_deferred_input_grad");
             cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
             owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
             input_grad = owned_input_grad.get();
@@ -2700,7 +2629,7 @@ struct AddGradFn : public GradFn {
             } else {
                 const size_t a_numel = a.numel();
                 float* buffer_a = nullptr;
-                cudaMalloc(&buffer_a, a_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "AddGradFn_grad_a");
                 cudaMemsetAsync(buffer_a, 0, a_numel * sizeof(float), stream);
                 owned_grad_a = std::shared_ptr<float>(buffer_a, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -2717,7 +2646,7 @@ struct AddGradFn : public GradFn {
             } else {
                 const size_t b_numel = b.numel();
                 float* buffer_b = nullptr;
-                cudaMalloc(&buffer_b, b_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_b), b_numel * sizeof(float), "AddGradFn_grad_b");
                 cudaMemsetAsync(buffer_b, 0, b_numel * sizeof(float), stream);
                 owned_grad_b = std::shared_ptr<float>(buffer_b, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -2746,7 +2675,7 @@ struct AddGradFn : public GradFn {
             } else {
                 const size_t a_numel = a.numel();
                 float* buffer_a = nullptr;
-                cudaMalloc(&buffer_a, a_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "AddGradFn_single_grad_a");
                 cudaMemsetAsync(buffer_a, 0, a_numel * sizeof(float), stream);
                 owned_grad_a = std::shared_ptr<float>(buffer_a, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -2952,7 +2881,7 @@ struct BiasAddGradFn : public GradFn {
             } else {
                 const size_t input_numel = input.numel();
                 float* buffer_input = nullptr;
-                cudaMalloc(&buffer_input, input_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_input), input_numel * sizeof(float), "BiasAddGradFn_grad_input");
                 cudaMemsetAsync(buffer_input, 0, input_numel * sizeof(float), stream);
                 owned_grad_input = std::shared_ptr<float>(buffer_input, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -2970,7 +2899,7 @@ struct BiasAddGradFn : public GradFn {
                 AG_TRACE("[BiasAddGradFn] Using persistent grad_bias buffer (leaf): %p\n", (void*)grad_bias);
             } else {
                 float* buffer_bias = nullptr;
-                cudaMalloc(&buffer_bias, features * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_bias), features * sizeof(float), "BiasAddGradFn_grad_bias");
                 cudaMemsetAsync(buffer_bias, 0, features * sizeof(float), stream);
                 owned_grad_bias = std::shared_ptr<float>(buffer_bias, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -3115,7 +3044,7 @@ struct GeluGradFn : public GradFn {
             } else {
                 const size_t x_numel = x.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, x_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "GeluGradFn_input_grad");
                 cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
                 owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
                 input_grad = owned_input_grad.get();
@@ -3132,7 +3061,7 @@ struct GeluGradFn : public GradFn {
         
         // Allocate and copy to owned buffer
         float* buffer = nullptr;
-        cudaMalloc(&buffer, size * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), size * sizeof(float), "GeluGradFn_cache");
         cudaMemcpyAsync(buffer, external_cache, size * sizeof(float), 
                        cudaMemcpyDeviceToDevice, stream);
         
@@ -3244,7 +3173,7 @@ struct SiluGradFn : public GradFn {
             } else {
                 const size_t x_numel = x.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, x_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "SiluGradFn_input_grad");
                 cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
                 owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
                 input_grad = owned_input_grad.get();
@@ -3341,7 +3270,7 @@ struct ElementwiseMulGradFn : public GradFn {
             } else {
                 const size_t n = a.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ElementwiseMulGradFn_grad_a");
                 cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
                 owned_a_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
                 a_grad = owned_a_grad.get();
@@ -3354,7 +3283,7 @@ struct ElementwiseMulGradFn : public GradFn {
             } else {
                 const size_t n = b.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ElementwiseMulGradFn_grad_b");
                 cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
                 owned_b_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
                 b_grad = owned_b_grad.get();
@@ -3479,10 +3408,7 @@ struct RMSNormGradFn : public GradFn {
         // We need our own buffer that persists until backward is complete.
         if (input_requires_grad) {
             const size_t grad_size = x.shape.total_elements();
-            cudaError_t err = cudaMalloc(&input_grad, grad_size * sizeof(float));
-            if (err != cudaSuccess) {
-                throw std::runtime_error("RMSNormGradFn: Failed to allocate input_grad buffer");
-            }
+            cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "RMSNormGradFn_input_grad");
             // Zero-initialize the gradient buffer
             cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream);
             owns_input_grad = true;
@@ -3515,7 +3441,7 @@ struct RMSNormGradFn : public GradFn {
         
         // Allocate and copy to owned buffer
         float* buffer = nullptr;
-        cudaMalloc(&buffer, size * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), size * sizeof(float), "RMSNormGradFn_cache");
         cudaMemcpyAsync(buffer, external_cache, size * sizeof(float), 
                        cudaMemcpyDeviceToDevice, stream);
         
@@ -3696,7 +3622,7 @@ struct EmbeddingGradFn : public GradFn {
                 (void*)ids, tokens, d, copy_ids ? "true" : "false");
         
         if (copy_ids) {
-            cudaMalloc(&token_ids, tokens * sizeof(int));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&token_ids), tokens * sizeof(int), "EmbeddingGradFn_token_ids");
             cudaMemcpyAsync(token_ids, ids, tokens * sizeof(int), cudaMemcpyDeviceToDevice, stream);
             owns_token_ids = true;
         } else {
@@ -3817,11 +3743,7 @@ struct LogSoftmaxGradFn : public GradFn {
                 // Issue #126 fallback: allocate OWN buffer when input tensor
                 // is a temporary that can't provide a grad buffer
                 const size_t bytes = x.shape.total_elements() * sizeof(float);
-                cudaError_t err = cudaMalloc(&input_grad, bytes);
-                if (err != cudaSuccess) {
-                    throw std::runtime_error(std::string("[LogSoftmaxGradFn::capture_input] cudaMalloc failed for input_grad (")
-                        + std::to_string(bytes) + " bytes): " + cudaGetErrorString(err));
-                }
+                cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), bytes, "LogSoftmaxGradFn_input_grad");
                 cudaMemset(input_grad, 0, bytes);
                 owns_input_grad = true;
             }
@@ -3839,11 +3761,7 @@ struct LogSoftmaxGradFn : public GradFn {
         dim = d;
         if (copy) {
             const size_t bytes = static_cast<size_t>(tokens) * d * sizeof(float);
-            cudaError_t err = cudaMalloc(&saved_log_softmax, bytes);
-            if (err != cudaSuccess) {
-                throw std::runtime_error(std::string("[LogSoftmaxGradFn::save] cudaMalloc failed for saved_log_softmax (")
-                    + std::to_string(bytes) + " bytes): " + cudaGetErrorString(err));
-            }
+            cudaMallocOrThrow(reinterpret_cast<void**>(&saved_log_softmax), bytes, "LogSoftmaxGradFn_saved");
             cudaMemcpyAsync(saved_log_softmax, log_softmax_output, bytes,
                             cudaMemcpyDeviceToDevice, stream);
             owns_saved_log_softmax = true;
@@ -3929,7 +3847,7 @@ struct DropoutGradFn : public GradFn {
         // The input tensor x may be destroyed before backward() runs, so we can't borrow its buffer
         if (input_requires_grad) {
             size_t grad_size = x.numel();
-            cudaMalloc(&input_grad, grad_size * sizeof(float));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "DropoutGradFn_input_grad");
             cudaMemset(input_grad, 0, grad_size * sizeof(float));
             owns_input_grad = true;
         }
@@ -3939,7 +3857,7 @@ struct DropoutGradFn : public GradFn {
         count = n;
         scale = (dropout_prob < 1.0f) ? 1.0f / (1.0f - dropout_prob) : 0.0f;
         
-        cudaMalloc(&saved_mask, n * sizeof(uint8_t));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_mask), n * sizeof(uint8_t), "DropoutGradFn_saved_mask");
         cudaMemcpyAsync(saved_mask, mask, n * sizeof(uint8_t), cudaMemcpyDeviceToDevice, stream);
     }
     
@@ -4037,7 +3955,7 @@ struct ResidualAddGradFn : public GradFn {
             } else {
                 const size_t x_numel = x.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, x_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "ResidualAddGradFn_input_grad");
                 cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
                 owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
                 input_grad = owned_input_grad.get();
@@ -4050,7 +3968,7 @@ struct ResidualAddGradFn : public GradFn {
             } else {
                 const size_t r_numel = r.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, r_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), r_numel * sizeof(float), "ResidualAddGradFn_residual_grad");
                 cudaMemsetAsync(buffer, 0, r_numel * sizeof(float), stream);
                 owned_residual_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
                 residual_grad = owned_residual_grad.get();
@@ -4154,7 +4072,7 @@ struct ScaleScalarGradFn : public GradFn {
         cudaStreamSynchronize(stream);
         const float scaled = scale * h_grad;
         float* d_scaled = nullptr;
-        cudaMalloc(&d_scaled, sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_scaled), sizeof(float), "ScaleScalarGradFn_d_scaled");
         cudaMemcpyAsync(d_scaled, &scaled, sizeof(float), cudaMemcpyHostToDevice, stream);
         Tensor view;
         view.data = d_scaled;
@@ -4178,7 +4096,7 @@ Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream) {
     cudaStreamSynchronize(stream);
     const float scaled_val = scale * h_val;
     float* d_out = nullptr;
-    cudaMalloc(&d_out, sizeof(float));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_out), sizeof(float), "scale_scalar_d_out");
     cudaMemcpyAsync(d_out, &scaled_val, sizeof(float), cudaMemcpyHostToDevice, stream);
     Tensor result;
     result.data = d_out;
@@ -4782,9 +4700,9 @@ Tensor project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_t stream) 
     float* g_buf  = nullptr;  // [D]
     float* g_tmp  = nullptr;  // [D]
     float* v_buf  = nullptr;  // [T]
-    cudaMalloc(&g_buf, D * sizeof(float));
-    cudaMalloc(&g_tmp, D * sizeof(float));
-    cudaMalloc(&v_buf, T * sizeof(float));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&g_buf), D * sizeof(float), "pc1_g_buf");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&g_tmp), D * sizeof(float), "pc1_g_tmp");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&v_buf), T * sizeof(float), "pc1_v_buf");
 
     // Initialize PC1 guess from column mean, then normalize
     kernel_pc1_col_mean<<<1, 256, 0, stream>>>(x.data, g_buf, T, D);
@@ -4917,12 +4835,12 @@ static void logCachedActivationStats(
     
     float* d_min, *d_max, *d_sum, *d_sum_sq;
     int* d_nan, *d_inf;
-    cudaMalloc(&d_min, sizeof(float));
-    cudaMalloc(&d_max, sizeof(float));
-    cudaMalloc(&d_sum, sizeof(float));
-    cudaMalloc(&d_sum_sq, sizeof(float));
-    cudaMalloc(&d_nan, sizeof(int));
-    cudaMalloc(&d_inf, sizeof(int));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_min), sizeof(float), "diag_d_min");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_max), sizeof(float), "diag_d_max");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_sum), sizeof(float), "diag_d_sum");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_sum_sq), sizeof(float), "diag_d_sum_sq");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_nan), sizeof(int), "diag_d_nan");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_inf), sizeof(int), "diag_d_inf");
     
     // Initialize to identity values
     float init_min = FLT_MAX, init_max = -FLT_MAX, init_zero = 0.0f;
@@ -5057,7 +4975,7 @@ struct MatMulGradFn : public GradFn {
                 // Non-leaf tensor (activation): temporary, allocate owned buffer
                 const size_t a_numel = a.numel();
                 float* buffer_a = nullptr;
-                cudaMalloc(&buffer_a, a_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_a), a_numel * sizeof(float), "MatMulGradFn_grad_a");
                 cudaMemsetAsync(buffer_a, 0, a_numel * sizeof(float), stream);
                 
                 owned_grad_a = std::shared_ptr<float>(buffer_a, [](float* p) {
@@ -5084,7 +5002,7 @@ struct MatMulGradFn : public GradFn {
                 // Non-leaf tensor (activation): temporary, allocate owned buffer
                 const size_t b_numel = b.numel();
                 float* buffer_b = nullptr;
-                cudaMalloc(&buffer_b, b_numel * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer_b), b_numel * sizeof(float), "MatMulGradFn_grad_b");
                 cudaMemsetAsync(buffer_b, 0, b_numel * sizeof(float), stream);
                 
                 owned_grad_b = std::shared_ptr<float>(buffer_b, [](float* p) {
@@ -5817,7 +5735,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         // Convert gradients back to FP32 BHSD and accumulate WITHOUT normalization
         if (q_requires_grad && q_grad) {
             float* grad_q_fp32 = nullptr;
-            cudaMalloc(&grad_q_fp32, q_elems * sizeof(float));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_q_fp32), q_elems * sizeof(float), "sdpa_grad_q_fp32");
             cudaMemsetAsync(grad_q_fp32, 0, q_elems * sizeof(float), stream);
             
             TensorConversion::convert_BSHD_bf16_to_BHSD(
@@ -5831,7 +5749,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         
         if (k_requires_grad && k_grad) {
             float* grad_k_fp32 = nullptr;
-            cudaMalloc(&grad_k_fp32, kv_elems * sizeof(float));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_k_fp32), kv_elems * sizeof(float), "sdpa_grad_k_fp32");
             cudaMemsetAsync(grad_k_fp32, 0, kv_elems * sizeof(float), stream);
             // ISSUE #72 FIX: Use GQA reduction kernel to sum gradients from grouped Q heads
             // dk_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
@@ -5845,7 +5763,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         
         if (v_requires_grad && v_grad) {
             float* grad_v_fp32 = nullptr;
-            cudaMalloc(&grad_v_fp32, kv_elems * sizeof(float));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_v_fp32), kv_elems * sizeof(float), "sdpa_grad_v_fp32");
             cudaMemsetAsync(grad_v_fp32, 0, kv_elems * sizeof(float), stream);
             // ISSUE #72 FIX: Use GQA reduction kernel to sum gradients from grouped Q heads
             // dv_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
@@ -6157,7 +6075,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         
         // Allocate temporary buffer for reshaped gradient
         float* bhsd_grad = nullptr;
-        cudaMalloc(&bhsd_grad, total_elems * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&bhsd_grad), total_elems * sizeof(float), "ReshapeBHSDGradFn_bhsd_grad");
         
         kernel_reshape_flat_to_BHSD<<<num_blocks, block_size, 0, stream>>>(
             grad_output.data, bhsd_grad, batch_size, seq_len, num_heads, head_dim);
@@ -6828,7 +6746,7 @@ struct SoftmaxGradFn : public GradFn {
             } else {
                 const size_t n = x.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "SoftmaxGradFn_input_grad");
                 cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
                 owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -6843,7 +6761,7 @@ struct SoftmaxGradFn : public GradFn {
         dim = dim_;
         inv_temperature = inv_temp;
         const size_t bytes = static_cast<size_t>(tokens_) * dim_ * sizeof(float);
-        cudaMalloc(&saved_softmax, bytes);
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_softmax), bytes, "SoftmaxGradFn_saved");
         cudaMemcpyAsync(saved_softmax, softmax_output, bytes, cudaMemcpyDeviceToDevice, stream);
     }
 
@@ -6940,7 +6858,7 @@ struct ConcatGradFn : public GradFn {
             } else {
                 const size_t n = a.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ConcatGradFn_grad_a");
                 cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
                 owned_grad_a = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
                 grad_a = owned_grad_a.get();
@@ -6953,7 +6871,7 @@ struct ConcatGradFn : public GradFn {
             } else {
                 const size_t n = b.numel();
                 float* buffer = nullptr;
-                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ConcatGradFn_grad_b");
                 cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
                 owned_grad_b = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
                 grad_b = owned_grad_b.get();
@@ -7111,7 +7029,7 @@ struct CrossEntropyLogitsGradFn : public GradFn {
                 grad_logits = logits.grad_data();
             } else {
                 float* buf = nullptr;
-                cudaMalloc(&buf, static_cast<size_t>(C) * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), static_cast<size_t>(C) * sizeof(float), "CELogitsGradFn_grad_logits");
                 cudaMemsetAsync(buf, 0, static_cast<size_t>(C) * sizeof(float), stream);
                 owned_grad_logits = std::shared_ptr<float>(buf, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -7184,7 +7102,7 @@ Tensor cross_entropy_logits(const Tensor& logits, int target_idx, cudaStream_t s
     // Allocate saved_probs buffer for backward
     float* saved_probs = nullptr;
     if (logits.requires_grad) {
-        cudaMalloc(&saved_probs, static_cast<size_t>(C) * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_probs), static_cast<size_t>(C) * sizeof(float), "ce_logits_saved_probs");
     }
 
     // Forward: single-thread kernel (C ≤ 64 for selector/execution)

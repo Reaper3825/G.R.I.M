@@ -10,6 +10,9 @@
 #include "execution_block_internal.hpp"
 #include "execution_block_memory_stream_GPU.hpp"
 #include "execution_block_data_stream_GPU.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 namespace GRIM {
 using namespace ExecutionBlockInternal;
@@ -114,13 +117,13 @@ ExecutionBlockLayer::ExecutionBlockLayer(const ExecutionBlockConfig& config,
     validateConfigOrThrow();
     EXEC_CHECK(init_stream != nullptr, "init_stream is NULL");
 
-    CUDA_CHECK(cudaMalloc(&d_numeric_error_flag_, sizeof(int)));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_numeric_error_flag_), sizeof(int), "exec_numeric_error_flag");
     CUDA_CHECK(cudaMemsetAsync(d_numeric_error_flag_, 0, sizeof(int), init_stream));
-    CUDA_CHECK(cudaMalloc(&d_div_clamp_count_, sizeof(int)));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_div_clamp_count_), sizeof(int), "exec_div_clamp_count");
     CUDA_CHECK(cudaMemsetAsync(d_div_clamp_count_, 0, sizeof(int), init_stream));
-    CUDA_CHECK(cudaMalloc(&d_exec_idx_, 4 * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&d_exec_record_i_, 3 * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&d_exec_record_f_, 3 * sizeof(float)));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_idx_), 4 * sizeof(int), "exec_idx");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_record_i_), 3 * sizeof(int), "exec_record_i");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_record_f_), 3 * sizeof(float), "exec_record_f");
 
     const int dm  = config_.d_model;
     const int dk  = config_.d_key;

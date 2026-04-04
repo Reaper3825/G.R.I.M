@@ -15,6 +15,9 @@
 #include "GRIM-TS.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 namespace {
 
@@ -910,11 +913,7 @@ bool InitializeGuessCache(const CacheConfig& config,
     if (buffers.slot_locks) {
         h_cache_state.slot_locks = buffers.slot_locks;
     } else {
-        cudaError_t lock_err = cudaMalloc(&g_slot_locks_owned, buffers.capacity * sizeof(int));
-        if (lock_err != cudaSuccess) {
-            throw std::runtime_error(std::string("[FATAL] GRIMTS::InitializeGuessCache: cudaMalloc slot_locks failed! error=") +
-                    cudaGetErrorString(lock_err));
-        }
+        cudaMallocOrThrow(reinterpret_cast<void**>(&g_slot_locks_owned), buffers.capacity * sizeof(int), "grimts_slot_locks");
         cudaMemsetAsync(g_slot_locks_owned, 0, buffers.capacity * sizeof(int), primary_stream);
         h_cache_state.slot_locks = g_slot_locks_owned;
     }
@@ -922,19 +921,8 @@ bool InitializeGuessCache(const CacheConfig& config,
     // Allocate device staging buffers for async ops (avoids cudaMalloc in hot path)
     if (config.enable_async_transfers && config.pinned_buffer_size > 0) {
         g_device_staging_capacity = config.pinned_buffer_size;
-        cudaError_t s_err = cudaMalloc(&g_device_staging_meta, g_device_staging_capacity * sizeof(GuessMetadata));
-        if (s_err != cudaSuccess) {
-            g_device_staging_capacity = 0;
-            fprintf(stderr, "[WARN] GRIMTS: Failed to allocate device staging meta, async ops will fall back to sync\n");
-        } else {
-            s_err = cudaMalloc(&g_device_staging_rewards, g_device_staging_capacity * sizeof(float));
-            if (s_err != cudaSuccess) {
-                cudaFree(g_device_staging_meta);
-                g_device_staging_meta = nullptr;
-                g_device_staging_capacity = 0;
-                fprintf(stderr, "[WARN] GRIMTS: Failed to allocate device staging rewards, async ops will fall back to sync\n");
-            }
-        }
+        cudaMallocOrThrow(reinterpret_cast<void**>(&g_device_staging_meta), g_device_staging_capacity * sizeof(GuessMetadata), "grimts_staging_meta");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&g_device_staging_rewards), g_device_staging_capacity * sizeof(float), "grimts_staging_rewards");
     }
     
     // Copy to device constant memory
@@ -1421,12 +1409,9 @@ cudaError_t WarmCache(const WarmingEntry* entries,
     
     // Allocate device buffer for entries
     WarmingEntry* device_entries = nullptr;
-    cudaError_t err = cudaMalloc(&device_entries, count * sizeof(WarmingEntry));
-    if (err != cudaSuccess) {
-        return err;
-    }
+    cudaMallocOrThrow(reinterpret_cast<void**>(&device_entries), count * sizeof(WarmingEntry), "grimts_warming_entries");
     
-    err = cudaMemcpyAsync(device_entries, entries, count * sizeof(WarmingEntry),
+    cudaError_t err = cudaMemcpyAsync(device_entries, entries, count * sizeof(WarmingEntry),
                           cudaMemcpyHostToDevice, stream);
     if (err != cudaSuccess) {
         cudaFree(device_entries);

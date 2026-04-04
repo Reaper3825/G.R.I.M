@@ -25,6 +25,9 @@
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
+#include "../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 namespace GRIM {
 
@@ -788,14 +791,8 @@ void LanguageModel::ensureKVCacheAllocated() {
     training_state_.kv_cache_v.resize(n_layers, nullptr);
 
     for (int l = 0; l < n_layers; ++l) {
-        cudaError_t err_k = cudaMalloc(&training_state_.kv_cache_k[l], kv_bytes_per_layer);
-        if (err_k != cudaSuccess)
-            throw std::runtime_error("ensureKVCacheAllocated: KV cache K alloc failed layer " +
-                                     std::to_string(l) + ": " + cudaGetErrorString(err_k));
-        cudaError_t err_v = cudaMalloc(&training_state_.kv_cache_v[l], kv_bytes_per_layer);
-        if (err_v != cudaSuccess)
-            throw std::runtime_error("ensureKVCacheAllocated: KV cache V alloc failed layer " +
-                                     std::to_string(l) + ": " + cudaGetErrorString(err_v));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_k[l]), kv_bytes_per_layer, "kv_cache_k");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_v[l]), kv_bytes_per_layer, "kv_cache_v");
         cudaMemsetAsync(training_state_.kv_cache_k[l], 0, kv_bytes_per_layer, stream);
         cudaMemsetAsync(training_state_.kv_cache_v[l], 0, kv_bytes_per_layer, stream);
     }
@@ -803,24 +800,16 @@ void LanguageModel::ensureKVCacheAllocated() {
     // ---- Softmax LSE scratch: [num_heads, kv_cache_capacity_rounded] ----
     const int kv_cap_rounded = ((kv_cap + 127) / 128) * 128;
     const size_t lse_bytes = static_cast<size_t>(cfg.num_heads) * kv_cap_rounded * sizeof(float);
-    cudaError_t err_lse = cudaMalloc(&training_state_.kv_cache_softmax_lse, lse_bytes);
-    if (err_lse != cudaSuccess)
-        throw std::runtime_error("ensureKVCacheAllocated: KV cache LSE alloc failed: " +
-                                 std::string(cudaGetErrorString(err_lse)));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_softmax_lse), lse_bytes, "kv_cache_lse");
     cudaMemsetAsync(training_state_.kv_cache_softmax_lse, 0, lse_bytes, stream);
 
     // ---- Decode scratch buffers (tiny, reused per layer per decode step) ----
     const size_t q_bf16_bytes = static_cast<size_t>(cfg.num_heads) * head_dim * sizeof(__nv_bfloat16);
     const size_t kv_bf16_bytes = static_cast<size_t>(num_kv_heads) * head_dim * sizeof(__nv_bfloat16);
-    cudaError_t err;
-    err = cudaMalloc(&training_state_.decode_q_bf16, q_bf16_bytes);
-    if (err != cudaSuccess) throw std::runtime_error("ensureKVCacheAllocated: decode_q_bf16 alloc failed");
-    err = cudaMalloc(&training_state_.decode_kv_bf16, kv_bf16_bytes);
-    if (err != cudaSuccess) throw std::runtime_error("ensureKVCacheAllocated: decode_kv_bf16 alloc failed");
-    err = cudaMalloc(&training_state_.decode_attn_out_bf16, q_bf16_bytes);
-    if (err != cudaSuccess) throw std::runtime_error("ensureKVCacheAllocated: decode_attn_out_bf16 alloc failed");
-    err = cudaMalloc(&training_state_.decode_attn_out_fp32, static_cast<size_t>(cfg.d_model) * sizeof(float));
-    if (err != cudaSuccess) throw std::runtime_error("ensureKVCacheAllocated: decode_attn_out_fp32 alloc failed");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_q_bf16), q_bf16_bytes, "decode_q_bf16");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_kv_bf16), kv_bf16_bytes, "decode_kv_bf16");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_attn_out_bf16), q_bf16_bytes, "decode_attn_out_bf16");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_attn_out_fp32), static_cast<size_t>(cfg.d_model) * sizeof(float), "decode_attn_out_fp32");
 
     // ---- Single-token buffers for incremental generation ----
     using TC = TensorContract::TensorShape;

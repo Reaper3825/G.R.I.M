@@ -29,6 +29,9 @@
 #include <algorithm>  // Rule 21 diagnostic: std::min_element, std::max_element
 #include <cfloat>     // FLT_MAX
 #include <cstdio>     // fprintf, snprintf
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 
 namespace {
@@ -95,14 +98,9 @@ namespace {
         init.first_inf_idx = -1;
 
         NonFiniteStats* d_stats = nullptr;
-        cudaError_t err = cudaMalloc(&d_stats, sizeof(NonFiniteStats));
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[QKV_DEBUG] %s cudaMalloc failed: %s\n",
-                    tag ? tag : "<null>", cudaGetErrorString(err));
-            return;
-        }
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_stats), sizeof(NonFiniteStats), "QKV_debug_stats");
 
-        err = cudaMemcpyAsync(d_stats, &init, sizeof(init), cudaMemcpyHostToDevice, stream);
+        cudaError_t err = cudaMemcpyAsync(d_stats, &init, sizeof(init), cudaMemcpyHostToDevice, stream);
         if (err != cudaSuccess) {
             fprintf(stderr, "[QKV_DEBUG] %s cudaMemcpyAsync H2D failed: %s\n",
                     tag ? tag : "<null>", cudaGetErrorString(err));

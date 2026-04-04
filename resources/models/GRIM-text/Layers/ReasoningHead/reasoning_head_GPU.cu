@@ -16,6 +16,9 @@
 #include <stdexcept>
 #include <cstdio>
 #include <algorithm>
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 namespace GRIM {
 
@@ -495,7 +498,7 @@ void ReasoningHeadGradFn::capture_encoder(Tensor& enc, cudaStream_t stream) {
     if (enc.requires_grad) {
         enc.ensure_grad();
         const size_t n = enc.numel();
-        cudaMalloc(&encoder_grad, n * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&encoder_grad), n * sizeof(float), "ReasoningHeadGradFn_encoder_grad");
         cudaMemsetAsync(encoder_grad, 0, n * sizeof(float), stream);
         owns_encoder_grad = true;
     }
@@ -508,7 +511,7 @@ void ReasoningHeadGradFn::capture_atom_emb(Tensor& emb, cudaStream_t stream) {
     if (emb.requires_grad) {
         emb.ensure_grad();
         const size_t n = emb.numel();
-        cudaMalloc(&atom_emb_grad, n * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&atom_emb_grad), n * sizeof(float), "ReasoningHeadGradFn_atom_emb_grad");
         cudaMemsetAsync(atom_emb_grad, 0, n * sizeof(float), stream);
         owns_atom_emb_grad = true;
     }
@@ -518,7 +521,7 @@ void ReasoningHeadGradFn::capture_positions(const int* d_positions, int n_atoms,
     num_atoms = n_atoms;
     if (n_atoms > 0 && d_positions) {
         const size_t bytes = static_cast<size_t>(n_atoms) * sizeof(int);
-        cudaMalloc(&saved_atom_positions, bytes);
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_atom_positions), bytes, "ReasoningHeadGradFn_saved_positions");
         cudaMemcpyAsync(saved_atom_positions, d_positions, bytes,
                         cudaMemcpyDeviceToDevice, stream);
     }
@@ -551,10 +554,10 @@ void ReasoningHeadGradFn::apply(const Tensor& grad_output, cudaStream_t stream) 
     float* grad_atom_emb_local = nullptr;
 
     if (encoder_grad) {
-        cudaMalloc(&grad_h_atoms, static_cast<size_t>(num_atoms) * d_model * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_h_atoms), static_cast<size_t>(num_atoms) * d_model * sizeof(float), "ReasoningHeadGradFn_grad_h_atoms");
     }
     if (atom_emb_grad) {
-        cudaMalloc(&grad_atom_emb_local, static_cast<size_t>(num_atoms) * atom_dim * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_atom_emb_local), static_cast<size_t>(num_atoms) * atom_dim * sizeof(float), "ReasoningHeadGradFn_grad_atom_emb_local");
     }
 
     // Split concat gradient

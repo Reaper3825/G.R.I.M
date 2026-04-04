@@ -1,5 +1,8 @@
 #include "execution_block_memory_stream_GPU.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 #ifdef USE_CUDA
 
@@ -649,8 +652,8 @@ void captureStateAfterWriteAndCheckMutations(
 
     float* d_hinge_discard = nullptr;
     int* d_changed_count = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_hinge_discard, sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_changed_count, sizeof(int)));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_hinge_discard), sizeof(float), "memstream_hinge_discard");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_changed_count), sizeof(int), "memstream_changed_count");
     kernelStateDeltaCheck<<<1, 1, 0, stream>>>(
         d_hinge_discard,
         d_changed_count,

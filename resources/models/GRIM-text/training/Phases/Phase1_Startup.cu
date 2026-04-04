@@ -28,6 +28,9 @@
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
 
 #include <nlohmann/json.hpp>
@@ -1829,11 +1832,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         
         // Upload to GPU
         const size_t weights_bytes = vocab_size * sizeof(float);
-        cudaError_t err = cudaMalloc(&ts.d_class_weights, weights_bytes);
-        if (err != cudaSuccess) {
-            throw std::runtime_error("[class_balanced] cudaMalloc failed for d_class_weights ("
-                + std::to_string(weights_bytes) + " bytes): " + cudaGetErrorString(err));
-        }
+        cudaMallocOrThrow(reinterpret_cast<void**>(&ts.d_class_weights), weights_bytes, "phase1_class_weights");
         cudaMemcpyAsync(ts.d_class_weights, h_class_weights.data(), weights_bytes,
                          cudaMemcpyHostToDevice, stream);
         ts.class_weights_vocab_size = static_cast<int>(vocab_size);

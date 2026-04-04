@@ -13,6 +13,7 @@
 #include "ScratchBlockReasoning_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <device_launch_parameters.h>
@@ -21,6 +22,8 @@
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 namespace GRIM {
 
@@ -358,7 +361,7 @@ void ScratchBlockGradFn::capture_input(Tensor& x) {
     // Input tensor may be destroyed before backward() runs.
     if (x.requires_grad) {
         const size_t grad_size = x.numel();
-        cudaMalloc(&input_grad, grad_size * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "ScratchBlockGradFn_input_grad");
         cudaMemset(input_grad, 0, grad_size * sizeof(float));
         owns_input_grad = true;
     }
@@ -378,20 +381,20 @@ void ScratchBlockGradFn::capture_forward(
         const size_t type_bytes = pos_bytes;
         const size_t emb_bytes = static_cast<size_t>(num_atoms) * atom_embedding_dim * sizeof(float);
 
-        cudaMalloc(&cached_atom_positions, pos_bytes);
+        cudaMallocOrThrow(reinterpret_cast<void**>(&cached_atom_positions), pos_bytes, "ScratchBlockGradFn_atom_positions");
         cudaMemcpyAsync(cached_atom_positions, atom_positions_src, pos_bytes,
                         cudaMemcpyDeviceToDevice, stream);
 
-        cudaMalloc(&cached_atom_types, type_bytes);
+        cudaMallocOrThrow(reinterpret_cast<void**>(&cached_atom_types), type_bytes, "ScratchBlockGradFn_atom_types");
         cudaMemcpyAsync(cached_atom_types, atom_types_src, type_bytes,
                         cudaMemcpyDeviceToDevice, stream);
 
-        cudaMalloc(&cached_atom_embeddings, emb_bytes);
+        cudaMallocOrThrow(reinterpret_cast<void**>(&cached_atom_embeddings), emb_bytes, "ScratchBlockGradFn_atom_embeddings");
         cudaMemcpyAsync(cached_atom_embeddings, atom_embeddings_src, emb_bytes,
                         cudaMemcpyDeviceToDevice, stream);
 
         // Backward scratch for per-atom gradients
-        cudaMalloc(&d_grad_atom_embeddings, static_cast<size_t>(max_atoms) * atom_embedding_dim * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_grad_atom_embeddings), static_cast<size_t>(max_atoms) * atom_embedding_dim * sizeof(float), "ScratchBlockGradFn_grad_atom_emb");
     }
     // NOTE: Text features are now merged INTO atom embeddings (dims 48-63)
     // during forward. cached_atom_embeddings already contains the merged signal.
@@ -519,11 +522,7 @@ Tensor scratch_block_inject(
     // Create output tensor (copy of input — injection is additive in-place)
     const size_t data_bytes = static_cast<size_t>(total_tokens) * cfg.d_model * sizeof(float);
     Tensor output;
-    cudaError_t alloc_err = cudaMalloc(&output.data, data_bytes);
-    if (alloc_err != cudaSuccess || !output.data) {
-        throw std::runtime_error("scratch_block_inject: cudaMalloc failed: " +
-                                 std::string(cudaGetErrorString(alloc_err)));
-    }
+    cudaMallocOrThrow(reinterpret_cast<void**>(&output.data), data_bytes, "scratch_block_inject_output");
     cudaMemcpyAsync(output.data, input.data, data_bytes, cudaMemcpyDeviceToDevice, stream);
     output.shape = input.shape;
     output.owns_data = true;
@@ -564,7 +563,7 @@ Tensor scratch_block_inject(
         // Extract atom types into device buffer for capture
         int* d_atom_types_temp = nullptr;
         if (num_atoms_host > 0) {
-            cudaMalloc(&d_atom_types_temp, static_cast<size_t>(num_atoms_host) * sizeof(int));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_types_temp), static_cast<size_t>(num_atoms_host) * sizeof(int), "scratch_block_atom_types_temp");
             const int blk = 256;
             const int grd = (num_atoms_host + blk - 1) / blk;
             kernelExtractAtomTypes<<<grd, blk, 0, stream>>>(
@@ -690,9 +689,9 @@ void ScratchBlockLayer::allocateWeights() {
     atom_projection_.ensure_grad();
 
     // Temporary buffers for forward (reused across calls, NOT cached for backward — GradFn owns that)
-    cudaMalloc(&d_atom_positions_, config_.max_atoms * sizeof(int));
-    cudaMalloc(&d_num_atoms_, sizeof(int));
-    cudaMalloc(&d_atom_embeddings_, static_cast<size_t>(config_.max_atoms) * config_.atom_embedding_dim * sizeof(float));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_positions_), config_.max_atoms * sizeof(int), "ScratchBlockLayer_atom_positions");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_num_atoms_), sizeof(int), "ScratchBlockLayer_num_atoms");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_embeddings_), static_cast<size_t>(config_.max_atoms) * config_.atom_embedding_dim * sizeof(float), "ScratchBlockLayer_atom_embeddings");
 
     weights_allocated_ = true;
 }
@@ -818,8 +817,7 @@ ScratchBlockLayer::RowLocalAtomView ScratchBlockLayer::extractRowLocalAtomView(
     view.num_atoms = 0;
 
     int* d_row_num_atoms = nullptr;
-    err = cudaMalloc(&d_row_num_atoms, sizeof(int));
-    if (err != cudaSuccess) throwCuda("cudaMalloc(d_row_num_atoms)", err);
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_row_num_atoms), sizeof(int), "scratch_row_num_atoms");
     err = cudaMemsetAsync(d_row_num_atoms, 0, sizeof(int), stream);
     if (err != cudaSuccess) throwCuda("cudaMemsetAsync(d_row_num_atoms)", err);
 

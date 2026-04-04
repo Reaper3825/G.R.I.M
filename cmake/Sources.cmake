@@ -6,6 +6,8 @@ file(GLOB COMMAND_SOURCES "commands/*.cpp")
 file(GLOB COMMAND_HEADERS "commands/*.hpp")
 file(GLOB POPUP_UI_SOURCES "popup_ui/*.cpp")
 file(GLOB POPUP_UI_HEADERS "popup_ui/*.hpp")
+file(GLOB POPUP_UI_OBJECTS_SOURCES "popup_ui/objects/*.cpp")
+file(GLOB POPUP_UI_OBJECTS_HEADERS "popup_ui/objects/*.hpp")
 file(GLOB DEVICE_SETUPS_SOURCES "device_setups/*.cpp")
 file(GLOB DEVICE_SETUPS_HEADERS "device_setups/*.hpp")
 file(GLOB WAKE_SOURCES "wake/*.cpp")
@@ -89,6 +91,7 @@ set(GRIM_SOURCES
     location.cpp
     ${COMMAND_SOURCES}
     ${POPUP_UI_SOURCES}
+    ${POPUP_UI_OBJECTS_SOURCES}
     ${DEVICE_SETUPS_SOURCES}
     ${VOICE_SOURCES}
     ${ai_SOURCES}
@@ -128,6 +131,7 @@ set(GRIM_HEADERS
     location.hpp
     ${COMMAND_HEADERS}
     ${POPUP_UI_HEADERS}
+    ${POPUP_UI_OBJECTS_HEADERS}
     ${DEVICE_SETUPS_HEADERS}
     ${VOICE_HEADERS}
     ${ai_HEADERS}

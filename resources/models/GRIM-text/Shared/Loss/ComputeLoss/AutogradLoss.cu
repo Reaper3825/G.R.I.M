@@ -10,12 +10,15 @@
 #include "../../TensorContract/TensorContract_GPU.hpp"
 #include "../../EquationLogging/EquationLogging.hpp"
 #include "../../VerboseLogging.hpp"  // Compile-time diagnostic guards (Issue #151)
+#include "../../CudaAllocUtils.hpp"
 #include <cuda_runtime.h>
 #include <cassert>
 #include <sstream>
 #include <cfloat>
 #include <cmath>
 #include <memory>
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 // ========================================================================
 // Finite Difference Gradient Verification (Issue Investigation)
@@ -1122,11 +1125,7 @@ struct NLLLossGradFn : public GradFn {
         // needed for backward, not during forward pass. Saves 1.37GB peak memory.
         if (!grad_log_probs_buffer) {
             const size_t grad_bytes = static_cast<size_t>(num_tokens) * vocab_size * sizeof(float);
-            cudaError_t alloc_err = cudaMalloc(&grad_log_probs_buffer, grad_bytes);
-            if (alloc_err != cudaSuccess) {
-                throw std::runtime_error(std::string("[NLLLossGradFn::apply] cudaMalloc failed for grad_log_probs_buffer (")
-                    + std::to_string(grad_bytes) + " bytes): " + cudaGetErrorString(alloc_err));
-            }
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_log_probs_buffer), grad_bytes, "NLLLossGradFn_grad_log_probs");
         }
         
         // ── Step 1: Compute NLL backward → gradient w.r.t. log_probs ──
@@ -1291,11 +1290,11 @@ __host__ Tensor unified_loss(
     int* d_valid_count = nullptr;
     float* d_weight_sum = nullptr;  // Class-balanced: accumulates per-token weights
     
-    cudaMalloc(&per_token_loss, num_tokens * sizeof(float));
-    cudaMalloc(&d_loss_sum, sizeof(float));
-    cudaMalloc(&d_valid_count, sizeof(int));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&per_token_loss), num_tokens * sizeof(float), "unified_loss_per_token_loss");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_loss_sum), sizeof(float), "unified_loss_d_loss_sum");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_valid_count), sizeof(int), "unified_loss_d_valid_count");
     if (config.d_class_weights) {
-        cudaMalloc(&d_weight_sum, sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_weight_sum), sizeof(float), "unified_loss_d_weight_sum");
     }
     
     launchUnifiedLossForward(
@@ -1367,7 +1366,7 @@ __host__ Tensor unified_loss(
     
     // ── Step 4: Create scalar loss tensor ──
     float* d_loss = nullptr;
-    cudaMalloc(&d_loss, sizeof(float));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_loss), sizeof(float), "unified_loss_d_loss");
     // BUG FIX Issue #61: Use SYNC copy because mean_loss is a local variable!
     cudaMemcpy(d_loss, &mean_loss, sizeof(float), cudaMemcpyHostToDevice);
     

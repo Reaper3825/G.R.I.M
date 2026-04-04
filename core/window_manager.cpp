@@ -645,10 +645,18 @@ void WindowManager::renderFrame()
     // BGFX is initialized but renders to a hidden 1x1 window — no visible
     // output. Throttle to every 30th call (~2 fps) to keep bgfx alive
     // without burning GPU submit cycles every frame.
+    // Skip throttling when a pre-frame callback is registered (e.g. popup 3D).
     static int s_frameSkipCounter = 0;
-    if (++s_frameSkipCounter < 30)
-        return;
-    s_frameSkipCounter = 0;
+    if (!s_preFrameCallback)
+    {
+        if (++s_frameSkipCounter < 30)
+            return;
+        s_frameSkipCounter = 0;
+    }
+    else
+    {
+        s_frameSkipCounter = 0;
+    }
 
     HWND primary = nullptr;
     uint32_t targetWidth = 0;
@@ -678,7 +686,22 @@ void WindowManager::renderFrame()
     bgfx::setViewRect(viewId, 0, 0, targetWidth, targetHeight);
     bgfx::touch(viewId);
 
-    bgfx::frame();
+    // Run pre-frame callback (e.g. popup 3D rendering) before bgfx::frame()
+    static uint32_t s_lastBgfxFrame = 0;
+    if (s_preFrameCallback)
+        s_preFrameCallback(s_lastBgfxFrame);
+
+    s_lastBgfxFrame = bgfx::frame();
+}
+
+void WindowManager::registerPreFrameCallback(PreFrameCallback cb)
+{
+    s_preFrameCallback = cb;
+}
+
+bool WindowManager::hasPreFrameCallback()
+{
+    return s_preFrameCallback != nullptr;
 }
 
 void WindowManager::requestMainLoopStop()

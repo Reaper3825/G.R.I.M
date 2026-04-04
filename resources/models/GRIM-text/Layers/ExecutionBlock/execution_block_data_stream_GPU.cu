@@ -1,6 +1,9 @@
 #include "execution_block_data_stream_GPU.hpp"
 #include "execution_block_memory_stream_GPU.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 #ifdef USE_CUDA
 
@@ -632,7 +635,7 @@ struct ReluGradFn : public GradFn {
         count = n;
 
         float* buf = nullptr;
-        cudaMalloc(&buf, n * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&buf), n * sizeof(float), "datastream_relu_fwd_input");
         cudaMemcpyAsync(buf, input.data, n * sizeof(float), cudaMemcpyDeviceToDevice, stream);
         owned_fwd_input = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
         fwd_input = owned_fwd_input.get();
@@ -643,7 +646,7 @@ struct ReluGradFn : public GradFn {
                 grad_input = input.grad_data();
             } else {
                 float* gbuf = nullptr;
-                cudaMalloc(&gbuf, n * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&gbuf), n * sizeof(float), "datastream_relu_grad_input");
                 cudaMemsetAsync(gbuf, 0, n * sizeof(float), stream);
                 owned_grad_input = std::shared_ptr<float>(gbuf, [](float* p) { cudaFree(p); });
                 grad_input = owned_grad_input.get();
@@ -697,14 +700,14 @@ struct SlotValueSTGradFn : public GradFn {
         p_requires = p_arg_softmax.requires_grad;
         N = n;
         float* buf = nullptr;
-        cudaMalloc(&buf, n * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&buf), n * sizeof(float), "datastream_slot_vals_saved");
         cudaMemcpyAsync(buf, d_slot_vals, n * sizeof(float), cudaMemcpyDeviceToDevice, stream);
         saved_slot_vals_owned = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
         saved_slot_vals = saved_slot_vals_owned.get();
 
         if (p_requires && p_softmax_grad_fn) {
             float* grad_buf = nullptr;
-            cudaMalloc(&grad_buf, n * sizeof(float));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_buf), n * sizeof(float), "datastream_slot_grad_p");
             cudaMemsetAsync(grad_buf, 0, n * sizeof(float), stream);
             owned_grad_p = std::shared_ptr<float>(grad_buf, [](float* p) { cudaFree(p); });
             grad_p = owned_grad_p.get();
@@ -776,13 +779,13 @@ struct FourOpMixGradFn : public GradFn {
                  int num_ops, cudaStream_t stream) {
         num_ops_ = num_ops;
 
-        cudaMalloc(&saved_v1, sizeof(float));
-        cudaMalloc(&saved_v2, sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v1), sizeof(float), "datastream_saved_v1");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v2), sizeof(float), "datastream_saved_v2");
         cudaMemcpyAsync(saved_v1, v1_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
         cudaMemcpyAsync(saved_v2, v2_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
-        cudaMalloc(&saved_p_op, num_ops * sizeof(float));
-        cudaMalloc(&saved_results, num_ops * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_p_op), num_ops * sizeof(float), "datastream_saved_p_op");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_results), num_ops * sizeof(float), "datastream_saved_results");
         cudaMemcpyAsync(saved_p_op, d_p_op, num_ops * sizeof(float), cudaMemcpyDeviceToDevice, stream);
         cudaMemcpyAsync(saved_results, d_results, num_ops * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
@@ -803,7 +806,7 @@ struct FourOpMixGradFn : public GradFn {
                 gp = t.grad_data();
             } else {
                 float* buf = nullptr;
-                cudaMalloc(&buf, n * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), n * sizeof(float), "datastream_alu_grad_buf");
                 cudaMemsetAsync(buf, 0, n * sizeof(float), stream);
                 owned = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
                 gp = owned.get();
@@ -925,11 +928,11 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         saved_gate = gate_device;
         saved_H_slot = H_slot_device;
 
-        cudaMalloc(&saved_result_emb, d_model_ * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_result_emb), d_model_ * sizeof(float), "datastream_saved_result_emb");
         cudaMemcpyAsync(saved_result_emb, result_t.data, d_model_ * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
         size_t total_size = static_cast<size_t>(total_tokens_) * d_model_ * sizeof(float);
-        cudaMalloc(&mod_grad_buf, total_size);
+        cudaMallocOrThrow(reinterpret_cast<void**>(&mod_grad_buf), total_size, "datastream_mod_grad_buf");
 
         w_gate_data = w_gate_t.data;
         w_gate_t.ensure_grad();
@@ -948,7 +951,7 @@ struct ExecutionBlockInjectGradFn : public GradFn {
                 grad_result_emb = result_t.grad_data();
             } else {
                 float* buf = nullptr;
-                cudaMalloc(&buf, d_model_ * sizeof(float));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), d_model_ * sizeof(float), "datastream_grad_result_emb");
                 cudaMemsetAsync(buf, 0, d_model_ * sizeof(float), stream);
                 owned_grad_result = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
                 grad_result_emb = owned_grad_result.get();
@@ -1044,7 +1047,7 @@ struct ReduceMeanGradFn : public GradFn {
 
         if (H_requires_grad) {
             size_t total = static_cast<size_t>(total_tokens) * d_model;
-            CUDA_CHECK(cudaMalloc(&grad_H_buf, total * sizeof(float)));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_H_buf), total * sizeof(float), "datastream_grad_H_buf");
         }
     }
 
@@ -1115,10 +1118,10 @@ struct RecordEncodeGradFn : public GradFn {
         num_ops_ = num_ops;
         d_model_ = d_model;
 
-        CUDA_CHECK(cudaMalloc(&saved_slot1_, N * sizeof(int)));
-        CUDA_CHECK(cudaMalloc(&saved_slot2_, N * sizeof(int)));
-        CUDA_CHECK(cudaMalloc(&saved_ops_, N * sizeof(int)));
-        CUDA_CHECK(cudaMalloc(&saved_scalars_, N * 3 * sizeof(float)));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_slot1_), N * sizeof(int), "datastream_saved_slot1");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_slot2_), N * sizeof(int), "datastream_saved_slot2");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_ops_), N * sizeof(int), "datastream_saved_ops");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_scalars_), N * 3 * sizeof(float), "datastream_saved_scalars");
         CUDA_CHECK(cudaMemcpyAsync(saved_slot1_, d_slot1, N * sizeof(int), cudaMemcpyDeviceToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync(saved_slot2_, d_slot2, N * sizeof(int), cudaMemcpyDeviceToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync(saved_ops_, d_ops, N * sizeof(int), cudaMemcpyDeviceToDevice, stream));
@@ -1182,13 +1185,13 @@ struct L1ScalarLossGradFn : public GradFn {
         a_shape_ = a_tensor.shape;
         a_grad_fn_ = a_tensor.grad_fn;
 
-        CUDA_CHECK(cudaMalloc(&saved_a_, sizeof(float)));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_a_), sizeof(float), "datastream_saved_a");
         CUDA_CHECK(cudaMemcpyAsync(saved_a_, a_tensor.data, sizeof(float), cudaMemcpyDeviceToDevice, stream));
-        CUDA_CHECK(cudaMalloc(&saved_b_, sizeof(float)));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_b_), sizeof(float), "datastream_saved_b");
         CUDA_CHECK(cudaMemcpyAsync(saved_b_, target_device_ptr, sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
         if (a_requires_grad_) {
-            CUDA_CHECK(cudaMalloc(&grad_a_, sizeof(float)));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_a_), sizeof(float), "datastream_grad_a");
             CUDA_CHECK(cudaMemsetAsync(grad_a_, 0, sizeof(float), stream));
         }
     }
@@ -1302,7 +1305,7 @@ struct SelectionCrossEntropyGradFn : public GradFn {
                 logits_grad_ = logits.grad_data();
             } else {
                 float* buffer = nullptr;
-                CUDA_CHECK(cudaMalloc(&buffer, static_cast<size_t>(N) * sizeof(float)));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), static_cast<size_t>(N) * sizeof(float), "datastream_logits_grad");
                 CUDA_CHECK(cudaMemsetAsync(buffer, 0, static_cast<size_t>(N) * sizeof(float), stream));
                 owned_logits_grad_ = std::shared_ptr<float>(buffer, [](float* p) {
                     queueForDeferredCleanup(p);
@@ -1366,7 +1369,7 @@ static Tensor computeSelectionCE(
 
     // Allocate saved probs buffer (owned by GradFn)
     float* saved_probs = nullptr;
-    CUDA_CHECK(cudaMalloc(&saved_probs, static_cast<size_t>(N) * sizeof(float)));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_probs), static_cast<size_t>(N) * sizeof(float), "datastream_saved_probs");
 
     // Forward: compute loss + save softmax probs
     Tensor loss = Tensor::zeros({1, 1}, stream, label);
@@ -1419,7 +1422,7 @@ static void collectStepMetrics(ExecutionBlockLayer& layer,
 
     float d_metrics[7];
     float* d_buf = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_buf, 7 * sizeof(float)));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_buf), 7 * sizeof(float), "datastream_diag_buf");
 
     kernelComputeEntropyScalar<<<1, 1, 0, stream>>>(d_buf + 0, work.p_arg1.data, V_val);
     kernelComputeEntropyScalar<<<1, 1, 0, stream>>>(d_buf + 1, work.p_arg2.data, V_val);
@@ -1533,10 +1536,10 @@ void executeStepCoordinatorImpl(
 
         int *d_slot1 = nullptr, *d_slot2 = nullptr, *d_ops = nullptr;
         float* d_scalars = nullptr;
-        CUDA_CHECK(cudaMalloc(&d_slot1, N_prior * sizeof(int)));
-        CUDA_CHECK(cudaMalloc(&d_slot2, N_prior * sizeof(int)));
-        CUDA_CHECK(cudaMalloc(&d_ops, N_prior * sizeof(int)));
-        CUDA_CHECK(cudaMalloc(&d_scalars, N_prior * 3 * sizeof(float)));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_slot1), N_prior * sizeof(int), "datastream_prior_slot1");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_slot2), N_prior * sizeof(int), "datastream_prior_slot2");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_ops), N_prior * sizeof(int), "datastream_prior_ops");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_scalars), N_prior * 3 * sizeof(float), "datastream_prior_scalars");
         CUDA_CHECK(cudaMemcpyAsync(d_slot1, h_slot1.data(), N_prior * sizeof(int), cudaMemcpyHostToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync(d_slot2, h_slot2.data(), N_prior * sizeof(int), cudaMemcpyHostToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync(d_ops, h_ops.data(), N_prior * sizeof(int), cudaMemcpyHostToDevice, stream));
@@ -1772,8 +1775,8 @@ void executeStepCoordinatorImpl(
 
     float* save_gate_buf = nullptr;
     float* save_H_slot_buf = nullptr;
-    CUDA_CHECK(cudaMalloc(&save_gate_buf, sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&save_H_slot_buf, dm * sizeof(float)));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&save_gate_buf), sizeof(float), "datastream_save_gate");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&save_H_slot_buf), dm * sizeof(float), "datastream_save_H_slot");
     kernelInjectResultSlot<<<1, kBlockSize, 0, stream>>>(
         H.data, work.result_emb.data, layer.w_inject_gate().data,
         inv_sqrt_d, work.result_slot, dm, layer.config().inject_gate_temp,

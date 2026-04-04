@@ -23,7 +23,10 @@
 #include "../OptimizerCheckpoint.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"       // launchScaleGradients (per-component clipping)
 #include "../../Shared/GradNorm/GradNormGPU.hpp"           // GradNorm::measureGradientNorms, GradMetrics
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -595,14 +598,9 @@ cudaError_t GuessCacheBatchBuffers::ensure(std::size_t capacity) {
     release();
     capacity_ = capacity;
     
-    cudaError_t err = cudaMalloc(&device_metadata_, capacity * sizeof(GRIMTS::GuessMetadata));
-    if (err != cudaSuccess) { release(); return err; }
-    
-    err = cudaMalloc(&device_rewards_, capacity * sizeof(float));
-    if (err != cudaSuccess) { release(); return err; }
-    
-    err = cudaMalloc(&device_stats_, capacity * sizeof(GRIMTS::GuessRewardStats));
-    if (err != cudaSuccess) { release(); return err; }
+    cudaMallocOrThrow(reinterpret_cast<void**>(&device_metadata_), capacity * sizeof(GRIMTS::GuessMetadata), "guess_cache_metadata");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&device_rewards_), capacity * sizeof(float), "guess_cache_rewards");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&device_stats_), capacity * sizeof(GRIMTS::GuessRewardStats), "guess_cache_stats");
     
     return cudaSuccess;
 }
@@ -769,7 +767,7 @@ static CollapseTokenStats launchCollapseTokenDiag(
 
     // Allocate temporary block results on device
     CollapseTokenStats* d_block_results = nullptr;
-    cudaMalloc(&d_block_results, num_blocks * sizeof(CollapseTokenStats));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_block_results), num_blocks * sizeof(CollapseTokenStats), "collapse_block_results");
 
     collapseTokenDiagKernel<<<num_blocks, kBlockSize, 0, stream>>>(
         d_logits, total_positions, vocab_size, collapse_token_id,
@@ -3408,7 +3406,7 @@ BatchResult processBatch(
             const int num_sample_positions = (diag_total_tokens + stride - 1) / stride;
 
             unsigned int* d_histogram = nullptr;
-            cudaMalloc(&d_histogram, static_cast<size_t>(cfg.vocab_size) * sizeof(unsigned int));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&d_histogram), static_cast<size_t>(cfg.vocab_size) * sizeof(unsigned int), "argmax_histogram");
             cudaMemsetAsync(d_histogram, 0, static_cast<size_t>(cfg.vocab_size) * sizeof(unsigned int), stream);
 
             const int block = 256;

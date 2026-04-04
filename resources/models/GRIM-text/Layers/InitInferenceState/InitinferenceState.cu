@@ -28,6 +28,9 @@
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 using GRIM::Tensor;
 
@@ -300,14 +303,8 @@ void LanguageModel::initInferenceState() {
         training_state_.kv_cache_v.resize(n_layers, nullptr);
 
         for (int l = 0; l < n_layers; ++l) {
-            cudaError_t err_k = cudaMalloc(&training_state_.kv_cache_k[l], kv_bytes_per_layer);
-            if (err_k != cudaSuccess)
-                throw std::runtime_error("[InitInferenceState] KV cache K alloc failed layer " +
-                                         std::to_string(l) + ": " + cudaGetErrorString(err_k));
-            cudaError_t err_v = cudaMalloc(&training_state_.kv_cache_v[l], kv_bytes_per_layer);
-            if (err_v != cudaSuccess)
-                throw std::runtime_error("[InitInferenceState] KV cache V alloc failed layer " +
-                                         std::to_string(l) + ": " + cudaGetErrorString(err_v));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_k[l]), kv_bytes_per_layer, "kv_cache_k");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_v[l]), kv_bytes_per_layer, "kv_cache_v");
             cudaMemsetAsync(training_state_.kv_cache_k[l], 0, kv_bytes_per_layer, primary_stream);
             cudaMemsetAsync(training_state_.kv_cache_v[l], 0, kv_bytes_per_layer, primary_stream);
         }
@@ -315,10 +312,7 @@ void LanguageModel::initInferenceState() {
         // Shared softmax LSE scratch for decode: [num_heads, kv_cache_capacity_rounded]
         const int kv_cap_rounded = ((static_cast<int>(max_seq_len_cache) + 127) / 128) * 128;
         const size_t lse_bytes = static_cast<size_t>(cfg.num_heads) * kv_cap_rounded * sizeof(float);
-        cudaError_t err_lse = cudaMalloc(&training_state_.kv_cache_softmax_lse, lse_bytes);
-        if (err_lse != cudaSuccess)
-            throw std::runtime_error("[InitInferenceState] KV cache LSE alloc failed: " +
-                                     std::string(cudaGetErrorString(err_lse)));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_softmax_lse), lse_bytes, "kv_cache_lse");
         cudaMemsetAsync(training_state_.kv_cache_softmax_lse, 0, lse_bytes, primary_stream);
 
         const size_t total_kv_bytes = n_layers * 2 * kv_bytes_per_layer + lse_bytes;
@@ -329,15 +323,10 @@ void LanguageModel::initInferenceState() {
         // Decode scratch buffers (tiny, reused per layer per decode step)
         const size_t q_bf16_bytes = static_cast<size_t>(cfg.num_heads) * head_dim * sizeof(__nv_bfloat16);
         const size_t kv_bf16_bytes = static_cast<size_t>(num_kv_heads) * head_dim * sizeof(__nv_bfloat16);
-        cudaError_t err;
-        err = cudaMalloc(&training_state_.decode_q_bf16, q_bf16_bytes);
-        if (err != cudaSuccess) throw std::runtime_error("[InitInferenceState] decode_q_bf16 alloc failed");
-        err = cudaMalloc(&training_state_.decode_kv_bf16, kv_bf16_bytes);
-        if (err != cudaSuccess) throw std::runtime_error("[InitInferenceState] decode_kv_bf16 alloc failed");
-        err = cudaMalloc(&training_state_.decode_attn_out_bf16, q_bf16_bytes);
-        if (err != cudaSuccess) throw std::runtime_error("[InitInferenceState] decode_attn_out_bf16 alloc failed");
-        err = cudaMalloc(&training_state_.decode_attn_out_fp32, static_cast<size_t>(cfg.d_model) * sizeof(float));
-        if (err != cudaSuccess) throw std::runtime_error("[InitInferenceState] decode_attn_out_fp32 alloc failed");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_q_bf16), q_bf16_bytes, "decode_q_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_kv_bf16), kv_bf16_bytes, "decode_kv_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_attn_out_bf16), q_bf16_bytes, "decode_attn_out_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_attn_out_fp32), static_cast<size_t>(cfg.d_model) * sizeof(float), "decode_attn_out_fp32");
         std::cout << "  ✓ Allocated decode scratch buffers ("
                   << ((q_bf16_bytes * 2 + kv_bf16_bytes + cfg.d_model * sizeof(float)) / 1024.0) << " KB)" << std::endl;
     }

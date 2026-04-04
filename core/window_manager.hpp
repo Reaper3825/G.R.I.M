@@ -43,6 +43,11 @@ public:
     static HWND getOverlayHWND();
     static GRIMWindow* ensureOverlay(int w, int h);
 
+    // Pre-frame render callback (called before bgfx::frame())
+    using PreFrameCallback = void(*)(uint32_t bgfxFrame);
+    static void registerPreFrameCallback(PreFrameCallback cb);
+    static bool hasPreFrameCallback();
+
 private:
     static inline std::vector<std::unique_ptr<GRIMWindow>> s_windows;
     static inline bool s_bgfxInitialized = false;
@@ -56,5 +61,6 @@ private:
     static inline uint32_t s_pendingPlatformWidth = 0;
     static inline uint32_t s_pendingPlatformHeight = 0;
     static inline std::atomic<bool> s_mainLoopStop{ false };
+    static inline PreFrameCallback s_preFrameCallback;
 };
 

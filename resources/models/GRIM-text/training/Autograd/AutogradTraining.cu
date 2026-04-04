@@ -13,6 +13,7 @@
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
@@ -28,6 +29,8 @@
 #include <cublas_v2.h>
 #include <stdexcept>
 #include "../../Shared/VerboseLogging.hpp"
+
+using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 // Issue #142: DELETED kernelMaskNonContentLogits / launchMaskNonContentLogits.
 // Setting special token logits to -inf is NON-STANDARD and was a workaround for
@@ -687,7 +690,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 const int B_teacher = have_exec_teacher
                     ? static_cast<int>(ctx.payload->teacher_steps.size()) : 0;
                 float* d_expected_target_buf = nullptr;
-                CUDA_CHECK(cudaMalloc(&d_expected_target_buf, sizeof(float)));
+                cudaMallocOrThrow(reinterpret_cast<void**>(&d_expected_target_buf), sizeof(float), "exec_expected_target_buf");
 
                 for (int b = 0; b < B; ++b) {
                     // WS7: Only allocate and execute for rows with active compiled payload.
@@ -1280,8 +1283,8 @@ LossResult computeAutogradLoss(
             cudaMemcpyAsync(&h_loss_k, loss_k.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
             int* d_correct = nullptr;
             int* d_valid = nullptr;
-            cudaMalloc(&d_correct, sizeof(int));
-            cudaMalloc(&d_valid, sizeof(int));
+            cudaMallocOrThrow(reinterpret_cast<void**>(&d_correct), sizeof(int), "mtp_d_correct");
+            cudaMallocOrThrow(reinterpret_cast<void**>(&d_valid), sizeof(int), "mtp_d_valid");
             autograd::launchMTPAccuracyKernel(
                 intermediates.mtp_logits_tensors.back().data,
                 reinterpret_cast<const int*>(ts->mtp_shifted_targets_tensor.data),
