@@ -397,7 +397,7 @@
                 "lr_min": 0.0005,
                 "max_seq_len": 1024
             },
-            "stability_overrides_enabled": true,
+            "stability_overrides_enabled": false,
             "telemetry_control": {
                 "accumulation_guard": {
                     "loss_threshold": 0.01,

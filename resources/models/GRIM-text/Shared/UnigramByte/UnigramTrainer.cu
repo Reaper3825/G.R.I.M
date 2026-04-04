@@ -1122,76 +1122,89 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     // ---- Phase A: initial EM to convergence ----
     auto [phase_a_counts, phase_a_iters] = runEMToConvergence("Phase-A");
 
-    // ---- Phase B: prune low-frequency tokens, backfill from ranked_subwords ----
-    // Tokens with Viterbi expected count < min_subword_freq are pruned and replaced
-    // with higher-frequency candidates from the mining stage. This eliminates tokens
-    // that passed mining but are rarely selected by the Viterbi decoder.
-    int pruned = 0;
-    {
+    // ---- Phase B/C loop: iteratively prune low-frequency tokens + reconverge ----
+    // After EM convergence, tokens whose Viterbi count < min_subword_freq are pruned
+    // and replaced with higher-frequency candidates from the mining pool. But reconvergence
+    // can shift probability mass and create NEW low-frequency tokens, so we loop until stable.
+    constexpr int MAX_PRUNE_ROUNDS = 10;
+    int total_pruned = 0;
+    auto current_counts = std::move(phase_a_counts);
+
+    for (int round = 0; round < MAX_PRUNE_ROUNDS; ++round) {
         std::unordered_set<int> dead_indices;
         for (size_t i = 0; i < pieces_.size(); ++i) {
             if (pieces_[i].is_user_defined) continue;
             int tid = tokenIdForIndex(static_cast<int>(i));
-            const double count = phase_a_counts.count(tid) ? phase_a_counts.at(tid) : 0.0;
+            const double count = current_counts.count(tid) ? current_counts.at(tid) : 0.0;
             if (count < static_cast<double>(MIN_SUBWORD_FREQ)) {
                 dead_indices.insert(static_cast<int>(i));
             }
         }
 
-        if (!dead_indices.empty()) {
-            std::cout << "[UnigramLM] Pruning " << dead_indices.size()
-                      << " low-frequency tokens (Viterbi count < " << MIN_SUBWORD_FREQ
-                      << " after convergence)" << std::endl;
-
-            std::vector<UnigramPiece> surviving;
-            surviving.reserve(pieces_.size() - dead_indices.size());
-            for (size_t i = 0; i < pieces_.size(); ++i) {
-                if (!dead_indices.count(static_cast<int>(i))) {
-                    surviving.push_back(std::move(pieces_[i]));
-                }
+        if (dead_indices.empty()) {
+            if (round == 0) {
+                std::cout << "[UnigramLM] No tokens below min_freq=" << MIN_SUBWORD_FREQ
+                          << " after convergence — skipping prune/backfill" << std::endl;
+            } else {
+                std::cout << "[UnigramLM] Prune round " << (round + 1)
+                          << ": no more low-frequency tokens — stable" << std::endl;
             }
-            pieces_ = std::move(surviving);
-            pruned = static_cast<int>(dead_indices.size());
-
-            piece_to_id_.clear();
-            for (size_t i = 0; i < pieces_.size(); ++i) {
-                piece_to_id_[pieces_[i].text] = static_cast<int>(i);
-            }
-
-            int backfilled = 0;
-            const int slots = pruned;
-            double backfill_total = 0.0;
-            for (const auto& p : pieces_) backfill_total += std::exp(static_cast<double>(p.score));
-            if (backfill_total < 1e-30) backfill_total = 1.0;
-
-            for (const SubwordEntry* entry : ranked_subwords) {
-                if (backfilled >= slots) break;
-                const std::string& subword = entry->first;
-                const int count = entry->second;
-                if (hasPiece(subword)) continue;
-                if (char_seeds.count(subword)) continue;
-                if (isRepetitionNoise(subword)) continue;
-                if (!isValidSubword(subword)) continue;
-                std::string dedup_key = structuralDedupKeyForCandidate(subword);
-                if (dedup_key.empty()) continue;
-                if (dedup_keys_seen.count(dedup_key)) continue;
-                if (isPrefixExtensionDuplicate(dedup_key, count, dedup_keys_seen, dedup_key_to_count)) continue;
-                dedup_keys_seen.insert(dedup_key);
-                dedup_key_to_count[dedup_key] = count;
-
-                float score = static_cast<float>(std::log(static_cast<double>(count) / total_accepted_count));
-                addPiece(dedup_key, score, false);
-                backfilled++;
-            }
-            std::cout << "[UnigramLM] Backfilled " << backfilled << " replacement tokens" << std::endl;
+            break;
         }
+
+        std::cout << "[UnigramLM] Prune round " << (round + 1) << ": removing " << dead_indices.size()
+                  << " tokens (Viterbi count < " << MIN_SUBWORD_FREQ << ")" << std::endl;
+
+        std::vector<UnigramPiece> surviving;
+        surviving.reserve(pieces_.size() - dead_indices.size());
+        for (size_t i = 0; i < pieces_.size(); ++i) {
+            if (!dead_indices.count(static_cast<int>(i))) {
+                surviving.push_back(std::move(pieces_[i]));
+            }
+        }
+        pieces_ = std::move(surviving);
+        total_pruned += static_cast<int>(dead_indices.size());
+
+        piece_to_id_.clear();
+        for (size_t i = 0; i < pieces_.size(); ++i) {
+            piece_to_id_[pieces_[i].text] = static_cast<int>(i);
+        }
+
+        int backfilled = 0;
+        const int slots = static_cast<int>(dead_indices.size());
+        double backfill_total = 0.0;
+        for (const auto& p : pieces_) backfill_total += std::exp(static_cast<double>(p.score));
+        if (backfill_total < 1e-30) backfill_total = 1.0;
+
+        for (const SubwordEntry* entry : ranked_subwords) {
+            if (backfilled >= slots) break;
+            const std::string& subword = entry->first;
+            const int count = entry->second;
+            if (hasPiece(subword)) continue;
+            if (char_seeds.count(subword)) continue;
+            if (isRepetitionNoise(subword)) continue;
+            if (!isValidSubword(subword)) continue;
+            std::string dedup_key = structuralDedupKeyForCandidate(subword);
+            if (dedup_key.empty()) continue;
+            if (dedup_keys_seen.count(dedup_key)) continue;
+            if (isPrefixExtensionDuplicate(dedup_key, count, dedup_keys_seen, dedup_key_to_count)) continue;
+            dedup_keys_seen.insert(dedup_key);
+            dedup_key_to_count[dedup_key] = count;
+
+            float score = static_cast<float>(std::log(static_cast<double>(count) / total_accepted_count));
+            addPiece(dedup_key, score, false);
+            backfilled++;
+        }
+        std::cout << "[UnigramLM] Backfilled " << backfilled << " replacement tokens" << std::endl;
+
+        // Reconverge with updated vocab — new counts feed the next prune check
+        std::string phase_label = "Prune-Round-" + std::to_string(round + 1);
+        auto [reconverged_counts, reconverged_iters] = runEMToConvergence(phase_label.c_str());
+        current_counts = std::move(reconverged_counts);
     }
 
-    // ---- Phase C: re-converge if we changed the vocab ----
-    if (pruned > 0) {
-        auto [phase_c_counts, phase_c_iters] = runEMToConvergence("Phase-C");
-        (void)phase_c_counts;
-        (void)phase_c_iters;
+    if (total_pruned > 0) {
+        std::cout << "[UnigramLM] Total pruned across all rounds: " << total_pruned << std::endl;
     }
 
     // Final trie build with converged scores
