@@ -110,7 +110,7 @@
         "add_bos": true,
         "add_eos": true,
         "enable_byte_fallback": true,
-        "enable_lowercasing": true,
+        "enable_lowercasing": false,
         "enable_nfkc_normalization": true,
         "enable_parallel_subword_mining": true,
         "enable_parallel_tokenization": true,
@@ -336,7 +336,7 @@
                 "prefer_short": false
             },
             "min_seq_len_for_flash": 256,
-            "min_seq_valid_tokens": 10,
+            "min_seq_valid_tokens": 256,
             "multi_token_prediction": {
                 "alpha": 0.2,
                 "alpha_warmup_steps": 500,
