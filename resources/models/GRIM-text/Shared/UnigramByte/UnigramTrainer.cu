@@ -1122,21 +1122,26 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     // ---- Phase A: initial EM to convergence ----
     auto [phase_a_counts, phase_a_iters] = runEMToConvergence("Phase-A");
 
-    // ---- Phase B: prune dead tokens, backfill from ranked_subwords ----
+    // ---- Phase B: prune low-frequency tokens, backfill from ranked_subwords ----
+    // Tokens with Viterbi expected count < min_subword_freq are pruned and replaced
+    // with higher-frequency candidates from the mining stage. This eliminates tokens
+    // that passed mining but are rarely selected by the Viterbi decoder.
     int pruned = 0;
     {
         std::unordered_set<int> dead_indices;
         for (size_t i = 0; i < pieces_.size(); ++i) {
             if (pieces_[i].is_user_defined) continue;
             int tid = tokenIdForIndex(static_cast<int>(i));
-            if (!phase_a_counts.count(tid) || phase_a_counts.at(tid) == 0.0) {
+            const double count = phase_a_counts.count(tid) ? phase_a_counts.at(tid) : 0.0;
+            if (count < static_cast<double>(MIN_SUBWORD_FREQ)) {
                 dead_indices.insert(static_cast<int>(i));
             }
         }
 
         if (!dead_indices.empty()) {
             std::cout << "[UnigramLM] Pruning " << dead_indices.size()
-                      << " dead tokens (zero Viterbi usage after convergence)" << std::endl;
+                      << " low-frequency tokens (Viterbi count < " << MIN_SUBWORD_FREQ
+                      << " after convergence)" << std::endl;
 
             std::vector<UnigramPiece> surviving;
             surviving.reserve(pieces_.size() - dead_indices.size());

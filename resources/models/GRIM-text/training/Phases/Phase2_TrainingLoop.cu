@@ -2187,7 +2187,7 @@ BatchResult processBatch(
         if (ts.autograd_intermediates.hasLogits() && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
             const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
             const int vocab_size = ctx.config.actual_vocab_size;
-            const int sample_positions = std::min(total_tokens, 100);
+            const int sample_positions = total_tokens;
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(sample_positions * vocab_size);
             cudaMemcpyAsync(logit_sample.data(), ts.autograd_intermediates.logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost, stream);
@@ -2528,8 +2528,8 @@ BatchResult processBatch(
             const int vocab_size = ctx.config.actual_vocab_size;
             const int d_model = ctx.model->getConfig().d_model;
             
-            // Sample logits for statistics (limit to avoid expensive D2H copy)
-            const int sample_positions = std::min(total_tokens, 50);
+            // Use full batch for logit statistics
+            const int sample_positions = total_tokens;
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(sample_positions * vocab_size);
             cudaMemcpy(logit_sample.data(), ts.autograd_intermediates.logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
@@ -2950,7 +2950,7 @@ BatchResult processBatch(
                 if (num_layers > 0 && sample_positions >= 2) {
                     // Helper: compute avg |cos| over sampled pairs from a device buffer
                     // Uses absolute cosine to detect alignment regardless of sign
-                    const int rho_sample_positions = std::min(sample_positions, 20);  // Cap for speed
+                    const int rho_sample_positions = sample_positions;  // Full batch
                     const int max_pairs = 50;  // Enough pairs for statistical stability
                     
                     auto compute_rho = [&](const float* device_ptr, int num_pos) -> std::pair<float, float> {
