@@ -4,6 +4,7 @@
 //======================================================//
 #include "TensorContract_GPU.hpp"
 #include "HyperParameters/HyperParameters_GPU.hpp"
+#include "../VerboseLogging.hpp"
 #include "../TensorConversion/TensorConversion.hpp"  // Layout conversions - single source of truth
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
@@ -24,6 +25,7 @@
 #include <vector>
 #include <atomic>
 #include <chrono>
+#include <iomanip>
 
 // DEBUG LOGGING - set to 1 to enable verbose tensor operation logging
 #define TENSOR_VERBOSE_DEBUG 0
@@ -90,6 +92,74 @@ void initCleanupStream() {
         cudaStreamCreate(&g_cleanup_stream);
     }
 }
+
+namespace {
+
+constexpr double kBytesPerMiB = 1024.0 * 1024.0;
+
+struct GpuMemSnapshot {
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    cudaError_t status = cudaSuccess;
+};
+
+inline GpuMemSnapshot captureGpuMemSnapshot() {
+    GpuMemSnapshot snapshot{};
+    snapshot.status = cudaMemGetInfo(&snapshot.free_bytes, &snapshot.total_bytes);
+    return snapshot;
+}
+
+inline std::string formatMiB(size_t bytes) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2) << (static_cast<double>(bytes) / kBytesPerMiB);
+    return oss.str();
+}
+
+inline void maybeLogGpuAllocationRequest(const char* label, size_t bytes) {
+    if constexpr (!GRIM::VerboseLogging::ENABLE_GPU_ALLOCATION_LOGS) {
+        return;
+    }
+
+    const GpuMemSnapshot snapshot = captureGpuMemSnapshot();
+    std::ostringstream oss;
+    oss << "[GPU_ALLOC] request label=" << (label ? label : "unnamed")
+        << " bytes=" << bytes << " (" << formatMiB(bytes) << " MiB)";
+    if (snapshot.status == cudaSuccess) {
+        oss << " free=" << formatMiB(snapshot.free_bytes) << " MiB"
+            << " total=" << formatMiB(snapshot.total_bytes) << " MiB";
+    } else {
+        oss << " mem_info_error=" << cudaGetErrorString(snapshot.status);
+    }
+    fprintf(stderr, "%s\n", oss.str().c_str());
+}
+
+inline std::string buildCudaAllocFailureMessage(const char* api, const char* label, size_t bytes, cudaError_t err) {
+    const GpuMemSnapshot snapshot = captureGpuMemSnapshot();
+
+    std::ostringstream oss;
+    oss << api << " failed for '" << (label ? label : "unnamed") << "': "
+        << cudaGetErrorString(err)
+        << " | request=" << bytes << " bytes (" << formatMiB(bytes) << " MiB)";
+
+    if (snapshot.status == cudaSuccess) {
+        oss << " | free=" << snapshot.free_bytes << " bytes (" << formatMiB(snapshot.free_bytes) << " MiB)"
+            << " | total=" << snapshot.total_bytes << " bytes (" << formatMiB(snapshot.total_bytes) << " MiB)";
+    } else {
+        oss << " | cudaMemGetInfo failed: " << cudaGetErrorString(snapshot.status);
+    }
+
+    return oss.str();
+}
+
+inline void cudaMallocOrThrow(void** ptr, size_t bytes, const char* label) {
+    maybeLogGpuAllocationRequest(label, bytes);
+    cudaError_t err = cudaMalloc(ptr, bytes);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(buildCudaAllocFailureMessage("cudaMalloc", label, bytes, err));
+    }
+}
+
+} // namespace
 
 //======================================================//
 //  KERNEL LAUNCH DIAGNOSTIC - Track which kernel is stuck
@@ -946,10 +1016,7 @@ Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cuda
     
     const size_t bytes = shape.total_elements() * sizeof(float);
     
-    cudaError_t err = cudaMalloc(&t.data, bytes);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("Tensor::empty cudaMalloc failed: ") + cudaGetErrorString(err));
-    }
+    cudaMallocOrThrow(reinterpret_cast<void**>(&t.data), bytes, name ? name : "Tensor::empty");
     t.owns_data = true;
     TENSOR_LOG_LIFECYCLE(alloc_counter,
         "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
@@ -1020,10 +1087,7 @@ Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_g
     const size_t count = shape.total_elements();
     const size_t bytes = count * sizeof(float);
     
-    cudaError_t err = cudaMalloc(&t.data, bytes);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("Tensor::xavier_uniform cudaMalloc failed: ") + cudaGetErrorString(err));
-    }
+    cudaMallocOrThrow(reinterpret_cast<void**>(&t.data), bytes, name ? name : "Tensor::xavier_uniform");
     t.owns_data = true;
     TENSOR_LOG_LIFECYCLE(alloc_counter,
         "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s (xavier)\n",
@@ -1090,11 +1154,7 @@ void Tensor::ensure_grad() {
     const size_t bytes = count * sizeof(float);
     
     float* ptr = nullptr;
-    cudaError_t err = cudaMalloc(&ptr, bytes);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("ensure_grad cudaMalloc failed for ") +
-                                 (name ? name : "unnamed") + ": " + cudaGetErrorString(err));
-    }
+    cudaMallocOrThrow(reinterpret_cast<void**>(&ptr), bytes, name ? name : "ensure_grad");
     
     cudaMemsetAsync(ptr, 0, bytes, stream);
     
@@ -5647,17 +5707,17 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         const size_t lse_elems = static_cast<size_t>(b) * nh * s;
         
         // Allocate bf16 buffers for FlashAttention
-        cudaMalloc(&saved_q_bf16, q_elems * sizeof(__nv_bfloat16));
-        cudaMalloc(&saved_k_bf16, kv_elems * sizeof(__nv_bfloat16));
-        cudaMalloc(&saved_v_bf16, kv_elems * sizeof(__nv_bfloat16));
-        cudaMalloc(&saved_out_bf16, q_elems * sizeof(__nv_bfloat16));
-        cudaMalloc(&saved_softmax_lse, lse_elems * sizeof(float));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_q_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_saved_q_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_k_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_saved_k_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_saved_v_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_out_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_saved_out_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_softmax_lse), lse_elems * sizeof(float), "sdpa_saved_softmax_lse");
         
         // Allocate backward workspace
         const size_t dq_accum_bytes = flash_attn_dq_accum_bytes(b, s, nh, hd);
         const size_t dsoftmax_sum_bytes = flash_attn_dsoftmax_sum_bytes(b, s, nh);
-        cudaMalloc(&dq_accum, dq_accum_bytes);
-        cudaMalloc(&dsoftmax_sum, dsoftmax_sum_bytes);
+        cudaMallocOrThrow(&dq_accum, dq_accum_bytes, "sdpa_dq_accum_workspace");
+        cudaMallocOrThrow(&dsoftmax_sum, dsoftmax_sum_bytes, "sdpa_dsoftmax_sum_workspace");
         
         // ISSUE #72 FIX: FlashAttention backward kernel writes dK/dV using query head index (bidh=0..num_heads-1),
         // NOT the KV head index (bidh / h_h_k_ratio). With GQA (12 Q heads, 4 KV heads), the library writes
@@ -5668,10 +5728,10 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         // then reduce the 12-head gradients down to 4 KV heads by summing grouped heads in apply().
         const size_t dk_dv_alloc_elems = static_cast<size_t>(b) * s * nh * hd;  // Use num_heads, not num_kv_heads!
         
-        cudaMalloc(&dq_bf16, q_elems * sizeof(__nv_bfloat16));
-        cudaMalloc(&dk_bf16, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Sized for num_heads
-        cudaMalloc(&dv_bf16, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Sized for num_heads
-        cudaMalloc(&dout_bf16, q_elems * sizeof(__nv_bfloat16));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&dq_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_dq_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&dk_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_dk_bf16");  // ISSUE #72: Sized for num_heads
+        cudaMallocOrThrow(reinterpret_cast<void**>(&dv_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_dv_bf16");  // ISSUE #72: Sized for num_heads
+        cudaMallocOrThrow(reinterpret_cast<void**>(&dout_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_dout_bf16");
         cudaMemset(dq_bf16, 0, q_elems * sizeof(__nv_bfloat16));
         cudaMemset(dk_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
         cudaMemset(dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
@@ -5897,11 +5957,11 @@ Tensor scaled_dot_product_attention(
     __nv_bfloat16* out_bf16 = nullptr;
     float* softmax_lse = nullptr;
     
-    cudaMalloc(&q_bf16, q_elems * sizeof(__nv_bfloat16));
-    cudaMalloc(&k_bf16, kv_elems * sizeof(__nv_bfloat16));
-    cudaMalloc(&v_bf16, kv_elems * sizeof(__nv_bfloat16));
-    cudaMalloc(&out_bf16, q_elems * sizeof(__nv_bfloat16));
-    cudaMalloc(&softmax_lse, lse_elems * sizeof(float));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&q_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_q_bf16");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&k_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_k_bf16");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&v_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_v_bf16");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&out_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_out_bf16");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&softmax_lse), lse_elems * sizeof(float), "sdpa_softmax_lse");
     // Sentinel fill: 0xFF bytes → float NaN. If LSE shows NaN after kernel, kernel didn't write.
     // Valid LSE is always finite (LSE = max_score * scale + log(sum_exp)), never NaN.
     cudaMemsetAsync(softmax_lse, 0xFF, lse_elems * sizeof(float), stream);
@@ -5967,8 +6027,8 @@ Tensor scaled_dot_product_attention(
         // Allocate backward workspace
         const size_t dq_accum_bytes = flash_attn_dq_accum_bytes(batch_size, seq_len, num_heads, head_dim);
         const size_t dsoftmax_sum_bytes = flash_attn_dsoftmax_sum_bytes(batch_size, seq_len, num_heads);
-        cudaMalloc(&grad_fn->dq_accum, dq_accum_bytes);
-        cudaMalloc(&grad_fn->dsoftmax_sum, dsoftmax_sum_bytes);
+        cudaMallocOrThrow(&grad_fn->dq_accum, dq_accum_bytes, "sdpa_gradfn_dq_accum_workspace");
+        cudaMallocOrThrow(&grad_fn->dsoftmax_sum, dsoftmax_sum_bytes, "sdpa_gradfn_dsoftmax_sum_workspace");
         
         // ISSUE #72 FIX: FlashAttention backward kernel writes dK/dV using query head index (bidh=0..num_heads-1),
         // NOT the KV head index (bidh / h_h_k_ratio). With GQA (12 Q heads, 4 KV heads), the library writes
@@ -5979,10 +6039,10 @@ Tensor scaled_dot_product_attention(
         // then reduce the 12-head gradients down to 4 KV heads by summing grouped heads in apply().
         const size_t dk_dv_alloc_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;  // Use num_heads!
         
-        cudaMalloc(&grad_fn->dq_bf16, q_elems * sizeof(__nv_bfloat16));
-        cudaMalloc(&grad_fn->dk_bf16, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Sized for num_heads
-        cudaMalloc(&grad_fn->dv_bf16, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Sized for num_heads
-        cudaMalloc(&grad_fn->dout_bf16, q_elems * sizeof(__nv_bfloat16));
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dq_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dq_bf16");
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dk_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dk_bf16");  // ISSUE #72: Sized for num_heads
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dv_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dv_bf16");  // ISSUE #72: Sized for num_heads
+        cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dout_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dout_bf16");
         cudaMemset(grad_fn->dq_bf16, 0, q_elems * sizeof(__nv_bfloat16));
         cudaMemset(grad_fn->dk_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
         cudaMemset(grad_fn->dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
