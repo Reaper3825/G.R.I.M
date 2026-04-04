@@ -465,7 +465,7 @@
             "warmup_steps": 2000,
             "weight_decay": 0.01
         },
-        "current_curriculum": "",
+        "current_curriculum": "Pre-Trainingv1",
         "current_model_training": "",
         "server_host": "127.0.0.1",
         "server_port": 11436

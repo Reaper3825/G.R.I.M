@@ -249,6 +249,11 @@ UITrainingPanel::UITrainingPanel()
     });
     tabTrainingBtn_->setSize(90.0f, 28.0f);
 
+    tabTokenizerBtn_ = std::make_shared<UIButton>("Tokenizer", [this]() {
+        setView(TrainingPanelTab::Tokenizer);
+    });
+    tabTokenizerBtn_->setSize(90.0f, 28.0f);
+
     // ══════════════════════════════════════════════════════
     //  Home tab — Model Browser widgets
     // ══════════════════════════════════════════════════════
@@ -527,6 +532,41 @@ UITrainingPanel::UITrainingPanel()
     paramEditInput_ = std::make_shared<UIInputBox>(&editParamBuffer_);
     paramEditInput_->setSize(120.0f, 20.0f);
     paramEditInput_->OnTextSubmitted.Bind([this](const std::string&) { commitParamEdit(); });
+
+    // ══════════════════════════════════════════════════════
+    //  Tokenizer tab widgets
+    // ══════════════════════════════════════════════════════
+
+    encodeInputBox_ = std::make_shared<UIInputBox>(&encodeInputBuffer_);
+    encodeInputBox_->setSize(500.0f, 28.0f);
+    encodeInputBox_->setPlaceholder("Enter text to encode...");
+
+    encodeButton_ = std::make_shared<UIButton>("Encode", [this]() {
+        handleEncodeText();
+    });
+    encodeButton_->setSize(90.0f, Sizes::ButtonHeight);
+
+    clearEncodeButton_ = std::make_shared<UIButton>("Clear", [this]() {
+        encodeInputBuffer_.clear();
+        encodeComplete_ = false;
+        encodeSuccess_ = false;
+        encodeErrorMessage_.clear();
+        lastEncodeResult_ = {};
+    });
+    clearEncodeButton_->setSize(70.0f, Sizes::ButtonHeight);
+
+    tokenizerRunValidationBtn_ = std::make_shared<UIButton>("Run Validation", [this]() {
+        handleRunTokenizer();
+    });
+    tokenizerRunValidationBtn_->setSize(120.0f, Sizes::ButtonHeight);
+
+    tokenizerCloseBtn_ = std::make_shared<UIButton>("Close", [this]() {
+        setVisible(false);
+    });
+    tokenizerCloseBtn_->setSize(90.0f, Sizes::ButtonHeight);
+
+    tokenizerScrollBox_ = std::make_shared<UIScrollBox>();
+    tokenizerScrollBox_->setSize(600.0f, 300.0f);
 }
 
 UITrainingPanel::~UITrainingPanel() = default;
@@ -616,6 +656,7 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     tabKnowledgeGapsBtn_->update(input, dt);
     tabToolGapsBtn_->update(input, dt);
     tabTrainingBtn_->update(input, dt);
+    tabTokenizerBtn_->update(input, dt);
 
     // Bottom bar buttons — always active
     startButton->update(input, dt);
@@ -623,7 +664,6 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     pauseResumeButton->update(input, dt);
     resetStatusButton->update(input, dt);
     closeButton->update(input, dt);
-    runTokenizerButton->update(input, dt);
 
     // Tab-specific updates
     switch (activeTab_) {
@@ -790,6 +830,15 @@ void UITrainingPanel::update(const InputState& input, float dt) {
             processParamBrowserClicks(input);
             break;
         }
+        case TrainingPanelTab::Tokenizer: {
+            if (encodeInputBox_) encodeInputBox_->update(input, dt);
+            if (encodeButton_) encodeButton_->update(input, dt);
+            if (clearEncodeButton_) clearEncodeButton_->update(input, dt);
+            if (tokenizerRunValidationBtn_) tokenizerRunValidationBtn_->update(input, dt);
+            if (tokenizerCloseBtn_) tokenizerCloseBtn_->update(input, dt);
+            if (tokenizerScrollBox_) tokenizerScrollBox_->update(input, dt);
+            break;
+        }
     }
 
     // Poll server
@@ -881,11 +930,13 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     tabKnowledgeGapsBtn_->setPosition(tabX + 95.0f, position.y + kTabBarY);
     tabToolGapsBtn_->setPosition(tabX + 220.0f, position.y + kTabBarY);
     tabTrainingBtn_->setPosition(tabX + 315.0f, position.y + kTabBarY);
+    tabTokenizerBtn_->setPosition(tabX + 410.0f, position.y + kTabBarY);
 
     tabHomeBtn_->drawOverlay(renderer, position);
     tabKnowledgeGapsBtn_->drawOverlay(renderer, position);
     tabToolGapsBtn_->drawOverlay(renderer, position);
     tabTrainingBtn_->drawOverlay(renderer, position);
+    tabTokenizerBtn_->drawOverlay(renderer, position);
 
     // Active tab indicator (2px underline)
     float indicatorX = tabX;
@@ -895,6 +946,7 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         case TrainingPanelTab::KnowledgeGaps: indicatorX = tabX + 95.0f;  indicatorW = 120.0f; break;
         case TrainingPanelTab::ToolGaps:      indicatorX = tabX + 220.0f; indicatorW = 90.0f;  break;
         case TrainingPanelTab::Training:      indicatorX = tabX + 315.0f; indicatorW = 90.0f;  break;
+        case TrainingPanelTab::Tokenizer:     indicatorX = tabX + 410.0f; indicatorW = 90.0f;  break;
     }
     renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {indicatorW, 2.0f},
                       Colors::Primary);
@@ -918,8 +970,8 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     PanelRect content = getContentRect();
     content.origin.y += (kContentTopY - kTabBarY);
     content.size.y   -= (kContentTopY - kTabBarY);
-    // Reserve space for bottom bar on Training tab
-    if (activeTab_ == TrainingPanelTab::Training) {
+    // Reserve space for bottom bar on Training and Tokenizer tabs
+    if (activeTab_ == TrainingPanelTab::Training || activeTab_ == TrainingPanelTab::Tokenizer) {
         content.size.y -= kBottomBarH;
     }
 
@@ -928,15 +980,25 @@ bool UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
         case TrainingPanelTab::KnowledgeGaps: drawKnowledgeGapsTab(renderer, content); break;
         case TrainingPanelTab::ToolGaps:      drawToolGapsTab(renderer, content);      break;
         case TrainingPanelTab::Training:      drawTrainingTab(renderer, content);      break;
+        case TrainingPanelTab::Tokenizer:     drawTokenizerTab(renderer, content);     break;
     }
 
-    // ── Bottom action bar (Training tab only) ──
+    // ── Bottom action bar (Training tab) ──
     if (activeTab_ == TrainingPanelTab::Training) {
         float barY = position.y + size.y - kBottomBarH - 10.0f;
         float barW = size.x - 20.0f;
         float barX = position.x + 10.0f;
         UIDrawHelpers::drawDivider(renderer, {barX, barY}, barW);
         drawBottomBar(renderer, barY + 8.0f, barW, barX);
+    }
+
+    // ── Bottom action bar (Tokenizer tab) ──
+    if (activeTab_ == TrainingPanelTab::Tokenizer) {
+        float barY = position.y + size.y - kBottomBarH - 10.0f;
+        float barW = size.x - 20.0f;
+        float barX = position.x + 10.0f;
+        UIDrawHelpers::drawDivider(renderer, {barX, barY}, barW);
+        drawTokenizerBottomBar(renderer, barY + 8.0f, barW, barX);
     }
 
     // ── Dropdowns on top ──
@@ -2362,7 +2424,7 @@ void UITrainingPanel::drawBottomBar(OverlayRenderer& renderer, float barY, float
     float btnW = 90.0f;
     float btnH = Sizes::ButtonHeight;
     float gap = Spacing::Small;
-    float totalW = btnW * 6.0f + gap * 5.0f;
+    float totalW = btnW * 5.0f + gap * 4.0f;
     float startX = barX + (barWidth - totalW) / 2.0f;
 
     auto placeBtn = [&](std::shared_ptr<UIButton>& btn, int idx) {
@@ -2377,8 +2439,7 @@ void UITrainingPanel::drawBottomBar(OverlayRenderer& renderer, float barY, float
     placeBtn(stopButton, 1);
     placeBtn(pauseResumeButton, 2);
     placeBtn(resetStatusButton, 3);
-    placeBtn(runTokenizerButton, 4);
-    placeBtn(closeButton, 5);
+    placeBtn(closeButton, 4);
 }
 
 // ============================================================
@@ -2801,6 +2862,9 @@ bool UITrainingPanel::isAnySliderEditing() const {
 }
 
 bool UITrainingPanel::isAnyInputEditing() const {
+    if (activeTab_ == TrainingPanelTab::Tokenizer) {
+        return encodeInputBox_ && encodeInputBox_->isFocused();
+    }
     if (activeTab_ != TrainingPanelTab::Home || !showCreatorForm_) return false;
     return creatorNameInput_->isFocused()
         || creatorParamInput_->isFocused()
@@ -3037,4 +3101,263 @@ void UITrainingPanel::drawTokenizerStatus(OverlayRenderer& renderer, float x, fl
             "Val: " + std::to_string(static_cast<int>(r.validation_time_ms)) + "ms";
         renderer.drawText({x + Spacing::Small, detailY}, details, Colors::TextSecondary);
     }
+}
+
+// ============================================================
+// Tokenizer Tab
+// ============================================================
+
+void UITrainingPanel::drawTokenizerTab(OverlayRenderer& renderer, const PanelRect& content) {
+    float x = content.origin.x + Spacing::PaddingX;
+    float y = content.origin.y + Spacing::Small;
+    float w = content.size.x - 2.0f * Spacing::PaddingX;
+
+    // ── Section 1: Validation ──
+    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
+                                     "Tokenizer Validation", Colors::SectionAI);
+    y += Sizes::HeaderHeight + Spacing::Small;
+
+    // Run Validation button
+    tokenizerRunValidationBtn_->setPosition(x, y);
+    tokenizerRunValidationBtn_->drawOverlay(renderer, position);
+
+    // Running indicator
+    if (tokenizerRunning_) {
+        renderer.drawText({x + 130.0f, y + 8.0f}, "Running...", Colors::Warning);
+    }
+
+    y += Sizes::ButtonHeight + Spacing::Medium;
+
+    // Validation status
+    drawTokenizerStatus(renderer, x, y, w);
+    if (tokenizerComplete_ || tokenizerRunning_) {
+        y += 24.0f + Spacing::Small;
+        if (tokenizerComplete_ && tokenizerSuccess_) {
+            y += 18.0f + Spacing::Small; // detail line
+        }
+    }
+
+    // Validation detail: test failures
+    if (tokenizerComplete_ && !tokenizerSuccess_ && !lastTokenizerResult_.failures.empty()) {
+        float failY = y;
+        renderer.drawText({x, failY}, "Failed tests:", Colors::Danger);
+        failY += 18.0f;
+        for (const auto& f : lastTokenizerResult_.failures) {
+            if (failY > content.origin.y + content.size.y - 40.0f) break;
+            renderer.drawText({x + Spacing::Medium, failY}, "- " + f, Colors::TextSecondary);
+            failY += 16.0f;
+        }
+        y = failY + Spacing::Small;
+    }
+
+    // Vocab info cards (show after successful validation)
+    if (tokenizerComplete_ && tokenizerSuccess_) {
+        auto& r = lastTokenizerResult_;
+        float cardW = (w - 2.0f * kStatCardGap) / 3.0f;
+
+        drawStatCard(renderer, {x, y}, {cardW, kStatCardH},
+                     "Total Vocab", std::to_string(r.total_vocab_size), Colors::Primary);
+        drawStatCard(renderer, {x + cardW + kStatCardGap, y}, {cardW, kStatCardH},
+                     "Unigram", std::to_string(r.unigram_vocab_size), Colors::AccentBlue);
+        drawStatCard(renderer, {x + 2.0f * (cardW + kStatCardGap), y}, {cardW, kStatCardH},
+                     "Byte + Atom", std::to_string(r.byte_vocab_size + r.atom_vocab_size), Colors::Warning);
+        y += kStatCardH + Spacing::Large;
+
+        // Special token IDs
+        std::string specialStr = "PAD=" + std::to_string(r.pad_id) +
+            "  UNK=" + std::to_string(r.unk_id) +
+            "  BOS=" + std::to_string(r.bos_id) +
+            "  EOS=" + std::to_string(r.eos_id);
+        renderer.drawText({x, y}, specialStr, Colors::TextSecondary);
+        y += 18.0f + Spacing::Small;
+    }
+
+    y += Spacing::Medium;
+
+    // ── Section 2: Encode Text ──
+    UIDrawHelpers::drawSectionHeader(renderer, {x - Spacing::PaddingX, y}, content.size.x,
+                                     "Encode Text", Colors::SectionNeutral);
+    y += Sizes::HeaderHeight + Spacing::Small;
+
+    // Input box + buttons row
+    float inputW = w - 90.0f - 70.0f - 2.0f * Spacing::Small;
+    encodeInputBox_->setPosition(x, y);
+    encodeInputBox_->setSize(inputW, 28.0f);
+    encodeInputBox_->drawOverlay(renderer, position);
+
+    encodeButton_->setPosition(x + inputW + Spacing::Small, y - 2.0f);
+    encodeButton_->drawOverlay(renderer, position);
+
+    clearEncodeButton_->setPosition(x + inputW + Spacing::Small + 90.0f + Spacing::Small, y - 2.0f);
+    clearEncodeButton_->drawOverlay(renderer, position);
+
+    if (encodeRunning_.load()) {
+        renderer.drawText({x, y + 32.0f}, "Encoding...", Colors::Warning);
+    }
+
+    y += 28.0f + Spacing::Medium;
+
+    // ── Encode results ──
+    float remainingH = (content.origin.y + content.size.y) - y - Spacing::Small;
+    if (remainingH > 40.0f) {
+        drawEncodeResults(renderer, x, y, w, remainingH);
+    }
+}
+
+void UITrainingPanel::drawEncodeResults(OverlayRenderer& renderer, float x, float y, float width, float maxHeight) {
+    if (!encodeComplete_ && !encodeRunning_.load()) return;
+
+    if (!encodeSuccess_ && encodeComplete_) {
+        // Error display
+        renderer.drawRoundedRect({x, y}, {width, 24.0f}, 0xFF3A1A1A, Sizes::WidgetRadius);
+        renderer.drawText({x + Spacing::Small, y + 4.0f},
+                          "Encode failed: " + encodeErrorMessage_, Colors::Danger);
+        return;
+    }
+
+    if (!encodeComplete_) return;
+
+    std::lock_guard<std::mutex> lock(encodeMutex_);
+    auto& r = lastEncodeResult_;
+
+    // Summary bar
+    std::string summary = std::to_string(r.token_count) + " tokens | " +
+        std::to_string(static_cast<int>(r.encode_time_ms * 1000.0)) + "us encode";
+    if (r.total_vocab_size > 0) {
+        summary += " | vocab " + std::to_string(r.total_vocab_size);
+    }
+    renderer.drawRoundedRect({x, y}, {width, 22.0f}, Colors::CardSurface, Sizes::SmallRadius);
+    renderer.drawText({x + Spacing::Small, y + 3.0f}, summary, Colors::TextPrimary);
+    y += 22.0f + Spacing::Small;
+
+    // Round-trip check
+    if (r.decoded_text != r.input_text) {
+        renderer.drawText({x, y}, "Round-trip mismatch!", Colors::Danger);
+        y += 16.0f;
+    }
+
+    // Token flow — colored chips showing the tokenization
+    float chipX = x;
+    float chipY = y;
+    float chipH = 26.0f;
+    float chipGap = 3.0f;
+    float chipPadX = 6.0f;
+
+    // Alternating colors for visual token boundary separation
+    static const uint32_t kTokenColors[] = {
+        0xD0283050,  // blue-ish
+        0xD0304028,  // green-ish
+        0xD0403028,  // amber-ish
+        0xD0382850,  // purple-ish
+        0xD0284040,  // teal-ish
+        0xD0402840,  // magenta-ish
+    };
+    static constexpr int kNumTokenColors = 6;
+
+    for (size_t i = 0; i < r.tokens.size(); ++i) {
+        const auto& tok = r.tokens[i];
+
+        // Determine display text
+        std::string displayText = tok.piece;
+        if (displayText.empty()) {
+            displayText = "<" + std::to_string(tok.id) + ">";
+        }
+        // Replace control chars for display
+        for (char& c : displayText) {
+            if (c == '\n') c = '\xAC';  // ¬ for newline
+            else if (c == '\t') c = '\xBB'; // » for tab
+            else if (c < 0x20 && c >= 0) c = '\xB7'; // · for other control
+        }
+
+        float textW = UIDrawHelpers::getTextWidth(displayText);
+        float chipW = textW + 2.0f * chipPadX;
+
+        // Wrap to next line
+        if (chipX + chipW > x + width && chipX > x) {
+            chipX = x;
+            chipY += chipH + chipGap;
+            if (chipY + chipH > y + maxHeight - 40.0f) break; // out of space
+        }
+
+        // Chip background
+        uint32_t bgColor = kTokenColors[i % kNumTokenColors];
+        renderer.drawRoundedRect({chipX, chipY}, {chipW, chipH}, bgColor, Sizes::SmallRadius);
+
+        // Token text
+        renderer.drawText({chipX + chipPadX, chipY + 5.0f}, displayText, Colors::TextPrimary);
+
+        // Token ID subscript
+        std::string idStr = std::to_string(tok.id);
+        renderer.drawText({chipX + chipPadX, chipY + chipH - 10.0f}, idStr, Colors::TextSecondary);
+
+        chipX += chipW + chipGap;
+    }
+
+    // Token type legend at bottom
+    chipY += chipH + Spacing::Medium;
+    if (chipY < y + maxHeight - 20.0f) {
+        renderer.drawText({x, chipY},
+                          "Types: special | byte | atom | unigram", Colors::TextSecondary);
+    }
+}
+
+void UITrainingPanel::drawTokenizerBottomBar(OverlayRenderer& renderer, float barY, float barWidth, float barX) {
+    float btnW = 120.0f;
+    float btnH = Sizes::ButtonHeight;
+    float gap = Spacing::Small;
+    float totalW = btnW + 90.0f + gap;
+    float startX = barX + (barWidth - totalW) / 2.0f;
+
+    tokenizerRunValidationBtn_->setPosition(startX, barY);
+    tokenizerRunValidationBtn_->setSize(btnW, btnH);
+    tokenizerRunValidationBtn_->drawOverlay(renderer, position);
+
+    tokenizerCloseBtn_->setPosition(startX + btnW + gap, barY);
+    tokenizerCloseBtn_->setSize(90.0f, btnH);
+    tokenizerCloseBtn_->drawOverlay(renderer, position);
+}
+
+void UITrainingPanel::handleEncodeText() {
+    if (encodeRunning_.load()) return;
+    if (encodeInputBuffer_.empty()) return;
+    if (!trainingController) {
+        encodeErrorMessage_ = "Controller not initialized";
+        encodeComplete_ = true;
+        encodeSuccess_ = false;
+        return;
+    }
+    if (!serverConnected) {
+        pollServer();
+        if (!serverConnected) {
+            encodeErrorMessage_ = "Server not connected";
+            encodeComplete_ = true;
+            encodeSuccess_ = false;
+            return;
+        }
+    }
+
+    encodeRunning_.store(true);
+    encodeComplete_ = false;
+    encodeSuccess_ = false;
+    encodeErrorMessage_.clear();
+
+    std::string textCopy = encodeInputBuffer_;
+    std::thread([this, textCopy]() {
+        auto result = trainingController->encodeText(textCopy);
+
+        {
+            std::lock_guard<std::mutex> lock(encodeMutex_);
+            lastEncodeResult_ = result;
+        }
+        encodeSuccess_ = result.success;
+        encodeComplete_ = true;
+        encodeRunning_.store(false);
+
+        if (!result.success) {
+            encodeErrorMessage_ = result.error;
+            addLog("Encode failed: " + result.error, 2);
+        } else {
+            addLog("Encoded " + std::to_string(result.token_count) + " tokens", 0);
+        }
+    }).detach();
 }

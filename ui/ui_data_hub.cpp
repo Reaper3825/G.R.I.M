@@ -659,6 +659,12 @@ UIDataHubPanel::UIDataHubPanel()
     cbCustomPromptArea_ = std::make_shared<UITextArea>("Custom Prompt", "",
         [](const std::string&) {});
 
+    // ── State 0 / Execution / State 1 widgets ───────────
+    cbState0TypeInput_ = std::make_shared<UIInputBox>();
+    cbState0TypeInput_->setPlaceholder("e.g. arithmetic");
+    cbState0AtomsInput_ = std::make_shared<UIInputBox>();
+    cbState0AtomsInput_->setPlaceholder("e.g. 2.0, 3.0");
+
     btnCBGenerate_ = std::make_shared<UIButton>("Generate", [this]() {
         generateConceptBlock();
     });
@@ -673,6 +679,15 @@ UIDataHubPanel::UIDataHubPanel()
     stepActionMenu_->addItem("- Step", [this]() {
         if (!cbIntermediateAreas_.empty())
             cbIntermediateAreas_.pop_back();
+    }, UITheme::Colors::Danger);
+
+    execStepActionMenu_ = std::make_shared<UIActionMenu>("Exec Steps");
+    execStepActionMenu_->addItem("+ Exec Step", [this]() {
+        syncExecStepRows(static_cast<int>(cbExecStepRows_.size()) + 1);
+    }, UITheme::Colors::Success);
+    execStepActionMenu_->addItem("- Exec Step", [this]() {
+        if (!cbExecStepRows_.empty())
+            cbExecStepRows_.pop_back();
     }, UITheme::Colors::Danger);
 
     blockActionMenu_ = std::make_shared<UIActionMenu>("Block");
@@ -707,6 +722,61 @@ UIDataHubPanel::UIDataHubPanel()
         for (const auto& area : cbIntermediateAreas_) {
             cb.intermediates.push_back(area ? area->getText() : "");
         }
+
+        // State 0
+        cb.state_0.type = cbState0TypeInput_ ? cbState0TypeInput_->getText() : "";
+        if (cbState0AtomsInput_) {
+            std::string atomsStr = cbState0AtomsInput_->getText();
+            cb.state_0.atoms.clear();
+            if (!atomsStr.empty()) {
+                std::istringstream iss(atomsStr);
+                std::string tok;
+                while (std::getline(iss, tok, ',')) {
+                    try { cb.state_0.atoms.push_back(std::stod(tok)); }
+                    catch (...) {}
+                }
+            }
+        }
+
+        // Execution steps
+        cb.execution.clear();
+        for (const auto& row : cbExecStepRows_) {
+            GRIM::ConceptExecutionStep step;
+            static const char* opNames[] = {"add", "sub", "mul", "div"};
+            int opIdx = row.opDropdown ? row.opDropdown->getSelectedIndex() : 0;
+            step.op = (opIdx >= 0 && opIdx < 4) ? opNames[opIdx] : "add";
+
+            if (row.argSlotsInput) {
+                std::istringstream iss(row.argSlotsInput->getText());
+                std::string tok;
+                while (std::getline(iss, tok, ',')) {
+                    try { step.arg_slots.push_back(std::stoi(tok)); }
+                    catch (...) {}
+                }
+            }
+            if (row.argsInput) {
+                std::istringstream iss(row.argsInput->getText());
+                std::string tok;
+                while (std::getline(iss, tok, ',')) {
+                    try { step.args.push_back(std::stod(tok)); }
+                    catch (...) {}
+                }
+            }
+            if (row.resultInput) {
+                try { step.result = std::stod(row.resultInput->getText()); }
+                catch (...) { step.result = 0.0; }
+            }
+            cb.execution.push_back(std::move(step));
+        }
+
+        // State 1 — derived from last execution step result
+        if (!cb.execution.empty()) {
+            cb.state_1.result = cb.execution.back().result;
+            cb.state_1.has_result = true;
+        } else {
+            cb.state_1.has_result = false;
+        }
+
         cb.recomputeDerived();
         cb.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -882,6 +952,20 @@ UIDataHubPanel::UIDataHubPanel()
             }
         }
     });
+    curriculumActionMenu_->addSeparator();
+    curriculumActionMenu_->addItem("Toggle Format Mode", [this]() {
+        if (activeCurriculumId_.empty() || !datasetTarget_) {
+            addLog("Select a curriculum first", 1);
+            return;
+        }
+        auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        curr.format_as_concept = !curr.format_as_concept;
+        if (datasetTarget_->updateCurriculum(activeCurriculumId_, curr)) {
+            std::string mode = curr.format_as_concept ? "Concept Block" : "Plain Text (PT)";
+            addLog("Curriculum format set to: " + mode, 0);
+            refreshCurriculumTabState();
+        }
+    });
 
     // ── Curriculum rename input ──────────────────────
     cbCurriculumRenameInput_ = std::make_shared<UIInputBox>();
@@ -904,7 +988,8 @@ UIDataHubPanel::UIDataHubPanel()
         cbModelDropdown_, cbCurriculumDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
         cbNameInput_, cbQuestionArea_, cbAnswerArea_, cbCustomPromptArea_,
-        btnCBGenerate_, stepActionMenu_, blockActionMenu_,
+        cbState0TypeInput_, cbState0AtomsInput_,
+        btnCBGenerate_, stepActionMenu_, execStepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_
     };
 
@@ -1358,6 +1443,12 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             for (auto& w : curriculumWidgets_) w->update(input, dt);
             for (auto& area : cbIntermediateAreas_)
                 if (area) area->update(input, dt);
+            for (auto& row : cbExecStepRows_) {
+                if (row.opDropdown)    row.opDropdown->update(input, dt);
+                if (row.argSlotsInput) row.argSlotsInput->update(input, dt);
+                if (row.argsInput)     row.argsInput->update(input, dt);
+                if (row.resultInput)   row.resultInput->update(input, dt);
+            }
 
             {
                 std::string curSearch = cbSearchInput_ ? cbSearchInput_->getText() : "";
@@ -1427,6 +1518,11 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
                     float maxScroll = std::max(0.0f,
                         static_cast<float>(rowCount) * kCBListRowH - (cbListH - kPoolHeaderH));
                     cbListScrollOffset_ = std::clamp(cbListScrollOffset_, 0.0f, maxScroll);
+                } else if (m.x >= layout.editorX && m.x <= layout.editorX + layout.editorW &&
+                           m.y >= cbListY && m.y <= cbListY + cbListH) {
+                    // Editor panel scroll
+                    cbEditorScrollOffset_ -= input.mouseWheelDelta;
+                    hoveredCBRow_ = -1;
                 } else {
                     hoveredCBRow_ = -1;
                 }
@@ -1516,8 +1612,14 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         queueActionMenu_->drawExpandedList(renderer, position);
     if (blockActionMenu_ && blockActionMenu_->isExpanded())
         blockActionMenu_->drawExpandedList(renderer, position);
+    if (execStepActionMenu_ && execStepActionMenu_->isExpanded())
+        execStepActionMenu_->drawExpandedList(renderer, position);
     if (stepActionMenu_ && stepActionMenu_->isExpanded())
         stepActionMenu_->drawExpandedList(renderer, position);
+    for (const auto& row : cbExecStepRows_) {
+        if (row.opDropdown && row.opDropdown->isExpanded())
+            row.opDropdown->drawExpandedList(renderer, position);
+    }
     if (currListActionMenu_ && currListActionMenu_->isExpanded())
         currListActionMenu_->drawExpandedList(renderer, position);
 
@@ -4134,6 +4236,22 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     curriculumActionMenu_->setPosition(cx, y + 4.0f);
     curriculumActionMenu_->setSize(menuW, rowH - 8.0f);
     curriculumActionMenu_->drawOverlay(renderer, position);
+    cx += menuW + gap;
+
+    // Format-mode badge: show whether active curriculum is Concept or PT
+    if (!activeCurriculumId_.empty() && datasetTarget_) {
+        auto activeCurr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        if (!activeCurr.id.empty()) {
+            const char* modeLabel = activeCurr.format_as_concept ? "Concept" : "PT";
+            uint32_t badgeBg = activeCurr.format_as_concept
+                ? UITheme::Colors::Success : 0xFF88AADD;
+            float badgeW = activeCurr.format_as_concept ? 68.0f : 38.0f;
+            float badgeH = rowH - 12.0f;
+            float badgeY = y + 6.0f;
+            renderer.drawRoundedRect({cx, badgeY}, {badgeW, badgeH}, badgeBg, 4.0f);
+            renderer.drawText({cx + 6.0f, badgeY + 3.0f}, modeLabel, 0xFFFFFFFF);
+        }
+    }
 
     y += rowH + 6.0f;
 
@@ -4174,6 +4292,14 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     float bottomBarH = layout.bottomBarH;
     float statusBarH = layout.statusBarH;
 
+    // Determine if active curriculum uses concept block formatting
+    bool conceptMode = true; // default when no curriculum selected
+    if (!activeCurriculumId_.empty() && datasetTarget_) {
+        auto activeCurr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        if (!activeCurr.id.empty())
+            conceptMode = activeCurr.format_as_concept;
+    }
+
     // ── ConceptBlock list ────────────────────────────────
     renderer.drawRoundedRect({x, y}, {listW, availH},
                              UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
@@ -4184,7 +4310,9 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     const float nameColW = listW * 0.34f;
     const float qColX    = x + 8.0f + nameColW;
     renderer.drawText({x + 8.0f, y + 6.0f}, "Name", UITheme::Colors::TextSecondary);
-    renderer.drawText({qColX, y + 6.0f}, "Question (preview)", UITheme::Colors::TextSecondary);
+    renderer.drawText({qColX, y + 6.0f},
+                      conceptMode ? "Question (preview)" : "Text (preview)",
+                      UITheme::Colors::TextSecondary);
     renderer.drawText({x + listW - 118.0f, y + 6.0f}, "Type", UITheme::Colors::TextSecondary);
 
     float bodyY = y + kPoolHeaderH;
@@ -4273,76 +4401,317 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
     // ── Editor panel ─────────────────────────────────────
     renderer.drawRoundedRect({editorX, y}, {editorW, availH},
-                             UITheme::Colors::Background, UITheme::Sizes::SmallRadius);
+                             UITheme::Colors::Background, 6.0f);
 
-    float ey = y + 8.0f;
-    float ePad = 8.0f;
+    float ePad = 16.0f;
     float eInnerW = editorW - 2.0f * ePad;
-    float fieldH = 28.0f;
-    float areaH  = 55.0f;
+    float fieldH = 30.0f;
+    float areaH  = 56.0f;
+    float sectionGap = 6.0f;   // gap between section divider and next label
+    float sectionPad = 6.0f;   // internal padding inside section boxes
+    float sectionRad = 5.0f;   // corner radius for section backgrounds
 
     int presetIdx = cbListTypeDropdown_ ? cbListTypeDropdown_->getSelectedIndex() : 1;
     if (presetIdx < 0 || presetIdx >= GRIM::kConceptPresetCount) presetIdx = 1;
     const auto& preset = GRIM::kConceptPresets[presetIdx];
 
-    // Name
+    // ── Scrollable editor content ───────────────────────
+    renderer.pushClipRect({editorX, y}, {editorW, availH});
+
+    float ey = y + 12.0f - cbEditorScrollOffset_;
+
+    // ─── Name ───────────────────────────────────────────
     renderer.drawText({editorX + ePad, ey}, "Name", UITheme::Colors::TextSecondary);
-    ey += 16.0f;
+    ey += 20.0f;
     cbNameInput_->setPosition(editorX + ePad, ey);
     cbNameInput_->setSize(eInnerW, fieldH);
     cbNameInput_->drawOverlay(renderer, position);
-    ey += fieldH + 8.0f;
+    ey += fieldH + 14.0f;
 
-    // Question (label from preset)
-    renderer.drawText({editorX + ePad, ey}, preset.questionLabel, UITheme::Colors::TextSecondary);
-    ey += 16.0f;
+    // ─── Q: Question / Raw Text ───────────────────────────
+    // Divider line
+    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+    ey += sectionGap;
+    if (conceptMode) {
+        std::string qLabel = std::string("Q: ") + preset.questionLabel;
+        renderer.drawText({editorX + ePad, ey}, qLabel, UITheme::Colors::TextSecondary);
+    } else {
+        renderer.drawText({editorX + ePad, ey}, "Text", UITheme::Colors::TextSecondary);
+    }
+    ey += 20.0f;
     cbQuestionArea_->setPosition(editorX + ePad, ey);
-    cbQuestionArea_->setSize(eInnerW, areaH);
+    cbQuestionArea_->setSize(eInnerW, conceptMode ? areaH : areaH * 2.0f);
     cbQuestionArea_->drawOverlay(renderer, position);
-    ey += areaH + 8.0f;
+    ey += (conceptMode ? areaH : areaH * 2.0f) + 16.0f;
 
-    // Intermediates (if preset has them)
-    if (preset.intermediatesLabel) {
-        renderer.drawText({editorX + ePad, ey}, preset.intermediatesLabel,
+    // ─── STATE0: Bootstrap Atoms (concept mode only) ────
+    if (conceptMode) {
+    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+    ey += sectionGap;
+    {
+        float s0StartY = ey;
+        ey += sectionPad;
+
+        renderer.drawText({editorX + ePad + sectionPad, ey}, "STATE0  (bootstrap atoms)",
                           UITheme::Colors::TextSecondary);
+        ey += 20.0f;
+        float halfW = (eInnerW - 2.0f * sectionPad - 12.0f) * 0.5f;
+        float innerLeft = editorX + ePad + sectionPad;
+        renderer.drawText({innerLeft, ey}, "Type", UITheme::Colors::TextMuted);
+        renderer.drawText({innerLeft + halfW + 12.0f, ey}, "Atoms (comma-separated)",
+                          UITheme::Colors::TextMuted);
         ey += 16.0f;
+        cbState0TypeInput_->setPosition(innerLeft, ey);
+        cbState0TypeInput_->setSize(halfW, fieldH);
+        cbState0TypeInput_->drawOverlay(renderer, position);
+        cbState0AtomsInput_->setPosition(innerLeft + halfW + 12.0f, ey);
+        cbState0AtomsInput_->setSize(halfW, fieldH);
+        cbState0AtomsInput_->drawOverlay(renderer, position);
+        ey += fieldH + sectionPad;
 
-        float stepAreaH = 40.0f;
-        float remainH = (y + availH) - ey - areaH - 60.0f - 8.0f;
-        if (!cbIntermediateAreas_.empty()) {
-            float perStep = (remainH - 30.0f) / static_cast<float>(cbIntermediateAreas_.size());
-            stepAreaH = std::clamp(perStep - 20.0f, 30.0f, 55.0f);
+        // Section background (drawn behind)
+        renderer.drawRoundedRect({editorX + ePad, s0StartY},
+                                 {eInnerW, ey - s0StartY}, 0x0CFFFFFF, sectionRad);
+    }
+    ey += 16.0f;
+
+    // ─── EXP: Explanation / Intermediates ────────────────
+    if (preset.intermediatesLabel) {
+        renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+        ey += sectionGap;
+        {
+            float expStartY = ey;
+            ey += sectionPad;
+            float innerLeft = editorX + ePad + sectionPad;
+
+            std::string expLabel = std::string("EXP: ") + preset.intermediatesLabel;
+            renderer.drawText({innerLeft, ey}, expLabel,
+                              UITheme::Colors::TextSecondary);
+            ey += 22.0f;
+
+            float stepAreaH = 44.0f;
+            float expInnerW = eInnerW - 2.0f * sectionPad;
+
+            for (size_t si = 0; si < cbIntermediateAreas_.size(); ++si) {
+                cbIntermediateAreas_[si]->setPosition(innerLeft, ey);
+                cbIntermediateAreas_[si]->setSize(expInnerW, stepAreaH);
+                cbIntermediateAreas_[si]->drawOverlay(renderer, position);
+                ey += stepAreaH + 10.0f;
+            }
+
+            stepActionMenu_->setPosition(innerLeft, ey);
+            stepActionMenu_->setSize(90.0f, 26.0f);
+            stepActionMenu_->drawOverlay(renderer, position);
+            ey += 32.0f + sectionPad;
+
+            // Section background
+            renderer.drawRoundedRect({editorX + ePad, expStartY},
+                                     {eInnerW, ey - expStartY}, 0x0CFFFFFF, sectionRad);
         }
-
-        for (size_t si = 0; si < cbIntermediateAreas_.size(); ++si) {
-            std::string stepLabel = "Step " + std::to_string(si + 1) + ":";
-            renderer.drawText({editorX + ePad, ey}, stepLabel, UITheme::Colors::TextMuted);
-            ey += 14.0f;
-            cbIntermediateAreas_[si]->setPosition(editorX + ePad, ey);
-            cbIntermediateAreas_[si]->setSize(eInnerW, stepAreaH);
-            cbIntermediateAreas_[si]->drawOverlay(renderer, position);
-            ey += stepAreaH + 4.0f;
-        }
-
-        // Add/Remove step menu
-        float stepMenuW = 80.0f;
-        stepActionMenu_->setPosition(editorX + ePad, ey);
-        stepActionMenu_->setSize(stepMenuW, 24.0f);
-        stepActionMenu_->drawOverlay(renderer, position);
-        ey += 30.0f;
+        ey += 16.0f;
     }
 
-    // Answer (label from preset)
-    float answerY = y + availH - areaH - 8.0f - 16.0f;
-    if (ey > answerY - 4.0f) answerY = ey + 4.0f;
-    renderer.drawText({editorX + ePad, answerY}, preset.answerLabel,
+    // ─── EXEC: Execution Steps ──────────────────────────
+    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+    ey += sectionGap;
+    {
+        float execStartY = ey;
+        ey += sectionPad;
+        float innerLeft = editorX + ePad + sectionPad;
+        float innerW = eInnerW - 2.0f * sectionPad;
+
+        renderer.drawText({innerLeft, ey}, "EXEC Steps",
+                          UITheme::Colors::TextSecondary);
+        ey += 20.0f;
+
+        float opW    = 80.0f;
+        float slotsW = 90.0f;
+        float colGap = 6.0f;
+        float argsW  = (innerW - opW - slotsW - colGap * 3.0f) * 0.5f;
+        float resW   = argsW;
+
+        // Column sub-headers
+        if (!cbExecStepRows_.empty()) {
+            float hx = innerLeft;
+            renderer.drawText({hx, ey}, "op", UITheme::Colors::TextMuted);
+            hx += opW + colGap;
+            renderer.drawText({hx, ey}, "arg_slots", UITheme::Colors::TextMuted);
+            hx += slotsW + colGap;
+            renderer.drawText({hx, ey}, "args", UITheme::Colors::TextMuted);
+            hx += argsW + colGap;
+            renderer.drawText({hx, ey}, "=> result", UITheme::Colors::TextMuted);
+            ey += 16.0f;
+        }
+
+        for (size_t ei = 0; ei < cbExecStepRows_.size(); ++ei) {
+            auto& row = cbExecStepRows_[ei];
+
+            float cx = innerLeft;
+            row.opDropdown->setPosition(cx, ey);
+            row.opDropdown->setSize(opW, fieldH);
+            row.opDropdown->drawOverlay(renderer, position);
+            cx += opW + colGap;
+
+            row.argSlotsInput->setPosition(cx, ey);
+            row.argSlotsInput->setSize(slotsW, fieldH);
+            row.argSlotsInput->drawOverlay(renderer, position);
+            cx += slotsW + colGap;
+
+            row.argsInput->setPosition(cx, ey);
+            row.argsInput->setSize(argsW, fieldH);
+            row.argsInput->drawOverlay(renderer, position);
+            cx += argsW + colGap;
+
+            row.resultInput->setPosition(cx, ey);
+            row.resultInput->setSize(resW, fieldH);
+            row.resultInput->drawOverlay(renderer, position);
+
+            ey += fieldH + 8.0f;
+        }
+
+        // Exec step add/remove menu
+        execStepActionMenu_->setPosition(innerLeft, ey);
+        execStepActionMenu_->setSize(120.0f, 26.0f);
+        execStepActionMenu_->drawOverlay(renderer, position);
+        ey += 32.0f;
+
+        // STATE1 derived result (inside the exec box)
+        if (!cbExecStepRows_.empty()) {
+            renderer.drawRect({innerLeft, ey}, {innerW, 1.0f}, 0x10FFFFFF);
+            ey += 8.0f;
+            std::string s1Label = "STATE1  result = ";
+            auto& lastRow = cbExecStepRows_.back();
+            std::string resText = lastRow.resultInput ? lastRow.resultInput->getText() : "?";
+            s1Label += resText.empty() ? "?" : resText;
+            renderer.drawText({innerLeft, ey}, s1Label, UITheme::Colors::Success);
+            ey += 20.0f;
+        }
+
+        ey += sectionPad;
+
+        // Section background
+        renderer.drawRoundedRect({editorX + ePad, execStartY},
+                                 {eInnerW, ey - execStartY}, 0x0CFFFFFF, sectionRad);
+    }
+    ey += 16.0f;
+
+    } // end if (conceptMode) — STATE0 / EXP / EXEC hidden in PT mode
+
+    // ─── A: Answer (concept mode only) ────────────────────
+    if (conceptMode) {
+    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+    ey += sectionGap;
+    std::string aLabel = std::string("A: ") + preset.answerLabel;
+    renderer.drawText({editorX + ePad, ey}, aLabel,
                       UITheme::Colors::TextSecondary);
-    answerY += 16.0f;
-    float ansH = std::min(areaH, (y + availH) - answerY - 4.0f);
-    if (ansH < 20.0f) ansH = 20.0f;
-    cbAnswerArea_->setPosition(editorX + ePad, answerY);
-    cbAnswerArea_->setSize(eInnerW, ansH);
+    ey += 20.0f;
+    cbAnswerArea_->setPosition(editorX + ePad, ey);
+    cbAnswerArea_->setSize(eInnerW, areaH);
     cbAnswerArea_->drawOverlay(renderer, position);
+    ey += areaH + 18.0f;
+    } // end if (conceptMode)
+
+    // ─── Training Preview (read-only) ───────────────────
+    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+    ey += sectionGap;
+    {
+        renderer.drawText({editorX + ePad, ey},
+                          conceptMode ? "Training Preview (canonical format)"
+                                      : "Training Preview (raw)",
+                          UITheme::Colors::TextSecondary);
+        ey += 22.0f;
+
+        // Build a ConceptBlock from current editor state for preview
+        GRIM::ConceptBlock previewCB;
+        previewCB.question = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
+        previewCB.answer   = (conceptMode && cbAnswerArea_) ? cbAnswerArea_->getText() : "";
+        previewCB.state_0.type = cbState0TypeInput_ ? cbState0TypeInput_->getText() : "";
+        if (conceptMode && cbState0AtomsInput_) {
+            std::string atomsStr = cbState0AtomsInput_->getText();
+            if (!atomsStr.empty()) {
+                std::istringstream iss(atomsStr);
+                std::string tok;
+                while (std::getline(iss, tok, ',')) {
+                    try { previewCB.state_0.atoms.push_back(std::stod(tok)); }
+                    catch (...) {}
+                }
+            }
+        }
+        if (conceptMode) {
+        for (const auto& row : cbExecStepRows_) {
+            GRIM::ConceptExecutionStep step;
+            static const char* opNames[] = {"add", "sub", "mul", "div"};
+            int opIdx = row.opDropdown ? row.opDropdown->getSelectedIndex() : 0;
+            step.op = (opIdx >= 0 && opIdx < 4) ? opNames[opIdx] : "add";
+            if (row.argsInput) {
+                std::istringstream iss(row.argsInput->getText());
+                std::string tok;
+                while (std::getline(iss, tok, ',')) {
+                    try { step.args.push_back(std::stod(tok)); }
+                    catch (...) {}
+                }
+            }
+            if (row.resultInput) {
+                try { step.result = std::stod(row.resultInput->getText()); }
+                catch (...) { step.result = 0.0; }
+            }
+            previewCB.execution.push_back(std::move(step));
+        }
+        if (!previewCB.execution.empty()) {
+            previewCB.state_1.result = previewCB.execution.back().result;
+            previewCB.state_1.has_result = true;
+        }
+        for (const auto& area : cbIntermediateAreas_) {
+            previewCB.explanation.push_back(area ? area->getText() : "");
+        }
+        } // end if (conceptMode)
+
+        std::string preview = buildTrainingPreview(previewCB, conceptMode);
+
+        // Pre-count lines so we can draw the background FIRST
+        std::vector<std::pair<std::string, uint32_t>> previewLines;
+        {
+            std::istringstream pss(preview);
+            std::string pline;
+            while (std::getline(pss, pline)) {
+                uint32_t lineCol = UITheme::Colors::TextMuted;
+                if (conceptMode) {
+                    if (pline.size() >= 2 && pline[0] == 'Q' && pline[1] == ':')
+                        lineCol = UITheme::Colors::TextPrimary;
+                    else if (pline.size() >= 2 && pline[0] == 'A' && pline[1] == ':')
+                        lineCol = UITheme::Colors::TextPrimary;
+                    else if (pline.size() >= 5 && pline.substr(0, 5) == "STATE")
+                        lineCol = UITheme::Colors::Success;
+                    else if (pline.size() >= 4 && pline.substr(0, 4) == "EXEC")
+                        lineCol = 0xFF88CCFF;
+                    else if (pline.size() >= 4 && pline.substr(0, 4) == "EXP:")
+                        lineCol = UITheme::Colors::TextSecondary;
+                }
+                previewLines.push_back({pline, lineCol});
+            }
+        }
+
+        // Draw background FIRST (correct z-order)
+        float lineH = 18.0f;
+        float previewH = static_cast<float>(previewLines.size()) * lineH + 16.0f;
+        renderer.drawRoundedRect({editorX + ePad, ey - 4.0f},
+                                 {eInnerW, previewH}, 0x14FFFFFF, 6.0f);
+
+        // Then draw text on top
+        float textY = ey + 4.0f;
+        for (const auto& [text, col] : previewLines) {
+            renderer.drawText({editorX + ePad + 10.0f, textY}, text, col);
+            textY += lineH;
+        }
+        ey += previewH + 12.0f;
+    }
+
+    float totalEditorContentH = (ey + cbEditorScrollOffset_) - (y + 12.0f);
+    renderer.popClipRect();
+
+    // Handle editor scroll
+    float maxEditorScroll = std::max(0.0f, totalEditorContentH - availH);
+    cbEditorScrollOffset_ = std::clamp(cbEditorScrollOffset_, 0.0f, maxEditorScroll);
 
     // ── Bottom action bar ────────────────────────────────
     float barY = y + availH + 6.0f;
@@ -4455,6 +4824,52 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
     for (size_t i = 0; i < cb.intermediates.size() && i < cbIntermediateAreas_.size(); ++i) {
         cbIntermediateAreas_[i]->setText(cb.intermediates[i]);
     }
+
+    // State 0
+    if (cbState0TypeInput_)  cbState0TypeInput_->setText(cb.state_0.type);
+    if (cbState0AtomsInput_) {
+        std::ostringstream oss;
+        for (size_t i = 0; i < cb.state_0.atoms.size(); ++i) {
+            if (i > 0) oss << ", ";
+            oss << cb.state_0.atoms[i];
+        }
+        cbState0AtomsInput_->setText(oss.str());
+    }
+
+    // Execution steps
+    syncExecStepRows(static_cast<int>(cb.execution.size()));
+    for (size_t i = 0; i < cb.execution.size() && i < cbExecStepRows_.size(); ++i) {
+        const auto& step = cb.execution[i];
+        auto& row = cbExecStepRows_[i];
+
+        // Map op string to dropdown index
+        int opIdx = 0;
+        if (step.op == "add") opIdx = 0;
+        else if (step.op == "sub") opIdx = 1;
+        else if (step.op == "mul") opIdx = 2;
+        else if (step.op == "div") opIdx = 3;
+        if (row.opDropdown) row.opDropdown->setSelectedIndex(opIdx);
+
+        if (row.argSlotsInput) {
+            std::ostringstream oss;
+            for (size_t j = 0; j < step.arg_slots.size(); ++j) {
+                if (j > 0) oss << ", ";
+                oss << step.arg_slots[j];
+            }
+            row.argSlotsInput->setText(oss.str());
+        }
+        if (row.argsInput) {
+            std::ostringstream oss;
+            for (size_t j = 0; j < step.args.size(); ++j) {
+                if (j > 0) oss << ", ";
+                oss << step.args[j];
+            }
+            row.argsInput->setText(oss.str());
+        }
+        if (row.resultInput) row.resultInput->setText(std::to_string(step.result));
+    }
+
+    cbEditorScrollOffset_ = 0.0f;
 }
 
 void UIDataHubPanel::clearCBEditor() {
@@ -4462,19 +4877,81 @@ void UIDataHubPanel::clearCBEditor() {
     if (cbQuestionArea_) cbQuestionArea_->setText("");
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
     cbIntermediateAreas_.clear();
+    if (cbState0TypeInput_)   cbState0TypeInput_->setText("");
+    if (cbState0AtomsInput_)  cbState0AtomsInput_->setText("");
+    cbExecStepRows_.clear();
+    cbEditorScrollOffset_ = 0.0f;
 }
 
 void UIDataHubPanel::syncIntermediateAreas(int count) {
     if (count < 0) count = 0;
     while (static_cast<int>(cbIntermediateAreas_.size()) < count) {
         auto area = std::make_shared<UITextArea>(
-            "Step " + std::to_string(cbIntermediateAreas_.size() + 1), "",
+            "EXP " + std::to_string(cbIntermediateAreas_.size() + 1), "",
             [](const std::string&) {});
         cbIntermediateAreas_.push_back(area);
     }
     while (static_cast<int>(cbIntermediateAreas_.size()) > count) {
         cbIntermediateAreas_.pop_back();
     }
+}
+
+void UIDataHubPanel::syncExecStepRows(int count) {
+    if (count < 0) count = 0;
+    while (static_cast<int>(cbExecStepRows_.size()) < count) {
+        CBExecStepRow row;
+        row.opDropdown = std::make_shared<UIDropdown>(
+            "", std::vector<std::string>{"add", "sub", "mul", "div"}, 0,
+            [](int, const std::string&) {});
+        row.opDropdown->setMaxVisibleItems(4);
+        row.argSlotsInput = std::make_shared<UIInputBox>();
+        row.argSlotsInput->setPlaceholder("slots: 0, 1");
+        row.argsInput = std::make_shared<UIInputBox>();
+        row.argsInput->setPlaceholder("args: 2.0, 3.0");
+        row.resultInput = std::make_shared<UIInputBox>();
+        row.resultInput->setPlaceholder("result");
+        cbExecStepRows_.push_back(std::move(row));
+    }
+    while (static_cast<int>(cbExecStepRows_.size()) > count) {
+        cbExecStepRows_.pop_back();
+    }
+}
+
+std::string UIDataHubPanel::buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const {
+    std::ostringstream oss;
+
+    if (conceptMode) {
+        oss << "Q: " << cb.question << "\n";
+
+        if (!cb.state_0.atoms.empty()) {
+            oss << "STATE0 type=" << cb.state_0.type;
+            for (double a : cb.state_0.atoms)
+                oss << " " << a;
+            oss << "\n";
+        }
+
+        for (const auto& exp : cb.explanation)
+            oss << "EXP: " << exp << "\n";
+
+        for (const auto& step : cb.execution) {
+            oss << "EXEC " << step.op;
+            for (double a : step.args)
+                oss << " " << a;
+            oss << " => " << step.result << "\n";
+        }
+
+        if (cb.state_1.has_result)
+            oss << "STATE1 result=" << cb.state_1.result << "\n";
+
+        oss << "A: " << cb.answer;
+    } else {
+        // Plain text / raw mode — no structural prefixes
+        oss << cb.question;
+        if (!cb.answer.empty())
+            oss << "\n" << cb.answer;
+    }
+
+    return oss.str();
 }
 
 void UIDataHubPanel::generateConceptBlock() {

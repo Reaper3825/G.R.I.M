@@ -6,6 +6,33 @@
 #include "logger.hpp"  // ? ADD: For debugging
 #include <algorithm>
 
+namespace {
+struct DropdownGeometry {
+    Vec2 boxPos{};
+    Vec2 boxSize{};
+    bool drawLabel = false;
+};
+
+DropdownGeometry computeDropdownGeometry(const std::string& label,
+                                         const Vec2& position,
+                                         const Vec2& size) {
+    DropdownGeometry geom;
+
+    const bool compact = label.empty() && size.x <= 170.0f;
+    if (compact) {
+        geom.boxPos = position;
+        geom.boxSize = size;
+        geom.drawLabel = false;
+        return geom;
+    }
+
+    geom.boxPos = {position.x + 150.0f, position.y + 5.0f};
+    geom.boxSize = {std::max(40.0f, size.x - 160.0f), 30.0f};
+    geom.drawLabel = !label.empty();
+    return geom;
+}
+}
+
 UIDropdown::UIDropdown(const std::string& lbl, const std::vector<std::string>& items,
                        int initialIndex, std::function<void(int, const std::string&)> onChange)
     : label(lbl), options(items), selectedIndex(initialIndex), callback(std::move(onChange))
@@ -31,9 +58,10 @@ std::string UIDropdown::getSelectedItem() const {
 
 void UIDropdown::update(const InputState& input, float dt) {
     Vec2 m = input.mousePos;
-    
-    dropdownPos = {position.x + 150, position.y + 5};
-    dropdownSize = {size.x - 160, 30};
+
+    const auto geom = computeDropdownGeometry(label, position, size);
+    dropdownPos = geom.boxPos;
+    dropdownSize = geom.boxSize;
     
     bool overDropdown = (m.x >= dropdownPos.x && m.x <= dropdownPos.x + dropdownSize.x &&
                         m.y >= dropdownPos.y && m.y <= dropdownPos.y + dropdownSize.y);
@@ -43,6 +71,7 @@ void UIDropdown::update(const InputState& input, float dt) {
     
     // Calculate expanded list bounds for scrolling
     int visibleItems = std::min(maxVisibleItems, static_cast<int>(options.size()));
+    int maxScrollOffset = std::max(0, static_cast<int>(options.size()) - visibleItems);
     float expandedHeight = visibleItems * 25.0f;
     Vec2 expandedPos = {dropdownPos.x, dropdownPos.y + dropdownSize.y};
     Vec2 expandedSize = {dropdownSize.x, expandedHeight};
@@ -66,8 +95,7 @@ void UIDropdown::update(const InputState& input, float dt) {
     if (expanded && overExpandedList && input.mouseWheelDelta != 0.0f) {
         // Scroll by 1 item per 120 wheel delta (standard Windows scroll)
         int scrollAmount = -static_cast<int>(input.mouseWheelDelta / 120.0f);
-        scrollOffset = std::clamp(scrollOffset + scrollAmount, 0, 
-                                 static_cast<int>(options.size()) - visibleItems);
+        scrollOffset = std::clamp(scrollOffset + scrollAmount, 0, maxScrollOffset);
     }
     
     if (leftPressed) {
@@ -77,8 +105,7 @@ void UIDropdown::update(const InputState& input, float dt) {
             if (expanded) {
                 // Reset scroll to show selected item
                 scrollOffset = std::max(0, selectedIndex - maxVisibleItems / 2);
-                scrollOffset = std::clamp(scrollOffset, 0, 
-                                         static_cast<int>(options.size()) - visibleItems);
+                scrollOffset = std::clamp(scrollOffset, 0, maxScrollOffset);
             }
         } else if (expanded) {
             if (overExpandedList) {
@@ -107,13 +134,13 @@ void UIDropdown::draw(UIRenderer& renderer) {
 
 void UIDropdown::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     using namespace UITheme;
-    
-    // Draw label
-    renderer.drawText({position.x, position.y + 15}, label, Colors::TextPrimary);
-    
-    // Recalculate dropdown position based on current position (for scrolling)
-    Vec2 currentDropdownPos = {position.x + 150, position.y + 5};
-    Vec2 currentDropdownSize = {size.x - 160, 30};
+
+    const auto geom = computeDropdownGeometry(label, position, size);
+    Vec2 currentDropdownPos = geom.boxPos;
+    Vec2 currentDropdownSize = geom.boxSize;
+
+    if (geom.drawLabel)
+        renderer.drawText({position.x, position.y + 15}, label, Colors::TextPrimary);
     
     uint32_t bgColor = expanded ? Colors::WidgetBgActive
                                 : (hovered ? Colors::WidgetBgHover : Colors::WidgetBg);
@@ -140,10 +167,10 @@ void UIDropdown::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
 void UIDropdown::drawExpandedList(OverlayRenderer& renderer, const Vec2& panelPos) {
     using namespace UITheme;
     if (!expanded) return;
-    
-    // Recalculate dropdown position
-    Vec2 currentDropdownPos = {position.x + 150, position.y + 5};
-    Vec2 currentDropdownSize = {size.x - 160, 30};
+
+    const auto geom = computeDropdownGeometry(label, position, size);
+    Vec2 currentDropdownPos = geom.boxPos;
+    Vec2 currentDropdownSize = geom.boxSize;
     
     int visibleItems = std::min(maxVisibleItems, static_cast<int>(options.size()));
     int totalItems = static_cast<int>(options.size());

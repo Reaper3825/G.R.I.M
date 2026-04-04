@@ -800,6 +800,7 @@ bool DatasetTarget::loadCurriculumRegistry() {
                 curr.id        = cj.value("id", std::string());
                 curr.name      = cj.value("name", std::string());
                 curr.timestamp = cj.value("timestamp", int64_t(0));
+                curr.format_as_concept = cj.value("format_as_concept", true);
                 if (cj.contains("concept_block_ids") && cj["concept_block_ids"].is_array()) {
                     for (const auto& bid : cj["concept_block_ids"]) {
                         if (bid.is_string())
@@ -830,6 +831,7 @@ bool DatasetTarget::saveCurriculumRegistry() const {
         cj["id"]                = curr.id;
         cj["name"]              = curr.name;
         cj["timestamp"]         = curr.timestamp;
+        cj["format_as_concept"] = curr.format_as_concept;
         cj["concept_block_ids"] = curr.concept_block_ids;
         j["curriculums"].push_back(std::move(cj));
     }
@@ -971,15 +973,25 @@ const std::vector<std::string>& DatasetTarget::assignedCurriculumOrder() const {
 // ─── Curriculum manifest export ──────────────────────────
 
 bool DatasetTarget::exportCurriculumManifest() const {
-    // Collect the union of concept_block_ids from all assigned curricula.
-    std::set<std::string> id_set;
+    // Collect the union of concept_block_ids from all assigned curricula,
+    // partitioned by format_as_concept flag.
+    std::set<std::string> concept_set;
+    std::set<std::string> plaintext_set;
     for (const auto& curr_id : assignedCurrOrder_) {
         auto it = currIdIndex_.find(curr_id);
         if (it == currIdIndex_.end()) continue;
         const auto& curr = curriculums_[it->second];
         for (const auto& cb_id : curr.concept_block_ids) {
-            id_set.insert(cb_id);
+            if (curr.format_as_concept) {
+                concept_set.insert(cb_id);
+            } else {
+                plaintext_set.insert(cb_id);
+            }
         }
+    }
+    // Concept formatting takes priority if a block appears in both.
+    for (const auto& id : concept_set) {
+        plaintext_set.erase(id);
     }
 
     fs::path manifest_path = massDatasetPath_.parent_path() / "curriculum_manifest.json";
@@ -999,8 +1011,12 @@ bool DatasetTarget::exportCurriculumManifest() const {
         j["curriculum_ids"].push_back(curr_id);
     }
     j["concept_block_ids"] = json::array();
-    for (const auto& cb_id : id_set) {
+    for (const auto& cb_id : concept_set) {
         j["concept_block_ids"].push_back(cb_id);
+    }
+    j["plaintext_block_ids"] = json::array();
+    for (const auto& cb_id : plaintext_set) {
+        j["plaintext_block_ids"].push_back(cb_id);
     }
 
     fs::path tmpPath = manifest_path;

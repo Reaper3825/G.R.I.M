@@ -52,6 +52,7 @@ struct RunnerOptions {
     std::string vocab_path;
     std::string data_path;
     std::string config_path = "ai_config.json";
+    std::string encode_text;  // non-empty = encode mode
     bool verbose = false;
     bool standalone = false;  // true = standalone mode (human-readable output)
 };
@@ -310,6 +311,8 @@ static RunnerOptions parseOptions(int argc, char** argv) {
             opts.data_path = argv[++i];
         } else if (arg == "--config" && i + 1 < argc) {
             opts.config_path = argv[++i];
+        } else if (arg == "--encode" && i + 1 < argc) {
+            opts.encode_text = argv[++i];
         } else if (arg == "--verbose" || arg == "-v") {
             opts.verbose = true;
         } else if (arg == "--standalone") {
@@ -322,6 +325,7 @@ static RunnerOptions parseOptions(int argc, char** argv) {
             fprintf(stderr, "  --vocab PATH      Path to vocab.bin (default: from ai_config.json)\n");
             fprintf(stderr, "  --data PATH       Path to training_data.grmt (default: from ai_config.json)\n");
             fprintf(stderr, "  --config PATH     Path to ai_config.json (default: ai_config.json)\n");
+            fprintf(stderr, "  --encode TEXT     Encode text and output token IDs (skips validation)\n");
             fprintf(stderr, "  --verbose, -v     Show detailed validation output on stderr\n");
             fprintf(stderr, "  --standalone      Human-readable output (for direct invocation)\n");
             fprintf(stderr, "  --help, -h        Show this help\n");
@@ -434,6 +438,64 @@ int main(int argc, char** argv) {
         if (opts.verbose) {
             fprintf(stderr, "[tokenizer_runner] Loaded %d tokens in %.1f ms\n",
                     tokenizer.totalVocabSize(), load_ms);
+        }
+
+        //==============================================================
+        // Mode: Encode Text (early return — skips validation)
+        //==============================================================
+        if (!opts.encode_text.empty()) {
+            auto encode_start = std::chrono::steady_clock::now();
+            auto ids = tokenizer.encode(opts.encode_text);
+            auto encode_end = std::chrono::steady_clock::now();
+            double encode_ms = std::chrono::duration<double, std::milli>(encode_end - encode_start).count();
+
+            // Build per-token pieces
+            json token_array = json::array();
+            for (int id : ids) {
+                json tok;
+                tok["id"] = id;
+                // Decode single token to get its surface form
+                std::vector<int> single = {id};
+                tok["piece"] = tokenizer.decode(single);
+                // Classify token type
+                if (id < 4) {
+                    tok["type"] = "special";
+                } else if (id >= 4 && id < 260) {
+                    tok["type"] = "byte";
+                } else if (id >= 260 && id < 263) {
+                    tok["type"] = "atom";
+                } else {
+                    tok["type"] = "unigram";
+                }
+                token_array.push_back(tok);
+            }
+
+            // Decode full sequence for round-trip check
+            std::string decoded = tokenizer.decode(ids);
+
+            json result;
+            result["status"] = "success";
+            result["mode"] = "encode";
+            result["input_text"] = opts.encode_text;
+            result["decoded_text"] = decoded;
+            result["token_count"] = static_cast<int>(ids.size());
+            result["tokens"] = token_array;
+            result["encode_time_ms"] = encode_ms;
+            result["load_time_ms"] = load_ms;
+            result["total_vocab_size"] = tokenizer.totalVocabSize();
+
+            if (opts.standalone) {
+                fprintf(stderr, "\n[ENCODE] \"%s\" → %zu tokens (%.1f ms)\n",
+                        opts.encode_text.c_str(), ids.size(), encode_ms);
+                for (size_t i = 0; i < ids.size(); ++i) {
+                    fprintf(stderr, "  [%3zu] id=%5d  piece=\"%s\"\n",
+                            i, ids[i], token_array[i]["piece"].get<std::string>().c_str());
+                }
+                fprintf(stderr, "  Decoded: \"%s\"\n", decoded.c_str());
+            }
+
+            std::cout << result.dump() << std::endl;
+            return 0;
         }
 
         //==============================================================

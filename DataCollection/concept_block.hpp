@@ -120,6 +120,7 @@ struct Curriculum {
     std::string              name;
     std::vector<std::string> concept_block_ids;
     int64_t                  timestamp = 0;
+    bool                     format_as_concept = true;  // false = plain text / pretraining mode
 
     bool containsBlock(const std::string& cb_id) const {
         for (const auto& bid : concept_block_ids)

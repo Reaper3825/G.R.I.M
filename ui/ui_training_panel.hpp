@@ -2,7 +2,7 @@
 //======================================================//
 //  UITrainingPanel — Unified Model + Training Hub
 //
-//  Four tabs: Home | Knowledge Gaps | Tool Gaps | Training
+//  Five tabs: Home | Knowledge Gaps | Tool Gaps | Training | Tokenizer
 //
 //  Merges the former ModelRegistry panel and Training panel
 //  into a single DataHub-style tabbed interface.
@@ -11,6 +11,7 @@
 //  - Knowledge Gaps: gap queue (router misses → create model)
 //  - Tool Gaps:      tool-gap proposals (ToolGapPlanner)
 //  - Training:       hyperparameters, training controls, monitoring
+//  - Tokenizer:      standalone tokenizer validation & encode
 //======================================================//
 
 #include "ui_panel.hpp"
@@ -59,7 +60,8 @@ enum class TrainingPanelTab : uint8_t {
     Home          = 0,
     KnowledgeGaps = 1,
     ToolGaps      = 2,
-    Training      = 3
+    Training      = 3,
+    Tokenizer     = 4
 };
 
 // ─────────────────────────────────────────────────────────
@@ -112,6 +114,7 @@ private:
     std::shared_ptr<UIButton> tabKnowledgeGapsBtn_;
     std::shared_ptr<UIButton> tabToolGapsBtn_;
     std::shared_ptr<UIButton> tabTrainingBtn_;
+    std::shared_ptr<UIButton> tabTokenizerBtn_;
 
     // ═════════════════════════════════════════════════════
     //  Home tab — Model Browser
@@ -354,6 +357,31 @@ private:
     GRIMText::TrainingControlClient::TokenizerResult lastTokenizerResult_;
     void handleRunTokenizer();
     void drawTokenizerStatus(OverlayRenderer& renderer, float x, float y, float width);
+
+    // ═════════════════════════════════════════════════════
+    //  Tokenizer tab
+    // ═════════════════════════════════════════════════════
+
+    // Encode state
+    std::string encodeInputBuffer_;
+    std::shared_ptr<UIInputBox> encodeInputBox_;
+    std::shared_ptr<UIButton> encodeButton_;
+    std::shared_ptr<UIButton> clearEncodeButton_;
+    std::shared_ptr<UIButton> tokenizerRunValidationBtn_;
+    std::shared_ptr<UIButton> tokenizerCloseBtn_;
+    std::shared_ptr<UIScrollBox> tokenizerScrollBox_;
+    std::atomic<bool> encodeRunning_{false};
+    bool encodeComplete_ = false;
+    bool encodeSuccess_ = false;
+    std::string encodeErrorMessage_;
+    GRIMText::TrainingControlClient::EncodeResult lastEncodeResult_;
+    std::mutex encodeMutex_;
+
+    // Tokenizer tab draw methods
+    void drawTokenizerTab(OverlayRenderer& renderer, const PanelRect& content);
+    void drawTokenizerBottomBar(OverlayRenderer& renderer, float barY, float barWidth, float barX);
+    void drawEncodeResults(OverlayRenderer& renderer, float x, float y, float width, float maxHeight);
+    void handleEncodeText();
 
     // Config scroll
     float configScrollOffset = 0.0f;

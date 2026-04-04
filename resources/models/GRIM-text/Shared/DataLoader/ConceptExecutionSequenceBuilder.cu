@@ -276,6 +276,17 @@ CanonicalRenderResult renderWithSpans(const json& j) {
         os << "\n";
     }
 
+    const json* expl = nullptr;
+    if (j.contains("explanation") && j["explanation"].is_array())
+        expl = &j["explanation"];
+    else if (j.contains("intermediates") && j["intermediates"].is_array())
+        expl = &j["intermediates"];
+    if (expl) {
+        for (const auto& s : *expl) {
+            if (s.is_string()) os << "EXP: " << s.get<std::string>() << "\n";
+        }
+    }
+
     if (j.contains("execution") && j["execution"].is_array()) {
         for (const auto& e : j["execution"]) {
             if (!e.is_object()) continue;
@@ -293,23 +304,6 @@ CanonicalRenderResult renderWithSpans(const json& j) {
     }
 
     if (j.contains("state_1") && j["state_1"].is_object()) {
-        const auto& s1 = j["state_1"];
-        if (s1.contains("result") && s1["result"].is_number())
-            os << "STATE1 result=" << formatNumber(s1["result"].get<double>()) << "\n";
-    }
-
-    const json* expl = nullptr;
-    if (j.contains("explanation") && j["explanation"].is_array())
-        expl = &j["explanation"];
-    else if (j.contains("intermediates") && j["intermediates"].is_array())
-        expl = &j["intermediates"];
-    if (expl) {
-        for (const auto& s : *expl) {
-            if (s.is_string()) os << "EXP: " << s.get<std::string>() << "\n";
-        }
-    }
-
-    if (j.contains("answer") && j["answer"].is_string() && !j["answer"].get<std::string>().empty())
         os << "A: " << j["answer"].get<std::string>() << "\n";
 
     result.text = os.str();
@@ -322,6 +316,39 @@ CanonicalRenderResult renderWithSpans(const json& j) {
 
 std::string renderCanonicalText(const json& j) {
     return renderWithSpans(j).text;
+}
+
+// ─── renderPlainText ────────────────────────────────────
+//
+// Returns raw text content from concept block fields WITHOUT
+// the canonical Q:/STATE0/EXP:/EXEC/A: prefixes. Used for
+// pretraining (PT) curriculums that should be tokenized as
+// natural text, not structured concept format.
+
+std::string renderPlainText(const json& j) {
+    std::ostringstream os;
+
+    if (j.contains("question") && j["question"].is_string() &&
+        !j["question"].get<std::string>().empty())
+        os << j["question"].get<std::string>() << "\n";
+
+    const json* expl = nullptr;
+    if (j.contains("explanation") && j["explanation"].is_array())
+        expl = &j["explanation"];
+    else if (j.contains("intermediates") && j["intermediates"].is_array())
+        expl = &j["intermediates"];
+    if (expl) {
+        for (const auto& s : *expl) {
+            if (s.is_string())
+                os << s.get<std::string>() << "\n";
+        }
+    }
+
+    if (j.contains("answer") && j["answer"].is_string() &&
+        !j["answer"].get<std::string>().empty())
+        os << j["answer"].get<std::string>() << "\n";
+
+    return os.str();
 }
 
 // ─── buildStructuredExecutionRecord ─────────────────────

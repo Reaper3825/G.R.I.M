@@ -233,39 +233,59 @@ namespace {
 
 using json = nlohmann::json;
 
-// Load concept_block_ids from curriculum_manifest.json if it exists.
-// Returns an empty set (meaning "no filter / include all") when the
-// manifest is absent.
-std::unordered_set<std::string> loadCurriculumManifest(const fs::path& dir, const std::string& curriculum_name) {
-	std::unordered_set<std::string> ids;
+// Curriculum filter returned by loadCurriculumFilter().
+// concept_ids: blocks that get canonical Q:/STATE0/EXP:/EXEC/A: formatting.
+// plaintext_ids: blocks treated as raw text (pretraining mode).
+// When has_filter is false, all entries are included as concept blocks.
+struct CurriculumFilter {
+	std::unordered_set<std::string> concept_ids;
+	std::unordered_set<std::string> plaintext_ids;
+	bool has_filter = false;
+};
+
+// Load concept_block_ids and plaintext_block_ids from curriculum manifest.
+// Returns a filter with has_filter=false (meaning "include all as concept")
+// when the manifest is absent.
+CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& curriculum_name) {
+	CurriculumFilter filter;
 	// Use named curriculum file if specified, otherwise default manifest
 	fs::path manifest = curriculum_name.empty()
 		? (dir / "curriculum_manifest.json")
 		: (dir / (curriculum_name + ".json"));
-	if (!fs::exists(manifest)) return ids;
+	if (!fs::exists(manifest)) return filter;
 
 	std::ifstream in(manifest);
-	if (!in.is_open()) return ids;
+	if (!in.is_open()) return filter;
 
 	try {
 		json j = json::parse(in);
 		if (j.contains("concept_block_ids") && j["concept_block_ids"].is_array()) {
 			for (const auto& id : j["concept_block_ids"]) {
 				if (id.is_string())
-					ids.insert(id.get<std::string>());
+					filter.concept_ids.insert(id.get<std::string>());
 			}
 		}
-		std::cout << "[DataLoader] Curriculum manifest: " << ids.size()
-		          << " concept block IDs from " << manifest.string() << std::endl;
+		if (j.contains("plaintext_block_ids") && j["plaintext_block_ids"].is_array()) {
+			for (const auto& id : j["plaintext_block_ids"]) {
+				if (id.is_string())
+					filter.plaintext_ids.insert(id.get<std::string>());
+			}
+		}
+		filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
+		std::cout << "[DataLoader] Curriculum manifest: "
+		          << filter.concept_ids.size() << " concept + "
+		          << filter.plaintext_ids.size() << " plaintext block IDs from "
+		          << manifest.string() << std::endl;
 	} catch (const std::exception& e) {
 		std::cerr << "[DataLoader] Failed to parse curriculum_manifest.json: "
 		          << e.what() << "\n";
 	}
-	return ids;
+	return filter;
 }
 
 void loadConceptBlocksJson(const fs::path& cache_dir,
                            std::vector<json>& out,
+                           CurriculumFilter& out_filter,
                            const std::string& curriculum_name = "") {
 	fs::path p = cache_dir / "concept_blocks.jsonl";
 	std::ifstream in(p);
@@ -276,8 +296,7 @@ void loadConceptBlocksJson(const fs::path& cache_dir,
 	}
 
 	// Load optional curriculum filter.
-	auto filter_ids = loadCurriculumManifest(cache_dir, curriculum_name);
-	bool has_filter = !filter_ids.empty();
+	out_filter = loadCurriculumFilter(cache_dir, curriculum_name);
 
 	std::string line;
 	size_t total = 0;
@@ -287,9 +306,11 @@ void loadConceptBlocksJson(const fs::path& cache_dir,
 		try {
 			auto j = json::parse(line);
 			++total;
-			if (has_filter) {
+			if (out_filter.has_filter) {
 				std::string id = j.value("id", std::string());
-				if (filter_ids.find(id) == filter_ids.end()) continue;
+				if (out_filter.concept_ids.find(id) == out_filter.concept_ids.end() &&
+				    out_filter.plaintext_ids.find(id) == out_filter.plaintext_ids.end())
+					continue;
 			}
 			out.push_back(std::move(j));
 			++accepted;
@@ -297,7 +318,7 @@ void loadConceptBlocksJson(const fs::path& cache_dir,
 			std::cerr << "[DataLoader] concept_blocks.jsonl skip line: " << e.what() << "\n";
 		}
 	}
-	if (has_filter) {
+	if (out_filter.has_filter) {
 		std::cout << "[DataLoader] Loaded " << accepted << "/" << total
 		          << " concept blocks (filtered by curriculum manifest) from "
 		          << p.string() << std::endl;
@@ -432,7 +453,8 @@ bool PrepareTrainingDataFromCache(
 			  << cache_dir.string() << std::endl;
 
 	std::vector<nlohmann::json> concept_json_entries;
-	loadConceptBlocksJson(cache_dir, concept_json_entries, train_config.current_curriculum);
+	CurriculumFilter curriculum_filter;
+	loadConceptBlocksJson(cache_dir, concept_json_entries, curriculum_filter, train_config.current_curriculum);
 
 	if (!train_config.current_curriculum.empty()) {
 		std::cout << "[DataLoader] Using curriculum: " << train_config.current_curriculum << std::endl;
@@ -511,8 +533,15 @@ bool PrepareTrainingDataFromCache(
 				  << target_vocab_size << " tokens)..." << std::endl;
 		std::vector<std::string> vocab_corpus;
 		vocab_corpus.reserve(concept_json_entries.size());
-		for (const auto& cj : concept_json_entries)
-			vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
+		for (const auto& cj : concept_json_entries) {
+			std::string entry_id = cj.value("id", std::string());
+			bool is_plaintext = curriculum_filter.has_filter &&
+			                    curriculum_filter.plaintext_ids.count(entry_id) > 0;
+			if (is_plaintext)
+				vocab_corpus.push_back(GRIM::DataLoader::renderPlainText(cj));
+			else
+				vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
+		}
 		tokenizer.train(vocab_corpus);
 		if (!out_vocab_path.empty()) {
 			std::cout << "[DataLoader] Saving vocab to " << out_vocab_path << "..." << std::endl << std::flush;
@@ -591,8 +620,27 @@ bool PrepareTrainingDataFromCache(
 		} catch (...) {}
 	}
 	const int expected_exec_steps = train_config.execution_block_num_steps;
+	size_t plaintext_count = 0;
 	for (const auto& cj : concept_json_entries) {
 		try {
+			std::string entry_id = cj.value("id", std::string());
+			bool is_plaintext = curriculum_filter.has_filter &&
+			                    curriculum_filter.plaintext_ids.count(entry_id) > 0;
+
+			if (is_plaintext) {
+				// ── Pretraining path: plain text, no execution payload ──
+				std::string text = GRIM::DataLoader::renderPlainText(cj);
+				if (text.size() < kMinCleanedTextLength) continue;
+
+				auto seq = build_sequence(text);
+				if (!seq) continue;
+				seq->execution_active = false;
+				all_tokens.push_back(std::move(*seq));
+				++plaintext_count;
+				continue;
+			}
+
+			// ── Concept path: canonical formatting + execution payload ──
 			auto built = GRIM::DataLoader::buildConceptSequence(cj, tokenizer, concept_exec_base_slot);
 			if (built.canonical_text.size() < kMinCleanedTextLength) continue;
 
@@ -604,13 +652,13 @@ bool PrepareTrainingDataFromCache(
 						"— cannot pad from nothing");
 				}
 				if (actual_steps > expected_exec_steps) {
-					std::string entry_id = "(unknown)";
+					std::string exec_entry_id = "(unknown)";
 					if (cj.contains("id") && cj["id"].is_string())
-						entry_id = cj["id"].get<std::string>();
+						exec_entry_id = cj["id"].get<std::string>();
 					else if (cj.contains("name") && cj["name"].is_string())
-						entry_id = cj["name"].get<std::string>();
+						exec_entry_id = cj["name"].get<std::string>();
 					throw std::runtime_error(
-						"DataLoader: execution-active concept entry \"" + entry_id
+						"DataLoader: execution-active concept entry \"" + exec_entry_id
 						+ "\" has teacher_steps=" + std::to_string(actual_steps)
 						+ " > execution_block_num_steps=" + std::to_string(expected_exec_steps)
 						+ " — truncation would lose computation; fix data or increase config num_steps");
@@ -632,6 +680,10 @@ bool PrepareTrainingDataFromCache(
 		} catch (const std::exception& e) {
 			std::cerr << "[DataLoader] concept build failed: " << e.what() << "\n";
 		}
+	}
+	if (plaintext_count > 0) {
+		std::cout << "[DataLoader] Encoded " << plaintext_count << " plaintext (PT) + "
+		          << (all_tokens.size() - plaintext_count) << " concept sequences" << std::endl;
 	}
 
 	// Write single GRMT file — Phase1_Startup handles train/val splitting

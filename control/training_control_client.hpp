@@ -407,6 +407,77 @@ public:
         }
     }
     
+    // Encode text using tokenizer
+    struct EncodeToken {
+        int id = 0;
+        std::string piece;
+        std::string type;  // "special", "byte", "atom", "unigram"
+    };
+
+    struct EncodeResult {
+        bool success = false;
+        int token_count = 0;
+        std::string input_text;
+        std::string decoded_text;
+        double encode_time_ms = 0.0;
+        double load_time_ms = 0.0;
+        int total_vocab_size = 0;
+        std::string error;
+        std::vector<EncodeToken> tokens;
+    };
+
+    EncodeResult encodeText(const std::string& text,
+                            const std::string& config_path = "") {
+        EncodeResult result;
+        if (text.empty()) {
+            result.error = "Text is empty";
+            return result;
+        }
+        try {
+            auto client = getClient();
+            client->set_read_timeout(30);
+
+            nlohmann::json body;
+            body["text"] = text;
+            if (!config_path.empty()) body["config_path"] = config_path;
+
+            std::string bodyStr = body.dump();
+            auto res = client->Post("/api/tokenizer/encode", bodyStr, "application/json");
+
+            if (!res) {
+                result.error = "Connection failed";
+                return result;
+            }
+
+            auto j = nlohmann::json::parse(res->body);
+            std::string status = j.value("status", "");
+            result.success = (status == "success");
+            result.token_count = j.value("token_count", 0);
+            result.input_text = j.value("input_text", "");
+            result.decoded_text = j.value("decoded_text", "");
+            result.encode_time_ms = j.value("encode_time_ms", 0.0);
+            result.load_time_ms = j.value("load_time_ms", 0.0);
+            result.total_vocab_size = j.value("total_vocab_size", 0);
+            result.error = j.value("error", "");
+
+            if (j.contains("tokens") && j["tokens"].is_array()) {
+                for (const auto& tok : j["tokens"]) {
+                    EncodeToken et;
+                    et.id = tok.value("id", 0);
+                    et.piece = tok.value("piece", "");
+                    et.type = tok.value("type", "");
+                    result.tokens.push_back(std::move(et));
+                }
+            }
+
+            return result;
+        } catch (const std::exception& e) {
+            result.error = e.what();
+            lastError_ = e.what();
+            return result;
+        }
+    }
+
     // Checkpoint operations
     struct CheckpointInfo {
         std::string path;

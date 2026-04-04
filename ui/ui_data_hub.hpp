@@ -378,8 +378,23 @@ private:
     std::shared_ptr<UITextArea>  cbCustomPromptArea_;
     std::vector<std::shared_ptr<UITextArea>> cbIntermediateAreas_;
 
+    // ── State 0 / Execution / State 1 widgets ───────────
+    std::shared_ptr<UIInputBox>  cbState0TypeInput_;
+    std::shared_ptr<UIInputBox>  cbState0AtomsInput_;     // comma-separated doubles
+
+    struct CBExecStepRow {
+        std::shared_ptr<UIDropdown>  opDropdown;    // add/sub/mul/div
+        std::shared_ptr<UIInputBox>  argSlotsInput; // e.g. "0,1"
+        std::shared_ptr<UIInputBox>  argsInput;     // e.g. "2.0,3.0"
+        std::shared_ptr<UIInputBox>  resultInput;   // e.g. "5.0"
+    };
+    std::vector<CBExecStepRow> cbExecStepRows_;
+
+    float  cbEditorScrollOffset_ = 0.0f;
+
     std::shared_ptr<UIButton>    btnCBGenerate_;
     std::shared_ptr<UIActionMenu> stepActionMenu_;       // + Step / - Step
+    std::shared_ptr<UIActionMenu> execStepActionMenu_;   // + Exec Step / - Exec Step
     std::shared_ptr<UIActionMenu> blockActionMenu_;      // New / Save / Delete
     std::shared_ptr<UIActionMenu> curriculumActionMenu_;   // New / Delete / Assign / Rename
     std::shared_ptr<UIActionMenu> blockCurriculumMenu_;     // + Curr / - Curr
@@ -484,6 +499,8 @@ private:
     void loadConceptBlockIntoEditor(size_t cbIndex);
     void clearCBEditor();
     void syncIntermediateAreas(int count);
+    void syncExecStepRows(int count);
+    std::string buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const;
     void generateConceptBlock();
     void populateCBModelDropdown();
     void populateCBCurriculumDropdown();

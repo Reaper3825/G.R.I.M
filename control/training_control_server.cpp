@@ -947,6 +947,138 @@ void setupAPI(httplib::Server& server) {
         }
     });
     
+    //======================================================//
+    //  Tokenizer Encode — Encode text via tokenizer_runner
+    //  Returns JSON with token IDs, pieces, and decode round-trip
+    //======================================================//
+    server.Post("/api/tokenizer/encode", [](const httplib::Request& req, httplib::Response& res) {
+        if (req.body.empty()) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "Request body is required with 'text' field";
+            res.status = 400;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        std::string text;
+        std::string config_path;
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            text = body.value("text", "");
+            config_path = body.value("config_path", "");
+        } catch (...) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "Invalid JSON in request body";
+            res.status = 400;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        if (text.empty()) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "'text' field is required and must be non-empty";
+            res.status = 400;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        // Find tokenizer_runner executable
+        std::string runnerPath = GRIM::Training::getSafeResourcePath(
+            "resources/models/GRIM-text/training/TrainingLoop/build/Release/tokenizer_runner"
+#ifdef _WIN32
+            ".exe"
+#endif
+            ,
+            GRIM::Training::PathResolutionMode::Relative
+        );
+
+        if (runnerPath.empty()) {
+            runnerPath = GRIM::Training::getSafeResourcePath(
+                "tokenizer_runner"
+#ifdef _WIN32
+                ".exe"
+#endif
+                ,
+                GRIM::Training::PathResolutionMode::Search
+            );
+        }
+
+        if (runnerPath.empty()) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "tokenizer_runner executable not found";
+            res.status = 500;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        // Build command — shell-escape the text to prevent injection
+        std::string safe_cmd = "\"" + runnerPath + "\" --encode \"";
+        for (char c : text) {
+            if (c == '"' || c == '\\' || c == '$' || c == '`') {
+                safe_cmd += '\\';
+            }
+            safe_cmd += c;
+        }
+        safe_cmd += "\"";
+        if (!config_path.empty()) safe_cmd += " --config \"" + config_path + "\"";
+
+        std::cout << "[Server] Running tokenizer encode" << std::endl;
+
+#ifdef _WIN32
+        FILE* pipe = _popen(safe_cmd.c_str(), "r");
+#else
+        FILE* pipe = popen(safe_cmd.c_str(), "r");
+#endif
+        if (!pipe) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "Failed to launch tokenizer_runner process";
+            res.status = 500;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        std::string output;
+        char buffer[4096];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            output += buffer;
+        }
+
+#ifdef _WIN32
+        int exit_code = _pclose(pipe);
+#else
+        int raw_status = pclose(pipe);
+        int exit_code = WEXITSTATUS(raw_status);
+#endif
+
+        if (output.empty()) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "tokenizer_runner produced no output (exit code " + std::to_string(exit_code) + ")";
+            res.status = 500;
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        try {
+            auto parsed = nlohmann::json::parse(output);
+            std::string status = parsed.value("status", "");
+            res.status = (status == "success") ? 200 : 422;
+            res.set_content(output, "application/json");
+        } catch (const nlohmann::json::parse_error& e) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["error"] = "tokenizer_runner produced invalid JSON: " + std::string(e.what());
+            err["raw_output"] = output.substr(0, 1000);
+            res.status = 500;
+            res.set_content(err.dump(), "application/json");
+        }
+    });
+
 }
 
 //======================================================//

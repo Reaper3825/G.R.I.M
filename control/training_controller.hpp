@@ -353,7 +353,14 @@ public:
         const std::string& config_path = "") {
         return client_.runTokenizer(vocab_path, data_path, config_path);
     }
-    
+
+    // Encode text using tokenizer
+    GRIMText::TrainingControlClient::EncodeResult encodeText(
+        const std::string& text,
+        const std::string& config_path = "") {
+        return client_.encodeText(text, config_path);
+    }
+
     // ============================================================
     // Callbacks Registration
     // ============================================================
