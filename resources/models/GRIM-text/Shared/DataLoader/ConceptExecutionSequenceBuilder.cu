@@ -305,6 +305,7 @@ CanonicalRenderResult renderWithSpans(const json& j) {
 
     if (j.contains("state_1") && j["state_1"].is_object()) {
         os << "A: " << j["answer"].get<std::string>() << "\n";
+    }
 
     result.text = os.str();
     return result;
