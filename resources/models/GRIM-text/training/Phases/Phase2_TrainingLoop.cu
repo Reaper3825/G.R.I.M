@@ -840,7 +840,7 @@ std::string formatGradientComponents(const GRIM::GradNorm::GradMetrics& gm, bool
     // When tie_embeddings=false: separate EMBEDDING and LM_HEAD groups
     // Use precision=6 so small per-parameter RMS values (e.g. attn ~0.00004) don't
     // display as 0.0000 with the default precision=4 (Issue #150)
-    constexpr int kComponentPrecision = 6;
+    constexpr int kComponentPrecision = 10;
 
     if (tied) {
         comp_msg << " emb_lm_tied=" << formatScalar(GM::rms(gm.lm_head_sum_sq, gm.lm_head_count), kComponentPrecision);

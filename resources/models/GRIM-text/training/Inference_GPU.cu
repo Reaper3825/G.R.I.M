@@ -490,7 +490,6 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         throw std::runtime_error("executeDecodeForward_: embedding layer is NULL");
     }
     Tensor& emb_weights = emb_layer->tokenWeights();
-    emb_weights.requires_grad = false;
 
     // Token ID is at device offset token_pos
     const int* token_id_ptr = reinterpret_cast<const int*>(ts.cached_token_ids_tensor.data) + token_pos;
@@ -538,15 +537,12 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         }
 
         // 3a. RMSNorm1
-        enc->rms1Gamma().requires_grad = false;
         Tensor ln1_out = ag::rms_norm(hidden, enc->rms1Gamma(), rms_eps, stream);
 
         // 3b. QKV projection: [1, d_model] @ W_qkv^T → [1, qkv_dim]
-        enc->attnWqkv().requires_grad = false;
         Tensor qkv = ag::matmul(ln1_out, enc->attnWqkv(), stream,
                                 nullptr, nullptr, true);
         if (enc->attnBqkv().data) {
-            enc->attnBqkv().requires_grad = false;
             qkv = ag::broadcast_add(qkv, enc->attnBqkv(), stream);
         }
 
@@ -616,24 +612,20 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         attn_flat.stream = stream;
 
         // 3j. Output projection: [1, d_model] @ W_o^T
-        enc->attnWo().requires_grad = false;
         Tensor proj = ag::matmul(attn_flat, enc->attnWo(), stream,
                                  nullptr, nullptr, true);
         if (enc->attnBo().data) {
-            enc->attnBo().requires_grad = false;
             proj = ag::broadcast_add(proj, enc->attnBo(), stream);
         }
 
         // 3k. LayerScale + residual
         if (enc->layerScale1().data) {
-            enc->layerScale1().requires_grad = false;
             proj = ag::layer_scale(proj, enc->layerScale1(), stream);
         }
         hidden = ag::add(hidden, proj, stream);
         // Skip center_columns for S=1 (centering a single vector is a no-op)
 
         // 3l. RMSNorm2
-        enc->rms2Gamma().requires_grad = false;
         Tensor ln2_out = ag::rms_norm(hidden, enc->rms2Gamma(), rms_eps, stream);
 
         // 3m. FFN (SwiGLU)
@@ -647,7 +639,6 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
 
         // 3n. LayerScale + residual
         if (enc->layerScale2().data) {
-            enc->layerScale2().requires_grad = false;
             ffn_out = ag::layer_scale(ffn_out, enc->layerScale2(), stream);
         }
         hidden = ag::add(hidden, ffn_out, stream);
