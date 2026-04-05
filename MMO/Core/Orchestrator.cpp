@@ -67,7 +67,9 @@ void Orchestrator::registerBackend(const std::string& model_id,
 // =========================================================
 
 OrchestratorResult Orchestrator::generate(const RequestContext& ctx) {
+    LOG_DEBUG("MMO_ORCH", "[TRACE] generate() waiting for mutex (req=" + ctx.request_id + ")");
     std::lock_guard<std::mutex> lock(mutex_);
+    LOG_DEBUG("MMO_ORCH", "[TRACE] generate() acquired mutex (req=" + ctx.request_id + ")");
 
     OrchestratorResult result;
     result.request_id = ctx.request_id;
@@ -80,7 +82,9 @@ OrchestratorResult Orchestrator::generate(const RequestContext& ctx) {
     }
 
     // ── Step 2: Ensure router is loaded ──
+    LOG_DEBUG("MMO_ORCH", "[TRACE] ensureLoaded('" + router_info->id + "')");
     LoadResult load_result = loader_.ensureLoaded(router_info->id);
+    LOG_DEBUG("MMO_ORCH", "[TRACE] ensureLoaded returned " + std::to_string(static_cast<int>(load_result)));
     if (load_result == LoadResult::Unavailable) {
         result.error = "Router model '" + router_info->id + "' unavailable";
         LOG_ERROR("MMO_ORCH", result.error);
@@ -107,7 +111,9 @@ OrchestratorResult Orchestrator::generate(const RequestContext& ctx) {
         GenerationOptions opts;
         opts.timeout_ms = config_.generate_timeout_ms;
 
+        LOG_DEBUG("MMO_ORCH", "[TRACE] calling backend->generate() for passthrough (timeout=" + std::to_string(opts.timeout_ms) + "ms)");
         GenerationResult gen = it->second->generate(ctx.prompt, opts);
+        LOG_DEBUG("MMO_ORCH", "[TRACE] backend->generate() returned (success=" + std::string(gen.success ? "true" : "false") + ")");
         loader_.markIdle(router_info->id);
 
         if (gen.success) {

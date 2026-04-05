@@ -336,8 +336,11 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
         std::string reply;
 
         // Reuse the async infrastructure
+        LOG_DEBUG("AI", "[TRACE] ai_interpret calling callAIAsync");
         auto future = callAIAsync(prompt);
+        LOG_DEBUG("AI", "[TRACE] ai_interpret waiting on future.get()");
         reply = future.get();
+        LOG_DEBUG("AI", "[TRACE] ai_interpret future.get() returned (" + std::to_string(reply.size()) + " chars)");
 
         // --- Early validation of reply ---
         if (reply.empty() || reply.rfind("[AI] Backend call failed", 0) == 0) {

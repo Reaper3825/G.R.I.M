@@ -125,7 +125,9 @@ LoadResult ModelLoader::ensureLoaded(const std::string& model_id) {
 
     bool load_ok = false;
     if (start_cb_) {
+        LOG_DEBUG("MMO_LOADER", "[TRACE] calling start callback for '" + model_id + "'");
         load_ok = start_cb_(*info);
+        LOG_DEBUG("MMO_LOADER", "[TRACE] start callback returned " + std::string(load_ok ? "true" : "false") + " for '" + model_id + "'");
     } else {
         // No start callback registered — treat as immediate success.
         // The actual process management is plugged in by the body.

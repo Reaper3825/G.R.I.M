@@ -335,11 +335,16 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     // ── macOS / POSIX implementation ──
 
     // Check if an existing instance is already serving on this port
-    if (checkHealth(model.id, 2000)) {
-        LOG_DEBUG("ProcessManager", "Existing server for '" + model.id + "' is healthy, reusing");
-        slot.running = true;
-        return true;
-    }
+    // NOTE: Cannot call checkHealth() here — caller (start()) holds mutex_
+    // and checkHealth() also acquires mutex_, causing deadlock.
+    try {
+        auto resp = cpr::Get(cpr::Url{slot.url}, cpr::Timeout{2000});
+        if (resp.status_code != 0) {
+            LOG_DEBUG("ProcessManager", "Existing server for '" + model.id + "' is healthy, reusing");
+            slot.running = true;
+            return true;
+        }
+    } catch (...) {}
 
     // Load paths from config
     Config::GrimTextPaths grim_paths;

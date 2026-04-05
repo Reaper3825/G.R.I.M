@@ -93,7 +93,7 @@ GenerationResult GrimNativeBackend::generateWithHistory(
     int timeout = options.timeout_ms > 0 ? options.timeout_ms : 30000;
     std::string endpoint = url_ + "/api/chat";
 
-    LOG_DEBUG("MMO_GRIM_NATIVE", "POST " + endpoint);
+    LOG_DEBUG("MMO_GRIM_NATIVE", "[TRACE] POST " + endpoint + " (timeout=" + std::to_string(timeout) + "ms)");
 
     cpr::Response http_resp = cpr::Post(
         cpr::Url{endpoint},
@@ -101,6 +101,8 @@ GenerationResult GrimNativeBackend::generateWithHistory(
         cpr::Body{body.dump()},
         cpr::Timeout{timeout}
     );
+    LOG_DEBUG("MMO_GRIM_NATIVE", "[TRACE] POST returned status=" + std::to_string(http_resp.status_code)
+              + " elapsed=" + std::to_string(http_resp.elapsed) + "s");
 
     if (http_resp.status_code != 200) {
         result.error = "HTTP " + std::to_string(http_resp.status_code)
