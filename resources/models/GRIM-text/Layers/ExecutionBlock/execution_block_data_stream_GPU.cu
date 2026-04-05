@@ -427,21 +427,6 @@ __global__ void kernelEncodeScalarToAtomEmbed(
     out[d] = result;
 }
 
-__global__ void kernelReluForward(float* out, const float* in, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) out[i] = (in[i] > 0.0f) ? in[i] : 0.0f;
-}
-
-__global__ void kernelReluBackward(
-    float* grad_input,
-    const float* grad_output,
-    const float* fwd_input,
-    int n
-) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) grad_input[i] += (fwd_input[i] > 0.0f) ? grad_output[i] : 0.0f;
-}
-
 __global__ void kernelAbsDiff(
     float* __restrict__ out,
     const float* __restrict__ a,
@@ -615,72 +600,6 @@ __global__ void kernelFourOpMixBackward(
         grad_v2[0] += dv2 * grad_v_out;
     }
 }
-
-struct ReluGradFn : public GradFn {
-    std::shared_ptr<GradFn> input_grad_fn;
-    TensorContract::TensorShape input_shape;
-    bool input_requires_grad = false;
-    float* grad_input = nullptr;
-    std::shared_ptr<float> owned_grad_input;
-    std::shared_ptr<float> owned_fwd_input;
-    const float* fwd_input = nullptr;
-    int count = 0;
-
-    ReluGradFn() { op_name = "relu"; }
-
-    void capture(Tensor& input, int n, cudaStream_t stream) {
-        input_requires_grad = input.requires_grad;
-        input_shape = input.shape;
-        input_grad_fn = input.grad_fn;
-        count = n;
-
-        float* buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&buf), n * sizeof(float), "datastream_relu_fwd_input");
-        cudaMemcpyAsync(buf, input.data, n * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        owned_fwd_input = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-        fwd_input = owned_fwd_input.get();
-
-        if (input_requires_grad) {
-            input.ensure_grad();
-            if (input.is_leaf) {
-                grad_input = input.grad_data();
-            } else {
-                float* gbuf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&gbuf), n * sizeof(float), "datastream_relu_grad_input");
-                cudaMemsetAsync(gbuf, 0, n * sizeof(float), stream);
-                owned_grad_input = std::shared_ptr<float>(gbuf, [](float* p) { cudaFree(p); });
-                grad_input = owned_grad_input.get();
-            }
-        }
-    }
-
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        if (applied) return;
-        applied = true;
-        if (!input_requires_grad || !grad_input || !fwd_input) return;
-
-        kernelReluBackward<<<(count + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-            grad_input, grad_output.data, fwd_input, count);
-
-        if (input_grad_fn) {
-            Tensor view;
-            view.data = grad_input;
-            view.shape = input_shape;
-            view.owns_data = false;
-            view.stream = stream;
-            input_grad_fn->apply(view, stream);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        owned_fwd_input.reset();
-        fwd_input = nullptr;
-        grad_input = nullptr;
-        owned_grad_input.reset();
-        input_grad_fn.reset();
-    }
-};
 
 struct SlotValueSTGradFn : public GradFn {
     std::shared_ptr<GradFn> p_softmax_grad_fn;
@@ -1747,18 +1666,9 @@ void executeStepCoordinatorImpl(
     auto decode_h = autograd::matmul(decode_input, layer.w_decode_1(), stream, decode_input.data, nullptr);
     decode_h = autograd::add(decode_h, layer.b_decode_1(), stream);
 
-    auto decode_relu = Tensor::zeros({1, vhd}, stream, "exec_decode_relu");
-    decode_relu.requires_grad = true;
-    decode_relu.is_leaf = false;
-    kernelReluForward<<<(vhd + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(decode_relu.data, decode_h.data, vhd);
-    CUDA_CHECK_KERNEL();
-    {
-        auto relu_fn = std::make_shared<ReluGradFn>();
-        relu_fn->capture(decode_h, vhd, stream);
-        decode_relu.grad_fn = relu_fn;
-    }
+    auto decode_act = autograd::silu(decode_h, stream, decode_h.data);
 
-    work.v_decoded = autograd::matmul(decode_relu, layer.w_decode_2(), stream, decode_relu.data, nullptr);
+    work.v_decoded = autograd::matmul(decode_act, layer.w_decode_2(), stream, decode_act.data, nullptr);
     work.result_emb = autograd::matmul(work.v_decoded, layer.W_value_to_emb(), stream, work.v_decoded.data, nullptr);
     work.result_emb = autograd::add(work.result_emb, layer.b_value_to_emb(), stream);
     kernelCheckFinite<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(

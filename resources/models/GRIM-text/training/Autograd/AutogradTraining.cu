@@ -834,6 +834,15 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         b * sl, sl);
                 }
             }
+
+            // Issue #155: Post-layer centering — single centering point AFTER all
+            // modifications to layer_output (encoder forward + dropout + crossAttentionRead).
+            // The encoder layer's post-FFN centering was removed (moved here) so that
+            // crossAttentionRead's in-place injection doesn't bypass it.
+            // Post-attention centering remains inside the encoder (between sublayers).
+            if (cfg->center_encoder_residuals) {
+                layer_output = autograd::center_columns(layer_output, ctx.stream);
+            }
             
             intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
         }

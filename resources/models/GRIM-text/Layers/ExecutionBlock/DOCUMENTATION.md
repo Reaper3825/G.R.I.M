@@ -200,13 +200,13 @@ If `debug_mode` is enabled, the layer may emit additional stderr context before 
 
 The current data-stream implementation owns these custom `GradFn`s:
 
-- `ReluGradFn`
 - `SlotValueSTGradFn`
 - `FourOpMixGradFn`
 - `ExecutionBlockInjectGradFn`
 - `ReduceMeanGradFn`
 - `RecordEncodeGradFn`
-- `L1ScalarLossGradFn`
+- `L1ScalarLossGradFn` — attached to `transition_loss` when `diag_out != nullptr`
+- `SelectionCrossEntropyGradFn` — attached to teacher-supervised selection CE tensors when `selection_targets->valid`
 
 Removed or stale documentation about other grad nodes is intentionally gone.
 

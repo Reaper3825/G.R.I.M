@@ -221,6 +221,13 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
         // Backward: grad_h = (I - gg^T) * grad_h̃
         // Returns non-owning view — input tensor's buffer is modified in-place
         out_centered_hidden = autograd::project_out_pc1(*current_input, config_.pc1_power_iters, stream);
+        if (current_input == &normalized) {
+            // project_out_pc1 modified normalized's buffer in-place and returned
+            // a non-owning view. Transfer ownership so normalized's destructor
+            // doesn't free the buffer — MatMulGradFn's cached_a still points here.
+            out_centered_hidden.owns_data = true;
+            normalized.owns_data = false;
+        }
         matmul_input = &out_centered_hidden;
     } else {
         if (current_input == &normalized) {

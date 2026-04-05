@@ -1045,10 +1045,9 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // ========================================================================
     intermediates.output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
     
-    // Residual centering after FFN sublayer (same rationale as post-attention above)
-    if (config_.center_encoder_residuals) {
-        intermediates.output = autograd::center_columns(intermediates.output, stream);
-    }
+    // Issue #155: Post-FFN centering REMOVED from here — moved to AutogradTraining.cu
+    // so it happens AFTER all layer-output modifications (including crossAttentionRead).
+    // Post-attention centering remains here (between sublayers, no external modification).
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 (pre-norm, no sandwich) DONE - layer COMPLETE\n");
     
     
