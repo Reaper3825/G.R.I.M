@@ -1966,12 +1966,10 @@ LossResult autogradTrainingStep(
         payload, "autogradTrainingStep",
         cfg.execution_block_num_slots, cfg.execution_block_num_ops, cfg.execution_block_num_steps);
 
-    // WS8: Execution dependency — arithmetic batches MUST use ExecutionBlock
-    // (mirrors computeLossBatch; ensures both paths throw on same condition)
+    // When execution_block is disabled, teacher_steps are ignored — batch trains with plain cross-entropy.
     if (!payload.teacher_steps.empty() && !cfg.execution_block_enabled) {
-        throw std::runtime_error(
-            "autogradTrainingStep: batch has teacher_steps (arithmetic) but execution_block_enabled=false; "
-            "arithmetic batches MUST use ExecutionBlock");
+        AG_WARN("batch has teacher_steps (arithmetic) but execution_block_enabled=false; "
+                "training with plain cross-entropy over text tokens (teacher supervision skipped)");
     }
 
     // WS8: Structural layer availability — crash loud if config says enabled but layers are missing
