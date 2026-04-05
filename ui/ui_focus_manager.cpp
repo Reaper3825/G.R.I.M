@@ -15,11 +15,7 @@ UIFocusManager::UIFocusManager()
 
 uint64_t UIFocusManager::generateUniqueID() {
     uint64_t id = dist(rng);
-    
-    std::ostringstream oss;
-    oss << "Generated unique ID: 0x" << std::hex << std::uppercase << id;
-    LOG_DEBUG("UIFocusManager", oss.str());
-    
+
     return id;
 }
 

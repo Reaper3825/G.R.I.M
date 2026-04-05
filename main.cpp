@@ -458,13 +458,13 @@ int main(int argc, char* argv[])
 #ifdef _WIN32
     std::thread([]() {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        runPopupUI(256, 256);
+        runPopupUI(400, 400);
     }).detach();
     LOG_PHASE("Popup UI launched (layered window)", true);
 #else
     std::thread([]() {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        runPopupUI(256, 256);
+        runPopupUI(400, 400);
     }).detach();
     LOG_PHASE("Popup UI launched (macOS NSWindow)", true);
 #endif

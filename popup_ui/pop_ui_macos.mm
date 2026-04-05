@@ -6,7 +6,7 @@
 #include "popup_anim.hpp"
 #include "popup_3d_renderer.hpp"
 #include "popup_3d_mailbox.hpp"
-#include "objects/cube_test_object.hpp"
+#include "objects/popup_obj_loader.hpp"
 #include "logger.hpp"
 #include "voice/voice_speak.hpp"
 #include "ui/ui_root.hpp"
@@ -16,12 +16,8 @@
 #include <chrono>
 
 // ===========================================================
-// Globals (matching Win32 pop_ui.cpp)
+// Globals
 // ===========================================================
-extern std::mutex g_alphaMutex;
-extern std::vector<uint8_t> g_popupPixels;
-extern std::atomic<bool> g_alphaReady;
-
 static void* g_popupHandle = nullptr;
 static PopupAnimState g_anim;
 static std::atomic<bool> g_running{ true };
@@ -38,28 +34,12 @@ static std::chrono::steady_clock::time_point g_frameStart = std::chrono::steady_
 static Popup3DRenderer g_popup3D;
 static PopupRenderInput g_popup3DInput;
 static std::atomic<bool> g_popup3DInitialized{ false };
-static float g_cubeRotationY = 0.0f;
-
-static std::atomic<uint32_t> s_preFrameCallCount{ 0 };
 
 static void popup3DPreFrameCallback(uint32_t bgfxFrame)
 {
-    uint32_t count = s_preFrameCallCount.fetch_add(1);
     if (!g_popup3DInitialized.load())
-    {
-        if (count < 3)
-        {
-            LOG_DEBUG("PopupUI", "preFrameCallback #" + std::to_string(count) +
-                      " but 3D NOT initialized — skipping");
-        }
         return;
-    }
-    if (count < 5 || count % 60 == 0)
-    {
-        LOG_DEBUG("PopupUI", "preFrameCallback #" + std::to_string(count) +
-                  " bgfxFrame=" + std::to_string(bgfxFrame) +
-                  " visible=" + std::to_string(g_popup3DInput.visible));
-    }
+
     popup3DRendererSubmit(g_popup3D, g_popup3DInput, bgfxFrame);
 }
 
@@ -119,14 +99,15 @@ void runPopupUI(int width, int height)
 
             try
             {
-                PopupObjectDefinition cubeDef = createCubeTestObject();
-                popup3DRendererInit(g_popup3D, cubeDef,
+                std::string objPath = std::string(GRIM_ROOT_DIR) + "/resources/popup_3d/grim_popup.obj";
+                PopupObjectDefinition grimDef = loadPopupObjectFromOBJ(objPath);
+                popup3DRendererInit(g_popup3D, grimDef,
                                     static_cast<uint32_t>(width),
                                     static_cast<uint32_t>(height));
 
                 // Set initial render input
-                g_popup3DInput.transform = cubeDef.defaultTransform;
-                g_popup3DInput.light     = cubeDef.defaultLight;
+                g_popup3DInput.transform = grimDef.defaultTransform;
+                g_popup3DInput.light     = grimDef.defaultLight;
                 g_popup3DInput.alphaMul  = 1.0f;
                 g_popup3DInput.width     = static_cast<uint32_t>(width);
                 g_popup3DInput.height    = static_cast<uint32_t>(height);
@@ -136,7 +117,7 @@ void runPopupUI(int width, int height)
                 WindowManager::registerPreFrameCallback(popup3DPreFrameCallback);
                 g_popup3DInitialized = true;
 
-                LOG_DEBUG("PopupUI", "Popup 3D renderer initialized (cube test, macOS)");
+                LOG_DEBUG("PopupUI", "Popup 3D renderer initialized (GRIM object, macOS)");
             }
             catch (const std::exception& e)
             {
@@ -186,7 +167,6 @@ void runPopupUI(int width, int height)
 
                 if (!Voice::isPlaying() && !isSpeaking && !voiceActive)
                 {
-                    LOG_DEBUG("PopupUI", "Idle timeout reached - hiding popup");
                     hidePopup();
                     g_idleTimerMs = 0;
                 }
@@ -215,38 +195,32 @@ void runPopupUI(int width, int height)
         {
             if (g_popup3DInitialized.load())
             {
-                g_cubeRotationY += dt * 0.8f;
-                g_popup3DInput.transform.rotation[0] = 0.3f;  // slight tilt
-                g_popup3DInput.transform.rotation[1] = g_cubeRotationY;
+                // Idle rotation + voice-reactive animation
+                g_popup3DInput.transform.rotation[0] = 0.15f;  // subtle tilt
+                g_popup3DInput.transform.rotation[1] = 0.0f;
+
+                // Breathing scale: gentle 2% oscillation
+                float breatheScale = 1.0f + g_anim.breathe * 0.02f;
+                // Voice pulse: up to 8% scale boost when speaking
+                float voiceScale = 1.0f + g_anim.pulse * 0.08f;
+                float finalScale = breatheScale * voiceScale;
+                g_popup3DInput.transform.scale[0] = finalScale;
+                g_popup3DInput.transform.scale[1] = finalScale;
+                g_popup3DInput.transform.scale[2] = finalScale;
+
+                g_popup3DInput.alphaMul   = g_anim.alpha;
+                g_popup3DInput.emissiveMul = g_anim.voiceIntensity * 0.5f;
                 g_popup3DInput.visible = g_popupVisible.load();
 
                 // Consume rendered frame from the mailbox
                 static std::vector<uint8_t> frameBuffer;
                 static uint64_t lastGen = 0;
-                static uint32_t consumeAttempts = 0;
-                static uint32_t consumeSuccesses = 0;
                 uint32_t fw = 0, fh = 0;
-                consumeAttempts++;
                 if (popupMailboxConsume(g_popup3D.mailbox, frameBuffer, fw, fh, lastGen))
                 {
-                    consumeSuccesses++;
-                    if (consumeSuccesses <= 3 || consumeSuccesses % 60 == 0)
-                    {
-                        LOG_DEBUG("PopupUI", "Mailbox consumed frame #" +
-                                  std::to_string(consumeSuccesses) +
-                                  " gen=" + std::to_string(lastGen) +
-                                  " size=" + std::to_string(fw) + "x" + std::to_string(fh) +
-                                  " bytes=" + std::to_string(frameBuffer.size()));
-                    }
                     presentPopup3DFrame(g_popupHandle, frameBuffer.data(),
                                         static_cast<int>(fw),
                                         static_cast<int>(fh));
-                }
-                else if (consumeAttempts <= 5 || consumeAttempts % 120 == 0)
-                {
-                    LOG_DEBUG("PopupUI", "Mailbox empty (attempt #" +
-                              std::to_string(consumeAttempts) +
-                              ", successes=" + std::to_string(consumeSuccesses) + ")");
                 }
             }
         }
@@ -302,7 +276,6 @@ void hidePopup()
     {
         hidePopupWindow(g_popupHandle);
         g_popupVisible = false;
-        LOG_DEBUG("PopupUI", "PopupUI hidden");
         WindowManager::setVisibility("popup", false);
     }
 }

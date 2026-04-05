@@ -3,11 +3,10 @@
 
 #include "popup_ui.hpp"
 #include "popup_window.hpp"
-#include "popup_renderer.hpp"
 #include "popup_anim.hpp"
 #include "popup_3d_renderer.hpp"
 #include "popup_3d_mailbox.hpp"
-#include "objects/cube_test_object.hpp"
+#include "objects/popup_obj_loader.hpp"
 #include "logger.hpp"
 #include "pch.hpp"
 #include "voice/voice_speak.hpp"
@@ -29,10 +28,6 @@ void hidePopup();
 // ===========================================================
 // Globals
 // ===========================================================
-extern std::mutex g_alphaMutex;
-extern std::vector<uint8_t> g_popupPixels;
-extern std::atomic<bool> g_alphaReady;
-
 static HWND g_hwnd = nullptr;
 static PopupAnimState g_anim;
 static std::atomic<bool> g_running{ true };
@@ -50,7 +45,6 @@ static std::chrono::steady_clock::time_point g_frameStart = std::chrono::steady_
 static Popup3DRenderer g_popup3D;
 static PopupRenderInput g_popup3DInput;
 static std::atomic<bool> g_popup3DInitialized{ false };
-static float g_cubeRotationY = 0.0f;
 
 static void popup3DPreFrameCallback(uint32_t bgfxFrame)
 {
@@ -98,61 +92,22 @@ void runPopupUI(int width, int height)
     WindowManager::registerWindow(std::move(win));
 
     // -------------------------------------------------------
-    // Prepare alpha mask (RGBA from Oreo maps) BEFORE showing
-    // Use the actual window size, not POPUP_SIZE constant!
-    // -------------------------------------------------------
-    LOG_DEBUG("PopupUI", "Loading alpha textures for " + std::to_string(width) + "x" + std::to_string(height));
-    queueWindowAlphaReadback(width, height);
-
-    // Wait until alpha data ready before showing window
-    LOG_DEBUG("PopupUI", "Waiting for alpha data to become ready...");
-    int safetyCounter = 0;
-    while (!g_alphaReady.load() && safetyCounter < 200) // up to 2 seconds
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        safetyCounter++;
-    }
-
-    if (g_alphaReady.load())
-    {
-        LOG_DEBUG("PopupUI", "Alpha data ready — applying initial transparency");
-        applyWindowAlphaIfReady(g_hwnd, width, height, 0);
-        
-        ShowWindow(g_hwnd, SW_SHOW);
-        UpdateWindow(g_hwnd);
-        
-        g_popupVisible = true;
-        g_idleTimerMs = 10000;
-        g_idleStart = std::chrono::steady_clock::now();
-        
-        LOG_PHASE("PopupUI shown with alpha", true);
-        
-        // Apply initial animation frame
-        applyAnimationToWindow(g_hwnd, width, height, 1.0f, 1.0f, g_anim.voiceIntensity);
-    }
-    else
-    {
-        LOG_ERROR("PopupUI", "Alpha data not ready in time — showing without transparency");
-        ShowWindow(g_hwnd, SW_SHOW);
-        g_popupVisible = true;
-    }
-
-    // -------------------------------------------------------
-    // Initialize 3D renderer (cube test object)
+    // Initialize 3D renderer
     // Must happen after BGFX is initialized (WindowManager)
     // -------------------------------------------------------
     if (WindowManager::isInitialized())
     {
         try
         {
-            PopupObjectDefinition cubeDef = createCubeTestObject();
-            popup3DRendererInit(g_popup3D, cubeDef,
+            std::string objPath = std::string(GRIM_ROOT_DIR) + "/resources/popup_3d/grim_popup.obj";
+            PopupObjectDefinition grimDef = loadPopupObjectFromOBJ(objPath);
+            popup3DRendererInit(g_popup3D, grimDef,
                                 static_cast<uint32_t>(width),
                                 static_cast<uint32_t>(height));
 
             // Set initial render input
-            g_popup3DInput.transform = cubeDef.defaultTransform;
-            g_popup3DInput.light     = cubeDef.defaultLight;
+            g_popup3DInput.transform = grimDef.defaultTransform;
+            g_popup3DInput.light     = grimDef.defaultLight;
             g_popup3DInput.alphaMul  = 1.0f;
             g_popup3DInput.width     = static_cast<uint32_t>(width);
             g_popup3DInput.height    = static_cast<uint32_t>(height);
@@ -162,7 +117,14 @@ void runPopupUI(int width, int height)
             WindowManager::registerPreFrameCallback(popup3DPreFrameCallback);
             g_popup3DInitialized = true;
 
-            LOG_PHASE("Popup 3D renderer initialized (cube test)", true);
+            // Show window now that 3D renderer is ready
+            ShowWindow(g_hwnd, SW_SHOW);
+            UpdateWindow(g_hwnd);
+            g_popupVisible = true;
+            g_idleTimerMs = 10000;
+            g_idleStart = std::chrono::steady_clock::now();
+
+            LOG_PHASE("Popup 3D renderer initialized (GRIM object)", true);
         }
         catch (const std::exception& e)
         {
@@ -171,7 +133,9 @@ void runPopupUI(int width, int height)
     }
     else
     {
-        LOG_DEBUG("PopupUI", "BGFX not initialized — skipping 3D renderer");
+        LOG_ERROR("PopupUI", "BGFX not initialized — cannot start 3D renderer");
+        CoUninitialize();
+        return;
     }
 
     // -------------------------------------------------------
@@ -249,7 +213,6 @@ void runPopupUI(int width, int height)
                 
                 if (!Voice::isPlaying() && !isSpeaking && !voiceActive)
                 {
-                    LOG_DEBUG("PopupUI", "Idle timeout reached - hiding popup");
                     hidePopup();
                     g_idleTimerMs = 0;
                 }
@@ -281,32 +244,33 @@ void runPopupUI(int width, int height)
             // ---------------------------------------------------
             // 3D renderer: update rotation + consume readback frame
             // ---------------------------------------------------
-            if (g_popup3DInitialized.load())
-            {
-                // Slowly rotate the cube
-                g_cubeRotationY += dt * 0.8f;
-                g_popup3DInput.transform.rotation[0] = 0.3f;  // slight tilt
-                g_popup3DInput.transform.rotation[1] = g_cubeRotationY;
-                g_popup3DInput.visible = g_popupVisible.load();
+            g_popup3DInput.transform.rotation[0] = 0.15f;  // subtle tilt
+            g_popup3DInput.transform.rotation[1] = 0.0f;
 
-                // Try to consume a rendered frame from the mailbox
-                static std::vector<uint8_t> frameBuffer;
-                static uint64_t lastGen = 0;
-                uint32_t fw = 0, fh = 0;
-                if (popupMailboxConsume(g_popup3D.mailbox, frameBuffer, fw, fh, lastGen))
-                {
-                    presentPopup3DFrame(g_hwnd, frameBuffer.data(),
-                                        static_cast<int>(fw),
-                                        static_cast<int>(fh));
-                }
-            }
-            else
+            // Breathing scale: gentle 2% oscillation
+            float breatheScale = 1.0f + g_anim.breathe * 0.02f;
+            // Voice pulse: up to 8% scale boost when speaking
+            float voiceScale = 1.0f + g_anim.pulse * 0.08f;
+            float finalScale = breatheScale * voiceScale;
+            g_popup3DInput.transform.scale[0] = finalScale;
+            g_popup3DInput.transform.scale[1] = finalScale;
+            g_popup3DInput.transform.scale[2] = finalScale;
+
+            g_popup3DInput.alphaMul    = g_anim.alpha;
+            g_popup3DInput.emissiveMul = g_anim.voiceIntensity * 0.5f;
+            g_popup3DInput.visible     = g_popupVisible.load();
+
+            // Try to consume a rendered frame from the mailbox
+            static std::vector<uint8_t> frameBuffer;
+            static uint64_t lastGen = 0;
+            uint32_t fw = 0, fh = 0;
+            if (popupMailboxConsume(g_popup3D.mailbox, frameBuffer, fw, fh, lastGen))
             {
-                // Fallback: existing CPU sprite pipeline
-                applyAnimationToWindow(g_hwnd, width, height,
-                                       g_anim.scale, g_anim.alpha, g_anim.voiceIntensity);
+                presentPopup3DFrame(g_hwnd, frameBuffer.data(),
+                                    static_cast<int>(fw),
+                                    static_cast<int>(fh));
             }
-         }
+        }
 
         // Show popup automatically when voice starts speaking
         if (isSpeaking && !g_popupVisible)
@@ -353,7 +317,6 @@ void hidePopup()
     {
         ShowWindow(g_hwnd, SW_HIDE);
         g_popupVisible = false;
-        LOG_PHASE("PopupUI hidden", true);
         WindowManager::setVisibility("popup", false);
     }
 }

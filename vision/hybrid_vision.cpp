@@ -12,7 +12,7 @@
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 
-// STB image library (implementation is in popup_renderer.cpp)
+// STB image library (implementation is in popup_ui/stb_image_impl.cpp)
 #include <stb/stb_image.h>
 
 // Use OpenCV for image processing (resize, JPEG encoding)

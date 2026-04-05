@@ -2,7 +2,6 @@
 #include "popup_3d_mesh.hpp"
 #include "popup_3d_shaders.hpp"
 #include "popup_3d_mailbox.hpp"
-#include "logger.hpp"
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 #include <stdexcept>
@@ -144,9 +143,6 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     if (!input.visible)
         return;
 
-    static uint32_t s_submitCount = 0;
-    s_submitCount++;
-
     // ---- Poll completed readbacks ----
     int newestReady = -1;
     uint64_t newestGen = 0;
@@ -157,12 +153,6 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
             currentBgfxFrame >= slot.readyAfterFrame)
         {
             slot.state = PopupSlotState::Ready;
-            if (s_submitCount <= 10)
-            {
-                LOG_DEBUG("Popup3D", "Slot " + std::to_string(i) +
-                          " readback ready (bgfxFrame=" + std::to_string(currentBgfxFrame) +
-                          " readyAfter=" + std::to_string(slot.readyAfterFrame) + ")");
-            }
         }
         if (slot.state == PopupSlotState::Ready && slot.generation > newestGen)
         {
@@ -175,21 +165,6 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     if (newestReady >= 0)
     {
         auto& slot = r.slots[newestReady];
-
-        // Check if readback data is non-zero
-        if (s_submitCount <= 10)
-        {
-            uint32_t nonZero = 0;
-            size_t totalBytes = slot.rawStraightBgra.size();
-            for (size_t j = 0; j < totalBytes && j < 4096; j++)
-            {
-                if (slot.rawStraightBgra[j] != 0) nonZero++;
-            }
-            LOG_DEBUG("Popup3D", "Publishing slot " + std::to_string(newestReady) +
-                      " gen=" + std::to_string(slot.generation) +
-                      " size=" + std::to_string(slot.width) + "x" + std::to_string(slot.height) +
-                      " nonZeroBytes(first4k)=" + std::to_string(nonZero));
-        }
 
         popupMailboxPublish(r.mailbox,
                             slot.rawStraightBgra.data(),
@@ -226,7 +201,7 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     // ---- Build view matrix ----
     float mtxView[16];
     {
-        const bx::Vec3 eye = { 0.0f, 0.0f, 2.5f };
+        const bx::Vec3 eye = { 0.0f, 0.0f, 3.5f };
         const bx::Vec3 at  = { 0.0f, 0.0f, 0.0f };
         const bx::Vec3 up  = { 0.0f, 1.0f, 0.0f };
         bx::mtxLookAt(mtxView, eye, at, up);
@@ -286,14 +261,6 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
                                               slot.rawStraightBgra.data());
     slot.generation = r.nextGeneration++;
     slot.state = PopupSlotState::PendingReadback;
-
-    if (s_submitCount <= 10)
-    {
-        LOG_DEBUG("Popup3D", "Submit #" + std::to_string(s_submitCount) +
-                  " slot=" + std::to_string(idleSlot) +
-                  " readyAfterFrame=" + std::to_string(slot.readyAfterFrame) +
-                  " gen=" + std::to_string(slot.generation));
-    }
 }
 
 // -------------------------------------------------------

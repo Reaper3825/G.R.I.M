@@ -5,8 +5,6 @@
 #import <QuartzCore/QuartzCore.h>
 #include "popup_window.hpp"
 #include "logger.hpp"
-#include <atomic>
-#include <mutex>
 #include <vector>
 #include <algorithm>
 
@@ -14,13 +12,6 @@
 // macOS Popup Window — NSWindow + CALayer frame presentation
 // Equivalent to Win32 layered window with per-pixel alpha.
 // ===========================================================
-
-// ===========================================================
-// Globals (matching Win32 popup_window.cpp interface)
-// ===========================================================
-std::atomic<bool> g_alphaReady{ false };
-std::vector<uint8_t> g_popupPixels;
-std::mutex g_alphaMutex;
 
 static NSWindow* s_popupWindow = nil;
 static NSView*   s_contentView = nil;
@@ -219,9 +210,6 @@ void presentPopup3DFrame(void* handle, const uint8_t* bgraData, int width, int h
             return;
 
         // Push the image to the CALayer on the main thread
-        static uint32_t s_presentCount = 0;
-        s_presentCount++;
-        uint32_t presentNum = s_presentCount;
         dispatch_async(dispatch_get_main_queue(), ^{
             CALayer* layer = view.layer;
             if (layer) {
@@ -229,11 +217,6 @@ void presentPopup3DFrame(void* handle, const uint8_t* bgraData, int width, int h
                 [CATransaction setDisableActions:YES];
                 layer.contents = (__bridge id)image;
                 [CATransaction commit];
-                if (presentNum <= 3 || presentNum % 60 == 0)
-                {
-                    LOG_DEBUG("PopupWindow", "CALayer.contents set (frame #" +
-                              std::to_string(presentNum) + ")");
-                }
             } else {
                 LOG_ERROR("PopupWindow", "CALayer is nil in present dispatch");
             }

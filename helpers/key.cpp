@@ -101,84 +101,6 @@ KeyCode fromVirtualKey(int vk)
     }
 }
 
-const char* boolText(bool value)
-{
-    if (value) return "true";
-    return "false";
-}
-
-bool shouldLogKeyDebugCode(KeyCode code)
-{
-    switch (code)
-    {
-        case KeyCode::LShift:
-        case KeyCode::RShift:
-        case KeyCode::LCtrl:
-        case KeyCode::RCtrl:
-        case KeyCode::LAlt:
-        case KeyCode::RAlt:
-        case KeyCode::Grave:
-            return true;
-        default:
-            return false;
-    }
-}
-
-std::string keyCodeDebugName(KeyCode code)
-{
-    switch (code)
-    {
-        case KeyCode::LShift: return "KeyCode::LShift";
-        case KeyCode::RShift: return "KeyCode::RShift";
-        case KeyCode::LCtrl: return "KeyCode::LCtrl";
-        case KeyCode::RCtrl: return "KeyCode::RCtrl";
-        case KeyCode::LAlt: return "KeyCode::LAlt";
-        case KeyCode::RAlt: return "KeyCode::RAlt";
-        case KeyCode::Grave: return "KeyCode::Grave";
-        case KeyCode::Unknown: return "KeyCode::Unknown";
-        default:
-            return std::string("KeyCode(") + std::to_string(static_cast<int>(code)) + ")";
-    }
-}
-
-std::string virtualKeyDebugName(int vk)
-{
-    switch (vk)
-    {
-        case VK_LSHIFT: return "VK_LSHIFT";
-        case VK_RSHIFT: return "VK_RSHIFT";
-        case VK_LCONTROL: return "VK_LCONTROL";
-        case VK_RCONTROL: return "VK_RCONTROL";
-        case VK_LMENU: return "VK_LMENU";
-        case VK_RMENU: return "VK_RMENU";
-        case VK_OEM_3: return "VK_OEM_3";
-        default:
-            return std::string("VK(") + std::to_string(vk) + ")";
-    }
-}
-
-bool shouldLogKeyDebug(int vk, KeyCode code)
-{
-    if (shouldLogKeyDebugCode(code))
-    {
-        return true;
-    }
-
-    switch (vk)
-    {
-        case VK_LSHIFT:
-        case VK_RSHIFT:
-        case VK_LCONTROL:
-        case VK_RCONTROL:
-        case VK_LMENU:
-        case VK_RMENU:
-        case VK_OEM_3:
-            return true;
-        default:
-            return false;
-    }
-}
-
 } // namespace
 
 void Key::initialize()
@@ -198,28 +120,12 @@ void Key::updateFromInput(const InputState& input)
         if (input.keyPressed[i])
         {
             KeyCode code = fromVirtualKey(i);
-            if (shouldLogKeyDebug(i, code))
-            {
-                LOG_DEBUG("Key",
-                    std::string("updateFromInput pressed vk=") + std::to_string(i) +
-                    " (" + virtualKeyDebugName(i) + ")" +
-                    " mapped=" + keyCodeDebugName(code) +
-                    " keysDown=" + boolText(input.keysDown[i]));
-            }
             if (code != KeyCode::Unknown)
                 setDown(code);
         }
         if (input.keyReleased[i])
         {
             KeyCode code = fromVirtualKey(i);
-            if (shouldLogKeyDebug(i, code))
-            {
-                LOG_DEBUG("Key",
-                    std::string("updateFromInput released vk=") + std::to_string(i) +
-                    " (" + virtualKeyDebugName(i) + ")" +
-                    " mapped=" + keyCodeDebugName(code) +
-                    " keysDown=" + boolText(input.keysDown[i]));
-            }
             if (code != KeyCode::Unknown)
                 setUp(code);
         }
@@ -258,12 +164,6 @@ void Key::setDown(KeyCode code)
     auto& state = keyStates[code];
     if (!state.down)
     {
-        if (shouldLogKeyDebugCode(code))
-        {
-            LOG_DEBUG("Key",
-                std::string("setDown code=") + keyCodeDebugName(code) +
-                " callbacks=" + std::to_string(state.pressCallbacks.size()));
-        }
         state.pressed = true;
         for (auto& cb : state.pressCallbacks)
             cb(code);
@@ -276,12 +176,6 @@ void Key::setUp(KeyCode code)
     auto& state = keyStates[code];
     if (state.down)
     {
-        if (shouldLogKeyDebugCode(code))
-        {
-            LOG_DEBUG("Key",
-                std::string("setUp code=") + keyCodeDebugName(code) +
-                " callbacks=" + std::to_string(state.releaseCallbacks.size()));
-        }
         state.released = true;
         for (auto& cb : state.releaseCallbacks)
             cb(code);

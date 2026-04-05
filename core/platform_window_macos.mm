@@ -120,91 +120,6 @@ static void stopScreenCapture();
 
 namespace {
 
-const char* boolText(bool value) {
-    if (value) return "true";
-    return "false";
-}
-
-std::string macKeyCodeDebugName(unsigned short macKeyCode) {
-    switch (macKeyCode) {
-        case kVK_Shift: return "kVK_Shift";
-        case kVK_RightShift: return "kVK_RightShift";
-        case kVK_Control: return "kVK_Control";
-        case kVK_RightControl: return "kVK_RightControl";
-        case kVK_Option: return "kVK_Option";
-        case kVK_RightOption: return "kVK_RightOption";
-        case kVK_Command: return "kVK_Command";
-        case kVK_RightCommand: return "kVK_RightCommand";
-        case kVK_ANSI_Grave: return "kVK_ANSI_Grave";
-        default:
-            return std::string("macKeyCode(") + std::to_string(static_cast<unsigned int>(macKeyCode)) + ")";
-    }
-}
-
-std::string virtualKeyDebugName(int vk) {
-    switch (vk) {
-        case 0xA0: return "VK_LSHIFT";
-        case 0xA1: return "VK_RSHIFT";
-        case 0xA2: return "VK_LCONTROL";
-        case 0xA3: return "VK_RCONTROL";
-        case 0xA4: return "VK_LMENU";
-        case 0xA5: return "VK_RMENU";
-        case 0xC0: return "VK_OEM_3";
-        default:
-            return std::string("VK(") + std::to_string(vk) + ")";
-    }
-}
-
-bool shouldLogMacKeyDebug(unsigned short macKeyCode, int vk) {
-    switch (macKeyCode) {
-        case kVK_Shift:
-        case kVK_RightShift:
-        case kVK_Control:
-        case kVK_RightControl:
-        case kVK_Option:
-        case kVK_RightOption:
-        case kVK_Command:
-        case kVK_RightCommand:
-        case kVK_ANSI_Grave:
-            return true;
-        default:
-            break;
-    }
-
-    switch (vk) {
-        case 0xA0:
-        case 0xA1:
-        case 0xA2:
-        case 0xA3:
-        case 0xA4:
-        case 0xA5:
-        case 0xC0:
-            return true;
-        default:
-            return false;
-    }
-}
-
-void logMacKeyEvent(const char* eventName,
-                    unsigned short macKeyCode,
-                    int vk,
-                    bool down,
-                    NSEventModifierFlags modifiers)
-{
-    if (!shouldLogMacKeyDebug(macKeyCode, vk)) {
-        return;
-    }
-
-    LOG_DEBUG("MacKey",
-        std::string("event=") + eventName +
-        " macKeyCode=" + std::to_string(static_cast<unsigned int>(macKeyCode)) +
-        " (" + macKeyCodeDebugName(macKeyCode) + ")" +
-        " vk=" + std::to_string(vk) +
-        " (" + virtualKeyDebugName(vk) + ")" +
-        " down=" + boolText(down) +
-        " modifiers=" + std::to_string(static_cast<unsigned long long>(modifiers)));
-}
-
 // Shared key-event processor used by both the local event loop and the global monitor.
 // Returns the VK code mapped, or -1 if the macKeyCode wasn't recognized.
 int processKeyEvent(unsigned short macKeyCode, bool down, NSEventModifierFlags modifiers) {
@@ -260,7 +175,6 @@ int processKeyEvent(unsigned short macKeyCode, bool down, NSEventModifierFlags m
         default: break;
     }
     if (vk >= 0) {
-        logMacKeyEvent(down ? "keyDown" : "keyUp", macKeyCode, vk, down, modifiers);
         PlatformInput::setKeyDownFromEvent(vk, down);
     }
     if (macKeyCode == kVK_Command || macKeyCode == kVK_RightCommand) {
@@ -282,16 +196,13 @@ void processFlagsChanged(unsigned short flagKey, NSEventModifierFlags mods) {
         default: break;
     }
     if (modifierVk >= 0) {
-        logMacKeyEvent("flagsChanged", flagKey, modifierVk, modifierDown, mods);
         PlatformInput::setKeyDownFromEvent(modifierVk, modifierDown);
     }
     bool cmdDown = (mods & NSEventModifierFlagCommand) != 0;
     PlatformInput::setCommandDownFromEvent(cmdDown);
     if (flagKey == kVK_Command) {
-        logMacKeyEvent("flagsChanged", flagKey, 0xA2, cmdDown, mods);
         PlatformInput::setKeyDownFromEvent(0xA2, cmdDown);
     } else if (flagKey == kVK_RightCommand) {
-        logMacKeyEvent("flagsChanged", flagKey, 0xA3, cmdDown, mods);
         PlatformInput::setKeyDownFromEvent(0xA3, cmdDown);
     }
 }
