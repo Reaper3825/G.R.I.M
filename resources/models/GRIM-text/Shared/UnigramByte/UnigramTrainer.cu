@@ -937,7 +937,12 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int repetition_filtered = 0;
     int structural_dedup_rejected = 0;
     int prefix_extension_rejected = 0;
-    const int max_to_add = target_vocab_size > 0 ? target_vocab_size : std::numeric_limits<int>::max();
+    // Seed with 3x target vocab for iterative shrinking (SentencePiece-style).
+    // Starting oversized then pruning by marginal likelihood contribution ensures
+    // every surviving token genuinely earns its slot → higher entropy, better compression.
+    constexpr int SEED_MULTIPLIER = 3;
+    const int seed_vocab_size = target_vocab_size > 0 ? SEED_MULTIPLIER * target_vocab_size : std::numeric_limits<int>::max();
+    const int max_to_add = seed_vocab_size;
 
     std::unordered_set<std::string> dedup_keys_seen;
     std::unordered_map<std::string, int> dedup_key_to_count;
@@ -1021,10 +1026,21 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Added " << added << " subwords (min_freq=" << MIN_SUBWORD_FREQ 
               << ", target=" << target_vocab_size << "), total vocab: " << pieces_.size() << std::endl;
     
-    // Step 5: EM with convergence detection + dead token pruning + backfill
+    // Step 5: Iterative EM + Shrinking (SentencePiece-style)
+    //
+    // Starting with an oversized seed vocab (3x target), we iteratively:
+    //   1. Run EM to convergence (estimate token log-probabilities)
+    //   2. Compute each token's marginal log-likelihood contribution
+    //   3. Remove the bottom 25% of tokens (lowest contribution)
+    //   4. Repeat until vocab <= target size
+    //
+    // This ensures every surviving token genuinely earns its slot by
+    // contributing to compression — directly improving entropy, bytes/token,
+    // and fertility vs. the old top-K-by-frequency approach.
     constexpr int    EM_MAX_ITERATIONS     = 50;
     constexpr double EM_CONVERGENCE_THRESH = 0.0001;
     constexpr double SMOOTHING             = 0.1;
+    constexpr float  SHRINK_KEEP_RATIO     = 0.75f;  // Keep 75% each round
 
     auto runEStep = [&]() -> std::tuple<std::unordered_map<int, double>, double, double> {
         std::unordered_map<int, double> token_counts;
@@ -1119,14 +1135,101 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         return {std::move(last_counts), iter};
     };
 
-    // ---- Phase A: initial EM to convergence ----
+    // Helper: rebuild piece_to_id_ from pieces_ after any mutation
+    auto rebuildPieceIndex = [&]() {
+        piece_to_id_.clear();
+        for (size_t i = 0; i < pieces_.size(); ++i) {
+            piece_to_id_[pieces_[i].text] = static_cast<int>(i);
+        }
+    };
+
+    // ---- Phase A: initial EM to convergence on seed vocab ----
+    std::cout << "[UnigramLM] Phase-A: EM on seed vocab (" << pieces_.size()
+              << " pieces, target=" << target_vocab_size << ")" << std::endl;
     auto [phase_a_counts, phase_a_iters] = runEMToConvergence("Phase-A");
 
-    // ---- Phase B: prune low-frequency tokens (no backfill) ----
-    // Tokens with Viterbi count < min_subword_freq are removed. Without backfill,
-    // pruning is self-stabilizing: removing tokens can only increase counts of
-    // surviving tokens (Viterbi paths must re-route through them). The vocab shrinks
-    // slightly but every surviving token genuinely earns its slot.
+    // ---- Phase B: iterative shrinking to target vocab size ----
+    // Each round removes the bottom 25% of tokens by marginal log-likelihood
+    // contribution: loss_i = count_i * score_i (always <= 0, closest to 0 = least useful).
+    // Tokens that are never or rarely selected by Viterbi, or have very low scores,
+    // contribute almost nothing to overall compression and are pruned first.
+    int shrink_round = 0;
+    while (static_cast<int>(pieces_.size()) > target_vocab_size) {
+        shrink_round++;
+
+        // How many to keep this round (at least target_vocab_size)
+        int current_size = static_cast<int>(pieces_.size());
+        int keep_count = std::max(
+            target_vocab_size,
+            static_cast<int>(current_size * SHRINK_KEEP_RATIO)
+        );
+
+        // Compute marginal log-likelihood contribution for each token
+        // loss_i = count_i * score_i (both <= 0 terms, so product >= 0 inverted)
+        // We use |count * score| so higher = more valuable
+        struct TokenValue {
+            int index;
+            double value;  // |count * score| — higher means more valuable
+        };
+        std::vector<TokenValue> token_values;
+        token_values.reserve(pieces_.size());
+
+        for (size_t i = 0; i < pieces_.size(); ++i) {
+            if (pieces_[i].is_user_defined || pieces_[i].is_special) {
+                // Protected tokens get infinite value — never pruned
+                token_values.push_back({static_cast<int>(i), std::numeric_limits<double>::max()});
+                continue;
+            }
+            int tid = tokenIdForIndex(static_cast<int>(i));
+            double count = phase_a_counts.count(tid) ? phase_a_counts.at(tid) : 0.0;
+            double score = static_cast<double>(pieces_[i].score);
+            // Marginal LL contribution = count * score (score is negative log-prob)
+            // Tokens with count=0 or tiny count*|score| contribute least
+            double marginal_ll = count * std::abs(score);
+            token_values.push_back({static_cast<int>(i), marginal_ll});
+        }
+
+        // Sort by value descending — most valuable first
+        std::sort(token_values.begin(), token_values.end(),
+                  [](const TokenValue& a, const TokenValue& b) {
+                      return a.value > b.value;
+                  });
+
+        // Keep the top keep_count tokens
+        std::unordered_set<int> keep_indices;
+        for (int k = 0; k < keep_count && k < static_cast<int>(token_values.size()); ++k) {
+            keep_indices.insert(token_values[k].index);
+        }
+
+        int removed = current_size - static_cast<int>(keep_indices.size());
+        std::cout << "[UnigramLM] Shrink round " << shrink_round
+                  << ": " << current_size << " -> " << keep_indices.size()
+                  << " tokens (removed " << removed << ")" << std::endl;
+
+        // Compact pieces_ to survivors only
+        std::vector<UnigramPiece> surviving;
+        surviving.reserve(keep_indices.size());
+        for (size_t i = 0; i < pieces_.size(); ++i) {
+            if (keep_indices.count(static_cast<int>(i))) {
+                surviving.push_back(std::move(pieces_[i]));
+            }
+        }
+        pieces_ = std::move(surviving);
+        rebuildPieceIndex();
+
+        // Re-converge EM on the smaller vocab
+        std::string label = "Shrink-" + std::to_string(shrink_round);
+        auto [shrink_counts, shrink_iters] = runEMToConvergence(label.c_str());
+        phase_a_counts = std::move(shrink_counts);
+    }
+
+    if (shrink_round > 0) {
+        std::cout << "[UnigramLM] Iterative shrinking complete after " << shrink_round
+                  << " rounds. Final vocab: " << pieces_.size() << " pieces" << std::endl;
+    }
+
+    // ---- Phase C: final dead-token cleanup ----
+    // Remove any tokens that still have zero Viterbi count after convergence
     int pruned = 0;
     {
         std::unordered_set<int> dead_indices;
@@ -1134,15 +1237,14 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             if (pieces_[i].is_user_defined) continue;
             int tid = tokenIdForIndex(static_cast<int>(i));
             const double count = phase_a_counts.count(tid) ? phase_a_counts.at(tid) : 0.0;
-            if (count < static_cast<double>(MIN_SUBWORD_FREQ)) {
+            if (count < 1.0) {
                 dead_indices.insert(static_cast<int>(i));
             }
         }
 
         if (!dead_indices.empty()) {
-            std::cout << "[UnigramLM] Pruning " << dead_indices.size()
-                      << " low-frequency tokens (Viterbi count < " << MIN_SUBWORD_FREQ
-                      << " after convergence)" << std::endl;
+            std::cout << "[UnigramLM] Final cleanup: pruning " << dead_indices.size()
+                      << " dead tokens (Viterbi count < 1)" << std::endl;
 
             std::vector<UnigramPiece> surviving;
             surviving.reserve(pieces_.size() - dead_indices.size());
@@ -1153,24 +1255,19 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             }
             pieces_ = std::move(surviving);
             pruned = static_cast<int>(dead_indices.size());
-
-            piece_to_id_.clear();
-            for (size_t i = 0; i < pieces_.size(); ++i) {
-                piece_to_id_[pieces_[i].text] = static_cast<int>(i);
-            }
+            rebuildPieceIndex();
         } else {
-            std::cout << "[UnigramLM] No tokens below min_freq=" << MIN_SUBWORD_FREQ
-                      << " after convergence — vocab is clean" << std::endl;
+            std::cout << "[UnigramLM] No dead tokens after shrinking — vocab is clean" << std::endl;
         }
     }
 
-    // ---- Phase C: reconverge scores after pruning ----
+    // ---- Phase D: final reconvergence after cleanup ----
     if (pruned > 0) {
         std::cout << "[UnigramLM] Reconverging after pruning " << pruned
-                  << " tokens (vocab now " << pieces_.size() << ")" << std::endl;
-        auto [phase_c_counts, phase_c_iters] = runEMToConvergence("Phase-C");
-        (void)phase_c_counts;
-        (void)phase_c_iters;
+                  << " dead tokens (vocab now " << pieces_.size() << ")" << std::endl;
+        auto [phase_d_counts, phase_d_iters] = runEMToConvergence("Phase-D");
+        (void)phase_d_counts;
+        (void)phase_d_iters;
     }
 
     // Final trie build with converged scores

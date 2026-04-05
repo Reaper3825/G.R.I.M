@@ -5,7 +5,7 @@
         "huggingface": "",
         "openai": ""
     },
-    "backend": "auto",
+    "backend": "ollama",
     "blur": {
         "enabled": true,
         "opacity": 1.0
@@ -32,7 +32,7 @@
     "localai_url": "http://127.0.0.1:8080/v1",
     "max_tokens": 32,
     "mmo": {
-        "enabled": true,
+        "enabled": false,
         "mode": "shadow",
         "model_loader": {
             "hot_ttl_cap_ms": 300000,
@@ -254,9 +254,9 @@
                 "center_encoder_residuals": true,
                 "center_hidden_states": false,
                 "center_logits": false,
-                "enabled": false,
+                "enabled": true,
                 "pc1_power_iters": 5,
-                "project_out_pc1": false
+                "project_out_pc1": true
             },
             "log_interval": 25,
             "log_recorder": {
@@ -462,7 +462,7 @@
             "use_flash_attention": true,
             "use_gpu": true,
             "validation_interval": 2000,
-            "warmup_steps": 2000,
+            "warmup_steps": 1000,
             "weight_decay": 0.01
         },
         "current_curriculum": "Pre-Trainingv1",
