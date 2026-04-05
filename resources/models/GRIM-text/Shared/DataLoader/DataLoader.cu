@@ -245,18 +245,30 @@ struct CurriculumFilter {
 };
 
 // Load concept_block_ids and plaintext_block_ids from curriculum manifest.
-// Returns a filter with has_filter=false (meaning "include all as concept")
-// when the manifest is absent.
+// THROWS when a named curriculum is specified but the manifest file is missing
+// (silent fallback was producing EXP: prefix leaks — Rule 20).
 CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& curriculum_name) {
 	CurriculumFilter filter;
 	// Use named curriculum file if specified, otherwise default manifest
 	fs::path manifest = curriculum_name.empty()
 		? (dir / "curriculum_manifest.json")
 		: (dir / (curriculum_name + ".json"));
-	if (!fs::exists(manifest)) return filter;
+	if (!fs::exists(manifest)) {
+		if (!curriculum_name.empty()) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: curriculum '" + curriculum_name
+				+ "' specified but manifest not found at: " + manifest.string()
+				+ " — cannot silently fall back to unfiltered concept rendering");
+		}
+		std::cout << "[DataLoader] No curriculum_manifest.json found; loading all blocks unfiltered." << std::endl;
+		return filter;
+	}
 
 	std::ifstream in(manifest);
-	if (!in.is_open()) return filter;
+	if (!in.is_open()) {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: cannot open curriculum manifest: " + manifest.string());
+	}
 
 	try {
 		json j = json::parse(in);
@@ -275,14 +287,31 @@ CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& cu
 		if (j.contains("format_as_concept") && j["format_as_concept"].is_boolean()) {
 			filter.format_as_concept = j["format_as_concept"].get<bool>();
 		}
+
+		// When format_as_concept=false, ALL block IDs render as plain text.
+		// Move concept_ids into plaintext_ids so downstream is_plaintext checks
+		// work regardless of which JSON list the IDs were placed in.
+		if (!filter.format_as_concept && !filter.concept_ids.empty()) {
+			std::cout << "[DataLoader] format_as_concept=false: moving "
+			          << filter.concept_ids.size()
+			          << " concept_block_ids → plaintext_ids" << std::endl;
+			for (const auto& id : filter.concept_ids)
+				filter.plaintext_ids.insert(id);
+			filter.concept_ids.clear();
+		}
+
 		filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
-		std::cout << "[DataLoader] Curriculum manifest: format_as_concept=" << (filter.format_as_concept ? "true" : "false") << ", "
-		          << filter.concept_ids.size() << " concept + "
-		          << filter.plaintext_ids.size() << " plaintext block IDs from "
-		          << manifest.string() << std::endl;
-	} catch (const std::exception& e) {
-		std::cerr << "[DataLoader] Failed to parse curriculum_manifest.json: "
-		          << e.what() << "\n";
+		std::cout << "[DataLoader] Curriculum manifest loaded: "
+		          << manifest.string() << std::endl
+		          << "[DataLoader]   format_as_concept=" << (filter.format_as_concept ? "true" : "false")
+		          << ", concept_ids=" << filter.concept_ids.size()
+		          << ", plaintext_ids=" << filter.plaintext_ids.size()
+		          << ", has_filter=" << (filter.has_filter ? "true" : "false")
+		          << std::endl;
+	} catch (const json::exception& e) {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: failed to parse curriculum manifest "
+			+ manifest.string() + ": " + e.what());
 	}
 	return filter;
 }
@@ -460,12 +489,19 @@ bool PrepareTrainingDataFromCache(
 	CurriculumFilter curriculum_filter;
 	loadConceptBlocksJson(cache_dir, concept_json_entries, curriculum_filter, train_config.current_curriculum);
 
+	// ── Curriculum startup summary ──
+	std::cout << "[DataLoader] ═══════════ Curriculum Config ═══════════" << std::endl;
 	if (!train_config.current_curriculum.empty()) {
-		std::cout << "[DataLoader] Using curriculum: " << train_config.current_curriculum << std::endl;
+		std::cout << "[DataLoader]   curriculum        = " << train_config.current_curriculum << std::endl;
 	} else {
-		std::cout << "[DataLoader] WARNING: No curriculum set in ai_config.json (training.current_curriculum is empty).\n"
-		          << "[DataLoader]          Loading ALL concept blocks from concept_blocks.jsonl without filtering." << std::endl;
+		std::cout << "[DataLoader]   curriculum        = (NONE — loading ALL blocks unfiltered)" << std::endl;
 	}
+	std::cout << "[DataLoader]   format_as_concept = " << (curriculum_filter.format_as_concept ? "true" : "false") << std::endl;
+	std::cout << "[DataLoader]   has_filter        = " << (curriculum_filter.has_filter ? "true" : "false") << std::endl;
+	std::cout << "[DataLoader]   concept_ids       = " << curriculum_filter.concept_ids.size() << std::endl;
+	std::cout << "[DataLoader]   plaintext_ids     = " << curriculum_filter.plaintext_ids.size() << std::endl;
+	std::cout << "[DataLoader]   loaded blocks     = " << concept_json_entries.size() << std::endl;
+	std::cout << "[DataLoader] ═══════════════════════════════════════" << std::endl;
 	if (!train_config.current_model_training.empty()) {
 		std::cout << "[DataLoader] Training model: " << train_config.current_model_training << std::endl;
 	}

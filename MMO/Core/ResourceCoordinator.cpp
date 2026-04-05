@@ -173,6 +173,12 @@ bool ResourceCoordinator::hasSufficientVRAM(long needed_mb, int gpu_device, cons
     // Find the matching GPU in snapshot
     for (auto& g : snap.gpus) {
         if (g.device_index == gpu_device) {
+            // vram_free_mb == 0 && vram_used_mb == 0 means "unknown" (no NVML / Metal).
+            // Treat unknown VRAM as sufficient — don't block loads on platforms
+            // where we can't query GPU memory (macOS Apple Silicon, etc.).
+            if (g.vram_free_mb == 0 && g.vram_used_mb == 0)
+                return true;
+
             long available = g.vram_free_mb;
             long reserved  = config_.vram_reserve_mb;
             // Subtract VRAM committed to existing holders on this GPU

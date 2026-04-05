@@ -32,7 +32,7 @@
     "localai_url": "http://127.0.0.1:8080/v1",
     "max_tokens": 32,
     "mmo": {
-        "enabled": false,
+        "enabled": true,
         "mode": "shadow",
         "model_loader": {
             "hot_ttl_cap_ms": 300000,
@@ -51,7 +51,7 @@
             "backend_type": "grim_text_server",
             "description": "Primary router model — routes requests and synthesizes sub-model outputs",
             "estimated_ram_mb": 0,
-            "estimated_vram_mb": 2048,
+            "estimated_vram_mb": 0,
             "hard_copy_path": "",
             "id": "grim-text-router",
             "lora_path": "",
@@ -212,7 +212,7 @@
                 "temp_schedule": 0,
                 "temp_start": 1.5,
                 "transition_hard_threshold": 0.0,
-                "usage_decay": 0.95,  
+                "usage_decay": 0.95,
                 "value_match_epsilon": 0.0001
             },
             "force_rebuild_vocab": false,

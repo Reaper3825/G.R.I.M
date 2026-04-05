@@ -14,6 +14,14 @@
 #include <stdexcept>
 #include <thread>
 
+#ifndef _WIN32
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+#endif
+
 #include "core/grim_platform.h"
 
 namespace fs = std::filesystem;
@@ -114,6 +122,12 @@ bool ProcessManager::isRunning(const std::string& model_id) const {
     if (GetExitCodeProcess(slot.h_process, &exit_code)) {
         return exit_code == STILL_ACTIVE;
     }
+#else
+    const auto& slot = it->second;
+    if (!slot.running || slot.pid <= 0) return false;
+
+    // kill(pid, 0) checks if process exists without sending a signal
+    if (kill(slot.pid, 0) != 0) return false;
 #endif
     return it->second.running;
 }
@@ -318,7 +332,124 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     return false;
 
 #else
-    LOG_ERROR("ProcessManager", "Server process management only supported on Windows");
+    // ── macOS / POSIX implementation ──
+
+    // Check if an existing instance is already serving on this port
+    if (checkHealth(model.id, 2000)) {
+        LOG_DEBUG("ProcessManager", "Existing server for '" + model.id + "' is healthy, reusing");
+        slot.running = true;
+        return true;
+    }
+
+    // Load paths from config
+    Config::GrimTextPaths grim_paths;
+    if (!Config::loadGrimTextPaths(grim_paths, "ai_config.json")) {
+        LOG_ERROR("ProcessManager", "Failed to load paths from ai_config.json for model '" + model.id + "'");
+        return false;
+    }
+
+    // Determine executable path
+    fs::path server_exe;
+    if (!model.model_path.empty() && fs::exists(model.model_path) && model.model_path.ends_with(".exe")) {
+        server_exe = fs::absolute(model.model_path);
+    } else {
+        server_exe = fs::absolute("resources/models/GRIM-text/training/build/Release/grim_text_server");
+    }
+
+    fs::path vocab_path = fs::absolute(grim_paths.vocab);
+    fs::path model_weights = fs::absolute(grim_paths.model);
+
+    if (!fs::exists(server_exe)) {
+        LOG_ERROR("ProcessManager", "Server executable not found: " + server_exe.string());
+        return false;
+    }
+    if (!fs::exists(vocab_path)) {
+        LOG_ERROR("ProcessManager", "Vocabulary file not found: " + vocab_path.string());
+        return false;
+    }
+    if (!fs::exists(model_weights)) {
+        LOG_ERROR("ProcessManager", "Model file not found: " + model_weights.string());
+        return false;
+    }
+
+    slot.executable_path = server_exe.string();
+
+    std::string port_str = std::to_string(slot.port > 0 ? slot.port : 11435);
+
+    LOG_DEBUG("ProcessManager", "Starting model '" + model.id + "': "
+              + server_exe.string() + " " + vocab_path.string()
+              + " " + model_weights.string() + " " + port_str);
+
+    // Build argv for posix_spawn
+    std::string exe_str   = server_exe.string();
+    std::string vocab_str = vocab_path.string();
+    std::string model_str = model_weights.string();
+
+    char* argv[] = {
+        const_cast<char*>(exe_str.c_str()),
+        const_cast<char*>(vocab_str.c_str()),
+        const_cast<char*>(model_str.c_str()),
+        const_cast<char*>(port_str.c_str()),
+        nullptr
+    };
+
+    // Set working directory via file actions (chdir)
+    posix_spawn_file_actions_t file_actions;
+    posix_spawn_file_actions_init(&file_actions);
+    std::string cwd = server_exe.parent_path().string();
+    posix_spawn_file_actions_addchdir_np(&file_actions, cwd.c_str());
+
+    pid_t pid = 0;
+    int spawn_err = posix_spawn(&pid, exe_str.c_str(), &file_actions, nullptr, argv, environ);
+    posix_spawn_file_actions_destroy(&file_actions);
+
+    if (spawn_err != 0) {
+        LOG_ERROR("ProcessManager", "Failed to launch model '" + model.id
+                  + "': posix_spawn error " + std::to_string(spawn_err));
+        return false;
+    }
+
+    slot.pid = pid;
+    slot.running = true;
+
+    LOG_DEBUG("ProcessManager", "Model '" + model.id + "' process started (PID: "
+              + std::to_string(pid) + ")");
+
+    // Poll for health
+    const int max_wait_ms = 30000;
+    const int poll_ms = 500;
+    int elapsed = 0;
+
+    while (elapsed < max_wait_ms) {
+        try {
+            auto resp = cpr::Get(cpr::Url{slot.url}, cpr::Timeout{1000});
+            if (resp.status_code != 0) {
+                LOG_DEBUG("ProcessManager", "Model '" + model.id + "' server ready at "
+                          + slot.url + " (took " + std::to_string(elapsed) + "ms)");
+                return true;
+            }
+        } catch (...) {}
+
+        // Check if process crashed
+        int status = 0;
+        pid_t result = waitpid(pid, &status, WNOHANG);
+        if (result == pid) {
+            int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            LOG_ERROR("ProcessManager", "Model '" + model.id
+                      + "' server terminated unexpectedly (exit code: "
+                      + std::to_string(exit_code) + ")");
+            slot.running = false;
+            slot.pid = 0;
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+        elapsed += poll_ms;
+    }
+
+    LOG_ERROR("ProcessManager", "Model '" + model.id
+              + "' server failed to respond within " + std::to_string(max_wait_ms) + "ms");
+    terminateSlot(slot);
     return false;
 #endif
 }
@@ -350,6 +481,35 @@ void ProcessManager::terminateSlot(ProcessSlot& slot) {
     if (slot.h_mutex) {
         CloseHandle(slot.h_mutex);
         slot.h_mutex = nullptr;
+    }
+#else
+    if (slot.pid > 0) {
+        // Try graceful shutdown (SIGTERM)
+        if (kill(slot.pid, SIGTERM) == 0) {
+            // Wait up to 5 seconds for graceful exit
+            const int max_wait_ms = 5000;
+            const int poll_ms = 100;
+            int elapsed = 0;
+            bool exited = false;
+
+            while (elapsed < max_wait_ms) {
+                int status = 0;
+                pid_t result = waitpid(slot.pid, &status, WNOHANG);
+                if (result == slot.pid) {
+                    exited = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+                elapsed += poll_ms;
+            }
+
+            if (!exited) {
+                LOG_DEBUG("ProcessManager", "Forcefully terminating model '" + slot.model_id + "'");
+                kill(slot.pid, SIGKILL);
+                waitpid(slot.pid, nullptr, 0);
+            }
+        }
+        slot.pid = 0;
     }
 #endif
 

@@ -215,8 +215,8 @@ static void bootstrapMMOLayer() {
     registry.loadFromConfig(aiConfig);
     LOG_PHASE("MMO model registry loaded", true);
 
-    if (registry.isEnabled()) {
-        LOG_DEBUG("Bootstrap", "MMO enabled (mode=" + registry.mode() + ")");
+    {
+        LOG_DEBUG("Bootstrap", "MMO layer init (mode=" + registry.mode() + ", enabled=" + std::string(registry.isEnabled() ? "true" : "false") + ")");
 
         // ModelLoader — load config from ai_config.json → mmo.model_loader
         GRIM::MMO::ModelLoaderConfig loaderCfg;
@@ -290,8 +290,6 @@ static void bootstrapMMOLayer() {
             }
         });
         s_idleTickThread.detach();
-    } else {
-        LOG_DEBUG("Bootstrap", "MMO disabled in config");
     }
 
     // ToolRegistry — seed from CommandRegistry

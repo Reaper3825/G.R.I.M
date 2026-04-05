@@ -26,6 +26,10 @@
 
 #include "core/grim_platform.h"
 
+#ifndef _WIN32
+#include <sys/types.h>
+#endif
+
 namespace GRIM::MMO {
 
 // =========================================================
@@ -42,6 +46,8 @@ struct ProcessSlot {
     PROCESS_INFORMATION process_info{};
     HANDLE              h_process = nullptr;
     HANDLE              h_mutex   = nullptr;
+#else
+    pid_t               pid       = 0;
 #endif
 };
 

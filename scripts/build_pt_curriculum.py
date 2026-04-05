@@ -190,6 +190,7 @@ def main():
     manifest = {
         "concept_block_ids": [],
         "plaintext_block_ids": pt_block_ids,
+        "format_as_concept": False,
     }
     manifest_path = os.path.join(DATA_DIR, f"{CURRICULUM_NAME}.json")
     with open(manifest_path, "w") as f:

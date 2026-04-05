@@ -172,10 +172,8 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 
         auto& registry = GRIM::MMO::ModelRegistry::instance();
         if (!registry.isEnabled()) {
-            throw std::runtime_error(
-                "MMO is disabled in config but backend '" + backend
-                + "' requires it. Set mmo.enabled=true in ai_config.json "
-                "or set backend to 'ollama'.");
+            LOG_DEBUG("AI", "MMO toggled off — falling back to Ollama direct");
+            return callOllamaDirect(prompt);
         }
 
         // Produce NlpAnnotation for structured routing
