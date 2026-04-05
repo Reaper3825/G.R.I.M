@@ -244,75 +244,128 @@ struct CurriculumFilter {
 	bool format_as_concept = true;  // curriculum-level flag; false → all blocks render as plain text
 };
 
-// Load concept_block_ids and plaintext_block_ids from curriculum manifest.
-// THROWS when a named curriculum is specified but the manifest file is missing
-// (silent fallback was producing EXP: prefix leaks — Rule 20).
+// Load curriculum filter from curriculum_registry.json by name lookup.
+// Falls back to {curriculum_name}.json or curriculum_manifest.json if registry
+// doesn't contain the curriculum. THROWS when a named curriculum is specified
+// but cannot be found anywhere (Rule 20: no silent fallbacks).
 CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& curriculum_name) {
 	CurriculumFilter filter;
-	// Use named curriculum file if specified, otherwise default manifest
-	fs::path manifest = curriculum_name.empty()
-		? (dir / "curriculum_manifest.json")
-		: (dir / (curriculum_name + ".json"));
-	if (!fs::exists(manifest)) {
-		if (!curriculum_name.empty()) {
-			throw std::runtime_error(
-				"[DataLoader] FATAL: curriculum '" + curriculum_name
-				+ "' specified but manifest not found at: " + manifest.string()
-				+ " — cannot silently fall back to unfiltered concept rendering");
+
+	if (curriculum_name.empty()) {
+		// No curriculum specified — try legacy curriculum_manifest.json
+		fs::path manifest = dir / "curriculum_manifest.json";
+		if (!fs::exists(manifest)) {
+			std::cout << "[DataLoader] No curriculum specified; loading all blocks unfiltered." << std::endl;
+			return filter;
 		}
-		std::cout << "[DataLoader] No curriculum_manifest.json found; loading all blocks unfiltered." << std::endl;
+		std::ifstream in(manifest);
+		if (!in.is_open()) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: cannot open curriculum manifest: " + manifest.string());
+		}
+		json j = json::parse(in);
+		if (j.contains("concept_block_ids") && j["concept_block_ids"].is_array()) {
+			for (const auto& id : j["concept_block_ids"])
+				if (id.is_string()) filter.concept_ids.insert(id.get<std::string>());
+		}
+		if (j.contains("plaintext_block_ids") && j["plaintext_block_ids"].is_array()) {
+			for (const auto& id : j["plaintext_block_ids"])
+				if (id.is_string()) filter.plaintext_ids.insert(id.get<std::string>());
+		}
+		if (j.contains("format_as_concept") && j["format_as_concept"].is_boolean())
+			filter.format_as_concept = j["format_as_concept"].get<bool>();
+		filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
+		std::cout << "[DataLoader] Legacy manifest loaded: " << manifest.string() << std::endl;
 		return filter;
 	}
 
-	std::ifstream in(manifest);
-	if (!in.is_open()) {
-		throw std::runtime_error(
-			"[DataLoader] FATAL: cannot open curriculum manifest: " + manifest.string());
-	}
+	// ── Primary path: look up curriculum by name in curriculum_registry.json ──
+	fs::path registry_path = dir / "curriculum_registry.json";
+	bool found_in_registry = false;
 
-	try {
-		json j = json::parse(in);
-		if (j.contains("concept_block_ids") && j["concept_block_ids"].is_array()) {
-			for (const auto& id : j["concept_block_ids"]) {
-				if (id.is_string())
-					filter.concept_ids.insert(id.get<std::string>());
+	if (fs::exists(registry_path)) {
+		std::ifstream reg_in(registry_path);
+		if (reg_in.is_open()) {
+			try {
+				json reg = json::parse(reg_in);
+				if (reg.contains("curriculums") && reg["curriculums"].is_array()) {
+					for (const auto& curr : reg["curriculums"]) {
+						if (!curr.contains("name") || !curr["name"].is_string()) continue;
+						if (curr["name"].get<std::string>() != curriculum_name) continue;
+
+						// Found it — extract block IDs and flags
+						found_in_registry = true;
+						if (curr.contains("format_as_concept") && curr["format_as_concept"].is_boolean())
+							filter.format_as_concept = curr["format_as_concept"].get<bool>();
+
+						if (curr.contains("concept_block_ids") && curr["concept_block_ids"].is_array()) {
+							for (const auto& id : curr["concept_block_ids"]) {
+								if (id.is_string()) {
+									if (filter.format_as_concept)
+										filter.concept_ids.insert(id.get<std::string>());
+									else
+										filter.plaintext_ids.insert(id.get<std::string>());
+								}
+							}
+						}
+						std::cout << "[DataLoader] Curriculum '" << curriculum_name
+						          << "' loaded from registry: " << registry_path.string() << std::endl;
+						break;
+					}
+				}
+			} catch (const json::exception& e) {
+				std::cerr << "[DataLoader] WARNING: failed to parse curriculum_registry.json: "
+				          << e.what() << std::endl;
 			}
 		}
-		if (j.contains("plaintext_block_ids") && j["plaintext_block_ids"].is_array()) {
-			for (const auto& id : j["plaintext_block_ids"]) {
-				if (id.is_string())
-					filter.plaintext_ids.insert(id.get<std::string>());
-			}
-		}
-		if (j.contains("format_as_concept") && j["format_as_concept"].is_boolean()) {
-			filter.format_as_concept = j["format_as_concept"].get<bool>();
-		}
-
-		// When format_as_concept=false, ALL block IDs render as plain text.
-		// Move concept_ids into plaintext_ids so downstream is_plaintext checks
-		// work regardless of which JSON list the IDs were placed in.
-		if (!filter.format_as_concept && !filter.concept_ids.empty()) {
-			std::cout << "[DataLoader] format_as_concept=false: moving "
-			          << filter.concept_ids.size()
-			          << " concept_block_ids → plaintext_ids" << std::endl;
-			for (const auto& id : filter.concept_ids)
-				filter.plaintext_ids.insert(id);
-			filter.concept_ids.clear();
-		}
-
-		filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
-		std::cout << "[DataLoader] Curriculum manifest loaded: "
-		          << manifest.string() << std::endl
-		          << "[DataLoader]   format_as_concept=" << (filter.format_as_concept ? "true" : "false")
-		          << ", concept_ids=" << filter.concept_ids.size()
-		          << ", plaintext_ids=" << filter.plaintext_ids.size()
-		          << ", has_filter=" << (filter.has_filter ? "true" : "false")
-		          << std::endl;
-	} catch (const json::exception& e) {
-		throw std::runtime_error(
-			"[DataLoader] FATAL: failed to parse curriculum manifest "
-			+ manifest.string() + ": " + e.what());
 	}
+
+	// ── Fallback: per-curriculum manifest file {name}.json ──
+	if (!found_in_registry) {
+		fs::path manifest = dir / (curriculum_name + ".json");
+		if (!fs::exists(manifest)) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: curriculum '" + curriculum_name
+				+ "' not found in curriculum_registry.json and no manifest at: "
+				+ manifest.string());
+		}
+		std::ifstream in(manifest);
+		if (!in.is_open()) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: cannot open curriculum manifest: " + manifest.string());
+		}
+		try {
+			json j = json::parse(in);
+			if (j.contains("concept_block_ids") && j["concept_block_ids"].is_array()) {
+				for (const auto& id : j["concept_block_ids"])
+					if (id.is_string()) filter.concept_ids.insert(id.get<std::string>());
+			}
+			if (j.contains("plaintext_block_ids") && j["plaintext_block_ids"].is_array()) {
+				for (const auto& id : j["plaintext_block_ids"])
+					if (id.is_string()) filter.plaintext_ids.insert(id.get<std::string>());
+			}
+			if (j.contains("format_as_concept") && j["format_as_concept"].is_boolean())
+				filter.format_as_concept = j["format_as_concept"].get<bool>();
+
+			if (!filter.format_as_concept && !filter.concept_ids.empty()) {
+				for (const auto& id : filter.concept_ids)
+					filter.plaintext_ids.insert(id);
+				filter.concept_ids.clear();
+			}
+			std::cout << "[DataLoader] Curriculum '" << curriculum_name
+			          << "' loaded from manifest: " << manifest.string() << std::endl;
+		} catch (const json::exception& e) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: failed to parse " + manifest.string() + ": " + e.what());
+		}
+	}
+
+	filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
+	std::cout << "[DataLoader]   format_as_concept=" << (filter.format_as_concept ? "true" : "false")
+	          << ", concept_ids=" << filter.concept_ids.size()
+	          << ", plaintext_ids=" << filter.plaintext_ids.size()
+	          << ", has_filter=" << (filter.has_filter ? "true" : "false")
+	          << std::endl;
 	return filter;
 }
 
