@@ -326,7 +326,10 @@ std::string renderCanonicalText(const json& j) {
 // pretraining (PT) curriculums that should be tokenized as
 // natural text, not structured concept format.
 
-std::string renderPlainText(const json& j) {
+std::string renderPlainText(const json& j, bool format_as_concept) {
+    if (format_as_concept)
+        return renderCanonicalText(j);
+
     std::ostringstream os;
 
     if (j.contains("question") && j["question"].is_string() &&

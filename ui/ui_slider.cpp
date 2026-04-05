@@ -20,8 +20,6 @@ UISlider::UISlider(const std::string& lbl, float minVal, float maxVal, float ini
     // Defensive check: ensure label was copied correctly
     if (label.empty()) {
         LOG_ERROR("UISlider", "WARNING: UISlider constructed with empty label");
-    } else {
-        LOG_DEBUG("UISlider", "Constructed: " + label);
     }
 }
 

@@ -241,6 +241,7 @@ struct CurriculumFilter {
 	std::unordered_set<std::string> concept_ids;
 	std::unordered_set<std::string> plaintext_ids;
 	bool has_filter = false;
+	bool format_as_concept = true;  // curriculum-level flag; false → all blocks render as plain text
 };
 
 // Load concept_block_ids and plaintext_block_ids from curriculum manifest.
@@ -271,8 +272,11 @@ CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& cu
 					filter.plaintext_ids.insert(id.get<std::string>());
 			}
 		}
+		if (j.contains("format_as_concept") && j["format_as_concept"].is_boolean()) {
+			filter.format_as_concept = j["format_as_concept"].get<bool>();
+		}
 		filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
-		std::cout << "[DataLoader] Curriculum manifest: "
+		std::cout << "[DataLoader] Curriculum manifest: format_as_concept=" << (filter.format_as_concept ? "true" : "false") << ", "
 		          << filter.concept_ids.size() << " concept + "
 		          << filter.plaintext_ids.size() << " plaintext block IDs from "
 		          << manifest.string() << std::endl;
@@ -535,10 +539,11 @@ bool PrepareTrainingDataFromCache(
 		vocab_corpus.reserve(concept_json_entries.size());
 		for (const auto& cj : concept_json_entries) {
 			std::string entry_id = cj.value("id", std::string());
-			bool is_plaintext = curriculum_filter.has_filter &&
-			                    curriculum_filter.plaintext_ids.count(entry_id) > 0;
+			bool is_plaintext = !curriculum_filter.format_as_concept ||
+			                    (curriculum_filter.has_filter &&
+			                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
 			if (is_plaintext)
-				vocab_corpus.push_back(GRIM::DataLoader::renderPlainText(cj));
+				vocab_corpus.push_back(GRIM::DataLoader::renderPlainText(cj, false));
 			else
 				vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
 		}
@@ -624,12 +629,13 @@ bool PrepareTrainingDataFromCache(
 	for (const auto& cj : concept_json_entries) {
 		try {
 			std::string entry_id = cj.value("id", std::string());
-			bool is_plaintext = curriculum_filter.has_filter &&
-			                    curriculum_filter.plaintext_ids.count(entry_id) > 0;
+			bool is_plaintext = !curriculum_filter.format_as_concept ||
+			                    (curriculum_filter.has_filter &&
+			                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
 
 			if (is_plaintext) {
 				// ── Pretraining path: plain text, no execution payload ──
-				std::string text = GRIM::DataLoader::renderPlainText(cj);
+				std::string text = GRIM::DataLoader::renderPlainText(cj, false);
 				if (text.size() < kMinCleanedTextLength) continue;
 
 				auto seq = build_sequence(text);

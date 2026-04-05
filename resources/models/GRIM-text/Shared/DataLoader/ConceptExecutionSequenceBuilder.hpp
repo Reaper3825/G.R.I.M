@@ -100,7 +100,8 @@ std::string renderCanonicalText(const nlohmann::json& j);
 // Render raw text content WITHOUT canonical Q:/STATE0/EXP:/EXEC/A: prefixes.
 // Used for pretraining (PT) curriculums where concept blocks should be
 // tokenized as natural text. Extracts question, explanation, and answer fields.
-std::string renderPlainText(const nlohmann::json& j);
+// format_as_concept: curriculum-level flag (false = plain text, no CB prefixes).
+std::string renderPlainText(const nlohmann::json& j, bool format_as_concept = false);
 
 // Full pipeline: parse JSON → build record → render text → tokenize → compile.
 // Compilation maps bootstrap bindings to ATOM_NUM token positions via

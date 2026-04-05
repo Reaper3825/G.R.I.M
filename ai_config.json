@@ -212,12 +212,12 @@
                 "temp_schedule": 0,
                 "temp_start": 1.5,
                 "transition_hard_threshold": 0.0,
-                "usage_decay": 0.95,
+                "usage_decay": 0.95,  
                 "value_match_epsilon": 0.0001
             },
             "force_rebuild_vocab": false,
             "generation": {
-                "do_sample": true,
+                "do_sample": false,
                 "enable_scratchblock_reasoning": true,
                 "frequency_penalty": 0.0,
                 "max_new_tokens": 128,
