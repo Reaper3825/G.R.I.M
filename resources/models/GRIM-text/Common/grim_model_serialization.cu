@@ -556,7 +556,82 @@ bool LanguageModel::load(const std::string& path) {
     }
 
     bool result = layer.load(request);
-    if (!result) return false;
+    if (!result) {
+        EmitModuleError(ModuleId::Checkpoint, "[load] FAILURE — dumping model & request state for diagnostics");
+        EmitModuleError(ModuleId::Checkpoint, "[load]   path=" + path);
+        {
+            std::ostringstream oss;
+            oss << "[load]   model config: vocab=" << config_.vocab_size
+                << " d_model=" << config_.d_model << " num_layers=" << config_.num_layers
+                << " num_heads=" << config_.num_heads << " num_kv_heads=" << config_.num_kv_heads
+                << " d_ff=" << config_.d_ff << " max_seq_len=" << config_.max_seq_len
+                << " head_dim=" << config_.head_dim;
+            EmitModuleError(ModuleId::Checkpoint, oss.str());
+        }
+        {
+            std::ostringstream oss;
+            oss << "[load]   tie_embeddings=" << config_.tie_embeddings
+                << " use_bias=" << config_.use_bias << " use_gpu=" << config_.use_gpu
+                << " mtp_enabled=" << config_.mtp_enabled;
+            EmitModuleError(ModuleId::Checkpoint, oss.str());
+        }
+        {
+            std::ostringstream oss;
+            oss << "[load]   capabilities: exec_block=" << request.capabilities.requires_execution_block
+                << " slot_selector=" << request.capabilities.requires_slot_selector
+                << " reasoning=" << request.capabilities.requires_reasoning_head
+                << " scratch=" << request.capabilities.requires_scratch_block
+                << " final_rms=" << request.capabilities.requires_final_rms_gamma;
+            EmitModuleError(ModuleId::Checkpoint, oss.str());
+        }
+        {
+            std::ostringstream oss;
+            oss << "[load]   layer pointers: embedding=" << (embedding_layer_ ? "OK" : "NULL")
+                << " lm_head=" << (lm_head_layer_ ? "OK" : "NULL")
+                << " scratch_block=" << (scratch_block_layer_ ? "OK" : "NULL")
+                << " reasoning_head=" << (reasoning_head_layer_ ? "OK" : "NULL")
+                << " exec_block=" << (execution_block_layer_ ? "OK" : "NULL")
+                << " slot_selector=" << (decode_time_slot_selector_layer_ ? "OK" : "NULL");
+            EmitModuleError(ModuleId::Checkpoint, oss.str());
+        }
+        {
+            std::ostringstream oss;
+            oss << "[load]   GPU destinations: token_emb=" << (request.gpu_embedding.token_embeddings.ptr ? "set" : "NULL")
+                << "(" << request.gpu_embedding.token_embeddings.count << ")"
+                << " rms_gamma=" << (request.gpu_embedding.rms_gamma.ptr ? "set" : "NULL")
+                << " lm_proj=" << (request.lm_head.projection.ptr ? "set" : "NULL")
+                << "(" << request.lm_head.projection.count << ")"
+                << " lm_bias=" << (request.lm_head.bias.ptr ? "set" : "NULL")
+                << "(" << request.lm_head.bias.count << ")";
+            EmitModuleError(ModuleId::Checkpoint, oss.str());
+        }
+        {
+            std::ostringstream oss;
+            oss << "[load]   encoder_layers=" << request.encoder_layers.size();
+            if (!request.encoder_layers.empty()) {
+                const auto& first = request.encoder_layers[0];
+                oss << " layer0: w_qkv=" << (first.attn_w_qkv.ptr ? "set" : "NULL")
+                    << "(" << first.attn_w_qkv.count << ")"
+                    << " w_o=" << (first.attn_w_o.ptr ? "set" : "NULL")
+                    << "(" << first.attn_w_o.count << ")"
+                    << " w1=" << (first.ffn_w1.ptr ? "set" : "NULL")
+                    << "(" << first.ffn_w1.count << ")";
+            }
+            EmitModuleError(ModuleId::Checkpoint, oss.str());
+        }
+        // CUDA memory state at time of failure
+        {
+            std::size_t free_mem = 0, total_mem = 0;
+            if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess) {
+                std::ostringstream oss;
+                oss << "[load]   CUDA memory: free=" << free_mem / (1024*1024)
+                    << "MB total=" << total_mem / (1024*1024)
+                    << "MB used=" << (total_mem - free_mem) / (1024*1024) << "MB";
+                EmitModuleError(ModuleId::Checkpoint, oss.str());
+            }
+        }
+        return false;
+    }
 
     // MTP heads: load from sidecar <path>.mtp if present and config has MTP enabled
     if (config_.mtp_enabled && getMtpK() > 0) {

@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -33,6 +34,20 @@ std::string Msg(Args&&... args) {
     std::ostringstream oss;
     (oss << ... << args);
     return oss.str();
+}
+
+void dumpSaveCudaState() {
+    std::size_t free_mem = 0, total_mem = 0;
+    if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess) {
+        GRIM::Logging::EmitModuleError(kLogModule,
+            Msg("[save][DUMP] GPU memory: free=", free_mem / (1024*1024), "MB total=",
+                 total_mem / (1024*1024), "MB used=", (total_mem - free_mem) / (1024*1024), "MB"));
+    }
+    cudaError_t sticky = cudaPeekAtLastError();
+    if (sticky != cudaSuccess) {
+        GRIM::Logging::EmitModuleError(kLogModule,
+            Msg("[save][DUMP] CUDA sticky error: ", cudaGetErrorString(sticky)));
+    }
 }
 
 } // namespace
@@ -98,13 +113,21 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     auto download_device_vector = [](const DeviceReadView& view, const char* label) -> std::vector<float> {
         if (view.count == 0) return {};
         if (!view.ptr) {
-            Logging::EmitModuleError(kLogModule, Msg("[save] Missing ", label, " buffer"));
+            Logging::EmitModuleError(kLogModule, Msg("[save] DOWNLOAD FAIL — null source buffer for ", label));
+            Logging::EmitModuleError(kLogModule, Msg("[save]   view.count=", view.count,
+                " view.ptr=NULL — caller provided a ReadView with count>0 but no pointer"));
+            dumpSaveCudaState();
             return {};
         }
         std::vector<float> host(view.count);
         cudaError_t err = cudaMemcpy(host.data(), view.ptr, view.count * sizeof(float), cudaMemcpyDeviceToHost);
         if (err != cudaSuccess) {
-            Logging::EmitModuleError(kLogModule, Msg("[save] Failed to download ", label, ": ", cudaGetErrorString(err)));
+            Logging::EmitModuleError(kLogModule, Msg("[save] DOWNLOAD FAIL — cudaMemcpy D2H failed for ", label,
+                ": ", cudaGetErrorString(err)));
+            Logging::EmitModuleError(kLogModule, Msg("[save]   elements=", view.count,
+                " bytes=", view.count * sizeof(float),
+                " src_ptr=", reinterpret_cast<uintptr_t>(view.ptr)));
+            dumpSaveCudaState();
             return {};
         }
         return host;
@@ -434,13 +457,20 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             total_written += static_cast<std::size_t>(n);
         }
         if (total_written != buf_size) {
-            Logging::EmitModuleError(kLogModule, "[save] Write failed");
+            Logging::EmitModuleError(kLogModule, Msg("[save] WRITE FAIL — incomplete write to temp file"));
+            Logging::EmitModuleError(kLogModule, Msg("[save]   written=", total_written, " expected=", buf_size,
+                " shortfall=", buf_size - total_written, " bytes"));
+            Logging::EmitModuleError(kLogModule, Msg("[save]   errno=", errno, " (", std::strerror(errno), ")"));
+            Logging::EmitModuleError(kLogModule, Msg("[save]   temp_path=", temp_path));
+            Logging::EmitModuleError(kLogModule, Msg("[save]   final_path=", final_path));
             close(fd);
             std::filesystem::remove(temp_path, ec);
             return false;
         }
         if (fsync(fd) != 0) {
-            Logging::EmitModuleError(kLogModule, "[save] fsync failed — refusing to rename (checkpoint data may not be on disk)");
+            Logging::EmitModuleError(kLogModule, Msg("[save] FSYNC FAIL — refusing to rename (data may not be on disk)"));
+            Logging::EmitModuleError(kLogModule, Msg("[save]   errno=", errno, " (", std::strerror(errno), ")"));
+            Logging::EmitModuleError(kLogModule, Msg("[save]   file_size=", buf_size, " temp_path=", temp_path));
             close(fd);
             std::filesystem::remove(temp_path, ec);
             return false;
@@ -458,8 +488,12 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             }
             struct stat st;
             if (fstat(verify_fd, &st) != 0 || static_cast<std::size_t>(st.st_size) != buf_size) {
-                Logging::EmitModuleError(kLogModule, Msg("[save] Post-write verify: size mismatch (expected=",
-                    buf_size, ", on_disk=", st.st_size, ")"));
+                Logging::EmitModuleError(kLogModule, Msg("[save] POST-WRITE VERIFY FAIL — size mismatch"));
+                Logging::EmitModuleError(kLogModule, Msg("[save]   expected=", buf_size,
+                    " on_disk=", st.st_size, " diff=",
+                    static_cast<int64_t>(buf_size) - static_cast<int64_t>(st.st_size)));
+                Logging::EmitModuleError(kLogModule, Msg("[save]   temp_path=", temp_path));
+                Logging::EmitModuleError(kLogModule, Msg("[save]   fstat errno=", errno, " (", std::strerror(errno), ")"));
                 close(verify_fd);
                 std::filesystem::remove(temp_path, ec);
                 return false;
@@ -469,13 +503,20 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             ssize_t hdr_read = read(verify_fd, header, std::min<std::size_t>(64, buf_size));
             close(verify_fd);
             if (hdr_read < 8) {
-                Logging::EmitModuleError(kLogModule, "[save] Post-write verify: could not read header");
+                Logging::EmitModuleError(kLogModule, Msg("[save] POST-WRITE VERIFY FAIL — could not read header"));
+                Logging::EmitModuleError(kLogModule, Msg("[save]   bytes_read=", hdr_read,
+                    " expected>=8 temp_path=", temp_path));
                 std::filesystem::remove(temp_path, ec);
                 return false;
             }
             // Verify file identifier at bytes 4-7
             if (std::memcmp(header + 4, "GRMT", 4) != 0) {
-                Logging::EmitModuleError(kLogModule, "[save] Post-write verify: file identifier mismatch — data corrupted on write");
+                char observed[5] = {static_cast<char>(header[4]), static_cast<char>(header[5]),
+                                    static_cast<char>(header[6]), static_cast<char>(header[7]), '\0'};
+                Logging::EmitModuleError(kLogModule, Msg("[save] POST-WRITE VERIFY FAIL — file identifier corrupted"));
+                Logging::EmitModuleError(kLogModule, Msg("[save]   expected=\"GRMT\" observed=\"", observed, "\""));
+                Logging::EmitModuleError(kLogModule, Msg("[save]   temp_path=", temp_path,
+                    " — filesystem wrote wrong data (corruption between builder and disk)"));
                 std::filesystem::remove(temp_path, ec);
                 return false;
             }
@@ -483,8 +524,9 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             uint32_t root_offset = 0;
             std::memcpy(&root_offset, header, 4);
             if (root_offset >= buf_size) {
-                Logging::EmitModuleError(kLogModule, Msg("[save] Post-write verify: root_offset=",
-                    root_offset, " exceeds file_size=", buf_size));
+                Logging::EmitModuleError(kLogModule, Msg("[save] POST-WRITE VERIFY FAIL — root_offset out of bounds"));
+                Logging::EmitModuleError(kLogModule, Msg("[save]   root_offset=", root_offset,
+                    " file_size=", buf_size, " temp_path=", temp_path));
                 std::filesystem::remove(temp_path, ec);
                 return false;
             }

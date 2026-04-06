@@ -2,6 +2,8 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <algorithm>
+#include <iomanip>
 #include <string>
 #include <vector>
 
@@ -20,6 +22,159 @@ std::string Msg(Args&&... args) {
     std::ostringstream oss;
     (oss << ... << args);
     return oss.str();
+}
+
+void dumpCudaDeviceState() {
+    auto emit = [](const std::string& msg) {
+        GRIM::Logging::EmitModuleError(kLogModule, msg);
+    };
+    emit("[DUMP] --- CUDA device state ---");
+    std::size_t free_mem = 0, total_mem = 0;
+    if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess) {
+        emit(Msg("[DUMP]   GPU memory: free=", free_mem / (1024*1024), "MB total=",
+                 total_mem / (1024*1024), "MB used=", (total_mem - free_mem) / (1024*1024), "MB"));
+    } else {
+        emit("[DUMP]   GPU memory query FAILED");
+    }
+    int dev = -1;
+    if (cudaGetDevice(&dev) == cudaSuccess) {
+        emit(Msg("[DUMP]   active CUDA device: ", dev));
+    }
+    cudaError_t sticky = cudaPeekAtLastError();
+    if (sticky != cudaSuccess) {
+        emit(Msg("[DUMP]   CUDA sticky error: ", cudaGetErrorString(sticky)));
+    }
+}
+
+void dumpBinaryAnalysis(const std::vector<uint8_t>& buffer, std::size_t file_size, const std::string& path) {
+    auto emit = [](const std::string& msg) {
+        GRIM::Logging::EmitModuleError(kLogModule, msg);
+    };
+
+    emit("========== CHECKPOINT LOAD FAILURE — FULL BINARY DUMP ==========");
+    emit(Msg("[DUMP] path: ", path));
+    emit(Msg("[DUMP] file_size: ", file_size, " bytes (", file_size / (1024*1024), " MB, ",
+             file_size % (1024*1024), " remainder bytes)"));
+
+    // --- Hex dump first 256 bytes with ASCII sidebar ---
+    auto hexDumpRange = [&](std::size_t start, std::size_t end, const char* label) {
+        emit(Msg("[DUMP] --- ", label, " (offset ", start, " to ", end - 1, ") ---"));
+        for (std::size_t row = start; row < end; row += 16) {
+            std::ostringstream hex;
+            std::string ascii;
+            hex << "[DUMP]   " << std::hex << std::setw(8) << std::setfill('0') << row << ": ";
+            for (std::size_t col = 0; col < 16 && (row + col) < end; ++col) {
+                uint8_t b = buffer[row + col];
+                hex << std::setw(2) << std::setfill('0') << static_cast<int>(b) << " ";
+                ascii += (b >= 32 && b < 127 ? static_cast<char>(b) : '.');
+            }
+            emit(hex.str() + " |" + ascii + "|");
+        }
+    };
+
+    std::size_t head_len = std::min<std::size_t>(256, file_size);
+    if (head_len > 0) hexDumpRange(0, head_len, "First 256 bytes");
+
+    if (file_size > 512) {
+        std::size_t tail_start = file_size - 256;
+        hexDumpRange(tail_start, file_size, "Last 256 bytes");
+    }
+
+    // --- Zero-run scan (entire file, report runs >= 1KB) ---
+    emit("[DUMP] --- Zero-region scan (runs >= 1KB) ---");
+    std::size_t zero_run_start = 0;
+    bool in_zero_run = false;
+    std::size_t total_zero_bytes = 0;
+    int zero_regions = 0;
+    for (std::size_t i = 0; i < file_size; ++i) {
+        if (buffer[i] == 0) {
+            if (!in_zero_run) { zero_run_start = i; in_zero_run = true; }
+            ++total_zero_bytes;
+        } else {
+            if (in_zero_run) {
+                std::size_t run_len = i - zero_run_start;
+                if (run_len >= 1024) {
+                    emit(Msg("[DUMP]   ZERO RUN: offset=", zero_run_start, " length=", run_len,
+                             " bytes (", run_len / 1024, " KB)"));
+                    ++zero_regions;
+                    if (zero_regions >= 50) { emit("[DUMP]   ... truncated (>50 zero regions)"); break; }
+                }
+            }
+            in_zero_run = false;
+        }
+    }
+    if (in_zero_run) {
+        std::size_t run_len = file_size - zero_run_start;
+        if (run_len >= 1024) {
+            emit(Msg("[DUMP]   ZERO RUN (tail): offset=", zero_run_start, " length=", run_len,
+                     " bytes — likely unflushed filesystem write"));
+            ++zero_regions;
+        }
+    }
+    emit(Msg("[DUMP]   Total zero bytes: ", total_zero_bytes, " / ", file_size,
+             " (", (file_size > 0 ? total_zero_bytes * 100 / file_size : 0), "%)"));
+    emit(Msg("[DUMP]   Zero regions found (>=1KB): ", zero_regions));
+    if (file_size > 0 && total_zero_bytes * 100 / file_size > 50) {
+        emit("[DUMP]   WARNING: >50% zero bytes — file is likely truncated or unflushed");
+    }
+
+    // --- FlatBuffer structure analysis ---
+    emit("[DUMP] --- FlatBuffer structure analysis ---");
+    if (file_size >= 4) {
+        uint32_t root_off = 0;
+        std::memcpy(&root_off, buffer.data(), 4);
+        emit(Msg("[DUMP]   root_offset (bytes 0-3): ", root_off,
+                 " valid=", (root_off < file_size ? "yes" : "NO — outside buffer")));
+        if (root_off < file_size && root_off + 4 <= file_size) {
+            int32_t vtable_soff = 0;
+            std::memcpy(&vtable_soff, buffer.data() + root_off, 4);
+            int64_t vtable_pos = static_cast<int64_t>(root_off) - vtable_soff;
+            emit(Msg("[DUMP]   vtable signed_offset=", vtable_soff, " → vtable_pos=", vtable_pos));
+            if (vtable_pos >= 0 && static_cast<std::size_t>(vtable_pos) + 4 <= file_size) {
+                uint16_t vt_size = 0, obj_size = 0;
+                std::memcpy(&vt_size, buffer.data() + vtable_pos, 2);
+                std::memcpy(&obj_size, buffer.data() + vtable_pos + 2, 2);
+                emit(Msg("[DUMP]   vtable_size=", vt_size, " object_inline_size=", obj_size,
+                         " vtable_fields=", (vt_size > 4 ? (vt_size - 4) / 2 : 0)));
+            } else {
+                emit(Msg("[DUMP]   vtable_pos INVALID — outside buffer bounds"));
+            }
+        }
+    }
+    if (file_size >= 8) {
+        char id[5] = {};
+        std::memcpy(id, buffer.data() + 4, 4);
+        uint32_t id_raw = 0;
+        std::memcpy(&id_raw, buffer.data() + 4, 4);
+        std::ostringstream id_hex;
+        id_hex << "0x" << std::hex << std::setw(8) << std::setfill('0') << id_raw;
+        emit("[DUMP]   file_identifier=\"" + std::string(id) + "\" (" + id_hex.str() + ") expected=\"GRMT\"");
+    }
+
+    // --- Byte frequency distribution (top 10 non-zero byte values) ---
+    emit("[DUMP] --- Byte frequency (top 10 non-zero) ---");
+    std::size_t freq[256] = {};
+    for (std::size_t i = 0; i < file_size; ++i) ++freq[buffer[i]];
+    std::vector<std::pair<int, std::size_t>> sorted;
+    for (int i = 1; i < 256; ++i) {
+        if (freq[i] > 0) sorted.push_back({i, freq[i]});
+    }
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    for (int i = 0; i < std::min<int>(10, static_cast<int>(sorted.size())); ++i) {
+        std::ostringstream oss;
+        oss << "[DUMP]   byte 0x" << std::hex << std::setw(2) << std::setfill('0') << sorted[i].first
+            << std::dec << " ('" << (sorted[i].first >= 32 && sorted[i].first < 127
+                                     ? static_cast<char>(sorted[i].first) : '.')
+            << "'): " << sorted[i].second << " occurrences";
+        emit(oss.str());
+    }
+    emit(Msg("[DUMP]   unique non-zero byte values: ", sorted.size(), " / 255"));
+
+    // --- CUDA device state ---
+    dumpCudaDeviceState();
+
+    emit("========== END CHECKPOINT LOAD FAILURE DUMP ==========");
 }
 
 } // namespace
@@ -112,41 +267,34 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     if (!GRIMTransformer::VerifyTransformerModelBuffer(verifier)) {
         emitFlatBufferLoadDiag("verification failed");
         for (const auto& s : issues) emitFlatBufferLoadDiag(s);
-        // Scan for zero-filled regions which indicate incomplete filesystem flush
-        if (file_size >= 4096) {
-            // Check if the last 4KB is all zeros (strong indicator of unflushed write)
-            bool tail_all_zero = true;
-            for (std::size_t i = file_size - 4096; i < file_size; ++i) {
-                if (buffer[i] != 0) { tail_all_zero = false; break; }
-            }
-            if (tail_all_zero) {
-                emitFlatBufferLoadDiag("last 4096 bytes are all zeros — likely incomplete filesystem flush (Lustre/NFS)");
-            }
-            // Check middle region for large zero spans
-            std::size_t mid = file_size / 2;
-            bool mid_zero = true;
-            for (std::size_t i = mid; i < std::min(mid + 4096, file_size); ++i) {
-                if (buffer[i] != 0) { mid_zero = false; break; }
-            }
-            if (mid_zero) {
-                emitFlatBufferLoadDiag("middle region contains 4096+ zero bytes — likely partial write corruption");
-            }
-        }
-        emitFlatBufferLoadDiag("file_size=" + std::to_string(file_size) +
-                               " path=" + request.path + " — structure invalid");
+        dumpBinaryAnalysis(buffer, file_size, request.path);
         return false;
     }
 
     const auto* model_fb = GRIMTransformer::GetTransformerModel(buffer.data());
     if (!model_fb) {
-        Logging::EmitModuleError(kLogModule, "[load] Failed to parse FlatBuffer");
+        Logging::EmitModuleError(kLogModule, "[load] Failed to parse FlatBuffer — GetTransformerModel returned null");
+        dumpBinaryAnalysis(buffer, file_size, request.path);
         return false;
     }
 
     // ─── Step 3: Version check ───
     if (model_fb->version() != GRIM_MODEL_VERSION) {
-        Logging::EmitModuleError(kLogModule, Msg("[load] Version mismatch (",
-                                            model_fb->version(), " != ", GRIM_MODEL_VERSION, ")"));
+        Logging::EmitModuleError(kLogModule, Msg("[load] Version mismatch: checkpoint_version=",
+                                            model_fb->version(), " expected=", GRIM_MODEL_VERSION));
+        const auto* fb_cfg = model_fb->config();
+        if (fb_cfg) {
+            Logging::EmitModuleError(kLogModule, Msg("[load]   checkpoint config: vocab=",
+                fb_cfg->vocab_size(), " d_model=", fb_cfg->d_model(),
+                " layers=", fb_cfg->num_layers(), " heads=", fb_cfg->num_heads(),
+                " kv_heads=", fb_cfg->num_kv_heads()));
+        }
+        Logging::EmitModuleError(kLogModule, Msg("[load]   model config: vocab=",
+            cfg.vocab_size, " d_model=", cfg.d_model,
+            " layers=", cfg.num_layers, " heads=", cfg.num_heads,
+            " kv_heads=", cfg.num_kv_heads));
+        Logging::EmitModuleError(kLogModule, Msg("[load]   path=", request.path,
+            " file_size=", file_size));
         return false;
     }
 
@@ -167,15 +315,33 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
                                    const char* label) -> bool {
         if (host.empty()) return true;
         if (!view.ptr) {
-            Logging::EmitModuleError(kLogModule, Msg("[load] Missing destination for ", label));
+            Logging::EmitModuleError(kLogModule, Msg("[load] UPLOAD FAIL — null destination for ", label));
+            Logging::EmitModuleError(kLogModule, Msg("[load]   host_elements=", host.size(),
+                " host_bytes=", host.size() * sizeof(float),
+                " view.count=", view.count, " view.ptr=NULL"));
+            dumpCudaDeviceState();
             return false;
         }
         if (view.count != host.size()) {
-            Logging::EmitModuleError(kLogModule, Msg("[load] Size mismatch for ", label,
-                                                " (dest=", view.count, ", src=", host.size(), ")"));
+            Logging::EmitModuleError(kLogModule, Msg("[load] UPLOAD FAIL — size mismatch for ", label));
+            Logging::EmitModuleError(kLogModule, Msg("[load]   dest_count=", view.count,
+                " src_size=", host.size(),
+                " diff=", static_cast<int64_t>(view.count) - static_cast<int64_t>(host.size()),
+                " dest_bytes=", view.count * sizeof(float),
+                " src_bytes=", host.size() * sizeof(float)));
+            dumpCudaDeviceState();
             return false;
         }
-        CUDA_CHECK(cudaMemcpy(view.ptr, host.data(), host.size() * sizeof(float), cudaMemcpyHostToDevice));
+        cudaError_t copy_err = cudaMemcpy(view.ptr, host.data(),
+                                          host.size() * sizeof(float), cudaMemcpyHostToDevice);
+        if (copy_err != cudaSuccess) {
+            Logging::EmitModuleError(kLogModule, Msg("[load] UPLOAD FAIL — cudaMemcpy failed for ", label,
+                ": ", cudaGetErrorString(copy_err)));
+            Logging::EmitModuleError(kLogModule, Msg("[load]   elements=", host.size(),
+                " bytes=", host.size() * sizeof(float)));
+            dumpCudaDeviceState();
+            throw std::runtime_error("CUDA failure");
+        }
         return true;
     };
 
