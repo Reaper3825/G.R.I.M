@@ -108,7 +108,9 @@ private:
     // ═══════════════════════════════════════════════════
 
     std::shared_ptr<UIScrollBox> device_list_scroll_;
-    std::shared_ptr<UIButton>    btn_add_device_;
+
+    // Local device code display + regenerate
+    std::shared_ptr<UIButton>    btn_regenerate_code_;
 
     // Enter device code UI
     std::shared_ptr<UIInputBox>  device_code_input_;
@@ -126,7 +128,6 @@ private:
         std::string pairing_code; // shown only while pending
     };
     std::vector<DeviceRow> cached_devices_;
-    std::string pending_pairing_code_; // most recently generated code
 
     void refreshDevices();
 

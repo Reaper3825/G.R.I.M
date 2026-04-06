@@ -44,12 +44,13 @@ UIStoragePanel::UIStoragePanel()
 
     // Devices tab widgets
     device_list_scroll_ = std::make_shared<UIScrollBox>();
-    btn_add_device_ = std::make_shared<UIButton>("Add Device", [this]() {
+
+    // Regenerate local code button
+    btn_regenerate_code_ = std::make_shared<UIButton>("Regenerate", [this]() {
         if (!server_) return;
-        pending_pairing_code_ = server_->createPendingDevice();
-        refreshDevices();
+        server_->regenerateLocalCode();
     });
-    btn_add_device_->setSize(110.0f, 28.0f);
+    btn_regenerate_code_->setSize(100.0f, 28.0f);
 
     // Enter device code widgets
     device_code_input_ = std::make_shared<UIInputBox>(&device_code_buffer_);
@@ -100,7 +101,7 @@ void UIStoragePanel::setView(StorageView view) {
     search_box_->setVisible(files);
 
     device_list_scroll_->setVisible(devices);
-    btn_add_device_->setVisible(devices);
+    btn_regenerate_code_->setVisible(devices);
     device_code_input_->setVisible(devices);
     btn_link_device_->setVisible(devices);
 }
@@ -123,10 +124,10 @@ void UIStoragePanel::update(const InputState& input, float dt) {
             if (file_list_scroll_->isVisible()) file_list_scroll_->update(input, dt);
             break;
         case StorageView::Devices:
-            if (btn_add_device_->isVisible())      btn_add_device_->update(input, dt);
-            if (device_code_input_->isVisible())   device_code_input_->update(input, dt);
-            if (btn_link_device_->isVisible())      btn_link_device_->update(input, dt);
-            if (device_list_scroll_->isVisible())   device_list_scroll_->update(input, dt);
+            if (btn_regenerate_code_->isVisible())  btn_regenerate_code_->update(input, dt);
+            if (device_code_input_->isVisible())    device_code_input_->update(input, dt);
+            if (btn_link_device_->isVisible())       btn_link_device_->update(input, dt);
+            if (device_list_scroll_->isVisible())    device_list_scroll_->update(input, dt);
             if (link_status_timer_ > 0.0f) {
                 link_status_timer_ -= dt;
                 if (link_status_timer_ <= 0.0f) link_status_msg_.clear();
@@ -286,34 +287,36 @@ void UIStoragePanel::drawBreadcrumbs(OverlayRenderer& renderer, const PanelRect&
 // ─── Devices view ────────────────────────────────────────
 
 void UIStoragePanel::drawDevicesView(OverlayRenderer& renderer, const PanelRect& content) {
-    // ── Top bar: [Enter code...] [Link]   [Add Device] ──
-    float codeInputX = content.origin.x + 4.0f;
-    float codeInputY = content.origin.y + 4.0f;
-    device_code_input_->setPosition(codeInputX, codeInputY);
+    // ── Row 1: Your Device Code: XXXX-XXXX  [Regenerate] ──
+    float row1X = content.origin.x + 4.0f;
+    float row1Y = content.origin.y + 4.0f;
+
+    renderer.drawText({row1X, row1Y + 6.0f}, "Your Device Code:",
+                      UITheme::Colors::TextSecondary);
+
+    std::string localCode = server_ ? server_->localDeviceCode() : "----";
+    renderer.drawText({row1X + 140.0f, row1Y + 6.0f}, localCode,
+                      UITheme::Colors::Primary);
+
+    btn_regenerate_code_->setPosition(row1X + 140.0f + static_cast<float>(localCode.size()) * 9.0f + 12.0f, row1Y);
+    btn_regenerate_code_->drawOverlay(renderer, position);
+
+    // ── Row 2: [Enter device code...] [Link]  (status msg) ──
+    float row2Y = row1Y + 34.0f;
+    device_code_input_->setPosition(row1X, row2Y);
     device_code_input_->drawOverlay(renderer, position);
 
-    btn_link_device_->setPosition(codeInputX + 184.0f, codeInputY);
+    btn_link_device_->setPosition(row1X + 184.0f, row2Y);
     btn_link_device_->drawOverlay(renderer, position);
 
     // Link status feedback
     if (!link_status_msg_.empty()) {
-        renderer.drawText({codeInputX + 250.0f, codeInputY + 6.0f},
+        renderer.drawText({row1X + 250.0f, row2Y + 6.0f},
                           link_status_msg_, UITheme::Colors::Warning);
     }
 
-    // Add Device button (right-aligned)
-    btn_add_device_->setPosition(content.origin.x + content.size.x - 110.0f, content.origin.y + 4.0f);
-    btn_add_device_->drawOverlay(renderer, position);
-
-    // Pending pairing code display
-    if (!pending_pairing_code_.empty()) {
-        renderer.drawText({content.origin.x + 4.0f, content.origin.y + 8.0f},
-                          "Pairing Code: " + pending_pairing_code_,
-                          UITheme::Colors::Warning);
-    }
-
     // Device list
-    float listY = content.origin.y + 36.0f;
+    float listY = row2Y + 36.0f;
 
     // Header
     renderer.drawText({content.origin.x + 24.0f, listY}, "Device", UITheme::Colors::TextSecondary);

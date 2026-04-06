@@ -45,12 +45,13 @@ public:
     // Snapshot list for UI consumption (thread-safe)
     std::vector<DeviceSnapshot> listDeviceSnapshots() const;
 
-    // Generate a pairing code and create a Pending device record.
-    // Returns the XXXX-XXXX code to display in UI.
-    std::string createPendingDevice();
+    // Local instance code — shown in UI so the user can enter it
+    // on the hub to link this device.
+    const std::string& localDeviceCode() const { return local_device_code_; }
+    void regenerateLocalCode();
 
-    // Accept a user-entered pairing code and create a Pending device record.
-    // Returns true if the code was accepted (valid format, not already in use).
+    // Accept a user-entered device code and create a Pending device record.
+    // Returns true if the code was accepted (not empty, not already in use).
     bool addPendingDeviceWithCode(const std::string& code);
 
     // Access subsystems (for UI queries)
@@ -65,6 +66,8 @@ private:
     SessionManager     sessions_;
     StorageManager     storage_;
     FileTransferManager transfer_;
+
+    std::string local_device_code_; // this instance's pairing code
 
     std::atomic<bool> running_{false};
     std::thread       server_thread_;

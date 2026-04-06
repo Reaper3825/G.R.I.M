@@ -39,6 +39,9 @@ DeviceCommServer::DeviceCommServer(const Config& config)
         throw std::runtime_error("DeviceCommServer: storage_root is required");
     if (config.registry_dir.empty())
         throw std::runtime_error("DeviceCommServer: registry_dir is required");
+
+    // Generate initial local device code for this instance
+    local_device_code_ = registry_.generatePairingCode();
 }
 
 DeviceCommServer::~DeviceCommServer() {
@@ -63,22 +66,14 @@ std::vector<DeviceSnapshot> DeviceCommServer::listDeviceSnapshots() const {
     return snapshots;
 }
 
-// ─── Pairing ─────────────────────────────────────────────
+// ─── Local device code ───────────────────────────────────
 
-std::string DeviceCommServer::createPendingDevice() {
-    std::string code = registry_.generatePairingCode();
-
-    DeviceRecord pending;
-    pending.pairing_code   = code;
-    pending.pairing_state  = PairingState::Pending;
-    pending.device_name    = "Pending (" + code + ")";
-    pending.device_type    = DeviceType::Desktop; // overwritten on completePairing
-    pending.platform       = Platform::Windows;   // overwritten on completePairing
-    registry_.addDevice(std::move(pending));
-
-    LOG_DEBUG(TAG, "Created pending device with pairing code: " + code);
-    return code;
+void DeviceCommServer::regenerateLocalCode() {
+    local_device_code_ = registry_.generatePairingCode();
+    LOG_DEBUG(TAG, "Regenerated local device code: " + local_device_code_);
 }
+
+// ─── Pairing ─────────────────────────────────────────────
 
 bool DeviceCommServer::addPendingDeviceWithCode(const std::string& code) {
     if (code.empty()) return false;
