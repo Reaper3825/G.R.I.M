@@ -51,6 +51,24 @@ UIStoragePanel::UIStoragePanel()
     });
     btn_add_device_->setSize(110.0f, 28.0f);
 
+    // Enter device code widgets
+    device_code_input_ = std::make_shared<UIInputBox>(&device_code_buffer_);
+    device_code_input_->setPlaceholder("Enter device code...");
+    device_code_input_->setSize(180.0f, 28.0f);
+
+    btn_link_device_ = std::make_shared<UIButton>("Link", [this]() {
+        if (!server_ || device_code_buffer_.empty()) return;
+        if (server_->addPendingDeviceWithCode(device_code_buffer_)) {
+            link_status_msg_ = "Code accepted — waiting for device";
+            device_code_buffer_.clear();
+            refreshDevices();
+        } else {
+            link_status_msg_ = "Invalid or already used code";
+        }
+        link_status_timer_ = 4.0f;
+    });
+    btn_link_device_->setSize(60.0f, 28.0f);
+
     // Initial breadcrumb = root
     breadcrumb_.clear();
 
@@ -83,6 +101,8 @@ void UIStoragePanel::setView(StorageView view) {
 
     device_list_scroll_->setVisible(devices);
     btn_add_device_->setVisible(devices);
+    device_code_input_->setVisible(devices);
+    btn_link_device_->setVisible(devices);
 }
 
 // ─── Update ──────────────────────────────────────────────
@@ -104,7 +124,13 @@ void UIStoragePanel::update(const InputState& input, float dt) {
             break;
         case StorageView::Devices:
             if (btn_add_device_->isVisible())      btn_add_device_->update(input, dt);
+            if (device_code_input_->isVisible())   device_code_input_->update(input, dt);
+            if (btn_link_device_->isVisible())      btn_link_device_->update(input, dt);
             if (device_list_scroll_->isVisible())   device_list_scroll_->update(input, dt);
+            if (link_status_timer_ > 0.0f) {
+                link_status_timer_ -= dt;
+                if (link_status_timer_ <= 0.0f) link_status_msg_.clear();
+            }
             break;
     }
 
@@ -260,7 +286,22 @@ void UIStoragePanel::drawBreadcrumbs(OverlayRenderer& renderer, const PanelRect&
 // ─── Devices view ────────────────────────────────────────
 
 void UIStoragePanel::drawDevicesView(OverlayRenderer& renderer, const PanelRect& content) {
-    // Add Device button
+    // ── Top bar: [Enter code...] [Link]   [Add Device] ──
+    float codeInputX = content.origin.x + 4.0f;
+    float codeInputY = content.origin.y + 4.0f;
+    device_code_input_->setPosition(codeInputX, codeInputY);
+    device_code_input_->drawOverlay(renderer, position);
+
+    btn_link_device_->setPosition(codeInputX + 184.0f, codeInputY);
+    btn_link_device_->drawOverlay(renderer, position);
+
+    // Link status feedback
+    if (!link_status_msg_.empty()) {
+        renderer.drawText({codeInputX + 250.0f, codeInputY + 6.0f},
+                          link_status_msg_, UITheme::Colors::Warning);
+    }
+
+    // Add Device button (right-aligned)
     btn_add_device_->setPosition(content.origin.x + content.size.x - 110.0f, content.origin.y + 4.0f);
     btn_add_device_->drawOverlay(renderer, position);
 

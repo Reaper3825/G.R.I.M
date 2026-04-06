@@ -110,6 +110,13 @@ private:
     std::shared_ptr<UIScrollBox> device_list_scroll_;
     std::shared_ptr<UIButton>    btn_add_device_;
 
+    // Enter device code UI
+    std::shared_ptr<UIInputBox>  device_code_input_;
+    std::string                  device_code_buffer_;
+    std::shared_ptr<UIButton>    btn_link_device_;
+    std::string                  link_status_msg_;    // feedback after submit
+    float                        link_status_timer_ = 0.0f;
+
     struct DeviceRow {
         std::string device_id;
         std::string device_name;

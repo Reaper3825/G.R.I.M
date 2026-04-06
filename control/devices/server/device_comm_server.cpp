@@ -80,6 +80,24 @@ std::string DeviceCommServer::createPendingDevice() {
     return code;
 }
 
+bool DeviceCommServer::addPendingDeviceWithCode(const std::string& code) {
+    if (code.empty()) return false;
+
+    // Reject if code already exists in registry
+    if (registry_.findByPairingCode(code)) return false;
+
+    DeviceRecord pending;
+    pending.pairing_code   = code;
+    pending.pairing_state  = PairingState::Pending;
+    pending.device_name    = "Pending (" + code + ")";
+    pending.device_type    = DeviceType::Desktop;
+    pending.platform       = Platform::Windows;
+    registry_.addDevice(std::move(pending));
+
+    LOG_DEBUG(TAG, "Created pending device with user-entered code: " + code);
+    return true;
+}
+
 // ─── Server lifecycle ────────────────────────────────────
 
 bool DeviceCommServer::start() {
