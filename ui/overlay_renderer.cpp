@@ -1395,7 +1395,6 @@ void OverlayRenderer::blurRegion(int x, int y, int w, int h, int radius)
                 (clamp8(sumA) << 24) | (clamp8(sumR) << 16) | (clamp8(sumG) << 8) | clamp8(sumB);
         }
     }
-
     // Pass 2: Vertical Gaussian from temp → pixel buffer
     auto clamp8 = [](float v) { return static_cast<uint32_t>(std::min(255, std::max(0, static_cast<int>(v + 0.5f)))); };
     for (int col = 0; col < rw; ++col) {
