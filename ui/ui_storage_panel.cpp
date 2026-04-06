@@ -19,7 +19,7 @@ namespace {
 UIStoragePanel::UIStoragePanel()
     : UIPanel("Shared Storage", true)
 {
-    position = {250, 120};
+    position = {250, 500};
     size     = {900, 550};
     setVisible(false);
     setBackground(UITheme::Colors::PanelBg);
