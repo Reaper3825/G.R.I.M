@@ -389,6 +389,18 @@ bool DeviceCommServer::start() {
                         auto dtype         = body.at("device_type").get<DeviceType>();
                         auto plat          = body.at("platform").get<Platform>();
 
+                        // Auto-create pending entry if device registers directly
+                        // (user may not have manually entered the code on the hub first)
+                        if (!registry_.findByPairingCode(code)) {
+                            DeviceRecord pending;
+                            pending.pairing_code  = code;
+                            pending.pairing_state = PairingState::Pending;
+                            pending.device_name   = "Pending (" + code + ")";
+                            pending.device_type   = dtype;
+                            pending.platform      = plat;
+                            registry_.addDevice(std::move(pending));
+                        }
+
                         DeviceRecord rec = registry_.completePairing(code, name, dtype, plat);
 
                         response["success"]   = true;
