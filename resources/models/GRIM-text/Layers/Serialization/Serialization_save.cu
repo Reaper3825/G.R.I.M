@@ -14,6 +14,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -438,9 +439,56 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             std::filesystem::remove(temp_path, ec);
             return false;
         }
-        if (fsync(fd) != 0)
-            Logging::EmitModuleError(kLogModule, "[save] fsync failed (checkpoint may be corrupt on NFS/Lustre)");
+        if (fsync(fd) != 0) {
+            Logging::EmitModuleError(kLogModule, "[save] fsync failed — refusing to rename (checkpoint data may not be on disk)");
+            close(fd);
+            std::filesystem::remove(temp_path, ec);
+            return false;
+        }
         close(fd);
+
+        // Post-write verification: re-read and verify FlatBuffer structure before rename.
+        // Catches silent data corruption from filesystem (Lustre/NFS page cache issues).
+        {
+            int verify_fd = open(temp_path.c_str(), O_RDONLY);
+            if (verify_fd < 0) {
+                Logging::EmitModuleError(kLogModule, "[save] Post-write verify: failed to re-open temp file");
+                std::filesystem::remove(temp_path, ec);
+                return false;
+            }
+            struct stat st;
+            if (fstat(verify_fd, &st) != 0 || static_cast<std::size_t>(st.st_size) != buf_size) {
+                Logging::EmitModuleError(kLogModule, Msg("[save] Post-write verify: size mismatch (expected=",
+                    buf_size, ", on_disk=", st.st_size, ")"));
+                close(verify_fd);
+                std::filesystem::remove(temp_path, ec);
+                return false;
+            }
+            // Read back the header (first 64 bytes) and verify FlatBuffer file identifier
+            uint8_t header[64];
+            ssize_t hdr_read = read(verify_fd, header, std::min<std::size_t>(64, buf_size));
+            close(verify_fd);
+            if (hdr_read < 8) {
+                Logging::EmitModuleError(kLogModule, "[save] Post-write verify: could not read header");
+                std::filesystem::remove(temp_path, ec);
+                return false;
+            }
+            // Verify file identifier at bytes 4-7
+            if (std::memcmp(header + 4, "GRMT", 4) != 0) {
+                Logging::EmitModuleError(kLogModule, "[save] Post-write verify: file identifier mismatch — data corrupted on write");
+                std::filesystem::remove(temp_path, ec);
+                return false;
+            }
+            // Verify root offset is within bounds
+            uint32_t root_offset = 0;
+            std::memcpy(&root_offset, header, 4);
+            if (root_offset >= buf_size) {
+                Logging::EmitModuleError(kLogModule, Msg("[save] Post-write verify: root_offset=",
+                    root_offset, " exceeds file_size=", buf_size));
+                std::filesystem::remove(temp_path, ec);
+                return false;
+            }
+        }
 #endif
     }
 

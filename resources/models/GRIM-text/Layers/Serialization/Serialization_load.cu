@@ -112,8 +112,28 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     if (!GRIMTransformer::VerifyTransformerModelBuffer(verifier)) {
         emitFlatBufferLoadDiag("verification failed");
         for (const auto& s : issues) emitFlatBufferLoadDiag(s);
-        if (issues.empty())
-            emitFlatBufferLoadDiag("file_size=" + std::to_string(file_size) + " — structure invalid");
+        // Scan for zero-filled regions which indicate incomplete filesystem flush
+        if (file_size >= 4096) {
+            // Check if the last 4KB is all zeros (strong indicator of unflushed write)
+            bool tail_all_zero = true;
+            for (std::size_t i = file_size - 4096; i < file_size; ++i) {
+                if (buffer[i] != 0) { tail_all_zero = false; break; }
+            }
+            if (tail_all_zero) {
+                emitFlatBufferLoadDiag("last 4096 bytes are all zeros — likely incomplete filesystem flush (Lustre/NFS)");
+            }
+            // Check middle region for large zero spans
+            std::size_t mid = file_size / 2;
+            bool mid_zero = true;
+            for (std::size_t i = mid; i < std::min(mid + 4096, file_size); ++i) {
+                if (buffer[i] != 0) { mid_zero = false; break; }
+            }
+            if (mid_zero) {
+                emitFlatBufferLoadDiag("middle region contains 4096+ zero bytes — likely partial write corruption");
+            }
+        }
+        emitFlatBufferLoadDiag("file_size=" + std::to_string(file_size) +
+                               " path=" + request.path + " — structure invalid");
         return false;
     }
 
@@ -303,6 +323,7 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();
         auto ul = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            if (!src) return true;  // Field absent in checkpoint — skip (e.g., older schema)
             std::vector<float> buf(src->begin(), src->end());
             return upload_device_vector(buf, dst, name);
         };
@@ -350,6 +371,7 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
             return false;
         }
         auto ul = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            if (!src) return true;  // Field absent in checkpoint — skip
             std::vector<float> buf(src->begin(), src->end());
             return upload_device_vector(buf, dst, name);
         };

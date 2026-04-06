@@ -537,6 +537,7 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(request.execution_block.b_scal, execution_block_layer_->b_scal().data, static_cast<std::size_t>(execution_block_layer_->b_scal().numel()));
         assignWrite(request.execution_block.W_trace, execution_block_layer_->W_trace().data, static_cast<std::size_t>(execution_block_layer_->W_trace().numel()));
         assignWrite(request.execution_block.b_trace, execution_block_layer_->b_trace().data, static_cast<std::size_t>(execution_block_layer_->b_trace().numel()));
+        assignWrite(request.execution_block.W_reason_gate, execution_block_layer_->W_reason_gate().data, static_cast<std::size_t>(execution_block_layer_->W_reason_gate().numel()));
     }
 
     // DecodeTimeSlotSelector weight destinations — loaded via FlatBuffer
