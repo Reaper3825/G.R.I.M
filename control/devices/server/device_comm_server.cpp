@@ -63,6 +63,23 @@ std::vector<DeviceSnapshot> DeviceCommServer::listDeviceSnapshots() const {
     return snapshots;
 }
 
+// ─── Pairing ─────────────────────────────────────────────
+
+std::string DeviceCommServer::createPendingDevice() {
+    std::string code = registry_.generatePairingCode();
+
+    DeviceRecord pending;
+    pending.pairing_code   = code;
+    pending.pairing_state  = PairingState::Pending;
+    pending.device_name    = "Pending (" + code + ")";
+    pending.device_type    = DeviceType::Desktop; // overwritten on completePairing
+    pending.platform       = Platform::Windows;   // overwritten on completePairing
+    registry_.addDevice(std::move(pending));
+
+    LOG_DEBUG(TAG, "Created pending device with pairing code: " + code);
+    return code;
+}
+
 // ─── Server lifecycle ────────────────────────────────────
 
 bool DeviceCommServer::start() {

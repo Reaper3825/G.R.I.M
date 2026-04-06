@@ -42,6 +42,15 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "Training panel not found - may not be initialized yet");
           }
+      })),
+      storageButton(std::make_shared<UIButton>(" Storage ", []() {
+          auto storagePanel = UIRoot::get().getPanel("Shared Storage");
+          if (storagePanel) {
+              storagePanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened storage panel via button");
+          } else {
+              LOG_DEBUG("ConsolePanel", "Storage panel not found");
+          }
       }))
 {
     position = { 100, 300 };
@@ -79,10 +88,12 @@ ConsolePanel::ConsolePanel()
     if (settingsButton) settingsButton->setSize(btnW, btnH);
     if (DCButton)       DCButton->setSize(btnW, btnH);
     if (trainingButton) trainingButton->setSize(btnW, btnH);
+    if (storageButton)  storageButton->setSize(btnW, btnH);
     
     toolbarBox = std::make_shared<UIHBox>(LayoutDirection::Horizontal, 8.0f);
     toolbarBox->addWidget(DCButton);
     toolbarBox->addWidget(trainingButton);
+    toolbarBox->addWidget(storageButton);
     toolbarBox->addWidget(settingsButton);
     toolbarBox->layout();
     

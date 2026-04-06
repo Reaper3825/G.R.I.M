@@ -45,6 +45,10 @@ public:
     // Snapshot list for UI consumption (thread-safe)
     std::vector<DeviceSnapshot> listDeviceSnapshots() const;
 
+    // Generate a pairing code and create a Pending device record.
+    // Returns the XXXX-XXXX code to display in UI.
+    std::string createPendingDevice();
+
     // Access subsystems (for UI queries)
     const StorageManager& storageManager() const { return storage_; }
     StorageManager& storageManager() { return storage_; }

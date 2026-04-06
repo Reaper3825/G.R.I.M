@@ -19,43 +19,43 @@ namespace {
 UIStoragePanel::UIStoragePanel()
     : UIPanel("Shared Storage", true)
 {
+    position = {250, 120};
+    size     = {900, 550};
+    setVisible(false);
+    setBackground(UITheme::Colors::PanelBg);
+
     // Tab buttons
     tab_files_btn_ = std::make_shared<UIButton>("My Files", [this]() {
         setView(StorageView::MyFiles);
     });
+    tab_files_btn_->setSize(kTabWidth, 28.0f);
+
     tab_devices_btn_ = std::make_shared<UIButton>("Devices", [this]() {
         setView(StorageView::Devices);
     });
-
-    addChild(tab_files_btn_);
-    addChild(tab_devices_btn_);
+    tab_devices_btn_->setSize(kTabWidth, 28.0f);
 
     // Files tab widgets
     file_list_scroll_ = std::make_shared<UIScrollBox>();
     btn_upload_ = std::make_shared<UIButton>("Upload", []() {});
+    btn_upload_->setSize(80.0f, 24.0f);
     search_box_       = std::make_shared<UIInputBox>();
     search_box_->setPlaceholder("Search files...");
-
-    addChild(file_list_scroll_);
-    addChild(btn_upload_);
-    addChild(search_box_);
 
     // Devices tab widgets
     device_list_scroll_ = std::make_shared<UIScrollBox>();
     btn_add_device_ = std::make_shared<UIButton>("Add Device", [this]() {
         if (!server_) return;
-        // Generate a new pairing code via registry
-        auto& reg = const_cast<GRIM::DeviceCommServer*>(server_)->storageManager();
-        // Pairing code generation is on DeviceRegistry, accessed through server
-        // For now, store the code for display
-        pending_pairing_code_ = "XXXX-XXXX"; // placeholder — wired in integration step
+        pending_pairing_code_ = server_->createPendingDevice();
+        refreshDevices();
     });
-
-    addChild(device_list_scroll_);
-    addChild(btn_add_device_);
+    btn_add_device_->setSize(110.0f, 28.0f);
 
     // Initial breadcrumb = root
     breadcrumb_.clear();
+
+    // Set initial tab visibility (hides Devices tab widgets)
+    setView(StorageView::MyFiles);
 }
 
 UIStoragePanel::~UIStoragePanel() = default;
@@ -88,7 +88,25 @@ void UIStoragePanel::setView(StorageView view) {
 // ─── Update ──────────────────────────────────────────────
 
 void UIStoragePanel::update(const InputState& input, float dt) {
+    if (!isVisible()) return;
     UIPanel::update(input, dt);
+
+    // Manually update widgets that are not panel children
+    // (DataHub pattern: panel owns widgets but does not addChild them)
+    if (tab_files_btn_->isVisible())   tab_files_btn_->update(input, dt);
+    if (tab_devices_btn_->isVisible()) tab_devices_btn_->update(input, dt);
+
+    switch (active_view_) {
+        case StorageView::MyFiles:
+            if (search_box_->isVisible())       search_box_->update(input, dt);
+            if (btn_upload_->isVisible())       btn_upload_->update(input, dt);
+            if (file_list_scroll_->isVisible()) file_list_scroll_->update(input, dt);
+            break;
+        case StorageView::Devices:
+            if (btn_add_device_->isVisible())      btn_add_device_->update(input, dt);
+            if (device_list_scroll_->isVisible())   device_list_scroll_->update(input, dt);
+            break;
+    }
 
     refresh_timer_ += dt;
     if (refresh_timer_ >= kRefreshInterval) {
