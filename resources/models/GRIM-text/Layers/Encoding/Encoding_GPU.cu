@@ -1064,7 +1064,11 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     //   |avg_cos| near 0 = diverse representations = generally healthy
     // Skipped on gradient-accumulation micro-batches (same weights → duplicate output)
     // ═══════════════════════════════════════════════════════════════════════════
-    if (isEquationLoggingEnabled() && !GRIM::getEquationLoggingSkipThisPassRef() && (layer_idx == 0 || layer_idx == 11)) {
+    // Log ALL layers so per-layer ρ trajectory is visible.
+    // NOTE: intermediates.output is the PRE-centering output — the post-layer center_columns
+    // in AutogradTraining.cu hasn't run yet. Logged ρ values will be slightly higher than
+    // what the NEXT layer actually receives as input.
+    if (isEquationLoggingEnabled() && !GRIM::getEquationLoggingSkipThisPassRef()) {
         cudaStreamSynchronize(stream);  // Ensure data is ready
         
         // Copy layer output to host for analysis

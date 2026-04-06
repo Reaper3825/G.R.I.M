@@ -1,15 +1,15 @@
 #pragma once
-#include "helpers/vector2.hpp"
+#include "vector2.hpp"
 #include <string>
 #include <memory>
 #include <cstdint>
 
 // Include plugin.hpp for GRIM_HOST_API macro
-#include "core/plugin.hpp"
+#include "../core/plugin.hpp"
 
 struct InputState;
 class UIRenderer;
-class OverlayRenderer;  // ✅ NEW: Forward declare
+class OverlayRenderer;
 
 class GRIM_HOST_API Widget {
 public:
@@ -23,7 +23,7 @@ public:
     uint64_t getPanelID() const { return panelID; }
     void setPanelID(uint64_t id) { panelID = id; }
     
-    // ✅ NEW: Base focus state management
+    // Base focus state management
     virtual bool isFocused() const { return focused; }
     virtual void setFocused(bool focus);
     virtual bool wantsFocus() const { return false; }  // Override in interactive widgets
@@ -31,7 +31,7 @@ public:
     virtual void update(const InputState& input, float dt);
     virtual void draw(UIRenderer& renderer);
     
-    // ✅ NEW: Overlay rendering for layered window rendering
+    // Overlay rendering for layered window rendering
     virtual void drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos);
 
     bool isVisible() const { return visible; }
@@ -47,7 +47,7 @@ public:
 
 protected:
     bool visible = true;
-    bool focused = false;  // ✅ NEW: Base focus state
+    bool focused = false;  // Base focus state
     Vec2 position{0.0f, 0.0f};
     Vec2 size{100.0f, 50.0f};
     uint64_t focusID = 0;  // Unique widget focus identifier

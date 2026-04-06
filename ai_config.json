@@ -530,5 +530,13 @@
         "whisper_model": "ggml-base.en.bin"
     },
     "whisper_language": "en",
-    "whisper_max_tokens": 32
+    "whisper_max_tokens": 32,
+    "device_comm": {
+        "port": 11437,
+        "heartbeat_timeout_sec": 30,
+        "max_chunk_size_bytes": 65536,
+        "transfer_timeout_sec": 300,
+        "storage_root": "~/.grim/shared_storage/",
+        "registry_dir": "~/.grim/devices/"
+    }
 }

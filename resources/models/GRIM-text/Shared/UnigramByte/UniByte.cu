@@ -197,33 +197,32 @@ void UniByte::initDetector() {
 //--------------------------------------------------//
 
 bool UniByte::load(const std::string& vocab_path) {
-    // Try binary first (faster), fall back to text
     std::string bin_path = vocab_path;
     size_t dot_pos = bin_path.rfind('.');
-    if (dot_pos != std::string::npos) {
+    if (dot_pos == std::string::npos) {
+        bin_path += ".bin";
+    } else {
         std::string ext = bin_path.substr(dot_pos);
         if (ext == ".txt") {
-            bin_path = bin_path.substr(0, dot_pos) + ".bin";
-        } else if (ext != ".bin") {
-            bin_path = bin_path.substr(0, dot_pos) + ".bin";
+            throw std::runtime_error(
+                "[UniByte] Text vocab loading is forbidden. Caller must provide a .bin vocab path, got: " +
+                vocab_path);
         }
-    } else {
-        bin_path += ".bin";
+        if (ext != ".bin") {
+            throw std::runtime_error(
+                "[UniByte] Unsupported vocab extension '" + ext +
+                "'. Caller must provide a .bin vocab path: " + vocab_path);
+        }
     }
-    
-    // Try binary format first
+
     std::ifstream test(bin_path, std::ios::binary);
-    if (test.good()) {
-        test.close();
-        if (unigram_.loadBinary(bin_path)) {
-            return true;
-        }
-        std::cerr << "[UniByte] Binary load failed, trying text format..." << std::endl;
+    if (!test.good()) {
+        throw std::runtime_error(
+            "[UniByte] Required binary vocab file does not exist or is not readable: " + bin_path);
     }
-    
-    // Fall back to text format
-    std::string txt_path = bin_path.substr(0, bin_path.rfind('.')) + ".txt";
-    return unigram_.load(txt_path);
+    test.close();
+
+    return unigram_.loadBinary(bin_path);
 }
 
 bool UniByte::save(const std::string& vocab_path, bool save_text_format) const {

@@ -27,7 +27,9 @@
 #include "ui/ui_settings_menu.hpp"
 #include "ui/ui_training_panel.hpp"
 #include "ui/ui_data_hub.hpp"
+#include "ui/ui_storage_panel.hpp"
 #include "ui/ui_surface_renderer_bridge.hpp"
+#include "control/devices/server/device_comm_server.hpp"
 #include "resources.hpp"
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
@@ -52,6 +54,7 @@
 
 GRIM::UnifiedMemoryStorage g_memoryStorage;
 static GRIM::WebSocketServer wsServer;
+static std::unique_ptr<GRIM::DeviceCommServer> g_deviceCommServer;
 namespace fs = std::filesystem;
 
 // External hardware inventory (defined in bootstrap.cpp)
@@ -211,6 +214,32 @@ int main(int argc, char* argv[])
     // ======================================================
     wsServer.start();
     LOG_PHASE("WebSocket server started", true);
+
+    // Start Device Communication server
+    {
+        GRIM::DeviceCommServer::Config dcConfig;
+        dcConfig.port                 = 11437;
+        dcConfig.heartbeat_timeout_sec = 30;
+        dcConfig.max_chunk_size_bytes  = 65536;
+        dcConfig.transfer_timeout_sec  = 300;
+
+        std::string home;
+#ifdef _WIN32
+        const char* userProfile = std::getenv("USERPROFILE");
+        if (!userProfile) throw std::runtime_error("USERPROFILE not set");
+        home = userProfile;
+#else
+        const char* homeDir = std::getenv("HOME");
+        if (!homeDir) throw std::runtime_error("HOME not set");
+        home = homeDir;
+#endif
+        dcConfig.storage_root = home + "/.grim/shared_storage/";
+        dcConfig.registry_dir = home + "/.grim/devices/";
+
+        g_deviceCommServer = std::make_unique<GRIM::DeviceCommServer>(dcConfig);
+        g_deviceCommServer->start();
+        LOG_PHASE("Device comm server started", true);
+    }
 
     
     
@@ -421,6 +450,10 @@ int main(int argc, char* argv[])
     auto settingsPanel = std::make_shared<UISettingsMenu>();
     auto trainingPanel = std::make_shared<UITrainingPanel>();
     auto dataHubPanel = std::make_shared<UIDataHubPanel>();
+    auto storagePanel = std::make_shared<UIStoragePanel>();
+    if (g_deviceCommServer) {
+        storagePanel->setServer(g_deviceCommServer.get());
+    }
     
     // Assign to global for command access
     g_trainingPanel = trainingPanel;
@@ -433,11 +466,13 @@ int main(int argc, char* argv[])
     settingsPanel->setVisible(false);
     trainingPanel->setVisible(false);
     dataHubPanel->setVisible(false);
+    storagePanel->setVisible(false);
 
     UIRoot::get().addPanel(consolePanel);
     UIRoot::get().addPanel(settingsPanel);
     UIRoot::get().addPanel(trainingPanel);
     UIRoot::get().addPanel(dataHubPanel);
+    UIRoot::get().addPanel(storagePanel);
 
 #if defined(__APPLE__)
     // macOS: inject typed characters into text input (Windows uses WM_CHAR in OverlayWndProc)
@@ -605,6 +640,10 @@ int main(int argc, char* argv[])
     WindowManager::shutdown();
 
     wsServer.stop();
+    if (g_deviceCommServer) {
+        g_deviceCommServer->stop();
+        g_deviceCommServer.reset();
+    }
 
     LOG_PHASE("All subsystems shut down", true);
     LOG_PHASE("G.R.I.M terminated successfully", true);
