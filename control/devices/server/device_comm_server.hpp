@@ -60,6 +60,14 @@ public:
     struct RegisterResult { bool success; std::string message; };
     RegisterResult registerWithHub(const std::string& hub_host, uint16_t hub_port);
 
+    // Disconnect from the current hub (clears saved connection).
+    void disconnectFromHub();
+
+    // Hub connection state (persisted across restarts)
+    bool        isConnectedToHub() const { return connected_to_hub_; }
+    std::string connectedHubHost() const { return hub_host_; }
+    uint16_t    connectedHubPort() const { return hub_port_; }
+
     // Access subsystems (for UI queries)
     const StorageManager& storageManager() const { return storage_; }
     StorageManager& storageManager() { return storage_; }
@@ -74,6 +82,15 @@ private:
     FileTransferManager transfer_;
 
     std::string local_device_code_; // this instance's pairing code
+
+    // Persisted hub connection state (satellite → hub)
+    bool        connected_to_hub_ = false;
+    std::string hub_host_;
+    uint16_t    hub_port_ = 0;
+
+    void loadHubConnection();
+    void saveHubConnection() const;
+    std::string hubConnectionPath() const;
 
     std::atomic<bool> running_{false};
     std::thread       server_thread_;

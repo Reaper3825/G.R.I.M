@@ -3,10 +3,14 @@
 #include "control/devices/protocol/device_messages.hpp"
 #include "logger.hpp"
 
+#include "memory/atomic_writer.hpp"
+
 #include <uwebsockets/App.h>
 #include <nlohmann/json.hpp>
 #include <httplib.h>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <sstream>
 
@@ -43,6 +47,9 @@ DeviceCommServer::DeviceCommServer(const Config& config)
 
     // Generate initial local device code for this instance
     local_device_code_ = registry_.generatePairingCode();
+
+    // Restore persisted hub connection state
+    loadHubConnection();
 }
 
 DeviceCommServer::~DeviceCommServer() {
@@ -141,10 +148,62 @@ DeviceCommServer::RegisterResult DeviceCommServer::registerWithHub(
             LOG_DEBUG(TAG, "Registered with hub at " + hub_host + ":" +
                            std::to_string(hub_port) + " — " + msg);
         }
+        if (ok) {
+            connected_to_hub_ = true;
+            hub_host_ = hub_host;
+            hub_port_ = hub_port;
+            saveHubConnection();
+        }
         return {ok, msg};
     } catch (const std::exception& e) {
         return {false, std::string("Bad response from hub: ") + e.what()};
     }
+}
+
+void DeviceCommServer::disconnectFromHub() {
+    connected_to_hub_ = false;
+    hub_host_.clear();
+    hub_port_ = 0;
+    saveHubConnection();
+    LOG_DEBUG(TAG, "Disconnected from hub");
+}
+
+// ─── Hub connection persistence ──────────────────────────
+
+std::string DeviceCommServer::hubConnectionPath() const {
+    return config_.registry_dir + "/hub_connection.json";
+}
+
+void DeviceCommServer::loadHubConnection() {
+    std::string path = hubConnectionPath();
+    if (!std::filesystem::exists(path)) return;
+
+    try {
+        std::ifstream in(path);
+        if (!in) return;
+        nlohmann::json j;
+        in >> j;
+
+        connected_to_hub_ = j.value("connected", false);
+        hub_host_         = j.value("hub_host", "");
+        hub_port_         = j.value("hub_port", static_cast<uint16_t>(0));
+
+        if (connected_to_hub_ && !hub_host_.empty()) {
+            LOG_DEBUG(TAG, "Loaded saved hub connection: " + hub_host_ + ":" +
+                           std::to_string(hub_port_));
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR(TAG, "Failed to load hub connection: " + std::string(e.what()));
+        connected_to_hub_ = false;
+    }
+}
+
+void DeviceCommServer::saveHubConnection() const {
+    nlohmann::json j;
+    j["connected"] = connected_to_hub_;
+    j["hub_host"]  = hub_host_;
+    j["hub_port"]  = hub_port_;
+    AtomicWriter::writeString(hubConnectionPath(), j.dump(2));
 }
 
 // ─── Server lifecycle ────────────────────────────────────
@@ -161,6 +220,16 @@ bool DeviceCommServer::start() {
             "DeviceCommServer: heartbeat_timeout_sec*2 exceeds uWebSockets idleTimeout limit");
     }
     const unsigned short idle_timeout = static_cast<unsigned short>(idle_timeout_wide);
+
+    // Auto-reconnect to saved hub if we were previously connected
+    if (connected_to_hub_ && !hub_host_.empty() && hub_port_ > 0) {
+        LOG_DEBUG(TAG, "Auto-reconnecting to hub " + hub_host_ + ":" +
+                       std::to_string(hub_port_));
+        auto result = registerWithHub(hub_host_, hub_port_);
+        if (!result.success) {
+            LOG_ERROR(TAG, "Auto-reconnect failed: " + result.message);
+        }
+    }
 
     running_ = true;
     uint16_t port = config_.port;

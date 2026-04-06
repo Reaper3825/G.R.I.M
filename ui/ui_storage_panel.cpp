@@ -76,7 +76,18 @@ UIStoragePanel::UIStoragePanel()
     hub_address_input_->setSize(240.0f, 28.0f);
 
     btn_connect_hub_ = std::make_shared<UIButton>("Connect", [this]() {
-        if (!server_ || hub_address_buffer_.empty()) return;
+        if (!server_) return;
+
+        // Toggle: disconnect if already connected
+        if (server_->isConnectedToHub()) {
+            server_->disconnectFromHub();
+            hub_status_msg_ = "Disconnected";
+            hub_status_timer_ = 3.0f;
+            refreshDevices();
+            return;
+        }
+
+        if (hub_address_buffer_.empty()) return;
 
         // Parse host:port (default port 11437)
         std::string host = hub_address_buffer_;
@@ -111,6 +122,16 @@ UIStoragePanel::~UIStoragePanel() = default;
 
 void UIStoragePanel::setServer(GRIM::DeviceCommServer* server) {
     server_ = server;
+
+    // Pre-fill hub address from saved connection state
+    if (server_ && server_->isConnectedToHub()) {
+        hub_address_buffer_ = server_->connectedHubHost();
+        uint16_t port = server_->connectedHubPort();
+        if (port != 0 && port != 11437) {
+            hub_address_buffer_ += ":" + std::to_string(port);
+        }
+    }
+
     refreshListing();
     refreshDevices();
 }
@@ -351,12 +372,25 @@ void UIStoragePanel::drawDevicesView(OverlayRenderer& renderer, const PanelRect&
                           link_status_msg_, UITheme::Colors::Warning);
     }
 
-    // ── Row 3: [Hub address...] [Connect]  (status msg) ──
+    // ── Row 3: [Hub address...] [Connect/Disconnect]  (status msg) ──
     float row3Y = row2Y + 34.0f;
-    hub_address_input_->setPosition(row1X, row3Y);
-    hub_address_input_->drawOverlay(renderer, position);
 
-    btn_connect_hub_->setPosition(row1X + 244.0f, row3Y);
+    bool hubConnected = server_ && server_->isConnectedToHub();
+
+    if (hubConnected) {
+        std::string connLabel = "Connected to " + server_->connectedHubHost()
+                              + ":" + std::to_string(server_->connectedHubPort());
+        renderer.drawText({row1X, row3Y + 6.0f}, connLabel,
+                          UITheme::Colors::Success);
+        btn_connect_hub_->setText("Disconnect");
+        btn_connect_hub_->setPosition(row1X + static_cast<float>(connLabel.size()) * 7.5f + 16.0f, row3Y);
+    } else {
+        hub_address_input_->setPosition(row1X, row3Y);
+        hub_address_input_->drawOverlay(renderer, position);
+        btn_connect_hub_->setText("Connect");
+        btn_connect_hub_->setPosition(row1X + 244.0f, row3Y);
+    }
+
     btn_connect_hub_->drawOverlay(renderer, position);
 
     if (!hub_status_msg_.empty()) {
