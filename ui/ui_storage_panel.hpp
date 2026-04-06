@@ -119,6 +119,13 @@ private:
     std::string                  link_status_msg_;    // feedback after submit
     float                        link_status_timer_ = 0.0f;
 
+    // Connect-to-hub UI
+    std::shared_ptr<UIInputBox>  hub_address_input_;
+    std::string                  hub_address_buffer_;
+    std::shared_ptr<UIButton>    btn_connect_hub_;
+    std::string                  hub_status_msg_;
+    float                        hub_status_timer_ = 0.0f;
+
     struct DeviceRow {
         std::string device_id;
         std::string device_name;

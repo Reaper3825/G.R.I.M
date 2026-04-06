@@ -70,6 +70,34 @@ UIStoragePanel::UIStoragePanel()
     });
     btn_link_device_->setSize(60.0f, 28.0f);
 
+    // Hub address + connect button
+    hub_address_input_ = std::make_shared<UIInputBox>(&hub_address_buffer_);
+    hub_address_input_->setPlaceholder("Hub address (e.g. 192.168.1.5)");
+    hub_address_input_->setSize(240.0f, 28.0f);
+
+    btn_connect_hub_ = std::make_shared<UIButton>("Connect", [this]() {
+        if (!server_ || hub_address_buffer_.empty()) return;
+
+        // Parse host:port (default port 11437)
+        std::string host = hub_address_buffer_;
+        uint16_t port = 11437;
+        auto colon = host.rfind(':');
+        if (colon != std::string::npos) {
+            try {
+                port = static_cast<uint16_t>(std::stoi(host.substr(colon + 1)));
+                host = host.substr(0, colon);
+            } catch (...) {
+                // No valid port after colon — treat entire string as host
+            }
+        }
+
+        auto result = server_->registerWithHub(host, port);
+        hub_status_msg_ = result.message;
+        hub_status_timer_ = 5.0f;
+        if (result.success) refreshDevices();
+    });
+    btn_connect_hub_->setSize(80.0f, 28.0f);
+
     // Initial breadcrumb = root
     breadcrumb_.clear();
 
@@ -104,6 +132,8 @@ void UIStoragePanel::setView(StorageView view) {
     btn_regenerate_code_->setVisible(devices);
     device_code_input_->setVisible(devices);
     btn_link_device_->setVisible(devices);
+    hub_address_input_->setVisible(devices);
+    btn_connect_hub_->setVisible(devices);
 }
 
 // ─── Update ──────────────────────────────────────────────
@@ -127,10 +157,16 @@ void UIStoragePanel::update(const InputState& input, float dt) {
             if (btn_regenerate_code_->isVisible())  btn_regenerate_code_->update(input, dt);
             if (device_code_input_->isVisible())    device_code_input_->update(input, dt);
             if (btn_link_device_->isVisible())       btn_link_device_->update(input, dt);
+            if (hub_address_input_->isVisible())     hub_address_input_->update(input, dt);
+            if (btn_connect_hub_->isVisible())       btn_connect_hub_->update(input, dt);
             if (device_list_scroll_->isVisible())    device_list_scroll_->update(input, dt);
             if (link_status_timer_ > 0.0f) {
                 link_status_timer_ -= dt;
                 if (link_status_timer_ <= 0.0f) link_status_msg_.clear();
+            }
+            if (hub_status_timer_ > 0.0f) {
+                hub_status_timer_ -= dt;
+                if (hub_status_timer_ <= 0.0f) hub_status_msg_.clear();
             }
             break;
     }
@@ -315,8 +351,21 @@ void UIStoragePanel::drawDevicesView(OverlayRenderer& renderer, const PanelRect&
                           link_status_msg_, UITheme::Colors::Warning);
     }
 
+    // ── Row 3: [Hub address...] [Connect]  (status msg) ──
+    float row3Y = row2Y + 34.0f;
+    hub_address_input_->setPosition(row1X, row3Y);
+    hub_address_input_->drawOverlay(renderer, position);
+
+    btn_connect_hub_->setPosition(row1X + 244.0f, row3Y);
+    btn_connect_hub_->drawOverlay(renderer, position);
+
+    if (!hub_status_msg_.empty()) {
+        renderer.drawText({row1X + 330.0f, row3Y + 6.0f},
+                          hub_status_msg_, UITheme::Colors::Warning);
+    }
+
     // Device list
-    float listY = row2Y + 36.0f;
+    float listY = row3Y + 36.0f;
 
     // Header
     renderer.drawText({content.origin.x + 24.0f, listY}, "Device", UITheme::Colors::TextSecondary);

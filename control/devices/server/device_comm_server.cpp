@@ -5,6 +5,7 @@
 
 #include <uwebsockets/App.h>
 #include <nlohmann/json.hpp>
+#include <httplib.h>
 #include <chrono>
 #include <limits>
 #include <sstream>
@@ -91,6 +92,59 @@ bool DeviceCommServer::addPendingDeviceWithCode(const std::string& code) {
 
     LOG_DEBUG(TAG, "Created pending device with user-entered code: " + code);
     return true;
+}
+
+DeviceCommServer::RegisterResult DeviceCommServer::registerWithHub(
+    const std::string& hub_host, uint16_t hub_port)
+{
+    if (local_device_code_.empty()) {
+        return {false, "No local device code generated"};
+    }
+
+    // Detect current platform
+#if defined(_WIN32)
+    Platform plat = Platform::Windows;
+#elif defined(__APPLE__)
+    Platform plat = Platform::macOS;
+#elif defined(__linux__)
+    Platform plat = Platform::Linux;
+#else
+    Platform plat = Platform::Windows;
+#endif
+
+    // Build registration payload
+    nlohmann::json body;
+    body["pairing_code"] = local_device_code_;
+    body["device_name"]  = "GRIM Desktop";
+    body["device_type"]  = DeviceType::Desktop;
+    body["platform"]     = plat;
+
+    httplib::Client client(hub_host, hub_port);
+    client.set_connection_timeout(5);
+    client.set_read_timeout(5);
+
+    auto result = client.Post("/api/register", body.dump(), "application/json");
+    if (!result) {
+        return {false, "Connection failed — is the hub running at "
+                       + hub_host + ":" + std::to_string(hub_port) + "?"};
+    }
+
+    if (result->status != 200) {
+        return {false, "Hub returned HTTP " + std::to_string(result->status)};
+    }
+
+    try {
+        auto resp = nlohmann::json::parse(result->body);
+        bool ok   = resp.value("success", false);
+        std::string msg = resp.value("message", "");
+        if (ok) {
+            LOG_DEBUG(TAG, "Registered with hub at " + hub_host + ":" +
+                           std::to_string(hub_port) + " — " + msg);
+        }
+        return {ok, msg};
+    } catch (const std::exception& e) {
+        return {false, std::string("Bad response from hub: ") + e.what()};
+    }
 }
 
 // ─── Server lifecycle ────────────────────────────────────
@@ -317,6 +371,39 @@ bool DeviceCommServer::start() {
                                        " (code=" + std::to_string(code) + ")");
                     }
                 }
+            })
+            // ─── HTTP API for device registration ────
+            .post("/api/register", [this](auto* res, auto* req) {
+                std::string buffer;
+                res->onAborted([]() {});
+                res->onData([this, res, buffer = std::move(buffer)](std::string_view data, bool last) mutable {
+                    buffer.append(data.data(), data.length());
+                    if (!last) return;
+
+                    nlohmann::json response;
+                    try {
+                        auto body = nlohmann::json::parse(buffer);
+
+                        std::string code   = body.at("pairing_code").get<std::string>();
+                        std::string name   = body.at("device_name").get<std::string>();
+                        auto dtype         = body.at("device_type").get<DeviceType>();
+                        auto plat          = body.at("platform").get<Platform>();
+
+                        DeviceRecord rec = registry_.completePairing(code, name, dtype, plat);
+
+                        response["success"]   = true;
+                        response["device_id"] = rec.device_id;
+                        response["message"]   = "Device paired successfully";
+
+                        LOG_DEBUG(TAG, "HTTP register: paired " + name + " (id=" + rec.device_id + ")");
+                    } catch (const std::exception& e) {
+                        response["success"] = false;
+                        response["message"] = e.what();
+                    }
+
+                    res->writeHeader("Content-Type", "application/json");
+                    res->end(response.dump());
+                });
             })
             .listen(port, [port](auto* listen_socket) {
                 if (listen_socket) {

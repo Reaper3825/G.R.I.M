@@ -54,6 +54,12 @@ public:
     // Returns true if the code was accepted (not empty, not already in use).
     bool addPendingDeviceWithCode(const std::string& code);
 
+    // Connect to a remote hub and register this instance using its local code.
+    // hub_host: IP or hostname, hub_port: port (default 11437).
+    // Returns { success, message } for UI feedback.
+    struct RegisterResult { bool success; std::string message; };
+    RegisterResult registerWithHub(const std::string& hub_host, uint16_t hub_port);
+
     // Access subsystems (for UI queries)
     const StorageManager& storageManager() const { return storage_; }
     StorageManager& storageManager() { return storage_; }
