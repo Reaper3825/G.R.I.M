@@ -196,6 +196,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             builder.CreateVector(h_W_qkv), builder.CreateVector(h_b_qkv),
             0, 0, 0, 0, 0, 0,
             builder.CreateVector(h_W_o), builder.CreateVector(h_b_o),
+            0, 0,  // alpha_q, alpha_k (not used)
             static_cast<uint32_t>(cfg.d_model),
             static_cast<uint32_t>(cfg.num_heads),
             static_cast<uint32_t>(cfg.num_kv_heads),
@@ -429,10 +430,126 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         if (!GRIMTransformer::VerifyTransformerModelBuffer(pre_write_verifier)) {
             Logging::EmitModuleError(kLogModule, "[save] CRITICAL: in-memory FlatBuffer verification FAILED before writing to disk!");
             Logging::EmitModuleError(kLogModule, Msg("[save]   buf_size=", buf_size, " buf_ptr=", reinterpret_cast<uintptr_t>(buf)));
-            // Try relaxed limits
-            flatbuffers::Verifier relaxed(buf, buf_size, 128, 10000000);
-            bool relaxed_ok = GRIMTransformer::VerifyTransformerModelBuffer(relaxed);
-            Logging::EmitModuleError(kLogModule, Msg("[save]   relaxed verifier (depth=128, tables=10M) = ", relaxed_ok ? "PASS" : "FAIL"));
+
+            // ── Component-level diagnostics ──
+            const auto* raw = GRIMTransformer::GetTransformerModel(buf);
+            if (!raw) {
+                Logging::EmitModuleError(kLogModule, "[save] DIAG: GetTransformerModel returned NULL — root table broken");
+            } else {
+                Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: root ptr OK, version=", raw->version()));
+
+                // Step-by-step root table Verify decomposition
+                {
+                    flatbuffers::Verifier v(buf, buf_size);
+                    bool s1 = raw->VerifyTableStart(v);
+                    Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: VerifyTableStart=", s1 ? "OK" : "FAIL"));
+                }
+
+                // Individual components
+                auto verify_component = [&](const char* name, const auto* tbl) {
+                    if (!tbl) {
+                        Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: ", name, " = NULL"));
+                        return;
+                    }
+                    flatbuffers::Verifier v(buf, buf_size);
+                    bool ok = tbl->Verify(v);
+                    Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: ", name, " verify=", ok ? "OK" : "FAIL"));
+                };
+
+                verify_component("config", raw->config());
+                verify_component("embeddings", raw->embeddings());
+
+                if (raw->encoder_layers()) {
+                    Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: encoder_layers count=", raw->encoder_layers()->size()));
+                    for (uint32_t i = 0; i < raw->encoder_layers()->size(); i++) {
+                        const auto* layer = raw->encoder_layers()->Get(i);
+                        if (!layer) {
+                            Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: encoder_layer[", i, "] = NULL"));
+                            continue;
+                        }
+                        flatbuffers::Verifier vl(buf, buf_size);
+                        bool layer_ok = layer->Verify(vl);
+                        if (!layer_ok) {
+                            Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: encoder_layer[", i, "] verify=FAIL"));
+                            // Drill into sub-components
+                            if (layer->attention()) {
+                                flatbuffers::Verifier va(buf, buf_size);
+                                Logging::EmitModuleError(kLogModule, Msg("[save] DIAG:   .attention=", layer->attention()->Verify(va) ? "OK" : "FAIL"));
+                            }
+                            if (layer->ffn()) {
+                                flatbuffers::Verifier vf(buf, buf_size);
+                                Logging::EmitModuleError(kLogModule, Msg("[save] DIAG:   .ffn=", layer->ffn()->Verify(vf) ? "OK" : "FAIL"));
+                            }
+                            if (layer->rms1()) {
+                                flatbuffers::Verifier vr(buf, buf_size);
+                                Logging::EmitModuleError(kLogModule, Msg("[save] DIAG:   .rms1=", layer->rms1()->Verify(vr) ? "OK" : "FAIL"));
+                            }
+                            if (layer->rms2()) {
+                                flatbuffers::Verifier vr(buf, buf_size);
+                                Logging::EmitModuleError(kLogModule, Msg("[save] DIAG:   .rms2=", layer->rms2()->Verify(vr) ? "OK" : "FAIL"));
+                            }
+                        } else {
+                            Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: encoder_layer[", i, "] verify=OK"));
+                        }
+                    }
+                } else {
+                    Logging::EmitModuleError(kLogModule, "[save] DIAG: encoder_layers = NULL (required!)");
+                }
+
+                verify_component("lm_head", raw->lm_head());
+                verify_component("numeric_head", raw->numeric_head());
+                verify_component("scratch_block", raw->scratch_block());
+                verify_component("training_metadata", raw->training_metadata());
+                verify_component("reasoning_head", raw->reasoning_head());
+                verify_component("execution_block", raw->execution_block());
+                verify_component("slot_selector", raw->slot_selector());
+
+                // Vector fields
+                if (raw->final_rms_gamma()) {
+                    flatbuffers::Verifier vr(buf, buf_size);
+                    bool ok = vr.VerifyVector(raw->final_rms_gamma());
+                    Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: final_rms_gamma vec verify=", ok ? "OK" : "FAIL",
+                        " size=", raw->final_rms_gamma()->size()));
+                } else {
+                    Logging::EmitModuleError(kLogModule, "[save] DIAG: final_rms_gamma = NULL");
+                }
+
+                // Relaxed verifier
+                flatbuffers::Verifier relaxed(buf, buf_size, 128, 10000000);
+                bool relaxed_ok = GRIMTransformer::VerifyTransformerModelBuffer(relaxed);
+                Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: relaxed verifier (depth=128, tables=10M) = ", relaxed_ok ? "PASS" : "FAIL"));
+
+                // Buffer header analysis
+                if (buf_size >= 8) {
+                    uint32_t root_off = flatbuffers::ReadScalar<uint32_t>(buf);
+                    char id[5] = {0};
+                    std::memcpy(id, buf + 4, 4);
+                    Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: root_offset=", root_off, " identifier=\"", id, "\""));
+                    if (buf_size > root_off) {
+                        const uint8_t* root_table = buf + root_off;
+                        int32_t vtable_soff = flatbuffers::ReadScalar<int32_t>(root_table);
+                        const uint8_t* vtable = root_table - vtable_soff;
+                        if (vtable >= buf && vtable < buf + buf_size) {
+                            uint16_t vt_size = flatbuffers::ReadScalar<uint16_t>(vtable);
+                            uint16_t obj_size = flatbuffers::ReadScalar<uint16_t>(vtable + 2);
+                            Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: vtable_size=", vt_size,
+                                " obj_inline_size=", obj_size, " num_fields=", (vt_size - 4) / 2));
+                            // Dump all vtable slots
+                            std::ostringstream slots;
+                            slots << "[save] DIAG: vtable slots:";
+                            for (uint16_t s = 4; s < vt_size; s += 2) {
+                                uint16_t slot_val = flatbuffers::ReadScalar<uint16_t>(vtable + s);
+                                slots << " [" << s << "]=" << slot_val;
+                            }
+                            Logging::EmitModuleError(kLogModule, slots.str());
+                        }
+                    }
+                }
+
+                // Alignment check
+                Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: buf alignment=", reinterpret_cast<uintptr_t>(buf) % 8));
+            }
+
             return false;
         }
         Logging::EmitModuleInfo(kLogModule, "[save] In-memory FlatBuffer verification PASSED");
