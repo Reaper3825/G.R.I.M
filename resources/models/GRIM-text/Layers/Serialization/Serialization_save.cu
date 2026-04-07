@@ -441,7 +441,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 // Step-by-step root table Verify decomposition
                 {
                     flatbuffers::Verifier v(buf, buf_size);
-                    bool s1 = raw->VerifyTableStart(v);
+                    bool s1 = v.VerifyTableStart(reinterpret_cast<const uint8_t*>(raw));
                     Logging::EmitModuleError(kLogModule, Msg("[save] DIAG: VerifyTableStart=", s1 ? "OK" : "FAIL"));
                 }
 

@@ -179,7 +179,7 @@
                 "enabled": true,
                 "freeze_after_step": 0
             },
-            "epochs": 2,
+            "epochs": 1,
             "execution_block": {
                 "causal_w1_transition": 1.5,
                 "cross_attn_head_dim": 64,
