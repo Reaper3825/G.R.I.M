@@ -265,7 +265,88 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
 
     flatbuffers::Verifier verifier(buffer.data(), buffer.size());
     if (!GRIMTransformer::VerifyTransformerModelBuffer(verifier)) {
-        emitFlatBufferLoadDiag("verification failed");
+        emitFlatBufferLoadDiag("verification failed — running component-level diagnostics...");
+
+        // Bypass verifier and read raw — identify WHICH component fails
+        const auto* raw_model = GRIMTransformer::GetTransformerModel(buffer.data());
+        if (!raw_model) {
+            emitFlatBufferLoadDiag("DIAG: GetTransformerModel returned NULL — root table broken");
+        } else {
+            Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: version=", raw_model->version()));
+
+            // Config
+            {
+                const auto* c = raw_model->config();
+                if (!c) { emitFlatBufferLoadDiag("DIAG: config = NULL (required!)"); }
+                else { flatbuffers::Verifier v(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: config verify=", c->Verify(v) ? "OK" : "FAIL")); }
+            }
+            // Embeddings
+            {
+                const auto* e = raw_model->embeddings();
+                if (!e) { emitFlatBufferLoadDiag("DIAG: embeddings = NULL (required!)"); }
+                else { flatbuffers::Verifier v(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: embeddings verify=", e->Verify(v) ? "OK" : "FAIL")); }
+            }
+            // Encoder layers
+            if (raw_model->encoder_layers()) {
+                Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: encoder_layers count=", raw_model->encoder_layers()->size()));
+                for (uint32_t i = 0; i < raw_model->encoder_layers()->size(); i++) {
+                    const auto* layer = raw_model->encoder_layers()->Get(i);
+                    if (!layer) {
+                        Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: encoder_layer[", i, "] = NULL"));
+                        continue;
+                    }
+                    flatbuffers::Verifier vl(buffer.data(), buffer.size());
+                    bool layer_ok = layer->Verify(vl);
+                    if (!layer_ok) {
+                        Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: encoder_layer[", i, "] verify=FAIL"));
+                        const auto* attn = layer->attention();
+                        const auto* ffn = layer->ffn();
+                        const auto* r1 = layer->rms1();
+                        const auto* r2 = layer->rms2();
+                        if (attn) { flatbuffers::Verifier va(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG:   layer[", i, "].attention verify=", attn->Verify(va) ? "OK" : "FAIL")); }
+                        else { Logging::EmitModuleError(kLogModule, Msg("[load] DIAG:   layer[", i, "].attention = NULL")); }
+                        if (ffn) { flatbuffers::Verifier vf(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG:   layer[", i, "].ffn verify=", ffn->Verify(vf) ? "OK" : "FAIL")); }
+                        else { Logging::EmitModuleError(kLogModule, Msg("[load] DIAG:   layer[", i, "].ffn = NULL")); }
+                        if (r1) { flatbuffers::Verifier vr1(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG:   layer[", i, "].rms1 verify=", r1->Verify(vr1) ? "OK" : "FAIL")); }
+                        if (r2) { flatbuffers::Verifier vr2(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG:   layer[", i, "].rms2 verify=", r2->Verify(vr2) ? "OK" : "FAIL")); }
+                    } else {
+                        Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: encoder_layer[", i, "] verify=OK"));
+                    }
+                }
+            } else {
+                emitFlatBufferLoadDiag("DIAG: encoder_layers = NULL (required!)");
+            }
+            // LM head
+            {
+                const auto* lm = raw_model->lm_head();
+                if (!lm) { emitFlatBufferLoadDiag("DIAG: lm_head = NULL (required!)"); }
+                else { flatbuffers::Verifier v(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: lm_head verify=", lm->Verify(v) ? "OK" : "FAIL")); }
+            }
+            // Scratch block
+            {
+                const auto* sb = raw_model->scratch_block();
+                if (!sb) { emitFlatBufferLoadDiag("DIAG: scratch_block = NULL"); }
+                else { flatbuffers::Verifier v(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: scratch_block verify=", sb->Verify(v) ? "OK" : "FAIL")); }
+            }
+            // Training metadata
+            {
+                const auto* tm = raw_model->training_metadata();
+                if (!tm) { emitFlatBufferLoadDiag("DIAG: training_metadata = NULL"); }
+                else { flatbuffers::Verifier v(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: training_metadata verify=", tm->Verify(v) ? "OK" : "FAIL")); }
+            }
+            // Final RMS gamma
+            if (raw_model->final_rms_gamma()) {
+                Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: final_rms_gamma size=", raw_model->final_rms_gamma()->size()));
+            } else {
+                emitFlatBufferLoadDiag("DIAG: final_rms_gamma = NULL");
+            }
+
+            // Test with relaxed limits (higher max_depth + max_tables)
+            flatbuffers::Verifier relaxed(buffer.data(), buffer.size(), 128, 10000000);
+            bool relaxed_ok = GRIMTransformer::VerifyTransformerModelBuffer(relaxed);
+            Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: relaxed verifier (depth=128, tables=10M) = ", relaxed_ok ? "PASS" : "FAIL"));
+        }
+
         for (const auto& s : issues) emitFlatBufferLoadDiag(s);
         dumpBinaryAnalysis(buffer, file_size, request.path);
         return false;

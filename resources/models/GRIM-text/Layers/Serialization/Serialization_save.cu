@@ -421,6 +421,23 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
 
     builder.Finish(fb_model, "GRMT");
 
+    // In-memory verification: catch builder issues BEFORE writing to disk
+    {
+        const uint8_t* buf = builder.GetBufferPointer();
+        const size_t buf_size = builder.GetSize();
+        flatbuffers::Verifier pre_write_verifier(buf, buf_size);
+        if (!GRIMTransformer::VerifyTransformerModelBuffer(pre_write_verifier)) {
+            Logging::EmitModuleError(kLogModule, "[save] CRITICAL: in-memory FlatBuffer verification FAILED before writing to disk!");
+            Logging::EmitModuleError(kLogModule, Msg("[save]   buf_size=", buf_size, " buf_ptr=", reinterpret_cast<uintptr_t>(buf)));
+            // Try relaxed limits
+            flatbuffers::Verifier relaxed(buf, buf_size, 128, 10000000);
+            bool relaxed_ok = GRIMTransformer::VerifyTransformerModelBuffer(relaxed);
+            Logging::EmitModuleError(kLogModule, Msg("[save]   relaxed verifier (depth=128, tables=10M) = ", relaxed_ok ? "PASS" : "FAIL"));
+            return false;
+        }
+        Logging::EmitModuleInfo(kLogModule, "[save] In-memory FlatBuffer verification PASSED");
+    }
+
     Logging::EmitModuleInfo(kLogModule, Msg("[save] Writing checkpoint to disk (", builder.GetSize() / (1024 * 1024), " MB)..."));
 
     const std::string final_path = request.path;
