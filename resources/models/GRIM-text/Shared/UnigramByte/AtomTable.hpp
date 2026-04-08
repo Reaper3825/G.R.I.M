@@ -236,8 +236,6 @@ public:
     // Type-specific parsing functions
     static ParseResult parseInteger(const std::string& text);
     static ParseResult parseFloat(const std::string& text);
-    static ParseResult parseHex(const std::string& text);
-    static ParseResult parseBinary(const std::string& text);
 
 
     //--------------------------------------------------//

@@ -512,10 +512,7 @@ AhoCorasick StructuralPatterns::createTimeSeparators() {
 
 AhoCorasick StructuralPatterns::createNumberPrefixes() {
     AhoCorasick ac;
-    ac.addPattern("0x", AtomType::ATOM_NUM);
-    ac.addPattern("0X", AtomType::ATOM_NUM);
-    ac.addPattern("0b", AtomType::ATOM_NUM);
-    ac.addPattern("0B", AtomType::ATOM_NUM);
+    // Hex/binary atom detection removed — no number prefix patterns needed.
     ac.build();
     return ac;
 }
@@ -528,10 +525,7 @@ AhoCorasick StructuralPatterns::createPathSeparators() {
 
 AhoCorasick StructuralPatterns::createAllStructuralPatterns() {
     AhoCorasick ac;
-    ac.addPattern("0x", AtomType::ATOM_NUM);
-    ac.addPattern("0X", AtomType::ATOM_NUM);
-    ac.addPattern("0b", AtomType::ATOM_NUM);
-    ac.addPattern("0B", AtomType::ATOM_NUM);
+    // Hex/binary atom detection removed — no structural patterns needed.
     ac.build();
     return ac;
 }

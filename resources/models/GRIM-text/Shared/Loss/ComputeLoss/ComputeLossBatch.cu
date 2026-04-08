@@ -201,14 +201,14 @@ float LanguageModel::computeLossBatch(
 	std::memcpy(handleB.data, payload.target_ids.data(), target_ids_bytes);
 
 	// Spec Step 10: LM does not supervise numeric magnitudes.
-	// Mask digit byte target tokens (ASCII '0'..'9') to -1 so unified_loss ignores them.
+	// Mask atom-position targets to -1 so unified_loss ignores tokens supervised
+	// by the execution block (numeric head). atom_mask[t]==1 marks exactly the
+	// <NUM> placeholder tokens produced by atom detection in the tokenizer.
 	if (cfg.execution_block_enabled) {
 		int32_t* tgt = reinterpret_cast<int32_t*>(handleB.data);
 		const int total_toks = payload.total_tokens;
-		constexpr int DIGIT_LO = Tokenizer::BYTE_TOKEN_OFFSET + 0x30;
-		constexpr int DIGIT_HI = Tokenizer::BYTE_TOKEN_OFFSET + 0x39;
 		for (int t = 0; t < total_toks; ++t) {
-			if (tgt[t] >= DIGIT_LO && tgt[t] <= DIGIT_HI)
+			if (payload.atom_mask[t] != 0)
 				tgt[t] = -1;
 		}
 	}
@@ -281,8 +281,10 @@ float LanguageModel::computeLossBatch(
 	GPUGrimEncoder* autograd_encoder = gpu_encoder;
 	ScratchBlockLayer* scratch_block = getScratchBlockLayer();
 	
-	static uint64_t s_autograd_forward_step = 0;
-	const uint64_t autograd_forward_step = s_autograd_forward_step++;
+	// Read step from TrainingState (set by autogradTrainingStep on train calls only).
+	// Eval calls reuse the last training step — dropout seeds are deterministic for eval
+	// and MTP warmup alpha is frozen at the current training progress.
+	const uint64_t autograd_forward_step = training_state_.autograd_step;
 	
 	GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
 		&cfg,

@@ -28,11 +28,12 @@ namespace GRIM {
 namespace Tokenizer {
 
 //======================================================//
-//  Atom Types — single <NUM> token for numeric scratchpad reasoning
+//  Atom Types — distinct tokens per numeric sub-type
 //======================================================//
 enum class AtomType : int {
-    ATOM_NONE = 0,
-    ATOM_NUM  = 1,
+    ATOM_NONE  = 0,
+    ATOM_INT   = 1,   // Integer literals: 42, -17, +5
+    ATOM_FLOAT = 2,   // Float literals: 3.14, -2.5e10, .5
     ATOM_ACTIVE_COUNT,
     ATOM_TYPE_COUNT
 };
@@ -88,14 +89,15 @@ inline bool isAtomToken(int token_id) {
 
 inline const char* atomTypeName(AtomType type) {
     switch (type) {
-        case AtomType::ATOM_NONE: return "NONE";
-        case AtomType::ATOM_NUM:  return "NUM";
+        case AtomType::ATOM_NONE:  return "NONE";
+        case AtomType::ATOM_INT:   return "INT";
+        case AtomType::ATOM_FLOAT: return "FLOAT";
         default: return "UNKNOWN";
     }
 }
 
 inline bool isNumericAtom(AtomType type) {
-    return type == AtomType::ATOM_NUM;
+    return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT;
 }
 
 } // namespace Tokenizer

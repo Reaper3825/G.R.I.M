@@ -4745,6 +4745,9 @@ EpochResult runEpoch(
     // Log telemetry vectors (multi-scale summary)
     if (ctx.telemetry.lattice && ctx.telemetry.enabled) {
         ctx.logging.logger->log("========== TELEMETRY SUMMARY ==========");
+        ctx.logging.logger->log("[Tel-Legend] Levels: L0=stride 1 fast telemetry; L2=stride 4 smoother telemetry; '(s=4)' means the L2 state updates every 4 observations.");
+        ctx.logging.logger->log("[Tel-Legend] Common fields: μ=EMA baseline for the logged stream; σ̃=normalized volatility σ/(|μ|+ε); v_σ=volatility-of-volatility; Δ̄=EMA normalized slope/trend.");
+        ctx.logging.logger->log("[Tel-Legend] Drift/outlier fields: p=directional bias (-1 falling, +1 rising); r_out=soft outlier frequency; δμ=mean drift vs slow anchor μ_a; δσ=volatility drift vs slow anchor σ_a.");
         
         // Log level 0 (fast, every step)
         GRIM::Telemetry::TelemetryVector vec0_loss, vec0_grad;

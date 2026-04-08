@@ -133,20 +133,10 @@ __global__ void kernelMarkStructuralBoundaries(
 //======================================================//
 
     struct UniByte::DetectorState {
-        AhoCorasick url_prefixes;       // kept empty (non-numeric atoms removed)
-        AhoCorasick email_indicator;    // kept empty
-        AhoCorasick number_prefixes;    // 0x, 0b for hex/binary -> ATOM_NUM
-        
-        DetectorState() {
-            url_prefixes.build();
-            email_indicator.build();
-            
-            number_prefixes.addPattern("0x", AtomType::ATOM_NUM);
-            number_prefixes.addPattern("0X", AtomType::ATOM_NUM);
-            number_prefixes.addPattern("0b", AtomType::ATOM_NUM);
-            number_prefixes.addPattern("0B", AtomType::ATOM_NUM);
-            number_prefixes.build();
-        }
+        // All Aho-Corasick automata deleted: url_prefixes, email_indicator
+        // were empty (non-numeric atoms removed per Rule 26), and
+        // number_prefixes (0x/0b) replaced by inline guard in detectStructures.
+        DetectorState() {}
     };
 
 //======================================================//
@@ -300,45 +290,23 @@ std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) c
     };
     
     //--------------------------------------------------//
-    // Phase 1: Aho-Corasick prefix detection (O(n) single pass)
-    //--------------------------------------------------//
-    
-    // Non-numeric atom types removed: URLs, emails, dates, times, IPs, paths
-    // all fall through to regular byte/unigram tokenization now.
-    
-    //--------------------------------------------------//
-    // Number detection with Aho-Corasick prefix hints
+    // Number detection: single-pass longest-match scan
     //--------------------------------------------------//
     
     if (config_.detect_numbers) {
-        auto num_prefix_hits = detector_->number_prefixes.search(text);
-        
-        for (const auto& hit : num_prefix_hits) {
-            size_t end;
-            if (Detector::detectHex(text, hit.start, end)) {
-                spans.push_back(makeSpan(hit.start, end, AtomType::ATOM_NUM));
-            } else if (Detector::detectBinary(text, hit.start, end)) {
-                spans.push_back(makeSpan(hit.start, end, AtomType::ATOM_NUM));
-            }
-        }
-        
+        // Single-pass longest-match: float > integer.
+        // Hex/binary atoms removed — those patterns are now tokenized as regular text.
         for (size_t i = 0; i < text.size(); ) {
-            if (i + 1 < text.size() && text[i] == '0' && 
-                (text[i+1] == 'x' || text[i+1] == 'X' || text[i+1] == 'b' || text[i+1] == 'B')) {
-                ++i;
-                continue;
-            }
-            
             size_t end;
             
             if (Detector::detectFloat(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_NUM));
+                spans.push_back(makeSpan(i, end, AtomType::ATOM_FLOAT));
                 i = end;
                 continue;
             }
             
             if (Detector::detectInteger(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_NUM));
+                spans.push_back(makeSpan(i, end, AtomType::ATOM_INT));
                 i = end;
                 continue;
             }
@@ -463,7 +431,6 @@ inline uint16_t floatToFp16(float value) {
 }
 
 // Encode text features for an atom token into 16-dim FP16 vector
-// With single ATOM_NUM type, features focus on numeric magnitude/structure.
 void encodeAtomTextFeatures(
     AtomType atom_type,
     const std::string_view raw_text,
@@ -474,10 +441,12 @@ void encodeAtomTextFeatures(
         out_features[i] = floatToFp16(0.0f);
     }
     
-    if (atom_type != AtomType::ATOM_NUM) return;
+    if (!isNumericAtom(atom_type)) return;
     
-    // Dim 0: numeric category indicator
-    out_features[0] = floatToFp16(1.0f);
+    // Dim 0: integer indicator
+    out_features[0] = floatToFp16(atom_type == AtomType::ATOM_INT ? 1.0f : 0.0f);
+    // Dim 1: float indicator
+    out_features[1] = floatToFp16(atom_type == AtomType::ATOM_FLOAT ? 1.0f : 0.0f);
     
     // Dims [8-11]: Length/magnitude features
     float len_f = static_cast<float>(raw_text.size());
@@ -850,7 +819,8 @@ std::string UniByte::tokenToString(int token_id) const {
         return byte_encoder_.tokenToString(token_id);
     } else if (isAtomToken(token_id)) {
         AtomType type = tokenIdToAtomType(token_id);
-        if (type == AtomType::ATOM_NUM) return "<NUM>";
+        if (type == AtomType::ATOM_INT) return "<INT>";
+        if (type == AtomType::ATOM_FLOAT) return "<FLOAT>";
         return "<ATOM>";
     } else if (isUnigramToken(token_id)) {
         const UnigramPiece* piece = unigram_.getPiece(token_id);

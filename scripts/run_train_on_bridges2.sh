@@ -176,7 +176,7 @@ BRIDGES2_ENSURE_CUDA12="export GRIM_PROJECT_DIR=\$BRIDGES2_DIR; source \"\$BRIDG
 # vcpkg
 BRIDGES2_VCPKG="${GRIM_VCPKG_ROOT:-$BRIDGES2_DIR/vcpkg}"
 VCPKG_TOOLCHAIN="$BRIDGES2_VCPKG/scripts/buildsystems/vcpkg.cmake"
-TRAINING_VCPKG_JSON='{"name":"grim-training","version-string":"0.1.0","dependencies":["nlohmann-json","flatbuffers"]}'
+TRAINING_VCPKG_JSON='{"name":"grim-text.v1-training","version-string":"0.1.0","dependencies":["nlohmann-json","flatbuffers"]}'
 BRIDGES2_VCPKG_ENSURE="true"
 if [[ -z "${GRIM_VCPKG_ROOT:-}" ]]; then
   BRIDGES2_VCPKG_ENSURE="if [ ! -f \"$BRIDGES2_DIR/vcpkg/scripts/buildsystems/vcpkg.cmake\" ]; then (cd \"$BRIDGES2_DIR\" && git clone https://github.com/Microsoft/vcpkg.git vcpkg && cd vcpkg && ./bootstrap-vcpkg.sh) || exit 1; fi"

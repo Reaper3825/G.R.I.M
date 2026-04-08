@@ -104,8 +104,10 @@ compileExecutionPayload(
     payload.execution_active = true;
     payload.token_exec_slots.assign(seq_len, -1);
 
-    const int atom_num_token_id = GRIM::Tokenizer::atomTypeToTokenId(
-        GRIM::Tokenizer::AtomType::ATOM_NUM);
+    const int atom_int_token_id = GRIM::Tokenizer::atomTypeToTokenId(
+        GRIM::Tokenizer::AtomType::ATOM_INT);
+    const int atom_float_token_id = GRIM::Tokenizer::atomTypeToTokenId(
+        GRIM::Tokenizer::AtomType::ATOM_FLOAT);
 
     if (literal_spans.size() != record.bootstrap_bindings.size()) {
         throw std::runtime_error(
@@ -125,7 +127,7 @@ compileExecutionPayload(
         int match_count = 0;
 
         for (int t = 0; t < seq_len; ++t) {
-            if (token_ids[t] != atom_num_token_id) continue;
+            if (token_ids[t] != atom_int_token_id && token_ids[t] != atom_float_token_id) continue;
             if (!token_to_span[t]) continue;
 
             const auto* span = token_to_span[t];
@@ -162,7 +164,7 @@ compileExecutionPayload(
                 + " (slot_id=" + std::to_string(binding.slot_id)
                 + ") rendered span [" + std::to_string(lit.byte_start)
                 + "," + std::to_string(lit.byte_end)
-                + ") matched zero ATOM_NUM tokens");
+                + ") matched zero numeric atom tokens");
         }
         if (match_count > 1) {
             throw std::runtime_error(
@@ -170,7 +172,7 @@ compileExecutionPayload(
                 + " (slot_id=" + std::to_string(binding.slot_id)
                 + ") rendered span [" + std::to_string(lit.byte_start)
                 + "," + std::to_string(lit.byte_end)
-                + ") matched " + std::to_string(match_count) + " ATOM_NUM tokens (must be exactly 1)");
+                + ") matched " + std::to_string(match_count) + " numeric atom tokens (must be exactly 1)");
         }
 
         if (!claimed_token_positions.insert(matched_pos).second) {

@@ -874,13 +874,15 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         && isScratchBlockEnabled()
         && training_state_.has_inference_exec_memory;
     if (!selector_active) {
-        // No selector → hard-mask <NUM> when scratchblock generation is active
+        // No selector → hard-mask numeric atom tokens when scratchblock generation is active
         const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
                                                     config_.use_scratch_block &&
                                                     isScratchBlockEnabled();
         if (scratchblock_generation_active) {
-            const int num_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
-            sampling_cfg.bad_token_ids.push_back(num_tid);
+            const int int_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_INT);
+            const int float_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_FLOAT);
+            sampling_cfg.bad_token_ids.push_back(int_tid);
+            sampling_cfg.bad_token_ids.push_back(float_tid);
             std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
             sampling_cfg.bad_token_ids.erase(
                 std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
@@ -953,10 +955,12 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                     + std::to_string(step) + " — selector was not evaluated after "
                     + (step == 0 ? "forwardInit (prefill)" : "forwardStep (decode)"));
             }
-            const int num_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
+            const int int_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_INT);
+            const int float_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_FLOAT);
             if (training_state_.decode_selector_status
                    != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
-                logits_vec.data[num_tid] = -1e30f;
+                logits_vec.data[int_tid] = -1e30f;
+                logits_vec.data[float_tid] = -1e30f;
             }
         }
 
@@ -982,14 +986,14 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
 
         if (scratchblock_active && GRIM::Tokenizer::isAtomToken(sample.token_id)) {
             token_atom_mask_val = 1;
-            if (GRIM::Tokenizer::tokenIdToAtomType(sample.token_id)
-                == GRIM::Tokenizer::AtomType::ATOM_NUM) {
-                // <NUM> was sampled — selector MUST have resolved a slot
+            if (GRIM::Tokenizer::isNumericAtom(
+                    GRIM::Tokenizer::tokenIdToAtomType(sample.token_id))) {
+                // Numeric atom was sampled — selector MUST have resolved a slot
                 if (!selector_active || !training_state_.decode_selector_valid
                     || training_state_.decode_selector_status
                        != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
                     throw std::runtime_error(
-                        "generateSequenceGPU: sampled <NUM> but selector did not resolve a slot "
+                        "generateSequenceGPU: sampled numeric atom but selector did not resolve a slot "
                         "(status=" + std::to_string(training_state_.decode_selector_status) + ")");
                 }
                 new_token_slot_id = training_state_.decode_selected_slot;

@@ -12,6 +12,9 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
+// Forward declaration — full definition in Batching/BatchPayload.hpp
+namespace GRIM { namespace Batching { struct BatchPayload; } }
+
 namespace GRIM {
 namespace autograd {
 
@@ -21,6 +24,8 @@ namespace autograd {
 
 struct LossConfig {
     // Focal Loss: L = α * (1-p_t)^γ * CE
+    // When focal_enabled=false, focal_alpha and focal_gamma are IGNORED.
+    // CE term becomes plain ce_smooth (no scaling by focal_alpha).
     float focal_alpha = 1.0f;       // Class balance weight (1.0 = none)
     float focal_gamma = 0.0f;       // Focusing parameter (0 = standard CE, 2 = strong focus)
     bool  focal_enabled = false;
@@ -62,13 +67,13 @@ struct LossConfig {
  *   Produces: grad_logits[j] = (p_j - q_j) / N  (standard CE gradient)
  *
  * Loss formula:
- *   L = α * (1-p_t)^γ * CE_smooth + λ * Σ p*log(p)
+ *   When focal_enabled:  L = α * (1-p_t)^γ * CE_smooth + λ * Σ p*log(p)
+ *   When focal disabled: L = CE_smooth + λ * Σ p*log(p)
+ *   (focal_alpha is ONLY applied when focal_enabled=true)
  * 
  * @param logits      [total_tokens, vocab_size] - raw logits from LM head
  * @param targets     [total_tokens] - target token IDs (on GPU), -1 = masked
- * @param valid_mask  [total_tokens] - 1.0 for valid, 0.0 for padding (optional)
- * @param num_tokens  Number of tokens
- * @param vocab_size  Vocabulary size
+ * @param payload     BatchPayload — single source of truth for total_tokens, vocab_size, valid_tokens
  * @param config      Loss configuration (focal, label smoothing, entropy reg)
  * @param stream      CUDA stream
  * @return Scalar loss tensor with grad_fn attached (if logits.requires_grad)
@@ -76,9 +81,7 @@ struct LossConfig {
 Tensor unified_loss(
     Tensor& logits,
     const int* targets,
-    const float* valid_mask,
-    int num_tokens,
-    int vocab_size,
+    const Batching::BatchPayload& payload,
     const LossConfig& config,
     cudaStream_t stream
 );
@@ -97,10 +100,10 @@ Tensor unified_loss(
 void launchUnifiedLossForward(
     const float* log_probs,
     const int* targets,
-    const float* valid_mask,
     float* per_token_loss,
     float* loss_sum,
     int* valid_count,
+    float* weight_sum,
     int num_tokens,
     int vocab_size,
     float focal_alpha,
@@ -110,6 +113,7 @@ void launchUnifiedLossForward(
     bool smoothing_enabled,
     float entropy_reg_lambda,
     bool entropy_reg_enabled,
+    const float* class_weights,
     cudaStream_t stream
 );
 
@@ -117,6 +121,7 @@ void launchUnifiedLossForward(
  * NLL loss backward — gradient w.r.t. log-probabilities
  * @param log_probs      [num_tokens, vocab_size] — saved log-probabilities
  * @param grad_log_probs [num_tokens, vocab_size] — OUTPUT: gradient w.r.t. log_probs
+ * @param grad_output_scale  Upstream scalar gradient for chain rule (1.0 when terminal loss)
  * @param focal_enabled True if focal loss should be applied (rules out checking focal_gamma > 0)
  * @param smoothing_enabled True if label smoothing should be applied (rules out checking smoothing_epsilon > 0)
  * @param entropy_reg_enabled True if entropy regularization should be applied (rules out checking entropy_reg_lambda > 0)
@@ -124,11 +129,11 @@ void launchUnifiedLossForward(
 void launchUnifiedLossBackward(
     const float* log_probs,
     const int* targets,
-    const float* valid_mask,
     float* grad_log_probs,
     int num_tokens,
     int vocab_size,
     int valid_count,
+    float weight_sum,
     float focal_alpha,
     float focal_gamma,
     bool focal_enabled,
@@ -136,6 +141,8 @@ void launchUnifiedLossBackward(
     bool smoothing_enabled,
     float entropy_reg_lambda,
     bool entropy_reg_enabled,
+    const float* class_weights,
+    float grad_output_scale,
     cudaStream_t stream
 );
 
@@ -144,34 +151,24 @@ void launchUnifiedLossBackward(
 //=============================================================================
 
 /**
- * Launch Token 277 diagnostic logging kernel
- * 
- * Tracks all components contributing to Token 277 (SPACE) becoming argmax:
- * - Softmax probability p(277)
- * - Argmax status (is 277 the predicted token?)
- * - Loss contribution when 277 is the target
- * 
- * @param logits       [num_tokens, vocab_size] - current logits
- * @param targets      [num_tokens] - target token IDs
- * @param valid_mask   [num_tokens] - mask for valid positions (optional)
- * @param grad_logits  [num_tokens, vocab_size] - gradients if available (optional)
- * @param num_tokens   Number of tokens
- * @param vocab_size   Vocabulary size
- * @param batch_idx    Current batch index
- * @param step_idx     Current training step
- * @param stream       CUDA stream
+ * Launch collapse token diagnostic with ACTUAL loss computation.
+ * Computes real loss (focal + smoothing + entropy) per-token to identify
+ * mode collapse and gradient issues for the tracked token.
  */
 void launchToken277DiagnosticActual(
+    const float* log_probs,
     const float* logits,
     const int* targets,
-    const float* valid_mask,
-    const float* grad_logits,
+    const float* grad_log_probs,
     int num_tokens,
     int vocab_size,
+    float focal_alpha,
+    float focal_gamma,
+    float smoothing_epsilon,
+    float entropy_reg_lambda,
     int batch_idx,
-    int step_idx,
-    cudaStream_t stream,
-    int tracked_token
+    int tracked_token,
+    cudaStream_t stream
 );
 
 /**

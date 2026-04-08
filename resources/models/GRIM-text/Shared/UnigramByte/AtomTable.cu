@@ -87,7 +87,7 @@ __global__ void kernelUnpackAtomNumerics(
     uint32_t type = types[idx];
     float val = numeric_values[idx];
     
-    bool is_int = (type == static_cast<uint32_t>(AtomType::ATOM_NUM));
+    bool is_int = isNumericAtom(static_cast<AtomType>(type));
     
     is_integer[idx] = is_int;
     output_floats[idx] = val;
@@ -748,16 +748,11 @@ ParseResult AtomTable::parseAtom(AtomType type, const std::string& text) {
         parse_text = &trimmed_storage;
     }
 
-    if (type == AtomType::ATOM_NUM) {
-        // Try integer first, then float, then hex, then binary
-        auto int_result = parseInteger(*parse_text);
-        if (int_result.success) return int_result;
-        auto float_result = parseFloat(*parse_text);
-        if (float_result.success) return float_result;
-        auto hex_result = parseHex(*parse_text);
-        if (hex_result.success) return hex_result;
-        auto bin_result = parseBinary(*parse_text);
-        if (bin_result.success) return bin_result;
+    if (type == AtomType::ATOM_INT) {
+        return parseInteger(*parse_text);
+    }
+    if (type == AtomType::ATOM_FLOAT) {
+        return parseFloat(*parse_text);
     }
     return ParseResult{true, AtomGeneric{*parse_text}, ""};
 }
@@ -834,83 +829,6 @@ ParseResult AtomTable::parseFloat(const std::string& text) {
             size_t e_pos = text.find_first_of("eE");
             if (e_pos != std::string::npos && e_pos + 1 < text.size()) {
                 atom.exponent = std::stoi(text.substr(e_pos + 1));
-            }
-        }
-        
-        result.success = true;
-        result.value = atom;
-    } catch (const std::exception& e) {
-        result.error_message = e.what();
-    }
-    
-    return result;
-}
-
-//--------------------------------------------------//
-// Hex Parsing
-//--------------------------------------------------//
-
-ParseResult AtomTable::parseHex(const std::string& text) {
-    ParseResult result;
-    result.success = false;
-    
-    if (text.size() < 3 || text[0] != '0' || 
-        (text[1] != 'x' && text[1] != 'X')) {
-        result.error_message = "Invalid hex format (expected 0x prefix)";
-        return result;
-    }
-    
-    try {
-        AtomInteger atom;
-        atom.base = 16;
-        atom.has_sign = false;
-        
-        size_t pos = 0;
-        atom.value = std::stoll(text, &pos, 16);
-        
-        if (pos != text.size()) {
-            result.error_message = "Invalid hex digits";
-            return result;
-        }
-        
-        result.success = true;
-        result.value = atom;
-    } catch (const std::exception& e) {
-        result.error_message = e.what();
-    }
-    
-    return result;
-}
-
-//--------------------------------------------------//
-// Binary Parsing
-//--------------------------------------------------//
-
-ParseResult AtomTable::parseBinary(const std::string& text) {
-    ParseResult result;
-    result.success = false;
-    
-    if (text.size() < 3 || text[0] != '0' || 
-        (text[1] != 'b' && text[1] != 'B')) {
-        result.error_message = "Invalid binary format (expected 0b prefix)";
-        return result;
-    }
-    
-    try {
-        AtomInteger atom;
-        atom.base = 2;
-        atom.has_sign = false;
-        
-        // Parse binary digits manually
-        atom.value = 0;
-        for (size_t i = 2; i < text.size(); ++i) {
-            if (text[i] == '0') {
-                atom.value = atom.value * 2;
-            } else if (text[i] == '1') {
-                atom.value = atom.value * 2 + 1;
-            } else {
-                result.error_message = "Invalid binary digit";
-                return result;
             }
         }
         
@@ -1031,7 +949,7 @@ bool AtomTable::hasNumericValue(AtomType type) {
 //--------------------------------------------------//
 
 AtomCategory AtomTable::getCategoryForType(AtomType type) {
-    if (type == AtomType::ATOM_NUM) return AtomCategory::NUMERIC;
+    if (isNumericAtom(type)) return AtomCategory::NUMERIC;
     return AtomCategory::GENERIC;
 }
 

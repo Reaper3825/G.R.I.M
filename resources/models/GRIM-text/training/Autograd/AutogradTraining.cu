@@ -1201,9 +1201,7 @@ LossResult computeAutogradLoss(
     Tensor loss_tensor = autograd::unified_loss(
         intermediates.logits_tensor,
         targets,
-        nullptr,  // valid_mask not used - padding handled by target=-1
-        total_tokens,
-        vocab_size,
+        payload,
         ctx.loss_config,
         ctx.stream
     );
@@ -1282,9 +1280,7 @@ LossResult computeAutogradLoss(
             Tensor loss_k = autograd::unified_loss(
                 intermediates.mtp_logits_tensors.back(),
                 reinterpret_cast<const int*>(ts->mtp_shifted_targets_tensor.data),
-                nullptr,
-                total_tokens,
-                vocab_size,
+                payload,
                 ctx.loss_config,
                 ctx.stream
             );
@@ -2027,16 +2023,15 @@ LossResult autogradTrainingStep(
     }
 
     // WS8 Spec Step 10: LM does not supervise numeric magnitudes.
-    // Mask digit byte target tokens (ASCII '0'..'9') to -1 so unified_loss ignores them.
-    // (mirrors computeLossBatch; ensures training and validation share identical target masking)
+    // Mask atom-position targets to -1 so unified_loss ignores tokens supervised
+    // by the execution block (numeric head). atom_mask[t]==1 marks exactly the
+    // <NUM> placeholder tokens produced by atom detection in the tokenizer.
     std::vector<int> masked_targets;
     const int* target_src = payload.target_ids.data();
     if (cfg.execution_block_enabled) {
         masked_targets.assign(payload.target_ids.begin(), payload.target_ids.end());
-        constexpr int DIGIT_LO = Tokenizer::BYTE_TOKEN_OFFSET + 0x30;
-        constexpr int DIGIT_HI = Tokenizer::BYTE_TOKEN_OFFSET + 0x39;
         for (int t = 0; t < total_tokens; ++t) {
-            if (masked_targets[t] >= DIGIT_LO && masked_targets[t] <= DIGIT_HI)
+            if (payload.atom_mask[t] != 0)
                 masked_targets[t] = -1;
         }
         target_src = masked_targets.data();
@@ -2100,6 +2095,10 @@ LossResult autogradTrainingStep(
     // AUTOGRAD CONTEXT
     // ═══════════════════════════════════════════════════════════════════════════
     
+    // Write authoritative training step to TrainingState BEFORE building context.
+    // This is the ONLY mutation site — eval paths (computeLossBatch) read but never write.
+    training_state.autograd_step = step;
+
     ExecutionBlockLayer* execution_block = model.getExecutionBlockLayer();
 
     AutogradContext ctx = initAutogradContext(

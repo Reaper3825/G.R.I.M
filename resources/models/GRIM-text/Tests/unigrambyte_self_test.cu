@@ -335,10 +335,10 @@ bool testUnigramTrainDedupsRepeatedVariants(std::string& message) {
 bool testAhoCorasickBasicMatches(std::string& message) {
     AhoCorasick ac;
 
-    uint32_t id_he = ac.addPattern("he", AtomType::ATOM_NUM);
-    uint32_t id_she = ac.addPattern("she", AtomType::ATOM_NUM);
-    uint32_t id_hers = ac.addPattern("hers", AtomType::ATOM_NUM);
-    uint32_t id_his = ac.addPattern("his", AtomType::ATOM_NUM);
+    uint32_t id_he = ac.addPattern("he", AtomType::ATOM_INT);
+    uint32_t id_she = ac.addPattern("she", AtomType::ATOM_INT);
+    uint32_t id_hers = ac.addPattern("hers", AtomType::ATOM_INT);
+    uint32_t id_his = ac.addPattern("his", AtomType::ATOM_INT);
     ac.build();
 
     std::string text = "ushers";
@@ -368,9 +368,9 @@ bool testAhoCorasickBasicMatches(std::string& message) {
 bool testAhoCorasickOutputClosure(std::string& message) {
     AhoCorasick ac;
 
-    uint32_t id_abc = ac.addPattern("abc", AtomType::ATOM_NUM);
-    uint32_t id_bc = ac.addPattern("bc", AtomType::ATOM_NUM);
-    uint32_t id_c = ac.addPattern("c", AtomType::ATOM_NUM);
+    uint32_t id_abc = ac.addPattern("abc", AtomType::ATOM_INT);
+    uint32_t id_bc = ac.addPattern("bc", AtomType::ATOM_INT);
+    uint32_t id_c = ac.addPattern("c", AtomType::ATOM_INT);
     ac.build();
 
     std::string text = "zabc";
@@ -411,18 +411,18 @@ bool testAhoCorasickStructuralVsNaive(std::string& message) {
     };
 
     std::vector<Pattern> patterns = {
-        {"http://", AtomType::ATOM_NUM},
-        {"https://", AtomType::ATOM_NUM},
-        {"ftp://", AtomType::ATOM_NUM},
-        {"ftps://", AtomType::ATOM_NUM},
-        {"ws://", AtomType::ATOM_NUM},
-        {"wss://", AtomType::ATOM_NUM},
-        {"file://", AtomType::ATOM_NUM},
-        {"@", AtomType::ATOM_NUM},
-        {"0x", AtomType::ATOM_NUM},
-        {"0X", AtomType::ATOM_NUM},
-        {"0b", AtomType::ATOM_NUM},
-        {"0B", AtomType::ATOM_NUM},
+        {"http://", AtomType::ATOM_INT},
+        {"https://", AtomType::ATOM_INT},
+        {"ftp://", AtomType::ATOM_INT},
+        {"ftps://", AtomType::ATOM_INT},
+        {"ws://", AtomType::ATOM_INT},
+        {"wss://", AtomType::ATOM_INT},
+        {"file://", AtomType::ATOM_INT},
+        {"@", AtomType::ATOM_INT},
+        {"0x", AtomType::ATOM_INT},
+        {"0X", AtomType::ATOM_INT},
+        {"0b", AtomType::ATOM_INT},
+        {"0B", AtomType::ATOM_INT},
     };
 
     AhoCorasick ac;
@@ -502,7 +502,7 @@ bool testAhoCorasickVisualization(std::string& message) {
 
     AhoCorasick ac;
     for (const auto& pattern : patterns) {
-        ac.addPattern(pattern, AtomType::ATOM_NUM);
+        ac.addPattern(pattern, AtomType::ATOM_INT);
     }
     ac.build();
 
@@ -519,7 +519,7 @@ bool testAhoCorasickVisualization(std::string& message) {
 bool testAhoCorasickCaseInsensitive(std::string& message) {
     AhoCorasick ac;
     ac.setCaseInsensitive(true);
-    uint32_t pid = ac.addPattern("http://", AtomType::ATOM_NUM);
+    uint32_t pid = ac.addPattern("http://", AtomType::ATOM_INT);
     ac.build();
 
     std::string text = "HTTP://";
@@ -570,8 +570,8 @@ bool testUniByteStructuralDetection(std::string& message) {
     
     bool found_number = false;
     for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM || 
-            span.atom_type == AtomType::ATOM_NUM) {
+        if (span.atom_type == AtomType::ATOM_INT || 
+            span.atom_type == AtomType::ATOM_FLOAT) {
             found_number = true;
             break;
         }
@@ -759,11 +759,11 @@ bool testUniByteRoundTrip(std::string& message) {
 bool testAtomTableRegisterInteger(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "12345", 0, 5);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "12345", 0, 5);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
-    ASSERT_EQ(static_cast<int>(entry->type), static_cast<int>(AtomType::ATOM_NUM), 
+    ASSERT_EQ(static_cast<int>(entry->type), static_cast<int>(AtomType::ATOM_INT), 
               "Type mismatch");
     
     // Access raw_text through string pool
@@ -780,7 +780,7 @@ bool testAtomTableRegisterInteger(std::string& message) {
 bool testAtomTableRegisterFloat(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "3.14159", 0, 7);
+    uint32_t id = table.registerAtom(AtomType::ATOM_FLOAT, "3.14159", 0, 7);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -792,29 +792,31 @@ bool testAtomTableRegisterFloat(std::string& message) {
 }
 
 bool testAtomTableRegisterHex(std::string& message) {
+    // Hex atoms no longer supported — verify a plain integer still works.
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "0xFF", 0, 4);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "255", 0, 3);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
     
     double num = AtomTable::getNumericValue(*entry);
-    ASSERT_NEAR(num, 255.0, 0.01, "Hex value mismatch");
+    ASSERT_NEAR(num, 255.0, 0.01, "Integer value mismatch");
     
     return true;
 }
 
 bool testAtomTableRegisterBinary(std::string& message) {
+    // Binary atoms no longer supported — verify a plain integer still works.
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "0b1010", 0, 6);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "10", 0, 2);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
     
     double num = AtomTable::getNumericValue(*entry);
-    ASSERT_NEAR(num, 10.0, 0.01, "Binary value mismatch");
+    ASSERT_NEAR(num, 10.0, 0.01, "Integer value mismatch");
     
     return true;
 }
@@ -822,13 +824,13 @@ bool testAtomTableRegisterBinary(std::string& message) {
 bool testAtomTableRegisterURL(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, 
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, 
                                       "https://example.com:8080/path?query=1#fragment", 
                                       0, 45);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
-    ASSERT_EQ(static_cast<int>(entry->type), static_cast<int>(AtomType::ATOM_NUM),
+    ASSERT_EQ(static_cast<int>(entry->type), static_cast<int>(AtomType::ATOM_INT),
               "Type mismatch");
     
     // Verify serialization
@@ -842,7 +844,7 @@ bool testAtomTableRegisterURL(std::string& message) {
 bool testAtomTableRegisterEmail(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "user@domain.com", 0, 15);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "user@domain.com", 0, 15);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -856,7 +858,7 @@ bool testAtomTableRegisterEmail(std::string& message) {
 bool testAtomTableRegisterDate(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "2024-12-25", 0, 10);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "2024-12-25", 0, 10);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -867,7 +869,7 @@ bool testAtomTableRegisterDate(std::string& message) {
 bool testAtomTableRegisterTime(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "14:30:00", 0, 8);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "14:30:00", 0, 8);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -878,7 +880,7 @@ bool testAtomTableRegisterTime(std::string& message) {
 bool testAtomTableRegisterIP(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "192.168.1.1", 0, 11);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "192.168.1.1", 0, 11);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -892,7 +894,7 @@ bool testAtomTableRegisterIP(std::string& message) {
 bool testAtomTableRegisterPath(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "/usr/local/bin/test", 0, 19);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "/usr/local/bin/test", 0, 19);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -903,7 +905,7 @@ bool testAtomTableRegisterPath(std::string& message) {
 bool testAtomTableRegisterString(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "\"hello\\nworld\"", 0, 14);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "\"hello\\nworld\"", 0, 14);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -915,10 +917,10 @@ bool testAtomTableRegisterIdentifier(std::string& message) {
     AtomTable table;
     
     // Test various naming conventions
-    table.registerAtom(AtomType::ATOM_NUM, "camelCase", 0, 9);
-    table.registerAtom(AtomType::ATOM_NUM, "PascalCase", 0, 10);
-    table.registerAtom(AtomType::ATOM_NUM, "snake_case", 0, 10);
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "SCREAMING_SNAKE", 0, 15);
+    table.registerAtom(AtomType::ATOM_INT, "camelCase", 0, 9);
+    table.registerAtom(AtomType::ATOM_INT, "PascalCase", 0, 10);
+    table.registerAtom(AtomType::ATOM_INT, "snake_case", 0, 10);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "SCREAMING_SNAKE", 0, 15);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -931,15 +933,15 @@ bool testAtomTableLookupByType(std::string& message) {
     AtomTable table;
     
     // Register multiple atoms of different types
-    table.registerAtom(AtomType::ATOM_NUM, "100", 0, 3);
-    table.registerAtom(AtomType::ATOM_NUM, "200", 0, 3);
-    table.registerAtom(AtomType::ATOM_NUM, "3.14", 0, 4);
-    table.registerAtom(AtomType::ATOM_NUM, "300", 0, 3);
+    table.registerAtom(AtomType::ATOM_INT, "100", 0, 3);
+    table.registerAtom(AtomType::ATOM_INT, "200", 0, 3);
+    table.registerAtom(AtomType::ATOM_FLOAT, "3.14", 0, 4);
+    table.registerAtom(AtomType::ATOM_INT, "300", 0, 3);
     
-    auto integers = table.getAtomsByType(AtomType::ATOM_NUM);
+    auto integers = table.getAtomsByType(AtomType::ATOM_INT);
     ASSERT_EQ(integers.size(), 3, "Should find 3 integers");
     
-    auto floats = table.getAtomsByType(AtomType::ATOM_NUM);
+    auto floats = table.getAtomsByType(AtomType::ATOM_FLOAT);
     ASSERT_EQ(floats.size(), 1, "Should find 1 float");
     
     return true;
@@ -949,9 +951,9 @@ bool testAtomTableGPUUpload(std::string& message) {
     AtomTable table;
     
     // Register some atoms
-    table.registerAtom(AtomType::ATOM_NUM, "42", 0, 2);
-    table.registerAtom(AtomType::ATOM_NUM, "3.14", 0, 4);
-    table.registerAtom(AtomType::ATOM_NUM, "https://test.com", 0, 16);
+    table.registerAtom(AtomType::ATOM_INT, "42", 0, 2);
+    table.registerAtom(AtomType::ATOM_FLOAT, "3.14", 0, 4);
+    table.registerAtom(AtomType::ATOM_INT, "https://test.com", 0, 16);
     
     AtomTable::GPUAtomData gpu_data;
     bool success = table.uploadToGPU(gpu_data);
@@ -970,9 +972,9 @@ bool testAtomTableGPUUpload(std::string& message) {
 bool testAtomTableClear(std::string& message) {
     AtomTable table;
     
-    table.registerAtom(AtomType::ATOM_NUM, "1", 0, 1);
-    table.registerAtom(AtomType::ATOM_NUM, "2", 0, 1);
-    table.registerAtom(AtomType::ATOM_NUM, "3", 0, 1);
+    table.registerAtom(AtomType::ATOM_INT, "1", 0, 1);
+    table.registerAtom(AtomType::ATOM_INT, "2", 0, 1);
+    table.registerAtom(AtomType::ATOM_INT, "3", 0, 1);
     
     ASSERT_EQ(table.size(), 3, "Should have 3 atoms before clear");
     
@@ -987,7 +989,7 @@ bool testAtomTableMetadata(std::string& message) {
     AtomTable table;
     
     // Register an atom
-    uint32_t id = table.registerAtom(AtomType::ATOM_NUM, "42", 0, 2);
+    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "42", 0, 2);
     
     const AtomEntry* entry = table.getAtom(id);
     ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
@@ -1020,8 +1022,8 @@ bool testAtomTableHashDeduplication(std::string& message) {
     AtomTable table;
     
     // Register same atom twice
-    uint32_t id1 = table.registerAtom(AtomType::ATOM_NUM, "100", 0, 3);
-    uint32_t id2 = table.registerAtom(AtomType::ATOM_NUM, "100", 0, 3);
+    uint32_t id1 = table.registerAtom(AtomType::ATOM_INT, "100", 0, 3);
+    uint32_t id2 = table.registerAtom(AtomType::ATOM_INT, "100", 0, 3);
     
     const AtomEntry* entry1 = table.getAtom(id1);
     const AtomEntry* entry2 = table.getAtom(id2);
@@ -1030,7 +1032,7 @@ bool testAtomTableHashDeduplication(std::string& message) {
     ASSERT_EQ(entry1->hash, entry2->hash, "Identical atoms should have same hash");
     
     // Different atom should have different hash
-    uint32_t id3 = table.registerAtom(AtomType::ATOM_NUM, "200", 0, 3);
+    uint32_t id3 = table.registerAtom(AtomType::ATOM_INT, "200", 0, 3);
     const AtomEntry* entry3 = table.getAtom(id3);
     
     ASSERT_TRUE(entry1->hash != entry3->hash, "Different atoms should have different hashes");
@@ -1366,9 +1368,8 @@ bool testMixedNumbers(std::string& message) {
     
     int number_count = 0;
     for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM || 
-            span.atom_type == AtomType::ATOM_NUM ||
-            span.atom_type == AtomType::ATOM_NUM) {
+        if (span.atom_type == AtomType::ATOM_INT || 
+            span.atom_type == AtomType::ATOM_FLOAT) {
             number_count++;
         }
     }
@@ -1442,7 +1443,7 @@ bool testScientificNotation(std::string& message) {
     
     int float_count = 0;
     for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
+        if (span.atom_type == AtomType::ATOM_INT) {
             float_count++;
         }
     }
@@ -1465,7 +1466,7 @@ bool testIPAddressVsDecimal(std::string& message) {
     
     bool found_ip = false;
     for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM) {
+        if (span.atom_type == AtomType::ATOM_INT) {
             found_ip = true;
             break;
         }
@@ -1489,7 +1490,7 @@ bool testNegativeNumbers(std::string& message) {
     
     int number_count = 0;
     for (const auto& span : result.atoms) {
-        if (span.atom_type == AtomType::ATOM_NUM || span.atom_type == AtomType::ATOM_NUM) {
+        if (span.atom_type == AtomType::ATOM_INT || span.atom_type == AtomType::ATOM_FLOAT) {
             number_count++;
         }
     }
@@ -1528,7 +1529,7 @@ bool testDigitsFollowedByAlpha(std::string& message) {
         
         int int_count = 0;
         for (const auto& span : result.atoms) {
-            if (span.atom_type == AtomType::ATOM_NUM) {
+            if (span.atom_type == AtomType::ATOM_INT) {
                 int_count++;
             }
         }

@@ -200,6 +200,7 @@ BatchPayload buildBatchPayload(
     // Derived geometry
     payload.total_tokens = payload.batch_size * payload.max_seq_len;
     payload.padding_tokens = payload.total_tokens - payload.actual_tokens;
+    payload.vocab_size = vocab_size;
     payload.packing_efficiency = (payload.total_tokens > 0)
         ? static_cast<float>(payload.actual_tokens) / static_cast<float>(payload.total_tokens)
         : 0.0f;

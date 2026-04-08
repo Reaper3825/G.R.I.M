@@ -69,6 +69,7 @@ struct BatchPayload {
     int actual_tokens = 0;                   // sum of real sequence lengths (no padding)
     int padding_tokens = 0;                  // total_tokens - actual_tokens
     int valid_tokens = 0;                    // total unmasked targets (for loss mean reduction)
+    int vocab_size = 0;                      // vocabulary size (for loss kernels + target validation)
     std::vector<int> seq_lengths;            // [batch_size] — original length per sequence before padding
     std::vector<int> valid_target_counts;    // [batch_size] — unmasked targets per sequence
     float packing_efficiency = 0.0f;         // actual_tokens / total_tokens
@@ -168,6 +169,11 @@ struct BatchPayload {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.valid_tokens=" +
                 std::to_string(valid_tokens) + " (must be > 0 — batch has no trainable targets)");
+        }
+        if (vocab_size <= 0) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.vocab_size=" +
+                std::to_string(vocab_size) + " (must be > 0)");
         }
         if (static_cast<int>(seq_lengths.size()) != batch_size) {
             throw std::runtime_error(

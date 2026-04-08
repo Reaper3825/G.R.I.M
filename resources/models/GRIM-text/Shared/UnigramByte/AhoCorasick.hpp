@@ -13,8 +13,8 @@
 //  
 //  Usage:
 //    AhoCorasick ac;
-//    ac.addPattern("0x", AtomType::ATOM_NUM);
-//    ac.addPattern("0b", AtomType::ATOM_NUM);
+//    ac.addPattern("0x", AtomType::ATOM_INT);
+//    ac.addPattern("0b", AtomType::ATOM_INT);
 //    ac.build();
 //    
 //    auto matches = ac.search(text);

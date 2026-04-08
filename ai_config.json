@@ -179,7 +179,7 @@
                 "enabled": true,
                 "freeze_after_step": 0
             },
-            "epochs": 1,
+            "epochs": 3,
             "execution_block": {
                 "causal_w1_transition": 1.5,
                 "cross_attn_head_dim": 64,
@@ -187,7 +187,7 @@
                 "d_key": 64,
                 "d_type": 16,
                 "diversity_kappa": 2.0,
-                "enabled": false,
+                "enabled": true,
                 "entropy_aux_weight": 0.01,
                 "entropy_weight": 0.01,
                 "execution_first_type_only": true,
@@ -217,7 +217,7 @@
             },
             "force_rebuild_vocab": false,
             "generation": {
-                "do_sample": false,
+                "do_sample": true,
                 "enable_scratchblock_reasoning": true,
                 "frequency_penalty": 0.0,
                 "max_new_tokens": 128,

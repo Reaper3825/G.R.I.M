@@ -90,6 +90,12 @@ struct TrainingState {
     int cached_batch_size = 0;
     int cached_seq_len = 0;
     int cached_valid_tokens = 0;
+
+    // Authoritative training step counter for autograd forward passes.
+    // Sourced from TrainingContext::global_step (checkpointed); set by
+    // autogradTrainingStep ONLY on train calls. Eval never mutates this.
+    // Controls: dropout PRNG seeds, MTP alpha warmup schedule.
+    uint64_t autograd_step = 0;
     
     //======================================================//
     //  INCREMENTAL KV CACHE STATE (autoregressive generation)

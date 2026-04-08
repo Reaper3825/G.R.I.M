@@ -39,6 +39,7 @@
 #include <nlohmann/json.hpp>
 
 #include "../Shared/UnigramByte/UniByte.hpp"
+#include "../Common/grim_model_serialization_version.hpp"
 #include "../../../../control/ai_config_paths.hpp"
 
 namespace fs = std::filesystem;
@@ -122,165 +123,589 @@ static json makeErrorJson(const std::string& error, const std::string& phase, in
 }
 
 //======================================================//
-//  Validation Tests
+//  GRMT Corpus Sampler — read token_id sequences from
+//  the actual training data file for validation
 //======================================================//
-static std::vector<ValidationResult> runValidationChecks(GrimTokenizer& tokenizer, bool verbose) {
+struct GRMTSample {
+    uint32_t grmt_vocab_size = 0;
+    uint32_t num_sequences = 0;
+    std::vector<std::vector<int>> sampled_sequences;  // token_id arrays
+};
+
+static GRMTSample sampleGRMTSequences(const std::string& data_path, int max_samples, bool verbose) {
+    GRMTSample result;
+
+    std::ifstream file(data_path, std::ios::binary);
+    if (!file) {
+        throw std::runtime_error("Cannot open GRMT file: " + data_path);
+    }
+
+    // Read header
+    uint32_t magic = 0, version = 0;
+    file.read(reinterpret_cast<char*>(&magic), 4);
+    file.read(reinterpret_cast<char*>(&version), 4);
+    file.read(reinterpret_cast<char*>(&result.num_sequences), 4);
+    file.read(reinterpret_cast<char*>(&result.grmt_vocab_size), 4);
+
+    if (magic != 0x474D5254) {
+        throw std::runtime_error("Invalid GRMT magic: 0x" +
+            ([&]{ char buf[16]; snprintf(buf, sizeof(buf), "%08X", magic); return std::string(buf); })());
+    }
+    if (version != GRIM::GRMT_FORMAT_VERSION) {
+        throw std::runtime_error("GRMT version mismatch: file=" + std::to_string(version) +
+            " expected=" + std::to_string(GRIM::GRMT_FORMAT_VERSION));
+    }
+    if (result.num_sequences == 0) {
+        throw std::runtime_error("GRMT file has 0 sequences");
+    }
+
+    // Compute which sequence indices to sample (evenly spaced)
+    int step = std::max(1u, result.num_sequences / static_cast<uint32_t>(max_samples));
+    std::vector<uint32_t> sample_indices;
+    for (uint32_t i = 0; i < result.num_sequences && static_cast<int>(sample_indices.size()) < max_samples; i += step) {
+        sample_indices.push_back(i);
+    }
+
+    if (verbose) {
+        fprintf(stderr, "[tokenizer_runner] Sampling %zu/%u sequences from GRMT\n",
+                sample_indices.size(), result.num_sequences);
+    }
+
+    size_t next_sample = 0;
+    for (uint32_t i = 0; i < result.num_sequences; ++i) {
+        uint32_t seq_len = 0;
+        file.read(reinterpret_cast<char*>(&seq_len), 4);
+        if (!file) throw std::runtime_error("GRMT read error at sequence " + std::to_string(i));
+
+        bool keep = (next_sample < sample_indices.size() && sample_indices[next_sample] == i);
+
+        // Read token_ids
+        std::vector<int> token_ids(seq_len);
+        file.read(reinterpret_cast<char*>(token_ids.data()), seq_len * sizeof(int));
+
+        if (keep) {
+            result.sampled_sequences.push_back(std::move(token_ids));
+            next_sample++;
+        }
+
+        // Skip remaining per-sequence fields to maintain file position:
+        // targets (int[seq_len]) + numeric_values (float[seq_len]) + atom_mask (uint8[seq_len])
+        // + text_features (uint16[seq_len * 16]) + atom_flags (uint32[seq_len])
+        size_t skip_bytes = seq_len * sizeof(int)           // targets
+                          + seq_len * sizeof(float)         // numeric_values
+                          + seq_len * sizeof(uint8_t)       // atom_mask
+                          + seq_len * GRIM::Tokenizer::kTextFeatureDim * sizeof(uint16_t)  // text_features
+                          + seq_len * sizeof(uint32_t);     // atom_flags
+        file.seekg(static_cast<std::streamoff>(skip_bytes), std::ios::cur);
+
+        // Skip variable-length atom text strings
+        for (uint32_t j = 0; j < seq_len; ++j) {
+            uint16_t slen = 0;
+            file.read(reinterpret_cast<char*>(&slen), sizeof(uint16_t));
+            if (slen > 0) file.seekg(slen, std::ios::cur);
+        }
+
+        // Skip v11 execution payload
+        {
+            uint8_t exec_active = 0;
+            file.read(reinterpret_cast<char*>(&exec_active), sizeof(uint8_t));
+            // token_exec_slots
+            file.seekg(static_cast<std::streamoff>(seq_len * sizeof(int32_t)), std::ios::cur);
+            // compiled_bootstrap_bindings
+            uint32_t cbb_count = 0;
+            file.read(reinterpret_cast<char*>(&cbb_count), sizeof(uint32_t));
+            if (cbb_count > 0) file.seekg(static_cast<std::streamoff>(cbb_count * 12), std::ios::cur);
+            // teacher_steps
+            uint32_t ts_count = 0;
+            file.read(reinterpret_cast<char*>(&ts_count), sizeof(uint32_t));
+            if (ts_count > 0) file.seekg(static_cast<std::streamoff>(ts_count * 20), std::ios::cur);
+            // slot_selection_targets (5 bytes each: uint8 kind + int32 slot_id)
+            uint32_t sst_count = 0;
+            file.read(reinterpret_cast<char*>(&sst_count), sizeof(uint32_t));
+            if (sst_count > 0) file.seekg(static_cast<std::streamoff>(sst_count * 5), std::ios::cur);
+        }
+
+        if (!file) throw std::runtime_error("GRMT read/seek error at sequence " + std::to_string(i));
+
+        // Early exit once we have all samples
+        if (next_sample >= sample_indices.size()) break;
+    }
+
+    return result;
+}
+
+//======================================================//
+//  Raw Text Sampler — read raw text from
+//  concept_blocks.jsonl (sibling of .grmt) so we can
+//  test the tokenizer against pre-tokenization text,
+//  not against its own baked output.
+//======================================================//
+static std::vector<std::string> sampleRawCorpusText(const std::string& data_path, int max_samples, bool verbose) {
+    // concept_blocks.jsonl sits in the same directory as the .grmt file
+    fs::path grmt_path(data_path);
+    fs::path corpus_path = grmt_path.parent_path() / "concept_blocks.jsonl";
+
+    if (!fs::exists(corpus_path)) {
+        if (verbose) {
+            fprintf(stderr, "[tokenizer_runner] No concept_blocks.jsonl at %s — raw text tests will be skipped\n",
+                    corpus_path.string().c_str());
+        }
+        return {};
+    }
+
+    std::ifstream in(corpus_path);
+    if (!in.is_open()) {
+        throw std::runtime_error("Cannot open concept_blocks.jsonl: " + corpus_path.string());
+    }
+
+    // Count lines first (cheap) to compute even sampling
+    std::vector<std::streampos> line_offsets;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            line_offsets.push_back(in.tellg() - static_cast<std::streamoff>(line.size() + 1));
+        }
+    }
+
+    if (line_offsets.empty()) {
+        throw std::runtime_error("concept_blocks.jsonl is empty");
+    }
+
+    int total_lines = static_cast<int>(line_offsets.size());
+    int step = std::max(1, total_lines / max_samples);
+
+    if (verbose) {
+        fprintf(stderr, "[tokenizer_runner] Sampling %d/%d entries from concept_blocks.jsonl\n",
+                std::min(max_samples, total_lines), total_lines);
+    }
+
+    std::vector<std::string> texts;
+    texts.reserve(std::min(max_samples, total_lines));
+
+    in.clear();
+    in.seekg(0);
+    int line_idx = 0;
+    int next_target = 0;
+    while (std::getline(in, line) && static_cast<int>(texts.size()) < max_samples) {
+        if (line.empty()) continue;
+        if (line_idx == next_target) {
+            try {
+                auto j = json::parse(line);
+                // Extract raw text the same way DataLoader::renderPlainText does:
+                // question + explanation/intermediates + answer
+                std::string text;
+                if (j.contains("question") && j["question"].is_string()) {
+                    text += j["question"].get<std::string>();
+                    text += "\n";
+                }
+                const json* expl = nullptr;
+                if (j.contains("explanation") && j["explanation"].is_array())
+                    expl = &j["explanation"];
+                else if (j.contains("intermediates") && j["intermediates"].is_array())
+                    expl = &j["intermediates"];
+                if (expl) {
+                    for (const auto& s : *expl) {
+                        if (s.is_string()) {
+                            text += s.get<std::string>();
+                            text += "\n";
+                        }
+                    }
+                }
+                if (j.contains("answer") && j["answer"].is_string()) {
+                    text += j["answer"].get<std::string>();
+                    text += "\n";
+                }
+
+                if (!text.empty()) {
+                    texts.push_back(std::move(text));
+                }
+            } catch (const std::exception&) {
+                // Skip malformed JSON lines
+            }
+            next_target += step;
+        }
+        line_idx++;
+    }
+
+    return texts;
+}
+
+//======================================================//
+//  Validation Tests
+//
+//  Two levels of validation:
+//  A) GRMT consistency — do the baked token IDs agree with
+//     this tokenizer's vocab and decode correctly?
+//  B) Raw text quality gate — encode raw pre-tokenization
+//     text and verify the tokenizer reproduces it exactly.
+//     This catches bad vocabs that the GRMT tests cannot.
+//======================================================//
+static constexpr int CORPUS_SAMPLE_COUNT = 32;
+
+static std::vector<ValidationResult> runValidationChecks(
+        GrimTokenizer& tokenizer,
+        const std::string& data_path,
+        bool verbose) {
     std::vector<ValidationResult> results;
 
-    // Test 1: Basic encode/decode round-trip
+    // ── Load corpus samples ──────────────────────────────
+    GRMTSample corpus = sampleGRMTSequences(data_path, CORPUS_SAMPLE_COUNT, verbose);
+    std::vector<std::string> raw_texts = sampleRawCorpusText(data_path, CORPUS_SAMPLE_COUNT, verbose);
+
+    //==========================================================
+    // GRMT Consistency Tests (A)
+    //==========================================================
+
+    // Test 1: GRMT-tokenizer vocab size consistency
     {
         ValidationResult r;
-        r.name = "Basic encode/decode round-trip";
-        std::string input = "Hello, world!";
-        auto ids = tokenizer.encode(input);
-        std::string decoded = tokenizer.decode(ids);
-
-        std::string input_stripped, decoded_stripped;
-        for (char c : input) if (!std::isspace(c)) input_stripped += std::tolower(c);
-        for (char c : decoded) if (!std::isspace(c)) decoded_stripped += std::tolower(c);
-
-        r.passed = (input_stripped == decoded_stripped);
+        r.name = "GRMT/tokenizer vocab consistency";
+        int tok_vocab = tokenizer.totalVocabSize();
+        int grmt_vocab = static_cast<int>(corpus.grmt_vocab_size);
+        r.passed = (tok_vocab == grmt_vocab);
         if (!r.passed) {
-            r.details = "Round-trip mismatch: input='" + input + "' decoded='" + decoded + "'";
+            r.details = "MISMATCH: tokenizer=" + std::to_string(tok_vocab) +
+                        " GRMT=" + std::to_string(grmt_vocab) +
+                        " — GRMT data was encoded with a different vocab. Delete .grmt and regenerate.";
         } else {
-            r.details = "Encoded to " + std::to_string(ids.size()) + " tokens";
+            r.details = "Both report " + std::to_string(tok_vocab) + " tokens";
         }
         results.push_back(r);
     }
 
-    // Test 2: Empty input handling
+    // Test 2: Special token IDs are in valid range
     {
         ValidationResult r;
-        r.name = "Empty input handling";
-        auto ids = tokenizer.encode("");
-        r.passed = true;  // Should not crash
-        r.details = "Empty input → " + std::to_string(ids.size()) + " tokens";
-        results.push_back(r);
-    }
-
-    // Test 3: Space preservation
-    {
-        ValidationResult r;
-        r.name = "Space preservation";
-        std::string input = "hello how are you";
-        auto ids = tokenizer.encode(input);
-        std::string decoded = tokenizer.decode(ids);
-
-        int input_spaces = static_cast<int>(std::count(input.begin(), input.end(), ' '));
-        int output_spaces = static_cast<int>(std::count(decoded.begin(), decoded.end(), ' '));
-
-        r.passed = (output_spaces > 0);
-        if (!r.passed) {
-            r.details = "All " + std::to_string(input_spaces) + " spaces lost!";
-        } else {
-            r.details = std::to_string(output_spaces) + "/" + std::to_string(input_spaces) + " spaces preserved";
-        }
-        results.push_back(r);
-    }
-
-    // Test 4: Special tokens exist
-    {
-        ValidationResult r;
-        r.name = "Special tokens valid";
-        r.passed = (tokenizer.padId() >= 0 && tokenizer.unkId() >= 0 &&
-                    tokenizer.bosId() >= 0 && tokenizer.eosId() >= 0);
-        if (!r.passed) {
-            r.details = "Missing special tokens";
-        } else {
-            r.details = "PAD=" + std::to_string(tokenizer.padId()) +
-                        " UNK=" + std::to_string(tokenizer.unkId()) +
-                        " BOS=" + std::to_string(tokenizer.bosId()) +
-                        " EOS=" + std::to_string(tokenizer.eosId());
-        }
-        results.push_back(r);
-    }
-
-    // Test 5: Vocab size sanity
-    {
-        ValidationResult r;
-        r.name = "Vocab size sanity";
+        r.name = "Special token IDs in range";
         int total = tokenizer.totalVocabSize();
-        r.passed = (total > 260);  // At least special + bytes + atoms
+        int pad = tokenizer.padId(), unk = tokenizer.unkId();
+        int bos = tokenizer.bosId(), eos = tokenizer.eosId();
+        bool all_valid = (pad >= 0 && pad < total) &&
+                         (unk >= 0 && unk < total) &&
+                         (bos >= 0 && bos < total) &&
+                         (eos >= 0 && eos < total);
+        bool all_unique = (pad != unk && pad != bos && pad != eos &&
+                           unk != bos && unk != eos && bos != eos);
+        r.passed = all_valid && all_unique;
         if (!r.passed) {
-            r.details = "Vocab too small: " + std::to_string(total);
+            r.details = "PAD=" + std::to_string(pad) + " UNK=" + std::to_string(unk) +
+                        " BOS=" + std::to_string(bos) + " EOS=" + std::to_string(eos) +
+                        " (total=" + std::to_string(total) + ")";
         } else {
-            r.details = "Total vocab: " + std::to_string(total) + " tokens";
+            r.details = "PAD=" + std::to_string(pad) + " UNK=" + std::to_string(unk) +
+                        " BOS=" + std::to_string(bos) + " EOS=" + std::to_string(eos);
         }
         results.push_back(r);
     }
 
-    // Test 6: UTF-8 byte fallback
+    // Test 3: Corpus token ID range — every ID in sampled sequences must be valid
     {
         ValidationResult r;
-        r.name = "UTF-8 byte fallback";
-        std::string input = "caf\xc3\xa9";  // café
-        auto ids = tokenizer.encode(input);
-        r.passed = (!ids.empty());
-        r.details = "Encoded UTF-8 to " + std::to_string(ids.size()) + " tokens";
-        results.push_back(r);
-    }
-
-    // Test 7: Punctuation preservation
-    {
-        ValidationResult r;
-        r.name = "Punctuation preservation";
-        std::string input = "Hello, world! How's it?";
-        auto ids = tokenizer.encode(input);
-        std::string decoded = tokenizer.decode(ids);
-
-        std::string input_punct, output_punct;
-        for (char c : input) if (std::ispunct(static_cast<unsigned char>(c))) input_punct += c;
-        for (char c : decoded) if (std::ispunct(static_cast<unsigned char>(c))) output_punct += c;
-
-        r.passed = (input_punct == output_punct);
+        r.name = "Corpus token IDs in range";
+        int total = tokenizer.totalVocabSize();
+        size_t total_tokens = 0;
+        size_t oob_count = 0;
+        int worst_id = 0;
+        for (const auto& seq : corpus.sampled_sequences) {
+            for (int id : seq) {
+                total_tokens++;
+                if (id < 0 || id >= total) {
+                    oob_count++;
+                    worst_id = id;
+                }
+            }
+        }
+        r.passed = (oob_count == 0);
         if (!r.passed) {
-            r.details = "Punctuation mismatch: expected '" + input_punct + "' got '" + output_punct + "'";
+            r.details = std::to_string(oob_count) + "/" + std::to_string(total_tokens) +
+                        " tokens out of range [0," + std::to_string(total) +
+                        ") — worst ID=" + std::to_string(worst_id);
         } else {
-            r.details = "All punctuation preserved";
+            r.details = std::to_string(total_tokens) + " tokens all in [0," +
+                        std::to_string(total) + ")";
         }
         results.push_back(r);
     }
 
-    // Test 8: Number tokenization
+    // Test 4: GRMT decode round-trip — decode GRMT sequences (filtering special
+    //         AND atom tokens), re-encode, re-decode, verify exact match.
+    //         Atom tokens decode to placeholder strings that won't re-encode
+    //         identically, so they must be excluded from the content pipeline.
     {
         ValidationResult r;
-        r.name = "Number tokenization";
-        std::string input = "12345 67890";
-        auto ids = tokenizer.encode(input);
-        r.passed = (!ids.empty());
-        r.details = "Numbers → " + std::to_string(ids.size()) + " tokens";
-        results.push_back(r);
-    }
+        r.name = "GRMT decode round-trip (exact)";
+        int tested = 0, passed_count = 0;
+        std::string worst_orig, worst_rt;
+        for (const auto& seq : corpus.sampled_sequences) {
+            if (seq.empty()) continue;
+            // Filter out special tokens AND atom placeholders
+            std::vector<int> content_ids;
+            for (int id : seq) {
+                if (tokenizer.isSpecialToken(id)) continue;
+                if (tokenizer.isAtomToken(id)) continue;
+                content_ids.push_back(id);
+            }
+            if (content_ids.empty()) continue;
 
-    // Test 9: Multi-word sentence
-    {
-        ValidationResult r;
-        r.name = "Multi-word sentence";
-        std::string input = "The quick brown fox jumps over the lazy dog";
-        auto ids = tokenizer.encode(input);
-        std::string decoded = tokenizer.decode(ids);
+            std::string decoded = tokenizer.decode(content_ids);
+            if (decoded.empty()) continue;
 
-        std::string input_stripped, decoded_stripped;
-        for (char c : input) if (!std::isspace(c)) input_stripped += std::tolower(c);
-        for (char c : decoded) if (!std::isspace(c)) decoded_stripped += std::tolower(c);
+            auto re_encoded = tokenizer.encode(decoded);
+            std::string re_decoded = tokenizer.decode(re_encoded);
 
-        r.passed = (input_stripped == decoded_stripped);
+            // Exact comparison — no lowercasing, no whitespace normalization.
+            // The tokenizer must be lossless on its own non-atom output.
+            tested++;
+            if (decoded == re_decoded) {
+                passed_count++;
+            } else if (worst_orig.empty()) {
+                worst_orig = decoded.substr(0, 100);
+                worst_rt = re_decoded.substr(0, 100);
+            }
+        }
+        // 100% required — any failure means the tokenizer is lossy
+        r.passed = (tested > 0 && passed_count == tested);
         if (!r.passed) {
-            r.details = "Content mismatch in decoded output";
+            r.details = std::to_string(passed_count) + "/" + std::to_string(tested) +
+                        " exact round-trips";
+            if (!worst_orig.empty()) {
+                r.details += " — first diff: '" + worst_orig + "' vs '" + worst_rt + "'";
+            }
         } else {
-            r.details = "9-word sentence → " + std::to_string(ids.size()) + " tokens";
+            r.details = "All " + std::to_string(tested) +
+                        " sequences exact round-tripped (special+atom tokens excluded)";
         }
         results.push_back(r);
     }
 
-    // Test 10: Invalid token ID handling
+    // Test 5: Corpus decode coverage — sampled sequences decode to non-empty text
     {
         ValidationResult r;
-        r.name = "Invalid token ID handling";
+        r.name = "Corpus decode coverage";
+        int tested = 0, non_empty = 0;
+        for (const auto& seq : corpus.sampled_sequences) {
+            if (seq.empty()) continue;
+            tested++;
+            std::string decoded = tokenizer.decode(seq);
+            if (!decoded.empty()) non_empty++;
+        }
+        r.passed = (tested > 0 && non_empty == tested);
+        if (!r.passed) {
+            r.details = std::to_string(non_empty) + "/" + std::to_string(tested) +
+                        " decoded to non-empty text";
+        } else {
+            r.details = "All " + std::to_string(tested) + " sequences decoded to text";
+        }
+        results.push_back(r);
+    }
+
+    // Test 6: Token type distribution — corpus uses unigram, byte, and atom tokens
+    {
+        ValidationResult r;
+        r.name = "Corpus token type distribution";
+        size_t byte_count = 0, atom_count = 0, unigram_count = 0, special_count = 0;
+        size_t total_tokens = 0;
+        for (const auto& seq : corpus.sampled_sequences) {
+            for (int id : seq) {
+                total_tokens++;
+                if (tokenizer.isSpecialToken(id))       special_count++;
+                else if (tokenizer.isByteToken(id))     byte_count++;
+                else if (tokenizer.isAtomToken(id))     atom_count++;
+                else if (tokenizer.isUnigramToken(id))  unigram_count++;
+            }
+        }
+        // Unigram tokens must appear — if 0, the vocab is broken or not loaded
+        r.passed = (unigram_count > 0 && total_tokens > 0);
+        if (!r.passed) {
+            r.details = "No unigram tokens in corpus — vocab may be corrupt or empty. "
+                        "unigram=0, byte=" + std::to_string(byte_count) +
+                        ", atom=" + std::to_string(atom_count) +
+                        ", special=" + std::to_string(special_count);
+        } else {
+            auto pct = [&](size_t n) -> std::string {
+                if (total_tokens == 0) return "0.0";
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%.1f", 100.0 * n / total_tokens);
+                return buf;
+            };
+            r.details = "unigram=" + pct(unigram_count) + "% byte=" + pct(byte_count) +
+                        "% atom=" + pct(atom_count) + "% special=" + pct(special_count) +
+                        "% (N=" + std::to_string(total_tokens) + ")";
+        }
+        results.push_back(r);
+    }
+
+    // Test 7: Corpus BOS/EOS framing — sequences should start with BOS and end with EOS
+    {
+        ValidationResult r;
+        r.name = "Corpus BOS/EOS framing";
+        int tested = 0, correct = 0;
+        int bos = tokenizer.bosId(), eos = tokenizer.eosId();
+        for (const auto& seq : corpus.sampled_sequences) {
+            if (seq.size() < 2) continue;
+            tested++;
+            if (seq.front() == bos && seq.back() == eos) correct++;
+        }
+        r.passed = (tested > 0 && correct == tested);
+        if (!r.passed) {
+            r.details = std::to_string(correct) + "/" + std::to_string(tested) +
+                        " sequences properly framed with BOS/EOS";
+        } else {
+            r.details = "All " + std::to_string(tested) + " sequences have BOS/EOS framing";
+        }
+        results.push_back(r);
+    }
+
+    //==========================================================
+    // Raw Text Quality Gate (B)
+    // These test the tokenizer against raw pre-tokenization text
+    // from concept_blocks.jsonl. This catches a bad vocab that
+    // GRMT consistency tests cannot — if the tokenizer was broken
+    // when GRMT was built, tests 1-7 can still pass because
+    // they grade the tokenizer against its own baked output.
+    //==========================================================
+
+    if (!raw_texts.empty()) {
+
+        // Test 8: Raw text exact round-trip — encode raw corpus text, decode,
+        //         verify we get the original back byte-for-byte.
+        {
+            ValidationResult r;
+            r.name = "Raw text exact round-trip";
+            int tested = 0, passed_count = 0;
+            std::string worst_input, worst_output;
+            for (const auto& text : raw_texts) {
+                if (text.size() < 10) continue;  // Skip trivially short entries
+
+                auto ids = tokenizer.encode(text);
+                std::string decoded = tokenizer.decode(ids);
+
+                tested++;
+                if (decoded == text) {
+                    passed_count++;
+                } else if (worst_input.empty()) {
+                    worst_input = text.substr(0, 100);
+                    worst_output = decoded.substr(0, 100);
+                }
+            }
+            // 100% required — the tokenizer must be lossless on all corpus text
+            r.passed = (tested > 0 && passed_count == tested);
+            if (!r.passed) {
+                r.details = std::to_string(passed_count) + "/" + std::to_string(tested) +
+                            " raw texts survived encode→decode";
+                if (!worst_input.empty()) {
+                    r.details += " — first diff: '" + worst_input + "' vs '" + worst_output + "'";
+                }
+            } else {
+                r.details = "All " + std::to_string(tested) +
+                            " raw corpus texts exact round-tripped";
+            }
+            results.push_back(r);
+        }
+
+        // Test 9: Raw text token efficiency — chars/token on raw text (independent
+        //         of GRMT, so a bad vocab trained on garbage will show low ratio)
+        {
+            ValidationResult r;
+            r.name = "Raw text token efficiency";
+            size_t total_chars = 0, total_tokens = 0;
+            for (const auto& text : raw_texts) {
+                if (text.size() < 10) continue;
+                auto ids = tokenizer.encode(text);
+                total_chars += text.size();
+                total_tokens += ids.size();
+            }
+            double ratio = (total_tokens > 0) ? static_cast<double>(total_chars) / total_tokens : 0.0;
+            r.passed = (ratio > 1.5);  // Stricter than GRMT test — raw text should compress well
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%.2f chars/token", ratio);
+            if (!r.passed) {
+                r.details = std::string(buf) +
+                            " — tokenizer compresses raw text poorly (expected >1.5)";
+            } else {
+                r.details = std::string(buf) + " on " + std::to_string(raw_texts.size()) +
+                            " raw corpus entries (" + std::to_string(total_chars) + " chars)";
+            }
+            results.push_back(r);
+        }
+
+        // Test 10: Raw text case and whitespace fidelity — verify the tokenizer
+        //          preserves mixed case, leading/trailing whitespace, and multiple
+        //          consecutive spaces exactly as they appear in the raw corpus.
+        {
+            ValidationResult r;
+            r.name = "Raw text case/whitespace fidelity";
+            int tested = 0;
+            int case_failures = 0, ws_failures = 0;
+            for (const auto& text : raw_texts) {
+                if (text.size() < 20) continue;
+                tested++;
+
+                auto ids = tokenizer.encode(text);
+                std::string decoded = tokenizer.decode(ids);
+
+                // Check case preservation
+                bool case_ok = true;
+                size_t min_len = std::min(text.size(), decoded.size());
+                for (size_t ci = 0; ci < min_len; ++ci) {
+                    if (text[ci] != decoded[ci] &&
+                        std::tolower(static_cast<unsigned char>(text[ci])) ==
+                        std::tolower(static_cast<unsigned char>(decoded[ci]))) {
+                        case_ok = false;
+                        break;
+                    }
+                }
+                if (!case_ok) case_failures++;
+
+                // Check whitespace preservation
+                auto extract_ws = [](const std::string& s) {
+                    std::string ws;
+                    for (char c : s) {
+                        if (std::isspace(static_cast<unsigned char>(c))) ws += c;
+                    }
+                    return ws;
+                };
+                if (extract_ws(text) != extract_ws(decoded)) ws_failures++;
+            }
+            r.passed = (tested > 0 && case_failures == 0 && ws_failures == 0);
+            if (!r.passed) {
+                r.details = std::to_string(case_failures) + " case failures, " +
+                            std::to_string(ws_failures) + " whitespace failures in " +
+                            std::to_string(tested) + " texts";
+            } else {
+                r.details = "All " + std::to_string(tested) +
+                            " texts preserve case and whitespace exactly";
+            }
+            results.push_back(r);
+        }
+    } else {
+        // No concept_blocks.jsonl found — log warning but don't fail
+        ValidationResult r;
+        r.name = "Raw text quality gate";
+        r.passed = true;
+        r.details = "SKIPPED — concept_blocks.jsonl not found alongside GRMT. "
+                     "Raw text validation unavailable.";
+        results.push_back(r);
+    }
+
+    // Test 11: Empty input encode — encode("") must not crash
+    {
+        ValidationResult r;
+        r.name = "Empty input encode safety";
+        auto ids = tokenizer.encode("");
+        r.passed = true;  // If we got here, it didn't crash
+        r.details = "encode(\"\") returned " + std::to_string(ids.size()) + " tokens";
+        results.push_back(r);
+    }
+
+    // Test 12: Invalid token ID decode — must not crash on garbage IDs
+    {
+        ValidationResult r;
+        r.name = "Invalid token ID decode safety";
         std::vector<int> bad_ids = {-1, 999999, tokenizer.totalVocabSize() + 100};
         std::string decoded = tokenizer.decode(bad_ids);
-        r.passed = true;  // Should not crash
-        r.details = "Handled gracefully";
+        r.passed = true;  // If we got here, it didn't crash
+        r.details = "decode([-1, 999999, OOB]) handled gracefully";
         results.push_back(r);
     }
 
@@ -506,7 +931,7 @@ int main(int argc, char** argv) {
         }
 
         auto val_start = std::chrono::steady_clock::now();
-        auto validation_results = runValidationChecks(tokenizer, opts.verbose);
+        auto validation_results = runValidationChecks(tokenizer, opts.data_path, opts.verbose);
         auto val_end = std::chrono::steady_clock::now();
         double val_ms = std::chrono::duration<double, std::milli>(val_end - val_start).count();
 

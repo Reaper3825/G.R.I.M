@@ -2,9 +2,9 @@
 //  Detectors.cu
 //  Structural Pattern Detector Implementations
 //
-//  Only active detectors: integer, float, hex, binary.
-//  Dead detectors (path, date, time, IP, string, identifier)
-//  have been deleted per Rule 26.
+//  Only active detectors: integer, float.
+//  Hex, binary, path, date, time, IP, string, identifier
+//  detectors have been deleted per Rule 26.
 //======================================================//
 
 #include "Detectors.hpp"
@@ -116,50 +116,6 @@ bool detectFloat(const std::string& text, size_t pos, size_t& end) {
     
     // Must have dot or exponent to be float (not just integer)
     if (!has_digit || (!has_dot && !has_exp)) return false;
-    
-    end = i;
-    return true;
-}
-
-bool detectHex(const std::string& text, size_t pos, size_t& end) {
-    if (pos + 2 >= text.size()) return false;
-    
-    if (text[pos] != '0' || (text[pos + 1] != 'x' && text[pos + 1] != 'X')) {
-        return false;
-    }
-    
-    size_t i = pos + 2;
-    
-    // Must have at least one hex digit
-    auto isHexDigit = [](char c) {
-        return std::isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-    };
-    
-    if (!isHexDigit(text[i])) return false;
-    
-    while (i < text.size() && isHexDigit(text[i])) {
-        ++i;
-    }
-    
-    end = i;
-    return true;
-}
-
-bool detectBinary(const std::string& text, size_t pos, size_t& end) {
-    if (pos + 2 >= text.size()) return false;
-    
-    if (text[pos] != '0' || (text[pos + 1] != 'b' && text[pos + 1] != 'B')) {
-        return false;
-    }
-    
-    size_t i = pos + 2;
-    
-    // Must have at least one binary digit
-    if (text[i] != '0' && text[i] != '1') return false;
-    
-    while (i < text.size() && (text[i] == '0' || text[i] == '1')) {
-        ++i;
-    }
     
     end = i;
     return true;
