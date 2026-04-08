@@ -86,8 +86,9 @@ __global__ void kernelUnpackAtomNumerics(
     
     uint32_t type = types[idx];
     float val = numeric_values[idx];
-    
-    bool is_int = isNumericAtom(static_cast<AtomType>(type));
+
+    const AtomType atom_type = static_cast<AtomType>(type);
+    const bool is_int = (atom_type == AtomType::ATOM_INT);
     
     is_integer[idx] = is_int;
     output_floats[idx] = val;

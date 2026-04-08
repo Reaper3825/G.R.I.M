@@ -29,9 +29,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
-#include <numeric>
 #include <queue>
-#include <random>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
@@ -358,16 +356,18 @@ static size_t resolveSubwordMiningChunkSize(unsigned int workers, size_t sentenc
 
 static void mineSubwordsFromSentence(const std::string& text,
                                      size_t max_len,
-                                     std::unordered_map<std::string, int>& subword_counts) {
-    if (text.empty()) return;
+                                     std::unordered_map<std::string, int>& subword_counts,
+                                     size_t byte_limit = std::string::npos) {
+    const size_t effective_len = std::min(text.size(), byte_limit);
+    if (effective_len == 0) return;
 
     std::vector<size_t> char_positions;
-    char_positions.reserve(text.size() + 1);
-    for (size_t i = 0; i < text.size(); ) {
+    char_positions.reserve(effective_len + 1);
+    for (size_t i = 0; i < effective_len; ) {
         char_positions.push_back(i);
         i += utf8SequenceLength(static_cast<unsigned char>(text[i]));
     }
-    char_positions.push_back(text.size());
+    char_positions.push_back(effective_len);
 
     const size_t num_chars = char_positions.size() - 1;
     for (size_t ci = 0; ci < num_chars; ++ci) {
@@ -403,20 +403,22 @@ static void mineSubwordsFromSentence(const std::string& text,
 static void mineSubwordsFromSentence(const std::string& text,
                                      size_t max_len,
                                      const std::vector<AtomSpan>& atom_spans,
-                                     std::unordered_map<std::string, int>& subword_counts) {
-    if (text.empty()) return;
+                                     std::unordered_map<std::string, int>& subword_counts,
+                                     size_t byte_limit = std::string::npos) {
+    const size_t effective_len = std::min(text.size(), byte_limit);
+    if (effective_len == 0) return;
     if (atom_spans.empty()) {
-        mineSubwordsFromSentence(text, max_len, subword_counts);
+        mineSubwordsFromSentence(text, max_len, subword_counts, byte_limit);
         return;
     }
 
     std::vector<size_t> char_positions;
-    char_positions.reserve(text.size() + 1);
-    for (size_t i = 0; i < text.size(); ) {
+    char_positions.reserve(effective_len + 1);
+    for (size_t i = 0; i < effective_len; ) {
         char_positions.push_back(i);
         i += utf8SequenceLength(static_cast<unsigned char>(text[i]));
     }
-    char_positions.push_back(text.size());
+    char_positions.push_back(effective_len);
 
     std::vector<bool> char_in_atom(char_positions.size() - 1, false);
     size_t span_idx = 0;
@@ -559,25 +561,41 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             ? subword_mining_max_bytes
             : static_cast<size_t>(HyperParameters::UNIGRAM_MAX_SUBWORD_BYTES);
     const bool use_sampling = total_sentence_bytes > max_subword_mining_bytes;
-    std::vector<size_t> sample_indices;
 
     std::cout << "[UnigramLM] Subword mining byte cap: "
               << (max_subword_mining_bytes / (1024 * 1024)) << " MB" << std::endl;
-    
+
+    // Byte-proportional prefix limits: when the corpus exceeds the mining byte
+    // budget, every document still contributes candidates — but each is truncated
+    // to a prefix proportional to its share of total corpus bytes.
+    //
+    // This eliminates three problems with the old document-uniform sampling:
+    //   1. No document is excluded → EM can't be starved of candidates
+    //   2. Large docs contribute more bytes → byte-weighted, not doc-weighted
+    //   3. Deterministic — no RNG dependence on document order
+    std::vector<size_t> prefix_limits;
     if (use_sampling) {
-        std::mt19937 rng(42);
-        std::vector<size_t> all_indices(training_units.size());
-        std::iota(all_indices.begin(), all_indices.end(), 0);
-        std::shuffle(all_indices.begin(), all_indices.end(), rng);
-        
-        size_t sampled_bytes = 0;
-        for (size_t idx : all_indices) {
-            if (sampled_bytes >= max_subword_mining_bytes) break;
-            sample_indices.push_back(idx);
-            sampled_bytes += training_units[idx].size();
+        const double sampling_ratio = static_cast<double>(max_subword_mining_bytes)
+                                    / static_cast<double>(total_sentence_bytes);
+        prefix_limits.resize(training_units.size());
+        size_t actual_sampled_bytes = 0;
+        for (size_t i = 0; i < training_units.size(); ++i) {
+            const auto& text = training_units[i];
+            if (text.empty()) { prefix_limits[i] = 0; continue; }
+            size_t target = static_cast<size_t>(std::ceil(text.size() * sampling_ratio));
+            target = std::max<size_t>(1, target);  // every non-empty doc contributes >= 1 byte
+            target = std::min(target, text.size());
+            // Snap forward to UTF-8 char boundary (don't truncate mid-character)
+            while (target < text.size() && (static_cast<unsigned char>(text[target]) & 0xC0) == 0x80) {
+                ++target;
+            }
+            prefix_limits[i] = target;
+            actual_sampled_bytes += target;
         }
-        std::cout << "[UnigramLM] Sampling " << sample_indices.size() << " documents (" 
-                  << (sampled_bytes / (1024*1024)) << " MB) for subword mining" << std::endl;
+        std::cout << "[UnigramLM] Byte-proportional prefix mining: ratio="
+                  << std::fixed << std::setprecision(3) << sampling_ratio
+                  << ", actual=" << (actual_sampled_bytes / (1024*1024)) << " MB from all "
+                  << training_units.size() << " documents" << std::defaultfloat << std::endl;
     }
     
     // Step 1: Count character frequencies (use ALL normalized texts)
@@ -695,18 +713,13 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::unordered_map<std::string, int> subword_counts;
     subword_counts.reserve(1000000);
 
-    const size_t num_texts_to_process = use_sampling ? sample_indices.size() : training_units.size();
+    const size_t num_texts_to_process = training_units.size();
     const size_t progress_interval = std::max<size_t>(1, num_texts_to_process / 20);
-    const size_t max_len = use_sampling
-        ? static_cast<size_t>(MAX_PIECE_LENGTH)
-        : std::min(static_cast<size_t>(MAX_PIECE_LENGTH), size_t(16));
+    const size_t max_len = static_cast<size_t>(MAX_PIECE_LENGTH);
 
-    auto sentenceForIndex = [&](size_t idx) -> const std::string& {
-        return use_sampling ? training_units[sample_indices[idx]] : training_units[idx];
-    };
-
-    auto sentenceAtomsForIndex = [&](size_t idx) -> const std::vector<AtomSpan>& {
-        return use_sampling ? norm_atom_spans[sample_indices[idx]] : norm_atom_spans[idx];
+    // Per-document byte limit: full document when not sampling, prefix when sampling.
+    auto byteLimitForIndex = [&](size_t idx) -> size_t {
+        return use_sampling ? prefix_limits[idx] : std::string::npos;
     };
 
     unsigned int mining_workers = resolveSubwordMiningWorkerCount(
@@ -724,7 +737,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     if (mining_workers <= 1) {
         for (size_t ti = 0; ti < num_texts_to_process; ++ti) {
-            const std::string& text = sentenceForIndex(ti);
+            const std::string& text = training_units[ti];
 
             if (ti % progress_interval == 0) {
                 std::cout << "[UnigramLM] Subword mining: " << ti << "/" << num_texts_to_process
@@ -732,7 +745,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                           << subword_counts.size() << " unique subwords" << std::endl;
             }
 
-            mineSubwordsFromSentence(text, max_len, sentenceAtomsForIndex(ti), subword_counts);
+            mineSubwordsFromSentence(text, max_len, norm_atom_spans[ti], subword_counts, byteLimitForIndex(ti));
 
             if (prune_during_mining && subword_counts.size() > 50000000) {
                 std::cout << "[UnigramLM] Pruning low-frequency subwords to control memory..." << std::endl;
@@ -781,7 +794,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 try {
                     for (size_t ti = begin; ti < end; ++ti) {
                         if (abort.load(std::memory_order_relaxed)) return;
-                        mineSubwordsFromSentence(sentenceForIndex(ti), max_len, sentenceAtomsForIndex(ti), local);
+                        mineSubwordsFromSentence(training_units[ti], max_len, norm_atom_spans[ti], local, byteLimitForIndex(ti));
                     }
                     if (local.size() > kLocalPruneHighWater) {
                         for (auto it = local.begin(); it != local.end(); ) {
