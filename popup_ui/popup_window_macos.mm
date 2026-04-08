@@ -7,6 +7,7 @@
 #include "logger.hpp"
 #include <vector>
 #include <algorithm>
+#include <string>
 
 // ===========================================================
 // macOS Popup Window — NSWindow + CALayer frame presentation
@@ -168,23 +169,21 @@ void presentPopup3DFrame(void* handle, const uint8_t* bgraData, int width, int h
         if (!view || ![view wantsLayer])
             return;
 
-        // Create a CGImage from the BGRA data.
-        // The readback produces straight-alpha BGRA8. CoreGraphics
-        // wants premultiplied RGBA, so we convert in-place.
+        // Create a CGImage from the BGRA readback data.
+        // CoreGraphics wants premultiplied RGBA — the GPU blend already
+        // premultiplied RGB, so we just swizzle BGRA → RGBA.
         size_t pixelCount = static_cast<size_t>(width * height);
         size_t byteCount  = pixelCount * 4;
 
-        // Convert BGRA straight → RGBA premultiplied
+        // Swizzle BGRA → RGBA premultiplied.
+        // The readback data is already premultiplied from the GPU blend
+        // (separate RGB/Alpha blend functions), so just reorder channels.
         std::vector<uint8_t> rgbaPremul(byteCount);
         for (size_t i = 0; i < pixelCount; ++i) {
-            uint8_t b = bgraData[i * 4 + 0];
-            uint8_t g = bgraData[i * 4 + 1];
-            uint8_t r = bgraData[i * 4 + 2];
-            uint8_t a = bgraData[i * 4 + 3];
-            rgbaPremul[i * 4 + 0] = static_cast<uint8_t>((r * a) / 255);
-            rgbaPremul[i * 4 + 1] = static_cast<uint8_t>((g * a) / 255);
-            rgbaPremul[i * 4 + 2] = static_cast<uint8_t>((b * a) / 255);
-            rgbaPremul[i * 4 + 3] = a;
+            rgbaPremul[i * 4 + 0] = bgraData[i * 4 + 2]; // R
+            rgbaPremul[i * 4 + 1] = bgraData[i * 4 + 1]; // G
+            rgbaPremul[i * 4 + 2] = bgraData[i * 4 + 0]; // B
+            rgbaPremul[i * 4 + 3] = bgraData[i * 4 + 3]; // A
         }
 
         CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
@@ -213,6 +212,11 @@ void presentPopup3DFrame(void* handle, const uint8_t* bgraData, int width, int h
         dispatch_async(dispatch_get_main_queue(), ^{
             CALayer* layer = view.layer;
             if (layer) {
+                static int sPresentCount = 0;
+                if (++sPresentCount <= 5)
+                    LOG_DEBUG("PopupWindow", "presentPopup3DFrame: pushing image " +
+                              std::to_string(width) + "x" + std::to_string(height) +
+                              " to CALayer (present#" + std::to_string(sPresentCount) + ")");
                 [CATransaction begin];
                 [CATransaction setDisableActions:YES];
                 layer.contents = (__bridge id)image;

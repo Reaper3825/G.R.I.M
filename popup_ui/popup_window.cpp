@@ -197,19 +197,11 @@ void presentPopup3DFrame(HWND hwnd, const uint8_t* bgraData, int width, int heig
         return;
     }
 
-    // Convert straight alpha to premultiplied alpha (required by UpdateLayeredWindow)
+    // Readback data is already premultiplied from the GPU blend
+    // (separate RGB/Alpha blend functions). UpdateLayeredWindow expects
+    // premultiplied BGRA, which is exactly what we have — just copy.
     uint8_t* dst = static_cast<uint8_t*>(bits);
-    for (int i = 0; i < width * height; i++)
-    {
-        uint8_t b = bgraData[i * 4 + 0];
-        uint8_t g = bgraData[i * 4 + 1];
-        uint8_t r = bgraData[i * 4 + 2];
-        uint8_t a = bgraData[i * 4 + 3];
-        dst[i * 4 + 0] = static_cast<uint8_t>((b * a) / 255); // B premul
-        dst[i * 4 + 1] = static_cast<uint8_t>((g * a) / 255); // G premul
-        dst[i * 4 + 2] = static_cast<uint8_t>((r * a) / 255); // R premul
-        dst[i * 4 + 3] = a;
-    }
+    std::memcpy(dst, bgraData, static_cast<size_t>(width) * height * 4);
 
     HBITMAP oldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
 

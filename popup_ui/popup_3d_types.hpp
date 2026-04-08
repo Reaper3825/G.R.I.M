@@ -10,11 +10,14 @@
 // Popup 3D — POD types only (no bgfx headers)
 // ===========================================================
 
-// Vertex layout: position + normal + color (matches bgfx metaballs shader)
+// Vertex layout: position + normal + tangent + texcoord + color
 struct PopupVertex
 {
     float px, py, pz;   // position
     float nx, ny, nz;   // normal
+    float tx, ty, tz;   // tangent (unit vector in UV-U direction)
+    float tw;           // tangent handedness (+1 or -1): bitangent = cross(N, T) * tw
+    float u, v;          // texture coordinates
     uint32_t abgr;      // packed color (bgfx ABGR: bits [31:24]=A, [23:16]=B, [15:8]=G, [7:0]=R)
 };
 

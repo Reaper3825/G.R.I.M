@@ -40,6 +40,11 @@ static void popup3DPreFrameCallback(uint32_t bgfxFrame)
     if (!g_popup3DInitialized.load())
         return;
 
+    static int sCallCount = 0;
+    if (++sCallCount <= 3)
+        LOG_DEBUG("PopupUI", "preFrameCallback called: bgfxFrame=" + std::to_string(bgfxFrame) +
+                  " call#" + std::to_string(sCallCount));
+
     popup3DRendererSubmit(g_popup3D, g_popup3DInput, bgfxFrame);
 }
 
@@ -101,9 +106,41 @@ void runPopupUI(int width, int height)
             {
                 std::string objPath = std::string(GRIM_ROOT_DIR) + "/resources/popup_3d/grim_popup.obj";
                 PopupObjectDefinition grimDef = loadPopupObjectFromOBJ(objPath);
+                LOG_DEBUG("PopupUI", "OBJ loaded: verts=" + std::to_string(grimDef.vertices.size()) +
+                          " indices=" + std::to_string(grimDef.indices.size()) +
+                          " from " + objPath);
                 popup3DRendererInit(g_popup3D, grimDef,
                                     static_cast<uint32_t>(width),
                                     static_cast<uint32_t>(height));
+
+                // Try to load material textures (fallback to defaults on failure)
+                {
+                    std::string base = std::string(GRIM_ROOT_DIR) + "/resources/popup_3d/";
+
+                    try {
+                        std::string albedoPath = base + "grim_popup_albedo.png";
+                        popup3DRendererLoadTexture(g_popup3D, albedoPath.c_str());
+                        LOG_DEBUG("PopupUI", "Loaded albedo: " + albedoPath);
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("PopupUI", std::string("Albedo not loaded (using default): ") + e.what());
+                    }
+
+                    try {
+                        std::string normalPath = base + "grim_popup_normal.png";
+                        popup3DRendererLoadNormalMap(g_popup3D, normalPath.c_str());
+                        LOG_DEBUG("PopupUI", "Loaded normal map: " + normalPath);
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("PopupUI", std::string("Normal map not loaded (using default): ") + e.what());
+                    }
+
+                    try {
+                        std::string packedPath = base + "grim_popup_packed.png";
+                        popup3DRendererLoadPackedMap(g_popup3D, packedPath.c_str());
+                        LOG_DEBUG("PopupUI", "Loaded packed map: " + packedPath);
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("PopupUI", std::string("Packed map not loaded (using default): ") + e.what());
+                    }
+                }
 
                 // Set initial render input
                 g_popup3DInput.transform = grimDef.defaultTransform;
@@ -215,12 +252,42 @@ void runPopupUI(int width, int height)
                 // Consume rendered frame from the mailbox
                 static std::vector<uint8_t> frameBuffer;
                 static uint64_t lastGen = 0;
+                static int sConsumeAttempts = 0;
+                static int sConsumeHits = 0;
                 uint32_t fw = 0, fh = 0;
+                ++sConsumeAttempts;
                 if (popupMailboxConsume(g_popup3D.mailbox, frameBuffer, fw, fh, lastGen))
                 {
+                    ++sConsumeHits;
+                    if (sConsumeHits <= 5)
+                    {
+                        // DIAG: scan consumed pixels
+                        size_t total = static_cast<size_t>(fw) * fh;
+                        size_t nzA = 0, nzRGB = 0;
+                        uint8_t mxR=0,mxG=0,mxB=0,mxA=0;
+                        const uint8_t* px = frameBuffer.data();
+                        for (size_t ii = 0; ii < total; ++ii) {
+                            uint8_t b=px[ii*4+0],g2=px[ii*4+1],r2=px[ii*4+2],a=px[ii*4+3];
+                            if(a>0)++nzA; if(r2>0||g2>0||b>0)++nzRGB;
+                            if(r2>mxR)mxR=r2;if(g2>mxG)mxG=g2;if(b>mxB)mxB=b;if(a>mxA)mxA=a;
+                        }
+                        size_t ci = (fh/2*fw+fw/2)*4;
+                        LOG_DEBUG("PopupUI", "DIAG-CONSUME hit#" + std::to_string(sConsumeHits)
+                            + " " + std::to_string(fw) + "x" + std::to_string(fh)
+                            + " gen=" + std::to_string(lastGen)
+                            + " nzA=" + std::to_string(nzA)
+                            + " nzRGB=" + std::to_string(nzRGB)
+                            + " max=(" + std::to_string(mxR)+","+std::to_string(mxG)+","+std::to_string(mxB)+","+std::to_string(mxA)+")"
+                            + " center=[" + std::to_string(px[ci])+" "+std::to_string(px[ci+1])+" "+std::to_string(px[ci+2])+" "+std::to_string(px[ci+3])+"]");
+                    }
                     presentPopup3DFrame(g_popupHandle, frameBuffer.data(),
                                         static_cast<int>(fw),
                                         static_cast<int>(fh));
+                }
+                else if (sConsumeAttempts <= 10 || (sConsumeAttempts % 300 == 0))
+                {
+                    LOG_DEBUG("PopupUI", "Mailbox empty: attempt#" + std::to_string(sConsumeAttempts) +
+                              " totalHits=" + std::to_string(sConsumeHits));
                 }
             }
         }

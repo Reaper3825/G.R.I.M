@@ -94,6 +94,8 @@ PopupObjectDefinition createGrimPopupObject()
             vert.nx = nx;
             vert.ny = ny;
             vert.nz = nz;
+            vert.u = 0.0f;
+            vert.v = 0.0f;
             vert.abgr = packABGR(cr, cg, cb, 1.0f);
             def.vertices.push_back(vert);
         }

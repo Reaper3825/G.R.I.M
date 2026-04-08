@@ -9,6 +9,9 @@
 #include <cstring>
 #include <cmath>
 
+#include <stb/stb_image.h>
+#include "logger.hpp"
+
 // ===========================================================
 // Popup 3D Renderer — offscreen render + async readback
 // ===========================================================
@@ -25,6 +28,9 @@ struct SlotGPU
 };
 
 static SlotGPU s_slotGPU[Popup3DRenderer::kSlotCount];
+
+// 1x1 white fallback for unbound texture samplers (avoids sampling zeros on Metal)
+static bgfx::TextureHandle s_whiteFallback = BGFX_INVALID_HANDLE;
 
 // -------------------------------------------------------
 // Slot GPU resource management
@@ -128,7 +134,23 @@ void popup3DRendererInit(Popup3DRenderer& r,
 
     r.renderWidth  = width;
     r.renderHeight = height;
+
+    // Create 1x1 white fallback so unbound samplers return (1,1,1,1) instead of (0,0,0,0)
+    if (!bgfx::isValid(s_whiteFallback))
+    {
+        uint32_t white = 0xFFFFFFFF;
+        const bgfx::Memory* mem = bgfx::copy(&white, 4);
+        s_whiteFallback = bgfx::createTexture2D(1, 1, false, 1,
+            bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, mem);
+    }
+
     r.initialized  = true;
+
+    LOG_DEBUG("Popup3D", "Init OK: mesh=" + std::to_string((uintptr_t)r.mesh) +
+             " shaders=" + std::to_string((uintptr_t)r.shaders) +
+             " verts=" + std::to_string(objDef.vertices.size()) +
+             " indices=" + std::to_string(objDef.indices.size()) +
+             " size=" + std::to_string(width) + "x" + std::to_string(height));
 }
 
 // -------------------------------------------------------
@@ -141,7 +163,16 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     if (!r.initialized)
         throw std::runtime_error("Popup3DRenderer::submit: not initialized");
     if (!input.visible)
+    {
+        static int sInvisSkipCount = 0;
+        if (++sInvisSkipCount <= 3)
+            LOG_DEBUG("Popup3D", "submit: input.visible=false, skipping (" + std::to_string(sInvisSkipCount) + ")");
         return;
+    }
+
+    static int sSubmitCount = 0;
+    ++sSubmitCount;
+    bool shouldLog = (sSubmitCount <= 5) || (sSubmitCount % 300 == 0);
 
     // ---- Poll completed readbacks ----
     int newestReady = -1;
@@ -166,6 +197,11 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     {
         auto& slot = r.slots[newestReady];
 
+        if (shouldLog)
+            LOG_DEBUG("Popup3D", "Publishing slot " + std::to_string(newestReady) +
+                     " gen=" + std::to_string(slot.generation) +
+                     " frame#" + std::to_string(sSubmitCount));
+
         popupMailboxPublish(r.mailbox,
                             slot.rawStraightBgra.data(),
                             slot.width, slot.height);
@@ -189,7 +225,11 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
         }
     }
     if (idleSlot < 0)
+    {
+        if (shouldLog)
+            LOG_DEBUG("Popup3D", "No idle slot — skipping frame#" + std::to_string(sSubmitCount));
         return;  // all slots busy, skip this frame
+    }
 
     // ---- Build model matrix ----
     float mtxModel[16];
@@ -236,6 +276,38 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     // ---- Bind mesh ----
     popupMeshBind(r.mesh);
 
+    // ---- Set uniforms for popup model shader ----
+    {
+        // Light direction (normalized)
+        float lightDir[4] = {
+            input.light.direction[0],
+            input.light.direction[1],
+            input.light.direction[2],
+            0.0f
+        };
+        // Normalize
+        float len = std::sqrt(lightDir[0]*lightDir[0] + lightDir[1]*lightDir[1] + lightDir[2]*lightDir[2]);
+        if (len > 1e-8f) { lightDir[0] /= len; lightDir[1] /= len; lightDir[2] /= len; }
+        bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::LightDir), lightDir);
+
+        float lightParams[4] = { input.light.intensity, input.light.ambient, 0.0f, 0.0f };
+        bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::LightParams), lightParams);
+
+        float alpha[4] = { input.alphaMul, 0.0f, 0.0f, 0.0f };
+        bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::Alpha), alpha);
+
+        float emissive[4] = { input.emissiveMul, 0.0f, 0.0f, 0.0f };
+        bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::Emissive), emissive);
+
+        // Always bind all 3 texture slots — Metal returns (0,0,0,0) for unbound samplers
+        bgfx::TextureHandle albedo = bgfx::isValid(r.albedoTex) ? r.albedoTex : s_whiteFallback;
+        bgfx::TextureHandle normal = bgfx::isValid(r.normalTex) ? r.normalTex : s_whiteFallback;
+        bgfx::TextureHandle packed = bgfx::isValid(r.packedTex) ? r.packedTex : s_whiteFallback;
+        bgfx::setTexture(0, popupShadersGetUniform(r.shaders, PopupShaderUniform::AlbedoSampler), albedo);
+        bgfx::setTexture(1, popupShadersGetUniform(r.shaders, PopupShaderUniform::NormalSampler), normal);
+        bgfx::setTexture(2, popupShadersGetUniform(r.shaders, PopupShaderUniform::PackedSampler), packed);
+    }
+
     // ---- Set render state ----
     uint64_t state = 0
         | BGFX_STATE_WRITE_RGB
@@ -248,9 +320,22 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     bgfx::setState(state);
 
     // ---- Submit ----
-    bgfx::submit(kPopupViewId, popupShadersGetProgram(r.shaders));
+    bgfx::ProgramHandle prog = popupShadersGetProgram(r.shaders);
+    if (shouldLog)
+        LOG_DEBUG("Popup3D", "submit: slot=" + std::to_string(idleSlot) +
+                 " alpha=" + std::to_string(input.alphaMul) +
+                 " prog=" + std::to_string(prog.idx) +
+                 " fb=" + std::to_string(s_slotGPU[idleSlot].fb.idx) +
+                 " frame#" + std::to_string(sSubmitCount));
+    bgfx::submit(kPopupViewId, prog);
 
     // ---- Blit RT → readback texture, then queue readback ----
+    // Activate the blit view so bgfx processes the blit command.
+    bgfx::setViewRect(kPopupBlitViewId, 0, 0,
+                       static_cast<uint16_t>(r.renderWidth),
+                       static_cast<uint16_t>(r.renderHeight));
+    bgfx::touch(kPopupBlitViewId);
+
     auto& slot = r.slots[idleSlot];
     bgfx::blit(kPopupBlitViewId,
                s_slotGPU[idleSlot].readbackTex, 0, 0,
@@ -261,6 +346,12 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
                                               slot.rawStraightBgra.data());
     slot.generation = r.nextGeneration++;
     slot.state = PopupSlotState::PendingReadback;
+
+    if (shouldLog)
+        LOG_DEBUG("Popup3D", "readback queued: slot=" + std::to_string(idleSlot) +
+                 " gen=" + std::to_string(slot.generation) +
+                 " readyAfter=" + std::to_string(slot.readyAfterFrame) +
+                 " curBgfxFrame=" + std::to_string(currentBgfxFrame));
 }
 
 // -------------------------------------------------------
@@ -303,10 +394,126 @@ void popup3DRendererShutdown(Popup3DRenderer& r)
     for (int i = 0; i < Popup3DRenderer::kSlotCount; i++)
         destroySlotGPU(s_slotGPU[i]);
 
+    if (bgfx::isValid(r.albedoTex)) { bgfx::destroy(r.albedoTex); r.albedoTex = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(r.normalTex)) { bgfx::destroy(r.normalTex); r.normalTex = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(r.packedTex)) { bgfx::destroy(r.packedTex); r.packedTex = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(s_whiteFallback)) { bgfx::destroy(s_whiteFallback); s_whiteFallback = BGFX_INVALID_HANDLE; }
     if (r.shaders) { popupShadersDestroy(r.shaders); r.shaders = nullptr; }
     if (r.mesh)    { popupMeshDestroy(r.mesh);        r.mesh    = nullptr; }
 
     r.initialized = false;
+}
+
+// -------------------------------------------------------
+// Texture loading (stb_image → bgfx RGBA8 texture)
+// -------------------------------------------------------
+void popup3DRendererLoadTexture(Popup3DRenderer& r, const char* imagePath)
+{
+    if (!r.initialized)
+        throw std::runtime_error("popup3DRendererLoadTexture: renderer not initialized");
+    if (!imagePath)
+        throw std::runtime_error("popup3DRendererLoadTexture: imagePath is NULL");
+
+    int w = 0, h = 0, channels = 0;
+    stbi_uc* pixels = stbi_load(imagePath, &w, &h, &channels, 4);  // force RGBA
+    if (!pixels)
+        throw std::runtime_error(std::string("popup3DRendererLoadTexture: failed to load ") + imagePath);
+
+    // Destroy previous texture if any
+    if (bgfx::isValid(r.albedoTex))
+    {
+        bgfx::destroy(r.albedoTex);
+        r.albedoTex = BGFX_INVALID_HANDLE;
+    }
+
+    const bgfx::Memory* mem = bgfx::copy(pixels, static_cast<uint32_t>(w * h * 4));
+    stbi_image_free(pixels);
+
+    r.albedoTex = bgfx::createTexture2D(
+        static_cast<uint16_t>(w),
+        static_cast<uint16_t>(h),
+        false, 1,
+        bgfx::TextureFormat::RGBA8,
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_ANISOTROPIC | BGFX_SAMPLER_MAG_ANISOTROPIC,
+        mem
+    );
+
+    if (!bgfx::isValid(r.albedoTex))
+        throw std::runtime_error(std::string("popup3DRendererLoadTexture: bgfx texture creation failed for ") + imagePath);
+}
+
+// -------------------------------------------------------
+// Normal map loading (stb_image → bgfx RGBA8 texture)
+// -------------------------------------------------------
+void popup3DRendererLoadNormalMap(Popup3DRenderer& r, const char* imagePath)
+{
+    if (!r.initialized)
+        throw std::runtime_error("popup3DRendererLoadNormalMap: renderer not initialized");
+    if (!imagePath)
+        throw std::runtime_error("popup3DRendererLoadNormalMap: imagePath is NULL");
+
+    int w = 0, h = 0, channels = 0;
+    stbi_uc* pixels = stbi_load(imagePath, &w, &h, &channels, 4);
+    if (!pixels)
+        throw std::runtime_error(std::string("popup3DRendererLoadNormalMap: failed to load ") + imagePath);
+
+    if (bgfx::isValid(r.normalTex))
+    {
+        bgfx::destroy(r.normalTex);
+        r.normalTex = BGFX_INVALID_HANDLE;
+    }
+
+    const bgfx::Memory* mem = bgfx::copy(pixels, static_cast<uint32_t>(w * h * 4));
+    stbi_image_free(pixels);
+
+    r.normalTex = bgfx::createTexture2D(
+        static_cast<uint16_t>(w),
+        static_cast<uint16_t>(h),
+        false, 1,
+        bgfx::TextureFormat::RGBA8,
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_ANISOTROPIC | BGFX_SAMPLER_MAG_ANISOTROPIC,
+        mem
+    );
+
+    if (!bgfx::isValid(r.normalTex))
+        throw std::runtime_error(std::string("popup3DRendererLoadNormalMap: bgfx texture creation failed for ") + imagePath);
+}
+
+// -------------------------------------------------------
+// Packed material map loading (stb_image → bgfx RGBA8 texture)
+// -------------------------------------------------------
+void popup3DRendererLoadPackedMap(Popup3DRenderer& r, const char* imagePath)
+{
+    if (!r.initialized)
+        throw std::runtime_error("popup3DRendererLoadPackedMap: renderer not initialized");
+    if (!imagePath)
+        throw std::runtime_error("popup3DRendererLoadPackedMap: imagePath is NULL");
+
+    int w = 0, h = 0, channels = 0;
+    stbi_uc* pixels = stbi_load(imagePath, &w, &h, &channels, 4);
+    if (!pixels)
+        throw std::runtime_error(std::string("popup3DRendererLoadPackedMap: failed to load ") + imagePath);
+
+    if (bgfx::isValid(r.packedTex))
+    {
+        bgfx::destroy(r.packedTex);
+        r.packedTex = BGFX_INVALID_HANDLE;
+    }
+
+    const bgfx::Memory* mem = bgfx::copy(pixels, static_cast<uint32_t>(w * h * 4));
+    stbi_image_free(pixels);
+
+    r.packedTex = bgfx::createTexture2D(
+        static_cast<uint16_t>(w),
+        static_cast<uint16_t>(h),
+        false, 1,
+        bgfx::TextureFormat::RGBA8,
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_ANISOTROPIC | BGFX_SAMPLER_MAG_ANISOTROPIC,
+        mem
+    );
+
+    if (!bgfx::isValid(r.packedTex))
+        throw std::runtime_error(std::string("popup3DRendererLoadPackedMap: bgfx texture creation failed for ") + imagePath);
 }
 
 // -------------------------------------------------------

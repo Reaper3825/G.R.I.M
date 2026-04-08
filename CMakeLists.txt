@@ -189,6 +189,7 @@ endif()
 
 include(${CMAKE_SOURCE_DIR}/cmake/Dependencies.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/Resources.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/Shaders.cmake)
 
 set_target_properties(GRIM PROPERTIES
     CXX_STANDARD 20

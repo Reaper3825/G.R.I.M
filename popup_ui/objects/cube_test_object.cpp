@@ -18,43 +18,43 @@ PopupObjectDefinition createCubeTestObject()
     constexpr uint32_t kWhite   = 0xFFCCCCCC; // B=CC G=CC R=CC
     constexpr uint32_t kGray    = 0xFF666666; // B=66 G=66 R=66
 
-    // Each face has 4 unique vertices (for correct per-face normals)
+    // Each face has 4 unique vertices (for correct per-face normals/tangents)
     def.vertices = {
-        // Front face (+Z toward camera) — normal (0, 0, 1) — Red
-        { -0.5f, -0.5f,  0.5f,   0.0f, 0.0f, 1.0f,  kRed },
-        {  0.5f, -0.5f,  0.5f,   0.0f, 0.0f, 1.0f,  kRed },
-        {  0.5f,  0.5f,  0.5f,   0.0f, 0.0f, 1.0f,  kRed },
-        { -0.5f,  0.5f,  0.5f,   0.0f, 0.0f, 1.0f,  kRed },
+        // Front face (+Z toward camera) — normal (0, 0, 1), tangent (+X) — Red
+        { -0.5f, -0.5f,  0.5f,   0.0f, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,   0.0f, 1.0f, kRed },
+        {  0.5f, -0.5f,  0.5f,   0.0f, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,   1.0f, 1.0f, kRed },
+        {  0.5f,  0.5f,  0.5f,   0.0f, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,   1.0f, 0.0f, kRed },
+        { -0.5f,  0.5f,  0.5f,   0.0f, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,   0.0f, 0.0f, kRed },
 
-        // Back face (-Z) — normal (0, 0, -1) — Green
-        {  0.5f, -0.5f, -0.5f,   0.0f, 0.0f, -1.0f,  kGreen },
-        { -0.5f, -0.5f, -0.5f,   0.0f, 0.0f, -1.0f,  kGreen },
-        { -0.5f,  0.5f, -0.5f,   0.0f, 0.0f, -1.0f,  kGreen },
-        {  0.5f,  0.5f, -0.5f,   0.0f, 0.0f, -1.0f,  kGreen },
+        // Back face (-Z) — normal (0, 0, -1), tangent (-X) — Green
+        {  0.5f, -0.5f, -0.5f,   0.0f, 0.0f, -1.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  0.0f, 1.0f, kGreen },
+        { -0.5f, -0.5f, -0.5f,   0.0f, 0.0f, -1.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  1.0f, 1.0f, kGreen },
+        { -0.5f,  0.5f, -0.5f,   0.0f, 0.0f, -1.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  1.0f, 0.0f, kGreen },
+        {  0.5f,  0.5f, -0.5f,   0.0f, 0.0f, -1.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  0.0f, 0.0f, kGreen },
 
-        // Right face (+X) — normal (1, 0, 0) — Blue
-        {  0.5f, -0.5f,  0.5f,   1.0f, 0.0f, 0.0f,  kBlue },
-        {  0.5f, -0.5f, -0.5f,   1.0f, 0.0f, 0.0f,  kBlue },
-        {  0.5f,  0.5f, -0.5f,   1.0f, 0.0f, 0.0f,  kBlue },
-        {  0.5f,  0.5f,  0.5f,   1.0f, 0.0f, 0.0f,  kBlue },
+        // Right face (+X) — normal (1, 0, 0), tangent (-Z) — Blue
+        {  0.5f, -0.5f,  0.5f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f, 1.0f,  0.0f, 1.0f, kBlue },
+        {  0.5f, -0.5f, -0.5f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f, 1.0f,  1.0f, 1.0f, kBlue },
+        {  0.5f,  0.5f, -0.5f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f, 1.0f,  1.0f, 0.0f, kBlue },
+        {  0.5f,  0.5f,  0.5f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f, 1.0f,  0.0f, 0.0f, kBlue },
 
-        // Left face (-X) — normal (-1, 0, 0) — Yellow
-        { -0.5f, -0.5f, -0.5f,  -1.0f, 0.0f, 0.0f,  kYellow },
-        { -0.5f, -0.5f,  0.5f,  -1.0f, 0.0f, 0.0f,  kYellow },
-        { -0.5f,  0.5f,  0.5f,  -1.0f, 0.0f, 0.0f,  kYellow },
-        { -0.5f,  0.5f, -0.5f,  -1.0f, 0.0f, 0.0f,  kYellow },
+        // Left face (-X) — normal (-1, 0, 0), tangent (+Z) — Yellow
+        { -0.5f, -0.5f, -0.5f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, 1.0f, 1.0f,   0.0f, 1.0f, kYellow },
+        { -0.5f, -0.5f,  0.5f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, 1.0f, 1.0f,   1.0f, 1.0f, kYellow },
+        { -0.5f,  0.5f,  0.5f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, 1.0f, 1.0f,   1.0f, 0.0f, kYellow },
+        { -0.5f,  0.5f, -0.5f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, 1.0f, 1.0f,   0.0f, 0.0f, kYellow },
 
-        // Top face (+Y) — normal (0, 1, 0) — White
-        { -0.5f,  0.5f,  0.5f,   0.0f, 1.0f, 0.0f,  kWhite },
-        {  0.5f,  0.5f,  0.5f,   0.0f, 1.0f, 0.0f,  kWhite },
-        {  0.5f,  0.5f, -0.5f,   0.0f, 1.0f, 0.0f,  kWhite },
-        { -0.5f,  0.5f, -0.5f,   0.0f, 1.0f, 0.0f,  kWhite },
+        // Top face (+Y) — normal (0, 1, 0), tangent (+X) — White
+        { -0.5f,  0.5f,  0.5f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f, 1.0f,   0.0f, 1.0f, kWhite },
+        {  0.5f,  0.5f,  0.5f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f, 1.0f,   1.0f, 1.0f, kWhite },
+        {  0.5f,  0.5f, -0.5f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f, 1.0f,   1.0f, 0.0f, kWhite },
+        { -0.5f,  0.5f, -0.5f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f, 1.0f,   0.0f, 0.0f, kWhite },
 
-        // Bottom face (-Y) — normal (0, -1, 0) — Gray
-        { -0.5f, -0.5f, -0.5f,   0.0f, -1.0f, 0.0f,  kGray },
-        {  0.5f, -0.5f, -0.5f,   0.0f, -1.0f, 0.0f,  kGray },
-        {  0.5f, -0.5f,  0.5f,   0.0f, -1.0f, 0.0f,  kGray },
-        { -0.5f, -0.5f,  0.5f,   0.0f, -1.0f, 0.0f,  kGray },
+        // Bottom face (-Y) — normal (0, -1, 0), tangent (+X) — Gray
+        { -0.5f, -0.5f, -0.5f,   0.0f, -1.0f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f,   0.0f, 1.0f, kGray },
+        {  0.5f, -0.5f, -0.5f,   0.0f, -1.0f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f,   1.0f, 1.0f, kGray },
+        {  0.5f, -0.5f,  0.5f,   0.0f, -1.0f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f,   1.0f, 0.0f, kGray },
+        { -0.5f, -0.5f,  0.5f,   0.0f, -1.0f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f,   0.0f, 0.0f, kGray },
     };
 
     // CCW winding per face (2 triangles each)

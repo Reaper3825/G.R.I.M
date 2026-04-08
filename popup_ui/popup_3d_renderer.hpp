@@ -17,6 +17,16 @@ struct Popup3DRenderer
     PopupMeshGPU*      mesh     = nullptr;
     PopupShaderState*  shaders  = nullptr;
 
+    // Albedo texture (BGFX_INVALID_HANDLE = no texture, use normal-based coloring)
+    bgfx::TextureHandle albedoTex = BGFX_INVALID_HANDLE;
+
+    // Normal map (tangent-space, RGB = xyz). INVALID = use geometry normal.
+    bgfx::TextureHandle normalTex = BGFX_INVALID_HANDLE;
+
+    // Packed material map: R=AO, G=roughness, B=metallic, A=opacity.
+    // INVALID = defaults (AO=1, roughness=0.5, metallic=0, opacity=1).
+    bgfx::TextureHandle packedTex = BGFX_INVALID_HANDLE;
+
     // Readback ring (3 slots)
     static constexpr int kSlotCount = 3;
     PopupReadbackSlot slots[kSlotCount];
@@ -55,6 +65,16 @@ void popup3DRendererResize(Popup3DRenderer& r, uint32_t width, uint32_t height);
 
 // Destroy all renderer resources.
 void popup3DRendererShutdown(Popup3DRenderer& r);
+
+// Load an albedo texture from an image file (PNG, JPG, TGA, BMP via stb_image).
+// Must be called after popup3DRendererInit(). Replaces any existing texture.
+void popup3DRendererLoadTexture(Popup3DRenderer& r, const char* imagePath);
+
+// Load a tangent-space normal map. RGB = direction, blue-dominant = flat.
+void popup3DRendererLoadNormalMap(Popup3DRenderer& r, const char* imagePath);
+
+// Load a packed material map: R=AO, G=roughness, B=metallic, A=opacity.
+void popup3DRendererLoadPackedMap(Popup3DRenderer& r, const char* imagePath);
 
 // Check if any readback slots are still pending (for drain-then-destroy).
 bool popup3DRendererHasPending(const Popup3DRenderer& r);
