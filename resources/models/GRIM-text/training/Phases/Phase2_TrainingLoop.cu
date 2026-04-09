@@ -3612,7 +3612,7 @@ BatchResult processBatch(
         // Also verify the ParameterGroup sees the same pointer
         float pg_sample = 0.0f;
         for (size_t g = 0; g < groups.size(); ++g) {
-            if (groups[g].type == ParamGroupType::LM_HEAD) {
+            if (groups[g].type == GRIM::ParamGroupType::LM_HEAD) {
                 float* pg_grads = groups[g].grads();
                 if (pg_grads) {
                     cudaMemcpy(&pg_sample, pg_grads, sizeof(float), cudaMemcpyDeviceToHost);
