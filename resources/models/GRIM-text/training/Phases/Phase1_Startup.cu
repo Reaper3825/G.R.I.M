@@ -1948,7 +1948,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // 11. Initialize telemetry lattice
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry lattice...", 0);
     ctx->telemetry.config.num_levels = 8;  // k ∈ [0,7]: strides [1,2,4,8,16,32,64,128]
-    ctx->telemetry.config.num_streams = 5; // LOSS, GRAD_NORM_MEAN, GRAD_NORM_MAX, LEARNING_RATE, TOKENS_PER_BATCH
+    ctx->telemetry.config.num_streams = 9; // LOSS, GRAD_NORM_MEAN, GRAD_NORM_MAX, LEARNING_RATE, TOKENS_PER_BATCH, RHO_FINAL, RHO_GROWTH, RHO_WORST_DELTA, H_RMS_GROWTH
     ctx->telemetry.config.hyperparams.beta_mu = 0.95f;
     ctx->telemetry.config.hyperparams.beta_a = 0.995f;
     ctx->telemetry.config.hyperparams.beta_delta = 0.90f;

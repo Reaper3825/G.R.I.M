@@ -310,6 +310,10 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::GRAD_NORM_MAX: return "grad_norm_max";
         case MetricStream::LEARNING_RATE: return "learning_rate";
         case MetricStream::TOKENS_PER_BATCH: return "tokens_per_batch";
+        case MetricStream::RHO_FINAL: return "rho_final";
+        case MetricStream::RHO_GROWTH: return "rho_growth";
+        case MetricStream::RHO_WORST_DELTA: return "rho_worst_delta";
+        case MetricStream::H_RMS_GROWTH: return "h_rms_growth";
         default: return "unknown";
     }
 }

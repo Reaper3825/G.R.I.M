@@ -2830,7 +2830,7 @@ BatchResult processBatch(
                                << std::setw(6) << lr.rho << "  ";
                         
                         // Δρ (skip for embedding)
-                        if (i == 0) {
+                        if (i == -1) {
                             rho_eq << "  —     ";
                         } else {
                             rho_eq << std::showpos << std::setw(6) << lr.delta_rho << std::noshowpos << "  ";
@@ -2864,11 +2864,19 @@ BatchResult processBatch(
                         float rho_emb = layer_rhos.front().rho;
                         float rho_final = layer_rhos.back().rho;
                         rho_growth = rho_final - rho_emb;
+                        float h_rms_growth_ratio = layer_rhos.back().rms / std::max(layer_rhos.front().rms, 1e-8f);
+                        
+                        // Write rho observations directly into the telemetry observation array
+                        // (streams 5-8 persist between diagnostic intervals via last_obs[])
+                        ctx.telemetry.last_obs[5] = rho_final;          // RHO_FINAL
+                        ctx.telemetry.last_obs[6] = rho_growth;         // RHO_GROWTH
+                        ctx.telemetry.last_obs[7] = max_delta;          // RHO_WORST_DELTA
+                        ctx.telemetry.last_obs[8] = h_rms_growth_ratio; // H_RMS_GROWTH
                         
                         rho_eq << "  SUMMARY: ρ(emb)=" << rho_emb
                                << " → ρ(final)=" << rho_final
                                << " growth=" << std::showpos << rho_growth << std::noshowpos
-                               << " h_rms_growth=" << (layer_rhos.back().rms / std::max(layer_rhos.front().rms, 1e-8f))
+                               << " h_rms_growth=" << h_rms_growth_ratio
                                << "x\n";
                         
                         if (max_delta_layer >= 0 && max_delta > 0.02f) {
@@ -4426,9 +4434,17 @@ BatchResult processBatch(
                                 " step=" + std::to_string(ctx.global_step) + 
                                 " grad_rms=" + Internal::formatScalar(preclip_grad_rms, 6));
         
-        GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->updateFromBatch(
-            payload, result.loss, preclip_grad_rms, result.learning_rate,
-            ctx.global_step);
+        // Write per-batch streams into the unified observation array.
+        // Streams 5-8 (rho) are already populated at diagnostic intervals above;
+        // their last-known values persist in last_obs[] between diagnostics.
+        ctx.telemetry.last_obs[0] = result.loss;
+        ctx.telemetry.last_obs[1] = preclip_grad_rms;
+        ctx.telemetry.last_obs[2] = preclip_grad_rms;
+        ctx.telemetry.last_obs[3] = result.learning_rate;
+        ctx.telemetry.last_obs[4] = static_cast<float>(payload.token_stats.total_tokens);
+        
+        GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(
+            ctx.telemetry.last_obs, ctx.global_step);
         
         ctx.logging.logger->log("[TelemetryLattice] POST-UPDATE batch=" + std::to_string(batch_idx + 1) + 
                                 " step=" + std::to_string(ctx.global_step) + 
@@ -4443,9 +4459,7 @@ BatchResult processBatch(
 
         // CSV export: dump all measured telemetry state for this step
         if (ctx.telemetry.csv_logger) {
-            const float tokens_f = static_cast<float>(payload.token_stats.total_tokens);
-            const float raw_obs[5] = { result.loss, preclip_grad_rms, preclip_grad_rms, result.learning_rate, tokens_f };
-            ctx.telemetry.csv_logger->log(*ctx.telemetry.lattice, raw_obs, ctx.global_step);
+            ctx.telemetry.csv_logger->log(*ctx.telemetry.lattice, ctx.telemetry.last_obs, ctx.global_step);
         }
 
         if (batch_idx == 0) {

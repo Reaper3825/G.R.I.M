@@ -197,6 +197,10 @@ struct LoggingContext {
 /**
  * @brief Telemetry lattice context for multi-scale monitoring
  * Pattern B: TelemetryLattice is self-managing (RAII via unique_ptr).
+ * 
+ * last_obs[9] holds the most recent raw observation for ALL metric streams.
+ * Streams 0-4 are updated every batch; streams 5-8 (rho) are updated at
+ * diagnostic intervals. lattice->update() always receives the full array.
  */
 struct TelemetryContext {
     std::unique_ptr<GRIM::Telemetry::TelemetryLattice> lattice;
@@ -204,6 +208,7 @@ struct TelemetryContext {
     GRIM::Telemetry::TelemetryControlConfig control_config;
     std::unique_ptr<GRIM::Telemetry::TelemetryControl> controller;
     std::unique_ptr<GRIM::Telemetry::TelemetryCsvLogger> csv_logger;
+    float last_obs[9] = {};  // All metric streams — rho slots persist between diagnostic intervals
     bool enabled = true;
 
     TelemetryContext() = default;

@@ -142,6 +142,10 @@ enum class MetricStream : int {
     GRAD_NORM_MAX = 2,
     LEARNING_RATE = 3,
     TOKENS_PER_BATCH = 4,
+    RHO_FINAL = 5,
+    RHO_GROWTH = 6,
+    RHO_WORST_DELTA = 7,
+    H_RMS_GROWTH = 8,
 };
 
 const char* getMetricStreamName(MetricStream stream);

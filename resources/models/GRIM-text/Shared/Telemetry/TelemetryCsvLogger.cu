@@ -126,7 +126,8 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
 
     // Stream names (matches MetricStream enum order)
     static const char* stream_names[] = {
-        "loss", "grad_norm_mean", "grad_norm_max", "learning_rate", "tokens_per_batch"
+        "loss", "grad_norm_mean", "grad_norm_max", "learning_rate", "tokens_per_batch",
+        "rho_final", "rho_growth", "rho_worst_delta", "h_rms_growth"
     };
 
     for (int level = 0; level < num_levels_; ++level) {
@@ -143,7 +144,7 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
             if (err != TelemetryError::OK) continue;
             if (state.initialized == 0) continue;
 
-            const char* name = (s < 5) ? stream_names[s] : "unknown";
+            const char* name = (s < 9) ? stream_names[s] : "unknown";
             const float obs = (raw_obs && s < num_streams_) ? raw_obs[s] : 0.0f;
 
             // Use fixed-precision for stability; scientific for very
