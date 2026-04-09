@@ -4443,6 +4443,39 @@ BatchResult processBatch(
         ctx.telemetry.last_obs[3] = result.learning_rate;
         ctx.telemetry.last_obs[4] = static_cast<float>(payload.token_stats.total_tokens);
         
+        // Streams 9-13: Adam warmup causation tracking
+        // These track WHY loss rises above ln(V) during warmup: β₂ convergence is the causal driver.
+        // β₁=0.9 (m direction converges in ~10 steps), β₂=0.999 (v magnitude: half-life=693 steps)
+        {
+            constexpr float BETA2 = 0.999f;   // matches HyperParameters::ADAMW_BETA2
+            const int iteration = ctx.global_step + 1;  // matches AdamW kernel: step+1
+            const float bc2 = 1.0f - std::pow(BETA2, static_cast<float>(iteration));
+            const float inv_bc2 = 1.0f / bc2;
+            const float one_minus_bc2 = 1.0f - bc2;
+            
+            // Signal dominance: bc2/(1-bc2). When >1, each Adam step does more good than harm.
+            // Crosses 1.0 at exactly the β₂ half-life (step 693) — predicts the loss peak.
+            const float signal_dominance = (one_minus_bc2 > 1e-12f) ? (bc2 / one_minus_bc2) : 1e6f;
+            
+            // Cumulative displacement: Σlr(t) — running sum of learning rates.
+            // Adam normalizes m/√v ≈ ±1, so each step moves weights by ≈ lr.
+            ctx.telemetry.adam_cumulative_disp += result.learning_rate;
+            
+            // Xavier embedding scale = sqrt(6 / (vocab_size + d_model))
+            const float vocab_f = static_cast<float>(ctx.config.actual_vocab_size);
+            const float d_model_f = static_cast<float>(ctx.model->getConfig().d_model);
+            const float xavier_emb_scale = std::sqrt(6.0f / (vocab_f + d_model_f));
+            
+            // Disruption: how many "Xavier scales" weights have drifted from init
+            const float disruption_emb = ctx.telemetry.adam_cumulative_disp / xavier_emb_scale;
+            
+            ctx.telemetry.last_obs[9]  = bc2;                // ADAM_BC2_V_CONVERGENCE: 0→1
+            ctx.telemetry.last_obs[10] = signal_dominance;    // ADAM_SIGNAL_DOMINANCE: >1 = learning
+            ctx.telemetry.last_obs[11] = ctx.telemetry.adam_cumulative_disp;  // ADAM_CUMULATIVE_DISP
+            ctx.telemetry.last_obs[12] = disruption_emb;      // ADAM_DISRUPTION_EMB: displacement/xavier
+            ctx.telemetry.last_obs[13] = inv_bc2;             // ADAM_INV_BC2_AMP: v inflation factor
+        }
+        
         GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(
             ctx.telemetry.last_obs, ctx.global_step);
         
@@ -4963,6 +4996,23 @@ bool executePhase2(TrainingContext& ctx) {
     const int num_epochs = std::max(1, hp.epochs);
     EmitModuleInfo(ModuleId::Training,
         std::string("Total epochs to run: ") + std::to_string(num_epochs), ctx.global_step);
+    
+    // Reconstruct adam_cumulative_disp = Σlr(0..global_step-1) for checkpoint resume correctness.
+    // On fresh start (global_step=0) this is a no-op. On resume, it reconstructs the exact
+    // cumulative displacement using the same LR schedule formula.
+    if (ctx.global_step > 0 && ctx.telemetry.adam_cumulative_disp == 0.0f) {
+        float reconstructed = 0.0f;
+        for (int t = 0; t < static_cast<int>(ctx.global_step); ++t) {
+            reconstructed += Internal::getScheduledLearningRate(
+                t, hp.learning_rate, hp.warmup_steps,
+                ctx.estimated_total_steps, hp.cosine_decay_min_lr, hp.cosine_decay_enabled,
+                ctx.config.stability.enabled);
+        }
+        ctx.telemetry.adam_cumulative_disp = reconstructed;
+        EmitModuleInfo(ModuleId::Training,
+            "[AdamCausation] Reconstructed cumulative_displacement=" + std::to_string(reconstructed) +
+            " from " + std::to_string(ctx.global_step) + " prior steps", ctx.global_step);
+    }
     
     try {
         for (int epoch = 0; epoch < num_epochs; ++epoch) {

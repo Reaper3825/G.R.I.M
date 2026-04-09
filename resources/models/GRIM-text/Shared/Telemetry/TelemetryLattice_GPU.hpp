@@ -146,6 +146,12 @@ enum class MetricStream : int {
     RHO_GROWTH = 6,
     RHO_WORST_DELTA = 7,
     H_RMS_GROWTH = 8,
+    // Adam warmup causation tracking (β₂ convergence diagnostics)
+    ADAM_BC2_V_CONVERGENCE = 9,   // 1 - β₂^(step+1): v-estimate quality, half-life=693
+    ADAM_SIGNAL_DOMINANCE = 10,   // bc2/(1-bc2): >1 = learning, <1 = destroying
+    ADAM_CUMULATIVE_DISP = 11,    // Σlr(t): total weight displacement from Xavier init
+    ADAM_DISRUPTION_EMB = 12,     // cumulative_disp / xavier_emb_scale: displacement in Xavier units
+    ADAM_INV_BC2_AMP = 13,        // 1/(1-β₂^(step+1)): v bias correction amplification factor
 };
 
 const char* getMetricStreamName(MetricStream stream);

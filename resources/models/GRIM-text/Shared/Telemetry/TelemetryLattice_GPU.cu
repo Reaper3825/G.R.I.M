@@ -314,6 +314,11 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RHO_GROWTH: return "rho_growth";
         case MetricStream::RHO_WORST_DELTA: return "rho_worst_delta";
         case MetricStream::H_RMS_GROWTH: return "h_rms_growth";
+        case MetricStream::ADAM_BC2_V_CONVERGENCE: return "adam_bc2_v_convergence";
+        case MetricStream::ADAM_SIGNAL_DOMINANCE: return "adam_signal_dominance";
+        case MetricStream::ADAM_CUMULATIVE_DISP: return "adam_cumulative_disp";
+        case MetricStream::ADAM_DISRUPTION_EMB: return "adam_disruption_emb";
+        case MetricStream::ADAM_INV_BC2_AMP: return "adam_inv_bc2_amp";
         default: return "unknown";
     }
 }

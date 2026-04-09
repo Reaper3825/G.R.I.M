@@ -144,7 +144,7 @@
                 "symmetric": false,
                 "zero_point": 0
             },
-            "activation_quantization_apply_to_embeddings": true,
+            "activation_quantization_apply_to_embeddings": false,
             "atom_stats_interval": 200,
             "atom_stats_max_seqs": 32,
             "attention_diagnostics": {
@@ -311,7 +311,7 @@
                 },
                 "focal": {
                     "alpha": 1.0,
-                    "enabled": true,
+                    "enabled": false,
                     "gamma": 0.75
                 },
                 "label_smoothing": {

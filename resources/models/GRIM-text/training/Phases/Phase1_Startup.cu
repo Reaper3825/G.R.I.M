@@ -1948,7 +1948,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // 11. Initialize telemetry lattice
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry lattice...", 0);
     ctx->telemetry.config.num_levels = 8;  // k ∈ [0,7]: strides [1,2,4,8,16,32,64,128]
-    ctx->telemetry.config.num_streams = 9; // LOSS, GRAD_NORM_MEAN, GRAD_NORM_MAX, LEARNING_RATE, TOKENS_PER_BATCH, RHO_FINAL, RHO_GROWTH, RHO_WORST_DELTA, H_RMS_GROWTH
+    ctx->telemetry.config.num_streams = 14; // LOSS, GRAD_NORM_MEAN, GRAD_NORM_MAX, LEARNING_RATE, TOKENS_PER_BATCH, RHO_FINAL, RHO_GROWTH, RHO_WORST_DELTA, H_RMS_GROWTH, ADAM_BC2_V_CONVERGENCE, ADAM_SIGNAL_DOMINANCE, ADAM_CUMULATIVE_DISP, ADAM_DISRUPTION_EMB, ADAM_INV_BC2_AMP
     ctx->telemetry.config.hyperparams.beta_mu = 0.95f;
     ctx->telemetry.config.hyperparams.beta_a = 0.995f;
     ctx->telemetry.config.hyperparams.beta_delta = 0.90f;
@@ -1962,7 +1962,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->telemetry.config.stream = ctx->model->getTrainingState().stream_ctrl.getPrimaryStream(); // Use same stream as training
     
     ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(ctx->telemetry.config);
-    ctx->logging.logger->log("✓ Telemetry lattice: 8 levels, 5 streams, GPU-resident");
+    ctx->logging.logger->log("✓ Telemetry lattice: 8 levels, 14 streams, GPU-resident");
 
     // 11a. Initialize telemetry CSV logger (per-step measured data export)
     {

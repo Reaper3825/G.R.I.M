@@ -10,10 +10,13 @@ namespace GRIM {
 
 using namespace ExecutionBlockInternal;
 
-__global__ void kernelBootstrapSlotValues(
-    float* __restrict__ M_values,
+// Bootstrap slots — last-token-wins semantics for duplicate slot mappings.
+// Multiple tokens may map to the same slot; we use atomicExch on valid_mask
+// (idempotent) and a two-pass approach: first mark valid, then a second kernel
+// writes values for only the highest-position token per slot (deterministic).
+__global__ void kernelBootstrapSlotMarkValid(
     float* __restrict__ M_valid_mask,
-    const float* __restrict__ numeric_values,
+    int* __restrict__ slot_last_pos,
     const int32_t* __restrict__ slot_map,
     int total_tokens, int V
 ) {
@@ -21,8 +24,22 @@ __global__ void kernelBootstrapSlotValues(
     if (pos >= total_tokens) return;
     const int slot = slot_map[pos];
     if (slot >= 0 && slot < V) {
+        M_valid_mask[slot] = 1.0f;  // idempotent — race-safe
+        atomicMax(&slot_last_pos[slot], pos);  // deterministic: highest position wins
+    }
+}
+
+__global__ void kernelBootstrapSlotWriteValues(
+    float* __restrict__ M_values,
+    const float* __restrict__ numeric_values,
+    const int* __restrict__ slot_last_pos,
+    int V
+) {
+    const int slot = blockIdx.x * blockDim.x + threadIdx.x;
+    if (slot >= V) return;
+    int pos = slot_last_pos[slot];
+    if (pos >= 0) {
         M_values[slot] = numeric_values[pos];
-        M_valid_mask[slot] = 1.0f;
     }
 }
 
@@ -315,40 +332,46 @@ __global__ void kernelCrossAttnSharpScores(
 
     const float* q_row = Q + static_cast<size_t>(t) * head_dim;
     float* s_row = scores + static_cast<size_t>(t) * num_valid;
-    for (int v = 0; v < num_valid; ++v) {
+
+    // Parallel dot products: each thread handles a subset of valid slots.
+    for (int v = threadIdx.x; v < num_valid; v += blockDim.x) {
         float dot = 0.0f;
         const float* k_row = K + static_cast<size_t>(v) * head_dim;
         for (int d = 0; d < head_dim; ++d)
             dot += q_row[d] * k_row[d];
-        s_row[v] = dot * inv_sqrt_d_tau;
-        if (valid[v] < 1e-6f) s_row[v] = -FLT_MAX;
+        s_row[v] = (valid[v] < 1e-6f) ? -FLT_MAX : dot * inv_sqrt_d_tau;
     }
+    __syncthreads();
 
-    if (topk > 0 && topk < num_valid) {
-        for (int pass = 0; pass < topk; ++pass) {
-            float best = -FLT_MAX;
-            int best_idx = -1;
-            for (int v = 0; v < num_valid; ++v) {
-                if (s_row[v] > best) { best = s_row[v]; best_idx = v; }
+    // Top-k and softmax are serial (small num_valid) — thread 0 only.
+    if (threadIdx.x == 0) {
+        if (topk > 0 && topk < num_valid) {
+            for (int pass = 0; pass < topk; ++pass) {
+                float best = -FLT_MAX;
+                int best_idx = -1;
+                for (int v = 0; v < num_valid; ++v) {
+                    if (s_row[v] >= 1e30f) continue;
+                    if (s_row[v] > best) { best = s_row[v]; best_idx = v; }
+                }
+                if (best_idx >= 0) s_row[best_idx] = 1e30f + best;
             }
-            if (best_idx >= 0) s_row[best_idx] += 1e9f;
+            for (int v = 0; v < num_valid; ++v) {
+                if (s_row[v] >= 1e30f) s_row[v] -= 1e30f;
+                else s_row[v] = -FLT_MAX;
+            }
         }
-        for (int v = 0; v < num_valid; ++v) {
-            if (s_row[v] > 1e8f) s_row[v] -= 1e9f;
-            else s_row[v] = -FLT_MAX;
-        }
-    }
 
-    float max_s = -FLT_MAX;
-    for (int v = 0; v < num_valid; ++v) max_s = fmaxf(max_s, s_row[v]);
-    float sum_exp = 0.0f;
-    for (int v = 0; v < num_valid; ++v) {
-        float e = expf(s_row[v] - max_s);
-        s_row[v] = e;
-        sum_exp += e;
+        float max_s = -FLT_MAX;
+        for (int v = 0; v < num_valid; ++v) max_s = fmaxf(max_s, s_row[v]);
+        float sum_exp = 0.0f;
+        for (int v = 0; v < num_valid; ++v) {
+            float e = expf(s_row[v] - max_s);
+            s_row[v] = e;
+            sum_exp += e;
+        }
+        float inv_sum = 1.0f / (sum_exp + kEps);
+        for (int v = 0; v < num_valid; ++v) s_row[v] *= inv_sum;
     }
-    float inv_sum = 1.0f / (sum_exp + kEps);
-    for (int v = 0; v < num_valid; ++v) s_row[v] *= inv_sum;
 }
 
 __global__ void kernelCrossAttnWeightedValue(
@@ -444,12 +467,25 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     validateMemoryOrThrow(M);
 
     const int V = config_.num_slots;
+
+    // Two-pass bootstrap: resolve race condition when multiple tokens map to same slot.
+    // Pass 1: mark valid + find highest-position token per slot (deterministic last-writer-wins).
+    int* d_slot_last_pos = nullptr;
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_slot_last_pos), V * sizeof(int), "bootstrap_slot_last_pos");
+    CUDA_CHECK(cudaMemsetAsync(d_slot_last_pos, 0xFF, V * sizeof(int), stream));  // fill with -1
+
     const int blocks = (row_tokens + kBlockSize - 1) / kBlockSize;
-    kernelBootstrapSlotValues<<<blocks, kBlockSize, 0, stream>>>(
-        M.values.data, M.valid_mask.data,
-        device_numeric_values, device_slot_map,
-        row_tokens, V);
+    kernelBootstrapSlotMarkValid<<<blocks, kBlockSize, 0, stream>>>(
+        M.valid_mask.data, d_slot_last_pos,
+        device_slot_map, row_tokens, V);
     CUDA_CHECK_KERNEL();
+
+    // Pass 2: write values — only the highest-position token per slot writes.
+    const int slot_blocks = (V + kBlockSize - 1) / kBlockSize;
+    kernelBootstrapSlotWriteValues<<<slot_blocks, kBlockSize, 0, stream>>>(
+        M.values.data, device_numeric_values, d_slot_last_pos, V);
+    CUDA_CHECK_KERNEL();
+    cudaFreeAsync(d_slot_last_pos, stream);
 
     const int dm = config_.d_model;
     const int dk = config_.d_key;
@@ -469,8 +505,22 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     CUDA_CHECK_KERNEL();
 }
 
+// Device kernel: check if any value slot [S..S+V_val) has valid_mask >= 0.5.
+// If none valid, sets error_flag via atomicMax to fail in finalizeStepOrThrow.
+__global__ void kernelCheckAnyValueSlotValid(
+    const float* __restrict__ valid_mask,
+    int* __restrict__ error_flag,
+    int S, int V_val, int stage_id
+) {
+    if (threadIdx.x != 0) return;
+    for (int i = 0; i < V_val; ++i) {
+        if (valid_mask[S + i] >= 0.5f) return;  // at least one valid — OK
+    }
+    atomicMax(error_flag, stage_id);  // no valid value slots
+}
+
 static void ensureBootstrappedValueSlotsOrThrow(
-    const ExecutionBlockLayer& layer,
+    ExecutionBlockLayer& layer,
     const ExecutionMemory& memory,
     cudaStream_t stream
 ) {
@@ -479,15 +529,13 @@ static void ensureBootstrappedValueSlotsOrThrow(
     const int V_val = V - S;
     EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
 
-    float h_valid_sum = 0.0f;
-    std::vector<float> h_mask(V_val);
-    CUDA_CHECK(cudaMemcpyAsync(h_mask.data(), memory.valid_mask.data + S,
-        V_val * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    for (int i = 0; i < V_val; ++i)
-        h_valid_sum += h_mask[i];
-    EXEC_CHECK(h_valid_sum >= 0.5f,
-        "executeStep: execution-active row reached ExecutionBlock with no bootstrapped value slots");
+    // Uses existing persistent error flag — defers sync to finalizeStepOrThrow.
+    // No per-step allocation or pipeline drain.
+    kernelCheckAnyValueSlotValid<<<1, 1, 0, stream>>>(
+        memory.valid_mask.data,
+        LayerAccess::numericErrorFlag(layer),
+        S, V_val, kStageSlotUninit);
+    CUDA_CHECK_KERNEL();
 }
 
 namespace ExecutionBlockInternal {
@@ -650,26 +698,27 @@ void captureStateAfterWriteAndCheckMutations(
     CUDA_CHECK(cudaMemcpyAsync(diag_out->state_after_valid.data, memory.valid_mask.data,
         V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
-    float* d_hinge_discard = nullptr;
-    int* d_changed_count = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_hinge_discard), sizeof(float), "memstream_hinge_discard");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_changed_count), sizeof(int), "memstream_changed_count");
+    // Use Tensor::zeros (async cudaMemsetAsync) instead of synchronous cudaMalloc.
+    auto hinge_discard = Tensor::zeros({1, 1}, stream, "memstream_hinge_discard");
+    auto changed_count_tensor = Tensor::zeros({1, 1}, stream, "memstream_changed_count");
+    // Reinterpret float* as int* for changed_count (single element, aligned)
+    int* d_changed_count = reinterpret_cast<int*>(changed_count_tensor.data);
+
     kernelStateDeltaCheck<<<1, 1, 0, stream>>>(
-        d_hinge_discard,
+        hinge_discard.data,
         d_changed_count,
         diag_out->state_before_values.data,
         diag_out->state_after_values.data,
         LayerAccess::execIndices(layer) + 3,
         V);
     CUDA_CHECK_KERNEL();
-    cudaFreeAsync(d_hinge_discard, stream);
 
     kernelCheckMultiSlotMutation<<<1, 1, 0, stream>>>(
         d_changed_count,
         LayerAccess::numericErrorFlag(layer),
         kStageMultiSlotMutation);
     CUDA_CHECK_KERNEL();
-    cudaFreeAsync(d_changed_count, stream);
+    // hinge_discard and changed_count_tensor freed by Tensor RAII destructor
 }
 
 void finalizeStepOrThrow(
@@ -751,7 +800,7 @@ void crossAttentionReadImpl(
     CUDA_CHECK_KERNEL();
 
     auto scores = Tensor::zeros({row_tokens, nv}, stream, "exec_read_scores");
-    kernelCrossAttnSharpScores<<<row_tokens, 1, 0, stream>>>(
+    kernelCrossAttnSharpScores<<<row_tokens, kBlockSize, 0, stream>>>(
         scores.data, Q.data, K_proj.data, memory.valid_mask.data,
         layer.tau().data, row_tokens, nv, hd, topk);
     CUDA_CHECK_KERNEL();
