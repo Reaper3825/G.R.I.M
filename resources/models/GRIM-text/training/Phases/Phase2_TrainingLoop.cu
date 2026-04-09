@@ -1740,7 +1740,7 @@ BatchResult processBatch(
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] autogradTrainingStep returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
     
-    // First-batch CUDA checkpoint: fault is in forward/loss/backward if we see error here
+    // First-batch CUDA checkpoint: fault is in forward/loss/backward if you see error here
     if (batch_idx == 0) {
         cudaError_t e = cudaDeviceSynchronize();
         cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
@@ -3596,7 +3596,39 @@ BatchResult processBatch(
     auto& training_state = ctx.model->getTrainingState();
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     const auto& groups = ctx.model->parameterGroups();
-    
+
+    // ════════════════════════════════════════════════════════════════════
+    // DIAGNOSTIC: Sample gradient values BEFORE measurement to verify
+    // backward results survive to this point.  Companion to [GRAD_DIAG]
+    // POST-BACKWARD in AutogradTraining.cu.
+    // ════════════════════════════════════════════════════════════════════
+    {
+        cudaStreamSynchronize(stream);
+        float lm_sample = 0.0f;
+        float* lm_grads = ctx.model->getLmHeadLayer()->weights().grad_data();
+        if (lm_grads) {
+            cudaMemcpy(&lm_sample, lm_grads, sizeof(float), cudaMemcpyDeviceToHost);
+        }
+        // Also verify the ParameterGroup sees the same pointer
+        float pg_sample = 0.0f;
+        for (size_t g = 0; g < groups.size(); ++g) {
+            if (groups[g].type == GRIM::ParameterType::LM_HEAD) {
+                float* pg_grads = groups[g].grads();
+                if (pg_grads) {
+                    cudaMemcpy(&pg_sample, pg_grads, sizeof(float), cudaMemcpyDeviceToHost);
+                }
+                fprintf(stderr,
+                    "[GRAD_DIAG] PRE-MEASURE batch=%d micro=%d "
+                    "lm_grad[0]=%.10e lm_ptr=%p pg_grad[0]=%.10e pg_ptr=%p match=%s\n",
+                    batch_idx + 1, ctx.optimizer.current_micro_step,
+                    lm_sample, static_cast<void*>(lm_grads),
+                    pg_sample, static_cast<void*>(pg_grads),
+                    (lm_grads == pg_grads) ? "YES" : "NO");
+                break;
+            }
+        }
+    }
+
     // Lazy-allocate scratch buffers on first use
     if (!training_state.grad_norm_scratch) {
         training_state.grad_norm_scratch = GRIM::GradNorm::allocateGradNormScratch(
@@ -4408,6 +4440,14 @@ BatchResult processBatch(
                 std::string("FATAL Telemetry: ") + 
                 GRIM::Telemetry::getTelemetryErrorMessage(tel_err));
         }
+
+        // CSV export: dump all measured telemetry state for this step
+        if (ctx.telemetry.csv_logger) {
+            const float tokens_f = static_cast<float>(payload.token_stats.total_tokens);
+            const float raw_obs[5] = { result.loss, preclip_grad_rms, preclip_grad_rms, result.learning_rate, tokens_f };
+            ctx.telemetry.csv_logger->log(*ctx.telemetry.lattice, raw_obs, ctx.global_step);
+        }
+
         if (batch_idx == 0) {
             cudaError_t e = cudaDeviceSynchronize();
             cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();

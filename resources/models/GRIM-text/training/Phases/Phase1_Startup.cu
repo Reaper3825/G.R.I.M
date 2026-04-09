@@ -1963,7 +1963,15 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(ctx->telemetry.config);
     ctx->logging.logger->log("✓ Telemetry lattice: 8 levels, 5 streams, GPU-resident");
-    
+
+    // 11a. Initialize telemetry CSV logger (per-step measured data export)
+    {
+        const std::string csv_path = ctx->config.paths.log_dir + "/telemetry_" + ctx->logging.session_id + ".csv";
+        ctx->telemetry.csv_logger = std::make_unique<GRIM::Telemetry::TelemetryCsvLogger>(
+            csv_path, *ctx->telemetry.lattice);
+        ctx->logging.logger->log("✓ Telemetry CSV logger: " + csv_path);
+    }
+
     // 11b. Initialize telemetry control (GPU-native kernel-based control)
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry control...", 0);
     // Rule 20: Use model's actual token budget (already computed during cache allocation)

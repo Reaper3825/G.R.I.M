@@ -1117,9 +1117,16 @@ struct NLLLossGradFn : public GradFn {
         // is the terminal objective seeded with 1.0, grad_scale == 1.0.
         // When composed with other losses or rescaled, grad_scale carries
         // the upstream derivative so magnitude accounting stays correct.
+        //
+        // CRITICAL: Must use the SAME stream for the D2H copy!
+        // Tensor::backward() writes grad_output via cudaMemcpyAsync on the
+        // training stream, which uses cudaStreamNonBlocking. Plain cudaMemcpy
+        // (NULL stream) does NOT synchronize with non-blocking streams,
+        // causing a data race that reads uninitialized GPU memory.
         float grad_scale = 1.0f;
         if (grad_output.data) {
-            cudaMemcpy(&grad_scale, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpyAsync(&grad_scale, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
             if (!std::isfinite(grad_scale)) {
                 throw std::runtime_error("[NLLLossGradFn::apply] grad_output is non-finite ("
                     + std::to_string(grad_scale) + ") — upstream gradient is corrupt");

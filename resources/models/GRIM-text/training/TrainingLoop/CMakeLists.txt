@@ -122,6 +122,7 @@ add_library(grim_training_kernels STATIC
     ../../Shared/GradNorm/GradNormGPU.cu
     ../../Shared/Telemetry/TelemetryLattice_GPU.cu
     ../../Shared/Telemetry/TelemetryControl_GPU.cu
+    ../../Shared/Telemetry/TelemetryCsvLogger.cu
     # Rule 20: Xavier.cu DELETED - Tensor::xavier_uniform_ (TensorContract) is the single source of truth
     ../../Shared/PBM/PositionalBiasMethod.cu
     # Rule 20: Old PBM modules DELETED - no backwards compatibility

@@ -1767,6 +1767,54 @@ BackwardResult executeAutogradBackward(
     intermediates.loss_tensor.backward(nullptr, ctx.grad_scale);
     AG_INFO("loss_tensor.backward() returned successfully");
 
+    // ════════════════════════════════════════════════════════════════════
+    // DIAGNOSTIC: Sample gradient values immediately after backward to
+    // determine if backward itself produces zeros or if something later
+    // corrupts the buffers.  Issue: "zero gradients every other batch"
+    // ════════════════════════════════════════════════════════════════════
+    {
+        cudaStreamSynchronize(ctx.stream);
+
+        // Sample LM head weight gradient (first element)
+        float lm_sample = 0.0f;
+        float* lm_grads = ctx.lm_head->weights().grad_data();
+        if (lm_grads) {
+            cudaMemcpy(&lm_sample, lm_grads, sizeof(float), cudaMemcpyDeviceToHost);
+        }
+
+        // Sample first encoder layer attnWqkv gradient
+        float enc_sample = 0.0f;
+        if (ctx.gpu_encoder && ctx.gpu_encoder->getNumLayers() > 0) {
+            auto* enc0 = ctx.gpu_encoder->getLayer(0);
+            if (enc0) {
+                float* wqkv_grads = enc0->attnWqkv().grad_data();
+                if (wqkv_grads) {
+                    cudaMemcpy(&enc_sample, wqkv_grads, sizeof(float), cudaMemcpyDeviceToHost);
+                }
+            }
+        }
+
+        // Sample RMSNorm gamma gradient (layer 0)
+        float rms_sample = 0.0f;
+        if (ctx.gpu_encoder && ctx.gpu_encoder->getNumLayers() > 0) {
+            auto* enc0 = ctx.gpu_encoder->getLayer(0);
+            if (enc0) {
+                float* rms_grads = enc0->rms1Gamma().grad_data();
+                if (rms_grads) {
+                    cudaMemcpy(&rms_sample, rms_grads, sizeof(float), cudaMemcpyDeviceToHost);
+                }
+            }
+        }
+
+        fprintf(stderr,
+            "[GRAD_DIAG] POST-BACKWARD accumulate=%d grad_scale=%.4f "
+            "lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e rms_gamma_grad[0]=%.10e "
+            "lm_ptr=%p\n",
+            static_cast<int>(accumulate), ctx.grad_scale,
+            lm_sample, enc_sample, rms_sample,
+            static_cast<void*>(lm_grads));
+    }
+
     // ScratchBlock backward is now automatic via ScratchBlockGradFn in the autograd chain.
     // loss_tensor.backward() → ... → ScratchBlockGradFn::apply() handles parameter gradients.
     

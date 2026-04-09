@@ -352,7 +352,12 @@ CleanupResult executePhase3(
         
         // Release resources
         releaseResources(ctx);
-        
+
+        // Flush telemetry CSV before shutdown
+        if (ctx.telemetry.csv_logger) {
+            ctx.telemetry.csv_logger->flush();
+        }
+
         // Flush all pending device logs to disk before exit
         EmitModuleInfo(ModuleId::Training, "Flushing device logs...", ctx.global_step);
         GRIM::Logging::FlushDeviceLogs();

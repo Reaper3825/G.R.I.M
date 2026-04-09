@@ -46,6 +46,7 @@
 #include "../../Shared/Loss/LossContext/LossContext.hpp"
 #include "../../Shared/Telemetry/TelemetryLattice_GPU.hpp"
 #include "../../Shared/Telemetry/TelemetryControl_GPU.hpp"
+#include "../../Shared/Telemetry/TelemetryCsvLogger.hpp"
 #include "../training_logger.hpp"
 #include "../training_status_writer.hpp"
 #include "../metrics_collector.hpp"
@@ -202,6 +203,7 @@ struct TelemetryContext {
     GRIM::Telemetry::LatticeConfig config;
     GRIM::Telemetry::TelemetryControlConfig control_config;
     std::unique_ptr<GRIM::Telemetry::TelemetryControl> controller;
+    std::unique_ptr<GRIM::Telemetry::TelemetryCsvLogger> csv_logger;
     bool enabled = true;
 
     TelemetryContext() = default;
