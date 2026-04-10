@@ -28,6 +28,14 @@
         "max_new_entries_per_run": 100000
     },
     "default_model": "llama3.1:8b",
+    "device_comm": {
+        "heartbeat_timeout_sec": 30,
+        "max_chunk_size_bytes": 65536,
+        "port": 11437,
+        "registry_dir": "~/.grim/devices/",
+        "storage_root": "~/.grim/shared_storage/",
+        "transfer_timeout_sec": 300
+    },
     "grim_text_url": "http://127.0.0.1:11435",
     "localai_url": "http://127.0.0.1:8080/v1",
     "max_tokens": 32,
@@ -249,7 +257,7 @@
                 "enabled": false,
                 "init_value": 1.0
             },
-            "learning_rate": 0.0006,
+            "learning_rate": 0.0006000000284984708,
             "lm_head_centering": {
                 "center_encoder_residuals": true,
                 "center_hidden_states": false,
@@ -530,13 +538,5 @@
         "whisper_model": "ggml-base.en.bin"
     },
     "whisper_language": "en",
-    "whisper_max_tokens": 32,
-    "device_comm": {
-        "port": 11437,
-        "heartbeat_timeout_sec": 30,
-        "max_chunk_size_bytes": 65536,
-        "transfer_timeout_sec": 300,
-        "storage_root": "~/.grim/shared_storage/",
-        "registry_dir": "~/.grim/devices/"
-    }
+    "whisper_max_tokens": 32
 }

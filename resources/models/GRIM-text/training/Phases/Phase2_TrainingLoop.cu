@@ -4476,6 +4476,72 @@ BatchResult processBatch(
             ctx.telemetry.last_obs[13] = inv_bc2;             // ADAM_INV_BC2_AMP: v inflation factor
         }
         
+        // Streams 14-20: Execution Block health tracking
+        {
+            float exec_grad_norm = 0.0f;
+            float exec_grad_ratio = 0.0f;
+            float exec_selection_entropy = 0.0f;
+            float exec_op_entropy = 0.0f;
+            float exec_div_clamp_rate = 0.0f;
+            float exec_max_p_write = 0.0f;
+            float exec_active_ratio = 0.0f;
+
+            // Grad norm from already-computed GradMetrics (zero extra GPU cost)
+            if (gm.execution_block_count > 0) {
+                exec_grad_norm = std::sqrt(gm.execution_block_sum_sq / static_cast<float>(gm.execution_block_count));
+                if (enc_rms_pre > 1e-12f) {
+                    exec_grad_ratio = exec_grad_norm / enc_rms_pre;
+                }
+            }
+
+            // Aggregate step metrics from exec outputs (populated when debug_mode=true)
+            const auto& ai = training_state.autograd_intermediates;
+            if (!ai.exec_outputs_per_row.empty()) {
+                int active_rows = 0;
+                int total_steps = 0;
+                float sum_selection_entropy = 0.0f;
+                float sum_op_entropy = 0.0f;
+                int total_div_clamps = 0;
+                float sum_max_p_write = 0.0f;
+
+                const int B = static_cast<int>(ai.exec_outputs_per_row.size());
+                for (int b = 0; b < B; ++b) {
+                    const bool row_active = !payload.execution_active.empty()
+                        && b < static_cast<int>(payload.execution_active.size())
+                        && payload.execution_active[b];
+                    if (!row_active) continue;
+                    active_rows++;
+
+                    for (const auto& step : ai.exec_outputs_per_row[b].steps) {
+                        const auto& m = step.metrics;
+                        sum_selection_entropy += (m.arg1_entropy + m.arg2_entropy + m.op_entropy + m.write_entropy) / 4.0f;
+                        sum_op_entropy += m.op_entropy;
+                        total_div_clamps += m.div_clamp_count;
+                        sum_max_p_write += m.max_p_write;
+                        total_steps++;
+                    }
+                }
+
+                if (total_steps > 0) {
+                    exec_selection_entropy = sum_selection_entropy / static_cast<float>(total_steps);
+                    exec_op_entropy = sum_op_entropy / static_cast<float>(total_steps);
+                    exec_div_clamp_rate = static_cast<float>(total_div_clamps) / static_cast<float>(total_steps);
+                    exec_max_p_write = sum_max_p_write / static_cast<float>(total_steps);
+                }
+                if (B > 0) {
+                    exec_active_ratio = static_cast<float>(active_rows) / static_cast<float>(B);
+                }
+            }
+
+            ctx.telemetry.last_obs[14] = exec_grad_norm;           // EXEC_GRAD_NORM
+            ctx.telemetry.last_obs[15] = exec_grad_ratio;          // EXEC_GRAD_RATIO
+            ctx.telemetry.last_obs[16] = exec_selection_entropy;   // EXEC_SELECTION_ENTROPY
+            ctx.telemetry.last_obs[17] = exec_op_entropy;          // EXEC_OP_ENTROPY
+            ctx.telemetry.last_obs[18] = exec_div_clamp_rate;      // EXEC_DIV_CLAMP_RATE
+            ctx.telemetry.last_obs[19] = exec_max_p_write;         // EXEC_MAX_P_WRITE
+            ctx.telemetry.last_obs[20] = exec_active_ratio;        // EXEC_ACTIVE_RATIO
+        }
+
         GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(
             ctx.telemetry.last_obs, ctx.global_step);
         

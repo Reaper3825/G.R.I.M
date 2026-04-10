@@ -94,7 +94,7 @@ constexpr int CUDA_TILE_DIM_TRANSPOSE = CUDA_WARP_SIZE;  // Tile dim = warp size
 // Hierarchical streaming statistics
 //======================================================//
 constexpr int TELEMETRY_MAX_LEVELS = 8;           // TelemetryLattice temporal levels
-constexpr int TELEMETRY_MAX_STREAMS = 16;         // TelemetryLattice metric streams
+constexpr int TELEMETRY_MAX_STREAMS = 32;         // TelemetryLattice metric streams
 
 //======================================================//
 // Equation Logging Configuration

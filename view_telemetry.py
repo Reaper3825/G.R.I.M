@@ -9,6 +9,35 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.gridspec import GridSpec
 
+
+def find_default_telemetry_csv():
+    """Find the most relevant telemetry CSV in the training logs directory."""
+    log_dir = os.path.join(os.path.dirname(__file__),
+                           "resources", "models", "GRIM-text", "training", "logs")
+
+    preferred = [
+        os.path.join(log_dir, "telemetary_latest.csv"),
+        os.path.join(log_dir, "telemetry_latest.csv"),
+    ]
+    for candidate in preferred:
+        if os.path.exists(candidate):
+            return candidate
+
+    patterns = [
+        os.path.join(log_dir, "telemetry_*.csv"),
+        os.path.join(log_dir, "telemetry_*.Csv"),
+        os.path.join(log_dir, "telemetary_*.csv"),
+        os.path.join(log_dir, "telemetary_*.Csv"),
+    ]
+    csvs = []
+    for pattern in patterns:
+        csvs.extend(glob.glob(pattern))
+
+    if not csvs:
+        return None
+
+    return max(csvs, key=os.path.getmtime)
+
 def load_telemetry(path):
     df = pd.read_csv(path)
     # Keep only level-0 (raw per-step) observations
@@ -31,13 +60,10 @@ def main():
     if len(sys.argv) > 1:
         path = sys.argv[1]
     else:
-        log_dir = os.path.join(os.path.dirname(__file__),
-                               "resources", "models", "GRIM-text", "training", "logs")
-        csvs = sorted(glob.glob(os.path.join(log_dir, "telemetry_*.Csv")))
-        if not csvs:
+        path = find_default_telemetry_csv()
+        if path is None:
             print("No telemetry CSV found. Pass path as argument.")
             sys.exit(1)
-        path = csvs[-1]  # most recent
         print(f"Using: {path}")
 
     df = load_telemetry(path)
@@ -338,6 +364,216 @@ def main():
         axes[-1].set_xlabel("global_step")
         fig4.savefig(os.path.splitext(path)[0] + "_levels.png", dpi=150)
         print(f"Saved: {os.path.splitext(path)[0]}_levels.png")
+
+    # --- Figure 5: Adam Warmup Causation ---
+    adam_bc2 = streams.get("adam_bc2_v_convergence")
+    adam_sig_dom = streams.get("adam_signal_dominance")
+    adam_cum_disp = streams.get("adam_cumulative_disp")
+    adam_disrupt = streams.get("adam_disruption_emb")
+    adam_inv_bc2 = streams.get("adam_inv_bc2_amp")
+
+    has_adam = any(s is not None for s in [adam_bc2, adam_sig_dom, adam_cum_disp, adam_disrupt, adam_inv_bc2])
+    if has_adam:
+        fig5 = plt.figure(figsize=(16, 18), constrained_layout=True)
+        fig5.suptitle("GRIM-text Telemetry — Adam Warmup Causation", fontsize=14, fontweight="bold")
+        gs5 = GridSpec(3, 2, figure=fig5)
+
+        # ln(V) reference for loss plots
+        import math
+        # Detect vocab size from loss data if available
+        ln_v = math.log(10000)  # ln(vocab_size)
+
+        # 5-1a) Loss + bc2 overlay — THE causal relationship
+        ax = fig5.add_subplot(gs5[0, 0])
+        if loss is not None:
+            ax.plot(loss.index, loss["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:blue")
+            ax.plot(loss.index, smooth(loss["raw_observation"]), linewidth=1.5, color="tab:blue", label="loss")
+            ax.axhline(ln_v, color="gray", linewidth=1, linestyle=":", label=f"ln(V)={ln_v:.2f}")
+        ax.set_ylabel("Loss", color="tab:blue")
+        if adam_bc2 is not None:
+            ax2 = ax.twinx()
+            ax2.plot(adam_bc2.index, adam_bc2["raw_observation"], linewidth=2, color="tab:red", label="bc₂ (v convergence)")
+            ax2.axhline(0.5, color="tab:red", linewidth=0.8, linestyle="--", alpha=0.5)
+            ax2.set_ylabel("bc₂ = 1 − β₂^(t+1)", color="tab:red")
+            ax2.set_ylim(0, 1.05)
+            ax2.legend(loc="center right", fontsize=8)
+        ax.axvline(693, color="tab:red", linewidth=0.8, linestyle="--", alpha=0.4, label="β₂ half-life (693)")
+        ax.set_title("Loss vs β₂ Convergence (causal overlay)")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 5-1b) Signal dominance — predicts loss peak
+        ax = fig5.add_subplot(gs5[0, 1])
+        if adam_sig_dom is not None:
+            vals = adam_sig_dom["raw_observation"].clip(upper=50)  # clip for readability
+            ax.plot(adam_sig_dom.index, vals, linewidth=1.5, color="tab:green", label="signal dominance")
+            ax.axhline(1.0, color="tab:red", linewidth=1.5, linestyle="--", label="crossover = 1.0")
+            ax.fill_between(adam_sig_dom.index, 0, 1, where=vals < 1, alpha=0.1, color="tab:red", label="destroying (< 1)")
+            ax.fill_between(adam_sig_dom.index, 1, vals, where=vals >= 1, alpha=0.1, color="tab:green", label="learning (≥ 1)")
+        ax.set_ylabel("bc₂ / (1 − bc₂)")
+        ax.set_title("Signal Dominance (>1 = learning, <1 = destroying)")
+        ax.set_yscale("log")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 5-2a) Cumulative displacement + LR
+        ax = fig5.add_subplot(gs5[1, 0])
+        if adam_cum_disp is not None:
+            ax.plot(adam_cum_disp.index, adam_cum_disp["raw_observation"], linewidth=1.5, color="tab:purple", label="Σlr(t)")
+        ax.set_ylabel("Cumulative Σlr(t)", color="tab:purple")
+        if lr is not None:
+            ax2 = ax.twinx()
+            ax2.plot(lr.index, lr["raw_observation"], linewidth=1, color="tab:green", alpha=0.6, label="lr(t)")
+            ax2.set_ylabel("LR", color="tab:green")
+            ax2.legend(loc="center right", fontsize=8)
+        ax.set_title("Cumulative Displacement & LR Schedule")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 5-2b) Disruption in Xavier units
+        ax = fig5.add_subplot(gs5[1, 1])
+        if adam_disrupt is not None:
+            ax.plot(adam_disrupt.index, adam_disrupt["raw_observation"], linewidth=1.5, color="tab:orange", label="displacement / Xavier scale")
+            ax.axhline(1.0, color="gray", linewidth=0.8, linestyle="--", alpha=0.5, label="1× Xavier")
+        ax.set_ylabel("Xavier Embedding Scale Units")
+        ax.set_title("Weight Disruption vs Xavier Init Scale")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 5-3a) inv_bc2 amplification (log scale)
+        ax = fig5.add_subplot(gs5[2, 0])
+        if adam_inv_bc2 is not None:
+            ax.plot(adam_inv_bc2.index, adam_inv_bc2["raw_observation"], linewidth=1.5, color="tab:brown", label="1/(1−β₂^(t+1))")
+        ax.set_ylabel("v Bias Correction Amplification")
+        ax.set_title("Adam v-Estimate Inflation Factor")
+        ax.set_yscale("log")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 5-3b) Combined: loss + disruption + signal_dominance (normalized)
+        ax = fig5.add_subplot(gs5[2, 1])
+        if loss is not None:
+            ax.plot(loss.index, smooth(loss["raw_observation"]), linewidth=1.5, color="tab:blue", label="loss (smoothed)")
+            ax.axhline(ln_v, color="gray", linewidth=1, linestyle=":", alpha=0.5)
+        ax.set_ylabel("Loss", color="tab:blue")
+        if adam_disrupt is not None and adam_bc2 is not None:
+            ax2 = ax.twinx()
+            ax2.plot(adam_disrupt.index, adam_disrupt["raw_observation"], linewidth=1.2, color="tab:orange", alpha=0.8, label="disruption (Xavier×)")
+            ax2.plot(adam_bc2.index, adam_bc2["raw_observation"] * adam_disrupt["raw_observation"].max(), linewidth=1.2, color="tab:red", alpha=0.8, linestyle="--", label="bc₂ (scaled)")
+            ax2.set_ylabel("Disruption / Scaled bc₂", color="tab:orange")
+            ax2.legend(loc="center right", fontsize=8)
+        ax.axvline(693, color="tab:red", linewidth=0.8, linestyle="--", alpha=0.4)
+        ax.set_title("Combined Causation Overview")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        fig5.savefig(os.path.splitext(path)[0] + "_adam_causation.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_adam_causation.png")
+    else:
+        missing = [
+            name for name, stream in [
+                ("adam_bc2_v_convergence", adam_bc2),
+                ("adam_signal_dominance", adam_sig_dom),
+                ("adam_cumulative_disp", adam_cum_disp),
+                ("adam_disruption_emb", adam_disrupt),
+                ("adam_inv_bc2_amp", adam_inv_bc2),
+            ] if stream is None
+        ]
+        print("Adam causation figure skipped: missing streams:", ", ".join(missing))
+
+    # --- Figure 6: Execution Block Health ---
+    exec_grad_norm = streams.get("exec_grad_norm")
+    exec_grad_ratio = streams.get("exec_grad_ratio")
+    exec_sel_ent = streams.get("exec_selection_entropy")
+    exec_op_ent = streams.get("exec_op_entropy")
+    exec_div_clamp = streams.get("exec_div_clamp_rate")
+    exec_max_pw = streams.get("exec_max_p_write")
+    exec_active = streams.get("exec_active_ratio")
+
+    has_exec = any(s is not None for s in [exec_grad_norm, exec_grad_ratio, exec_sel_ent,
+                                            exec_op_ent, exec_div_clamp, exec_max_pw, exec_active])
+    if has_exec:
+        fig6 = plt.figure(figsize=(16, 14), constrained_layout=True)
+        fig6.suptitle("GRIM-text Telemetry — Execution Block Health", fontsize=14, fontweight="bold")
+        gs6 = GridSpec(3, 2, figure=fig6)
+
+        # 6-1a) Exec Grad Norm
+        ax = fig6.add_subplot(gs6[0, 0])
+        if exec_grad_norm is not None:
+            ax.plot(exec_grad_norm.index, exec_grad_norm["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:blue")
+            ax.plot(exec_grad_norm.index, smooth(exec_grad_norm["raw_observation"]), linewidth=1.5, color="tab:blue", label="exec grad RMS")
+        if grad_mean is not None:
+            ax.plot(grad_mean.index, smooth(grad_mean["raw_observation"]), linewidth=1, linestyle="--", color="tab:gray", alpha=0.6, label="total grad RMS")
+        ax.set_ylabel("Gradient RMS")
+        ax.set_title("Exec Block Gradient Norm")
+        ax.set_yscale("log")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 6-1b) Exec Grad Ratio (exec/encoder)
+        ax = fig6.add_subplot(gs6[0, 1])
+        if exec_grad_ratio is not None:
+            ax.plot(exec_grad_ratio.index, exec_grad_ratio["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:red")
+            ax.plot(exec_grad_ratio.index, smooth(exec_grad_ratio["raw_observation"]), linewidth=1.5, color="tab:red", label="exec/encoder ratio")
+            ax.axhline(1.0, color="gray", linewidth=0.8, linestyle="--", alpha=0.5, label="parity (1.0)")
+        ax.set_ylabel("Ratio")
+        ax.set_title("Exec/Encoder Gradient Ratio (dying → 0)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 6-2a) Selection Entropy (sharpening = learning)
+        ax = fig6.add_subplot(gs6[1, 0])
+        if exec_sel_ent is not None:
+            ax.plot(exec_sel_ent.index, exec_sel_ent["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:purple")
+            ax.plot(exec_sel_ent.index, smooth(exec_sel_ent["raw_observation"]), linewidth=1.5, color="tab:purple", label="selection entropy")
+        if exec_op_ent is not None:
+            ax.plot(exec_op_ent.index, smooth(exec_op_ent["raw_observation"]), linewidth=1.2, color="tab:orange", linestyle="--", label="op entropy")
+        ax.set_ylabel("Entropy (nats)")
+        ax.set_title("Selection Entropy (↓ = sharpening)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 6-2b) Op Entropy momentum (p) — is it trending down?
+        ax = fig6.add_subplot(gs6[1, 1])
+        if exec_sel_ent is not None:
+            ax.plot(exec_sel_ent.index, smooth(exec_sel_ent["p"], 10), linewidth=1.2, color="tab:purple", label="selection entropy p")
+        if exec_op_ent is not None:
+            ax.plot(exec_op_ent.index, smooth(exec_op_ent["p"], 10), linewidth=1.2, color="tab:orange", label="op entropy p")
+        ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+        ax.set_ylabel("p (momentum)")
+        ax.set_title("Entropy Momentum (< 0 = sharpening)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 6-3a) Div Clamp Rate + Max P Write
+        ax = fig6.add_subplot(gs6[2, 0])
+        if exec_div_clamp is not None:
+            ax.plot(exec_div_clamp.index, smooth(exec_div_clamp["raw_observation"]), linewidth=1.5, color="tab:red", label="div clamp rate")
+        ax.set_ylabel("Rate", color="tab:red")
+        if exec_max_pw is not None:
+            ax2 = ax.twinx()
+            ax2.plot(exec_max_pw.index, smooth(exec_max_pw["raw_observation"]), linewidth=1.5, color="tab:green", label="max p(write)")
+            ax2.set_ylabel("max p(write)", color="tab:green")
+            ax2.legend(loc="center right", fontsize=8)
+        ax.set_title("Div Clamp Rate & Write Concentration")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 6-3b) Active Rows Ratio
+        ax = fig6.add_subplot(gs6[2, 1])
+        if exec_active is not None:
+            ax.plot(exec_active.index, exec_active["raw_observation"], linewidth=1.5, color="tab:cyan", label="active ratio")
+            ax.fill_between(exec_active.index, 0, exec_active["raw_observation"].values, alpha=0.15, color="tab:cyan")
+        ax.set_ylabel("Fraction")
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_title("Execution-Active Rows / Batch Size")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        fig6.savefig(os.path.splitext(path)[0] + "_exec_block.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_exec_block.png")
+    else:
+        print("Execution block figure skipped: no exec streams in CSV")
 
     plt.show()
 

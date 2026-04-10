@@ -319,6 +319,13 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::ADAM_CUMULATIVE_DISP: return "adam_cumulative_disp";
         case MetricStream::ADAM_DISRUPTION_EMB: return "adam_disruption_emb";
         case MetricStream::ADAM_INV_BC2_AMP: return "adam_inv_bc2_amp";
+        case MetricStream::EXEC_GRAD_NORM: return "exec_grad_norm";
+        case MetricStream::EXEC_GRAD_RATIO: return "exec_grad_ratio";
+        case MetricStream::EXEC_SELECTION_ENTROPY: return "exec_selection_entropy";
+        case MetricStream::EXEC_OP_ENTROPY: return "exec_op_entropy";
+        case MetricStream::EXEC_DIV_CLAMP_RATE: return "exec_div_clamp_rate";
+        case MetricStream::EXEC_MAX_P_WRITE: return "exec_max_p_write";
+        case MetricStream::EXEC_ACTIVE_RATIO: return "exec_active_ratio";
         default: return "unknown";
     }
 }
