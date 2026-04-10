@@ -51,7 +51,8 @@ void crossAttentionReadImpl(
 	ExecutionMemory& memory,
 	cudaStream_t stream,
 	int token_offset,
-	int row_tokens);
+	int row_tokens,
+	float* d_gate_accum = nullptr);
 }
 
 #endif  // USE_CUDA
