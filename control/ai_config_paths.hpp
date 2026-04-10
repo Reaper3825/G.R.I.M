@@ -438,6 +438,7 @@ struct TokenizerConfig {
     bool enable_byte_fallback = true;
     uint32_t expected_checksum = 0;
     bool save_text_vocab = true;  // Also save human-readable .txt alongside .bin
+    float vocab_score_multiplier = 1.0f;  // Multiply all vocab scores by this value on save (experiment knob)
 };
 
 struct AiConfigSnapshot {
@@ -1381,6 +1382,7 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
     assignTrainingField(tokenizer_config.enable_byte_fallback, tok, "enable_byte_fallback");
     assignTrainingField(tokenizer_config.expected_checksum, tok, "expected_checksum");
     assignTrainingField(tokenizer_config.save_text_vocab, tok, "save_text_vocab");
+    assignTrainingField(tokenizer_config.vocab_score_multiplier, tok, "vocab_score_multiplier");
 
     // Backward compatibility with configs that only set max_vocab_size:
     // treat it as the target vocab size when vocab_size is omitted.

@@ -562,7 +562,7 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
     return true;
 }
 
-bool UnigramLM::save(const std::string& vocab_path, bool save_text_format) const {
+bool UnigramLM::save(const std::string& vocab_path, bool save_text_format, float score_multiplier) const {
     // Primary: Save binary format (.bin)
     // Binary format: KTMG magic + version + checksum + config + vocab_size + pieces
     std::string bin_path = vocab_path;
@@ -611,6 +611,10 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format) const
         NUM_SPECIAL_TOKENS + BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE + pieces_.size());
     bin_file.write(reinterpret_cast<const char*>(&total_vocab_size), 4);
     
+    if (score_multiplier != 1.0f) {
+        std::cout << "[UnigramLM] Applying vocab_score_multiplier=" << score_multiplier << " to all piece scores on save" << std::endl;
+    }
+    
     // Write pieces: length (4 bytes) + text + score (4 bytes float) + token_id (4 bytes)
     // token_id is position-derived (UNIGRAM_VOCAB_OFFSET + i), written for format compat.
     for (size_t i = 0; i < pieces_.size(); ++i) {
@@ -618,7 +622,8 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format) const
         uint32_t len = static_cast<uint32_t>(piece.text.size());
         bin_file.write(reinterpret_cast<const char*>(&len), 4);
         bin_file.write(piece.text.data(), len);
-        bin_file.write(reinterpret_cast<const char*>(&piece.score), 4);
+        float scaled_score = piece.score * score_multiplier;
+        bin_file.write(reinterpret_cast<const char*>(&scaled_score), 4);
         int tid = tokenIdForIndex(static_cast<int>(i));
         bin_file.write(reinterpret_cast<const char*>(&tid), 4);
     }
@@ -636,7 +641,7 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format) const
         std::ofstream txt_file(txt_path);
         if (txt_file.is_open()) {
             for (const auto& piece : pieces_) {
-                txt_file << piece.text << "\t" << piece.score << "\n";
+                txt_file << piece.text << "\t" << (piece.score * score_multiplier) << "\n";
             }
             txt_file.close();
             std::cout << "[UnigramLM] Saved text vocab (human-readable) to " << txt_path << std::endl;

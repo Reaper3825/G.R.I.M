@@ -639,7 +639,7 @@ bool PrepareTrainingDataFromCache(
 		tokenizer.train(vocab_corpus);
 		if (!out_vocab_path.empty()) {
 			std::cout << "[DataLoader] Saving vocab to " << out_vocab_path << "..." << std::endl << std::flush;
-			if (!tokenizer.save(out_vocab_path, save_text_vocab)) {
+			if (!tokenizer.save(out_vocab_path, save_text_vocab, config_tok.vocab_score_multiplier)) {
 				std::cerr << "[DataLoader] Failed to save vocab to "
 						  << out_vocab_path << std::endl;
 			} else {

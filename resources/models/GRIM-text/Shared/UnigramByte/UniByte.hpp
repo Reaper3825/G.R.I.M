@@ -236,7 +236,7 @@ public:
     bool load(const std::string& vocab_path);
     
     // Save vocabulary to file (binary primary, text optional)
-    bool save(const std::string& vocab_path, bool save_text_format = false) const;
+    bool save(const std::string& vocab_path, bool save_text_format = false, float score_multiplier = 1.0f) const;
     
     // Train from corpus
     bool train(const std::vector<std::string>& texts);

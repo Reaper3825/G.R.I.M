@@ -135,7 +135,8 @@
         },
         "subword_mining_max_bytes": 0,
         "subword_mining_workers": 0,
-        "vocab_size": 10000
+        "vocab_size": 10000,
+        "vocab_score_multiplier": 0.1
     },
     "training": {
         "config": {

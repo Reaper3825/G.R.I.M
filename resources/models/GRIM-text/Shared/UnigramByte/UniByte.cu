@@ -215,8 +215,8 @@ bool UniByte::load(const std::string& vocab_path) {
     return unigram_.loadBinary(bin_path);
 }
 
-bool UniByte::save(const std::string& vocab_path, bool save_text_format) const {
-    return unigram_.save(vocab_path, save_text_format);
+bool UniByte::save(const std::string& vocab_path, bool save_text_format, float score_multiplier) const {
+    return unigram_.save(vocab_path, save_text_format, score_multiplier);
 }
 
 bool UniByte::train(const std::vector<std::string>& texts) {
