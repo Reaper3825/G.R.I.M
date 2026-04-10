@@ -62,6 +62,12 @@ struct AutogradIntermediates {
     std::vector<ExecutionBlockOutput> exec_outputs_per_row;   // [batch_size][K steps]
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // INJECTION DIAGNOSTICS — accumulated during forward for telemetry
+    // ═══════════════════════════════════════════════════════════════════════════
+    float* d_read_gate_accum = nullptr;   // [2] device: [sum_of_gate_values, total_token_count]
+    float  h_read_gate_mean  = 0.0f;     // host: mean gate after forward-pass readback
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
     // ═══════════════════════════════════════════════════════════════════════════
     
@@ -81,6 +87,9 @@ struct AutogradIntermediates {
         reasoning_output = ReasoningHeadOutput{};
         exec_memories.clear();
         exec_outputs_per_row.clear();
+        // Note: d_read_gate_accum is NOT freed here — it's a persistent buffer
+        // owned by TrainingState, zeroed before each forward pass.
+        h_read_gate_mean = 0.0f;
     }
     
     /** Check if intermediates are populated (forward has run) */

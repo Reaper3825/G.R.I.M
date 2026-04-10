@@ -378,7 +378,8 @@ void ExecutionBlockLayer::crossAttentionRead(
     int total_tokens,
     cudaStream_t stream,
     int token_offset,
-    int row_tokens)
+    int row_tokens,
+    float* d_gate_accum)
 {
     validateCrossAttentionInputsOrThrow(hidden_states, M, total_tokens);
     if (row_tokens < 0) row_tokens = total_tokens;
@@ -386,7 +387,7 @@ void ExecutionBlockLayer::crossAttentionRead(
     EXEC_CHECK(row_tokens > 0, "row_tokens must be positive");
     EXEC_CHECK(token_offset + row_tokens <= total_tokens,
                "crossAttentionRead row-local span exceeds total token extent");
-    crossAttentionReadImpl(*this, hidden_states, M, stream, token_offset, row_tokens);
+    crossAttentionReadImpl(*this, hidden_states, M, stream, token_offset, row_tokens, d_gate_accum);
 }
 
 }  // namespace GRIM

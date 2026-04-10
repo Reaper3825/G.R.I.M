@@ -575,6 +575,103 @@ def main():
     else:
         print("Execution block figure skipped: no exec streams in CSV")
 
+    # --- Figure 7: EB Injection Diagnostics ---
+    eb_inject_gate = streams.get("eb_inject_gate")
+    eb_read_gate = streams.get("eb_read_gate_mean")
+    eb_inject_wnorm = streams.get("eb_inject_weight_norm")
+    eb_read_wnorm = streams.get("eb_read_weight_norm")
+    eb_loss_frac = streams.get("eb_loss_frac")
+    sb_atom_rms = streams.get("sb_atom_embed_rms")
+
+    has_inject_diag = any(s is not None for s in [eb_inject_gate, eb_read_gate, eb_inject_wnorm,
+                                                   eb_read_wnorm, eb_loss_frac, sb_atom_rms])
+    if has_inject_diag:
+        fig7 = plt.figure(figsize=(16, 14), constrained_layout=True)
+        fig7.suptitle("GRIM-text Telemetry — EB Injection Diagnostics", fontsize=14, fontweight="bold")
+        gs7 = GridSpec(3, 2, figure=fig7)
+
+        # 7-1a) Gate values: inject gate + read gate mean
+        ax = fig7.add_subplot(gs7[0, 0])
+        if eb_inject_gate is not None:
+            ax.plot(eb_inject_gate.index, eb_inject_gate["raw_observation"], alpha=0.25, linewidth=0.5, color="tab:blue")
+            ax.plot(eb_inject_gate.index, smooth(eb_inject_gate["raw_observation"]), linewidth=1.5, color="tab:blue", label="inject gate σ")
+        if eb_read_gate is not None:
+            ax.plot(eb_read_gate.index, eb_read_gate["raw_observation"], alpha=0.25, linewidth=0.5, color="tab:red")
+            ax.plot(eb_read_gate.index, smooth(eb_read_gate["raw_observation"]), linewidth=1.5, color="tab:red", label="read gate mean σ")
+        ax.axhline(0.5, color="gray", linewidth=0.8, linestyle="--", alpha=0.5, label="init (0.5)")
+        ax.set_ylabel("Gate Value (sigmoid)")
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_title("EB Gate Values (↓ = model suppressing EB)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 7-1b) Gate momentum (p values) — trending?
+        ax = fig7.add_subplot(gs7[0, 1])
+        if eb_inject_gate is not None and "p" in eb_inject_gate.columns:
+            ax.plot(eb_inject_gate.index, smooth(eb_inject_gate["p"], 10), linewidth=1.2, color="tab:blue", label="inject gate p")
+        if eb_read_gate is not None and "p" in eb_read_gate.columns:
+            ax.plot(eb_read_gate.index, smooth(eb_read_gate["p"], 10), linewidth=1.2, color="tab:red", label="read gate p")
+        ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+        ax.set_ylabel("p (momentum)")
+        ax.set_title("Gate Momentum (< 0 = closing gate)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 7-2a) Gate weight norms (learning signal for gates)
+        ax = fig7.add_subplot(gs7[1, 0])
+        if eb_inject_wnorm is not None:
+            ax.plot(eb_inject_wnorm.index, eb_inject_wnorm["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:blue")
+            ax.plot(eb_inject_wnorm.index, smooth(eb_inject_wnorm["raw_observation"]), linewidth=1.5, color="tab:blue", label="w_inject_gate RMS")
+        if eb_read_wnorm is not None:
+            ax.plot(eb_read_wnorm.index, eb_read_wnorm["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:red")
+            ax.plot(eb_read_wnorm.index, smooth(eb_read_wnorm["raw_observation"]), linewidth=1.5, color="tab:red", label="W_gate_read RMS")
+        ax.set_ylabel("Weight RMS")
+        ax.set_title("Gate Weight Norms (0 at init → growing = learning)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 7-2b) EB Loss Fraction
+        ax = fig7.add_subplot(gs7[1, 1])
+        if eb_loss_frac is not None:
+            ax.plot(eb_loss_frac.index, eb_loss_frac["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:orange")
+            ax.plot(eb_loss_frac.index, smooth(eb_loss_frac["raw_observation"]), linewidth=1.5, color="tab:orange", label="exec_loss / total_loss")
+        ax.set_ylabel("Fraction")
+        ax.set_title("EB Auxiliary Loss Fraction")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 7-3a) SB Atom Embed RMS
+        ax = fig7.add_subplot(gs7[2, 0])
+        if sb_atom_rms is not None:
+            ax.plot(sb_atom_rms.index, sb_atom_rms["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:green")
+            ax.plot(sb_atom_rms.index, smooth(sb_atom_rms["raw_observation"]), linewidth=1.5, color="tab:green", label="atom_type_embeddings RMS")
+        ax.set_ylabel("RMS")
+        ax.set_title("ScratchBlock Atom Embedding Scale")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 7-3b) Combined: gates overlaid with loss
+        ax = fig7.add_subplot(gs7[2, 1])
+        if eb_inject_gate is not None:
+            ax.plot(eb_inject_gate.index, smooth(eb_inject_gate["raw_observation"]), linewidth=1.2, color="tab:blue", label="inject gate")
+        if eb_read_gate is not None:
+            ax.plot(eb_read_gate.index, smooth(eb_read_gate["raw_observation"]), linewidth=1.2, color="tab:red", label="read gate")
+        ax.set_ylabel("Gate Value", color="tab:blue")
+        ax.set_ylim(-0.05, 1.05)
+        if loss is not None:
+            ax2 = ax.twinx()
+            ax2.plot(loss.index, smooth(loss["raw_observation"]), linewidth=1, color="tab:gray", alpha=0.5, label="loss (sm20)")
+            ax2.set_ylabel("Loss", color="tab:gray")
+            ax2.legend(loc="center right", fontsize=8)
+        ax.set_title("Gates vs Loss (correlation = causation hypothesis)")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        fig7.savefig(os.path.splitext(path)[0] + "_eb_injection.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_eb_injection.png")
+    else:
+        print("EB injection diagnostics figure skipped: no injection streams in CSV")
+
     plt.show()
 
 if __name__ == "__main__":

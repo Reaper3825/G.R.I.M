@@ -1685,6 +1685,7 @@ void executeStepCoordinatorImpl(
 
     float* save_gate_buf = nullptr;
     float* save_H_slot_buf = nullptr;
+    float h_inject_gate_value = 0.0f;  // host-side readback for telemetry
     cudaMallocOrThrow(reinterpret_cast<void**>(&save_gate_buf), sizeof(float), "datastream_save_gate");
     cudaMallocOrThrow(reinterpret_cast<void**>(&save_H_slot_buf), dm * sizeof(float), "datastream_save_H_slot");
     kernelInjectResultSlot<<<1, kBlockSize, 0, stream>>>(
@@ -1692,6 +1693,11 @@ void executeStepCoordinatorImpl(
         inv_sqrt_d, work.result_slot, dm, layer.config().inject_gate_temp,
         save_gate_buf, save_H_slot_buf);
     CUDA_CHECK_KERNEL();
+    // Queue async readback of inject gate for telemetry (completes at next sync)
+    if (diag_out && layer.config().debug_mode) {
+        CUDA_CHECK(cudaMemcpyAsync(&h_inject_gate_value, save_gate_buf, sizeof(float),
+                                   cudaMemcpyDeviceToHost, stream));
+    }
 
     {
         auto inject_fn = std::make_shared<ExecutionBlockInjectGradFn>();
@@ -1807,6 +1813,10 @@ void executeStepCoordinatorImpl(
     copyStepDiagnostics(work, diag_out, V_val, nop, V, dm, stream);
     captureStateAfterWriteAndCheckMutations(layer, memory, diag_out, stream);
     collectStepMetrics(layer, work, diag_out, V_val, nop, V, stream);
+    // collectStepMetrics synced the stream — h_inject_gate_value is now valid
+    if (diag_out && layer.config().debug_mode) {
+        diag_out->metrics.inject_gate_value = h_inject_gate_value;
+    }
     finalizeStepOrThrow(layer, diag_out, step, stream);
 }
 

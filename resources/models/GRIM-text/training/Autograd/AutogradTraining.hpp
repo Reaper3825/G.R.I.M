@@ -64,6 +64,7 @@ struct LossResult {
     float text_loss = 0.0f;          // Raw text cross-entropy loss
     float numeric_loss = 0.0f;       // Reserved (legacy); always 0 — no value head
     float selector_loss = 0.0f;      // Decode-time selector supervision loss
+    float exec_loss = 0.0f;          // Exec block auxiliary losses (structured CE + entropy)
     float weight_text = 1.0f;
     int valid_tokens = 0;
     bool success = false;

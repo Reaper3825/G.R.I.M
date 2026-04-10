@@ -160,6 +160,13 @@ enum class MetricStream : int {
     EXEC_DIV_CLAMP_RATE = 18,        // div_clamp_count / total_steps: numerical stability
     EXEC_MAX_P_WRITE = 19,           // mean(max(p_write)): write slot concentration
     EXEC_ACTIVE_RATIO = 20,          // active_rows / batch_size: exec block utilization
+    // EB/SB injection diagnostics (poisoning hypothesis)
+    EB_INJECT_GATE = 21,             // mean sigmoid inject gate across active rows*steps
+    EB_READ_GATE_MEAN = 22,          // mean sigmoid cross-attn read gate across tokens*layers
+    EB_INJECT_WEIGHT_NORM = 23,      // RMS(w_inject_gate) — gate parameter evolution
+    EB_READ_WEIGHT_NORM = 24,        // RMS(W_gate_read) — read gate parameter evolution
+    EB_LOSS_FRAC = 25,               // (exec_ce + exec_entropy) / total_loss
+    SB_ATOM_EMBED_RMS = 26,          // RMS(atom_type_embeddings) — ScratchBlock injection scale
 };
 
 const char* getMetricStreamName(MetricStream stream);

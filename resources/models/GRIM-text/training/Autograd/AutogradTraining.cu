@@ -831,7 +831,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     ctx.execution_block->crossAttentionRead(
                         layer_output, intermediates.exec_memories[b],
                         total_tokens, ctx.stream,
-                        b * sl, sl);
+                        b * sl, sl,
+                        intermediates.d_read_gate_accum);
                 }
             }
 
@@ -1660,6 +1661,7 @@ LossResult computeAutogradLoss(
     result.loss_value = text_loss + exec_structured_ce + exec_entropy_loss
                       + final_consistency_loss
                       + selector_supervision_loss;
+    result.exec_loss = exec_structured_ce + exec_entropy_loss + final_consistency_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
@@ -2172,10 +2174,31 @@ LossResult autogradTrainingStep(
     // ═══════════════════════════════════════════════════════════════════════════
     // FORWARD → LOSS → BACKWARD
     // ═══════════════════════════════════════════════════════════════════════════
+
+    // Allocate read-gate accumulator once (persistent across batches)
+    auto& intermediates = training_state.autograd_intermediates;
+    if (!intermediates.d_read_gate_accum && cfg.execution_block_enabled) {
+        CUDA_CHECK(cudaMalloc(&intermediates.d_read_gate_accum, 2 * sizeof(float)));
+    }
+    // Zero the accumulator before forward (sum=0, count=0)
+    if (intermediates.d_read_gate_accum) {
+        CUDA_CHECK(cudaMemsetAsync(intermediates.d_read_gate_accum, 0, 2 * sizeof(float), stream));
+    }
     
     ForwardResult fwd_result = executeAutogradForward(ctx);
     if (!fwd_result.success) {
         throw std::runtime_error("autogradTrainingStep: Forward failed - " + fwd_result.error_message);
+    }
+
+    // Read back the cross-attention read gate accumulator (sum/count on device)
+    if (intermediates.d_read_gate_accum) {
+        float h_accum[2] = {0.0f, 0.0f};
+        CUDA_CHECK(cudaMemcpyAsync(h_accum, intermediates.d_read_gate_accum,
+                                   2 * sizeof(float), cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        intermediates.h_read_gate_mean = (h_accum[1] > 0.0f)
+            ? (h_accum[0] / h_accum[1])
+            : 0.0f;
     }
     
     LossResult loss_result = computeAutogradLoss(ctx);

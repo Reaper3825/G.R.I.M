@@ -4542,6 +4542,87 @@ BatchResult processBatch(
             ctx.telemetry.last_obs[20] = exec_active_ratio;        // EXEC_ACTIVE_RATIO
         }
 
+        // Streams 21-26: EB injection diagnostics (gate health, weight norms, loss fraction)
+        {
+            const auto& ai = training_state.autograd_intermediates;
+
+            // Stream 21: EB_INJECT_GATE — mean inject gate sigmoid across active rows/steps
+            float inject_gate_mean = 0.0f;
+            if (!ai.exec_outputs_per_row.empty()) {
+                float sum_gate = 0.0f;
+                int gate_count = 0;
+                const int B = static_cast<int>(ai.exec_outputs_per_row.size());
+                for (int b = 0; b < B; ++b) {
+                    const bool row_active = !payload.execution_active.empty()
+                        && b < static_cast<int>(payload.execution_active.size())
+                        && payload.execution_active[b];
+                    if (!row_active) continue;
+                    for (const auto& step : ai.exec_outputs_per_row[b].steps) {
+                        sum_gate += step.metrics.inject_gate_value;
+                        gate_count++;
+                    }
+                }
+                if (gate_count > 0) {
+                    inject_gate_mean = sum_gate / static_cast<float>(gate_count);
+                }
+            }
+            ctx.telemetry.last_obs[21] = inject_gate_mean;  // EB_INJECT_GATE
+
+            // Stream 22: EB_READ_GATE_MEAN — mean cross-attention read gate (accumulated on GPU)
+            ctx.telemetry.last_obs[22] = ai.h_read_gate_mean;  // EB_READ_GATE_MEAN
+
+            // Streams 23-24: Gate weight norms (small D2H copy, ~3KB each — negligible)
+            float inject_w_rms = 0.0f;
+            float read_w_rms = 0.0f;
+            auto* eb = ctx.model->getExecutionBlockLayer();
+            if (eb) {
+                const auto& w_inj = eb->w_inject_gate();
+                const size_t n_inj = w_inj.numel();
+                if (n_inj > 0 && w_inj.data) {
+                    std::vector<float> h_buf(n_inj);
+                    cudaMemcpy(h_buf.data(), w_inj.data, n_inj * sizeof(float), cudaMemcpyDeviceToHost);
+                    double sum_sq = 0.0;
+                    for (size_t i = 0; i < n_inj; ++i) sum_sq += static_cast<double>(h_buf[i]) * h_buf[i];
+                    inject_w_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(n_inj)));
+                }
+
+                const auto& w_read = eb->W_gate_read();
+                const size_t n_read = w_read.numel();
+                if (n_read > 0 && w_read.data) {
+                    std::vector<float> h_buf(n_read);
+                    cudaMemcpy(h_buf.data(), w_read.data, n_read * sizeof(float), cudaMemcpyDeviceToHost);
+                    double sum_sq = 0.0;
+                    for (size_t i = 0; i < n_read; ++i) sum_sq += static_cast<double>(h_buf[i]) * h_buf[i];
+                    read_w_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(n_read)));
+                }
+            }
+            ctx.telemetry.last_obs[23] = inject_w_rms;  // EB_INJECT_WEIGHT_NORM
+            ctx.telemetry.last_obs[24] = read_w_rms;    // EB_READ_WEIGHT_NORM
+
+            // Stream 25: EB_LOSS_FRAC — exec auxiliary loss as fraction of total loss
+            float eb_loss_frac = 0.0f;
+            if (loss_result.loss_value > 1e-12f) {
+                eb_loss_frac = loss_result.exec_loss / loss_result.loss_value;
+            }
+            ctx.telemetry.last_obs[25] = eb_loss_frac;  // EB_LOSS_FRAC
+
+            // Stream 26: SB_ATOM_EMBED_RMS — atom type embedding scale
+            float atom_embed_rms = 0.0f;
+            auto* sb = ctx.model->getScratchBlockLayer();
+            if (sb) {
+                const auto& ate = sb->atomTypeEmbeddings();
+                const size_t n_ate = ate.numel();
+                if (n_ate > 0 && ate.data) {
+                    std::vector<float> h_buf(n_ate);
+                    cudaMemcpy(h_buf.data(), ate.data, n_ate * sizeof(float), cudaMemcpyDeviceToHost);
+                    double sum_sq = 0.0;
+                    for (size_t i = 0; i < n_ate; ++i) sum_sq += static_cast<double>(h_buf[i]) * h_buf[i];
+                    atom_embed_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(n_ate)));
+                }
+            }
+            ctx.telemetry.last_obs[26] = atom_embed_rms;  // SB_ATOM_EMBED_RMS
+        }
+
         GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(
             ctx.telemetry.last_obs, ctx.global_step);
         

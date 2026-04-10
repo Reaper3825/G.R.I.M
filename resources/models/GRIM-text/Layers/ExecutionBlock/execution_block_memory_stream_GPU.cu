@@ -285,6 +285,25 @@ __global__ void kernelCheckMultiSlotMutation(
         atomicMax(error_flag, stage_id);
 }
 
+// Accumulate sum of gate values into a [2]-float accumulator: [sum, count]
+// Launched with 1 block after kernelComputeGate to avoid extra sync.
+__global__ void kernelAccumulateGateStats(
+    float* __restrict__ accum,       // [2]: accum[0] = running sum, accum[1] = running count
+    const float* __restrict__ gate,  // [n] gate values
+    int n
+) {
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x)
+        local_sum += gate[i];
+    // Warp reduction
+    for (int mask = warpSize / 2; mask > 0; mask >>= 1)
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, mask);
+    if (threadIdx.x == 0) {
+        atomicAdd(&accum[0], local_sum);
+        atomicAdd(&accum[1], static_cast<float>(n));
+    }
+}
+
 __global__ void kernelComputeGate(
     float* __restrict__ gate,
     const float* __restrict__ H,
@@ -777,7 +796,8 @@ void crossAttentionReadImpl(
     ExecutionMemory& memory,
     cudaStream_t stream,
     int token_offset,
-    int row_tokens
+    int row_tokens,
+    float* d_gate_accum  // [2] device accumulator: [sum, count]. nullptr = skip.
 ) {
     const int dm = layer.config().d_model;
     const int dk = layer.config().d_key;
@@ -813,6 +833,13 @@ void crossAttentionReadImpl(
     kernelComputeGate<<<(row_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         gate.data, H_row, layer.W_gate_read().data, row_tokens, dm);
     CUDA_CHECK_KERNEL();
+
+    // Accumulate gate statistics for telemetry (no sync required — atomic to device buffer)
+    if (d_gate_accum) {
+        kernelAccumulateGateStats<<<1, kBlockSize, 0, stream>>>(
+            d_gate_accum, gate.data, row_tokens);
+        CUDA_CHECK_KERNEL();
+    }
 
     kernelCrossAttnGatedOutput<<<row_tokens, kBlockSize, 0, stream>>>(
         H_row, R.data, layer.W_O_read().data, gate.data, row_tokens, dm, hd);

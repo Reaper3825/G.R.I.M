@@ -90,6 +90,7 @@ struct ExecStepMetrics {
     float max_p_write    = 0.0f;
     int   div_clamp_count = 0;
     float op_distribution[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float inject_gate_value = 0.0f;  // sigmoid output of result injection gate
 };
 
 //======================================================//
@@ -229,7 +230,8 @@ public:
         int total_tokens,
         cudaStream_t stream,
         int token_offset = 0,
-        int row_tokens = -1
+        int row_tokens = -1,
+        float* d_gate_accum = nullptr  // [2] device: [sum, count] for telemetry
     );
 
     //--------------------------------------------------//

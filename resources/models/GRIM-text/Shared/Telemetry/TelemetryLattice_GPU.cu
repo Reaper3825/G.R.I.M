@@ -326,6 +326,12 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::EXEC_DIV_CLAMP_RATE: return "exec_div_clamp_rate";
         case MetricStream::EXEC_MAX_P_WRITE: return "exec_max_p_write";
         case MetricStream::EXEC_ACTIVE_RATIO: return "exec_active_ratio";
+        case MetricStream::EB_INJECT_GATE: return "eb_inject_gate";
+        case MetricStream::EB_READ_GATE_MEAN: return "eb_read_gate_mean";
+        case MetricStream::EB_INJECT_WEIGHT_NORM: return "eb_inject_weight_norm";
+        case MetricStream::EB_READ_WEIGHT_NORM: return "eb_read_weight_norm";
+        case MetricStream::EB_LOSS_FRAC: return "eb_loss_frac";
+        case MetricStream::SB_ATOM_EMBED_RMS: return "sb_atom_embed_rms";
         default: return "unknown";
     }
 }
