@@ -243,8 +243,8 @@
                 "strategy": "greedy",
                 "temperature": 0.5,
                 "top_k": 50,
-                "top_p": 0.9,
-                "typical_p": 1.0
+                "top_p": 1.0,
+                "typical_p": 0.9
             },
             "gradient_accumulation_steps": 2,
             "gradient_clip": 1.0,
@@ -353,7 +353,7 @@
             "multi_token_prediction": {
                 "alpha": 0.2,
                 "alpha_warmup_steps": 0,
-                "enabled": true,
+                "enabled": false,
                 "k": 3,
                 "log_ratio_monitor": true
             },
@@ -486,7 +486,8 @@
     "ui": {
         "Minimize": "Side",
         "font_name": "DejaVuMathTeXGyre",
-        "font_size": 16
+        "font_size": 16,
+        "icon_font": ""
     },
     "vision": {
         "enabled": false

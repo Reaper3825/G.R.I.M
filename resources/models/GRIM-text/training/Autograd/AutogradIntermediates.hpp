@@ -18,6 +18,7 @@
 #include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 #include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 
 #include <vector>
 
@@ -61,6 +62,11 @@ struct AutogradIntermediates {
     std::vector<ExecutionMemory> exec_memories;               // [batch_size] per-row isolation
     std::vector<ExecutionBlockOutput> exec_outputs_per_row;   // [batch_size][K steps]
 
+    // Selector supervision — SelectorForwardResult owns intermediate Tensors
+    // (q, slot_keys) whose .data is cached by MatMulGradFn nodes. MUST stay
+    // alive from computeAutogradLoss() through executeAutogradBackward().
+    std::vector<SelectorForwardResult> selector_fwd_results;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // INJECTION DIAGNOSTICS — accumulated during forward for telemetry
     // ═══════════════════════════════════════════════════════════════════════════
@@ -87,6 +93,7 @@ struct AutogradIntermediates {
         reasoning_output = ReasoningHeadOutput{};
         exec_memories.clear();
         exec_outputs_per_row.clear();
+        selector_fwd_results.clear();
         // Note: d_read_gate_accum is NOT freed here — it's a persistent buffer
         // owned by TrainingState, zeroed before each forward pass.
         h_read_gate_mean = 0.0f;

@@ -60,11 +60,11 @@ struct ForwardResult {
  * Contains decomposed loss components for logging and gradient weighting.
  */
 struct LossResult {
-    float loss_value = 0.0f;         // Combined loss (text CE + optional exec entropy)
-    float text_loss = 0.0f;          // Raw text cross-entropy loss
+    float loss_value = 0.0f;         // Ground-truth: D2H read of loss_tensor AFTER all autograd::add()
+    float text_loss = 0.0f;          // Text CE + MTP only (snapshot before exec/selector additions)
     float numeric_loss = 0.0f;       // Reserved (legacy); always 0 — no value head
-    float selector_loss = 0.0f;      // Decode-time selector supervision loss
-    float exec_loss = 0.0f;          // Exec block auxiliary losses (structured CE + entropy)
+    float selector_loss = 0.0f;      // Decode-time selector supervision loss (host scalar)
+    float exec_loss = 0.0f;          // loss_value - text_loss (all non-text autograd terms)
     float weight_text = 1.0f;
     int valid_tokens = 0;
     bool success = false;

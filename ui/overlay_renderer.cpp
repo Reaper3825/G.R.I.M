@@ -144,63 +144,212 @@ void OverlayRenderer::shutdown()
 // Font loading via stb_truetype
 // ---------------------------------------------------------------
 
+static std::vector<uint8_t> readFontFile(const std::string& fontPath)
+{
+    std::ifstream file(fontPath, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        LOG_ERROR("OverlayRenderer", "Failed to open font file: " + fontPath);
+        return {};
+    }
+    auto fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+    std::vector<uint8_t> data(static_cast<size_t>(fileSize));
+    file.read(reinterpret_cast<char*>(data.data()), fileSize);
+    return data;
+}
+
+// Decode one UTF-8 codepoint; advance pos past consumed bytes.
+uint32_t OverlayRenderer::decodeUtf8(const std::string& text, size_t& pos)
+{
+    uint8_t c = static_cast<uint8_t>(text[pos]);
+    uint32_t cp = 0;
+    int extra = 0;
+
+    if (c < 0x80) {
+        cp = c; extra = 0;
+    } else if ((c & 0xE0) == 0xC0) {
+        cp = c & 0x1F; extra = 1;
+    } else if ((c & 0xF0) == 0xE0) {
+        cp = c & 0x0F; extra = 2;
+    } else if ((c & 0xF8) == 0xF0) {
+        cp = c & 0x07; extra = 3;
+    } else {
+        // Invalid lead byte — skip
+        ++pos;
+        return 0xFFFD; // replacement character
+    }
+
+    ++pos;
+    for (int i = 0; i < extra && pos < text.size(); ++i, ++pos) {
+        uint8_t cont = static_cast<uint8_t>(text[pos]);
+        if ((cont & 0xC0) != 0x80) return 0xFFFD; // broken sequence
+        cp = (cp << 6) | (cont & 0x3F);
+    }
+    return cp;
+}
+
 void OverlayRenderer::setFont(const std::string& fontPath, int fontSize)
 {
     std::lock_guard<std::mutex> lock(m_renderMutex);
 
-    std::ifstream file(fontPath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        LOG_ERROR("OverlayRenderer", "Failed to open font file: " + fontPath);
+    m_fontFileData = readFontFile(fontPath);
+    if (m_fontFileData.empty()) {
+        m_fontLoaded = false;
         return;
     }
 
-    auto fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
-    m_fontFileData.resize(static_cast<size_t>(fileSize));
-    file.read(reinterpret_cast<char*>(m_fontFileData.data()), fileSize);
-    file.close();
-
     m_fontSize = static_cast<float>(fontSize);
-    m_atlasWidth = 512;
-    m_atlasHeight = 512;
+    rebuildAtlas();
 
-    // Retry with larger atlas if needed
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        m_fontAtlas.resize(m_atlasWidth * m_atlasHeight);
+    if (m_fontLoaded) {
+        LOG_DEBUG("OverlayRenderer", "Font loaded: " + fontPath +
+                 " (size " + std::to_string(fontSize) +
+                 ", atlas " + std::to_string(m_atlasWidth) + "x" + std::to_string(m_atlasHeight) +
+                 ", glyphs " + std::to_string(m_glyphMap.size()) + ")");
+    }
+}
 
-        stbtt_bakedchar bakedChars[kCharCount];
-        int result = stbtt_BakeFontBitmap(
-            m_fontFileData.data(), 0,
-            m_fontSize,
-            m_fontAtlas.data(), m_atlasWidth, m_atlasHeight,
-            kFirstChar, kCharCount,
-            bakedChars
-        );
+void OverlayRenderer::loadIconFont(const std::string& fontPath)
+{
+    std::lock_guard<std::mutex> lock(m_renderMutex);
 
-        if (result != 0) {
-            for (int i = 0; i < kCharCount; ++i) {
-                m_bakedChars[i].x0 = bakedChars[i].x0;
-                m_bakedChars[i].y0 = bakedChars[i].y0;
-                m_bakedChars[i].x1 = bakedChars[i].x1;
-                m_bakedChars[i].y1 = bakedChars[i].y1;
-                m_bakedChars[i].xoff = bakedChars[i].xoff;
-                m_bakedChars[i].yoff = bakedChars[i].yoff;
-                m_bakedChars[i].xadvance = bakedChars[i].xadvance;
-            }
-            m_fontLoaded = true;
-            LOG_DEBUG("OverlayRenderer", "Font loaded: " + fontPath +
-                     " (size " + std::to_string(fontSize) +
-                     ", atlas " + std::to_string(m_atlasWidth) + "x" + std::to_string(m_atlasHeight) +
-                     ", bake result " + std::to_string(result) + ")");
-            return;
-        }
+    m_iconFontFileData = readFontFile(fontPath);
+    if (m_iconFontFileData.empty()) return;
 
-        m_atlasWidth *= 2;
-        m_atlasHeight *= 2;
+    rebuildAtlas();
+
+    LOG_DEBUG("OverlayRenderer", "Icon font loaded: " + fontPath +
+             " (total glyphs " + std::to_string(m_glyphMap.size()) + ")");
+}
+
+void OverlayRenderer::rebuildAtlas()
+{
+    m_glyphMap.clear();
+    m_fontLoaded = false;
+
+    if (m_fontFileData.empty()) return;
+
+    // Define codepoint ranges to bake
+    // Range 1: ASCII printable (32-126)
+    // Range 2: Latin Extended-A (0x100-0x17F) for accented chars
+    // Range 3: General Punctuation (0x2000-0x206F) for em-dash, bullets etc.
+    // Icon ranges are added if an icon font is loaded
+    struct PackRange {
+        int firstCodepoint;
+        int count;
+        bool isIconFont; // true = use icon font data instead of text font
+    };
+
+    std::vector<PackRange> ranges = {
+        { 32,    95,   false }, // ASCII 32-126
+        { 0x100, 128,  false }, // Latin Extended-A
+        { 0x2000, 112, false }, // General Punctuation
+    };
+
+    // FontAwesome icon ranges (v4/v5/v6 overlap these)
+    if (!m_iconFontFileData.empty()) {
+        ranges.push_back({ 0xE000, 256,  true }); // Private Use Area (common icon range)
+        ranges.push_back({ 0xE200, 256,  true }); // Extended PUA icons
+        ranges.push_back({ 0xF000, 4096, true }); // FontAwesome / Nerd Font main range
     }
 
-    LOG_ERROR("OverlayRenderer", "Failed to bake font atlas for: " + fontPath);
-    m_fontLoaded = false;
+    // Total chars across all ranges
+    int totalChars = 0;
+    for (auto& r : ranges) totalChars += r.count;
+
+    // Try progressively larger atlas sizes
+    for (m_atlasWidth = 512, m_atlasHeight = 512;
+         m_atlasWidth <= 4096;
+         m_atlasWidth *= 2, m_atlasHeight *= 2)
+    {
+        m_fontAtlas.resize(m_atlasWidth * m_atlasHeight);
+        std::fill(m_fontAtlas.begin(), m_fontAtlas.end(), 0);
+
+        stbtt_pack_context pc;
+        if (!stbtt_PackBegin(&pc, m_fontAtlas.data(), m_atlasWidth, m_atlasHeight, 0, 1, nullptr)) {
+            continue;
+        }
+        stbtt_PackSetOversampling(&pc, 1, 1); // No oversampling — software blitter draws 1:1
+
+        // Allocate packed char storage
+        std::vector<stbtt_packedchar> packedChars(totalChars);
+
+        // Build stbtt_pack_range array
+        std::vector<stbtt_pack_range> stbRanges;
+        int offset = 0;
+        for (auto& r : ranges) {
+            stbtt_pack_range pr = {};
+            pr.font_size = m_fontSize;
+            pr.first_unicode_codepoint_in_range = r.firstCodepoint;
+            pr.num_chars = r.count;
+            pr.chardata_for_range = &packedChars[offset];
+            stbRanges.push_back(pr);
+            offset += r.count;
+        }
+
+        // Pack text font ranges
+        bool allOk = true;
+        {
+            // Collect text font range indices
+            std::vector<stbtt_pack_range> textRanges;
+            for (size_t i = 0; i < ranges.size(); ++i) {
+                if (!ranges[i].isIconFont) textRanges.push_back(stbRanges[i]);
+            }
+            if (!textRanges.empty()) {
+                int ret = stbtt_PackFontRanges(&pc, m_fontFileData.data(), 0,
+                                               textRanges.data(), (int)textRanges.size());
+                if (ret == 0) allOk = false;
+            }
+        }
+
+        // Pack icon font ranges
+        if (allOk && !m_iconFontFileData.empty()) {
+            std::vector<stbtt_pack_range> iconRanges;
+            for (size_t i = 0; i < ranges.size(); ++i) {
+                if (ranges[i].isIconFont) iconRanges.push_back(stbRanges[i]);
+            }
+            if (!iconRanges.empty()) {
+                int ret = stbtt_PackFontRanges(&pc, m_iconFontFileData.data(), 0,
+                                               iconRanges.data(), (int)iconRanges.size());
+                if (ret == 0) {
+                    LOG_DEBUG("OverlayRenderer", "Some icon glyphs failed to pack — atlas may be too small");
+                }
+            }
+        }
+
+        stbtt_PackEnd(&pc);
+
+        if (!allOk) continue; // try larger atlas
+
+        // Transfer packed chars into glyph map
+        offset = 0;
+        for (auto& r : ranges) {
+            for (int i = 0; i < r.count; ++i) {
+                const stbtt_packedchar& pc2 = packedChars[offset + i];
+                // Skip glyphs that weren't successfully packed (empty)
+                if (pc2.x1 == 0 && pc2.y1 == 0 && pc2.x0 == 0 && pc2.y0 == 0
+                    && pc2.xadvance == 0.0f) {
+                    continue;
+                }
+                uint32_t cp = r.firstCodepoint + i;
+                BakedChar bc;
+                bc.x0 = pc2.x0;
+                bc.y0 = pc2.y0;
+                bc.x1 = pc2.x1;
+                bc.y1 = pc2.y1;
+                bc.xoff = pc2.xoff;
+                bc.yoff = pc2.yoff;
+                bc.xadvance = pc2.xadvance;
+                m_glyphMap[cp] = bc;
+            }
+            offset += r.count;
+        }
+
+        m_fontLoaded = true;
+        return;
+    }
+
+    LOG_ERROR("OverlayRenderer", "Failed to bake font atlas (tried up to 4096x4096)");
 }
 
 // ---------------------------------------------------------------
@@ -1189,18 +1338,24 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
     float cursorX = pos.x;
     float cursorY = pos.y;
 
-    for (char c : text) {
-        if (c < kFirstChar || c >= kFirstChar + kCharCount) {
-            if (c == '\n') {
-                cursorX = pos.x;
-                cursorY += m_fontSize;
-                continue;
-            }
-            c = '?';
+    size_t i = 0;
+    while (i < text.size()) {
+        uint32_t cp = decodeUtf8(text, i);
+
+        if (cp == '\n') {
+            cursorX = pos.x;
+            cursorY += m_fontSize;
+            continue;
         }
 
-        int ci = c - kFirstChar;
-        const BakedChar& bc = m_bakedChars[ci];
+        // Look up glyph; fall back to '?' for unknown codepoints
+        auto it = m_glyphMap.find(cp);
+        if (it == m_glyphMap.end()) {
+            it = m_glyphMap.find('?');
+            if (it == m_glyphMap.end()) continue;
+        }
+
+        const BakedChar& bc = it->second;
 
         int glyphW = bc.x1 - bc.x0;
         int glyphH = bc.y1 - bc.y0;
@@ -1256,10 +1411,16 @@ float OverlayRenderer::measureTextWidth(const std::string& text) const
 {
     if (!m_fontLoaded || text.empty()) return 0.0f;
     float width = 0.0f;
-    for (char c : text) {
-        if (c == '\n') break; // single-line measurement
-        if (c < kFirstChar || c >= kFirstChar + kCharCount) c = '?';
-        width += m_bakedChars[c - kFirstChar].xadvance;
+    size_t i = 0;
+    while (i < text.size()) {
+        uint32_t cp = decodeUtf8(text, i);
+        if (cp == '\n') break; // single-line measurement
+        auto it = m_glyphMap.find(cp);
+        if (it == m_glyphMap.end()) {
+            it = m_glyphMap.find('?');
+            if (it == m_glyphMap.end()) continue;
+        }
+        width += it->second.xadvance;
     }
     return width;
 }

@@ -444,6 +444,33 @@ int main(int argc, char* argv[])
         } else {
             LOG_ERROR("UIRoot", "No font file found — text will not render");
         }
+
+        // Load icon font if configured (FontAwesome, Material Icons, Nerd Font, etc.)
+        std::string iconFontName;
+        if (aiConfig.contains("ui") && aiConfig["ui"].contains("icon_font")) {
+            iconFontName = aiConfig["ui"]["icon_font"].get<std::string>();
+        }
+        if (!iconFontName.empty()) {
+            std::string iconFontPath;
+            // Search resources/fonts/ for the icon font file
+            std::filesystem::path fontsDir = std::filesystem::path(argv[0]).parent_path() / "resources" / "fonts";
+            if (std::filesystem::exists(fontsDir)) {
+                for (auto& entry : std::filesystem::recursive_directory_iterator(fontsDir)) {
+                    if (entry.is_regular_file()) {
+                        std::string stem = entry.path().stem().string();
+                        if (stem == iconFontName || entry.path().filename().string() == iconFontName) {
+                            iconFontPath = entry.path().string();
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!iconFontPath.empty()) {
+                UIRoot::get().getRenderer().loadIconFont(iconFontPath);
+            } else {
+                LOG_DEBUG("UIRoot", "Icon font '" + iconFontName + "' not found in resources/fonts/");
+            }
+        }
     }
 
     auto consolePanel  = std::make_shared<ConsolePanel>();

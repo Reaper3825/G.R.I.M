@@ -1333,7 +1333,8 @@ LossResult computeAutogradLoss(
 
     result.text_loss = text_loss;
     result.valid_tokens = valid_tokens;
-    ts->cached_loss_value = text_loss;
+    // NOTE: cached_loss_value is set AFTER all losses are accumulated (see below).
+    // text_loss here is ONLY text CE + MTP — execution/selector losses come later.
     ts->cached_text_loss = text_loss;
     ts->cached_valid_tokens = valid_tokens;
 
@@ -1483,39 +1484,6 @@ LossResult computeAutogradLoss(
         }
     }
 
-    // Optional Spec Step 9: final slot vs target MSE penalty
-    float final_consistency_loss = 0.0f;
-    if (cfg->final_slot_consistency_weight > 0.0f
-        && cfg->execution_block_enabled && ctx.execution_block
-        && !intermediates.exec_outputs_per_row.empty()
-        && ctx.payload && !ctx.payload->teacher_steps.empty()) {
-        float mse_sum = 0.0f;
-        int mse_count = 0;
-        for (int b = 0; b < ctx.batch_size; ++b) {
-            // execution_active[b] is the authoritative per-row activation
-            if (!ctx.payload->execution_active.empty()
-                && !ctx.payload->execution_active[b])
-                continue;
-            const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
-            const auto& teacher_row = ctx.payload->teacher_steps[b];
-            if (row_steps.empty() || teacher_row.empty()) continue;
-            const auto& last_step = row_steps.back();
-            const auto& last_teacher = teacher_row.back();
-            if (last_step.state_after_values.data) {
-                float v_final = 0.0f;
-                cudaMemcpy(&v_final, last_step.state_after_values.data + last_teacher.write_slot,
-                           sizeof(float), cudaMemcpyDeviceToHost);
-                float diff = v_final - last_teacher.expected_value;
-                mse_sum += diff * diff;
-                mse_count++;
-            }
-        }
-        if (mse_count > 0) {
-            final_consistency_loss = cfg->final_slot_consistency_weight *
-                (mse_sum / static_cast<float>(mse_count));
-        }
-    }
-
     result.numeric_loss = numeric_loss;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1526,8 +1494,10 @@ LossResult computeAutogradLoss(
     // Weighted by cfg->selector_supervision_weight (0 = disabled).
     // ═══════════════════════════════════════════════════════════════════════════
     float selector_supervision_loss = 0.0f;
-    // Keep SelectorForwardResult objects alive until backward completes
-    std::vector<SelectorForwardResult> selector_fwd_results;
+    // Keep SelectorForwardResult objects alive until backward completes — stored in
+    // autograd_intermediates so they survive past computeAutogradLoss() return.
+    auto& selector_fwd_results = intermediates.selector_fwd_results;
+    selector_fwd_results.clear();  // Reset from any prior batch
     if (cfg->selector_enabled && cfg->selector_supervision_weight > 0.0f
         && cfg->execution_block_enabled && ctx.model
         && ctx.payload && !ctx.payload->slot_selection_targets.empty()
@@ -1673,22 +1643,30 @@ LossResult computeAutogradLoss(
     }
     result.selector_loss = selector_supervision_loss;
 
-    result.loss_value = text_loss + exec_structured_ce + exec_entropy_loss
-                      + final_consistency_loss
-                      + selector_supervision_loss;
-    result.exec_loss = exec_structured_ce + exec_entropy_loss + final_consistency_loss;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GROUND-TRUTH LOSS: Read the ACTUAL tensor that backward will differentiate.
+    // This is the single source of truth — no manual reconstruction from stale
+    // host-side scalars. text_loss was snapshot before exec/selector additions.
+    // ═══════════════════════════════════════════════════════════════════════════
+    float actual_loss = 0.0f;
+    cudaMemcpyAsync(&actual_loss, intermediates.loss_tensor.data, sizeof(float),
+                    cudaMemcpyDeviceToHost, ctx.stream);
+    cudaStreamSynchronize(ctx.stream);
+
+    result.loss_value = actual_loss;
+    result.exec_loss = actual_loss - text_loss;  // Everything beyond text CE + MTP
     result.weight_text = 1.0f;
+    ts->cached_loss_value = actual_loss;
     
     if (!std::isfinite(result.loss_value)) {
-        throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (text=" 
-            + std::to_string(text_loss) + " numeric=" + std::to_string(numeric_loss)
+        throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (actual_tensor=" 
+            + std::to_string(actual_loss) + " text=" + std::to_string(text_loss)
             + " exec_ce=" + std::to_string(exec_structured_ce)
-            + " exec_entropy=" + std::to_string(exec_entropy_loss)
-            + " final_consistency=" + std::to_string(final_consistency_loss)
             + " selector=" + std::to_string(selector_supervision_loss) + ")");
     }
     
-    AG_INFO("Loss computed: text_ce=" << text_loss << " exec_ce=" << exec_structured_ce
+    AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_loss
+            << " exec_ce=" << exec_structured_ce
             << " exec_entropy_aux=" << exec_entropy_loss
             << " selector=" << selector_supervision_loss
             << " valid_tokens=" << valid_tokens);
@@ -1775,6 +1753,60 @@ BackwardResult executeAutogradBackward(
                     if (head->bias.data) head->bias.zero_grad(ctx.stream);
                 }
             }
+        }
+
+        // ExecutionBlock parameters
+        if (ctx.execution_block && cfg->execution_block_enabled) {
+            auto& eb = *ctx.execution_block;
+            eb.w_decode_1().zero_grad(ctx.stream);
+            eb.b_decode_1().zero_grad(ctx.stream);
+            eb.w_decode_2().zero_grad(ctx.stream);
+            eb.w_arg1_select().zero_grad(ctx.stream);
+            eb.w_arg2_select().zero_grad(ctx.stream);
+            eb.W_op_select().zero_grad(ctx.stream);
+            eb.W_key_proj().zero_grad(ctx.stream);
+            eb.W_write_query().zero_grad(ctx.stream);
+            eb.W_write_key().zero_grad(ctx.stream);
+            eb.alpha().zero_grad(ctx.stream);
+            eb.beta().zero_grad(ctx.stream);
+            eb.step_embeddings().zero_grad(ctx.stream);
+            eb.type_num_embed().zero_grad(ctx.stream);
+            eb.W_value_to_emb().zero_grad(ctx.stream);
+            eb.b_value_to_emb().zero_grad(ctx.stream);
+            eb.w_inject_gate().zero_grad(ctx.stream);
+            eb.W_Q_read().zero_grad(ctx.stream);
+            eb.W_K_read().zero_grad(ctx.stream);
+            eb.W_V_read().zero_grad(ctx.stream);
+            eb.W_O_read().zero_grad(ctx.stream);
+            eb.W_gate_read().zero_grad(ctx.stream);
+            eb.tau().zero_grad(ctx.stream);
+            eb.E_slot().zero_grad(ctx.stream);
+            eb.E_op().zero_grad(ctx.stream);
+            eb.W_scal().zero_grad(ctx.stream);
+            eb.b_scal().zero_grad(ctx.stream);
+            eb.W_trace().zero_grad(ctx.stream);
+            eb.b_trace().zero_grad(ctx.stream);
+            eb.W_reason_gate().zero_grad(ctx.stream);
+            eb.W_trace_gate().zero_grad(ctx.stream);
+        }
+
+        // DecodeTimeSlotSelector parameters
+        if (ctx.model && cfg->selector_enabled) {
+            auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
+            if (selector) {
+                selector->W_q_select().zero_grad(ctx.stream);
+                selector->W_k_select().zero_grad(ctx.stream);
+                selector->null_key_select().zero_grad(ctx.stream);
+                selector->null_logit_bias().zero_grad(ctx.stream);
+            }
+        }
+
+        // ReasoningHead parameters
+        if (ctx.reasoning_head) {
+            ctx.reasoning_head->W_op().zero_grad(ctx.stream);
+            ctx.reasoning_head->b_op().zero_grad(ctx.stream);
+            ctx.reasoning_head->w_arg1().zero_grad(ctx.stream);
+            ctx.reasoning_head->w_arg2().zero_grad(ctx.stream);
         }
     }
     
@@ -1996,6 +2028,78 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
                 }
             }
         }
+    }
+
+    // ExecutionBlock parameters
+    if (ctx.execution_block && ctx.config->execution_block_enabled) {
+        auto checkEB = [&](Tensor& t, const char* name) {
+            if (t.data && !t.has_grad()) {
+                AG_WARN("exec block " << name << ".grad is NULL");
+                ok = false;
+            }
+        };
+        auto& eb = *ctx.execution_block;
+        checkEB(eb.w_decode_1(), "w_decode_1");
+        checkEB(eb.b_decode_1(), "b_decode_1");
+        checkEB(eb.w_decode_2(), "w_decode_2");
+        checkEB(eb.w_arg1_select(), "w_arg1_select");
+        checkEB(eb.w_arg2_select(), "w_arg2_select");
+        checkEB(eb.W_op_select(), "W_op_select");
+        checkEB(eb.W_key_proj(), "W_key_proj");
+        checkEB(eb.W_write_query(), "W_write_query");
+        checkEB(eb.W_write_key(), "W_write_key");
+        checkEB(eb.alpha(), "alpha");
+        checkEB(eb.beta(), "beta");
+        checkEB(eb.step_embeddings(), "step_embeddings");
+        checkEB(eb.type_num_embed(), "type_num_embed");
+        checkEB(eb.W_value_to_emb(), "W_value_to_emb");
+        checkEB(eb.b_value_to_emb(), "b_value_to_emb");
+        checkEB(eb.w_inject_gate(), "w_inject_gate");
+        checkEB(eb.W_Q_read(), "W_Q_read");
+        checkEB(eb.W_K_read(), "W_K_read");
+        checkEB(eb.W_V_read(), "W_V_read");
+        checkEB(eb.W_O_read(), "W_O_read");
+        checkEB(eb.W_gate_read(), "W_gate_read");
+        checkEB(eb.tau(), "tau");
+        checkEB(eb.E_slot(), "E_slot");
+        checkEB(eb.E_op(), "E_op");
+        checkEB(eb.W_scal(), "W_scal");
+        checkEB(eb.b_scal(), "b_scal");
+        checkEB(eb.W_trace(), "W_trace");
+        checkEB(eb.b_trace(), "b_trace");
+        checkEB(eb.W_reason_gate(), "W_reason_gate");
+        checkEB(eb.W_trace_gate(), "W_trace_gate");
+    }
+
+    // DecodeTimeSlotSelector parameters
+    if (ctx.model && ctx.config->selector_enabled) {
+        auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
+        if (selector) {
+            auto checkSel = [&](Tensor& t, const char* name) {
+                if (t.data && !t.has_grad()) {
+                    AG_WARN("selector " << name << ".grad is NULL");
+                    ok = false;
+                }
+            };
+            checkSel(selector->W_q_select(), "W_q_select");
+            checkSel(selector->W_k_select(), "W_k_select");
+            checkSel(selector->null_key_select(), "null_key_select");
+            checkSel(selector->null_logit_bias(), "null_logit_bias");
+        }
+    }
+
+    // ReasoningHead parameters
+    if (ctx.reasoning_head) {
+        auto checkRH = [&](Tensor& t, const char* name) {
+            if (t.data && !t.has_grad()) {
+                AG_WARN("reasoning head " << name << ".grad is NULL");
+                ok = false;
+            }
+        };
+        checkRH(ctx.reasoning_head->W_op(), "W_op");
+        checkRH(ctx.reasoning_head->b_op(), "b_op");
+        checkRH(ctx.reasoning_head->w_arg1(), "w_arg1");
+        checkRH(ctx.reasoning_head->w_arg2(), "w_arg2");
     }
     
     return ok;

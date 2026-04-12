@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run GRIM-text training on PSC Bridges-2 via SSH.
-# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--config CONFIG] [--sbatch] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas]
+# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--config CONFIG] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas]
 #
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
@@ -84,6 +84,20 @@ while [[ $# -gt 0 ]]; do
     --sync-cbs)       FLAG_SYNC_CBS=true; shift ;;
     --sync-crs)       FLAG_SYNC_CRS=true; shift ;;
     --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
+    --sync)
+      shift
+      while [[ $# -gt 0 ]] && [[ "$1" != --* ]]; do
+        case "$1" in
+          all) FLAG_SYNC_ALL=true ;;
+          mcs) FLAG_SYNC_MCS=true ;;
+          cbs) FLAG_SYNC_CBS=true ;;
+          crs) FLAG_SYNC_CRS=true ;;
+          fas) FLAG_SYNC_FAS=true ;;
+          *)   echo "ERROR: Unknown sync target: $1 (valid: all mcs cbs crs fas)"; exit 1 ;;
+        esac
+        shift
+      done
+      ;;
     --TD)             DO_TD=true; shift ;;
     --UT)             DO_UT=true; shift ;;
     --TT)             DO_TT=true; shift ;;

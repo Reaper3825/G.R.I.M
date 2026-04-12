@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include "helpers/vector2.hpp"
+#include "ui/icon_codepoints.hpp"
 
 struct ClipRect {
     int x1, y1, x2, y2;
@@ -41,6 +42,10 @@ public:
     
     // Load a TTF/OTF font from a file path. fontSize is in pixels.
     void setFont(const std::string& fontPath, int fontSize = 16);
+
+    // Load an icon font (FontAwesome, Material Icons, etc.) to merge into the atlas.
+    // Call AFTER setFont(). Icon glyphs are accessible via their Unicode codepoints.
+    void loadIconFont(const std::string& fontPath);
     
     void pushClipRect(const Vec2& pos, const Vec2& size);
     void popClipRect();
@@ -118,18 +123,24 @@ private:
 
     // stb_truetype font state
     std::vector<uint8_t> m_fontFileData;
+    std::vector<uint8_t> m_iconFontFileData;
     std::vector<uint8_t> m_fontAtlas;
     int m_atlasWidth = 0;
     int m_atlasHeight = 0;
     float m_fontSize = 16.0f;
     bool m_fontLoaded = false;
 
-    // Baked character data for ASCII 32..126
-    static constexpr int kFirstChar = 32;
-    static constexpr int kCharCount = 95;
+    // Glyph data for arbitrary Unicode codepoints (ASCII + icons)
     struct BakedChar {
         unsigned short x0, y0, x1, y1;
         float xoff, yoff, xadvance;
     };
-    BakedChar m_bakedChars[kCharCount] = {};
+    std::unordered_map<uint32_t, BakedChar> m_glyphMap;
+
+    // Decode one UTF-8 codepoint from a byte sequence.
+    // Returns the codepoint and advances `pos` past the consumed bytes.
+    static uint32_t decodeUtf8(const std::string& text, size_t& pos);
+
+    // Rebuild the font atlas from loaded font data (called by setFont/loadIconFont).
+    void rebuildAtlas();
 };
