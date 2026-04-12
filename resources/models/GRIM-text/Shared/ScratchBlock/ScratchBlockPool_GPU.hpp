@@ -186,3 +186,45 @@ private:
 
 } // namespace ScratchBlock
 } // namespace GRIM
+
+//======================================================//
+//  RAII Guard — exception-safe acquire/release
+//======================================================//
+
+namespace GRIM {
+namespace ScratchBlock {
+
+class ScratchBlockGuard {
+public:
+    ScratchBlockGuard(ScratchBlockPool& pool, size_t min_bytes)
+        : pool_(&pool), handle_(pool.acquire(min_bytes)) {}
+
+    ~ScratchBlockGuard() {
+        if (pool_) pool_->release(handle_);
+    }
+
+    // Move-only
+    ScratchBlockGuard(ScratchBlockGuard&& o) noexcept
+        : pool_(o.pool_), handle_(o.handle_) { o.pool_ = nullptr; }
+    ScratchBlockGuard& operator=(ScratchBlockGuard&& o) noexcept {
+        if (this != &o) {
+            if (pool_) pool_->release(handle_);
+            pool_ = o.pool_;
+            handle_ = o.handle_;
+            o.pool_ = nullptr;
+        }
+        return *this;
+    }
+    ScratchBlockGuard(const ScratchBlockGuard&) = delete;
+    ScratchBlockGuard& operator=(const ScratchBlockGuard&) = delete;
+
+    int*   data()           const { return handle_.data; }
+    size_t capacity_bytes() const { return handle_.capacity_bytes; }
+
+private:
+    ScratchBlockPool* pool_;
+    ScratchBlockHandle handle_;
+};
+
+} // namespace ScratchBlock
+} // namespace GRIM

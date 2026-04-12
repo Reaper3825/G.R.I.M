@@ -387,9 +387,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             reinterpret_cast<const uint16_t*>(ts->cached_token_text_features.data),
             reinterpret_cast<const uint8_t*>(ts->cached_token_atom_mask.data),
             reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
-            ts->cached_token_to_slot_map.data
-                ? reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data)
-                : nullptr,
+            reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data),
             total_tokens,
             ctx.stream,
             exec_first_type_only);
@@ -1167,7 +1165,15 @@ LossResult computeAutogradLoss(
     
     const int total_tokens = ctx.batch_size * ctx.seq_len;
     const int vocab_size = cfg->vocab_size;
-    const int valid_tokens = payload.valid_tokens;
+    // Use payload.lm_valid_tokens — the post atom-target masking count set by
+    // copyBatchToDevice (training path) or computeLossBatch (eval path).
+    const int valid_tokens = payload.lm_valid_tokens;
+    if (valid_tokens <= 0) {
+        throw std::runtime_error("computeAutogradLoss: payload.lm_valid_tokens=" +
+            std::to_string(valid_tokens) + " — must be > 0 (set after atom-target masking)");
+    }
+    // Publish to TrainingState so Phase2 logging can read it.
+    ts->cached_valid_tokens = valid_tokens;
     
     AG_INFO("Computing loss: tokens=" << total_tokens << " vocab=" << vocab_size
             << " valid=" << valid_tokens);
@@ -1336,7 +1342,7 @@ LossResult computeAutogradLoss(
     // NOTE: cached_loss_value is set AFTER all losses are accumulated (see below).
     // text_loss here is ONLY text CE + MTP — execution/selector losses come later.
     ts->cached_text_loss = text_loss;
-    ts->cached_valid_tokens = valid_tokens;
+    // cached_valid_tokens published from payload.lm_valid_tokens above.
 
     constexpr float numeric_loss = 0.0f;
 
@@ -2192,24 +2198,11 @@ LossResult autogradTrainingStep(
         throw std::runtime_error("autogradTrainingStep: cached_targets_tensor.data is NULL");
     }
 
-    // WS8 Spec Step 10: LM does not supervise numeric magnitudes.
-    // Mask atom-position targets to -1 so unified_loss ignores tokens supervised
-    // by the execution block (numeric head). atom_mask[t]==1 marks exactly the
-    // <NUM> placeholder tokens produced by atom detection in the tokenizer.
-    std::vector<int> masked_targets;
-    const int* target_src = payload.target_ids.data();
-    if (cfg.execution_block_enabled) {
-        masked_targets.assign(payload.target_ids.begin(), payload.target_ids.end());
-        for (int t = 0; t < total_tokens; ++t) {
-            if (payload.atom_mask[t] != 0)
-                masked_targets[t] = -1;
-        }
-        target_src = masked_targets.data();
-    }
-
+    // Targets arrive pre-masked from buildBatchPayload() Phase 4b.
+    // payload.lm_valid_tokens is already set by the builder.
     CUDA_CHECK(cudaMemcpyAsync(
         reinterpret_cast<int*>(training_state.cached_targets_tensor.data),
-        target_src,
+        payload.target_ids.data(),
         payload.targetIdBytes(),
         cudaMemcpyHostToDevice, stream));
     
@@ -2248,15 +2241,17 @@ LossResult autogradTrainingStep(
             cudaMemcpyHostToDevice, stream));
     }
     // Execution slot map (runtime substrate metadata — stable for full forward/execute sequence)
-    if (training_state.cached_token_to_slot_map.data) {
-        CUDA_CHECK(cudaMemcpyAsync(
-            reinterpret_cast<int32_t*>(training_state.cached_token_to_slot_map.data),
-            payload.token_to_slot_map.data(),
-            payload.slotMapBytes(),
-            cudaMemcpyHostToDevice, stream));
-        payload.d_token_to_slot_map =
-            reinterpret_cast<const int32_t*>(training_state.cached_token_to_slot_map.data);
+    if (!training_state.cached_token_to_slot_map.data) {
+        throw std::runtime_error("copyBatchToDevice: cached_token_to_slot_map.data is NULL — "
+            "slot map is unconditionally allocated in InitTrainingState");
     }
+    CUDA_CHECK(cudaMemcpyAsync(
+        reinterpret_cast<int32_t*>(training_state.cached_token_to_slot_map.data),
+        payload.token_to_slot_map.data(),
+        payload.slotMapBytes(),
+        cudaMemcpyHostToDevice, stream));
+    payload.d_token_to_slot_map =
+        reinterpret_cast<const int32_t*>(training_state.cached_token_to_slot_map.data);
     
     // Store dimensions in TrainingState for downstream consumers
     training_state.cached_batch_size = payload.batch_size;

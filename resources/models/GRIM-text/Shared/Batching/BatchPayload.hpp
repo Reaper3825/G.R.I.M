@@ -69,6 +69,10 @@ struct BatchPayload {
     int actual_tokens = 0;                   // sum of real sequence lengths (no padding)
     int padding_tokens = 0;                  // total_tokens - actual_tokens
     int valid_tokens = 0;                    // total unmasked targets (for loss mean reduction)
+    // LM-supervised token count AFTER execution-slot target masking.
+    // Set by buildBatchPayload() Phase 4b.  Equals valid_tokens when no
+    // execution-slot masking occurs.
+    int lm_valid_tokens = 0;
     int vocab_size = 0;                      // vocabulary size (for loss kernels + target validation)
     std::vector<int> seq_lengths;            // [batch_size] — original length per sequence before padding
     std::vector<int> valid_target_counts;    // [batch_size] — unmasked targets per sequence

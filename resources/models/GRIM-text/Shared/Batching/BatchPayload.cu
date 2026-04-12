@@ -379,6 +379,40 @@ BatchPayload buildBatchPayload(
     }
 
     // ═════════════════════════════════════════════════════════════════════════
+    // PHASE 4b: Execution-slot target masking
+    //
+    // Tokens owned by the execution block (token_to_slot_map[t] >= 0) are
+    // supervised by the numeric head, NOT by LM cross-entropy.  Mask their
+    // targets to -1 so unified_loss ignores them.
+    //
+    // Only execution-active rows can have valid slots.  Tokens that are atoms
+    // but have NO slot (slot == -1) remain under LM CE — they are ordinary
+    // numeric text, not execution-owned.
+    //
+    // lm_valid_tokens = valid_tokens minus execution-slot-masked positions.
+    // ═════════════════════════════════════════════════════════════════════════
+    payload.lm_valid_tokens = payload.valid_tokens;
+    {
+        int slots_masked = 0;
+        for (int b = 0; b < payload.batch_size; ++b) {
+            if (!payload.execution_active[b])
+                continue;  // Row has no execution supervision — no slots possible
+            const int row_start = b * S;
+            const int row_end   = row_start + payload.seq_lengths[b];
+            for (int t = row_start; t < row_end; ++t) {
+                if (payload.token_to_slot_map[t] >= 0) {
+                    if (payload.target_ids[t] != -1) {
+                        slots_masked++;
+                        payload.valid_target_counts[b]--;
+                    }
+                    payload.target_ids[t] = -1;
+                }
+            }
+        }
+        payload.lm_valid_tokens -= slots_masked;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
     // PHASE 5: Final validation
     // ═════════════════════════════════════════════════════════════════════════
     if (payload.valid_tokens <= 0) {
@@ -394,6 +428,12 @@ BatchPayload buildBatchPayload(
         }
         msg << "] — all targets are masked (-1), batch has nothing to train on";
         throw std::runtime_error(msg.str());
+    }
+    if (payload.lm_valid_tokens <= 0) {
+        throw std::runtime_error(
+            "buildBatchPayload: lm_valid_tokens=0 after execution-slot masking "
+            "(valid_tokens=" + std::to_string(payload.valid_tokens) +
+            ") — all LM targets were claimed by execution slots");
     }
 
     // Cross-check geometry invariants (Rule 20: crash if anything is wrong)

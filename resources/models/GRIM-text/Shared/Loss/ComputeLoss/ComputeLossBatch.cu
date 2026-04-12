@@ -177,86 +177,80 @@ float LanguageModel::computeLossBatch(
 	if (!cached_atom_mask_ptr) {
 		throw std::runtime_error("computeLossBatch: cached_token_atom_mask.data is NULL");
 	}
+	int32_t* cached_slot_map_ptr = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data);
+	if (!cached_slot_map_ptr) {
+		throw std::runtime_error("computeLossBatch: cached_token_to_slot_map.data is NULL — "
+			"slot map is unconditionally allocated in InitTrainingState");
+	}
 
-	// Compute transfer sizes
 	// Compute transfer sizes using BatchPayload helpers
 	const size_t input_ids_bytes    = payload.inputIdBytes();
 	const size_t target_ids_bytes   = payload.targetIdBytes();
 	const size_t numeric_val_bytes  = payload.numericValueBytes();
 	const size_t atom_mask_bytes    = payload.atomMaskBytes();
+	const size_t atom_flag_bytes    = payload.atomFlagBytes();
 
 	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
 	const bool has_text_features = (cached_text_features_ptr != nullptr);
 	const size_t text_feat_bytes = payload.textFeatureBytes();
+	const size_t slot_map_bytes  = payload.slotMapBytes();
 
-	// Acquire double-buffer blocks (A and B)
-	auto handleA = scratch_pool->acquire(std::max({input_ids_bytes, numeric_val_bytes, text_feat_bytes}));
-	auto handleB = scratch_pool->acquire(std::max({target_ids_bytes, atom_mask_bytes}));
+	// Acquire double-buffer blocks (A and B) — RAII guards release on any exit path.
+	// Block A is reused across rounds: input_ids, numeric_values, text_features, slot_map.
+	// Block B: target_ids, atom_mask, atom_flags.
+	ScratchBlock::ScratchBlockGuard handleA(*scratch_pool, std::max({input_ids_bytes, numeric_val_bytes, text_feat_bytes, slot_map_bytes}));
+	ScratchBlock::ScratchBlockGuard handleB(*scratch_pool, std::max({target_ids_bytes, atom_mask_bytes, atom_flag_bytes}));
 
 	// --- Round 1: input_ids (block A) + target_ids (block B) ---
-	std::memcpy(handleA.data, payload.input_ids.data(), input_ids_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, handleA.data,
+	std::memcpy(handleA.data(), payload.input_ids.data(), input_ids_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, handleA.data(),
 		input_ids_bytes, cudaMemcpyHostToDevice, stream));
 
-	std::memcpy(handleB.data, payload.target_ids.data(), target_ids_bytes);
+	// Targets are already execution-slot-masked by buildBatchPayload().
+	// payload.lm_valid_tokens reflects the post-masking LM-supervised count.
+	std::memcpy(handleB.data(), payload.target_ids.data(), target_ids_bytes);
 
-	// Spec Step 10: LM does not supervise numeric magnitudes.
-	// Mask atom-position targets to -1 so unified_loss ignores tokens supervised
-	// by the execution block (numeric head). atom_mask[t]==1 marks exactly the
-	// <NUM> placeholder tokens produced by atom detection in the tokenizer.
-	if (cfg.execution_block_enabled) {
-		int32_t* tgt = reinterpret_cast<int32_t*>(handleB.data);
-		const int total_toks = payload.total_tokens;
-		for (int t = 0; t < total_toks; ++t) {
-			if (payload.atom_mask[t] != 0)
-				tgt[t] = -1;
-		}
-	}
-
-	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, handleB.data,
+	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, handleB.data(),
 		target_ids_bytes, cudaMemcpyHostToDevice, stream));
 
 	// Sync before reusing blocks — GPU must finish reading A and B
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 
 	// --- Round 2: numeric_values (block A) + atom_mask (block B) ---
-	std::memcpy(handleA.data, payload.numeric_values.data(), numeric_val_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, handleA.data,
+	std::memcpy(handleA.data(), payload.numeric_values.data(), numeric_val_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, handleA.data(),
 		numeric_val_bytes, cudaMemcpyHostToDevice, stream));
 
-	std::memcpy(handleB.data, payload.atom_mask.data(), atom_mask_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), handleB.data,
+	std::memcpy(handleB.data(), payload.atom_mask.data(), atom_mask_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), handleB.data(),
 		atom_mask_bytes, cudaMemcpyHostToDevice, stream));
 
-	// --- Round 3: text_features (block A) ---
+	// --- Round 3: text_features (block A) + atom_flags (block B) ---
+	CUDA_CHECK(cudaStreamSynchronize(stream));
 	if (has_text_features) {
-		CUDA_CHECK(cudaStreamSynchronize(stream));
-
-		std::memcpy(handleA.data, payload.text_features.data(), text_feat_bytes);
-		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), handleA.data,
+		std::memcpy(handleA.data(), payload.text_features.data(), text_feat_bytes);
+		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), handleA.data(),
 			text_feat_bytes, cudaMemcpyHostToDevice, stream));
+	}
+	if (training_state_.cached_token_atom_flags.data) {
+		std::memcpy(handleB.data(), payload.atom_flags.data(), atom_flag_bytes);
+		CUDA_CHECK(cudaMemcpyAsync(
+			reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data), handleB.data(),
+			atom_flag_bytes, cudaMemcpyHostToDevice, stream));
 	}
 
 	// --- Round 4: token_to_slot_map (reuse block A; pool is only double-buffered) ---
-	if (training_state_.cached_token_to_slot_map.data) {
-		CUDA_CHECK(cudaStreamSynchronize(stream));
-		const size_t slot_map_bytes = payload.slotMapBytes();
-		if (slot_map_bytes > handleA.capacity_bytes) {
-			throw std::runtime_error(
-				"computeLossBatch: token_to_slot_map transfer (" + std::to_string(slot_map_bytes) +
-				" bytes) exceeds scratch block A capacity (" + std::to_string(handleA.capacity_bytes) + ")");
-		}
-		std::memcpy(handleA.data, payload.token_to_slot_map.data(), slot_map_bytes);
-		CUDA_CHECK(cudaMemcpyAsync(
-			reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data),
-			handleA.data, slot_map_bytes, cudaMemcpyHostToDevice, stream));
-		CUDA_CHECK(cudaStreamSynchronize(stream));
-	}
-
-	// Final sync ensures all DMAs complete before releasing pinned blocks
 	CUDA_CHECK(cudaStreamSynchronize(stream));
-	scratch_pool->release(handleA);
-	scratch_pool->release(handleB);
+	std::memcpy(handleA.data(), payload.token_to_slot_map.data(), slot_map_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(
+		cached_slot_map_ptr,
+		handleA.data(), slot_map_bytes, cudaMemcpyHostToDevice, stream));
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+	payload.d_token_to_slot_map =
+		reinterpret_cast<const int32_t*>(training_state_.cached_token_to_slot_map.data);
+
+	// Final sync ensures all DMAs complete before guards release pinned blocks
+	CUDA_CHECK(cudaStreamSynchronize(stream));
 
 	auto copy_end = std::chrono::high_resolution_clock::now();
 	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
@@ -333,7 +327,7 @@ float LanguageModel::computeLossBatch(
 	}
 
 	orderLog("computeLossBatch.forward_done",
-		batch_size, seq_len, total_tokens, valid_tokens);
+		batch_size, seq_len, total_tokens, payload.lm_valid_tokens);
 
 	// Build loss config via centralized helper (Issue #142: single conversion point)
 	autograd_ctx.loss_config = GRIM::Autograd::buildLossConfig(loss_options_, nullptr);
@@ -344,11 +338,12 @@ float LanguageModel::computeLossBatch(
 		GRIM::Logging::EmitModuleInfo("Loss", 
 			"[ComputeLossBatch] Call #" + std::to_string(loss_call_count) +
 			": batch=" + std::to_string(batch_size) + " seq=" + std::to_string(seq_len) +
-			" valid=" + std::to_string(valid_tokens));
+			" valid=" + std::to_string(valid_tokens) +
+			" lm_valid=" + std::to_string(payload.lm_valid_tokens));
 	}
 
 	orderLog("computeLossBatch.loss_start",
-		batch_size, seq_len, total_tokens, valid_tokens);
+		batch_size, seq_len, total_tokens, payload.lm_valid_tokens);
 
 	// === FORWARD DIAGNOSTIC: Verify logits and targets before loss computation ===
 	// This helps trace the plateau bug by showing what values reach the loss function
@@ -368,7 +363,7 @@ float LanguageModel::computeLossBatch(
 		           target_sample.size() * sizeof(int), cudaMemcpyDeviceToHost);
 		
 		fprintf(stderr, "\n[ForwardDiag] ========== PRE-LOSS CHECK ==========\n");
-		fprintf(stderr, "[ForwardDiag] batch=%zu seq=%zu valid_tokens=%d\n", batch_size, seq_len, valid_tokens);
+		fprintf(stderr, "[ForwardDiag] batch=%zu seq=%zu valid_tokens=%d lm_valid_tokens=%d\n", batch_size, seq_len, valid_tokens, payload.lm_valid_tokens);
 		
 		// Compute and show logit stats
 		float logit_min = std::numeric_limits<float>::infinity();
@@ -467,12 +462,12 @@ float LanguageModel::computeLossBatch(
 	auto loss_result = GRIM::Autograd::computeAutogradLoss(autograd_ctx);
 	if (!loss_result.success) {
 		orderLog("computeLossBatch.loss_fail",
-			batch_size, seq_len, total_tokens, valid_tokens);
+			batch_size, seq_len, total_tokens, payload.lm_valid_tokens);
 		throw std::runtime_error("computeLossBatch: loss computation failed - " + loss_result.error_message);
 	}
 
 	orderLog("computeLossBatch.loss_done",
-		batch_size, seq_len, total_tokens, valid_tokens);
+		batch_size, seq_len, total_tokens, payload.lm_valid_tokens);
 
 	exception_guard.dismiss();
 	return loss_result.loss_value;
