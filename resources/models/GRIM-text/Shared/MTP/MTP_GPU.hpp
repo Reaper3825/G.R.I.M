@@ -25,26 +25,8 @@ namespace GRIM {
 namespace MTP {
 
 //=============================================================================
-// KERNEL LAUNCHERS — shifted targets + accuracy
+// KERNEL LAUNCHERS — accuracy
 //=============================================================================
-
-/**
- * Build shifted target vector for MTP head k: out[t] = targets[t+shift] if in-bounds else -1.
- * @param targets      [total_tokens] device target IDs
- * @param shifted_out   [total_tokens] device output (caller-allocated)
- * @param total_tokens  total_tokens
- * @param seq_len       sequence length (positions per batch item)
- * @param shift         k+1 for head k (number of positions to shift)
- * @param stream        CUDA stream
- */
-void launchShiftTargetsKernel(
-    const int* targets,
-    int* shifted_out,
-    int total_tokens,
-    int seq_len,
-    int shift,
-    cudaStream_t stream
-);
 
 /**
  * Compute MTP head accuracy: correct count and valid count (target != -1).
@@ -72,12 +54,13 @@ void launchMTPAccuracyKernel(
  *  2. For each head k: shift targets, matmul, bias, unified_loss, scale, add
  *  3. Fills ts.mtp_diagnostics (head_loss, head_acc, alpha_effective)
  *
- * Derives targets from ts.cached_targets_tensor, total_tokens and vocab_size
- * from ctx.payload (BatchPayload is the single source of truth for batch geometry).
+ * Reads shifted targets from payload.mtp_shifted_targets[k] (computed by
+ * buildBatchPayload) and uploads to ts.mtp_shifted_targets_tensor per head.
+ * BatchPayload is the single source of truth for batch geometry and masking.
  *
  * @param ctx           AutogradContext with model, config, stream, step, payload
  * @param intermediates AutogradIntermediates owning encoder_output, centered output, loss_tensor
- * @param ts            TrainingState for cached_targets_tensor, mtp_shifted_targets_tensor, mtp_diagnostics
+ * @param ts            TrainingState for mtp_shifted_targets_tensor (GPU upload buffer), mtp_diagnostics
  */
 void computeMTPAuxiliaryLosses(
     Autograd::AutogradContext& ctx,

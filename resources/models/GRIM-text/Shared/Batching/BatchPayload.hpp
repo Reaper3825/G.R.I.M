@@ -144,6 +144,26 @@ struct BatchPayload {
     std::vector<std::shared_ptr<const GRIM::Tokenizer::AtomTable>> seq_atom_tables;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // MTP (Multi-Token Prediction) SHIFTED TARGETS
+    //
+    // Computed ONCE during buildBatchPayload() when mtp_k > 0.
+    // mtp_shifted_targets[k] = [total_tokens] shifted target_ids for head k.
+    // mtp_valid_counts[k] = number of valid (non -1) targets after shift.
+    //
+    // Shift rule: for head k, shift = k+1.
+    //   shifted[b*S + t] = target_ids[b*S + t + shift]  if (t + shift) < seq_len[b]
+    //                     = -1                            otherwise
+    //
+    // Execution-slot masking is inherited: target_ids are already masked by
+    // Phase 4b before MTP shift, so shifted targets respect slot boundaries.
+    //
+    // These are the AUTHORITATIVE shifted targets. MTP_GPU must use these
+    // directly — no ad-hoc GPU shifting.
+    // ═══════════════════════════════════════════════════════════════════════════
+    std::vector<std::vector<int>> mtp_shifted_targets;  // [K][total_tokens]
+    std::vector<int> mtp_valid_counts;                   // [K] valid targets per head
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // TOKEN STATS (for gradient clipping — computed ONCE)
     // ═══════════════════════════════════════════════════════════════════════════
     TNC::BatchTokenStats token_stats;
@@ -310,6 +330,32 @@ struct BatchPayload {
                     std::to_string(batch_size));
             }
         }
+
+        // MTP shifted targets validation
+        const int mtp_k = static_cast<int>(mtp_shifted_targets.size());
+        if (mtp_k > 0) {
+            if (static_cast<int>(mtp_valid_counts.size()) != mtp_k) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.mtp_valid_counts.size()=" +
+                    std::to_string(mtp_valid_counts.size()) + " != mtp_shifted_targets.size()=" +
+                    std::to_string(mtp_k));
+            }
+            for (int k = 0; k < mtp_k; ++k) {
+                if (static_cast<int>(mtp_shifted_targets[k].size()) != total_tokens) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": BatchPayload.mtp_shifted_targets[" +
+                        std::to_string(k) + "].size()=" +
+                        std::to_string(mtp_shifted_targets[k].size()) +
+                        " != total_tokens=" + std::to_string(total_tokens));
+                }
+                if (mtp_valid_counts[k] <= 0) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": BatchPayload.mtp_valid_counts[" +
+                        std::to_string(k) + "]=" + std::to_string(mtp_valid_counts[k]) +
+                        " — no valid shifted targets for MTP head " + std::to_string(k));
+                }
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -363,7 +409,8 @@ BatchPayload buildBatchPayload(
     size_t max_cached_seq_len,
     int execution_num_slots,
     int execution_num_ops,
-    int execution_num_steps);
+    int execution_num_steps,
+    int mtp_k);
 
 }  // namespace Batching
 }  // namespace GRIM

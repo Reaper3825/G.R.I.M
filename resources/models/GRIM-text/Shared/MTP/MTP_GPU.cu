@@ -18,41 +18,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 namespace GRIM {
 namespace MTP {
 
-//========================================================================
-// Shifted targets for MTP (multi-token prediction)
-// out[t] = targets[t+shift] when (t % seq_len) + shift < seq_len else -1
-//========================================================================
-__global__ void kernelShiftTargets(
-    const int* __restrict__ targets,
-    int* __restrict__ out,
-    int total_tokens,
-    int seq_len,
-    int shift
-) {
-    const int t = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= total_tokens) return;
-    const int pos = t % seq_len;
-    if (pos + shift < seq_len) {
-        out[t] = targets[t + shift];
-    } else {
-        out[t] = -1;
-    }
-}
-
-void launchShiftTargetsKernel(
-    const int* targets,
-    int* shifted_out,
-    int total_tokens,
-    int seq_len,
-    int shift,
-    cudaStream_t stream
-) {
-    if (!targets || !shifted_out || total_tokens <= 0 || seq_len <= 0 || shift <= 0) return;
-    const int block = 256;
-    const int grid = (total_tokens + block - 1) / block;
-    kernelShiftTargets<<<grid, block, 0, stream>>>(targets, shifted_out, total_tokens, seq_len, shift);
-}
-
 // MTP accuracy: per-token argmax(logits[t]) == targets[t], count valid (targets[t] != -1)
 __global__ void kernelMTPAccuracy(
     const float* __restrict__ logits,
@@ -116,14 +81,23 @@ void computeMTPAuxiliaryLosses(
     const auto& payload = *ctx.payload;
     const int total_tokens = payload.total_tokens;
     const int vocab_size = payload.vocab_size;
-    const int* targets = reinterpret_cast<const int*>(ts.cached_targets_tensor.data);
-    if (!targets) {
-        throw std::runtime_error("computeMTPAuxiliaryLosses: ts.cached_targets_tensor.data is NULL — GPU copies must run before MTP loss");
-    }
 
     if (!ctx.model || !cfg->mtp_enabled || cfg->mtp_k <= 0 ||
         !intermediates.encoder_output_tensor.data || !ts.mtp_shifted_targets_tensor.data) {
         return;
+    }
+
+    const int K = cfg->mtp_k;
+
+    // Rule 20: payload must have MTP shifted targets computed by buildBatchPayload
+    if (static_cast<int>(payload.mtp_shifted_targets.size()) != K) {
+        throw std::runtime_error("computeMTPAuxiliaryLosses: payload.mtp_shifted_targets.size()=" +
+            std::to_string(payload.mtp_shifted_targets.size()) + " != mtp_k=" + std::to_string(K) +
+            " — buildBatchPayload must be called with mtp_k=" + std::to_string(K));
+    }
+    if (static_cast<int>(payload.mtp_valid_counts.size()) != K) {
+        throw std::runtime_error("computeMTPAuxiliaryLosses: payload.mtp_valid_counts.size()=" +
+            std::to_string(payload.mtp_valid_counts.size()) + " != mtp_k=" + std::to_string(K));
     }
 
     float L0_main = 0.0f;
@@ -137,7 +111,6 @@ void computeMTPAuxiliaryLosses(
 
     const float alpha_effective = cfg->mtp_alpha * std::min(1.0f,
         static_cast<float>(ctx.step) / static_cast<float>(cfg->mtp_alpha_warmup_steps > 0 ? cfg->mtp_alpha_warmup_steps : 1));
-    const int K = cfg->mtp_k;
     const float scale = (K > 0 && alpha_effective > 0.0f) ? (alpha_effective / static_cast<float>(K)) : 0.0f;
     intermediates.mtp_logits_tensors.clear();
     ts.mtp_diagnostics.head_loss.clear();
@@ -162,18 +135,19 @@ void computeMTPAuxiliaryLosses(
         mtp_input = &intermediates.encoder_output_tensor;
     }
 
+    const size_t target_bytes = static_cast<size_t>(total_tokens) * sizeof(int);
+
     for (int k = 0; k < K && scale > 0.0f; ++k) {
         LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
         if (!head || !head->weight.data || !head->bias.data) continue;
-        const int shift = k + 1;
-        launchShiftTargetsKernel(
-            targets,
-            reinterpret_cast<int*>(ts.mtp_shifted_targets_tensor.data),
-            total_tokens,
-            ctx.seq_len,
-            shift,
-            ctx.stream
-        );
+
+        // Upload shifted targets from payload (authoritative, computed by buildBatchPayload)
+        cudaMemcpyAsync(
+            ts.mtp_shifted_targets_tensor.data,
+            payload.mtp_shifted_targets[k].data(),
+            target_bytes,
+            cudaMemcpyHostToDevice, ctx.stream);
+
         Tensor logits_k = autograd::matmul(
             *mtp_input,
             head->weight,
@@ -187,7 +161,7 @@ void computeMTPAuxiliaryLosses(
         Tensor loss_k = autograd::unified_loss(
             intermediates.mtp_logits_tensors.back(),
             reinterpret_cast<const int*>(ts.mtp_shifted_targets_tensor.data),
-            *ctx.payload,
+            payload,
             ctx.loss_config,
             ctx.stream
         );
@@ -209,7 +183,7 @@ void computeMTPAuxiliaryLosses(
         cudaStreamSynchronize(ctx.stream);
         if (!std::isfinite(h_loss_k)) {
             throw std::runtime_error("computeMTPAuxiliaryLosses: MTP head k=" + std::to_string(k) +
-                " loss is non-finite (" + std::to_string(h_loss_k) + ") — shift=" + std::to_string(shift));
+                " loss is non-finite (" + std::to_string(h_loss_k) + ") — shift=" + std::to_string(k + 1));
         }
         ts.mtp_diagnostics.head_loss.push_back(h_loss_k);
         int h_correct = 0, h_valid = 0;

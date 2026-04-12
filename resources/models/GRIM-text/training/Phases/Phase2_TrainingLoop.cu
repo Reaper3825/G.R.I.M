@@ -826,7 +826,8 @@ void maybeRunMicroValidation(
             mv_max_cached_batch, mv_max_cached_seq,
             mv_model_cfg.execution_block_num_slots,
             mv_model_cfg.execution_block_num_ops,
-            mv_model_cfg.execution_block_num_steps);
+            mv_model_cfg.execution_block_num_steps,
+            0);  // mtp_k=0 for validation — no MTP shifting needed
         if (mv_payload.batch_size == 0) continue;
         
         float micro_batch_loss = ctx.model->computeLossBatch(mv_payload, /*is_training=*/false);
@@ -1263,7 +1264,8 @@ ValidationResult runValidation(TrainingContext& ctx) {
                 val_max_cached_batch, val_max_cached_seq,
                 val_model_cfg.execution_block_num_slots,
                 val_model_cfg.execution_block_num_ops,
-                val_model_cfg.execution_block_num_steps);
+                val_model_cfg.execution_block_num_steps,
+                0);  // mtp_k=0 for validation — no MTP shifting needed
             if (val_payload.batch_size == 0) continue;
             
             float batch_val_loss = ctx.model->computeLossBatch(val_payload, /*is_training=*/false);
@@ -4853,7 +4855,8 @@ EpochResult runEpoch(
             token_layout, max_cached_batch, max_cached_seq,
             model_cfg.execution_block_num_slots,
             model_cfg.execution_block_num_ops,
-            model_cfg.execution_block_num_steps);
+            model_cfg.execution_block_num_steps,
+            model_cfg.mtp_enabled ? model_cfg.mtp_k : 0);
 
         // Log progress periodically (from payload — single source of truth)
         if (batch_idx % 5 == 0) {

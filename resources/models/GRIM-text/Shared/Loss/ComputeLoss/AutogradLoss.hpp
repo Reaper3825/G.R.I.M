@@ -173,7 +173,7 @@ void launchToken277DiagnosticActual(
 
 /**
  * MTP kernels moved to Shared/MTP/MTP_GPU.hpp
- * (launchShiftTargetsKernel, launchMTPAccuracyKernel)
+ * (launchMTPAccuracyKernel, computeMTPAuxiliaryLosses)
  */
 
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
