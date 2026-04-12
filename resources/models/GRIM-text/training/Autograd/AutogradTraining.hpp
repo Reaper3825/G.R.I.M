@@ -64,7 +64,7 @@ struct LossResult {
     float text_loss = 0.0f;          // Text CE + MTP only (snapshot before exec/selector additions)
     float numeric_loss = 0.0f;       // Reserved (legacy); always 0 — no value head
     float selector_loss = 0.0f;      // Decode-time selector supervision loss (host scalar)
-    float exec_loss = 0.0f;          // loss_value - text_loss (all non-text autograd terms)
+    float aux_loss = 0.0f;           // loss_value - text_loss (all non-text auxiliary terms)
     float weight_text = 1.0f;
     int valid_tokens = 0;
     bool success = false;

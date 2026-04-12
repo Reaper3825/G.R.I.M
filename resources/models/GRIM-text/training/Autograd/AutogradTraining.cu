@@ -1628,10 +1628,10 @@ LossResult computeAutogradLoss(
                         intermediates.loss_tensor = autograd::add(
                             intermediates.loss_tensor, ce_scaled, ctx.stream);
 
-                        // Read CE for reporting
+                        // Read CE for reporting (synchronous — host needs the value now)
                         float ce_val = 0.0f;
-                        cudaMemcpyAsync(&ce_val, ce.data, sizeof(float),
-                                        cudaMemcpyDeviceToHost, ctx.stream);
+                        cudaMemcpy(&ce_val, ce.data, sizeof(float),
+                                   cudaMemcpyDeviceToHost);
                         selector_supervision_loss += per_pos_weight * ce_val;
 
                         // Keep forward result alive for backward
@@ -1654,7 +1654,7 @@ LossResult computeAutogradLoss(
     cudaStreamSynchronize(ctx.stream);
 
     result.loss_value = actual_loss;
-    result.exec_loss = actual_loss - text_loss;  // Everything beyond text CE + MTP
+    result.aux_loss = actual_loss - text_loss;  // All non-text auxiliary loss (exec block + selector + etc.)
     result.weight_text = 1.0f;
     ts->cached_loss_value = actual_loss;
     

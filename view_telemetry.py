@@ -633,7 +633,7 @@ def main():
         ax = fig7.add_subplot(gs7[1, 1])
         if eb_loss_frac is not None:
             ax.plot(eb_loss_frac.index, eb_loss_frac["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:orange")
-            ax.plot(eb_loss_frac.index, smooth(eb_loss_frac["raw_observation"]), linewidth=1.5, color="tab:orange", label="exec_loss / total_loss")
+            ax.plot(eb_loss_frac.index, smooth(eb_loss_frac["raw_observation"]), linewidth=1.5, color="tab:orange", label="aux_loss / total_loss")
         ax.set_ylabel("Fraction")
         ax.set_title("EB Auxiliary Loss Fraction")
         ax.legend(fontsize=8)

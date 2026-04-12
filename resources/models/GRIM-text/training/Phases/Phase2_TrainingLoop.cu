@@ -4602,7 +4602,7 @@ BatchResult processBatch(
             // Stream 25: EB_LOSS_FRAC — exec auxiliary loss as fraction of total loss
             float eb_loss_frac = 0.0f;
             if (loss_result.loss_value > 1e-12f) {
-                eb_loss_frac = loss_result.exec_loss / loss_result.loss_value;
+                eb_loss_frac = loss_result.aux_loss / loss_result.loss_value;
             }
             ctx.telemetry.last_obs[25] = eb_loss_frac;  // EB_LOSS_FRAC
 
