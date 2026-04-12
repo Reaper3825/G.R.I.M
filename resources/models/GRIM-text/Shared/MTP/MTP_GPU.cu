@@ -118,21 +118,23 @@ void computeMTPAuxiliaryLosses(
     ts.mtp_diagnostics.alpha_effective = alpha_effective;
 
     // Resolve mtp_input: same representation as LM head matmul input (A1 fix)
-    const Tensor* mtp_input = nullptr;
+    // CRITICAL: detach() stops MTP loss gradients from flowing back into the encoder.
+    // MTP heads train only their own W/b — the encoder receives gradients ONLY from the main LM head.
+    // Without detach, K random MTP heads inject conflicting noise gradients into the encoder,
+    // causing the ~2-nat loss jump on step 1.
+    Tensor mtp_input_detached;
     if (intermediates.centered_encoder_output.data) {
-        // LM head used center_hidden_states or project_out_pc1 — use that buffer
-        mtp_input = &intermediates.centered_encoder_output;
+        mtp_input_detached = intermediates.centered_encoder_output.detach();
     } else if (ctx.lm_head->config().has_final_rms_norm && ctx.lm_head->finalRmsGamma().data) {
-        // LM head used only RMSNorm — apply it so MTP sees the same normalized representation
         intermediates.mtp_input_tensor = autograd::rms_norm(
             intermediates.encoder_output_tensor,
             ctx.lm_head->finalRmsGamma(),
             ctx.lm_head->config().rms_epsilon,
             ctx.stream
         );
-        mtp_input = &intermediates.mtp_input_tensor;
+        mtp_input_detached = intermediates.mtp_input_tensor.detach();
     } else {
-        mtp_input = &intermediates.encoder_output_tensor;
+        mtp_input_detached = intermediates.encoder_output_tensor.detach();
     }
 
     const size_t target_bytes = static_cast<size_t>(total_tokens) * sizeof(int);
@@ -149,10 +151,10 @@ void computeMTPAuxiliaryLosses(
             cudaMemcpyHostToDevice, ctx.stream);
 
         Tensor logits_k = autograd::matmul(
-            *mtp_input,
+            mtp_input_detached,
             head->weight,
             ctx.stream,
-            mtp_input->data,
+            mtp_input_detached.data,
             nullptr,
             true
         );
