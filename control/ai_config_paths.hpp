@@ -348,6 +348,16 @@ struct TrainingHyperparameters {
     int   execution_block_gate_warmup_steps;
     float execution_block_causal_w1_transition;
 
+    // Fix #6: Division invalid penalty (penalize selecting ÷ when |v2| < eps)
+    float execution_div_invalid_penalty_weight;
+
+    // Fix #8: Division magnitude penalty (penalize large |v_out| after clamped division)
+    float execution_div_magnitude_penalty_weight;
+
+    // Fix #7: Arg REINFORCE weight (0 = disabled)
+    float execution_arg_reinforce_weight;
+    float execution_arg_reinforce_baseline_decay;
+
     // Autograd structured CE
     bool  structured_ce_enabled;
     float structured_ce_weight;
@@ -1240,6 +1250,10 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
         assignTrainingField(params.execution_block_gate_warmup_steps, eb, "gate_warmup_steps");
         assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
+        assignTrainingField(params.execution_div_invalid_penalty_weight, eb, "div_invalid_penalty_weight");
+        assignTrainingField(params.execution_div_magnitude_penalty_weight, eb, "div_magnitude_penalty_weight");
+        assignTrainingField(params.execution_arg_reinforce_weight, eb, "arg_reinforce_weight");
+        assignTrainingField(params.execution_arg_reinforce_baseline_decay, eb, "arg_reinforce_baseline_decay");
         assignTrainingField(params.structured_ce_enabled, eb, "structured_ce_enabled");
         assignTrainingField(params.structured_ce_weight, eb, "structured_ce_weight");
 

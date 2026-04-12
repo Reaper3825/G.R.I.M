@@ -1004,6 +1004,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.execution_block_transition_hard_threshold = hp.execution_block_transition_hard_threshold;
     model_config.execution_block_gate_warmup_steps = hp.execution_block_gate_warmup_steps;
     model_config.execution_block_causal_w1_transition = hp.execution_block_causal_w1_transition;
+    model_config.div_invalid_penalty_weight = hp.execution_div_invalid_penalty_weight;
+    model_config.div_magnitude_penalty_weight = hp.execution_div_magnitude_penalty_weight;
+    model_config.arg_reinforce_weight = hp.execution_arg_reinforce_weight;
+    model_config.arg_reinforce_baseline_decay = hp.execution_arg_reinforce_baseline_decay;
     model_config.structured_ce_enabled = hp.structured_ce_enabled;
     model_config.structured_ce_weight  = hp.structured_ce_weight;
     if (model_config.structured_ce_enabled && model_config.structured_ce_weight <= 0.0f) {

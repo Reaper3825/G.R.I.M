@@ -150,7 +150,6 @@ void LanguageModel::initInferenceState() {
         eb_cfg.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
         eb_cfg.cross_attn_topk = cfg.execution_block_cross_attn_topk;
         eb_cfg.usage_decay = cfg.execution_block_usage_decay;
-        eb_cfg.diversity_kappa = cfg.execution_block_diversity_kappa;
         eb_cfg.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
 
         execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_cfg, /*seed=*/0, primary_stream);

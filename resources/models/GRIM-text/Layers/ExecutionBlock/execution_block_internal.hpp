@@ -13,6 +13,7 @@
 namespace GRIM::ExecutionBlockInternal {
 
 inline constexpr int kBlockSize = 256;
+inline constexpr int kWarpSize = 32;
 inline constexpr float kEps = 1e-7f;
 
 inline constexpr int kStageV1 = 1;
@@ -66,9 +67,11 @@ inline const char* stageIdToName(int id) {
 struct LayerAccess {
 	static int* numericErrorFlag(ExecutionBlockLayer& layer) { return layer.d_numeric_error_flag_; }
 	static int* divClampCount(ExecutionBlockLayer& layer) { return layer.d_div_clamp_count_; }
+	static int* divInvalidFlag(ExecutionBlockLayer& layer) { return layer.d_div_invalid_flag_; }
 	static int* execIndices(ExecutionBlockLayer& layer) { return layer.d_exec_idx_; }
 	static int* execRecordI(ExecutionBlockLayer& layer) { return layer.d_exec_record_i_; }
 	static float* execRecordF(ExecutionBlockLayer& layer) { return layer.d_exec_record_f_; }
+	static float* reinforceBaseline(ExecutionBlockLayer& layer) { return layer.d_reinforce_baseline_; }
 };
 
 struct StepWorkingSet {
@@ -79,8 +82,7 @@ struct StepWorkingSet {
 	Tensor trace_vec;
 	Tensor context_enriched;
 	Tensor step_emb;
-	Tensor h_arg1;
-	Tensor h_arg2;
+	// [DELETED] h_arg1, h_arg2 — removed: leaked arg selection into op/write heads.
 	Tensor p_arg1;
 	Tensor p_arg2;
 	Tensor v1;

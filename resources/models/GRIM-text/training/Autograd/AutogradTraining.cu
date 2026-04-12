@@ -666,10 +666,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
                 float T = cfg->execution_block_temp_start;
 
-                const int32_t* d_slot_map_full = ts->cached_token_to_slot_map.data
-                    ? reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data)
-                    : nullptr;
-
                 // Initialize persistent execution trace per row
                 // Vectors sized B for index stability; only active rows get allocated tensors.
                 ts->execution_trace_by_row.resize(B);
@@ -706,16 +702,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     M_b.clear(ctx.stream);
 
                     const int tok_off = b * sl;
-                    const int32_t* d_slot_map_row = d_slot_map_full
-                        ? d_slot_map_full + tok_off
-                        : nullptr;
 
                     auto row_atom_view = ctx.scratch_block->extractRowLocalAtomView(
                         tok_off, sl, ctx.stream);
 
                     // WS7: Execution-active rows MUST have bootstrap data.
                     // Throw instead of silently entering executeStep with empty memory.
-                    if (!d_slot_map_full || !ts->cached_token_numeric_values.data) {
+                    if (!ctx.payload->d_token_to_slot_map || !ts->cached_token_numeric_values.data) {
                         throw std::runtime_error(
                             "AutogradTraining: execution-active row " + std::to_string(b)
                             + " has no slot map or numeric values for bootstrap — "
@@ -724,7 +717,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     ctx.execution_block->bootstrapMemoryFromSlotMap(
                         M_b,
                         ts->cached_token_numeric_values.data + tok_off,
-                        d_slot_map_row,
+                        ctx.payload->d_token_to_slot_map + tok_off,
                         sl, ctx.stream);
 
                     for (int step = 0; step < exec_K; ++step) {
@@ -801,11 +794,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         ctx.execution_block->executeStep(
                             layer_output, M_b,
                             reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
-                            d_slot_map_row,
-                            row_atom_view.num_atoms, total_tokens,
+                            row_atom_view.num_atoms, *ctx.payload, b,
                             step, T, ctx.stream,
                             &step_diag,
-                            tok_off, sl,
                             ts->trace_state_by_row[b],
                             ts->execution_trace_by_row[b],
                             d_expected_target,
@@ -1354,7 +1345,7 @@ LossResult computeAutogradLoss(
     // Two gradient-connected paths:
     //   1. transition_loss — L1 on soft-computed value vs teacher expected_value
     //   2. selection CE — logits-space CE on op/arg1/arg2/write selections
-    //      (computed inside executeStep via SelectionCrossEntropyGradFn)
+    //      (computed inside executeStep via autograd::cross_entropy_logits)
     //
     // Monitoring-only (host scalars, no gradients):
     //   - exec_entropy_loss — distribution collapse detection
@@ -1399,6 +1390,30 @@ LossResult computeAutogradLoss(
                         intermediates.loss_tensor, scaled, ctx.stream);
                 }
 
+                // Fix #6: div_invalid_penalty → autograd graph
+                // Penalizes p_op[3] when division was clamped (|v2| < eps).
+                // Gradient flows: penalty → p_op → softmax → op_logits → W_op_select.
+                if (sout.div_invalid_penalty.data && sout.div_invalid_penalty.grad_fn) {
+                    intermediates.loss_tensor = autograd::add(
+                        intermediates.loss_tensor, sout.div_invalid_penalty, ctx.stream);
+                }
+
+                // Fix #8: div_magnitude_penalty → autograd graph
+                // Penalizes large |v_out| after clamped division.
+                // Gradient flows: penalty → v_out → FourOpMixGradFn → v1, v2.
+                if (sout.div_magnitude_penalty.data && sout.div_magnitude_penalty.grad_fn) {
+                    intermediates.loss_tensor = autograd::add(
+                        intermediates.loss_tensor, sout.div_magnitude_penalty, ctx.stream);
+                }
+
+                // Fix #7: arg_reinforce_loss → autograd graph
+                // REINFORCE: λ * detached(|v_out-target|) * (-log p_arg[k])
+                // Gradient flows ONLY to arg logits. No soft weighting of values.
+                if (sout.arg_reinforce_loss.data && sout.arg_reinforce_loss.grad_fn) {
+                    intermediates.loss_tensor = autograd::add(
+                        intermediates.loss_tensor, sout.arg_reinforce_loss, ctx.stream);
+                }
+
                 // selection CE → autograd graph (direct per-decision supervision)
                 if (cfg->structured_ce_enabled && sout.has_selection_ce) {
                     auto accumulate_ce = [&](const Tensor& ce_tensor, const char* name) {
@@ -1407,7 +1422,7 @@ LossResult computeAutogradLoss(
                                 std::string("AutogradTraining: selection CE tensor '")
                                 + name + "' has no data/grad_fn at row=" + std::to_string(b)
                                 + " step=" + std::to_string(k)
-                                + " — SelectionCrossEntropyGradFn was not attached");
+                                + " — CrossEntropyLogitsGradFn was not attached");
                         auto scaled = autograd::scale_scalar(ce_tensor, ce_weight, ctx.stream);
                         intermediates.loss_tensor = autograd::add(
                             intermediates.loss_tensor, scaled, ctx.stream);
@@ -2134,6 +2149,8 @@ LossResult autogradTrainingStep(
             payload.token_to_slot_map.data(),
             payload.slotMapBytes(),
             cudaMemcpyHostToDevice, stream));
+        payload.d_token_to_slot_map =
+            reinterpret_cast<const int32_t*>(training_state.cached_token_to_slot_map.data);
     }
     
     // Store dimensions in TrainingState for downstream consumers

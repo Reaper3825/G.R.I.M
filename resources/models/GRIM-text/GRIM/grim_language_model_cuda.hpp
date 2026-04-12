@@ -370,6 +370,16 @@ struct LanguageModelConfig {
     int   execution_block_gate_warmup_steps = 0;
     float execution_block_causal_w1_transition = 1.0f;
 
+    // Fix #6: Division invalid penalty (0 = disabled)
+    float div_invalid_penalty_weight = 0.0f;
+
+    // Fix #8: Division magnitude penalty (0 = disabled)
+    float div_magnitude_penalty_weight = 0.0f;
+
+    // Fix #7: Arg REINFORCE weight (0 = disabled)
+    float arg_reinforce_weight = 0.0f;
+    float arg_reinforce_baseline_decay = 0.99f;
+
     // Autograd-connected structured CE for execution selection decisions
     bool  structured_ce_enabled = false;  // Enable device-side logits-space CE on teacher targets
     float structured_ce_weight  = 0.0f;   // Weight for selection CE (0 = must be set if enabled)

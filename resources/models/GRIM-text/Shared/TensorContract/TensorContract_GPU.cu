@@ -4933,11 +4933,12 @@ struct MatMulGradFn : public GradFn {
     std::shared_ptr<GradFn> a_grad_fn;   // Chain continuation for A
     std::shared_ptr<GradFn> b_grad_fn;   // Chain continuation for B
     
-    // TAPE-BASED cache contract:
-    // - cached_a/cached_b are external pointers managed by caller lifecycle.
-    // - MatMulGradFn validates non-null requirements but does not allocate/copy caches.
-    const float* cached_a = nullptr;  // External A cache (for grad_B)
-    const float* cached_b = nullptr;  // External B cache (for grad_A)
+    // ISSUE #51 FIX: Own copies of cached activations instead of dangling external pointers.
+    // Same pattern as GeluGradFn/RMSNormGradFn — allocate, copy, wrap in shared_ptr.
+    std::shared_ptr<float> owned_cached_a;  // Owned GPU copy of A activations (for grad_B)
+    std::shared_ptr<float> owned_cached_b;  // Owned GPU copy of B activations (for grad_A)
+    const float* cached_a = nullptr;  // Points to owned_cached_a.get()
+    const float* cached_b = nullptr;  // Points to owned_cached_b.get()
     int M = 0, K = 0, N = 0;   // Dimensions
     cublasHandle_t cublas_handle = nullptr;
     bool transpose_b = false;  // Was B transposed in forward?
@@ -5017,8 +5018,8 @@ struct MatMulGradFn : public GradFn {
         }
     }
     
-    // Bind external cache pointers for backward.
-    // Contract: caller owns cache lifetime through backward execution.
+    // ISSUE #51 FIX: Copy cache data to owned buffers instead of storing dangling pointers.
+    // Same contract as GeluGradFn::set_cache_copy / RMSNormGradFn::set_cache_copy.
     void set_cache_copy(const float* a_cache, const float* b_cache, int m, int k, int n, 
                         cublasHandle_t handle, cudaStream_t stream, bool transB = false) {
         transpose_b = transB;
@@ -5026,20 +5027,43 @@ struct MatMulGradFn : public GradFn {
         cublas_handle = handle;
         cache_stream = stream;
         
-        if (b_requires_grad) cached_a = a_cache;
-        
-        if (a_requires_grad) cached_b = b_cache;
-        
-        // Validate that required caches are set
-        if (a_requires_grad && !cached_b) {
+        // Validate that required caches are provided
+        if (a_requires_grad && !b_cache) {
             throw std::runtime_error(
                 "MatMulGradFn::set_cache_copy: b_cache is NULL but input_a requires grad "
                 "(A.grad=true requires B cache for grad_A)");
         }
-        if (b_requires_grad && !cached_a) {
+        if (b_requires_grad && !a_cache) {
             throw std::runtime_error(
                 "MatMulGradFn::set_cache_copy: a_cache is NULL but input_b requires grad "
                 "(B.grad=true requires A cache for grad_B)");
+        }
+        
+        // Allocate and copy A cache (needed for grad_B = A^T @ grad_C)
+        if (b_requires_grad && a_cache) {
+            const size_t a_size = static_cast<size_t>(m) * k;
+            float* buffer = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), a_size * sizeof(float), "MatMulGradFn_cache_a");
+            cudaMemcpyAsync(buffer, a_cache, a_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+            owned_cached_a = std::shared_ptr<float>(buffer, [](float* p) {
+                queueForDeferredCleanup(p);
+            });
+            cached_a = owned_cached_a.get();
+            AG_TRACE("[MatMulGradFn] Copied cache_a: %zu floats to %p\n", a_size, (void*)cached_a);
+        }
+        
+        // Allocate and copy B cache (needed for grad_A = grad_C @ B^T)
+        if (a_requires_grad && b_cache) {
+            // B shape: [K,N] normal or [N,K] if transposed
+            const size_t b_size = static_cast<size_t>(k) * n;
+            float* buffer = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), b_size * sizeof(float), "MatMulGradFn_cache_b");
+            cudaMemcpyAsync(buffer, b_cache, b_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+            owned_cached_b = std::shared_ptr<float>(buffer, [](float* p) {
+                queueForDeferredCleanup(p);
+            });
+            cached_b = owned_cached_b.get();
+            AG_TRACE("[MatMulGradFn] Copied cache_b: %zu floats to %p\n", b_size, (void*)cached_b);
         }
     }
     
@@ -5300,7 +5324,9 @@ struct MatMulGradFn : public GradFn {
     
     void release_saved() override {
         GradFn::release_saved();
-        // TAPE-BASED: Don't free - we don't own the caches or grad buffers
+        // ISSUE #51 FIX: Release owned cache copies (shared_ptr → deferred cleanup)
+        owned_cached_a.reset();
+        owned_cached_b.reset();
         cached_a = nullptr;
         cached_b = nullptr;
         grad_a = nullptr;

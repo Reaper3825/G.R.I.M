@@ -195,6 +195,10 @@
                 "cross_attn_topk": 2,
                 "d_key": 64,
                 "d_type": 16,
+                "div_invalid_penalty_weight": 0.5,
+                "div_magnitude_penalty_weight": 0.1,
+                "arg_reinforce_weight": 0.0,
+                "arg_reinforce_baseline_decay": 0.99,
                 "diversity_kappa": 2.0,
                 "enabled": true,
                 "entropy_aux_weight": 0.01,
@@ -348,7 +352,7 @@
             "min_seq_valid_tokens": 256,
             "multi_token_prediction": {
                 "alpha": 0.2,
-                "alpha_warmup_steps": 100, // test later
+                "alpha_warmup_steps": 0,
                 "enabled": true,
                 "k": 3,
                 "log_ratio_monitor": true

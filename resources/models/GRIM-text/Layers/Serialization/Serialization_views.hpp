@@ -188,6 +188,7 @@ struct SerializationExecutionBlockReadView {
 	DeviceReadView W_trace;
 	DeviceReadView b_trace;
 	DeviceReadView W_reason_gate;
+	DeviceReadView W_trace_gate;
 	bool enabled = false;
 };
 
@@ -236,6 +237,7 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView W_trace;
 	DeviceWriteView b_trace;
 	DeviceWriteView W_reason_gate;
+	DeviceWriteView W_trace_gate;
 };
 
 } // namespace GRIM

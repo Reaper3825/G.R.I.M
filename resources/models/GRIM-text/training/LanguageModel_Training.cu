@@ -273,6 +273,7 @@ void LanguageModel::buildParameterGroups() {
         registerNonDecayTensor("exec_block_b_trace", execution_block_layer_->b_trace(), ParamGroupType::EXECUTION_BLOCK);
         // Reasoning state update gate
         registerTensor("exec_block_W_reason_gate", execution_block_layer_->W_reason_gate(), ParamGroupType::EXECUTION_BLOCK);
+        registerTensor("exec_block_W_trace_gate", execution_block_layer_->W_trace_gate(), ParamGroupType::EXECUTION_BLOCK);
         fprintf(stderr, "[buildParameterGroups] DIAG-D4d: execution block v2 registered\n"); fflush(stderr);
     }
 

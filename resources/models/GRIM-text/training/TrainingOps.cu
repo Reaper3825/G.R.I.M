@@ -424,8 +424,11 @@ void LanguageModel::initGPU() {
             eb_config.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
             eb_config.cross_attn_topk = cfg.execution_block_cross_attn_topk;
             eb_config.usage_decay = cfg.execution_block_usage_decay;
-            eb_config.diversity_kappa = cfg.execution_block_diversity_kappa;
             eb_config.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
+            eb_config.div_invalid_penalty_weight = cfg.div_invalid_penalty_weight;
+            eb_config.div_magnitude_penalty_weight = cfg.div_magnitude_penalty_weight;
+            eb_config.arg_reinforce_weight = cfg.arg_reinforce_weight;
+            eb_config.arg_reinforce_baseline_decay = cfg.arg_reinforce_baseline_decay;
 
             const uint64_t eb_seed = training_state_.weight_init_seed + 20;
             execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_config, eb_seed, primary_stream);

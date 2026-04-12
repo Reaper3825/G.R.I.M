@@ -305,6 +305,7 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(request.sources.execution_block.W_trace, execution_block_layer_->W_trace());
         assignRead(request.sources.execution_block.b_trace, execution_block_layer_->b_trace());
         assignRead(request.sources.execution_block.W_reason_gate, execution_block_layer_->W_reason_gate());
+        assignRead(request.sources.execution_block.W_trace_gate, execution_block_layer_->W_trace_gate());
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
     }
 
@@ -538,6 +539,7 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(request.execution_block.W_trace, execution_block_layer_->W_trace().data, static_cast<std::size_t>(execution_block_layer_->W_trace().numel()));
         assignWrite(request.execution_block.b_trace, execution_block_layer_->b_trace().data, static_cast<std::size_t>(execution_block_layer_->b_trace().numel()));
         assignWrite(request.execution_block.W_reason_gate, execution_block_layer_->W_reason_gate().data, static_cast<std::size_t>(execution_block_layer_->W_reason_gate().numel()));
+        assignWrite(request.execution_block.W_trace_gate, execution_block_layer_->W_trace_gate().data, static_cast<std::size_t>(execution_block_layer_->W_trace_gate().numel()));
     }
 
     // DecodeTimeSlotSelector weight destinations — loaded via FlatBuffer

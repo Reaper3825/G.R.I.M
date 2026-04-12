@@ -15,28 +15,27 @@ def find_default_telemetry_csv():
     log_dir = os.path.join(os.path.dirname(__file__),
                            "resources", "models", "GRIM-text", "training", "logs")
 
-    preferred = [
+    candidates = [
         os.path.join(log_dir, "telemetary_latest.csv"),
         os.path.join(log_dir, "telemetry_latest.csv"),
-    ]
-    for candidate in preferred:
-        if os.path.exists(candidate):
-            return candidate
-
-    patterns = [
         os.path.join(log_dir, "telemetry_*.csv"),
         os.path.join(log_dir, "telemetry_*.Csv"),
         os.path.join(log_dir, "telemetary_*.csv"),
         os.path.join(log_dir, "telemetary_*.Csv"),
     ]
+
     csvs = []
-    for pattern in patterns:
-        csvs.extend(glob.glob(pattern))
+    for candidate in candidates:
+        if any(ch in candidate for ch in "*?["):
+            csvs.extend(glob.glob(candidate))
+        elif os.path.exists(candidate):
+            csvs.append(candidate)
 
     if not csvs:
         return None
 
-    return max(csvs, key=os.path.getmtime)
+    unique_csvs = list({os.path.realpath(path): path for path in csvs}.values())
+    return max(unique_csvs, key=os.path.getmtime)
 
 def load_telemetry(path):
     df = pd.read_csv(path)

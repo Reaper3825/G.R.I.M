@@ -245,8 +245,7 @@ bool testExecutionBlockConfigDefaults(std::string& message) {
     EB_ASSERT_EQ(cfg.cross_attn_head_dim, 64, "cross_attn_head_dim default 64");
     EB_ASSERT_EQ(cfg.cross_attn_topk, 1, "cross_attn_topk default 1");
     EB_ASSERT_NEAR(cfg.usage_decay, 0.9f, 1e-6f, "usage_decay default");
-    EB_ASSERT_NEAR(cfg.empty_slot_bonus, 10.0f, 1e-6f, "empty_slot_bonus default");
-    EB_ASSERT_NEAR(cfg.diversity_kappa, 2.0f, 1e-6f, "diversity_kappa default");
+    // [DELETED] empty_slot_bonus, diversity_kappa checks — fields removed per Fix #4.
     EB_ASSERT_NEAR(cfg.inject_gate_temp, 0.5f, 1e-6f, "inject_gate_temp default");
     EB_ASSERT_EQ(cfg.result_slot_mode, 0, "result_slot_mode default 0");
     EB_ASSERT_EQ(cfg.result_slot_index, -1, "result_slot_index default -1");

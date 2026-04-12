@@ -3,6 +3,7 @@
 #ifdef USE_CUDA
 
 #include "execution_block_internal.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 
 namespace GRIM::ExecutionBlockInternal {
 void executeStepCoordinatorImpl(
@@ -10,15 +11,13 @@ void executeStepCoordinatorImpl(
 	Tensor& H,
 	ExecutionMemory& memory,
 	const int* atom_positions,
-	const int32_t* token_to_slot_map,
 	int num_atoms,
-	int total_tokens,
+	const Batching::BatchPayload& payload,
+	int batch_row,
 	int step,
 	float temperature,
 	cudaStream_t stream,
 	ExecutionBlockStepOutput* diag_out,
-	int token_offset,
-	int row_tokens,
 	Tensor& trace_state,
 	const std::vector<ExecutionRecord>& prior_records,
 	const float* expected_target,

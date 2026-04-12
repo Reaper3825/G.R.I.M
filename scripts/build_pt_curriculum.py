@@ -28,7 +28,7 @@ CURRICULUM_NAME = "Pre-Trainingv1"
 MIN_TOKENS = 400
 MAX_TOKENS = 3000
 MIN_SCORE = 3.0   # Educational quality >= 3/5
-TARGET_COUNT = 50000
+TARGET_COUNT = 10000
 
 
 def split_plaintext_document(text: str):
@@ -167,10 +167,12 @@ def main():
     )
 
     if found_idx is not None:
-        registry["curriculums"][found_idx]["concept_block_ids"] = pt_block_ids
+        existing_curriculum_ids = registry["curriculums"][found_idx]["concept_block_ids"]
+        registry["curriculums"][found_idx]["concept_block_ids"] = existing_curriculum_ids + pt_block_ids
         registry["curriculums"][found_idx]["format_as_concept"] = False
         curr_id = registry["curriculums"][found_idx]["id"]
-        print(f"Updated '{CURRICULUM_NAME}' (id={curr_id}) with {len(pt_block_ids)} blocks")
+        total = len(registry["curriculums"][found_idx]["concept_block_ids"])
+        print(f"Updated '{CURRICULUM_NAME}' (id={curr_id}): added {len(pt_block_ids)} blocks (total: {total})")
     else:
         curr_id = f"curr_pt_{hashlib.sha256(CURRICULUM_NAME.encode()).hexdigest()[:16]}"
         registry["curriculums"].append({
@@ -187,9 +189,10 @@ def main():
         f.write("\n")
 
     # Create the named curriculum manifest: Pre-Trainingv1.json
+    all_pt_ids = registry["curriculums"][found_idx]["concept_block_ids"] if found_idx is not None else pt_block_ids
     manifest = {
         "concept_block_ids": [],
-        "plaintext_block_ids": pt_block_ids,
+        "plaintext_block_ids": all_pt_ids,
         "format_as_concept": False,
     }
     manifest_path = os.path.join(DATA_DIR, f"{CURRICULUM_NAME}.json")
@@ -197,7 +200,7 @@ def main():
         json.dump(manifest, f, ensure_ascii=False)
         f.write("\n")
     print(f"Wrote curriculum manifest: {manifest_path}")
-    print(f"  plaintext_block_ids: {len(pt_block_ids)}")
+    print(f"  plaintext_block_ids: {len(all_pt_ids)}")
     print("  concept_block_ids: 0 (pure PT, no execution blocks)")
 
     # Show sample

@@ -87,8 +87,14 @@ struct BatchPayload {
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
     std::vector<uint16_t> text_features;     // [total_tokens * kTextFeatureDim] padded with 0
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = any atom type)
-     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
+    std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
     std::vector<int32_t> token_to_slot_map;   // [total_tokens] padded with -1 (slot_id for execution; -1 = non-state-bearing)
+
+    // Device mirror of token_to_slot_map.  Non-owning — points into the GPU
+    // cache allocated by TrainingState (training) or the inference upload buffer.
+    // Set after cudaMemcpyAsync; read-only by execution kernels.
+    // mutable: payload is passed as const& but device ptr is set post-upload.
+    mutable const int32_t* d_token_to_slot_map = nullptr;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TEACHER EXECUTION STEPS (for structured CE supervision)

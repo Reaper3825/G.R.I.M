@@ -132,7 +132,7 @@ resources/models/GRIM-text/**/*.npz
 resources/models/GRIM-text/**/*.grmt
 resources/models/GRIM-text/**/*.jsonl
 resources/models/GRIM-text/**/*.png
-resources/models/GRIM-text/**/*.fb
+
 
 # ==============================
 # Node / JS dependencies
@@ -202,7 +202,6 @@ plugins/
 plugins/*
 data/
 data/*
-*.fbs
 .venv310/
 .venv310/*
 .cache/

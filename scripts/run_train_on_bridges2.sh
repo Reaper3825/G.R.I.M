@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Run GRIM-text training on PSC Bridges-2 via SSH.
-# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--config CONFIG] [--sbatch] [--sync-all|--sync-mcs|--sync-cbs|--sync-fas]
+# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--config CONFIG] [--sbatch] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas]
 #
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
 #   - Allocation: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. abc1234p)
 #   - Path: Set GRIM_BRIDGES2_DIR to your repo path, e.g. /ocean/projects/<alloc_id>/<username>/G.R.I.M (default: cis210058p/uwadkins)
 #   - Remote git: Each run still git fetch + reset on Bridges-2 unless GRIM_BRIDGES2_SKIP_PULL is set (unrelated to MCS/CBS/FAS).
-#   - Data: By default does NOT push merged_verified_cache.jsonl or concept_blocks.jsonl, and does NOT run
-#     the flash-attention submodule step on --build. Opt in with --sync-all or --sync-mcs|--sync-cbs|--sync-fas,
-#     or env GRIM_BRIDGES2_SYNC_ALL=1 / GRIM_BRIDGES2_SYNC_MCS|CBS|FAS=1.
+#   - Data: By default does NOT push merged_verified_cache.jsonl, concept_blocks.jsonl, or curriculum_registry.json,
+#     and does NOT run the flash-attention submodule step on --build. Opt in with --sync-all or
+#     --sync-mcs|--sync-cbs|--sync-crs|--sync-fas, or env GRIM_BRIDGES2_SYNC_ALL=1 / GRIM_BRIDGES2_SYNC_MCS|CBS|CRS|FAS=1.
 #   - Submodules: With --sync-fas / SYNC_FAS, flash-attention is refreshed via bridges2_ensure_flash_attention.sh
 #     (no forced submodule update when the expected commits are already checked out on the remote).
 #   - vcpkg: Script clones to GRIM_BRIDGES2_DIR/vcpkg if missing
@@ -25,9 +25,10 @@
 #   --partition P    GPU-shared (default) or GPU.
 #   --gpu-type T     h100-80 (default), v100-32, v100-16, or l40s-48.
 #   --account A      Override GRIM_BRIDGES2_ACCOUNT.
-#   --sync-all       Enable MCS + CBS + FAS (push caches + flash-attention submodule on --build).
+#   --sync-all       Enable MCS + CBS + CRS + FAS (push caches + flash-attention submodule on --build).
 #   --sync-mcs       Push merged_verified_cache.jsonl.
 #   --sync-cbs       Push concept_blocks.jsonl (if present locally).
+#   --sync-crs       Push curriculum_registry.json (if present locally).
 #   --sync-fas       On --build, run scripts/bridges2_ensure_flash_attention.sh (skips forced git pull if FA
 #                    gitlink + pinned Cutlass SHA already match remote; still applies patches).
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
@@ -46,6 +47,7 @@ CONFIG="${CONFIG:-../../../../ai_config.json}"
 TRAINING_DATA_DIR="$REPO_ROOT/resources/models/GRIM-text/training/data"
 CACHE_PATH="$TRAINING_DATA_DIR/merged_verified_cache.jsonl"
 CONCEPT_BLOCKS_PATH="$TRAINING_DATA_DIR/concept_blocks.jsonl"
+CURRICULUM_REGISTRY_PATH="$TRAINING_DATA_DIR/curriculum_registry.json"
 
 # Bridges-2 path: /ocean/projects/<alloc_id>/<username>/G.R.I.M (override with GRIM_BRIDGES2_DIR)
 BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
@@ -61,6 +63,7 @@ FLAG_SYNC_ALL=false
 FLAG_SYNC_MCS=false
 FLAG_SYNC_CBS=false
 FLAG_SYNC_FAS=false
+FLAG_SYNC_CRS=false
 DO_TD=false
 DO_UT=false
 DO_TT=false
@@ -79,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --sync-all)       FLAG_SYNC_ALL=true; shift ;;
     --sync-mcs)       FLAG_SYNC_MCS=true; shift ;;
     --sync-cbs)       FLAG_SYNC_CBS=true; shift ;;
+    --sync-crs)       FLAG_SYNC_CRS=true; shift ;;
     --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
     --TD)             DO_TD=true; shift ;;
     --UT)             DO_UT=true; shift ;;
@@ -94,23 +98,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# MCS/CBS/FAS = merged cache / concept blocks / flash-attention (build). Default: skip all; opt in via flags or SYNC_* env.
+# MCS/CBS/CRS/FAS = merged cache / concept blocks / curriculum registry / flash-attention (build). Default: skip all; opt in via flags or SYNC_* env.
 SKIP_MCS=1
 SKIP_CBS=1
+SKIP_CRS=1
 SKIP_FAS=1
 if [[ "$FLAG_SYNC_ALL" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_ALL:-0}" == "1" ]]; then
   SKIP_MCS=0
   SKIP_CBS=0
+  SKIP_CRS=0
   SKIP_FAS=0
 fi
 [[ "$FLAG_SYNC_MCS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_MCS:-0}" == "1" ]] && SKIP_MCS=0
 [[ "$FLAG_SYNC_CBS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_CBS:-0}" == "1" ]] && SKIP_CBS=0
+[[ "$FLAG_SYNC_CRS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_CRS:-0}" == "1" ]] && SKIP_CRS=0
 [[ "$FLAG_SYNC_FAS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_FAS:-0}" == "1" ]] && SKIP_FAS=0
 
 _assets_mcs=$([[ "$SKIP_MCS" == 0 ]] && echo sync || echo off)
 _assets_cbs=$([[ "$SKIP_CBS" == 0 ]] && echo sync || echo off)
+_assets_crs=$([[ "$SKIP_CRS" == 0 ]] && echo sync || echo off)
 _assets_fas=$([[ "$SKIP_FAS" == 0 ]] && echo sync || echo off)
-echo "[Bridges-2] training assets: MCS=$_assets_mcs  CBS=$_assets_cbs  FAS=$_assets_fas  (default off — use --sync-all or --sync-{mcs,cbs,fas})"
+echo "[Bridges-2] training assets: MCS=$_assets_mcs  CBS=$_assets_cbs  CRS=$_assets_crs  FAS=$_assets_fas  (default off — use --sync-all or --sync-{mcs,cbs,crs,fas})"
 
 # Validate (path/account have defaults; override with env if needed)
 if [[ -z "$BRIDGES2_DIR" ]]; then
@@ -130,8 +138,10 @@ REMOTE_EXE="$BRIDGES2_DIR/$EXE"
 REMOTE_DATA="$REMOTE_TRAINING/data"
 REMOTE_CACHE="$REMOTE_DATA/merged_verified_cache.jsonl"
 REMOTE_CONCEPT_BLOCKS="$REMOTE_DATA/concept_blocks.jsonl"
+REMOTE_CURRICULUM_REGISTRY="$REMOTE_DATA/curriculum_registry.json"
 CACHE_PATH_EXPANDED="${CACHE_PATH/#\~/$HOME}"
 CONCEPT_BLOCKS_PATH_EXPANDED="${CONCEPT_BLOCKS_PATH/#\~/$HOME}"
+CURRICULUM_REGISTRY_PATH_EXPANDED="${CURRICULUM_REGISTRY_PATH/#\~/$HOME}"
 
 # SSH target: bridges2 or bridges2.psc.edu
 BRIDGES2_SSH="${GRIM_BRIDGES2_SSH:-bridges2}"
@@ -246,6 +256,17 @@ elif [[ -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
 else
   echo "Skipping concept_blocks.jsonl (not found at $CONCEPT_BLOCKS_PATH_EXPANDED)."
   echo "  DataLoader will use cache-only curriculum; add the file locally to ship UltraChat/stem blocks."
+fi
+
+if [[ "$SKIP_CRS" == "1" ]]; then
+  :
+elif [[ -f "$CURRICULUM_REGISTRY_PATH_EXPANDED" ]]; then
+  echo "Transferring curriculum_registry.json..."
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_DATA"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CURRICULUM_REGISTRY" < "$CURRICULUM_REGISTRY_PATH_EXPANDED"
+  echo "  -> $REMOTE_CURRICULUM_REGISTRY"
+else
+  echo "Skipping curriculum_registry.json (not found at $CURRICULUM_REGISTRY_PATH_EXPANDED)."
 fi
 
 # Transfer ai_config.json

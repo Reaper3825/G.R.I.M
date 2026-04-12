@@ -250,6 +250,9 @@ public:
         addFloat (params.execution_block_transition_hard_threshold,  "execution_block_transition_hard_threshold",  "Transition Hard Threshold","Execution Block");
         addInt   (params.execution_block_gate_warmup_steps,          "execution_block_gate_warmup_steps",          "Gate Warmup Steps",        "Execution Block");
         addFloat (params.execution_block_causal_w1_transition,       "execution_block_causal_w1_transition",       "Causal W1 Transition",    "Execution Block");
+        addFloat (params.execution_div_magnitude_penalty_weight,     "execution_div_magnitude_penalty_weight",     "Div Magnitude Penalty",   "Execution Block");
+        addFloat (params.execution_arg_reinforce_weight,             "execution_arg_reinforce_weight",             "Arg REINFORCE Weight",    "Execution Block");
+        addFloat (params.execution_arg_reinforce_baseline_decay,      "execution_arg_reinforce_baseline_decay",      "REINFORCE Baseline Decay","Execution Block");
         addBool  (params.structured_ce_enabled,                       "structured_ce_enabled",                       "Structured CE Enabled",   "Execution Block");
         addFloat (params.structured_ce_weight,                        "structured_ce_weight",                        "Structured CE Weight",    "Execution Block");
         addBool  (params.selector_enabled,                           "selector_enabled",                           "Selector Enabled",         "Execution Block");

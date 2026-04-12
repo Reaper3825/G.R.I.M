@@ -128,16 +128,19 @@ __global__ void kernelArgmax1DInt(
     const float* __restrict__ probs,
     int N
 ) {
-    if (threadIdx.x != 0) return;
-    int best = 0;
-    float bestv = (N > 0) ? probs[0] : 0.0f;
-    for (int i = 1; i < N; ++i) {
-        if (probs[i] > bestv) {
-            bestv = probs[i];
-            best = i;
-        }
+    const int tid = threadIdx.x;
+    float best_val = -1e30f;
+    int best_idx = 0;
+    for (int i = tid; i < N; i += blockDim.x) {
+        float v = probs[i];
+        if (v > best_val) { best_val = v; best_idx = i; }
     }
-    out_idx[0] = best;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        float other_val = __shfl_down_sync(0xffffffff, best_val, offset);
+        int other_idx = __shfl_down_sync(0xffffffff, best_idx, offset);
+        if (other_val > best_val) { best_val = other_val; best_idx = other_idx; }
+    }
+    if (tid == 0) out_idx[0] = best_idx;
 }
 
 __global__ void kernelReadSlotValueByRelIdx(
@@ -298,8 +301,12 @@ __global__ void kernelAccumulateGateStats(
     // Warp reduction
     for (int mask = warpSize / 2; mask > 0; mask >>= 1)
         local_sum += __shfl_down_sync(0xffffffff, local_sum, mask);
-    if (threadIdx.x == 0) {
+    // Every warp leader contributes its partial sum
+    if (threadIdx.x % warpSize == 0) {
         atomicAdd(&accum[0], local_sum);
+    }
+    // Only thread 0 adds count (once per kernel invocation)
+    if (threadIdx.x == 0) {
         atomicAdd(&accum[1], static_cast<float>(n));
     }
 }
@@ -642,9 +649,9 @@ void materializeSelectedOperands(
     EXEC_CHECK(work.p_arg1.data != nullptr, "materializeSelectedOperands: p_arg1 is null");
     EXEC_CHECK(work.p_arg2.data != nullptr, "materializeSelectedOperands: p_arg2 is null");
 
-    kernelArgmax1DInt<<<1, 1, 0, stream>>>(d_exec_idx, work.p_arg1.data, V_val);
+    kernelArgmax1DInt<<<1, 32, 0, stream>>>(d_exec_idx, work.p_arg1.data, V_val);
     CUDA_CHECK_KERNEL();
-    kernelArgmax1DInt<<<1, 1, 0, stream>>>(d_exec_idx + 1, work.p_arg2.data, V_val);
+    kernelArgmax1DInt<<<1, 32, 0, stream>>>(d_exec_idx + 1, work.p_arg2.data, V_val);
     CUDA_CHECK_KERNEL();
 
     work.v1 = Tensor::zeros({1, 1}, stream, "exec_v1");
@@ -678,7 +685,7 @@ void applyHardWriteback(
     const int dt = layer.config().d_type;
     int* d_exec_idx = LayerAccess::execIndices(layer);
 
-    kernelArgmax1DInt<<<1, 1, 0, stream>>>(d_exec_idx + 3, work.p_write.data, V);
+    kernelArgmax1DInt<<<1, 32, 0, stream>>>(d_exec_idx + 3, work.p_write.data, V);
     CUDA_CHECK_KERNEL();
     kernelValidateWriteSlotDev<<<1, 1, 0, stream>>>(
         d_exec_idx + 3, S, V, LayerAccess::numericErrorFlag(layer), kStageWriteSlotInvalid);

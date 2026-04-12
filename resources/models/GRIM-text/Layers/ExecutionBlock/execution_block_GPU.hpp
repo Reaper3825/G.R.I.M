@@ -22,6 +22,7 @@
 
 namespace GRIM {
 
+namespace Batching { struct BatchPayload; }
 namespace ExecutionBlockInternal {
 struct LayerAccess;
 }
@@ -65,8 +66,8 @@ struct ExecutionBlockConfig {
     int cross_attn_head_dim  = 64;
     int cross_attn_topk      = 1;
     float usage_decay        = 0.9f;
-    float empty_slot_bonus   = 10.0f;
-    float diversity_kappa    = 2.0f;
+    // [DELETED] empty_slot_bonus, diversity_kappa — removed per Fix #4.
+    // kernelComputeWriteBias was non-differentiable; write slot is now pure CE.
     float inject_gate_temp   = 0.5f;
     int   result_slot_mode   = 0;     // 0 = last token, 1 = fixed index
     int   result_slot_index  = -1;    // used when result_slot_mode == 1
@@ -77,6 +78,18 @@ struct ExecutionBlockConfig {
 
     // Causal state loss (plan: persistantExecutionMemory)
     float transition_hard_threshold  = 0.0f;  // Fix 1: hard gate threshold (0 = disabled)
+
+    // Fix #6: Division invalid penalty — penalize selecting ÷ when |v2| < eps
+    float div_invalid_penalty_weight = 0.0f;  // 0 = disabled
+
+    // Fix #8: Division magnitude penalty — penalize large |v_out| after clamped division
+    float div_magnitude_penalty_weight = 0.0f;  // 0 = disabled
+
+    // Fix #7: Arg REINFORCE — use transition_err as reward for arg selection.
+    // REINFORCE loss = weight * detached(|v_out-target|) * (-log p_arg[k]).
+    // Gradient: ONLY into arg logits. No soft weighting. No gradient into p_op/v_out.
+    float arg_reinforce_weight = 0.0f;  // 0 = disabled
+    float arg_reinforce_baseline_decay = 0.99f;  // EMA decay for variance-reduction baseline
 };
 
 //======================================================//
@@ -151,6 +164,19 @@ struct ExecutionBlockStepOutput {
     Tensor selection_ce_arg2;   // CE(arg2_logits, arg2_target)
     Tensor selection_ce_write;  // CE(write_logits, write_target)
     bool   has_selection_ce = false;  // true iff selection CE tensors are populated
+
+    // Fix #6: Division invalid penalty (autograd-connected)
+    // penalty = flag * weight * p_op[3]; gradient → softmax → op_logits → W_op_select
+    Tensor div_invalid_penalty;  // [1,1] scalar, populated when div was clamped AND weight > 0
+
+    // Fix #8: Division magnitude penalty (autograd-connected)
+    // penalty = div_flag * weight * |v_out|; gradient → v_out → FourOpMixGradFn → v1, v2
+    Tensor div_magnitude_penalty;  // [1,1] scalar, populated when div was clamped AND weight > 0
+
+    // Fix #7: Arg REINFORCE loss (autograd-connected)
+    // loss = weight * detached(|v_out-target|) * (-log p_arg1[k1] - log p_arg2[k2])
+    // Gradient flows ONLY to arg logits. No soft weighting.
+    Tensor arg_reinforce_loss;   // [1,1] scalar, populated when weight > 0 and target available
 };
 
 //======================================================//
@@ -194,15 +220,13 @@ public:
         Tensor& H,                          // [total_tokens, d_model] mutated in place
         ExecutionMemory& M,
         const int* atom_positions,          // row-local [max(1, num_atoms)] positions relative to current row [0, row_tokens)
-        const int32_t* token_to_slot_map,   // row-local [row_tokens] slot_id per token position (-1 = non-state-bearing)
         int num_atoms,
-        int total_tokens,
+        const Batching::BatchPayload& payload,
+        int batch_row,
         int step,
         float temperature,
         cudaStream_t stream,
         ExecutionBlockStepOutput* diag_out,
-        int token_offset,
-        int row_tokens,
         Tensor& trace_state,
         const std::vector<ExecutionRecord>& prior_records,
         const float* expected_target = nullptr,      // Fix 6: optional teacher scalar (device [1])
@@ -251,13 +275,11 @@ public:
     void validateExecuteStepInputsOrThrow(
         const Tensor& H,
         const int* atom_positions,
-        const int32_t* token_to_slot_map,
         int num_atoms,
-        int total_tokens,
+        const Batching::BatchPayload& payload,
+        int batch_row,
         const ExecutionMemory& M,
-        int step,
-        int token_offset,
-        int row_tokens) const;
+        int step) const;
     void validateCrossAttentionInputsOrThrow(
         const Tensor& hidden_states,
         const ExecutionMemory& M,
@@ -295,6 +317,7 @@ public:
     Tensor& W_trace()         { return W_trace_; }
     Tensor& b_trace()         { return b_trace_; }
     Tensor& W_reason_gate()   { return W_reason_gate_; }
+    Tensor& W_trace_gate()    { return W_trace_gate_; }
 
     const Tensor& w_decode_1()    const { return w_decode_1_; }
     const Tensor& b_decode_1()    const { return b_decode_1_; }
@@ -325,6 +348,7 @@ public:
     const Tensor& W_trace()       const { return W_trace_; }
     const Tensor& b_trace()       const { return b_trace_; }
     const Tensor& W_reason_gate() const { return W_reason_gate_; }
+    const Tensor& W_trace_gate()  const { return W_trace_gate_; }
 
     const ExecutionBlockConfig& config() const { return config_; }
 
@@ -336,9 +360,11 @@ private:
     // Production hardening: persistent device-side error tracking
     int* d_numeric_error_flag_ = nullptr;  // atomicMax stage-id: numeric, softmax, collapse
     int* d_div_clamp_count_    = nullptr;  // atomicAdd on division clamp
+    int* d_div_invalid_flag_   = nullptr;  // [1] per-step: 1 if division was clamped, 0 otherwise
     int* d_exec_idx_           = nullptr;  // [4] arg1_rel, arg2_rel, op_id, write_slot (abs)
     int* d_exec_record_i_      = nullptr;  // [3] packed for ExecutionRecord ints
     float* d_exec_record_f_    = nullptr;  // [3] value_before_1, value_before_2, value_after
+    float* d_reinforce_baseline_ = nullptr; // [1] EMA of transition_err for REINFORCE variance reduction
 
     // Value decode MLP (atom embedding dims 16-39 -> scalar)
     Tensor w_decode_1_;     // [24, 16]
@@ -349,14 +375,15 @@ private:
     Tensor w_arg1_select_;  // [3 * d_model, d_model]
     Tensor w_arg2_select_;  // [3 * d_model, d_model]
 
-    // Op selection: pool [1,5*dm] = (h_arg1,h_arg2,context,trace_state,step_emb) → [1,nop]
-    Tensor W_op_select_;    // [5 * d_model, num_ops]
+    // Op selection: decision_input [1,3*dm] → [1,nop] (detached from arg selection)
+    Tensor W_op_select_;    // [3 * d_model, num_ops]  (detached from arg selection)
 
     // Key generation from result embedding
     Tensor W_key_proj_;     // [d_model, d_key]
 
-    // Write-head: write_ctx [1,6*dm] = (h1,h2,ctx,result_emb,trace_state,step_emb) → d_key query
-    Tensor W_write_query_;  // [6 * d_model, d_key]
+    // Write-head: write_ctx [1,4*dm] = (ctx,result_emb,trace_state,step_emb) → d_key query
+    // Detached from arg selection (no h_arg1/h_arg2).
+    Tensor W_write_query_;  // [4 * d_model, d_key]
     Tensor W_write_key_;    // [d_key, d_key]
     Tensor alpha_;          // [1] learned content score scalar (init 1.0)
     Tensor beta_;           // [1] learned usage penalty scalar (init 1.0)
@@ -390,8 +417,9 @@ private:
     Tensor W_trace_;         // [K * d_model, d_model] flattened history → d_model
     Tensor b_trace_;         // [1, d_model]           trace projection bias
 
-    // Reasoning state update gate (learned residual transform)
-    Tensor W_reason_gate_;   // [2 * d_model, d_model] concat(trace_state, cur_enc) → update
+    // Reasoning state update: candidate + gate
+    Tensor W_reason_gate_;   // [2 * d_model, d_model] concat(trace_state, cur_enc) → candidate
+    Tensor W_trace_gate_;    // [2 * d_model, d_model] concat(trace_state, cur_enc) → gate logits
 };
 
 }  // namespace GRIM

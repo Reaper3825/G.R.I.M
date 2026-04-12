@@ -26,6 +26,7 @@
 #include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../Shared/CudaAllocUtils.hpp"
+#include "../Shared/Batching/BatchPayload.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
@@ -680,21 +681,25 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                 slot_ptr,
                 1, stream);
 
+            // Construct minimal BatchPayload for single-token decode execution.
+            GRIM::Batching::BatchPayload decode_payload;
+            decode_payload.batch_size = 1;
+            decode_payload.max_seq_len = 1;
+            decode_payload.total_tokens = 1;
+            decode_payload.d_token_to_slot_map = slot_ptr;
+
             ExecutionBlockStepOutput last_step_diag;
             for (int step = 0; step < exec_K; ++step) {
                 ExecutionBlockStepOutput step_diag;
                 exec_block->executeStep(
                     hidden, ts.inference_exec_memory,
                     reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
-                    slot_ptr,  // device pointer to current token's slot_id
                     row_atom_view.num_atoms,
-                    1,         // total_tokens (single token)
+                    decode_payload, 0,
                     step, T, stream,
                     &step_diag,
-                    0, 1,      // token_offset, row_tokens
                     ts.trace_state_by_row[0],
-                    ts.execution_trace_by_row[0],
-                    nullptr);
+                    ts.execution_trace_by_row[0]);
                 ts.execution_trace_by_row[0].push_back(step_diag.record);
                 if (step == exec_K - 1) {
                     last_step_diag = std::move(step_diag);

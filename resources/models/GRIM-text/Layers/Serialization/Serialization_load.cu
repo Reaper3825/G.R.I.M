@@ -605,6 +605,10 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         eb_ok = eb_ok && ul(fb_eb->w_trace_data(), eb.W_trace, "EB W_trace");
         eb_ok = eb_ok && ul(fb_eb->b_trace_data(), eb.b_trace, "EB b_trace");
         eb_ok = eb_ok && ul(fb_eb->w_reason_gate_data(), eb.W_reason_gate, "EB W_reason_gate");
+        // W_trace_gate is optional for backward compatibility with pre-Fix#5 checkpoints
+        if (fb_eb->w_trace_gate_data()) {
+            eb_ok = eb_ok && ul(fb_eb->w_trace_gate_data(), eb.W_trace_gate, "EB W_trace_gate");
+        }
         if (!eb_ok) return false;
         request.report.execution_block_loaded = true;
         Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v2 weights loaded");

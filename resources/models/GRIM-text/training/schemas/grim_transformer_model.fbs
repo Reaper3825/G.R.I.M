@@ -1,0 +1,221 @@
+// GRIM-text transformer checkpoint schema (FlatBuffers).
+// Regenerate C++: flatc --cpp --gen-object-api -o <this_dir> grim_transformer_model.fbs
+//
+// ExecutionBlockWeights v2: differentiable block (4 ops, W_key_proj, value→emb, inject gate).
+// No backward compatibility with pre-v2 execution_block tables.
+
+namespace GRIMTransformer;
+
+enum PositionalEncodingType : ubyte {
+  NONE = 0,
+  ALIBI = 1,
+  ROPE = 2,
+  ALIBI_ROPE = 3
+}
+
+table Matrix {
+  data: [float] (required);
+  rows: uint32;
+  cols: uint32;
+}
+
+table Vector {
+  data: [float] (required);
+}
+
+table RMSNormWeights {
+  gamma: [float] (required);
+  epsilon: float = 0.00001;
+}
+
+table AttentionWeights {
+  w_qkv_data: [float];
+  b_qkv_data: [float];
+  w_q_data: [float];
+  b_q_data: [float];
+  w_k_data: [float];
+  b_k_data: [float];
+  w_v_data: [float];
+  b_v_data: [float];
+  w_o_data: [float] (required);
+  b_o_data: [float] (required);
+  alpha_q: [float];
+  alpha_k: [float];
+  d_model: uint32;
+  num_heads: uint32;
+  num_kv_heads: uint32;
+  fuse_qkv: bool;
+}
+
+table FFNWeights {
+  w1_data: [float] (required);
+  b1_data: [float];
+  w2_data: [float] (required);
+  b2_data: [float] (required);
+  d_model: uint32;
+  d_ff: uint32;
+  w_gate_data: [float];
+}
+
+table EncoderLayerWeights {
+  attention: AttentionWeights (required);
+  ffn: FFNWeights (required);
+  rms1: RMSNormWeights (required);
+  rms2: RMSNormWeights (required);
+  layer_scale1: [float];
+  layer_scale2: [float];
+  rms_post_attn: RMSNormWeights;
+  rms_post_ffn: RMSNormWeights;
+  layer_id: uint32;
+}
+
+table EmbeddingWeights {
+  token_embeddings: [float] (required);
+  positional_encodings: [float];
+  rms_gamma: [float];
+  vocab_size: uint32;
+  d_model: uint32;
+  max_seq_len: uint32;
+  use_rms_norm: bool;
+}
+
+table LMHeadWeights {
+  projection_data: [float];
+  bias_data: [float];
+  d_model: uint32;
+  vocab_size: uint32;
+  tie_embeddings: bool;
+  use_bias: bool;
+}
+
+table NumericHeadWeights {
+  projection_data: [float];
+  bias_data: [float];
+  d_model: uint32;
+  use_bias: bool;
+}
+
+table ReasoningHeadWeights {
+  w_op_data: [float];
+  b_op_data: [float];
+  w_arg1_data: [float];
+  w_arg2_data: [float];
+  num_ops: uint32;
+  d_total: uint32;
+}
+
+table ScratchBlockWeights {
+  atom_type_embeddings: [float];
+  atom_projection: [float];
+  text_feature_projection: [float];
+  num_atom_types: uint32;
+  atom_embedding_dim: uint32;
+  d_model: uint32;
+  atom_scale: float;
+  enabled: bool;
+}
+
+/// Decode-time slot selector (pointer-selector baseline, 4 learned tensors).
+table DecodeTimeSlotSelectorWeights {
+  w_q_select_data: [float];
+  w_k_select_data: [float];
+  null_key_select_data: [float];
+  null_logit_bias_data: [float];
+}
+
+/// Execution block v2 (softmax selections, 4 ops, linear value embedding, inject path).
+table ExecutionBlockWeights {
+  w_decode_1_data: [float];
+  b_decode_1_data: [float];
+  w_decode_2_data: [float];
+  w_arg1_select_data: [float];
+  w_arg2_select_data: [float];
+  w_op_select_data: [float];
+  w_key_proj_data: [float];
+  w_write_query_data: [float];
+  w_write_key_data: [float];
+  alpha_data: [float];
+  beta_data: [float];
+  step_embeddings_data: [float];
+  type_num_embed_data: [float];
+  w_value_to_emb_data: [float];
+  b_value_to_emb_data: [float];
+  w_inject_gate_data: [float];
+  w_q_read_data: [float];
+  w_k_read_data: [float];
+  w_v_read_data: [float];
+  w_o_read_data: [float];
+  w_gate_read_data: [float];
+  tau_data: [float];
+  e_slot_data: [float];
+  e_op_data: [float];
+  w_scal_data: [float];
+  b_scal_data: [float];
+  w_trace_data: [float];
+  b_trace_data: [float];
+  w_reason_gate_data: [float];
+  w_trace_gate_data: [float];
+}
+
+table ModelConfig {
+  vocab_size: uint32;
+  d_model: uint32;
+  num_layers: uint32;
+  num_heads: uint32;
+  num_kv_heads: uint32;
+  d_ff: uint32;
+  max_seq_len: uint32;
+  dropout_rate: float = 0.1;
+  attention_dropout: float = 0.1;
+  positional_encoding: PositionalEncodingType = ALIBI_ROPE;
+  use_alibi: bool;
+  causal_mask: bool = true;
+  use_pre_norm: bool = true;
+  fuse_qkv: bool = true;
+  tie_embeddings: bool = true;
+  use_bias: bool = true;
+}
+
+table LossWeightingWeights {
+  log_var_text: float;
+  log_var_numeric: float;
+}
+
+table TrainingMetadata {
+  optimizer: string;
+  learning_rate: float;
+  batch_size: uint32;
+  num_epochs: uint32;
+  training_steps: uint64;
+  final_train_loss: float;
+  final_val_loss: float;
+  best_val_loss: float;
+  gradient_norm: float;
+  timestamp: uint64;
+  training_duration_seconds: uint64;
+  model_name: string;
+}
+
+table TransformerModel {
+  version: uint32;
+  config: ModelConfig (required);
+  embeddings: EmbeddingWeights (required);
+  encoder_layers: [EncoderLayerWeights] (required);
+  lm_head: LMHeadWeights (required);
+  numeric_head: NumericHeadWeights;
+  scratch_block: ScratchBlockWeights;
+  final_rms_gamma: [float];
+  loss_weighting: LossWeightingWeights;
+  training_metadata: TrainingMetadata;
+  checksum_crc32: uint32;
+  checksum_xxhash64: uint64;
+  creation_timestamp: uint64;
+  last_modified_timestamp: uint64;
+  reasoning_head: ReasoningHeadWeights;
+  execution_block: ExecutionBlockWeights;
+  slot_selector: DecodeTimeSlotSelectorWeights;
+}
+
+root_type TransformerModel;
+file_identifier "GRMT";
+file_extension "grmt";
