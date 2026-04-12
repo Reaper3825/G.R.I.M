@@ -1690,6 +1690,7 @@ BackwardResult executeAutogradBackward(
     ctx.validate("executeAutogradBackward");
     
     auto* ts = ctx.training_state;
+    const auto* cfg = ctx.config;
     auto& intermediates = ts->autograd_intermediates;
     if (!intermediates.loss_tensor.data) {
         throw std::runtime_error("executeAutogradBackward: Loss tensor not initialized - call computeAutogradLoss() first");
