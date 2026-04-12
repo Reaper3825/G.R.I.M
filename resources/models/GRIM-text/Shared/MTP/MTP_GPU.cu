@@ -145,7 +145,7 @@ void computeMTPAuxiliaryLosses(
     ts.mtp_diagnostics.alpha_effective = alpha_effective;
 
     // Resolve mtp_input: same representation as LM head matmul input (A1 fix)
-    const autograd::Tensor* mtp_input = nullptr;
+    const Tensor* mtp_input = nullptr;
     if (intermediates.centered_encoder_output.data) {
         // LM head used center_hidden_states or project_out_pc1 — use that buffer
         mtp_input = &intermediates.centered_encoder_output;
@@ -174,7 +174,7 @@ void computeMTPAuxiliaryLosses(
             shift,
             ctx.stream
         );
-        autograd::Tensor logits_k = autograd::matmul(
+        Tensor logits_k = autograd::matmul(
             *mtp_input,
             head->weight,
             ctx.stream,
@@ -184,7 +184,7 @@ void computeMTPAuxiliaryLosses(
         );
         logits_k = autograd::broadcast_add(logits_k, head->bias, ctx.stream);
         intermediates.mtp_logits_tensors.push_back(std::move(logits_k));
-        autograd::Tensor loss_k = autograd::unified_loss(
+        Tensor loss_k = autograd::unified_loss(
             intermediates.mtp_logits_tensors.back(),
             reinterpret_cast<const int*>(ts.mtp_shifted_targets_tensor.data),
             *ctx.payload,
@@ -219,7 +219,7 @@ void computeMTPAuxiliaryLosses(
         cudaFree(d_valid);
         float acc_k = (h_valid > 0) ? (static_cast<float>(h_correct) / static_cast<float>(h_valid)) * 100.0f : 0.0f;
         ts.mtp_diagnostics.head_acc.push_back(acc_k);
-        autograd::Tensor scaled_k = autograd::scale_scalar(loss_k, scale, ctx.stream);
+        Tensor scaled_k = autograd::scale_scalar(loss_k, scale, ctx.stream);
         intermediates.loss_tensor = autograd::add(intermediates.loss_tensor, scaled_k, ctx.stream);
     }
     ts.mtp_diagnostics.valid = !ts.mtp_diagnostics.head_loss.empty();
