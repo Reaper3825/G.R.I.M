@@ -2165,7 +2165,7 @@ void executeStepCoordinatorImpl(
             gfn->capture(trace_state, candidate, gate_logits, gate_vals_buf, dm, stream);
             new_trace.grad_fn = gfn;
         }
-        trace_state = new_trace;
+        trace_state = std::move(new_trace);
     }
 
     work.atom_new = Tensor::zeros({1, ae}, stream, "exec_atom_new");
