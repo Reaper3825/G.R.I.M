@@ -353,7 +353,7 @@
             "multi_token_prediction": {
                 "alpha": 0.2,
                 "alpha_warmup_steps": 0,
-                "enabled": false,
+                "enabled": true,
                 "k": 3,
                 "log_ratio_monitor": true
             },

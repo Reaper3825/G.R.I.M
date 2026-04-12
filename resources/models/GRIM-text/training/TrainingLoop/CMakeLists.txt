@@ -286,6 +286,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
+    ../../Shared/MTP/MTP_GPU.cu
 )
 set_target_properties(grim_language_model_gpu_impl PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF

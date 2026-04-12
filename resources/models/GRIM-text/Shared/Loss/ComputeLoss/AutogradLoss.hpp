@@ -172,36 +172,9 @@ void launchToken277DiagnosticActual(
 );
 
 /**
- * Build shifted target vector for MTP head k: out[t] = targets[t+shift] if in-bounds else -1.
- * @param targets      [total_tokens] device target IDs
- * @param shifted_out   [total_tokens] device output (caller-allocated)
- * @param total_tokens  total_tokens
- * @param seq_len       sequence length (positions per batch item)
- * @param shift         k+1 for head k (number of positions to shift)
- * @param stream        CUDA stream
+ * MTP kernels moved to Shared/MTP/MTP_GPU.hpp
+ * (launchShiftTargetsKernel, launchMTPAccuracyKernel)
  */
-void launchShiftTargetsKernel(
-    const int* targets,
-    int* shifted_out,
-    int total_tokens,
-    int seq_len,
-    int shift,
-    cudaStream_t stream
-);
-
-/**
- * Compute MTP head accuracy: correct count and valid count (target != -1).
- * Caller copies d_correct and d_valid to host and computes acc = correct / valid.
- */
-void launchMTPAccuracyKernel(
-    const float* logits,
-    const int* targets,
-    int total_tokens,
-    int vocab_size,
-    int* d_correct,
-    int* d_valid,
-    cudaStream_t stream
-);
 
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
 // Was a thin wrapper calling unified_loss() with hardcoded plain CE config.

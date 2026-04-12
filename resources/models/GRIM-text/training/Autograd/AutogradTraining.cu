@@ -15,6 +15,7 @@
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
+#include "../../Shared/MTP/MTP_GPU.hpp"
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
@@ -1209,112 +1210,9 @@ LossResult computeAutogradLoss(
 
     // ═══════════════════════════════════════════════════════════════════════════
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
-    //
-    // FIX (A1): MTP heads MUST consume the same representation as the LM head.
-    // Previously MTP used raw encoder_output_tensor while the LM head applies
-    // RMSNorm + optional center/PC1. That mismatch sent conflicting gradients to
-    // the encoder. Now we use the exact same matmul input the LM head uses.
+    // Delegated to MTP_GPU module (see Shared/MTP/MTP_GPU.cu)
     // ═══════════════════════════════════════════════════════════════════════════
-    ts->mtp_diagnostics.valid = false;
-    if (ctx.model && cfg->mtp_enabled && cfg->mtp_k > 0 &&
-        intermediates.encoder_output_tensor.data && ts->mtp_shifted_targets_tensor.data) {
-        float L0_main = 0.0f;
-        cudaMemcpyAsync(&L0_main, intermediates.loss_tensor.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-        cudaStreamSynchronize(ctx.stream);
-        ts->mtp_diagnostics.L0_main = L0_main;
-        if (!std::isfinite(L0_main)) {
-            throw std::runtime_error("computeAutogradLoss: main CE loss (L0_main) is non-finite (" + std::to_string(L0_main) +
-                ") — unified_loss failed before MTP. num_tokens=" + std::to_string(total_tokens) + " vocab=" + std::to_string(vocab_size));
-        }
-        const float alpha_effective = cfg->mtp_alpha * std::min(1.0f,
-            static_cast<float>(ctx.step) / static_cast<float>(cfg->mtp_alpha_warmup_steps > 0 ? cfg->mtp_alpha_warmup_steps : 1));
-        const int K = cfg->mtp_k;
-        const float scale = (K > 0 && alpha_effective > 0.0f) ? (alpha_effective / static_cast<float>(K)) : 0.0f;
-        intermediates.mtp_logits_tensors.clear();
-        ts->mtp_diagnostics.head_loss.clear();
-        ts->mtp_diagnostics.head_acc.clear();
-        ts->mtp_diagnostics.alpha_effective = alpha_effective;
-
-        // Resolve mtp_input: same representation as LM head matmul input (A1 fix)
-        const Tensor* mtp_input = nullptr;
-        if (intermediates.centered_encoder_output.data) {
-            // LM head used center_hidden_states or project_out_pc1 — use that buffer
-            mtp_input = &intermediates.centered_encoder_output;
-        } else if (ctx.lm_head->config().has_final_rms_norm && ctx.lm_head->finalRmsGamma().data) {
-            // LM head used only RMSNorm — apply it so MTP sees the same normalized representation
-            intermediates.mtp_input_tensor = autograd::rms_norm(
-                intermediates.encoder_output_tensor,
-                ctx.lm_head->finalRmsGamma(),
-                ctx.lm_head->config().rms_epsilon,
-                ctx.stream
-            );
-            mtp_input = &intermediates.mtp_input_tensor;
-        } else {
-            mtp_input = &intermediates.encoder_output_tensor;
-        }
-
-        for (int k = 0; k < K && scale > 0.0f; ++k) {
-            LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
-            if (!head || !head->weight.data || !head->bias.data) continue;
-            const int shift = k + 1;
-            autograd::launchShiftTargetsKernel(
-                targets,
-                reinterpret_cast<int*>(ts->mtp_shifted_targets_tensor.data),
-                total_tokens,
-                ctx.seq_len,
-                shift,
-                ctx.stream
-            );
-            Tensor logits_k = autograd::matmul(
-                *mtp_input,
-                head->weight,
-                ctx.stream,
-                mtp_input->data,
-                nullptr,
-                true
-            );
-            logits_k = autograd::broadcast_add(logits_k, head->bias, ctx.stream);
-            intermediates.mtp_logits_tensors.push_back(std::move(logits_k));
-            Tensor loss_k = autograd::unified_loss(
-                intermediates.mtp_logits_tensors.back(),
-                reinterpret_cast<const int*>(ts->mtp_shifted_targets_tensor.data),
-                payload,
-                ctx.loss_config,
-                ctx.stream
-            );
-            float h_loss_k = 0.0f;
-            cudaMemcpyAsync(&h_loss_k, loss_k.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-            int* d_correct = nullptr;
-            int* d_valid = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&d_correct), sizeof(int), "mtp_d_correct");
-            cudaMallocOrThrow(reinterpret_cast<void**>(&d_valid), sizeof(int), "mtp_d_valid");
-            autograd::launchMTPAccuracyKernel(
-                intermediates.mtp_logits_tensors.back().data,
-                reinterpret_cast<const int*>(ts->mtp_shifted_targets_tensor.data),
-                total_tokens,
-                vocab_size,
-                d_correct,
-                d_valid,
-                ctx.stream
-            );
-            cudaStreamSynchronize(ctx.stream);
-            if (!std::isfinite(h_loss_k)) {
-                throw std::runtime_error("computeAutogradLoss: MTP head k=" + std::to_string(k) +
-                    " loss is non-finite (" + std::to_string(h_loss_k) + ") — shift=" + std::to_string(shift));
-            }
-            ts->mtp_diagnostics.head_loss.push_back(h_loss_k);
-            int h_correct = 0, h_valid = 0;
-            cudaMemcpy(&h_correct, d_correct, sizeof(int), cudaMemcpyDeviceToHost);
-            cudaMemcpy(&h_valid, d_valid, sizeof(int), cudaMemcpyDeviceToHost);
-            cudaFree(d_correct);
-            cudaFree(d_valid);
-            float acc_k = (h_valid > 0) ? (static_cast<float>(h_correct) / static_cast<float>(h_valid)) * 100.0f : 0.0f;
-            ts->mtp_diagnostics.head_acc.push_back(acc_k);
-            Tensor scaled_k = autograd::scale_scalar(loss_k, scale, ctx.stream);
-            intermediates.loss_tensor = autograd::add(intermediates.loss_tensor, scaled_k, ctx.stream);
-        }
-        ts->mtp_diagnostics.valid = !ts->mtp_diagnostics.head_loss.empty();
-    }
+    GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, *ts);
     
     // Issue both loss D2H copies before a single sync (batch sync for text + numeric)
     float text_loss = 0.0f;
@@ -1752,14 +1650,8 @@ BackwardResult executeAutogradBackward(
 
         // Numeric head parameters
         // MTP head parameters
-        if (ctx.model && ctx.model->getMtpK() > 0) {
-            for (int k = 0; k < ctx.model->getMtpK(); ++k) {
-                LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
-                if (head) {
-                    if (head->weight.data) head->weight.zero_grad(ctx.stream);
-                    if (head->bias.data) head->bias.zero_grad(ctx.stream);
-                }
-            }
+        if (ctx.model) {
+            GRIM::MTP::zeroMTPGradients(*ctx.model, ctx.stream);
         }
 
         // ExecutionBlock parameters
@@ -2021,20 +1913,8 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         checkScratch(ctx.scratch_block->atomProjection(), "atomProjection");
     }
 
-    if (ctx.model && ctx.model->getMtpK() > 0) {
-        for (int k = 0; k < ctx.model->getMtpK(); ++k) {
-            LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
-            if (head) {
-                if (head->weight.data && !head->weight.has_grad()) {
-                    AG_WARN("MTP head " << k << " weight.grad is NULL");
-                    ok = false;
-                }
-                if (head->bias.data && !head->bias.has_grad()) {
-                    AG_WARN("MTP head " << k << " bias.grad is NULL");
-                    ok = false;
-                }
-            }
-        }
+    if (ctx.model && !GRIM::MTP::verifyMTPGradients(*ctx.model)) {
+        ok = false;
     }
 
     // ExecutionBlock parameters
