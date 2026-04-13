@@ -28,7 +28,8 @@
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
-#include "../../Shared/Gradients/GradientCC_GPU.hpp"       // launchScaleGradients (per-component clipping)
+#include "../../Shared/Gradients/GradientCC_GPU.hpp"       // GradClip::clipGradientNorms (registry-level clipping)
+#include "../../Shared/Dynamic_LR/LRSchedule.hpp"          // GRIM::LR::LRSchedule (exposed LR curve)
 #include "../../Shared/GradNorm/GradNormGPU.hpp"           // GradNorm::measureGradientNorms, GradMetrics
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
@@ -648,38 +649,17 @@ std::string formatGradientComponents(const GRIM::GradNorm::GradMetrics& gm, bool
     return comp_msg.str();
 }
 
-/** Cosine decay: lr = min_lr + (base_lr - min_lr) * 0.5 * (1 + cos(pi * progress)), progress in [0,1]. */
-inline float getCosineDecayLr(float base_lr, float min_lr, float progress) {
-    const float p = std::clamp(progress, 0.0f, 1.0f);
-    const float decay = 0.5f * (1.0f + std::cos(3.14159265f * p));
-    return min_lr + (base_lr - min_lr) * decay;
-}
-
+/// Query the LR schedule at a given step, respecting stability overrides.
+/// Delegates to GRIM::LR::LRSchedule for the actual curve computation.
 float getScheduledLearningRate(
+    const GRIM::LR::LRSchedule& schedule,
     int step,
     float base_lr,
-    int warmup_steps,
-    int total_steps,
-    float cosine_decay_min_lr,
-    bool cosine_decay_enabled,
     bool stability_overrides_enabled) {
-    
     if (stability_overrides_enabled) {
         return base_lr;
     }
-    
-    if (step < warmup_steps) {
-        return base_lr * (static_cast<float>(step + 1) / static_cast<float>(std::max(1, warmup_steps)));
-    }
-    
-    if (!cosine_decay_enabled || total_steps <= warmup_steps) {
-        return base_lr;
-    }
-    
-    const int decay_steps = total_steps - warmup_steps;
-    const int current_decay_step = step - warmup_steps;
-    const float progress = static_cast<float>(current_decay_step) / static_cast<float>(std::max(1, decay_steps));
-    return getCosineDecayLr(base_lr, cosine_decay_min_lr, progress);
+    return schedule.lr(step);
 }
 
 bool isBatchQuarantined(
@@ -724,7 +704,6 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     opts.similarity_threshold = 0.30f;
     opts.prefer_short_first = curriculum_active;
     opts.curriculum_progress = curriculum_active ? static_cast<float>(epoch + 1) / kCurriculumEpochs : 1.0f;
-    // Issue #90: Pass RNG seed for reproducible shuffling in GREEDY mode
     opts.rng_seed = ctx.rng.data_seed + epoch;  // Vary by epoch for different shuffle each epoch
     // Use RANDOM ordering to avoid loss spikes at epoch end
     // LENGTH_ASCENDING causes easy→hard progression: loss plateaus then explodes
@@ -1730,13 +1709,17 @@ BatchResult processBatch(
     // This ensures that gradients averaged per micro-batch are further averaged across the accumulation window,
     // preventing the "Sum of Averages" discrepancy that causes gradient explosion by a factor of M.
     const float grad_scale = 1.0f / static_cast<float>(accum_steps);
+    // FIX: Pass optimizer step, not global_step (batch counter).
+    // ctx.step is used downstream by MTP alpha warmup ramp and dropout seeds.
+    // With gradient_accumulation_steps > 1, global_step advances accum_steps
+    // times faster than actual weight updates, completing warmup ramps too early.
     auto loss_result = GRIM::Autograd::autogradTrainingStep(
         *ctx.model,
         ctx.model->getTrainingState(),
         payload,
         should_accumulate,
         grad_scale,
-        ctx.global_step
+        static_cast<uint64_t>(ctx.optimizer.optimizer_state.step)
     );
     result.loss = loss_result.loss_value;
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] autogradTrainingStep returned, loss=%f success=%d\n", 
@@ -3856,10 +3839,17 @@ BatchResult processBatch(
     auto clipping_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - clipping_start).count();
     
     // Learning rate computation (accum_steps already computed above)
+    // FIX: Use optimizer step count, NOT global_step (batch counter).
+    // global_step increments every micro-batch; optimizer_state.step increments
+    // only on actual weight updates. With gradient_accumulation_steps > 1,
+    // using global_step makes warmup/decay advance accum_steps times too fast.
     auto lr_start = std::chrono::steady_clock::now();
+    const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_state.step);
+    if (!ctx.lr_schedule) {
+        throw std::runtime_error("lr_schedule is not initialized at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
     const float scheduled_lr = Internal::getScheduledLearningRate(
-        ctx.global_step, hp.learning_rate, hp.warmup_steps,
-        ctx.estimated_total_steps, hp.cosine_decay_min_lr, hp.cosine_decay_enabled,
+        *ctx.lr_schedule, optimizer_step, hp.learning_rate,
         ctx.config.stability.enabled);
     
     result.learning_rate = scheduled_lr;
@@ -4096,120 +4086,45 @@ BatchResult processBatch(
         // Recompute grad norm since accum_scale changed magnitudes.
         // Per-component clipping (Issue #139):
         //   1. emb_clip  — LM_HEAD (+ EMBEDDING if untied)
-        //   2. enc_clip  — ATTENTION + FFN + RMSNORM + SCRATCHBLOCK (encoder params)
+        //   2. enc_clip  — ATTENTION + FFN + RMSNORM + SCRATCHBLOCK +
+        //                  NUMERIC_HEAD + MTP + REASONING_HEAD + EXECUTION_BLOCK
+        //
+        // Clipping operates through the ParameterGroup tensor registry
+        // via GradClip::clipGradientNorms() — norm measurement, bucket
+        // aggregation, and gradient scaling all happen inside GradientCC
+        // against the registered tensors.
         // ========================================================================
         if (clipping_enabled) {
             clipping_start = std::chrono::steady_clock::now();
             
-            // Recompute norm on the accumulated+scaled gradients
             auto& clip_ts = ctx.model->getTrainingState();
             cudaStream_t clip_stream = clip_ts.stream_ctrl.getPrimaryStream();
             auto& clip_groups = ctx.model->parameterGroups();
             
-            // Scratch already allocated from diagnostic norm above
             if (!clip_ts.grad_norm_scratch) {
                 throw std::runtime_error("[FATAL] grad_norm_scratch is NULL at clipping stage - "
                                          "diagnostic norm should have allocated it");
             }
             
-            auto clip_norm_status = GRIM::GradNorm::measureGradientNorms(
-                clip_groups.data(), clip_groups.size(), clip_ts.grad_norm_scratch, clip_stream);
-            if (clip_norm_status != GRIM::GradNorm::GradNormStatus::SUCCESS) {
-                throw std::runtime_error("[FATAL] measureGradientNorms failed during clipping: " +
-                                         std::string(GRIM::GradNorm::statusToString(clip_norm_status)));
-            }
-            cudaStreamSynchronize(clip_stream);
+            GRIM::GradClip::ClipConfig clip_cfg;
+            clip_cfg.max_rms = effective_per_token_limit;
+            clip_cfg.tie_embeddings = ctx.model->getConfig().tie_embeddings;
             
-            const auto& clip_gm = *clip_ts.grad_norm_scratch->h_metrics;
-            // Compute per-component RMS matching clipping strategy
-            float clip_emb_sq = clip_gm.lm_head_sum_sq;
-            int64_t clip_emb_count = clip_gm.lm_head_count;
-            if (!ctx.model->getConfig().tie_embeddings) {
-                clip_emb_sq += clip_gm.embedding_sum_sq;
-                clip_emb_count += clip_gm.embedding_count;
-            }
-            const float clip_enc_sq = clip_gm.attention_sum_sq + clip_gm.ffn_sum_sq
-                                    + clip_gm.rmsnorm_sum_sq + clip_gm.scratchblock_sum_sq
-                                    + clip_gm.numeric_head_sum_sq + clip_gm.reasoning_head_sum_sq
-                                    + clip_gm.execution_block_sum_sq;
-            const int64_t clip_enc_count = clip_gm.attention_count + clip_gm.ffn_count
-                                         + clip_gm.rmsnorm_count + clip_gm.scratchblock_count
-                                         + clip_gm.numeric_head_count + clip_gm.reasoning_head_count
-                                         + clip_gm.execution_block_count;
-            const float clip_emb_rms = (clip_emb_count > 0) ? std::sqrt(clip_emb_sq / static_cast<float>(clip_emb_count)) : 0.0f;
-            const float clip_enc_rms = (clip_enc_count > 0) ? std::sqrt(clip_enc_sq / static_cast<float>(clip_enc_count)) : 0.0f;
-            result.grad_rms = std::sqrt(clip_emb_rms * clip_emb_rms + clip_enc_rms * clip_enc_rms);
-            result.normalized_grad_rms = result.grad_rms;
-            const float post_accum_norm = result.grad_rms;
+            const auto clip = GRIM::GradClip::clipGradientNorms(
+                clip_groups.data(), clip_groups.size(),
+                clip_ts.grad_norm_scratch, clip_cfg, clip_stream);
             
-            {   // emb_norm computed as RMS
-                float emb_sum_sq = clip_gm.lm_head_sum_sq;
-                int64_t emb_count = clip_gm.lm_head_count;
-                if (!ctx.model->getConfig().tie_embeddings) {
-                    emb_sum_sq += clip_gm.embedding_sum_sq;
-                    emb_count += clip_gm.embedding_count;
-                }
-                const float emb_rms = (emb_count > 0) ? std::sqrt(emb_sum_sq / static_cast<float>(emb_count)) : 0.0f;
-                
-                // encoder_rms: everything that's NOT emb/lm_head
-                const float enc_sum_sq = clip_gm.attention_sum_sq
-                                       + clip_gm.ffn_sum_sq
-                                       + clip_gm.rmsnorm_sum_sq
-                                       + clip_gm.scratchblock_sum_sq
-                                       + clip_gm.numeric_head_sum_sq;
-                const int64_t enc_count = clip_gm.attention_count + clip_gm.ffn_count
-                                        + clip_gm.rmsnorm_count + clip_gm.scratchblock_count
-                                        + clip_gm.numeric_head_count;
-                const float enc_rms = (enc_count > 0) ? std::sqrt(enc_sum_sq / static_cast<float>(enc_count)) : 0.0f;
-                
-                bool any_clipped = false;
-                
-                // Clip embedding/LM head independently — iterate groups directly
-                if (emb_rms > effective_per_token_limit) {
-                    const float emb_clip_coef = effective_per_token_limit / (emb_rms + 1e-8f);
-                    for (auto& g : clip_groups) {
-                        if (!g.grads() || g.size() == 0) continue;
-                        if (g.type == GRIM::ParamGroupType::LM_HEAD ||
-                            (!ctx.model->getConfig().tie_embeddings && g.type == GRIM::ParamGroupType::EMBEDDING)) {
-                            launchScaleGradients(g.grads(), static_cast<int>(g.size()), emb_clip_coef, clip_stream);
-                        }
-                    }
-                    any_clipped = true;
-                }
-                
-                // Clip encoder components independently
-                if (enc_rms > effective_per_token_limit) {
-                    const float enc_clip_coef = effective_per_token_limit / (enc_rms + 1e-8f);
-                    for (auto& g : clip_groups) {
-                        if (!g.grads() || g.size() == 0) continue;
-                        if (g.type == GRIM::ParamGroupType::ATTENTION ||
-                            g.type == GRIM::ParamGroupType::FFN ||
-                            g.type == GRIM::ParamGroupType::RMSNORM ||
-                            g.type == GRIM::ParamGroupType::SCRATCHBLOCK ||
-                            g.type == GRIM::ParamGroupType::NUMERIC_HEAD ||
-                            g.type == GRIM::ParamGroupType::MTP) {
-                            launchScaleGradients(g.grads(), static_cast<int>(g.size()), enc_clip_coef, clip_stream);
-                        }
-                    }
-                    any_clipped = true;
-                }
-                
-                // Recompute post-clip total RMS
-                const float clipped_emb = std::min(emb_rms, effective_per_token_limit);
-                const float clipped_enc = std::min(enc_rms, effective_per_token_limit);
-                result.grad_rms = std::sqrt(clipped_emb * clipped_emb 
-                                           + clipped_enc * clipped_enc);
-                result.normalized_grad_rms = result.grad_rms;
-                result.gradient_clipped = any_clipped;
-                
-                ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +
-                                        " post_accum_rms=" + Internal::formatScalar(post_accum_norm, 6) +
-                                        " emb_rms=" + Internal::formatScalar(emb_rms, 6) +
-                                        " enc_rms=" + Internal::formatScalar(enc_rms, 6) +
-                                        " emb_clipped=" + (emb_rms > effective_per_token_limit ? "YES" : "NO") +
-                                        " enc_clipped=" + (enc_rms > effective_per_token_limit ? "YES" : "NO") +
-                                        " post_clip_total=" + Internal::formatScalar(result.grad_rms, 6));
-            }
+            result.grad_rms = clip.total_rms_post;
+            result.normalized_grad_rms = clip.total_rms_post;
+            result.gradient_clipped = clip.any_clipped();
+            
+            ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +
+                                    " post_accum_rms=" + Internal::formatScalar(clip.total_rms_pre, 6) +
+                                    " emb_rms=" + Internal::formatScalar(clip.emb_rms, 6) +
+                                    " enc_rms=" + Internal::formatScalar(clip.enc_rms, 6) +
+                                    " emb_clipped=" + (clip.emb_clipped ? "YES" : "NO") +
+                                    " enc_clipped=" + (clip.enc_clipped ? "YES" : "NO") +
+                                    " post_clip_total=" + Internal::formatScalar(clip.total_rms_post, 6));
             
             clipping_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - clipping_start).count();
         }
@@ -4450,18 +4365,27 @@ BatchResult processBatch(
         // β₁=0.9 (m direction converges in ~10 steps), β₂=0.999 (v magnitude: half-life=693 steps)
         {
             constexpr float BETA2 = 0.999f;   // matches HyperParameters::ADAMW_BETA2
-            const int iteration = ctx.global_step + 1;  // matches AdamW kernel: step+1
-            const float bc2 = 1.0f - std::pow(BETA2, static_cast<float>(iteration));
+            // FIX: Use optimizer_state.step (actual optimizer updates), NOT global_step (batch counter).
+            // Adam's β₂ bias correction tracks optimizer iterations, not micro-batches.
+            // With gradient_accumulation_steps > 1, global_step overestimates the
+            // iteration count by accum_steps, making β₂^t converge too fast in telemetry.
+            const int iteration = static_cast<int>(ctx.optimizer.optimizer_state.step) + 1;
+            const float beta2_pow_t = std::pow(BETA2, static_cast<float>(iteration));
+            const float bc2 = 1.0f - beta2_pow_t;
             const float inv_bc2 = 1.0f / bc2;
-            const float one_minus_bc2 = 1.0f - bc2;
             
-            // Signal dominance: bc2/(1-bc2). When >1, each Adam step does more good than harm.
+            // Signal dominance: (1-β₂^t)/β₂^t. When >1, each Adam step does more good than harm.
             // Crosses 1.0 at exactly the β₂ half-life (step 693) — predicts the loss peak.
-            const float signal_dominance = (one_minus_bc2 > 1e-12f) ? (bc2 / one_minus_bc2) : 1e6f;
+            // Uses beta2_pow_t directly to avoid catastrophic cancellation in 1.0f - bc2
+            // which loses all precision when β₂^t < float ULP (~1.19e-7, step ~15925).
+            const float signal_dominance = (beta2_pow_t > 1e-12f) ? (bc2 / beta2_pow_t) : 1e6f;
             
             // Cumulative displacement: Σlr(t) — running sum of learning rates.
-            // Adam normalizes m/√v ≈ ±1, so each step moves weights by ≈ lr.
-            ctx.telemetry.adam_cumulative_disp += result.learning_rate;
+            // Only accumulate on actual optimizer steps (when weights move).
+            // On non-step micro-batches, skip to avoid accum_steps× overcount.
+            if (should_step) {
+                ctx.telemetry.adam_cumulative_disp += result.learning_rate;
+            }
             
             // Xavier embedding scale = sqrt(6 / (vocab_size + d_model))
             const float vocab_f = static_cast<float>(ctx.config.actual_vocab_size);
@@ -4822,7 +4746,19 @@ EpochResult runEpoch(
     
     const int total_batches = static_cast<int>(schedule.batches.size());
     if (ctx.estimated_total_steps == 0 && total_batches > 0) {
-        ctx.estimated_total_steps = num_epochs * total_batches;
+        // estimated_total_steps counts OPTIMIZER STEPS (not micro-batches).
+        // LR schedule, warmup, and cosine decay all index by optimizer step.
+        const int accum = std::max(1, hp.gradient_accumulation_steps);
+        ctx.estimated_total_steps = (num_epochs * total_batches) / accum;
+        
+        // Construct the deterministic LR schedule now that total_steps is known.
+        GRIM::LR::LRScheduleConfig lr_cfg;
+        lr_cfg.base_lr = hp.learning_rate;
+        lr_cfg.cosine_decay_min_lr = hp.cosine_decay_min_lr;
+        lr_cfg.warmup_steps = hp.warmup_steps;
+        lr_cfg.total_steps = ctx.estimated_total_steps;
+        lr_cfg.cosine_decay_enabled = hp.cosine_decay_enabled;
+        ctx.lr_schedule.emplace(lr_cfg);
     }
     int total_batches_to_run = total_batches;
     const bool single_batch_overfit = hp.single_batch_overfit_enabled;
@@ -5147,21 +5083,21 @@ bool executePhase2(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training,
         std::string("Total epochs to run: ") + std::to_string(num_epochs), ctx.global_step);
     
-    // Reconstruct adam_cumulative_disp = Σlr(0..global_step-1) for checkpoint resume correctness.
-    // On fresh start (global_step=0) this is a no-op. On resume, it reconstructs the exact
-    // cumulative displacement using the same LR schedule formula.
-    if (ctx.global_step > 0 && ctx.telemetry.adam_cumulative_disp == 0.0f) {
+    // Reconstruct adam_cumulative_disp = Σlr(0..optimizer_step-1) for checkpoint resume correctness.
+    // On fresh start this is a no-op. On resume, it reconstructs the exact cumulative
+    // displacement by iterating over actual optimizer steps (not micro-batches).
+    // FIX: Used to loop over ctx.global_step (batch counter), overcounting by
+    // gradient_accumulation_steps. Now loops over optimizer_state.step.
+    const int resumed_optimizer_step = static_cast<int>(ctx.optimizer.optimizer_state.step);
+    if (resumed_optimizer_step > 0 && ctx.telemetry.adam_cumulative_disp == 0.0f) {
         float reconstructed = 0.0f;
-        for (int t = 0; t < static_cast<int>(ctx.global_step); ++t) {
-            reconstructed += Internal::getScheduledLearningRate(
-                t, hp.learning_rate, hp.warmup_steps,
-                ctx.estimated_total_steps, hp.cosine_decay_min_lr, hp.cosine_decay_enabled,
-                ctx.config.stability.enabled);
+        for (int t = 0; t < resumed_optimizer_step; ++t) {
+            reconstructed += ctx.lr_schedule->lr(t);
         }
         ctx.telemetry.adam_cumulative_disp = reconstructed;
         EmitModuleInfo(ModuleId::Training,
             "[AdamCausation] Reconstructed cumulative_displacement=" + std::to_string(reconstructed) +
-            " from " + std::to_string(ctx.global_step) + " prior steps", ctx.global_step);
+            " from " + std::to_string(resumed_optimizer_step) + " optimizer steps", ctx.global_step);
     }
     
     try {

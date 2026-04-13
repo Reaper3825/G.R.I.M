@@ -328,11 +328,11 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     copyTokenSlotMapH2D(training_state_, stream, seq_len, prompt_token_to_slot_map,
                         config_.execution_block_num_slots);
     
-    // Store sequence length for subsequent forwardStep() calls
-    training_state_.kv_cache_len = seq_len;
-    
-    // Prefill: populate KV cache from autograd intermediates
+    // Prefill: populate KV cache from autograd intermediates.
+    // Commit kv_cache_len AFTER success — if forward throws, the cache
+    // must not claim it holds tokens that never completed the forward path.
     Vector logits = executeInferenceForward_(seq_len, /*populate_kv_cache=*/true);
+    training_state_.kv_cache_len = seq_len;
 
     // ── Initialize trace structures for subsequent decode steps ──
     // resetKVCache() clears these, and executeInferenceForward_ (autograd path)
@@ -450,10 +450,11 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
         }
     }
 
+    // Commit kv_cache_len AFTER success — if decode throws, the cache
+    // must not claim it holds a token that never completed the forward path.
+    Vector logits = executeDecodeForward_(token_pos);
     training_state_.kv_cache_len = new_seq_len;
-    
-    // Use KV-cached decode (O(1) per layer instead of O(n²))
-    return executeDecodeForward_(token_pos);
+    return logits;
 }
 
 //======================================================//

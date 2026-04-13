@@ -404,11 +404,13 @@ def main():
         # 5-1b) Signal dominance — predicts loss peak
         ax = fig5.add_subplot(gs5[0, 1])
         if adam_sig_dom is not None:
-            vals = adam_sig_dom["raw_observation"].clip(upper=50)  # clip for readability
-            ax.plot(adam_sig_dom.index, vals, linewidth=1.5, color="tab:green", label="signal dominance")
+            sig_dom = adam_sig_dom
+            x = sig_dom.index.to_numpy()
+            vals = sig_dom["raw_observation"].to_numpy()
+            ax.plot(x, vals, linewidth=1.5, color="tab:green", label="signal dominance")
             ax.axhline(1.0, color="tab:red", linewidth=1.5, linestyle="--", label="crossover = 1.0")
-            ax.fill_between(adam_sig_dom.index, 0, 1, where=vals < 1, alpha=0.1, color="tab:red", label="destroying (< 1)")
-            ax.fill_between(adam_sig_dom.index, 1, vals, where=vals >= 1, alpha=0.1, color="tab:green", label="learning (≥ 1)")
+            ax.fill_between(x, 0, 1, where=vals < 1, alpha=0.1, color="tab:red", label="destroying (< 1)")
+            ax.fill_between(x, 1, vals, where=vals >= 1, alpha=0.1, color="tab:green", label="learning (≥ 1)")
         ax.set_ylabel("bc₂ / (1 − bc₂)")
         ax.set_title("Signal Dominance (>1 = learning, <1 = destroying)")
         ax.set_yscale("log")

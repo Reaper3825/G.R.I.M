@@ -27,6 +27,7 @@
 //======================================================//
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <random>
@@ -42,6 +43,7 @@
 #include "../../Shared/Batching/Batching_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/Dynamic_LR/DynamicLR.hpp"
+#include "../../Shared/Dynamic_LR/LRSchedule.hpp"
 #include "../../Shared/SoftRestart/SoftRestart.hpp"
 #include "../../Shared/Loss/LossContext/LossContext.hpp"
 #include "../../Shared/Telemetry/TelemetryLattice_GPU.hpp"
@@ -307,6 +309,12 @@ struct TrainingContext {
     int global_step = 0;
     /** Estimated total steps (epochs * batches per epoch), set in runEpoch; used for cosine LR decay. */
     int estimated_total_steps = 0;
+    
+    /** Deterministic LR schedule — exposed curve queryable at any step.
+     *  Constructed in Phase2 once estimated_total_steps is known. */
+    std::optional<GRIM::LR::LRSchedule> lr_schedule;
+    
+    
     float best_val_loss = std::numeric_limits<float>::infinity();
     /** Number of epochs actually completed (set by Phase 2; used by Phase 3 for summary). */
     int epochs_completed = 0;
