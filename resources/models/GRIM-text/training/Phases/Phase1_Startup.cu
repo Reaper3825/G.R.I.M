@@ -1118,6 +1118,15 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", telemetry_warmup=" + std::to_string(hp.telemetry_warmup_steps) +
                ", gate_warmup=" + std::to_string(hp.execution_block_gate_warmup_steps) +
                " (all =warmup_steps=" + std::to_string(hp.warmup_steps) + ")");
+    logger.log("Derived hyperparameters (cont): d_key=" + std::to_string(hp.execution_block_d_key) +
+               ", cross_attn_head_dim=" + std::to_string(hp.cross_attn_head_dim) +
+               ", atom_embedding_dim=" + std::to_string(hp.scratch_block_reasoning_atom_embedding_dim) +
+               ", micro_val_interval=" + std::to_string(hp.micro_validation_interval) +
+               ", micro_val_min_step=" + std::to_string(hp.micro_validation_min_step) +
+               ", stability_batch=" + std::to_string(hp.stability_override_batch_size) +
+               ", stability_max_seq=" + std::to_string(hp.stability_override_max_seq_len) +
+               ", stability_clip_per_token=" + std::to_string(hp.stability_override_clip_per_token) +
+               ", stability_lr_min=" + std::to_string(hp.stability_override_lr_min) + ")");
     
     // STEP 0: Initialize CUDA device context FIRST (REQUIRED before any stream/allocation operations)
     // This ensures CUDA driver is loaded and device context exists before StreamController creates streams.

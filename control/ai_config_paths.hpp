@@ -628,15 +628,158 @@ inline bool jsonPathExists(const nlohmann::json& json, const std::string& path) 
 }
 
 /**
- * @brief Validate all required fields exist in training.config JSON
+ * @brief Set sensible defaults for all non-base hyperparameters.
+ * Called BEFORE JSON parsing, so JSON values override these defaults.
+ * Future: Replace this function body with a trained hyperparameter prediction model.
+ * @param params The hyperparameters struct to populate with defaults
+ */
+inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
+    // ── Auto stop ──
+    params.auto_stop_plateau_patience = 18;
+    params.auto_stop_plateau_min_delta = 0.004f;
+    params.auto_stop_high_loss_threshold = 6.0f;
+    params.auto_stop_high_loss_patience = 12;
+
+    // ── Soft restart ──
+    params.soft_restart_loss_increase_threshold = 3.0f;
+    params.soft_restart_max_step_window = 50;
+    params.soft_restart_cooldown_steps = 200;
+
+    // ── Single batch overfit ──
+    params.single_batch_overfit_max_steps = 1000;
+
+    // ── Micro validation ──
+    params.micro_validation_interval = 500;
+    params.micro_validation_batch_limit = 8;
+    params.micro_validation_min_step = 500;
+    params.micro_validation_prefer_short = false;
+
+    // ── Guess aux ──
+    params.guess_aux_lambda = 0.25f;
+    params.guess_aux_min_confidence = 0.7f;
+
+    // ── Shuffle ──
+    params.shuffle_train_epochs = 1;
+
+    // ── Embedding freeze ──
+    params.embedding_freeze_after_step = 0;
+
+    // ── Scratch blocks ──
+    params.scratch_num_blocks = 4;
+    params.scratch_write_combined = true;
+
+    // ── Scratch block reasoning ──
+    params.scratch_block_reasoning_max_atoms = 8192;
+    params.scratch_block_reasoning_atom_scale = 1.0f;
+
+    // ── Telemetry control ──
+    params.telemetry_spike_mild_threshold = 3.0f;
+    params.telemetry_spike_moderate_threshold = 5.0f;
+    params.telemetry_spike_severe_threshold = 10.0f;
+    params.telemetry_moderate_grad_scale = 0.5f;
+    params.telemetry_moderate_cooldown_extension = 3;
+    params.telemetry_min_grad_for_nonzero_loss = 1e-10f;
+    params.telemetry_loss_threshold_for_grad_check = 0.01f;
+    params.telemetry_max_consecutive_zero_grad_steps = 0;
+    params.telemetry_seq_len_regime_change_threshold = 0.3f;
+    params.telemetry_regime_change_suppression_steps = 2;
+    params.telemetry_volatility_damping_threshold = 150.0f;
+    params.telemetry_max_volatility_damping = 0.9f;
+    params.telemetry_gradient_decay_threshold = 0.0f;
+    params.telemetry_max_decay_boost = 1.0f;
+    params.telemetry_progress_boost_threshold = 100.0f;
+    params.telemetry_max_progress_boost = 1.0f;
+    params.telemetry_outlier_frequency_trigger = 0.95f;
+    params.telemetry_outlier_persistence_trigger = 0.9f;
+    params.telemetry_anchor_drift_sigma_multiplier = 5.0f;
+    params.telemetry_soft_restart_cooldown_steps = 100000;
+    params.telemetry_baseline_stabilization_steps = 100;
+    params.telemetry_plateau_noise_patience = 30;
+    params.telemetry_plateau_noise_variance_threshold = 0.008f;
+    params.telemetry_plateau_noise_std = 0.1f;
+    params.telemetry_plateau_noise_proportional = true;
+    params.telemetry_plateau_noise_cooldown = 10;
+    params.telemetry_plateau_noise_max_per_epoch = 3;
+
+    // ── Loss sub-parameters ──
+    params.loss_label_smoothing_epsilon = 0.05f;
+    params.loss_focal_gamma = 0.75f;
+    params.loss_focal_alpha = 1.0f;
+    params.loss_preference_beta = 0.1f;
+    params.loss_distillation_temperature = 1.0f;
+    params.loss_distillation_lambda = 0.5f;
+    params.loss_entropy_reg_lambda = 0.0f;
+    params.loss_class_balanced_beta = 0.5f;
+
+    // ── LM head centering ──
+    params.pc1_power_iters = 5;
+
+    // ── Layer scale ──
+    params.layer_scale_init = 1.0f;
+
+    // ── Execution block tuning ──
+    params.execution_block_cross_attn_topk = 2;
+    params.execution_block_usage_decay = 0.95f;
+    params.execution_block_diversity_kappa = 2.0f;
+    params.execution_block_temp_start = 1.5f;
+    params.execution_block_temp_end = 0.5f;
+    params.execution_block_temp_schedule = 0;
+    params.execution_block_entropy_weight = 0.01f;
+    params.execution_step_x_multiplier = 2.0f;
+    params.execution_step_y_multiplier = 3.0f;
+    params.execution_step_y_overrides_x = false;
+    params.execution_entropy_aux_weight = 0.01f;
+    params.execution_value_match_epsilon = 0.0001f;
+    params.execution_final_slot_consistency_weight = 0.1f;
+    params.execution_block_transition_hard_threshold = 0.0f;
+    params.execution_block_causal_w1_transition = 1.5f;
+    params.execution_div_invalid_penalty_weight = 0.5f;
+    params.execution_div_magnitude_penalty_weight = 0.1f;
+    params.execution_arg_reinforce_weight = 0.0f;
+    params.execution_arg_reinforce_baseline_decay = 0.99f;
+    params.structured_ce_weight = 0.1f;
+    params.selector_d_selector = 64;
+    params.selector_selection_margin = 1.0f;
+    params.selector_supervision_weight = 1.0f;
+
+    // ── Activation quantization ──
+    params.activation_quantization_apply_to_embeddings = false;
+    params.activation_quantization_apply_to_encoder_outputs = false;
+    params.activation_quantization_apply_to_layer_caches = false;
+    params.activation_quantization_apply_to_qkv_cache = false;
+    params.activation_quantization_apply_to_logits = false;
+    params.activation_quantization_scale = 1.0f;
+    params.activation_quantization_clip_min = -127.0f;
+    params.activation_quantization_clip_max = 127.0f;
+    params.activation_quantization_zero_point = 0;
+    params.activation_quantization_symmetric = false;
+
+    // ── Multi-token prediction ──
+    params.mtp_k = 3;
+    params.mtp_alpha = 0.2f;
+    params.mtp_log_ratio_monitor = true;
+
+    // ── Diagnostics ──
+    params.hardcoded_hidden_pattern = 0;
+    params.hardcoded_log_every_n_batches = 1;
+    params.prediction_comparison_interval = 100;
+    params.prediction_comparison_top_k = 5;
+    params.prediction_comparison_max_positions = 8;
+    params.prediction_comparison_log_path = "resources/models/GRIM-text/training/prediction_comparison.log";
+    params.logit_update_trace_interval = 50;
+    params.attention_diag_layer = -1;
+    params.attention_diag_head = 0;
+}
+
+/**
+ * @brief Validate required (base+enable) fields exist in training.config JSON
  * @param trainConfig The training.config JSON object
  * @throws std::runtime_error listing all missing required fields
- * 
- * Rule 20: NO SILENT DEFAULTS. EVERY field MUST be explicitly set in ai_config.json.
- * TrainingHyperparameters has NO default values - all must come from JSON.
+ *
+ * Rule 20: Base parameters and feature enables MUST be explicitly set.
+ * Non-base parameters get sensible defaults from setDefaultHyperparameters().
  */
 inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
-    // ALL fields required - NO DEFAULTS ANYWHERE
     static const std::vector<std::string> REQUIRED = {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
@@ -645,132 +788,64 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
         
-        // Single batch overfit
-        "single_batch.enabled", "single_batch.max_steps",
+        // Feature enables
+        "cosine_decay.enabled",
+        "single_batch.enabled",
+        "soft_restart.enabled",
+        "auto_stop.enabled",
+        "micro_validation.enabled",
+        "guess_aux.enabled",
+        "shuffle.enabled",
         
-        // Soft restart
-        "soft_restart.enabled", "soft_restart.loss_increase_threshold",
-        "soft_restart.max_step_window", "soft_restart.cooldown_steps",
-        
-        // Auto stop
-        "auto_stop.enabled", "auto_stop.plateau_patience", "auto_stop.plateau_min_delta",
-        "auto_stop.high_loss_threshold", "auto_stop.high_loss_patience",
-        
-        // Micro validation
-        "micro_validation.enabled", "micro_validation.interval",
-        "micro_validation.batch_limit", "micro_validation.min_step", "micro_validation.prefer_short",
-        
-        // Guess aux
-        "guess_aux.enabled", "guess_aux.lambda", "guess_aux.min_confidence",
-        
-        // Shuffle
-        "shuffle.enabled", "shuffle.epochs",
-        
-        // Telemetry control
         "telemetry_control.enabled",
-        "telemetry_control.spike_thresholds.mild",
-        "telemetry_control.spike_thresholds.moderate",
-        "telemetry_control.spike_thresholds.severe",
-        "telemetry_control.response.moderate_grad_scale",
-        "telemetry_control.response.moderate_cooldown_extension",
-        "telemetry_control.accumulation_guard.min_grad_for_nonzero_loss",
-        "telemetry_control.accumulation_guard.loss_threshold",
-        "telemetry_control.accumulation_guard.max_consecutive_zero_grad_steps",
-        "telemetry_control.regime_change.seq_len_threshold",
-        "telemetry_control.regime_change.suppression_steps",
-        "telemetry_control.volatility_damping.threshold",
-        "telemetry_control.volatility_damping.max_damping",
-        "telemetry_control.gradient_decay.threshold",
-        "telemetry_control.gradient_decay.max_boost",
-        "telemetry_control.progress_boost.threshold",
-        "telemetry_control.progress_boost.max_boost",
-        "telemetry_control.outlier.frequency_trigger",
-        "telemetry_control.outlier.persistence_trigger",
-        "telemetry_control.drift.anchor_sigma_multiplier",
-        "telemetry_control.soft_restart.cooldown_steps",
-        // telemetry_control.baseline.warmup_steps: derived as warmup_steps (see deriveImplicitHyperparameters)
-        "telemetry_control.baseline.stabilization_steps",
-        "telemetry_control.logging.verbose",
-        "telemetry_control.logging.fail_loud_on_accumulation_bug",
-        "telemetry_control.plateau_noise.enabled",
-        "telemetry_control.plateau_noise.patience",
-        "telemetry_control.plateau_noise.variance_threshold",
-        "telemetry_control.plateau_noise.noise_std",
-        "telemetry_control.plateau_noise.proportional",
-        "telemetry_control.plateau_noise.cooldown",
-        "telemetry_control.plateau_noise.max_per_epoch",
-        
-        // Loss
-        "loss.label_smoothing.enabled", "loss.label_smoothing.epsilon",
-        "loss.focal.enabled", "loss.focal.gamma", "loss.focal.alpha",
-        "loss.preference.enabled", "loss.preference.beta",
-        "loss.distillation.enabled", "loss.distillation.temperature", "loss.distillation.lambda",
-        "loss.masking.enabled", "loss.masking.tag",
-        
-        // Stability overrides
         "stability_overrides_enabled",
-        "stability_overrides.batch_size", "stability_overrides.max_seq_len",
-        "stability_overrides.clip_per_token", "stability_overrides.lr_min",
-        
-        // Scratch blocks
-        "scratch_blocks.enabled",
-        "scratch_blocks.num_blocks", "scratch_blocks.use_write_combined",
-        
-        // Scratch block reasoning
-        "scratch_block_reasoning.enabled", "scratch_block_reasoning.atom_embedding_dim",
-        "scratch_block_reasoning.max_atoms", "scratch_block_reasoning.atom_scale",
-
-        // Execution block (differentiable register machine + execution-first loss weights)
+        "activation_quantization.enabled",
+        "multi_token_prediction.enabled",
         "execution_block.enabled",
+        "scratch_blocks.enabled",
+        "scratch_block_reasoning.enabled",
+        "lm_head_centering.enabled",
+        "layer_scale.enabled",
+        "qk_norm.enabled",
+        "embedding_freeze.enabled",
+        "hardcoded_hidden_states.enabled",
+        "prediction_comparison.enabled",
+        "logit_update_trace.enabled",
+        "attention_diagnostics.enabled",
+
+        // Loss enables
+        "loss.label_smoothing.enabled",
+        "loss.focal.enabled",
+        "loss.preference.enabled",
+        "loss.distillation.enabled",
+        "loss.masking.enabled", "loss.masking.tag",
+
+        // Execution block structural (architecture choices)
         "execution_block.execution_first_type_only",
         "execution_block.layer",
         "execution_block.num_ops",
         "execution_block.num_slots",
         "execution_block.num_steps",
         "execution_block.d_type",
-        "execution_block.cross_attn_topk",
-        "execution_block.usage_decay",
-        "execution_block.diversity_kappa",
-        "execution_block.temp_start",
-        "execution_block.temp_end",
-        "execution_block.temp_schedule",
-        "execution_block.entropy_weight",
-        "execution_block.step_x_multiplier",
-        "execution_block.step_y_multiplier",
-        "execution_block.step_y_overrides_x",
-        "execution_block.entropy_aux_weight",
-        "execution_block.value_match_epsilon",
-        "execution_block.final_slot_consistency_weight",
-        
-        // Activation quantization
-        "activation_quantization.enabled",
-        "activation_quantization.apply_to_embeddings",
-        "activation_quantization.apply_to_encoder_outputs",
-        "activation_quantization.apply_to_layer_caches",
-        "activation_quantization.apply_to_qkv_cache",
-        "activation_quantization.apply_to_logits",
-        "activation_quantization.scale",
-        "activation_quantization.clip_min", "activation_quantization.clip_max",
-        "activation_quantization.zero_point", "activation_quantization.symmetric",
-        
+        "execution_block.structured_ce_enabled",
+        "execution_block.selector.enabled",
+
+        // LM head centering choices
+        "lm_head_centering.center_hidden_states",
+        "lm_head_centering.center_logits",
+        "lm_head_centering.center_encoder_residuals",
+        "lm_head_centering.project_out_pc1",
+
+        // Logging
+        "log_recorder.enabled", "log_recorder.default_level",
+        "telemetry_control.logging.verbose",
+        "telemetry_control.logging.fail_loud_on_accumulation_bug",
+        "telemetry_control.plateau_noise.enabled",
+
         // CUDA execution
         "cuda_execution.single_stream_mode",
         "cuda_execution.disable_async_frees",
         "cuda_execution.synchronize_after_kernels",
-        
-        // Prediction comparison
-        "prediction_comparison.enabled", "prediction_comparison.interval",
-        "prediction_comparison.top_k", "prediction_comparison.max_positions",
-        "prediction_comparison.log_path",
-        
-        // Logit update trace
-        "logit_update_trace.enabled", "logit_update_trace.interval",
-        
-        // Attention diagnostics
-        "attention_diagnostics.enabled", "attention_diagnostics.layer", "attention_diagnostics.head",
-        
-        // Log recorder
-        "log_recorder.enabled", "log_recorder.default_level"
     };
     
     std::vector<std::string> missing;
@@ -792,8 +867,8 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         for (const auto& m : missing) {
             oss << "  - " << m << "\n";
         }
-        oss << "\nRule 20: NO SILENT DEFAULTS. ALL training config fields MUST be explicitly set.\n";
-        oss << "TrainingHyperparameters has NO default values - every field must come from JSON.";
+        oss << "\nRule 20: Base parameters and feature enables MUST be explicitly set.\n";
+        oss << "Non-base parameters get sensible defaults from setDefaultHyperparameters().";
         throw std::runtime_error(oss.str());
     }
 }
@@ -814,12 +889,12 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.grad_clip_norm, trainConfig, "grad_clip_norm");
     assignTrainingField(params.per_token_grad_scale, trainConfig, "per_token_grad_scale");
     assignTrainingField(params.max_seq_len, trainConfig, "max_seq_len");
-    // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveImplicitHyperparameters)
-    // min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveImplicitHyperparameters)
+    // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
+    // min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
     assignTrainingField(params.warmup_steps, trainConfig, "warmup_steps");
     if (auto it = trainConfig.find("cosine_decay"); it != trainConfig.end() && it->is_object()) {
         params.cosine_decay_enabled = it->value("enabled", false);
-        // cosine_decay_min_lr: derived as learning_rate * 0.1 (see deriveImplicitHyperparameters)
+        // cosine_decay_min_lr: derived as learning_rate * 0.1 (see deriveComputedHyperparameters)
     } else {
         params.cosine_decay_enabled = false;
     }
@@ -830,7 +905,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.checkpoint_interval, trainConfig, "checkpoint_interval");
     assignTrainingField(params.use_gpu, trainConfig, "use_gpu");
     assignTrainingField(params.use_flash_attention, trainConfig, "use_flash_attention");
-    // min_seq_len_for_flash: derived from max_seq_len (see deriveImplicitHyperparameters)
+    // min_seq_len_for_flash: derived from max_seq_len (see deriveComputedHyperparameters)
 
     if (auto it = trainConfig.find("soft_restart"); it != trainConfig.end()) {
         const auto& soft = *it;
@@ -983,7 +1058,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
 
             if (auto base_it = tc.find("baseline"); base_it != tc.end() && base_it->is_object()) {
                 const auto& base = *base_it;
-                // telemetry_warmup_steps: derived as warmup_steps (see deriveImplicitHyperparameters)
+                // telemetry_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
                 params.telemetry_baseline_stabilization_steps = base.value("stabilization_steps", params.telemetry_baseline_stabilization_steps);
             }
 
@@ -1206,7 +1281,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             params.scratch_blocks_enabled = scratch.get<bool>();
         } else if (scratch.is_object()) {
             params.scratch_blocks_enabled = scratch.value("enabled", params.scratch_blocks_enabled);
-            // scratch_max_tokens_per_block: derived as max_seq_len (see deriveImplicitHyperparameters)
+            // scratch_max_tokens_per_block: derived as max_seq_len (see deriveComputedHyperparameters)
             params.scratch_num_blocks = scratch.value("num_blocks", params.scratch_num_blocks);
             params.scratch_write_combined = scratch.value("use_write_combined", params.scratch_write_combined);
         }
@@ -1229,9 +1304,9 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_block_num_ops, eb, "num_ops");
         assignTrainingField(params.execution_block_num_slots, eb, "num_slots");
         assignTrainingField(params.execution_block_num_steps, eb, "num_steps");
-        // execution_block_d_key: derived as d_model / num_heads (see deriveImplicitHyperparameters)
+        // execution_block_d_key: derived as d_model / num_heads (see deriveComputedHyperparameters)
         assignTrainingField(params.execution_block_d_type, eb, "d_type");
-        // execution_block_cross_attn_head_dim: derived as d_model / num_heads (see deriveImplicitHyperparameters)
+        // execution_block_cross_attn_head_dim: derived as d_model / num_heads (see deriveComputedHyperparameters)
         assignTrainingField(params.execution_block_cross_attn_topk, eb, "cross_attn_topk");
         assignTrainingField(params.execution_block_usage_decay, eb, "usage_decay");
         assignTrainingField(params.execution_block_diversity_kappa, eb, "diversity_kappa");
@@ -1246,7 +1321,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_value_match_epsilon, eb, "value_match_epsilon");
         assignTrainingField(params.execution_final_slot_consistency_weight, eb, "final_slot_consistency_weight");
         assignTrainingField(params.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
-        // execution_block_gate_warmup_steps: derived as warmup_steps (see deriveImplicitHyperparameters)
+        // execution_block_gate_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
         assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
         assignTrainingField(params.execution_div_invalid_penalty_weight, eb, "div_invalid_penalty_weight");
         assignTrainingField(params.execution_div_magnitude_penalty_weight, eb, "div_magnitude_penalty_weight");
@@ -1295,7 +1370,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.mtp_enabled = mtp.value("enabled", params.mtp_enabled);
         params.mtp_k = mtp.value("k", params.mtp_k);
         params.mtp_alpha = mtp.value("alpha", params.mtp_alpha);
-        // mtp_alpha_warmup_steps: derived as warmup_steps (see deriveImplicitHyperparameters)
+        // mtp_alpha_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
         params.mtp_log_ratio_monitor = mtp.value("log_ratio_monitor", params.mtp_log_ratio_monitor);
     }
 
@@ -1330,28 +1405,26 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     }
 }
 
-// Compute all derived hyperparameters from base fields.
-// Called AFTER applyTrainingConfigObject() so all base fields are populated.
+// Compute formula-derived hyperparameters from base fields.
+// Called AFTER applyTrainingConfigObject() so base fields are populated from JSON.
+// These ALWAYS overwrite — they are mathematical derivations, not defaults.
 // Rule 20: throws if any base field needed for derivation is invalid.
-inline void deriveImplicitHyperparameters(TrainingHyperparameters& params, const nlohmann::json& trainConfig) {
-    // min_seq_valid_tokens = max_seq_len / 4
+inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const nlohmann::json& trainConfig) {
+    // ── Sequence length derivations ──
     if (params.max_seq_len <= 0)
-        throw std::runtime_error("deriveImplicitHyperparameters: max_seq_len must be > 0, got " + std::to_string(params.max_seq_len));
+        throw std::runtime_error("deriveComputedHyperparameters: max_seq_len must be > 0, got " + std::to_string(params.max_seq_len));
     params.min_seq_valid_tokens = params.max_seq_len / 4;
     params.min_seq_len_for_flash = params.max_seq_len / 4;
-
-    // scratch_max_tokens_per_block = max_seq_len
     params.scratch_max_tokens_per_block = static_cast<size_t>(params.max_seq_len);
 
-    // cosine_decay_min_lr = learning_rate * 0.1
+    // ── LR floor ──
     if (params.cosine_decay_enabled) {
         if (params.learning_rate <= 0.0f)
-            throw std::runtime_error("deriveImplicitHyperparameters: learning_rate must be > 0 when cosine_decay is enabled, got " + std::to_string(params.learning_rate));
+            throw std::runtime_error("deriveComputedHyperparameters: learning_rate must be > 0 when cosine_decay is enabled, got " + std::to_string(params.learning_rate));
         params.cosine_decay_min_lr = params.learning_rate * 0.1f;
     }
 
-    // execution_block d_key and cross_attn_head_dim = d_model / num_heads (= head_dim)
-    // d_model and num_heads are architecture fields read from the same JSON block
+    // ── Head dimension propagation ──
     if (trainConfig.contains("d_model") && trainConfig.contains("num_heads")) {
         int d_model = trainConfig["d_model"].get<int>();
         int num_heads = trainConfig["num_heads"].get<int>();
@@ -1359,21 +1432,27 @@ inline void deriveImplicitHyperparameters(TrainingHyperparameters& params, const
             int head_dim = d_model / num_heads;
             params.execution_block_d_key = head_dim;
             params.execution_block_cross_attn_head_dim = head_dim;
+            params.scratch_block_reasoning_atom_embedding_dim = d_model / 8;
         }
     }
 
-    // All warmup-derived fields use the single base warmup_steps
+    // ── Warmup propagation ──
     if (params.warmup_steps <= 0)
-        throw std::runtime_error("deriveImplicitHyperparameters: warmup_steps must be > 0, got " + std::to_string(params.warmup_steps));
-
-    // MTP alpha warmup = base warmup (auxiliary loss should ramp with LR)
+        throw std::runtime_error("deriveComputedHyperparameters: warmup_steps must be > 0, got " + std::to_string(params.warmup_steps));
     params.mtp_alpha_warmup_steps = params.warmup_steps;
-
-    // Telemetry baseline warmup = base warmup (skip anomaly detection during LR warmup)
     params.telemetry_warmup_steps = params.warmup_steps;
-
-    // ExecutionBlock gate warmup = base warmup (gates should stabilize with LR)
     params.execution_block_gate_warmup_steps = params.warmup_steps;
+
+    // ── Micro validation derived from base training schedule ──
+    params.micro_validation_min_step = params.warmup_steps;
+    params.micro_validation_interval = params.validation_interval;
+
+    // ── Stability overrides derived from base values ──
+    params.stability_override_batch_size = params.batch_size * 2 / 3;
+    if (params.stability_override_batch_size < 1) params.stability_override_batch_size = 1;
+    params.stability_override_max_seq_len = params.max_seq_len;
+    params.stability_override_clip_per_token = 0.02f;
+    params.stability_override_lr_min = params.learning_rate * 0.83f;
 }
 
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
@@ -1384,11 +1463,14 @@ inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& conf
         assignTrainingField(params.current_curriculum, training, "current_curriculum");
 
         const auto& trainConfig = training["config"];
-        // Rule 20: Validate required fields BEFORE parsing (fail fast)
+        // Phase 1: Set sensible defaults for all non-base params
+        setDefaultHyperparameters(params);
+        // Phase 2: Validate base+enable fields exist
         validateTrainingConfigJson(trainConfig);
+        // Phase 3: Parse JSON (overwrites defaults only for keys present)
         applyTrainingConfigObject(trainConfig, params);
-        // Compute all derived hyperparameters from base fields
-        deriveImplicitHyperparameters(params, trainConfig);
+        // Phase 4: Compute formula-derived values (always overwrites)
+        deriveComputedHyperparameters(params, trainConfig);
         return true;
     }
     return false;
