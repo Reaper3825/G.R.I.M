@@ -8,7 +8,7 @@
 
 #include "AutogradLoss.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
-#include "../../Batching/BatchPayload.hpp"
+// BatchPayload include removed — unified_loss takes explicit (num_tokens, vocab_size)
 #include "../../EquationLogging/EquationLogging.hpp"
 #include "../../VerboseLogging.hpp"  // Compile-time diagnostic guards (Issue #151)
 #include "../../CudaAllocUtils.hpp"
@@ -1170,16 +1170,15 @@ struct NLLLossGradFn : public GradFn {
 __host__ Tensor unified_loss(
     Tensor& logits,
     const int* targets,
-    const Batching::BatchPayload& payload,
+    int num_tokens,
+    int vocab_size,
     const LossConfig& config,
     cudaStream_t stream
 ) {
     // ══════════════════════════════════════════════════════════════════════
     // Rule 20: FAIL LOUD on invalid data
-    // 
-    // BatchPayload is the single source of truth for batch geometry.
-    // payload.validate() was already called by the caller, but we still
-    // crash on null targets and zero dimensions.
+    //
+    // Callers pass explicit (num_tokens, vocab_size) — no BatchPayload coupling.
     //
     // Validation CONTRACT (caller MUST ensure):
     //   - targets[i] ∈ {-1} ∪ [0, vocab_size)  where -1 = masked position
@@ -1192,17 +1191,14 @@ __host__ Tensor unified_loss(
     // the upstream data pipeline).
     // ══════════════════════════════════════════════════════════════════════
     
-    const int num_tokens = payload.total_tokens;
-    const int vocab_size = payload.vocab_size;
-    
     if (!targets) {
         throw std::runtime_error("[unified_loss] targets pointer is NULL — caller MUST provide valid target token IDs");
     }
     if (num_tokens <= 0) {
-        throw std::runtime_error("[unified_loss] payload.total_tokens=" + std::to_string(num_tokens) + " — must be > 0");
+        throw std::runtime_error("[unified_loss] num_tokens=" + std::to_string(num_tokens) + " — must be > 0");
     }
     if (vocab_size <= 0) {
-        throw std::runtime_error("[unified_loss] payload.vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
+        throw std::runtime_error("[unified_loss] vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
     }
 
     // ══════════════════════════════════════════════════════════════════════

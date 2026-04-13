@@ -29,7 +29,8 @@ __global__ void kernelMTPAccuracy(
 ) {
     const int t = blockIdx.x * blockDim.x + threadIdx.x;
     int my_correct = 0, my_valid = 0;
-    if (t < total_tokens && targets[t] >= 0) {
+    // Masking: target == -1 means masked/padding — must match kernelNLLLossForward exactly
+    if (t < total_tokens && targets[t] != -1) {
         my_valid = 1;
         const float* row = logits + t * static_cast<size_t>(vocab_size);
         int best = 0;
@@ -83,7 +84,7 @@ void computeMTPAuxiliaryLosses(
     const int vocab_size = payload.vocab_size;
 
     if (!ctx.model || !cfg->mtp_enabled || cfg->mtp_k <= 0 ||
-        !intermediates.encoder_output_tensor.data || !ts.mtp_shifted_targets_tensor.data) {
+        !intermediates.encoder_output_tensor.data) {
         return;
     }
 
@@ -118,13 +119,11 @@ void computeMTPAuxiliaryLosses(
     ts.mtp_diagnostics.alpha_effective = alpha_effective;
 
     // Resolve mtp_input: same representation as LM head matmul input (A1 fix)
-    // CRITICAL: detach() stops MTP loss gradients from flowing back into the encoder.
-    // MTP heads train only their own W/b — the encoder receives gradients ONLY from the main LM head.
-    // Without detach, K random MTP heads inject conflicting noise gradients into the encoder,
-    // causing the ~2-nat loss jump on step 1.
-    Tensor mtp_input_detached;
+    // MTP IS an auxiliary training objective — gradients flow through encoder.
+    // DeepSeek-V3 design: encoder learns future-token structure from MTP signal.
+    const Tensor* mtp_input = nullptr;
     if (intermediates.centered_encoder_output.data) {
-        mtp_input_detached = intermediates.centered_encoder_output.detach();
+        mtp_input = &intermediates.centered_encoder_output;
     } else if (ctx.lm_head->config().has_final_rms_norm && ctx.lm_head->finalRmsGamma().data) {
         intermediates.mtp_input_tensor = autograd::rms_norm(
             intermediates.encoder_output_tensor,
@@ -132,29 +131,51 @@ void computeMTPAuxiliaryLosses(
             ctx.lm_head->config().rms_epsilon,
             ctx.stream
         );
-        mtp_input_detached = intermediates.mtp_input_tensor.detach();
+        mtp_input = &intermediates.mtp_input_tensor;
     } else {
-        mtp_input_detached = intermediates.encoder_output_tensor.detach();
+        mtp_input = &intermediates.encoder_output_tensor;
     }
 
     const size_t target_bytes = static_cast<size_t>(total_tokens) * sizeof(int);
+
+    // Each MTP head needs its own GPU target buffer that persists through backward.
+    // NLLLossGradFn stores a raw pointer to targets — if all heads share a single
+    // buffer (ts.mtp_shifted_targets_tensor), backward reads the LAST head's targets
+    // for ALL heads. Allocate per-head and store in intermediates for lifetime.
+    intermediates.mtp_shifted_targets_gpu.clear();
+    intermediates.mtp_shifted_targets_gpu.reserve(K);
 
     for (int k = 0; k < K && scale > 0.0f; ++k) {
         LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
         if (!head || !head->weight.data || !head->bias.data) continue;
 
+        // Allocate per-head GPU target buffer (owned by Tensor in intermediates)
+        Tensor targets_k;
+        auto target_shape = TensorContract::TensorShape::make_BSM(total_tokens, 1);
+        float* raw_buf = nullptr;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&raw_buf), target_bytes, "mtp_targets_k");
+        targets_k.data = raw_buf;
+        targets_k.shape = target_shape;
+        targets_k.owns_data = true;
+        targets_k.requires_grad = false;
+
         // Upload shifted targets from payload (authoritative, computed by buildBatchPayload)
         cudaMemcpyAsync(
-            ts.mtp_shifted_targets_tensor.data,
+            targets_k.data,
             payload.mtp_shifted_targets[k].data(),
             target_bytes,
             cudaMemcpyHostToDevice, ctx.stream);
 
+        const int* d_targets_k = reinterpret_cast<const int*>(targets_k.data);
+
+        // Store in intermediates so buffer lives through backward
+        intermediates.mtp_shifted_targets_gpu.push_back(std::move(targets_k));
+
         Tensor logits_k = autograd::matmul(
-            mtp_input_detached,
+            *mtp_input,
             head->weight,
             ctx.stream,
-            mtp_input_detached.data,
+            mtp_input->data,
             nullptr,
             true
         );
@@ -162,8 +183,9 @@ void computeMTPAuxiliaryLosses(
         intermediates.mtp_logits_tensors.push_back(std::move(logits_k));
         Tensor loss_k = autograd::unified_loss(
             intermediates.mtp_logits_tensors.back(),
-            reinterpret_cast<const int*>(ts.mtp_shifted_targets_tensor.data),
-            payload,
+            d_targets_k,
+            total_tokens,
+            vocab_size,
             ctx.loss_config,
             ctx.stream
         );
@@ -175,7 +197,7 @@ void computeMTPAuxiliaryLosses(
         cudaMallocOrThrow(reinterpret_cast<void**>(&d_valid), sizeof(int), "mtp_d_valid");
         launchMTPAccuracyKernel(
             intermediates.mtp_logits_tensors.back().data,
-            reinterpret_cast<const int*>(ts.mtp_shifted_targets_tensor.data),
+            d_targets_k,
             total_tokens,
             vocab_size,
             d_correct,
@@ -187,12 +209,22 @@ void computeMTPAuxiliaryLosses(
             throw std::runtime_error("computeMTPAuxiliaryLosses: MTP head k=" + std::to_string(k) +
                 " loss is non-finite (" + std::to_string(h_loss_k) + ") — shift=" + std::to_string(k + 1));
         }
-        ts.mtp_diagnostics.head_loss.push_back(h_loss_k);
+        ts.mtp_diagnostics.head_loss.push_back(h_loss_k * scale);  // Report ACTUAL contribution to total loss
         int h_correct = 0, h_valid = 0;
         cudaMemcpy(&h_correct, d_correct, sizeof(int), cudaMemcpyDeviceToHost);
         cudaMemcpy(&h_valid, d_valid, sizeof(int), cudaMemcpyDeviceToHost);
         cudaFree(d_correct);
         cudaFree(d_valid);
+
+        // Cross-validate: GPU-counted valid must match CPU-counted payload.mtp_valid_counts[k].
+        // A mismatch means buildBatchPayload and the GPU kernel disagree on masking — data corruption.
+        const int expected_valid = payload.mtp_valid_counts[k];
+        if (h_valid != expected_valid) {
+            throw std::runtime_error("computeMTPAuxiliaryLosses: MTP head k=" + std::to_string(k) +
+                " valid count mismatch: GPU=" + std::to_string(h_valid) +
+                " vs payload.mtp_valid_counts[k]=" + std::to_string(expected_valid) +
+                " — buildBatchPayload and accuracy kernel disagree on masking");
+        }
         float acc_k = (h_valid > 0) ? (static_cast<float>(h_correct) / static_cast<float>(h_valid)) * 100.0f : 0.0f;
         ts.mtp_diagnostics.head_acc.push_back(acc_k);
         Tensor scaled_k = autograd::scale_scalar(loss_k, scale, ctx.stream);

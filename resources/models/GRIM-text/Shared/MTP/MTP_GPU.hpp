@@ -51,16 +51,17 @@ void launchMTPAccuracyKernel(
  *
  * This function:
  *  1. Resolves mtp_input (same representation as LM head — A1 fix)
- *  2. For each head k: shift targets, matmul, bias, unified_loss, scale, add
+ *  2. For each head k: allocate per-head GPU target buffer, matmul, bias, unified_loss, scale, add
  *  3. Fills ts.mtp_diagnostics (head_loss, head_acc, alpha_effective)
  *
  * Reads shifted targets from payload.mtp_shifted_targets[k] (computed by
- * buildBatchPayload) and uploads to ts.mtp_shifted_targets_tensor per head.
+ * buildBatchPayload) and uploads to per-head GPU buffers stored in
+ * intermediates.mtp_shifted_targets_gpu (kept alive for NLLLossGradFn backward).
  * BatchPayload is the single source of truth for batch geometry and masking.
  *
  * @param ctx           AutogradContext with model, config, stream, step, payload
- * @param intermediates AutogradIntermediates owning encoder_output, centered output, loss_tensor
- * @param ts            TrainingState for mtp_shifted_targets_tensor (GPU upload buffer), mtp_diagnostics
+ * @param intermediates AutogradIntermediates owning encoder_output, centered output, loss_tensor, per-head target buffers
+ * @param ts            TrainingState for mtp_diagnostics
  */
 void computeMTPAuxiliaryLosses(
     Autograd::AutogradContext& ctx,

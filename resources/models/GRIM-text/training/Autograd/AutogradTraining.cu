@@ -1200,7 +1200,8 @@ LossResult computeAutogradLoss(
     Tensor loss_tensor = autograd::unified_loss(
         intermediates.logits_tensor,
         targets,
-        payload,
+        payload.total_tokens,
+        payload.vocab_size,
         ctx.loss_config,
         ctx.stream
     );

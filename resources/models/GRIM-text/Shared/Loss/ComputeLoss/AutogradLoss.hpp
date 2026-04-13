@@ -12,9 +12,6 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-// Forward declaration — full definition in Batching/BatchPayload.hpp
-namespace GRIM { namespace Batching { struct BatchPayload; } }
-
 namespace GRIM {
 namespace autograd {
 
@@ -71,9 +68,10 @@ struct LossConfig {
  *   When focal disabled: L = CE_smooth + λ * Σ p*log(p)
  *   (focal_alpha is ONLY applied when focal_enabled=true)
  * 
- * @param logits      [total_tokens, vocab_size] - raw logits from LM head
- * @param targets     [total_tokens] - target token IDs (on GPU), -1 = masked
- * @param payload     BatchPayload — single source of truth for total_tokens, vocab_size, valid_tokens
+ * @param logits      [num_tokens, vocab_size] - raw logits from LM head
+ * @param targets     [num_tokens] - target token IDs (on GPU), -1 = masked
+ * @param num_tokens  Number of token positions in the logits/targets buffers
+ * @param vocab_size  Vocabulary size (second dimension of logits)
  * @param config      Loss configuration (focal, label smoothing, entropy reg)
  * @param stream      CUDA stream
  * @return Scalar loss tensor with grad_fn attached (if logits.requires_grad)
@@ -81,7 +79,8 @@ struct LossConfig {
 Tensor unified_loss(
     Tensor& logits,
     const int* targets,
-    const Batching::BatchPayload& payload,
+    int num_tokens,
+    int vocab_size,
     const LossConfig& config,
     cudaStream_t stream
 );
