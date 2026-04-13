@@ -4549,6 +4549,50 @@ BatchResult processBatch(
             ctx.telemetry.last_obs[26] = atom_embed_rms;  // SB_ATOM_EMBED_RMS
         }
 
+        // Streams 27-30: PBM (Positional Bias Method) diagnostics
+        {
+            const auto* alibi_bias = ctx.model->getEmbedderPtr()->getALiBiBias();
+            if (!alibi_bias || !alibi_bias->isInitialized()) {
+                throw std::runtime_error("PBM telemetry: ALiBi bias not initialized — model MUST have positional encoding");
+            }
+            const auto& pbm = alibi_bias->getPBMState();
+
+            // Stream 27: PBM_ALIBI_SLOPE_RMS — RMS of ALiBi slopes (host copy, no D2H)
+            {
+                float slope_rms = 0.0f;
+                if (!pbm.alibi_slopes_host.empty()) {
+                    double sum_sq = 0.0;
+                    for (float s : pbm.alibi_slopes_host) sum_sq += static_cast<double>(s) * s;
+                    slope_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(pbm.alibi_slopes_host.size())));
+                }
+                ctx.telemetry.last_obs[27] = slope_rms;
+            }
+
+            // Stream 28: PBM_ALIBI_EFF_BIAS_MAX — max|slope| * batch_max_seq_len
+            {
+                float max_abs_slope = 0.0f;
+                for (float s : pbm.alibi_slopes_host) {
+                    float a = std::fabs(s);
+                    if (a > max_abs_slope) max_abs_slope = a;
+                }
+                ctx.telemetry.last_obs[28] = max_abs_slope * static_cast<float>(payload.max_seq_len);
+            }
+
+            // Stream 29: PBM_ROPE_INV_FREQ_RMS — RMS of RoPE inverse frequencies (host copy)
+            {
+                float freq_rms = 0.0f;
+                if (!pbm.rope_inv_freq_host.empty()) {
+                    double sum_sq = 0.0;
+                    for (float f : pbm.rope_inv_freq_host) sum_sq += static_cast<double>(f) * f;
+                    freq_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(pbm.rope_inv_freq_host.size())));
+                }
+                ctx.telemetry.last_obs[29] = freq_rms;
+            }
+
+            // Stream 30: PBM_BATCH_MAX_SEQ_LEN — actual max sequence length this batch
+            ctx.telemetry.last_obs[30] = static_cast<float>(payload.max_seq_len);
+        }
+
         GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(
             ctx.telemetry.last_obs, ctx.global_step);
         

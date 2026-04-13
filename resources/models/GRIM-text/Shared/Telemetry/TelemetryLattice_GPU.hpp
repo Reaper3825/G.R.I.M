@@ -167,6 +167,11 @@ enum class MetricStream : int {
     EB_READ_WEIGHT_NORM = 24,        // RMS(W_gate_read) — read gate parameter evolution
     EB_LOSS_FRAC = 25,               // (exec_ce + exec_entropy) / total_loss
     SB_ATOM_EMBED_RMS = 26,          // RMS(atom_type_embeddings) — ScratchBlock injection scale
+    // PBM (Positional Bias Method) diagnostics
+    PBM_ALIBI_SLOPE_RMS = 27,        // RMS of ALiBi slopes (constant; verifies init integrity)
+    PBM_ALIBI_EFF_BIAS_MAX = 28,     // max|slope| * batch_max_seq_len (varies per batch)
+    PBM_ROPE_INV_FREQ_RMS = 29,      // RMS of RoPE inverse frequencies (constant; verifies init)
+    PBM_BATCH_MAX_SEQ_LEN = 30,      // Actual max sequence length in current batch
 };
 
 const char* getMetricStreamName(MetricStream stream);

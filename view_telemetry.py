@@ -673,6 +673,66 @@ def main():
     else:
         print("EB injection diagnostics figure skipped: no injection streams in CSV")
 
+    # --- Figure 8: PBM (Positional Bias Method) Diagnostics ---
+    pbm_slope_rms = streams.get("pbm_alibi_slope_rms")
+    pbm_eff_bias = streams.get("pbm_alibi_eff_bias_max")
+    pbm_rope_rms = streams.get("pbm_rope_inv_freq_rms")
+    pbm_seq_len = streams.get("pbm_batch_max_seq_len")
+
+    has_pbm = any(s is not None for s in [pbm_slope_rms, pbm_eff_bias, pbm_rope_rms, pbm_seq_len])
+    if has_pbm:
+        fig8 = plt.figure(figsize=(16, 10), constrained_layout=True)
+        fig8.suptitle("GRIM-text Telemetry — PBM Positional Bias Diagnostics", fontsize=14, fontweight="bold")
+        gs8 = GridSpec(2, 2, figure=fig8)
+
+        # 8-1a) ALiBi slope RMS (should be constant — corruption detector)
+        ax = fig8.add_subplot(gs8[0, 0])
+        if pbm_slope_rms is not None:
+            ax.plot(pbm_slope_rms.index, pbm_slope_rms["raw_observation"], linewidth=1.5, color="tab:blue", label="ALiBi slope RMS")
+        ax.set_ylabel("RMS")
+        ax.set_title("ALiBi Slope RMS (should be constant)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 8-1b) RoPE inv_freq RMS (should be constant — corruption detector)
+        ax = fig8.add_subplot(gs8[0, 1])
+        if pbm_rope_rms is not None:
+            ax.plot(pbm_rope_rms.index, pbm_rope_rms["raw_observation"], linewidth=1.5, color="tab:orange", label="RoPE inv_freq RMS")
+        ax.set_ylabel("RMS")
+        ax.set_title("RoPE Inverse Frequency RMS (should be constant)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 8-2a) Effective bias max (max|slope| × seq_len) — varies per batch
+        ax = fig8.add_subplot(gs8[1, 0])
+        if pbm_eff_bias is not None:
+            ax.plot(pbm_eff_bias.index, pbm_eff_bias["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:red")
+            ax.plot(pbm_eff_bias.index, smooth(pbm_eff_bias["raw_observation"]), linewidth=1.5, color="tab:red", label="max|slope| × seq_len")
+        ax.set_ylabel("Effective Bias Magnitude")
+        ax.set_title("ALiBi Effective Bias Max (distant-token suppression)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 8-2b) Batch max sequence length + effective bias overlay
+        ax = fig8.add_subplot(gs8[1, 1])
+        if pbm_seq_len is not None:
+            ax.plot(pbm_seq_len.index, pbm_seq_len["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:green")
+            ax.plot(pbm_seq_len.index, smooth(pbm_seq_len["raw_observation"]), linewidth=1.5, color="tab:green", label="batch max_seq_len")
+        ax.set_ylabel("Sequence Length", color="tab:green")
+        if pbm_eff_bias is not None:
+            ax2 = ax.twinx()
+            ax2.plot(pbm_eff_bias.index, smooth(pbm_eff_bias["raw_observation"]), linewidth=1.2, color="tab:red", alpha=0.7, label="eff. bias max")
+            ax2.set_ylabel("Effective Bias", color="tab:red")
+            ax2.legend(loc="center right", fontsize=8)
+        ax.set_title("Batch Sequence Length & Effective Bias")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        fig8.savefig(os.path.splitext(path)[0] + "_pbm.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_pbm.png")
+    else:
+        print("PBM diagnostics figure skipped: no PBM streams in CSV")
+
     plt.show()
 
 if __name__ == "__main__":

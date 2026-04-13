@@ -332,6 +332,10 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::EB_READ_WEIGHT_NORM: return "eb_read_weight_norm";
         case MetricStream::EB_LOSS_FRAC: return "eb_loss_frac";
         case MetricStream::SB_ATOM_EMBED_RMS: return "sb_atom_embed_rms";
+        case MetricStream::PBM_ALIBI_SLOPE_RMS: return "pbm_alibi_slope_rms";
+        case MetricStream::PBM_ALIBI_EFF_BIAS_MAX: return "pbm_alibi_eff_bias_max";
+        case MetricStream::PBM_ROPE_INV_FREQ_RMS: return "pbm_rope_inv_freq_rms";
+        case MetricStream::PBM_BATCH_MAX_SEQ_LEN: return "pbm_batch_max_seq_len";
         default: return "unknown";
     }
 }

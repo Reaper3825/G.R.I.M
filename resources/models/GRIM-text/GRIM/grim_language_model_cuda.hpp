@@ -484,6 +484,7 @@ public:
     float* getRoPEFreqs() const;
     bool isInitialized() const;
     PositionalEncodingType getType() const { return type; }
+    const PBM::PBMState& getPBMState() const { return pbm_state_; }
     void cleanup();
 };
 
