@@ -366,6 +366,24 @@ bool initializePBM(const PBMConfig& config, PBMState& state) {
     state.rope_theta = config.rope_theta;
     state.rope_scaling = config.rope_scaling;
     state.alibi_slope_exponent = config.alibi_slope_exponent;
+    state.alibi_max_bias = config.alibi_max_bias;
+    
+    // Record event after async upload for cross-stream safety
+    if (config.stream) {
+        if (state.upload_event == nullptr) {
+            if (!checkCuda(cudaEventCreateWithFlags(&state.upload_event, cudaEventDisableTiming),
+                           "cudaEventCreate(upload_event)")) {
+                releasePBM(state);
+                return false;
+            }
+        }
+        if (!checkCuda(cudaEventRecord(state.upload_event, config.stream),
+                       "cudaEventRecord(upload_event)")) {
+            releasePBM(state);
+            return false;
+        }
+    }
+    
     state.initialized = true;
     
     std::cout << kTag << " ✓ Hybrid ALiBi+RoPE initialized successfully" << std::endl;
@@ -387,7 +405,8 @@ bool ensurePBM(const PBMConfig& config, PBMState& state) {
                               state.max_seq_len == config.max_seq_len &&
                               state.rope_theta == config.rope_theta &&
                               state.rope_scaling == config.rope_scaling &&
-                              state.alibi_slope_exponent == config.alibi_slope_exponent;
+                              state.alibi_slope_exponent == config.alibi_slope_exponent &&
+                              state.alibi_max_bias == config.alibi_max_bias;
     
     if (config_match) {
         return true;  // Already initialized with matching config
@@ -405,6 +424,10 @@ void releasePBM(PBMState& state) {
         cudaFree(state.rope_inv_freq);
         state.rope_inv_freq = nullptr;
     }
+    if (state.upload_event) {
+        cudaEventDestroy(state.upload_event);
+        state.upload_event = nullptr;
+    }
     
     state.alibi_slopes_host.clear();
     state.alibi_slopes_host.shrink_to_fit();
@@ -419,6 +442,7 @@ void releasePBM(PBMState& state) {
     state.rope_theta = 0.0f;
     state.rope_scaling = 0.0f;
     state.alibi_slope_exponent = 0.0f;
+    state.alibi_max_bias = 0.0f;
     state.initialized = false;
 }
 
@@ -541,7 +565,8 @@ __global__ void ropeRotationGQABackwardKernel(
     int seq_len,
     int head_dim,
     int rotary_dim,
-    bool is_q_pass
+    bool is_q_pass,
+    int pos_offset
 ) {
     const int pos_idx = blockIdx.x * blockDim.x + threadIdx.x;
     const int head_idx = blockIdx.y;
@@ -561,7 +586,7 @@ __global__ void ropeRotationGQABackwardKernel(
         const int dim_j = pair_idx * 2 + 1;
         
         const float freq = inv_freq[pair_idx];
-        const float theta = static_cast<float>(pos_idx) * freq;
+        const float theta = static_cast<float>(pos_idx + pos_offset) * freq;
         const float cos_val = cosf(theta);
         const float sin_val = sinf(theta);
         
@@ -577,7 +602,7 @@ __global__ void ropeRotationGQABackwardKernel(
 
 // NOTE: Non-GQA launchRoPERotation() was REMOVED (Rule 20: no backwards compatibility).
 // It was broken for GQA (assumed Q and K have same head count, causing memory corruption).
-// Use launchRoPERotationGQA() for ALL cases - set num_q_heads == num_kv_heads for MHA.
+// Use launchRoPERotationGQA() for ALL cases - set num_q_heads == num_kv_heads.
 
 void launchRoPERotationGQA(
     float* Q,
@@ -686,7 +711,8 @@ void launchRoPERotationGQA_backward(
     int seq_len,
     int head_dim,
     int rotary_dim,
-    cudaStream_t stream
+    cudaStream_t stream,
+    int pos_offset
 ) {
     // ISSUE rgb(9, 255, 0) FIX: The caller (RoPEGradFn in TensorContract_GPU.cu) intentionally
     // passes nullptr for one of grad_Q or grad_K because Q and K have independent
@@ -737,7 +763,8 @@ void launchRoPERotationGQA_backward(
         ropeRotationGQABackwardKernel<<<grid, block, 0, stream>>>(
             grad_Q, grad_K, inv_freq,
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
-            true  // grad_Q pass
+            true,  // grad_Q pass
+            pos_offset
         );
         
         cudaError_t err = cudaGetLastError();
@@ -755,7 +782,8 @@ void launchRoPERotationGQA_backward(
         ropeRotationGQABackwardKernel<<<grid, block, 0, stream>>>(
             grad_Q, grad_K, inv_freq,
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
-            false  // grad_K pass
+            false,  // grad_K pass
+            pos_offset
         );
         
         cudaError_t err = cudaGetLastError();

@@ -78,6 +78,12 @@ struct PBMState {
     float rope_theta = 0.0f;
     float rope_scaling = 0.0f;
     float alibi_slope_exponent = 0.0f;
+    float alibi_max_bias = 0.0f;
+    
+    // CUDA event recorded after async upload for cross-stream synchronization.
+    // Consumers on a DIFFERENT stream must cudaStreamWaitEvent(their_stream, upload_event)
+    // before reading alibi_slopes or rope_inv_freq buffers.
+    cudaEvent_t upload_event = nullptr;
     
     // Status
     bool initialized = false;
@@ -168,7 +174,8 @@ void launchRoPERotationGQA_backward(
     int seq_len,
     int head_dim,
     int rotary_dim,
-    cudaStream_t stream = nullptr
+    cudaStream_t stream = nullptr,
+    int pos_offset = 0                  // Position offset (MUST match forward pass)
 );
 
 // ═══════════════════════════════════════════════════════════════════════════

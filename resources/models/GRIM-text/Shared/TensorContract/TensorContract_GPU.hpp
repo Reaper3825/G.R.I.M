@@ -1451,7 +1451,8 @@ void rope_rotation(
     const float* inv_freq,
     int batch_size, int num_q_heads, int num_kv_heads,
     int seq_len, int head_dim, int rotary_dim,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    int pos_offset = 0);
 
 /**
  * Softmax: p[i] = exp(x[i]) / sum_j exp(x[j])  (along last dim, numerically stable)

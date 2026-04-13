@@ -6536,6 +6536,7 @@ struct RoPEGradFn : public GradFn {
         int seq_len = 0;
         int head_dim = 0;
         int rotary_dim = 0;
+        int pos_offset = 0;
         
         // Atomic counter: when reaches 2, both Q and K backward complete
         std::atomic<int> apply_count{0};
@@ -6577,7 +6578,8 @@ struct RoPEGradFn : public GradFn {
                 state.seq_len,
                 state.head_dim,
                 state.rotary_dim,
-                stream
+                stream,
+                state.pos_offset
             );
             AG_TRACE("[RoPEGradFn-Q] Inverse RoPE applied to dQ\n");
         } else {
@@ -6592,7 +6594,8 @@ struct RoPEGradFn : public GradFn {
                 state.seq_len,
                 state.head_dim,
                 state.rotary_dim,
-                stream
+                stream,
+                state.pos_offset
             );
             AG_TRACE("[RoPEGradFn-K] Inverse RoPE applied to dK\n");
         }
@@ -6661,7 +6664,8 @@ void rope_rotation(
     int seq_len,
     int head_dim,
     int rotary_dim,
-    cudaStream_t stream
+    cudaStream_t stream,
+    int pos_offset
 ) {
     // RULE 20: Fail loud validation
     if (!Q.data) {
@@ -6685,7 +6689,7 @@ void rope_rotation(
     PBM::launchRoPERotationGQA(
         Q.data, K.data, inv_freq,
         batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
-        stream
+        stream, pos_offset
     );
     
     // Setup backward pass if either tensor requires gradients
@@ -6718,6 +6722,7 @@ void rope_rotation(
         shared->seq_len = seq_len;
         shared->head_dim = head_dim;
         shared->rotary_dim = rotary_dim;
+        shared->pos_offset = pos_offset;
         
         // Create and attach GradFn for Q
         auto q_grad_fn = std::make_shared<RoPEGradFn>();
