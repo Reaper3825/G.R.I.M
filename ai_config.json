@@ -153,7 +153,6 @@
                 "symmetric": false,
                 "zero_point": 0
             },
-            "activation_quantization_apply_to_embeddings": false,
             "atom_stats_interval": 200,
             "atom_stats_max_seqs": 32,
             "attention_diagnostics": {
@@ -161,7 +160,6 @@
                 "head": 0,
                 "layer": -1
             },
-            "attention_dropout": 0.1,
             "auto_stop": {
                 "enabled": true,
                 "high_loss_patience": 12,
@@ -173,15 +171,13 @@
             "batch_strategy": "RANDOM",
             "checkpoint_interval": 2000,
             "cosine_decay": {
-                "enabled": true,
-                "min_lr": 6e-05
+                "enabled": true
             },
             "cuda_execution": {
                 "disable_async_frees": false,
                 "single_stream_mode": false,
                 "synchronize_after_kernels": true
             },
-            "d_ff": 3072,
             "d_model": 768,
             "dropout_rate": 0.1,
             "embedding_freeze": {
@@ -191,9 +187,7 @@
             "epochs": 3,
             "execution_block": {
                 "causal_w1_transition": 1.5,
-                "cross_attn_head_dim": 64,
                 "cross_attn_topk": 2,
-                "d_key": 64,
                 "d_type": 16,
                 "div_invalid_penalty_weight": 0.5,
                 "div_magnitude_penalty_weight": 0.1,
@@ -205,7 +199,6 @@
                 "entropy_weight": 0.01,
                 "execution_first_type_only": true,
                 "final_slot_consistency_weight": 0.1,
-                "gate_warmup_steps": 0,
                 "layer": -1,
                 "num_ops": 4,
                 "num_slots": 8,
@@ -348,11 +341,8 @@
                 "min_step": 500,
                 "prefer_short": false
             },
-            "min_seq_len_for_flash": 256,
-            "min_seq_valid_tokens": 256,
             "multi_token_prediction": {
                 "alpha": 0.2,
-                "alpha_warmup_steps": 0,
                 "enabled": false,
                 "k": 3,
                 "log_ratio_monitor": true
@@ -376,7 +366,6 @@
             "qk_norm": {
                 "enabled": false
             },
-            "residual_dropout_rate": 0.1,
             "scratch_block_reasoning": {
                 "atom_embedding_dim": 96,
                 "atom_scale": 1.0,
@@ -385,7 +374,6 @@
             },
             "scratch_blocks": {
                 "enabled": true,
-                "max_tokens_per_block": 1024,
                 "num_blocks": 4,
                 "use_write_combined": true
             },
@@ -418,8 +406,7 @@
                     "min_grad_for_nonzero_loss": 1e-10
                 },
                 "baseline": {
-                    "stabilization_steps": 100,
-                    "warmup_steps": 200
+                    "stabilization_steps": 100
                 },
                 "drift": {
                     "anchor_sigma_multiplier": 5.0

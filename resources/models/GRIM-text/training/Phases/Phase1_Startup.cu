@@ -333,16 +333,13 @@ StartupConfig loadConfiguration(int argc, char** argv) {
             config.architecture.num_heads = cfg["num_heads"].get<int>();
         if (cfg.contains("num_kv_heads") && cfg["num_kv_heads"].is_number())
             config.architecture.num_kv_heads = cfg["num_kv_heads"].get<int>();
-        if (cfg.contains("d_ff") && cfg["d_ff"].is_number())
-            config.architecture.d_ff = cfg["d_ff"].get<int>();
-        else
-            config.architecture.d_ff = config.architecture.d_model * GRIM::HyperParameters::DEFAULT_D_FF_MULTIPLIER;
+        // d_ff: always derived as d_model * DEFAULT_D_FF_MULTIPLIER (never read from JSON)
+        config.architecture.d_ff = config.architecture.d_model * GRIM::HyperParameters::DEFAULT_D_FF_MULTIPLIER;
         if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number())
             config.architecture.dropout_rate = cfg["dropout_rate"].get<float>();
-        if (cfg.contains("residual_dropout_rate") && cfg["residual_dropout_rate"].is_number())
-            config.architecture.residual_dropout_rate = cfg["residual_dropout_rate"].get<float>();
-        if (cfg.contains("attention_dropout") && cfg["attention_dropout"].is_number())
-            config.architecture.attention_dropout = cfg["attention_dropout"].get<float>();
+        // attention_dropout and residual_dropout_rate: always derived from dropout_rate
+        config.architecture.residual_dropout_rate = config.architecture.dropout_rate;
+        config.architecture.attention_dropout = config.architecture.dropout_rate;
         
         // Load tie_embeddings config (affects memory layout and parameter count)
         if (cfg.contains("tie_embeddings") && cfg["tie_embeddings"].is_boolean())
@@ -1110,6 +1107,17 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", num_heads=" + std::to_string(arch.num_heads) + 
                ", d_ff=" + std::to_string(arch.d_ff) +
                ", max_seq_len=" + std::to_string(model_config.max_seq_len));
+    logger.log("Derived hyperparameters: d_ff=" + std::to_string(arch.d_ff) + " (d_model*4)" +
+               ", attention_dropout=" + std::to_string(arch.attention_dropout) + " (=dropout_rate)" +
+               ", residual_dropout=" + std::to_string(arch.residual_dropout_rate) + " (=dropout_rate)" +
+               ", min_seq_valid_tokens=" + std::to_string(hp.min_seq_valid_tokens) +
+               ", min_seq_len_for_flash=" + std::to_string(hp.min_seq_len_for_flash) +
+               ", cosine_decay_min_lr=" + std::to_string(hp.cosine_decay_min_lr) +
+               ", scratch_max_tokens_per_block=" + std::to_string(hp.scratch_max_tokens_per_block) +
+               ", mtp_alpha_warmup=" + std::to_string(hp.mtp_alpha_warmup_steps) +
+               ", telemetry_warmup=" + std::to_string(hp.telemetry_warmup_steps) +
+               ", gate_warmup=" + std::to_string(hp.execution_block_gate_warmup_steps) +
+               " (all =warmup_steps=" + std::to_string(hp.warmup_steps) + ")");
     
     // STEP 0: Initialize CUDA device context FIRST (REQUIRED before any stream/allocation operations)
     // This ensures CUDA driver is loaded and device context exists before StreamController creates streams.

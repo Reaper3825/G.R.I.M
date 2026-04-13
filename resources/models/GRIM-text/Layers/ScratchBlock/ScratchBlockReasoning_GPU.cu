@@ -33,7 +33,7 @@ namespace GRIM {
 
 static constexpr const char* kScratchBlockModule = "ScratchBlock";
 constexpr int ATOM_TOKEN_START = HyperParameters::ATOM_TOKEN_START;
-constexpr int NUM_ATOM_TYPES   = HyperParameters::NUM_ATOM_TYPES;
+constexpr int NUM_ATOM_TYPES   = GRIM::Tokenizer::kAtomTypeCount;
 constexpr int kTextFeatureDim  = 16;
 
 __device__ __forceinline__ int ClampNumAtoms(const int* num_atoms, int max_atoms) {

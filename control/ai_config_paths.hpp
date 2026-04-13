@@ -641,9 +641,9 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
         "batch_strategy", "learning_rate", "weight_decay",
-        "per_token_grad_scale", "warmup_steps", "max_seq_len", "min_seq_valid_tokens", "log_interval",
+        "per_token_grad_scale", "warmup_steps", "max_seq_len", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
-        "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention", "min_seq_len_for_flash",
+        "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
         
         // Single batch overfit
         "single_batch.enabled", "single_batch.max_steps",
@@ -688,7 +688,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "telemetry_control.outlier.persistence_trigger",
         "telemetry_control.drift.anchor_sigma_multiplier",
         "telemetry_control.soft_restart.cooldown_steps",
-        "telemetry_control.baseline.warmup_steps",
+        // telemetry_control.baseline.warmup_steps: derived as warmup_steps (see deriveImplicitHyperparameters)
         "telemetry_control.baseline.stabilization_steps",
         "telemetry_control.logging.verbose",
         "telemetry_control.logging.fail_loud_on_accumulation_bug",
@@ -713,7 +713,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "stability_overrides.clip_per_token", "stability_overrides.lr_min",
         
         // Scratch blocks
-        "scratch_blocks.enabled", "scratch_blocks.max_tokens_per_block",
+        "scratch_blocks.enabled",
         "scratch_blocks.num_blocks", "scratch_blocks.use_write_combined",
         
         // Scratch block reasoning
@@ -727,9 +727,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "execution_block.num_ops",
         "execution_block.num_slots",
         "execution_block.num_steps",
-        "execution_block.d_key",
         "execution_block.d_type",
-        "execution_block.cross_attn_head_dim",
         "execution_block.cross_attn_topk",
         "execution_block.usage_decay",
         "execution_block.diversity_kappa",
@@ -816,14 +814,14 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.grad_clip_norm, trainConfig, "grad_clip_norm");
     assignTrainingField(params.per_token_grad_scale, trainConfig, "per_token_grad_scale");
     assignTrainingField(params.max_seq_len, trainConfig, "max_seq_len");
-    assignTrainingField(params.min_seq_valid_tokens, trainConfig, "min_seq_valid_tokens");
+    // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveImplicitHyperparameters)
+    // min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveImplicitHyperparameters)
     assignTrainingField(params.warmup_steps, trainConfig, "warmup_steps");
     if (auto it = trainConfig.find("cosine_decay"); it != trainConfig.end() && it->is_object()) {
         params.cosine_decay_enabled = it->value("enabled", false);
-        params.cosine_decay_min_lr = it->value("min_lr", 0.0f);
+        // cosine_decay_min_lr: derived as learning_rate * 0.1 (see deriveImplicitHyperparameters)
     } else {
         params.cosine_decay_enabled = false;
-        params.cosine_decay_min_lr = 0.0f;
     }
     assignTrainingField(params.log_interval, trainConfig, "log_interval");
     assignTrainingField(params.atom_stats_interval, trainConfig, "atom_stats_interval");
@@ -832,7 +830,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.checkpoint_interval, trainConfig, "checkpoint_interval");
     assignTrainingField(params.use_gpu, trainConfig, "use_gpu");
     assignTrainingField(params.use_flash_attention, trainConfig, "use_flash_attention");
-    assignTrainingField(params.min_seq_len_for_flash, trainConfig, "min_seq_len_for_flash");
+    // min_seq_len_for_flash: derived from max_seq_len (see deriveImplicitHyperparameters)
 
     if (auto it = trainConfig.find("soft_restart"); it != trainConfig.end()) {
         const auto& soft = *it;
@@ -985,7 +983,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
 
             if (auto base_it = tc.find("baseline"); base_it != tc.end() && base_it->is_object()) {
                 const auto& base = *base_it;
-                params.telemetry_warmup_steps = base.value("warmup_steps", params.telemetry_warmup_steps);
+                // telemetry_warmup_steps: derived as warmup_steps (see deriveImplicitHyperparameters)
                 params.telemetry_baseline_stabilization_steps = base.value("stabilization_steps", params.telemetry_baseline_stabilization_steps);
             }
 
@@ -1208,7 +1206,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             params.scratch_blocks_enabled = scratch.get<bool>();
         } else if (scratch.is_object()) {
             params.scratch_blocks_enabled = scratch.value("enabled", params.scratch_blocks_enabled);
-            params.scratch_max_tokens_per_block = scratch.value("max_tokens_per_block", params.scratch_max_tokens_per_block);
+            // scratch_max_tokens_per_block: derived as max_seq_len (see deriveImplicitHyperparameters)
             params.scratch_num_blocks = scratch.value("num_blocks", params.scratch_num_blocks);
             params.scratch_write_combined = scratch.value("use_write_combined", params.scratch_write_combined);
         }
@@ -1231,9 +1229,9 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_block_num_ops, eb, "num_ops");
         assignTrainingField(params.execution_block_num_slots, eb, "num_slots");
         assignTrainingField(params.execution_block_num_steps, eb, "num_steps");
-        assignTrainingField(params.execution_block_d_key, eb, "d_key");
+        // execution_block_d_key: derived as d_model / num_heads (see deriveImplicitHyperparameters)
         assignTrainingField(params.execution_block_d_type, eb, "d_type");
-        assignTrainingField(params.execution_block_cross_attn_head_dim, eb, "cross_attn_head_dim");
+        // execution_block_cross_attn_head_dim: derived as d_model / num_heads (see deriveImplicitHyperparameters)
         assignTrainingField(params.execution_block_cross_attn_topk, eb, "cross_attn_topk");
         assignTrainingField(params.execution_block_usage_decay, eb, "usage_decay");
         assignTrainingField(params.execution_block_diversity_kappa, eb, "diversity_kappa");
@@ -1248,7 +1246,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_value_match_epsilon, eb, "value_match_epsilon");
         assignTrainingField(params.execution_final_slot_consistency_weight, eb, "final_slot_consistency_weight");
         assignTrainingField(params.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
-        assignTrainingField(params.execution_block_gate_warmup_steps, eb, "gate_warmup_steps");
+        // execution_block_gate_warmup_steps: derived as warmup_steps (see deriveImplicitHyperparameters)
         assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
         assignTrainingField(params.execution_div_invalid_penalty_weight, eb, "div_invalid_penalty_weight");
         assignTrainingField(params.execution_div_magnitude_penalty_weight, eb, "div_magnitude_penalty_weight");
@@ -1297,7 +1295,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.mtp_enabled = mtp.value("enabled", params.mtp_enabled);
         params.mtp_k = mtp.value("k", params.mtp_k);
         params.mtp_alpha = mtp.value("alpha", params.mtp_alpha);
-        params.mtp_alpha_warmup_steps = mtp.value("alpha_warmup_steps", params.mtp_alpha_warmup_steps);
+        // mtp_alpha_warmup_steps: derived as warmup_steps (see deriveImplicitHyperparameters)
         params.mtp_log_ratio_monitor = mtp.value("log_ratio_monitor", params.mtp_log_ratio_monitor);
     }
 
@@ -1332,6 +1330,52 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     }
 }
 
+// Compute all derived hyperparameters from base fields.
+// Called AFTER applyTrainingConfigObject() so all base fields are populated.
+// Rule 20: throws if any base field needed for derivation is invalid.
+inline void deriveImplicitHyperparameters(TrainingHyperparameters& params, const nlohmann::json& trainConfig) {
+    // min_seq_valid_tokens = max_seq_len / 4
+    if (params.max_seq_len <= 0)
+        throw std::runtime_error("deriveImplicitHyperparameters: max_seq_len must be > 0, got " + std::to_string(params.max_seq_len));
+    params.min_seq_valid_tokens = params.max_seq_len / 4;
+    params.min_seq_len_for_flash = params.max_seq_len / 4;
+
+    // scratch_max_tokens_per_block = max_seq_len
+    params.scratch_max_tokens_per_block = static_cast<size_t>(params.max_seq_len);
+
+    // cosine_decay_min_lr = learning_rate * 0.1
+    if (params.cosine_decay_enabled) {
+        if (params.learning_rate <= 0.0f)
+            throw std::runtime_error("deriveImplicitHyperparameters: learning_rate must be > 0 when cosine_decay is enabled, got " + std::to_string(params.learning_rate));
+        params.cosine_decay_min_lr = params.learning_rate * 0.1f;
+    }
+
+    // execution_block d_key and cross_attn_head_dim = d_model / num_heads (= head_dim)
+    // d_model and num_heads are architecture fields read from the same JSON block
+    if (trainConfig.contains("d_model") && trainConfig.contains("num_heads")) {
+        int d_model = trainConfig["d_model"].get<int>();
+        int num_heads = trainConfig["num_heads"].get<int>();
+        if (d_model > 0 && num_heads > 0) {
+            int head_dim = d_model / num_heads;
+            params.execution_block_d_key = head_dim;
+            params.execution_block_cross_attn_head_dim = head_dim;
+        }
+    }
+
+    // All warmup-derived fields use the single base warmup_steps
+    if (params.warmup_steps <= 0)
+        throw std::runtime_error("deriveImplicitHyperparameters: warmup_steps must be > 0, got " + std::to_string(params.warmup_steps));
+
+    // MTP alpha warmup = base warmup (auxiliary loss should ramp with LR)
+    params.mtp_alpha_warmup_steps = params.warmup_steps;
+
+    // Telemetry baseline warmup = base warmup (skip anomaly detection during LR warmup)
+    params.telemetry_warmup_steps = params.warmup_steps;
+
+    // ExecutionBlock gate warmup = base warmup (gates should stabilize with LR)
+    params.execution_block_gate_warmup_steps = params.warmup_steps;
+}
+
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
     if (config.contains("training") && config["training"].contains("config")) {
         const auto& training = config["training"];
@@ -1343,6 +1387,8 @@ inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& conf
         // Rule 20: Validate required fields BEFORE parsing (fail fast)
         validateTrainingConfigJson(trainConfig);
         applyTrainingConfigObject(trainConfig, params);
+        // Compute all derived hyperparameters from base fields
+        deriveImplicitHyperparameters(params, trainConfig);
         return true;
     }
     return false;

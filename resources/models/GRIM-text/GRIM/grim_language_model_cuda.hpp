@@ -144,12 +144,12 @@ struct EncoderConfig {
     int num_heads = 0;         // Use HyperParameters::DEFAULT_NUM_HEADS
     int num_kv_heads = 0;      // Use HyperParameters::DEFAULT_NUM_KV_HEADS (GQA - Grouped Query Attention)
     int head_dim = 0;          // = d_model / num_heads (set from LanguageModelConfig.head_dim)
-    int d_ff = 0;              // Use HyperParameters::DEFAULT_D_FF
+    int d_ff = 0;              // Computed: d_model * DEFAULT_D_FF_MULTIPLIER
     int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
     int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
     float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
-    float residual_dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_RESIDUAL_DROPOUT_RATE
-    float attention_dropout = 0.0f; // Use HyperParameters::DEFAULT_ATTENTION_DROPOUT
+    float residual_dropout_rate = 0.0f; // Derived from dropout_rate
+    float attention_dropout = 0.0f; // Derived from dropout_rate
     
     // Cache limits
     int max_cached_batch = 0;
@@ -283,12 +283,12 @@ struct LanguageModelConfig {
     int d_model = 0;           // Use HyperParameters::DEFAULT_D_MODEL
     int num_heads = 0;         // Use HyperParameters::DEFAULT_NUM_HEADS
     int num_kv_heads = 0;      // Use HyperParameters::DEFAULT_NUM_KV_HEADS (GQA - Grouped Query Attention)
-    int d_ff = 0;              // Use HyperParameters::DEFAULT_D_FF
+    int d_ff = 0;              // Computed: d_model * DEFAULT_D_FF_MULTIPLIER
     int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
     int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
     float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
-    float residual_dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_RESIDUAL_DROPOUT_RATE
-    float attention_dropout = 0.0f; // Use HyperParameters::DEFAULT_ATTENTION_DROPOUT
+    float residual_dropout_rate = 0.0f; // Derived from dropout_rate
+    float attention_dropout = 0.0f; // Derived from dropout_rate
     
     // Derived values - computed from above, DO NOT set directly
     // Call computeDerivedValues() after setting d_model/num_heads

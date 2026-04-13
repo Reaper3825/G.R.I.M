@@ -54,11 +54,9 @@ constexpr int DEFAULT_NUM_HEADS = 12;
 constexpr int DEFAULT_D_FF_MULTIPLIER = 4;  // d_ff = d_model * multiplier
 constexpr int DEFAULT_MAX_SEQ_LEN = 2048;
 constexpr float DEFAULT_DROPOUT_RATE = 0.1f;
-constexpr float DEFAULT_RESIDUAL_DROPOUT_RATE = 0.1f;
-constexpr float DEFAULT_ATTENTION_DROPOUT = 0.1f;
+// Residual and attention dropout are always derived from dropout_rate (no separate defaults)
 
 // Derived model constants
-constexpr int DEFAULT_D_FF = DEFAULT_D_MODEL * DEFAULT_D_FF_MULTIPLIER;  // 3072
 constexpr int DEFAULT_HEAD_DIM = DEFAULT_D_MODEL / DEFAULT_NUM_HEADS;    // 64
 
 // Sequence-length derived constants
@@ -162,9 +160,8 @@ constexpr int UPSILON_REFERENCE_LAYERS = 12;      // Reference layer count (L_re
 //======================================================//
 constexpr int BYTE_TOKEN_END = Tokenizer::BYTE_TOKEN_OFFSET + Tokenizer::BYTE_VOCAB_SIZE;  // 260
 constexpr int ATOM_TOKEN_START = BYTE_TOKEN_END;  // First atom token ID (immediately after bytes)
-constexpr int NUM_ATOM_TYPES = 1;                 // Only ATOM_NUM (ATOM_NONE is a sentinel, not a real type)
-constexpr int ATOM_SLOTS_PER_TYPE = 1;
-constexpr int ATOM_TOKEN_END = ATOM_TOKEN_START + Tokenizer::kAtomTypeCount;  // 260 + 2 = 262
+// Atom type count: single source of truth is Tokenizer::kAtomTypeCount (TokenLayout.hpp)
+constexpr int ATOM_TOKEN_END = ATOM_TOKEN_START + Tokenizer::kAtomTypeCount;  // 260 + kAtomTypeCount
 constexpr uint32_t MAX_REASONABLE_VOCAB_SIZE = 2000000; // Sanity check for vocab detection
 
 //======================================================//
@@ -363,47 +360,47 @@ struct ModelArchitecture {
     int num_layers = DEFAULT_NUM_LAYERS;
     int num_heads = DEFAULT_NUM_HEADS;
     int num_kv_heads = DEFAULT_NUM_KV_HEADS;  // GQA: number of KV heads
-    int d_ff = DEFAULT_D_FF;
+    int d_ff = 0;  // Must be set from config or computed as d_model * multiplier
     int max_seq_len = DEFAULT_MAX_SEQ_LEN;
     float dropout_rate = DEFAULT_DROPOUT_RATE;
-    float residual_dropout_rate = DEFAULT_RESIDUAL_DROPOUT_RATE;
-    float attention_dropout = DEFAULT_ATTENTION_DROPOUT;
+    float residual_dropout_rate = DEFAULT_DROPOUT_RATE;   // Derived: always = dropout_rate
+    float attention_dropout = DEFAULT_DROPOUT_RATE;        // Derived: always = dropout_rate
     bool tie_embeddings = true;  // Weight tying: share embedding/LM head weights
     PositionalEncodingType positional_encoding = DEFAULT_POSITIONAL_ENCODING;
     
     // Derived (computed from above)
     int head_dim = DEFAULT_HEAD_DIM;
     
-    // Compute derived values and validate
-    bool validate(std::string* error_msg = nullptr) {
-        // Compute head_dim
+    // Validate architecture and compute derived values. Throws on invalid config.
+    void validate() {
         if (num_heads <= 0) {
-            if (error_msg) *error_msg = "num_heads must be > 0";
-            return false;
+            throw std::runtime_error("Invalid ModelArchitecture: num_heads must be > 0, got " + std::to_string(num_heads));
+        }
+        
+        // Validate divisibility BEFORE computing head_dim
+        if (d_model % num_heads != 0) {
+            throw std::runtime_error("Invalid ModelArchitecture: d_model (" + std::to_string(d_model) +
+                                     ") must be divisible by num_heads (" + std::to_string(num_heads) + ")");
         }
         head_dim = d_model / num_heads;
         
-        // Check d_model divisibility
-        if (d_model % num_heads != 0) {
-            if (error_msg) *error_msg = "d_model must be divisible by num_heads";
-            return false;
-        }
-        
         // Validate Flash Attention compatibility
         if (!isValidFlashAttentionHeadDim(head_dim)) {
-            if (error_msg) {
-                *error_msg = "head_dim=" + std::to_string(head_dim) + 
-                             " not supported by Flash Attention (need 32 or 64)";
-            }
-            return false;
+            throw std::runtime_error("Invalid ModelArchitecture: head_dim=" + std::to_string(head_dim) +
+                                     " not supported by Flash Attention (need 32 or 64)");
+        }
+        
+        // Validate GQA configuration
+        if (!isValidGQAConfig(num_heads, num_kv_heads)) {
+            throw std::runtime_error("Invalid GQA configuration: num_heads=" + std::to_string(num_heads) +
+                                     " num_kv_heads=" + std::to_string(num_kv_heads) +
+                                     " (num_heads must be divisible by num_kv_heads)");
         }
         
         // Compute d_ff if not explicitly set
         if (d_ff <= 0) {
             d_ff = d_model * DEFAULT_D_FF_MULTIPLIER;
         }
-        
-        return true;
     }
 };
 
@@ -459,13 +456,24 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     GRIM::Config::TrainingHyperparameters& params,
     const DerivationContext& context,
     LogCallback log_callback = {}) {
+    // Rule 20: Fail hard on invalid config instead of silently fixing
+    if (params.batch_size <= 0) {
+        throw std::runtime_error("FATAL: batch_size must be > 0, got " + std::to_string(params.batch_size));
+    }
+    if (params.epochs <= 0) {
+        throw std::runtime_error("FATAL: epochs must be > 0, got " + std::to_string(params.epochs));
+    }
+    if (params.validation_interval <= 0) {
+        throw std::runtime_error("FATAL: validation_interval must be > 0, got " + std::to_string(params.validation_interval));
+    }
+
     DerivedScheduleInfo info;
 
-    const int safe_batch_size = std::max(1, params.batch_size);
+    const int safe_batch_size = params.batch_size;
     const int sequence_count = std::max(0, context.train_sequence_count);
 
     info.batches_per_epoch = std::max(1, (sequence_count + safe_batch_size - 1) / safe_batch_size);
-    info.total_training_steps = std::max(1, info.batches_per_epoch * std::max(1, params.epochs));
+    info.total_training_steps = std::max(1, info.batches_per_epoch * params.epochs);
     info.safe_last_step = std::max(info.total_training_steps - 1, 1);
 
     auto log_adjustment = [&](std::string_view label, auto before, auto after) {
@@ -496,9 +504,7 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     params.warmup_steps = std::min(params.warmup_steps, info.safe_last_step);
     log_adjustment("warmup_steps", original_warmup, params.warmup_steps);
 
-    const int original_validation_interval = params.validation_interval;
-    params.validation_interval = std::max(1, params.validation_interval);
-    log_adjustment("validation_interval", original_validation_interval, params.validation_interval);
+    // validation_interval already validated > 0 above
 
     const int required_micro_min = params.warmup_steps;
     const int original_micro_min = params.micro_validation_min_step;
@@ -570,15 +576,15 @@ namespace HyperParameters {
  * @return true if config was loaded, false if using defaults only
  */
 inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& configPath = "ai_config.json") {
-    // Start with defaults
+    // Start with defaults (derived fields computed from base defaults)
     arch.d_model = DEFAULT_D_MODEL;
     arch.num_layers = DEFAULT_NUM_LAYERS;
     arch.num_heads = DEFAULT_NUM_HEADS;
-    arch.d_ff = DEFAULT_D_FF;
+    arch.d_ff = DEFAULT_D_MODEL * DEFAULT_D_FF_MULTIPLIER;
     arch.max_seq_len = DEFAULT_MAX_SEQ_LEN;
     arch.dropout_rate = DEFAULT_DROPOUT_RATE;
-    arch.residual_dropout_rate = DEFAULT_RESIDUAL_DROPOUT_RATE;
-    arch.attention_dropout = DEFAULT_ATTENTION_DROPOUT;
+    arch.residual_dropout_rate = DEFAULT_DROPOUT_RATE;  // = dropout_rate
+    arch.attention_dropout = DEFAULT_DROPOUT_RATE;       // = dropout_rate
     
     // Try to load from config
     auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
@@ -607,24 +613,17 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
         if (cfg.contains("num_kv_heads") && cfg["num_kv_heads"].is_number()) {
             arch.num_kv_heads = cfg["num_kv_heads"].get<int>();
         }
-        if (cfg.contains("d_ff") && cfg["d_ff"].is_number()) {
-            arch.d_ff = cfg["d_ff"].get<int>();
-        } else {
-            // Compute d_ff from d_model if not explicitly set
-            arch.d_ff = arch.d_model * DEFAULT_D_FF_MULTIPLIER;
-        }
+        // d_ff: always derived as d_model * DEFAULT_D_FF_MULTIPLIER (never read from JSON)
+        arch.d_ff = arch.d_model * DEFAULT_D_FF_MULTIPLIER;
         if (cfg.contains("tie_embeddings") && cfg["tie_embeddings"].is_boolean()) {
             arch.tie_embeddings = cfg["tie_embeddings"].get<bool>();
         }
         if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number()) {
             arch.dropout_rate = cfg["dropout_rate"].get<float>();
         }
-        if (cfg.contains("residual_dropout_rate") && cfg["residual_dropout_rate"].is_number()) {
-            arch.residual_dropout_rate = cfg["residual_dropout_rate"].get<float>();
-        }
-        if (cfg.contains("attention_dropout") && cfg["attention_dropout"].is_number()) {
-            arch.attention_dropout = cfg["attention_dropout"].get<float>();
-        }
+        // attention_dropout and residual_dropout_rate: always derived from dropout_rate
+        arch.residual_dropout_rate = arch.dropout_rate;
+        arch.attention_dropout = arch.dropout_rate;
 
         // Issue #142: Parse positional encoding from shared architecture loader.
         // This path is used by runtime inference/server startup and must match

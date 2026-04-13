@@ -149,9 +149,9 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
 
         // ScratchBlock params are classified as encoder_params by parameter_groups
         if (cfg.use_scratch_block) {
-            constexpr int NUM_ATOM_TYPES = HyperParameters::NUM_ATOM_TYPES;
+            constexpr int num_atom_types = GRIM::Tokenizer::kAtomTypeCount;
             const int atom_dim = cfg.scratch_block_atom_embedding_dim;
-            est_encoder += static_cast<size_t>(NUM_ATOM_TYPES) * atom_dim;  // atom_type_embeddings
+            est_encoder += static_cast<size_t>(num_atom_types) * atom_dim;  // atom_type_embeddings
             est_encoder += static_cast<size_t>(atom_dim) * cfg.d_model;     // atom_projection
             // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
         }
@@ -184,10 +184,10 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
 
     // ScratchBlock stats for reporting (already counted in encoder_params via parameter_groups)
     if (config_.use_scratch_block) {
-        constexpr int NUM_ATOM_TYPES = HyperParameters::NUM_ATOM_TYPES;
+        constexpr int num_atom_types = GRIM::Tokenizer::kAtomTypeCount;
         const int atom_dim = config_.scratch_block_atom_embedding_dim;
         stats.scratchblock_params =
-            static_cast<size_t>(NUM_ATOM_TYPES) * atom_dim +
+            static_cast<size_t>(num_atom_types) * atom_dim +
             static_cast<size_t>(atom_dim) * config_.d_model;
             // text_feature_projection ELIMINATED — merged into atom embeddings
         // NOTE: scratchblock_params NOT added to total_params — already in encoder_params

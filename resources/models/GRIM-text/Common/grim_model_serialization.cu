@@ -219,7 +219,7 @@ bool LanguageModel::save(const std::string& path) {
 
     // Process ScratchBlock weights (if enabled)
     // Use the layer's actual tensor sizes so copy count never exceeds allocation.
-    // ScratchBlock allocates with HyperParameters::NUM_ATOM_TYPES, not Tokenizer::kAtomTypeCount.
+    // ScratchBlock allocates with Tokenizer::kAtomTypeCount (single source of truth).
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
         Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
         Tensor& ap = scratch_block_layer_->atomProjection();
