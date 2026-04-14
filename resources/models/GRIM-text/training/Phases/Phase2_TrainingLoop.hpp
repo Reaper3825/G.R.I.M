@@ -31,21 +31,15 @@
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/TNC/Token-normalized_clipping.hpp"
 #include "../../Layers/GRIMTS/GRIM-TS.hpp"
+#include "../../Layers/GRIMTS/GuessCacheTraining.hpp"
 
 #include <functional>
-#include <unordered_map>
-#include <unordered_set>
 
 namespace GRIMText::Training {
-
-class GuessCacheBatchBuffers;
 
 //======================================================//
 //  Training Constants
 //======================================================//
-
-constexpr float kGuessRewardMomentum = 0.85f;
-constexpr std::size_t kDefaultGuessCacheCapacity = 16384;
 constexpr int kDefaultMaxTokensPerBatch = 8192;
 constexpr int kWarmupTokenCap = 4096;
 constexpr int kWarmupTokenSteps = 2048;
@@ -53,8 +47,7 @@ constexpr int kCurriculumEpochs = 1;
 constexpr float kTokenAwareGradReference = 1024.0f;
 constexpr float kBoilerplateBaseWeight = 0.7f;
 constexpr float kJunkBaseWeight = 0.5f;
-constexpr int kGradSpikeCooldownSteps = 2;
-constexpr float kGradSpikeLrFraction = 0.10f;
+
 
 //======================================================//
 //  Batch Processing Structures
@@ -110,12 +103,7 @@ struct EpochResult {
  * @brief State that persists across batches and epochs
  */
 struct TrainingLoopState {
-    // Spike tracking
-    std::unordered_map<uint32_t, int> spike_counts;
-    std::unordered_set<uint32_t> quarantined_seqs;
-    int grad_spike_cooldown = 0;
-    
-    // Loss baseline tracking (for adaptive spike detection)
+    // Loss baseline tracking
     float initial_loss = 0.0f;
     float min_observed_loss = std::numeric_limits<float>::infinity();
     int warmup_batches = 0;
@@ -124,10 +112,8 @@ struct TrainingLoopState {
     std::vector<GRIM::Batching::BatchAssignment> micro_validation_batches;
     std::size_t micro_validation_cursor = 0;
     
-    // GuessCache state
-    bool guess_cache_ready = false;
-    bool guess_cache_faulted = false;
-    std::unique_ptr<GuessCacheBatchBuffers> guess_cache_buffers;
+    // GuessCache state (lifecycle + batch buffers owned by GRIMTS::Training)
+    GRIMTS::Training::GuessCacheState guess_cache;
     
     // Shuffle tracking
     bool shuffle_window_exhausted_notified = false;
@@ -219,13 +205,6 @@ float getScheduledLearningRate(
     bool stability_overrides_enabled);
 
 /**
- * @brief Check if a batch should be skipped due to quarantine
- */
-bool isBatchQuarantined(
-    const std::vector<uint32_t>& seq_ids,
-    const std::unordered_set<uint32_t>& quarantined_seqs);
-
-/**
  * @brief Format scalar for logging
  */
 std::string formatScalar(float value, int precision = 4);
@@ -256,19 +235,6 @@ void maybeRunMicroValidation(
     float current_lr);
 
 /**
- * @brief Handle gradient spike detection and quarantine
- */
-bool handleGradientSpike(
-    TrainingContext& ctx,
-    TrainingLoopState& state,
-    const GRIM::Batching::BatchPayload& payload,
-    float preclip_grad_rms,
-    float preclip_norm_grad,
-    float batch_loss,
-    const GRIM::TNC::ClipSelection& clip_selection,
-    int batch_idx);
-
-/**
  * @brief Save checkpoint if this is the best validation loss
  */
 bool maybeSaveCheckpoint(
@@ -278,49 +244,8 @@ bool maybeSaveCheckpoint(
 
 } // namespace Internal
 
-//======================================================//
-//  GuessCache RAII Scope (Rule 22 Compliant)
-//======================================================//
-
-class GuessCacheScope {
-public:
-    // Rule 22: TrainingState owns all GPU memory
-    // GuessCacheScope just manages initialization/shutdown lifecycle
-    explicit GuessCacheScope(::GRIM::TrainingState& training_state, 
-                             std::size_t capacity, 
-                             bool enable_async = true);
-    ~GuessCacheScope();
-    
-    GuessCacheScope(const GuessCacheScope&) = delete;
-    GuessCacheScope& operator=(const GuessCacheScope&) = delete;
-    
-    bool active() const { return active_; }
-
-private:
-    ::GRIM::TrainingState& training_state_;
-    bool active_ = false;
-    bool buffers_allocated_ = false;
-};
-
-class GuessCacheBatchBuffers {
-public:
-    GuessCacheBatchBuffers() = default;
-    ~GuessCacheBatchBuffers();
-    
-    cudaError_t ensure(std::size_t capacity);
-    
-    GRIMTS::GuessMetadata* metadata() const { return device_metadata_; }
-    float* rewards() const { return device_rewards_; }
-    GRIMTS::GuessRewardStats* stats() const { return device_stats_; }
-
-private:
-    void release();
-    
-    GRIMTS::GuessMetadata* device_metadata_ = nullptr;
-    float* device_rewards_ = nullptr;
-    GRIMTS::GuessRewardStats* device_stats_ = nullptr;
-    std::size_t capacity_ = 0;
-};
+// GuessCacheScope and GuessCacheBatchBuffers are now in
+// Layers/GRIMTS/GuessCacheTraining.hpp (namespace GRIMTS::Training)
 
 class MicroValidationScope {
 public:

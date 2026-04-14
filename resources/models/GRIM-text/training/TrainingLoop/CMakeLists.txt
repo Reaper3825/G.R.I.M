@@ -370,6 +370,7 @@ add_executable(train_gpu
     ../../Shared/TNC/Token-normalized_clipping.cu
     ../../Shared/SoftRestart/SoftRestart.cu
     ../../Layers/GRIMTS/GRIM-TS.cu
+    ../../Layers/GRIMTS/GuessCacheTraining.cu
 )
 
 set_target_properties(train_gpu PROPERTIES

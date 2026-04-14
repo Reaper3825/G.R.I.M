@@ -1940,31 +1940,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             ctx->logging.logger->log("  LM_HEAD_ONLY buffer: " + std::to_string(ts.debug_lm_head_only_grad.numel() * sizeof(float) / (1024*1024)) + " MB");
             ctx->logging.logger->log("  Will log tracked collapse token gradient sources after each backward pass");
         }
-        
-        // ═══════════════════════════════════════════════════════════════════════════
-        // ISSUE #109 FIX: Embedding backward must NOT be skipped!
-        // ═══════════════════════════════════════════════════════════════════════════
-        // Issue #88 was WRONG! It claimed LM head and embedding backward "cancel" each other,
-        // but they are COMPLETELY DIFFERENT gradient operations:
-        //
-        // LM HEAD BACKWARD (MatMulGradFn):
-        //   grad_W[i,j] = sum_t hidden[t,i] * grad_logits[t,j]
-        //   This is a DENSE MATMUL - updates ALL vocab rows based on which OUTPUT predictions were wrong
-        //
-        // EMBEDDING BACKWARD (EmbeddingGradFn):
-        //   grad_W[token_id[t], :] += grad_encoder[t, :]
-        //   This is SPARSE SCATTER - only updates rows for tokens that APPEARED IN INPUT
-        //
-        // ISSUE #110 FIX: LM head and embedding gradients ARE OPPOSITE and DO CANCEL!
-        // ═══════════════════════════════════════════════════════════════════════════
-        // Issue #60 proved that LM head and embedding backward produce OPPOSING gradients:
-        //   - LM head: grad = h^T @ grad_logits (DENSE MATMUL, based on OUTPUT predictions)
-        //   - Embedding: grad_W[token_id] += grad_encoder (SPARSE SCATTER, based on INPUT)
-        //
-        // With tied weights, both write to the same buffer via direct accumulation
-        // (PyTorch-style, same as GPT-2/LLaMA). The LM head and embedding gradients
-        // can partially cancel, but this is standard behavior for tied embeddings.
-        //
+
         if (model_cfg.tie_embeddings) {
             ctx->logging.logger->log("✓ Tied weight gradients use PyTorch-style direct accumulation");
         }
@@ -2010,61 +1986,24 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     // TelemetryControl configuration - load from global config
     const auto& hp = ctx->config.hyperparameters;
-    const bool telemetry_control_enabled = hp.telemetry_control_enabled;
     
-    // Populate plateau noise config from TrainingParams (loaded from ai_config.json)
-    ctx->telemetry.control_config.plateau_noise_enabled = hp.telemetry_plateau_noise_enabled;
-    ctx->telemetry.control_config.plateau_noise_patience = hp.telemetry_plateau_noise_patience;
-    ctx->telemetry.control_config.plateau_noise_variance_threshold = hp.telemetry_plateau_noise_variance_threshold;
-    ctx->telemetry.control_config.plateau_noise_std = hp.telemetry_plateau_noise_std;
-    ctx->telemetry.control_config.plateau_noise_proportional = hp.telemetry_plateau_noise_proportional;
-    ctx->telemetry.control_config.plateau_noise_cooldown = hp.telemetry_plateau_noise_cooldown;
-    ctx->telemetry.control_config.plateau_noise_max_per_epoch = hp.telemetry_plateau_noise_max_per_epoch;
-
+    // Spike thresholds (diagnostic only — no interventions)
     ctx->telemetry.control_config.spike_mild_threshold = hp.telemetry_spike_mild_threshold;
     ctx->telemetry.control_config.spike_moderate_threshold = hp.telemetry_spike_moderate_threshold;
     ctx->telemetry.control_config.spike_severe_threshold = hp.telemetry_spike_severe_threshold;
-    ctx->telemetry.control_config.moderate_grad_scale = hp.telemetry_moderate_grad_scale;
-    ctx->telemetry.control_config.moderate_cooldown_extension = hp.telemetry_moderate_cooldown_extension;
+
+    // Accumulation bug detection (Rule 20: crash on zero gradients with non-zero loss)
     ctx->telemetry.control_config.min_grad_for_nonzero_loss = hp.telemetry_min_grad_for_nonzero_loss;
     ctx->telemetry.control_config.loss_threshold_for_grad_check = hp.telemetry_loss_threshold_for_grad_check;
     ctx->telemetry.control_config.max_consecutive_zero_grad_steps = hp.telemetry_max_consecutive_zero_grad_steps;
-    ctx->telemetry.control_config.seq_len_regime_change_threshold = hp.telemetry_seq_len_regime_change_threshold;
-    ctx->telemetry.control_config.regime_change_suppression_steps = hp.telemetry_regime_change_suppression_steps;
-    ctx->telemetry.control_config.volatility_damping_threshold = hp.telemetry_volatility_damping_threshold;
-    ctx->telemetry.control_config.max_volatility_damping = hp.telemetry_max_volatility_damping;
-    ctx->telemetry.control_config.gradient_decay_threshold = hp.telemetry_gradient_decay_threshold;
-    ctx->telemetry.control_config.max_decay_boost = hp.telemetry_max_decay_boost;
-    ctx->telemetry.control_config.progress_boost_threshold = hp.telemetry_progress_boost_threshold;
-    ctx->telemetry.control_config.max_progress_boost = hp.telemetry_max_progress_boost;
-    ctx->telemetry.control_config.outlier_frequency_trigger = hp.telemetry_outlier_frequency_trigger;
-    ctx->telemetry.control_config.outlier_persistence_trigger = hp.telemetry_outlier_persistence_trigger;
-    ctx->telemetry.control_config.anchor_drift_sigma_multiplier = hp.telemetry_anchor_drift_sigma_multiplier;
-    ctx->telemetry.control_config.soft_restart_cooldown_steps = hp.telemetry_soft_restart_cooldown_steps;
+
+    // Monitoring config
     ctx->telemetry.control_config.warmup_steps = hp.telemetry_warmup_steps;
     ctx->telemetry.control_config.baseline_stabilization_steps = hp.telemetry_baseline_stabilization_steps;
     ctx->telemetry.control_config.verbose_logging = hp.telemetry_verbose_logging;
     ctx->telemetry.control_config.fail_loud_on_accumulation_bug = hp.telemetry_fail_loud_on_accumulation_bug;
     
-    if (telemetry_control_enabled) {
-        // ENABLED: Use configured thresholds for gradient spike detection and interventions
-        ctx->logging.logger->log("Telemetry control: ENABLED");
-        ctx->logging.logger->log("  Plateau noise: " + std::string(hp.telemetry_plateau_noise_enabled ? "ON" : "OFF") +
-                                " (patience=" + std::to_string(hp.telemetry_plateau_noise_patience) +
-                                ", variance_threshold=" + std::to_string(hp.telemetry_plateau_noise_variance_threshold) +
-                                ", noise_std=" + std::to_string(hp.telemetry_plateau_noise_std) + ")");
-    } else {
-        // DISABLED: Set ALL thresholds to prevent ANY interventions
-        ctx->logging.logger->log("Telemetry control: DISABLED (monitoring only)");
-        ctx->telemetry.control_config.spike_severe_threshold = 1000.0f;   // Never trigger severe
-        ctx->telemetry.control_config.spike_moderate_threshold = 1000.0f; // Never trigger moderate (WAS MISSING!)
-        ctx->telemetry.control_config.spike_mild_threshold = 1000.0f;     // Never trigger mild
-        ctx->telemetry.control_config.max_volatility_damping = 1.0f;      // No damping
-        ctx->telemetry.control_config.gradient_decay_threshold = 0.0f;    // No decay detection
-        ctx->telemetry.control_config.max_decay_boost = 1.0f;             // No boosting
-        ctx->telemetry.control_config.plateau_noise_enabled = false;      // No plateau noise
-        ctx->telemetry.control_config.moderate_grad_scale = 1.0f;         // No gradient scaling
-    }
+    ctx->logging.logger->log("Telemetry control: MONITORING ONLY (all interventions removed)");
     
     // 12. Check GPU memory
     size_t free_mem, total_mem;

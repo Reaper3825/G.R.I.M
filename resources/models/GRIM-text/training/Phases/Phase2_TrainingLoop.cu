@@ -272,126 +272,8 @@ static int g_collapse_token_id = -1;  // Set dynamically from argmax of predicti
 
 } // anonymous namespace
 
-//======================================================//
-//  GuessCache RAII Classes (Rule 22 Compliant)
-//======================================================//
-
-GuessCacheScope::GuessCacheScope(::GRIM::TrainingState& training_state,
-                                 std::size_t capacity, 
-                                 bool enable_async)
-    : training_state_(training_state), active_(false), buffers_allocated_(false) {
-    
-    // RULE 22: Allocate buffers through TrainingState
-    const bool enable_diversity = true;
-    const std::size_t diversity_bloom_bits = 65536;
-    const std::size_t pinned_buffer_size = enable_async ? 8192 : 0;
-    
-    training_state_.allocateGuessCacheBuffers(
-            capacity, enable_diversity, diversity_bloom_bits, pinned_buffer_size);
-    buffers_allocated_ = true;
-    
-    // Build GRIMTS config
-    GRIMTS::CacheConfig config{};
-    config.initial_capacity = capacity;
-    config.min_capacity = 4096;
-    config.max_capacity = 262144;
-    config.grow_threshold = 0.85f;
-    config.shrink_threshold = 0.25f;
-    config.evict_window = 32;
-    config.enable_diversity_tracking = enable_diversity;
-    config.diversity_bloom_bits = static_cast<int>(diversity_bloom_bits);
-    config.enable_async_transfers = enable_async;
-    config.pinned_buffer_size = pinned_buffer_size;
-    config.enable_histograms = false;
-    
-    // RULE 22: Get stream from centralized controller
-    // getPrimaryStream() throws if not initialized (Rule 20)
-    cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
-    
-    // Convert TrainingState::GuessCacheBuffers to GRIMTS::GuessCacheBuffers
-    GRIMTS::GuessCacheBuffers grimts_buffers{};
-    grimts_buffers.records = training_state_.guess_cache_buffers.records;
-    grimts_buffers.keys = training_state_.guess_cache_buffers.keys;
-    grimts_buffers.size = training_state_.guess_cache_buffers.size;
-    grimts_buffers.evict_cursor = training_state_.guess_cache_buffers.evict_cursor;
-    grimts_buffers.diversity_bloom = training_state_.guess_cache_buffers.diversity_bloom;
-    grimts_buffers.bloom_words = training_state_.guess_cache_buffers.bloom_words;
-    grimts_buffers.calibration_offset = training_state_.guess_cache_buffers.calibration_offset;
-    grimts_buffers.single_meta_buffer = training_state_.guess_cache_buffers.single_meta_buffer;
-    grimts_buffers.single_reward_buffer = training_state_.guess_cache_buffers.single_reward_buffer;
-    grimts_buffers.pinned_meta = training_state_.guess_cache_buffers.pinned_meta;
-    grimts_buffers.pinned_rewards = training_state_.guess_cache_buffers.pinned_rewards;
-    grimts_buffers.pinned_capacity = training_state_.guess_cache_buffers.pinned_capacity;
-    grimts_buffers.capacity = training_state_.guess_cache_buffers.capacity;
-    grimts_buffers.allocated = training_state_.guess_cache_buffers.allocated;
-    
-    // Wire up GRIMTS logging to training log system
-    GRIMTS::Logging::RegisterLogCallback([](GRIMTS::Logging::LogLevel level, std::string_view message) {
-        // Convert GRIMTS log level to our module logging
-        switch (level) {
-            case GRIMTS::Logging::LogLevel::Error:
-                EmitModuleError(ModuleId::GuessCache, std::string(message), 0);
-                break;
-            case GRIMTS::Logging::LogLevel::Warning:
-                EmitModuleWarning(ModuleId::GuessCache, std::string(message), 0);
-                break;
-            case GRIMTS::Logging::LogLevel::Info:
-            case GRIMTS::Logging::LogLevel::Debug:
-            default:
-                EmitModuleInfo(ModuleId::GuessCache, std::string(message), 0);
-                break;
-        }
-    });
-    
-    // Initialize GRIM-TS with pre-allocated buffers
-    active_ = GRIMTS::InitializeGuessCache(config, grimts_buffers, primary_stream);
-    if (active_) {
-        GRIMTS::ResetGuessCache(primary_stream);
-    } else {
-        fprintf(stderr, "[ERROR] GuessCacheScope: GRIMTS::InitializeGuessCache failed!\n");
-        training_state_.freeGuessCacheBuffers();
-        buffers_allocated_ = false;
-    }
-}
-
-GuessCacheScope::~GuessCacheScope() {
-    if (active_) {
-        GRIMTS::ShutdownGuessCache();
-        active_ = false;
-    }
-    // Clear logging callbacks to avoid dangling references
-    GRIMTS::Logging::ClearLogCallbacks();
-    // RULE 22: TrainingState owns the buffers, we allocated them so we free them
-    if (buffers_allocated_) {
-        training_state_.freeGuessCacheBuffers();
-        buffers_allocated_ = false;
-    }
-}
-
-GuessCacheBatchBuffers::~GuessCacheBatchBuffers() {
-    release();
-}
-
-void GuessCacheBatchBuffers::release() {
-    if (device_metadata_) { cudaFree(device_metadata_); device_metadata_ = nullptr; }
-    if (device_rewards_) { cudaFree(device_rewards_); device_rewards_ = nullptr; }
-    if (device_stats_) { cudaFree(device_stats_); device_stats_ = nullptr; }
-    capacity_ = 0;
-}
-
-cudaError_t GuessCacheBatchBuffers::ensure(std::size_t capacity) {
-    if (capacity == 0) return cudaSuccess;
-    if (capacity <= capacity_) return cudaSuccess;
-    
-    release();
-    capacity_ = capacity;
-    
-    cudaMallocOrThrow(reinterpret_cast<void**>(&device_metadata_), capacity * sizeof(GRIMTS::GuessMetadata), "guess_cache_metadata");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&device_rewards_), capacity * sizeof(float), "guess_cache_rewards");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&device_stats_), capacity * sizeof(GRIMTS::GuessRewardStats), "guess_cache_stats");
-    
-    return cudaSuccess;
-}
+// GuessCacheScope, GuessCacheBatchBuffers implementations moved to
+// Layers/GRIMTS/GuessCacheTraining.cu (namespace GRIMTS::Training)
 
 MicroValidationScope::MicroValidationScope(int step) : step_(step) {
     GRIMTS::BeginMicroValidation(step_);
@@ -662,16 +544,6 @@ float getScheduledLearningRate(
     return schedule.lr(step);
 }
 
-bool isBatchQuarantined(
-    const std::vector<uint32_t>& seq_ids,
-    const std::unordered_set<uint32_t>& quarantined_seqs) {
-    
-    for (uint32_t sid : seq_ids) {
-        if (quarantined_seqs.count(sid)) return true;
-    }
-    return false;
-}
-
 GRIM::Batching::BatchSchedule buildEpochBatches(
     const TrainingContext& ctx,
     const GRIM::DynaSeq::Catalog& catalog,
@@ -848,103 +720,6 @@ void maybeRunMicroValidation(
         << " lr=" << formatScalar(current_lr, 6)
         << " dt=" << formatScalar(duration_ms, 2) << "ms";
     ctx.logging.logger->log(msg.str());
-}
-
-bool handleGradientSpike(
-    TrainingContext& ctx,
-    TrainingLoopState& state,
-    const GRIM::Batching::BatchPayload& payload,
-    float preclip_grad_rms,
-    float preclip_norm_grad,
-    float batch_loss,
-    const GRIM::TNC::ClipSelection& clip_selection,
-    int batch_idx) {
-    
-    const float token_skip_threshold = clip_selection.per_token_limit * 50.0f;
-    const float raw_skip_threshold = 500000.0f;
-    
-    if (preclip_norm_grad <= token_skip_threshold || preclip_grad_rms <= raw_skip_threshold) {
-        return false;  // Not a spike
-    }
-    
-    bool SkipGradGuard = true; // debug override
-    if (ctx.config.stability.enabled || SkipGradGuard) {
-        return false;  // Skip spike handling when stability overrides enabled
-    }
-    
-    std::ostringstream skip_msg;
-    skip_msg << "[GradGuard] skip optimizer step preclip_norm="
-             << formatScalar(preclip_grad_rms)
-             << " per_token=" << formatScalar(preclip_norm_grad, 4)
-             << " batch=" << (batch_idx + 1)
-             << " loss=" << formatScalar(batch_loss)
-             << " tokens=" << clip_selection.stats.total_tokens;
-    ctx.logging.logger->log(skip_msg.str());
-    
-    // Log gradient components if available (dead code path — SkipGradGuard=true above)
-    if (ctx.model->getTrainingState().grad_norm_scratch) {
-        const auto& spike_gm = *ctx.model->getTrainingState().grad_norm_scratch->h_metrics;
-        std::string comp_log = Internal::formatGradientComponents(spike_gm, ctx.model->getConfig().tie_embeddings);
-        if (!comp_log.empty()) {
-            ctx.logging.logger->log(comp_log);
-        }
-    }
-    
-    // Quarantine sequences (from payload — scheduler put them in this batch)
-    for (uint32_t sid : payload.seq_ids) {
-        state.spike_counts[sid]++;
-        state.quarantined_seqs.insert(sid);
-    }
-    
-    std::ostringstream qmsg;
-    qmsg << "[GradGuard] quarantined seqs=[";
-    for (size_t si = 0; si < payload.seq_ids.size(); ++si) {
-        qmsg << payload.seq_ids[si];
-        if (si + 1 < payload.seq_ids.size()) qmsg << ",";
-    }
-    qmsg << "]";
-    ctx.logging.logger->log(qmsg.str());
-    
-    // Log problematic sequences to bad_sequences.log with text content
-    std::string bad_seq_path = ctx.config.paths.checkpoint_dir + "/bad_sequences.log";
-    std::ofstream bad_seq_log(bad_seq_path, std::ios::app);
-    if (bad_seq_log.is_open()) {
-        bad_seq_log << "\n========================================\n";
-        bad_seq_log << "[Batch " << (batch_idx + 1) << "] Gradient spike: " 
-                   << preclip_grad_rms << " (raw) / " << preclip_norm_grad << " (per-token)\n";
-        bad_seq_log << "Loss: " << batch_loss << " | Tokens: " << clip_selection.stats.total_tokens << "\n";
-        bad_seq_log << "Sequence IDs: ";
-        for (size_t si = 0; si < payload.seq_ids.size(); ++si) {
-            bad_seq_log << payload.seq_ids[si];
-            if (si + 1 < payload.seq_ids.size()) bad_seq_log << ", ";
-        }
-        bad_seq_log << "\n";
-        
-        // Decode and dump the actual text content
-        for (size_t bi = 0; bi < payload.seq_ids.size(); ++bi) {
-            uint32_t sid = payload.seq_ids[bi];
-            bad_seq_log << "\n--- Sequence " << sid << " ---\n";
-            
-            // Get the sequence from training data seqs
-            if (sid < ctx.data.train_seqs.size()) {
-                const std::vector<int>& token_ids = ctx.data.train_seqs[sid].token_ids;
-                std::string decoded_text = ctx.tokenizer.decode(token_ids);
-                
-                bad_seq_log << "Length: " << token_ids.size() << " tokens\n";
-                bad_seq_log << "Text preview (first 500 chars):\n";
-                bad_seq_log << decoded_text.substr(0, std::min<size_t>(500, decoded_text.length())) << "\n";
-                if (decoded_text.length() > 500) {
-                    bad_seq_log << "... (truncated, total " << decoded_text.length() << " chars)\n";
-                }
-            } else {
-                bad_seq_log << "ERROR: Sequence ID out of bounds\n";
-            }
-        }
-        bad_seq_log << "========================================\n";
-        bad_seq_log.close(); 
-    }
-    
-    return true;  // Spike detected
 }
 
 //======================================================//
@@ -1377,16 +1152,6 @@ BatchResult processBatch(
         return result;
     }
 
-    // Extract filtered_seq_ids for quarantine check (from payload)
-    std::vector<uint32_t> filtered_seq_ids(payload.seq_ids.begin(), payload.seq_ids.end());
-    
-    // Check quarantine
-    if (Internal::isBatchQuarantined(filtered_seq_ids, state.quarantined_seqs)) {
-        result.skipped = true;
-        result.skip_reason = "quarantined";
-        return result;
-    }
-    
     // First batch diagnostics - check weight initialization
     if (batch_idx == 0 && ctx.global_step == 0) {
         ctx.logging.logger->log("[GradTrace] FIRST_BATCH: Checking initial model state...");
@@ -1756,197 +1521,15 @@ BatchResult processBatch(
                             "/" + std::to_string(accum_steps) +
                             " accumulate=" + (should_accumulate ? "true" : "false"));
 
-    if (std::isfinite(result.loss) &&
-        ctx.config.hyperparameters.guess_aux_enabled &&
-        state.guess_cache_ready && !state.guess_cache_faulted) {
-        if (!state.guess_cache_buffers) {
-            state.guess_cache_buffers = std::make_unique<GuessCacheBatchBuffers>();
-        }
-
-        const std::size_t guess_count = static_cast<std::size_t>(payload.batch_size);
-        if (guess_count > 0 && state.guess_cache_buffers) {
-            auto& buffers = *state.guess_cache_buffers;
-            auto& training_state = ctx.model->getTrainingState();
-            if (!training_state.stream_ctrl.isInitialized()) {
-                state.guess_cache_faulted = true;
-                EmitModuleError(ModuleId::GuessCache,
-                                "Guess cache update failed: stream controller not initialized",
-                                ctx.global_step);
-            } else if (!training_state.autograd_intermediates.hasLogits() ||
-                       training_state.cached_batch_size != static_cast<int>(guess_count) ||
-                       training_state.cached_seq_len <= 0) {
-                EmitModuleWarning(ModuleId::GuessCache,
-                                  "Guess cache skipped: cached logits not ready for prediction-based pass",
-                                  ctx.global_step);
-            } else {
-                cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
-                const int batch_size = static_cast<int>(guess_count);
-                const int vocab_size = ctx.config.actual_vocab_size;
-                const int cached_seq_len = training_state.cached_seq_len;
-                std::vector<int> guess_positions(batch_size, -1);
-                for (int i = 0; i < batch_size; ++i) {
-                    const int seq_len = payload.seq_lengths[i];
-                    if (seq_len <= 0) {
-                        continue;
-                    }
-                    const int flat_start = i * payload.max_seq_len;
-                    int pos = seq_len - 1;
-                    while (pos >= 0 && payload.target_ids[flat_start + pos] < 0) {
-                        --pos;
-                    }
-                    if (pos >= 0 && pos < cached_seq_len) {
-                        guess_positions[i] = pos;
-                    }
-                }
-
-                std::vector<float> pred_logits;
-                pred_logits.resize(static_cast<std::size_t>(batch_size) * vocab_size);
-                cudaError_t err = cudaSuccess;
-                for (int i = 0; i < batch_size; ++i) {
-                    const int pos = guess_positions[i];
-                    if (pos < 0) {
-                        continue;
-                    }
-                    const std::size_t offset =
-                        (static_cast<std::size_t>(i) * cached_seq_len + pos) * vocab_size;
-                    err = cudaMemcpyAsync(pred_logits.data() + static_cast<std::size_t>(i) * vocab_size,
-                                          training_state.autograd_intermediates.logits_tensor.data + offset,
-                                          static_cast<std::size_t>(vocab_size) * sizeof(float),
-                                          cudaMemcpyDeviceToHost, stream);
-                    if (err != cudaSuccess) {
-                        break;
-                    }
-                }
-                if (err == cudaSuccess) {
-                    err = cudaStreamSynchronize(stream);
-                }
-                if (err != cudaSuccess) {
-                    state.guess_cache_faulted = true;
-                    EmitModuleError(ModuleId::GuessCache,
-                                    std::string("Guess cache logit sync failed: ") +
-                                        cudaGetErrorString(err),
-                                    ctx.global_step);
-                } else {
-                    std::vector<GRIMTS::GuessMetadata> pred_metadata;
-                    std::vector<GRIMTS::GuessMetadata> reward_metadata;
-                    std::vector<float> rewards;
-                    pred_metadata.reserve(guess_count);
-                    reward_metadata.reserve(guess_count);
-                    rewards.reserve(guess_count);
-
-                    const float reward = 1.0f / (1.0f + result.loss);
-                    for (int i = 0; i < batch_size; ++i) {
-                        const int pos = guess_positions[i];
-                        if (pos < 0) {
-                            continue;
-                        }
-                        const int flat_start_i = i * payload.max_seq_len;
-                        const int target_token = payload.target_ids[flat_start_i + pos];
-                        if (target_token < 0 || target_token >= vocab_size) {
-                            continue;
-                        }
-                        const float* logits = pred_logits.data() + static_cast<std::size_t>(i) * vocab_size;
-                        float top1 = -std::numeric_limits<float>::infinity();
-                        float top2 = -std::numeric_limits<float>::infinity();
-                        int pred_token = 0;
-                        for (int v = 0; v < vocab_size; ++v) {
-                            const float logit = logits[v];
-                            if (logit > top1) {
-                                top2 = top1;
-                                top1 = logit;
-                                pred_token = v;
-                            } else if (logit > top2) {
-                                top2 = logit;
-                            }
-                        }
-
-                        const float margin = top1 - top2;
-                        const float confidence = 1.0f / (1.0f + std::exp(-margin));
-                        const float clamped_confidence = std::min(1.0f, std::max(0.0f, confidence));
-                        const std::uint64_t prompt_hash = GRIMTS::HashSignature(
-                            payload.input_ids.data() + flat_start_i,
-                            payload.seq_lengths[i] * sizeof(int));
-
-                        GRIMTS::GuessMetadata pred_meta{};
-                        pred_meta.prompt_hash = prompt_hash;
-                        pred_meta.guess_hash = GRIMTS::HashSignature(&pred_token, sizeof(int));
-                        pred_meta.confidence = clamped_confidence;
-                        pred_meta.sequence_length = static_cast<std::uint16_t>(
-                            std::min<std::size_t>(payload.seq_lengths[i],
-                                                  std::numeric_limits<std::uint16_t>::max()));
-                        pred_meta.prompt_length = static_cast<std::uint16_t>(
-                            std::min<std::size_t>(payload.seq_lengths[i],
-                                                  std::numeric_limits<std::uint16_t>::max()));
-                        pred_meta.epoch = static_cast<std::uint32_t>(epoch_idx + 1);
-                        pred_metadata.push_back(pred_meta);
-
-                        GRIMTS::GuessMetadata reward_meta = pred_meta;
-                        reward_meta.guess_hash = GRIMTS::HashSignature(&target_token, sizeof(int));
-                        reward_metadata.push_back(reward_meta);
-                        rewards.push_back(reward);
-                    }
-
-                    if (!pred_metadata.empty()) {
-                        err = buffers.ensure(pred_metadata.size());
-                        if (err != cudaSuccess) {
-                            state.guess_cache_faulted = true;
-                            EmitModuleError(ModuleId::GuessCache,
-                                            std::string("Guess cache buffer allocation failed: ") +
-                                                cudaGetErrorString(err),
-                                            ctx.global_step);
-                        } else {
-                            err = cudaMemcpyAsync(buffers.metadata(), pred_metadata.data(),
-                                                  pred_metadata.size() * sizeof(GRIMTS::GuessMetadata),
-                                                  cudaMemcpyHostToDevice, stream);
-                            if (err == cudaSuccess) {
-                                err = GRIMTS::CacheGuessBatchGPU(
-                                    buffers.metadata(),
-                                    pred_metadata.size(),
-                                    stream);
-                            }
-                            if (err != cudaSuccess) {
-                                state.guess_cache_faulted = true;
-                                EmitModuleError(ModuleId::GuessCache,
-                                                std::string("Guess cache insert failed: ") +
-                                                    cudaGetErrorString(err),
-                                                ctx.global_step);
-                            } else {
-                                err = cudaMemcpyAsync(buffers.metadata(), reward_metadata.data(),
-                                                      reward_metadata.size() * sizeof(GRIMTS::GuessMetadata),
-                                                      cudaMemcpyHostToDevice, stream);
-                                if (err == cudaSuccess) {
-                                    err = cudaMemcpyAsync(buffers.rewards(), rewards.data(),
-                                                          rewards.size() * sizeof(float),
-                                                          cudaMemcpyHostToDevice, stream);
-                                }
-                                if (err != cudaSuccess) {
-                                    state.guess_cache_faulted = true;
-                                    EmitModuleError(ModuleId::GuessCache,
-                                                    std::string("Guess cache H2D copy failed: ") +
-                                                        cudaGetErrorString(err),
-                                                    ctx.global_step);
-                                } else {
-                                    err = GRIMTS::ApplyRewardBatchGPU(
-                                        buffers.metadata(),
-                                        buffers.rewards(),
-                                        reward_metadata.size(),
-                                        kGuessRewardMomentum,
-                                        buffers.stats(),
-                                        stream);
-                                    if (err != cudaSuccess) {
-                                        state.guess_cache_faulted = true;
-                                        EmitModuleError(ModuleId::GuessCache,
-                                                        std::string("Guess cache reward update failed: ") +
-                                                            cudaGetErrorString(err),
-                                                        ctx.global_step);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // Update guess cache with predictions from this batch
+    if (std::isfinite(result.loss) && ctx.config.hyperparameters.guess_aux_enabled) {
+        GRIMTS::Training::updateGuessCacheFromBatch(
+            ctx.model->getTrainingState(),
+            payload,
+            result.loss,
+            epoch_idx,
+            ctx.global_step,
+            state.guess_cache);
     }
     
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
@@ -3050,82 +2633,12 @@ BatchResult processBatch(
             }
         }
         
-        // Only skip on confirmed invalid token corruption
+        // Rule 20: Data corruption = CRASH. Fix the data pipeline, don't silently skip.
         if (has_invalid_tokens) {
-            ctx.logging.logger->log("[DataGuard] SKIPPING batch=" + std::to_string(batch_idx + 1) +
-                                    " loss=" + Internal::formatScalar(result.loss) +
-                                    " invalid_tokens=true");
-            
-            // Quarantine corrupted sequences (from payload)
-            for (uint32_t sid : payload.seq_ids) {
-                state.spike_counts[sid]++;
-                state.quarantined_seqs.insert(sid);
-            }
-            
-            // Log to bad_sequences.log with corruption details
-            std::string bad_seq_path = ctx.config.paths.checkpoint_dir + "/bad_sequences.log";
-            std::ofstream bad_seq_log(bad_seq_path, std::ios::app);
-            if (bad_seq_log.is_open()) {
-                bad_seq_log << "\n========================================\n";
-                bad_seq_log << "[Batch " << (batch_idx + 1) << "] DATA CORRUPTION DETECTED\n";
-                bad_seq_log << "Loss: " << result.loss << " | Invalid tokens: " << (has_invalid_tokens ? "yes" : "no") << "\n";
-                bad_seq_log << "Sequence IDs: ";
-                for (size_t si = 0; si < payload.seq_ids.size(); ++si) {
-                    bad_seq_log << payload.seq_ids[si];
-                    if (si + 1 < payload.seq_ids.size()) bad_seq_log << ", ";
-                }
-                bad_seq_log << "\n";
-                
-                // CRITICAL: Decode sequences and check for data corruption
-                for (size_t bi = 0; bi < payload.seq_ids.size(); ++bi) {
-                    uint32_t sid = payload.seq_ids[bi];
-                    bad_seq_log << "\n--- Sequence " << sid << " ---\n";
-                    
-                    if (sid < ctx.data.train_seqs.size()) {
-                        const std::vector<int>& token_ids = ctx.data.train_seqs[sid].token_ids;
-                        bad_seq_log << "Length: " << token_ids.size() << " tokens\n";
-                        
-                        // Check for invalid token IDs (root cause of loss=165)
-                        int invalid_count = 0;
-                        int max_invalid = -1;
-                        for (int tid : token_ids) {
-                            if (tid < 0 || tid >= static_cast<int>(ctx.config.actual_vocab_size)) {
-                                invalid_count++;
-                                if (tid > max_invalid) max_invalid = tid;
-                            }
-                        }
-                        
-                        if (invalid_count > 0) {
-                            bad_seq_log << "**CORRUPTION DETECTED**: " << invalid_count 
-                                       << " tokens out of vocab range [0, " << ctx.config.actual_vocab_size 
-                                       << "). Max invalid token: " << max_invalid << "\n";
-                        }
-                        
-                        // Decode text preview
-                        std::string decoded_text = ctx.tokenizer.decode(token_ids);
-                        bad_seq_log << "Text preview (first 500 chars):\n";
-                        bad_seq_log << decoded_text.substr(0, std::min<size_t>(500, decoded_text.length())) << "\n";
-                        if (decoded_text.length() > 500) {
-                            bad_seq_log << "... (truncated, total " << decoded_text.length() << " chars)\n";
-                        }
-                    } else {
-                        bad_seq_log << "ERROR: Sequence ID " << sid << " out of bounds (max: " 
-                                   << ctx.data.train_seqs.size() << ")\n";
-                    }
-                }
-                bad_seq_log << "========================================\n";
-                bad_seq_log.close();
-            }
-            
-            // IMPORTANT: Reset state before early return
-            // zeroGrad removed: next autogradTrainingStep with accumulate=false zeros gradients
-            ctx.optimizer.current_micro_step = 0;  // Reset accumulation window
-            ctx.model->getTrainingState().autograd_intermediates.clear();
-            
-            result.skipped = true;
-            result.skip_reason = "data_corruption";
-            ctx.global_step++;
-            return result;
+            throw std::runtime_error(
+                "DATA CORRUPTION: batch " + std::to_string(batch_idx + 1) +
+                " contains token IDs outside vocab range [0, " + std::to_string(ctx.config.actual_vocab_size) +
+                ") — fix data pipeline at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
         }
         
         // Log high loss for monitoring, but DO NOT skip
@@ -3762,55 +3275,9 @@ BatchResult processBatch(
     // === TIMING GUARD: Track operations between POST-BACKWARD and PRE-OPTIMIZER ===
     auto pre_optimizer_start = std::chrono::steady_clock::now();
     
-    // Handle gradient spikes
-    auto spike_start = std::chrono::steady_clock::now();
-    if (Internal::handleGradientSpike(ctx, state, payload, preclip_grad_rms, preclip_grad_rms,
-                                      result.loss, clip_selection, batch_idx)) {
-        // zeroGrad removed: next autogradTrainingStep with accumulate=false zeros gradients
-        ctx.optimizer.current_micro_step = 0;  // Reset accumulation window
-        ctx.model->getTrainingState().autograd_intermediates.clear();
-        result.skipped = true;
-        result.skip_reason = "gradient_spike";
-        ctx.global_step++;
-        return result;
-    }
-    auto spike_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - spike_start).count();
+    // Gradient spike handling removed (Rule 20: spikes indicate real bugs, not something to silently skip)
     
-    // === TELEMETRY CONTROL (GPU-NATIVE) ===
-    auto telemetry_start = std::chrono::steady_clock::now();
-    
-    // PERFORMANCE: Only evaluate telemetry every 10 batches (requires sync for D2H transfer)
-    // Use cached decision for intermediate batches to avoid sync stalls
-    static GRIM::Telemetry::ControlDecision cached_telemetry_decision = []() {
-        GRIM::Telemetry::ControlDecision d;
-        d.grad_scale_factor = 1.0f;  // Neutral scale (no intervention)
-        d.action = GRIM::Telemetry::ControlAction::Continue;
-        return d;
-    }();
-    static int telemetry_counter = 0;
-    const bool telemetry_control_enabled = ctx.config.hyperparameters.telemetry_control_enabled;
-    const bool telemetry_control_active = false;  // TelemetryControl call sites removed
-    const bool should_eval_telemetry = telemetry_control_active && (telemetry_counter == 0);
-    telemetry_counter = (telemetry_counter + 1) % 10;
-    
-    GRIM::Telemetry::ControlDecision telemetry_decision = cached_telemetry_decision;  // Use cached by default
-    if (!telemetry_control_active) {
-        // Monitoring-only mode: disable all control actions/scaling regardless of cached state.
-        telemetry_decision = GRIM::Telemetry::ControlDecision{};
-        telemetry_decision.grad_scale_factor = 1.0f;
-        telemetry_decision.action = GRIM::Telemetry::ControlAction::Continue;
-        cached_telemetry_decision = telemetry_decision;
-    }
-    
-    
-    auto telemetry_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - telemetry_start).count();
-    const bool allow_telemetry_actions = telemetry_control_active && should_eval_telemetry;
-    GRIM::Telemetry::ControlAction telemetry_action = telemetry_decision.action;
-    if (!allow_telemetry_actions && telemetry_action != GRIM::Telemetry::ControlAction::Continue) {
-        // Cached decisions are for scaling only; one-shot actions must execute once per eval.
-        telemetry_action = GRIM::Telemetry::ControlAction::Continue;
-        telemetry_decision.cooldown_extension = 0;
-    }
+    // Telemetry control interventions removed (Rule 20: monitoring-only, crash on real bugs)
     
     // ========================================================================
     // Issue #135: Gradient clipping DEFERRED to after accumulation scaling
@@ -3829,10 +3296,7 @@ BatchResult processBatch(
     // ========================================================================
     auto clipping_start = std::chrono::steady_clock::now();
     
-    // Compute clip parameters now (telemetry scale, enabled flag) but defer actual clipping
-    const float telemetry_scale = telemetry_control_active ? telemetry_decision.grad_scale_factor : 1.0f;
-    const float safe_scale_factor = std::max(telemetry_scale, 0.01f);
-    const float effective_per_token_limit = clip_selection.per_token_limit * safe_scale_factor;
+    const float effective_per_token_limit = clip_selection.per_token_limit;
     const bool clipping_enabled = (hp.grad_clip_norm > 0.0f);
     
     // No clipping here — deferred to post-accumulation inside should_step
@@ -3853,103 +3317,6 @@ BatchResult processBatch(
         ctx.config.stability.enabled);
     
     result.learning_rate = scheduled_lr;
-    
-    // Spike cooldown handling
-    if (state.grad_spike_cooldown > 0 && !ctx.config.stability.enabled) {
-        state.grad_spike_cooldown--;
-        const float floor_lr = std::max(1e-8f, ctx.config.stability.lr_min);
-        const float spike_cap_lr = std::max(floor_lr, scheduled_lr * kGradSpikeLrFraction);
-        result.learning_rate = std::min(result.learning_rate, spike_cap_lr);
-    }
-    
-    // === TELEMETRY CONTROL ACTIONS ===
-    // GPU kernel already made all decisions - just execute them
-    switch (telemetry_action) {
-        case GRIM::Telemetry::ControlAction::SkipStep:
-            // Skip optimizer step entirely - reset accumulation window
-            // zeroGrad removed: next autogradTrainingStep with accumulate=false zeros gradients
-            ctx.optimizer.current_micro_step = 0;
-            ctx.model->getTrainingState().autograd_intermediates.clear();
-            
-            result.skipped = true;
-            result.skip_reason = "telemetry_control_skip";
-            ctx.logging.logger->log("[TelemetryControl] SKIP_STEP batch=" + std::to_string(batch_idx + 1) + " (reset accumulation window)");
-            return result;
-            
-        case GRIM::Telemetry::ControlAction::ExtendCooldown:
-            state.grad_spike_cooldown += telemetry_decision.cooldown_extension;
-            ctx.logging.logger->log("[TelemetryControl] EXTEND_COOLDOWN +" + std::to_string(telemetry_decision.cooldown_extension) + " steps");
-            break;
-            
-        case GRIM::Telemetry::ControlAction::TriggerSoftRestart:
-            // Scale momentum instead of zeroing - smoother adaptation to regime changes
-            // Telemetry already computed optimal damping factor (volatility_damping * decay_boost)
-            ctx.logging.logger->log("[TelemetryControl] MOMENTUM_DAMPING: scaling by " + 
-                                   std::to_string(telemetry_decision.grad_scale_factor));
-            GRIM::SoftRestart::scaleOptimizerMoments(ctx.model.get(), telemetry_decision.grad_scale_factor);
-            
-            // Reset telemetry anchors to prevent repeated drift triggers (Rule 22: explicit API call)
-            if (ctx.telemetry.enabled && ctx.telemetry.lattice) {
-                GRIM::Telemetry::TelemetryError err = ctx.telemetry.lattice->resetAnchors(
-                    ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()
-                );
-                if (err != GRIM::Telemetry::TelemetryError::OK) {
-                    ctx.logging.logger->log("[TelemetryControl] WARNING: Failed to reset anchors after momentum damping");
-                }
-            }
-            break;
-            
-        case GRIM::Telemetry::ControlAction::InjectPlateauNoise:
-            {
-                // Inject Gaussian noise into weights to escape plateau
-                ctx.logging.logger->log("[TelemetryControl] ═════════════════════════════════════════════════");
-                ctx.logging.logger->log("[TelemetryControl] PLATEAU DETECTED - Injecting noise to escape local minimum");
-                
-                auto& training_state = ctx.model->getTrainingState();
-                cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
-                const auto& cfg = ctx.model->getConfig();
-                const auto& tc_cfg = ctx.telemetry.control_config;
-                
-                // Generate reproducible seed from global step
-                uint64_t noise_seed = static_cast<uint64_t>(ctx.global_step) * 1099511628211ull;
-                
-                size_t total_params_perturbed = 0;
-                
-                // Inject into LM head weights (always accessible via LMHeadLayer)
-                if (ctx.model->getLmHeadLayer()->weights().data) {
-                    size_t lm_size = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-                    total_params_perturbed += lm_size;
-                    ctx.logging.logger->log("[TelemetryControl] Injected noise into lm_head_weights (" + 
-                                           std::to_string(lm_size) + " params)");
-                }
-                
-                // Inject into LM head bias if present
-                if (ctx.model->getLmHeadLayer()->bias().data) {
-                    total_params_perturbed += cfg.vocab_size;
-                }
-                
-                // Sync to ensure noise injection completes
-                cudaStreamSynchronize(stream);
-                
-                ctx.logging.logger->log("[TelemetryControl] Total parameters perturbed: " + std::to_string(total_params_perturbed));
-                ctx.logging.logger->log("[TelemetryControl] noise_std=" + std::to_string(tc_cfg.plateau_noise_std) +
-                                       " proportional=" + std::string(tc_cfg.plateau_noise_proportional ? "true" : "false"));
-                ctx.logging.logger->log("[TelemetryControl] ═════════════════════════════════════════════════");
-                
-                // Also scale momentum to prevent optimizer from immediately undoing the noise
-                GRIM::SoftRestart::scaleOptimizerMoments(ctx.model.get(), 0.5f);
-                ctx.logging.logger->log("[TelemetryControl] Scaled optimizer momentum by 0.5 to preserve perturbation");
-                
-                // Reset telemetry anchors
-                if (ctx.telemetry.enabled && ctx.telemetry.lattice) {
-                    ctx.telemetry.lattice->resetAnchors(stream);
-                }
-            }
-            break;
-            
-        default:
-            break;
-    }
     
     auto lr_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - lr_start).count();
     
@@ -3974,9 +3341,7 @@ BatchResult processBatch(
         optimizer_step_start - pre_optimizer_start).count();
     if (pre_optimizer_elapsed_ms > 1000.0f) {  // Log if > 1 second
         ctx.logging.logger->log("[PERF] Pre-optimizer setup took " + Internal::formatScalar(pre_optimizer_elapsed_ms, 2) + 
-                                "ms (spike=" + Internal::formatScalar(spike_elapsed_ms, 2) + 
-                                "ms, telemetry=" + Internal::formatScalar(telemetry_elapsed_ms, 2) + 
-                                "ms, clipping=" + Internal::formatScalar(clipping_elapsed_ms, 2) + 
+                                "ms (clipping=" + Internal::formatScalar(clipping_elapsed_ms, 2) + 
                                 "ms, lr=" + Internal::formatScalar(lr_elapsed_ms, 2) + 
                                 "ms, sample=" + Internal::formatScalar(sample_elapsed_ms, 2) + "ms)");
     }
@@ -4738,11 +4103,9 @@ EpochResult runEpoch(
     ctx.logging.logger->log("Epoch " + std::to_string(epoch_idx + 1) + "/" + std::to_string(num_epochs));
     
     // Reset guess cache at epoch start
-    // BUG FIX: Must pass stream to ResetGuessCache - nullptr causes cudaMemsetAsync crash!
-    if (ctx.config.hyperparameters.guess_aux_enabled &&
-        state.guess_cache_ready && !state.guess_cache_faulted) {
-        cudaStream_t primary_stream = ctx.model->getTrainingState().stream_ctrl.getPrimaryStream();
-        GRIMTS::ResetGuessCache(primary_stream);
+    if (ctx.config.hyperparameters.guess_aux_enabled) {
+        GRIMTS::Training::resetGuessCacheForEpoch(
+            ctx.model->getTrainingState(), state.guess_cache);
     }
     
     PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] After ResetGuessCache, checking shuffle...\n");
@@ -4921,16 +4284,8 @@ EpochResult runEpoch(
                     }
                 }
             }
-            if (ctx.config.hyperparameters.guess_aux_enabled &&
-                state.guess_cache_ready && !state.guess_cache_faulted) {
-                const GRIMTS::GuessCacheTelemetry telemetry = GRIMTS::GetCacheTelemetry(false);
-                std::ostringstream cache_msg;
-                cache_msg << "Telemetry: fill=" << (telemetry.fill_ratio * 100.0f) << "%"
-                          << " records=" << telemetry.total_records
-                          << " hits=" << telemetry.trends.total_hits
-                          << " misses=" << telemetry.trends.total_misses
-                          << " health=" << (telemetry.is_healthy ? "OK" : "DEGRADED");
-                EmitModuleInfo(ModuleId::GuessCache, cache_msg.str(), ctx.global_step);
+            if (ctx.config.hyperparameters.guess_aux_enabled) {
+                GRIMTS::Training::logGuessCacheTelemetry(state.guess_cache, ctx.global_step);
             }
         }
 
@@ -5079,30 +4434,12 @@ bool executePhase2(TrainingContext& ctx) {
     TrainingLoopState state;
     
     // Initialize guess cache (Rule 22: pass TrainingState for buffer allocation)
-    std::unique_ptr<GuessCacheScope> guess_cache_scope;
-    PHASE2_DEBUG_STDERR("[DEBUG] guess_aux_enabled=%d\n", ctx.config.hyperparameters.guess_aux_enabled ? 1 : 0);
-    if (ctx.config.hyperparameters.guess_aux_enabled) {
-        PHASE2_DEBUG_STDERR("[DEBUG] Attempting to create GuessCacheScope...\n");
-        auto& training_state = ctx.model->getTrainingState();
-        guess_cache_scope = std::make_unique<GuessCacheScope>(
-            training_state,
-            kDefaultGuessCacheCapacity,
-            !ctx.config.cuda_exec.single_stream_mode);
-        state.guess_cache_ready = guess_cache_scope->active();
-        PHASE2_DEBUG_STDERR("[DEBUG] GuessCacheScope created, active=%d\n", state.guess_cache_ready ? 1 : 0);
-    } else {
-        state.guess_cache_ready = false;
-    }
-    
-    if (state.guess_cache_ready) {
-        PHASE2_DEBUG_STDERR("[DEBUG] About to call EmitModuleInfo for GuessCache...\n");
-        EmitModuleInfo(ModuleId::GuessCache, 
-            std::string("GPU cache ready (capacity=") + std::to_string(kDefaultGuessCacheCapacity) + ")", ctx.global_step);
-        state.guess_cache_buffers = std::make_unique<GuessCacheBatchBuffers>();
-        PHASE2_DEBUG_STDERR("[DEBUG] GuessCacheBatchBuffers created successfully\n");
-    } else if (!ctx.config.hyperparameters.guess_aux_enabled) {
-        EmitModuleInfo(ModuleId::GuessCache, "Guess cache disabled (guess_aux.enabled=false)", ctx.global_step);
-    }
+    auto guess_cache_scope = GRIMTS::Training::initGuessCache(
+        ctx.model->getTrainingState(),
+        ctx.config.hyperparameters.guess_aux_enabled,
+        ctx.config.cuda_exec.single_stream_mode,
+        ctx.global_step,
+        state.guess_cache);
     
     PHASE2_DEBUG_STDERR("[DEBUG] About to initialize training log...");
 

@@ -132,6 +132,7 @@ __global__ void updateTelemetryStateKernel(
 
     // STEP 9: Update metadata
     s->step_count++;
+    s->initialized = 1;
     level_0->last_update = global_step;
 
     if (strict_mode) {
@@ -207,6 +208,7 @@ __global__ void updateTelemetryStateKernel(
         sk->delta_sigma = sk->sigma - sk->sigma_a;
         
         sk->step_count++;
+        sk->initialized = 1;
         level_k->last_update = global_step;
     }
 }

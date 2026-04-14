@@ -926,7 +926,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         //  1. Hidden state (encoder output) statistics at sample position
         //  2. Weight row statistics for the predicted argmax token at that position  
         //  3. Dot product decomposition showing WHY argmax wins
-        constexpr int kSamplePositions = 5;  // Sample first 5 positions
+        constexpr int kSamplePositions = 1024;  // Sample first 5 positions
         const int d_model = cfg->d_model;
         const int vocab_size_local = cfg->vocab_size;
         
