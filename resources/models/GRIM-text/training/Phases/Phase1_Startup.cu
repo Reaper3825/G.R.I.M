@@ -1120,7 +1120,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", gate_warmup=" + std::to_string(hp.execution_block_gate_warmup_steps) +
                " (all =warmup_steps=" + std::to_string(hp.warmup_steps) + ")");
     logger.log("Derived hyperparameters (cont): d_key=" + std::to_string(hp.execution_block_d_key) +
-               ", cross_attn_head_dim=" + std::to_string(hp.cross_attn_head_dim) +
+               ", cross_attn_head_dim=" + std::to_string(hp.execution_block_cross_attn_head_dim) +
                ", atom_embedding_dim=" + std::to_string(hp.scratch_block_reasoning_atom_embedding_dim) +
                ", micro_val_interval=" + std::to_string(hp.micro_validation_interval) +
                ", micro_val_min_step=" + std::to_string(hp.micro_validation_min_step) +
