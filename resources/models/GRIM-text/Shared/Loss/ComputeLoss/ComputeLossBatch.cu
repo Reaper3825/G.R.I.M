@@ -248,6 +248,8 @@ float LanguageModel::computeLossBatch(
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 	payload.d_token_to_slot_map =
 		reinterpret_cast<const int32_t*>(training_state_.cached_token_to_slot_map.data);
+	payload.d_atom_mask =
+		reinterpret_cast<const uint8_t*>(training_state_.cached_token_atom_mask.data);
 
 	// Final sync ensures all DMAs complete before guards release pinned blocks
 	CUDA_CHECK(cudaStreamSynchronize(stream));

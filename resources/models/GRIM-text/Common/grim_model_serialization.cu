@@ -378,7 +378,6 @@ bool LanguageModel::load(const std::string& path) {
     // Pattern B: call site is the sole authority for what the model requires.
     request.capabilities.requires_execution_block = (execution_block_layer_ != nullptr);
     request.capabilities.requires_slot_selector     = (decode_time_slot_selector_layer_ != nullptr);
-    request.capabilities.requires_numeric_head    = false;
     request.capabilities.requires_reasoning_head  = (reasoning_head_layer_ != nullptr);
     request.capabilities.requires_scratch_block   = (scratch_block_layer_ != nullptr && scratch_block_layer_->isEnabled());
     request.capabilities.requires_final_rms_gamma = (lm_head_layer_ != nullptr && lm_head_layer_->finalRmsGamma().data != nullptr);

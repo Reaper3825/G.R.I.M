@@ -4087,7 +4087,7 @@ BatchResult processBatch(
         // Per-component clipping (Issue #139):
         //   1. emb_clip  — LM_HEAD (+ EMBEDDING if untied)
         //   2. enc_clip  — ATTENTION + FFN + RMSNORM + SCRATCHBLOCK +
-        //                  NUMERIC_HEAD + MTP + REASONING_HEAD + EXECUTION_BLOCK
+        //                  MTP + REASONING_HEAD + EXECUTION_BLOCK
         //
         // Clipping operates through the ParameterGroup tensor registry
         // via GradClip::clipGradientNorms() — norm measurement, bucket

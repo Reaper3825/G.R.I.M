@@ -68,10 +68,9 @@ struct alignas(64) GradMetrics {
     float ffn_sum_sq = 0.0f;            // FFN = 3
     float rmsnorm_sum_sq = 0.0f;        // RMSNORM = 4
     float scratchblock_sum_sq = 0.0f;   // SCRATCHBLOCK = 5
-    float numeric_head_sum_sq = 0.0f;   // NUMERIC_HEAD = 6
-    float mtp_sum_sq = 0.0f;            // MTP = 7
-    float reasoning_head_sum_sq = 0.0f; // REASONING_HEAD = 8
-    float execution_block_sum_sq = 0.0f; // EXECUTION_BLOCK = 9
+    float mtp_sum_sq = 0.0f;            // MTP = 6
+    float reasoning_head_sum_sq = 0.0f; // REASONING_HEAD = 7
+    float execution_block_sum_sq = 0.0f; // EXECUTION_BLOCK = 8
 
     // Per-type element counts (for RMS computation)
     int embedding_count = 0;
@@ -80,7 +79,6 @@ struct alignas(64) GradMetrics {
     int ffn_count = 0;
     int rmsnorm_count = 0;
     int scratchblock_count = 0;
-    int numeric_head_count = 0;
     int mtp_count = 0;
     int reasoning_head_count = 0;
     int execution_block_count = 0;

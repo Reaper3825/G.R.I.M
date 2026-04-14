@@ -1,0 +1,269 @@
+================================================================================
+  SIGMA EPSILON FLOOR SIMULATION
+  TelemetryLattice — exact kernel reproduction
+  Pass condition: no gradnorm jump without hacks
+================================================================================
+
+  Test streams:
+    1. lr_constant:     6e-5 constant (zero variance)
+    2. grad_norm:       5.5e-5 ± 1e-5 (18% CV)
+    3. loss:            3.7 ± 0.03 (0.8% CV)
+    4. rho:             0.30 ± 0.06 (20% CV)
+    5. grad_norm_jump:  5e-5 → 2e-4 step change at t=250
+
+  Hyperparameters: beta_mu=0.95, beta_a=0.995, beta_delta=0.9, beta_r=0.85, beta_run=0.8, beta_v=0.9, k_out0=2.5, alpha_v=1.5, epsilon=1e-07
+
+
+================================================================================
+  BASELINE: current epsilon floor (epsilon=1e-7)
+================================================================================
+
+  ── lr_constant ──
+    mu (final):            6.000000e-05
+    sigma (final):         3.162278e-04
+    sigma_tilde (final):   5.261693e+00
+    v_sigma (final):       1.632186e-31
+    sigma/|mu| ratio:      5.2617
+    delta_hat RMS:         0.0000
+    delta_hat |max|:       0.0000
+    max sigma jump:        3.162278e-04 at step 1
+    max delta_hat jump:    0.0000 at step 2
+    ✗ FAIL: sigma/|mu| = 5.26x for CONSTANT stream (want < 0.1)
+    ✗ STREAM FAIL
+
+  ── grad_norm ──
+    mu (final):            5.409950e-05
+    sigma (final):         3.162278e-04
+    sigma_tilde (final):   5.834515e+00
+    v_sigma (final):       1.632186e-31
+    sigma/|mu| ratio:      5.8345
+    delta_hat RMS:         0.0316
+    delta_hat |max|:       0.1200
+    max sigma jump:        3.162278e-04 at step 1
+    max delta_hat jump:    63.5036 at step 2
+    ✓ PASS: delta_hat RMS = 0.0316 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── loss ──
+    mu (final):            3.698151e+00
+    sigma (final):         2.939325e-02
+    sigma_tilde (final):   7.948092e-03
+    v_sigma (final):       1.048542e-06
+    sigma/|mu| ratio:      0.0079
+    delta_hat RMS:         1.1827
+    delta_hat |max|:       11.0777
+    max sigma jump:        1.030974e-02 at step 2
+    max delta_hat jump:    294982.8056 at step 2
+    ✓ PASS: delta_hat RMS = 1.1827 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── rho ──
+    mu (final):            3.251199e-01
+    sigma (final):         6.701776e-02
+    sigma_tilde (final):   2.061324e-01
+    v_sigma (final):       5.564346e-06
+    sigma/|mu| ratio:      0.2061
+    delta_hat RMS:         1.2582
+    delta_hat |max|:       12.7192
+    max sigma jump:        1.325998e-02 at step 61
+    max delta_hat jump:    284820.3330 at step 2
+    ✓ PASS: delta_hat RMS = 1.2582 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── grad_norm_jump ──
+    mu (final):            2.007763e-04
+    sigma (final):         3.162278e-04
+    sigma_tilde (final):   1.574241e+00
+    v_sigma (final):       1.632186e-31
+    sigma/|mu| ratio:      1.5742
+    delta_hat RMS:         0.0693
+    delta_hat |max|:       0.4602
+    max sigma jump:        3.162278e-04 at step 1
+    max delta_hat jump:    66.4532 at step 2
+    pre-jump max sigma Δ:  3.162278e-04
+    post-jump sigma rise:  0.000000e+00
+    ✗ FAIL: artificial sigma jumps BEFORE real regime change
+    ✗ STREAM FAIL
+
+  ════════════════════════════════════════════════════════════
+  OVERALL: ✗ FAIL — see above
+  ════════════════════════════════════════════════════════════
+
+================================================================================
+  FIX 1: Scale-aware epsilon — max(variance, epsilon * mu²)
+================================================================================
+
+  ── lr_constant ──
+    mu (final):            6.000000e-05
+    sigma (final):         1.897367e-08
+    sigma_tilde (final):   3.157016e-04
+    v_sigma (final):       5.875870e-40
+    sigma/|mu| ratio:      0.0003
+    delta_hat RMS:         0.0000
+    delta_hat |max|:       0.0000
+    max sigma jump:        1.897367e-08 at step 1
+    max delta_hat jump:    0.0000 at step 2
+    ✓ PASS: sigma/|mu| = 0.0003 (properly small for constant stream)
+    ✓ STREAM PASS
+
+  ── grad_norm ──
+    mu (final):            5.409950e-05
+    sigma (final):         1.080960e-05
+    sigma_tilde (final):   1.994410e-01
+    v_sigma (final):       9.294767e-14
+    sigma/|mu| ratio:      0.1994
+    delta_hat RMS:         1.1499
+    delta_hat |max|:       6.9630
+    max sigma jump:        3.211422e-06 at step 209
+    max delta_hat jump:    64.7292 at step 2
+    ✓ PASS: delta_hat RMS = 1.1499 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── loss ──
+    mu (final):            3.698151e+00
+    sigma (final):         2.939325e-02
+    sigma_tilde (final):   7.948092e-03
+    v_sigma (final):       1.048542e-06
+    sigma/|mu| ratio:      0.0079
+    delta_hat RMS:         1.1827
+    delta_hat |max|:       11.0777
+    max sigma jump:        1.030974e-02 at step 2
+    max delta_hat jump:    294982.8056 at step 2
+    ✓ PASS: delta_hat RMS = 1.1827 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── rho ──
+    mu (final):            3.251199e-01
+    sigma (final):         6.701776e-02
+    sigma_tilde (final):   2.061324e-01
+    v_sigma (final):       5.564346e-06
+    sigma/|mu| ratio:      0.2061
+    delta_hat RMS:         1.2582
+    delta_hat |max|:       12.7192
+    max sigma jump:        1.325998e-02 at step 61
+    max delta_hat jump:    284820.3330 at step 2
+    ✓ PASS: delta_hat RMS = 1.2582 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── grad_norm_jump ──
+    mu (final):            2.007763e-04
+    sigma (final):         4.267556e-06
+    sigma_tilde (final):   2.124470e-02
+    v_sigma (final):       1.255291e-14
+    sigma/|mu| ratio:      0.0212
+    delta_hat RMS:         1.7526
+    delta_hat |max|:       31.9288
+    max sigma jump:        2.564940e-05 at step 250
+    max delta_hat jump:    61.5379 at step 2
+    pre-jump max sigma Δ:  1.448840e-06
+    post-jump sigma rise:  3.468957e-05
+    ✓ PASS: sigma smooth pre-jump, responds to real change
+    ✓ STREAM PASS
+
+  ════════════════════════════════════════════════════════════
+  OVERALL: ✓ ALL PASS
+  ════════════════════════════════════════════════════════════
+
+================================================================================
+  FIX 2: Warmup gate (N=20) — no epsilon floor on variance during warmup
+================================================================================
+
+  ── lr_constant ──
+    mu (final):            6.000000e-05
+    sigma (final):         3.162278e-04
+    sigma_tilde (final):   5.261693e+00
+    v_sigma (final):       1.208265e-30
+    sigma/|mu| ratio:      5.2617
+    delta_hat RMS:         0.0000
+    delta_hat |max|:       0.0000
+    max sigma jump:        3.162278e-04 at step 20
+    max delta_hat jump:    0.0000 at step 2
+    ✗ FAIL: sigma/|mu| = 5.26x for CONSTANT stream (want < 0.1)
+    ✗ STREAM FAIL
+
+  ── grad_norm ──
+    mu (final):            5.409950e-05
+    sigma (final):         3.162278e-04
+    sigma_tilde (final):   5.834515e+00
+    v_sigma (final):       1.144547e-30
+    sigma/|mu| ratio:      5.8345
+    delta_hat RMS:         0.5054
+    delta_hat |max|:       6.9630
+    max sigma jump:        3.077708e-04 at step 20
+    max delta_hat jump:    64.7292 at step 2
+    ✓ PASS: delta_hat RMS = 0.5054 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── loss ──
+    mu (final):            3.698151e+00
+    sigma (final):         2.939325e-02
+    sigma_tilde (final):   7.948092e-03
+    v_sigma (final):       1.048542e-06
+    sigma/|mu| ratio:      0.0079
+    delta_hat RMS:         1.1827
+    delta_hat |max|:       11.0777
+    max sigma jump:        1.030974e-02 at step 2
+    max delta_hat jump:    294982.8056 at step 2
+    ✓ PASS: delta_hat RMS = 1.1827 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── rho ──
+    mu (final):            3.251199e-01
+    sigma (final):         6.701776e-02
+    sigma_tilde (final):   2.061324e-01
+    v_sigma (final):       5.564346e-06
+    sigma/|mu| ratio:      0.2061
+    delta_hat RMS:         1.2582
+    delta_hat |max|:       12.7192
+    max sigma jump:        1.325998e-02 at step 61
+    max delta_hat jump:    284820.3330 at step 2
+    ✓ PASS: delta_hat RMS = 1.2582 (O(1) — sigma properly scaled)
+    ✓ STREAM PASS
+
+  ── grad_norm_jump ──
+    mu (final):            2.007763e-04
+    sigma (final):         3.162278e-04
+    sigma_tilde (final):   1.574241e+00
+    v_sigma (final):       1.174930e-30
+    sigma/|mu| ratio:      1.5742
+    delta_hat RMS:         0.3916
+    delta_hat |max|:       4.9394
+    max sigma jump:        3.118336e-04 at step 20
+    max delta_hat jump:    61.5379 at step 2
+    pre-jump max sigma Δ:  3.118336e-04
+    post-jump sigma rise:  0.000000e+00
+    ✗ FAIL: artificial sigma jumps BEFORE real regime change
+    ✗ STREAM FAIL
+
+  ════════════════════════════════════════════════════════════
+  OVERALL: ✗ FAIL — see above
+  ════════════════════════════════════════════════════════════
+
+================================================================================
+  COMPARATIVE SUMMARY
+================================================================================
+
+  sigma/|mu| ratio for lr_constant (want ≈ 0):
+    CURRENT       sigma=3.162278e-04  ratio=5.2617
+    FIX 1         sigma=1.897367e-08  ratio=0.0003
+    FIX 2         sigma=3.162278e-04  ratio=5.2617
+
+  delta_hat RMS for grad_norm (want O(1)):
+    CURRENT       delta_hat_rms=0.0316
+    FIX 1         delta_hat_rms=1.1499
+    FIX 2         delta_hat_rms=0.5054
+
+  delta_hat RMS for loss (want O(1)):
+    CURRENT       delta_hat_rms=1.1827
+    FIX 1         delta_hat_rms=1.1827
+    FIX 2         delta_hat_rms=1.1827
+
+  grad_norm_jump: sigma at t=245 (pre) vs t=300 (post):
+    CURRENT       pre=3.162278e-04  post=3.162278e-04  rise=0.000000e+00
+    FIX 1         pre=4.352759e-06  post=3.904233e-05  rise=3.468957e-05
+    FIX 2         pre=3.162278e-04  post=3.162278e-04  rise=0.000000e+00
+
+  VERDICTS:
+    CURRENT:  FAIL
+    FIX 1:    PASS
+    FIX 2:    FAIL

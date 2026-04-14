@@ -263,7 +263,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
-    ../../Layers/NumericHead/numeric_head_GPU.cu
     ../../Layers/ReasoningHead/reasoning_head_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu

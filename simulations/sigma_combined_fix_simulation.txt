@@ -1,0 +1,262 @@
+╔══════════════════════════════════════════════════════════════════════╗
+║  COMBINED FIX SIMULATION — Honest Thresholds                       ║
+║                                                                    ║
+║  BUG 1: Absolute epsilon floor → sigma_tilde = 5.27 for lr        ║
+║  BUG 2: Init seeds + returns (not an EMA step) → 20-step ramp     ║
+║                                                                    ║
+║  FIX A: variance = max(m2 - mu², epsilon * mu²) [epsilon only]     ║
+║  FIX B: + bias-corrected EMA (no init special case) [both bugs]    ║
+║                                                                    ║
+║  Thresholds:                                                       ║
+║    P1: sigma_tilde < 0.01 (constant), < 0.10 (tiny noise)         ║
+║    P2: sigma[5]/sigma_ss ∈ [0.2, 5.0]                             ║
+║    P3: early/late delta_hat RMS < 2.0                              ║
+║    P4: regime-change sigma within 50% at step+20                   ║
+║    P5: no NaN, Inf, or negative sigma                              ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+========================================================================
+  VARIANT: CURRENT (baseline)
+========================================================================
+
+  Stream: lr_constant
+    mu[steady] = 6.000000e-05
+    sigma[steady] = 3.162278e-04
+    sigma_tilde[steady] = 5.261693e+00
+    [P1] sigma_tilde (constant stream) = 5.261693e+00  threshold < 0.01  → FAIL
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm_tiny
+    mu[steady] = 5.496712e-05
+    sigma[steady] = 3.162278e-04
+    sigma_tilde[steady] = 5.742605e+00
+    [P1] sigma_tilde (tiny noise) = 5.742605e+00  threshold < 0.1  → FAIL
+    [P3] delta_hat early/late RMS = 0.8031  (early=2.4578e-03, late=3.0603e-03)  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm
+    mu[steady] = 5.439048e-05
+    sigma[steady] = 3.162278e-04
+    sigma_tilde[steady] = 5.804925e+00
+    [P2] sigma[5]/sigma_ss = 1.0000  (sigma[5]=3.1623e-04, ss=3.1623e-04)  → PASS
+    [P3] delta_hat early/late RMS = 0.9781  (early=3.3351e-02, late=3.4097e-02)  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: loss
+    mu[steady] = 3.706508e+00
+    sigma[steady] = 2.846866e-02
+    sigma_tilde[steady] = 7.680845e-03
+    [P2] sigma[5]/sigma_ss = 0.4711  (sigma[5]=1.3411e-02, ss=2.8469e-02)  → PASS
+    [P3] delta_hat early/late RMS = 2.0312  (early=2.0070e+00, late=9.8810e-01)  → FAIL
+    [P5] numerical sanity → PASS
+
+  Stream: rho
+    mu[steady] = 3.019808e-01
+    sigma[steady] = 6.840185e-02
+    sigma_tilde[steady] = 2.262960e-01
+    [P2] sigma[5]/sigma_ss = 0.2350  (sigma[5]=1.6077e-02, ss=6.8402e-02)  → PASS
+    [P3] delta_hat early/late RMS = 2.2670  (early=2.2208e+00, late=9.7966e-01)  → FAIL
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm_jump
+    mu[steady] = 2.007330e-04
+    sigma[steady] = 3.162278e-04
+    sigma_tilde[steady] = 1.574591e+00
+    [P4] sigma[170]/sigma_new_ss = 1.0000  (at_170=3.1623e-04, new_ss=3.1623e-04)  → PASS
+    [P5] numerical sanity → PASS
+
+  ────────────────────────────────────────────────────────────────────
+    ✗ P1:lr_constant: sigma_tilde=5.2617e+00
+    ✓ P5:lr_constant: clean
+    ✗ P1:grad_norm_tiny: sigma_tilde=5.7426e+00
+    ✓ P3:grad_norm_tiny: ratio=0.8031
+    ✓ P5:grad_norm_tiny: clean
+    ✓ P2:grad_norm: ratio=1.0000
+    ✓ P3:grad_norm: ratio=0.9781
+    ✓ P5:grad_norm: clean
+    ✓ P2:loss: ratio=0.4711
+    ✗ P3:loss: ratio=2.0312
+    ✓ P5:loss: clean
+    ✓ P2:rho: ratio=0.2350
+    ✗ P3:rho: ratio=2.2670
+    ✓ P5:rho: clean
+    ✓ P4:grad_norm_jump: ratio=1.0000
+    ✓ P5:grad_norm_jump: clean
+
+  ═══ CURRENT (baseline): 12/16 tests passed → FAIL ═══
+
+========================================================================
+  VARIANT: FIX A (scale-aware epsilon only)
+========================================================================
+
+  Stream: lr_constant
+    mu[steady] = 6.000000e-05
+    sigma[steady] = 1.897367e-08
+    sigma_tilde[steady] = 3.157016e-04
+    [P1] sigma_tilde (constant stream) = 3.157016e-04  threshold < 0.01  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm_tiny
+    mu[steady] = 5.496712e-05
+    sigma[steady] = 1.085684e-06
+    sigma_tilde[steady] = 1.971690e-02
+    [P1] sigma_tilde (tiny noise) = 1.971690e-02  threshold < 0.1  → PASS
+    [P3] delta_hat early/late RMS = 1.8548  (early=1.6993e+00, late=9.1617e-01)  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm
+    mu[steady] = 5.439048e-05
+    sigma[steady] = 9.529951e-06
+    sigma_tilde[steady] = 1.748983e-01
+    [P2] sigma[5]/sigma_ss = 0.4991  (sigma[5]=4.7563e-06, ss=9.5300e-06)  → PASS
+    [P3] delta_hat early/late RMS = 2.2255  (early=2.2200e+00, late=9.9756e-01)  → FAIL
+    [P5] numerical sanity → PASS
+
+  Stream: loss
+    mu[steady] = 3.706508e+00
+    sigma[steady] = 2.846866e-02
+    sigma_tilde[steady] = 7.680845e-03
+    [P2] sigma[5]/sigma_ss = 0.4711  (sigma[5]=1.3411e-02, ss=2.8469e-02)  → PASS
+    [P3] delta_hat early/late RMS = 2.0312  (early=2.0070e+00, late=9.8810e-01)  → FAIL
+    [P5] numerical sanity → PASS
+
+  Stream: rho
+    mu[steady] = 3.019808e-01
+    sigma[steady] = 6.840185e-02
+    sigma_tilde[steady] = 2.262960e-01
+    [P2] sigma[5]/sigma_ss = 0.2350  (sigma[5]=1.6077e-02, ss=6.8402e-02)  → PASS
+    [P3] delta_hat early/late RMS = 2.2670  (early=2.2208e+00, late=9.7966e-01)  → FAIL
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm_jump
+    mu[steady] = 2.007330e-04
+    sigma[steady] = 8.238503e-06
+    sigma_tilde[steady] = 4.101577e-02
+    [P4] sigma[170]/sigma_new_ss = 8.5754  (at_170=7.0648e-05, new_ss=8.2385e-06)  → FAIL
+    [P5] numerical sanity → PASS
+
+  ────────────────────────────────────────────────────────────────────
+    ✓ P1:lr_constant: sigma_tilde=3.1570e-04
+    ✓ P5:lr_constant: clean
+    ✓ P1:grad_norm_tiny: sigma_tilde=1.9717e-02
+    ✓ P3:grad_norm_tiny: ratio=1.8548
+    ✓ P5:grad_norm_tiny: clean
+    ✓ P2:grad_norm: ratio=0.4991
+    ✗ P3:grad_norm: ratio=2.2255
+    ✓ P5:grad_norm: clean
+    ✓ P2:loss: ratio=0.4711
+    ✗ P3:loss: ratio=2.0312
+    ✓ P5:loss: clean
+    ✓ P2:rho: ratio=0.2350
+    ✗ P3:rho: ratio=2.2670
+    ✓ P5:rho: clean
+    ✗ P4:grad_norm_jump: ratio=8.5754
+    ✓ P5:grad_norm_jump: clean
+
+  ═══ FIX A (scale-aware epsilon only): 12/16 tests passed → FAIL ═══
+
+========================================================================
+  VARIANT: FIX B (scale-aware epsilon + bias-corrected EMA)
+========================================================================
+
+  Stream: lr_constant
+    mu[steady] = 6.000000e-05
+    sigma[steady] = 1.897367e-08
+    sigma_tilde[steady] = 3.157016e-04
+    [P1] sigma_tilde (constant stream) = 3.157016e-04  threshold < 0.01  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm_tiny
+    mu[steady] = 5.496711e-05
+    sigma[steady] = 1.085684e-06
+    sigma_tilde[steady] = 1.971691e-02
+    [P1] sigma_tilde (tiny noise) = 1.971691e-02  threshold < 0.1  → PASS
+    [P3] delta_hat early/late RMS = 1.2271  (early=1.1239e+00, late=9.1585e-01)  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm
+    mu[steady] = 5.439049e-05
+    sigma[steady] = 9.529952e-06
+    sigma_tilde[steady] = 1.748983e-01
+    [P2] sigma[5]/sigma_ss = 0.5784  (sigma[5]=5.5119e-06, ss=9.5300e-06)  → PASS
+    [P3] delta_hat early/late RMS = 1.1165  (early=1.1137e+00, late=9.9753e-01)  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: loss
+    mu[steady] = 3.706508e+00
+    sigma[steady] = 2.846867e-02
+    sigma_tilde[steady] = 7.680847e-03
+    [P2] sigma[5]/sigma_ss = 0.9152  (sigma[5]=2.6055e-02, ss=2.8469e-02)  → PASS
+    [P3] delta_hat early/late RMS = 1.3055  (early=1.2897e+00, late=9.8788e-01)  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: rho
+    mu[steady] = 3.019807e-01
+    sigma[steady] = 6.840188e-02
+    sigma_tilde[steady] = 2.262961e-01
+    [P2] sigma[5]/sigma_ss = 0.4491  (sigma[5]=3.0720e-02, ss=6.8402e-02)  → PASS
+    [P3] delta_hat early/late RMS = 1.3486  (early=1.3206e+00, late=9.7926e-01)  → PASS
+    [P5] numerical sanity → PASS
+
+  Stream: grad_norm_jump
+    mu[steady] = 2.007331e-04
+    sigma[steady] = 8.237337e-06
+    sigma_tilde[steady] = 4.100994e-02
+    [P4] sigma[170]/sigma_new_ss = 8.5760  (at_170=7.0643e-05, new_ss=8.2373e-06)  → FAIL
+    [P5] numerical sanity → PASS
+
+  ────────────────────────────────────────────────────────────────────
+    ✓ P1:lr_constant: sigma_tilde=3.1570e-04
+    ✓ P5:lr_constant: clean
+    ✓ P1:grad_norm_tiny: sigma_tilde=1.9717e-02
+    ✓ P3:grad_norm_tiny: ratio=1.2271
+    ✓ P5:grad_norm_tiny: clean
+    ✓ P2:grad_norm: ratio=0.5784
+    ✓ P3:grad_norm: ratio=1.1165
+    ✓ P5:grad_norm: clean
+    ✓ P2:loss: ratio=0.9152
+    ✓ P3:loss: ratio=1.3055
+    ✓ P5:loss: clean
+    ✓ P2:rho: ratio=0.4491
+    ✓ P3:rho: ratio=1.3486
+    ✓ P5:rho: clean
+    ✗ P4:grad_norm_jump: ratio=8.5760
+    ✓ P5:grad_norm_jump: clean
+
+  ═══ FIX B (scale-aware epsilon + bias-corrected EMA): 15/16 tests passed → FAIL ═══
+
+==========================================================================================
+  SIDE-BY-SIDE: Key metrics at steady state (last 50 steps)
+==========================================================================================
+  Stream             Metric           CURRENT        FIX_A          FIX_B         
+  ────────────────────────────────────────────────────────────────────────────
+  lr_constant        sigma_tilde      5.261693e+00   3.157016e-04   3.157016e-04  
+                     sigma            3.162278e-04   1.897367e-08   1.897367e-08  
+                     v_sigma          8.038422e-21   2.893832e-29   2.604449e-29  
+
+  grad_norm_tiny     sigma_tilde      5.742605e+00   1.971690e-02   1.971691e-02  
+                     sigma            3.162278e-04   1.085684e-06   1.085684e-06  
+                     v_sigma          8.038422e-21   1.681776e-15   1.681780e-15  
+
+  grad_norm          sigma_tilde      5.804925e+00   1.748983e-01   1.748983e-01  
+                     sigma            3.162278e-04   9.529951e-06   9.529952e-06  
+                     v_sigma          8.038422e-21   1.303914e-13   1.303918e-13  
+
+  loss               sigma_tilde      7.680845e-03   7.680845e-03   7.680847e-03  
+                     sigma            2.846866e-02   2.846866e-02   2.846867e-02  
+                     v_sigma          8.931950e-07   8.931950e-07   8.931990e-07  
+
+  rho                sigma_tilde      2.262960e-01   2.262960e-01   2.262961e-01  
+                     sigma            6.840185e-02   6.840185e-02   6.840188e-02  
+                     v_sigma          4.523744e-06   4.523744e-06   4.523751e-06  
+
+  grad_norm_jump     sigma_tilde      1.574591e+00   4.101577e-02   4.100994e-02  
+                     sigma            3.162278e-04   8.238503e-06   8.237337e-06  
+                     v_sigma          8.038422e-21   5.775344e-14   5.773312e-14  
+
+==========================================================================================
+  FINAL VERDICT
+==========================================================================================
+  CURRENT:  FAIL
+  FIX A:    FAIL  (scale-aware epsilon only)
+  FIX B:    FAIL  (scale-aware epsilon + bias-corrected EMA)

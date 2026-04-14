@@ -1,6 +1,6 @@
 //======================================================//
 //  Reasoning Head Layer - GPU
-//  Parallel head (alongside NumericHead / LMHead)
+//  Parallel head (alongside LMHead)
 //
 //  Gathers encoder hidden states at atom positions,
 //  concatenates with ScratchBlock atom embeddings,

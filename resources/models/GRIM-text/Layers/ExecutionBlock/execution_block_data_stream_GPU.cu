@@ -160,27 +160,57 @@ __global__ void kernelCheckWriteCollapse(
         atomicMax(error_flag, stage_id);
 }
 
+// Masked reduce-mean: exclude atom positions from the mean so that numeric
+// surface features in H cannot leak into execution decision context.
+// When atom_mask is nullptr the kernel falls back to the unmasked path.
 __global__ void kernelReduceMeanForward(
     float* __restrict__ out,
     const float* __restrict__ H,
-    int total_tokens, int d_model
+    int total_tokens, int d_model,
+    const uint8_t* __restrict__ atom_mask  // [total_tokens] or nullptr
 ) {
     const int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= d_model) return;
     float sum = 0.0f;
-    for (int i = 0; i < total_tokens; ++i)
+    int count = 0;
+    for (int i = 0; i < total_tokens; ++i) {
+        if (atom_mask && atom_mask[i] != 0) continue;  // skip atom positions
         sum += H[static_cast<size_t>(i) * d_model + j];
-    out[j] = sum / static_cast<float>(total_tokens);
+        ++count;
+    }
+    // Guard: if every position is an atom, fall back to full mean rather than
+    // dividing by zero.  This can happen during single-token decode of an atom.
+    if (count == 0) {
+        for (int i = 0; i < total_tokens; ++i)
+            sum += H[static_cast<size_t>(i) * d_model + j];
+        count = total_tokens;
+    }
+    out[j] = sum / static_cast<float>(count);
 }
 
+// Backward: scatter gradient only to non-atom positions (matching forward mask).
 __global__ void kernelReduceMeanBackward(
     float* __restrict__ grad_H,
     const float* __restrict__ grad_out,
-    int total_tokens, int d_model
+    int total_tokens, int d_model,
+    const uint8_t* __restrict__ atom_mask  // [total_tokens] or nullptr
 ) {
     const int i = blockIdx.x;
     if (i >= total_tokens) return;
-    float scale = 1.0f / static_cast<float>(total_tokens);
+    // Skip atom positions — they were excluded from the forward mean,
+    // so they receive zero gradient from this path.
+    if (atom_mask && atom_mask[i] != 0) return;
+    // Count non-atom tokens to match forward scale.
+    int count = 0;
+    if (atom_mask) {
+        for (int t = 0; t < total_tokens; ++t)
+            if (atom_mask[t] == 0) ++count;
+    } else {
+        count = total_tokens;
+    }
+    // Guard: same fallback as forward — if all atoms, include all.
+    if (count == 0) count = total_tokens;
+    float scale = 1.0f / static_cast<float>(count);
     float* dst = grad_H + static_cast<size_t>(i) * d_model;
     for (int j = threadIdx.x; j < d_model; j += blockDim.x)
         dst[j] += grad_out[j] * scale;
@@ -1420,6 +1450,10 @@ struct ReduceMeanGradFn : public GradFn {
     bool H_is_leaf_ = false;
     float* grad_H_buf = nullptr;
 
+    // Row-local atom mask (non-owning, points into batch-global device buffer).
+    // When non-null, backward excludes atom positions matching the forward mask.
+    const uint8_t* atom_mask_row_ = nullptr;
+
     ReduceMeanGradFn() { op_name = "reduce_mean"; }
 
     ~ReduceMeanGradFn() override {
@@ -1427,11 +1461,13 @@ struct ReduceMeanGradFn : public GradFn {
     }
 
     void capture(Tensor& H, int total_tokens, int d_model, cudaStream_t stream,
-                 int token_offset = 0, int row_tokens = -1) {
+                 int token_offset = 0, int row_tokens = -1,
+                 const uint8_t* atom_mask_row = nullptr) {
         total_tokens_ = total_tokens;
         d_model_ = d_model;
         token_offset_ = token_offset;
         row_tokens_ = (row_tokens == -1) ? total_tokens : row_tokens;
+        atom_mask_row_ = atom_mask_row;
         H_requires_grad = H.requires_grad;
         H_shape = H.shape;
         H_grad_fn = H.grad_fn;
@@ -1461,7 +1497,8 @@ struct ReduceMeanGradFn : public GradFn {
             grad_H_buf + static_cast<size_t>(token_offset_) * d_model_,
             grad_output.data,
             row_tokens_,
-            d_model_);
+            d_model_,
+            atom_mask_row_);
         CUDA_CHECK_KERNEL();
 
         if (H_grad_fn) {
@@ -1877,6 +1914,13 @@ void executeStepCoordinatorImpl(
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.slot_values.data, V_val, LayerAccess::numericErrorFlag(layer), kStageV1, layer.config().magnitude_limit);
 
+    // Row-local device atom mask: used by ReduceMean to exclude atom positions
+    // from the decision context, preventing numeric surface leakage into
+    // execution op/arg/write selection.
+    const uint8_t* d_atom_mask_row = payload.d_atom_mask
+        ? payload.d_atom_mask + static_cast<size_t>(batch_row) * payload.max_seq_len
+        : nullptr;
+
     work.context = Tensor::zeros({1, dm}, stream, "exec_context");
     work.context.requires_grad = true;
     work.context.is_leaf = false;
@@ -1884,11 +1928,13 @@ void executeStepCoordinatorImpl(
         work.context.data,
         H.data + static_cast<size_t>(batch_row) * payload.max_seq_len * dm,
         payload.max_seq_len,
-        dm);
+        dm,
+        d_atom_mask_row);
     CUDA_CHECK_KERNEL();
     {
         auto mean_fn = std::make_shared<ReduceMeanGradFn>();
-        mean_fn->capture(H, payload.total_tokens, dm, stream, batch_row * payload.max_seq_len, payload.max_seq_len);
+        mean_fn->capture(H, payload.total_tokens, dm, stream, batch_row * payload.max_seq_len, payload.max_seq_len,
+                         d_atom_mask_row);
         work.context.grad_fn = mean_fn;
     }
 

@@ -55,7 +55,7 @@ void launchScaleGradients(
 //  Two independent clip buckets (Issue #139):
 //    emb: LM_HEAD (+ EMBEDDING if untied)
 //    enc: ATTENTION + FFN + RMSNORM + SCRATCHBLOCK +
-//         NUMERIC_HEAD + MTP + REASONING_HEAD + EXECUTION_BLOCK
+//         MTP + REASONING_HEAD + EXECUTION_BLOCK
 //======================================================//
 
 namespace GRIM::GradClip {

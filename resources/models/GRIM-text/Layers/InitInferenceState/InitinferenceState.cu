@@ -377,10 +377,9 @@ void LanguageModel::initInferenceState() {
     const size_t logits_bytes = max_tokens * cfg.vocab_size * sizeof(float);
     const size_t single_token_bytes = (2 * cfg.d_model + cfg.vocab_size) * sizeof(float);  // embedding + hidden + logits
     const size_t workspace_bytes = static_cast<size_t>(cfg.d_ff) * max_seq_len_cache * 4 * sizeof(float);
-    const size_t numeric_pred_bytes = 0;  // NumericHead deleted (Issue #143)
     
     const size_t total_bytes = token_cache_bytes + encoder_out_bytes + logits_bytes +
-                               single_token_bytes + workspace_bytes + numeric_pred_bytes;
+                               single_token_bytes + workspace_bytes;
     
     std::cout << "  📊 Total GPU activation memory: ~" << (total_bytes / 1024.0 / 1024.0) << " MB" << std::endl;
     std::cout << "      (excludes model weights loaded from checkpoint)" << std::endl;

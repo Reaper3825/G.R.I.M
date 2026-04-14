@@ -49,7 +49,6 @@ struct AutogradIntermediates {
     Tensor encoder_output_tensor;      // [total_tokens, d_model] - after final RMSNorm
     Tensor centered_encoder_output;    // [total_tokens, d_model] - Issue #127
     Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
-    Tensor numeric_head_output;        // [total_tokens, 2] - (log_magnitude, sign_logit)
     Tensor loss_tensor;                // Scalar loss driving backward
     std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward
     std::vector<Tensor> mtp_shifted_targets_gpu;  // Per-head GPU target buffers — kept alive for NLLLossGradFn backward
@@ -86,7 +85,6 @@ struct AutogradIntermediates {
         encoder_output_tensor = Tensor();
         centered_encoder_output = Tensor();
         logits_tensor = Tensor();
-        numeric_head_output = Tensor();
         loss_tensor = Tensor();
         mtp_logits_tensors.clear();
         mtp_shifted_targets_gpu.clear();

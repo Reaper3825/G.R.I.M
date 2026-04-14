@@ -300,18 +300,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         }
     }
 
-    flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> fb_numeric_head = 0;
-    const auto& nh_view = request.sources.numeric_head;
-    if (nh_view.enabled && nh_view.weights.ptr) {
-        auto nh_weights = download_device_vector(nh_view.weights, "NumericHead weights");
-        auto nh_bias = download_device_vector(nh_view.bias, "NumericHead bias");
-        fb_numeric_head = GRIMTransformer::CreateNumericHeadWeights(
-            builder, builder.CreateVector(nh_weights), builder.CreateVector(nh_bias),
-            static_cast<uint32_t>(nh_view.d_model), true);
-        Logging::EmitModuleInfo(kLogModule, Msg("[save] NumericHead: weights=",
-            nh_weights.size(), " bias=", nh_bias.size()));
-    }
-
     flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> fb_reasoning_head = 0;
     const auto& rh_view = request.sources.reasoning_head;
     if (rh_view.enabled && rh_view.w_op.ptr) {
@@ -410,7 +398,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_embeddings,
         fb_encoder_layers,
         fb_lm_head,
-        fb_numeric_head,
+        0,  // numeric_head (removed)
         fb_scratch_block,
         fb_final_rms_gamma,
         0,
@@ -498,7 +486,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 }
 
                 verify_component("lm_head", raw->lm_head());
-                verify_component("numeric_head", raw->numeric_head());
                 verify_component("scratch_block", raw->scratch_block());
                 verify_component("training_metadata", raw->training_metadata());
                 verify_component("reasoning_head", raw->reasoning_head());

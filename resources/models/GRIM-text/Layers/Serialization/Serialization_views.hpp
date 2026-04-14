@@ -126,19 +126,6 @@ struct SerializationScratchBlockWriteView {
 	int atom_embedding_dim = 0;
 };
 
-struct SerializationNumericHeadReadView {
-	DeviceReadView weights;
-	DeviceReadView bias;
-	int d_model = 0;
-	bool enabled = false;
-};
-
-struct SerializationNumericHeadWriteView {
-	DeviceWriteView weights;
-	DeviceWriteView bias;
-	int d_model = 0;
-};
-
 struct SerializationReasoningHeadReadView {
 	DeviceReadView w_op;
 	DeviceReadView b_op;

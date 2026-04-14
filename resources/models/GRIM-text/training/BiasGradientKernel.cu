@@ -38,7 +38,7 @@ __global__ void biasSumGradientKernel(
 
 } // anonymous namespace
 
-// Public API - NOT extern "C" to match forward declarations in lm_head_GPU.cu, numeric_head_GPU.cu
+// Public API - NOT extern "C" to match forward declarations in lm_head_GPU.cu
 void launchBiasSumGradient(
     const float* grad_output,
     float* grad_bias,

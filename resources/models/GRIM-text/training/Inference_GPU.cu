@@ -688,6 +688,10 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             decode_payload.max_seq_len = 1;
             decode_payload.total_tokens = 1;
             decode_payload.d_token_to_slot_map = slot_ptr;
+            decode_payload.d_atom_mask =
+                ts.cached_token_atom_mask.data
+                    ? reinterpret_cast<const uint8_t*>(ts.cached_token_atom_mask.data) + token_pos
+                    : nullptr;
 
             ExecutionBlockStepOutput last_step_diag;
             for (int step = 0; step < exec_K; ++step) {
@@ -876,15 +880,6 @@ void LanguageModel::resetKVCache() {
 //======================================================//
 int LanguageModel::getKVCacheLength() const {
     return training_state_.kv_cache_len;
-}
-
-//======================================================//
-//  predictNumericValue — removed (execution-first spec; no value head)
-//======================================================//
-float LanguageModel::predictNumericValue() const {
-    throw std::runtime_error(
-        "predictNumericValue: NumericHead removed; numeric values must come from ExecutionBlock "
-        "and slot binding (spec Step Z), not hidden-state regression");
 }
 
 } // namespace GRIM

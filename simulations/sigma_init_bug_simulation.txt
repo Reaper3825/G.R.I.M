@@ -1,0 +1,270 @@
+================================================================================
+  SIGMA INITIALIZATION BUG SIMULATION
+  TelemetryLattice — exact kernel reproduction
+  Pass condition: no artificial gradnorm jump without hacks
+================================================================================
+
+  Streams:
+    loss:        3.7 ± 0.03 (0.8% CV)
+    grad_norm:   5.5e-5 ± 1e-5 (18% CV)
+    rho:         0.30 ± 0.06 (20% CV)
+    lr_constant: 6e-5 constant
+
+  Bugs under test:
+    BUG 1: sigma_prev=0 at init → delta_hat=(x1-x0)/(0+1e-7) = O(1e5)
+    BUG 2: single-sample seed → m2,mu wrong for ~20 steps → sigma inflated
+
+  FIX 1: Patch sigma_prev → sigma on first post-init update (fixes bug 1 only)
+  FIX 2: Welford warmup N=20 → seed EMA from real statistics (fixes both)
+
+  HP: beta_mu=0.95, beta_a=0.995, beta_delta=0.9, beta_r=0.85, beta_run=0.8, beta_v=0.9, k_out0=2.5, alpha_v=1.5, epsilon=1e-07
+  Welford N = 20
+
+================================================================================
+  BASELINE: current init (sigma_prev=0, single-sample seed)
+================================================================================
+
+  ── loss (true μ=3.698777e+00, true σ=2.786020e-02) ──
+    delta_hat[step 2]:     -4.588204e+00
+    max|delta_hat| [0:5]:  4.588204e+00
+    sigma steady-state:    2.757274e-02
+    sigma[  2]:            4.219264e-03  (0.15× steady)
+    sigma[  5]:            1.017541e-02  (0.37× steady)
+    sigma[ 10]:            1.423312e-02  (0.52× steady)
+    sigma[ 20]:            2.661534e-02  (0.97× steady)
+    sigma[ 50]:            2.695693e-02  (0.98× steady)
+    |delta_mu[5]|:         1.318564e-03  (steady=4.148680e-03)
+    delta_hat RMS [2:20]:  2.0028
+    delta_hat RMS [50+]:   0.9943
+    ✓ PASS: delta_hat[2] = -4.5882 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 0.37× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 2.01× (clean)
+    ✓ STREAM PASS
+
+  ── grad_norm (true μ=5.585868e-05, true σ=9.845332e-06) ──
+    delta_hat[step 2]:     6.417305e-03
+    max|delta_hat| [0:5]:  5.734140e-02
+    sigma steady-state:    3.162278e-04
+    sigma[  2]:            3.162278e-04  (1.00× steady)
+    sigma[  5]:            3.162278e-04  (1.00× steady)
+    sigma[ 10]:            3.162278e-04  (1.00× steady)
+    sigma[ 20]:            3.162278e-04  (1.00× steady)
+    sigma[ 50]:            3.162278e-04  (1.00× steady)
+    |delta_mu[5]|:         7.666951e-07  (steady=1.504609e-06)
+    delta_hat RMS [2:20]:  0.0358
+    delta_hat RMS [50+]:   0.0305
+    ✓ PASS: delta_hat[2] = 0.0064 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 1.00× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 1.17× (clean)
+    ✓ STREAM PASS
+
+  ── rho (true μ=2.948607e-01, true σ=5.949323e-02) ──
+    delta_hat[step 2]:     4.588279e+00
+    max|delta_hat| [0:5]:  4.588279e+00
+    sigma steady-state:    5.718506e-02
+    sigma[  2]:            2.390881e-02  (0.42× steady)
+    sigma[  5]:            4.061624e-02  (0.71× steady)
+    sigma[ 10]:            5.170188e-02  (0.90× steady)
+    sigma[ 20]:            7.095768e-02  (1.24× steady)
+    sigma[ 50]:            6.332327e-02  (1.11× steady)
+    |delta_mu[5]|:         2.061170e-02  (steady=4.404708e-02)
+    delta_hat RMS [2:20]:  1.9199
+    delta_hat RMS [50+]:   0.9722
+    ✓ PASS: delta_hat[2] = 4.5883 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 0.71× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 1.97× (clean)
+    ✓ STREAM PASS
+
+  ── lr_constant (true μ=6.000000e-05, true σ=2.032879e-20) ──
+    delta_hat[step 2]:     0.000000e+00
+    max|delta_hat| [0:5]:  0.000000e+00
+    sigma steady-state:    3.162278e-04
+    sigma[  2]:            3.162278e-04  (1.00× steady)
+    sigma[  5]:            3.162278e-04  (1.00× steady)
+    sigma[ 10]:            3.162278e-04  (1.00× steady)
+    sigma[ 20]:            3.162278e-04  (1.00× steady)
+    sigma[ 50]:            3.162278e-04  (1.00× steady)
+    |delta_mu[5]|:         0.000000e+00  (steady=0.000000e+00)
+    delta_hat RMS [2:20]:  0.0000
+    delta_hat RMS [50+]:   0.0000
+    ✓ PASS: delta_hat[2] = 0.0000 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 1.00× (reasonable)
+    ✓ STREAM PASS
+
+  ════════════════════════════════════════════════════════════
+  OVERALL: ✓ ALL PASS
+  ════════════════════════════════════════════════════════════
+
+================================================================================
+  FIX 1: sigma_prev patch (first update seeds sigma_prev=sigma)
+================================================================================
+
+  ── loss (true μ=3.698777e+00, true σ=2.786020e-02) ──
+    delta_hat[step 2]:     -4.588204e+00
+    max|delta_hat| [0:5]:  4.588204e+00
+    sigma steady-state:    2.757274e-02
+    sigma[  2]:            4.219264e-03  (0.15× steady)
+    sigma[  5]:            1.017541e-02  (0.37× steady)
+    sigma[ 10]:            1.423312e-02  (0.52× steady)
+    sigma[ 20]:            2.661534e-02  (0.97× steady)
+    sigma[ 50]:            2.695693e-02  (0.98× steady)
+    |delta_mu[5]|:         1.318564e-03  (steady=4.148680e-03)
+    delta_hat RMS [2:20]:  2.0028
+    delta_hat RMS [50+]:   0.9943
+    ✓ PASS: delta_hat[2] = -4.5882 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 0.37× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 2.01× (clean)
+    ✓ STREAM PASS
+
+  ── grad_norm (true μ=5.585868e-05, true σ=9.845332e-06) ──
+    delta_hat[step 2]:     6.417305e-03
+    max|delta_hat| [0:5]:  5.734140e-02
+    sigma steady-state:    3.162278e-04
+    sigma[  2]:            3.162278e-04  (1.00× steady)
+    sigma[  5]:            3.162278e-04  (1.00× steady)
+    sigma[ 10]:            3.162278e-04  (1.00× steady)
+    sigma[ 20]:            3.162278e-04  (1.00× steady)
+    sigma[ 50]:            3.162278e-04  (1.00× steady)
+    |delta_mu[5]|:         7.666951e-07  (steady=1.504609e-06)
+    delta_hat RMS [2:20]:  0.0358
+    delta_hat RMS [50+]:   0.0305
+    ✓ PASS: delta_hat[2] = 0.0064 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 1.00× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 1.17× (clean)
+    ✓ STREAM PASS
+
+  ── rho (true μ=2.948607e-01, true σ=5.949323e-02) ──
+    delta_hat[step 2]:     4.588279e+00
+    max|delta_hat| [0:5]:  4.588279e+00
+    sigma steady-state:    5.718506e-02
+    sigma[  2]:            2.390881e-02  (0.42× steady)
+    sigma[  5]:            4.061624e-02  (0.71× steady)
+    sigma[ 10]:            5.170188e-02  (0.90× steady)
+    sigma[ 20]:            7.095768e-02  (1.24× steady)
+    sigma[ 50]:            6.332327e-02  (1.11× steady)
+    |delta_mu[5]|:         2.061170e-02  (steady=4.404708e-02)
+    delta_hat RMS [2:20]:  1.9199
+    delta_hat RMS [50+]:   0.9722
+    ✓ PASS: delta_hat[2] = 4.5883 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 0.71× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 1.97× (clean)
+    ✓ STREAM PASS
+
+  ── lr_constant (true μ=6.000000e-05, true σ=2.032879e-20) ──
+    delta_hat[step 2]:     0.000000e+00
+    max|delta_hat| [0:5]:  0.000000e+00
+    sigma steady-state:    3.162278e-04
+    sigma[  2]:            3.162278e-04  (1.00× steady)
+    sigma[  5]:            3.162278e-04  (1.00× steady)
+    sigma[ 10]:            3.162278e-04  (1.00× steady)
+    sigma[ 20]:            3.162278e-04  (1.00× steady)
+    sigma[ 50]:            3.162278e-04  (1.00× steady)
+    |delta_mu[5]|:         0.000000e+00  (steady=0.000000e+00)
+    delta_hat RMS [2:20]:  0.0000
+    delta_hat RMS [50+]:   0.0000
+    ✓ PASS: delta_hat[2] = 0.0000 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 1.00× (reasonable)
+    ✓ STREAM PASS
+
+  ════════════════════════════════════════════════════════════
+  OVERALL: ✓ ALL PASS
+  ════════════════════════════════════════════════════════════
+
+================================================================================
+  FIX 2: Welford warmup N=20 (accumulate then seed EMA)
+================================================================================
+
+  ── loss (true μ=3.698777e+00, true σ=2.786020e-02) ──
+    delta_hat[step 2]:     0.000000e+00
+    max|delta_hat| [0:5]:  0.000000e+00
+    sigma steady-state:    2.757418e-02
+    sigma[  2]:            0.000000e+00  (0.00× steady)
+    sigma[  5]:            0.000000e+00  (0.00× steady)
+    sigma[ 10]:            0.000000e+00  (0.00× steady)
+    sigma[ 20]:            2.937970e-02  (1.07× steady)
+    sigma[ 50]:            2.738342e-02  (0.99× steady)
+    |delta_mu[5]|:         0.000000e+00  (steady=5.288171e-03)
+    delta_hat RMS [2:20]:  0.0000
+    delta_hat RMS [50+]:   0.9925
+    ✓ PASS: delta_hat[2] = 0.0000 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 0.00× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 0.00× (clean)
+    ✓ STREAM PASS
+
+  ── grad_norm (true μ=5.585868e-05, true σ=9.845332e-06) ──
+    delta_hat[step 2]:     0.000000e+00
+    max|delta_hat| [0:5]:  0.000000e+00
+    sigma steady-state:    3.162278e-04
+    sigma[  2]:            0.000000e+00  (0.00× steady)
+    sigma[  5]:            0.000000e+00  (0.00× steady)
+    sigma[ 10]:            0.000000e+00  (0.00× steady)
+    sigma[ 20]:            3.162278e-04  (1.00× steady)
+    sigma[ 50]:            3.162278e-04  (1.00× steady)
+    |delta_mu[5]|:         0.000000e+00  (steady=1.745705e-06)
+    delta_hat RMS [2:20]:  0.0000
+    delta_hat RMS [50+]:   0.0305
+    ✓ PASS: delta_hat[2] = 0.0000 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 0.00× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 0.00× (clean)
+    ✓ STREAM PASS
+
+  ── rho (true μ=2.948607e-01, true σ=5.949323e-02) ──
+    delta_hat[step 2]:     0.000000e+00
+    max|delta_hat| [0:5]:  0.000000e+00
+    sigma steady-state:    5.717698e-02
+    sigma[  2]:            0.000000e+00  (0.00× steady)
+    sigma[  5]:            0.000000e+00  (0.00× steady)
+    sigma[ 10]:            0.000000e+00  (0.00× steady)
+    sigma[ 20]:            5.781301e-02  (1.01× steady)
+    sigma[ 50]:            6.082916e-02  (1.06× steady)
+    |delta_mu[5]|:         0.000000e+00  (steady=4.623738e-03)
+    delta_hat RMS [2:20]:  0.0000
+    delta_hat RMS [50+]:   0.9773
+    ✓ PASS: delta_hat[2] = 0.0000 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 0.00× (reasonable)
+    ✓ PASS: early/late delta_hat RMS = 0.00× (clean)
+    ✓ STREAM PASS
+
+  ── lr_constant (true μ=6.000000e-05, true σ=2.032879e-20) ──
+    delta_hat[step 2]:     0.000000e+00
+    max|delta_hat| [0:5]:  0.000000e+00
+    sigma steady-state:    3.162278e-04
+    sigma[  2]:            0.000000e+00  (0.00× steady)
+    sigma[  5]:            0.000000e+00  (0.00× steady)
+    sigma[ 10]:            0.000000e+00  (0.00× steady)
+    sigma[ 20]:            3.162278e-04  (1.00× steady)
+    sigma[ 50]:            3.162278e-04  (1.00× steady)
+    |delta_mu[5]|:         0.000000e+00  (steady=0.000000e+00)
+    delta_hat RMS [2:20]:  0.0000
+    delta_hat RMS [50+]:   0.0000
+    ✓ PASS: delta_hat[2] = 0.0000 (no explosion)
+    ✓ PASS: sigma[5]/sigma_ss = 0.00× (reasonable)
+    ✓ STREAM PASS
+
+  ════════════════════════════════════════════════════════════
+  OVERALL: ✓ ALL PASS
+  ════════════════════════════════════════════════════════════
+
+================================================================================
+  COMPARATIVE SUMMARY
+================================================================================
+
+  delta_hat[step 2] (want O(1), not O(1e5)):
+    BASELINE      loss=-4.59e+00, grad_norm=6.42e-03, rho=4.59e+00, lr_constant=0.00e+00
+    FIX 1         loss=-4.59e+00, grad_norm=6.42e-03, rho=4.59e+00, lr_constant=0.00e+00
+    FIX 2         loss=0.00e+00, grad_norm=0.00e+00, rho=0.00e+00, lr_constant=0.00e+00
+
+  sigma[5] / sigma_steady (want ≈ 1.0):
+    BASELINE      loss=0.37×, grad_norm=1.00×, rho=0.71×, lr_constant=1.00×
+    FIX 1         loss=0.37×, grad_norm=1.00×, rho=0.71×, lr_constant=1.00×
+    FIX 2         loss=0.00×, grad_norm=0.00×, rho=0.00×, lr_constant=0.00×
+
+  delta_hat RMS [2:20] / RMS [50+] (want ≈ 1.0):
+    BASELINE      loss=2.01×, grad_norm=1.17×, rho=1.97×, lr_constant=0.00×
+    FIX 1         loss=2.01×, grad_norm=1.17×, rho=1.97×, lr_constant=0.00×
+    FIX 2         loss=0.00×, grad_norm=0.00×, rho=0.00×, lr_constant=0.00×
+
+  VERDICTS:
+    BASELINE:  PASS
+    FIX 1:     PASS
+    FIX 2:     PASS

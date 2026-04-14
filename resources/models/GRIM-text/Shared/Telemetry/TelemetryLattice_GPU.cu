@@ -76,37 +76,22 @@ __global__ void updateTelemetryStateKernel(
     LatticeLevelState* level_0 = &levels[level_0_idx];
     TelemetryState* s = &level_0->state;
     
-    if (s->initialized == 0) {
-        s->mu = x_t;
-        s->m2 = x_t * x_t;
-        s->sigma = 0.0f;
-        s->sigma_tilde = 0.0f;
-        s->mu_a = x_t;
-        s->sigma_a = 0.0f;
-        s->delta_mu = 0.0f;
-        s->delta_sigma = 0.0f;
-        s->v_sigma = 0.0f;
-        s->sigma_prev = 0.0f;
-        s->delta_bar = 0.0f;
-        s->p = 0.0f;
-        s->mu_prev = x_t;
-        s->r_out = 0.0f;
-        s->ell_out = 0.0f;
-        s->mu_ex = 0.0f;
-        s->k_out = hp.k_out0;
-        s->c_out = x_t;
-        s->step_count = 1;
-        s->initialized = 1;
-        level_0->last_update = global_step;
-        return;
-    }
-
-    // STEP 1: Fast magnitude statistics
-    s->mu = hp.beta_mu * s->mu + (1.0f - hp.beta_mu) * x_t;
-    s->m2 = hp.beta_mu * s->m2 + (1.0f - hp.beta_mu) * (x_t * x_t);
+    // STEP 1: Fast magnitude statistics (bias-corrected EMA)
+    // Raw EMA accumulators (zero-initialized, no init special case)
+    s->mu_raw = hp.beta_mu * s->mu_raw + (1.0f - hp.beta_mu) * x_t;
+    s->m2_raw = hp.beta_mu * s->m2_raw + (1.0f - hp.beta_mu) * (x_t * x_t);
     
-    const float variance = fmaxf(s->m2 - s->mu * s->mu, hp.epsilon);
-    s->sigma = safeSqrt(variance, hp.epsilon);
+    // Adam-style bias correction: corrected = raw / (1 - beta^t)
+    s->beta_mu_power *= hp.beta_mu;
+    const float bc = 1.0f - s->beta_mu_power;
+    s->mu = s->mu_raw / bc;
+    s->m2 = s->m2_raw / bc;
+    
+    // Scale-aware epsilon: variance floor proportional to mu^2
+    const float raw_variance = s->m2 - s->mu * s->mu;
+    const float scale_eps = hp.epsilon * s->mu * s->mu;
+    const float variance = fmaxf(raw_variance, scale_eps);
+    s->sigma = sqrtf(fmaxf(variance, 0.0f));
     s->sigma_tilde = s->sigma / (fabsf(s->mu) + hp.epsilon);
 
     // STEP 2: Volatility-of-volatility
@@ -120,7 +105,9 @@ __global__ void updateTelemetryStateKernel(
     s->c_out = s->mu + s->k_out * s->sigma;
 
     // STEP 4: Normalized slope + direction
-    const float delta_hat = (x_t - s->mu_prev) / (s->sigma_prev + hp.epsilon);
+    // First sample: sigma_prev=0, mu_prev=0 → delta_hat=0 to avoid garbage
+    const float delta_hat = (s->step_count == 0) ? 0.0f
+        : (x_t - s->mu_prev) / (s->sigma_prev + hp.epsilon);
     s->delta_bar = hp.beta_delta * s->delta_bar + (1.0f - hp.beta_delta) * delta_hat;
     s->p = hp.beta_delta * s->p + (1.0f - hp.beta_delta) * safeSign(delta_hat);
     s->mu_prev = s->mu;
@@ -173,25 +160,23 @@ __global__ void updateTelemetryStateKernel(
         LatticeLevelState* level_k = &levels[level_k_idx];
         TelemetryState* sk = &level_k->state;
         
-        if (sk->initialized == 0) {
-            sk->mu = x_k;
-            sk->m2 = x_k * x_k;
-            sk->sigma = 0.0f;
-            sk->sigma_tilde = 0.0f;
-            sk->mu_a = x_k;
-            sk->sigma_a = 0.0f;
-            sk->mu_prev = x_k;
-            sk->sigma_prev = 0.0f;
-            sk->initialized = 1;
-            level_k->last_update = global_step;
-            continue;
+        if (sk->step_count == 0) {
+            sk->k_out = hp.k_out0;
         }
 
-        sk->mu = hp.beta_mu * sk->mu + (1.0f - hp.beta_mu) * x_k;
-        sk->m2 = hp.beta_mu * sk->m2 + (1.0f - hp.beta_mu) * (x_k * x_k);
+        // Bias-corrected EMA (same as Level 0)
+        sk->mu_raw = hp.beta_mu * sk->mu_raw + (1.0f - hp.beta_mu) * x_k;
+        sk->m2_raw = hp.beta_mu * sk->m2_raw + (1.0f - hp.beta_mu) * (x_k * x_k);
         
-        const float var_k = fmaxf(sk->m2 - sk->mu * sk->mu, hp.epsilon);
-        sk->sigma = safeSqrt(var_k, hp.epsilon);
+        sk->beta_mu_power *= hp.beta_mu;
+        const float bc_k = 1.0f - sk->beta_mu_power;
+        sk->mu = sk->mu_raw / bc_k;
+        sk->m2 = sk->m2_raw / bc_k;
+        
+        const float raw_var_k = sk->m2 - sk->mu * sk->mu;
+        const float scale_eps_k = hp.epsilon * sk->mu * sk->mu;
+        const float var_k = fmaxf(raw_var_k, scale_eps_k);
+        sk->sigma = sqrtf(fmaxf(var_k, 0.0f));
         sk->sigma_tilde = sk->sigma / (fabsf(sk->mu) + hp.epsilon);
         
         const float sd_k = sk->sigma - sk->sigma_prev;
@@ -201,7 +186,8 @@ __global__ void updateTelemetryStateKernel(
         sk->k_out = hp.k_out0 * (1.0f + hp.alpha_v * safeSqrt(sk->v_sigma, hp.epsilon));
         sk->c_out = sk->mu + sk->k_out * sk->sigma;
         
-        const float dh_k = (x_k - sk->mu_prev) / (sk->sigma_prev + hp.epsilon);
+        const float dh_k = (sk->step_count == 0) ? 0.0f
+            : (x_k - sk->mu_prev) / (sk->sigma_prev + hp.epsilon);
         sk->delta_bar = hp.beta_delta * sk->delta_bar + (1.0f - hp.beta_delta) * dh_k;
         sk->p = hp.beta_delta * sk->p + (1.0f - hp.beta_delta) * safeSign(dh_k);
         sk->mu_prev = sk->mu;

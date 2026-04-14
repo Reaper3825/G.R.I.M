@@ -135,7 +135,6 @@ static inline bool isEncBucket(ParamGroupType type) {
         case ParamGroupType::FFN:
         case ParamGroupType::RMSNORM:
         case ParamGroupType::SCRATCHBLOCK:
-        case ParamGroupType::NUMERIC_HEAD:
         case ParamGroupType::MTP:
         case ParamGroupType::REASONING_HEAD:
         case ParamGroupType::EXECUTION_BLOCK:
@@ -182,11 +181,11 @@ ClipResult clipGradientNorms(
 
     const float enc_sum_sq = m.attention_sum_sq + m.ffn_sum_sq
                            + m.rmsnorm_sum_sq + m.scratchblock_sum_sq
-                           + m.numeric_head_sum_sq + m.mtp_sum_sq
+                           + m.mtp_sum_sq
                            + m.reasoning_head_sum_sq + m.execution_block_sum_sq;
     const int64_t enc_count = m.attention_count + m.ffn_count
                             + m.rmsnorm_count + m.scratchblock_count
-                            + m.numeric_head_count + m.mtp_count
+                            + m.mtp_count
                             + m.reasoning_head_count + m.execution_block_count;
 
     const float emb_rms = (emb_count > 0) ? std::sqrt(emb_sum_sq / static_cast<float>(emb_count)) : 0.0f;

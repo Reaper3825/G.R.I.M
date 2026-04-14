@@ -81,6 +81,11 @@ struct TelemetryState {
     float k_out = 2.5f;         // Current threshold (adapts with v_σ)
     float c_out = 0.0f;         // Current cutoff = μ + k_out*σ
     
+    // Bias correction (Adam-style: corrected = raw / (1 - beta^t))
+    float mu_raw = 0.0f;        // Uncorrected EMA of x_t
+    float m2_raw = 0.0f;        // Uncorrected EMA of x_t²
+    float beta_mu_power = 1.0f; // beta_mu^t — decays each step
+    
     // Metadata
     uint32_t step_count = 0;    // Total updates
     uint32_t initialized = 0;   // 1 after first update

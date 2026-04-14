@@ -659,9 +659,6 @@ public:
     // Appends new token to cached sequence and recomputes full forward pass
     Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
                        int32_t new_token_slot_id = -1);
-    
-    /// Removed: NumericHead / value prediction. Do not call.
-    float predictNumericValue() const;
 
     // Ensure KV cache + decode scratch buffers are allocated.
     // Safe to call repeatedly — skips if already allocated.

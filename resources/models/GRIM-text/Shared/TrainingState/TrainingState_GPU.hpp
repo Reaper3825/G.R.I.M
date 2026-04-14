@@ -102,7 +102,6 @@ struct TrainingState {
     //======================================================//
     int kv_cache_len = 0;           // Number of tokens with valid K,V in cache
     int kv_cache_capacity = 0;      // Maximum tokens the cache can hold
-    float cached_numeric_pred[2] = {0.0f, 0.0f};  // Last-token numeric head output (host-side)
 
     // Per-layer KV cache tensors (BF16, BSHD layout for FlashAttention)
     // Shape per entry: [1, num_kv_heads, kv_cache_capacity, head_dim]

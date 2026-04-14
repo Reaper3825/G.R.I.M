@@ -145,6 +145,29 @@ SelectorForwardResult DecodeTimeSlotSelectorLayer::forward(
     if (num_live_slots > 0 && !slot_features.data) {
         throw std::runtime_error("DecodeTimeSlotSelectorLayer::forward: slot_features.data is NULL with num_live_slots > 0");
     }
+    if (num_live_slots > 0) {
+        // Validate slot_features shape matches [num_live_slots, d_slot_features].
+        // A shape mismatch means a stale or mis-sized buffer would silently produce
+        // wrong score vectors via the W_k matmul.
+        if (slot_features.shape.layout == TensorContract::Layout::UNKNOWN) {
+            throw std::runtime_error(
+                "DecodeTimeSlotSelectorLayer::forward: slot_features has UNKNOWN layout "
+                "with num_live_slots=" + std::to_string(num_live_slots));
+        }
+        const auto& sf = slot_features.shape.as_2d();
+        if (sf.rows != num_live_slots) {
+            throw std::runtime_error(
+                "DecodeTimeSlotSelectorLayer::forward: slot_features.rows=" +
+                std::to_string(sf.rows) + " != num_live_slots=" +
+                std::to_string(num_live_slots));
+        }
+        if (sf.cols != config_.d_slot_features) {
+            throw std::runtime_error(
+                "DecodeTimeSlotSelectorLayer::forward: slot_features.cols=" +
+                std::to_string(sf.cols) + " != config.d_slot_features=" +
+                std::to_string(config_.d_slot_features));
+        }
+    }
 
     // Set cuBLAS handle for autograd matmul
     if (config_.cublas_handle) {

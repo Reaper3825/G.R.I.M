@@ -170,17 +170,6 @@ bool validate_checkpoint_capabilities(
         }
     }
 
-    // ─── NumericHead (removed from runtime; reject legacy checkpoints that carry weights) ───
-    if (const auto* fb_nh = model_fb->numeric_head()) {
-        const bool has_weights = fb_nh->projection_data() && fb_nh->projection_data()->size() > 0;
-        if (has_weights) {
-            Logging::EmitModuleError(kLogModule,
-                "[load] FATAL: checkpoint contains NumericHead weights; this build removed NumericHead "
-                "(execution-first). Train or export a checkpoint without NumericHead.");
-            return false;
-        }
-    }
-
     // ─── ReasoningHead ───
     if (req.requires_reasoning_head) {
         const auto* fb_rh = model_fb->reasoning_head();

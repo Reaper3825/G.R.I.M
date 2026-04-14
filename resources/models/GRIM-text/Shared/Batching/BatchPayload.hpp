@@ -100,6 +100,12 @@ struct BatchPayload {
     // mutable: payload is passed as const& but device ptr is set post-upload.
     mutable const int32_t* d_token_to_slot_map = nullptr;
 
+    // Device mirror of atom_mask.  Non-owning — points into the GPU cache
+    // allocated by TrainingState.  Used by ExecutionBlock to exclude atom
+    // positions from the mean-pooled decision context, preventing numeric
+    // surface features from leaking into execution decisions.
+    mutable const uint8_t* d_atom_mask = nullptr;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // TEACHER EXECUTION STEPS (for structured CE supervision)
     // Populated for arithmetic batches; empty for non-execution batches.
