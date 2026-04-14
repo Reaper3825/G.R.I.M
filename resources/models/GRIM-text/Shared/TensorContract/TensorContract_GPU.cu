@@ -5080,19 +5080,18 @@ Tensor zero_pad(const Tensor& x, int row_offset, int total_rows, cudaStream_t st
     if (!x.data) {
         throw std::runtime_error("autograd::zero_pad: input data is NULL");
     }
-    if (x.shape.size() != 2) {
-        throw std::runtime_error("autograd::zero_pad: input must be 2D [rows, cols], got " +
-                                 std::to_string(x.shape.size()) + "D");
+    if (!x.shape.is_2d_layout()) {
+        throw std::runtime_error("autograd::zero_pad: input must be a 2D layout [rows, cols], got non-2D layout");
     }
-    const int row_tokens = x.shape[0];
-    const int cols = x.shape[1];
+    const int row_tokens = x.shape.flat.rows;
+    const int cols = x.shape.flat.cols;
     if (row_offset < 0 || row_offset + row_tokens > total_rows) {
         throw std::runtime_error("autograd::zero_pad: offset=" + std::to_string(row_offset) +
                                  " + rows=" + std::to_string(row_tokens) +
                                  " > total_rows=" + std::to_string(total_rows));
     }
 
-    Tensor result = Tensor::zeros({total_rows, cols}, x.requires_grad, stream, "zero_pad_result");
+    Tensor result = Tensor::zeros(TensorContract::TensorShape::make_BSM(total_rows, cols), x.requires_grad, stream, "zero_pad_result");
 
     const size_t offset_elements = static_cast<size_t>(row_offset) * cols;
     const size_t slice_bytes = static_cast<size_t>(row_tokens) * cols * sizeof(float);
