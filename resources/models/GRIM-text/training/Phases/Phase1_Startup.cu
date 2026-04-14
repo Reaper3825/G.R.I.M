@@ -337,8 +337,7 @@ StartupConfig loadConfiguration(int argc, char** argv) {
         config.architecture.d_ff = config.architecture.d_model * GRIM::HyperParameters::DEFAULT_D_FF_MULTIPLIER;
         if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number())
             config.architecture.dropout_rate = cfg["dropout_rate"].get<float>();
-        // attention_dropout and residual_dropout_rate: always derived from dropout_rate
-        config.architecture.residual_dropout_rate = config.architecture.dropout_rate;
+        // attention_dropout: always derived from dropout_rate
         config.architecture.attention_dropout = config.architecture.dropout_rate;
         
         // Load tie_embeddings config (affects memory layout and parameter count)
@@ -962,7 +961,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.d_ff = arch.d_ff;
     model_config.max_seq_len = config.max_seq_len;
     model_config.dropout_rate = arch.dropout_rate;
-    model_config.residual_dropout_rate = arch.residual_dropout_rate;
     model_config.attention_dropout = arch.attention_dropout;
     model_config.vocab_path = config.paths.vocab_path;
     model_config.infer_vocab_from_file = true;
@@ -1125,7 +1123,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", max_seq_len=" + std::to_string(model_config.max_seq_len));
     logger.log("Derived hyperparameters: d_ff=" + std::to_string(arch.d_ff) + " (d_model*4)" +
                ", attention_dropout=" + std::to_string(arch.attention_dropout) + " (=dropout_rate)" +
-               ", residual_dropout=" + std::to_string(arch.residual_dropout_rate) + " (=dropout_rate)" +
                ", min_seq_valid_tokens=" + std::to_string(hp.min_seq_valid_tokens) +
                ", min_seq_len_for_flash=" + std::to_string(hp.min_seq_len_for_flash) +
                ", cosine_decay_min_lr=" + std::to_string(hp.cosine_decay_min_lr) +

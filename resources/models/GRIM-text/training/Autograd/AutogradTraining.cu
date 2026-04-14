@@ -642,12 +642,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 : intermediates.encoder_layer_outputs.back();
             
             Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage, ctx.step, layer_idx);
-            
-            if (cfg->residual_dropout_rate > 0.0f && ctx.is_training) {
-                const uint64_t residual_drop_seed = ctx.step * 2654435761ULL + 7000 + static_cast<uint64_t>(layer_idx) * 131;
-                layer_output = autograd::dropout(layer_output, cfg->residual_dropout_rate,
-                                                 residual_drop_seed, ctx.is_training, ctx.stream);
-            }
 
             // ExecutionBlock: run K execution steps at the configured layer
             // Per-row isolation: each batch row gets its own ExecutionMemory

@@ -363,7 +363,6 @@ struct ModelArchitecture {
     int d_ff = 0;  // Must be set from config or computed as d_model * multiplier
     int max_seq_len = DEFAULT_MAX_SEQ_LEN;
     float dropout_rate = DEFAULT_DROPOUT_RATE;
-    float residual_dropout_rate = DEFAULT_DROPOUT_RATE;   // Derived: always = dropout_rate
     float attention_dropout = DEFAULT_DROPOUT_RATE;        // Derived: always = dropout_rate
     bool tie_embeddings = true;  // Weight tying: share embedding/LM head weights
     PositionalEncodingType positional_encoding = DEFAULT_POSITIONAL_ENCODING;
@@ -583,7 +582,6 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
     arch.d_ff = DEFAULT_D_MODEL * DEFAULT_D_FF_MULTIPLIER;
     arch.max_seq_len = DEFAULT_MAX_SEQ_LEN;
     arch.dropout_rate = DEFAULT_DROPOUT_RATE;
-    arch.residual_dropout_rate = DEFAULT_DROPOUT_RATE;  // = dropout_rate
     arch.attention_dropout = DEFAULT_DROPOUT_RATE;       // = dropout_rate
     
     // Try to load from config
@@ -621,8 +619,7 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
         if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number()) {
             arch.dropout_rate = cfg["dropout_rate"].get<float>();
         }
-        // attention_dropout and residual_dropout_rate: always derived from dropout_rate
-        arch.residual_dropout_rate = arch.dropout_rate;
+        // attention_dropout: always derived from dropout_rate
         arch.attention_dropout = arch.dropout_rate;
 
         // Issue #142: Parse positional encoding from shared architecture loader.
@@ -687,7 +684,6 @@ inline void printModelArchitecture(const ModelArchitecture& arch) {
     std::cout << "  d_ff: " << arch.d_ff << std::endl;
     std::cout << "  max_seq_len: " << arch.max_seq_len << std::endl;
     std::cout << "  dropout_rate: " << arch.dropout_rate << std::endl;
-    std::cout << "  residual_dropout_rate: " << arch.residual_dropout_rate << std::endl;
     std::cout << "  attention_dropout: " << arch.attention_dropout << std::endl;
 }
 

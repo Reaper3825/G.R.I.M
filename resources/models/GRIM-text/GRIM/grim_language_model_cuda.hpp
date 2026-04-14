@@ -148,7 +148,6 @@ struct EncoderConfig {
     int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
     int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
     float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
-    float residual_dropout_rate = 0.0f; // Derived from dropout_rate
     float attention_dropout = 0.0f; // Derived from dropout_rate
     
     // Cache limits
@@ -287,7 +286,6 @@ struct LanguageModelConfig {
     int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
     int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
     float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
-    float residual_dropout_rate = 0.0f; // Derived from dropout_rate
     float attention_dropout = 0.0f; // Derived from dropout_rate
     
     // Derived values - computed from above, DO NOT set directly
