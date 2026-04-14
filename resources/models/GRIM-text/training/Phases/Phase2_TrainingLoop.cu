@@ -267,9 +267,6 @@ MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync
 }
 
 
-// Detected at runtime — was token 277 under old layout
-static int g_collapse_token_id = -1;  // Set dynamically from argmax of predictions
-
 } // anonymous namespace
 
 // GuessCacheScope, GuessCacheBatchBuffers implementations moved to
@@ -296,185 +293,6 @@ void MicroValidationScope::complete(const GRIMTS::MicroValidationPulse& pulse) {
 // All decision logic runs on GPU via TelemetryControl::evaluate()
 // See: TelemetryControl_GPU.{cu,hpp} for kernel implementation
 // Only 48-byte ControlDecision struct synced to CPU
-
-//======================================================//
-//  GPU Collapse Token Diagnostic Kernel
-//======================================================//
-
-// Result struct for collapse token stats reduction (copied D2H — 24 bytes)
-struct CollapseTokenStats {
-    float logit_sum;       // Σ logit[pos][collapse_token]
-    float logit_min;       // min over positions
-    float logit_max;       // max over positions
-    int   is_argmax_count; // # positions where collapse_token is argmax
-    float global_max_logit;// max logit across ALL positions × ALL tokens
-    int   global_argmax_token; // which token achieved global_max_logit
-};
-
-// Block-level reduction kernel: each block reduces a chunk of positions,
-// then block 0 does a final serial merge of per-block results.
-// total_positions × vocab_size logits → single CollapseTokenStats.
-// Build histogram of argmax token over sampled valid positions (one D2H instead of 128).
-__global__ void argmaxHistogramKernel(
-    const float* __restrict__ logits,  // [total_tokens, vocab_size]
-    const int* __restrict__ targets,
-    int total_tokens,
-    int vocab_size,
-    int stride,
-    int pad_token_id,
-    unsigned int* __restrict__ histogram
-) {
-    const int sample_index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int pos = sample_index * stride;
-    if (pos >= total_tokens) return;
-    const int target = targets[pos];
-    if (target < 0 || target == pad_token_id) return;
-
-    const float* row = logits + static_cast<size_t>(pos) * vocab_size;
-    float best = row[0];
-    int argmax = 0;
-    for (int v = 1; v < vocab_size; ++v) {
-        const float val = row[v];
-        if (val > best) {
-            best = val;
-            argmax = v;
-        }
-    }
-    atomicAdd(&histogram[argmax], 1u);
-}
-
-__global__ void collapseTokenDiagKernel(
-    const float* __restrict__ logits,   // [total_positions, vocab_size]
-    int total_positions,
-    int vocab_size,
-    int collapse_token_id,
-    CollapseTokenStats* __restrict__ block_results,  // [gridDim.x] partial results
-    CollapseTokenStats* __restrict__ final_result     // unused; host merges block_results
-) {
-    (void)final_result;
-    // Phase 1: each thread processes one position, block reduces via shared mem
-    __shared__ float  s_logit_sum[256];
-    __shared__ float  s_logit_min[256];
-    __shared__ float  s_logit_max[256];
-    __shared__ int    s_argmax_count[256];
-    __shared__ float  s_global_max[256];
-    __shared__ int    s_global_argmax[256];
-
-    const int tid = threadIdx.x;
-    const int pos = blockIdx.x * blockDim.x + tid;
-
-    // Init per-thread accumulators
-    float my_sum = 0.0f;
-    float my_min = 1e30f;
-    float my_max = -1e30f;
-    int   my_argmax_count = 0;
-    float my_global_max = -1e30f;
-    int   my_global_argmax = 0;
-
-    if (pos < total_positions) {
-        const float* row = logits + static_cast<size_t>(pos) * vocab_size;
-        const float collapse_logit = row[collapse_token_id];
-        my_sum = collapse_logit;
-        my_min = collapse_logit;
-        my_max = collapse_logit;
-
-        // Find argmax for this position
-        float pos_max = row[0];
-        int   pos_argmax = 0;
-        for (int v = 1; v < vocab_size; ++v) {
-            const float l = row[v];
-            if (l > pos_max) { pos_max = l; pos_argmax = v; }
-        }
-        my_argmax_count = (pos_argmax == collapse_token_id) ? 1 : 0;
-        my_global_max = pos_max;
-        my_global_argmax = pos_argmax;
-    }
-
-    s_logit_sum[tid]    = my_sum;
-    s_logit_min[tid]    = my_min;
-    s_logit_max[tid]    = my_max;
-    s_argmax_count[tid] = my_argmax_count;
-    s_global_max[tid]   = my_global_max;
-    s_global_argmax[tid]= my_global_argmax;
-    __syncthreads();
-
-    // Block reduction
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            s_logit_sum[tid] += s_logit_sum[tid + stride];
-            s_argmax_count[tid] += s_argmax_count[tid + stride];
-            if (s_logit_min[tid + stride] < s_logit_min[tid])
-                s_logit_min[tid] = s_logit_min[tid + stride];
-            if (s_logit_max[tid + stride] > s_logit_max[tid])
-                s_logit_max[tid] = s_logit_max[tid + stride];
-            if (s_global_max[tid + stride] > s_global_max[tid]) {
-                s_global_max[tid] = s_global_max[tid + stride];
-                s_global_argmax[tid] = s_global_argmax[tid + stride];
-            }
-        }
-        __syncthreads();
-    }
-
-    // Thread 0 writes block result
-    if (tid == 0) {
-        const int bid = blockIdx.x;
-        block_results[bid].logit_sum       = s_logit_sum[0];
-        block_results[bid].logit_min       = s_logit_min[0];
-        block_results[bid].logit_max       = s_logit_max[0];
-        block_results[bid].is_argmax_count = s_argmax_count[0];
-        block_results[bid].global_max_logit    = s_global_max[0];
-        block_results[bid].global_argmax_token = s_global_argmax[0];
-    }
-}
-
-// Host helper: launch kernel, merge block results, return stats
-static CollapseTokenStats launchCollapseTokenDiag(
-    const float* d_logits, int total_positions, int vocab_size,
-    int collapse_token_id, cudaStream_t stream
-) {
-    constexpr int kBlockSize = 256;
-    const int num_blocks = (total_positions + kBlockSize - 1) / kBlockSize;
-
-    // Allocate temporary block results on device
-    CollapseTokenStats* d_block_results = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_block_results), num_blocks * sizeof(CollapseTokenStats), "collapse_block_results");
-
-    collapseTokenDiagKernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        d_logits, total_positions, vocab_size, collapse_token_id,
-        d_block_results, nullptr
-    );
-
-    // Copy block results to host and merge
-    std::vector<CollapseTokenStats> h_blocks(num_blocks);
-    cudaMemcpyAsync(h_blocks.data(), d_block_results,
-                    num_blocks * sizeof(CollapseTokenStats),
-                    cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
-    cudaFree(d_block_results);
-
-    // Final merge on host (num_blocks is small, typically ~32)
-    CollapseTokenStats result{};
-    result.logit_sum = 0.0f;
-    result.logit_min = 1e30f;
-    result.logit_max = -1e30f;
-    result.is_argmax_count = 0;
-    result.global_max_logit = -1e30f;
-    result.global_argmax_token = 0;
-
-    for (int i = 0; i < num_blocks; ++i) {
-        result.logit_sum += h_blocks[i].logit_sum;
-        result.is_argmax_count += h_blocks[i].is_argmax_count;
-        if (h_blocks[i].logit_min < result.logit_min)
-            result.logit_min = h_blocks[i].logit_min;
-        if (h_blocks[i].logit_max > result.logit_max)
-            result.logit_max = h_blocks[i].logit_max;
-        if (h_blocks[i].global_max_logit > result.global_max_logit) {
-            result.global_max_logit = h_blocks[i].global_max_logit;
-            result.global_argmax_token = h_blocks[i].global_argmax_token;
-        }
-    }
-    return result;
-}
 
 //======================================================//
 //  Internal Helper Implementations
@@ -1455,9 +1273,6 @@ BatchResult processBatch(
     // BUG FIX Issue #22: First micro-batch overwrites (accumulate=false), subsequent accumulate
     const bool should_accumulate = ctx.optimizer.current_micro_step > 0;
     
-    // Sync dynamic collapse token to training state for gradient attribution diagnostic
-    ctx.model->getTrainingState().tracked_collapse_token = g_collapse_token_id;
-    
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call autogradTrainingStep...\n");
     // First-batch CUDA checkpoint: surface any error before forward/loss/backward
     if (batch_idx == 0) {
@@ -1579,7 +1394,6 @@ BatchResult processBatch(
             EmitModuleInfo(ModuleId::ForwardPass, pred_info.str(), ctx.global_step);
 
             if (logit_trace_enabled && sample_positions > 0) {
-                const int kDebugTokenId = GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
                 int debug_pos = -1;
                 int debug_b = -1;
                 int debug_t = -1;
@@ -1631,10 +1445,6 @@ BatchResult processBatch(
                 if (target_token >= 0 && target_token < vocab_size) {
                     p_t = std::exp(static_cast<double>(logits[target_token] - max_logit)) / sum_exp;
                 }
-                double p_277 = -1.0;
-                if (vocab_size > kDebugTokenId) {
-                    p_277 = std::exp(static_cast<double>(logits[kDebugTokenId] - max_logit)) / sum_exp;
-                }
 
                 std::ostringstream trace_msg;
                 trace_msg << std::fixed << std::setprecision(6);
@@ -1649,11 +1459,6 @@ BatchResult processBatch(
                 } else {
                     trace_msg << " p_t=N/A";
                 }
-                if (p_277 >= 0.0) {
-                    trace_msg << " p_277=" << p_277;
-                } else {
-                    trace_msg << " p_277=N/A";
-                }
                 // sum_exp = Σ exp(logit[v] - max_logit), NOT Σ exp(logit[v])!
                 // This is the SHIFTED partition function. Low values (e.g. 5.5) mean
                 // the distribution is PEAKED (only ~5 tokens have significant mass).
@@ -1666,161 +1471,6 @@ BatchResult processBatch(
                           << " logit_range=" << Internal::formatScalar(max_logit - static_cast<float>(*std::min_element(logits, logits + vocab_size)), 4)
                           << " loss=" << Internal::formatScalar(result.loss, 4);
                 ctx.logging.logger->log(trace_msg.str());
-            }
-            
-            // === COLLAPSE TOKEN MODE COLLAPSE DIAGNOSTIC ===
-            // Track logit values for the dynamically-detected collapse token
-            // Uses GPU reduction kernel over ALL positions (not a 10-pos sample)
-            const int COLLAPSE_TOKEN_ID = g_collapse_token_id;
-            if (COLLAPSE_TOKEN_ID >= 0 && vocab_size > COLLAPSE_TOKEN_ID) {
-                const CollapseTokenStats cstats = launchCollapseTokenDiag(
-                    ts.autograd_intermediates.logits_tensor.data,
-                    total_tokens, vocab_size, COLLAPSE_TOKEN_ID,
-                    ts.stream_ctrl.getPrimaryStream()
-                );
-                const float collapse_logit_mean = cstats.logit_sum / total_tokens;
-
-                // Log collapse token diagnostic (full population)
-                std::ostringstream collapse_diag;
-                collapse_diag << std::fixed << std::setprecision(4);
-                collapse_diag << "[CollapseTokenDiag] batch=" << (batch_idx + 1)
-                           << " token=" << COLLAPSE_TOKEN_ID
-                           << " logit: mean=" << collapse_logit_mean
-                           << " min=" << cstats.logit_min
-                           << " max=" << cstats.logit_max
-                           << " is_argmax=" << cstats.is_argmax_count << "/" << total_tokens
-                           << " global_max_logit=" << cstats.global_max_logit
-                           << " global_argmax_token=" << cstats.global_argmax_token;
-                ctx.logging.logger->log(collapse_diag.str());
-            }
-            
-            // ================================================================
-            // PERIODIC p_t / p_collapse DUMP
-            // p_t = softmax probability assigned to the CORRECT target token
-            // p_collapse = softmax probability assigned to the dynamically
-            //   detected collapse token at positions where it is NOT the target
-            // Fires every kPtPvDumpInterval batches for a configurable number
-            // of positions so we can track whether the model is learning.
-            // ================================================================
-            constexpr int kPtPvDumpInterval   = 10;   // every N batches (set higher to reduce noise)
-            constexpr int kPtPvDumpPositions  = 20;  // how many positions to dump
-            const int dump_tracked_token = (g_collapse_token_id >= 0) ? g_collapse_token_id : -1;
-            
-            if ((batch_idx % kPtPvDumpInterval) == 0) {
-                const int dump_n = kPtPvDumpPositions;
-                
-                // Issue #147/149: Collect positions with VALID targets first.
-                // The scan must look through the FULL batch, not just sample_positions,
-                // because sliding window overlaps can mask the first ~129 tokens.
-                std::vector<int> valid_positions;
-                valid_positions.reserve(dump_n);
-                for (int pos = 0; pos < total_tokens && static_cast<int>(valid_positions.size()) < dump_n; ++pos) {
-                    const int b = pos / ts.cached_seq_len;
-                    const int t = pos % ts.cached_seq_len;
-                    if (b < payload.batch_size && t < payload.seq_lengths[b]) {
-                        const int tgt = payload.target_ids[b * payload.max_seq_len + t];
-                        if (tgt >= 0) {
-                            valid_positions.push_back(pos);
-                        }
-                    }
-                }
-                // Fallback: if no valid targets found, sample linearly (at least shows the data)
-                if (valid_positions.empty()) {
-                    for (int pos = 0; pos < std::min(total_tokens, dump_n); ++pos) valid_positions.push_back(pos);
-                }
-                
-                // Accumulators for summary stats
-                double sum_p_t = 0.0, sum_p_v = 0.0;
-                int    count_p_t = 0, count_p_v = 0;
-                float  max_p_t = 0.0f, min_p_t = 1.0f;
-                float  max_p_v = 0.0f, min_p_v = 1.0f;
-                
-                std::ostringstream pt_pv;
-                pt_pv << std::fixed << std::setprecision(8);
-                pt_pv << "[PtPvDump] batch=" << (batch_idx + 1) << " positions=" << static_cast<int>(valid_positions.size()) << "\n";
-                
-                for (int vi = 0; vi < static_cast<int>(valid_positions.size()); ++vi) {
-                    const int pos = valid_positions[vi];
-                    
-                    // Fetch logits for this specific position (Issue #149: handle positions outside sample_positions)
-                    std::vector<float> row_buffer;
-                    const float* logits_pos = nullptr;
-                    if (pos < sample_positions) {
-                        logits_pos = logit_sample.data() + static_cast<size_t>(pos) * vocab_size;
-                    } else {
-                        row_buffer.resize(vocab_size);
-                        const float* device_ptr = static_cast<const float*>(ts.autograd_intermediates.logits_tensor.data) + static_cast<size_t>(pos) * vocab_size;
-                        cudaMemcpy(row_buffer.data(), device_ptr, vocab_size * sizeof(float), cudaMemcpyDeviceToHost);
-                        logits_pos = row_buffer.data();
-                    }
-                    
-                    // Stable softmax: subtract max
-                    float lmax = -std::numeric_limits<float>::infinity();
-                    for (int v = 0; v < vocab_size; ++v) {
-                        if (logits_pos[v] > lmax) lmax = logits_pos[v];
-                    }
-                    double denom = 0.0;
-                    for (int v = 0; v < vocab_size; ++v) {
-                        denom += std::exp(static_cast<double>(logits_pos[v] - lmax));
-                    }
-                    if (denom <= 0.0) denom = 1.0;
-                    
-                    // Resolve target for this position from flat payload
-                    const int b = pos / ts.cached_seq_len;
-                    const int t = pos % ts.cached_seq_len;
-                    int target = -1;
-                    if (b < payload.batch_size &&
-                        t < payload.seq_lengths[b]) {
-                        target = payload.target_ids[b * payload.max_seq_len + t];
-                    }
-                    
-                    // p_t: probability of correct target
-                    float p_t_val = 0.0f;
-                    if (target >= 0 && target < vocab_size) {
-                        p_t_val = static_cast<float>(
-                            std::exp(static_cast<double>(logits_pos[target] - lmax)) / denom);
-                        sum_p_t += p_t_val;
-                        max_p_t = std::max(max_p_t, p_t_val);
-                        min_p_t = std::min(min_p_t, p_t_val);
-                        count_p_t++;
-                    }
-                    
-                    // p_collapse: probability of collapse token at this position
-                    float p_v_val = 0.0f;
-                    if (dump_tracked_token >= 0 && vocab_size > dump_tracked_token) {
-                        p_v_val = static_cast<float>(
-                            std::exp(static_cast<double>(logits_pos[dump_tracked_token] - lmax)) / denom);
-                        if (target != dump_tracked_token) {
-                            sum_p_v += p_v_val;
-                            max_p_v = std::max(max_p_v, p_v_val);
-                            min_p_v = std::min(min_p_v, p_v_val);
-                            count_p_v++;
-                        }
-                    }
-                    
-                    // Find argmax for context
-                    int am = 0; float am_val = logits_pos[0];
-                    for (int v = 1; v < vocab_size; ++v) {
-                        if (logits_pos[v] > am_val) { am_val = logits_pos[v]; am = v; }
-                    }
-                    
-                    pt_pv << "  pos=" << pos
-                           << " target=" << target
-                           << " p_t=" << p_t_val
-                           << " p_collapse=" << p_v_val
-                           << " argmax=" << am
-                           << (dump_tracked_token >= 0 && target == dump_tracked_token ? " [TGT=COLLAPSE]" : "")
-                           << "\n";
-                }
-                
-                // Summary line
-                pt_pv << "  SUMMARY: "
-                       << "avg_p_t=" << (count_p_t > 0 ? sum_p_t / count_p_t : 0.0)
-                       << " [" << min_p_t << ".." << max_p_t << "] (n=" << count_p_t << ")"
-                       << " | avg_p_277_at_other=" << (count_p_v > 0 ? sum_p_v / count_p_v : 0.0)
-                       << " [" << min_p_v << ".." << max_p_v << "] (n=" << count_p_v << ")"
-                       << " | uniform_baseline=" << (1.0 / vocab_size);
-                ctx.logging.logger->log(pt_pv.str());
             }
         }
     }
@@ -2081,7 +1731,7 @@ BatchResult processBatch(
                 // --- Weight norm statistics (sample random + top tokens) ---
                 // Issue #138 FIX: Compute E[||W||²] (mean of squared norms) for correct expected logit_std.
                 // Old code used E[||W||] (mean of norms) which underestimates by Jensen's inequality
-                // when ||W|| distribution is skewed (e.g., tok277 has ||W||=1.67 vs mean=0.20).
+                // when ||W|| distribution is skewed.
                 const float* lm_head_weights = ctx.model->getLmHeadLayer()->weights().data;
                 const float* embedding_weights = ctx.model->getEmbeddingLayer()->tokenWeights().data;
                 if (ctx.model->getConfig().tie_embeddings &&
@@ -2127,10 +1777,8 @@ BatchResult processBatch(
                     w_rms_sq_mean /= sampled;
                     
                     // FIX: Also check top-predicted tokens for ||W||_max.
-                    // The strided sample (stride=100) systematically misses tokens like
-                    // 262, 277, 488 which are the ones with growing norms causing mode
-                    // collapse. The strided sample reported ||W||_max=0.197 while these
-                    // tokens had ||W||=0.323 (64% above reported "max").
+                    // The strided sample (stride=100) can miss tokens with growing norms.
+                    // Include top-argmax tokens to ensure ||W||_max is accurate.
                     for (size_t i = 0; i < std::min(sorted_argmax.size(), size_t(5)); ++i) {
                         const int tok = sorted_argmax[i].first;
                         // Skip if already in strided sample
@@ -2665,188 +2313,44 @@ BatchResult processBatch(
     // NOTE: Gradient component logging happens later after measureGradientNorms()
     // via formatGradientComponents(). Premature logging here would use undefined variables.
 
-    // Gate behind shouldSyncDiagnostics so 128 logit row copies only run on diagnostic sync interval
-    static int debug_collapse_diag_interval = 10;
-    const int diag_interval = std::max(debug_collapse_diag_interval, 1);
-    const bool kCollapseDiagEnabled = shouldSyncDiagnostics(ctx, batch_idx) &&
-        GRIM::getEquationLogger().isEnabled() &&
-        (batch_idx == 0 || (batch_idx + 1) % diag_interval == 0);
-    
-    if (kCollapseDiagEnabled) {
-        const auto& ts = ctx.model->getTrainingState();
+    // ========================================================================
+    // DIAGNOSTIC: Issue #142 - Special Token Weight & Gradient Verification
+    // (Rule 21 Equation-Based)
+    //
+    // After removing -inf logit masking (Issue #142), special tokens
+    // (UNK=0, PAD=1, BOS=2, EOS=3) participate naturally in softmax.
+    // Loss masking via target=-1 handles them correctly (zero loss, zero grad
+    // at those TARGET positions). But their EMBEDDING WEIGHT ROWS still receive
+    // gradients from:
+    //   1. LM head backward: grad_W[v,d] = Σ_t hidden[t,d] * grad_logits[t,v]
+    //      (summed across ALL positions, not just target-v positions)
+    //   2. Embedding forward: grad_W[tok_id] += grad_encoder[t] * scale
+    //      (only at positions where tok_id appears as INPUT)
+    //
+    // This diagnostic tracks whether special token weight rows are:
+    //   - Receiving meaningful gradients (they SHOULD, from LM head backward)
+    //   - Diverging in norm from content tokens (ANOMALY if so)
+    //   - Drifting toward zero (could indicate implicit suppression)
+    //
+    // [SPECIAL_TOKEN_EQUATION] W_special health check:
+    //   ||W[v]|| should be ~same magnitude as ||W[content]||_mean
+    //   ||grad_W[v]|| should be non-zero (from LM head backward)
+    // ========================================================================
+    if (shouldSyncDiagnostics(ctx, batch_idx) && GRIM::getEquationLogger().isEnabled()) {
         const auto& cfg = ctx.model->getConfig();
-        cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-        
-        // ====================================================================
-        // Issue #137: Use GPU's cached_targets_tensor directly.
-        // ====================================================================
-        const int diag_total_tokens = ts.cached_batch_size * ts.cached_seq_len;
-        std::vector<int> flat_targets(diag_total_tokens);
-        if (ts.cached_targets_tensor.data && diag_total_tokens > 0) {
-            cudaMemcpyAsync(flat_targets.data(),
-                            reinterpret_cast<const int*>(ts.cached_targets_tensor.data),
-                            diag_total_tokens * sizeof(int),
-                            cudaMemcpyDeviceToHost, stream);
-        }
+        const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
+        // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
+        // Read gradients from the SAME layer as weights (LM head) so rms(W) and
+        // rms(grad) refer to the same parameter. Previously read embedding grads,
+        // which showed PAD scatter-add accumulation (~1754 positions) as 76x spike
+        // vs BOS/EOS — misleading because that gradient doesn't affect LM head.
+        const bool weights_tied = ctx.model->getEmbeddingLayer()->tokenWeights().data
+                               == ctx.model->getLmHeadLayer()->weights().data;
+        const float* grads_ptr = weights_tied
+            ? ctx.model->getEmbeddingLayer()->tokenWeights().grad_data()   // tied: same tensor, either pointer works
+            : ctx.model->getLmHeadLayer()->weights().grad_data();          // untied: use LM head's own gradients
 
-        // ====================================================================
-        // DYNAMIC ARGMAX DETECTION: GPU histogram kernel (one D2H instead of 128).
-        // ====================================================================
-        int sampled = 0;
-        if (ts.autograd_intermediates.hasLogits() && diag_total_tokens > 0 && cfg.vocab_size > 0) {
-            constexpr int kArgmaxSampleSize = 128;
-            const int stride = std::max(1, diag_total_tokens / kArgmaxSampleSize);
-            const int num_sample_positions = (diag_total_tokens + stride - 1) / stride;
-
-            unsigned int* d_histogram = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&d_histogram), static_cast<size_t>(cfg.vocab_size) * sizeof(unsigned int), "argmax_histogram");
-            cudaMemsetAsync(d_histogram, 0, static_cast<size_t>(cfg.vocab_size) * sizeof(unsigned int), stream);
-
-            const int block = 256;
-            const int grid = (num_sample_positions + block - 1) / block;
-            argmaxHistogramKernel<<<grid, block, 0, stream>>>(
-                ts.autograd_intermediates.logits_tensor.data,
-                reinterpret_cast<const int*>(ts.cached_targets_tensor.data),
-                diag_total_tokens,
-                cfg.vocab_size,
-                stride,
-                GRIM::Tokenizer::PAD_TOKEN_ID,
-                d_histogram);
-
-            std::vector<unsigned int> h_histogram(static_cast<size_t>(cfg.vocab_size));
-            cudaMemcpyAsync(h_histogram.data(), d_histogram,
-                            static_cast<size_t>(cfg.vocab_size) * sizeof(unsigned int),
-                            cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            cudaFree(d_histogram);
-
-            int most_common_token = -1;
-            int most_common_count = 0;
-            for (int v = 0; v < cfg.vocab_size; ++v) {
-                const int cnt = static_cast<int>(h_histogram[static_cast<size_t>(v)]);
-                if (cnt > 0) sampled += cnt;
-                if (cnt > most_common_count) {
-                    most_common_count = cnt;
-                    most_common_token = v;
-                }
-            }
-
-            if (most_common_token >= 0 && sampled > 0) {
-                const float collapse_fraction = static_cast<float>(most_common_count) / static_cast<float>(sampled);
-                ctx.logging.logger->log(
-                    "[COLLAPSE_DETECT] batch=" + std::to_string(batch_idx + 1) +
-                    " dominant_argmax_token=" + std::to_string(most_common_token) +
-                    " count=" + std::to_string(most_common_count) + "/" + std::to_string(sampled) +
-                    " (" + std::to_string(static_cast<int>(collapse_fraction * 100)) + "%)");
-                g_collapse_token_id = most_common_token;
-            }
-        }
-        // Ensure flat_targets is valid for downstream (HiddenState277 etc.) — sync already done above
-        if (ts.cached_targets_tensor.data && diag_total_tokens > 0 && !ts.autograd_intermediates.hasLogits()) {
-            cudaStreamSynchronize(stream);
-        }
-        
-        // Only run detailed diagnostics if we have a tracked token (Token277 removed — model stabilized)
-        if (g_collapse_token_id >= 0) {
-            // Issue #37: Hidden state analysis - understand WHY grad_W[T].sum is positive
-            // Issue #115: Pass use_centering to read correct buffer (centered vs raw)
-            GRIM::Diagnostics::HiddenState277Analysis hidden277 = GRIM::Diagnostics::computeHiddenState277Analysis(
-                ts, flat_targets, cfg.d_model, cfg.vocab_size, g_collapse_token_id,
-                cfg.lm_head_center_hidden_states,  // Issue #115: Use centered buffer when active
-                stream);
-            ctx.logging.logger->log(GRIM::Diagnostics::formatHiddenState277Analysis(hidden277, batch_idx));
-            
-            // Structured equation logging to CSV
-            EQ_LOG("HIDDEN_STATE_EQUATION", GRIM::Diagnostics::formatHiddenState277Analysis(hidden277, batch_idx),
-                   static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
-            
-            // ========================================================================
-            // DIAGNOSTIC: Issue #114 - Feedback Loop Detection (Rule 21 Equation-Based)
-            // Tracks the self-reinforcing collapse: logit[T] = ||h|| × ||W[T]|| × cos(h, W[T])
-            // Detects: hidden norm explosion, cosine collapse, weight paradox, alignment explosion
-            // ========================================================================
-            // Issue #115: Pass use_centering to read correct buffer (centered vs raw)
-            GRIM::Diagnostics::FeedbackLoopDiagnostic feedback_diag = GRIM::Diagnostics::computeFeedbackLoopDiagnostic(
-                ctx.model->getLmHeadLayer(), ts, flat_targets, cfg.d_model, cfg.vocab_size, batch_idx, g_collapse_token_id,
-                cfg.lm_head_center_hidden_states,  // Issue #115: Use centered buffer when active
-                stream);
-            ctx.logging.logger->log(GRIM::Diagnostics::formatFeedbackLoopDiagnostic(feedback_diag, batch_idx));
-            
-            // Structured equation logging to CSV
-            EQ_LOG("FEEDBACK_LOOP_EQUATION", GRIM::Diagnostics::formatFeedbackLoopDiagnostic(feedback_diag, batch_idx),
-                   static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
-
-            // ========================================================================
-            // DIAGNOSTIC: Issue #134 - PC1 Causality Test (Rule 21 Equation-Based)
-            // Estimates top principal component of hidden states via power iteration,
-            // projects it out, recomputes logits, measures tracked token deflation and
-            // entropy improvement to determine if PC1 is the mode collapse mechanism.
-            // NOTE: This is EXPENSIVE (copies full weight matrix + N×V logit recompute
-            // at sampled positions). Runs at same frequency as other expensive diagnostics.
-            // ========================================================================
-            GRIM::Diagnostics::PC1CausalityTest pc1_test = GRIM::Diagnostics::computePC1CausalityTest(
-                ctx.model->getLmHeadLayer(), ts, flat_targets, cfg.d_model, cfg.vocab_size, g_collapse_token_id,
-                cfg.lm_head_center_hidden_states,
-                stream);
-            ctx.logging.logger->log(GRIM::Diagnostics::formatPC1CausalityTest(pc1_test, batch_idx));
-
-            // Structured equation logging to CSV
-            EQ_LOG("PC1_CAUSALITY_TEST", GRIM::Diagnostics::formatPC1CausalityTest(pc1_test, batch_idx),
-                   static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
-
-            // ========================================================================
-            // DIAGNOSTIC: HiddenSpectrum — Top-k singular value spectrum (Rule 21)
-            // Computes top-20 eigenvalues of H^T H via deflated power iteration.
-            // Answers: what is the rank structure of the hidden state correlation?
-            // [HIDDEN_SPECTRUM_EQUATION] r_k = Σ_{i=1}^{k} σ_i² / Σ σ_i²
-            // ========================================================================
-            GRIM::Diagnostics::HiddenSpectrum spectrum = GRIM::Diagnostics::computeHiddenSpectrum(
-                ts, flat_targets, cfg.d_model,
-                cfg.lm_head_center_hidden_states,
-                stream);
-            ctx.logging.logger->log(GRIM::Diagnostics::formatHiddenSpectrum(spectrum, batch_idx));
-
-            EQ_LOG("HIDDEN_SPECTRUM_EQUATION", GRIM::Diagnostics::formatHiddenSpectrum(spectrum, batch_idx),
-                   static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
-        }
-
-        // ========================================================================
-        // DIAGNOSTIC: Issue #142 - Special Token Weight & Gradient Verification
-        // (Rule 21 Equation-Based)
-        //
-        // After removing -inf logit masking (Issue #142), special tokens
-        // (UNK=0, PAD=1, BOS=2, EOS=3) participate naturally in softmax.
-        // Loss masking via target=-1 handles them correctly (zero loss, zero grad
-        // at those TARGET positions). But their EMBEDDING WEIGHT ROWS still receive
-        // gradients from:
-        //   1. LM head backward: grad_W[v,d] = Σ_t hidden[t,d] * grad_logits[t,v]
-        //      (summed across ALL positions, not just target-v positions)
-        //   2. Embedding forward: grad_W[tok_id] += grad_encoder[t] * scale
-        //      (only at positions where tok_id appears as INPUT)
-        //
-        // This diagnostic tracks whether special token weight rows are:
-        //   - Receiving meaningful gradients (they SHOULD, from LM head backward)
-        //   - Diverging in norm from content tokens (ANOMALY if so)
-        //   - Drifting toward zero (could indicate implicit suppression)
-        //
-        // [SPECIAL_TOKEN_EQUATION] W_special health check:
-        //   ||W[v]|| should be ~same magnitude as ||W[content]||_mean
-        //   ||grad_W[v]|| should be non-zero (from LM head backward)
-        // ========================================================================
-        {
-            const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
-            // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
-            // Read gradients from the SAME layer as weights (LM head) so rms(W) and
-            // rms(grad) refer to the same parameter. Previously read embedding grads,
-            // which showed PAD scatter-add accumulation (~1754 positions) as 76x spike
-            // vs BOS/EOS — misleading because that gradient doesn't affect LM head.
-            const bool weights_tied = ctx.model->getEmbeddingLayer()->tokenWeights().data
-                                   == ctx.model->getLmHeadLayer()->weights().data;
-            const float* grads_ptr = weights_tied
-                ? ctx.model->getEmbeddingLayer()->tokenWeights().grad_data()   // tied: same tensor, either pointer works
-                : ctx.model->getLmHeadLayer()->weights().grad_data();          // untied: use LM head's own gradients
-
-            if (weights_ptr) {
+        if (weights_ptr) {
                 constexpr int SPECIAL_IDS[] = {
                     GRIM::Tokenizer::UNK_TOKEN_ID,   // 0
                     GRIM::Tokenizer::PAD_TOKEN_ID,    // 1
@@ -2951,7 +2455,6 @@ BatchResult processBatch(
                 EQ_LOG("SPECIAL_TOKEN_EQUATION", diag.str(),
                        static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
             }
-        }
     }
     
     // ========================================================================
@@ -3229,7 +2732,7 @@ BatchResult processBatch(
     // ========================================================================
     // DIAGNOSTIC: [EMB_GRAD_EQUATION] Embedding gradient spike analysis (Issue #141)
     // Rule 21 equation-based logging for tied-weight gradient decomposition.
-    // Runs every diag_interval batches (same cadence as Token277 diagnostics).
+    // Runs every diag_interval batches (same cadence as other sync diagnostics).
     // Identifies which token rows concentrate gradient mass and whether
     // atomicAdd scatter density correlates with spike magnitude.
     // ========================================================================
