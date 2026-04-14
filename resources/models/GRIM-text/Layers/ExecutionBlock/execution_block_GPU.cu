@@ -386,8 +386,8 @@ void ExecutionBlockLayer::executeStep(
 //======================================================//
 //  crossAttentionRead — thin wrapper
 //======================================================//
-void ExecutionBlockLayer::crossAttentionRead(
-    Tensor& hidden_states,
+Tensor ExecutionBlockLayer::crossAttentionRead(
+    const Tensor& hidden_states,
     ExecutionMemory& M,
     int total_tokens,
     cudaStream_t stream,
@@ -401,7 +401,7 @@ void ExecutionBlockLayer::crossAttentionRead(
     EXEC_CHECK(row_tokens > 0, "row_tokens must be positive");
     EXEC_CHECK(token_offset + row_tokens <= total_tokens,
                "crossAttentionRead row-local span exceeds total token extent");
-    crossAttentionReadImpl(*this, hidden_states, M, stream, token_offset, row_tokens, d_gate_accum);
+    return crossAttentionReadImpl(*this, hidden_states, M, stream, token_offset, row_tokens, d_gate_accum);
 }
 
 }  // namespace GRIM

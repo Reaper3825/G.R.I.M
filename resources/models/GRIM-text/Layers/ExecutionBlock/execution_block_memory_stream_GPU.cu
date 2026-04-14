@@ -311,130 +311,40 @@ __global__ void kernelAccumulateGateStats(
     }
 }
 
-__global__ void kernelComputeGate(
-    float* __restrict__ gate,
-    const float* __restrict__ H,
-    const float* __restrict__ w_gate,
-    int total_tokens, int d_model
-) {
-    const int t = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= total_tokens) return;
-    const float* h = H + static_cast<size_t>(t) * d_model;
-    float sum = 0.0f;
-    for (int j = 0; j < d_model; ++j)
-        sum += h[j] * w_gate[j];
-    gate[t] = 1.0f / (1.0f + expf(-sum));
-}
-
-__global__ void kernelSmallMatmul(
-    float* __restrict__ out,
-    const float* __restrict__ A,
-    const float* __restrict__ B,
-    int M, int K, int N
-) {
-    const int row = blockIdx.x;
-    if (row >= M) return;
-    for (int col = threadIdx.x; col < N; col += blockDim.x) {
-        float sum = 0.0f;
-        for (int k = 0; k < K; ++k)
-            sum += A[row * K + k] * B[k * N + col];
-        out[row * N + col] = sum;
-    }
-}
-
-__global__ void kernelCrossAttnSharpScores(
-    float* __restrict__ scores,
-    const float* __restrict__ Q,
-    const float* __restrict__ K,
-    const float* __restrict__ valid,
-    const float* __restrict__ tau_ptr,
-    int total_tokens, int num_valid, int head_dim, int topk
+// Non-differentiable masking kernel (like causal mask in standard attention).
+// Applies valid_mask + top-k selection to pre-computed scores.
+// Does NOT recompute dot products or softmax — those are handled by autograd ops.
+__global__ void kernelApplyValidMaskAndTopK(
+    float* __restrict__ scores,       // [total_tokens, num_valid] — modified in-place
+    const float* __restrict__ valid,   // [num_valid]
+    int total_tokens, int num_valid, int topk
 ) {
     const int t = blockIdx.x;
     if (t >= total_tokens) return;
 
-    float tau = fmaxf(tau_ptr[0], 0.01f);
-    float inv_sqrt_d_tau = 1.0f / (sqrtf(static_cast<float>(head_dim)) * tau);
-
-    const float* q_row = Q + static_cast<size_t>(t) * head_dim;
     float* s_row = scores + static_cast<size_t>(t) * num_valid;
 
-    // Parallel dot products: each thread handles a subset of valid slots.
+    // Apply valid mask: invalid slots → -FLT_MAX
     for (int v = threadIdx.x; v < num_valid; v += blockDim.x) {
-        float dot = 0.0f;
-        const float* k_row = K + static_cast<size_t>(v) * head_dim;
-        for (int d = 0; d < head_dim; ++d)
-            dot += q_row[d] * k_row[d];
-        s_row[v] = (valid[v] < 1e-6f) ? -FLT_MAX : dot * inv_sqrt_d_tau;
+        if (valid[v] < 1e-6f) s_row[v] = -FLT_MAX;
     }
     __syncthreads();
 
-    // Top-k and softmax are serial (small num_valid) — thread 0 only.
-    if (threadIdx.x == 0) {
-        if (topk > 0 && topk < num_valid) {
-            for (int pass = 0; pass < topk; ++pass) {
-                float best = -FLT_MAX;
-                int best_idx = -1;
-                for (int v = 0; v < num_valid; ++v) {
-                    if (s_row[v] >= 1e30f) continue;
-                    if (s_row[v] > best) { best = s_row[v]; best_idx = v; }
-                }
-                if (best_idx >= 0) s_row[best_idx] = 1e30f + best;
-            }
+    // Top-k selection (serial, thread 0 — num_valid is small)
+    if (threadIdx.x == 0 && topk > 0 && topk < num_valid) {
+        for (int pass = 0; pass < topk; ++pass) {
+            float best = -FLT_MAX;
+            int best_idx = -1;
             for (int v = 0; v < num_valid; ++v) {
-                if (s_row[v] >= 1e30f) s_row[v] -= 1e30f;
-                else s_row[v] = -FLT_MAX;
+                if (s_row[v] >= 1e30f) continue;
+                if (s_row[v] > best) { best = s_row[v]; best_idx = v; }
             }
+            if (best_idx >= 0) s_row[best_idx] = 1e30f + best;
         }
-
-        float max_s = -FLT_MAX;
-        for (int v = 0; v < num_valid; ++v) max_s = fmaxf(max_s, s_row[v]);
-        float sum_exp = 0.0f;
         for (int v = 0; v < num_valid; ++v) {
-            float e = expf(s_row[v] - max_s);
-            s_row[v] = e;
-            sum_exp += e;
+            if (s_row[v] >= 1e30f) s_row[v] -= 1e30f;
+            else s_row[v] = -FLT_MAX;
         }
-        float inv_sum = 1.0f / (sum_exp + kEps);
-        for (int v = 0; v < num_valid; ++v) s_row[v] *= inv_sum;
-    }
-}
-
-__global__ void kernelCrossAttnWeightedValue(
-    float* __restrict__ R,
-    const float* __restrict__ attn,
-    const float* __restrict__ V_proj,
-    int total_tokens, int num_valid, int head_dim
-) {
-    const int t = blockIdx.x;
-    if (t >= total_tokens) return;
-    const float* a_row = attn + static_cast<size_t>(t) * num_valid;
-    float* r_row = R + static_cast<size_t>(t) * head_dim;
-    for (int j = threadIdx.x; j < head_dim; j += blockDim.x) {
-        float sum = 0.0f;
-        for (int v = 0; v < num_valid; ++v)
-            sum += a_row[v] * V_proj[v * head_dim + j];
-        r_row[j] = sum;
-    }
-}
-
-__global__ void kernelCrossAttnGatedOutput(
-    float* __restrict__ H,
-    const float* __restrict__ R,
-    const float* __restrict__ W_O,
-    const float* __restrict__ gate,
-    int total_tokens, int d_model, int head_dim
-) {
-    const int t = blockIdx.x;
-    if (t >= total_tokens) return;
-    float g = gate[t];
-    const float* r_row = R + static_cast<size_t>(t) * head_dim;
-    float* h_row = H + static_cast<size_t>(t) * d_model;
-    for (int j = threadIdx.x; j < d_model; j += blockDim.x) {
-        float proj = 0.0f;
-        for (int k = 0; k < head_dim; ++k)
-            proj += r_row[k] * W_O[k * d_model + j];
-        h_row[j] += g * proj;
     }
 }
 
@@ -797,64 +707,95 @@ void finalizeStepOrThrow(
     }
 }
 
-void crossAttentionReadImpl(
+Tensor crossAttentionReadImpl(
     ExecutionBlockLayer& layer,
-    Tensor& hidden_states,
+    const Tensor& hidden_states,
     ExecutionMemory& memory,
     cudaStream_t stream,
     int token_offset,
     int row_tokens,
     float* d_gate_accum  // [2] device accumulator: [sum, count]. nullptr = skip.
 ) {
+    using namespace autograd;
+
     const int dm = layer.config().d_model;
     const int dk = layer.config().d_key;
     const int hd = layer.config().cross_attn_head_dim;
     const int V = layer.config().num_slots;
     const int nv = V;
     const int topk = layer.config().cross_attn_topk;
+    const float inv_sqrt_d = 1.0f / sqrtf(static_cast<float>(hd));
+
+    // Non-owning view of H[token_offset : token_offset + row_tokens, :].
+    // requires_grad=false: gradient w.r.t. H flows through the add() at the call site,
+    // not through Q/gate projections (standard residual detach pattern).
     float* H_row = hidden_states.data + static_cast<size_t>(token_offset) * dm;
+    auto H_view = Tensor::from_ptr(H_row, {row_tokens, dm}, stream, "exec_read_H_view");
 
-    auto Q = Tensor::zeros({row_tokens, hd}, stream, "exec_read_Q");
-    kernelSmallMatmul<<<row_tokens, hd, 0, stream>>>(Q.data, H_row, layer.W_Q_read().data, row_tokens, dm, hd);
+    // Q = H_view @ W_Q_read  [row_tokens, hd]
+    Tensor Q = matmul(H_view, layer.W_Q_read(), stream, nullptr, nullptr, false);
+
+    // K_proj = key_embeds @ W_K_read  [nv, hd]
+    Tensor K_proj = matmul(memory.key_embeds, layer.W_K_read(), stream, nullptr, nullptr, false);
+
+    // V_proj = state_embeds @ W_V_read  [nv, hd]
+    Tensor V_proj = matmul(memory.state_embeds, layer.W_V_read(), stream, nullptr, nullptr, false);
+
+    // raw_scores = Q @ K_proj^T  [row_tokens, nv]
+    Tensor raw_scores = matmul(Q, K_proj, stream, nullptr, nullptr, true);
+
+    // Scale by 1/sqrt(hd) (constant — no gradient needed)
+    Tensor scaled_scores = mul_scalar(raw_scores, inv_sqrt_d, stream);
+
+    // Apply valid_mask + top-k masking (non-differentiable, like causal mask in attention).
+    // Read tau to host for softmax temperature — matches original behavior.
+    // (tau gradient can be added later with broadcast_mul primitive if needed.)
+    float h_tau = 0.0f;
+    CUDA_CHECK(cudaMemcpyAsync(&h_tau, layer.tau().data, sizeof(float), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    if (h_tau < 0.01f) h_tau = 0.01f;
+
+    // Non-differentiable masking (like causal mask): valid_mask + top-k.
+    // In-place on scaled_scores.data is safe — masked positions get 0 gradient
+    // naturally from softmax (output ≈ 0 for -FLT_MAX inputs).
+    kernelApplyValidMaskAndTopK<<<row_tokens, kBlockSize, 0, stream>>>(
+        scaled_scores.data, memory.valid_mask.data,
+        row_tokens, nv, topk);
     CUDA_CHECK_KERNEL();
 
-    auto K_proj = Tensor::zeros({nv, hd}, stream, "exec_read_K");
-    kernelSmallMatmul<<<nv, hd, 0, stream>>>(K_proj.data, memory.key_embeds.data, layer.W_K_read().data, nv, dk, hd);
-    CUDA_CHECK_KERNEL();
+    // Softmax over attention scores with tau temperature
+    Tensor attn_weights = softmax(scaled_scores, h_tau, stream);
 
-    auto V_proj = Tensor::zeros({nv, hd}, stream, "exec_read_V");
-    kernelSmallMatmul<<<nv, hd, 0, stream>>>(V_proj.data, memory.state_embeds.data, layer.W_V_read().data, nv, dm, hd);
-    CUDA_CHECK_KERNEL();
+    // R = attn_weights @ V_proj  [row_tokens, hd]
+    Tensor R = matmul(attn_weights, V_proj, stream, nullptr, nullptr, false);
 
-    auto scores = Tensor::zeros({row_tokens, nv}, stream, "exec_read_scores");
-    kernelCrossAttnSharpScores<<<row_tokens, kBlockSize, 0, stream>>>(
-        scores.data, Q.data, K_proj.data, memory.valid_mask.data,
-        layer.tau().data, row_tokens, nv, hd, topk);
-    CUDA_CHECK_KERNEL();
+    // proj = R @ W_O_read  [row_tokens, dm]
+    Tensor proj = matmul(R, layer.W_O_read(), stream, nullptr, nullptr, false);
 
-    auto R = Tensor::zeros({row_tokens, hd}, stream, "exec_read_R");
-    kernelCrossAttnWeightedValue<<<row_tokens, hd, 0, stream>>>(R.data, scores.data, V_proj.data, row_tokens, nv, hd);
-    CUDA_CHECK_KERNEL();
+    // gate = sigmoid(H_view @ W_gate_read) [row_tokens, 1]
+    // Composed from primitives: sigmoid(x) = reciprocal(add_scalar(exp(mul_scalar(x, -1)), 1))
+    Tensor gate_logits = matmul(H_view, layer.W_gate_read(), stream, nullptr, nullptr, false);
+    Tensor neg_logits = mul_scalar(gate_logits, -1.0f, stream);
+    Tensor exp_neg = exp(neg_logits, stream);
+    Tensor one_plus_exp = add_scalar(exp_neg, 1.0f, stream);
+    Tensor gate = reciprocal(one_plus_exp, stream);
 
-    auto gate = Tensor::zeros({1, row_tokens}, stream, "exec_read_gate");
-    kernelComputeGate<<<(row_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        gate.data, H_row, layer.W_gate_read().data, row_tokens, dm);
-    CUDA_CHECK_KERNEL();
-
-    // Accumulate gate statistics for telemetry (no sync required — atomic to device buffer)
+    // Accumulate gate statistics for telemetry (detached, no grad flow needed)
     if (d_gate_accum) {
         kernelAccumulateGateStats<<<1, kBlockSize, 0, stream>>>(
             d_gate_accum, gate.data, row_tokens);
         CUDA_CHECK_KERNEL();
     }
 
-    kernelCrossAttnGatedOutput<<<row_tokens, kBlockSize, 0, stream>>>(
-        H_row, R.data, layer.W_O_read().data, gate.data, row_tokens, dm, hd);
+    // delta = gate * proj  [row_tokens, dm]  (broadcast [row_tokens,1] * [row_tokens,dm])
+    Tensor delta = broadcast_row_mul(gate, proj, stream);
+
+    // Usage update (detached telemetry — no autograd)
+    kernelDecayedUsageUpdate<<<(nv + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        memory.usage.data, attn_weights.data, layer.config().usage_decay, row_tokens, nv, V);
     CUDA_CHECK_KERNEL();
 
-    kernelDecayedUsageUpdate<<<(nv + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        memory.usage.data, scores.data, layer.config().usage_decay, row_tokens, nv, V);
-    CUDA_CHECK_KERNEL();
+    return delta;
 }
 
 }  // namespace ExecutionBlockInternal

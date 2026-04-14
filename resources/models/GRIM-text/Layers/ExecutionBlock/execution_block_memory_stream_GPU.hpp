@@ -45,9 +45,9 @@ void finalizeStepOrThrow(
 	int step,
 	cudaStream_t stream);
 
-void crossAttentionReadImpl(
+Tensor crossAttentionReadImpl(
 	ExecutionBlockLayer& layer,
-	Tensor& hidden_states,
+	const Tensor& hidden_states,
 	ExecutionMemory& memory,
 	cudaStream_t stream,
 	int token_offset,

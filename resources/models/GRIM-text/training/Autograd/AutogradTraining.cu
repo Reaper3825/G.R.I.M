@@ -803,6 +803,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
             // ExecutionBlock: gated cross-attention read at every layer >= exec_layer (per-row)
             // WS7: Only execution-active rows participate in cross-attention read.
+            // Each row returns a [sl, dm] delta — zero_pad places it at the correct
+            // offset in [total_tokens, dm], then autograd::add merges into layer_output.
             if (exec_layer >= 0 && layer_idx >= exec_layer
                 && ctx.execution_block
                 && !intermediates.exec_memories.empty()) {
@@ -812,11 +814,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     const bool row_exec_active = !ctx.payload->execution_active.empty()
                         && ctx.payload->execution_active[b];
                     if (!row_exec_active) continue;
-                    ctx.execution_block->crossAttentionRead(
+                    Tensor row_delta = ctx.execution_block->crossAttentionRead(
                         layer_output, intermediates.exec_memories[b],
                         total_tokens, ctx.stream,
                         b * sl, sl,
                         intermediates.d_read_gate_accum);
+                    Tensor padded = autograd::zero_pad(row_delta, b * sl, total_tokens, ctx.stream);
+                    layer_output = autograd::add(layer_output, padded, ctx.stream);
                 }
             }
 
@@ -920,7 +924,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         //  1. Hidden state (encoder output) statistics at sample position
         //  2. Weight row statistics for the predicted argmax token at that position  
         //  3. Dot product decomposition showing WHY argmax wins
-        constexpr int kSamplePositions = 1024;  // Sample first 5 positions
+        constexpr int kSamplePositions = 1024;  // Sample first 1024 positions
         const int d_model = cfg->d_model;
         const int vocab_size_local = cfg->vocab_size;
         

@@ -1212,6 +1212,46 @@ Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream = nullptr)
 // autograd::scale() DELETED — dead code from reverted Issue #98 (Rule 20)
 
 /**
+ * Element-wise exponential: y = exp(x)
+ * Backward: grad_x = grad_y * y
+ */
+Tensor exp(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Add a constant scalar to every element: y = x + c
+ * Backward: grad_x = grad_y  (pure pass-through, constant has no gradient)
+ */
+Tensor add_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
+
+/**
+ * Element-wise reciprocal: y = 1/x
+ * Backward: grad_x = grad_y * (-y²)
+ */
+Tensor reciprocal(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Multiply every element of a tensor by a constant float.
+ * Forward: y = x * scalar
+ * Backward: grad_x = grad_y * scalar
+ */
+Tensor mul_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
+
+/**
+ * Broadcast per-row scalar multiply: out[i,j] = scale[i,0] * x[i,j]
+ * scale must be [rows, 1], x must be [rows, cols].
+ * Backward: grad_scale[i] = sum_j(grad_out[i,j] * x[i,j])
+ *           grad_x[i,j] = grad_out[i,j] * scale[i,0]
+ */
+Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Zero-pad: places [rows, cols] input at row_offset in a [total_rows, cols] zero tensor.
+ * Forward:  result = 0; result[row_offset:row_offset+rows, :] = x
+ * Backward: grad_x += grad_result[row_offset:row_offset+rows, :]
+ */
+Tensor zero_pad(const Tensor& x, int row_offset, int total_rows, cudaStream_t stream = nullptr);
+
+/**
  * LayerScale: Scale tensor by a learned scalar parameter (tensor of shape [1])
  * Forward:  y[i,j] = x[i,j] * scale_param[0]
  * Backward: grad_x = grad_y * scale_param

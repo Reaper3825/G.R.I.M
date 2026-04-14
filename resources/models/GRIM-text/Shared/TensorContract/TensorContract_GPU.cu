@@ -1427,6 +1427,103 @@ __global__ void kernel_silu_backward(
     }
 }
 
+// Exp forward: y = exp(x)
+__global__ void kernel_exp_forward(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        output[idx] = expf(input[idx]);
+    }
+}
+
+// Exp backward: grad_x = grad_y * y  (uses saved output, not input)
+__global__ void kernel_exp_backward(
+    const float* __restrict__ grad_output,
+    const float* __restrict__ saved_output,
+    float* __restrict__ grad_input,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        grad_input[idx] += grad_output[idx] * saved_output[idx];
+    }
+}
+
+// Add scalar forward: y = x + scalar
+__global__ void kernel_add_scalar_forward(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    float scalar,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        output[idx] = input[idx] + scalar;
+    }
+}
+
+// Reciprocal forward: y = 1/x
+__global__ void kernel_reciprocal_forward(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        output[idx] = 1.0f / input[idx];
+    }
+}
+
+// Reciprocal backward: grad_x = grad_y * (-y²)  (uses saved output)
+__global__ void kernel_reciprocal_backward(
+    const float* __restrict__ grad_output,
+    const float* __restrict__ saved_output,
+    float* __restrict__ grad_input,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        const float y = saved_output[idx];
+        grad_input[idx] += grad_output[idx] * (-y * y);
+    }
+}
+
+// Mul-scalar forward: y = x * scalar  (element-wise multiply by constant)
+__global__ void kernel_mul_scalar_forward(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    float scalar,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        output[idx] = input[idx] * scalar;
+    }
+}
+
+// Mul-scalar backward: grad_x += grad_y * scalar
+__global__ void kernel_mul_scalar_backward(
+    const float* __restrict__ grad_output,
+    float* __restrict__ grad_input,
+    float scalar,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        grad_input[idx] += grad_output[idx] * scalar;
+    }
+}
+
 // Element-wise multiply forward: output = a ⊙ b
 __global__ void kernel_elementwise_mul_forward(
     const float* __restrict__ a,
@@ -1439,6 +1536,51 @@ __global__ void kernel_elementwise_mul_forward(
     if (idx < count) {
         output[idx] = a[idx] * b[idx];
     }
+}
+
+// Broadcast row multiply forward: out[i,j] = scale[i,0] * x[i,j]
+__global__ void kernel_broadcast_row_mul_forward(
+    const float* __restrict__ scale,   // [rows, 1]
+    const float* __restrict__ x,       // [rows, cols]
+    float* __restrict__ output,        // [rows, cols]
+    int rows, int cols
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * cols) return;
+    const int row = idx / cols;
+    output[idx] = scale[row] * x[idx];
+}
+
+// Broadcast row multiply backward for x: grad_x[i,j] += grad_out[i,j] * scale[i,0]
+__global__ void kernel_broadcast_row_mul_backward_x(
+    const float* __restrict__ grad_output,  // [rows, cols]
+    const float* __restrict__ scale,        // [rows, 1]
+    float* __restrict__ grad_x,             // [rows, cols]
+    int rows, int cols
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * cols) return;
+    const int row = idx / cols;
+    grad_x[idx] += grad_output[idx] * scale[row];
+}
+
+// Broadcast row multiply backward for scale: grad_scale[i] += sum_j(grad_out[i,j] * x[i,j])
+__global__ void kernel_broadcast_row_mul_backward_scale(
+    const float* __restrict__ grad_output,  // [rows, cols]
+    const float* __restrict__ x,            // [rows, cols]
+    float* __restrict__ grad_scale,         // [rows, 1]
+    int rows, int cols
+) {
+    const int row = blockIdx.x;
+    if (row >= rows) return;
+    float sum = 0.0f;
+    for (int j = threadIdx.x; j < cols; j += blockDim.x)
+        sum += grad_output[row * cols + j] * x[row * cols + j];
+    // Warp reduction
+    for (int mask = warpSize / 2; mask > 0; mask >>= 1)
+        sum += __shfl_down_sync(0xffffffff, sum, mask);
+    if (threadIdx.x == 0)
+        atomicAdd(&grad_scale[row], sum);
 }
 
 // Element-wise multiply backward for input A: grad_a = grad_output ⊙ b
@@ -3229,6 +3371,493 @@ struct SiluGradFn : public GradFn {
 };
 
 /**
+ * ExpGradFn - Backward for element-wise exp
+ * Forward: y = exp(x)
+ * Backward: grad_x = grad_y * y  (uses saved output)
+ *
+ * Saves output (not input) — more memory-efficient since we need y anyway.
+ */
+struct ExpGradFn : public GradFn {
+    bool input_requires_grad = false;
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
+    TensorContract::TensorShape input_shape;
+    std::shared_ptr<GradFn> input_grad_fn;
+    const float* cached_output = nullptr;
+    size_t cached_size = 0;
+
+    ExpGradFn() { op_name = "exp"; }
+
+    void capture_input(Tensor& x, cudaStream_t stream) {
+        input_requires_grad = x.requires_grad;
+        input_shape = x.shape;
+        input_grad_fn = x.grad_fn;
+
+        if (input_requires_grad) {
+            if (x.is_leaf) {
+                x.ensure_grad();
+                input_grad = x.grad_data();
+            } else {
+                const size_t x_numel = x.numel();
+                float* buffer = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "ExpGradFn_input_grad");
+                cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                input_grad = owned_input_grad.get();
+            }
+        }
+    }
+
+    void save_output(const float* output_data, size_t size) {
+        if (!output_data) {
+            throw std::runtime_error("ExpGradFn::save_output: output_data is NULL");
+        }
+        cached_output = output_data;
+        cached_size = size;
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("exp", this);
+        if (applied) return;
+        applied = true;
+
+        if (!input_requires_grad) return;
+        if (!input_grad) {
+            throw std::runtime_error("ExpGradFn::apply: input_grad is NULL");
+        }
+        if (!cached_output) {
+            throw std::runtime_error("ExpGradFn::apply: cached_output is NULL");
+        }
+
+        const size_t count = grad_output.numel();
+        if (count != cached_size) {
+            throw std::runtime_error("ExpGradFn::apply: size mismatch");
+        }
+
+        kernel_exp_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, cached_output, input_grad, count);
+        trackKernelLaunch("kernel_exp_backward", stream);
+
+        if (input_grad_fn) {
+            Tensor view;
+            view.data = input_grad; view.shape = input_shape;
+            view.owns_data = false; view.stream = stream;
+            input_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        cached_output = nullptr;
+        cached_size = 0;
+        input_grad = nullptr;
+        input_grad_fn.reset();
+    }
+};
+
+/**
+ * AddScalarGradFn - Backward for adding a constant scalar
+ * Forward: y = x + c
+ * Backward: grad_x = grad_y  (pure pass-through, constant has no gradient)
+ */
+struct AddScalarGradFn : public GradFn {
+    bool input_requires_grad = false;
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
+    TensorContract::TensorShape input_shape;
+    std::shared_ptr<GradFn> input_grad_fn;
+    size_t count = 0;
+
+    AddScalarGradFn() { op_name = "add_scalar"; }
+
+    void capture_input(Tensor& x, cudaStream_t stream) {
+        input_requires_grad = x.requires_grad;
+        input_shape = x.shape;
+        input_grad_fn = x.grad_fn;
+        count = x.numel();
+
+        if (input_requires_grad) {
+            if (x.is_leaf) {
+                x.ensure_grad();
+                input_grad = x.grad_data();
+            } else {
+                float* buffer = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), count * sizeof(float), "AddScalarGradFn_input_grad");
+                cudaMemsetAsync(buffer, 0, count * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                input_grad = owned_input_grad.get();
+            }
+        }
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("add_scalar", this);
+        if (applied) return;
+        applied = true;
+
+        if (!input_requires_grad) return;
+        if (!input_grad) {
+            throw std::runtime_error("AddScalarGradFn::apply: input_grad is NULL");
+        }
+
+        // Pure pass-through: grad_x += grad_y
+        const size_t n = grad_output.numel();
+        if (n != count) {
+            throw std::runtime_error("AddScalarGradFn::apply: size mismatch");
+        }
+        kernel_accumulate_grad<<<gridForCount(n), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            input_grad, grad_output.data, n, 1.0f);
+        trackKernelLaunch("add_scalar_backward", stream);
+
+        if (input_grad_fn) {
+            Tensor view;
+            view.data = input_grad; view.shape = input_shape;
+            view.owns_data = false; view.stream = stream;
+            input_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        input_grad = nullptr;
+        input_grad_fn.reset();
+    }
+};
+
+/**
+ * ReciprocalGradFn - Backward for element-wise reciprocal
+ * Forward: y = 1/x
+ * Backward: grad_x = grad_y * (-y²)  (uses saved output)
+ */
+struct ReciprocalGradFn : public GradFn {
+    bool input_requires_grad = false;
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
+    TensorContract::TensorShape input_shape;
+    std::shared_ptr<GradFn> input_grad_fn;
+    const float* cached_output = nullptr;
+    size_t cached_size = 0;
+
+    ReciprocalGradFn() { op_name = "reciprocal"; }
+
+    void capture_input(Tensor& x, cudaStream_t stream) {
+        input_requires_grad = x.requires_grad;
+        input_shape = x.shape;
+        input_grad_fn = x.grad_fn;
+
+        if (input_requires_grad) {
+            if (x.is_leaf) {
+                x.ensure_grad();
+                input_grad = x.grad_data();
+            } else {
+                const size_t x_numel = x.numel();
+                float* buffer = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "ReciprocalGradFn_input_grad");
+                cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                input_grad = owned_input_grad.get();
+            }
+        }
+    }
+
+    void save_output(const float* output_data, size_t size) {
+        if (!output_data) {
+            throw std::runtime_error("ReciprocalGradFn::save_output: output_data is NULL");
+        }
+        cached_output = output_data;
+        cached_size = size;
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("reciprocal", this);
+        if (applied) return;
+        applied = true;
+
+        if (!input_requires_grad) return;
+        if (!input_grad) {
+            throw std::runtime_error("ReciprocalGradFn::apply: input_grad is NULL");
+        }
+        if (!cached_output) {
+            throw std::runtime_error("ReciprocalGradFn::apply: cached_output is NULL");
+        }
+
+        const size_t count = grad_output.numel();
+        if (count != cached_size) {
+            throw std::runtime_error("ReciprocalGradFn::apply: size mismatch");
+        }
+
+        kernel_reciprocal_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, cached_output, input_grad, count);
+        trackKernelLaunch("kernel_reciprocal_backward", stream);
+
+        if (input_grad_fn) {
+            Tensor view;
+            view.data = input_grad; view.shape = input_shape;
+            view.owns_data = false; view.stream = stream;
+            input_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        cached_output = nullptr;
+        cached_size = 0;
+        input_grad = nullptr;
+        input_grad_fn.reset();
+    }
+};
+
+/**
+ * MulScalarGradFn - Backward for element-wise multiply by constant
+ * Forward: y = x * scalar
+ * Backward: grad_x = grad_y * scalar
+ */
+struct MulScalarGradFn : public GradFn {
+    bool input_requires_grad = false;
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
+    TensorContract::TensorShape input_shape;
+    std::shared_ptr<GradFn> input_grad_fn;
+    float scalar = 0.0f;
+    size_t count = 0;
+
+    MulScalarGradFn() { op_name = "mul_scalar"; }
+
+    void capture_input(Tensor& x, cudaStream_t stream) {
+        input_requires_grad = x.requires_grad;
+        input_shape = x.shape;
+        input_grad_fn = x.grad_fn;
+
+        if (input_requires_grad) {
+            if (x.is_leaf) {
+                x.ensure_grad();
+                input_grad = x.grad_data();
+            } else {
+                const size_t x_numel = x.numel();
+                float* buffer = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "MulScalarGradFn_input_grad");
+                cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                input_grad = owned_input_grad.get();
+            }
+        }
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("mul_scalar", this);
+        if (applied) return;
+        applied = true;
+
+        if (!input_requires_grad) return;
+        if (!input_grad) {
+            throw std::runtime_error("MulScalarGradFn::apply: input_grad is NULL");
+        }
+
+        kernel_mul_scalar_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, input_grad, scalar, count);
+        trackKernelLaunch("kernel_mul_scalar_backward", stream);
+
+        if (input_grad_fn) {
+            Tensor view;
+            view.data = input_grad; view.shape = input_shape;
+            view.owns_data = false; view.stream = stream;
+            input_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        input_grad = nullptr;
+        input_grad_fn.reset();
+    }
+};
+
+/**
+ * BroadcastRowMulGradFn - Backward for broadcast per-row scalar multiply
+ * Forward:  out[i,j] = scale[i,0] * x[i,j]
+ * Backward: grad_scale[i] += sum_j(grad_out[i,j] * x[i,j])
+ *           grad_x[i,j]   += grad_out[i,j] * scale[i,0]
+ */
+struct BroadcastRowMulGradFn : public GradFn {
+    bool scale_requires_grad = false;
+    bool x_requires_grad = false;
+    float* scale_grad = nullptr;
+    float* x_grad = nullptr;
+    std::shared_ptr<float> owned_scale_grad;
+    std::shared_ptr<float> owned_x_grad;
+    TensorContract::TensorShape scale_shape;
+    TensorContract::TensorShape x_shape;
+    std::shared_ptr<GradFn> scale_grad_fn;
+    std::shared_ptr<GradFn> x_grad_fn;
+    const float* cached_scale = nullptr;
+    const float* cached_x = nullptr;
+    int rows = 0;
+    int cols = 0;
+
+    BroadcastRowMulGradFn() { op_name = "broadcast_row_mul"; }
+
+    void capture_inputs(Tensor& s, Tensor& x, cudaStream_t stream) {
+        scale_requires_grad = s.requires_grad;
+        x_requires_grad = x.requires_grad;
+        scale_shape = s.shape;
+        x_shape = x.shape;
+        scale_grad_fn = s.grad_fn;
+        x_grad_fn = x.grad_fn;
+
+        if (scale_requires_grad) {
+            if (s.is_leaf) {
+                s.ensure_grad();
+                scale_grad = s.grad_data();
+            } else {
+                const size_t s_numel = s.numel();
+                float* buffer = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), s_numel * sizeof(float), "BroadcastRowMulGradFn_scale_grad");
+                cudaMemsetAsync(buffer, 0, s_numel * sizeof(float), stream);
+                owned_scale_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                scale_grad = owned_scale_grad.get();
+            }
+        }
+        if (x_requires_grad) {
+            if (x.is_leaf) {
+                x.ensure_grad();
+                x_grad = x.grad_data();
+            } else {
+                const size_t x_numel = x.numel();
+                float* buffer = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "BroadcastRowMulGradFn_x_grad");
+                cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
+                owned_x_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                x_grad = owned_x_grad.get();
+            }
+        }
+    }
+
+    void set_cache_refs(const float* scale_data, const float* x_data, int r, int c) {
+        if (!scale_data) throw std::runtime_error("BroadcastRowMulGradFn::set_cache_refs: scale_data is NULL");
+        if (!x_data) throw std::runtime_error("BroadcastRowMulGradFn::set_cache_refs: x_data is NULL");
+        cached_scale = scale_data;
+        cached_x = x_data;
+        rows = r;
+        cols = c;
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("broadcast_row_mul", this);
+        if (applied) return;
+        applied = true;
+
+        const int total = rows * cols;
+
+        if (x_requires_grad) {
+            if (!x_grad) throw std::runtime_error("BroadcastRowMulGradFn::apply: x_grad is NULL");
+            kernel_broadcast_row_mul_backward_x<<<(total + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_output.data, cached_scale, x_grad, rows, cols);
+            trackKernelLaunch("kernel_broadcast_row_mul_backward_x", stream);
+        }
+
+        if (scale_requires_grad) {
+            if (!scale_grad) throw std::runtime_error("BroadcastRowMulGradFn::apply: scale_grad is NULL");
+            kernel_broadcast_row_mul_backward_scale<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_output.data, cached_x, scale_grad, rows, cols);
+            trackKernelLaunch("kernel_broadcast_row_mul_backward_scale", stream);
+        }
+
+        if (x_requires_grad && x_grad_fn) {
+            Tensor view;
+            view.data = x_grad; view.shape = x_shape;
+            view.owns_data = false; view.stream = stream;
+            x_grad_fn->apply(view, stream);
+        }
+        if (scale_requires_grad && scale_grad_fn) {
+            Tensor view;
+            view.data = scale_grad; view.shape = scale_shape;
+            view.owns_data = false; view.stream = stream;
+            scale_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        cached_scale = nullptr;
+        cached_x = nullptr;
+        scale_grad = nullptr;
+        x_grad = nullptr;
+        scale_grad_fn.reset();
+        x_grad_fn.reset();
+    }
+};
+
+/**
+ * ZeroPadGradFn - Backward for row-offset zero-padding
+ * Forward: result = zeros(total_rows, cols); result[offset:offset+rows, :] = x
+ * Backward: grad_x += grad_result[offset:offset+rows, :]
+ *
+ * Used to place per-batch-row deltas at the correct offset in a full-size
+ * [total_tokens, dm] tensor before autograd::add with layer_output.
+ */
+struct ZeroPadGradFn : public GradFn {
+    bool input_requires_grad = false;
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
+    TensorContract::TensorShape input_shape;
+    std::shared_ptr<GradFn> input_grad_fn;
+    size_t input_count = 0;
+    size_t offset_elements = 0;  // row_offset * cols
+
+    ZeroPadGradFn() { op_name = "zero_pad"; }
+
+    void capture_input(Tensor& x, cudaStream_t stream, size_t offset_elems) {
+        input_requires_grad = x.requires_grad;
+        input_shape = x.shape;
+        input_grad_fn = x.grad_fn;
+        input_count = x.numel();
+        offset_elements = offset_elems;
+
+        if (input_requires_grad) {
+            if (x.is_leaf) {
+                x.ensure_grad();
+                input_grad = x.grad_data();
+            } else {
+                float* buffer = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), input_count * sizeof(float), "ZeroPadGradFn_input_grad");
+                cudaMemsetAsync(buffer, 0, input_count * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                input_grad = owned_input_grad.get();
+            }
+        }
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("zero_pad", this);
+        if (applied) return;
+        applied = true;
+
+        if (!input_requires_grad) return;
+        if (!input_grad) {
+            throw std::runtime_error("ZeroPadGradFn::apply: input_grad is NULL");
+        }
+
+        // grad_x += grad_output[offset_elements : offset_elements + input_count]
+        kernel_accumulate_grad<<<gridForCount(input_count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            input_grad, grad_output.data + offset_elements, input_count, 1.0f);
+        trackKernelLaunch("zero_pad_backward", stream);
+
+        if (input_grad_fn) {
+            Tensor view;
+            view.data = input_grad; view.shape = input_shape;
+            view.owns_data = false; view.stream = stream;
+            input_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        input_grad = nullptr;
+        input_grad_fn.reset();
+    }
+};
+
+/**
  * ElementwiseMulGradFn - Backward for element-wise multiply (Hadamard product)
  * Forward: y = a ⊙ b
  * Backward: grad_a = grad_y ⊙ b, grad_b = grad_y ⊙ a
@@ -4250,6 +4879,230 @@ Tensor silu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
 
         const float* effective_cache = input_cache ? input_cache : x.data;
         grad_fn->set_cache_ref(effective_cache, count);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+/**
+ * autograd::exp - Element-wise exponential with automatic differentiation
+ *
+ * Forward: y = exp(x)
+ * Backward: grad_x = grad_y * y
+ *
+ * Saves output (not input) for backward — d/dx exp(x) = exp(x) = y.
+ */
+Tensor exp(const Tensor& x, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::exp: stream is NULL - caller MUST provide valid stream");
+    }
+    if (!x.data) {
+        throw std::runtime_error("autograd::exp: input data is NULL");
+    }
+
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "exp_result");
+    const size_t count = x.numel();
+    kernel_exp_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
+
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<ExpGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
+        grad_fn->save_output(result.data, count);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+/**
+ * autograd::add_scalar - Add a constant scalar to every element
+ *
+ * Forward: y = x + c
+ * Backward: grad_x = grad_y  (pure pass-through)
+ *
+ * The scalar is a constant with no gradient.
+ */
+Tensor add_scalar(const Tensor& x, float scalar, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::add_scalar: stream is NULL - caller MUST provide valid stream");
+    }
+    if (!x.data) {
+        throw std::runtime_error("autograd::add_scalar: input data is NULL");
+    }
+
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "add_scalar_result");
+    const size_t count = x.numel();
+    kernel_add_scalar_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, scalar, count);
+
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<AddScalarGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+/**
+ * autograd::reciprocal - Element-wise reciprocal with automatic differentiation
+ *
+ * Forward: y = 1/x
+ * Backward: grad_x = grad_y * (-y²)
+ *
+ * Saves output for backward — d/dx (1/x) = -1/x² = -y².
+ */
+Tensor reciprocal(const Tensor& x, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::reciprocal: stream is NULL - caller MUST provide valid stream");
+    }
+    if (!x.data) {
+        throw std::runtime_error("autograd::reciprocal: input data is NULL");
+    }
+
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "reciprocal_result");
+    const size_t count = x.numel();
+    kernel_reciprocal_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, count);
+
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<ReciprocalGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
+        grad_fn->save_output(result.data, count);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+/**
+ * autograd::mul_scalar - Multiply every element by a constant
+ *
+ * Forward: y = x * scalar
+ * Backward: grad_x = grad_y * scalar
+ *
+ * @param x Input tensor (any shape)
+ * @param scalar Constant multiplier
+ * @param stream CUDA stream
+ * @return Scaled tensor with autograd tracking
+ */
+Tensor mul_scalar(const Tensor& x, float scalar, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::mul_scalar: stream is NULL - caller MUST provide valid stream");
+    }
+    if (!x.data) {
+        throw std::runtime_error("autograd::mul_scalar: input data is NULL");
+    }
+
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "mul_scalar_result");
+    const size_t count = x.numel();
+    kernel_mul_scalar_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, scalar, count);
+
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<MulScalarGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
+        grad_fn->scalar = scalar;
+        grad_fn->count = count;
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+/**
+ * autograd::broadcast_row_mul - Broadcast per-row scalar multiply
+ *
+ * Forward:  out[i,j] = scale[i,0] * x[i,j]
+ * Backward: grad_scale[i] += sum_j(grad_out[i,j] * x[i,j])
+ *           grad_x[i,j]   += grad_out[i,j] * scale[i,0]
+ *
+ * @param scale Per-row scalars [rows, 1]
+ * @param x     Input tensor [rows, cols]
+ * @param stream CUDA stream
+ * @return Broadcast-scaled tensor [rows, cols]
+ */
+Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::broadcast_row_mul: stream is NULL");
+    }
+    if (!scale.data || !x.data) {
+        throw std::runtime_error("autograd::broadcast_row_mul: input data is NULL");
+    }
+    const auto s_dims = scale.shape.as_2d();
+    const auto x_dims = x.shape.as_2d();
+    if (s_dims.cols != 1) {
+        throw std::runtime_error("autograd::broadcast_row_mul: scale must be [rows,1], got cols=" + std::to_string(s_dims.cols));
+    }
+    if (s_dims.rows != x_dims.rows) {
+        throw std::runtime_error("autograd::broadcast_row_mul: row mismatch scale.rows=" + std::to_string(s_dims.rows) + " x.rows=" + std::to_string(x_dims.rows));
+    }
+    const int rows = x_dims.rows;
+    const int cols = x_dims.cols;
+    const int total = rows * cols;
+
+    const bool needs_grad = scale.requires_grad || x.requires_grad;
+    Tensor result = Tensor::empty(x.shape, needs_grad, stream, "brow_mul_result");
+
+    kernel_broadcast_row_mul_forward<<<(total + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        scale.data, x.data, result.data, rows, cols);
+
+    if (needs_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<BroadcastRowMulGradFn>();
+        grad_fn->capture_inputs(const_cast<Tensor&>(scale), const_cast<Tensor&>(x), stream);
+        grad_fn->set_cache_refs(scale.data, x.data, rows, cols);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+/**
+ * autograd::zero_pad - Place a [rows, cols] tensor at row_offset in a zero-padded
+ * [total_rows, cols] result.
+ *
+ * Forward: result = zeros(total_rows, cols); result[row_offset : row_offset+rows, :] = x
+ * Backward: grad_x += grad_result[row_offset : row_offset+rows, :]
+ *
+ * No custom kernel needed — forward uses cudaMemsetAsync + cudaMemcpyAsync,
+ * backward uses existing kernel_accumulate_grad on the correct slice.
+ */
+Tensor zero_pad(const Tensor& x, int row_offset, int total_rows, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::zero_pad: stream is NULL - caller MUST provide valid stream");
+    }
+    if (!x.data) {
+        throw std::runtime_error("autograd::zero_pad: input data is NULL");
+    }
+    if (x.shape.size() != 2) {
+        throw std::runtime_error("autograd::zero_pad: input must be 2D [rows, cols], got " +
+                                 std::to_string(x.shape.size()) + "D");
+    }
+    const int row_tokens = x.shape[0];
+    const int cols = x.shape[1];
+    if (row_offset < 0 || row_offset + row_tokens > total_rows) {
+        throw std::runtime_error("autograd::zero_pad: offset=" + std::to_string(row_offset) +
+                                 " + rows=" + std::to_string(row_tokens) +
+                                 " > total_rows=" + std::to_string(total_rows));
+    }
+
+    Tensor result = Tensor::zeros({total_rows, cols}, x.requires_grad, stream, "zero_pad_result");
+
+    const size_t offset_elements = static_cast<size_t>(row_offset) * cols;
+    const size_t slice_bytes = static_cast<size_t>(row_tokens) * cols * sizeof(float);
+    cudaMemcpyAsync(result.data + offset_elements, x.data, slice_bytes,
+                    cudaMemcpyDeviceToDevice, stream);
+
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<ZeroPadGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream, offset_elements);
         result.grad_fn = grad_fn;
     }
 

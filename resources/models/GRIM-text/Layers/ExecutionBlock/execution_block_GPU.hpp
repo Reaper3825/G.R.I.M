@@ -248,8 +248,8 @@ public:
     // Cross-attention read: H = H + g * W_O(R)
     // token_offset / row_tokens enable per-batch-row processing.
     //--------------------------------------------------//
-    void crossAttentionRead(
-        Tensor& hidden_states,
+    Tensor crossAttentionRead(
+        const Tensor& hidden_states,
         ExecutionMemory& M,
         int total_tokens,
         cudaStream_t stream,
