@@ -281,11 +281,6 @@ struct TrainingState {
     
     void allocateDebugGradBuffers(int vocab_size, int d_model, cudaStream_t stream);
     void freeDebugGradBuffers();
-    void logGradientAttribution(int batch_idx, cudaStream_t stream, const EmbeddingLayer* embedding_layer);
-    
-    // Dynamic collapse token tracking — set by Phase2 argmax detection each diagnostic interval.
-    // -1 means no collapse token detected yet.
-    int tracked_collapse_token = -1;
 
     //======================================================//
     //  GUESS CACHE BUFFERS (GRIM-TS - typed buffers, NOT Tensors)

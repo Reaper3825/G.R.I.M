@@ -2224,9 +2224,6 @@ LossResult autogradTrainingStep(
     }
     
     // Post-backward cleanup (matches LanguageModel::backward() behavior)
-    if (training_state.debug_gradient_attribution) {
-        training_state.logGradientAttribution(static_cast<int>(step), stream, ctx.embedding_layer);
-    }
     training_state.sequence_weight_count = 0;
     
     // NOTE: Do NOT clear autograd_intermediates here — caller (processBatch) reads

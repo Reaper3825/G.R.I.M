@@ -1076,7 +1076,7 @@ BatchResult processBatch(
                 const double ratio = seq_len > 0
                     ? static_cast<double>(atom_count) / static_cast<double>(seq_len)
                     : 0.0;
-                per_seq_msg << filtered_seq_ids[i] << ":" << atom_count << "/" << seq_len
+                per_seq_msg << i << ":" << atom_count << "/" << seq_len
                             << "(" << std::fixed << std::setprecision(3) << ratio << ")";
                 if (i + 1 < to_log) {
                     per_seq_msg << " ";
