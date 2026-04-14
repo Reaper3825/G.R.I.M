@@ -4801,7 +4801,9 @@ EpochResult runEpoch(
         lr_cfg.cosine_decay_min_lr = hp.cosine_decay_min_lr;
         lr_cfg.warmup_steps = hp.warmup_steps;
         lr_cfg.total_steps = ctx.estimated_total_steps;
+        lr_cfg.steps_per_epoch = total_batches / accum;
         lr_cfg.cosine_decay_enabled = hp.cosine_decay_enabled;
+        lr_cfg.warm_restarts = hp.cosine_warm_restarts;
         ctx.lr_schedule.emplace(lr_cfg);
     }
     int total_batches_to_run = total_batches;

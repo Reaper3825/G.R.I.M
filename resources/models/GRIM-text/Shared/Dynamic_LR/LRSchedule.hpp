@@ -25,7 +25,9 @@ struct LRScheduleConfig {
     float cosine_decay_min_lr = 0.0f; ///< Floor LR at end of cosine decay
     int warmup_steps = 0;          ///< Linear warmup from 0 → base_lr
     int total_steps = 0;           ///< Total optimizer steps for full schedule
+    int steps_per_epoch = 0;       ///< Optimizer steps per epoch (for warm restarts)
     bool cosine_decay_enabled = false;
+    bool warm_restarts = false;    ///< Reset cosine decay at each epoch boundary
 };
 
 /// Result of querying the schedule at a given step.
@@ -77,12 +79,34 @@ public:
         }
 
         r.in_decay = true;
-        const int decay_steps = config_.total_steps - config_.warmup_steps;
-        const int current_decay_step = step - config_.warmup_steps;
-        r.decay_progress = static_cast<float>(current_decay_step) /
-                           static_cast<float>(std::max(1, decay_steps));
-        r.decay_progress = std::clamp(r.decay_progress, 0.0f, 1.0f);
 
+        if (config_.warm_restarts && config_.steps_per_epoch > 0) {
+            // ── Cosine annealing with warm restarts (per-epoch) ──
+            // First epoch: cosine decay occupies (steps_per_epoch - warmup_steps)
+            // Subsequent epochs: full cosine cycle over steps_per_epoch
+            const int post_warmup = step - config_.warmup_steps;
+            const int first_epoch_decay = config_.steps_per_epoch - config_.warmup_steps;
+
+            if (first_epoch_decay > 0 && post_warmup < first_epoch_decay) {
+                // Still in first epoch (after warmup)
+                r.decay_progress = static_cast<float>(post_warmup) /
+                                   static_cast<float>(first_epoch_decay);
+            } else {
+                // Subsequent epochs — full cosine cycle, restarting at each boundary
+                const int remaining = post_warmup - std::max(0, first_epoch_decay);
+                const int epoch_pos = remaining % config_.steps_per_epoch;
+                r.decay_progress = static_cast<float>(epoch_pos) /
+                                   static_cast<float>(config_.steps_per_epoch);
+            }
+        } else {
+            // ── Single cosine decay over entire training run ──
+            const int decay_steps = config_.total_steps - config_.warmup_steps;
+            const int current_decay_step = step - config_.warmup_steps;
+            r.decay_progress = static_cast<float>(current_decay_step) /
+                               static_cast<float>(std::max(1, decay_steps));
+        }
+
+        r.decay_progress = std::clamp(r.decay_progress, 0.0f, 1.0f);
         const float cosine = 0.5f * (1.0f + std::cos(3.14159265f * r.decay_progress));
         r.lr = config_.cosine_decay_min_lr +
                (config_.base_lr - config_.cosine_decay_min_lr) * cosine;

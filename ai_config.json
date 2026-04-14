@@ -149,7 +149,8 @@
             "batch_strategy": "RANDOM",
             "checkpoint_interval": 2000,
             "cosine_decay": {
-                "enabled": true
+                "enabled": true,
+                "warm_restarts": true
             },
             "cuda_execution": {
                 "disable_async_frees": false,
@@ -190,14 +191,14 @@
                 "typical_p": 0.9
             },
             "gradient_accumulation_steps": 2,
-            "gradient_clip": 1.0,
+            "gradient_clip": 0.001,
             "guess_aux": { "enabled": false },
             "hardcoded_hidden_states": { "enabled": false },
             "layer_scale": { "enabled": false },
             "learning_rate": 0.0006,
             "lm_head_centering": {
                 "center_encoder_residuals": true,
-                "center_hidden_states": false,
+                "center_hidden_states": true,
                 "center_logits": false,
                 "enabled": true,
                 "project_out_pc1": true
