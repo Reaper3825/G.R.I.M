@@ -1113,6 +1113,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", min_seq_valid_tokens=" + std::to_string(hp.min_seq_valid_tokens) +
                ", min_seq_len_for_flash=" + std::to_string(hp.min_seq_len_for_flash) +
                ", cosine_decay_min_lr=" + std::to_string(hp.cosine_decay_min_lr) +
+               ", cosine_warm_restarts=" + std::string(hp.cosine_warm_restarts ? "true" : "false") +
                ", scratch_max_tokens_per_block=" + std::to_string(hp.scratch_max_tokens_per_block) +
                ", mtp_alpha_warmup=" + std::to_string(hp.mtp_alpha_warmup_steps) +
                ", telemetry_warmup=" + std::to_string(hp.telemetry_warmup_steps) +
