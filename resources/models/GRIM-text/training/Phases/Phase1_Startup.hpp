@@ -407,12 +407,15 @@ SequenceData loadTrainingData(
 
 /**
  * @brief Initialize the model with configuration
+ * @param[out] loaded_checkpoint_path Set to the path of the checkpoint that
+ *             actually loaded successfully (empty if fresh start).
  */
 std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const StartupConfig& config,
     uint32_t vocab_size,
     uint64_t xavier_seed,
-    TrainingLogger& logger);
+    TrainingLogger& logger,
+    std::string& loaded_checkpoint_path);
 
 /**
  * @brief Initialize optimizer and gradient controller

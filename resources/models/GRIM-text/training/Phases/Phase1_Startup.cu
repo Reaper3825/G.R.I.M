@@ -496,7 +496,9 @@ void validatePaths(const PathConfig& paths) {
     }
     
     // Create directories
-    fs::create_directories(fs::path(paths.output_model_path).parent_path());
+    auto model_parent = fs::path(paths.output_model_path).parent_path();
+    if (!model_parent.empty())
+        fs::create_directories(model_parent);
     fs::create_directories(paths.checkpoint_dir);
     fs::create_directories(paths.log_dir);
 }
@@ -723,16 +725,17 @@ SequenceData loadTrainingData(
             size_t prev_source_end = 0;  // Track previous window's source end for overlap masking
             
             while (start < seq_len) {
-                // Reserve 1 token for BOS if this is not the first window
-                const size_t effective_max = is_first_window 
+                // Reserve 1 token for BOS if this is not the first window and BOS is enabled
+                const bool prepend_bos = !is_first_window && add_bos_token && bos_id >= 0;
+                const size_t effective_max = (is_first_window || !prepend_bos)
                     ? static_cast<size_t>(max_seq_len) 
                     : static_cast<size_t>(max_seq_len - 1);
                 size_t end = std::min(seq_len, start + effective_max);
                 
                 TrainingSequence window;
                 
-                // For non-first windows, prepend BOS token
-                if (!is_first_window && bos_id >= 0) {
+                // For non-first windows, prepend BOS token (gated on add_bos_token config)
+                if (prepend_bos) {
                     window.token_ids.push_back(bos_id);
                     window.targets.push_back(-1);  // BOS position masked
                     window.token_numeric_values.push_back(0.0f);
@@ -744,6 +747,9 @@ SequenceData loadTrainingData(
                     }
                     if (!seq.token_exec_slots.empty())
                         window.token_exec_slots.push_back(static_cast<int32_t>(-1));
+                    if (!seq.slot_selection_targets.empty())
+                        window.slot_selection_targets.push_back(
+                            GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
                     bos_prepended++;
                 }
                 
@@ -772,6 +778,11 @@ SequenceData loadTrainingData(
                         seq.token_exec_slots.begin() + static_cast<ptrdiff_t>(start),
                         seq.token_exec_slots.begin() + static_cast<ptrdiff_t>(end));
                 }
+                if (!seq.slot_selection_targets.empty()) {
+                    window.slot_selection_targets.insert(window.slot_selection_targets.end(),
+                        seq.slot_selection_targets.begin() + static_cast<ptrdiff_t>(start),
+                        seq.slot_selection_targets.begin() + static_cast<ptrdiff_t>(end));
+                }
 
                 
                 // Mask first position if it's the first window (BOS already there)
@@ -794,7 +805,7 @@ SequenceData loadTrainingData(
                 if (!is_first_window && prev_source_end > start) {
                     const size_t raw_overlap = prev_source_end - start;
                     const size_t overlap_len = (raw_overlap > 0) ? (raw_overlap - 1) : 0;
-                    const size_t bos_offset = (bos_id >= 0) ? 1 : 0;  // Skip BOS (already masked)
+                    const size_t bos_offset = prepend_bos ? 1 : 0;  // Skip BOS (already masked)
                     for (size_t i = bos_offset; i < bos_offset + overlap_len && i < window.targets.size(); ++i) {
                         window.targets[i] = -1;
                     }
@@ -818,6 +829,9 @@ SequenceData loadTrainingData(
                     window.token_atom_mask.back() = 0;
                     if (!window.token_exec_slots.empty())
                         window.token_exec_slots.back() = static_cast<int32_t>(-1);
+                    if (!window.slot_selection_targets.empty())
+                        window.slot_selection_targets.back() =
+                            GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1};
                     // Clear text features for the replaced position
                     const size_t last_tf_start = (window.token_ids.size() - 1) * GRIM::Tokenizer::kTextFeatureDim;
                     for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
@@ -930,7 +944,9 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const StartupConfig& config,
     uint32_t vocab_size,
     uint64_t xavier_seed,
-    TrainingLogger& logger) {
+    TrainingLogger& logger,
+    std::string& loaded_checkpoint_path) {
+    loaded_checkpoint_path.clear();
     
     logger.log("Initializing model with xavier_seed=" + std::to_string(xavier_seed) + "...");
     
@@ -1350,8 +1366,9 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     for (const auto& [epoch, checkpoint_path] : checkpoint_candidates) {
         logger.log("Found checkpoint candidate: " + checkpoint_path + " (epoch " + std::to_string(epoch) + ")");
         if (model->load(checkpoint_path)) {
-            logger.log("✓ Loaded weights from checkpoint");
+            logger.log("✓ Loaded weights from checkpoint: " + checkpoint_path);
             loaded_checkpoint = true;
+            loaded_checkpoint_path = checkpoint_path;
             break;
         }
         logger.log("⚠ Failed to load checkpoint candidate, trying older checkpoint");
@@ -1723,12 +1740,15 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->rng = Internal::initializeRNG(ctx->config, *ctx->logging.logger);
     
     // 9. Initialize model (uses RNG init_seed for Xavier)
+    //    loaded_checkpoint_path receives the path that ACTUALLY loaded
+    //    so the optimizer sidecar can be matched exactly (no independent scan).
     try {
         ctx->model = Internal::initializeModel(
             ctx->config,
             ctx->config.actual_vocab_size,
             ctx->rng.init_seed,
-            *ctx->logging.logger);
+            *ctx->logging.logger,
+            ctx->loaded_checkpoint_path);
     } catch (const std::exception& e) {
         EmitModuleError(ModuleId::Training, std::string("FATAL: Model initialization failed: ") + e.what(), 0);
         throw;
@@ -1758,44 +1778,27 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // 10. Initialize optimizer
     ctx->optimizer = Internal::initializeOptimizer(*ctx->model, ctx->config, *ctx->logging.logger);
     
-    // 10a. Restore optimizer state from sidecar if a checkpoint was loaded
-    // Scan for newest checkpoint (same logic as initializeModel) to find matching .opt sidecar
-    {
-        std::vector<std::pair<int, std::string>> opt_candidates;
-        if (fs::exists(ctx->config.paths.checkpoint_dir) && fs::is_directory(ctx->config.paths.checkpoint_dir)) {
-            for (const auto& entry : fs::directory_iterator(ctx->config.paths.checkpoint_dir)) {
-                const auto& p = entry.path();
-                if (p.extension() == ".bin" && p.stem().string().rfind("checkpoint_epoch_", 0) == 0) {
-                    std::string stem = p.stem().string();
-                    std::string epoch_str = stem.substr(std::string("checkpoint_epoch_").size());
-                    try {
-                        int epoch = std::stoi(epoch_str);
-                        opt_candidates.emplace_back(epoch, p.string());
-                    } catch (...) {}
-                }
+    // 10a. Restore optimizer state from the EXACT checkpoint that loaded weights.
+    // CRITICAL: Do NOT rescan the checkpoint dir independently — that can pick a
+    // different epoch's .opt sidecar if a newer .bin failed to load.
+    if (!ctx->loaded_checkpoint_path.empty()) {
+        std::string opt_path = optimizerSidecarPath(ctx->loaded_checkpoint_path);
+        if (fs::exists(opt_path)) {
+            ctx->logging.logger->log("Found optimizer sidecar for loaded checkpoint: " + opt_path);
+            try {
+                loadOptimizerState(*ctx, opt_path);
+                ctx->logging.logger->log("✓ Optimizer state restored (step=" + 
+                    std::to_string(ctx->optimizer.optimizer_state.step) +
+                    ", global_step=" + std::to_string(ctx->global_step) +
+                    ", best_val_loss=" + std::to_string(ctx->best_val_loss) +
+                    ", epochs_completed=" + std::to_string(ctx->epochs_completed) + ")");
+            } catch (const std::exception& e) {
+                ctx->logging.logger->log(std::string("⚠ Optimizer sidecar load failed: ") + e.what());
+                ctx->logging.logger->log("  Continuing with fresh optimizer state for checkpoint: " + ctx->loaded_checkpoint_path);
             }
-        }
-        std::sort(opt_candidates.begin(), opt_candidates.end(),
-                  [](const auto& a, const auto& b) { return a.first > b.first; });
-        
-        for (const auto& [epoch, ckpt_path] : opt_candidates) {
-            std::string opt_path = optimizerSidecarPath(ckpt_path);
-            if (fs::exists(opt_path)) {
-                ctx->logging.logger->log("Found optimizer sidecar: " + opt_path);
-                try {
-                    loadOptimizerState(*ctx, opt_path);
-                    ctx->loaded_checkpoint_path = ckpt_path;
-                    ctx->logging.logger->log("✓ Optimizer state restored (step=" + 
-                        std::to_string(ctx->optimizer.optimizer_state.step) +
-                        ", global_step=" + std::to_string(ctx->global_step) +
-                        ", best_val_loss=" + std::to_string(ctx->best_val_loss) +
-                        ", epochs_completed=" + std::to_string(ctx->epochs_completed) + ")");
-                } catch (const std::exception& e) {
-                    ctx->logging.logger->log(std::string("⚠ Optimizer sidecar load failed: ") + e.what());
-                    ctx->logging.logger->log("  Continuing with fresh optimizer state");
-                }
-                break;
-            }
+        } else {
+            ctx->logging.logger->log("⚠ No optimizer sidecar for loaded checkpoint: " + ctx->loaded_checkpoint_path);
+            ctx->logging.logger->log("  Continuing with fresh optimizer state (moments reset, LR from step 0)");
         }
     }
     
@@ -1984,7 +1987,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->telemetry.config.stream = ctx->model->getTrainingState().stream_ctrl.getPrimaryStream(); // Use same stream as training
     
     ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(ctx->telemetry.config);
-    ctx->logging.logger->log("✓ Telemetry lattice: 8 levels, 21 streams, GPU-resident");
+    ctx->logging.logger->log("✓ Telemetry lattice: 8 levels, " + std::to_string(ctx->telemetry.config.num_streams) + " streams, GPU-resident");
 
     // 11a. Initialize telemetry CSV logger (per-step measured data export)
     {
