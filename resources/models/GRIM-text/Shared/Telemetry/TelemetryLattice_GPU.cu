@@ -324,6 +324,10 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::PBM_ALIBI_EFF_BIAS_MAX: return "pbm_alibi_eff_bias_max";
         case MetricStream::PBM_ROPE_INV_FREQ_RMS: return "pbm_rope_inv_freq_rms";
         case MetricStream::PBM_BATCH_MAX_SEQ_LEN: return "pbm_batch_max_seq_len";
+        case MetricStream::RHO_RAW_AVG_ABS_DOT: return "rho_raw_avg_abs_dot";
+        case MetricStream::RHO_RAW_AVG_NORM_PROD: return "rho_raw_avg_norm_prod";
+        case MetricStream::RHO_RAW_H_RMS_MIN: return "rho_raw_h_rms_min";
+        case MetricStream::RHO_RAW_H_RMS_MAX: return "rho_raw_h_rms_max";
         default: return "unknown";
     }
 }

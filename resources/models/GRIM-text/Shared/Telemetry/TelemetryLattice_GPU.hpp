@@ -172,6 +172,11 @@ enum class MetricStream : int {
     PBM_ALIBI_EFF_BIAS_MAX = 28,     // max|slope| * batch_max_seq_len (varies per batch)
     PBM_ROPE_INV_FREQ_RMS = 29,      // RMS of RoPE inverse frequencies (constant; verifies init)
     PBM_BATCH_MAX_SEQ_LEN = 30,      // Actual max sequence length in current batch
+    // Raw ρ decomposition (final layer) — trace WHY correlation moves
+    RHO_RAW_AVG_ABS_DOT = 31,        // mean|dot(h_i,h_j)| — alignment numerator
+    RHO_RAW_AVG_NORM_PROD = 32,      // mean(‖h_i‖·‖h_j‖·d) — normalization denominator
+    RHO_RAW_H_RMS_MIN = 33,          // min per-position h_rms — collapse detector
+    RHO_RAW_H_RMS_MAX = 34,          // max per-position h_rms — explosion detector
 };
 
 const char* getMetricStreamName(MetricStream stream);
