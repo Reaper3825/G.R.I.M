@@ -33,6 +33,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/GradNorm/GradNormGPU.hpp"           // GradNorm::measureGradientNorms, GradMetrics
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/Telemetry/TelemetryUpdate.hpp"
 #include "../Diagnostics/TrainingDiagnostics.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
@@ -3196,300 +3197,25 @@ BatchResult processBatch(
         "grad_rms",
         "post_backward");
     
-    // Update telemetry lattice (GPU-resident, fail loud)
-    // YAGNI: Only track grad_norm (μ magnitude) to avoid memory bloat
-    // Single stream with 10 internal dimensions (μ, σ_tilde, v_σ, etc.)
-    if (ctx.telemetry.lattice && ctx.telemetry.enabled) {
-        // ISSUE #14 FIX: Use PRE-CLIP gradient norm for telemetry baseline.
-        // Before: used result.grad_rms (post-clip, always ~1.0 due to clipping)
-        // This caused spike detection to think normal gradients (3-12) were 10x+ spikes
-        // relative to the clamped 1.0 baseline, skipping 62% of batches!
-        // After: use preclip_grad_rms so baseline reflects actual gradient magnitude
-        
-        // Guard against NaN/Inf BEFORE passing to telemetry (fail loud with diagnostic)
-        if (!std::isfinite(preclip_grad_rms)) {
-            throw std::runtime_error(
-                "FATAL: Gradient RMS is " + std::string(std::isnan(preclip_grad_rms) ? "NaN" : "Inf") +
-                " at batch " + std::to_string(batch_idx + 1) + " step " + std::to_string(ctx.global_step) +
-                " loss=" + std::to_string(result.loss) +
-                " - indicates gradient explosion or numerical instability in backward pass");
-        }
-        
-        ctx.logging.logger->log("[TelemetryLattice] PRE-UPDATE batch=" + std::to_string(batch_idx + 1) + 
-                                " step=" + std::to_string(ctx.global_step) + 
-                                " grad_rms=" + Internal::formatScalar(preclip_grad_rms, 6));
-        
-        // Write per-batch streams into the unified observation array.
-        // Streams 5-8 (rho) are already populated at diagnostic intervals above;
-        // their last-known values persist in last_obs[] between diagnostics.
-        ctx.telemetry.last_obs[0] = result.loss;
-        ctx.telemetry.last_obs[1] = preclip_grad_rms;
-        ctx.telemetry.last_obs[2] = preclip_grad_rms;
-        ctx.telemetry.last_obs[3] = result.learning_rate;
-        ctx.telemetry.last_obs[4] = static_cast<float>(payload.token_stats.total_tokens);
-        
-        // Streams 9-13: Adam warmup causation tracking
-        // These track WHY loss rises above ln(V) during warmup: β₂ convergence is the causal driver.
-        // β₁=0.9 (m direction converges in ~10 steps), β₂=0.999 (v magnitude: half-life=693 steps)
-        {
-            constexpr float BETA2 = 0.999f;   // matches HyperParameters::ADAMW_BETA2
-            // FIX: Use optimizer_state.step (actual optimizer updates), NOT global_step (batch counter).
-            // Adam's β₂ bias correction tracks optimizer iterations, not micro-batches.
-            // With gradient_accumulation_steps > 1, global_step overestimates the
-            // iteration count by accum_steps, making β₂^t converge too fast in telemetry.
-            const int iteration = static_cast<int>(ctx.optimizer.optimizer_state.step) + 1;
-            const float beta2_pow_t = std::pow(BETA2, static_cast<float>(iteration));
-            const float bc2 = 1.0f - beta2_pow_t;
-            const float inv_bc2 = 1.0f / bc2;
-            
-            // Signal dominance: (1-β₂^t)/β₂^t. When >1, each Adam step does more good than harm.
-            // Crosses 1.0 at exactly the β₂ half-life (step 693) — predicts the loss peak.
-            // Uses beta2_pow_t directly to avoid catastrophic cancellation in 1.0f - bc2
-            // which loses all precision when β₂^t < float ULP (~1.19e-7, step ~15925).
-            const float signal_dominance = (beta2_pow_t > 1e-12f) ? (bc2 / beta2_pow_t) : 1e6f;
-            
-            // Cumulative displacement: Σlr(t) — running sum of learning rates.
-            // Only accumulate on actual optimizer steps (when weights move).
-            // On non-step micro-batches, skip to avoid accum_steps× overcount.
-            if (should_step) {
-                ctx.telemetry.adam_cumulative_disp += result.learning_rate;
-            }
-            
-            // Xavier embedding scale = sqrt(6 / (vocab_size + d_model))
-            const float vocab_f = static_cast<float>(ctx.config.actual_vocab_size);
-            const float d_model_f = static_cast<float>(ctx.model->getConfig().d_model);
-            const float xavier_emb_scale = std::sqrt(6.0f / (vocab_f + d_model_f));
-            
-            // Disruption: how many "Xavier scales" weights have drifted from init
-            const float disruption_emb = ctx.telemetry.adam_cumulative_disp / xavier_emb_scale;
-            
-            ctx.telemetry.last_obs[9]  = bc2;                // ADAM_BC2_V_CONVERGENCE: 0→1
-            ctx.telemetry.last_obs[10] = signal_dominance;    // ADAM_SIGNAL_DOMINANCE: >1 = learning
-            ctx.telemetry.last_obs[11] = ctx.telemetry.adam_cumulative_disp;  // ADAM_CUMULATIVE_DISP
-            ctx.telemetry.last_obs[12] = disruption_emb;      // ADAM_DISRUPTION_EMB: displacement/xavier
-            ctx.telemetry.last_obs[13] = inv_bc2;             // ADAM_INV_BC2_AMP: v inflation factor
-        }
-        
-        // Streams 14-20: Execution Block health tracking
-        {
-            float exec_grad_norm = 0.0f;
-            float exec_grad_ratio = 0.0f;
-            float exec_selection_entropy = 0.0f;
-            float exec_op_entropy = 0.0f;
-            float exec_div_clamp_rate = 0.0f;
-            float exec_max_p_write = 0.0f;
-            float exec_active_ratio = 0.0f;
+    // Update telemetry lattice — all metric computation delegated to TelemetryUpdate.cu
+    {
+        GRIM::Telemetry::TelemetryBatchInput tel_input;
+        tel_input.loss              = result.loss;
+        tel_input.preclip_grad_rms  = preclip_grad_rms;
+        tel_input.learning_rate     = result.learning_rate;
+        tel_input.total_tokens      = payload.token_stats.total_tokens;
+        tel_input.enc_rms_pre       = enc_rms_pre;
+        tel_input.optimizer_step    = static_cast<int>(ctx.optimizer.optimizer_state.step);
+        tel_input.should_step       = should_step;
+        tel_input.total_loss_value  = loss_result.loss_value;
+        tel_input.aux_loss          = loss_result.aux_loss;
+        tel_input.max_seq_len       = payload.max_seq_len;
+        tel_input.batch_idx         = batch_idx;
+        tel_input.global_step       = ctx.global_step;
+        tel_input.actual_vocab_size = ctx.config.actual_vocab_size;
+        tel_input.d_model           = ctx.model->getConfig().d_model;
 
-            // Grad norm from already-computed GradMetrics (zero extra GPU cost)
-            if (gm.execution_block_count > 0) {
-                exec_grad_norm = std::sqrt(gm.execution_block_sum_sq / static_cast<float>(gm.execution_block_count));
-                if (enc_rms_pre > 1e-12f) {
-                    exec_grad_ratio = exec_grad_norm / enc_rms_pre;
-                }
-            }
-
-            // Aggregate step metrics from exec outputs (populated when debug_mode=true)
-            const auto& ai = training_state.autograd_intermediates;
-            if (!ai.exec_outputs_per_row.empty()) {
-                int active_rows = 0;
-                int total_steps = 0;
-                float sum_selection_entropy = 0.0f;
-                float sum_op_entropy = 0.0f;
-                int total_div_clamps = 0;
-                float sum_max_p_write = 0.0f;
-
-                const int B = static_cast<int>(ai.exec_outputs_per_row.size());
-                for (int b = 0; b < B; ++b) {
-                    const bool row_active = !payload.execution_active.empty()
-                        && b < static_cast<int>(payload.execution_active.size())
-                        && payload.execution_active[b];
-                    if (!row_active) continue;
-                    active_rows++;
-
-                    for (const auto& step : ai.exec_outputs_per_row[b].steps) {
-                        const auto& m = step.metrics;
-                        sum_selection_entropy += (m.arg1_entropy + m.arg2_entropy + m.op_entropy + m.write_entropy) / 4.0f;
-                        sum_op_entropy += m.op_entropy;
-                        total_div_clamps += m.div_clamp_count;
-                        sum_max_p_write += m.max_p_write;
-                        total_steps++;
-                    }
-                }
-
-                if (total_steps > 0) {
-                    exec_selection_entropy = sum_selection_entropy / static_cast<float>(total_steps);
-                    exec_op_entropy = sum_op_entropy / static_cast<float>(total_steps);
-                    exec_div_clamp_rate = static_cast<float>(total_div_clamps) / static_cast<float>(total_steps);
-                    exec_max_p_write = sum_max_p_write / static_cast<float>(total_steps);
-                }
-                if (B > 0) {
-                    exec_active_ratio = static_cast<float>(active_rows) / static_cast<float>(B);
-                }
-            }
-
-            ctx.telemetry.last_obs[14] = exec_grad_norm;           // EXEC_GRAD_NORM
-            ctx.telemetry.last_obs[15] = exec_grad_ratio;          // EXEC_GRAD_RATIO
-            ctx.telemetry.last_obs[16] = exec_selection_entropy;   // EXEC_SELECTION_ENTROPY
-            ctx.telemetry.last_obs[17] = exec_op_entropy;          // EXEC_OP_ENTROPY
-            ctx.telemetry.last_obs[18] = exec_div_clamp_rate;      // EXEC_DIV_CLAMP_RATE
-            ctx.telemetry.last_obs[19] = exec_max_p_write;         // EXEC_MAX_P_WRITE
-            ctx.telemetry.last_obs[20] = exec_active_ratio;        // EXEC_ACTIVE_RATIO
-        }
-
-        // Streams 21-26: EB injection diagnostics (gate health, weight norms, loss fraction)
-        {
-            const auto& ai = training_state.autograd_intermediates;
-
-            // Stream 21: EB_INJECT_GATE — mean inject gate sigmoid across active rows/steps
-            float inject_gate_mean = 0.0f;
-            if (!ai.exec_outputs_per_row.empty()) {
-                float sum_gate = 0.0f;
-                int gate_count = 0;
-                const int B = static_cast<int>(ai.exec_outputs_per_row.size());
-                for (int b = 0; b < B; ++b) {
-                    const bool row_active = !payload.execution_active.empty()
-                        && b < static_cast<int>(payload.execution_active.size())
-                        && payload.execution_active[b];
-                    if (!row_active) continue;
-                    for (const auto& step : ai.exec_outputs_per_row[b].steps) {
-                        sum_gate += step.metrics.inject_gate_value;
-                        gate_count++;
-                    }
-                }
-                if (gate_count > 0) {
-                    inject_gate_mean = sum_gate / static_cast<float>(gate_count);
-                }
-            }
-            ctx.telemetry.last_obs[21] = inject_gate_mean;  // EB_INJECT_GATE
-
-            // Stream 22: EB_READ_GATE_MEAN — mean cross-attention read gate (accumulated on GPU)
-            ctx.telemetry.last_obs[22] = ai.h_read_gate_mean;  // EB_READ_GATE_MEAN
-
-            // Streams 23-24: Gate weight norms (small D2H copy, ~3KB each — negligible)
-            float inject_w_rms = 0.0f;
-            float read_w_rms = 0.0f;
-            auto* eb = ctx.model->getExecutionBlockLayer();
-            if (eb) {
-                const auto& w_inj = eb->w_inject_gate();
-                const size_t n_inj = w_inj.numel();
-                if (n_inj > 0 && w_inj.data) {
-                    std::vector<float> h_buf(n_inj);
-                    cudaMemcpy(h_buf.data(), w_inj.data, n_inj * sizeof(float), cudaMemcpyDeviceToHost);
-                    double sum_sq = 0.0;
-                    for (size_t i = 0; i < n_inj; ++i) sum_sq += static_cast<double>(h_buf[i]) * h_buf[i];
-                    inject_w_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(n_inj)));
-                }
-
-                const auto& w_read = eb->W_gate_read();
-                const size_t n_read = w_read.numel();
-                if (n_read > 0 && w_read.data) {
-                    std::vector<float> h_buf(n_read);
-                    cudaMemcpy(h_buf.data(), w_read.data, n_read * sizeof(float), cudaMemcpyDeviceToHost);
-                    double sum_sq = 0.0;
-                    for (size_t i = 0; i < n_read; ++i) sum_sq += static_cast<double>(h_buf[i]) * h_buf[i];
-                    read_w_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(n_read)));
-                }
-            }
-            ctx.telemetry.last_obs[23] = inject_w_rms;  // EB_INJECT_WEIGHT_NORM
-            ctx.telemetry.last_obs[24] = read_w_rms;    // EB_READ_WEIGHT_NORM
-
-            // Stream 25: EB_LOSS_FRAC — exec auxiliary loss as fraction of total loss
-            float eb_loss_frac = 0.0f;
-            if (loss_result.loss_value > 1e-12f) {
-                eb_loss_frac = loss_result.aux_loss / loss_result.loss_value;
-            }
-            ctx.telemetry.last_obs[25] = eb_loss_frac;  // EB_LOSS_FRAC
-
-            // Stream 26: SB_ATOM_EMBED_RMS — atom type embedding scale
-            float atom_embed_rms = 0.0f;
-            auto* sb = ctx.model->getScratchBlockLayer();
-            if (sb) {
-                const auto& ate = sb->atomTypeEmbeddings();
-                const size_t n_ate = ate.numel();
-                if (n_ate > 0 && ate.data) {
-                    std::vector<float> h_buf(n_ate);
-                    cudaMemcpy(h_buf.data(), ate.data, n_ate * sizeof(float), cudaMemcpyDeviceToHost);
-                    double sum_sq = 0.0;
-                    for (size_t i = 0; i < n_ate; ++i) sum_sq += static_cast<double>(h_buf[i]) * h_buf[i];
-                    atom_embed_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(n_ate)));
-                }
-            }
-            ctx.telemetry.last_obs[26] = atom_embed_rms;  // SB_ATOM_EMBED_RMS
-        }
-
-        // Streams 27-30: PBM (Positional Bias Method) diagnostics
-        {
-            const auto* alibi_bias = ctx.model->getEmbedderPtr()->getALiBiBias();
-            if (!alibi_bias || !alibi_bias->isInitialized()) {
-                throw std::runtime_error("PBM telemetry: ALiBi bias not initialized — model MUST have positional encoding");
-            }
-            const auto& pbm = alibi_bias->getPBMState();
-
-            // Stream 27: PBM_ALIBI_SLOPE_RMS — RMS of ALiBi slopes (host copy, no D2H)
-            {
-                float slope_rms = 0.0f;
-                if (!pbm.alibi_slopes_host.empty()) {
-                    double sum_sq = 0.0;
-                    for (float s : pbm.alibi_slopes_host) sum_sq += static_cast<double>(s) * s;
-                    slope_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(pbm.alibi_slopes_host.size())));
-                }
-                ctx.telemetry.last_obs[27] = slope_rms;
-            }
-
-            // Stream 28: PBM_ALIBI_EFF_BIAS_MAX — max|slope| * batch_max_seq_len
-            {
-                float max_abs_slope = 0.0f;
-                for (float s : pbm.alibi_slopes_host) {
-                    float a = std::fabs(s);
-                    if (a > max_abs_slope) max_abs_slope = a;
-                }
-                ctx.telemetry.last_obs[28] = max_abs_slope * static_cast<float>(payload.max_seq_len);
-            }
-
-            // Stream 29: PBM_ROPE_INV_FREQ_RMS — RMS of RoPE inverse frequencies (host copy)
-            {
-                float freq_rms = 0.0f;
-                if (!pbm.rope_inv_freq_host.empty()) {
-                    double sum_sq = 0.0;
-                    for (float f : pbm.rope_inv_freq_host) sum_sq += static_cast<double>(f) * f;
-                    freq_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(pbm.rope_inv_freq_host.size())));
-                }
-                ctx.telemetry.last_obs[29] = freq_rms;
-            }
-
-            // Stream 30: PBM_BATCH_MAX_SEQ_LEN — actual max sequence length this batch
-            ctx.telemetry.last_obs[30] = static_cast<float>(payload.max_seq_len);
-        }
-
-        GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(
-            ctx.telemetry.last_obs, ctx.global_step);
-        
-        ctx.logging.logger->log("[TelemetryLattice] POST-UPDATE batch=" + std::to_string(batch_idx + 1) + 
-                                " step=" + std::to_string(ctx.global_step) + 
-                                " error_code=" + std::to_string(static_cast<int>(tel_err)));
-        
-        if (tel_err != GRIM::Telemetry::TelemetryError::OK) {
-            // FATAL - telemetry detected NaN/Inf
-            throw std::runtime_error(
-                std::string("FATAL Telemetry: ") + 
-                GRIM::Telemetry::getTelemetryErrorMessage(tel_err));
-        }
-
-        // CSV export: dump all measured telemetry state for this step
-        if (ctx.telemetry.csv_logger) {
-            ctx.telemetry.csv_logger->log(*ctx.telemetry.lattice, ctx.telemetry.last_obs, ctx.global_step);
-        }
-
-        if (batch_idx == 0) {
-            cudaError_t e = cudaDeviceSynchronize();
-            cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
-            if (last != cudaSuccess) {
-                ctx.logging.logger->log("[CUDA] first_batch AFTER telemetry update: " + std::string(cudaGetErrorString(last)));
-                cudaGetLastError();
-            } else {
-                ctx.logging.logger->log("[CUDA] first_batch AFTER telemetry update: ok");
-            }
-        }
+        GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, gm, &payload);
     }
     
     // First-batch CUDA checkpoint (runs even if telemetry disabled): last point before step++
@@ -3820,40 +3546,7 @@ EpochResult runEpoch(
                             Internal::formatMetric("avg_loss", result.avg_loss));
     
     // Log telemetry vectors (multi-scale summary)
-    if (ctx.telemetry.lattice && ctx.telemetry.enabled) {
-        ctx.logging.logger->log("========== TELEMETRY SUMMARY ==========");
-        ctx.logging.logger->log("[Tel-Legend] Levels: L0=stride 1 fast telemetry; L2=stride 4 smoother telemetry; '(s=4)' means the L2 state updates every 4 observations.");
-        ctx.logging.logger->log("[Tel-Legend] Common fields: μ=EMA baseline for the logged stream; σ̃=normalized volatility σ/(|μ|+ε); v_σ=volatility-of-volatility; Δ̄=EMA normalized slope/trend.");
-        ctx.logging.logger->log("[Tel-Legend] Drift/outlier fields: p=directional bias (-1 falling, +1 rising); r_out=soft outlier frequency; δμ=mean drift vs slow anchor μ_a; δσ=volatility drift vs slow anchor σ_a.");
-        
-        // Log level 0 (fast, every step)
-        GRIM::Telemetry::TelemetryVector vec0_loss, vec0_grad;
-        ctx.telemetry.lattice->readVector(0, (int)GRIM::Telemetry::MetricStream::LOSS, &vec0_loss);
-        ctx.telemetry.lattice->readVector(0, (int)GRIM::Telemetry::MetricStream::GRAD_NORM_MEAN, &vec0_grad);
-        
-        std::ostringstream oss;
-        oss << "[Tel-L0] LOSS: μ=" << vec0_loss.mu << " σ̃=" << vec0_loss.sigma_tilde 
-            << " v_σ=" << vec0_loss.v_sigma << " Δ̄=" << vec0_loss.delta_bar 
-            << " p=" << vec0_loss.p << " r_out=" << vec0_loss.r_out;
-        ctx.logging.logger->log(oss.str());
-        
-        oss.str("");
-        oss << "[Tel-L0] GRAD: μ=" << vec0_grad.mu << " σ̃=" << vec0_grad.sigma_tilde 
-            << " v_σ=" << vec0_grad.v_sigma << " δμ=" << vec0_grad.delta_mu 
-            << " δσ=" << vec0_grad.delta_sigma;
-        ctx.logging.logger->log(oss.str());
-        
-        // Log level 2 (medium scale, stride=4)
-        GRIM::Telemetry::TelemetryVector vec2_loss;
-        ctx.telemetry.lattice->readVector(2, (int)GRIM::Telemetry::MetricStream::LOSS, &vec2_loss);
-        
-        oss.str("");
-        oss << "[Tel-L2] LOSS (s=4): μ=" << vec2_loss.mu << " σ̃=" << vec2_loss.sigma_tilde 
-            << " Δ̄=" << vec2_loss.delta_bar << " δμ=" << vec2_loss.delta_mu;
-        ctx.logging.logger->log(oss.str());
-        
-        ctx.logging.logger->log("========================================");
-    }
+    GRIM::Telemetry::logTelemetrySummary(ctx);
     
     // Run validation
     result.validation = runValidation(ctx);
