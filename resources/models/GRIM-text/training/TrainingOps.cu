@@ -402,9 +402,6 @@ void LanguageModel::initGPU() {
             rh_config.d_model = cfg.d_model;
             rh_config.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
             rh_config.num_ops = cfg.reasoning_num_ops;
-            rh_config.stream = primary_stream;
-            rh_config.cublas_handle = training_state_.cublas_handle;
-
             const uint64_t rh_seed = training_state_.weight_init_seed + 10;
             reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(rh_config, rh_seed, primary_stream);
             std::cout << "✓ ReasoningHead layer created (d_total="

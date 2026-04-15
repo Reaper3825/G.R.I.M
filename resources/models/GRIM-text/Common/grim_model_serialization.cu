@@ -252,8 +252,8 @@ bool LanguageModel::save(const std::string& path) {
 
     // ReasoningHead weights
     if (reasoning_head_layer_) {
-        const int dt = reasoning_head_layer_->d_total();
-        const int nops = reasoning_head_layer_->num_ops();
+        const int dt = reasoning_head_layer_->config().d_total();
+        const int nops = reasoning_head_layer_->config().num_ops;
         request.sources.reasoning_head.enabled = true;
         request.sources.reasoning_head.num_ops = nops;
         request.sources.reasoning_head.d_total = dt;
@@ -489,8 +489,8 @@ bool LanguageModel::load(const std::string& path) {
 
     // ReasoningHead weight destinations
     if (reasoning_head_layer_) {
-        const int dt = reasoning_head_layer_->d_total();
-        const int nops = reasoning_head_layer_->num_ops();
+        const int dt = reasoning_head_layer_->config().d_total();
+        const int nops = reasoning_head_layer_->config().num_ops;
         assignWrite(request.reasoning_head.w_op,
                     reasoning_head_layer_->W_op().data,
                     static_cast<std::size_t>(nops) * dt);
