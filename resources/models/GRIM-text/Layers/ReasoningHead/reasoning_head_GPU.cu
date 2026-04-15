@@ -301,9 +301,11 @@ ReasoningHeadLayer& ReasoningHeadLayer::operator=(ReasoningHeadLayer&& other) no
 ReasoningHeadOutput ReasoningHeadLayer::forward(
     Tensor& encoder_output,
     Tensor& atom_embeddings,
-    int* atom_positions,
+    const int* atom_positions,
     int num_atoms,
     int total_tokens,
+    int token_offset,
+    int row_tokens,
     cudaStream_t stream)
 {
     // ════════════════════════════════════════════════════
@@ -311,8 +313,6 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     // ════════════════════════════════════════════════════
     if (!stream)
         throw std::runtime_error("ReasoningHeadLayer::forward: stream is NULL");
-    if (!config_.cublas_handle)
-        throw std::runtime_error("ReasoningHeadLayer::forward: cublas_handle is NULL");
     if (!encoder_output.data)
         throw std::runtime_error("ReasoningHeadLayer::forward: encoder_output.data is NULL");
     if (num_atoms < 0)
