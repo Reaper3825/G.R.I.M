@@ -10,6 +10,8 @@
 //  If you only want one, use the PyTorch reference implementation.
 //======================================================//
 
+#ifndef GRIM_SHARED_PBM_POSITIONALBIASMETHOD_HPP
+#define GRIM_SHARED_PBM_POSITIONALBIASMETHOD_HPP
 #pragma once
 
 #include <cuda_runtime.h>
@@ -203,3 +205,5 @@ inline int getRotaryDimension(const PBMState& state) {
 }
 
 } // namespace GRIM::PBM
+
+#endif // GRIM_SHARED_PBM_POSITIONALBIASMETHOD_HPP

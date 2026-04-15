@@ -129,8 +129,6 @@ void LanguageModel::initInferenceState() {
         rh_cfg.d_model = cfg.d_model;
         rh_cfg.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
         rh_cfg.num_ops = cfg.reasoning_num_ops;
-        rh_cfg.stream = primary_stream;
-        rh_cfg.cublas_handle = training_state_.cublas_handle;
 
         reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(rh_cfg, /*seed=*/0, primary_stream);
         std::cout << "  ✓ ReasoningHeadLayer initialized (inference, d_total="
