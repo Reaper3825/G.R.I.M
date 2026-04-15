@@ -2064,7 +2064,7 @@ void executeStepCoordinatorImpl(
     kernelCheckFinite<<<1, 1, 0, stream>>>(work.v1.data, 1, LayerAccess::numericErrorFlag(layer), kStageV1, layer.config().magnitude_limit);
     kernelCheckFinite<<<1, 1, 0, stream>>>(work.v2.data, 1, LayerAccess::numericErrorFlag(layer), kStageV2, layer.config().magnitude_limit);
 
-    // Fix #1: v1/v2 are DETACHED from p_arg.  No gradient path from execution
+    // v1/v2 are DETACHED from p_arg.  No gradient path from execution
     // value loss back into arg selection.  Only selection CE trains arg selection.
     // v1/v2 grad_fn are left as nullptr (set by materializeSelectedOperands).
 
@@ -2094,11 +2094,11 @@ void executeStepCoordinatorImpl(
     kernelFourOps<<<1, kWarpSize, 0, stream>>>(work.op_results.data, work.v1.data, work.v2.data, kEps, LayerAccess::divClampCount(layer), d_div_flag);
     CUDA_CHECK_KERNEL();
 
-    // Fix #2, Option A: Hard op selection (clean classification).
+    // Hard op selection (clean classification).
     // Forward: argmax(p_op) → pick discrete result.  v_out = results[hard_op].
     // Backward: grad_p_op is ZERO — no execution-value gradient into op selection.
     // The ONLY training signal for op is selection_ce_op (CE classification).
-    // Blending +/-/*/÷ results is semantically meaningless for a register machine.
+    // Blending +/-/*/÷ results is FUCKING STUPID! for a register machine.
     kernelArgmax1DIntData<<<1, kWarpSize, 0, stream>>>(d_exec_idx + 2, work.p_op.data, nop);
     CUDA_CHECK_KERNEL();
 

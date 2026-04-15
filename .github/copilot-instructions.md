@@ -274,7 +274,7 @@ NEVER clip components jointly when one dominates L2 norm — it crushes the smal
 
 - **RMSNorm diagnostic formula**: `expected_output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps)` — not just `gamma_rms`. With small Xavier-init embeddings (rms≈0.006), epsilon contributes ~20%.
 - **Xavier Init LCG**: Uses splitmix64-style per-element seed + 16 iterations. Single-iteration LCG produces correlated outputs (avg|cos| ≈ 0.37 instead of expected 0.036).
-- **Diagnostic buffer selection**: Read `centering_scratch_tensor` (post-centering), not `cached_encoder_output` (pre-centering), in diagnostic functions.
+- **Diagnostic buffer selection**: Read `cached_encoder_output` (post-centering, overwritten after LM head forward) for all hidden-state diagnostics. `centering_scratch_tensor` was deleted — single buffer is the source of truth.
 - **Wall-time vs GPU-time**: `cudaStreamSynchronize` timing includes draining prior pipeline work. Use CUDA events (`cudaEventRecord`/`cudaEventElapsedTime`) to isolate actual kernel time.
 - **Mean reduction double-application**: Loss backward already scales by `1/N`. Do NOT apply additional `1/tokens` scaling in parameter gradient kernels (RMSNorm gamma, etc.).
 - **LibTorch gradient comparisons**: Only valid when baseline uses IDENTICAL config (d_model, num_layers, num_heads, batch_tokens). Different configs produce inherently different gradient magnitudes.

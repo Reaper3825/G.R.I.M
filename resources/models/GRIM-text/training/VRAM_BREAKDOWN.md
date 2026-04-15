@@ -41,12 +41,11 @@ All sizes float32, 4 bytes per element.
 | grad_qkv_concat_tensor | 8192 × (3×768) × 4 | 75,497,472 |
 | grad_qkv_input_tensor | 8192 × 768 × 4 | 25,165,824 |
 | grad_attn_bsm_tensor | 8192 × 768 × 4 | 25,165,824 |
-| centering_scratch_tensor | 8192 × max(768,3072) × 4 | 100,663,296 |
 
-Sum of above buffers: 718,274,560 bytes ≈ **0.67 GiB**.
-- **Running tally: 1.61 + 0.67 = 2.28 GiB**
+Sum of above buffers: 617,611,264 bytes ≈ **0.58 GiB**.
+- **Running tally: 1.61 + 0.58 = 2.19 GiB**
 
-**Startup total (params + these buffers):** 2.28 GiB.
+**Startup total (params + these buffers):** 2.19 GiB.
 
 ---
 
@@ -238,7 +237,6 @@ Symbols: **T** = max_tokens (batch × seq_len), **T_logit** = max_logit_tokens, 
 | grad_ffn_input_tensor | [T, D] | `T × D × 4` | 25.2 MiB |
 | grad_ffn_hidden_tensor | [T, F] | `T × F × 4` | 8192×3072×4 = 100.7 MiB |
 | grad_attn_* (multiple) | [T, D] or [T, 3×D] etc. | See pre-allocated table | 25.2 MiB each, 75.5 MiB for qkv_concat |
-| centering_scratch_tensor | [T, max(D,F)] | `T × max(D,F) × 4` | 100.7 MiB |
 | cached_targets_tensor | [T_logit, 1] | `T_logit × 4` | 32.8 KiB |
 | cached_token_ids_tensor | [1, T] | `T × 4` | 32.8 KiB |
 | cached_token_numeric_values | [1, T] | `T × 4` | 32.8 KiB |

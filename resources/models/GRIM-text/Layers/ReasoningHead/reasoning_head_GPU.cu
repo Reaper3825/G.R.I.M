@@ -1,32 +1,26 @@
 //======================================================//
 //  reasoning_head_GPU.cu
-//  GPU-accelerated Reasoning Head layer
+//  Reasoning Head — thin public coordinator
+//
+//  Owns: validation helpers, construction/move lifecycle,
+//  forward dispatch, backward (ReasoningHeadGradFn).
+//
 //  Pattern B: Layer Ownership — self-allocates weights
-//
-//  Owns: W_op [num_ops, d_total], b_op [num_ops],
-//        w_arg1 [1, d_total], w_arg2 [1, d_total]
-//
-//  Forward: gather → concat → mean-pool → matmul projections
-//  Backward: ReasoningHeadGradFn handles gather/concat/pool;
-//            matmuls use standard MatmulGradFn via autograd::matmul
+//  W_op [num_ops, d_total], b_op [1, num_ops],
+//  w_arg1 [1, d_total], w_arg2 [1, d_total]
 //======================================================//
 
-#include "reasoning_head_GPU.hpp"
-
-#include <stdexcept>
-#include <cstdio>
-#include <algorithm>
+#include "reasoning_head_internal.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 namespace GRIM {
+using namespace ReasoningHeadInternal;
 
 //======================================================//
 //  CUDA Kernels
 //======================================================//
-
-static constexpr int kBlockSize = 256;
 
 // Gather encoder hidden states at atom positions
 // out[i, j] = encoder[positions[i], j]
@@ -184,53 +178,93 @@ __global__ void kernelMeanPoolBackward(
 }
 
 //======================================================//
+//  Validation helpers
+//======================================================//
+void ReasoningHeadLayer::validateConfigOrThrow() const {
+    RH_CHECK(config_.d_model > 0,            "d_model must be positive");
+    RH_CHECK(config_.atom_embedding_dim > 0,  "atom_embedding_dim must be positive");
+    RH_CHECK(config_.num_ops > 0,            "num_ops must be positive");
+}
+
+void ReasoningHeadLayer::validateForwardInputsOrThrow(
+    const Tensor& encoder_output,
+    const Tensor& atom_embeddings,
+    const int* atom_positions,
+    int num_atoms,
+    int total_tokens,
+    int token_offset,
+    int row_tokens) const
+{
+    const int dm = config_.d_model;
+    const int dt = config_.d_total();
+    const int ae = config_.atom_embedding_dim;
+
+    RH_CHECK(total_tokens > 0, "total_tokens must be positive");
+    RH_CHECK(num_atoms >= 0,   "num_atoms must be non-negative");
+    RH_CHECK(token_offset >= 0, "token_offset must be non-negative");
+    RH_CHECK(row_tokens > 0,   "row_tokens must be positive");
+    RH_CHECK(token_offset + row_tokens <= total_tokens,
+             "row-local span exceeds total token extent");
+
+    RH_CHECK_SHAPE2(encoder_output, "encoder_output", total_tokens, dm);
+
+    if (num_atoms > 0) {
+        RH_CHECK(atom_positions != nullptr,
+                 "atom_positions is NULL but num_atoms > 0");
+        RH_CHECK(atom_embeddings.data != nullptr,
+                 "atom_embeddings.data is NULL but num_atoms > 0");
+        RH_CHECK_SHAPE2(atom_embeddings, "atom_embeddings", num_atoms, ae);
+    }
+
+    // Weight shape validation
+    RH_CHECK_SHAPE2(w_op_,   "W_op",   config_.num_ops, dt);
+    RH_CHECK_SHAPE1(b_op_,   "b_op",   config_.num_ops);
+    RH_CHECK_SHAPE2(w_arg1_, "w_arg1", 1, dt);
+    RH_CHECK_SHAPE2(w_arg2_, "w_arg2", 1, dt);
+}
+
+//======================================================//
 //  Constructor
 //======================================================//
+ReasoningHeadLayer::~ReasoningHeadLayer() {
+    if (d_numeric_error_flag_) cudaFree(d_numeric_error_flag_);
+}
+
 ReasoningHeadLayer::ReasoningHeadLayer(const ReasoningHeadConfig& config,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
     : config_(config)
 {
-    if (config_.d_model <= 0)
-        throw std::runtime_error("ReasoningHeadLayer: d_model must be positive");
-    if (config_.atom_embedding_dim <= 0)
-        throw std::runtime_error("ReasoningHeadLayer: atom_embedding_dim must be positive");
-    if (config_.num_ops <= 0)
-        throw std::runtime_error("ReasoningHeadLayer: num_ops must be positive");
-    if (!init_stream)
-        throw std::runtime_error("ReasoningHeadLayer: init_stream is NULL");
+    validateConfigOrThrow();
+    RH_CHECK(init_stream != nullptr, "init_stream is NULL");
 
-    const int dt = config_.d_total();
+    // Device-side error tracking
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_numeric_error_flag_), sizeof(int), "rh_numeric_error_flag");
+    RH_CUDA_CHECK(cudaMemsetAsync(d_numeric_error_flag_, 0, sizeof(int), init_stream));
 
-    // W_op: [num_ops, d_total]
-    w_op_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(config_.num_ops, dt),
-                          true, init_stream, "reasoning_head.W_op");
-    w_op_.requires_grad_();
-    w_op_.ensure_grad();
-    Tensor::xavier_uniform_(w_op_, seed, init_stream);
+    const int dt  = config_.d_total();
+    const int nop = config_.num_ops;
 
-    // b_op: [num_ops]
-    b_op_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(1, config_.num_ops),
-                          true, init_stream, "reasoning_head.b_op");
-    b_op_.requires_grad_();
-    b_op_.ensure_grad();
+    auto make_param = [&](int rows, int cols, uint64_t s, const char* name) -> Tensor {
+        auto t = Tensor::zeros(TensorContract::TensorShape::make_BSM(rows, cols),
+                               true, init_stream, name);
+        t.requires_grad_();
+        t.ensure_grad();
+        Tensor::xavier_uniform_(t, s, init_stream);
+        return t;
+    };
+    auto make_bias = [&](int cols, const char* name) -> Tensor {
+        auto t = Tensor::zeros(TensorContract::TensorShape::make_BSM(1, cols),
+                               true, init_stream, name);
+        t.requires_grad_();
+        t.ensure_grad();
+        return t;
+    };
 
-    // w_arg1: [1, d_total]
-    w_arg1_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(1, dt),
-                            true, init_stream, "reasoning_head.w_arg1");
-    w_arg1_.requires_grad_();
-    w_arg1_.ensure_grad();
-    Tensor::xavier_uniform_(w_arg1_, seed + 1, init_stream);
-
-    // w_arg2: [1, d_total]
-    w_arg2_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(1, dt),
-                            true, init_stream, "reasoning_head.w_arg2");
-    w_arg2_.requires_grad_();
-    w_arg2_.ensure_grad();
-    Tensor::xavier_uniform_(w_arg2_, seed + 2, init_stream);
-
-    fprintf(stdout, "[ReasoningHeadLayer] Initialized: d_model=%d, atom_dim=%d, d_total=%d, num_ops=%d\n",
-            config_.d_model, config_.atom_embedding_dim, dt, config_.num_ops);
+    w_op_   = make_param(nop, dt, seed,     "reasoning_head.W_op");
+    b_op_   = make_bias(nop,                "reasoning_head.b_op");
+    w_arg1_ = make_param(1, dt, seed + 1,  "reasoning_head.w_arg1");
+    w_arg2_ = make_param(1, dt, seed + 2,  "reasoning_head.w_arg2");
 }
 
 //======================================================//
@@ -238,22 +272,25 @@ ReasoningHeadLayer::ReasoningHeadLayer(const ReasoningHeadConfig& config,
 //======================================================//
 ReasoningHeadLayer::ReasoningHeadLayer(ReasoningHeadLayer&& other) noexcept
     : config_(other.config_)
+    , d_numeric_error_flag_(other.d_numeric_error_flag_)
     , w_op_(std::move(other.w_op_))
     , b_op_(std::move(other.b_op_))
     , w_arg1_(std::move(other.w_arg1_))
     , w_arg2_(std::move(other.w_arg2_))
 {
-    other.config_.cublas_handle = nullptr;
+    other.d_numeric_error_flag_ = nullptr;
 }
 
 ReasoningHeadLayer& ReasoningHeadLayer::operator=(ReasoningHeadLayer&& other) noexcept {
     if (this != &other) {
+        if (d_numeric_error_flag_) cudaFree(d_numeric_error_flag_);
         config_ = other.config_;
+        d_numeric_error_flag_ = other.d_numeric_error_flag_;
+        other.d_numeric_error_flag_ = nullptr;
         w_op_ = std::move(other.w_op_);
         b_op_ = std::move(other.b_op_);
         w_arg1_ = std::move(other.w_arg1_);
         w_arg2_ = std::move(other.w_arg2_);
-        other.config_.cublas_handle = nullptr;
     }
     return *this;
 }

@@ -327,9 +327,6 @@ void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 	safe_zero(grad_qkv_concat_tensor, "grad_qkv_concat");
 	safe_zero(grad_qkv_input_tensor, "grad_qkv_input");
 	safe_zero(grad_attn_bsm_tensor, "grad_attn_bsm");
-	 
-	// Issue #43: Centering scratch (not strictly a gradient, but needs zeroing)
-	safe_zero(centering_scratch_tensor, "centering_scratch");
 }
 
 //======================================================//

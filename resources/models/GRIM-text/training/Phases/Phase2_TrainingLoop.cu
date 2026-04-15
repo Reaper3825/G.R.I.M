@@ -1691,10 +1691,8 @@ BatchResult processBatch(
                 const float avg_per_pos_range = per_pos_range_sum / sample_positions;
                 
                 // --- Hidden state norms at LM head input ---
-                const bool use_centered_src = ctx.model->getConfig().lm_head_center_hidden_states;
-                const float* h_src = (use_centered_src && ts.centering_scratch_tensor.data)
-                    ? ts.centering_scratch_tensor.data
-                    : ts.cached_encoder_output.data;
+                // cached_encoder_output contains centered data (overwritten after LM head forward)
+                const float* h_src = ts.cached_encoder_output.data;
                 
                 float h_rms_max = -std::numeric_limits<float>::infinity();
                 float h_rms_min = std::numeric_limits<float>::infinity();
@@ -1856,76 +1854,6 @@ BatchResult processBatch(
                              << " >> 3.0. Possible hidden-weight alignment or missing 1/sqrt(d) scaling.\n";
                 }
                 ctx.logging.logger->log(scale_eq.str());
-            }
-            
-            // ================================================================
-            // HIDDEN STATE DIAGNOSTICS: Cosine similarity between positions
-            // Issue #115 FIX: Use centered buffer when centering is enabled!
-            // ts.cached_encoder_output = RAW encoder output BEFORE centering
-            // ts.centering_scratch_tensor = CENTERED output (what LM head actually uses)
-            // ================================================================
-            const bool use_centering_for_diag = ctx.model->getConfig().lm_head_center_hidden_states;
-            const float* hidden_source = (use_centering_for_diag && ts.centering_scratch_tensor.data)
-                ? ts.centering_scratch_tensor.data  // CENTERED: actual LM head input
-                : ts.cached_encoder_output.data;    // UNCENTERED: raw encoder output
-            
-            if (hidden_source && sample_positions >= 2) {
-                const size_t hidden_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
-                std::vector<float> hidden_sample(sample_positions * d_model);
-                cudaMemcpy(hidden_sample.data(), hidden_source, hidden_bytes, cudaMemcpyDeviceToHost);
-                
-                // Compute cosine similarity between position pairs (sample 5 pairs)
-                auto compute_cosine = [&](int i, int j) -> float {
-                    float dot = 0.0f, sq_i = 0.0f, sq_j = 0.0f;
-                    for (int d = 0; d < d_model; ++d) {
-                        float hi = hidden_sample[i * d_model + d];
-                        float hj = hidden_sample[j * d_model + d];
-                        dot += hi * hj;
-                        sq_i += hi * hi;
-                        sq_j += hj * hj;
-                    }
-                    // cos = dot / (rms_i * rms_j * d_model)
-                    const float rms_i = std::sqrt(sq_i / d_model);
-                    const float rms_j = std::sqrt(sq_j / d_model);
-                    return dot / (rms_i * rms_j * d_model + 1e-8f);
-                };
-                
-                // Compute pairwise cosines: (0,1), (0,10), (0,25), (10,25), (25,49)
-                std::ostringstream hidden_stats;
-                hidden_stats << "[HiddenCosine] batch=" << (batch_idx + 1) << " cos(h_i,h_j)=[";
-                const int pairs[][2] = {{0, 1}, {0, std::min(10, sample_positions-1)}, 
-                                        {0, std::min(25, sample_positions-1)},
-                                        {std::min(10, sample_positions-1), std::min(25, sample_positions-1)},
-                                        {std::min(25, sample_positions-1), sample_positions-1}};
-                for (int p = 0; p < 5; ++p) {
-                    int i = pairs[p][0], j = pairs[p][1];
-                    if (i < sample_positions && j < sample_positions && i != j) {
-                        float cos_ij = compute_cosine(i, j);
-                        hidden_stats << "(" << i << "," << j << "):" << Internal::formatScalar(cos_ij, 3);
-                        if (p < 4) hidden_stats << ",";
-                    }
-                }
-                hidden_stats << "]";
-                
-                // Compute average pairwise cosine over the sampled positions.
-                // Log both signed cosine and average absolute cosine so this can be
-                // compared directly with HIDDEN_CORRELATION diagnostics.
-                float cos_sum = 0.0f;
-                float abs_cos_sum = 0.0f;
-                int cos_count = 0;
-                for (int i = 0; i < std::min(10, sample_positions); ++i) {
-                    for (int j = i + 1; j < std::min(10, sample_positions); ++j) {
-                        float c = compute_cosine(i, j);
-                        cos_sum += c;
-                        abs_cos_sum += std::abs(c);
-                        cos_count++;
-                    }
-                }
-                float avg_cos = (cos_count > 0) ? cos_sum / cos_count : 0.0f;
-                float avg_abs_cos = (cos_count > 0) ? abs_cos_sum / cos_count : 0.0f;
-                hidden_stats << " avg_cos=" << Internal::formatScalar(avg_cos, 8)
-                            << " avg|cos|=" << Internal::formatScalar(avg_abs_cos, 8);
-                ctx.logging.logger->log(hidden_stats.str());
             }
             
             // RHO_BUILDUP_EQUATION: Per-layer hidden state correlation

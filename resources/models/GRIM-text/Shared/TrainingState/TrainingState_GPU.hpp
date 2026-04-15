@@ -210,13 +210,6 @@ struct TrainingState {
 
     
     //======================================================//
-    //  Issue #43 FIX: Centering Scratch Buffer
-    //======================================================//
-    Tensor centering_scratch_tensor;
-    size_t centering_scratch_elems() const { return centering_scratch_tensor.numel(); }
-    float* centered_activation_scratch() const { return centering_scratch_tensor.data; }
-
-    //======================================================//
     //  LOSS COMPUTATION SCRATCH
     //======================================================//
     Tensor d_loss_scratch;         // Per-token losses

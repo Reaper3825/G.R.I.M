@@ -124,7 +124,7 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
 {
     if (!file_.is_open()) return;
 
-    // Stream names (matches MetricStream enum order)
+    // Stream names (matches MetricStream enum order, indices 0-37)
     static const char* stream_names[] = {
         "loss", "grad_norm_mean", "grad_norm_max", "learning_rate", "tokens_per_batch",
         "rho_final", "rho_growth", "rho_worst_delta", "h_rms_growth",
@@ -134,7 +134,9 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
         "exec_op_entropy", "exec_div_clamp_rate", "exec_max_p_write", "exec_active_ratio",
         "eb_inject_gate", "eb_read_gate_mean", "eb_inject_weight_norm",
         "eb_read_weight_norm", "eb_loss_frac", "sb_atom_embed_rms",
-        "pbm_alibi_slope_rms", "pbm_alibi_eff_bias_max", "pbm_rope_inv_freq_rms", "pbm_batch_max_seq_len"
+        "pbm_alibi_slope_rms", "pbm_alibi_eff_bias_max", "pbm_rope_inv_freq_rms", "pbm_batch_max_seq_len",
+        "rho_raw_avg_abs_dot", "rho_raw_avg_norm_prod", "rho_raw_h_rms_min", "rho_raw_h_rms_max",
+        "rms_gamma_pre_attn_rms", "rms_gamma_pre_ffn_rms", "rms_gamma_final_rms"
     };
     static constexpr int num_named_streams = sizeof(stream_names) / sizeof(stream_names[0]);
 

@@ -221,6 +221,21 @@ void computeRhoDiagnostic(
         }
     }
 
+    // LM head input (post-centering when centering is enabled).
+    // cached_encoder_output is overwritten with centered data after LM head forward.
+    // Using layer_id = num_layers to distinguish from raw encoder layers.
+    if (ts.cached_encoder_output.data) {
+        auto raw = compute_rho(ts.cached_encoder_output.data);
+        float delta = 0.0f;
+        int vs_id = -2;
+        if (!layer_rhos.empty()) {
+            delta = raw.rho - layer_rhos.back().rho;
+            vs_id = layer_rhos.back().layer_id;
+        }
+        layer_rhos.push_back({num_layers, vs_id, raw.rho, raw.avg_rms, delta,
+                              raw.avg_abs_dot, raw.avg_norm_prod, raw.rms_min, raw.rms_max});
+    }
+
     // Build the equation log
     std::ostringstream rho_eq;
     rho_eq << std::fixed << std::setprecision(4);
@@ -244,6 +259,8 @@ void computeRhoDiagnostic(
         std::string label;
         if (lr.layer_id == -1) {
             label = "emb  ";
+        } else if (lr.layer_id == num_layers) {
+            label = "lm_in";
         } else {
             label = "L" + std::to_string(lr.layer_id);
             if (lr.layer_id < 10) label += "   ";
@@ -272,7 +289,7 @@ void computeRhoDiagnostic(
         rho_eq << std::setw(9) << lr.rms << "  ";
 
         // Interpretation
-        const bool is_encoder = (lr.layer_id >= 0);
+        const bool is_encoder = (lr.layer_id >= 0 && lr.layer_id < num_layers);
         if (lr.rho > 0.8f) {
             rho_eq << "[ANOMALY] COLLAPSE RISK";
         } else if (lr.rho > 0.5f) {
@@ -305,8 +322,13 @@ void computeRhoDiagnostic(
         float h_rms_growth_ratio = last_lr.rms / std::max(first_lr.rms, 1e-8f);
 
         // Honest labels for what we actually measured
-        std::string first_label = (first_lr.layer_id == -1) ? "emb" : "L" + std::to_string(first_lr.layer_id);
-        std::string last_label  = (last_lr.layer_id  == -1) ? "emb" : "L" + std::to_string(last_lr.layer_id);
+        auto make_label = [&](int id) -> std::string {
+            if (id == -1) return "emb";
+            if (id == num_layers) return "lm_in";
+            return "L" + std::to_string(id);
+        };
+        std::string first_label = make_label(first_lr.layer_id);
+        std::string last_label  = make_label(last_lr.layer_id);
 
         // Write rho observations directly into the telemetry observation array
         // (streams 5-8 persist between diagnostic intervals via last_obs[])
@@ -332,8 +354,7 @@ void computeRhoDiagnostic(
             std::string vs_label = "?";
             for (const auto& lr : layer_rhos) {
                 if (lr.layer_id == max_delta_layer) {
-                    if (lr.delta_vs_id == -1) vs_label = "emb";
-                    else if (lr.delta_vs_id >= 0) vs_label = "L" + std::to_string(lr.delta_vs_id);
+                    vs_label = make_label(lr.delta_vs_id);
                     break;
                 }
             }

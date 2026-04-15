@@ -1,13 +1,12 @@
 //======================================================//
-//  Reasoning Head Layer - GPU
-//  Parallel head (alongside LMHead)
+//  reasoning_head_GPU.hpp
+//  Reasoning Head — GPU
 //
-//  Gathers encoder hidden states at atom positions,
-//  concatenates with ScratchBlock atom embeddings,
-//  mean-pools, then projects to:
-//    op_logits   [1, num_ops]
-//    arg1_logits [1, num_atoms]
-//    arg2_logits [1, num_atoms]
+//  Declares: ReasoningHeadConfig, ReasoningHeadOutput,
+//  ReasoningHeadGradFn, ReasoningHeadLayer.
+//
+//  No CUDA kernels here. No orchestration logic.
+//  No serialization code.
 //
 //  Forward:
 //    H_atoms  = gather(encoder_output, atom_positions)  [num_atoms, d_model]
@@ -23,13 +22,16 @@
 #ifdef USE_CUDA
 
 #include <cuda_runtime.h>
-#include <cublas_v2.h>
 #include <cstdint>
 #include <memory>
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
+
+namespace ReasoningHeadInternal {
+struct LayerAccess;
+}
 
 //======================================================//
 //  ReasoningHeadOutput — returned from forward
@@ -42,13 +44,15 @@ struct ReasoningHeadOutput {
 
 //======================================================//
 //  ReasoningHeadConfig
+//
+//  Layer-owned behavior only.
+//  Does NOT carry orchestration-owned concerns:
+//  stream, cuBLAS handle, temperature schedule, etc.
 //======================================================//
 struct ReasoningHeadConfig {
     int d_model = 0;
     int atom_embedding_dim = 0;
-    int num_ops = 8;
-    cudaStream_t stream = nullptr;
-    cublasHandle_t cublas_handle = nullptr;
+    int num_ops = 0;
 
     int d_total() const { return d_model + atom_embedding_dim; }
 };
@@ -104,7 +108,7 @@ public:
                                 uint64_t seed,
                                 cudaStream_t init_stream);
 
-    ~ReasoningHeadLayer() = default;
+    ~ReasoningHeadLayer();
 
     ReasoningHeadLayer(ReasoningHeadLayer&& other) noexcept;
     ReasoningHeadLayer& operator=(ReasoningHeadLayer&& other) noexcept;
@@ -112,21 +116,43 @@ public:
     ReasoningHeadLayer(const ReasoningHeadLayer&) = delete;
     ReasoningHeadLayer& operator=(const ReasoningHeadLayer&) = delete;
 
-    /// Forward pass.
-    /// encoder_output:  [total_tokens, d_model]  — Tensor with grad_fn from encoder
-    /// atom_embeddings: [num_atoms, atom_embedding_dim] — canonical copy-first Tensor
-    /// atom_positions:  device int* [num_atoms] — token indices
-    /// num_atoms:       HOST int (from D2H copy of numAtomsBuffer)
-    /// total_tokens:    HOST int
+    //--------------------------------------------------//
+    // Forward pass — row-local contract
+    //
+    // encoder_output:  [total_tokens, d_model]
+    // atom_embeddings: [num_atoms, atom_embedding_dim]
+    // atom_positions:  device const int* [num_atoms] — row-local token indices in [0, row_tokens)
+    // num_atoms:       HOST int
+    // total_tokens:    HOST int
+    // token_offset:    start of this row in encoder_output
+    // row_tokens:      number of tokens in this row
+    //--------------------------------------------------//
     ReasoningHeadOutput forward(
         Tensor& encoder_output,
         Tensor& atom_embeddings,
-        int* atom_positions,
+        const int* atom_positions,
         int num_atoms,
         int total_tokens,
+        int token_offset,
+        int row_tokens,
         cudaStream_t stream);
 
-    // Parameter access
+    //--------------------------------------------------//
+    // Validation (hard-fail)
+    //--------------------------------------------------//
+    void validateConfigOrThrow() const;
+    void validateForwardInputsOrThrow(
+        const Tensor& encoder_output,
+        const Tensor& atom_embeddings,
+        const int* atom_positions,
+        int num_atoms,
+        int total_tokens,
+        int token_offset,
+        int row_tokens) const;
+
+    //--------------------------------------------------//
+    // Parameter access (for registration + serialization)
+    //--------------------------------------------------//
     Tensor& W_op()    { return w_op_; }
     Tensor& b_op()    { return b_op_; }
     Tensor& w_arg1()  { return w_arg1_; }
@@ -136,18 +162,19 @@ public:
     const Tensor& w_arg1() const { return w_arg1_; }
     const Tensor& w_arg2() const { return w_arg2_; }
 
-    void setStream(cudaStream_t s) { config_.stream = s; }
-    void setCublasHandle(cublasHandle_t h) { config_.cublas_handle = h; }
-
-    int d_model() const { return config_.d_model; }
-    int atom_embedding_dim() const { return config_.atom_embedding_dim; }
-    int num_ops() const { return config_.num_ops; }
-    int d_total() const { return config_.d_total(); }
+    const ReasoningHeadConfig& config() const { return config_; }
 
 private:
+    friend struct ReasoningHeadInternal::LayerAccess;
+
     ReasoningHeadConfig config_;
+
+    // Device-side error tracking
+    int* d_numeric_error_flag_ = nullptr;
+
+    // Learnable tensors (Pattern B: layer-owned)
     Tensor w_op_;    // [num_ops, d_total]
-    Tensor b_op_;    // [num_ops]
+    Tensor b_op_;    // [1, num_ops]
     Tensor w_arg1_;  // [1, d_total]
     Tensor w_arg2_;  // [1, d_total]
 };

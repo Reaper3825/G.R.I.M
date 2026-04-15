@@ -328,6 +328,9 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RHO_RAW_AVG_NORM_PROD: return "rho_raw_avg_norm_prod";
         case MetricStream::RHO_RAW_H_RMS_MIN: return "rho_raw_h_rms_min";
         case MetricStream::RHO_RAW_H_RMS_MAX: return "rho_raw_h_rms_max";
+        case MetricStream::RMS_GAMMA_PRE_ATTN_RMS: return "rms_gamma_pre_attn_rms";
+        case MetricStream::RMS_GAMMA_PRE_FFN_RMS: return "rms_gamma_pre_ffn_rms";
+        case MetricStream::RMS_GAMMA_FINAL_RMS: return "rms_gamma_final_rms";
         default: return "unknown";
     }
 }

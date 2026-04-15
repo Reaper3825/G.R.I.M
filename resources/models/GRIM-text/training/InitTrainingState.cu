@@ -448,17 +448,10 @@ void LanguageModel::initTrainingState() {
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
         false, grad_stream, "grad_attn_bsm_scratch");
     
-    // Issue #43 FIX: Centering scratch buffer for encoder weight gradients
-    // Size: max(d_model, d_ff) to handle both model and FFN width activations
-    const int centering_width = std::max(cfg.d_model, cfg.d_ff);
-    training_state_.centering_scratch_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, centering_width),
-        false, grad_stream, "centered_activation_scratch");
-    std::cout << "📐 Issue #43: Allocated centering scratch tensor (" 
-              << (training_state_.centering_scratch_tensor.numel() * sizeof(float) / (1024*1024)) << " MB)" << std::endl;
-
     // Rule 20: NO BACKWARDS COMPATIBILITY - callers must use tensor.data directly
     // Removed raw pointer alias assignments
+    // centering_scratch_tensor DELETED — cached_encoder_output is now overwritten
+    // with centered data after LM head forward (single source of truth)
 
     // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages
     // (was ~56MB dead GPU allocation). Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.

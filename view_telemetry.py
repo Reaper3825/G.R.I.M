@@ -733,6 +733,154 @@ def main():
     else:
         print("PBM diagnostics figure skipped: no PBM streams in CSV")
 
+    # --- Figure 9: Rho Raw Decomposition ---
+    rho_raw_dot = streams.get("rho_raw_avg_abs_dot")
+    rho_raw_norm = streams.get("rho_raw_avg_norm_prod")
+    rho_raw_hmin = streams.get("rho_raw_h_rms_min")
+    rho_raw_hmax = streams.get("rho_raw_h_rms_max")
+
+    has_rho_raw = any(s is not None for s in [rho_raw_dot, rho_raw_norm, rho_raw_hmin, rho_raw_hmax])
+    if has_rho_raw:
+        fig9 = plt.figure(figsize=(16, 10), constrained_layout=True)
+        fig9.suptitle("GRIM-text Telemetry — Rho Raw Decomposition", fontsize=14, fontweight="bold")
+        gs9 = GridSpec(2, 2, figure=fig9)
+
+        # 9-1a) avg|dot(h_i,h_j)| — alignment numerator
+        ax = fig9.add_subplot(gs9[0, 0])
+        if rho_raw_dot is not None:
+            ax.plot(rho_raw_dot.index, rho_raw_dot["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:blue")
+            ax.plot(rho_raw_dot.index, smooth(rho_raw_dot["raw_observation"]), linewidth=1.5, color="tab:blue", label="avg|dot(h_i,h_j)|")
+        ax.set_ylabel("Average Absolute Dot Product")
+        ax.set_title("Alignment Numerator (↑ = more aligned)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 9-1b) avg(||h_i||·||h_j||·d) — normalization denominator
+        ax = fig9.add_subplot(gs9[0, 1])
+        if rho_raw_norm is not None:
+            ax.plot(rho_raw_norm.index, rho_raw_norm["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:orange")
+            ax.plot(rho_raw_norm.index, smooth(rho_raw_norm["raw_observation"]), linewidth=1.5, color="tab:orange", label="avg(‖h_i‖·‖h_j‖·d)")
+        ax.set_ylabel("Normalization Denominator")
+        ax.set_title("Normalization Denominator (scale factor)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 9-2a) h_rms min/max range — collapse/explosion detector
+        ax = fig9.add_subplot(gs9[1, 0])
+        if rho_raw_hmin is not None:
+            ax.plot(rho_raw_hmin.index, smooth(rho_raw_hmin["raw_observation"]), linewidth=1.5, color="tab:green", label="h_rms min")
+        if rho_raw_hmax is not None:
+            ax.plot(rho_raw_hmax.index, smooth(rho_raw_hmax["raw_observation"]), linewidth=1.5, color="tab:red", label="h_rms max")
+        if rho_raw_hmin is not None and rho_raw_hmax is not None:
+            common = rho_raw_hmin.index.intersection(rho_raw_hmax.index)
+            ax.fill_between(common,
+                            smooth(rho_raw_hmin.loc[common, "raw_observation"]),
+                            smooth(rho_raw_hmax.loc[common, "raw_observation"]),
+                            alpha=0.15, color="tab:gray")
+        ax.set_ylabel("h_rms")
+        ax.set_title("Per-Position h_rms Range (min/max)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 9-2b) Rho raw dot/norm ratio + rho_final overlay
+        ax = fig9.add_subplot(gs9[1, 1])
+        if rho_raw_dot is not None and rho_raw_norm is not None:
+            common = rho_raw_dot.index.intersection(rho_raw_norm.index)
+            dot_vals = rho_raw_dot.loc[common, "raw_observation"].values
+            norm_vals = rho_raw_norm.loc[common, "raw_observation"].values
+            ratio = np.where(norm_vals > 1e-12, dot_vals / norm_vals, 0.0)
+            ax.plot(common, smooth(pd.Series(ratio, index=common)), linewidth=1.5, color="tab:purple", label="dot/norm ratio")
+        if rho_final is not None:
+            ax.plot(rho_final.index, smooth(rho_final["raw_observation"]), linewidth=1.2, linestyle="--", color="tab:blue", alpha=0.7, label="rho_final")
+        ax.set_ylabel("Ratio / ρ")
+        ax.set_title("Dot/Norm Ratio vs ρ_final (should track)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        fig9.savefig(os.path.splitext(path)[0] + "_rho_raw.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_rho_raw.png")
+    else:
+        print("Rho raw decomposition figure skipped: no rho raw streams in CSV")
+
+    # --- Figure 10: RMSNorm Gamma Tracking ---
+    gamma_pre_attn = streams.get("rms_gamma_pre_attn_rms")
+    gamma_pre_ffn = streams.get("rms_gamma_pre_ffn_rms")
+    gamma_final = streams.get("rms_gamma_final_rms")
+
+    has_gamma = any(s is not None for s in [gamma_pre_attn, gamma_pre_ffn, gamma_final])
+    if has_gamma:
+        fig10 = plt.figure(figsize=(16, 10), constrained_layout=True)
+        fig10.suptitle("GRIM-text Telemetry — RMSNorm Learned Gamma", fontsize=14, fontweight="bold")
+        gs10 = GridSpec(2, 2, figure=fig10)
+
+        # 10-1a) All gamma RMS values overlaid
+        ax = fig10.add_subplot(gs10[0, 0])
+        if gamma_pre_attn is not None:
+            ax.plot(gamma_pre_attn.index, gamma_pre_attn["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:blue")
+            ax.plot(gamma_pre_attn.index, smooth(gamma_pre_attn["raw_observation"]), linewidth=1.5, color="tab:blue", label="γ₁ pre-attn (mean)")
+        if gamma_pre_ffn is not None:
+            ax.plot(gamma_pre_ffn.index, gamma_pre_ffn["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:orange")
+            ax.plot(gamma_pre_ffn.index, smooth(gamma_pre_ffn["raw_observation"]), linewidth=1.5, color="tab:orange", label="γ₂ pre-FFN (mean)")
+        if gamma_final is not None:
+            ax.plot(gamma_final.index, gamma_final["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:green")
+            ax.plot(gamma_final.index, smooth(gamma_final["raw_observation"]), linewidth=1.5, color="tab:green", label="γ_final (LM head)")
+        ax.axhline(1.0, color="gray", linewidth=1, linestyle="--", alpha=0.5, label="init (1.0)")
+        ax.set_ylabel("Gamma RMS")
+        ax.set_title("RMSNorm Gamma RMS (init=1.0, drift → learning)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 10-1b) Gamma deviation from init (% change)
+        ax = fig10.add_subplot(gs10[0, 1])
+        for name, s, color in [("γ₁ pre-attn", gamma_pre_attn, "tab:blue"),
+                                ("γ₂ pre-FFN", gamma_pre_ffn, "tab:orange"),
+                                ("γ_final", gamma_final, "tab:green")]:
+            if s is not None:
+                pct_change = (s["raw_observation"] - 1.0) * 100.0
+                ax.plot(s.index, smooth(pct_change), linewidth=1.5, color=color, label=name)
+        ax.axhline(0, color="gray", linewidth=0.8, linestyle="--", alpha=0.5)
+        ax.set_ylabel("% Deviation from Init")
+        ax.set_title("Gamma Drift from Initialization")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 10-2a) Gamma momentum (p) — is gamma trending?
+        ax = fig10.add_subplot(gs10[1, 0])
+        for name, s, color in [("γ₁ pre-attn", gamma_pre_attn, "tab:blue"),
+                                ("γ₂ pre-FFN", gamma_pre_ffn, "tab:orange"),
+                                ("γ_final", gamma_final, "tab:green")]:
+            if s is not None and "p" in s.columns:
+                ax.plot(s.index, smooth(s["p"], 10), linewidth=1.2, color=color, label=f"{name} p")
+        ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+        ax.set_ylabel("p (momentum)")
+        ax.set_title("Gamma Momentum (trending direction)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 10-2b) Gamma vs loss overlay — causal relationship
+        ax = fig10.add_subplot(gs10[1, 1])
+        if gamma_pre_attn is not None:
+            ax.plot(gamma_pre_attn.index, smooth(gamma_pre_attn["raw_observation"]), linewidth=1.2, color="tab:blue", label="γ₁ pre-attn")
+        if gamma_pre_ffn is not None:
+            ax.plot(gamma_pre_ffn.index, smooth(gamma_pre_ffn["raw_observation"]), linewidth=1.2, color="tab:orange", label="γ₂ pre-FFN")
+        if gamma_final is not None:
+            ax.plot(gamma_final.index, smooth(gamma_final["raw_observation"]), linewidth=1.2, color="tab:green", label="γ_final")
+        ax.set_ylabel("Gamma RMS", color="tab:blue")
+        ax.axhline(1.0, color="gray", linewidth=0.8, linestyle="--", alpha=0.3)
+        if loss is not None:
+            ax2 = ax.twinx()
+            ax2.plot(loss.index, smooth(loss["raw_observation"]), linewidth=1, color="tab:gray", alpha=0.5, label="loss (sm20)")
+            ax2.set_ylabel("Loss", color="tab:gray")
+            ax2.legend(loc="center right", fontsize=8)
+        ax.set_title("Gamma vs Loss (correlation check)")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        fig10.savefig(os.path.splitext(path)[0] + "_rms_gamma.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_rms_gamma.png")
+    else:
+        print("RMS gamma figure skipped: no gamma streams in CSV")
+
     plt.show()
 
 if __name__ == "__main__":

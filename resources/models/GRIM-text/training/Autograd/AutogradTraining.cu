@@ -16,7 +16,6 @@
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/MTP/MTP_GPU.hpp"
-#include "../../Shared/Gradients/GradientCC_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
@@ -59,15 +58,6 @@ namespace Autograd {
 namespace {
 
 constexpr int kBlockSize = 256;
-
-// Thin wrapper around shared launchScaleGradients (GradientCC_GPU)
-// Accepts size_t for convenience since .numel() returns size_t
-[[maybe_unused]] inline void scaleGradBuffer(float* data, size_t n, float scale, cudaStream_t stream) {
-    if (!data || n == 0) {
-        return;
-    }
-    launchScaleGradients(data, static_cast<int>(n), scale, stream);
-}
 
 //======================================================//
 // Issue #57 FIX: Position embedding support
@@ -843,7 +833,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Final encoder output pointer for LM head and diagnostics
     result.encoder_output = encoder_output;
     
-    // Copy to scratch buffer for diagnostics and inference
+    // Copy raw encoder output to cached buffer for inference slot selector
+    // (prefill reads this BEFORE LM head centering is applied).
+    // After LM head forward below, we overwrite with the actual LM head input
+    // (centered if centering is on, raw otherwise) — single source of truth.
     if (ts->cached_encoder_output.data) {
         cudaMemcpyAsync(ts->cached_encoder_output.data, encoder_output,
                         static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
@@ -898,14 +891,17 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Forward pass: builds autograd graph through RMSNorm → centering → matmul → bias
     Tensor logits_tensor = ctx.lm_head->forward(intermediates.encoder_output_tensor, intermediates.centered_encoder_output);
     
-    // Copy centered data to scratch buffer for diagnostics (Issue #115)
-    if (cfg->lm_head_center_hidden_states && ts->centering_scratch_tensor.data && intermediates.centered_encoder_output.data) {
-        cudaMemcpyAsync(ts->centering_scratch_tensor.data, intermediates.centered_encoder_output.data,
+    // Overwrite cached_encoder_output with what the LM head actually used.
+    // When centering is on, this is the centered output; otherwise the raw encoder output
+    // (already written above, so this is a no-op in that case).
+    // Single source of truth: every diagnostic reads cached_encoder_output, period.
+    if (cfg->lm_head_center_hidden_states && ts->cached_encoder_output.data && intermediates.centered_encoder_output.data) {
+        cudaMemcpyAsync(ts->cached_encoder_output.data, intermediates.centered_encoder_output.data,
                        static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
                        cudaMemcpyDeviceToDevice, ctx.stream);
     }
     
-    // Pointer for diagnostic reads (centered if enabled, raw encoder output otherwise)
+    // Pointer for inline diagnostic reads — same data as cached_encoder_output
     float* lm_input_ptr = cfg->lm_head_center_hidden_states 
         ? intermediates.centered_encoder_output.data 
         : intermediates.encoder_output_tensor.data;

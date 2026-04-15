@@ -177,6 +177,10 @@ enum class MetricStream : int {
     RHO_RAW_AVG_NORM_PROD = 32,      // mean(‖h_i‖·‖h_j‖·d) — normalization denominator
     RHO_RAW_H_RMS_MIN = 33,          // min per-position h_rms — collapse detector
     RHO_RAW_H_RMS_MAX = 34,          // max per-position h_rms — explosion detector
+    // RMSNorm learned gamma tracking — detect gamma drift/collapse
+    RMS_GAMMA_PRE_ATTN_RMS = 35,     // mean RMS(γ₁) across encoder layers (pre-attention)
+    RMS_GAMMA_PRE_FFN_RMS = 36,      // mean RMS(γ₂) across encoder layers (pre-FFN)
+    RMS_GAMMA_FINAL_RMS = 37,        // RMS(γ_final) — LM head final RMSNorm gamma
 };
 
 const char* getMetricStreamName(MetricStream stream);
