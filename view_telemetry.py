@@ -4,10 +4,22 @@
 import sys
 import glob
 import os
+import csv
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.gridspec import GridSpec
+
+
+REQUIRED_TELEMETRY_COLUMNS = {"global_step", "stream_name", "level"}
+TELEMETRY_COLUMN_ALIASES = {
+    "step": "global_step",
+    "global step": "global_step",
+    "stream": "stream_name",
+    "stream id": "stream_idx",
+    "observation": "raw_observation",
+    "raw observation": "raw_observation",
+}
 
 
 def find_default_telemetry_csv():
@@ -35,10 +47,62 @@ def find_default_telemetry_csv():
         return None
 
     unique_csvs = list({os.path.realpath(path): path for path in csvs}.values())
-    return max(unique_csvs, key=os.path.getmtime)
+    for path in sorted(unique_csvs, key=os.path.getmtime, reverse=True):
+        if telemetry_csv_looks_valid(path):
+            return path
+
+    return None
+
+
+def telemetry_csv_looks_valid(path):
+    try:
+        if os.path.getsize(path) <= 0:
+            return False
+        with open(path, newline="", encoding="utf-8", errors="replace") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, [])
+    except (OSError, StopIteration):
+        return False
+
+    cleaned_header = {
+        TELEMETRY_COLUMN_ALIASES.get(column.lstrip("\ufeff").strip().lower(), column.lstrip("\ufeff").strip())
+        for column in header
+    }
+    return REQUIRED_TELEMETRY_COLUMNS.issubset(cleaned_header)
+
+
+def canonicalize_telemetry_columns(df):
+    rename_map = {}
+    for column in df.columns:
+        cleaned = column.lstrip("\ufeff").strip()
+        cleaned = TELEMETRY_COLUMN_ALIASES.get(cleaned.lower(), cleaned)
+        if cleaned != column:
+            rename_map[column] = cleaned
+
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    missing = sorted(REQUIRED_TELEMETRY_COLUMNS.difference(df.columns))
+    if missing:
+        raise KeyError(
+            "Telemetry CSV is missing required columns: "
+            + ", ".join(missing)
+            + ". Available columns: "
+            + ", ".join(map(str, df.columns))
+        )
+
+    return df
+
+
+def read_telemetry_csv(path):
+    if os.path.getsize(path) <= 0:
+        raise ValueError(f"Telemetry CSV is empty: {path}")
+    df = pd.read_csv(path)
+    return canonicalize_telemetry_columns(df)
+
 
 def load_telemetry(path):
-    df = pd.read_csv(path)
+    df = read_telemetry_csv(path)
     # Keep only level-0 (raw per-step) observations
     df = df[df["level"] == 0].copy()
     return df
@@ -340,7 +404,7 @@ def main():
     print(f"Saved: {os.path.splitext(path)[0]}_lattice.png")
 
     # --- Figure 4: Multi-level lattice view ---
-    df_all = pd.read_csv(path)
+    df_all = read_telemetry_csv(path)
     levels = sorted(df_all["level"].unique())
     if len(levels) > 1:
         fig4, axes = plt.subplots(len(levels), 1, figsize=(14, 3 * len(levels)),

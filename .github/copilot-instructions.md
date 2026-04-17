@@ -254,6 +254,7 @@ NEVER clip components jointly when one dominates L2 norm — it crushes the smal
 ### Architecture
 
 - **Embedding scale = 1.0**: Do NOT scale embeddings by `sqrt(d_model)`. GRIM-text uses ALiBi/RoPE inside attention — the AIAYN scaling has no purpose and creates a 27.7x gradient asymmetry with tied weights.
+- **γ_final (final RMSNorm) MUST have weight decay**: Without weight decay, γ_final acts as an unregulated logit temperature and grows unbounded (1.0→3.0), causing overconfident predictions → mode collapse. Registered as `ParamGroupType::RMSNORM` with `wd_mult=1.0` (NOT 0.0). Per-layer gammas (γ₁, γ₂) remain `RMSNORM` with no decay — they get mixed gradient signals through encoder nonlinearities that naturally constrain growth.
 - **Sandwich Norm removed** (Issue #148): Architecture is standard pre-norm (`output = input + LayerScale(sublayer_output)`). Post-residual RMSNorm constrained hidden norms to a hypersphere → mode collapse.
 - **LayerScale init_value = 1.0** in `ai_config.json`. Value 0.1 causes catastrophic gradient vanishing through encoder layers.
 - **`per_token_grad_scale=true` is REQUIRED**: Gradient RMS ~1e-6 with ~3000 tokens is CORRECT. Disabling causes 3000x effective LR explosion.

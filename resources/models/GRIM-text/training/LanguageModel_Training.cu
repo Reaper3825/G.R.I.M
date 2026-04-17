@@ -296,11 +296,14 @@ void LanguageModel::buildParameterGroups() {
         tryRegisterBias("mtp_head_" + std::to_string(k) + "_bias", head->bias, ParamGroupType::MTP);
     }
 
-    // Final RMSNorm (between encoder output and LM head) — no weight decay
+    // Final RMSNorm (between encoder output and LM head)
+    // γ_final acts as a logit temperature — without weight decay it grows unbounded
+    // (1.0→3.0) causing overconfident predictions → mode collapse. Weight decay
+    // provides the restoring force that per-layer gammas get from mixed gradient signals.
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
             (void*)lm_head_layer_->finalRmsGamma().data, (int)lm_head_layer_->finalRmsGamma().has_grad(),
             lm_head_layer_->finalRmsGamma().numel()); fflush(stderr);
-    registerNonDecayTensor("final_rms_gamma", lm_head_layer_->finalRmsGamma(), ParamGroupType::RMSNORM);
+    registerTensor("final_rms_gamma", lm_head_layer_->finalRmsGamma(), ParamGroupType::RMSNORM, -1, 1.0f);
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
 
     fprintf(stderr, "[buildParameterGroups] DIAG-E: %zu groups registered, allocating optimizer states\n", parameter_groups_.size()); fflush(stderr);
