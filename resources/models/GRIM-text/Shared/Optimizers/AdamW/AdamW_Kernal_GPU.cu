@@ -212,8 +212,9 @@ void launchAdamWStep(std::vector<ParameterGroup>& groups,
         // Deeper layers get LESS regularization (smaller effective weight_decay)
         // weight_decay_multiplier = 0.0 for biases/norms (standard AdamW practice)
         const float effective_weight_decay = weight_decay * group.upsilon * group.weight_decay_multiplier;
+        const float effective_lr = learning_rate * group.lr_multiplier;
 
-        launchAdamWKernel(group, learning_rate, effective_weight_decay, step, stream);
+        launchAdamWKernel(group, effective_lr, effective_weight_decay, step, stream);
     }
 }
 

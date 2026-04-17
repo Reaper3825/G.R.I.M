@@ -102,7 +102,7 @@ void LanguageModel::buildParameterGroups() {
     // Rule 20: tensor MUST have data and grad, otherwise skip with warning.
     auto registerTensor = [&](const std::string& name, Tensor& tensor,
                               ParamGroupType type, int layer = -1,
-                              float wd_mult = 1.0f) {
+                              float wd_mult = 1.0f, float lr_mult = 1.0f) {
         if (!tensor.data || !tensor.has_grad()) {
             throw std::runtime_error("[buildParameterGroups] " + name + " has no data or grad! data=" 
                                      + std::to_string(reinterpret_cast<uintptr_t>(tensor.data)) 
@@ -117,6 +117,7 @@ void LanguageModel::buildParameterGroups() {
         group.type = type;
         group.layer_index = layer;
         group.weight_decay_multiplier = wd_mult;
+        group.lr_multiplier = lr_mult;
         if (layer >= 0) {
             group.upsilon = HyperParameters::UPSILON_BASE * 
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
@@ -300,10 +301,13 @@ void LanguageModel::buildParameterGroups() {
     // γ_final acts as a logit temperature — without weight decay it grows unbounded
     // (1.0→3.0) causing overconfident predictions → mode collapse. Weight decay
     // provides the restoring force that per-layer gammas get from mixed gradient signals.
+    // lr_mult=0.1 prevents the initial spike: γ_final has a monotonic "scale up" gradient
+    // bias in early training (scaling logits reduces CE faster than learning representations),
+    // so it needs a slower learning rate to prevent overshooting before representations form.
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
             (void*)lm_head_layer_->finalRmsGamma().data, (int)lm_head_layer_->finalRmsGamma().has_grad(),
             lm_head_layer_->finalRmsGamma().numel()); fflush(stderr);
-    registerTensor("final_rms_gamma", lm_head_layer_->finalRmsGamma(), ParamGroupType::RMSNORM, -1, 1.0f);
+    registerTensor("final_rms_gamma", lm_head_layer_->finalRmsGamma(), ParamGroupType::RMSNORM, -1, 1.0f, 0.1f);
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
 
     fprintf(stderr, "[buildParameterGroups] DIAG-E: %zu groups registered, allocating optimizer states\n", parameter_groups_.size()); fflush(stderr);
