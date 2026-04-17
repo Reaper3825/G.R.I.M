@@ -1167,6 +1167,12 @@ inline size_t ParameterGroup::size_bytes() const { return size() * sizeof(float)
 struct cublasContext;
 typedef cublasContext* cublasHandle_t;
 
+/**
+ * Track a cuBLAS call for error checking (Rule 20: fail loud).
+ * Defined at global scope in TensorContract_GPU.cu, used by MatMulGradFn in AutogradAttention.cu.
+ */
+void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t stream, cublasStatus_t status);
+
 namespace GRIM {  // reopen namespace
 
 namespace autograd {

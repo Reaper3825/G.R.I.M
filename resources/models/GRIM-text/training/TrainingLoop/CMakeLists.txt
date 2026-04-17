@@ -282,6 +282,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/InitInferenceState/InitinferenceState.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu
+    ../../Shared/TensorContract/AutogradAttention.cu
     ../../Layers/FeedForward/Feed_Forward_GPU.cu
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
@@ -695,6 +696,7 @@ add_executable(gradient_verification_test
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu
+    ../../Shared/TensorContract/AutogradAttention.cu
     ../../Shared/PBM/PositionalBiasMethod.cu
 )
 
@@ -740,6 +742,7 @@ add_executable(execution_block_test
     ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Shared/PBM/PositionalBiasMethod.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu
+    ../../Shared/TensorContract/AutogradAttention.cu
     ../../Shared/TensorConversion/TensorConversion.cu
 )
 
