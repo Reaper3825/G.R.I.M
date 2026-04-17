@@ -61,11 +61,10 @@ std::atomic<int> TensorLifecycleCounters::move_counter{0};
 float* g_debug_lm_head_only_grad = nullptr;   // Where to copy LM head backward contribution
 float* g_debug_embedding_only_grad = nullptr; // Where to copy embedding backward contribution
 size_t g_debug_grad_buffer_size = 0;          // Size in elements (vocab_size * d_model)
-bool g_debug_capture_enabled = g_autograd_verbose;         // Enable/disable capturing
 
 // Call this after LM head matmul backward to capture its contribution
 void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
-    if (!g_debug_capture_enabled) return;  // Debug capture not enabled - valid skip
+    if (!g_autograd_verbose) return;  // Debug capture not enabled - valid skip
     if (!g_debug_lm_head_only_grad) throw std::runtime_error("debugCaptureLMHeadGrad: g_debug_lm_head_only_grad buffer is NULL - initDebugGradCapture() must be called first");
     if (!grad_ptr) throw std::runtime_error("debugCaptureLMHeadGrad: grad_ptr is NULL - caller MUST provide valid gradient pointer");
     const size_t copy_size = (size < g_debug_grad_buffer_size ? size : g_debug_grad_buffer_size);
@@ -75,7 +74,7 @@ void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
 
 // Call this after embedding backward to capture its contribution
 void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
-    if (!g_debug_capture_enabled) return;  // Debug capture not enabled - valid skip
+    if (!g_autograd_verbose) return;  // Debug capture not enabled - valid skip
     if (!g_debug_embedding_only_grad) throw std::runtime_error("debugCaptureEmbeddingGrad: g_debug_embedding_only_grad buffer is NULL - initDebugGradCapture() must be called first");
     if (!grad_ptr) throw std::runtime_error("debugCaptureEmbeddingGrad: grad_ptr is NULL - caller MUST provide valid gradient pointer");
     const size_t copy_size = (size < g_debug_grad_buffer_size ? size : g_debug_grad_buffer_size);
@@ -85,11 +84,13 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 
 // Global stream for async cleanup - initialized on first use
 static cudaStream_t g_cleanup_stream = nullptr;
+static std::mutex g_cleanup_stream_mutex;
 
 // cuBLAS for autograd is the handle from TrainingState/InferenceState; layers call
 // set_autograd_cublas_handle() and autograd matmul uses get_autograd_cublas_handle() (thread-local).
 
 void initCleanupStream() {
+    std::lock_guard<std::mutex> lock(g_cleanup_stream_mutex);
     if (g_cleanup_stream == nullptr) {
         cudaStreamCreate(&g_cleanup_stream);
     }
@@ -1231,15 +1232,15 @@ void Tensor::backward(const Tensor* grad_output, float scale) {
         
         // Poll stream until complete (non-blocking approach)
         {
-            int poll_count = 0;
+            auto poll_start = std::chrono::steady_clock::now();
             cudaError_t query;
             while ((query = cudaStreamQuery(stream)) == cudaErrorNotReady) {
-                poll_count++;
-                if (poll_count > 100000000) {  // ~10 seconds of spinning
+                auto elapsed = std::chrono::steady_clock::now() - poll_start;
+                if (elapsed > std::chrono::seconds(10)) {
                     std::string ctx = getCurrentGradFnContext();
-                    std::string msg = "[Tensor::backward] TIMEOUT: Stream stuck after 100M polls! | " + ctx;
-                    
                     cudaError_t err = cudaGetLastError();
+                    std::string msg = "[Tensor::backward] TIMEOUT: Stream stuck after 10s! last_error=" +
+                        std::string(cudaGetErrorString(err)) + " | " + ctx;
                     // RULE 20: Fail Loud - throw with full context
                     throw std::runtime_error(msg);
                 }
@@ -1580,7 +1581,8 @@ __global__ void kernel_broadcast_row_mul_backward_scale(
     // Warp reduction
     for (int mask = warpSize / 2; mask > 0; mask >>= 1)
         sum += __shfl_down_sync(0xffffffff, sum, mask);
-    if (threadIdx.x == 0)
+    // Lane 0 of EVERY warp contributes (not just threadIdx.x == 0)
+    if ((threadIdx.x & (warpSize - 1)) == 0)
         atomicAdd(&grad_scale[row], sum);
 }
 
@@ -1595,22 +1597,6 @@ __global__ void kernel_elementwise_mul_backward(
     const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         grad_self[idx] = grad_output[idx] * other[idx];
-    }
-}
-
-// Element-wise add backward: grad_a = grad_out, grad_b = grad_out
-// (Gradient just passes through to both inputs)
-__global__ void kernel_add_backward(
-    const float* grad_output,
-    float* grad_a,
-    float* grad_b,
-    size_t count
-) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        const float g = grad_output[idx];
-        grad_a[idx] += g;  // Accumulate (not overwrite)
-        grad_b[idx] += g;
     }
 }
 
@@ -2488,19 +2474,19 @@ struct CenterColumnsGradFn : public GradFn {
         // Copy shared_ptr to input's grad_fn
         input_grad_fn = input.grad_fn;
         
-        // Setup gradient buffer (Issue #54 pattern)
+        // Setup gradient buffer
         input.ensure_grad();
-        if (input.is_leaf) {
-            input_grad = input.grad_data();
-            AG_TRACE("[CenterColumnsGradFn] Using persistent input_grad buffer (leaf): %p\n", (void*)input_grad);
-        } else {
-            float* buf = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterColumnsGradFn_input_grad");
-            cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
-            owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
-            input_grad = owned_input_grad.get();
-            AG_TRACE("[CenterColumnsGradFn] Allocated owned input_grad buffer (non-leaf): %zu floats at %p\n", element_count, (void*)input_grad);
-        }
+        
+        // CRITICAL FIX (Issue #136 pattern): NEVER reuse externally-owned leaf buffers!
+        // kernel_center_columns OVERWRITES the output buffer with centered gradients.
+        // If we write into the leaf's persistent grad buffer, we corrupt upstream data
+        // (same bug CenterRowsGradFn had). Always allocate our own buffer.
+        float* buf = nullptr;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterColumnsGradFn_input_grad");
+        cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
+        owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+        input_grad = owned_input_grad.get();
+        AG_TRACE("[CenterColumnsGradFn] Allocated owned input_grad buffer (Issue #136 FIX): %zu floats at %p\n", element_count, (void*)input_grad);
     }
     
     __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
@@ -3994,13 +3980,13 @@ struct RMSNormGradFn : public GradFn {
     bool input_requires_grad = false;
     bool gamma_requires_grad = false;
     float* input_grad = nullptr;
-    bool owns_input_grad = false;  // ISSUE #126: Track if we own input_grad buffer
     float* gamma_grad_ptr = nullptr;  // For gamma gradient
     float* gamma_data = nullptr;      // Gamma weights data (for forward values)
     TensorContract::TensorShape input_shape;
     std::shared_ptr<GradFn> input_grad_fn;
     // ISSUE #51 FIX: Own a copy of cached data instead of non-owning pointer
     std::shared_ptr<float> owned_cache;
+    std::shared_ptr<float> owned_input_grad;
     const float* cached_input = nullptr;  // Points to owned_cache.get()
     size_t cached_size = 0;
     int d_model = 0;
@@ -4034,10 +4020,11 @@ struct RMSNormGradFn : public GradFn {
         // We need our own buffer that persists until backward is complete.
         if (input_requires_grad) {
             const size_t grad_size = x.shape.total_elements();
-            cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "RMSNormGradFn_input_grad");
-            // Zero-initialize the gradient buffer
-            cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream);
-            owns_input_grad = true;
+            float* buf = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), grad_size * sizeof(float), "RMSNormGradFn_input_grad");
+            cudaMemsetAsync(buf, 0, grad_size * sizeof(float), stream);
+            owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+            input_grad = owned_input_grad.get();
 #if TENSOR_VERBOSE_DEBUG
             fprintf(stderr, "[RMSNormGradFn::capture_inputs] this=%p → Allocated input_grad: %p (%zu floats)\n",
                     (void*)this, (void*)input_grad, grad_size);
@@ -4193,11 +4180,7 @@ struct RMSNormGradFn : public GradFn {
         GradFn::release_saved();
         cached_input = nullptr;
         cached_size = 0;
-        // ISSUE #126: Free owned input_grad buffer (if not already freed by destructor)
-        if (owns_input_grad && input_grad) {
-            queueForDeferredCleanup(input_grad);
-            owns_input_grad = false;
-        }
+        owned_input_grad.reset();
         input_grad = nullptr;
         gamma_grad_ptr = nullptr;
         input_grad_fn.reset();
@@ -4300,7 +4283,7 @@ struct EmbeddingGradFn : public GradFn {
         trackKernelLaunch("kernel_embedding_backward", stream);
         
         // DEBUG: Capture embedding gradient
-        if (g_debug_capture_enabled && g_debug_embedding_only_grad && weight_grad) {
+        if (g_autograd_verbose && g_debug_embedding_only_grad && weight_grad) {
             const size_t total_size = weight_shape.total_elements();
             debugCaptureEmbeddingGrad(weight_grad, total_size, stream);
         }
@@ -4691,16 +4674,16 @@ struct ScaleScalarGradFn : public GradFn {
         cudaMemcpyAsync(&h_grad, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
         const float scaled = scale * h_grad;
-        float* d_scaled = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&d_scaled), sizeof(float), "ScaleScalarGradFn_d_scaled");
-        cudaMemcpyAsync(d_scaled, &scaled, sizeof(float), cudaMemcpyHostToDevice, stream);
+        float* d_scaled_raw = nullptr;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_scaled_raw), sizeof(float), "ScaleScalarGradFn_d_scaled");
+        std::shared_ptr<float> d_scaled_guard(d_scaled_raw, [](float* p) { queueForDeferredCleanup(p); });
+        cudaMemcpyAsync(d_scaled_raw, &scaled, sizeof(float), cudaMemcpyHostToDevice, stream);
         Tensor view;
-        view.data = d_scaled;
+        view.data = d_scaled_raw;
         view.shape = input_shape;
         view.owns_data = false;
         view.stream = stream;
         input_grad_fn->apply(view, stream);
-        queueForDeferredCleanup(d_scaled);
     }
 };
 
@@ -6141,7 +6124,7 @@ struct MatMulGradFn : public GradFn {
             // ISSUE #60 DEBUG: Capture LM head grad contribution if debugging enabled
             // Check if this looks like LM head (N=vocab_size is large, K=d_model is small)
             // Typical LM head: N=50377, K=768
-            if (g_debug_capture_enabled && N > 10000 && K < 2000) {
+            if (g_autograd_verbose && N > 10000 && K < 2000) {
                 debugCaptureLMHeadGrad(grad_b, static_cast<size_t>(N) * K, stream);
                 AG_TRACE("[MatMulGradFn] DEBUG: Captured LM head grad, N=%d K=%d\n", N, K);
             }
