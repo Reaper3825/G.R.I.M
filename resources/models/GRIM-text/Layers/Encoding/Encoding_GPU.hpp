@@ -206,7 +206,7 @@ public:
      * @param layer_idx Layer index within encoder stack (for equation logging and dropout seed)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
-    Tensor forward(const Tensor& input, int seq_len, cudaStream_t stream,
+    Tensor forward(const Tensor& input, const BatchPayload& payload, cudaStream_t stream,
                    struct ForwardIntermediates& intermediates,
                    uint64_t training_step = 0,
                    int layer_idx = 0);

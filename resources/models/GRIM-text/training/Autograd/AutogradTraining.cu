@@ -137,7 +137,7 @@ AutogradContext initAutogradContext(
     return ctx;
 }
 
-// Inference overload — batch_size/seq_len set directly (no payload)
+// Inference overload — builds a geometry-only BatchPayload so ctx.payload is never null
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,
@@ -166,12 +166,19 @@ AutogradContext initAutogradContext(
     ctx.execution_block = execution_block;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
-    ctx.payload = nullptr;  // No payload for inference
     ctx.batch_size = batch_size;
     ctx.seq_len = seq_len;
     ctx.grad_scale = grad_scale;
     ctx.step = step;
     ctx.is_training = is_training;
+
+    // Build geometry-only inference payload (vectors stay empty)
+    ctx.inference_payload_.batch_size   = batch_size;
+    ctx.inference_payload_.max_seq_len  = seq_len;
+    ctx.inference_payload_.total_tokens = batch_size * seq_len;
+    ctx.inference_payload_.actual_tokens = batch_size * seq_len;
+    // NOTE: payload pointer is set by fixupInferencePayload() after return-by-value,
+    // because NRVO/move invalidates self-pointers. See executeAutogradForward.
     
     // Rule 20: Fail loud on invalid context
     ctx.validate("initAutogradContext(inference)");
@@ -187,6 +194,13 @@ AutogradContext initAutogradContext(
 ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ForwardResult result{};
     result.success = false;
+
+    // Inference path: re-seat payload pointer to OUR inference_payload_ member.
+    // initAutogradContext returns by value, so the self-pointer set during init
+    // would dangle. Training path already has an external pointer — skip.
+    if (!ctx.payload && ctx.inference_payload_.batch_size > 0) {
+        ctx.payload = &ctx.inference_payload_;
+    }
 
     // Skip QKV_EQUATION D2H + fprintf on gradient-accumulation micro-batches (same weights, duplicate output)
     struct EquationLoggingScope {
@@ -557,7 +571,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             }
             no_grad_layer_storage.clear();
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
-            running = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, no_grad_layer_storage, ctx.step, layer_idx);
+            running = enc_layer->forward(layer_input, *ctx.payload, ctx.stream, no_grad_layer_storage, ctx.step, layer_idx);
             // Encoder returns a non-owning view of no_grad_layer_storage.output. That storage
             // is cleared next iteration (or destroyed when the loop exits). So running would
             // become a dangling pointer for the next layer OR for post-encoder use (final RMS,
@@ -631,7 +645,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 ? intermediates.embedding_tensor
                 : intermediates.encoder_layer_outputs.back();
             
-            Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage, ctx.step, layer_idx);
+            Tensor layer_output = enc_layer->forward(layer_input, *ctx.payload, ctx.stream, layer_storage, ctx.step, layer_idx);
 
             // ExecutionBlock: run K execution steps at the configured layer
             // Per-row isolation: each batch row gets its own ExecutionMemory

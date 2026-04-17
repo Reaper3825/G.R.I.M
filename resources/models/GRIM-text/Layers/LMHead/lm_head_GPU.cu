@@ -216,18 +216,11 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
         out_centered_hidden = autograd::center_rows(col_centered, stream);
         matmul_input = &out_centered_hidden;
     } else if (config_.project_out_pc1) {
-        // Issue #149: project out dominant PC1 direction via power iteration (IN-PLACE)
+        // Issue #149: project out dominant PC1 direction via power iteration
         // h̃[t] = h[t] - (h[t]·g)*g  where g = PC1(H), g treated as stop-gradient
         // Backward: grad_h = (I - gg^T) * grad_h̃
-        // Returns non-owning view — input tensor's buffer is modified in-place
+        // Returns owning tensor with separate output buffer — input is not mutated
         out_centered_hidden = autograd::project_out_pc1(*current_input, config_.pc1_power_iters, stream);
-        if (current_input == &normalized) {
-            // project_out_pc1 modified normalized's buffer in-place and returned
-            // a non-owning view. Transfer ownership so normalized's destructor
-            // doesn't free the buffer — MatMulGradFn's cached_a still points here.
-            out_centered_hidden.owns_data = true;
-            normalized.owns_data = false;
-        }
         matmul_input = &out_centered_hidden;
     } else {
         if (current_input == &normalized) {

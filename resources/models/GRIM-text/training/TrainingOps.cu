@@ -255,14 +255,9 @@ void LanguageModel::initGPU() {
         //  3) Build GPU encoder
         //======================================================//
         EncoderConfig enc_config;
-        enc_config.d_model = cfg.d_model;
-        enc_config.num_heads = cfg.num_heads;
-        enc_config.num_kv_heads = cfg.num_kv_heads;
-        enc_config.head_dim = cfg.head_dim;
-        enc_config.d_ff = cfg.d_ff;
-        enc_config.num_layers = cfg.num_layers;
-        enc_config.dropout_rate = cfg.dropout_rate;
-        enc_config.attention_dropout = cfg.attention_dropout;
+        // Copy architecture fields from LanguageModelConfig (both inherit ModelArchitecture)
+        static_cast<GRIM::HyperParameters::ModelArchitecture&>(enc_config) =
+            static_cast<const GRIM::HyperParameters::ModelArchitecture&>(cfg);
         enc_config.use_pre_norm = cfg.use_pre_norm;
         enc_config.use_simd = cfg.use_simd;
         enc_config.num_threads = cfg.num_threads;
@@ -271,7 +266,6 @@ void LanguageModel::initGPU() {
         enc_config.use_flash_attention = cfg.use_flash_attention;
         enc_config.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
         enc_config.causal_mask = cfg.causal_mask;
-        enc_config.max_seq_len = cfg.max_seq_len;
         enc_config.max_cached_batch = cfg.max_cached_batch;
         enc_config.max_cached_seq_len = cfg.max_cached_seq_len;
 

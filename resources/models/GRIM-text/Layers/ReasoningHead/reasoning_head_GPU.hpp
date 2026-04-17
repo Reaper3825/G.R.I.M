@@ -46,7 +46,7 @@ struct ReasoningHeadOutput {
 struct ReasoningHeadConfig {
     int d_model = 0;
     int atom_embedding_dim = 0;
-    int num_ops = 8;
+    int num_ops = 4;
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;
 

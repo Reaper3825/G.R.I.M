@@ -126,10 +126,9 @@ struct ContextState {
 
 //======================================================//
 //  Configuration Structures
-//  NOTE: All numeric defaults are 0 - caller MUST populate
-//  from HyperParameters::loadModelArchitecture() or explicitly
-//  DO NOT add hardcoded defaults here - HyperParameters_GPU.hpp
-//  is the ONLY source of truth for model architecture values
+//  Architecture fields (d_model, num_heads, etc.) are inherited
+//  from HyperParameters::ModelArchitecture — the ONLY source of truth.
+//  DO NOT redeclare architecture fields here.
 //======================================================//
 
 // Model execution mode - determines memory allocation strategy
@@ -138,18 +137,11 @@ enum class ModelExecutionMode {
     INFERENCE    // Lightweight inference state with only forward caches (~385MB)
 };
 
-struct EncoderConfig {
-    // Architecture - MUST be populated from HyperParameters
-    int d_model = 0;           // Use HyperParameters::DEFAULT_D_MODEL
-    int num_heads = 0;         // Use HyperParameters::DEFAULT_NUM_HEADS
-    int num_kv_heads = 0;      // Use HyperParameters::DEFAULT_NUM_KV_HEADS (GQA - Grouped Query Attention)
-    int head_dim = 0;          // = d_model / num_heads (set from LanguageModelConfig.head_dim)
-    int d_ff = 0;              // Computed: d_model * DEFAULT_D_FF_MULTIPLIER
-    int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
-    int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
-    float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
-    float attention_dropout = 0.0f; // Derived from dropout_rate
-    
+struct EncoderConfig : public HyperParameters::ModelArchitecture {
+    // Architecture fields (d_model, num_heads, num_kv_heads, head_dim, d_ff,
+    // num_layers, max_seq_len, dropout_rate, attention_dropout, positional_encoding,
+    // tie_embeddings) inherited from HyperParameters::ModelArchitecture
+
     // Cache limits
     int max_cached_batch = 0;
     int max_cached_seq_len = 0;
@@ -161,7 +153,6 @@ struct EncoderConfig {
     // - Result: output_rms = 0.19 instead of expected 1.0
     // Standard practice (LLaMA, Mistral, GPT): eps = 1e-5 to 1e-6
     float rms_epsilon = 1e-5f;  // RMSNorm epsilon - standard value matching LLaMA/Mistral
-    HyperParameters::PositionalEncodingType positional_encoding = HyperParameters::DEFAULT_POSITIONAL_ENCODING;
     bool causal_mask = true;                        
     bool use_pre_norm = true;
     bool fuse_qkv = true;
@@ -275,37 +266,23 @@ using GenerationStreamCallback = std::function<void(int token_id, float score)>;
     bool symmetric = false;
 };
 
-struct LanguageModelConfig {
-    // Architecture - MUST be populated from HyperParameters
-    // DO NOT add hardcoded defaults here - use HyperParameters::loadModelArchitecture()
+struct LanguageModelConfig : public HyperParameters::ModelArchitecture {
+    // Architecture fields (d_model, num_heads, num_kv_heads, head_dim, d_ff,
+    // num_layers, max_seq_len, dropout_rate, attention_dropout, positional_encoding,
+    // tie_embeddings) inherited from HyperParameters::ModelArchitecture
+
     int vocab_size = 0;        // MUST come from .grmt training data or tokenizer
-    int d_model = 0;           // Use HyperParameters::DEFAULT_D_MODEL
-    int num_heads = 0;         // Use HyperParameters::DEFAULT_NUM_HEADS
-    int num_kv_heads = 0;      // Use HyperParameters::DEFAULT_NUM_KV_HEADS (GQA - Grouped Query Attention)
-    int d_ff = 0;              // Computed: d_model * DEFAULT_D_FF_MULTIPLIER
-    int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
-    int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
-    float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
-    float attention_dropout = 0.0f; // Derived from dropout_rate
     
-    // Derived values - computed from above, DO NOT set directly
-    // Call computeDerivedValues() after setting d_model/num_heads
-    int head_dim = 0;          // = d_model / num_heads (computed)
-    
-    // Compute derived values from primary values - MUST be called after setting d_model/num_heads
+    // Validates architecture and computes derived values (head_dim = d_model / num_heads)
+    // MUST be called after populating architecture fields
     void computeDerivedValues() {
-        if (num_heads > 0 && d_model > 0) {
-            head_dim = d_model / num_heads;
-        }
+        validate();  // ModelArchitecture::validate() computes head_dim and validates all arch fields
     }
     
     // Cache limits
     int max_cached_batch = 0;
     int max_cached_seq_len = 0;
     int max_tokens_per_batch = 0;  // Optional token budget for training logits/loss
-    
-    // Positional encoding configuration
-    HyperParameters::PositionalEncodingType positional_encoding = HyperParameters::DEFAULT_POSITIONAL_ENCODING;
     
     // Fixed config values (not architecture-dependent)
     // Issue #104 FIX: Changed from 1e-3 to 1e-5 (see TransformerConfig above for rationale)
@@ -315,7 +292,6 @@ struct LanguageModelConfig {
     bool fuse_qkv = true;
     bool use_simd = true;
     int num_threads = 4;
-    bool tie_embeddings = true;
     bool use_bias = true;
     bool qk_norm_enabled = false;  // QK-Norm: RMSNorm applied to Q and K before attention scoring
     
@@ -672,7 +648,7 @@ public:
     void initCuBLASHandle();   // Initialize cuBLAS handle only (MUST be called before initGPU)
     void initPBM();            // Initialize PBM (ALiBi+RoPE hybrid) - MUST be called before initGPU
     void initTrainingState();  // Initialize training state (allocate GPU buffers + gradients)
-    void initInferenceState();  // Initialize inference state (allocate GPU buffers WITHOUT gradients)
+    void initInferenceState(); // Initialize inference state (allocate GPU buffers WITHOUT gradients)
     // backward() and zeroGrad() DELETED (Rule 26).
     // Backward: Use autogradTrainingStep() which does forward+loss+backward.
     // Zeroing: executeAutogradBackward() zeros all gradients when accumulate=false.

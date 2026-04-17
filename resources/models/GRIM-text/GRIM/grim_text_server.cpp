@@ -127,16 +127,8 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
         // Load architecture from HyperParameters (THE source of truth)
         HyperParameters::ModelArchitecture arch;
         HyperParameters::loadModelArchitecture(arch);
-        config.d_model = arch.d_model;
-        config.num_layers = arch.num_layers;
-        config.num_heads = arch.num_heads;
-        config.num_kv_heads = arch.num_kv_heads;
-        config.d_ff = arch.d_ff;
-        config.max_seq_len = arch.max_seq_len;
-        config.dropout_rate = arch.dropout_rate;
-        config.attention_dropout = arch.attention_dropout;
-        config.tie_embeddings = arch.tie_embeddings;
-        config.positional_encoding = arch.positional_encoding;
+        // Copy all architecture fields via base class assignment
+        static_cast<HyperParameters::ModelArchitecture&>(config) = arch;
         
         // vocab_size comes from actual tokenizer (from .grmt data)
         config.vocab_size = g_tokenizer->totalVocabSize();

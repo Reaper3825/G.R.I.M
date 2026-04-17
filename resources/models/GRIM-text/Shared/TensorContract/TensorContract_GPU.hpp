@@ -91,6 +91,7 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 #include <memory>     // for std::shared_ptr (ISSUE #59: grad as Tensor)
 #include <tuple>      // for std::tuple (ISSUE #61: split_and_reshape_qkv return type)
 #include <atomic>     // for tensor lifecycle counters
+#include "../Batching/BatchPayload.hpp"  // BatchPayload for batch geometry in autograd ops
 
 //======================================================//
 //  Tensor Lifecycle Counters
@@ -1429,17 +1430,15 @@ Tensor scaled_dot_product_attention(
  * for W_qkv).
  * 
  * @param qkv_out      Input tensor [tokens, d_model + 2*kv_dim] from matmul(ln1_out, W_qkv)
- * @param batch        Batch size
- * @param seq          Sequence length (tokens = batch * seq)
- * @param num_heads    Number of Q heads
- * @param num_kv_heads Number of K/V heads (GQA)
- * @param head_dim     Dimension per head
+ * @param payload      Batch geometry (batch_size, max_seq_len)
+ * @param gqa          GQA dimensions (num_heads, num_kv_heads, head_dim)
  * @param stream       CUDA stream
  * @return Tuple of (Q_bhsd, K_bhsd, V_bhsd) with properly linked autograd chains
  */
 std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor& qkv_out,
-    int batch, int seq, int num_heads, int num_kv_heads, int head_dim,
+    const BatchPayload& payload,
+    const GQADims& gqa,
     cudaStream_t stream = nullptr);
 
 /**
@@ -1450,16 +1449,15 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
  * downstream gradients to not flow through attention backward).
  * 
  * @param bhsd_input   Input tensor [B, H, S, D] from attention output
- * @param batch_size   Batch size
- * @param seq_len      Sequence length
- * @param num_heads    Number of attention heads
- * @param head_dim     Dimension per head
+ * @param payload      Batch geometry (batch_size, max_seq_len)
+ * @param gqa          GQA dimensions (num_heads, head_dim)
  * @param stream       CUDA stream
  * @return Tensor [tokens, d_model] with properly linked autograd chain
  */
 Tensor reshape_bhsd_to_flat(
     Tensor& bhsd_input,
-    int batch_size, int seq_len, int num_heads, int head_dim,
+    const BatchPayload& payload,
+    const GQADims& gqa,
     cudaStream_t stream = nullptr);
 
 /**
@@ -1475,22 +1473,22 @@ Tensor reshape_bhsd_to_flat(
  * 
  * Uses SharedState pattern to coordinate backward calls from both Q and K.
  * 
- * @param Q          Q tensor [B, H, S, D] - modified in-place
- * @param K          K tensor [B, Hkv, S, D] - modified in-place  
+ * @param Q          Q tensor [B, H, S, D] — not mutated (out-of-place)
+ * @param K          K tensor [B, Hkv, S, D] — not mutated (out-of-place)
  * @param inv_freq   Device pointer to inverse frequencies [rotary_dim/2]
- * @param batch_size Batch size (B)
- * @param num_q_heads Number of query heads (H)
- * @param num_kv_heads Number of key/value heads (Hkv) for GQA
- * @param seq_len    Sequence length (S)
- * @param head_dim   Dimension per head (D)
+ * @param payload    Batch geometry (batch_size, max_seq_len)
+ * @param gqa        GQA dimensions (num_heads, num_kv_heads, head_dim)
  * @param rotary_dim Number of dimensions to rotate (must be <= head_dim, typically 64)
  * @param stream     CUDA stream
+ * @param pos_offset Position offset for KV-cache continuation
+ * @return {Q_rot, K_rot} — new tensors with autograd tracking
  */
-void rope_rotation(
-    Tensor& Q, Tensor& K,
+std::pair<Tensor, Tensor> rope_rotation(
+    const Tensor& Q, const Tensor& K,
     const float* inv_freq,
-    int batch_size, int num_q_heads, int num_kv_heads,
-    int seq_len, int head_dim, int rotary_dim,
+    const BatchPayload& payload,
+    const GQADims& gqa,
+    int rotary_dim,
     cudaStream_t stream = nullptr,
     int pos_offset = 0);
 

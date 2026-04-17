@@ -135,16 +135,22 @@
         },
         "subword_mining_max_bytes": 0,
         "subword_mining_workers": 0,
-        "vocab_size": 10000,
-        "vocab_score_multiplier": 0.1
+        "vocab_score_multiplier": 0.1,
+        "vocab_size": 10000
     },
     "training": {
         "config": {
-            "activation_quantization": { "enabled": false },
+            "activation_quantization": {
+                "enabled": false
+            },
             "atom_stats_interval": 200,
             "atom_stats_max_seqs": 32,
-            "attention_diagnostics": { "enabled": false },
-            "auto_stop": { "enabled": true },
+            "attention_diagnostics": {
+                "enabled": false
+            },
+            "auto_stop": {
+                "enabled": true
+            },
             "batch_size": 12,
             "batch_strategy": "RANDOM",
             "checkpoint_interval": 2000,
@@ -159,7 +165,9 @@
             },
             "d_model": 768,
             "dropout_rate": 0.1,
-            "embedding_freeze": { "enabled": true },
+            "embedding_freeze": {
+                "enabled": true
+            },
             "epochs": 3,
             "execution_block": {
                 "d_type": 16,
@@ -169,7 +177,9 @@
                 "num_ops": 4,
                 "num_slots": 8,
                 "num_steps": 4,
-                "selector": { "enabled": true },
+                "selector": {
+                    "enabled": true
+                },
                 "structured_ce_enabled": true
             },
             "force_rebuild_vocab": false,
@@ -192,10 +202,16 @@
             },
             "gradient_accumulation_steps": 2,
             "gradient_clip": 0.001,
-            "guess_aux": { "enabled": false },
-            "hardcoded_hidden_states": { "enabled": false },
-            "layer_scale": { "enabled": false },
-            "learning_rate": 0.0006,
+            "guess_aux": {
+                "enabled": false
+            },
+            "hardcoded_hidden_states": {
+                "enabled": false
+            },
+            "layer_scale": {
+                "enabled": false
+            },
+            "learning_rate": 0.0006000000284984708,
             "lm_head_centering": {
                 "center_encoder_residuals": true,
                 "center_hidden_states": true,
@@ -236,19 +252,40 @@
                     "Validation": "Info"
                 }
             },
-            "logit_update_trace": { "enabled": false },
+            "logit_update_trace": {
+                "enabled": false
+            },
             "loss": {
-                "class_balanced": { "enabled": false },
-                "distillation": { "enabled": false },
-                "entropy_reg": { "enabled": false },
-                "focal": { "enabled": false },
-                "label_smoothing": { "enabled": true },
-                "masking": { "enabled": true, "tag": "" },
-                "preference": { "enabled": false }
+                "class_balanced": {
+                    "enabled": false
+                },
+                "distillation": {
+                    "enabled": false
+                },
+                "entropy_reg": {
+                    "enabled": false
+                },
+                "focal": {
+                    "enabled": false
+                },
+                "label_smoothing": {
+                    "enabled": true
+                },
+                "masking": {
+                    "enabled": true,
+                    "tag": ""
+                },
+                "preference": {
+                    "enabled": false
+                }
             },
             "max_seq_len": 1024,
-            "micro_validation": { "enabled": false },
-            "multi_token_prediction": { "enabled": false },
+            "micro_validation": {
+                "enabled": false
+            },
+            "multi_token_prediction": {
+                "enabled": false
+            },
             "num_heads": 12,
             "num_kv_heads": 4,
             "num_layers": 12,
@@ -258,16 +295,28 @@
                 "use_learned": false,
                 "use_rope": true
             },
-            "prediction_comparison": { "enabled": false },
+            "prediction_comparison": {
+                "enabled": false
+            },
             "qk_norm": {
                 "enabled": false
             },
-            "scratch_block_reasoning": { "enabled": true },
-            "scratch_blocks": { "enabled": true },
+            "scratch_block_reasoning": {
+                "enabled": true
+            },
+            "scratch_blocks": {
+                "enabled": true
+            },
             "seed": 1,
-            "shuffle": { "enabled": true },
-            "single_batch": { "enabled": false },
-            "soft_restart": { "enabled": false },
+            "shuffle": {
+                "enabled": true
+            },
+            "single_batch": {
+                "enabled": false
+            },
+            "soft_restart": {
+                "enabled": false
+            },
             "stability_overrides_enabled": false,
             "telemetry_control": {
                 "enabled": false,
@@ -275,7 +324,9 @@
                     "fail_loud_on_accumulation_bug": true,
                     "verbose": false
                 },
-                "plateau_noise": { "enabled": true }
+                "plateau_noise": {
+                    "enabled": true
+                }
             },
             "tie_embeddings": true,
             "use_flash_attention": true,

@@ -462,10 +462,11 @@ void EncodingLayer::validateReady(const char* context) const {
 //  Forward Pass - Autograd Implementation with ForwardIntermediates (Issue #56 Fix)
 //======================================================//
 
-Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t stream,
+Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, cudaStream_t stream,
                                ForwardIntermediates& intermediates,
                                uint64_t training_step,
                                int layer_idx) {
+    const int seq_len = payload.max_seq_len;
     if constexpr (kEnableEncoderStepLogs) {
         fprintf(stderr, "[EncoderFwd] START total_tokens=%d seq_len=%d\n", 
                 input.shape.flat.rows, seq_len);
@@ -495,14 +496,17 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                                  "Expected " + std::to_string(d_model) + 
                                  ", got " + std::to_string(input.shape.flat.cols));
     }
-    if (total_tokens % seq_len != 0) {
-        throw std::runtime_error("EncodingLayer::forward: total_tokens not divisible by seq_len");
+    if (total_tokens != payload.batch_size * seq_len) {
+        throw std::runtime_error("EncodingLayer::forward: total_tokens (" + std::to_string(total_tokens) +
+                                 ") != payload.batch_size * seq_len (" + std::to_string(payload.batch_size) +
+                                 " * " + std::to_string(seq_len) + ")");
     }
     
-    const int batch_size = total_tokens / seq_len;
+    const int batch_size = payload.batch_size;
     const int num_heads = config_.num_heads;
     const int num_kv_heads = config_.effectiveKVHeads();
     const int head_dim = config_.headDim();
+    const TensorContract::GQADims gqa{num_heads, num_kv_heads, head_dim};
     const int qkv_debug = qkvDebugLevel();
     if constexpr (kEnableEncoderStepLogs) {
         fprintf(stderr, "[EncoderFwd] validated: batch=%d heads=%d kv_heads=%d head_dim=%d\n", 
@@ -794,7 +798,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // ISSUE #61: This properly tracks gradients through the split/reshape operation
     auto [Q_bhsd_tmp, K_bhsd_tmp, V_bhsd_tmp] = autograd::split_and_reshape_qkv(
         intermediates.qkv_out,
-        batch_size, seq_len, num_heads, num_kv_heads, head_dim,
+        payload, gqa,
         stream);
     intermediates.Q_bhsd = std::move(Q_bhsd_tmp);
     intermediates.K_bhsd = std::move(K_bhsd_tmp);
@@ -816,11 +820,14 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         // ISSUE #119 FIX: Use autograd::rope_rotation() instead of raw kernel call
         // The raw PBM::launchRoPERotationGQA() bypassed autograd - dQ/dK gradients
         // were never inverse-rotated in backward pass, causing gradient corruption.
-        autograd::rope_rotation(
-            intermediates.Q_bhsd, intermediates.K_bhsd,  // Tensor refs, not .data
+        // Returns new tensors — inputs are never mutated.
+        auto [Q_rot, K_rot] = autograd::rope_rotation(
+            intermediates.Q_bhsd, intermediates.K_bhsd,
             config_.pos_encoding->rope_inv_freq,
-            batch_size, num_heads, num_kv_heads, seq_len, head_dim,
+            payload, gqa,
             config_.pos_encoding->rotary_dim, stream);
+        intermediates.Q_bhsd = std::move(Q_rot);
+        intermediates.K_bhsd = std::move(K_rot);
     } else {
         throw std::runtime_error("EncodingLayer::forward: RoPE not initialized");
     }
@@ -907,7 +914,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 5: Reshape from BHSD with autograd tracking...\n");
     intermediates.attn_out = autograd::reshape_bhsd_to_flat(
-        intermediates.attn_out_bhsd, batch_size, seq_len, num_heads, head_dim, stream);
+        intermediates.attn_out_bhsd, payload, gqa, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 5: Reshape DONE (autograd tracked)\n");
     
     //--------------------------------------------------

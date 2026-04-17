@@ -953,22 +953,15 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const auto& hp = config.hyperparameters;
     
     GRIM::LanguageModelConfig model_config;
+    // Copy all architecture fields from validated ModelArchitecture (Single Source of Truth)
+    static_cast<GRIM::HyperParameters::ModelArchitecture&>(model_config) = arch;
+    model_config.max_seq_len = config.max_seq_len;  // Override: uses StartupConfig's derived value
     model_config.vocab_size = vocab_size;
-    model_config.d_model = arch.d_model;
-    model_config.num_layers = arch.num_layers;
-    model_config.num_heads = arch.num_heads;
-    model_config.num_kv_heads = arch.num_kv_heads;  // GQA: use config value from ai_config.json
-    model_config.d_ff = arch.d_ff;
-    model_config.max_seq_len = config.max_seq_len;
-    model_config.dropout_rate = arch.dropout_rate;
-    model_config.attention_dropout = arch.attention_dropout;
     model_config.vocab_path = config.paths.vocab_path;
     model_config.infer_vocab_from_file = true;
-    model_config.positional_encoding = arch.positional_encoding;  // Issue #141: From parsed JSON config
     model_config.causal_mask = true;
     model_config.use_pre_norm = true;
     model_config.fuse_qkv = true;
-    model_config.tie_embeddings = arch.tie_embeddings;  // Load from ai_config.json
     model_config.use_bias = true;
     model_config.use_gpu = true;
     model_config.use_flash_attention = hp.use_flash_attention;

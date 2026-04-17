@@ -117,11 +117,11 @@ struct AutogradContext {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PARAMETERS
-    // For training: payload is the single source of truth; batch_size/seq_len
-    // are derived from it by initAutogradContext(const BatchPayload&, ...).
-    // For inference: payload is nullptr; batch_size/seq_len set directly.
+    // Training: payload points to the caller-owned BatchPayload (single source of truth).
+    // Inference: payload points to inference_payload_ below (geometry-only, vectors empty).
+    // payload is NEVER null after initAutogradContext.
     // ═══════════════════════════════════════════════════════════════════════════
-    const Batching::BatchPayload* payload = nullptr;  // Non-owning. Set for training, nullptr for inference.
+    const Batching::BatchPayload* payload = nullptr;
     int batch_size = 0;
     int seq_len = 0;
     float grad_scale = 1.0f;
@@ -129,6 +129,10 @@ struct AutogradContext {
     bool is_training = true;
     /** When true, encoder layers skip QKV_EQUATION D2H + fprintf (gradient accumulation micro-batches) */
     bool skip_equation_logging = false;
+
+    // FOR INFERENCE ONLY — geometry-only BatchPayload (vectors empty).
+    // payload points here when initialized via the inference overload.
+    Batching::BatchPayload inference_payload_;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LOSS CONFIGURATION
@@ -175,7 +179,8 @@ AutogradContext initAutogradContext(
 );
 
 /**
- * Initialize autograd context for INFERENCE (no payload, set batch_size/seq_len directly)
+ * Initialize autograd context for INFERENCE (geometry-only payload, vectors empty).
+ * payload pointer re-seated to inference_payload_ by executeAutogradForward.
  */
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
