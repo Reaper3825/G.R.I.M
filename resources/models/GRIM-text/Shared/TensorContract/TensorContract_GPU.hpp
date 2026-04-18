@@ -80,6 +80,7 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 //======================================================//
 
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #include <cstdint>
 #include <cstddef>
 #include <stdexcept>
@@ -1163,10 +1164,6 @@ inline size_t ParameterGroup::size_bytes() const { return size() * sizeof(float)
 //  Autograd Operations (create computation graph nodes)
 //======================================================//
 
-// Forward declarations for cuBLAS types (must be in global namespace)
-struct cublasContext;
-typedef cublasContext* cublasHandle_t;
-
 /**
  * Track a cuBLAS call for error checking (Rule 20: fail loud).
  * Defined at global scope in TensorContract_GPU.cu, used by MatMulGradFn in AutogradAttention.cu.
@@ -1176,6 +1173,10 @@ void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t st
 namespace GRIM {  // reopen namespace
 
 namespace autograd {
+
+// Bring sibling-namespace types into scope for autograd function declarations
+using GRIM::Batching::BatchPayload;
+using ::TensorContract::GQADims;
 
 /**
  * Set/get the cuBLAS handle for autograd matmul operations.
