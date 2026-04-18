@@ -971,6 +971,9 @@ struct Tensor {
     /// In-place Xavier uniform initialization
     static void xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream = nullptr);
     
+    /// In-place normal initialization N(mean, std)
+    static void normal_(Tensor& t, float mean, float std, uint64_t seed, cudaStream_t stream = nullptr);
+    
     //--------------------------------------------------//
     // Gradient Management
     //--------------------------------------------------//

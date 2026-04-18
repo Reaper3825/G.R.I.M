@@ -56,9 +56,16 @@ EmbeddingLayer::EmbeddingLayer(const EmbeddingLayerConfig& config,
         token_weights_.requires_grad_();
         token_weights_.ensure_grad();  // Allocate grad NOW so share_grad() works for LM head tying
     }
-    Tensor::xavier_uniform_(token_weights_, seed, stream);
+    // Issue #163: Normal(0,1) init gives embedding RMS ≈ 1.0, matching post-RMSNorm
+    // residual stream scale. Xavier gives RMS ≈ sqrt(6/(V+D))/sqrt(3) ≈ 0.014 for
+    // V=10000, D=768 — 60× weaker than the sublayer noise accumulated through 12
+    // encoder layers. The SNR mismatch causes violent norm divergence at step ~200
+    // (positions develop correlated representations → rho spike → weight poisoning).
+    // With N(0,1): SNR ≈ 1.0/0.88 instead of 0.014/0.88, eliminating the transient.
+    // gamma_final in LMHead is set to 1/sqrt(d_model) to keep initial logit std ≈ 1.0.
+    Tensor::normal_(token_weights_, 0.0f, 1.0f, seed, stream);
 
-    fprintf(stdout, "[EmbeddingLayer] Token weights: [%d, %d] Xavier seed=%llu\n",
+    fprintf(stdout, "[EmbeddingLayer] Token weights: [%d, %d] Normal(0,1) seed=%llu (RMS≈1.0)\n",
             config_.vocab_size, config_.d_model, static_cast<unsigned long long>(seed));
 
     // ══════════════════════════════════════════════════════════════

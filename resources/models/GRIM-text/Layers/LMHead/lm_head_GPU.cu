@@ -104,20 +104,25 @@ LMHeadLayer::LMHeadLayer(const LMHeadLayerConfig& config,
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  FINAL RMSNORM GAMMA: Always self-allocated, initialized to 1.0
+    //  FINAL RMSNORM GAMMA: Always self-allocated
+    //  Issue #163: Init to 1/sqrt(d_model) to compensate for N(0,1) embedding init.
+    //  With tied weights (emb RMS ≈ 1.0), gamma = 1/sqrt(d) gives:
+    //    logit_std ≈ sqrt(d) × (1/sqrt(d)) × 1.0 = 1.0  (healthy initial softmax)
+    //  gamma_final learns with lr_mult=0.1 and wd_mult=1.0 (see copilot-instructions).
     // ══════════════════════════════════════════════════════════════
     if (config_.has_final_rms_norm) {
         final_rms_gamma_ = Tensor::zeros({config_.d_model}, init_stream, "final_rms_gamma");
         final_rms_gamma_.requires_grad_();
         final_rms_gamma_.ensure_grad();
 
-        // Initialize gamma to 1.0 (identity normalization at start)
-        std::vector<float> ones(config_.d_model, 1.0f);
-        cudaMemcpyAsync(final_rms_gamma_.data, ones.data(),
+        // Initialize gamma to 1/sqrt(d_model) — bridges embedding magnitude to logit scale
+        const float gamma_init = 1.0f / std::sqrt(static_cast<float>(config_.d_model));
+        std::vector<float> init_vals(config_.d_model, gamma_init);
+        cudaMemcpyAsync(final_rms_gamma_.data, init_vals.data(),
                         config_.d_model * sizeof(float), cudaMemcpyHostToDevice, init_stream);
 
-        fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to 1.0 (eps=%.1e)\n",
-                config_.d_model, config_.rms_epsilon);
+        fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to %.6f (1/sqrt(%d), eps=%.1e)\n",
+                config_.d_model, gamma_init, config_.d_model, config_.rms_epsilon);
     }
 
     // Set cuBLAS handle for autograd (if available at init time)

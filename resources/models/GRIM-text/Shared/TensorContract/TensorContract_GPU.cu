@@ -734,6 +734,20 @@ __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, ui
     data[idx] = rnd * scale;
 }
 
+// Kernel: Normal distribution initialization using Box-Muller transform via cuRAND Philox.
+// Produces N(mean, std) samples with the same PRNG quality as Xavier init (Issue #107).
+__global__ void kernel_normal_init(float* data, size_t count, float mean, float std, uint64_t seed) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx >= count) return;
+
+    curandStatePhilox4_32_10_t state;
+    curand_init(seed, idx, 0, &state);
+
+    // curand_normal returns N(0,1), transform to N(mean, std)
+    data[idx] = curand_normal(&state) * std + mean;
+}
+
 // Kernel: Accumulate gradient (dst += src * scale)
 __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t count, float scale) {
     const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
@@ -1064,9 +1078,26 @@ void Tensor::xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream) {
     t.version++;
 }
 
+void Tensor::normal_(Tensor& t, float mean, float std, uint64_t seed, cudaStream_t stream) {
+    if (!t.data) {
+        throw std::invalid_argument("Tensor::normal_: tensor has no data");
+    }
+    if (!t.shape.is_valid()) {
+        throw std::invalid_argument("Tensor::normal_: tensor has invalid shape");
+    }
+    if (std <= 0.0f) {
+        throw std::invalid_argument("Tensor::normal_: std must be > 0, got " + std::to_string(std));
+    }
+
+    const size_t count = t.shape.total_elements();
+    kernel_normal_init<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        t.data, count, mean, std, seed);
+    t.version++;
+}
+
 //======================================================//
 //  Gradient Management
-//======================================================//
+//======================================================
 
 void Tensor::ensure_grad() {
     if (!requires_grad) {

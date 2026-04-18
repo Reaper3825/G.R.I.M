@@ -307,7 +307,7 @@
             "scratch_blocks": {
                 "enabled": true
             },
-            "seed": 1,
+            "seed": 131,
             "shuffle": {
                 "enabled": true
             },
