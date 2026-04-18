@@ -1939,7 +1939,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // 11. Initialize telemetry lattice
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry lattice...", 0);
     ctx->telemetry.config.num_levels = 8;  // k ∈ [0,7]: strides [1,2,4,8,16,32,64,128]
-    ctx->telemetry.config.num_streams = 38; // 0-4: core, 5-8: rho, 9-13: adam, 14-20: exec block, 21-26: EB/SB injection, 27-30: PBM, 31-34: rho raw, 35-37: RMS gamma
+    ctx->telemetry.config.num_streams = 39; // 0-4: core, 5-8: rho, 9-13: adam, 14-20: exec block, 21-26: EB/SB injection, 27-30: PBM, 31-34: rho raw, 35-37: RMS gamma, 38: rho rms-spread
     ctx->telemetry.config.hyperparams.beta_mu = 0.95f;
     ctx->telemetry.config.hyperparams.beta_a = 0.995f;
     ctx->telemetry.config.hyperparams.beta_delta = 0.90f;

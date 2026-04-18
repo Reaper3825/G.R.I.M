@@ -181,6 +181,11 @@ enum class MetricStream : int {
     RMS_GAMMA_PRE_ATTN_RMS = 35,     // mean RMS(γ₁) across encoder layers (pre-attention)
     RMS_GAMMA_PRE_FFN_RMS = 36,      // mean RMS(γ₂) across encoder layers (pre-FFN)
     RMS_GAMMA_FINAL_RMS = 37,        // RMS(γ_final) — LM head final RMSNorm gamma
+    // ρ-denominator collapse detector (April 2026)
+    RHO_RAW_RMS_SPREAD = 38,         // rms_max / rms_min — per-position rms bifurcation
+                                     // (>2.0 indicates row-centering or upstream collapse
+                                     //  is stripping certain positions to near-zero,
+                                     //  driving spurious high ρ via tiny denominators)
 };
 
 const char* getMetricStreamName(MetricStream stream);

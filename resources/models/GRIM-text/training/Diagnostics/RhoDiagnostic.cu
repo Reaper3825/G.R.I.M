@@ -342,12 +342,32 @@ void computeRhoDiagnostic(
         ctx.telemetry.last_obs[32] = last_lr.avg_norm_prod;  // RHO_RAW_AVG_NORM_PROD
         ctx.telemetry.last_obs[33] = last_lr.rms_min;        // RHO_RAW_H_RMS_MIN
         ctx.telemetry.last_obs[34] = last_lr.rms_max;        // RHO_RAW_H_RMS_MAX
+        // Per-position rms bifurcation — the proximate driver of ρ spikes when
+        // a subset of positions is stripped to near-zero (Apr 2026 finding).
+        // ρ = mean(|dot|/(rms_i*rms_j*d)); when rms_min collapses, the per-pair
+        // denominator goes to ~0 and ρ reads as noise/0 ⇒ spuriously high ρ.
+        // Healthy training: spread ≈ 1.0–1.5x.  >2x = early warning.
+        const float rms_spread = last_lr.rms_max
+                               / std::max(last_lr.rms_min, 1e-8f);
+        ctx.telemetry.last_obs[38] = rms_spread;             // RHO_RAW_RMS_SPREAD
 
         rho_eq << "  SUMMARY: ρ(" << first_label << ")=" << rho_first
                << " → ρ(" << last_label << ")=" << rho_final
                << " growth=" << std::showpos << rho_growth << std::noshowpos
                << " h_rms_growth=" << h_rms_growth_ratio
                << "x\n";
+        rho_eq << "  RAW(" << last_label << "): |dot|=" << last_lr.avg_abs_dot
+               << " denom=" << last_lr.avg_norm_prod
+               << " rms[min..max]=[" << last_lr.rms_min
+               << ".." << last_lr.rms_max
+               << "] spread=" << rms_spread << "x";
+        if (rms_spread > 4.0f) {
+            rho_eq << "  [ANOMALY] RMS BIFURCATION: positions are being stripped to"
+                      " near-zero — ρ numerator/denominator collapse";
+        } else if (rms_spread > 2.0f) {
+            rho_eq << "  [WARNING] rms spread >2x — watch denominator";
+        }
+        rho_eq << "\n";
 
         if (max_delta_layer >= 0 && max_delta > 0.02f) {
             // Find the entry to report what it was measured against

@@ -331,6 +331,7 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RMS_GAMMA_PRE_ATTN_RMS: return "rms_gamma_pre_attn_rms";
         case MetricStream::RMS_GAMMA_PRE_FFN_RMS: return "rms_gamma_pre_ffn_rms";
         case MetricStream::RMS_GAMMA_FINAL_RMS: return "rms_gamma_final_rms";
+        case MetricStream::RHO_RAW_RMS_SPREAD: return "rho_raw_rms_spread";
         default: return "unknown";
     }
 }

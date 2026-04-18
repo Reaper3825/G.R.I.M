@@ -104,25 +104,20 @@ LMHeadLayer::LMHeadLayer(const LMHeadLayerConfig& config,
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  FINAL RMSNORM GAMMA: Always self-allocated
-    //  Issue #163: Init to 1/sqrt(d_model) to compensate for N(0,1) embedding init.
-    //  With tied weights (emb RMS ≈ 1.0), gamma = 1/sqrt(d) gives:
-    //    logit_std ≈ sqrt(d) × (1/sqrt(d)) × 1.0 = 1.0  (healthy initial softmax)
-    //  gamma_final learns with lr_mult=0.1 and wd_mult=1.0 (see copilot-instructions).
+    //  FINAL RMSNORM GAMMA: Always self-allocated, initialized to 1.0
     // ══════════════════════════════════════════════════════════════
     if (config_.has_final_rms_norm) {
         final_rms_gamma_ = Tensor::zeros({config_.d_model}, init_stream, "final_rms_gamma");
         final_rms_gamma_.requires_grad_();
         final_rms_gamma_.ensure_grad();
 
-        // Initialize gamma to 1/sqrt(d_model) — bridges embedding magnitude to logit scale
-        const float gamma_init = 1.0f / std::sqrt(static_cast<float>(config_.d_model));
-        std::vector<float> init_vals(config_.d_model, gamma_init);
-        cudaMemcpyAsync(final_rms_gamma_.data, init_vals.data(),
+        // Initialize gamma to 1.0 (identity normalization at start)
+        std::vector<float> ones(config_.d_model, 1.0f);
+        cudaMemcpyAsync(final_rms_gamma_.data, ones.data(),
                         config_.d_model * sizeof(float), cudaMemcpyHostToDevice, init_stream);
 
-        fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to %.6f (1/sqrt(%d), eps=%.1e)\n",
-                config_.d_model, gamma_init, config_.d_model, config_.rms_epsilon);
+        fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to 1.0 (eps=%.1e)\n",
+                config_.d_model, config_.rms_epsilon);
     }
 
     // Set cuBLAS handle for autograd (if available at init time)
@@ -202,23 +197,34 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // STEP 1: Optional hidden state centering (Issue #125/#132)
+    // STEP 1: Optional hidden state centering (Issue #125 / reformulated #132, April 2026)
     //
-    // Column centering: Σ_t h[t,d] = 0 for each feature d
-    //   Removes shared direction → reduces cos(h_i, h_j) → fixes mode collapse
+    //   Column centering h: Σ_t h[t,d] = 0 for each feature d   (Issue #125)
+    //     Removes shared direction across positions → reduces cos(h_i, h_j).
     //
-    // Row centering: Σ_d h[t,d] = 0 for each position t
-    //   Eliminates gradient sign flip → prevents weight paradox
+    //   Row centering of WEIGHT matrix instead of h (April 2026 reformulation,
+    //   applied below at STEP 2 — see commentary there):
+    //     Constrains Σ_d W[v,d] = 0 for each vocab v. Mathematically equivalent
+    //     invariance to the original Issue #132 row-centering-of-h, with two
+    //     advantages:
+    //       (a) preserves per-position energy in h — no rms bifurcation when h
+    //           drifts toward the all-ones direction (the failure mode that
+    //           caused rms_max/rms_min to climb 1.02x → 4.0x and produced
+    //           spurious high ρ from tiny denominators);
+    //       (b) STRONGER guarantee — also makes back-propagated grad_h satisfy
+    //           Σ_d grad_h[t,d] = 0 automatically (Issue #132's original
+    //           row-centering-of-h only enforced the property in forward).
     // ════════════════════════════════════════════════════════════════════
-    
+
     const Tensor* matmul_input = current_input;
-    
+
     if (config_.center_hidden_states) {
-        // Column centering (Issue #125): removes common direction
+        // Column-center h: removes common direction across positions (Issue #125).
+        // Row-centering moved to W at STEP 2 (April 2026 reformulation).
         Tensor col_centered = autograd::center_columns(*current_input, stream);
-        // Row centering (Issue #132): eliminates gradient sign flip
         // Store in out_centered_hidden so it survives this scope (Issue #127)
-        out_centered_hidden = autograd::center_rows(col_centered, stream);
+        // and so cached_encoder_output reflects the actual matmul input for diagnostics.
+        out_centered_hidden = std::move(col_centered);
         matmul_input = &out_centered_hidden;
     } else if (config_.project_out_pc1) {
         // Issue #149: project out dominant PC1 direction via power iteration
@@ -254,6 +260,21 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
     weights_.requires_grad = true;
     weights_.shape = TensorContract::TensorShape::make_BSM(config_.vocab_size, config_.d_model);
 
+    // April 2026: When hidden-state centering is enabled, project through a
+    // row-centered VIEW of W (Σ_d W[v,d]=0). Forward and backward both pick up
+    // the invariance described above. centered_weights_ is held as a member so
+    // its data buffer and CenterRowsGradFn chain survive past this function and
+    // remain valid for backward(). When centering is disabled we project through
+    // raw weights_ as before.
+    const Tensor* effective_weights = &weights_;
+    if (config_.center_hidden_states) {
+        centered_weights_ = autograd::center_rows(weights_, stream);
+        effective_weights = &centered_weights_;
+    } else {
+        // Drop any stale buffer from a previous centered run — keeps memory honest.
+        centered_weights_ = Tensor();
+    }
+
     if (!matmul_input->data) {
         throw std::runtime_error("LMHeadLayer::forward: matmul input has null data - cannot compute weight gradient. "
             "Check encoder output and centering/PC1 buffers.");
@@ -262,10 +283,10 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
 
     Tensor logits = autograd::matmul(
         *matmul_input,
-        weights_,
+        *effective_weights,
         stream,
         a_cache,
-        nullptr,  // weights_.data persists
+        nullptr,  // weights persist across calls (raw or centered held by member)
         true  // transpose_b=true: logits = input @ W^T
     );
     // Validate output shape

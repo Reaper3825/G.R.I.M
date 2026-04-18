@@ -734,20 +734,6 @@ __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, ui
     data[idx] = rnd * scale;
 }
 
-// Kernel: Normal distribution initialization using Box-Muller transform via cuRAND Philox.
-// Produces N(mean, std) samples with the same PRNG quality as Xavier init (Issue #107).
-__global__ void kernel_normal_init(float* data, size_t count, float mean, float std, uint64_t seed) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx >= count) return;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(seed, idx, 0, &state);
-
-    // curand_normal returns N(0,1), transform to N(mean, std)
-    data[idx] = curand_normal(&state) * std + mean;
-}
-
 // Kernel: Accumulate gradient (dst += src * scale)
 __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t count, float scale) {
     const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
@@ -1075,23 +1061,6 @@ void Tensor::xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream) {
     
     kernel_xavier_uniform<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, scale, seed);
     
-    t.version++;
-}
-
-void Tensor::normal_(Tensor& t, float mean, float std, uint64_t seed, cudaStream_t stream) {
-    if (!t.data) {
-        throw std::invalid_argument("Tensor::normal_: tensor has no data");
-    }
-    if (!t.shape.is_valid()) {
-        throw std::invalid_argument("Tensor::normal_: tensor has invalid shape");
-    }
-    if (std <= 0.0f) {
-        throw std::invalid_argument("Tensor::normal_: std must be > 0, got " + std::to_string(std));
-    }
-
-    const size_t count = t.shape.total_elements();
-    kernel_normal_init<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        t.data, count, mean, std, seed);
     t.version++;
 }
 
@@ -2402,63 +2371,92 @@ struct CenterRowsGradFn : public GradFn {
     int row_dim = 0;
     int num_rows = 0;
     bool input_requires_grad = false;
-    
-    // ISSUE #56 FIX: Owned gradient buffer for non-leaf tensors
+    bool input_is_leaf = false;       // April 2026: leaf parameter accumulation path
+    float* leaf_grad_buf = nullptr;   // direct pointer to leaf parameter's .grad data
+
+    // ISSUE #56 FIX: Owned gradient buffer for non-leaf tensors / leaf staging buffer
     std::shared_ptr<float> owned_input_grad;
-    
+
     CenterRowsGradFn() { op_name = "center_rows"; }
-    
+
     __host__ void capture_input(Tensor& input, int dim, int rows, cudaStream_t stream) {
         input_requires_grad = input.requires_grad;
         if (!input.requires_grad) return;
-        
+
         input_shape = input.shape;
         element_count = input.numel();
         row_dim = dim;
         num_rows = rows;
-        
+
         // Copy shared_ptr to input's grad_fn
         input_grad_fn = input.grad_fn;
-        
+
         // Setup gradient buffer (Issue #54 pattern)
         input.ensure_grad();
-        
+
+        // April 2026: Support row-centering of LEAF parameters (e.g. LM head weight matrix
+        // for the "constrain Σ_d W[v,d]=0" architecture). For leaves, input.grad_fn is null,
+        // so the non-leaf chain path below would silently drop gradients. We must
+        // accumulate the centered gradient into the leaf's persistent .grad buffer instead.
+        input_is_leaf = input.is_leaf;
+        if (input_is_leaf) {
+            leaf_grad_buf = input.grad_data();
+            if (!leaf_grad_buf) {
+                throw std::runtime_error(
+                    "CenterRowsGradFn::capture_input: leaf input has requires_grad but "
+                    "grad_data() is NULL after ensure_grad() at " __FILE__);
+            }
+        }
+
         // CRITICAL FIX (Issue #136): NEVER reuse externally-owned leaf buffers!
         // set_grad_from_buffer() marks the gradient tensor as is_leaf=true,
         // but it's wrapping an externally-owned buffer (grad_logits_tensor.data).
         // If we reuse this buffer, CenterRowsGradFn OVERWRITES it with centered gradients,
         // corrupting the original CE gradients that LogSoftmaxGradFn wrote.
-        // Always allocate our own buffer so we don't destroy upstream data.
+        // Always allocate our own staging buffer so we don't destroy upstream data;
+        // for leaf inputs this also serves as the centered-grad scratch that we then
+        // accumulate (+=) into the leaf's persistent grad buffer.
         float* buf = nullptr;
         cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterRowsGradFn_input_grad");
         cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
         owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
         input_grad = owned_input_grad.get();
-        AG_TRACE("[CenterRowsGradFn] Allocated owned input_grad buffer (Issue #136 FIX): %zu floats at %p\n", element_count, (void*)input_grad);
+        AG_TRACE("[CenterRowsGradFn] Allocated owned input_grad buffer (Issue #136 FIX): %zu floats at %p (leaf=%d)\n", element_count, (void*)input_grad, (int)input_is_leaf);
     }
-    
+
     __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;  // ISSUE #49
         if (!input_requires_grad) return;  // No grad needed for this input
         if (!input_grad) throw std::runtime_error("CenterRowsGradFn::apply: input_grad is NULL - capture_input() must be called first");
         if (!grad_output.data) throw std::runtime_error("CenterRowsGradFn::apply: grad_output.data is NULL - backward called with null gradient");
         applied = true;
-        
+
         // BACKWARD: grad_x = grad_y - mean_d(grad_y)  (reuse centering kernel!)
         // We can use kernel_center_rows to center grad_output directly to input_grad
         {
             kernel_center_rows<<<num_rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_output.data, input_grad, row_dim, num_rows);
         }
-        
-        // Continue backward chain
+
+        if (input_is_leaf) {
+            // Accumulate centered gradient into leaf parameter's persistent .grad buffer.
+            // MUST be += (not =) so grad-accumulation windows work and so we don't clobber
+            // gradients from other autograd paths into the same parameter.
+            if (!leaf_grad_buf) {
+                throw std::runtime_error("CenterRowsGradFn::apply: leaf_grad_buf is NULL for leaf input at " __FILE__);
+            }
+            kernel_accumulate_grad<<<gridForCount(element_count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                leaf_grad_buf, input_grad, element_count, 1.0f);
+        }
+
+        // Continue backward chain (non-leaf inputs only — leaves have grad_fn=null)
         if (input_grad_fn) {
             Tensor input_grad_tensor;
             input_grad_tensor.data = input_grad;
             input_grad_tensor.shape = input_shape;
             input_grad_tensor.owns_data = false;
             input_grad_tensor.stream = stream;
-            
+
             input_grad_fn->apply(input_grad_tensor, stream);
             // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
         }

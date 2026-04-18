@@ -141,6 +141,13 @@ private:
     Tensor bias_;             // [vocab_size] — optional, always owned
     Tensor final_rms_gamma_;  // [d_model] — pre-LM-head RMSNorm gamma, always owned
 
+    // April 2026: Workspace for the row-centered LM head weight matrix
+    // (Σ_d W[v,d]=0 constraint that replaces row-centering of hidden states).
+    // Held as a member so its data buffer outlives forward() — the matmul GradFn
+    // captures W via this tensor, and backward must dereference its .data and
+    // grad chain after forward() has returned.
+    Tensor centered_weights_;
+
     bool owns_weights_ = true;  // false when tied to embedding weights
 };
 
