@@ -85,9 +85,10 @@ __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t coun
 // (matching TensorContract_GPU.cu structure)
 // ═══════════════════════════════════════════════════════════════════════════
 namespace GRIM {
-namespace autograd {
 
-using Tensor = TensorContract::Tensor;
+using CudaAlloc::cudaMallocOrThrow;
+
+namespace autograd {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ISSUE #77 DIAGNOSTIC: Log cached activation (ln1_out) values during backward

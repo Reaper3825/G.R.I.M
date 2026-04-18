@@ -40,6 +40,8 @@
 
 namespace GRIM {
 
+using Batching::BatchPayload;
+
 //======================================================//
 //  Configuration - MUST be fully specified
 //======================================================//
