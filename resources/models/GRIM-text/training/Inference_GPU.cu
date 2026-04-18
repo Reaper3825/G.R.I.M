@@ -555,8 +555,12 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         }
 
         // 3c. Split QKV → Q [1,nh,1,hd], K [1,nkv,1,hd], V [1,nkv,1,hd]
+        Batching::BatchPayload inf_payload;
+        inf_payload.batch_size = 1;
+        inf_payload.max_seq_len = 1;
+        TensorContract::GQADims inf_gqa{num_heads, num_kv_heads, head_dim};
         auto [Q, K, V] = ag::split_and_reshape_qkv(
-            qkv, 1, 1, num_heads, num_kv_heads, head_dim, stream);
+            qkv, inf_payload, inf_gqa, stream);
 
         // 3d. RoPE rotation with position offset
         // For S=1, Q is [1,nh,1,hd] and K is [1,nkv,1,hd]
