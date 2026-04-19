@@ -959,12 +959,14 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
     // LM Head centering configuration (Issue #37 / #40)
     model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
+    model_config.lm_head_freeze_final_rms_gamma = hp.lm_head_freeze_final_rms_gamma;
     model_config.project_out_pc1 = hp.project_out_pc1;
     model_config.pc1_power_iters = hp.pc1_power_iters;
     model_config.center_logits = hp.center_logits;
     model_config.center_encoder_residuals = hp.center_encoder_residuals;
     
     logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
+              ", freeze_final_rms_gamma=" + std::string(model_config.lm_head_freeze_final_rms_gamma ? "true" : "false") +
               ", project_out_pc1=" + std::string(model_config.project_out_pc1 ? "true" : "false") +
               ", pc1_power_iters=" + std::to_string(model_config.pc1_power_iters) +
               ", center_logits=" + std::string(model_config.center_logits ? "true" : "false") +

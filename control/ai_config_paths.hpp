@@ -283,6 +283,7 @@ struct TrainingHyperparameters {
     // Centering backward handled by autograd GradFns (Issue #142).
     bool lm_head_centering_enabled;
     bool lm_head_center_hidden_states;
+    bool lm_head_freeze_final_rms_gamma;  // Hold γ_final at 1.0 (no requires_grad, no param group).
     bool center_logits;  // Center logits per position (row-wise) before softmax
     bool center_encoder_residuals;  // Center residuals INSIDE encoder layers (24 projections - can attenuate gradients)
     bool project_out_pc1;            // Issue #149: project out PC1 direction before LM head
@@ -835,6 +836,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
 
         // LM head centering choices
         "lm_head_centering.center_hidden_states",
+        "lm_head_centering.freeze_final_rms_gamma",
         "lm_head_centering.center_logits",
         "lm_head_centering.center_encoder_residuals",
         "lm_head_centering.project_out_pc1",
@@ -1207,6 +1209,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     // Set to false for standard PyTorch-style implementation.
     params.lm_head_centering_enabled = false;  // Default to disabled (standard implementation)
     params.lm_head_center_hidden_states = false;
+    params.lm_head_freeze_final_rms_gamma = false;  // Default: γ_final is trainable. Set true if logit-temperature inflation observed.
     params.center_logits = false;  // Default to disabled (standard implementation)
     params.center_encoder_residuals = false;  // Default: disabled. Enable to prevent ρ buildup across layers (mode collapse fix).
                                                // Gradient cost: (1-1/n_tokens)^24 ≈ 0.996 for n≈6000 — negligible.
@@ -1216,6 +1219,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         const auto& lmc = *it;
         params.lm_head_centering_enabled = lmc.value("enabled", false);
         params.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
+        params.lm_head_freeze_final_rms_gamma = lmc.value("freeze_final_rms_gamma", false);
         params.center_logits = lmc.value("center_logits", false);
         params.center_encoder_residuals = lmc.value("center_encoder_residuals", false);
         params.project_out_pc1 = lmc.value("project_out_pc1", false);

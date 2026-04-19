@@ -41,6 +41,11 @@ struct LMHeadLayerConfig {
     int  pc1_power_iters = 5;           // Number of power iteration steps for PC1 estimation
     bool center_logits = false;         // Row-center logits after projection (numerical stability)
     bool has_final_rms_norm = true;     // Apply RMSNorm before projection (pre-LM-head norm)
+    bool freeze_final_rms_gamma = false; // If true, γ_final is held at 1.0 (no requires_grad, no param group).
+                                         // Use when γ_final exhibits monotonic logit-temperature inflation
+                                         // (1.0 → 1.3+ over 20k steps) that the wd_mult/lr_mult brake cannot
+                                         // counter. Mathematically equivalent to no learnable scale on the
+                                         // final norm (GPT-2 style); the LM head W absorbs any needed scale.
     float rms_epsilon = 1e-5f;          // RMSNorm epsilon
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle

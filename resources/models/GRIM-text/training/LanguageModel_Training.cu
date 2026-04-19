@@ -304,11 +304,21 @@ void LanguageModel::buildParameterGroups() {
     // lr_mult=0.1 prevents the initial spike: γ_final has a monotonic "scale up" gradient
     // bias in early training (scaling logits reduces CE faster than learning representations),
     // so it needs a slower learning rate to prevent overshooting before representations form.
-    fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
-            (void*)lm_head_layer_->finalRmsGamma().data, (int)lm_head_layer_->finalRmsGamma().has_grad(),
-            lm_head_layer_->finalRmsGamma().numel()); fflush(stderr);
-    registerTensor("final_rms_gamma", lm_head_layer_->finalRmsGamma(), ParamGroupType::RMSNORM, -1, 1.0f, 0.1f);
-    fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
+    //
+    // EMPIRICAL UPDATE (Apr 2026, 20k-step run): wd_mult=1.0 + lr_mult=0.1 + ADAMW_WEIGHT_DECAY=0.01
+    // produces effective decay ~6e-7/step, ~25× too weak vs the ~31% inflation observed by step
+    // 20k. Setting `lm_head_freeze_final_rms_gamma=true` in ai_config.json disables \u03b3 entirely
+    // (held at 1.0). When frozen, has_grad()==false and we skip registration here.
+    if (lm_head_layer_->finalRmsGamma().data && lm_head_layer_->finalRmsGamma().has_grad()) {
+        fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
+                (void*)lm_head_layer_->finalRmsGamma().data, (int)lm_head_layer_->finalRmsGamma().has_grad(),
+                lm_head_layer_->finalRmsGamma().numel()); fflush(stderr);
+        registerTensor("final_rms_gamma", lm_head_layer_->finalRmsGamma(), ParamGroupType::RMSNORM, -1, 1.0f, 0.1f);
+        fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
+    } else {
+        fprintf(stderr, "[buildParameterGroups] final_rms_gamma FROZEN (no grad, no param group) — held at 1.0\n");
+        fflush(stderr);
+    }
 
     fprintf(stderr, "[buildParameterGroups] DIAG-E: %zu groups registered, allocating optimizer states\n", parameter_groups_.size()); fflush(stderr);
     // Collect sizes for centralized optimizer state allocation

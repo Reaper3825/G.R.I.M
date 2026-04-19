@@ -1629,7 +1629,11 @@ BackwardResult executeAutogradBackward(
         // LM Head parameters (Pattern B: owned by persistent LMHeadLayer)
         ctx.lm_head->weights().zero_grad(ctx.stream);
         ctx.lm_head->bias().zero_grad(ctx.stream);
-        ctx.lm_head->finalRmsGamma().zero_grad(ctx.stream);
+        // γ_final may be frozen (lm_head_freeze_final_rms_gamma=true) — in that case
+        // it has no grad tensor and zero_grad would no-op; gate explicitly for clarity.
+        if (ctx.lm_head->finalRmsGamma().requires_grad) {
+            ctx.lm_head->finalRmsGamma().zero_grad(ctx.stream);
+        }
 
         // Encoder parameters
         if (ctx.gpu_encoder) {
@@ -1871,8 +1875,12 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // Final RMSNorm gamma (Pattern B: owned by LMHeadLayer)
+    // When lm_head_freeze_final_rms_gamma=true, requires_grad=false and we skip the check
+    // (no grad is correct, not a bug).
     // ═══════════════════════════════════════════════════════════════════════════
-    if (ctx.lm_head->finalRmsGamma().data && !ctx.lm_head->finalRmsGamma().has_grad()) {
+    if (ctx.lm_head->finalRmsGamma().data
+        && ctx.lm_head->finalRmsGamma().requires_grad
+        && !ctx.lm_head->finalRmsGamma().has_grad()) {
         AG_WARN("final_rms_gamma.grad is NULL - gradients NOT flowing!");
         ok = false;
     }

@@ -377,6 +377,10 @@ struct LanguageModelConfig : public HyperParameters::ModelArchitecture {
     // Centering backward is handled automatically by CenterRowsGradFn/CenterColumnsGradFn
     // inside the autograd graph (Issues #125/#132).
     bool lm_head_center_hidden_states = false;  // Center encoder output before projection
+    bool lm_head_freeze_final_rms_gamma = false;  // Freeze γ_final at 1.0 (no requires_grad,
+                                                  // no param group). Use when γ_final exhibits
+                                                  // monotonic logit-temperature inflation that
+                                                  // wd_mult/lr_mult cannot brake.
     bool project_out_pc1 = false;              // Project out PC1 direction before LM head (Issue #149)
     int  pc1_power_iters = 5;                  // Power iteration steps for PC1 estimation
     bool center_logits = false;                 // Center logits per position (row-wise, mean→0)

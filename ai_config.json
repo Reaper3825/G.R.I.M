@@ -217,6 +217,7 @@
                 "center_hidden_states": true,
                 "center_logits": false,
                 "enabled": true,
+                "freeze_final_rms_gamma": true,
                 "project_out_pc1": true
             },
             "log_interval": 25,

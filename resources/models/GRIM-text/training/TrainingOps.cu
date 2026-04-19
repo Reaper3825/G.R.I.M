@@ -367,6 +367,7 @@ void LanguageModel::initGPU() {
             lm_config.pc1_power_iters = cfg.pc1_power_iters;
             lm_config.center_logits = cfg.center_logits;
             lm_config.has_final_rms_norm = true;
+            lm_config.freeze_final_rms_gamma = cfg.lm_head_freeze_final_rms_gamma;
             lm_config.rms_epsilon = cfg.rms_epsilon;
             lm_config.stream = primary_stream;
             lm_config.cublas_handle = training_state_.cublas_handle;

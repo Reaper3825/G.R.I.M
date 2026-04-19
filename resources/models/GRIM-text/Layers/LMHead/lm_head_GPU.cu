@@ -108,16 +108,23 @@ LMHeadLayer::LMHeadLayer(const LMHeadLayerConfig& config,
     // ══════════════════════════════════════════════════════════════
     if (config_.has_final_rms_norm) {
         final_rms_gamma_ = Tensor::zeros({config_.d_model}, init_stream, "final_rms_gamma");
-        final_rms_gamma_.requires_grad_();
-        final_rms_gamma_.ensure_grad();
+
+        // freeze_final_rms_gamma=true: γ stays at 1.0 forever — do NOT mark as a leaf
+        // parameter. autograd will skip producing its gradient and buildParameterGroups
+        // will skip registering it (gated on has_grad()).
+        if (!config_.freeze_final_rms_gamma) {
+            final_rms_gamma_.requires_grad_();
+            final_rms_gamma_.ensure_grad();
+        }
 
         // Initialize gamma to 1.0 (identity normalization at start)
         std::vector<float> ones(config_.d_model, 1.0f);
         cudaMemcpyAsync(final_rms_gamma_.data, ones.data(),
                         config_.d_model * sizeof(float), cudaMemcpyHostToDevice, init_stream);
 
-        fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to 1.0 (eps=%.1e)\n",
-                config_.d_model, config_.rms_epsilon);
+        fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to 1.0 (eps=%.1e) frozen=%s\n",
+                config_.d_model, config_.rms_epsilon,
+                config_.freeze_final_rms_gamma ? "true" : "false");
     }
 
     // Set cuBLAS handle for autograd (if available at init time)
@@ -191,7 +198,11 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
     Tensor normalized;
 
     if (config_.has_final_rms_norm && final_rms_gamma_.data) {
-        final_rms_gamma_.requires_grad = true;
+        // Only flip requires_grad when γ is trainable. When frozen the rms_norm
+        // GradFn will skip the gamma path entirely (no grad accumulation).
+        if (!config_.freeze_final_rms_gamma) {
+            final_rms_gamma_.requires_grad = true;
+        }
         normalized = autograd::rms_norm(input, final_rms_gamma_, config_.rms_epsilon, stream);
         current_input = &normalized;
     }

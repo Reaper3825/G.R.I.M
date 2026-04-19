@@ -2180,8 +2180,9 @@ bool UITrainingPanel::persistHyperparamToJSON(const GRIM::Config::HyperparamEntr
             setDoubleNested("loss", "class_balanced", k.substr(20)); handled = true;
         }
         // LM head centering
-        if (!handled && k == "lm_head_centering_enabled")     { setNested("lm_head_centering", "enabled"); handled = true; }
-        if (!handled && k == "lm_head_center_hidden_states")  { setNested("lm_head_centering", "center_hidden_states"); handled = true; }
+        if (!handled && k == "lm_head_centering_enabled")       { setNested("lm_head_centering", "enabled"); handled = true; }
+        if (!handled && k == "lm_head_center_hidden_states")    { setNested("lm_head_centering", "center_hidden_states"); handled = true; }
+        if (!handled && k == "lm_head_freeze_final_rms_gamma")  { setNested("lm_head_centering", "freeze_final_rms_gamma"); handled = true; }
         if (!handled && k == "center_logits")                 { setNested("lm_head_centering", "center_logits"); handled = true; }
         if (!handled && k == "center_encoder_residuals")      { setNested("lm_head_centering", "center_encoder_residuals"); handled = true; }
         if (!handled && k == "project_out_pc1")               { setNested("lm_head_centering", "project_out_pc1"); handled = true; }

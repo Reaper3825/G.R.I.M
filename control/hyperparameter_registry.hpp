@@ -189,9 +189,10 @@ public:
         addFloat (params.loss_class_balanced_beta,     "loss_class_balanced_beta",     "Class Balanced Beta", "Loss");
 
         // ── LM Head ──
-        addBool  (params.lm_head_centering_enabled,     "lm_head_centering_enabled",     "Centering Enabled",     "LM Head");
-        addBool  (params.lm_head_center_hidden_states,  "lm_head_center_hidden_states",  "Center Hidden States",  "LM Head");
-        addBool  (params.center_logits,                 "center_logits",                 "Center Logits",         "LM Head");
+        addBool  (params.lm_head_centering_enabled,       "lm_head_centering_enabled",       "Centering Enabled",     "LM Head");
+        addBool  (params.lm_head_center_hidden_states,    "lm_head_center_hidden_states",    "Center Hidden States",  "LM Head");
+        addBool  (params.lm_head_freeze_final_rms_gamma,  "lm_head_freeze_final_rms_gamma",  "Freeze γ_final",        "LM Head");
+        addBool  (params.center_logits,                   "center_logits",                   "Center Logits",         "LM Head");
         addBool  (params.center_encoder_residuals,      "center_encoder_residuals",      "Center Encoder Resids", "LM Head");
         addBool  (params.project_out_pc1,               "project_out_pc1",               "Project Out PC1",       "LM Head");
         addInt   (params.pc1_power_iters,               "pc1_power_iters",               "PC1 Power Iters",       "LM Head");
