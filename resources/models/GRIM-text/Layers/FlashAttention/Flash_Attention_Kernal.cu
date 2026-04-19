@@ -20,7 +20,7 @@
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../training/module_logger.hpp"
-#include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/VerboseLogging.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 
@@ -32,7 +32,8 @@ using FlashAttentionLog = ModuleLogger<GRIM::Logging::ModuleId::Activations>;
 
 // Helper function to check if equation logging is enabled at runtime
 inline bool isEquationLoggingEnabled() {
-    return GRIM::getEquationLogger().isEnabled();
+    auto* tape = GRIM::Logging::getGlobalTape();
+    return tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
 }
 }
 

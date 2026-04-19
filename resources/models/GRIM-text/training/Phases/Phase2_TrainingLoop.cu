@@ -33,7 +33,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"          // GRIM::LR::LRSchedule (exposed LR curve)
 #include "../../Shared/GradNorm/GradNormGPU.hpp"           // GradNorm::measureGradientNorms, GradMetrics
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
-#include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/Telemetry/TelemetryUpdate.hpp"
 #include "../Diagnostics/TrainingDiagnostics.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
@@ -120,7 +120,7 @@ bool isPhase2DebugEnabled() {
 
 bool shouldSyncDiagnostics(const TrainingContext& ctx, std::size_t batch_idx) {
     // Skip expensive D2H syncs when equation logging disabled (avoids GPU pipeline drain)
-    if (!GRIM::getEquationLogger().isEnabled()) {
+    if (!ctx.logging.tape || !ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
         return false;
     }
     const int default_interval = ctx.config.hyperparameters.log_interval;
@@ -815,6 +815,11 @@ BatchResult processBatch(
     BatchResult result;
     result.batch_idx = batch_idx;
     
+    // Begin tape recording for this batch (clears prior entries, sets step/batch)
+    if (ctx.logging.tape) {
+        ctx.logging.tape->beginBatch(static_cast<int>(ctx.global_step), batch_idx);
+    }
+    
     // Issue #142b: Eagerly detect any deferred CUDA errors from prior operations
     // (e.g., sample generation, previous batch backward). Without this, the error
     // manifests deep inside encoderForward as an SEH exception → silent exit.
@@ -1386,7 +1391,7 @@ BatchResult processBatch(
         eq << "  valid_tokens=" << valid_tokens_eq << " vocab_size=" << ctx.config.actual_vocab_size << "\n";
         eq << "  EXPECTED loss (random) = ln(" << ctx.config.actual_vocab_size << ") = " << expected_random_loss << "\n";
         eq << "  ACTUAL loss = " << result.loss << "\n";
-        EQ_LOG("BATCH_LOSS", eq.str(), batch_idx, -1, ctx.global_step, GRIM::EquationPhase::LOSS_COMPUTATION);
+        EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Loss, GRIM::Logging::LogPhase::LOSS_COMPUTATION, -1, "BATCH_LOSS", eq.str().c_str());
     }
 
     {
@@ -1937,7 +1942,7 @@ BatchResult processBatch(
     //   ||W[v]|| should be ~same magnitude as ||W[content]||_mean
     //   ||grad_W[v]|| should be non-zero (from LM head backward)
     // ========================================================================
-    if (shouldSyncDiagnostics(ctx, batch_idx) && GRIM::getEquationLogger().isEnabled()) {
+    if (shouldSyncDiagnostics(ctx, batch_idx) && ctx.logging.tape && ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
         const auto& cfg = ctx.model->getConfig();
         const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
         // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
@@ -2053,8 +2058,7 @@ BatchResult processBatch(
                      << " (sampled " << content_norm_count << " tokens)";
 
                 ctx.logging.logger->log(diag.str());
-                EQ_LOG("SPECIAL_TOKEN_EQUATION", diag.str(),
-                       static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
+                EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Embedding, GRIM::Logging::LogPhase::GRADIENT_CLIP, 0, "SPECIAL_TOKEN_EQUATION", diag.str().c_str());
             }
     }
     
@@ -2343,7 +2347,7 @@ BatchResult processBatch(
         // Gate behind shouldSyncDiagnostics so full vocab gradient D2H only runs on diagnostic sync interval
         static int emb_grad_diag_interval = 10;
         const bool kEmbGradDiagEnabled = shouldSyncDiagnostics(ctx, batch_idx) &&
-            GRIM::getEquationLogger().isEnabled() &&
+            ctx.logging.tape && ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug) &&
             (batch_idx == 0 || (batch_idx + 1) % std::max(emb_grad_diag_interval, 1) == 0);
         
         // gm is already in scope from measureGradientNorms above
@@ -2368,8 +2372,7 @@ BatchResult processBatch(
                 std::string emb_eq_str = GRIM::Diagnostics::formatEmbGradEquation(emb_diag, batch_idx);
                 ctx.logging.logger->log(emb_eq_str);
                 
-                EQ_LOG("EMB_GRAD_EQUATION", emb_eq_str,
-                       static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
+                EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Embedding, GRIM::Logging::LogPhase::GRADIENT_CLIP, 0, "EMB_GRAD_EQUATION", emb_eq_str.c_str());
             }
         }
         
@@ -2703,13 +2706,8 @@ BatchResult processBatch(
         // Reset micro_step counter after optimizer step completes
         ctx.optimizer.current_micro_step = 0;
 
-        // Periodic equation log flush (every 10 optimizer steps)
-        // ISSUE FIX: Must call flushAsync() FIRST to copy device buffer to host,
-        // THEN flushSync() to process and write the data
-        if (ctx.optimizer.optimizer_state.step % 10 == 0) {
-            GRIM::getEquationLogger().flushAsync();  // Device→Host async copy
-            GRIM::getEquationLogger().flushSync();   // Wait, process, write to file
-        }
+        // Periodic tape flush (every 10 optimizer steps) — sinks handle I/O
+        // (tape.flush() already called at end of processBatch; this is a mid-batch safety flush)
 
         const auto moment_sample = sampleOptimizerMomentStats(ctx.model->getTrainingState(), sync_diag);
         if (moment_sample.valid) {
@@ -2910,6 +2908,11 @@ BatchResult processBatch(
     // Free autograd intermediate tensors (logits, encoder outputs, etc.)
     // Must happen AFTER all diagnostics that read from intermediates
     ctx.model->getTrainingState().autograd_intermediates.clear();
+    
+    // Flush tape: sort by phase, dispatch to all sinks
+    if (ctx.logging.tape) {
+        ctx.logging.tape->flush();
+    }
     
     return result;
 }

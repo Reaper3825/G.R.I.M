@@ -9,7 +9,7 @@
 #include "AutogradLoss.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
 // BatchPayload include removed — unified_loss takes explicit (num_tokens, vocab_size)
-#include "../../EquationLogging/EquationLogging.hpp"
+#include "../../LogRecorder/BatchLogTape.hpp"
 #include "../../VerboseLogging.hpp"  // Compile-time diagnostic guards (Issue #151)
 #include "../../CudaAllocUtils.hpp"
 #include <cuda_runtime.h>
@@ -1122,7 +1122,7 @@ struct NLLLossGradFn : public GradFn {
                << "  INPUTS: num_tokens=" << num_tokens << " vocab=" << vocab_size << " valid=" << valid_count << "\n"
                << "  EXPECTED |grad[t,target[t]]|=1/N=" << expected_target_grad << "\n"
                << "  ACTUAL max=" << mx << " rms=" << rms << " (sampled " << valid_sampled << " valid target entries)";
-            EQ_LOG("NLL-BWD-OUT", eq.str(), 0, -1, 0, GRIM::EquationPhase::LOSS_BACKWARD);
+            EQ_LOG(GRIM::Logging::getGlobalTape(), GRIM::Logging::LogGroup::Loss, GRIM::Logging::LogPhase::LOSS_BACKWARD, -1, "NLL-BWD-OUT", eq.str().c_str());
         } // if constexpr ENABLE_LOSS_BACKWARD_SAMPLING (NLL-BWD-OUT)
         
         // ── Step 3: Chain to LogSoftmaxGradFn → computes grad w.r.t. raw logits ──
@@ -1140,7 +1140,7 @@ struct NLLLossGradFn : public GradFn {
                 std::ostringstream eq;
                 eq << "[NLL-TO-LOGSOFTMAX] chaining grad_log_probs to LogSoftmaxGradFn -> grad_logits\n"
                    << "  grad_log_probs.data=" << (void*)grad_log_probs_buffer;
-                EQ_LOG("NLL-TO-LOGSOFTMAX", eq.str(), 0, -1, 0, GRIM::EquationPhase::LOSS_BACKWARD);
+                EQ_LOG(GRIM::Logging::getGlobalTape(), GRIM::Logging::LogGroup::Loss, GRIM::Logging::LogPhase::LOSS_BACKWARD, -1, "NLL-TO-LOGSOFTMAX", eq.str().c_str());
             }
             
             AG_TRACE("[NLLLossGradFn::apply] Chaining to LogSoftmaxGradFn\n");

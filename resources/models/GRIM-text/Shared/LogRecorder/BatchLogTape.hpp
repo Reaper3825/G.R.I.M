@@ -200,6 +200,12 @@ public:
     size_t entryCount() const { return entries_.size(); }
     const TapeConfig& config() const { return config_; }
 
+    /// Skip flag for gradient-accumulation micro-batches.
+    /// When true, expensive D2H equation diagnostics are suppressed
+    /// (same weights → duplicate output on micro-batches 1..N-1).
+    bool skipThisPass() const { return skip_this_pass_; }
+    void setSkipThisPass(bool skip) { skip_this_pass_ = skip; }
+
     /// Update the global threshold at runtime.
     void setDefaultLevel(LogLevel level) { config_.default_level = level; }
 
@@ -221,6 +227,7 @@ private:
     std::mutex mutex_;
     int current_step_  = 0;
     int current_batch_ = 0;
+    bool skip_this_pass_ = false;
 };
 
 //======================================================//
@@ -239,5 +246,18 @@ void applyGroupOverride(TapeConfig& config, const char* group_str, const char* l
 
 /// Dump TapeConfig as a human-readable string (for diagnostics).
 std::string dumpTapeConfig(const TapeConfig& config);
+
+//======================================================//
+//  Global tape accessor (set once at startup, cleared at shutdown)
+//  This allows layer-level code (Encoding_GPU, AutogradLoss, etc.)
+//  to access the tape without threading ctx through every call.
+//  Thread-safe: record() is mutex-protected.
+//======================================================//
+
+/// Set the global tape pointer (call in Phase1 after construction).
+void setGlobalTape(BatchLogTape* tape);
+
+/// Get the global tape pointer (returns nullptr before setGlobalTape).
+BatchLogTape* getGlobalTape();
 
 } // namespace GRIM::Logging

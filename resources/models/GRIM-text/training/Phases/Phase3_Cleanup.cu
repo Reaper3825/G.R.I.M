@@ -20,7 +20,7 @@
 #include "../OptimizerCheckpoint.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
-#include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 #include <iostream>
@@ -363,20 +363,28 @@ CleanupResult executePhase3(
         GRIM::Logging::FlushDeviceLogs();
         GRIM::Logging::ShutdownLogRecorder();
         
-        // Final summary entry to equation log
-        {
+        // Final summary entry to tape
+        if (ctx.logging.tape) {
+            GRIM::Logging::LogEntry entry{};
+            entry.level = GRIM::Logging::LogLevel::Info;
+            entry.group = GRIM::Logging::LogGroup::System;
+            entry.phase = GRIM::Logging::LogPhase::LIFECYCLE;
+            entry.layer_idx = -1;
+            entry.global_step = static_cast<int>(ctx.global_step);
+            entry.batch_idx = -1;
+            entry.setTag("TRAINING_COMPLETE");
             std::ostringstream eq;
-            eq << "[TRAINING_COMPLETE] final_loss = avg(batch_losses)\n";
-            eq << "  batches_completed=" << ctx.global_step << "\n";
-            eq << "  training_completed_successfully\n";
-            EQ_LOG("TRAINING_COMPLETE", eq.str(),
-                   static_cast<int>(ctx.global_step), -1, static_cast<int>(ctx.global_step),
-                   GRIM::EquationPhase::LOSS_COMPUTATION);
+            eq << "final_loss=avg(batch_losses) batches_completed=" << ctx.global_step;
+            entry.setMessage("%s", eq.str().c_str());
+            ctx.logging.tape->emitImmediate(entry);
+            
+            // Final flush and shutdown
+            ctx.logging.tape->flush();
+            ctx.logging.tape->flushSinks();
+            GRIM::Logging::setGlobalTape(nullptr);
         }
         
-        GRIM::getEquationLogger().shutdown();
-        EmitModuleInfo(ModuleId::Training, "✓ Device logs flushed", ctx.global_step);
-        EmitModuleInfo(ModuleId::Training, "✓ Equation logs flushed", ctx.global_step);
+        EmitModuleInfo(ModuleId::Training, "✓ Logs flushed", ctx.global_step);
         
         result.success = true;
         

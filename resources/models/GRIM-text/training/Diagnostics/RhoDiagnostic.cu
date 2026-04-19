@@ -8,7 +8,7 @@
 #include "../Phases/Phase1_Startup.hpp"
 #include "../Phases/Phase2_TrainingLoop.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
-#include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 
@@ -421,8 +421,7 @@ void computeRhoDiagnostic(
     }
 
     ctx.logging.logger->log(rho_eq.str());
-    EQ_LOG("RHO_BUILDUP_EQUATION", rho_eq.str(), batch_idx, -1, ctx.global_step,
-           GRIM::EquationPhase::RESIDUAL_ADD);
+    EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Telemetry, GRIM::Logging::LogPhase::DIAGNOSTICS, -1, "RHO_BUILDUP_EQUATION", rho_eq.str().c_str());
 }
 
 } // namespace GRIM::Diagnostics

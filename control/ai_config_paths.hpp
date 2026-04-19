@@ -137,6 +137,18 @@ struct LogRecorderConfig {
 };
 
 /**
+ * @brief Unified tape-based logging configuration (replaces LogRecorderConfig).
+ * Parsed from training.config.logging in ai_config.json.
+ */
+struct TapeLogConfig {
+    std::string default_level = "Info";
+    bool equation_csv_enabled = true;
+    bool stderr_enabled = true;
+    size_t initial_capacity = 2048;
+    std::map<std::string, std::string> group_overrides;
+};
+
+/**
  * @brief Load training configuration from ai_config.json
  * 
  * This loads the training hyperparameters (epochs, batch_size, learning_rate, etc.)
@@ -153,6 +165,9 @@ struct TrainingHyperparameters {
 
     // Log Recorder configuration
     LogRecorderConfig log_recorder;
+
+    // Unified tape-based logging configuration
+    TapeLogConfig tape_logging;
 
     // Core training parameters - NO DEFAULTS
     int epochs;
@@ -1059,6 +1074,22 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     // Legacy: simple bool telemetry_control_enabled (backwards compat removed per Rule 20)
     // If you had "telemetry_control_enabled": true, migrate to "telemetry_control": { "enabled": true }
 
+    // Load unified tape logging configuration
+    if (auto it = trainConfig.find("logging"); it != trainConfig.end() && it->is_object()) {
+        const auto& logCfg = *it;
+        params.tape_logging.default_level = logCfg.value("default_level", params.tape_logging.default_level);
+        params.tape_logging.equation_csv_enabled = logCfg.value("equation_csv_enabled", params.tape_logging.equation_csv_enabled);
+        params.tape_logging.stderr_enabled = logCfg.value("stderr_enabled", params.tape_logging.stderr_enabled);
+        params.tape_logging.initial_capacity = logCfg.value("initial_capacity", params.tape_logging.initial_capacity);
+        if (logCfg.contains("group_overrides") && logCfg["group_overrides"].is_object()) {
+            for (auto& [key, val] : logCfg["group_overrides"].items()) {
+                if (val.is_string()) {
+                    params.tape_logging.group_overrides[key] = val.get<std::string>();
+                }
+            }
+        }
+    }
+
     // Load Log Recorder configuration
     if (auto it = trainConfig.find("log_recorder"); it != trainConfig.end()) {
         const auto& logRec = *it;
@@ -1539,6 +1570,20 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
 }
 
 } // namespace detail
+
+/// Derive warmup_steps and dependent fields once estimated_total_steps is known (Phase2).
+/// Must be called after populateTrainingHyperparametersFromConfig() and before the training loop.
+inline void deriveWarmupSteps(TrainingHyperparameters& params, int estimated_total_steps) {
+    if (estimated_total_steps <= 0)
+        throw std::runtime_error("deriveWarmupSteps: estimated_total_steps must be > 0, got " + std::to_string(estimated_total_steps));
+    if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f)
+        throw std::runtime_error("deriveWarmupSteps: warmup_fraction must be in (0, 1), got " + std::to_string(params.warmup_fraction));
+
+    params.warmup_steps = std::max(1, static_cast<int>(params.warmup_fraction * estimated_total_steps));
+    params.mtp_alpha_warmup_steps = params.warmup_steps;
+    params.telemetry_warmup_steps = params.warmup_steps;
+    params.execution_block_gate_warmup_steps = params.warmup_steps;
+}
 
 inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& configPath) {
     try {

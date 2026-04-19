@@ -416,7 +416,6 @@ target_link_libraries(train_gpu PRIVATE
     grim_model_serialization
     grim_unigrambyte_tokenizer
     grim_log_recorder
-    grim_equation_logging
 )
 # Link pthread and gomp for GCC/Linux (avoid genex - nvcc device link rejects $<CXX_COMPILER_ID:GNU>)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -436,28 +435,6 @@ target_include_directories(train_gpu PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../archive
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../core
-)
-
-# Equation logging library (centralized diagnostic logging system)
-add_library(grim_equation_logging STATIC
-    ../../Shared/EquationLogging/EquationLogging.cu
-)
-set_target_properties(grim_equation_logging PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
-)
-target_include_directories(grim_equation_logging PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
-)
-target_link_libraries(grim_equation_logging PUBLIC
-    CUDA::cudart
-)
-target_compile_options(grim_equation_logging PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
 )
 
 # UnigramByte tokenizer library (Unigram LM + Byte fallback + Atoms)

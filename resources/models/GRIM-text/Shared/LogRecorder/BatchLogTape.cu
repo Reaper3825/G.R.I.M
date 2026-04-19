@@ -76,4 +76,18 @@ std::string dumpTapeConfig(const TapeConfig& config) {
     return ss.str();
 }
 
+//======================================================//
+//  Global tape pointer
+//======================================================//
+
+static BatchLogTape* g_global_tape = nullptr;
+
+void setGlobalTape(BatchLogTape* tape) {
+    g_global_tape = tape;
+}
+
+BatchLogTape* getGlobalTape() {
+    return g_global_tape;
+}
+
 } // namespace GRIM::Logging

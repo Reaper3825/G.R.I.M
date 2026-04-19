@@ -17,7 +17,7 @@
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorConversion/TensorConversion.hpp"
-#include "../../Shared/EquationLogging/EquationLogging.hpp"  // Centralized equation logging (Rule 21)
+#include "../../Shared/LogRecorder/BatchLogTape.hpp"  // Centralized equation logging (Rule 21)
 #include <cuda_runtime.h>
 #include <cstdlib>
 #include <cstring>
@@ -37,9 +37,10 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 namespace {
     constexpr bool kEnableEncoderStepLogs = false;  // Set true to enable [EncoderFwd] step logs
     
-    // Use centralized EquationLogger for [*_EQUATION] diagnostic logs (Rule 21)
+    // Use centralized tape for [*_EQUATION] diagnostic logs (Rule 21)
     inline bool isEquationLoggingEnabled() {
-        return GRIM::getEquationLogger().isEnabled();
+        auto* tape = GRIM::Logging::getGlobalTape();
+        return tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
     }
     
 
@@ -557,7 +558,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     // Formula: qkv_out = ln1_out @ W_qkv^T + b_qkv
     // Skipped on gradient-accumulation micro-batches (same weights → duplicate output)
     // ========================================================================
-    if (isEquationLoggingEnabled() && !GRIM::getEquationLoggingSkipThisPassRef()) {
+    if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
         const int qkv_dim_local = config_.d_model + 2 * config_.kvDim();
         const int d_model_local = config_.d_model;
         const int num_heads_local = config_.num_heads;
@@ -762,8 +763,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
                 if (wq_row_rms_mean > 5.0f) {
                     eq << "  [ANOMALY] W_q row_rms=" << wq_row_rms_mean << " >> expected ~0.036\n";
                 }
-                EQ_LOG("QKV_PROJECTION_EQUATION", eq.str(), batch_idx_local, layer_idx_local, step_idx_local, 
-                       GRIM::EquationPhase::QKV_PROJECTION);
+                EQ_LOG(GRIM::Logging::getGlobalTape(), GRIM::Logging::LogGroup::Attention, GRIM::Logging::LogPhase::QKV_PROJECTION, layer_idx_local, "QKV_PROJECTION_EQUATION", eq.str().c_str());
             }
         }
     }
@@ -1075,7 +1075,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     // NOTE: intermediates.output is the PRE-centering output — the post-layer center_columns
     // in AutogradTraining.cu hasn't run yet. Logged ρ values will be slightly higher than
     // what the NEXT layer actually receives as input.
-    if (isEquationLoggingEnabled() && !GRIM::getEquationLoggingSkipThisPassRef()) {
+    if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
         cudaStreamSynchronize(stream);  // Ensure data is ready
         
         // Copy layer output to host for analysis
@@ -1137,7 +1137,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
             eq << "  [ANOMALY] Layer " << layer_idx << " |avg_cos|=" << fabs(avg_cos) 
                << " HIGH - possible mode collapse!\n";
         }
-        EQ_LOG("LAYER_COSINE_EQUATION", eq.str(), 0, layer_idx, 0, GRIM::EquationPhase::RESIDUAL_ADD);
+        EQ_LOG(GRIM::Logging::getGlobalTape(), GRIM::Logging::LogGroup::Attention, GRIM::Logging::LogPhase::RESIDUAL_POST_ATTN, layer_idx, "LAYER_COSINE_EQUATION", eq.str().c_str());
     }
     
     // Return a non-owning view of the output

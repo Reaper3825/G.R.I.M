@@ -31,7 +31,6 @@
 #include "../../Shared/CudaAllocUtils.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
-#include "../../Shared/EquationLogging/EquationLogging.hpp"
 
 #include <nlohmann/json.hpp>
 #include <iostream>
@@ -1565,51 +1564,66 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         ctx->logging.logger->log("[WARNING] Failed to bind ExecutionBlock module logger - execution block diagnostics may not appear in logs");
     }
     
-    // Initialize EquationLogger for kernel diagnostic logging (Rule 21 equation tracing)
+    // ================================================================
+    //  Initialize unified BatchLogTape system
+    // ================================================================
     {
-        std::string eq_log_path = ctx->config.paths.log_dir + "/equation_log.csv";
+        const auto& tape_cfg = ctx->config.hyperparameters.tape_logging;
         
-        // If file already exists, create a timestamped version to preserve old logs
-        if (fs::exists(eq_log_path)) {
-            auto now = std::chrono::system_clock::now();
-            auto time_t_now = std::chrono::system_clock::to_time_t(now);
-            std::tm tm_now;
-#if defined(_WIN32) || defined(_WIN64)
-            localtime_s(&tm_now, &time_t_now);
-#else
-            localtime_r(&time_t_now, &tm_now);
-#endif
-            char timestamp[32];
-            std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm_now);
-            eq_log_path = ctx->config.paths.log_dir + "/equation_log_" + timestamp + ".csv";
-            ctx->logging.logger->log("Previous equation_log.csv exists, creating: " + eq_log_path);
+        auto tc = GRIM::Logging::parseTapeConfig(
+            tape_cfg.default_level.c_str(),
+            tape_cfg.equation_csv_enabled,
+            tape_cfg.stderr_enabled,
+            tape_cfg.initial_capacity);
+        
+        // Apply per-group overrides from ai_config.json
+        for (const auto& [group_name, level_name] : tape_cfg.group_overrides) {
+            GRIM::Logging::applyGroupOverride(tc, group_name.c_str(), level_name.c_str());
         }
         
-        bool eq_init_ok = GRIM::getEquationLogger().initialize(eq_log_path, false);  // Disabled: avoids GPU sync + D2H on hot path
-        if (eq_init_ok) {
-            ctx->logging.logger->log("EquationLogger disabled (enable=false) - no equation diagnostics, no D2H sync overhead");
-        } else {
-            ctx->logging.logger->log("[WARNING] EquationLogger initialization failed - equation diagnostics disabled");
+        ctx->logging.tape = std::make_unique<GRIM::Logging::BatchLogTape>(tc);
+        
+        // Create sinks
+        std::string text_log_path = ctx->config.paths.log_dir + "/training_" + ctx->logging.session_id + "_tape.log";
+        ctx->logging.text_sink = std::make_unique<GRIM::Logging::TextLogSink>(
+            text_log_path.c_str(), /*also_stdout=*/false);
+        ctx->logging.tape->addSink(ctx->logging.text_sink.get());
+        
+        if (tape_cfg.equation_csv_enabled) {
+            std::string eq_csv_path = ctx->config.paths.log_dir + "/equation_log.csv";
+            ctx->logging.equation_sink = std::make_unique<GRIM::Logging::CsvEquationSink>(
+                eq_csv_path.c_str());
+            ctx->logging.tape->addSink(ctx->logging.equation_sink.get());
         }
         
-        // PyTorch verification for side-by-side comparison (compile with -DGRIM_PYTORCH_VERIFY)
-#ifdef GRIM_PYTORCH_VERIFY
-        ctx->logging.logger->log("🔬 PyTorch verification: ENABLED (compile flag GRIM_PYTORCH_VERIFY)");
-        // Get GRIM root using the centralized resolver
-        fs::path grim_root_path = GRIM::Config::detail::resolveGrimRoot();
-        std::string grim_root = grim_root_path.string();
-        bool pytorch_ok = PYTORCH_VERIFY_INIT(grim_root);
-        if (pytorch_ok) {
-            ctx->logging.logger->log("✓ PyTorch verifier initialized (root=" + grim_root + ")");
-            fs::path script_path = grim_root_path / "resources/models/GRIM-text/Shared/EquationLogging/pytorch_verify.py";
-            ctx->logging.logger->log("  Script: " + script_path.string());
-        } else {
-            ctx->logging.logger->log("[WARNING] PyTorch verifier failed to initialize - verification disabled");
+        if (tape_cfg.stderr_enabled) {
+            ctx->logging.stderr_sink = std::make_unique<GRIM::Logging::StderrSink>();
+            ctx->logging.tape->addSink(ctx->logging.stderr_sink.get());
         }
-#else
-        ctx->logging.logger->log("PyTorch verification: DISABLED (compile with -DGRIM_PYTORCH_VERIFY to enable)");
-#endif
+        
+        // Set global tape pointer for layer-level code
+        GRIM::Logging::setGlobalTape(ctx->logging.tape.get());
+        
+        ctx->logging.logger->log("BatchLogTape initialized: " + GRIM::Logging::dumpTapeConfig(tc));
     }
+    
+    // PyTorch verification for side-by-side comparison (compile with -DGRIM_PYTORCH_VERIFY)
+#ifdef GRIM_PYTORCH_VERIFY
+    ctx->logging.logger->log("🔬 PyTorch verification: ENABLED (compile flag GRIM_PYTORCH_VERIFY)");
+    // Get GRIM root using the centralized resolver
+    fs::path grim_root_path = GRIM::Config::detail::resolveGrimRoot();
+    std::string grim_root = grim_root_path.string();
+    bool pytorch_ok = PYTORCH_VERIFY_INIT(grim_root);
+    if (pytorch_ok) {
+        ctx->logging.logger->log("✓ PyTorch verifier initialized (root=" + grim_root + ")");
+        fs::path script_path = grim_root_path / "resources/models/GRIM-text/Shared/EquationLogging/pytorch_verify.py";
+        ctx->logging.logger->log("  Script: " + script_path.string());
+    } else {
+        ctx->logging.logger->log("[WARNING] PyTorch verifier failed to initialize - verification disabled");
+    }
+#else
+    ctx->logging.logger->log("PyTorch verification: DISABLED (compile with -DGRIM_PYTORCH_VERIFY to enable)");
+#endif
     
     // 2b. Auto-prepare training data/vocab from merged cache when needed.
     {

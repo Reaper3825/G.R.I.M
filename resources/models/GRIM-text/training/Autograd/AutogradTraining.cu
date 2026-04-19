@@ -16,7 +16,7 @@
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/MTP/MTP_GPU.hpp"
-#include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
@@ -203,13 +203,15 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     }
 
     // Skip QKV_EQUATION D2H + fprintf on gradient-accumulation micro-batches (same weights, duplicate output)
-    struct EquationLoggingScope {
-        bool& ref;
+    struct TapeSkipScope {
+        GRIM::Logging::BatchLogTape* tape;
         bool prev;
-        explicit EquationLoggingScope(bool skip) : ref(GRIM::getEquationLoggingSkipThisPassRef()), prev(ref) { ref = skip; }
-        ~EquationLoggingScope() { ref = prev; }
+        explicit TapeSkipScope(bool skip) : tape(GRIM::Logging::getGlobalTape()), prev(tape ? tape->skipThisPass() : false) {
+            if (tape) tape->setSkipThisPass(skip);
+        }
+        ~TapeSkipScope() { if (tape) tape->setSkipThisPass(prev); }
     };
-    EquationLoggingScope eq_scope(ctx.skip_equation_logging);
+    TapeSkipScope eq_scope(ctx.skip_equation_logging);
 
     // Rule 20: Fail loud
     ctx.validate("executeAutogradForward");
