@@ -1177,7 +1177,7 @@ int main(int argc, char** argv) {
         config.batchSize = hyperparams.batch_size;
         config.learningRate = hyperparams.learning_rate;
         config.maxSeqLen = hyperparams.max_seq_len;
-        config.warmupSteps = hyperparams.warmup_steps;
+        config.warmupSteps = hyperparams.warmup_steps;  // 0 until Phase2 derives from warmup_fraction
         config.useGPU = hyperparams.use_gpu;
         config.useFlashAttention = hyperparams.use_flash_attention;
         g_state.updateConfig(config);

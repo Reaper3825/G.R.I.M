@@ -156,7 +156,7 @@
             "checkpoint_interval": 2000,
             "cosine_decay": {
                 "enabled": true,
-                "warm_restarts": true
+                "warm_restarts": false
             },
             "cuda_execution": {
                 "disable_async_frees": false,
@@ -332,7 +332,7 @@
             "use_flash_attention": true,
             "use_gpu": true,
             "validation_interval": 2000,
-            "warmup_steps": 1000,
+            "warmup_fraction": 0.05,
             "weight_decay": 0.01
         },
         "current_curriculum": "Pre-Trainingv1",

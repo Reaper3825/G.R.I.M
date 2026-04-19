@@ -109,7 +109,7 @@ public:
         addFloat (params.weight_decay,        "weight_decay",        "Weight Decay",        "Optimizer");
         addFloat (params.grad_clip_norm,      "grad_clip_norm",      "Grad Clip Norm",      "Optimizer");
         addBool  (params.per_token_grad_scale,"per_token_grad_scale","Per-Token Grad Scale","Optimizer");
-        addInt   (params.warmup_steps,        "warmup_steps",        "Warmup Steps",        "Optimizer");
+        addFloat (params.warmup_fraction,    "warmup_fraction",    "Warmup Fraction",    "Optimizer");
         addBool  (params.cosine_decay_enabled,"cosine_decay_enabled","Cosine Decay",        "Optimizer");
         addBool  (params.cosine_warm_restarts,"cosine_warm_restarts","Warm Restarts",       "Optimizer");
         addFloat (params.cosine_decay_min_lr, "cosine_decay_min_lr", "Cosine Decay Min LR", "Optimizer");

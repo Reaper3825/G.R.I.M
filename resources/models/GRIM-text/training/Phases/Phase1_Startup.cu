@@ -1121,10 +1121,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", cosine_decay_min_lr=" + std::to_string(hp.cosine_decay_min_lr) +
                ", cosine_warm_restarts=" + std::string(hp.cosine_warm_restarts ? "true" : "false") +
                ", scratch_max_tokens_per_block=" + std::to_string(hp.scratch_max_tokens_per_block) +
-               ", mtp_alpha_warmup=" + std::to_string(hp.mtp_alpha_warmup_steps) +
-               ", telemetry_warmup=" + std::to_string(hp.telemetry_warmup_steps) +
-               ", gate_warmup=" + std::to_string(hp.execution_block_gate_warmup_steps) +
-               " (all =warmup_steps=" + std::to_string(hp.warmup_steps) + ")");
+               ", warmup_fraction=" + std::to_string(hp.warmup_fraction) +
+               " (warmup_steps derived in Phase2 from fraction * total_steps)");
     logger.log("Derived hyperparameters (cont): d_key=" + std::to_string(hp.execution_block_d_key) +
                ", cross_attn_head_dim=" + std::to_string(hp.execution_block_cross_attn_head_dim) +
                ", atom_embedding_dim=" + std::to_string(hp.scratch_block_reasoning_atom_embedding_dim) +

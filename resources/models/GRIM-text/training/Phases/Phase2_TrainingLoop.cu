@@ -3103,16 +3103,24 @@ EpochResult runEpoch(
         const int accum = std::max(1, hp.gradient_accumulation_steps);
         ctx.estimated_total_steps = (num_epochs * total_batches) / accum;
         
+        // Derive warmup_steps from warmup_fraction now that total_steps is known.
+        GRIM::Config::deriveWarmupSteps(ctx.config.hyperparameters, ctx.estimated_total_steps);
+        
         // Construct the deterministic LR schedule now that total_steps is known.
+        // Cosine decay spans all epochs; warm restarts are disabled.
         GRIM::LR::LRScheduleConfig lr_cfg;
         lr_cfg.base_lr = hp.learning_rate;
         lr_cfg.cosine_decay_min_lr = hp.cosine_decay_min_lr;
-        lr_cfg.warmup_steps = hp.warmup_steps;
+        lr_cfg.warmup_steps = ctx.config.hyperparameters.warmup_steps;
         lr_cfg.total_steps = ctx.estimated_total_steps;
         lr_cfg.steps_per_epoch = total_batches / accum;
         lr_cfg.cosine_decay_enabled = hp.cosine_decay_enabled;
         lr_cfg.warm_restarts = hp.cosine_warm_restarts;
         ctx.lr_schedule.emplace(lr_cfg);
+        
+        ctx.logging.logger->log("[LRSchedule] warmup_fraction=" + std::to_string(hp.warmup_fraction)
+            + " -> warmup_steps=" + std::to_string(ctx.config.hyperparameters.warmup_steps)
+            + " / total_steps=" + std::to_string(ctx.estimated_total_steps));
     }
     int total_batches_to_run = total_batches;
     const bool single_batch_overfit = hp.single_batch_overfit_enabled;
@@ -3357,7 +3365,7 @@ bool executePhase2(TrainingContext& ctx) {
 
     // Log configuration
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
-    EmitModuleInfo(ModuleId::Training, std::string("  Warmup steps: ") + std::to_string(hp.warmup_steps), ctx.global_step);
+    EmitModuleInfo(ModuleId::Training, std::string("  Warmup fraction: ") + std::to_string(hp.warmup_fraction) + " (steps derived after batch count known)", ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Target learning rate: ") + std::to_string(hp.learning_rate), ctx.global_step);
     if (hp.cosine_decay_enabled) {
         EmitModuleInfo(ModuleId::Training,

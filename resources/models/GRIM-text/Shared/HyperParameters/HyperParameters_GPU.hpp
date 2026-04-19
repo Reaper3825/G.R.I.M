@@ -501,13 +501,12 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
 
     const int cadence_reference = std::max(info.batches_per_epoch, std::max(0, context.validation_interval));
 
-    const int original_warmup = params.warmup_steps;
-    params.warmup_steps = std::min(params.warmup_steps, info.safe_last_step);
-    log_adjustment("warmup_steps", original_warmup, params.warmup_steps);
+    // warmup_steps is derived in Phase2 from warmup_fraction * estimated_total_steps.
+    // At harmonize time it is 0 — skip clamping here; it will be set correctly in Phase2.
 
     // validation_interval already validated > 0 above
 
-    const int required_micro_min = params.warmup_steps;
+    const int required_micro_min = params.warmup_steps;  // 0 at this point; overridden in Phase2
     const int original_micro_min = params.micro_validation_min_step;
     params.micro_validation_min_step = std::clamp(
         std::max(params.micro_validation_min_step, required_micro_min),

@@ -167,7 +167,8 @@ struct TrainingHyperparameters {
     float weight_decay;
     float grad_clip_norm;
     bool per_token_grad_scale;
-    int warmup_steps;
+    float warmup_fraction;  // Fraction of total optimizer steps for warmup (e.g. 0.05 = 5%)
+    int warmup_steps = 0;   // Derived in Phase2 from warmup_fraction * estimated_total_steps
     bool cosine_decay_enabled;
     bool cosine_warm_restarts;
     float cosine_decay_min_lr;
@@ -785,7 +786,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
         "batch_strategy", "learning_rate", "weight_decay",
-        "per_token_grad_scale", "warmup_steps", "max_seq_len", "log_interval",
+        "per_token_grad_scale", "warmup_fraction", "max_seq_len", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
         
@@ -892,7 +893,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.max_seq_len, trainConfig, "max_seq_len");
     // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
     // min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
-    assignTrainingField(params.warmup_steps, trainConfig, "warmup_steps");
+    assignTrainingField(params.warmup_fraction, trainConfig, "warmup_fraction");
     if (auto it = trainConfig.find("cosine_decay"); it != trainConfig.end() && it->is_object()) {
         params.cosine_decay_enabled = it->value("enabled", false);
         params.cosine_warm_restarts = it->value("warm_restarts", false);
@@ -1439,15 +1440,14 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
         }
     }
 
-    // ── Warmup propagation ──
-    if (params.warmup_steps <= 0)
-        throw std::runtime_error("deriveComputedHyperparameters: warmup_steps must be > 0, got " + std::to_string(params.warmup_steps));
-    params.mtp_alpha_warmup_steps = params.warmup_steps;
-    params.telemetry_warmup_steps = params.warmup_steps;
-    params.execution_block_gate_warmup_steps = params.warmup_steps;
+    // ── Warmup fraction validation (warmup_steps derived in Phase2 from warmup_fraction * total_steps) ──
+    if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f)
+        throw std::runtime_error("deriveComputedHyperparameters: warmup_fraction must be in (0, 1), got " + std::to_string(params.warmup_fraction));
+    // warmup_steps, mtp_alpha_warmup_steps, telemetry_warmup_steps,
+    // execution_block_gate_warmup_steps, micro_validation_min_step are all
+    // derived in Phase2 via deriveWarmupSteps() once estimated_total_steps is known.
 
-    // ── Micro validation derived from base training schedule ──
-    params.micro_validation_min_step = params.warmup_steps;
+    // ── Micro validation interval (not warmup-dependent) ──
     params.micro_validation_interval = params.validation_interval;
 
     // ── Stability overrides derived from base values ──
@@ -1456,6 +1456,21 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
     params.stability_override_max_seq_len = params.max_seq_len;
     params.stability_override_clip_per_token = 0.02f;
     params.stability_override_lr_min = params.learning_rate * 0.83f;
+}
+
+/// Derive warmup_steps and dependent fields once estimated_total_steps is known (Phase2).
+/// Must be called after deriveComputedHyperparameters() and before the training loop.
+inline void deriveWarmupSteps(TrainingHyperparameters& params, int estimated_total_steps) {
+    if (estimated_total_steps <= 0)
+        throw std::runtime_error("deriveWarmupSteps: estimated_total_steps must be > 0, got " + std::to_string(estimated_total_steps));
+    if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f)
+        throw std::runtime_error("deriveWarmupSteps: warmup_fraction must be in (0, 1), got " + std::to_string(params.warmup_fraction));
+
+    params.warmup_steps = std::max(1, static_cast<int>(params.warmup_fraction * estimated_total_steps));
+    params.mtp_alpha_warmup_steps = params.warmup_steps;
+    params.telemetry_warmup_steps = params.warmup_steps;
+    params.execution_block_gate_warmup_steps = params.warmup_steps;
+    params.micro_validation_min_step = params.warmup_steps;
 }
 
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
