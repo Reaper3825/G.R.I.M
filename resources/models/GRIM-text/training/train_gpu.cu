@@ -135,9 +135,6 @@ int main(int argc, char** argv) {
     SetUnhandledExceptionFilter(GrimSEHHandler);
 #endif
     
-    // Initialize LogRecorder for modular logging
-    GRIM::Logging::SetDefaultModuleLogLevel(GRIM::Logging::ModuleLogLevel::Info);
-    
     // Check for --autograd-verbose flag to enable detailed autograd tracing
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--autograd-verbose") {
@@ -233,13 +230,11 @@ int main(int argc, char** argv) {
         std::ostringstream oss;
         oss << "[FATAL] Unhandled exception: " << e.what();
         EmitModuleError(ModuleId::TrainingOrchestrator, oss.str(), 0);
-        GRIM::Logging::FlushModuleLogQueue();
         exit_code = 1;
     } catch (...) {
         fprintf(stderr, "\n[FATAL] Unknown exception (not std::exception)\n");
         fflush(stderr);
         EmitModuleError(ModuleId::TrainingOrchestrator, "[FATAL] Unknown exception", 0);
-        GRIM::Logging::FlushModuleLogQueue();
         exit_code = 1;
     }
     
@@ -258,10 +253,6 @@ int main(int argc, char** argv) {
     }
     EmitModuleInfo(ModuleId::TrainingOrchestrator, 
         "════════════════════════════════════════════════════════════", 0);
-    
-    // Flush async log queue so ALL messages (including error details) are written to disk
-    // before process exit. Without this, async-queued error messages are lost.
-    GRIM::Logging::FlushModuleLogQueue();
     
     return exit_code;
 }

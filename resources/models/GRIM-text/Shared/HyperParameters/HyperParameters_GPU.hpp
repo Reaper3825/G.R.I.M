@@ -102,16 +102,6 @@ constexpr bool DEFAULT_EQ_LOG_ENABLED = false;    // Disabled: equation logging 
 constexpr int DEFAULT_EQ_LOG_INTERVAL = 1;       // Log every N batches (0 = every batch)
 
 //======================================================//
-// PyTorch Verification Configuration
-// When GRIM_PYTORCH_VERIFY is defined at compile time, enables
-// side-by-side comparison with PyTorch reference implementations.
-// 
-// To enable: Add -DGRIM_PYTORCH_VERIFY to CMake compile flags
-// WARNING: This is SLOW (subprocess per op) - use DEBUG builds only!
-//======================================================//
-constexpr int DEFAULT_PYTORCH_VERIFY_INTERVAL = 1;  // Verify every N batches (reduces overhead)
-
-//======================================================//
 // Gradient Scaling Defaults
 //======================================================//
 constexpr bool DEFAULT_GRAD_SCALE_PER_TOKEN = false;  // Apply 1/valid_tokens in backward

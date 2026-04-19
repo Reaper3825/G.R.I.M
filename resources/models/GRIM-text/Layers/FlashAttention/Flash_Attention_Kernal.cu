@@ -19,16 +19,25 @@
 #include <algorithm>
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
-#include "../../training/module_logger.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/VerboseLogging.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
-// Module logger for Flash Attention diagnostics
+// Inline alias replacing module_logger.hpp template
 namespace {
-using FlashAttentionLog = ModuleLogger<GRIM::Logging::ModuleId::Activations>;
+struct FlashAttentionLog {
+    static void info(std::string_view msg, std::uint64_t step = 0) {
+        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Activations, msg, step);
+    }
+    static void warn(std::string_view msg, std::uint64_t step = 0) {
+        GRIM::Logging::EmitModuleWarning(GRIM::Logging::ModuleId::Activations, msg, step);
+    }
+    static void error(std::string_view msg, std::uint64_t step = 0) {
+        GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::Activations, msg, step);
+    }
+};
 
 // Helper function to check if equation logging is enabled at runtime
 inline bool isEquationLoggingEnabled() {

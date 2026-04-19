@@ -58,74 +58,6 @@ using GRIM::Logging::EmitModuleError;
 namespace GRIMText::Training {
 
 //======================================================//
-//  String Utilities
-//======================================================//
-
-namespace {
-
-std::string trimCopy(const std::string& value) {
-    const auto start = value.find_first_not_of(" \t\n\r");
-    if (start == std::string::npos) return {};
-    const auto end = value.find_last_not_of(" \t\n\r");
-    return value.substr(start, end - start + 1);
-}
-
-std::string toLowerCopy(const std::string& value) {
-    std::string result = value;
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    return result;
-}
-
-GRIM::Logging::ModuleLogLevel parseModuleLogLevelString(const std::string& text) {
-    // Rule 20: No fallback parameter - function throws on invalid input, parameter was unused
-    const std::string normalized = toLowerCopy(trimCopy(text));
-    if (normalized == "info" || normalized == "verbose" || normalized == "all") {
-        return GRIM::Logging::ModuleLogLevel::Info;
-    }
-    if (normalized == "warn" || normalized == "warning") {
-        return GRIM::Logging::ModuleLogLevel::Warning;
-    }
-    if (normalized == "err" || normalized == "error" || normalized == "fatal") {
-        return GRIM::Logging::ModuleLogLevel::Error;
-    }
-    std::ostringstream oss;
-    oss << "Phase1_Startup: unknown module log level '" << text << "'";
-    throw std::runtime_error(oss.str());
-}
-
-void registerDefaultLoggingProfiles() {
-    using namespace GRIM::Logging;
-    static bool registered = false;
-    if (registered) return;
-    registered = true;
-
-    RegisterModuleLogProfile("forward_pass", {
-        MakeOverride(ModuleId::ForwardPass, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::Activations, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::GuessCache, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::DataLoader, ModuleLogLevel::Info),
-    });
-
-    RegisterModuleLogProfile("backward_pass", {
-        MakeOverride(ModuleId::BackwardPass, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::Optimizer, ModuleLogLevel::Info),
-    });
-
-    RegisterModuleLogProfile("optimizer", {
-        MakeOverride(ModuleId::Optimizer, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::Scheduler, ModuleLogLevel::Info),
-    });
-
-    RegisterModuleLogProfile("validation", {
-        MakeOverride(ModuleId::Validation, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::Checkpoint, ModuleLogLevel::Info),
-    });
-}
-
-} // anonymous namespace
-
-//======================================================//
 //  RNGContext Implementation
 //======================================================//
 
@@ -246,15 +178,8 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     }
     GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
 
-    // Configure LogRecorder
+    // Configure LogRecorder (layer-file logging system)
     if (config.hyperparameters.log_recorder.enabled) {
-        GRIM::Logging::SetDefaultModuleLogLevel(
-            parseModuleLogLevelString(config.hyperparameters.log_recorder.default_level));
-            
-        for (const auto& [module, level] : config.hyperparameters.log_recorder.modules) {
-            GRIM::Logging::SetModuleLogLevel(module, parseModuleLogLevelString(level));
-        }
-        
         // Initialize log recorder system - MUST pass path (Rule 20: no hardcoded fallback)
         GRIM::Logging::InitLogRecorder(config.paths.log_dir);
         
@@ -1495,14 +1420,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     EmitModuleInfo(ModuleId::Training, "  GRIM-text GPU Training v3.0.0", 0);
     EmitModuleInfo(ModuleId::Training, "========================================", 0);
     
-    // Enable verbose module logging
-    GRIM::Logging::ApplyModuleLogOverrides({
-        GRIM::Logging::MakeOverride(GRIM::Logging::ModuleId::ForwardPass, GRIM::Logging::ModuleLogLevel::Info),
-        GRIM::Logging::MakeOverride(GRIM::Logging::ModuleId::BackwardPass, GRIM::Logging::ModuleLogLevel::Info),
-        GRIM::Logging::MakeOverride(GRIM::Logging::ModuleId::Checkpoint, GRIM::Logging::ModuleLogLevel::Info)
-    });
-    registerDefaultLoggingProfiles();
-    
     // 1. Load configuration
     EmitModuleInfo(ModuleId::Training, "[Phase1] Loading configuration...", 0);
     ctx->config = Internal::loadConfiguration(argc, argv);
@@ -1521,48 +1438,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     }
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing logging...", 0);
         ctx->logging = Internal::initializeLogging(ctx->config.paths);
-    
-    // Create standard module log formatter (Rule 21: centralized logging setup)
-    auto log_fn = [logger = ctx->logging.logger.get()](const std::string& msg) {
-        logger->log(msg);
-    };
-    auto formatter = GRIM::Logging::CreateStandardModuleLogFormatter(log_fn);
-    
-    // Forward BackwardPass module logs to training logger (MUST persist!)
-    ctx->logging.backward_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.backward_sink->bind("BackwardPass", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind BackwardPass module logger - backward diagnostics may not appear in logs");
-    }
-    
-    // Forward StreamController module logs to training logger (CRITICAL for init debugging!)
-    ctx->logging.stream_controller_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.stream_controller_sink->bind("StreamController", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind StreamController module logger - stream diagnostics may not appear in logs");
-    }
-    
-    // Forward Checkpoint module logs to training logger (CRITICAL for save/load debugging!)
-    ctx->logging.checkpoint_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.checkpoint_sink->bind("Checkpoint", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind Checkpoint module logger - save/load diagnostics may not appear in logs");
-    }
-
-    // Forward Activations module logs to training logger (Flash Attention diagnostics)
-    ctx->logging.activations_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.activations_sink->bind("Activations", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind Activations module logger - Flash Attention diagnostics may not appear in logs");
-    }
-
-    // Forward GuessCache module logs to training logger (GRIM-TS cache diagnostics)
-    ctx->logging.guess_cache_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.guess_cache_sink->bind("GuessCache", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind GuessCache module logger - cache diagnostics may not appear in logs");
-    }
-
-    // Forward ExecutionBlock module logs to training logger (differentiable register machine diagnostics)
-    ctx->logging.execution_block_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.execution_block_sink->bind("ExecutionBlock", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind ExecutionBlock module logger - execution block diagnostics may not appear in logs");
-    }
     
     // ================================================================
     //  Initialize unified BatchLogTape system
@@ -1606,24 +1481,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         
         ctx->logging.logger->log("BatchLogTape initialized: " + GRIM::Logging::dumpTapeConfig(tc));
     }
-    
-    // PyTorch verification for side-by-side comparison (compile with -DGRIM_PYTORCH_VERIFY)
-#ifdef GRIM_PYTORCH_VERIFY
-    ctx->logging.logger->log("🔬 PyTorch verification: ENABLED (compile flag GRIM_PYTORCH_VERIFY)");
-    // Get GRIM root using the centralized resolver
-    fs::path grim_root_path = GRIM::Config::detail::resolveGrimRoot();
-    std::string grim_root = grim_root_path.string();
-    bool pytorch_ok = PYTORCH_VERIFY_INIT(grim_root);
-    if (pytorch_ok) {
-        ctx->logging.logger->log("✓ PyTorch verifier initialized (root=" + grim_root + ")");
-        fs::path script_path = grim_root_path / "resources/models/GRIM-text/Shared/EquationLogging/pytorch_verify.py";
-        ctx->logging.logger->log("  Script: " + script_path.string());
-    } else {
-        ctx->logging.logger->log("[WARNING] PyTorch verifier failed to initialize - verification disabled");
-    }
-#else
-    ctx->logging.logger->log("PyTorch verification: DISABLED (compile with -DGRIM_PYTORCH_VERIFY to enable)");
-#endif
     
     // 2b. Auto-prepare training data/vocab from merged cache when needed.
     {

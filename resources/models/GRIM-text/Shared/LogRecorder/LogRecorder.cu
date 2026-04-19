@@ -1,22 +1,13 @@
 #include "LogRecorder.hpp"
+#include "BatchLogTape.hpp"
 #include <algorithm>
-#include <atomic>
 #include <cctype>
-#include <chrono>
-#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
-#include <memory>
 #include <mutex>
-#include <queue>
-#include <sstream>
-#include <stdexcept>
 #include <string>
-#include <thread>
 #include <unordered_map>
-#include <utility>
-#include <vector>
 
 using namespace GRIM;
 using namespace GRIM::Logging;
@@ -25,28 +16,16 @@ namespace fs = std::filesystem;
 
 namespace {
 
+//======================================================//
+//  Layer-file logging state
+//======================================================//
+
 std::mutex g_host_mutex;
 bool g_initialized = false;
 std::string g_logs_root;
 
 std::unordered_map<std::string, std::FILE*> g_log_handles;
 
-using ModuleDelegate = GRIM::MulticastDelegate<const ModuleLogEvent&>;
-std::mutex g_module_log_mutex;
-std::unordered_map<std::string, std::shared_ptr<ModuleDelegate>> g_module_loggers;
-std::unordered_map<std::string, ModuleLogLevel> g_module_level_overrides;
-ModuleLogLevel g_default_module_level = ModuleLogLevel::Info;
-std::unordered_map<std::string, std::vector<ModuleLogOverride>> g_log_profiles;
-
-// Async logging infrastructure
-std::atomic<bool> g_async_logging_enabled{true};  // Default to async
-std::queue<ModuleLogEvent> g_log_queue;
-std::mutex g_log_queue_mutex;
-std::condition_variable g_log_queue_cv;
-std::thread g_log_worker;
-std::atomic<bool> g_log_worker_stop{false};
-
-// Layer logging enables (global state, set via ConfigureLayerLogging)
 bool g_layer_logging_master_enabled = true;
 bool g_layer_enables[static_cast<int>(LayerType::kCount)] = {
     false,  // kUnknown
@@ -97,38 +76,7 @@ void CloseAllFiles() {
     g_log_handles.clear();
 }
 
-std::shared_ptr<ModuleDelegate> EnsureModuleDelegateLocked(const std::string& module_name) {
-    auto it = g_module_loggers.find(module_name);
-    if (it == g_module_loggers.end()) {
-        auto delegate = std::make_shared<ModuleDelegate>();
-        it = g_module_loggers.emplace(module_name, std::move(delegate)).first;
-    }
-    return it->second;
-}
-
-std::shared_ptr<ModuleDelegate> FindModuleDelegateLocked(const std::string& module_name) {
-    auto it = g_module_loggers.find(module_name);
-    if (it == g_module_loggers.end()) {
-        return nullptr;
-    }
-    return it->second;
-}
-
-ModuleLogLevel ResolveModuleThresholdLocked(const std::string& module_name) {
-    auto it = g_module_level_overrides.find(module_name);
-    if (it != g_module_level_overrides.end()) {
-        return it->second;
-    }
-    return g_default_module_level;
-}
-
-bool ShouldEmitLocked(const std::string& module_name, ModuleLogLevel level) {
-    const ModuleLogLevel threshold = ResolveModuleThresholdLocked(module_name);
-    return static_cast<int>(level) >= static_cast<int>(threshold);
-}
-
 void WriteEntryToDisk(const LayerLogEntry& entry) {
-    // Check if this layer type is enabled
     if (!g_layer_logging_master_enabled) {
         return;
     }
@@ -153,64 +101,11 @@ void WriteEntryToDisk(const LayerLogEntry& entry) {
     std::fflush(handle);
 }
 
-void LogWorkerThread() {
-    while (true) {
-        std::unique_lock<std::mutex> lock(g_log_queue_mutex);
-        g_log_queue_cv.wait(lock, [] {
-            return !g_log_queue.empty() || g_log_worker_stop.load();
-        });
-        
-        if (g_log_worker_stop.load() && g_log_queue.empty()) {
-            break;
-        }
-        
-        if (!g_log_queue.empty()) {
-            ModuleLogEvent event = std::move(g_log_queue.front());
-            g_log_queue.pop();
-            lock.unlock();
-            
-            // Process event outside lock
-            std::shared_ptr<ModuleDelegate> delegate;
-            {
-                std::lock_guard<std::mutex> module_lock(g_module_log_mutex);
-                delegate = FindModuleDelegateLocked(event.module);
-            }
-            if (delegate) {
-                delegate->Broadcast(event);
-            }
-        }
-    }
-}
-
-void CleanupResources() {
-    // Shutdown async logging first
-    if (g_log_worker.joinable()) {
-        g_log_worker_stop.store(true);
-        g_log_queue_cv.notify_one();
-        g_log_worker.join();
-    }
-    
-    CloseAllFiles();
-    g_initialized = false;
-}
-
-std::string TrimCopyInternal(const std::string& value) {
-    const auto start = value.find_first_not_of(" \t\n\r");
-    if (start == std::string::npos) {
-        return {};
-    }
-    const auto end = value.find_last_not_of(" \t\n\r");
-    return value.substr(start, end - start + 1);
-}
-
-std::string ToLowerCopyInternal(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
-}
-
 } // namespace
+
+//======================================================//
+//  GRIM namespace — LayerType helpers
+//======================================================//
 
 namespace GRIM {
 
@@ -239,6 +134,10 @@ bool CreateLayerFolder(const std::string& absolutePath, LayerType type) {
 }
 
 } // namespace GRIM
+
+//======================================================//
+//  GRIM::Logging — Module log + layer logging
+//======================================================//
 
 namespace GRIM::Logging {
 
@@ -277,6 +176,10 @@ const char* ModuleLogLevelToString(ModuleLogLevel level) {
     }
 }
 
+//------------------------------------------------------
+//  Layer-file logging (InitLogRecorder / RecordLayerLogHost)
+//------------------------------------------------------
+
 bool InitLogRecorder(const std::string& rootPath, std::size_t /*maxDeviceEntries*/) {
     std::lock_guard<std::mutex> lock(g_host_mutex);
     if (g_initialized) {
@@ -293,11 +196,6 @@ bool InitLogRecorder(const std::string& rootPath, std::size_t /*maxDeviceEntries
     }
 
     g_initialized = true;
-    
-    // Start async logging worker
-    g_log_worker_stop.store(false);
-    g_log_worker = std::thread(LogWorkerThread);
-    
     return true;
 }
 
@@ -306,17 +204,16 @@ void ShutdownLogRecorder() {
     if (!g_initialized) {
         return;
     }
-    FlushDeviceLogs();
-    CleanupResources();
+    CloseAllFiles();
+    g_initialized = false;
 }
 
 void FlushDeviceLogs() {
-    // No-op: Device-side logging was removed (zero callers in production).
-    // Only host-side RecordLayerLogHost() is used.
+    // No-op: Device-side logging was removed.
 }
 
 void ResetDeviceLogs() {
-    // No-op: Device-side logging was removed (zero callers in production).
+    // No-op: Device-side logging was removed.
 }
 
 bool LogsInitialized() {
@@ -351,276 +248,71 @@ bool RecordLayerLogHost(LayerType type,
     return true;
 }
 
-DelegateHandle RegisterModuleLogSink(const std::string& module_name,
-                                     ModuleLogCallback callback) {
-    if (!callback) {
-        return {};
-    }
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    auto delegate = EnsureModuleDelegateLocked(module_name);
-    return delegate ? delegate->Add(callback) : DelegateHandle{};
-}
-
-bool UnregisterModuleLogSink(const std::string& module_name,
-                             const DelegateHandle& handle) {
-    if (!handle.IsValid()) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    auto delegate = FindModuleDelegateLocked(module_name);
-    if (!delegate) {
-        return false;
-    }
-    const bool removed = delegate->Remove(handle);
-    if (delegate->IsEmpty()) {
-        g_module_loggers.erase(module_name);
-    }
-    return removed;
-}
+//------------------------------------------------------
+//  EmitModuleLog — routes through global BatchLogTape
+//------------------------------------------------------
 
 void EmitModuleLog(const std::string& module_name,
                    ModuleLogLevel level,
                    std::string_view message,
                    std::uint64_t global_step,
-                   bool force_sync) {
-    ModuleLogEvent event;
-    event.module = module_name;
-    event.level = level;
-    event.message = std::string(message);
-    event.global_step = global_step;
+                   bool /*force_sync*/) {
+    const LogLevel log_level = moduleLogLevelToLogLevel(static_cast<int>(level));
     
-    // Check if we should emit (level filtering)
-    {
-        std::lock_guard<std::mutex> lock(g_module_log_mutex);
-        if (!ShouldEmitLocked(module_name, level)) {
+    auto* tape = getGlobalTape();
+    if (tape) {
+        LogGroup group = LogGroup::System;
+        
+        if (module_name == "ForwardPass")           group = moduleIdToLogGroup(0);
+        else if (module_name == "BackwardPass")     group = moduleIdToLogGroup(1);
+        else if (module_name == "Optimizer")        group = moduleIdToLogGroup(2);
+        else if (module_name == "Scheduler")        group = moduleIdToLogGroup(3);
+        else if (module_name == "Activations")      group = moduleIdToLogGroup(4);
+        else if (module_name == "GuessCache")       group = moduleIdToLogGroup(5);
+        else if (module_name == "Validation")       group = moduleIdToLogGroup(6);
+        else if (module_name == "Checkpoint")       group = moduleIdToLogGroup(7);
+        else if (module_name == "DataLoader")       group = moduleIdToLogGroup(8);
+        else if (module_name == "Inference")        group = moduleIdToLogGroup(9);
+        else if (module_name == "LogRecorder")      group = moduleIdToLogGroup(10);
+        else if (module_name == "Training")         group = moduleIdToLogGroup(11);
+        else if (module_name == "TrainingOrchestrator") group = moduleIdToLogGroup(12);
+        else if (module_name == "StreamController") group = moduleIdToLogGroup(13);
+        else if (module_name == "Loss")             group = moduleIdToLogGroup(14);
+        else if (module_name == "Attention")        group = moduleIdToLogGroup(15);
+        else if (module_name == "Custom")           group = moduleIdToLogGroup(16);
+        else if (module_name == "Autograd")         group = moduleIdToLogGroup(17);
+        else if (module_name == "ExecutionBlock")   group = moduleIdToLogGroup(18);
+        
+        if (!tape->accepts(log_level, group)) {
             return;
         }
-    }
-    
-    // Force sync or async disabled -> synchronous broadcast
-    if (force_sync || !g_async_logging_enabled.load()) {
-        std::shared_ptr<ModuleDelegate> delegate;
-        {
-            std::lock_guard<std::mutex> lock(g_module_log_mutex);
-            delegate = FindModuleDelegateLocked(module_name);
-        }
-        if (!delegate) {
-            return;
-        }
-        delegate->Broadcast(event);
-        return;
-    }
-    
-    // Async path - queue event
-    {
-        std::lock_guard<std::mutex> lock(g_log_queue_mutex);
-        g_log_queue.push(std::move(event));
-    }
-    g_log_queue_cv.notify_one();
-}
-
-ModuleLogSink::ModuleLogSink(const std::string& module_name, ModuleLogCallback callback) {
-    bind(module_name, std::move(callback));
-}
-
-ModuleLogSink::ModuleLogSink(ModuleLogSink&& other) noexcept {
-    *this = std::move(other);
-}
-
-ModuleLogSink& ModuleLogSink::operator=(ModuleLogSink&& other) noexcept {
-    if (this == &other) {
-        return *this;
-    }
-    reset();
-    module_ = std::move(other.module_);
-    handle_ = other.handle_;
-    other.handle_ = {};
-    other.module_.clear();
-    return *this;
-}
-
-ModuleLogSink::~ModuleLogSink() {
-    reset();
-}
-
-bool ModuleLogSink::bind(const std::string& module_name, ModuleLogCallback callback) {
-    reset();
-    if (!callback) {
-        return false;
-    }
-    module_ = module_name;
-    handle_ = RegisterModuleLogSink(module_, std::move(callback));
-    if (!handle_.IsValid()) {
-        module_.clear();
-        return false;
-    }
-    return true;
-}
-
-void ModuleLogSink::reset() {
-    if (!handle_.IsValid()) {
-        module_.clear();
-        return;
-    }
-    UnregisterModuleLogSink(module_, handle_);
-    handle_ = {};
-    module_.clear();
-}
-
-bool ApplyModuleLogOverride(const ModuleLogOverride& override_desc) {
-    if (override_desc.module.empty()) {
-        return false;
-    }
-    SetModuleLogLevel(override_desc.module, override_desc.level);
-    return true;
-}
-
-bool ApplyModuleLogOverrides(const std::vector<ModuleLogOverride>& overrides) {
-    bool result = true;
-    for (const auto& entry : overrides) {
-        result &= ApplyModuleLogOverride(entry);
-    }
-    return result;
-}
-
-bool RegisterModuleLogProfile(const std::string& profile_name,
-                              const std::vector<ModuleLogOverride>& overrides) {
-    if (profile_name.empty() || overrides.empty()) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    g_log_profiles[profile_name] = overrides;
-    return true;
-}
-
-bool HasModuleLogProfile(const std::string& profile_name) {
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    return g_log_profiles.find(profile_name) != g_log_profiles.end();
-}
-
-bool ApplyModuleLogProfile(const std::string& profile_name) {
-    std::vector<ModuleLogOverride> overrides;
-    {
-        std::lock_guard<std::mutex> lock(g_module_log_mutex);
-        auto it = g_log_profiles.find(profile_name);
-        if (it == g_log_profiles.end()) {
-            return false;
-        }
-        overrides = it->second;
-    }
-    return ApplyModuleLogOverrides(overrides);
-}
-
-void SetDefaultModuleLogLevel(ModuleLogLevel level) {
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    g_default_module_level = level;
-}
-
-ModuleLogLevel GetDefaultModuleLogLevel() {
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    return g_default_module_level;
-}
-
-void SetModuleLogLevel(const std::string& module_name, ModuleLogLevel level) {
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    if (module_name.empty()) {
-        return;
-    }
-    g_module_level_overrides[module_name] = level;
-}
-
-void ClearModuleLogLevel(const std::string& module_name) {
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    g_module_level_overrides.erase(module_name);
-}
-
-ModuleLogLevel GetModuleLogLevel(const std::string& module_name) {
-    std::lock_guard<std::mutex> lock(g_module_log_mutex);
-    if (module_name.empty()) {
-        return g_default_module_level;
-    }
-    return ResolveModuleThresholdLocked(module_name);
-}
-
-ScopedLogRecorder::ScopedLogRecorder(ScopedLogRecorder&& other) noexcept {
-    *this = std::move(other);
-}
-
-ScopedLogRecorder& ScopedLogRecorder::operator=(ScopedLogRecorder&& other) noexcept {
-    if (this == &other) {
-        return *this;
-    }
-    if (active_) {
-        shutdown();
-    }
-    active_ = other.active_;
-    other.active_ = false;
-    return *this;
-}
-
-ScopedLogRecorder::~ScopedLogRecorder() {
-    if (active_) {
-        shutdown();
-    }
-}
-
-bool ScopedLogRecorder::init(const std::string& root_path, std::size_t max_device_entries) {
-    if (active_) {
-        return true;
-    }
-    active_ = InitLogRecorder(root_path, max_device_entries);
-    if (active_) {
-        EmitModuleInfo(ModuleId::LogRecorder,
-                       std::string("Layer diagnostics enabled at ") + root_path);
+        
+        LogEntry entry{};
+        entry.level = log_level;
+        entry.group = group;
+        entry.phase = LogPhase::LIFECYCLE;
+        entry.layer_idx = -1;
+        entry.global_step = static_cast<int32_t>(global_step);
+        entry.batch_idx = tape->currentBatch();
+        entry.setTag(module_name.c_str());
+        entry.setMessage("%.*s", static_cast<int>(std::min(message.size(), size_t(511))), message.data());
+        entry.primary = __builtin_nanf("");
+        entry.secondary = __builtin_nanf("");
+        tape->record(entry);
     } else {
-        EmitModuleWarning(ModuleId::LogRecorder,
-                          std::string("Failed to initialize layer diagnostics at ") + root_path);
-    }
-    return active_;
-}
-
-void ScopedLogRecorder::shutdown() {
-    if (!active_) {
-        return;
-    }
-    ShutdownLogRecorder();
-    EmitModuleInfo(ModuleId::LogRecorder, "Layer diagnostics shutdown");
-    active_ = false;
-}
-
-void ScopedLogRecorder::flush() const {
-    if (!active_) {
-        return;
-    }
-    FlushDeviceLogs();
-}
-
-
-
-void SetModuleLogAsync(bool enabled) {
-    g_async_logging_enabled.store(enabled);
-}
-
-bool IsModuleLogAsync() {
-    return g_async_logging_enabled.load();
-}
-
-void FlushModuleLogQueue() {
-    if (!g_async_logging_enabled.load()) {
-        return;  // Nothing to flush in sync mode
-    }
-    
-    // Wait until queue is empty
-    while (true) {
-        {
-            std::lock_guard<std::mutex> lock(g_log_queue_mutex);
-            if (g_log_queue.empty()) {
-                break;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // Pre-tape initialization: write to stderr so messages aren't lost
+        const char* lvl_str = "INFO";
+        if (level == ModuleLogLevel::Warning) lvl_str = "WARN";
+        else if (level == ModuleLogLevel::Error) lvl_str = "ERR";
+        std::fprintf(stderr, "[pre-tape][%s][%s] %.*s\n",
+                     module_name.c_str(), lvl_str,
+                     static_cast<int>(message.size()), message.data());
     }
 }
+
+//------------------------------------------------------
+//  ConfigureLayerLogging / IsLayerLoggingEnabled
+//------------------------------------------------------
 
 void ConfigureLayerLogging(bool master_enabled,
                            bool embedding,
@@ -635,7 +327,7 @@ void ConfigureLayerLogging(bool master_enabled,
     g_layer_logging_master_enabled = master_enabled;
     g_layer_enables[static_cast<int>(LayerType::kUnknown)] = false;
     g_layer_enables[static_cast<int>(LayerType::kEmbedding)] = embedding;
-    g_layer_enables[static_cast<int>(LayerType::kLayerNorm)] = false; // Deprecated, always false
+    g_layer_enables[static_cast<int>(LayerType::kLayerNorm)] = false;
     g_layer_enables[static_cast<int>(LayerType::kRMSNorm)] = rms_norm;
     g_layer_enables[static_cast<int>(LayerType::kAttention)] = attention;
     g_layer_enables[static_cast<int>(LayerType::kFeedForward)] = feed_forward;
@@ -654,30 +346,6 @@ bool IsLayerLoggingEnabled(LayerType type) {
         return false;
     }
     return g_layer_enables[idx];
-}
-
-//======================================================//
-//  Module Log Formatting Helpers
-//======================================================//
-
-ModuleLogCallback CreateStandardModuleLogFormatter(std::function<void(const std::string&)> log_fn) {
-    if (!log_fn) {
-        // Return a no-op callback if log_fn is null
-        return [](const ModuleLogEvent&) {};
-    }
-    
-    // Return a formatter that converts ModuleLogEvent to string and logs via log_fn
-    return [log_fn](const ModuleLogEvent& evt) {
-        const char* level = "INFO";
-        switch (evt.level) {
-            case ModuleLogLevel::Warning: level = "WARN"; break;
-            case ModuleLogLevel::Error: level = "ERR"; break;
-            default: break;
-        }
-        std::ostringstream msg;
-        msg << "[" << evt.module << "][" << level << "] " << evt.message;
-        log_fn(msg.str());
-    };
 }
 
 } // namespace GRIM::Logging

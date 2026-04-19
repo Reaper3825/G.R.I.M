@@ -19,10 +19,8 @@
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "module_logger.hpp"
 
 namespace {
-using ForwardLog = ModuleLogger<GRIM::Logging::ModuleId::ForwardPass>;
 
 inline void cudaFail(cudaError_t err, const char* where) {
     if (err != cudaSuccess) {
@@ -204,7 +202,6 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
 void LanguageModel::initGPU() {
     const auto& cfg = getConfig();
 
-    // NOTE: Cannot use ForwardLog here - LogRecorder not initialized yet during Phase1 startup.
     std::cout << "[initGPU] Entry, use_gpu=" << (cfg.use_gpu ? "true" : "false") << std::endl;
     if (!cfg.use_gpu) {
         throw std::runtime_error("[initGPU] use_gpu=false but GRIM-text REQUIRES GPU - fix ai_config.json");

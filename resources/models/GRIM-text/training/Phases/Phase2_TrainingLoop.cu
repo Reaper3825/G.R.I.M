@@ -3313,9 +3313,11 @@ bool executePhase2(TrainingContext& ctx) {
         EmitModuleError(ModuleId::Training, 
             std::string("TRAINING ERROR: ") + e.what(), ctx.global_step);
         
-        // Flush async log queue BEFORE re-throwing so error message is written to disk.
-        // Without this, async-queued "TRAINING ERROR:" is lost during stack unwinding.
-        GRIM::Logging::FlushModuleLogQueue();
+        // Flush tape sinks before re-throwing so error message is written to disk.
+        if (ctx.logging.tape) {
+            ctx.logging.tape->flush();
+            ctx.logging.tape->flushSinks();
+        }
         
         ctx.logging.status_writer->writeStatus(
             GRIMText::Control::TrainingState_Error,

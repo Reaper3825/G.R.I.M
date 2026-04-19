@@ -196,14 +196,6 @@ struct LoggingContext {
     std::unique_ptr<GRIM::Logging::TextLogSink> text_sink;
     std::unique_ptr<GRIM::Logging::CsvEquationSink> equation_sink;
     std::unique_ptr<GRIM::Logging::StderrSink> stderr_sink;
-    
-    // ---- Legacy module sinks (Phase B: migrate call sites then delete) ----
-    std::unique_ptr<GRIM::Logging::ModuleLogSink> backward_sink;
-    std::unique_ptr<GRIM::Logging::ModuleLogSink> stream_controller_sink;
-    std::unique_ptr<GRIM::Logging::ModuleLogSink> checkpoint_sink;
-    std::unique_ptr<GRIM::Logging::ModuleLogSink> activations_sink;
-    std::unique_ptr<GRIM::Logging::ModuleLogSink> guess_cache_sink;
-    std::unique_ptr<GRIM::Logging::ModuleLogSink> execution_block_sink;
 };
 
 /**

@@ -1367,15 +1367,6 @@ int main() {
     bool log_initialized = GRIM::Logging::InitLogRecorder("logs");
     if (log_initialized) {
         std::cout << "LogRecorder initialized at: " << GRIM::Logging::GetLogsRoot() << "\n\n";
-        
-        // Register a console sink for test module
-        RegisterModuleLogSink(kTestModule, [](const ModuleLogEvent& event) {
-            std::cout << "[" << ModuleLogLevelToString(event.level) << "] "
-                      << "[step=" << event.global_step << "] "
-                      << event.message << "\n";
-        });
-        
-        // Log test suite start
         EmitModuleInfo(kTestModule, "ScratchBlock test suite starting", 0);
     } else {
         std::cout << "Note: LogRecorder not initialized (standalone mode)\n\n";

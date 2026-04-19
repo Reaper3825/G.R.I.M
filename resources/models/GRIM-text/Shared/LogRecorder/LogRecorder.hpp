@@ -1,77 +1,28 @@
 #pragma once
-#include <atomic>
+//======================================================//
+//  LogRecorder.hpp — Module-level logging API
+//======================================================//
+//
+//  EmitModuleLog and convenience wrappers now route through
+//  the unified BatchLogTape (single logging point).
+//  The old delegate/callback/async-queue infrastructure
+//  has been deleted.
+//
+//  Layer logging (RecordLayerLogHost) still writes to
+//  per-layer-type disk files — retained for the single
+//  caller in Phase2_TrainingLoop.cu.
+//
+//  Author: Austin Wadkins
+//======================================================//
+
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include "../../Layers/grim_layer_gpu.hpp"
 
 namespace GRIM {
-
-// Simple handle for callback registration (GRIM-text local, not from core/delegate.hpp)
-class DelegateHandle {
-public:
-    DelegateHandle() : id_(0) {}
-    explicit DelegateHandle(std::uint64_t id) : id_(id) {}
-    
-    bool IsValid() const { return id_ != 0; }
-    bool operator==(const DelegateHandle& other) const { return id_ == other.id_; }
-    bool operator!=(const DelegateHandle& other) const { return id_ != other.id_; }
-    std::uint64_t id() const { return id_; }
-    
-private:
-    friend struct std::hash<DelegateHandle>;
-    std::uint64_t id_;
-};
-
-} // namespace GRIM
-
-// Hash specialization for DelegateHandle (must be in std namespace)
-namespace std {
-    template<> struct hash<GRIM::DelegateHandle> {
-        std::size_t operator()(const GRIM::DelegateHandle& h) const noexcept {
-            return std::hash<std::uint64_t>{}(h.id_);
-        }
-    };
-}
-
-namespace GRIM {
-
-// CPU-side multicast delegate for module logging callbacks (GRIM-text local)
-template<typename... Args>
-class MulticastDelegate {
-public:
-    using Callback = std::function<void(Args...)>;
-
-    DelegateHandle Add(const Callback& func) {
-        DelegateHandle handle(++last_id_);
-        listeners_[handle] = func;
-        return handle;
-    }
-
-    bool Remove(const DelegateHandle& handle) {
-        return listeners_.erase(handle) > 0;
-    }
-
-    void Clear() { listeners_.clear(); }
-
-    void Broadcast(Args... args) const {
-        for (const auto& [_, func] : listeners_) {
-            func(args...);
-        }
-    }
-
-    bool IsEmpty() const { return listeners_.empty(); }
-    std::size_t Count() const { return listeners_.size(); }
-
-private:
-    std::unordered_map<DelegateHandle, Callback> listeners_;
-    std::uint64_t last_id_ = 0;
-};
 
 std::string layerTypeToString(LayerType type);
 bool CreateLayerFolder(const std::string& absolutePath, LayerType type);
@@ -79,6 +30,10 @@ bool CreateLayerFolder(const std::string& absolutePath, LayerType type);
 } // namespace GRIM
 
 namespace GRIM::Logging {
+
+//======================================================//
+//  Module identity enums (used by 366+ call sites)
+//======================================================//
 
 enum class ModuleLogLevel : int {
     Info = 0,
@@ -108,72 +63,24 @@ enum class ModuleId : int {
     ExecutionBlock = 18
 };
 
-struct ModuleLogOverride {
-    std::string module;
-    ModuleLogLevel level = ModuleLogLevel::Info;
-};
-
-struct ModuleLogEvent {
-    std::string module;
-    ModuleLogLevel level = ModuleLogLevel::Info;
-    std::string message;
-    std::uint64_t global_step = 0;
-};
-
-using ModuleLogCallback = std::function<void(const ModuleLogEvent&)>;
-
-class ModuleLogSink {
-public:
-    ModuleLogSink() = default;
-    ModuleLogSink(const std::string& module_name, ModuleLogCallback callback);
-    ModuleLogSink(const ModuleLogSink&) = delete;
-    ModuleLogSink& operator=(const ModuleLogSink&) = delete;
-    ModuleLogSink(ModuleLogSink&& other) noexcept;
-    ModuleLogSink& operator=(ModuleLogSink&& other) noexcept;
-    ~ModuleLogSink();
-
-    bool bind(const std::string& module_name, ModuleLogCallback callback);
-    void reset();
-    bool active() const { return handle_.IsValid(); }
-
-private:
-    std::string module_;
-    GRIM::DelegateHandle handle_{};
-};
-
 const char* ModuleIdToString(ModuleId id);
 const char* ModuleLogLevelToString(ModuleLogLevel level);
-inline ModuleLogOverride MakeOverride(ModuleId id, ModuleLogLevel level) {
-    return {ModuleIdToString(id), level};
-}
 
-void SetDefaultModuleLogLevel(ModuleLogLevel level);
-ModuleLogLevel GetDefaultModuleLogLevel();
-void SetModuleLogLevel(const std::string& module_name, ModuleLogLevel level);
-void ClearModuleLogLevel(const std::string& module_name);
-ModuleLogLevel GetModuleLogLevel(const std::string& module_name);
-bool ApplyModuleLogOverride(const ModuleLogOverride& override_desc);
-bool ApplyModuleLogOverrides(const std::vector<ModuleLogOverride>& overrides);
-bool RegisterModuleLogProfile(const std::string& profile_name,
-                              const std::vector<ModuleLogOverride>& overrides);
-bool ApplyModuleLogProfile(const std::string& profile_name);
-bool HasModuleLogProfile(const std::string& profile_name);
-
-GRIM::DelegateHandle RegisterModuleLogSink(const std::string& module_name,
-                                     ModuleLogCallback callback);
-bool UnregisterModuleLogSink(const std::string& module_name,
-                             const GRIM::DelegateHandle& handle);
-
-// Async logging control
-void SetModuleLogAsync(bool enabled);
-bool IsModuleLogAsync();
-void FlushModuleLogQueue();
+//======================================================//
+//  EmitModuleLog — routes through global BatchLogTape
+//======================================================//
+//
+//  Before the tape is constructed (early Phase1), messages
+//  go to stderr with a [pre-tape] prefix. After setGlobalTape(),
+//  they are recorded onto the tape and flow through all sinks.
+//
 
 void EmitModuleLog(const std::string& module_name,
                    ModuleLogLevel level,
                    std::string_view message,
                    std::uint64_t global_step = 0,
                    bool force_sync = false);
+
 inline void EmitModuleInfo(const std::string& module_name,
                            std::string_view message,
                            std::uint64_t global_step = 0,
@@ -219,6 +126,10 @@ inline void EmitModuleError(ModuleId id,
     EmitModuleLog(id, ModuleLogLevel::Error, message, global_step);
 }
 
+//======================================================//
+//  Layer-file logging (per-type disk files)
+//======================================================//
+
 constexpr std::size_t kMaxTagLength = 32;
 constexpr std::size_t kMaxMessageLength = 96;
 
@@ -240,7 +151,6 @@ void ResetDeviceLogs();
 bool LogsInitialized();
 const std::string& GetLogsRoot();
 
-// Host-side helper to write a single entry immediately (bypasses the device buffer).
 bool RecordLayerLogHost(LayerType type,
                         int layer_index,
                         std::uint64_t global_step,
@@ -249,7 +159,6 @@ bool RecordLayerLogHost(LayerType type,
                         const std::string& tag,
                         const std::string& message);
 
-// Configure which layer types are logged (call from ai_config.json parsing)
 void ConfigureLayerLogging(bool master_enabled,
                            bool embedding,
                            bool rms_norm,
@@ -260,34 +169,6 @@ void ConfigureLayerLogging(bool master_enabled,
                            bool serialization,
                            bool execution_block);
 
-// Check if a specific layer type is enabled for logging
 bool IsLayerLoggingEnabled(LayerType type);
-
-class ScopedLogRecorder {
-public:
-    ScopedLogRecorder() = default;
-    ScopedLogRecorder(const ScopedLogRecorder&) = delete;
-    ScopedLogRecorder& operator=(const ScopedLogRecorder&) = delete;
-    ScopedLogRecorder(ScopedLogRecorder&& other) noexcept;
-    ScopedLogRecorder& operator=(ScopedLogRecorder&& other) noexcept;
-    ~ScopedLogRecorder();
-
-    bool init(const std::string& root_path, std::size_t max_device_entries = 4096);
-    void shutdown();
-    void flush() const;
-    bool active() const { return active_; }
-
-private:
-    bool active_ = false;
-};
-
-//======================================================//
-//  Module Log Formatting Helpers
-//======================================================//
-
-// Create a standard module log formatter that routes events to a logging function.
-// The log_fn parameter is called with formatted log strings.
-// The returned callback converts ModuleLogEvent to formatted string and logs via log_fn.
-ModuleLogCallback CreateStandardModuleLogFormatter(std::function<void(const std::string&)> log_fn);
 
 } // namespace GRIM::Logging
