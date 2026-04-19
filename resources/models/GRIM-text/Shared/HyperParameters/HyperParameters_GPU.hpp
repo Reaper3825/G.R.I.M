@@ -506,25 +506,6 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
 
     // validation_interval already validated > 0 above
 
-    const int required_micro_min = params.warmup_steps;  // 0 at this point; overridden in Phase2
-    const int original_micro_min = params.micro_validation_min_step;
-    params.micro_validation_min_step = std::clamp(
-        std::max(params.micro_validation_min_step, required_micro_min),
-        0,
-        info.safe_last_step);
-    log_adjustment("micro_validation_min_step", original_micro_min, params.micro_validation_min_step);
-
-    const int original_micro_interval = params.micro_validation_interval;
-    params.micro_validation_interval = std::clamp(
-        std::max(1, params.micro_validation_interval),
-        1,
-        info.safe_last_step);
-    log_adjustment("micro_validation_interval", original_micro_interval, params.micro_validation_interval);
-
-    const int original_micro_batches = params.micro_validation_batch_limit;
-    params.micro_validation_batch_limit = std::max(1, params.micro_validation_batch_limit);
-    log_adjustment("micro_validation_batch_limit", original_micro_batches, params.micro_validation_batch_limit);
-
     const int original_sr_window = params.soft_restart_max_step_window;
     params.soft_restart_max_step_window = std::max(params.soft_restart_max_step_window, cadence_reference);
     log_adjustment("soft_restart_max_step_window", original_sr_window, params.soft_restart_max_step_window);

@@ -37,11 +37,6 @@ std::mutex g_log_mutex;
 std::vector<CacheLog::LogCallback> g_log_callbacks;
 CacheLog::LogLevel g_min_log_level = CacheLog::LogLevel::Info;
 
-// Micro-validation state
-std::atomic<bool> g_micro_validation_active{false};
-MicroValidationPulse g_last_micro_validation{};
-std::mutex g_micro_validation_mutex;
-
 // Trend tracking
 CacheTrendMetrics g_trends{};
 std::mutex g_trends_mutex;
@@ -1632,35 +1627,6 @@ std::uint64_t HashSignature(const void* data, std::size_t size) {
         hash *= kPrime;
     }
     return hash;
-}
-
-//==============================================================================
-// Micro-Validation
-//==============================================================================
-
-void BeginMicroValidation(int global_step, int epoch) {
-    g_micro_validation_active.store(true, std::memory_order_release);
-    std::lock_guard<std::mutex> lock(g_micro_validation_mutex);
-    g_last_micro_validation = {};
-    g_last_micro_validation.global_step = global_step;
-    g_last_micro_validation.epoch = epoch;
-}
-
-void CompleteMicroValidation(const MicroValidationPulse& pulse) {
-    {
-        std::lock_guard<std::mutex> lock(g_micro_validation_mutex);
-        g_last_micro_validation = pulse;
-    }
-    g_micro_validation_active.store(false, std::memory_order_release);
-}
-
-bool MicroValidationActive() {
-    return g_micro_validation_active.load(std::memory_order_acquire);
-}
-
-MicroValidationPulse GetLastMicroValidationPulse() {
-    std::lock_guard<std::mutex> lock(g_micro_validation_mutex);
-    return g_last_micro_validation;
 }
 
 //==============================================================================

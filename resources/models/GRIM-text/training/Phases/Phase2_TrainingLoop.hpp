@@ -108,10 +108,6 @@ struct TrainingLoopState {
     float min_observed_loss = std::numeric_limits<float>::infinity();
     int warmup_batches = 0;
     
-    // Micro-validation state
-    std::vector<GRIM::Batching::BatchAssignment> micro_validation_batches;
-    std::size_t micro_validation_cursor = 0;
-    
     // GuessCache state (lifecycle + batch buffers owned by GRIMTS::Training)
     GRIMTS::Training::GuessCacheState guess_cache;
     
@@ -226,15 +222,6 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     TrainingLogger& logger);
 
 /**
- * @brief Run micro-validation if conditions are met
- */
-void maybeRunMicroValidation(
-    TrainingContext& ctx,
-    TrainingLoopState& state,
-    float latest_batch_loss,
-    float current_lr);
-
-/**
  * @brief Save checkpoint if this is the best validation loss
  */
 bool maybeSaveCheckpoint(
@@ -246,20 +233,5 @@ bool maybeSaveCheckpoint(
 
 // GuessCacheScope and GuessCacheBatchBuffers are now in
 // Layers/GRIMTS/GuessCacheTraining.hpp (namespace GRIMTS::Training)
-
-class MicroValidationScope {
-public:
-    explicit MicroValidationScope(int step);
-    ~MicroValidationScope();
-    
-    MicroValidationScope(const MicroValidationScope&) = delete;
-    MicroValidationScope& operator=(const MicroValidationScope&) = delete;
-    
-    void complete(const GRIMTS::MicroValidationPulse& pulse);
-
-private:
-    int step_ = 0;
-    bool completed_ = false;
-};
 
 } // namespace GRIMText::Training

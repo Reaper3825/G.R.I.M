@@ -280,9 +280,6 @@
                 }
             },
             "max_seq_len": 1024,
-            "micro_validation": {
-                "enabled": false
-            },
             "multi_token_prediction": {
                 "enabled": false
             },

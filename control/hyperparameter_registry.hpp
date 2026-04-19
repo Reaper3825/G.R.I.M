@@ -9,7 +9,7 @@
 // optionally write) values directly.
 //
 // Categories map to logical feature groups for filtering:
-//   Core, Optimizer, SoftRestart, AutoStop, MicroValidation,
+//   Core, Optimizer, SoftRestart, AutoStop,
 //   GuessAux, Shuffle, Telemetry, Loss, LMHead, Attention,
 //   LayerScale, ScratchBlock, ExecutionBlock, ActivationQuant,
 //   CUDA, MTP, Diagnostics
@@ -126,13 +126,6 @@ public:
         addFloat (params.auto_stop_plateau_min_delta,   "auto_stop_plateau_min_delta",   "Plateau Min Delta",   "Auto Stop");
         addFloat (params.auto_stop_high_loss_threshold, "auto_stop_high_loss_threshold", "High Loss Threshold", "Auto Stop");
         addInt   (params.auto_stop_high_loss_patience,  "auto_stop_high_loss_patience",  "High Loss Patience",  "Auto Stop");
-
-        // ── Micro Validation ──
-        addBool  (params.micro_validation_enabled,      "micro_validation_enabled",      "Enabled",         "Micro Validation");
-        addInt   (params.micro_validation_interval,     "micro_validation_interval",     "Interval",        "Micro Validation");
-        addInt   (params.micro_validation_batch_limit,  "micro_validation_batch_limit",  "Batch Limit",     "Micro Validation");
-        addInt   (params.micro_validation_min_step,     "micro_validation_min_step",     "Min Step",        "Micro Validation");
-        addBool  (params.micro_validation_prefer_short, "micro_validation_prefer_short", "Prefer Short",    "Micro Validation");
 
         // ── Guess Aux ──
         addBool  (params.guess_aux_enabled,        "guess_aux_enabled",        "Enabled",        "Guess Aux");

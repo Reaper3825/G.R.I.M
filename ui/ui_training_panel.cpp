@@ -2149,12 +2149,7 @@ bool UITrainingPanel::persistHyperparamToJSON(const GRIM::Config::HyperparamEntr
         if (!handled && k.rfind("auto_stop_", 0) == 0) {
             setNested("auto_stop", k.substr(10)); handled = true;
         }
-        // Micro validation
-        if (!handled && k.rfind("micro_validation_", 0) == 0) {
-            std::string suffix = k.substr(17);
-            if (suffix == "batch_limit") suffix = "batch_limit";  // direct map
-            setNested("micro_validation", suffix); handled = true;
-        }
+
         // Shuffle
         if (!handled && k == "shuffle_train_enabled") { setNested("shuffle", "enabled"); handled = true; }
         if (!handled && k == "shuffle_train_epochs")  { setNested("shuffle", "epochs");  handled = true; }

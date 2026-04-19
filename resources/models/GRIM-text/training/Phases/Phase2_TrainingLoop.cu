@@ -274,21 +274,6 @@ MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync
 // GuessCacheScope, GuessCacheBatchBuffers implementations moved to
 // Layers/GRIMTS/GuessCacheTraining.cu (namespace GRIMTS::Training)
 
-MicroValidationScope::MicroValidationScope(int step) : step_(step) {
-    GRIMTS::BeginMicroValidation(step_);
-}
-
-MicroValidationScope::~MicroValidationScope() {
-    if (!completed_) {
-        GRIMTS::CompleteMicroValidation({});
-    }
-}
-
-void MicroValidationScope::complete(const GRIMTS::MicroValidationPulse& pulse) {
-    GRIMTS::CompleteMicroValidation(pulse);
-    completed_ = true;
-}
-
 //======================================================//
 //  GPU-Native Telemetry Control
 //======================================================//
@@ -439,107 +424,6 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     PHASE2_DEBUG_STDERR("[DEBUG-BUILD] All logger.log calls completed\n");
     
     return schedule;
-}
-
-void maybeRunMicroValidation(
-    TrainingContext& ctx,
-    TrainingLoopState& state,
-    float latest_batch_loss,
-    float current_lr) {
-    
-    const auto& hp = ctx.config.hyperparameters;
-    if (!hp.micro_validation_enabled || ctx.data.val_seqs.empty()) return;
-    if (hp.micro_validation_interval <= 0) return;
-    if (ctx.global_step < hp.micro_validation_min_step) return;
-    if ((ctx.global_step % hp.micro_validation_interval) != 0) return;
-    
-    // Ensure micro-validation batches are built
-    if (state.micro_validation_batches.empty()) {
-        const int micro_batch_size = std::max(1, std::min(hp.batch_size, 8));
-        GRIM::Batching::BatchOptions mv_opts;
-        const auto& mv_model_cfg = ctx.model->getConfig();
-        mv_opts.max_tokens_per_batch = static_cast<uint32_t>(micro_batch_size) *
-            static_cast<uint32_t>(mv_model_cfg.max_seq_len);
-        mv_opts.max_batch_size = static_cast<uint32_t>(micro_batch_size);
-        mv_opts.bucket_step = 128;
-        mv_opts.prefer_short_first = hp.micro_validation_prefer_short;
-        
-        auto micro_schedule = GRIM::Batching::buildBatches(ctx.data.val_catalog, mv_opts);
-        state.micro_validation_batches = std::move(micro_schedule.batches);
-        state.micro_validation_cursor = 0;
-    }
-    
-    if (state.micro_validation_batches.empty()) return;
-    
-    MicroValidationScope scope(ctx.global_step);
-    const auto micro_start = std::chrono::steady_clock::now();
-    float accumulated_loss = 0.0f;
-    int sequences_processed = 0;
-    int batches_executed = 0;
-    
-    const int batches_to_eval = std::min(hp.micro_validation_batch_limit,
-                                         static_cast<int>(state.micro_validation_batches.size()));
-    
-    const auto& mv_model_cfg = ctx.model->getConfig();
-    const size_t mv_max_cached_batch = static_cast<size_t>(std::max(1, mv_model_cfg.max_cached_batch));
-    const size_t mv_max_cached_seq = static_cast<size_t>(std::max(1, std::min(mv_model_cfg.max_seq_len, mv_model_cfg.max_cached_seq_len)));
-    
-    for (int i = 0; i < batches_to_eval; ++i) {
-        if (state.micro_validation_cursor >= state.micro_validation_batches.size()) {
-            state.micro_validation_cursor = 0;
-        }
-        const auto& dyn_batch = state.micro_validation_batches[state.micro_validation_cursor++];
-        
-        const auto mv_token_layout = ctx.tokenizer.tokenLayout();
-        auto mv_payload = GRIM::Batching::buildBatchPayload(
-            dyn_batch, ctx.data.val_views, ctx.config.actual_vocab_size,
-            mv_token_layout,
-            mv_max_cached_batch, mv_max_cached_seq,
-            mv_model_cfg.execution_block_num_slots,
-            mv_model_cfg.execution_block_num_ops,
-            mv_model_cfg.execution_block_num_steps,
-            0);  // mtp_k=0 for validation — no MTP shifting needed
-        if (mv_payload.batch_size == 0) continue;
-        
-        float micro_batch_loss = ctx.model->computeLossBatch(mv_payload, /*is_training=*/false);
-        ctx.model->getTrainingState().autograd_intermediates.clear();
-        // NOTE: No device sync here - computeLossBatch returns synchronously
-        // Loss value is already on CPU after the call returns
-        
-        accumulated_loss += micro_batch_loss * static_cast<float>(mv_payload.batch_size);
-        sequences_processed += mv_payload.batch_size;
-        batches_executed++;
-    }
-    
-    if (batches_executed == 0 || sequences_processed == 0) return;
-    
-    const float avg_val_loss = accumulated_loss / static_cast<float>(sequences_processed);
-    const float val_perplexity = (std::isfinite(avg_val_loss) && avg_val_loss < 50.0f)
-        ? std::exp(avg_val_loss)
-        : std::numeric_limits<float>::infinity();
-    const float duration_ms = std::chrono::duration<float, std::milli>(
-        std::chrono::steady_clock::now() - micro_start).count();
-    
-    GRIMTS::MicroValidationPulse pulse;
-    pulse.global_step = ctx.global_step;
-    pulse.train_loss = latest_batch_loss;
-    pulse.learning_rate = current_lr;
-    pulse.val_loss = avg_val_loss;
-    pulse.val_perplexity = val_perplexity;
-    pulse.duration_ms = duration_ms;
-    pulse.batches = batches_executed;
-    pulse.sequences = sequences_processed;
-    scope.complete(pulse);
-    
-    std::ostringstream msg;
-    msg << "[ValMicro] step=" << ctx.global_step
-        << " batches=" << batches_executed
-        << " seq=" << sequences_processed
-        << " loss=" << formatScalar(avg_val_loss)
-        << " ppl=" << formatScalar(val_perplexity, 3)
-        << " lr=" << formatScalar(current_lr, 6)
-        << " dt=" << formatScalar(duration_ms, 2) << "ms";
-    ctx.logging.logger->log(msg.str());
 }
 
 //======================================================//
@@ -3258,8 +3142,7 @@ EpochResult runEpoch(
             train_perplexity, 0.0f, 0.0f, 0.0f,
             "Training epoch " + std::to_string(epoch_idx + 1) + " batch " + std::to_string(batch_idx + 1));
         
-        // Micro-validation
-        Internal::maybeRunMicroValidation(ctx, state, batch_result.loss, batch_result.learning_rate);
+
     }
     
     result.avg_loss = epoch_loss / std::max(result.batches_processed, 1);

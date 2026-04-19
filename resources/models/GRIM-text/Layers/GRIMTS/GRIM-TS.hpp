@@ -191,21 +191,6 @@ struct GuessCacheTelemetry {
     const char* health_message = "OK";
 };
 
-struct MicroValidationPulse {
-    int global_step = 0;
-    int epoch = 0;
-    float train_loss = std::numeric_limits<float>::quiet_NaN();
-    float learning_rate = 0.0f;
-    float val_loss = std::numeric_limits<float>::quiet_NaN();
-    float val_perplexity = std::numeric_limits<float>::quiet_NaN();
-    float duration_ms = 0.0f;
-    int batches = 0;
-    int sequences = 0;
-    float cache_fill_ratio = 0.0f;
-    float cache_hit_rate = 0.0f;
-    float avg_reward = 0.0f;
-};
-
 //------------------------------------------------------------------------------
 // Cache Warming / Injection Structures
 //------------------------------------------------------------------------------
@@ -361,12 +346,6 @@ cudaError_t ImportCacheFromHost(const GuessRecord* host_buffer,
 // Utility
 std::uint64_t HashSignature(std::string_view text);
 std::uint64_t HashSignature(const void* data, std::size_t size);
-
-// Micro-validation (training loop integration)
-void BeginMicroValidation(int global_step, int epoch = 0);
-void CompleteMicroValidation(const MicroValidationPulse& pulse);
-bool MicroValidationActive();
-MicroValidationPulse GetLastMicroValidationPulse();
 
 // Debug/Diagnostics
 void DumpCacheStats(const char* filepath = nullptr);  // nullptr = stdout

@@ -196,13 +196,6 @@ struct TrainingHyperparameters {
     float auto_stop_high_loss_threshold;
     int auto_stop_high_loss_patience;
     
-    // Micro validation - NO DEFAULTS
-    bool micro_validation_enabled;
-    int micro_validation_interval;
-    int micro_validation_batch_limit;
-    int micro_validation_min_step;
-    bool micro_validation_prefer_short;
-    
     // Guess aux - NO DEFAULTS
     bool guess_aux_enabled;
     float guess_aux_lambda;
@@ -650,12 +643,6 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     // ── Single batch overfit ──
     params.single_batch_overfit_max_steps = 1000;
 
-    // ── Micro validation ──
-    params.micro_validation_interval = 500;
-    params.micro_validation_batch_limit = 8;
-    params.micro_validation_min_step = 500;
-    params.micro_validation_prefer_short = false;
-
     // ── Guess aux ──
     params.guess_aux_lambda = 0.25f;
     params.guess_aux_min_confidence = 0.7f;
@@ -795,7 +782,6 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "single_batch.enabled",
         "soft_restart.enabled",
         "auto_stop.enabled",
-        "micro_validation.enabled",
         "guess_aux.enabled",
         "shuffle.enabled",
         
@@ -934,21 +920,6 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             params.auto_stop_plateau_min_delta = autoStop.value("plateau_min_delta", params.auto_stop_plateau_min_delta);
             params.auto_stop_high_loss_threshold = autoStop.value("high_loss_threshold", params.auto_stop_high_loss_threshold);
             params.auto_stop_high_loss_patience = autoStop.value("high_loss_patience", params.auto_stop_high_loss_patience);
-        }
-    }
-
-    if (auto it = trainConfig.find("micro_validation"); it != trainConfig.end()) {
-        const auto& micro = *it;
-        if (micro.is_boolean()) {
-            params.micro_validation_enabled = micro.get<bool>();
-        } else if (micro.is_object()) {
-            params.micro_validation_enabled = micro.value("enabled", params.micro_validation_enabled);
-            params.micro_validation_interval = micro.value("interval", params.micro_validation_interval);
-            params.micro_validation_batch_limit = micro.value(
-                "batch_limit",
-                micro.value("batches", params.micro_validation_batch_limit));
-            params.micro_validation_min_step = micro.value("min_step", params.micro_validation_min_step);
-            params.micro_validation_prefer_short = micro.value("prefer_short", params.micro_validation_prefer_short);
         }
     }
 
@@ -1444,11 +1415,8 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
     if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f)
         throw std::runtime_error("deriveComputedHyperparameters: warmup_fraction must be in (0, 1), got " + std::to_string(params.warmup_fraction));
     // warmup_steps, mtp_alpha_warmup_steps, telemetry_warmup_steps,
-    // execution_block_gate_warmup_steps, micro_validation_min_step are all
+    // execution_block_gate_warmup_steps are all
     // derived in Phase2 via deriveWarmupSteps() once estimated_total_steps is known.
-
-    // ── Micro validation interval (not warmup-dependent) ──
-    params.micro_validation_interval = params.validation_interval;
 
     // ── Stability overrides derived from base values ──
     params.stability_override_batch_size = params.batch_size * 2 / 3;
@@ -1470,7 +1438,6 @@ inline void deriveWarmupSteps(TrainingHyperparameters& params, int estimated_tot
     params.mtp_alpha_warmup_steps = params.warmup_steps;
     params.telemetry_warmup_steps = params.warmup_steps;
     params.execution_block_gate_warmup_steps = params.warmup_steps;
-    params.micro_validation_min_step = params.warmup_steps;
 }
 
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
