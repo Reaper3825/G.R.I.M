@@ -49,6 +49,10 @@
 #include "../../Shared/Telemetry/TelemetryLattice_GPU.hpp"
 #include "../../Shared/Telemetry/TelemetryControl_GPU.hpp"
 #include "../../Shared/Telemetry/TelemetryCsvLogger.hpp"
+#include "../../Shared/LogRecorder/BatchLogTape.hpp"
+#include "../../Shared/LogRecorder/Sinks/TextLogSink.hpp"
+#include "../../Shared/LogRecorder/Sinks/CsvEquationSink.hpp"
+#include "../../Shared/LogRecorder/Sinks/StderrSink.hpp"
 #include "../training_logger.hpp"
 #include "../training_status_writer.hpp"
 #include "../metrics_collector.hpp"
@@ -187,7 +191,13 @@ struct LoggingContext {
     std::string session_id;
     std::string raw_log_path;
     
-    // Module log sinks (must persist throughout training)
+    // ---- Unified batch-tape logging system ----
+    std::unique_ptr<GRIM::Logging::BatchLogTape> tape;
+    std::unique_ptr<GRIM::Logging::TextLogSink> text_sink;
+    std::unique_ptr<GRIM::Logging::CsvEquationSink> equation_sink;
+    std::unique_ptr<GRIM::Logging::StderrSink> stderr_sink;
+    
+    // ---- Legacy module sinks (Phase B: migrate call sites then delete) ----
     std::unique_ptr<GRIM::Logging::ModuleLogSink> backward_sink;
     std::unique_ptr<GRIM::Logging::ModuleLogSink> stream_controller_sink;
     std::unique_ptr<GRIM::Logging::ModuleLogSink> checkpoint_sink;
@@ -200,12 +210,12 @@ struct LoggingContext {
  * @brief Telemetry lattice context for multi-scale monitoring
  * Pattern B: TelemetryLattice is self-managing (RAII via unique_ptr).
  * 
- * last_obs[38] holds the most recent raw observation for ALL metric streams.
+ * last_obs[39] holds the most recent raw observation for ALL metric streams (0-38 inclusive).
  * Streams 0-4 are updated every batch; streams 5-8 (rho) are updated at
  * diagnostic intervals. Streams 9-13 (Adam warmup causation) are updated
  * every batch. Streams 14-20 (exec block health). Streams 21-26 (EB/SB injection diagnostics).
  * Streams 27-30 (PBM positional bias diagnostics). Streams 31-34 (rho raw decomposition).
- * Streams 35-37 (RMSNorm learned gamma tracking).
+ * Streams 35-37 (RMSNorm learned gamma tracking). Stream 38 (RHO_RAW_RMS_SPREAD).
  * lattice->update() always receives the full array.
  */
 struct TelemetryContext {
@@ -214,7 +224,7 @@ struct TelemetryContext {
     GRIM::Telemetry::TelemetryControlConfig control_config;
     std::unique_ptr<GRIM::Telemetry::TelemetryControl> controller;
     std::unique_ptr<GRIM::Telemetry::TelemetryCsvLogger> csv_logger;
-    float last_obs[38] = {};  // All metric streams — rho slots persist between diagnostic intervals
+    float last_obs[39] = {};  // All metric streams (0-38 inclusive) — rho slots persist between diagnostic intervals
     float adam_cumulative_disp = 0.0f;  // Running sum of lr(t) for Adam disruption tracking
     bool enabled = true;
 

@@ -153,6 +153,7 @@ target_compile_definitions(grim_training_kernels PRIVATE
 # LogRecorder library (shared by all targets to avoid duplicate symbols)
 add_library(grim_log_recorder STATIC
     ../../Shared/LogRecorder/LogRecorder.cu
+    ../../Shared/LogRecorder/BatchLogTape.cu
 )
 set_target_properties(grim_log_recorder PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON

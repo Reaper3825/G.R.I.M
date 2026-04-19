@@ -220,6 +220,14 @@
                 "project_out_pc1": true
             },
             "log_interval": 25,
+            "logging": {
+                "default_level": "Info",
+                "equation_csv_enabled": true,
+                "stderr_enabled": true,
+                "initial_capacity": 2048,
+                "group_overrides": {
+                }
+            },
             "log_recorder": {
                 "default_level": "Info",
                 "enabled": true,
