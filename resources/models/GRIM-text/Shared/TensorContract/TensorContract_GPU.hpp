@@ -91,6 +91,7 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 #include <memory>     // for std::shared_ptr (ISSUE #59: grad as Tensor)
 #include <tuple>      // for std::tuple (ISSUE #61: split_and_reshape_qkv return type)
 #include <atomic>     // for tensor lifecycle counters
+#include "../Batching/BatchPayload.hpp"
 
 //======================================================//
 //  Tensor Lifecycle Counters
@@ -1399,7 +1400,7 @@ Tensor scaled_dot_product_attention(
  */
 std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor& qkv_out,
-    const ::GRIM::Batching::BatchPayload& payload,
+    const Batching::BatchPayload& payload,
     const ::TensorContract::GQADims& gqa,
     cudaStream_t stream = nullptr);
 
@@ -1448,11 +1449,11 @@ Tensor reshape_bhsd_to_flat(
  * @param stream     CUDA stream
  */
 std::pair<Tensor, Tensor> rope_rotation(
-     const Tensor& Q, const Tensor& K,
-     const float* inv_freq,
-     const ::GRIM::Batching::BatchPayload& payload,
-     const ::TensorContract::GQADims& gqa,
-     int rotary_dim,
+    const Tensor& Q, const Tensor& K,
+    const float* inv_freq,
+    const Batching::BatchPayload& payload,
+    const ::TensorContract::GQADims& gqa,
+    int rotary_dim,
     cudaStream_t stream = nullptr,
     int pos_offset = 0);
 
