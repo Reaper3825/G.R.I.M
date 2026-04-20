@@ -1486,6 +1486,36 @@ Tensor concat(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
  */
 Tensor cross_entropy_logits(const Tensor& logits, int target_idx, cudaStream_t stream = nullptr);
 
+/**
+ * Element-wise exponential: y = exp(x).
+ * Backward: grad_x = grad_y * y
+ */
+Tensor exp(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Add constant scalar: y = x + c.
+ * Backward: grad_x = grad_y (pass-through)
+ */
+Tensor add_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
+
+/**
+ * Element-wise reciprocal: y = 1/x.
+ * Backward: grad_x = grad_y * (-y^2)
+ */
+Tensor reciprocal(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Multiply every element by a constant: y = x * scalar.
+ * Backward: grad_x = grad_y * scalar
+ */
+Tensor mul_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
+
+/**
+ * Broadcast per-row scalar multiply: out[i,j] = scale[i,0] * x[i,j].
+ * scale: [rows, 1], x: [rows, cols] → [rows, cols]
+ */
+Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream = nullptr);
+
 }  // namespace autograd
 
 }  // namespace GRIM
