@@ -1519,6 +1519,10 @@ Tensor mul_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
  */
 Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream = nullptr);
 
-}  // namespace autograd
+/**
+ * Place a [rows, cols] tensor at row_offset inside a zero-padded [total_rows, cols] output.
+ * Creates ZeroPadGradFn if input.requires_grad.
+ */
+Tensor zero_pad(const Tensor& x, int row_offset, int total_rows, cudaStream_t stream = nullptr);
 
 }  // namespace GRIM
