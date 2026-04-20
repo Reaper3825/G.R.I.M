@@ -77,50 +77,9 @@ std::string toLowerCopy(const std::string& value) {
     return result;
 }
 
-GRIM::Logging::ModuleLogLevel parseModuleLogLevelString(const std::string& text) {
-    // Rule 20: No fallback parameter - function throws on invalid input, parameter was unused
-    const std::string normalized = toLowerCopy(trimCopy(text));
-    if (normalized == "info" || normalized == "verbose" || normalized == "all") {
-        return GRIM::Logging::ModuleLogLevel::Info;
-    }
-    if (normalized == "warn" || normalized == "warning") {
-        return GRIM::Logging::ModuleLogLevel::Warning;
-    }
-    if (normalized == "err" || normalized == "error" || normalized == "fatal") {
-        return GRIM::Logging::ModuleLogLevel::Error;
-    }
-    std::ostringstream oss;
-    oss << "Phase1_Startup: unknown module log level '" << text << "'";
-    throw std::runtime_error(oss.str());
-}
-
 void registerDefaultLoggingProfiles() {
-    using namespace GRIM::Logging;
-    static bool registered = false;
-    if (registered) return;
-    registered = true;
-
-    RegisterModuleLogProfile("forward_pass", {
-        MakeOverride(ModuleId::ForwardPass, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::Activations, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::GuessCache, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::DataLoader, ModuleLogLevel::Info),
-    });
-
-    RegisterModuleLogProfile("backward_pass", {
-        MakeOverride(ModuleId::BackwardPass, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::Optimizer, ModuleLogLevel::Info),
-    });
-
-    RegisterModuleLogProfile("optimizer", {
-        MakeOverride(ModuleId::Optimizer, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::Scheduler, ModuleLogLevel::Info),
-    });
-
-    RegisterModuleLogProfile("validation", {
-        MakeOverride(ModuleId::Validation, ModuleLogLevel::Info),
-        MakeOverride(ModuleId::Checkpoint, ModuleLogLevel::Info),
-    });
+    // Module log profile registration removed: API never implemented.
+    // EmitModule*() functions remain available via LogRecorder.hpp.
 }
 
 } // anonymous namespace
@@ -248,13 +207,6 @@ StartupConfig loadConfiguration(int argc, char** argv) {
 
     // Configure LogRecorder
     if (config.hyperparameters.log_recorder.enabled) {
-        GRIM::Logging::SetDefaultModuleLogLevel(
-            parseModuleLogLevelString(config.hyperparameters.log_recorder.default_level));
-            
-        for (const auto& [module, level] : config.hyperparameters.log_recorder.modules) {
-            GRIM::Logging::SetModuleLogLevel(module, parseModuleLogLevelString(level));
-        }
-        
         // Initialize log recorder system - MUST pass path (Rule 20: no hardcoded fallback)
         GRIM::Logging::InitLogRecorder(config.paths.log_dir);
         
@@ -1495,12 +1447,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     EmitModuleInfo(ModuleId::Training, "  GRIM-text GPU Training v3.0.0", 0);
     EmitModuleInfo(ModuleId::Training, "========================================", 0);
     
-    // Enable verbose module logging
-    GRIM::Logging::ApplyModuleLogOverrides({
-        GRIM::Logging::MakeOverride(GRIM::Logging::ModuleId::ForwardPass, GRIM::Logging::ModuleLogLevel::Info),
-        GRIM::Logging::MakeOverride(GRIM::Logging::ModuleId::BackwardPass, GRIM::Logging::ModuleLogLevel::Info),
-        GRIM::Logging::MakeOverride(GRIM::Logging::ModuleId::Checkpoint, GRIM::Logging::ModuleLogLevel::Info)
-    });
     registerDefaultLoggingProfiles();
     
     // 1. Load configuration
