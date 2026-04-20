@@ -1468,48 +1468,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing logging...", 0);
         ctx->logging = Internal::initializeLogging(ctx->config.paths);
     
-    // Create standard module log formatter (Rule 21: centralized logging setup)
-    auto log_fn = [logger = ctx->logging.logger.get()](const std::string& msg) {
-        logger->log(msg);
-    };
-    auto formatter = GRIM::Logging::CreateStandardModuleLogFormatter(log_fn);
-    
-    // Forward BackwardPass module logs to training logger (MUST persist!)
-    ctx->logging.backward_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.backward_sink->bind("BackwardPass", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind BackwardPass module logger - backward diagnostics may not appear in logs");
-    }
-    
-    // Forward StreamController module logs to training logger (CRITICAL for init debugging!)
-    ctx->logging.stream_controller_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.stream_controller_sink->bind("StreamController", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind StreamController module logger - stream diagnostics may not appear in logs");
-    }
-    
-    // Forward Checkpoint module logs to training logger (CRITICAL for save/load debugging!)
-    ctx->logging.checkpoint_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.checkpoint_sink->bind("Checkpoint", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind Checkpoint module logger - save/load diagnostics may not appear in logs");
-    }
-
-    // Forward Activations module logs to training logger (Flash Attention diagnostics)
-    ctx->logging.activations_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.activations_sink->bind("Activations", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind Activations module logger - Flash Attention diagnostics may not appear in logs");
-    }
-
-    // Forward GuessCache module logs to training logger (GRIM-TS cache diagnostics)
-    ctx->logging.guess_cache_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.guess_cache_sink->bind("GuessCache", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind GuessCache module logger - cache diagnostics may not appear in logs");
-    }
-
-    // Forward ExecutionBlock module logs to training logger (differentiable register machine diagnostics)
-    ctx->logging.execution_block_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    if (!ctx->logging.execution_block_sink->bind("ExecutionBlock", formatter)) {
-        ctx->logging.logger->log("[WARNING] Failed to bind ExecutionBlock module logger - execution block diagnostics may not appear in logs");
-    }
-    
     // ================================================================
     //  Initialize unified BatchLogTape system
     // ================================================================
