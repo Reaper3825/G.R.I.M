@@ -1399,7 +1399,8 @@ Tensor scaled_dot_product_attention(
  */
 std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor& qkv_out,
-    int batch, int seq, int num_heads, int num_kv_heads, int head_dim,
+    const ::GRIM::Batching::BatchPayload& payload,
+    const ::TensorContract::GQADims& gqa,
     cudaStream_t stream = nullptr);
 
 /**
@@ -1446,11 +1447,12 @@ Tensor reshape_bhsd_to_flat(
  * @param rotary_dim Number of dimensions to rotate (must be <= head_dim, typically 64)
  * @param stream     CUDA stream
  */
-void rope_rotation(
-    Tensor& Q, Tensor& K,
-    const float* inv_freq,
-    int batch_size, int num_q_heads, int num_kv_heads,
-    int seq_len, int head_dim, int rotary_dim,
+std::pair<Tensor, Tensor> rope_rotation(
+     const Tensor& Q, const Tensor& K,
+     const float* inv_freq,
+     const ::GRIM::Batching::BatchPayload& payload,
+     const ::TensorContract::GQADims& gqa,
+     int rotary_dim,
     cudaStream_t stream = nullptr,
     int pos_offset = 0);
 

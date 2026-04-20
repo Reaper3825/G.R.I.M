@@ -37,6 +37,7 @@
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/TensorContract/ForwardIntermediates.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 
 namespace GRIM {
 
