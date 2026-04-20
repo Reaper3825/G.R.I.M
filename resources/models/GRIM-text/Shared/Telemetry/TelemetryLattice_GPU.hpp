@@ -77,7 +77,7 @@ public:
      * Fails loud if total_tokens <= 0.
      */
     TelemetryError updateFromBatch(
-        const GRIM::Batching::BatchPayload& payload,
+        const ::GRIM::Batching::BatchPayload& payload,
         float loss, float grad_norm, float learning_rate,
         uint32_t global_step);
 
