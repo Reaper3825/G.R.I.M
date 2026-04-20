@@ -1421,7 +1421,8 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
  */
 Tensor reshape_bhsd_to_flat(
     Tensor& bhsd_input,
-    int batch_size, int seq_len, int num_heads, int head_dim,
+    const Batching::BatchPayload& payload,
+    const ::TensorContract::GQADims& gqa,
     cudaStream_t stream = nullptr);
 
 /**
