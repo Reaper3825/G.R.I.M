@@ -1525,4 +1525,6 @@ Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stre
  */
 Tensor zero_pad(const Tensor& x, int row_offset, int total_rows, cudaStream_t stream = nullptr);
 
+}  // namespace autograd
+
 }  // namespace GRIM
