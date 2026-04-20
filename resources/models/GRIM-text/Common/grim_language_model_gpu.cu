@@ -377,7 +377,6 @@ GrimEmbeddingStack::GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_
       max_seq_len_(max_seq_len)
 {
     token_embed = Matrix(vocab_size, d_model, 0.0f, true);
-    rms_gamma = Vector(d_model, 1.0f);  // RMSNorm gamma
     // NOTE: Position embeddings initialized directly on GPU in TrainingOps.cu
 }
 

@@ -39,27 +39,20 @@ struct DeviceWriteView {
 
 struct SerializationGpuEmbeddingReadView {
 	DeviceReadView token_embeddings;
-	DeviceReadView rms_gamma;
-	bool has_rms_norm = false;
 };
 
 struct SerializationGpuEmbeddingWriteView {
 	DeviceWriteView token_embeddings;
-	DeviceWriteView rms_gamma;
-	bool has_rms_norm = false;
 };
 
 struct SerializationCpuEmbeddingReadData {
 	std::vector<float> token_data;
-	std::vector<float> rms_gamma;
 	int num_rows = 0;
 	int num_cols = 0;
-	bool has_rms_norm = false;
 };
 
 struct SerializationCpuEmbeddingWriteOps {
 	std::function<void(const std::vector<float>& data, int rows, int cols)> set_tokens;
-	std::function<void(const std::vector<float>& gamma)> set_rms_gamma;
 };
 
 struct SerializationEncoderLayerReadView {

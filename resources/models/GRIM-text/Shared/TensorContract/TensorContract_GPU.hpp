@@ -80,7 +80,6 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 //======================================================//
 
 #include <cuda_runtime.h>
-#include <cublas_v2.h>
 #include <cstdint>
 #include <cstddef>
 #include <stdexcept>
@@ -92,7 +91,6 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 #include <memory>     // for std::shared_ptr (ISSUE #59: grad as Tensor)
 #include <tuple>      // for std::tuple (ISSUE #61: split_and_reshape_qkv return type)
 #include <atomic>     // for tensor lifecycle counters
-#include "../Batching/BatchPayload.hpp"  // BatchPayload for batch geometry in autograd ops
 
 //======================================================//
 //  Tensor Lifecycle Counters
@@ -766,7 +764,6 @@ struct ParameterGroup {
     int layer_index = -1;    ///< Encoder layer index (0-based), -1 for non-layer params
     float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
     float weight_decay_multiplier = 1.0f;  ///< 0.0 for biases/norms (no weight decay), 1.0 for weights
-    float lr_multiplier = 1.0f;  ///< Per-group learning rate scale (e.g., 0.1 = 10x slower learning)
     
     // Live accessors — always read through the Tensor, never stale
     // Defined after struct Tensor (forward-declared only here)
@@ -1164,19 +1161,13 @@ inline size_t ParameterGroup::size_bytes() const { return size() * sizeof(float)
 //  Autograd Operations (create computation graph nodes)
 //======================================================//
 
-/**
- * Track a cuBLAS call for error checking (Rule 20: fail loud).
- * Defined at global scope in TensorContract_GPU.cu, used by MatMulGradFn in AutogradAttention.cu.
- */
-void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t stream, cublasStatus_t status);
+// Forward declarations for cuBLAS types (must be in global namespace)
+struct cublasContext;
+typedef cublasContext* cublasHandle_t;
 
 namespace GRIM {  // reopen namespace
 
 namespace autograd {
-
-// Bring sibling-namespace types into scope for autograd function declarations
-using GRIM::Batching::BatchPayload;
-using ::TensorContract::GQADims;
 
 /**
  * Set/get the cuBLAS handle for autograd matmul operations.
@@ -1219,46 +1210,6 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream = nullptr);
 
 // autograd::scale() DELETED — dead code from reverted Issue #98 (Rule 20)
-
-/**
- * Element-wise exponential: y = exp(x)
- * Backward: grad_x = grad_y * y
- */
-Tensor exp(const Tensor& x, cudaStream_t stream = nullptr);
-
-/**
- * Add a constant scalar to every element: y = x + c
- * Backward: grad_x = grad_y  (pure pass-through, constant has no gradient)
- */
-Tensor add_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
-
-/**
- * Element-wise reciprocal: y = 1/x
- * Backward: grad_x = grad_y * (-y²)
- */
-Tensor reciprocal(const Tensor& x, cudaStream_t stream = nullptr);
-
-/**
- * Multiply every element of a tensor by a constant float.
- * Forward: y = x * scalar
- * Backward: grad_x = grad_y * scalar
- */
-Tensor mul_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
-
-/**
- * Broadcast per-row scalar multiply: out[i,j] = scale[i,0] * x[i,j]
- * scale must be [rows, 1], x must be [rows, cols].
- * Backward: grad_scale[i] = sum_j(grad_out[i,j] * x[i,j])
- *           grad_x[i,j] = grad_out[i,j] * scale[i,0]
- */
-Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream = nullptr);
-
-/**
- * Zero-pad: places [rows, cols] input at row_offset in a [total_rows, cols] zero tensor.
- * Forward:  result = 0; result[row_offset:row_offset+rows, :] = x
- * Backward: grad_x += grad_result[row_offset:row_offset+rows, :]
- */
-Tensor zero_pad(const Tensor& x, int row_offset, int total_rows, cudaStream_t stream = nullptr);
 
 /**
  * LayerScale: Scale tensor by a learned scalar parameter (tensor of shape [1])
@@ -1437,15 +1388,17 @@ Tensor scaled_dot_product_attention(
  * for W_qkv).
  * 
  * @param qkv_out      Input tensor [tokens, d_model + 2*kv_dim] from matmul(ln1_out, W_qkv)
- * @param payload      Batch geometry (batch_size, max_seq_len)
- * @param gqa          GQA dimensions (num_heads, num_kv_heads, head_dim)
+ * @param batch        Batch size
+ * @param seq          Sequence length (tokens = batch * seq)
+ * @param num_heads    Number of Q heads
+ * @param num_kv_heads Number of K/V heads (GQA)
+ * @param head_dim     Dimension per head
  * @param stream       CUDA stream
  * @return Tuple of (Q_bhsd, K_bhsd, V_bhsd) with properly linked autograd chains
  */
 std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor& qkv_out,
-    const BatchPayload& payload,
-    const GQADims& gqa,
+    int batch, int seq, int num_heads, int num_kv_heads, int head_dim,
     cudaStream_t stream = nullptr);
 
 /**
@@ -1456,15 +1409,16 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
  * downstream gradients to not flow through attention backward).
  * 
  * @param bhsd_input   Input tensor [B, H, S, D] from attention output
- * @param payload      Batch geometry (batch_size, max_seq_len)
- * @param gqa          GQA dimensions (num_heads, head_dim)
+ * @param batch_size   Batch size
+ * @param seq_len      Sequence length
+ * @param num_heads    Number of attention heads
+ * @param head_dim     Dimension per head
  * @param stream       CUDA stream
  * @return Tensor [tokens, d_model] with properly linked autograd chain
  */
 Tensor reshape_bhsd_to_flat(
     Tensor& bhsd_input,
-    const BatchPayload& payload,
-    const GQADims& gqa,
+    int batch_size, int seq_len, int num_heads, int head_dim,
     cudaStream_t stream = nullptr);
 
 /**
@@ -1480,22 +1434,22 @@ Tensor reshape_bhsd_to_flat(
  * 
  * Uses SharedState pattern to coordinate backward calls from both Q and K.
  * 
- * @param Q          Q tensor [B, H, S, D] — not mutated (out-of-place)
- * @param K          K tensor [B, Hkv, S, D] — not mutated (out-of-place)
+ * @param Q          Q tensor [B, H, S, D] - modified in-place
+ * @param K          K tensor [B, Hkv, S, D] - modified in-place  
  * @param inv_freq   Device pointer to inverse frequencies [rotary_dim/2]
- * @param payload    Batch geometry (batch_size, max_seq_len)
- * @param gqa        GQA dimensions (num_heads, num_kv_heads, head_dim)
+ * @param batch_size Batch size (B)
+ * @param num_q_heads Number of query heads (H)
+ * @param num_kv_heads Number of key/value heads (Hkv) for GQA
+ * @param seq_len    Sequence length (S)
+ * @param head_dim   Dimension per head (D)
  * @param rotary_dim Number of dimensions to rotate (must be <= head_dim, typically 64)
  * @param stream     CUDA stream
- * @param pos_offset Position offset for KV-cache continuation
- * @return {Q_rot, K_rot} — new tensors with autograd tracking
  */
-std::pair<Tensor, Tensor> rope_rotation(
-    const Tensor& Q, const Tensor& K,
+void rope_rotation(
+    Tensor& Q, Tensor& K,
     const float* inv_freq,
-    const BatchPayload& payload,
-    const GQADims& gqa,
-    int rotary_dim,
+    int batch_size, int num_q_heads, int num_kv_heads,
+    int seq_len, int head_dim, int rotary_dim,
     cudaStream_t stream = nullptr,
     int pos_offset = 0);
 

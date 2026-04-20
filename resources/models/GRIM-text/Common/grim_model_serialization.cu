@@ -90,10 +90,6 @@ SerializationCpuEmbeddingReadData snapshotCpuEmbedding(const GrimEmbeddingStack*
     data.num_rows = embedder->token_embed.num_rows;
     data.num_cols = embedder->token_embed.num_cols;
     data.token_data = flattenMatrix(embedder->token_embed);
-    if (!embedder->rms_gamma.data.empty()) {
-        data.rms_gamma = embedder->rms_gamma.data;
-        data.has_rms_norm = true;
-    }
     return data;
 }
 
@@ -141,15 +137,6 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(request.sources.gpu_embedding.token_embeddings,
                    embedding_layer_->tokenWeights().data,
                    embeddingElementCount(config_));
-        // final_rms_gamma is owned by LMHeadLayer (Pattern B), serialized separately (~line 260)
-        // but legacy checkpoint format also stores it under gpu_embedding.rms_gamma.
-        if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data) {
-            EmitModuleInfo(ModuleId::Checkpoint, "Including embedding RMSNorm gamma");
-            assignRead(request.sources.gpu_embedding.rms_gamma,
-                       lm_head_layer_->finalRmsGamma().data,
-                       static_cast<std::size_t>(config_.d_model));
-            request.sources.gpu_embedding.has_rms_norm = true;
-        }
     } else {
         EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: CPU");
         EmitModuleInfo(ModuleId::Checkpoint, "Using CPU embedder snapshot");
@@ -380,7 +367,9 @@ bool LanguageModel::load(const std::string& path) {
     request.capabilities.requires_slot_selector     = (decode_time_slot_selector_layer_ != nullptr);
     request.capabilities.requires_reasoning_head  = (reasoning_head_layer_ != nullptr);
     request.capabilities.requires_scratch_block   = (scratch_block_layer_ != nullptr && scratch_block_layer_->isEnabled());
-    request.capabilities.requires_final_rms_gamma = (lm_head_layer_ != nullptr && lm_head_layer_->finalRmsGamma().data != nullptr);
+    request.capabilities.requires_final_rms_gamma = (lm_head_layer_ != nullptr
+                                                      && lm_head_layer_->finalRmsGamma().data != nullptr
+                                                      && !config_.lm_head_freeze_final_rms_gamma);
 
     if (config_.use_gpu) {
         if (!embedding_layer_ || !embedding_layer_->tokenWeights().data) {
@@ -390,20 +379,11 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(request.gpu_embedding.token_embeddings,
                     embedding_layer_->tokenWeights().data,
                     embeddingElementCount(config_));
-        if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data) {
-            assignWrite(request.gpu_embedding.rms_gamma,
-                        lm_head_layer_->finalRmsGamma().data,
-                        static_cast<std::size_t>(config_.d_model));
-            request.gpu_embedding.has_rms_norm = true;
-        }
     }
 
     if (auto* embedder = getEmbedderPtr()) {
         request.cpu_embedding.set_tokens = [embedder](const std::vector<float>& data, int rows, int cols) {
             unflattenMatrix(data, embedder->token_embed, rows, cols);
-        };
-        request.cpu_embedding.set_rms_gamma = [embedder](const std::vector<float>& gamma) {
-            embedder->rms_gamma.data = gamma;
         };
     }
 
@@ -550,7 +530,9 @@ bool LanguageModel::load(const std::string& path) {
     }
 
     // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer
-    if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data) {
+    // When frozen, γ_final stays at 1.0 — do NOT overwrite from checkpoint.
+    if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data
+        && !config_.lm_head_freeze_final_rms_gamma) {
         assignWrite(request.final_rms_gamma,
                     lm_head_layer_->finalRmsGamma().data,
                     static_cast<std::size_t>(config_.d_model));
@@ -599,7 +581,7 @@ bool LanguageModel::load(const std::string& path) {
             std::ostringstream oss;
             oss << "[load]   GPU destinations: token_emb=" << (request.gpu_embedding.token_embeddings.ptr ? "set" : "NULL")
                 << "(" << request.gpu_embedding.token_embeddings.count << ")"
-                << " rms_gamma=" << (request.gpu_embedding.rms_gamma.ptr ? "set" : "NULL")
+                << " final_rms_gamma=" << (request.final_rms_gamma.ptr ? "set" : "SKIP(frozen)")
                 << " lm_proj=" << (request.lm_head.projection.ptr ? "set" : "NULL")
                 << "(" << request.lm_head.projection.count << ")"
                 << " lm_bias=" << (request.lm_head.bias.ptr ? "set" : "NULL")

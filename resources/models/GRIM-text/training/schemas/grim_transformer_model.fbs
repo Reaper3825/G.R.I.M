@@ -72,11 +72,9 @@ table EncoderLayerWeights {
 table EmbeddingWeights {
   token_embeddings: [float] (required);
   positional_encodings: [float];
-  rms_gamma: [float];
   vocab_size: uint32;
   d_model: uint32;
   max_seq_len: uint32;
-  use_rms_norm: bool;
 }
 
 table LMHeadWeights {

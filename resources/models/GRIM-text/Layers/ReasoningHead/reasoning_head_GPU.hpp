@@ -46,7 +46,7 @@ struct ReasoningHeadOutput {
 struct ReasoningHeadConfig {
     int d_model = 0;
     int atom_embedding_dim = 0;
-    int num_ops = 4;
+    int num_ops = 8;
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;
 
@@ -139,7 +139,6 @@ public:
     void setStream(cudaStream_t s) { config_.stream = s; }
     void setCublasHandle(cublasHandle_t h) { config_.cublas_handle = h; }
 
-    const ReasoningHeadConfig& config() const { return config_; }
     int d_model() const { return config_.d_model; }
     int atom_embedding_dim() const { return config_.atom_embedding_dim; }
     int num_ops() const { return config_.num_ops; }

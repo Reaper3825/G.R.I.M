@@ -445,17 +445,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         request.cpu_embedding.set_tokens(token_host, vocab_size, d_model);
     }
 
-    if (fb_embeddings->use_rms_norm() && fb_embeddings->rms_gamma()) {
-        std::vector<float> rms_gamma_host(fb_embeddings->rms_gamma()->begin(), fb_embeddings->rms_gamma()->end());
-        if (cfg.use_gpu && request.gpu_embedding.has_rms_norm) {
-            if (!upload_device_vector(rms_gamma_host, request.gpu_embedding.rms_gamma, "embedding rms gamma"))
-                return false;
-        }
-        if (request.cpu_embedding.set_rms_gamma) {
-            request.cpu_embedding.set_rms_gamma(rms_gamma_host);
-        }
-    }
-
     // ─── Encoder layers ───
     const auto* fb_layers = model_fb->encoder_layers();
     for (int layer_idx = 0; layer_idx < cfg.num_layers; ++layer_idx) {

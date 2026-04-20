@@ -134,8 +134,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     };
 
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_token_embed = 0;
-    flatbuffers::Offset<flatbuffers::Vector<float>> fb_rms_gamma = 0;
-    bool use_rms = true;
 
     Logging::EmitModuleInfo(kLogModule, Msg("[save] Downloading weights: embeddings + ", cfg.num_layers, " encoder layers (GPU->CPU)..."));
 
@@ -143,13 +141,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         auto token_embed_data = download_device_vector(request.sources.gpu_embedding.token_embeddings, "token embeddings");
         if (token_embed_data.empty() && request.sources.gpu_embedding.token_embeddings.count > 0) return false;
         fb_token_embed = builder.CreateVector(token_embed_data);
-
-        if (request.sources.gpu_embedding.has_rms_norm) {
-            auto rms_gamma = download_device_vector(request.sources.gpu_embedding.rms_gamma, "embedding rms gamma");
-            if (rms_gamma.empty() && request.sources.gpu_embedding.rms_gamma.count > 0) return false;
-            fb_rms_gamma = builder.CreateVector(rms_gamma);
-            use_rms = true;
-        }
     } else {
         const auto& cpu_embed = request.sources.cpu_embedding;
         if (cpu_embed.token_data.empty()) {
@@ -157,18 +148,13 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             return false;
         }
         fb_token_embed = builder.CreateVector(cpu_embed.token_data);
-        if (cpu_embed.has_rms_norm) {
-            fb_rms_gamma = builder.CreateVector(cpu_embed.rms_gamma);
-            use_rms = true;
-        }
     }
 
     auto fb_embeddings = GRIMTransformer::CreateEmbeddingWeights(
-        builder, fb_token_embed, 0, fb_rms_gamma,
+        builder, fb_token_embed, 0,
         static_cast<uint32_t>(cfg.vocab_size),
         static_cast<uint32_t>(cfg.d_model),
-        static_cast<uint32_t>(cfg.max_seq_len),
-        use_rms);
+        static_cast<uint32_t>(cfg.max_seq_len));
 
     std::vector<flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>> fb_layers;
     fb_layers.reserve(cfg.num_layers);

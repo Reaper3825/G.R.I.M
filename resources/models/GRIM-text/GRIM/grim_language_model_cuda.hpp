@@ -480,7 +480,6 @@ public:
     
     // Public members needed by GPU code
     Matrix token_embed;        // Token embedding matrix [vocab_size x d_model]
-    Vector rms_gamma;          // RMSNorm gamma (scale)
     // NOTE: Position embeddings are GPU-only (initialized in TrainingOps.cu)
     
 private:
