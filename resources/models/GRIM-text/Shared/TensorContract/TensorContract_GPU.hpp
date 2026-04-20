@@ -764,6 +764,7 @@ struct ParameterGroup {
     int layer_index = -1;    ///< Encoder layer index (0-based), -1 for non-layer params
     float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
     float weight_decay_multiplier = 1.0f;  ///< 0.0 for biases/norms (no weight decay), 1.0 for weights
+    float lr_multiplier = 1.0f;  ///< Learning rate multiplier (e.g., 0.1 for γ_final to prevent logit temperature drift)
     
     // Live accessors — always read through the Tensor, never stale
     // Defined after struct Tensor (forward-declared only here)
