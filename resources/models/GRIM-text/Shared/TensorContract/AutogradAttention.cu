@@ -80,6 +80,9 @@ __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t coun
 
 }  // anonymous namespace
 
+// ─── Forward declaration: defined in TensorContract_GPU.cu at global scope ───
+void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t stream, cublasStatus_t status);
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Open GRIM::autograd namespace — all functions below are in this namespace
 // (matching TensorContract_GPU.cu structure)
@@ -89,6 +92,9 @@ namespace GRIM {
 using CudaAlloc::cudaMallocOrThrow;
 
 namespace autograd {
+
+using TensorContract::GQADims;
+using Batching::BatchPayload;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ISSUE #77 DIAGNOSTIC: Log cached activation (ln1_out) values during backward
