@@ -177,42 +177,114 @@ void PhysicalMonocularDepthEstimator::RouteFrameToPhysicalMonocularDepthEstimato
         cv::Mat depth_at_model;
         cv::resize(depth_2d, depth_at_model, cv::Size(model_w, model_h), 0, 0, cv::INTER_LINEAR);
 
-        // Compute pre-normalisation min/max across the MODEL-resolution map.
-        double mn = 0.0, mx = 0.0;
-        cv::minMaxLoc(depth_at_model, &mn, &mx);
-        if (!std::isfinite(mn) || !std::isfinite(mx)) {
-            throw std::runtime_error("Depth output contains non-finite values (NaN/Inf)");
-        }
-
-        // Save raw stats BEFORE normalising so a metric conversion can
-        // reverse the scaling.
-        cv::Mat raw_inverse = depth_at_model.clone();
-
-        cv::Mat normalised;
-        if (mx > mn) {
-            normalised = (depth_at_model - mn) / (mx - mn);
-        } else {
-            normalised = cv::Mat::zeros(model_h, model_w, CV_32FC1);
-        }
-
-        out_depth.inverse_depth_image  = normalised;
+        // Two output conventions are supported:
+        //
+        //   output_is_disparity = true   ⇒ raw output is INVERSE depth
+        //                                  (MiDaS / Depth-Anything-Relative).
+        //                                  Metric conversion uses the
+        //                                  MiDaS-style depth = scale / inverse.
+        //
+        //   output_is_disparity = false  ⇒ raw output is DEPTH IN METRES
+        //                                  directly (Depth-Anything-V2-Metric,
+        //                                  ZoeDepth). metric_scale_meters acts
+        //                                  as a unit scalar (1.0 for metres,
+        //                                  0.001 for millimetres, …) and MUST
+        //                                  be > 0 — Rule 20: a "metric" model
+        //                                  with no metric scale is a config
+        //                                  bug, not a silent relative model.
         out_depth.map_width            = model_w;
         out_depth.map_height           = model_h;
-        out_depth.raw_inverse_depth_min = static_cast<float>(mn);
-        out_depth.raw_inverse_depth_max = static_cast<float>(mx);
 
-        if (cfg_.metric_scale_meters > 0.0) {
-            // depth_m = scale / max(raw_inverse, eps)
-            cv::Mat denom;
-            cv::max(raw_inverse, cfg_.metric_epsilon, denom);
-            cv::Mat metric = cv::Mat::zeros(model_h, model_w, CV_32FC1);
-            cv::divide(static_cast<double>(cfg_.metric_scale_meters), denom, metric);
-            out_depth.metric_depth_image = metric;
-            out_depth.units              = DepthUnits::Meters;
-            out_depth.metric_scale_meters = cfg_.metric_scale_meters;
+        if (cfg_.output_is_disparity) {
+            // Compute pre-normalisation min/max across the MODEL-resolution map.
+            double mn = 0.0, mx = 0.0;
+            cv::minMaxLoc(depth_at_model, &mn, &mx);
+            if (!std::isfinite(mn) || !std::isfinite(mx)) {
+                throw std::runtime_error(
+                    "Depth output contains non-finite values (NaN/Inf)");
+            }
+
+            // Save raw stats BEFORE normalising so a metric conversion can
+            // reverse the scaling.
+            cv::Mat raw_inverse = depth_at_model.clone();
+
+            cv::Mat normalised;
+            if (mx > mn) {
+                normalised = (depth_at_model - mn) / (mx - mn);
+            } else {
+                normalised = cv::Mat::zeros(model_h, model_w, CV_32FC1);
+            }
+
+            out_depth.inverse_depth_image   = normalised;
+            out_depth.raw_inverse_depth_min = static_cast<float>(mn);
+            out_depth.raw_inverse_depth_max = static_cast<float>(mx);
+
+            if (cfg_.metric_scale_meters > 0.0) {
+                // depth_m = scale / max(raw_inverse, eps)
+                cv::Mat denom;
+                cv::max(raw_inverse, cfg_.metric_epsilon, denom);
+                cv::Mat metric = cv::Mat::zeros(model_h, model_w, CV_32FC1);
+                cv::divide(static_cast<double>(cfg_.metric_scale_meters), denom, metric);
+                out_depth.metric_depth_image  = metric;
+                out_depth.units               = DepthUnits::Meters;
+                out_depth.metric_scale_meters = cfg_.metric_scale_meters;
+            } else {
+                out_depth.units               = DepthUnits::Relative;
+                out_depth.metric_scale_meters = 0.0;
+            }
         } else {
-            out_depth.units              = DepthUnits::Relative;
-            out_depth.metric_scale_meters = 0.0;
+            // Direct-metric path: raw output is depth in metres
+            // (Depth-Anything-V2-Metric).
+            if (cfg_.metric_scale_meters <= 0.0) {
+                throw std::runtime_error(
+                    "output_is_disparity=false requires metric_scale_meters>0 "
+                    "(this model is configured as direct-metric but no unit "
+                    "scale was provided — set 1.0 for metres)");
+            }
+
+            // Convert raw → metres. Most direct-metric models already emit
+            // metres, in which case metric_scale_meters=1.0 is a no-op.
+            cv::Mat metric;
+            depth_at_model.convertTo(metric, CV_32FC1, cfg_.metric_scale_meters);
+
+            // Sanitise: clamp non-finite or non-positive depths to 0 so that
+            // downstream consumers can safely treat depth>0 as valid.
+            // (Direct-metric models occasionally produce 0 or tiny negative
+            // values at sky / saturated pixels.)
+            cv::Mat valid_mask;
+            cv::Mat finite_mask;
+            cv::compare(metric, 0.0f, valid_mask,  cv::CMP_GT);   // >0 → 255
+            cv::patchNaNs(metric, 0.0f);
+            metric.setTo(0.0f, ~valid_mask);
+
+            out_depth.metric_depth_image  = metric;
+            out_depth.units               = DepthUnits::Meters;
+            out_depth.metric_scale_meters = cfg_.metric_scale_meters;
+
+            // Synthesize an inverse-depth visualisation map so existing UI /
+            // grounder code paths keep working unchanged: inv = 1/max(depth,eps),
+            // then min-max normalise to [0,1] for display.
+            cv::Mat denom;
+            cv::max(metric, cfg_.metric_epsilon, denom);
+            cv::Mat inv_raw = cv::Mat::zeros(model_h, model_w, CV_32FC1);
+            cv::divide(1.0, denom, inv_raw);
+
+            double inv_mn = 0.0, inv_mx = 0.0;
+            cv::minMaxLoc(inv_raw, &inv_mn, &inv_mx);
+            if (!std::isfinite(inv_mn) || !std::isfinite(inv_mx)) {
+                throw std::runtime_error(
+                    "Direct-metric depth produced non-finite inverse-depth "
+                    "(NaN/Inf) after sanitisation");
+            }
+            cv::Mat normalised;
+            if (inv_mx > inv_mn) {
+                normalised = (inv_raw - inv_mn) / (inv_mx - inv_mn);
+            } else {
+                normalised = cv::Mat::zeros(model_h, model_w, CV_32FC1);
+            }
+            out_depth.inverse_depth_image   = normalised;
+            out_depth.raw_inverse_depth_min = static_cast<float>(inv_mn);
+            out_depth.raw_inverse_depth_max = static_cast<float>(inv_mx);
         }
 
         ++inference_count_;

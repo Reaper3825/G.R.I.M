@@ -284,6 +284,45 @@
                 }
             },
             {
+                "id": "depth_anything_v2_metric_indoor_small_518",
+                "name": "Depth-Anything-V2-Metric Indoor Small (518)",
+                "version": "2.0",
+                "subject": "vision",
+                "description": "Depth-Anything-V2-Metric Small (Indoor / Hypersim fine-tune, ViT-S DINOv2 backbone). Outputs DEPTH IN METRES directly (not disparity), max ~20m, optimised for indoor / room-scale scenes. 518x518 input (must be a multiple of 14 — DINOv2 ViT requirement), ImageNet normalisation, RGB. Replaces MiDaS as the active depth model in PhysicalSpatialGroundingLoop because the vision sub-model loop registers in order and the last entry wins for the monocular_depth_estimator slot. With DepthUnits::Meters populated, PhysicalLocalizationLoop's depth-fusion path will promote pose_scale_state to ScaledByDepthMap and the occupancy grid mapper will start writing metric free-space.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/depth_anything_v2_metric_indoor_small.onnx",
+                "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
+                "subject_tags": [
+                    "vision",
+                    "depth",
+                    "monocular_depth",
+                    "metric_depth",
+                    "spatial_grounding",
+                    "stage3",
+                    "stage5"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 380,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "monocular_depth_estimator",
+                    "input_width": 518,
+                    "input_height": 518,
+                    "depth_swap_rb": true,
+                    "depth_input_scale": 0.00392156862745098,
+                    "depth_input_mean_r": 123.675,
+                    "depth_input_mean_g": 116.28,
+                    "depth_input_mean_b": 103.53,
+                    "depth_input_std_r": 58.395,
+                    "depth_input_std_g": 57.12,
+                    "depth_input_std_b": 57.375,
+                    "depth_output_is_disparity": false,
+                    "depth_metric_scale_meters": 1.0,
+                    "depth_metric_epsilon": 0.001
+                }
+            },
+            {
                 "id": "vision-instance-segmenter",
                 "name": "SAM 2 Hiera Tiny (Prompted Instance Segmentation)",
                 "version": "2024jul",

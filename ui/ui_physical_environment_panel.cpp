@@ -109,8 +109,14 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]() { setActiveTab(Tab::Perception); });
     tab_spatial_btn_ = std::make_shared<UIButton>(" Spatial ",
         [this]() { setActiveTab(Tab::Spatial); });
+    tab_localization_btn_ = std::make_shared<UIButton>(" Localization ",
+        [this]() { setActiveTab(Tab::Localization); });
     tab_world_btn_ = std::make_shared<UIButton>(" World ",
         [this]() { setActiveTab(Tab::World); });
+
+    // ── Localization tab controls ──
+    loc_reset_btn_ = std::make_shared<UIButton>(" Reset Pose ",
+        [this]() { HandleResetLocalizationClicked(); });
 
     // ── Perception tab toggle buttons (labels refreshed at end of ctor) ──
     perc_btn_obj_  = std::make_shared<UIButton>(" Detector: on ",
@@ -636,19 +642,25 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         tab_spatial_btn_->setPosition(position.x + kTabBarPad + 388.0f, tab_y);
         tab_spatial_btn_->update(input, dt);
     }
+    if (tab_localization_btn_) {
+        tab_localization_btn_->setSize(130.0f, kTabBarHeight - 4.0f);
+        tab_localization_btn_->setPosition(position.x + kTabBarPad + 504.0f, tab_y);
+        tab_localization_btn_->update(input, dt);
+    }
     if (tab_world_btn_) {
         tab_world_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
-        tab_world_btn_->setPosition(position.x + kTabBarPad + 504.0f, tab_y);
+        tab_world_btn_->setPosition(position.x + kTabBarPad + 640.0f, tab_y);
         tab_world_btn_->update(input, dt);
     }
 
     // ── Tab content ──
     switch (active_tab_) {
-        case Tab::Camera:      UpdateCameraTab(input, dt);      break;
-        case Tab::Calibration: UpdateCalibrationTab(input, dt); break;
-        case Tab::Perception:  UpdatePerceptionTab(input, dt);  break;
-        case Tab::Spatial:     UpdateSpatialTab(input, dt);     break;
-        case Tab::World:       UpdateWorldTab(input, dt);       break;
+        case Tab::Camera:       UpdateCameraTab(input, dt);       break;
+        case Tab::Calibration:  UpdateCalibrationTab(input, dt);  break;
+        case Tab::Perception:   UpdatePerceptionTab(input, dt);   break;
+        case Tab::Spatial:      UpdateSpatialTab(input, dt);      break;
+        case Tab::Localization: UpdateLocalizationTab(input, dt); break;
+        case Tab::World:        UpdateWorldTab(input, dt);        break;
     }
 }
 
@@ -859,11 +871,12 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     if (!UIPanel::drawOverlay(renderer)) return false;
 
     // ── Tab buttons ──
-    if (tab_camera_btn_)      tab_camera_btn_->drawOverlay(renderer, position);
-    if (tab_calibration_btn_) tab_calibration_btn_->drawOverlay(renderer, position);
-    if (tab_perception_btn_)  tab_perception_btn_->drawOverlay(renderer, position);
-    if (tab_spatial_btn_)     tab_spatial_btn_->drawOverlay(renderer, position);
-    if (tab_world_btn_)       tab_world_btn_->drawOverlay(renderer, position);
+    if (tab_camera_btn_)       tab_camera_btn_->drawOverlay(renderer, position);
+    if (tab_calibration_btn_)  tab_calibration_btn_->drawOverlay(renderer, position);
+    if (tab_perception_btn_)   tab_perception_btn_->drawOverlay(renderer, position);
+    if (tab_spatial_btn_)      tab_spatial_btn_->drawOverlay(renderer, position);
+    if (tab_localization_btn_) tab_localization_btn_->drawOverlay(renderer, position);
+    if (tab_world_btn_)        tab_world_btn_->drawOverlay(renderer, position);
 
     // Active-tab underline indicator (matches DataHub/Training pattern).
     {
@@ -878,8 +891,10 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
                 ix = position.x + kTabBarPad + 252.0f; iw = 130.0f; break;
             case Tab::Spatial:
                 ix = position.x + kTabBarPad + 388.0f; iw = 110.0f; break;
+            case Tab::Localization:
+                ix = position.x + kTabBarPad + 504.0f; iw = 130.0f; break;
             case Tab::World:
-                ix = position.x + kTabBarPad + 504.0f; iw = 110.0f; break;
+                ix = position.x + kTabBarPad + 640.0f; iw = 110.0f; break;
         }
         renderer.drawRect({ix, y}, {iw, 2.0f}, UITheme::Colors::Primary);
     }
@@ -891,11 +906,12 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
                       UITheme::Colors::DividerLine);
 
     switch (active_tab_) {
-        case Tab::Camera:      DrawCameraTab(renderer);      break;
-        case Tab::Calibration: DrawCalibrationTab(renderer); break;
-        case Tab::Perception:  DrawPerceptionTab(renderer);  break;
-        case Tab::Spatial:     DrawSpatialTab(renderer);     break;
-        case Tab::World:       DrawWorldTab(renderer);       break;
+        case Tab::Camera:       DrawCameraTab(renderer);       break;
+        case Tab::Calibration:  DrawCalibrationTab(renderer);  break;
+        case Tab::Perception:   DrawPerceptionTab(renderer);   break;
+        case Tab::Spatial:      DrawSpatialTab(renderer);      break;
+        case Tab::Localization: DrawLocalizationTab(renderer); break;
+        case Tab::World:        DrawWorldTab(renderer);        break;
     }
 
     renderer.popClipRect();
@@ -2707,4 +2723,237 @@ void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
                              sidebar_w - 16, sidebar_h - 16,
                              world_snapshot_view_.snapshot,
                              have_any_world_results_);
+}
+
+// ============================================================================
+//  Localization tab (Stage-5)
+// ============================================================================
+
+void UIPhysicalEnvironmentPanel::HandleResetLocalizationClicked() {
+    try {
+        PE::RequestResetPhysicalLocalization();
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+                  std::string("HandleResetLocalizationClicked: threw: ") + e.what());
+    }
+}
+
+void UIPhysicalEnvironmentPanel::UpdateLocalizationTab(const InputState& input, float dt) {
+    // Pull latest published snapshot. The localization loop publishes once
+    // per processed frame; missing publishes simply leave the cached view
+    // in place so the UI does not flicker.
+    try {
+        const bool advanced =
+            PE::PhysicalLocalizationBus::Instance()
+                .PullLatestPhysicalLocalizationSnapshotView(
+                    loc_snapshot_view_, loc_last_seen_publish_sequence_);
+        if (advanced) have_any_loc_snapshot_ = true;
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+                  std::string("UpdateLocalizationTab: snapshot pull threw: ") + e.what());
+    }
+
+    const float pad = 12.0f;
+    const float by  = position.y + titleBarHeight + kTabBarHeight + 8.0f;
+    if (loc_reset_btn_) {
+        loc_reset_btn_->setSize(120.0f, 26.0f);
+        loc_reset_btn_->setPosition(position.x + size.x - pad - 120.0f, by);
+        loc_reset_btn_->update(input, dt);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawLocalizationTrajectoryMinimap(
+    OverlayRenderer& renderer,
+    float x, float y, float w, float h,
+    const PE::PhysicalLocalizationSnapshot& snap)
+{
+    // Border + background.
+    renderer.drawRect({x - 1, y - 1}, {w + 2, h + 2}, UITheme::Colors::DividerLine);
+    renderer.drawRect({x, y}, {w, h}, UITheme::Colors::PanelBg);
+
+    if (snap.trajectory_world_meters.empty()) {
+        renderer.drawText({x + 8, y + 8},
+                          "Trajectory: empty (waiting for Tracking state)",
+                          UITheme::Colors::TextSecondary);
+        return;
+    }
+
+    // Compute X/Z (top-down) bounds, padded so the camera dot does not sit on
+    // the border. We project onto X (world east) and Z (world forward) which
+    // is the canonical Nav2 / SLAM-Toolbox top-down convention.
+    double min_x =  1e30, max_x = -1e30;
+    double min_z =  1e30, max_z = -1e30;
+    for (const auto& p : snap.trajectory_world_meters) {
+        min_x = std::min(min_x, p.x); max_x = std::max(max_x, p.x);
+        min_z = std::min(min_z, p.z); max_z = std::max(max_z, p.z);
+    }
+    if (max_x - min_x < 0.5) { const double m = 0.5 - (max_x - min_x); min_x -= m * 0.5; max_x += m * 0.5; }
+    if (max_z - min_z < 0.5) { const double m = 0.5 - (max_z - min_z); min_z -= m * 0.5; max_z += m * 0.5; }
+    const double range_x = max_x - min_x;
+    const double range_z = max_z - min_z;
+
+    // Square aspect: pick the larger range and apply it to both axes so
+    // 1 metre on screen = 1 metre on screen on both axes (Rule 20: never
+    // silently distort spatial data).
+    const double range = std::max(range_x, range_z);
+    const double cx = 0.5 * (min_x + max_x);
+    const double cz = 0.5 * (min_z + max_z);
+    const double half = range * 0.5 * 1.1;   // 10 % padding
+
+    auto project = [&](double wx, double wz) -> std::pair<float,float> {
+        const double u = (wx - (cx - half)) / (2.0 * half);   // 0..1, world-X right
+        const double v = ((cz + half) - wz) / (2.0 * half);   // 0..1, world-Z up
+        return { static_cast<float>(x + u * w),
+                 static_cast<float>(y + v * h) };
+    };
+
+    // Polyline of the trajectory.
+    auto prev = project(snap.trajectory_world_meters.front().x,
+                        snap.trajectory_world_meters.front().z);
+    for (size_t i = 1; i < snap.trajectory_world_meters.size(); ++i) {
+        const auto cur = project(snap.trajectory_world_meters[i].x,
+                                 snap.trajectory_world_meters[i].z);
+        renderer.drawLine({prev.first, prev.second},
+                          {cur.first,  cur.second},
+                          UITheme::Colors::Primary);
+        prev = cur;
+    }
+
+    // Current camera position dot.
+    const auto here = project(snap.pose_world_camera.position_meters[0],
+                              snap.pose_world_camera.position_meters[2]);
+    renderer.drawRect({here.first - 3.0f, here.second - 3.0f},
+                      {6.0f, 6.0f},
+                      UITheme::Colors::TextPrimary);
+
+    // Scale-bar in metres so the user can read the minimap.
+    {
+        std::ostringstream ss;
+        ss << "scale: full window \u2248 " << std::fixed << std::setprecision(2)
+           << (2.0 * half) << " m  (top-down X / Z)";
+        renderer.drawText({x + 6, y + h - 18.0f}, ss.str(),
+                          UITheme::Colors::TextSecondary);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawLocalizationTab(OverlayRenderer& renderer) {
+    if (loc_reset_btn_) loc_reset_btn_->drawOverlay(renderer, position);
+
+    const float pad        = 12.0f;
+    const float content_y  = position.y + titleBarHeight + kTabBarHeight + 44.0f;
+    const float content_x  = position.x + pad;
+    const float content_w  = size.x - 2.0f * pad;
+    const float content_h  = position.y + size.y - content_y - pad;
+
+    if (!have_any_loc_snapshot_) {
+        renderer.drawText({content_x, content_y},
+                          "PhysicalLocalizationBus: no snapshot published yet.",
+                          UITheme::Colors::TextSecondary);
+        renderer.drawText({content_x, content_y + 18.0f},
+                          "(Waiting for Stage-5 lazy init. If this persists, calibrate the camera.)",
+                          UITheme::Colors::TextSecondary);
+        return;
+    }
+
+    const auto& snap = loc_snapshot_view_.snapshot;
+
+    // Left column: text readouts. Right column: trajectory minimap.
+    const float minimap_w = std::min(content_w * 0.45f, 360.0f);
+    const float minimap_h = std::min(content_h - 8.0f, minimap_w);
+    const float minimap_x = content_x + content_w - minimap_w;
+    const float minimap_y = content_y;
+
+    const float text_x = content_x;
+    float       row_y  = content_y;
+    const float row_h  = 18.0f;
+
+    auto draw_row = [&](const std::string& s, uint32_t col = UITheme::Colors::TextPrimary) {
+        renderer.drawText({text_x, row_y}, s, col);
+        row_y += row_h;
+    };
+
+    {
+        std::ostringstream ss;
+        ss << "Tracking state : "
+           << PE::DescribePhysicalLocalizationTrackingState(snap.tracking_state)
+           << "   |   scale: "
+           << PE::DescribePhysicalLocalizationPoseScaleState(snap.pose_scale_state);
+        draw_row(ss.str());
+    }
+    if (!snap.tracking_reason.empty()) {
+        draw_row("Reason         : " + snap.tracking_reason,
+                 UITheme::Colors::TextSecondary);
+    }
+    {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(3)
+           << "Position (m)   : x=" << snap.pose_world_camera.position_meters[0]
+           << "  y="                << snap.pose_world_camera.position_meters[1]
+           << "  z="                << snap.pose_world_camera.position_meters[2];
+        draw_row(ss.str());
+    }
+    {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(3)
+           << "YPR (rad)      : yaw="   << snap.pose_world_camera.yaw_pitch_roll_radians[0]
+           << "  pitch="                << snap.pose_world_camera.yaw_pitch_roll_radians[1]
+           << "  roll="                 << snap.pose_world_camera.yaw_pitch_roll_radians[2];
+        draw_row(ss.str());
+    }
+    {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(3)
+           << "Quaternion wxyz: w=" << snap.pose_world_camera.quaternion_world_camera[0]
+           << "  x="                << snap.pose_world_camera.quaternion_world_camera[1]
+           << "  y="                << snap.pose_world_camera.quaternion_world_camera[2]
+           << "  z="                << snap.pose_world_camera.quaternion_world_camera[3];
+        draw_row(ss.str());
+    }
+    {
+        const auto& v = snap.velocity_world_camera;
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(3)
+           << "Velocity       : lin=(" << v.linear_world_per_sec[0]
+           << ", "                     << v.linear_world_per_sec[1]
+           << ", "                     << v.linear_world_per_sec[2]
+           << ")  ang=("               << v.angular_radians_per_sec[0]
+           << ", "                     << v.angular_radians_per_sec[1]
+           << ", "                     << v.angular_radians_per_sec[2]
+           << ")  dt="                 << v.sample_interval_seconds << "s";
+        draw_row(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    row_y += 4.0f;
+    {
+        std::ostringstream ss;
+        ss << "VO metrics     : kp=" << snap.keypoints_detected_current_frame
+           << "  matches="           << snap.matches_to_prior_frame
+           << "  inliers="           << snap.essential_inliers
+           << std::fixed << std::setprecision(2)
+           << "  median_parallax="   << snap.median_parallax_pixels << "px"
+           << "  reproj_err="        << snap.mean_reprojection_error_pixels << "px";
+        draw_row(ss.str());
+    }
+    {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2)
+           << "Timing         : last_estimation=" << snap.last_estimation_ms << "ms"
+           << "  estimation_count="               << snap.estimation_count
+           << "  source_frame_counter="           << snap.source_frame_counter;
+        draw_row(ss.str(), UITheme::Colors::TextSecondary);
+    }
+    {
+        const auto& g = snap.occupancy_grid;
+        std::ostringstream ss;
+        ss << "Occupancy grid : " << g.cols << "x" << g.rows
+           << " @ " << std::fixed << std::setprecision(3) << g.resolution_meters << "m"
+           << "  observed_cells=" << g.total_cells_observed
+           << "  updated_this_frame=" << g.cells_updated_this_frame;
+        draw_row(ss.str(), UITheme::Colors::TextSecondary);
+    }
+
+    // Right side: top-down trajectory minimap.
+    DrawLocalizationTrajectoryMinimap(renderer,
+                                      minimap_x, minimap_y,
+                                      minimap_w, minimap_h,
+                                      snap);
 }

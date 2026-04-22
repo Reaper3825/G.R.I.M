@@ -12,6 +12,8 @@
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingBus.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
+#include "perception/physical/PhysicalLocalizationBus.hpp"
+#include "perception/physical/PhysicalLocalizationLoop.hpp"
 #include "perception/physical/PhysicalWorldStateBus.hpp"
 #include "perception/physical/PhysicalWorldStateLoop.hpp"
 
@@ -40,11 +42,12 @@
 class UIPhysicalEnvironmentPanel : public UIPanel {
 public:
     enum class Tab : uint8_t {
-        Camera      = 0,
-        Calibration = 1,
-        Perception  = 2,
-        Spatial     = 3,
-        World       = 4
+        Camera       = 0,
+        Calibration  = 1,
+        Perception   = 2,
+        Spatial      = 3,
+        Localization = 4,
+        World        = 5
     };
 
     UIPhysicalEnvironmentPanel();
@@ -176,6 +179,7 @@ private:
     std::shared_ptr<UIButton>   tab_calibration_btn_;
     std::shared_ptr<UIButton>   tab_perception_btn_;
     std::shared_ptr<UIButton>   tab_spatial_btn_;
+    std::shared_ptr<UIButton>   tab_localization_btn_;
     std::shared_ptr<UIButton>   tab_world_btn_;
     Tab                         active_tab_ = Tab::Camera;
 
@@ -344,4 +348,23 @@ private:
     uint64_t world_last_seen_counter_ = 0;
     bool     have_any_world_results_  = false;
     PreviewBlitCache world_blit_cache_;
+
+    // ── Localization tab (Stage-5) ──
+    // Pulls the latest PhysicalLocalizationSnapshot (camera pose,
+    // velocity, trajectory, occupancy grid) from PhysicalLocalizationBus
+    // and renders text readouts plus a top-down trajectory minimap.
+    void HandleResetLocalizationClicked();
+    void UpdateLocalizationTab(const InputState& input, float dt);
+    void DrawLocalizationTab(OverlayRenderer& renderer);
+    void DrawLocalizationTrajectoryMinimap(
+        OverlayRenderer& renderer,
+        float x, float y, float w, float h,
+        const GRIM::Perception::Physical::PhysicalLocalizationSnapshot& snap);
+
+    std::shared_ptr<UIButton> loc_reset_btn_;
+
+    GRIM::Perception::Physical::PhysicalLocalizationBus::SnapshotView
+        loc_snapshot_view_;
+    uint64_t loc_last_seen_publish_sequence_ = 0;
+    bool     have_any_loc_snapshot_          = false;
 };

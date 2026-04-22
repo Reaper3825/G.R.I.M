@@ -38,6 +38,7 @@
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
+#include "perception/physical/PhysicalLocalizationLoop.hpp"
 #include "perception/physical/PhysicalWorldStateLoop.hpp"
 #include "ui/ui_physical_environment_panel.hpp"
 #include "MMO/UI/UISurfaceRegistry.hpp"
@@ -598,6 +599,13 @@ int main(int argc, char* argv[])
         // monocular depth estimator and the spatial grounder, publishes the
         // per-track grounded results to PhysicalSpatialGroundingBus.
         GRIM::Perception::Physical::TickPhysicalSpatialGrounding();
+        // Stage 5: pulls camera intrinsics + the latest frame, runs monocular
+        // visual odometry (ORB + 5-point essential matrix), updates a Nav2-style
+        // 2D occupancy grid along the trajectory, and publishes a
+        // PhysicalLocalizationSnapshot (T_world_camera, velocity, trajectory,
+        // grid) to PhysicalLocalizationBus. Stage 4 below can later stamp the
+        // world frame onto every entity it publishes.
+        GRIM::Perception::Physical::TickPhysicalLocalization();
         // Stage 4: fuses the perception-primitive bus + spatial-grounding bus into
         // a single identity-keyed PhysicalWorldStateSnapshot (object_id, class,
         // position, velocity, visibility, depth, text_on_object, relations) and
@@ -690,6 +698,7 @@ int main(int argc, char* argv[])
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
     GRIM::Perception::Physical::ShutdownPhysicalWorldState();
+    GRIM::Perception::Physical::ShutdownPhysicalLocalization();
     GRIM::Perception::Physical::ShutdownPhysicalSpatialGrounding();
     GRIM::Perception::Physical::ShutdownPhysicalPerceptionPrimitives();
     GRIM::Perception::Physical::ShutdownPhysicalEnvironment();
