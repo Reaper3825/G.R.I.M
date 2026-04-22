@@ -131,7 +131,7 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
 # Perception/Vision DLLs (OpenCV, Tesseract, ONNX) - Optional
 # =========================================================
 if(GRIM_USE_PERCEPTION)
-    find_package(OpenCV QUIET COMPONENTS core imgproc dnn photo)
+    find_package(OpenCV QUIET COMPONENTS core imgproc imgcodecs videoio video dnn photo calib3d)
     find_package(Tesseract CONFIG QUIET)
     find_package(onnxruntime CONFIG QUIET)
     

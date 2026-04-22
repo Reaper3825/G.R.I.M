@@ -102,7 +102,7 @@ endif()
 if(GRIM_USE_PERCEPTION)
     message(STATUS "[GRIM] Perception models enabled - finding OpenCV and Tesseract")
     
-    find_package(OpenCV QUIET COMPONENTS core imgproc dnn imgcodecs photo)
+    find_package(OpenCV QUIET COMPONENTS core imgproc dnn imgcodecs videoio video photo calib3d)
     find_package(Tesseract CONFIG QUIET)
     find_package(Leptonica CONFIG QUIET)
     

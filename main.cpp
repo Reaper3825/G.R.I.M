@@ -35,6 +35,8 @@
 #include "timer.hpp"
 #include "perception/perception.hpp"
 #include "perception/perception_context.hpp" 
+#include "perception/physical/PhysicalEnvironmentLoop.hpp"
+#include "ui/ui_physical_environment_panel.hpp"
 #include "MMO/UI/UISurfaceRegistry.hpp"
 #ifdef _WIN32
 #include <crtdbg.h>
@@ -478,6 +480,12 @@ int main(int argc, char* argv[])
     auto trainingPanel = std::make_shared<UITrainingPanel>();
     auto dataHubPanel = std::make_shared<UIDataHubPanel>();
     auto storagePanel = std::make_shared<UIStoragePanel>();
+    // Stage 1: hand the device server to the physical environment subsystem so the
+    // camera directory can include hub-registered devices that advertise "camera".
+    // MUST be registered BEFORE constructing the panel so its initial directory
+    // refresh sees hub candidates.
+    GRIM::Perception::Physical::RegisterPhysicalEnvironmentDeviceServer(g_deviceCommServer.get());
+    auto physicalEnvPanel = std::make_shared<UIPhysicalEnvironmentPanel>();
     if (g_deviceCommServer) {
         storagePanel->setServer(g_deviceCommServer.get());
     }
@@ -494,12 +502,14 @@ int main(int argc, char* argv[])
     trainingPanel->setVisible(false);
     dataHubPanel->setVisible(false);
     storagePanel->setVisible(false);
+    physicalEnvPanel->setVisible(false);
 
     UIRoot::get().addPanel(consolePanel);
     UIRoot::get().addPanel(settingsPanel);
     UIRoot::get().addPanel(trainingPanel);
     UIRoot::get().addPanel(dataHubPanel);
     UIRoot::get().addPanel(storagePanel);
+    UIRoot::get().addPanel(physicalEnvPanel);
 
 #if defined(__APPLE__)
     // macOS: inject typed characters into text input (Windows uses WM_CHAR in OverlayWndProc)
@@ -571,6 +581,10 @@ int main(int argc, char* argv[])
         // Update Mouse class state from InputState for better reliability
         Mouse::updateFromInput(input);
         Key::updateFromInput(input);
+
+        // Single integration point for the physical-environment perception subsystem.
+        // Lazy-inits on first call; pumps the active IP camera stream into the FrameBus.
+        GRIM::Perception::Physical::TickPhysicalEnvironment();
 
         UIRoot::get().update(input, 0.016f);
 
@@ -657,6 +671,7 @@ int main(int argc, char* argv[])
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
+    GRIM::Perception::Physical::ShutdownPhysicalEnvironment();
     GRIM::Perception::shutdown();  
     Mouse::shutdown();
     

@@ -724,7 +724,13 @@ static void ensureScreenCaptureStarted(NSWindow* overlayWindow) {
         cfg.pixelFormat = kCVPixelFormatType_32BGRA;
         cfg.showsCursor = NO;
         cfg.capturesAudio = NO;
-        cfg.minimumFrameInterval = CMTimeMake(1, 30); // ~30 FPS
+        // 10 fps is plenty for "see the desktop through our transparent
+        // overlay" — the overlay UI itself renders via bgfx at vsync, and
+        // the captured desktop is just background context. Higher rates
+        // burn ~2 GB/s of memory bandwidth at native 5K and add real
+        // contention for mediaserverd / GPU compositor with any other
+        // AVFoundation pipeline (e.g. PhysicalCameraStream's webcam).
+        cfg.minimumFrameInterval = CMTimeMake(1, 10);
         cfg.queueDepth = 2;
 
         // Capture full display (pixel dimensions).

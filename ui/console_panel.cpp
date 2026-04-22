@@ -51,6 +51,15 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "Storage panel not found");
           }
+      })),
+      cameraButton(std::make_shared<UIButton>(" Camera ", []() {
+          auto physicalEnvPanel = UIRoot::get().getPanel("Physical Environment");
+          if (physicalEnvPanel) {
+              physicalEnvPanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened Physical Environment panel via button");
+          } else {
+              LOG_DEBUG("ConsolePanel", "Physical Environment panel not found");
+          }
       }))
 {
     position = { 100, 300 };
@@ -89,11 +98,13 @@ ConsolePanel::ConsolePanel()
     if (DCButton)       DCButton->setSize(btnW, btnH);
     if (trainingButton) trainingButton->setSize(btnW, btnH);
     if (storageButton)  storageButton->setSize(btnW, btnH);
+    if (cameraButton)   cameraButton->setSize(btnW, btnH);
     
     toolbarBox = std::make_shared<UIHBox>(LayoutDirection::Horizontal, 8.0f);
     toolbarBox->addWidget(DCButton);
     toolbarBox->addWidget(trainingButton);
     toolbarBox->addWidget(storageButton);
+    toolbarBox->addWidget(cameraButton);
     toolbarBox->addWidget(settingsButton);
     toolbarBox->layout();
     
