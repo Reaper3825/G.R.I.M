@@ -297,7 +297,69 @@ struct PhysicalEntityTrackerOutput {
     uint64_t                    total_tracks_culled    = 0;
 };
 
-// Aggregate snapshot — one frame's worth of results from all five operators.
+// 9. Class policy — one ranked, deduplicated row per CANONICAL class. The
+//    policy mutates the per-operator results above so the labels match the
+//    canonical names; this struct is the "what does the model actually see"
+//    summary that downstream consumers (model context matrix builder, UI)
+//    can iterate over without re-walking every operator.
+//
+//    Numerical-precision contract:
+//      * priority_rank is taken verbatim from the matched
+//        PhysicalClassPriorityRule (or PhysicalClassPolicyConfig::
+//        default_priority_rank when no rule matched). Lower = higher
+//        priority. Never reinterpreted.
+//      * max_confidence is the maximum over EVERY signal that contributed
+//        to this class this frame (detection.confidence,
+//        track.smoothed_confidence, instance_mask.mask_confidence,
+//        classification.score). Always in [0, 1].
+//      * Counts are exact post-merge / post-drop counts — they MUST equal
+//        what a consumer would get by filtering the per-operator outputs
+//        on canonical_label.
+struct PhysicalClassPolicyClassSummary {
+    std::string  canonical_label;
+    int32_t      priority_rank        = 0;
+    uint32_t     detection_count      = 0;
+    uint32_t     track_count          = 0;
+    uint32_t     instance_mask_count  = 0;
+    uint32_t     classification_count = 0;
+    float        max_confidence       = 0.0f;
+};
+
+// PhysicalClassPolicy has no ONNX model — its "model" is its rule set.
+// State semantics mirror PhysicalEntityTracker:
+//   NoModelConfigured — never configured AND never default-initialised
+//                       (only between Reset and the next Configure).
+//   ModelLoaded       — rule set is in effect; ready to apply.
+//   ModelLoadFailed   — last Configure rejected its config (e.g. an alias
+//                       maps to two different canonicals).
+//   InferenceFailed   — last ApplyPhysicalClassPolicyToPerceptionResults
+//                       threw.
+struct PhysicalClassPolicyOutput {
+    PhysicalImageOperatorState  state               = PhysicalImageOperatorState::NoModelConfigured;
+    std::string                 last_error_reason;
+    uint64_t                    inference_count     = 0;   // total successful Apply* calls
+    uint64_t                    last_frame_counter  = 0;
+    double                      last_apply_ms       = 0.0;
+
+    // Mutation counters — how many items were touched THIS frame. A
+    // pass-through policy (empty rule set) leaves all eight at zero.
+    uint32_t                    detections_relabeled       = 0;
+    uint32_t                    tracks_relabeled           = 0;
+    uint32_t                    instance_masks_relabeled   = 0;
+    uint32_t                    classifications_relabeled  = 0;
+    uint32_t                    detections_dropped         = 0;
+    uint32_t                    tracks_dropped             = 0;
+    uint32_t                    instance_masks_dropped     = 0;
+    uint32_t                    classifications_dropped    = 0;
+
+    // Ranked summary, sorted ascending by priority_rank, ties broken by
+    // canonical_label lexicographic order so the UI is deterministic.
+    std::vector<PhysicalClassPolicyClassSummary> ranked_classes;
+};
+
+// Aggregate snapshot — one frame's worth of results from all operators
+// PLUS the class-policy summary that downstream model-context builders
+// will read first.
 // Carries the source frame counter so the UI can verify it is rendering a
 // coherent set (same input frame for every operator).
 struct PhysicalPerceptionPrimitiveResults {
@@ -315,6 +377,7 @@ struct PhysicalPerceptionPrimitiveResults {
     PhysicalSceneTextReaderOutput         scene_text_reader;
     PhysicalFacialExpressionDetectorOutput facial_expression_detector;
     PhysicalEntityTrackerOutput            entity_tracker;
+    PhysicalClassPolicyOutput              class_policy;
 };
 
 }}} // namespace GRIM::Perception::Physical

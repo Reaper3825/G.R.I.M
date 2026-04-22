@@ -135,6 +135,8 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]{ HandleTogglePerceptionEntityTracker(); });
     perc_btn_inst_seg_ = std::make_shared<UIButton>(" InstSeg: on ",
         [this]{ HandleTogglePerceptionInstanceSegmenter(); });
+    perc_btn_class_policy_ = std::make_shared<UIButton>(" Policy: on ",
+        [this]{ HandleTogglePerceptionClassPolicy(); });
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
 
     // ── Spatial tab toggle buttons (labels refreshed at end of ctor) ──
@@ -1419,6 +1421,12 @@ void UIPhysicalEnvironmentPanel::HandleTogglePerceptionInstanceSegmenter() {
     PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
 }
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionClassPolicy() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.class_policy = !f.class_policy;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
 
 void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsystem() {
     const auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
@@ -1430,6 +1438,7 @@ void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsyste
     if (perc_btn_face_) perc_btn_face_->setText(std::string(" Face: ")      + OnOffStr(f.facial_expression_detector) + " ");
     if (perc_btn_track_)perc_btn_track_->setText(std::string(" Tracks: ")    + OnOffStr(f.entity_tracker) + " ");
     if (perc_btn_inst_seg_)perc_btn_inst_seg_->setText(std::string(" InstSeg: ") + OnOffStr(f.instance_segmenter) + " ");
+    if (perc_btn_class_policy_)perc_btn_class_policy_->setText(std::string(" Policy: ") + OnOffStr(f.class_policy) + " ");
 }
 
 // ── Update ──────────────────────────────────────────────────────────────────
@@ -1467,6 +1476,7 @@ void UIPhysicalEnvironmentPanel::UpdatePerceptionTab(const InputState& input, fl
     place(perc_btn_face_, 5);
     place(perc_btn_track_,6);
     place(perc_btn_inst_seg_,7);
+    place(perc_btn_class_policy_,8);
 }
 
 // ── Draw: detection boxes ───────────────────────────────────────────────────
@@ -2001,6 +2011,47 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
             sep();
         }
     }
+    {
+        // Stage-2.5 class policy. This is the section that shows what the
+        // model context matrix builder will actually consume — one row per
+        // canonical class, sorted by priority_rank ascending. Mutation
+        // counters surface how the policy reshaped the per-operator output
+        // this frame so the operator is never invisible.
+        const auto& cp = r.class_policy;
+        std::ostringstream extra;
+        extra << "ranks=" << cp.ranked_classes.size()
+              << "  rl=" << (cp.detections_relabeled
+                             + cp.tracks_relabeled
+                             + cp.instance_masks_relabeled
+                             + cp.classifications_relabeled)
+              << "  drop=" << (cp.detections_dropped
+                               + cp.tracks_dropped
+                               + cp.instance_masks_dropped
+                               + cp.classifications_dropped);
+        opStatus("Policy", cp.state, cp.last_error_reason,
+                 cp.inference_count, cp.last_apply_ms, extra.str());
+        if (cp.state == PE::PhysicalImageOperatorState::ModelLoaded
+            && !cp.ranked_classes.empty()) {
+            const size_t shown = std::min<size_t>(8, cp.ranked_classes.size());
+            for (size_t i = 0; i < shown; ++i) {
+                const auto& row = cp.ranked_classes[i];
+                std::ostringstream rl;
+                rl << "    #" << row.priority_rank << "  " << row.canonical_label
+                   << "  d=" << row.detection_count
+                   << " t=" << row.track_count
+                   << " m=" << row.instance_mask_count
+                   << " c=" << row.classification_count
+                   << "  " << FormatDouble(row.max_confidence * 100.0, 0) << "%";
+                line(rl.str(), UITheme::Colors::TextPrimary);
+            }
+            if (cp.ranked_classes.size() > shown) {
+                line(std::string("    \u2026 ")
+                     + std::to_string(cp.ranked_classes.size() - shown)
+                     + " more", UITheme::Colors::TextSecondary);
+            }
+            sep();
+        }
+    }
 }
 
 // ── Draw: tab body ─────────────────────────────────────────────────────────
@@ -2015,6 +2066,7 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
     if (perc_btn_face_) perc_btn_face_->drawOverlay(renderer, position);
     if (perc_btn_track_)perc_btn_track_->drawOverlay(renderer, position);
     if (perc_btn_inst_seg_)perc_btn_inst_seg_->drawOverlay(renderer, position);
+    if (perc_btn_class_policy_)perc_btn_class_policy_->drawOverlay(renderer, position);
 
     const float pad         = 12.0f;
     const float toolbar_h   = 32.0f;

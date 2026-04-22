@@ -8,6 +8,7 @@
 #include "PhysicalSemanticSegmenter.hpp"
 #include "PhysicalFacialExpressionDetector.hpp"
 #include "PhysicalEntityTracker.hpp"
+#include "PhysicalClassPolicy.hpp"
 
 #include <string>
 
@@ -55,6 +56,10 @@ struct PhysicalPerceptionPrimitivesEnableFlags {
     // prompts. Same gating as the tracker: with no detections this frame the
     // operator skips the encoder pass entirely (cheap no-op).
     bool instance_segmenter = true;
+    // Class policy applies the merge map + priority cutoff to the per-
+    // operator results in place. Disabling it leaves the per-operator
+    // labels untouched and emits an empty ranked summary.
+    bool class_policy       = true;
 };
 
 // Mainloop entry point. Cheap; safe to call every frame. Lazy-inits.
@@ -88,5 +93,6 @@ void RequestConfigurePhysicalSceneTextReader(const PhysicalSceneTextReaderConfig
 void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpressionDetectorConfig& cfg);
 void RequestConfigurePhysicalEntityTracker(const PhysicalEntityTrackerConfig& cfg);
 void RequestConfigurePhysicalInstanceSegmenter(const PhysicalInstanceSegmenterConfig& cfg);
+void RequestConfigurePhysicalClassPolicy(const PhysicalClassPolicyConfig& cfg);
 
 }}} // namespace GRIM::Perception::Physical

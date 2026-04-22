@@ -214,6 +214,7 @@ private:
     void HandleTogglePerceptionFacialExpressionDetector();
     void HandleTogglePerceptionEntityTracker();
     void HandleTogglePerceptionInstanceSegmenter();
+    void HandleTogglePerceptionClassPolicy();
     void RefreshPerceptionEnableButtonLabelsFromSubsystem();
     void UpdatePerceptionTab(const InputState& input, float dt);
     void DrawPerceptionTab(OverlayRenderer& renderer);
@@ -264,6 +265,7 @@ private:
     std::shared_ptr<UIButton> perc_btn_face_;
     std::shared_ptr<UIButton> perc_btn_track_;
     std::shared_ptr<UIButton> perc_btn_inst_seg_;
+    std::shared_ptr<UIButton> perc_btn_class_policy_;
 
     // Frame blit cache for the Perception tab (model-image view).
     PreviewBlitCache perception_blit_cache_;

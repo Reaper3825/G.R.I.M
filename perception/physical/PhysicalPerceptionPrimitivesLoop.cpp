@@ -33,6 +33,7 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalSceneTextReader>         scene_text_reader;
     std::unique_ptr<PhysicalFacialExpressionDetector> facial_expression_detector;
     std::unique_ptr<PhysicalEntityTracker>           entity_tracker;
+    std::unique_ptr<PhysicalClassPolicy>             class_policy;
 
     // Pending configs deposited via Request* before lazy init. Applied at
     // the first Tick. After init these are emptied; subsequent Request*
@@ -45,6 +46,7 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalSceneTextReaderConfig>         pending_text_cfg;
     std::unique_ptr<PhysicalFacialExpressionDetectorConfig> pending_face_cfg;
     std::unique_ptr<PhysicalEntityTrackerConfig>            pending_track_cfg;
+    std::unique_ptr<PhysicalClassPolicyConfig>              pending_class_policy_cfg;
 
     std::string  last_error_reason;
     uint64_t     tick_count           = 0;
@@ -194,6 +196,7 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     s.scene_text_reader  = std::make_unique<PhysicalSceneTextReader>();
     s.facial_expression_detector = std::make_unique<PhysicalFacialExpressionDetector>();
     s.entity_tracker     = std::make_unique<PhysicalEntityTracker>();
+    s.class_policy       = std::make_unique<PhysicalClassPolicy>();
 
     // Apply any pending configs. Failures are loud but do not abort init —
     // the operator simply ends up in ModelLoadFailed state and the UI
@@ -244,6 +247,22 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
             s.entity_tracker->ConfigurePhysicalEntityTracker(PhysicalEntityTrackerConfig{});
         } catch (const std::exception& e) {
             s.last_error_reason = std::string("LazyInit: default PhysicalEntityTracker config failed: ") + e.what();
+            LOG_ERROR(PHYSICAL_PERC_PRIM_LOG_TAG, s.last_error_reason);
+        }
+    }
+
+    // ClassPolicy mirrors EntityTracker: no model file. Default-construct
+    // installs an empty rule set (pass-through) so it transitions to
+    // ModelLoaded and the loop's Apply* call is always safe.
+    if (s.pending_class_policy_cfg) {
+        apply(s.pending_class_policy_cfg,
+              [&](auto& c){ s.class_policy->ConfigurePhysicalClassPolicy(c); },
+              "PhysicalClassPolicy");
+    } else {
+        try {
+            s.class_policy->ConfigurePhysicalClassPolicy(PhysicalClassPolicyConfig{});
+        } catch (const std::exception& e) {
+            s.last_error_reason = std::string("LazyInit: default PhysicalClassPolicy config failed: ") + e.what();
             LOG_ERROR(PHYSICAL_PERC_PRIM_LOG_TAG, s.last_error_reason);
         }
     }
@@ -521,6 +540,18 @@ void TickPhysicalPerceptionPrimitives() {
         }
     }
 
+    // Class policy runs LAST. It mutates results.object_detector.detections,
+    // results.entity_tracker.tracks, results.instance_segmenter
+    // .segmentation.instances, and results.image_classifier.top_k IN PLACE
+    // (relabel by canonical, drop by confidence floor / priority cutoff)
+    // and writes the ranked summary into results.class_policy. The single
+    // Apply* call is the integration point Stage-2 exposes to whatever
+    // builds the model context matrix downstream.
+    if (s.enable_flags.class_policy && s.class_policy) {
+        s.class_policy->ApplyPhysicalClassPolicyToPerceptionResults(
+            results, results.class_policy);
+    }
+
     try {
         PhysicalPerceptionPrimitiveBus::Instance().PublishPhysicalPerceptionResultsToBus(results);
         ++s.processed_count;
@@ -543,6 +574,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     if (s.scene_text_reader)  s.scene_text_reader->ResetPhysicalSceneTextReader();
     if (s.facial_expression_detector) s.facial_expression_detector->ResetPhysicalFacialExpressionDetector();
     if (s.entity_tracker)     s.entity_tracker->ResetPhysicalEntityTracker();
+    if (s.class_policy)       s.class_policy->ResetPhysicalClassPolicy();
     s.object_detector.reset();
     s.semantic_segmenter.reset();
     s.instance_segmenter.reset();
@@ -551,6 +583,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.scene_text_reader.reset();
     s.facial_expression_detector.reset();
     s.entity_tracker.reset();
+    s.class_policy.reset();
     s.pending_obj_cfg.reset();
     s.pending_seg_cfg.reset();
     s.pending_inst_seg_cfg.reset();
@@ -559,6 +592,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.pending_text_cfg.reset();
     s.pending_face_cfg.reset();
     s.pending_track_cfg.reset();
+    s.pending_class_policy_cfg.reset();
     PhysicalPerceptionPrimitiveBus::Instance().ResetPhysicalPerceptionPrimitiveBus();
     s.initialized          = false;
     s.tick_count           = 0;
@@ -627,7 +661,8 @@ void RequestSetPhysicalPerceptionPrimitivesEnableFlags(
               + " text="+ (flags.scene_text_reader  ? "1" : "0")
               + " face="+ (flags.facial_expression_detector ? "1" : "0")
               + " track="+ (flags.entity_tracker ? "1" : "0")
-              + " inst_seg="+ (flags.instance_segmenter ? "1" : "0"));
+              + " inst_seg="+ (flags.instance_segmenter ? "1" : "0")
+              + " class_policy="+ (flags.class_policy ? "1" : "0"));
 }
 
 // Each Request* either applies immediately (init done) or stages the cfg
@@ -748,6 +783,21 @@ void RequestConfigurePhysicalInstanceSegmenter(const PhysicalInstanceSegmenterCo
             "instance_segmenter is null \xE2\x80\x94 likely after ShutdownPhysicalPerceptionPrimitives()");
     }
     s.instance_segmenter->LoadOnnxModelsIntoPhysicalInstanceSegmenter(cfg);
+}
+
+void RequestConfigurePhysicalClassPolicy(const PhysicalClassPolicyConfig& cfg) {
+    auto& s = GetState();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    if (!s.initialized) {
+        s.pending_class_policy_cfg = std::make_unique<PhysicalClassPolicyConfig>(cfg);
+        return;
+    }
+    if (!s.class_policy) {
+        throw std::runtime_error(
+            "RequestConfigurePhysicalClassPolicy: subsystem initialised but "
+            "class_policy is null \u2014 likely after ShutdownPhysicalPerceptionPrimitives()");
+    }
+    s.class_policy->ConfigurePhysicalClassPolicy(cfg);
 }
 
 }}} // namespace
