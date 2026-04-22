@@ -338,8 +338,9 @@ static void bootstrapMMOLayer() {
                 }
                 case Op::ImageClassifier: {
                     PE::PhysicalImageClassifierConfig c;
-                    c.onnx_model_path  = vm->model_path;
-                    c.class_names_path = vm->vision.class_names_path;
+                    c.onnx_model_path      = vm->model_path;
+                    c.class_names_path     = vm->vision.class_names_path;
+                    c.text_embeddings_path = vm->vision.text_embeddings_path;
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     if (vm->vision.top_k > 0) c.top_k = vm->vision.top_k;
@@ -496,40 +497,23 @@ static void bootstrapMMOLayer() {
                 { /*canonical=*/"couch",  /*sources=*/{"chair", "bench"} },
                 // COCO display devices.
                 { /*canonical=*/"screen", /*sources=*/{"tv", "laptop"} },
-                // ImageNet whole-frame classifier almost always lands on a
-                // garment class when the user is in frame wearing a hoodie
-                // / sweater. Collapse the long tail onto a single
-                // "person_clothing" canonical so the policy summary stops
-                // showing four near-duplicate fashion-magazine labels.
-                { /*canonical=*/"person_clothing",
-                  /*sources=*/{ "cloak", "poncho", "abaya", "kimono",
-                                "academic_gown", "sweatshirt", "jersey",
-                                "cardigan", "lab_coat", "trench_coat",
-                                "hoop skirt", "overskirt", "miniskirt",
-                                "fur_coat", "suit", "windsor_tie",
-                                "bulletproof_vest", "military_uniform" } },
             };
             pol.priority_rules = {
-                { /*canonical=*/"person",          /*rank=*/1, /*floor=*/0.0f  },
-                { /*canonical=*/"couch",           /*rank=*/2, /*floor=*/0.0f  },
-                { /*canonical=*/"screen",          /*rank=*/3, /*floor=*/0.0f  },
-                // Whole-frame ImageNet classifications are noisy. Require
-                // at least 25% confidence before they show up at all.
-                { /*canonical=*/"person_clothing", /*rank=*/50, /*floor=*/0.25f },
+                { /*canonical=*/"person", /*rank=*/1, /*floor=*/0.0f },
+                { /*canonical=*/"couch",  /*rank=*/2, /*floor=*/0.0f },
+                { /*canonical=*/"screen", /*rank=*/3, /*floor=*/0.0f },
             };
             pol.default_priority_rank    = 100;
-            // Drop any classifier top-K row below 10% — pure noise.
-            pol.default_confidence_floor = 0.10f;
+            // CLIP zero-shot already gives well-calibrated scores against a
+            // curated prompt list — no need for a global confidence floor.
+            pol.default_confidence_floor = 0.0f;
             pol.emit_only_top_rank       = 0;     // keep everything in summary
-            // Collapse cross-class ghosts using max(IoU, IoMin) at 0.40 so
-            // small drifted ghost tracks fully contained inside a confirmed
-            // track also get suppressed. Pure-IoU 0.55 missed those because
-            // a 50x50 fragment inside a 500x500 confirmed box has IoU≈0.01
-            // but IoMin=1.0.
+            // Cross-class de-dup using max(IoU, IoMin) — collapses small
+            // ghost coasted tracks fully contained inside a confirmed track.
             pol.post_merge_nms_iou       = 0.40f;
             PE::RequestConfigurePhysicalClassPolicy(pol);
             LOG_PHASE("Class policy configured (chair→couch, tv/laptop→screen, "
-                      "garments→person_clothing, max(IoU,IoMin)=0.40, default floor=0.10)", true);
+                      "max(IoU,IoMin)=0.40)", true);
         } catch (const std::exception& e) {
             LOG_PHASE(std::string("Class policy configuration failed — ") + e.what(), false);
         }

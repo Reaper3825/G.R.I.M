@@ -273,6 +273,7 @@ nlohmann::json ModelRegistry::serializeModelToJson(const ModelInfo& model) {
         nlohmann::json v;
         v["operator"]                 = visionOperatorKindToString(model.vision.operator_kind);
         v["class_names_path"]         = model.vision.class_names_path;
+        v["text_embeddings_path"]     = model.vision.text_embeddings_path;
         v["input_width"]              = model.vision.input_width;
         v["input_height"]             = model.vision.input_height;
         v["confidence_threshold"]     = model.vision.confidence_threshold;
@@ -373,6 +374,7 @@ ModelInfo ModelRegistry::parseModelInfo(const nlohmann::json& entry) {
                 v["operator"].get<std::string>());
         }
         m.vision.class_names_path        = v.value("class_names_path", "");
+        m.vision.text_embeddings_path    = v.value("text_embeddings_path", "");
         m.vision.input_width             = v.value("input_width", 0);
         m.vision.input_height            = v.value("input_height", 0);
         m.vision.confidence_threshold    = v.value("confidence_threshold", 0.0f);

@@ -1,0 +1,53 @@
+# MobileCLIP zero-shot prompts for GRIM.
+#
+# One prompt per line. Lines starting with '#' or blank are ignored.
+# After editing this file, re-run scripts/setup_mobileclip.py to rebuild
+# resources/models/vision/mobileclip_text_embeddings.bin so the C++ side
+# picks up the new label set.
+#
+# Tips:
+#   - Use full natural-language phrases ("a photo of ...") — CLIP was
+#     trained on web captions and scores those better than bare nouns.
+#   - Add an explicit "negative / catch-all" row so unrelated frames have
+#     somewhere to land instead of forcing one of the real labels.
+#   - Keep the list focused (~20–60 prompts). Larger lists dilute scores.
+#
+# ── Activities ──────────────────────────────────────────────────────────
+a photo of a person sitting on a couch
+a photo of a person lying on a couch
+a photo of a person standing in a room
+a photo of a person at a desk working on a computer
+a photo of a person typing on a laptop
+a photo of a person looking at a phone
+a photo of a person holding a phone up to the camera
+a photo of a person holding a remote control
+a photo of a person eating food
+a photo of a person drinking from a cup or bottle
+a photo of a person reading a book
+a photo of a person watching television
+a photo of a person playing a video game
+a photo of a person talking on a phone
+a photo of a person wearing headphones
+
+# ── Objects held up to camera ───────────────────────────────────────────
+a close-up photo of a smartphone
+a close-up photo of a remote control
+a close-up photo of a book
+a close-up photo of a coffee mug
+a close-up photo of a water bottle
+a close-up photo of a pair of headphones
+a close-up photo of a video game controller
+a close-up photo of a piece of food
+a close-up photo of a pet cat or dog
+a close-up photo of a hand making a gesture
+
+# ── Scene / room ────────────────────────────────────────────────────────
+a photo of an empty living room
+a photo of an empty bedroom
+a photo of a kitchen
+a photo of an office workspace
+a photo of a dimly lit room at night
+a photo of a brightly lit room during the day
+
+# ── Catch-all (keep this line) ──────────────────────────────────────────
+a blurry or unclear webcam photo with no clear subject

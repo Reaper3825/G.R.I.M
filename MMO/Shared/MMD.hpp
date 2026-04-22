@@ -59,6 +59,12 @@ struct VisionModelDescriptor {
     int   input_width   = 0;
     int   input_height  = 0;
 
+    // Image classifier (zero-shot CLIP path) — precomputed text
+    // embeddings produced by scripts/setup_mobileclip.py. Pair with
+    // class_names_path which holds the matching prompt list (one
+    // prompt per line, same row order as the embedding matrix).
+    std::string text_embeddings_path;
+
     // Object detector + classifier + pose-specific
     float confidence_threshold = 0.0f;   // detector / pose person-score
     float iou_threshold        = 0.0f;   // detector / pose NMS

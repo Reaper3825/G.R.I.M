@@ -132,13 +132,13 @@
             },
             {
                 "id": "vision-image-classifier",
-                "name": "MobileNetV2 ImageNet-1k",
-                "version": "2022apr",
+                "name": "MobileCLIP-S0 (zero-shot)",
+                "version": "2024",
                 "subject": "vision",
-                "description": "ImageNet-1k whole-frame classifier (224x224, top-K). Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
+                "description": "Apple MobileCLIP-S0 image encoder + precomputed prompt embeddings. Zero-shot scene/activity classification — labels come from resources/models/vision/mobileclip_prompts.txt. Run scripts/setup_mobileclip.py to download the model and bake embeddings.",
                 "backend_type": "in_process_vision",
                 "kind": "vision",
-                "model_path": "resources/models/vision/mobilenet_v2.onnx",
+                "model_path": "resources/models/vision/mobileclip_s0_image.onnx",
                 "url": "",
                 "subject_tags": [
                     "vision",
@@ -146,13 +146,14 @@
                     "perception_primitive"
                 ],
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 48,
+                "estimated_ram_mb": 80,
                 "estimated_vram_mb": 0,
                 "vision": {
                     "operator": "image_classifier",
-                    "class_names_path": "resources/models/vision/imagenet1k.names",
-                    "input_width": 224,
-                    "input_height": 224,
+                    "class_names_path": "resources/models/vision/mobileclip_prompts.txt",
+                    "text_embeddings_path": "resources/models/vision/mobileclip_text_embeddings.bin",
+                    "input_width": 256,
+                    "input_height": 256,
                     "top_k": 5
                 }
             },
