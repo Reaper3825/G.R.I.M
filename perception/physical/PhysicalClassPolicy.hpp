@@ -90,6 +90,20 @@ struct PhysicalClassPolicyConfig {
     // cutoff entirely (everything that survives the confidence floor is
     // emitted). MUST be >= 0; throws otherwise.
     int32_t  emit_only_top_rank       = 0;
+
+    // Cross-class de-duplication. After merge-relabel, two items that came
+    // from DIFFERENT original classes (e.g. "chair" and "couch") will share
+    // the same canonical label and now spatially overlap on the same
+    // physical object. This is the IoU threshold above which a lower-ranked
+    // overlapping item is suppressed. Applied per-section to:
+    //   * results.object_detector.detections      (using model_box)
+    //   * results.entity_tracker.tracks            (using smoothed_model_box)
+    //   * results.instance_segmenter ... .instances (using prompt_model_box)
+    // Tie-break ranking inside same canonical class:
+    //   higher confidence wins (tracks: smoothed_confidence; dets: confidence;
+    //   masks: detection_confidence). 0.0f disables the pass entirely.
+    //   MUST be in [0, 1]; throws otherwise.
+    float    post_merge_nms_iou       = 0.0f;
 };
 
 class PhysicalClassPolicy {

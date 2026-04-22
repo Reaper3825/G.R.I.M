@@ -43,21 +43,22 @@ struct PhysicalSceneStabilityConfig {
     int      thumbnail_height            = 36;
 
     // Mean-absolute-difference threshold in 0..255 luma units. Anything
-    // above this is treated as motion. 4.0 ≈ ~1.5% of luma range — small
-    // enough to pick up a hand wave at the edge of frame, large enough to
-    // ignore sensor noise on a tripod.
-    double   motion_threshold            = 4.0;
+    // above this is treated as motion. 2.0 ≈ ~0.8% of luma range — picks
+    // up subtle motion (subject breathing, micro-expressions, slight head
+    // sway) while still tolerating webcam sensor noise on a tripod.
+    double   motion_threshold            = 2.0;
 
     // Maximum Hamming distance (0..64) between consecutive 64-bit average
-    // hashes that still counts as the "same scene". 8 is conservative —
-    // a single subtle lighting shift typically flips ~2-4 bits.
-    int      hash_hamming_threshold      = 8;
+    // hashes that still counts as the "same scene". 4 catches small
+    // lighting / pose shifts that flip 2-4 bits — anything more is treated
+    // as a new scene and forces a cache refresh.
+    int      hash_hamming_threshold      = 4;
 
     // Hard cap on consecutive stable frames before the gate is force-broken
-    // and operators are required to refresh their caches. 600 frames at
-    // 30 fps = 20s. Prevents indefinite drift if a scene happens to be
+    // and operators are required to refresh their caches. 300 frames at
+    // 30 fps = 10s. Prevents indefinite drift if a scene happens to be
     // bit-identical (e.g. webcam pointed at a static poster).
-    uint32_t max_stable_streak_frames    = 600;
+    uint32_t max_stable_streak_frames    = 300;
 };
 
 struct PhysicalSceneStability {

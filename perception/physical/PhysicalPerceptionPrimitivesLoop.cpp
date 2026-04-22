@@ -381,8 +381,51 @@ void TickPhysicalPerceptionPrimitives() {
             s.last_cls_run_steady_ns, now_steady_ns);
         if (decision == PhysicalCadenceDecision::Run ||
             decision == PhysicalCadenceDecision::NoSignal) {
+            // Pick the highest-confidence "person" detection from this
+            // frame's detector output. Whole-frame ImageNet classification
+            // is dominated by background; classifying the person crop
+            // gives meaningful clothing/activity labels instead of
+            // "cloak/poncho/abaya" garbage from the wall behind them.
+            const cv::Mat& full = s.frame_view.model_image;
+            cv::Mat        cls_input = full;        // default = whole frame
+            const PhysicalObjectDetection* best_person = nullptr;
+            if (s.enable_flags.object_detector &&
+                results.object_detector.state == PhysicalImageOperatorState::ModelLoaded) {
+                for (const auto& d : results.object_detector.detections) {
+                    if (d.class_label != "person") continue;
+                    if (d.model_box.width <= 1.0f || d.model_box.height <= 1.0f) continue;
+                    if (!best_person || d.confidence > best_person->confidence) {
+                        best_person = &d;
+                    }
+                }
+            }
+            if (best_person) {
+                // Pad bbox by 15% on each side so we capture the head/feet
+                // and a bit of context (improves classifier robustness),
+                // then clamp to image bounds.
+                const float pad_x = best_person->model_box.width  * 0.15f;
+                const float pad_y = best_person->model_box.height * 0.15f;
+                float x0 = best_person->model_box.x - pad_x;
+                float y0 = best_person->model_box.y - pad_y;
+                float x1 = best_person->model_box.x + best_person->model_box.width  + pad_x;
+                float y1 = best_person->model_box.y + best_person->model_box.height + pad_y;
+                x0 = std::max(0.0f, x0);
+                y0 = std::max(0.0f, y0);
+                x1 = std::min(static_cast<float>(full.cols), x1);
+                y1 = std::min(static_cast<float>(full.rows), y1);
+                const int ix0 = static_cast<int>(std::floor(x0));
+                const int iy0 = static_cast<int>(std::floor(y0));
+                const int iw  = static_cast<int>(std::ceil (x1 - x0));
+                const int ih  = static_cast<int>(std::ceil (y1 - y0));
+                if (iw >= 8 && ih >= 8 &&
+                    ix0 >= 0 && iy0 >= 0 &&
+                    ix0 + iw <= full.cols && iy0 + ih <= full.rows) {
+                    // No-copy ROI view; the classifier resizes internally.
+                    cls_input = full(cv::Rect(ix0, iy0, iw, ih));
+                }
+            }
             s.image_classifier->RouteFrameToPhysicalImageClassifier(
-                s.frame_view.model_image,
+                cls_input,
                 frame_ctr,
                 results.image_classifier);
             StampPhysicalCacheStatus(results.image_classifier.cache_status,

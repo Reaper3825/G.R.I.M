@@ -413,10 +413,13 @@ static void bootstrapMMOLayer() {
                     if (vm->vision.expression_classifier_input_height > 0)
                         c.classifier_input_height = vm->vision.expression_classifier_input_height;
                     c.classifier_input_grayscale = vm->vision.expression_classifier_input_grayscale;
-                    // Expressions change quickly under motion; cap at
-                    // ~10 fps and reuse on a stable scene.
-                    c.cadence.reuse_on_stable_scene = true;
-                    c.cadence.min_period_ms         = 100;
+                    // Expressions change rapidly even when the user is
+                    // physically still (eyebrows, mouth, blinks). Do NOT
+                    // reuse on stable scene — always run fresh — and hold
+                    // a 30 fps floor so the signal is effectively per-frame
+                    // at typical webcam rates.
+                    c.cadence.reuse_on_stable_scene = false;
+                    c.cadence.min_period_ms         = 33;
                     PE::RequestConfigurePhysicalFacialExpressionDetector(c);
                     break;
                 }
@@ -474,6 +477,61 @@ static void bootstrapMMOLayer() {
                 LOG_PHASE(std::string("MMO vision sub-model wiring failed: ")
                           + vm->id + " — " + e.what(), false);
             }
+        }
+
+        // ----------------------------------------------------------------
+        // Class-policy: collapse the YOLO/COCO classes that the detector
+        // routinely confuses on the same physical object (chair vs couch
+        // is the canonical case — back-of-couch fragments produce two
+        // tracks) and rank the household classes the assistant cares
+        // about so the model-context summary is stable.
+        //
+        // post_merge_nms_iou=0.55 then collapses surviving overlapping
+        // tracks/dets/masks that share the post-merge canonical label.
+        // ----------------------------------------------------------------
+        try {
+            PE::PhysicalClassPolicyConfig pol;
+            pol.merge_rules = {
+                // COCO furniture confusions on the same physical surface.
+                { /*canonical=*/"couch",  /*sources=*/{"chair", "bench"} },
+                // COCO display devices.
+                { /*canonical=*/"screen", /*sources=*/{"tv", "laptop"} },
+                // ImageNet whole-frame classifier almost always lands on a
+                // garment class when the user is in frame wearing a hoodie
+                // / sweater. Collapse the long tail onto a single
+                // "person_clothing" canonical so the policy summary stops
+                // showing four near-duplicate fashion-magazine labels.
+                { /*canonical=*/"person_clothing",
+                  /*sources=*/{ "cloak", "poncho", "abaya", "kimono",
+                                "academic_gown", "sweatshirt", "jersey",
+                                "cardigan", "lab_coat", "trench_coat",
+                                "hoop skirt", "overskirt", "miniskirt",
+                                "fur_coat", "suit", "windsor_tie",
+                                "bulletproof_vest", "military_uniform" } },
+            };
+            pol.priority_rules = {
+                { /*canonical=*/"person",          /*rank=*/1, /*floor=*/0.0f  },
+                { /*canonical=*/"couch",           /*rank=*/2, /*floor=*/0.0f  },
+                { /*canonical=*/"screen",          /*rank=*/3, /*floor=*/0.0f  },
+                // Whole-frame ImageNet classifications are noisy. Require
+                // at least 25% confidence before they show up at all.
+                { /*canonical=*/"person_clothing", /*rank=*/50, /*floor=*/0.25f },
+            };
+            pol.default_priority_rank    = 100;
+            // Drop any classifier top-K row below 10% — pure noise.
+            pol.default_confidence_floor = 0.10f;
+            pol.emit_only_top_rank       = 0;     // keep everything in summary
+            // Collapse cross-class ghosts using max(IoU, IoMin) at 0.40 so
+            // small drifted ghost tracks fully contained inside a confirmed
+            // track also get suppressed. Pure-IoU 0.55 missed those because
+            // a 50x50 fragment inside a 500x500 confirmed box has IoU≈0.01
+            // but IoMin=1.0.
+            pol.post_merge_nms_iou       = 0.40f;
+            PE::RequestConfigurePhysicalClassPolicy(pol);
+            LOG_PHASE("Class policy configured (chair→couch, tv/laptop→screen, "
+                      "garments→person_clothing, max(IoU,IoMin)=0.40, default floor=0.10)", true);
+        } catch (const std::exception& e) {
+            LOG_PHASE(std::string("Class policy configuration failed — ") + e.what(), false);
         }
 
         // Background idle-tick thread

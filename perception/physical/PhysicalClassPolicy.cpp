@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
@@ -28,6 +29,90 @@ inline void AccumulateMaxConfidence(float& running_max, float candidate) {
     if (candidate > running_max) running_max = candidate;
 }
 
+// IoU on cv::Rect2f. Empty boxes (w<=0 or h<=0) yield 0 — consistent with
+// "cannot overlap" rather than throwing, since legitimately-empty boxes
+// arise during track spawn before the first smoothing step.
+inline float IouRect2f(const cv::Rect2f& a, const cv::Rect2f& b) {
+    if (a.width <= 0.0f || a.height <= 0.0f) return 0.0f;
+    if (b.width <= 0.0f || b.height <= 0.0f) return 0.0f;
+    const float ix1 = std::max(a.x, b.x);
+    const float iy1 = std::max(a.y, b.y);
+    const float ix2 = std::min(a.x + a.width,  b.x + b.width);
+    const float iy2 = std::min(a.y + a.height, b.y + b.height);
+    const float iw  = ix2 - ix1;
+    const float ih  = iy2 - iy1;
+    if (iw <= 0.0f || ih <= 0.0f) return 0.0f;
+    const float inter = iw * ih;
+    const float uni   = a.width * a.height + b.width * b.height - inter;
+    return (uni > 0.0f) ? (inter / uni) : 0.0f;
+}
+
+// Intersection-over-Min-area. Captures the "small box mostly contained in
+// a large box" case that pure IoU misses: a 50x50 ghost track overlapping
+// fully with a 500x500 confirmed track has IoU=0.01 but IoMin=1.0. This is
+// the regime that produces ghost couch/chair fragments hanging off a
+// confirmed couch — IoU alone never fires.
+inline float IoMinRect2f(const cv::Rect2f& a, const cv::Rect2f& b) {
+    if (a.width <= 0.0f || a.height <= 0.0f) return 0.0f;
+    if (b.width <= 0.0f || b.height <= 0.0f) return 0.0f;
+    const float ix1 = std::max(a.x, b.x);
+    const float iy1 = std::max(a.y, b.y);
+    const float ix2 = std::min(a.x + a.width,  b.x + b.width);
+    const float iy2 = std::min(a.y + a.height, b.y + b.height);
+    const float iw  = ix2 - ix1;
+    const float ih  = iy2 - iy1;
+    if (iw <= 0.0f || ih <= 0.0f) return 0.0f;
+    const float inter = iw * ih;
+    const float min_area = std::min(a.width * a.height, b.width * b.height);
+    return (min_area > 0.0f) ? (inter / min_area) : 0.0f;
+}
+
+// Greedy same-canonical NMS: sort items by `score` (descending) and
+// suppress later items that share the same canonical_label AND overlap the
+// pivot's box with max(IoU, IoMin) >= threshold. Used post-merge so that
+// two items whose ORIGINAL classes differed (e.g. chair + couch on the
+// same physical object) are now both labelled "couch" and collapse into
+// one. Returns the number of items dropped.
+template <typename ItemT, typename GetBox, typename GetScore>
+size_t SuppressOverlappingSameCanonical(
+    std::vector<ItemT>& items,
+    float                threshold,
+    GetBox               get_box,
+    GetScore             get_score)
+{
+    if (threshold <= 0.0f || items.size() < 2) return 0;
+    std::vector<size_t> order(items.size());
+    std::iota(order.begin(), order.end(), size_t{0});
+    std::sort(order.begin(), order.end(),
+              [&](size_t a, size_t b) { return get_score(items[a]) > get_score(items[b]); });
+    std::vector<uint8_t> suppressed(items.size(), 0);
+    size_t dropped = 0;
+    for (size_t i = 0; i < order.size(); ++i) {
+        const size_t pivot = order[i];
+        if (suppressed[pivot]) continue;
+        const auto&         pivot_box   = get_box(items[pivot]);
+        const std::string&  pivot_label = items[pivot].class_label;
+        for (size_t j = i + 1; j < order.size(); ++j) {
+            const size_t cand = order[j];
+            if (suppressed[cand]) continue;
+            if (items[cand].class_label != pivot_label) continue;
+            const auto& cand_box = get_box(items[cand]);
+            const float iou   = IouRect2f(pivot_box, cand_box);
+            const float iomin = IoMinRect2f(pivot_box, cand_box);
+            if (std::max(iou, iomin) < threshold) continue;
+            suppressed[cand] = 1;
+            ++dropped;
+        }
+    }
+    std::vector<ItemT> kept;
+    kept.reserve(items.size() - dropped);
+    for (size_t k = 0; k < items.size(); ++k) {
+        if (!suppressed[k]) kept.push_back(std::move(items[k]));
+    }
+    items = std::move(kept);
+    return dropped;
+}
+
 } // anonymous namespace
 
 PhysicalClassPolicy::PhysicalClassPolicy()  = default;
@@ -49,6 +134,12 @@ void PhysicalClassPolicy::ConfigurePhysicalClassPolicy(
         state_             = PhysicalImageOperatorState::ModelLoadFailed;
         last_error_reason_ = "ConfigurePhysicalClassPolicy: default_confidence_floor must be in [0, 1] (got "
                              + std::to_string(cfg.default_confidence_floor) + ")";
+        throw std::runtime_error(last_error_reason_);
+    }
+    if (!(cfg.post_merge_nms_iou >= 0.0f && cfg.post_merge_nms_iou <= 1.0f)) {
+        state_             = PhysicalImageOperatorState::ModelLoadFailed;
+        last_error_reason_ = "ConfigurePhysicalClassPolicy: post_merge_nms_iou must be in [0, 1] (got "
+                             + std::to_string(cfg.post_merge_nms_iou) + ")";
         throw std::runtime_error(last_error_reason_);
     }
 
@@ -385,7 +476,63 @@ void PhysicalClassPolicy::ApplyPhysicalClassPolicyToPerceptionResults(
             topk = std::move(kept);
         }
 
-        // ── 5. Build the ranked summary in deterministic order ──────────
+        // ── 5. Post-merge cross-class de-duplication ────────────────────
+        // After merge re-labels (e.g. chair → couch), two items whose
+        // ORIGINAL classes differed may now share the same canonical label
+        // and overlap on the same physical object. Greedy NMS collapses
+        // them. Disabled when post_merge_nms_iou == 0. Counters bump the
+        // existing *_dropped fields so callers see one combined drop count.
+        if (cfg_.post_merge_nms_iou > 0.0f) {
+            const float thr = cfg_.post_merge_nms_iou;
+
+            const size_t det_dropped = SuppressOverlappingSameCanonical(
+                results.object_detector.detections, thr,
+                [](const PhysicalObjectDetection& d) -> const cv::Rect2f& { return d.model_box; },
+                [](const PhysicalObjectDetection& d) { return d.confidence; });
+            out.detections_dropped += static_cast<uint32_t>(det_dropped);
+
+            const size_t trk_dropped = SuppressOverlappingSameCanonical(
+                results.entity_tracker.tracks, thr,
+                [](const PhysicalEntityTrack& t) -> const cv::Rect2f& { return t.smoothed_model_box; },
+                [](const PhysicalEntityTrack& t) { return t.smoothed_confidence; });
+            out.tracks_dropped += static_cast<uint32_t>(trk_dropped);
+
+            const size_t msk_dropped = SuppressOverlappingSameCanonical(
+                results.instance_segmenter.segmentation.instances, thr,
+                [](const PhysicalInstanceMask& m) -> const cv::Rect2f& { return m.prompt_model_box; },
+                [](const PhysicalInstanceMask& m) { return m.detection_confidence; });
+            out.instance_masks_dropped += static_cast<uint32_t>(msk_dropped);
+
+            // Rebuild the per-canonical summary from the survivors so the
+            // ranked rows exactly reflect what downstream consumers see.
+            // Image classifier top-K has no box so it is unaffected by NMS
+            // but must be re-counted from the (already filtered) vector.
+            summary.clear();
+            auto bump_summary = [&](const std::string& canon, float conf,
+                                    uint32_t det = 0, uint32_t trk = 0,
+                                    uint32_t msk = 0, uint32_t cls = 0) {
+                auto& row = summary[canon];
+                if (row.canonical_label.empty()) {
+                    row.canonical_label = canon;
+                    row.priority_rank   = rank_for_canonical(canon);
+                }
+                row.detection_count       += det;
+                row.track_count           += trk;
+                row.instance_mask_count   += msk;
+                row.classification_count  += cls;
+                AccumulateMaxConfidence(row.max_confidence, conf);
+            };
+            for (const auto& d : results.object_detector.detections)
+                bump_summary(d.class_label, d.confidence, 1, 0, 0, 0);
+            for (const auto& t : results.entity_tracker.tracks)
+                bump_summary(t.class_label, t.smoothed_confidence, 0, 1, 0, 0);
+            for (const auto& m : results.instance_segmenter.segmentation.instances)
+                bump_summary(m.class_label, m.detection_confidence, 0, 0, 1, 0);
+            for (const auto& c : results.image_classifier.top_k)
+                bump_summary(c.class_label, c.score, 0, 0, 0, 1);
+        }
+
+        // ── 6. Build the ranked summary in deterministic order ──────────
         out.ranked_classes.reserve(summary.size());
         for (auto& kv : summary) out.ranked_classes.push_back(std::move(kv.second));
         std::sort(out.ranked_classes.begin(), out.ranked_classes.end(),
