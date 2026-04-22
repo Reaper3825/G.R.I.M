@@ -79,6 +79,17 @@ struct PhysicalSceneTextLine {
     float        confidence = 0.0f;
 };
 
+// 6. Facial expression — one detected face plus its top emotion class
+struct PhysicalFacialExpression {
+    cv::Rect2f               model_bbox;           // MODEL pixel space (always populated)
+    cv::Rect2f               raw_bbox;            // RAW   pixel space (back-projected)
+    float                    detection_confidence = 0.0f;  // YuNet face score
+    int32_t                  expression_id        = -1;    // argmax over class scores
+    std::string              expression_label;             // resolved from labels file
+    float                    expression_score     = 0.0f;  // softmax probability of top class
+    std::vector<float>       all_class_scores;             // full softmax distribution (size == K)
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Per-operator output envelope. Each carries its own state + last-error
 //  reason so the bus consumer can render BOTH the result AND the lifecycle
@@ -131,6 +142,16 @@ struct PhysicalSceneTextReaderOutput {
     std::vector<PhysicalSceneTextLine> lines;
 };
 
+struct PhysicalFacialExpressionDetectorOutput {
+    PhysicalImageOperatorState  state            = PhysicalImageOperatorState::NoModelConfigured;
+    std::string                 last_error_reason;
+    uint64_t                    inference_count  = 0;
+    uint64_t                    last_frame_counter = 0;
+    double                      last_inference_ms = 0.0;
+    bool                        classifier_configured = false; // false → only face detection ran
+    std::vector<PhysicalFacialExpression> faces;
+};
+
 // Aggregate snapshot — one frame's worth of results from all five operators.
 // Carries the source frame counter so the UI can verify it is rendering a
 // coherent set (same input frame for every operator).
@@ -146,6 +167,7 @@ struct PhysicalPerceptionPrimitiveResults {
     PhysicalImageClassifierOutput         image_classifier;
     PhysicalPoseKeypointEstimatorOutput   pose_estimator;
     PhysicalSceneTextReaderOutput         scene_text_reader;
+    PhysicalFacialExpressionDetectorOutput facial_expression_detector;
 };
 
 }}} // namespace GRIM::Perception::Physical

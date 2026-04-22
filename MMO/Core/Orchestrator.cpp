@@ -96,8 +96,11 @@ OrchestratorResult Orchestrator::generate(const RequestContext& ctx) {
         return result;
     }
 
-    // ── Passthrough: no sub-models → call router directly ──
-    if (registry_.getSubModels().empty()) {
+    // ── Passthrough: no TEXT sub-models → call router directly ──
+    // Vision sub-models are not part of the text-routing pool; they are
+    // dispatched through PhysicalPerceptionPrimitivesLoop. So a registry
+    // that holds only vision sub-models is functionally a passthrough.
+    if (registry_.getTextSubModels().empty()) {
         loader_.markInUse(router_info->id);
 
         auto it = backends_.find(router_info->id);

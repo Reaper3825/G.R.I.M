@@ -43,6 +43,9 @@ struct PhysicalSceneTextReaderConfig {
     int          recogniser_input_height = 32;
     float        recogniser_input_scale  = 1.0f / 127.5f;
     cv::Scalar   recogniser_input_mean   = cv::Scalar(127.5, 127.5, 127.5);
+    // Convert ROI to single-channel grayscale before recognise().
+    // OpenCV Zoo CRNN_EN/CN are 1-channel; CRNN_VGG_BiLSTM_CTC is 3-channel.
+    bool         recogniser_input_grayscale = true;
 
     int          dnn_backend_id          = cv::dnn::DNN_BACKEND_OPENCV;
     int          dnn_target_id           = cv::dnn::DNN_TARGET_CPU;

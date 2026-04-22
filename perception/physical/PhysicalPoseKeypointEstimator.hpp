@@ -25,6 +25,16 @@ namespace GRIM { namespace Perception { namespace Physical {
 //  a model whose ONNX includes its own decode head.
 // ─────────────────────────────────────────────────────────────────────────────
 struct PhysicalPoseKeypointEstimatorConfig {
+    enum class OutputFormat : uint8_t {
+        // Top-down per-joint heatmap models (HRNet/MoveNet style).
+        // Output: [1, J, H, W]; argmax per joint plane.
+        Heatmap = 0,
+        // YOLOv8-pose style anchor list.
+        // Output: [1, 4 + 1 + J*3, A]  (cx,cy,w,h, person_score, kp_x*J, kp_y*J, kp_conf*J)
+        // Coordinates are in MODEL pixel space.
+        YoloAnchor = 1
+    };
+
     std::string  onnx_model_path;
     std::string  joint_names_path;        // newline-separated joint labels
     int          input_width    = 192;
@@ -33,6 +43,11 @@ struct PhysicalPoseKeypointEstimatorConfig {
     cv::Scalar   input_mean     = cv::Scalar(0.0, 0.0, 0.0);
     bool         swap_rb        = true;
     float        min_keypoint_confidence = 0.30f;
+    OutputFormat output_format  = OutputFormat::Heatmap;
+    // YoloAnchor-only:
+    int          num_keypoints  = 17;       // J
+    float        person_confidence_threshold = 0.25f;
+    float        nms_iou_threshold           = 0.45f;
     int          dnn_backend_id = cv::dnn::DNN_BACKEND_OPENCV;
     int          dnn_target_id  = cv::dnn::DNN_TARGET_CPU;
 };

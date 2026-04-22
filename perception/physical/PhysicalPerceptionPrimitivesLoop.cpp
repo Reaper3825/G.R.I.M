@@ -29,6 +29,7 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalImageClassifier>         image_classifier;
     std::unique_ptr<PhysicalPoseKeypointEstimator>   pose_estimator;
     std::unique_ptr<PhysicalSceneTextReader>         scene_text_reader;
+    std::unique_ptr<PhysicalFacialExpressionDetector> facial_expression_detector;
 
     // Pending configs deposited via Request* before lazy init. Applied at
     // the first Tick. After init these are emptied; subsequent Request*
@@ -38,6 +39,7 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalImageClassifierConfig>         pending_cls_cfg;
     std::unique_ptr<PhysicalPoseKeypointEstimatorConfig>   pending_pose_cfg;
     std::unique_ptr<PhysicalSceneTextReaderConfig>         pending_text_cfg;
+    std::unique_ptr<PhysicalFacialExpressionDetectorConfig> pending_face_cfg;
 
     std::string  last_error_reason;
     uint64_t     tick_count           = 0;
@@ -62,6 +64,7 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     s.image_classifier   = std::make_unique<PhysicalImageClassifier>();
     s.pose_estimator     = std::make_unique<PhysicalPoseKeypointEstimator>();
     s.scene_text_reader  = std::make_unique<PhysicalSceneTextReader>();
+    s.facial_expression_detector = std::make_unique<PhysicalFacialExpressionDetector>();
 
     // Apply any pending configs. Failures are loud but do not abort init —
     // the operator simply ends up in ModelLoadFailed state and the UI
@@ -92,6 +95,9 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     apply(s.pending_text_cfg,
           [&](auto& c){ s.scene_text_reader->LoadOnnxModelsIntoPhysicalSceneTextReader(c); },
           "PhysicalSceneTextReader");
+    apply(s.pending_face_cfg,
+          [&](auto& c){ s.facial_expression_detector->LoadOnnxModelsIntoPhysicalFacialExpressionDetector(c); },
+          "PhysicalFacialExpressionDetector");
 
     s.initialized = true;
 }
@@ -172,6 +178,15 @@ void TickPhysicalPerceptionPrimitives() {
             results.source_frame_counter,
             results.scene_text_reader);
     }
+    if (s.enable_flags.facial_expression_detector && s.facial_expression_detector) {
+        s.facial_expression_detector->RouteFrameToPhysicalFacialExpressionDetector(
+            s.frame_view.model_image,
+            results.raw_to_model,
+            results.raw_image_width,
+            results.raw_image_height,
+            results.source_frame_counter,
+            results.facial_expression_detector);
+    }
 
     try {
         PhysicalPerceptionPrimitiveBus::Instance().PublishPhysicalPerceptionResultsToBus(results);
@@ -192,16 +207,19 @@ void ShutdownPhysicalPerceptionPrimitives() {
     if (s.image_classifier)   s.image_classifier->ResetPhysicalImageClassifier();
     if (s.pose_estimator)     s.pose_estimator->ResetPhysicalPoseKeypointEstimator();
     if (s.scene_text_reader)  s.scene_text_reader->ResetPhysicalSceneTextReader();
+    if (s.facial_expression_detector) s.facial_expression_detector->ResetPhysicalFacialExpressionDetector();
     s.object_detector.reset();
     s.semantic_segmenter.reset();
     s.image_classifier.reset();
     s.pose_estimator.reset();
     s.scene_text_reader.reset();
+    s.facial_expression_detector.reset();
     s.pending_obj_cfg.reset();
     s.pending_seg_cfg.reset();
     s.pending_cls_cfg.reset();
     s.pending_pose_cfg.reset();
     s.pending_text_cfg.reset();
+    s.pending_face_cfg.reset();
     PhysicalPerceptionPrimitiveBus::Instance().ResetPhysicalPerceptionPrimitiveBus();
     s.initialized          = false;
     s.tick_count           = 0;
@@ -252,7 +270,8 @@ void RequestSetPhysicalPerceptionPrimitivesEnableFlags(
               + " seg=" + (flags.semantic_segmenter ? "1" : "0")
               + " cls=" + (flags.image_classifier   ? "1" : "0")
               + " pose="+ (flags.pose_estimator     ? "1" : "0")
-              + " text="+ (flags.scene_text_reader  ? "1" : "0"));
+              + " text="+ (flags.scene_text_reader  ? "1" : "0")
+              + " face="+ (flags.facial_expression_detector ? "1" : "0"));
 }
 
 // Each Request* either applies immediately (init done) or stages the cfg
@@ -323,6 +342,19 @@ void RequestConfigurePhysicalSceneTextReader(const PhysicalSceneTextReaderConfig
         throw std::runtime_error("RequestConfigurePhysicalSceneTextReader: scene_text_reader is null");
     }
     s.scene_text_reader->LoadOnnxModelsIntoPhysicalSceneTextReader(cfg);
+}
+
+void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpressionDetectorConfig& cfg) {
+    auto& s = GetState();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    if (!s.initialized) {
+        s.pending_face_cfg = std::make_unique<PhysicalFacialExpressionDetectorConfig>(cfg);
+        return;
+    }
+    if (!s.facial_expression_detector) {
+        throw std::runtime_error("RequestConfigurePhysicalFacialExpressionDetector: facial_expression_detector is null");
+    }
+    s.facial_expression_detector->LoadOnnxModelsIntoPhysicalFacialExpressionDetector(cfg);
 }
 
 }}} // namespace

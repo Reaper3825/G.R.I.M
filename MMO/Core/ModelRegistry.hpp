@@ -57,6 +57,16 @@ public:
     // All sub-models (excludes router).
     std::vector<const ModelInfo*> getSubModels() const;
 
+    // Sub-models (excludes router) whose kind == ModelKind::Text. Used
+    // by the Orchestrator/Router to build the routing candidate pool;
+    // vision sub-models are intentionally excluded — they are dispatched
+    // through PhysicalPerceptionPrimitivesLoop, not the text path.
+    std::vector<const ModelInfo*> getTextSubModels() const;
+
+    // Sub-models whose kind == ModelKind::Vision. Used by bootstrap to
+    // configure the perception loop with their ONNX weights.
+    std::vector<const ModelInfo*> getVisionSubModels() const;
+
     // Sub-models whose subject_tags contain the given tag.
     std::vector<const ModelInfo*> getModelsBySubjectTag(const std::string& tag) const;
 
@@ -103,6 +113,14 @@ public:
 
     // Convert BackendType to config string.
     static std::string backendTypeToString(BackendType bt);
+
+    // ModelKind <-> string
+    static ModelKind   parseModelKind(const std::string& str);
+    static std::string modelKindToString(ModelKind k);
+
+    // VisionOperatorKind <-> string
+    static VisionOperatorKind parseVisionOperatorKind(const std::string& str);
+    static std::string        visionOperatorKindToString(VisionOperatorKind k);
 
 private:
     ModelRegistry() = default;

@@ -27,6 +27,7 @@
 #include "../commands/command_registry.hpp"
 #include "../core/plugin_manager.hpp"
 #include "../location.hpp"
+#include "../perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 
 #include <filesystem>
 #include <whisper.h>
@@ -172,6 +173,12 @@ createBackendForModel(const GRIM::MMO::ModelInfo& info) {
         return std::make_unique<GRIM::MMO::GrimNativeBackend>(
             info.url, info.id);
 
+    case GRIM::MMO::BackendType::InProcessVision:
+        // Vision sub-models do not expose a text-generation backend;
+        // they are dispatched through PhysicalPerceptionPrimitivesLoop.
+        // Return nullptr so the caller skips registerBackend().
+        return nullptr;
+
     case GRIM::MMO::BackendType::Ollama: {
         // For Ollama, the model_path stores the Ollama model name
         std::string ollama_model = info.model_path;
@@ -270,6 +277,11 @@ static void bootstrapMMOLayer() {
 
             // Sub-model backends
             for (const auto& sub : registry.getSubModels()) {
+                // Vision sub-models are wired into PhysicalPerceptionPrimitivesLoop
+                // below — they have no HTTP generation backend.
+                if (sub->kind == GRIM::MMO::ModelKind::Vision) {
+                    continue;
+                }
                 auto backend = createBackendForModel(*sub);
                 if (backend) {
                     g_orchestrator->registerBackend(sub->id, std::move(backend));
@@ -278,6 +290,121 @@ static void bootstrapMMOLayer() {
         };
         registerBackendsForModels();
         LOG_PHASE("MMO backends registered", true);
+
+        // ----------------------------------------------------------------
+        // Wire vision sub-models into PhysicalPerceptionPrimitivesLoop.
+        // The loop is the in-process host for the OpenCV cv::dnn vision
+        // operators; each registered vision sub-model becomes the active
+        // ONNX for one operator slot.
+        // ----------------------------------------------------------------
+        namespace PE = GRIM::Perception::Physical;
+        for (const auto& vm : registry.getVisionSubModels()) {
+            try {
+                using Op = GRIM::MMO::VisionOperatorKind;
+                switch (vm->vision.operator_kind) {
+                case Op::ObjectDetector: {
+                    PE::PhysicalObjectDetectorConfig c;
+                    c.onnx_model_path  = vm->model_path;
+                    c.class_names_path = vm->vision.class_names_path;
+                    if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
+                    if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
+                    if (vm->vision.confidence_threshold > 0.0f)
+                        c.confidence_threshold = vm->vision.confidence_threshold;
+                    if (vm->vision.iou_threshold > 0.0f)
+                        c.iou_threshold = vm->vision.iou_threshold;
+                    PE::RequestConfigurePhysicalObjectDetector(c);
+                    break;
+                }
+                case Op::SemanticSegmenter: {
+                    PE::PhysicalSemanticSegmenterConfig c;
+                    c.onnx_model_path  = vm->model_path;
+                    c.class_names_path = vm->vision.class_names_path;
+                    if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
+                    if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
+                    PE::RequestConfigurePhysicalSemanticSegmenter(c);
+                    break;
+                }
+                case Op::ImageClassifier: {
+                    PE::PhysicalImageClassifierConfig c;
+                    c.onnx_model_path  = vm->model_path;
+                    c.class_names_path = vm->vision.class_names_path;
+                    if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
+                    if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
+                    if (vm->vision.top_k > 0) c.top_k = vm->vision.top_k;
+                    PE::RequestConfigurePhysicalImageClassifier(c);
+                    break;
+                }
+                case Op::PoseEstimator: {
+                    PE::PhysicalPoseKeypointEstimatorConfig c;
+                    c.onnx_model_path  = vm->model_path;
+                    c.joint_names_path = vm->vision.class_names_path;
+                    if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
+                    if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
+                    if (vm->vision.min_keypoint_confidence > 0.0f)
+                        c.min_keypoint_confidence = vm->vision.min_keypoint_confidence;
+                    // Output-format selection. Empty / "heatmap" → default Heatmap.
+                    // "yolo_anchor" → YOLOv8-pose decode.
+                    if (vm->vision.pose_output_format == "yolo_anchor") {
+                        c.output_format = PE::PhysicalPoseKeypointEstimatorConfig::OutputFormat::YoloAnchor;
+                    } else if (vm->vision.pose_output_format.empty() ||
+                               vm->vision.pose_output_format == "heatmap") {
+                        c.output_format = PE::PhysicalPoseKeypointEstimatorConfig::OutputFormat::Heatmap;
+                    } else {
+                        throw std::runtime_error(
+                            "vision sub-model '" + vm->id + "': unknown pose_output_format='"
+                            + vm->vision.pose_output_format + "' (expected 'heatmap' or 'yolo_anchor')");
+                    }
+                    if (vm->vision.num_keypoints > 0) c.num_keypoints = vm->vision.num_keypoints;
+                    if (vm->vision.confidence_threshold > 0.0f)
+                        c.person_confidence_threshold = vm->vision.confidence_threshold;
+                    if (vm->vision.iou_threshold > 0.0f)
+                        c.nms_iou_threshold = vm->vision.iou_threshold;
+                    PE::RequestConfigurePhysicalPoseKeypointEstimator(c);
+                    break;
+                }
+                case Op::SceneTextReader: {
+                    PE::PhysicalSceneTextReaderConfig c;
+                    c.detector_onnx_path        = vm->model_path;
+                    c.recogniser_onnx_path      = vm->vision.recogniser_onnx_path;
+                    c.recogniser_charset_path   = vm->vision.recogniser_charset_path;
+                    c.recogniser_input_grayscale = vm->vision.recogniser_input_grayscale;
+                    if (vm->vision.input_width  > 0) c.detector_input_width  = vm->vision.input_width;
+                    if (vm->vision.input_height > 0) c.detector_input_height = vm->vision.input_height;
+                    PE::RequestConfigurePhysicalSceneTextReader(c);
+                    break;
+                }
+                case Op::FacialExpressionDetector: {
+                    PE::PhysicalFacialExpressionDetectorConfig c;
+                    c.detector_onnx_path        = vm->model_path;
+                    c.classifier_onnx_path      = vm->vision.expression_classifier_onnx_path;
+                    c.classifier_class_names_path = vm->vision.expression_classifier_class_names_path;
+                    if (vm->vision.input_width  > 0) c.detector_input_width  = vm->vision.input_width;
+                    if (vm->vision.input_height > 0) c.detector_input_height = vm->vision.input_height;
+                    if (vm->vision.confidence_threshold > 0.0f)
+                        c.detector_score_threshold = vm->vision.confidence_threshold;
+                    if (vm->vision.iou_threshold > 0.0f)
+                        c.detector_nms_threshold = vm->vision.iou_threshold;
+                    if (vm->vision.expression_classifier_input_width  > 0)
+                        c.classifier_input_width  = vm->vision.expression_classifier_input_width;
+                    if (vm->vision.expression_classifier_input_height > 0)
+                        c.classifier_input_height = vm->vision.expression_classifier_input_height;
+                    c.classifier_input_grayscale = vm->vision.expression_classifier_input_grayscale;
+                    PE::RequestConfigurePhysicalFacialExpressionDetector(c);
+                    break;
+                }
+                case Op::Unknown:
+                    throw std::runtime_error(
+                        "vision sub-model '" + vm->id + "' has unknown operator kind");
+                }
+                LOG_PHASE(std::string("MMO vision sub-model wired: ") + vm->id
+                          + " → " + GRIM::MMO::ModelRegistry::visionOperatorKindToString(
+                                        vm->vision.operator_kind),
+                          true);
+            } catch (const std::exception& e) {
+                LOG_PHASE(std::string("MMO vision sub-model wiring failed: ")
+                          + vm->id + " — " + e.what(), false);
+            }
+        }
 
         // Background idle-tick thread
         s_idleTickStop = false;

@@ -5,6 +5,7 @@
 #include "PhysicalPoseKeypointEstimator.hpp"
 #include "PhysicalSceneTextReader.hpp"
 #include "PhysicalSemanticSegmenter.hpp"
+#include "PhysicalFacialExpressionDetector.hpp"
 
 #include <string>
 
@@ -43,6 +44,7 @@ struct PhysicalPerceptionPrimitivesEnableFlags {
     bool image_classifier   = true;
     bool pose_estimator     = true;
     bool scene_text_reader  = true;
+    bool facial_expression_detector = true;
 };
 
 // Mainloop entry point. Cheap; safe to call every frame. Lazy-inits.
@@ -73,5 +75,6 @@ void RequestConfigurePhysicalSemanticSegmenter(const PhysicalSemanticSegmenterCo
 void RequestConfigurePhysicalImageClassifier(const PhysicalImageClassifierConfig& cfg);
 void RequestConfigurePhysicalPoseKeypointEstimator(const PhysicalPoseKeypointEstimatorConfig& cfg);
 void RequestConfigurePhysicalSceneTextReader(const PhysicalSceneTextReaderConfig& cfg);
+void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpressionDetectorConfig& cfg);
 
 }}} // namespace GRIM::Perception::Physical

@@ -119,6 +119,8 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]{ HandleTogglePerceptionPoseEstimator(); });
     perc_btn_text_ = std::make_shared<UIButton>(" Text: on ",
         [this]{ HandleTogglePerceptionSceneTextReader(); });
+    perc_btn_face_ = std::make_shared<UIButton>(" Face: on ",
+        [this]{ HandleTogglePerceptionFacialExpressionDetector(); });
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
 
     // ── Camera tab widgets ──
@@ -1348,6 +1350,12 @@ void UIPhysicalEnvironmentPanel::HandleTogglePerceptionSceneTextReader() {
     PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
 }
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionFacialExpressionDetector() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.facial_expression_detector = !f.facial_expression_detector;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
 
 void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsystem() {
     const auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
@@ -1356,6 +1364,7 @@ void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsyste
     if (perc_btn_cls_)  perc_btn_cls_->setText(std::string(" Classifier: ") + OnOffStr(f.image_classifier)   + " ");
     if (perc_btn_pose_) perc_btn_pose_->setText(std::string(" Pose: ")      + OnOffStr(f.pose_estimator)     + " ");
     if (perc_btn_text_) perc_btn_text_->setText(std::string(" Text: ")      + OnOffStr(f.scene_text_reader)  + " ");
+    if (perc_btn_face_) perc_btn_face_->setText(std::string(" Face: ")      + OnOffStr(f.facial_expression_detector) + " ");
 }
 
 // ── Update ──────────────────────────────────────────────────────────────────
@@ -1390,6 +1399,7 @@ void UIPhysicalEnvironmentPanel::UpdatePerceptionTab(const InputState& input, fl
     place(perc_btn_cls_,  2);
     place(perc_btn_pose_, 3);
     place(perc_btn_text_, 4);
+    place(perc_btn_face_, 5);
 }
 
 // ── Draw: detection boxes ───────────────────────────────────────────────────
@@ -1550,6 +1560,35 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionSceneTextOverlay(
 
 // ── Draw: sidebar status ────────────────────────────────────────────────────
 
+void UIPhysicalEnvironmentPanel::DrawPerceptionFacialExpressionOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalFacialExpressionDetectorOutput& faces,
+    int blit_x, int blit_y, int blit_w, int blit_h,
+    int model_w, int model_h)
+{
+    if (faces.faces.empty() || model_w <= 0 || model_h <= 0) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(model_w);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(model_h);
+    const uint32_t bbox_col  = PercMakeArgb(0xFF, 0xFF, 0x60, 0xC0);
+    const uint32_t label_col = PercMakeArgb(0xFF, 0xFF, 0xFF, 0xFF);
+    for (const auto& fc : faces.faces) {
+        const float x = blit_x + fc.model_bbox.x * sx;
+        const float y = blit_y + fc.model_bbox.y * sy;
+        const float w = fc.model_bbox.width  * sx;
+        const float h = fc.model_bbox.height * sy;
+        renderer.drawRect({x, y         }, {w,    1.0f}, bbox_col);
+        renderer.drawRect({x, y + h - 1 }, {w,    1.0f}, bbox_col);
+        renderer.drawRect({x, y         }, {1.0f, h   }, bbox_col);
+        renderer.drawRect({x + w - 1, y }, {1.0f, h   }, bbox_col);
+        if (!fc.expression_label.empty()) {
+            std::string s = fc.expression_label + " "
+                          + FormatDouble(fc.expression_score * 100.0, 0) + "%";
+            renderer.drawText({x, std::max(static_cast<float>(blit_y), y - 14.0f)},
+                              s, label_col);
+        }
+    }
+}
+
 void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
     OverlayRenderer& renderer, float x, float y, float w, float /*h*/,
     const PE::PhysicalPerceptionPrimitiveResults& r, bool have_results)
@@ -1638,6 +1677,21 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
              r.scene_text_reader.inference_count, r.scene_text_reader.last_inference_ms,
              std::string("lines=") + std::to_string(r.scene_text_reader.lines.size())
              + (r.scene_text_reader.recogniser_configured ? " (+OCR)" : " (det-only)"));
+    opStatus("Face",
+             r.facial_expression_detector.state, r.facial_expression_detector.last_error_reason,
+             r.facial_expression_detector.inference_count, r.facial_expression_detector.last_inference_ms,
+             std::string("faces=") + std::to_string(r.facial_expression_detector.faces.size())
+             + (r.facial_expression_detector.classifier_configured ? " (+emotion)" : " (det-only)"));
+    if (r.facial_expression_detector.state == PE::PhysicalImageOperatorState::ModelLoaded
+        && !r.facial_expression_detector.faces.empty()) {
+        for (const auto& fc : r.facial_expression_detector.faces) {
+            if (fc.expression_label.empty()) continue;
+            line(std::string("    ") + FormatDouble(fc.expression_score * 100.0, 1) + "%  "
+                 + fc.expression_label,
+                 UITheme::Colors::TextPrimary);
+        }
+        sep();
+    }
 }
 
 // ── Draw: tab body ─────────────────────────────────────────────────────────
@@ -1649,6 +1703,7 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
     if (perc_btn_cls_)  perc_btn_cls_->drawOverlay(renderer, position);
     if (perc_btn_pose_) perc_btn_pose_->drawOverlay(renderer, position);
     if (perc_btn_text_) perc_btn_text_->drawOverlay(renderer, position);
+    if (perc_btn_face_) perc_btn_face_->drawOverlay(renderer, position);
 
     const float pad         = 12.0f;
     const float toolbar_h   = 32.0f;
@@ -1703,6 +1758,8 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
                                       blit_x, blit_y, blit_w, blit_h, model_w, model_h);
             DrawPerceptionSceneTextOverlay(renderer, r.scene_text_reader,
                                            blit_x, blit_y, blit_w, blit_h, model_w, model_h);
+            DrawPerceptionFacialExpressionOverlay(renderer, r.facial_expression_detector,
+                                                  blit_x, blit_y, blit_w, blit_h, model_w, model_h);
         } else if (have_any_perc_results_) {
             renderer.drawText({frame_x + 12, frame_y + frame_h - 22},
                               "Latest results are for an older frame "

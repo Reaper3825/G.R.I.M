@@ -199,7 +199,16 @@ void PhysicalSceneTextReader::RouteFrameToPhysicalSceneTextReader(
                 cv::Rect bb = cv::boundingRect(src) & cv::Rect(0, 0, model_image.cols, model_image.rows);
                 if (bb.width > 1 && bb.height > 1) {
                     roi = model_image(bb);
-                    ln.text = recogniser_->recognize(roi);
+                    if (cfg_.recogniser_input_grayscale) {
+                        // Most CRNN ONNX models in the wild (incl. OpenCV Zoo
+                        // CRNN_EN/CN) take a single-channel input. Convert the
+                        // BGR ROI to grayscale so the underlying blob has 1 ch.
+                        cv::Mat gray;
+                        cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+                        ln.text = recogniser_->recognize(gray);
+                    } else {
+                        ln.text = recogniser_->recognize(roi);
+                    }
                 }
             }
             out.lines.push_back(std::move(ln));

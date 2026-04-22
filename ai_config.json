@@ -57,11 +57,12 @@
         },
         "router": {
             "backend_type": "grim_text_server",
-            "description": "Primary router model — routes requests and synthesizes sub-model outputs",
+            "description": "GRIM-text router \u2014 the core reasoning engine. Decides which sub-models (text or vision) to leverage and synthesizes their outputs into the final response.",
             "estimated_ram_mb": 0,
             "estimated_vram_mb": 0,
             "hard_copy_path": "",
             "id": "grim-text-router",
+            "kind": "text",
             "lora_path": "",
             "model_path": "resources/models/GRIM-text/grim_text.bin",
             "name": "GRIM-text Router",
@@ -69,13 +70,183 @@
             "subject_tags": [
                 "general",
                 "routing",
-                "synthesis"
+                "synthesis",
+                "reasoning"
             ],
             "url": "http://127.0.0.1:11435",
             "usage_weight": 1.0,
             "version": "1.0"
         },
-        "sub_models": []
+        "sub_models": [
+            {
+                "id": "vision-object-detector",
+                "name": "YOLOv8n Object Detector",
+                "version": "8.0",
+                "subject": "vision",
+                "description": "COCO-class axis-aligned object detection (80 classes). Hosted in-process by PhysicalPerceptionPrimitivesLoop via OpenCV cv::dnn.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/yolov8n.onnx",
+                "url": "",
+                "subject_tags": [
+                    "vision",
+                    "object_detection",
+                    "perception_primitive"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 64,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "object_detector",
+                    "class_names_path": "resources/models/vision/coco.names",
+                    "input_width": 640,
+                    "input_height": 640,
+                    "confidence_threshold": 0.25,
+                    "iou_threshold": 0.45
+                }
+            },
+            {
+                "id": "vision-semantic-segmenter",
+                "name": "PPHumanSeg (Person Segmentation)",
+                "version": "2023mar",
+                "subject": "vision",
+                "description": "Binary person/background semantic segmentation (192x192). Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/pphumanseg.onnx",
+                "url": "",
+                "subject_tags": [
+                    "vision",
+                    "semantic_segmentation",
+                    "perception_primitive"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 32,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "semantic_segmenter",
+                    "class_names_path": "resources/models/vision/pphumanseg.names",
+                    "input_width": 192,
+                    "input_height": 192
+                }
+            },
+            {
+                "id": "vision-image-classifier",
+                "name": "MobileNetV2 ImageNet-1k",
+                "version": "2022apr",
+                "subject": "vision",
+                "description": "ImageNet-1k whole-frame classifier (224x224, top-K). Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/mobilenet_v2.onnx",
+                "url": "",
+                "subject_tags": [
+                    "vision",
+                    "image_classification",
+                    "perception_primitive"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 48,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "image_classifier",
+                    "class_names_path": "resources/models/vision/imagenet1k.names",
+                    "input_width": 224,
+                    "input_height": 224,
+                    "top_k": 5
+                }
+            },
+            {
+                "id": "vision-pose-estimator",
+                "name": "YOLOv8n-Pose",
+                "version": "8.0",
+                "subject": "vision",
+                "description": "Multi-person 17-keypoint pose estimation (COCO-Pose, 640x640). Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/yolov8n_pose.onnx",
+                "url": "",
+                "subject_tags": [
+                    "vision",
+                    "pose_estimation",
+                    "perception_primitive"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 64,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "pose_estimator",
+                    "class_names_path": "resources/models/vision/coco_pose.names",
+                    "input_width": 640,
+                    "input_height": 640,
+                    "min_keypoint_confidence": 0.30,
+                    "pose_output_format": "yolo_anchor",
+                    "num_keypoints": 17,
+                    "confidence_threshold": 0.25,
+                    "iou_threshold": 0.45
+                }
+            },
+            {
+                "id": "vision-scene-text-reader",
+                "name": "PPOCRv3-EN + CRNN Scene Text",
+                "version": "2023may",
+                "subject": "vision",
+                "description": "PaddleOCR v3 English text detector + CRNN-EN recogniser. Hosted in-process by PhysicalPerceptionPrimitivesLoop via cv::dnn::TextDetectionModel_DB / TextRecognitionModel.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/ppocrv3_en_det.onnx",
+                "url": "",
+                "subject_tags": [
+                    "vision",
+                    "scene_text",
+                    "ocr",
+                    "perception_primitive"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 64,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "scene_text_reader",
+                    "input_width": 736,
+                    "input_height": 736,
+                    "recogniser_onnx_path": "resources/models/vision/crnn_en.onnx",
+                    "recogniser_charset_path": "resources/models/vision/crnn_charset_en.txt"
+                }
+            },
+            {
+                "id": "vision-facial-expression-detector",
+                "name": "YuNet Face + FER+ Emotion",
+                "version": "2023mar+8",
+                "subject": "vision",
+                "description": "YuNet face detector (cv::FaceDetectorYN) + FER+ 8-class emotion classifier. Hosted in-process by PhysicalPerceptionPrimitivesLoop. Per detected face: bbox + softmax over {neutral, happiness, surprise, sadness, anger, disgust, fear, contempt}.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/yunet_face_detector.onnx",
+                "url": "",
+                "subject_tags": [
+                    "vision",
+                    "face",
+                    "facial_expression",
+                    "emotion",
+                    "perception_primitive"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 80,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "facial_expression_detector",
+                    "input_width": 320,
+                    "input_height": 320,
+                    "confidence_threshold": 0.60,
+                    "iou_threshold": 0.30,
+                    "expression_classifier_onnx_path": "resources/models/vision/ferplus_emotion.onnx",
+                    "expression_classifier_class_names_path": "resources/models/vision/ferplus_emotions.names",
+                    "expression_classifier_input_width": 64,
+                    "expression_classifier_input_height": 64,
+                    "expression_classifier_input_grayscale": true
+                }
+            }
+        ]
     },
     "ollama_options": {
         "low_vram": false,

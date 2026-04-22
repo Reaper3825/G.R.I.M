@@ -126,6 +126,28 @@ std::vector<const ModelInfo*> ModelRegistry::getSubModels() const {
     return result;
 }
 
+std::vector<const ModelInfo*> ModelRegistry::getTextSubModels() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<const ModelInfo*> result;
+    for (const auto& [id, model] : models_) {
+        if (id == router_id_)               continue;
+        if (model.kind != ModelKind::Text)  continue;
+        result.push_back(&model);
+    }
+    return result;
+}
+
+std::vector<const ModelInfo*> ModelRegistry::getVisionSubModels() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<const ModelInfo*> result;
+    for (const auto& [id, model] : models_) {
+        if (id == router_id_)                 continue;
+        if (model.kind != ModelKind::Vision)  continue;
+        result.push_back(&model);
+    }
+    return result;
+}
+
 std::vector<const ModelInfo*> ModelRegistry::getModelsBySubjectTag(
     const std::string& tag) const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -245,6 +267,31 @@ nlohmann::json ModelRegistry::serializeModelToJson(const ModelInfo& model) {
     j["estimated_ram_mb"]  = model.estimated_ram_mb;
     j["estimated_vram_mb"] = model.estimated_vram_mb;
 
+    // Capability classification
+    j["kind"] = modelKindToString(model.kind);
+    if (model.kind == ModelKind::Vision) {
+        nlohmann::json v;
+        v["operator"]                 = visionOperatorKindToString(model.vision.operator_kind);
+        v["class_names_path"]         = model.vision.class_names_path;
+        v["input_width"]              = model.vision.input_width;
+        v["input_height"]             = model.vision.input_height;
+        v["confidence_threshold"]     = model.vision.confidence_threshold;
+        v["iou_threshold"]            = model.vision.iou_threshold;
+        v["top_k"]                    = model.vision.top_k;
+        v["min_keypoint_confidence"]  = model.vision.min_keypoint_confidence;
+        v["recogniser_onnx_path"]     = model.vision.recogniser_onnx_path;
+        v["recogniser_charset_path"]  = model.vision.recogniser_charset_path;
+        v["recogniser_input_grayscale"] = model.vision.recogniser_input_grayscale;
+        v["pose_output_format"]       = model.vision.pose_output_format;
+        v["num_keypoints"]            = model.vision.num_keypoints;
+        v["expression_classifier_onnx_path"]        = model.vision.expression_classifier_onnx_path;
+        v["expression_classifier_class_names_path"] = model.vision.expression_classifier_class_names_path;
+        v["expression_classifier_input_width"]      = model.vision.expression_classifier_input_width;
+        v["expression_classifier_input_height"]     = model.vision.expression_classifier_input_height;
+        v["expression_classifier_input_grayscale"]  = model.vision.expression_classifier_input_grayscale;
+        j["vision"] = std::move(v);
+    }
+
     // Router-only fields — only emit if non-empty
     if (!model.lora_path.empty())      j["lora_path"]      = model.lora_path;
     if (!model.hard_copy_path.empty()) j["hard_copy_path"] = model.hard_copy_path;
@@ -312,30 +359,107 @@ ModelInfo ModelRegistry::parseModelInfo(const nlohmann::json& entry) {
     m.estimated_ram_mb  = entry.value("estimated_ram_mb", 0L);
     m.estimated_vram_mb = entry.value("estimated_vram_mb", 0L);
 
+    // Capability classification (kind defaults to Text)
+    if (entry.contains("kind") && entry["kind"].is_string()) {
+        m.kind = parseModelKind(entry["kind"].get<std::string>());
+    }
+    if (entry.contains("vision") && entry["vision"].is_object()) {
+        const auto& v = entry["vision"];
+        if (v.contains("operator") && v["operator"].is_string()) {
+            m.vision.operator_kind = parseVisionOperatorKind(
+                v["operator"].get<std::string>());
+        }
+        m.vision.class_names_path        = v.value("class_names_path", "");
+        m.vision.input_width             = v.value("input_width", 0);
+        m.vision.input_height            = v.value("input_height", 0);
+        m.vision.confidence_threshold    = v.value("confidence_threshold", 0.0f);
+        m.vision.iou_threshold           = v.value("iou_threshold", 0.0f);
+        m.vision.top_k                   = v.value("top_k", 0);
+        m.vision.min_keypoint_confidence = v.value("min_keypoint_confidence", 0.0f);
+        m.vision.recogniser_onnx_path    = v.value("recogniser_onnx_path", "");
+        m.vision.recogniser_charset_path = v.value("recogniser_charset_path", "");
+        m.vision.recogniser_input_grayscale = v.value("recogniser_input_grayscale", true);
+        m.vision.pose_output_format      = v.value("pose_output_format", "");
+        m.vision.num_keypoints           = v.value("num_keypoints", 0);
+        m.vision.expression_classifier_onnx_path        = v.value("expression_classifier_onnx_path", "");
+        m.vision.expression_classifier_class_names_path = v.value("expression_classifier_class_names_path", "");
+        m.vision.expression_classifier_input_width      = v.value("expression_classifier_input_width", 64);
+        m.vision.expression_classifier_input_height     = v.value("expression_classifier_input_height", 64);
+        m.vision.expression_classifier_input_grayscale  = v.value("expression_classifier_input_grayscale", true);
+    }
+
     return m;
 }
 
 BackendType ModelRegistry::parseBackendType(const std::string& str) {
-    if (str == "grim_text_server") return BackendType::GrimTextServer;
-    if (str == "llama_cpp")        return BackendType::LlamaCpp;
-    if (str == "ollama")           return BackendType::Ollama;
-    if (str == "external")         return BackendType::External;
+    if (str == "grim_text_server")  return BackendType::GrimTextServer;
+    if (str == "llama_cpp")         return BackendType::LlamaCpp;
+    if (str == "ollama")            return BackendType::Ollama;
+    if (str == "external")          return BackendType::External;
+    if (str == "in_process_vision") return BackendType::InProcessVision;
 
     throw std::runtime_error(
         "ModelRegistry: unknown backend_type '" + str
-        + "' (valid: grim_text_server, llama_cpp, ollama, external)");
+        + "' (valid: grim_text_server, llama_cpp, ollama, external, in_process_vision)");
 }
 
 std::string ModelRegistry::backendTypeToString(BackendType bt) {
     switch (bt) {
-        case BackendType::GrimTextServer: return "grim_text_server";
-        case BackendType::LlamaCpp:       return "llama_cpp";
-        case BackendType::Ollama:         return "ollama";
-        case BackendType::External:       return "external";
+        case BackendType::GrimTextServer:  return "grim_text_server";
+        case BackendType::LlamaCpp:        return "llama_cpp";
+        case BackendType::Ollama:          return "ollama";
+        case BackendType::External:        return "external";
+        case BackendType::InProcessVision: return "in_process_vision";
     }
     throw std::runtime_error(
         "ModelRegistry::backendTypeToString: unknown BackendType value "
         + std::to_string(static_cast<int>(bt)));
+}
+
+ModelKind ModelRegistry::parseModelKind(const std::string& str) {
+    if (str == "text")   return ModelKind::Text;
+    if (str == "vision") return ModelKind::Vision;
+    throw std::runtime_error(
+        "ModelRegistry: unknown model kind '" + str
+        + "' (valid: text, vision)");
+}
+
+std::string ModelRegistry::modelKindToString(ModelKind k) {
+    switch (k) {
+        case ModelKind::Text:   return "text";
+        case ModelKind::Vision: return "vision";
+    }
+    throw std::runtime_error(
+        "ModelRegistry::modelKindToString: unknown ModelKind "
+        + std::to_string(static_cast<int>(k)));
+}
+
+VisionOperatorKind ModelRegistry::parseVisionOperatorKind(const std::string& str) {
+    if (str == "object_detector")    return VisionOperatorKind::ObjectDetector;
+    if (str == "semantic_segmenter") return VisionOperatorKind::SemanticSegmenter;
+    if (str == "image_classifier")   return VisionOperatorKind::ImageClassifier;
+    if (str == "pose_estimator")     return VisionOperatorKind::PoseEstimator;
+    if (str == "scene_text_reader")  return VisionOperatorKind::SceneTextReader;
+    if (str == "facial_expression_detector") return VisionOperatorKind::FacialExpressionDetector;
+    throw std::runtime_error(
+        "ModelRegistry: unknown vision operator '" + str
+        + "' (valid: object_detector, semantic_segmenter, image_classifier, "
+          "pose_estimator, scene_text_reader, facial_expression_detector)");
+}
+
+std::string ModelRegistry::visionOperatorKindToString(VisionOperatorKind k) {
+    switch (k) {
+        case VisionOperatorKind::Unknown:           return "unknown";
+        case VisionOperatorKind::ObjectDetector:    return "object_detector";
+        case VisionOperatorKind::SemanticSegmenter: return "semantic_segmenter";
+        case VisionOperatorKind::ImageClassifier:   return "image_classifier";
+        case VisionOperatorKind::PoseEstimator:     return "pose_estimator";
+        case VisionOperatorKind::SceneTextReader:   return "scene_text_reader";
+        case VisionOperatorKind::FacialExpressionDetector: return "facial_expression_detector";
+    }
+    throw std::runtime_error(
+        "ModelRegistry::visionOperatorKindToString: unknown VisionOperatorKind "
+        + std::to_string(static_cast<int>(k)));
 }
 
 void ModelRegistry::validateModel(const ModelInfo& model, bool is_router) {
@@ -348,9 +472,42 @@ void ModelRegistry::validateModel(const ModelInfo& model, bool is_router) {
         throw std::runtime_error(
             "ModelRegistry: model '" + model.id + "' is missing required 'name' field");
     }
-    if (model.url.empty()) {
+
+    // Kind / backend coherence
+    const bool is_vision = (model.kind == ModelKind::Vision);
+    if (is_router && is_vision) {
         throw std::runtime_error(
-            "ModelRegistry: model '" + model.id + "' is missing required 'url' field");
+            "ModelRegistry: router '" + model.id
+            + "' must have kind=text (the router is the reasoning engine that "
+              "orchestrates sub-models, not a vision operator).");
+    }
+
+    if (is_vision) {
+        // In-process vision sub-models do NOT have an HTTP url; instead
+        // they require an ONNX path (in model_path) and a vision descriptor.
+        if (model.backend_type != BackendType::InProcessVision) {
+            throw std::runtime_error(
+                "ModelRegistry: vision sub-model '" + model.id
+                + "' must declare backend_type='in_process_vision'.");
+        }
+        if (model.vision.operator_kind == VisionOperatorKind::Unknown) {
+            throw std::runtime_error(
+                "ModelRegistry: vision sub-model '" + model.id
+                + "' is missing required vision.operator (one of: object_detector, "
+                  "semantic_segmenter, image_classifier, pose_estimator, scene_text_reader, "
+                  "facial_expression_detector).");
+        }
+        if (model.model_path.empty()) {
+            throw std::runtime_error(
+                "ModelRegistry: vision sub-model '" + model.id
+                + "' is missing required model_path (ONNX weights).");
+        }
+    } else {
+        // Text models (router and text sub-models) require a URL.
+        if (model.url.empty()) {
+            throw std::runtime_error(
+                "ModelRegistry: model '" + model.id + "' is missing required 'url' field");
+        }
     }
 
     // Sub-model invariant: no LoRA, no hard copy

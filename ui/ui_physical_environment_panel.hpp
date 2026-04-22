@@ -197,6 +197,7 @@ private:
     void HandleTogglePerceptionImageClassifier();
     void HandleTogglePerceptionPoseEstimator();
     void HandleTogglePerceptionSceneTextReader();
+    void HandleTogglePerceptionFacialExpressionDetector();
     void RefreshPerceptionEnableButtonLabelsFromSubsystem();
     void UpdatePerceptionTab(const InputState& input, float dt);
     void DrawPerceptionTab(OverlayRenderer& renderer);
@@ -219,6 +220,11 @@ private:
         const GRIM::Perception::Physical::PhysicalSceneTextReaderOutput& text,
         int blit_x, int blit_y, int blit_w, int blit_h,
         int model_w, int model_h);
+    void DrawPerceptionFacialExpressionOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalFacialExpressionDetectorOutput& faces,
+        int blit_x, int blit_y, int blit_w, int blit_h,
+        int model_w, int model_h);
     void DrawPerceptionSidebar(
         OverlayRenderer& renderer, float x, float y, float w, float h,
         const GRIM::Perception::Physical::PhysicalPerceptionPrimitiveResults& r,
@@ -229,6 +235,7 @@ private:
     std::shared_ptr<UIButton> perc_btn_cls_;
     std::shared_ptr<UIButton> perc_btn_pose_;
     std::shared_ptr<UIButton> perc_btn_text_;
+    std::shared_ptr<UIButton> perc_btn_face_;
 
     // Frame blit cache for the Perception tab (model-image view).
     PreviewBlitCache perception_blit_cache_;
