@@ -107,6 +107,8 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]() { setActiveTab(Tab::Calibration); });
     tab_perception_btn_ = std::make_shared<UIButton>(" Perception ",
         [this]() { setActiveTab(Tab::Perception); });
+    tab_spatial_btn_ = std::make_shared<UIButton>(" Spatial ",
+        [this]() { setActiveTab(Tab::Spatial); });
 
     // ── Perception tab toggle buttons (labels refreshed at end of ctor) ──
     perc_btn_obj_  = std::make_shared<UIButton>(" Detector: on ",
@@ -123,7 +125,16 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]{ HandleTogglePerceptionFacialExpressionDetector(); });
     perc_btn_track_ = std::make_shared<UIButton>(" Tracks: on ",
         [this]{ HandleTogglePerceptionEntityTracker(); });
+    perc_btn_inst_seg_ = std::make_shared<UIButton>(" InstSeg: on ",
+        [this]{ HandleTogglePerceptionInstanceSegmenter(); });
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
+
+    // ── Spatial tab toggle buttons (labels refreshed at end of ctor) ──
+    spatial_btn_depth_ = std::make_shared<UIButton>(" Depth: on ",
+        [this]{ HandleToggleSpatialDepthEstimator(); });
+    spatial_btn_ground_ = std::make_shared<UIButton>(" Ground: on ",
+        [this]{ HandleToggleSpatialGrounder(); });
+    RefreshSpatialEnableButtonLabelsFromSubsystem();
 
     // ── Camera tab widgets ──
     url_inputbox_ = std::make_shared<UIInputBox>(&url_buffer_);
@@ -618,12 +629,18 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         tab_perception_btn_->setPosition(position.x + kTabBarPad + 252.0f, tab_y);
         tab_perception_btn_->update(input, dt);
     }
+    if (tab_spatial_btn_) {
+        tab_spatial_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
+        tab_spatial_btn_->setPosition(position.x + kTabBarPad + 388.0f, tab_y);
+        tab_spatial_btn_->update(input, dt);
+    }
 
     // ── Tab content ──
     switch (active_tab_) {
         case Tab::Camera:      UpdateCameraTab(input, dt);      break;
         case Tab::Calibration: UpdateCalibrationTab(input, dt); break;
         case Tab::Perception:  UpdatePerceptionTab(input, dt);  break;
+        case Tab::Spatial:     UpdateSpatialTab(input, dt);     break;
     }
 }
 
@@ -837,6 +854,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     if (tab_camera_btn_)      tab_camera_btn_->drawOverlay(renderer, position);
     if (tab_calibration_btn_) tab_calibration_btn_->drawOverlay(renderer, position);
     if (tab_perception_btn_)  tab_perception_btn_->drawOverlay(renderer, position);
+    if (tab_spatial_btn_)     tab_spatial_btn_->drawOverlay(renderer, position);
 
     // Active-tab underline indicator (matches DataHub/Training pattern).
     {
@@ -849,6 +867,8 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
                 ix = position.x + kTabBarPad + 116.0f; iw = 130.0f; break;
             case Tab::Perception:
                 ix = position.x + kTabBarPad + 252.0f; iw = 130.0f; break;
+            case Tab::Spatial:
+                ix = position.x + kTabBarPad + 388.0f; iw = 110.0f; break;
         }
         renderer.drawRect({ix, y}, {iw, 2.0f}, UITheme::Colors::Primary);
     }
@@ -863,6 +883,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
         case Tab::Camera:      DrawCameraTab(renderer);      break;
         case Tab::Calibration: DrawCalibrationTab(renderer); break;
         case Tab::Perception:  DrawPerceptionTab(renderer);  break;
+        case Tab::Spatial:     DrawSpatialTab(renderer);     break;
     }
 
     renderer.popClipRect();
@@ -1364,6 +1385,12 @@ void UIPhysicalEnvironmentPanel::HandleTogglePerceptionEntityTracker() {
     PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
 }
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionInstanceSegmenter() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.instance_segmenter = !f.instance_segmenter;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
 
 void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsystem() {
     const auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
@@ -1374,6 +1401,7 @@ void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsyste
     if (perc_btn_text_) perc_btn_text_->setText(std::string(" Text: ")      + OnOffStr(f.scene_text_reader)  + " ");
     if (perc_btn_face_) perc_btn_face_->setText(std::string(" Face: ")      + OnOffStr(f.facial_expression_detector) + " ");
     if (perc_btn_track_)perc_btn_track_->setText(std::string(" Tracks: ")    + OnOffStr(f.entity_tracker) + " ");
+    if (perc_btn_inst_seg_)perc_btn_inst_seg_->setText(std::string(" InstSeg: ") + OnOffStr(f.instance_segmenter) + " ");
 }
 
 // ── Update ──────────────────────────────────────────────────────────────────
@@ -1410,6 +1438,7 @@ void UIPhysicalEnvironmentPanel::UpdatePerceptionTab(const InputState& input, fl
     place(perc_btn_text_, 4);
     place(perc_btn_face_, 5);
     place(perc_btn_track_,6);
+    place(perc_btn_inst_seg_,7);
 }
 
 // ── Draw: detection boxes ───────────────────────────────────────────────────
@@ -1706,6 +1735,76 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionEntityTracksOverlay(
     }
 }
 
+void UIPhysicalEnvironmentPanel::DrawPerceptionInstanceMasksOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalInstanceSegmenterOutput& inst,
+    int blit_x, int blit_y, int blit_w, int blit_h,
+    int model_w, int model_h)
+{
+    if (model_w <= 0 || model_h <= 0) return;
+    if (inst.segmentation.instances.empty()) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(model_w);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(model_h);
+
+    for (const auto& m : inst.segmentation.instances) {
+        if (m.mask_pixel_count <= 0 || m.mask_within_bbox.empty()) continue;
+        if (m.mask_within_bbox.type() != CV_8UC1) {
+            // Hard-fail visualisation rather than draw garbage \u2014 the
+            // contract on PhysicalInstanceMask says CV_8UC1.
+            renderer.drawText({static_cast<float>(blit_x) + 4.0f,
+                               static_cast<float>(blit_y) + 4.0f},
+                              std::string("InstSeg overlay: mask is not CV_8UC1 for ")
+                              + m.class_label,
+                              PercMakeArgb(0xFF, 0xFF, 0x40, 0x40));
+            continue;
+        }
+        const uint32_t fill_col    = PercColorForClassId(m.class_id, /*alpha=*/0x55);
+        const uint32_t outline_col = PercColorForClassId(m.class_id, /*alpha=*/0xFF);
+
+        // Trace mask outline via cv::findContours. Outlines are far cheaper
+        // to draw than per-pixel filled rectangles AND make occlusion
+        // boundaries visually obvious (the whole point of segmentation).
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(m.mask_within_bbox, contours,
+                         cv::RETR_EXTERNAL, cv::CHAIN_APPROX_TC89_L1);
+
+        // Light fill: 1px squares along the outline interior so the masked
+        // region is visible against busy backgrounds, without burning CPU
+        // doing per-pixel blits across the whole region.
+        for (const auto& contour : contours) {
+            if (contour.size() < 2) continue;
+            for (size_t i = 0; i < contour.size(); ++i) {
+                const cv::Point& a = contour[i];
+                const cv::Point& b = contour[(i + 1) % contour.size()];
+                // contour points are in mask-local coords; translate to
+                // model coords by adding bbox top-left, then to screen.
+                const float ax = blit_x + (m.mask_model_bbox.x + a.x) * sx;
+                const float ay = blit_y + (m.mask_model_bbox.y + a.y) * sy;
+                const float bx = blit_x + (m.mask_model_bbox.x + b.x) * sx;
+                const float by = blit_y + (m.mask_model_bbox.y + b.y) * sy;
+                renderer.drawLine({ax, ay}, {bx, by}, outline_col);
+            }
+        }
+
+        // Tag the mask with its class + IoU near the mask bbox top-left so
+        // the user knows which detection produced this mask.
+        const float lx = blit_x + m.mask_model_bbox.x * sx;
+        const float ly = std::max(static_cast<float>(blit_y),
+                                  blit_y + m.mask_model_bbox.y * sy - 14.0f);
+        std::ostringstream label_ss;
+        label_ss << m.class_label
+                 << "  iou=" << FormatDouble(m.mask_confidence * 100.0, 0) << "%";
+        const std::string label = label_ss.str();
+        const float tw = renderer.measureTextWidth(label) + 6.0f;
+        renderer.drawRect({lx, ly}, {tw, 14.0f}, PercMakeArgb(0xC0, 0, 0, 0));
+        renderer.drawText({lx + 3.0f, ly + 2.0f}, label, outline_col);
+
+        // Suppress an unused-variable warning while keeping the alpha-fill
+        // colour in the API for a future per-pixel renderer mode.
+        (void)fill_col;
+    }
+}
+
 void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
     OverlayRenderer& renderer, float x, float y, float w, float /*h*/,
     const PE::PhysicalPerceptionPrimitiveResults& r, bool have_results)
@@ -1847,6 +1946,39 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
             sep();
         }
     }
+    {
+        // Stage-2 instance segmenter (SAM 2). Reports separate encoder /
+        // decoder timings because the encoder runs once per frame while the
+        // decoder loops once per prompt — extremely useful for spotting
+        // "too many prompts" cost spikes.
+        const auto& isg = r.instance_segmenter;
+        std::ostringstream extra;
+        extra << "masks=" << isg.segmentation.instances.size()
+              << "  prompts=" << isg.prompt_count
+              << "  enc=" << FormatDouble(isg.last_encoder_ms, 1) << "ms"
+              << "  dec=" << FormatDouble(isg.last_decoder_total_ms, 1) << "ms";
+        opStatus("InstSeg", isg.state, isg.last_error_reason,
+                 isg.inference_count, isg.last_inference_ms, extra.str());
+        if (isg.state == PE::PhysicalImageOperatorState::ModelLoaded
+            && !isg.segmentation.instances.empty()) {
+            const size_t shown = std::min<size_t>(6, isg.segmentation.instances.size());
+            for (size_t i = 0; i < shown; ++i) {
+                const auto& m = isg.segmentation.instances[i];
+                std::ostringstream row;
+                row << "    " << m.class_label
+                    << "  iou=" << FormatDouble(m.mask_confidence * 100.0, 0) << "%"
+                    << "  px=" << m.mask_pixel_count
+                    << "  area=" << FormatDouble(m.mask_area_fraction * 100.0, 1) << "%";
+                line(row.str(), UITheme::Colors::TextPrimary);
+            }
+            if (isg.segmentation.instances.size() > shown) {
+                line(std::string("    \u2026 ")
+                     + std::to_string(isg.segmentation.instances.size() - shown)
+                     + " more", UITheme::Colors::TextSecondary);
+            }
+            sep();
+        }
+    }
 }
 
 // ── Draw: tab body ─────────────────────────────────────────────────────────
@@ -1860,6 +1992,7 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
     if (perc_btn_text_) perc_btn_text_->drawOverlay(renderer, position);
     if (perc_btn_face_) perc_btn_face_->drawOverlay(renderer, position);
     if (perc_btn_track_)perc_btn_track_->drawOverlay(renderer, position);
+    if (perc_btn_inst_seg_)perc_btn_inst_seg_->drawOverlay(renderer, position);
 
     const float pad         = 12.0f;
     const float toolbar_h   = 32.0f;
@@ -1918,6 +2051,8 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
                                                   blit_x, blit_y, blit_w, blit_h, model_w, model_h);
             DrawPerceptionEntityTracksOverlay(renderer, r.entity_tracker,
                                               blit_x, blit_y, blit_w, blit_h, model_w, model_h);
+            DrawPerceptionInstanceMasksOverlay(renderer, r.instance_segmenter,
+                                               blit_x, blit_y, blit_w, blit_h, model_w, model_h);
         } else if (have_any_perc_results_) {
             renderer.drawText({frame_x + 12, frame_y + frame_h - 22},
                               "Latest results are for an older frame "
@@ -1934,4 +2069,342 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
     DrawPerceptionSidebar(renderer, sidebar_x + 8, sidebar_y + 8,
                           sidebar_w - 16, sidebar_h - 16,
                           perc_results_view_.results, have_any_perc_results_);
+}
+
+// ============================================================================
+//  Spatial tab (Stage-3 — depth + grounded entities)
+// ============================================================================
+
+void UIPhysicalEnvironmentPanel::HandleToggleSpatialDepthEstimator() {
+    try {
+        auto f = PE::GetPhysicalSpatialGroundingEnableFlags();
+        f.depth_estimator = !f.depth_estimator;
+        PE::RequestSetPhysicalSpatialGroundingEnableFlags(f);
+        RefreshSpatialEnableButtonLabelsFromSubsystem();
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+            std::string("HandleToggleSpatialDepthEstimator threw: ") + e.what());
+    }
+}
+
+void UIPhysicalEnvironmentPanel::HandleToggleSpatialGrounder() {
+    try {
+        auto f = PE::GetPhysicalSpatialGroundingEnableFlags();
+        f.spatial_grounder = !f.spatial_grounder;
+        PE::RequestSetPhysicalSpatialGroundingEnableFlags(f);
+        RefreshSpatialEnableButtonLabelsFromSubsystem();
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+            std::string("HandleToggleSpatialGrounder threw: ") + e.what());
+    }
+}
+
+void UIPhysicalEnvironmentPanel::RefreshSpatialEnableButtonLabelsFromSubsystem() {
+    try {
+        const auto f = PE::GetPhysicalSpatialGroundingEnableFlags();
+        if (spatial_btn_depth_)
+            spatial_btn_depth_->setText(f.depth_estimator
+                                         ? std::string(" Depth: on ")
+                                         : std::string(" Depth: off "));
+        if (spatial_btn_ground_)
+            spatial_btn_ground_->setText(f.spatial_grounder
+                                          ? std::string(" Ground: on ")
+                                          : std::string(" Ground: off "));
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+            std::string("RefreshSpatialEnableButtonLabelsFromSubsystem threw: ") + e.what());
+    }
+}
+
+void UIPhysicalEnvironmentPanel::UpdateSpatialTab(const InputState& input, float dt) {
+    (void)dt;
+
+    // Pull the latest grounded result; throws are surfaced to the log but
+    // do NOT block the rest of the tab from rendering.
+    try {
+        if (PE::PhysicalSpatialGroundingBus::Instance()
+                .PullLatestPhysicalSpatialGroundingResultsView(
+                    spatial_results_view_, spatial_last_seen_counter_)) {
+            have_any_spatial_results_ = true;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+                  std::string("UpdateSpatialTab: results pull threw: ") + e.what());
+    }
+
+    // Toolbar layout — two enable buttons across the top of the tab.
+    const float content_top = position.y + titleBarHeight + kTabBarHeight + 8.0f;
+    const float bx          = position.x + 16.0f;
+    const float by          = content_top;
+    const float bh          = 24.0f;
+    if (spatial_btn_depth_) {
+        spatial_btn_depth_->setSize(110.0f, bh);
+        spatial_btn_depth_->setPosition(bx, by);
+        spatial_btn_depth_->update(input, dt);
+    }
+    if (spatial_btn_ground_) {
+        spatial_btn_ground_->setSize(120.0f, bh);
+        spatial_btn_ground_->setPosition(bx + 118.0f, by);
+        spatial_btn_ground_->update(input, dt);
+    }
+
+    // Build the heatmap BGR Mat ONCE per new source frame. The Bus pull
+    // already gated on counter, so we further key by source_frame_counter
+    // to avoid rebuilding the colormap during idle redraws.
+    if (have_any_spatial_results_
+        && !spatial_results_view_.results.depth_map.empty()
+        && spatial_results_view_.results.source_frame_counter != spatial_heatmap_source_id_) {
+        try {
+            const cv::Mat& inv = spatial_results_view_.results.depth_map.inverse_depth_image;
+            if (inv.type() == CV_32FC1 && inv.cols > 0 && inv.rows > 0) {
+                cv::Mat u8;
+                inv.convertTo(u8, CV_8UC1, 255.0);
+                cv::applyColorMap(u8, spatial_heatmap_bgr_, cv::COLORMAP_INFERNO);
+                spatial_heatmap_source_id_ = spatial_results_view_.results.source_frame_counter;
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR(kPanelLogTag,
+                std::string("UpdateSpatialTab: heatmap build threw: ") + e.what());
+        }
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawSpatialDepthHeatmap(
+    OverlayRenderer& renderer,
+    const PE::PhysicalDepthMap& dmap,
+    uint64_t source_id,
+    float frame_x, float frame_y, float frame_w, float frame_h)
+{
+    if (dmap.empty() || spatial_heatmap_bgr_.empty()) {
+        renderer.drawText({frame_x + 12, frame_y + 12},
+            "(no depth map yet — load an ONNX MiDaS model via "
+            "RequestConfigurePhysicalMonocularDepthEstimator)",
+            UITheme::Colors::TextSecondary);
+        return;
+    }
+    DrawBgrFrameIntoOverlay(renderer, spatial_heatmap_bgr_, source_id, false,
+                            frame_x, frame_y, frame_w, frame_h,
+                            spatial_heatmap_blit_cache_);
+}
+
+void UIPhysicalEnvironmentPanel::DrawSpatialGroundedEntitiesOverlay(
+    OverlayRenderer& renderer,
+    const std::vector<PE::PhysicalGroundedEntity>& entities,
+    int blit_x, int blit_y, int blit_w, int blit_h,
+    int model_w, int model_h)
+{
+    if (entities.empty() || model_w <= 0 || model_h <= 0
+        || blit_w <= 0 || blit_h <= 0) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(model_w);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(model_h);
+    for (const auto& g : entities) {
+        const float bx = blit_x + g.model_box.x      * sx;
+        const float by = blit_y + g.model_box.y      * sy;
+        const float bw =          g.model_box.width  * sx;
+        const float bh =          g.model_box.height * sy;
+        // 2-px outline (top, bottom, left, right) — matches Detector style.
+        const auto col = g.path_blocked ? UITheme::Colors::Danger
+                                        : UITheme::Colors::Primary;
+        renderer.drawRect({bx, by},          {bw, 2.0f}, col);
+        renderer.drawRect({bx, by + bh-2.0f},{bw, 2.0f}, col);
+        renderer.drawRect({bx, by},          {2.0f, bh}, col);
+        renderer.drawRect({bx + bw-2.0f, by},{2.0f, bh}, col);
+
+        // Compose label: id, class, range, support, motion, blocked.
+        std::stringstream ss;
+        ss << "#" << g.track_id;
+        if (!g.class_label.empty()) ss << " " << g.class_label;
+        if (g.units == PE::DepthUnits::Meters) {
+            ss << " | " << std::fixed << std::setprecision(2)
+               << g.range_value_meters << "m";
+        } else {
+            ss << " | rel=" << std::fixed << std::setprecision(2) << g.range_value;
+        }
+        ss << " conf=" << std::fixed << std::setprecision(2) << g.range_confidence;
+        ss << " | " << PE::DescribePhysicalSupportSurfaceClass(g.support_surface);
+        ss << " | " << PE::DescribePhysicalEntityMotionState(g.motion_state);
+        if (g.path_blocked) ss << " | BLOCKED";
+        renderer.drawText({bx, by - 14.0f}, ss.str(), col);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawSpatialSidebar(
+    OverlayRenderer& renderer, float x, float y, float w, float h,
+    const PE::PhysicalSpatialGroundingResults& r, bool have_results)
+{
+    (void)w; (void)h;
+    auto state_text = [](PE::PhysicalImageOperatorState s) -> const char* {
+        switch (s) {
+            case PE::PhysicalImageOperatorState::NoModelConfigured: return "no model";
+            case PE::PhysicalImageOperatorState::ModelLoaded:       return "ready";
+            case PE::PhysicalImageOperatorState::ModelLoadFailed:   return "LOAD-FAIL";
+            case PE::PhysicalImageOperatorState::InferenceFailed:   return "INF-FAIL";
+        }
+        return "?";
+    };
+
+    float ly = y;
+    renderer.drawText({x, ly}, "Stage-3: Spatial Grounding",
+                      UITheme::Colors::TextPrimary); ly += 18.0f;
+
+    if (!have_results) {
+        renderer.drawText({x, ly},
+            "(no result on bus yet — frame + tracker must publish)",
+            UITheme::Colors::TextSecondary);
+        return;
+    }
+
+    {
+        std::stringstream ss;
+        ss << "frame_ctr=" << r.source_frame_counter
+           << "  perc_ctr=" << r.source_perception_results_counter;
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+        ly += 16.0f;
+    }
+    {
+        std::stringstream ss;
+        ss << "depth: " << state_text(r.depth_estimator_state)
+           << " | " << std::fixed << std::setprecision(2)
+           << r.last_depth_inference_ms << "ms"
+           << " | n=" << r.depth_inference_count;
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+        ly += 16.0f;
+    }
+    if (!r.depth_estimator_last_error.empty()) {
+        renderer.drawText({x, ly},
+            "depth err: " + r.depth_estimator_last_error,
+            UITheme::Colors::Warning);
+        ly += 16.0f;
+    }
+    {
+        std::stringstream ss;
+        ss << "ground: " << state_text(r.grounder_state)
+           << " | " << std::fixed << std::setprecision(2)
+           << r.last_grounding_ms << "ms"
+           << " | n=" << r.grounding_count;
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+        ly += 16.0f;
+    }
+    if (!r.grounder_last_error.empty()) {
+        renderer.drawText({x, ly},
+            "ground err: " + r.grounder_last_error,
+            UITheme::Colors::Warning);
+        ly += 16.0f;
+    }
+    {
+        std::stringstream ss;
+        ss << "depth_map: ";
+        if (r.depth_map.empty()) {
+            ss << "(empty)";
+        } else {
+            ss << r.depth_map.map_width << "x" << r.depth_map.map_height
+               << " units=" << PE::DescribeDepthUnits(r.depth_map.units)
+               << " inv=[" << std::fixed << std::setprecision(3)
+               << r.depth_map.raw_inverse_depth_min << ","
+               << r.depth_map.raw_inverse_depth_max << "]";
+        }
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+        ly += 16.0f;
+    }
+    {
+        std::stringstream ss;
+        ss << "grounded entities: " << r.grounded_entities.size();
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextPrimary);
+        ly += 18.0f;
+    }
+    int blocked = 0, moving = 0, on_floor = 0, on_table = 0;
+    for (const auto& g : r.grounded_entities) {
+        if (g.path_blocked) ++blocked;
+        if (g.motion_state == PE::PhysicalEntityMotionState::Moving) ++moving;
+        if (g.support_surface == PE::PhysicalSupportSurfaceClass::Floor) ++on_floor;
+        if (g.support_surface == PE::PhysicalSupportSurfaceClass::Table) ++on_table;
+    }
+    {
+        std::stringstream ss;
+        ss << "  blocking path: " << blocked
+           << "  moving: " << moving
+           << "  on floor: " << on_floor
+           << "  on table: " << on_table;
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+        ly += 18.0f;
+    }
+    // Per-entity detail (truncated so we don't blow past the sidebar).
+    constexpr size_t kMaxRows = 12;
+    const size_t n = std::min(kMaxRows, r.grounded_entities.size());
+    for (size_t i = 0; i < n; ++i) {
+        const auto& g = r.grounded_entities[i];
+        std::stringstream ss;
+        ss << "#" << g.track_id;
+        if (!g.class_label.empty()) ss << " " << g.class_label;
+        if (g.units == PE::DepthUnits::Meters)
+            ss << " | " << std::fixed << std::setprecision(2)
+               << g.range_value_meters << "m";
+        else
+            ss << " | r=" << std::fixed << std::setprecision(2) << g.range_value;
+        ss << " | " << PE::DescribePhysicalSupportSurfaceClass(g.support_surface);
+        ss << " | " << PE::DescribePhysicalEntityMotionState(g.motion_state);
+        if (g.path_blocked) ss << "  BLOCKED";
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+        ly += 14.0f;
+    }
+    if (r.grounded_entities.size() > n) {
+        std::stringstream ss;
+        ss << "  ... (+" << (r.grounded_entities.size() - n) << " more)";
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawSpatialTab(OverlayRenderer& renderer) {
+    // Toolbar buttons (already laid out + ticked in UpdateSpatialTab).
+    if (spatial_btn_depth_)  spatial_btn_depth_->drawOverlay(renderer, position);
+    if (spatial_btn_ground_) spatial_btn_ground_->drawOverlay(renderer, position);
+
+    const float pad         = 16.0f;
+    const float toolbar_h   = 32.0f;
+    const float content_top = position.y + titleBarHeight + kTabBarHeight + toolbar_h + 8.0f;
+
+    // Heatmap takes left ~62% of the panel; sidebar gets the rest.
+    const float total_w  = size.x - 2.0f * pad;
+    const float frame_w  = total_w * 0.62f;
+    const float frame_h  = size.y - (content_top - position.y) - pad;
+    const float frame_x  = position.x + pad;
+    const float frame_y  = content_top;
+
+    // Sidebar.
+    const float sidebar_x = frame_x + frame_w + 8.0f;
+    const float sidebar_y = content_top;
+    const float sidebar_w = size.x - pad - (sidebar_x - position.x);
+    const float sidebar_h = frame_h;
+
+    DrawSpatialDepthHeatmap(renderer,
+                            spatial_results_view_.results.depth_map,
+                            spatial_results_view_.results.source_frame_counter,
+                            frame_x, frame_y, frame_w, frame_h);
+
+    // Compute the actual blit rect (heatmap + bounding-box overlay must
+    // share the same letterboxed geometry).
+    if (have_any_spatial_results_
+        && !spatial_results_view_.results.depth_map.empty()
+        && spatial_heatmap_blit_cache_.out_w > 0
+        && spatial_heatmap_blit_cache_.out_h > 0) {
+        const int out_w = spatial_heatmap_blit_cache_.out_w;
+        const int out_h = spatial_heatmap_blit_cache_.out_h;
+        const int out_x = static_cast<int>(frame_x + (frame_w - out_w) * 0.5f);
+        const int out_y = static_cast<int>(frame_y + (frame_h - out_h) * 0.5f);
+        DrawSpatialGroundedEntitiesOverlay(
+            renderer,
+            spatial_results_view_.results.grounded_entities,
+            out_x, out_y, out_w, out_h,
+            spatial_results_view_.results.model_image_width,
+            spatial_results_view_.results.model_image_height);
+    }
+
+    // Sidebar background + content.
+    renderer.drawRect({sidebar_x - 1, sidebar_y - 1},
+                      {sidebar_w + 2, sidebar_h + 2}, UITheme::Colors::DividerLine);
+    renderer.drawRect({sidebar_x, sidebar_y},
+                      {sidebar_w, sidebar_h}, UITheme::Colors::PanelBg);
+    DrawSpatialSidebar(renderer, sidebar_x + 8, sidebar_y + 8,
+                       sidebar_w - 16, sidebar_h - 16,
+                       spatial_results_view_.results, have_any_spatial_results_);
 }

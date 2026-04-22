@@ -26,6 +26,7 @@ struct PhysicalPerceptionPrimitivesState {
     // Owned operators — constructed lazily on first Tick.
     std::unique_ptr<PhysicalObjectDetector>          object_detector;
     std::unique_ptr<PhysicalSemanticSegmenter>       semantic_segmenter;
+    std::unique_ptr<PhysicalInstanceSegmenter>       instance_segmenter;
     std::unique_ptr<PhysicalImageClassifier>         image_classifier;
     std::unique_ptr<PhysicalPoseKeypointEstimator>   pose_estimator;
     std::unique_ptr<PhysicalSceneTextReader>         scene_text_reader;
@@ -37,6 +38,7 @@ struct PhysicalPerceptionPrimitivesState {
     // calls operate directly on the operator instances.
     std::unique_ptr<PhysicalObjectDetectorConfig>          pending_obj_cfg;
     std::unique_ptr<PhysicalSemanticSegmenterConfig>       pending_seg_cfg;
+    std::unique_ptr<PhysicalInstanceSegmenterConfig>       pending_inst_seg_cfg;
     std::unique_ptr<PhysicalImageClassifierConfig>         pending_cls_cfg;
     std::unique_ptr<PhysicalPoseKeypointEstimatorConfig>   pending_pose_cfg;
     std::unique_ptr<PhysicalSceneTextReaderConfig>         pending_text_cfg;
@@ -63,6 +65,7 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
               "TickPhysicalPerceptionPrimitives: first call — running lazy init");
     s.object_detector    = std::make_unique<PhysicalObjectDetector>();
     s.semantic_segmenter = std::make_unique<PhysicalSemanticSegmenter>();
+    s.instance_segmenter = std::make_unique<PhysicalInstanceSegmenter>();
     s.image_classifier   = std::make_unique<PhysicalImageClassifier>();
     s.pose_estimator     = std::make_unique<PhysicalPoseKeypointEstimator>();
     s.scene_text_reader  = std::make_unique<PhysicalSceneTextReader>();
@@ -89,6 +92,9 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     apply(s.pending_seg_cfg,
           [&](auto& c){ s.semantic_segmenter->LoadOnnxModelIntoPhysicalSemanticSegmenter(c); },
           "PhysicalSemanticSegmenter");
+    apply(s.pending_inst_seg_cfg,
+          [&](auto& c){ s.instance_segmenter->LoadOnnxModelsIntoPhysicalInstanceSegmenter(c); },
+          "PhysicalInstanceSegmenter");
     apply(s.pending_cls_cfg,
           [&](auto& c){ s.image_classifier->LoadOnnxModelIntoPhysicalImageClassifier(c); },
           "PhysicalImageClassifier");
@@ -222,6 +228,19 @@ void TickPhysicalPerceptionPrimitives() {
             results.entity_tracker);
     }
 
+    // Instance segmenter (SAM 2) consumes the object detector's boxes as
+    // prompts, so it MUST run after the detector populated
+    // results.object_detector.detections. Order vs entity_tracker is
+    // independent (no shared mutable state) but we keep the segmenter last
+    // because its encoder pass is the most expensive operator on the bus.
+    if (s.enable_flags.instance_segmenter && s.instance_segmenter) {
+        s.instance_segmenter->RouteFrameAndDetectionsToPhysicalInstanceSegmenter(
+            s.frame_view.model_image,
+            results.object_detector.detections,
+            results.source_frame_counter,
+            results.instance_segmenter);
+    }
+
     try {
         PhysicalPerceptionPrimitiveBus::Instance().PublishPhysicalPerceptionResultsToBus(results);
         ++s.processed_count;
@@ -238,6 +257,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.shutting_down = true;
     if (s.object_detector)    s.object_detector->ResetPhysicalObjectDetector();
     if (s.semantic_segmenter) s.semantic_segmenter->ResetPhysicalSemanticSegmenter();
+    if (s.instance_segmenter) s.instance_segmenter->ResetPhysicalInstanceSegmenter();
     if (s.image_classifier)   s.image_classifier->ResetPhysicalImageClassifier();
     if (s.pose_estimator)     s.pose_estimator->ResetPhysicalPoseKeypointEstimator();
     if (s.scene_text_reader)  s.scene_text_reader->ResetPhysicalSceneTextReader();
@@ -245,6 +265,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     if (s.entity_tracker)     s.entity_tracker->ResetPhysicalEntityTracker();
     s.object_detector.reset();
     s.semantic_segmenter.reset();
+    s.instance_segmenter.reset();
     s.image_classifier.reset();
     s.pose_estimator.reset();
     s.scene_text_reader.reset();
@@ -252,6 +273,7 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.entity_tracker.reset();
     s.pending_obj_cfg.reset();
     s.pending_seg_cfg.reset();
+    s.pending_inst_seg_cfg.reset();
     s.pending_cls_cfg.reset();
     s.pending_pose_cfg.reset();
     s.pending_text_cfg.reset();
@@ -309,7 +331,8 @@ void RequestSetPhysicalPerceptionPrimitivesEnableFlags(
               + " pose="+ (flags.pose_estimator     ? "1" : "0")
               + " text="+ (flags.scene_text_reader  ? "1" : "0")
               + " face="+ (flags.facial_expression_detector ? "1" : "0")
-              + " track="+ (flags.entity_tracker ? "1" : "0"));
+              + " track="+ (flags.entity_tracker ? "1" : "0")
+              + " inst_seg="+ (flags.instance_segmenter ? "1" : "0"));
 }
 
 // Each Request* either applies immediately (init done) or stages the cfg
@@ -408,6 +431,21 @@ void RequestConfigurePhysicalEntityTracker(const PhysicalEntityTrackerConfig& cf
             "entity_tracker is null \u2014 likely after ShutdownPhysicalPerceptionPrimitives()");
     }
     s.entity_tracker->ConfigurePhysicalEntityTracker(cfg);
+}
+
+void RequestConfigurePhysicalInstanceSegmenter(const PhysicalInstanceSegmenterConfig& cfg) {
+    auto& s = GetState();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    if (!s.initialized) {
+        s.pending_inst_seg_cfg = std::make_unique<PhysicalInstanceSegmenterConfig>(cfg);
+        return;
+    }
+    if (!s.instance_segmenter) {
+        throw std::runtime_error(
+            "RequestConfigurePhysicalInstanceSegmenter: subsystem initialised but "
+            "instance_segmenter is null \xE2\x80\x94 likely after ShutdownPhysicalPerceptionPrimitives()");
+    }
+    s.instance_segmenter->LoadOnnxModelsIntoPhysicalInstanceSegmenter(cfg);
 }
 
 }}} // namespace

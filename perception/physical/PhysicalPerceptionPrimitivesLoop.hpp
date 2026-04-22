@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PhysicalImageClassifier.hpp"
+#include "PhysicalInstanceSegmenter.hpp"
 #include "PhysicalObjectDetector.hpp"
 #include "PhysicalPoseKeypointEstimator.hpp"
 #include "PhysicalSceneTextReader.hpp"
@@ -50,6 +51,10 @@ struct PhysicalPerceptionPrimitivesEnableFlags {
     // object_detector is off OR has no model loaded, the tracker still runs
     // but sees an empty detection list (it will simply age out tracks).
     bool entity_tracker     = true;
+    // Instance segmenter (SAM 2) consumes the object detector's boxes as
+    // prompts. Same gating as the tracker: with no detections this frame the
+    // operator skips the encoder pass entirely (cheap no-op).
+    bool instance_segmenter = true;
 };
 
 // Mainloop entry point. Cheap; safe to call every frame. Lazy-inits.
@@ -82,5 +87,6 @@ void RequestConfigurePhysicalPoseKeypointEstimator(const PhysicalPoseKeypointEst
 void RequestConfigurePhysicalSceneTextReader(const PhysicalSceneTextReaderConfig& cfg);
 void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpressionDetectorConfig& cfg);
 void RequestConfigurePhysicalEntityTracker(const PhysicalEntityTrackerConfig& cfg);
+void RequestConfigurePhysicalInstanceSegmenter(const PhysicalInstanceSegmenterConfig& cfg);
 
 }}} // namespace GRIM::Perception::Physical

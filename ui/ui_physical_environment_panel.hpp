@@ -10,6 +10,8 @@
 #include "perception/physical/PhysicalFrameBus.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitiveBus.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
+#include "perception/physical/PhysicalSpatialGroundingBus.hpp"
+#include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 
 #include <opencv2/core/mat.hpp>
 
@@ -38,7 +40,8 @@ public:
     enum class Tab : uint8_t {
         Camera      = 0,
         Calibration = 1,
-        Perception  = 2
+        Perception  = 2,
+        Spatial     = 3
     };
 
     UIPhysicalEnvironmentPanel();
@@ -169,6 +172,7 @@ private:
     std::shared_ptr<UIButton>   tab_camera_btn_;
     std::shared_ptr<UIButton>   tab_calibration_btn_;
     std::shared_ptr<UIButton>   tab_perception_btn_;
+    std::shared_ptr<UIButton>   tab_spatial_btn_;
     Tab                         active_tab_ = Tab::Camera;
 
     // ── Shared frame pull state (one bus, one cached frame) ──
@@ -201,6 +205,7 @@ private:
     void HandleTogglePerceptionSceneTextReader();
     void HandleTogglePerceptionFacialExpressionDetector();
     void HandleTogglePerceptionEntityTracker();
+    void HandleTogglePerceptionInstanceSegmenter();
     void RefreshPerceptionEnableButtonLabelsFromSubsystem();
     void UpdatePerceptionTab(const InputState& input, float dt);
     void DrawPerceptionTab(OverlayRenderer& renderer);
@@ -233,6 +238,11 @@ private:
         const GRIM::Perception::Physical::PhysicalEntityTrackerOutput& tracker,
         int blit_x, int blit_y, int blit_w, int blit_h,
         int model_w, int model_h);
+    void DrawPerceptionInstanceMasksOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalInstanceSegmenterOutput& inst,
+        int blit_x, int blit_y, int blit_w, int blit_h,
+        int model_w, int model_h);
     void DrawPerceptionSidebar(
         OverlayRenderer& renderer, float x, float y, float w, float h,
         const GRIM::Perception::Physical::PhysicalPerceptionPrimitiveResults& r,
@@ -245,6 +255,7 @@ private:
     std::shared_ptr<UIButton> perc_btn_text_;
     std::shared_ptr<UIButton> perc_btn_face_;
     std::shared_ptr<UIButton> perc_btn_track_;
+    std::shared_ptr<UIButton> perc_btn_inst_seg_;
 
     // Frame blit cache for the Perception tab (model-image view).
     PreviewBlitCache perception_blit_cache_;
@@ -271,4 +282,39 @@ private:
         uint64_t                            last_seen_frame_counter = 0;
     };
     std::unordered_map<uint64_t, TrackTrail> track_trails_;
+
+    // ── Spatial tab (Stage-3) ──
+    void HandleToggleSpatialDepthEstimator();
+    void HandleToggleSpatialGrounder();
+    void RefreshSpatialEnableButtonLabelsFromSubsystem();
+    void UpdateSpatialTab(const InputState& input, float dt);
+    void DrawSpatialTab(OverlayRenderer& renderer);
+    void DrawSpatialDepthHeatmap(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalDepthMap& dmap,
+        uint64_t source_id,
+        float frame_x, float frame_y, float frame_w, float frame_h);
+    void DrawSpatialGroundedEntitiesOverlay(
+        OverlayRenderer& renderer,
+        const std::vector<GRIM::Perception::Physical::PhysicalGroundedEntity>& entities,
+        int blit_x, int blit_y, int blit_w, int blit_h,
+        int model_w, int model_h);
+    void DrawSpatialSidebar(
+        OverlayRenderer& renderer, float x, float y, float w, float h,
+        const GRIM::Perception::Physical::PhysicalSpatialGroundingResults& r,
+        bool have_results);
+
+    std::shared_ptr<UIButton> spatial_btn_depth_;
+    std::shared_ptr<UIButton> spatial_btn_ground_;
+
+    // Bus-pull state for spatial grounding results.
+    GRIM::Perception::Physical::PhysicalSpatialGroundingBus::ResultsView
+        spatial_results_view_;
+    uint64_t spatial_last_seen_counter_ = 0;
+    bool     have_any_spatial_results_  = false;
+
+    // Heatmap blit cache (depth map → COLORMAP_INFERNO → ARGB pre-pack).
+    PreviewBlitCache spatial_heatmap_blit_cache_;
+    cv::Mat          spatial_heatmap_bgr_;             // built lazily from depth_map
+    uint64_t         spatial_heatmap_source_id_ = 0;   // 0 = not yet built
 };

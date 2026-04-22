@@ -28,6 +28,8 @@
 #include "../core/plugin_manager.hpp"
 #include "../location.hpp"
 #include "../perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
+#include "../perception/physical/PhysicalSpatialGroundingLoop.hpp"
+#include "../perception/physical/PhysicalMonocularDepthEstimator.hpp"
 
 #include <filesystem>
 #include <whisper.h>
@@ -390,6 +392,38 @@ static void bootstrapMMOLayer() {
                         c.classifier_input_height = vm->vision.expression_classifier_input_height;
                     c.classifier_input_grayscale = vm->vision.expression_classifier_input_grayscale;
                     PE::RequestConfigurePhysicalFacialExpressionDetector(c);
+                    break;
+                }
+                case Op::MonocularDepthEstimator: {
+                    PE::PhysicalMonocularDepthEstimatorConfig c;
+                    c.onnx_model_path = vm->model_path;
+                    if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
+                    if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
+                    c.input_scale = static_cast<float>(vm->vision.depth_input_scale);
+                    c.input_mean  = cv::Scalar(vm->vision.depth_input_mean_r,
+                                               vm->vision.depth_input_mean_g,
+                                               vm->vision.depth_input_mean_b);
+                    c.input_std   = cv::Scalar(vm->vision.depth_input_std_r,
+                                               vm->vision.depth_input_std_g,
+                                               vm->vision.depth_input_std_b);
+                    c.swap_rb              = vm->vision.depth_swap_rb;
+                    c.output_is_disparity  = vm->vision.depth_output_is_disparity;
+                    c.metric_scale_meters  = vm->vision.depth_metric_scale_meters;
+                    c.metric_epsilon       = static_cast<float>(vm->vision.depth_metric_epsilon);
+                    PE::RequestConfigurePhysicalMonocularDepthEstimator(c);
+                    break;
+                }
+                case Op::InstanceSegmenter: {
+                    PE::PhysicalInstanceSegmenterConfig c;
+                    c.encoder_onnx_path = vm->model_path;
+                    c.decoder_onnx_path = vm->vision.instance_seg_decoder_onnx_path;
+                    if (vm->vision.input_width  > 0) c.encoder_input_width  = vm->vision.input_width;
+                    if (vm->vision.input_height > 0) c.encoder_input_height = vm->vision.input_height;
+                    if (vm->vision.instance_seg_max_prompts_per_frame > 0)
+                        c.max_prompts_per_frame = vm->vision.instance_seg_max_prompts_per_frame;
+                    if (vm->vision.instance_seg_min_prompt_confidence > 0.0f)
+                        c.min_prompt_confidence = vm->vision.instance_seg_min_prompt_confidence;
+                    PE::RequestConfigurePhysicalInstanceSegmenter(c);
                     break;
                 }
                 case Op::Unknown:

@@ -37,6 +37,7 @@
 #include "perception/perception_context.hpp" 
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
+#include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "ui/ui_physical_environment_panel.hpp"
 #include "MMO/UI/UISurfaceRegistry.hpp"
 #ifdef _WIN32
@@ -592,6 +593,10 @@ int main(int argc, char* argv[])
         // perception primitive (detection / segmentation / classification / pose /
         // scene text), publishes the aggregate to PhysicalPerceptionPrimitiveBus.
         GRIM::Perception::Physical::TickPhysicalPerceptionPrimitives();
+        // Stage 3: pulls the latest matching frame + perception result, runs the
+        // monocular depth estimator and the spatial grounder, publishes the
+        // per-track grounded results to PhysicalSpatialGroundingBus.
+        GRIM::Perception::Physical::TickPhysicalSpatialGrounding();
 
         UIRoot::get().update(input, 0.016f);
 
@@ -678,6 +683,7 @@ int main(int argc, char* argv[])
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
+    GRIM::Perception::Physical::ShutdownPhysicalSpatialGrounding();
     GRIM::Perception::Physical::ShutdownPhysicalPerceptionPrimitives();
     GRIM::Perception::Physical::ShutdownPhysicalEnvironment();
     GRIM::Perception::shutdown();  

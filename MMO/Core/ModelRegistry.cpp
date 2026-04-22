@@ -289,6 +289,9 @@ nlohmann::json ModelRegistry::serializeModelToJson(const ModelInfo& model) {
         v["expression_classifier_input_width"]      = model.vision.expression_classifier_input_width;
         v["expression_classifier_input_height"]     = model.vision.expression_classifier_input_height;
         v["expression_classifier_input_grayscale"]  = model.vision.expression_classifier_input_grayscale;
+        v["instance_seg_decoder_onnx_path"]     = model.vision.instance_seg_decoder_onnx_path;
+        v["instance_seg_max_prompts_per_frame"] = model.vision.instance_seg_max_prompts_per_frame;
+        v["instance_seg_min_prompt_confidence"] = model.vision.instance_seg_min_prompt_confidence;
         j["vision"] = std::move(v);
     }
 
@@ -386,6 +389,24 @@ ModelInfo ModelRegistry::parseModelInfo(const nlohmann::json& entry) {
         m.vision.expression_classifier_input_width      = v.value("expression_classifier_input_width", 64);
         m.vision.expression_classifier_input_height     = v.value("expression_classifier_input_height", 64);
         m.vision.expression_classifier_input_grayscale  = v.value("expression_classifier_input_grayscale", true);
+
+        // Monocular depth (Stage-3) preprocessing & calibration overrides.
+        m.vision.depth_swap_rb              = v.value("depth_swap_rb", true);
+        m.vision.depth_input_mean_r         = v.value("depth_input_mean_r", 123.675);
+        m.vision.depth_input_mean_g         = v.value("depth_input_mean_g", 116.28);
+        m.vision.depth_input_mean_b         = v.value("depth_input_mean_b", 103.53);
+        m.vision.depth_input_std_r          = v.value("depth_input_std_r", 58.395);
+        m.vision.depth_input_std_g          = v.value("depth_input_std_g", 57.12);
+        m.vision.depth_input_std_b          = v.value("depth_input_std_b", 57.375);
+        m.vision.depth_input_scale          = v.value("depth_input_scale", 1.0 / 255.0);
+        m.vision.depth_output_is_disparity  = v.value("depth_output_is_disparity", true);
+        m.vision.depth_metric_scale_meters  = v.value("depth_metric_scale_meters", 0.0);
+        m.vision.depth_metric_epsilon       = v.value("depth_metric_epsilon", 1.0e-3);
+
+        // Instance-segmenter (Stage-2 SAM 2)
+        m.vision.instance_seg_decoder_onnx_path     = v.value("instance_seg_decoder_onnx_path", "");
+        m.vision.instance_seg_max_prompts_per_frame = v.value("instance_seg_max_prompts_per_frame", 0);
+        m.vision.instance_seg_min_prompt_confidence = v.value("instance_seg_min_prompt_confidence", 0.0f);
     }
 
     return m;
@@ -441,10 +462,13 @@ VisionOperatorKind ModelRegistry::parseVisionOperatorKind(const std::string& str
     if (str == "pose_estimator")     return VisionOperatorKind::PoseEstimator;
     if (str == "scene_text_reader")  return VisionOperatorKind::SceneTextReader;
     if (str == "facial_expression_detector") return VisionOperatorKind::FacialExpressionDetector;
+    if (str == "monocular_depth_estimator")  return VisionOperatorKind::MonocularDepthEstimator;
+    if (str == "instance_segmenter")         return VisionOperatorKind::InstanceSegmenter;
     throw std::runtime_error(
         "ModelRegistry: unknown vision operator '" + str
         + "' (valid: object_detector, semantic_segmenter, image_classifier, "
-          "pose_estimator, scene_text_reader, facial_expression_detector)");
+          "pose_estimator, scene_text_reader, facial_expression_detector, "
+          "monocular_depth_estimator, instance_segmenter)");
 }
 
 std::string ModelRegistry::visionOperatorKindToString(VisionOperatorKind k) {
@@ -456,6 +480,8 @@ std::string ModelRegistry::visionOperatorKindToString(VisionOperatorKind k) {
         case VisionOperatorKind::PoseEstimator:     return "pose_estimator";
         case VisionOperatorKind::SceneTextReader:   return "scene_text_reader";
         case VisionOperatorKind::FacialExpressionDetector: return "facial_expression_detector";
+        case VisionOperatorKind::MonocularDepthEstimator:  return "monocular_depth_estimator";
+        case VisionOperatorKind::InstanceSegmenter:        return "instance_segmenter";
     }
     throw std::runtime_error(
         "ModelRegistry::visionOperatorKindToString: unknown VisionOperatorKind "
@@ -495,7 +521,7 @@ void ModelRegistry::validateModel(const ModelInfo& model, bool is_router) {
                 "ModelRegistry: vision sub-model '" + model.id
                 + "' is missing required vision.operator (one of: object_detector, "
                   "semantic_segmenter, image_classifier, pose_estimator, scene_text_reader, "
-                  "facial_expression_detector).");
+                  "facial_expression_detector, monocular_depth_estimator, instance_segmenter).");
         }
         if (model.model_path.empty()) {
             throw std::runtime_error(

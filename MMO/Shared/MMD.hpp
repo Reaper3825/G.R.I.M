@@ -46,7 +46,9 @@ enum class VisionOperatorKind : uint8_t {
     ImageClassifier          = 3,
     PoseEstimator            = 4,
     SceneTextReader          = 5,
-    FacialExpressionDetector = 6
+    FacialExpressionDetector = 6,
+    MonocularDepthEstimator  = 7,
+    InstanceSegmenter        = 8
 };
 
 struct VisionModelDescriptor {
@@ -86,6 +88,31 @@ struct VisionModelDescriptor {
     int         expression_classifier_input_width  = 64;
     int         expression_classifier_input_height = 64;
     bool        expression_classifier_input_grayscale = true;
+
+    // Monocular-depth-estimator-specific (Stage-3).
+    // ImageNet defaults match MiDaS / DPT / Depth-Anything preprocessing.
+    // input_mean / input_std are stored as 3-element BGR scalars when set
+    // via the loader; channel order is post-swap_rb when swap_rb=true.
+    // depth_metric_scale_meters > 0 ⇒ produce metric depth via
+    //   depth_m = depth_metric_scale_meters / max(inverse_depth, eps)
+    bool   depth_swap_rb              = true;
+    double depth_input_mean_r         = 123.675;  // ImageNet R*255
+    double depth_input_mean_g         = 116.28;
+    double depth_input_mean_b         = 103.53;
+    double depth_input_std_r          = 58.395;
+    double depth_input_std_g          = 57.12;
+    double depth_input_std_b          = 57.375;
+    double depth_input_scale          = 1.0 / 255.0;
+    bool   depth_output_is_disparity  = true;     // MiDaS / Depth-Anything family
+    double depth_metric_scale_meters  = 0.0;      // 0 ⇒ relative depth only
+    double depth_metric_epsilon       = 1.0e-3;
+
+    // Instance-segmenter (Stage-2 SAM 2). ModelInfo::model_path holds the
+    // ENCODER ONNX; the decoder ONNX is a SECOND file. input_width /
+    // input_height (above) are the encoder spatial dims (SAM 2 default 1024).
+    std::string instance_seg_decoder_onnx_path;
+    int         instance_seg_max_prompts_per_frame = 0;   // 0 ⇒ operator default
+    float       instance_seg_min_prompt_confidence = 0.0f; // 0 ⇒ operator default
 };
 
 // =========================================================

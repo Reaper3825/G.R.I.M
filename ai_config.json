@@ -245,6 +245,71 @@
                     "expression_classifier_input_height": 64,
                     "expression_classifier_input_grayscale": true
                 }
+            },
+            {
+                "id": "midas_v21_small_256",
+                "name": "MiDaS v2.1 Small (256)",
+                "version": "2.1",
+                "subject": "vision",
+                "description": "MiDaS v2.1 Small monocular relative-depth estimator (EfficientNet-Lite3 backbone). Best accuracy/latency balance for OpenCV cv::dnn CPU backend on Apple Silicon: 256x256 input, ~30+ FPS, ImageNet normalisation, output is inverse depth (closer = larger). Hosted in-process by PhysicalSpatialGroundingLoop and consumed by PhysicalSpatialGrounder for range/support-surface/path-block/motion fusion.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/midas_v21_small_256.onnx",
+                "url": "",
+                "subject_tags": [
+                    "vision",
+                    "depth",
+                    "monocular_depth",
+                    "spatial_grounding",
+                    "stage3"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 220,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "monocular_depth_estimator",
+                    "input_width": 256,
+                    "input_height": 256,
+                    "depth_swap_rb": true,
+                    "depth_input_scale": 0.00392156862745098,
+                    "depth_input_mean_r": 123.675,
+                    "depth_input_mean_g": 116.28,
+                    "depth_input_mean_b": 103.53,
+                    "depth_input_std_r": 58.395,
+                    "depth_input_std_g": 57.12,
+                    "depth_input_std_b": 57.375,
+                    "depth_output_is_disparity": true,
+                    "depth_metric_scale_meters": 0.0,
+                    "depth_metric_epsilon": 0.001
+                }
+            },
+            {
+                "id": "vision-instance-segmenter",
+                "name": "SAM 2 Hiera Tiny (Prompted Instance Segmentation)",
+                "version": "2024jul",
+                "subject": "vision",
+                "description": "Meta SAM 2 Hiera-Tiny prompted instance segmentation. Encoder runs once per frame (1024x1024); decoder runs once per object detector box (TL+BR point prompts) producing a per-instance binary mask at MODEL resolution. Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
+                "backend_type": "in_process_vision",
+                "kind": "vision",
+                "model_path": "resources/models/vision/sam2_hiera_tiny_encoder.onnx",
+                "url": "",
+                "subject_tags": [
+                    "vision",
+                    "instance_segmentation",
+                    "sam2",
+                    "perception_primitive"
+                ],
+                "usage_weight": 1.0,
+                "estimated_ram_mb": 320,
+                "estimated_vram_mb": 0,
+                "vision": {
+                    "operator": "instance_segmenter",
+                    "input_width": 1024,
+                    "input_height": 1024,
+                    "instance_seg_decoder_onnx_path": "resources/models/vision/sam2_hiera_tiny_decoder.onnx",
+                    "instance_seg_max_prompts_per_frame": 16,
+                    "instance_seg_min_prompt_confidence": 0.30
+                }
             }
         ]
     },

@@ -47,6 +47,38 @@ struct PhysicalSemanticSegmentation {
     std::vector<std::string> class_labels;     // class_labels[i] = name for class i (may be empty)
 };
 
+// 2b. Instance segmentation — one binary mask per detected object instance,
+//     produced by PhysicalInstanceSegmenter (SAM 2) prompted with the
+//     PhysicalObjectDetector's boxes. Each mask is stored compactly as
+//     mask_within_bbox (CV_8UC1, values 0 or 255) packed inside its tight
+//     mask_model_bbox in MODEL pixel space, so consumers can reason about
+//     occlusion via mask intersection without paying for full-frame masks.
+//
+//     Numerical-precision contract:
+//       * mask_within_bbox.size() == mask_model_bbox.size() exactly.
+//       * mask_model_bbox is fully contained within [0, model_w) x [0, model_h).
+//       * mask_pixel_count == cv::countNonZero(mask_within_bbox / 255).
+//       * mask_area_fraction = mask_pixel_count / (model_w * model_h).
+//       * source_detection_index points back into PhysicalObjectDetectorOutput
+//         .detections so the consumer can recover class / raw-space box.
+//         If <0 the prompt did not come from the detector (reserved).
+struct PhysicalInstanceMask {
+    int32_t      source_detection_index = -1;
+    int32_t      class_id               = -1;
+    std::string  class_label;
+    float        detection_confidence   = 0.0f;   // confidence of source detection
+    float        mask_confidence        = 0.0f;   // SAM 2 IoU prediction (mask quality)
+    cv::Rect2f   prompt_model_box;                // copy of the source box (traceability)
+    cv::Rect2i   mask_model_bbox;                 // tight integer bbox in MODEL space
+    cv::Mat      mask_within_bbox;                // CV_8UC1, size = mask_model_bbox.size()
+    int32_t      mask_pixel_count       = 0;
+    float        mask_area_fraction     = 0.0f;
+};
+
+struct PhysicalInstanceSegmentation {
+    std::vector<PhysicalInstanceMask> instances;
+};
+
 // 3. Image classification — top-K candidates over the whole frame
 struct PhysicalImageClassification {
     int32_t      class_id        = -1;
@@ -175,6 +207,25 @@ struct PhysicalSemanticSegmenterOutput {
     PhysicalSemanticSegmentation segmentation;
 };
 
+// PhysicalInstanceSegmenter (SAM 2) envelope. Reports timing for the
+// expensive image-encoder pass separately from the (much cheaper) per-prompt
+// decoder pass so the UI can show what dominates wall-time.
+//   prompt_count       == number of detector boxes routed THIS frame
+//   instances.size()   == number of masks actually decoded (≤ prompt_count;
+//                         caps from cfg.max_prompts_per_frame and the
+//                         confidence floor are applied before decoding)
+struct PhysicalInstanceSegmenterOutput {
+    PhysicalImageOperatorState     state            = PhysicalImageOperatorState::NoModelConfigured;
+    std::string                    last_error_reason;
+    uint64_t                       inference_count  = 0;
+    uint64_t                       last_frame_counter = 0;
+    double                         last_inference_ms = 0.0;   // total: encoder + all decoder calls
+    double                         last_encoder_ms   = 0.0;
+    double                         last_decoder_total_ms = 0.0;
+    int32_t                        prompt_count     = 0;
+    PhysicalInstanceSegmentation   segmentation;
+};
+
 struct PhysicalImageClassifierOutput {
     PhysicalImageOperatorState  state            = PhysicalImageOperatorState::NoModelConfigured;
     std::string                 last_error_reason;
@@ -251,6 +302,7 @@ struct PhysicalPerceptionPrimitiveResults {
     PhysicalSignalRawToModelTransform     raw_to_model{};
     PhysicalObjectDetectorOutput          object_detector;
     PhysicalSemanticSegmenterOutput       semantic_segmenter;
+    PhysicalInstanceSegmenterOutput       instance_segmenter;
     PhysicalImageClassifierOutput         image_classifier;
     PhysicalPoseKeypointEstimatorOutput   pose_estimator;
     PhysicalSceneTextReaderOutput         scene_text_reader;
