@@ -36,6 +36,7 @@
 #include "perception/perception.hpp"
 #include "perception/perception_context.hpp" 
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
+#include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "ui/ui_physical_environment_panel.hpp"
 #include "MMO/UI/UISurfaceRegistry.hpp"
 #ifdef _WIN32
@@ -486,6 +487,8 @@ int main(int argc, char* argv[])
     // refresh sees hub candidates.
     GRIM::Perception::Physical::RegisterPhysicalEnvironmentDeviceServer(g_deviceCommServer.get());
     auto physicalEnvPanel = std::make_shared<UIPhysicalEnvironmentPanel>();
+    // Stage 2 perception-primitives surface lives as a tab inside
+    // UIPhysicalEnvironmentPanel; the standalone panel was removed.
     if (g_deviceCommServer) {
         storagePanel->setServer(g_deviceCommServer.get());
     }
@@ -585,6 +588,10 @@ int main(int argc, char* argv[])
         // Single integration point for the physical-environment perception subsystem.
         // Lazy-inits on first call; pumps the active IP camera stream into the FrameBus.
         GRIM::Perception::Physical::TickPhysicalEnvironment();
+        // Stage 2: pulls the latest frame from the FrameBus, runs every enabled
+        // perception primitive (detection / segmentation / classification / pose /
+        // scene text), publishes the aggregate to PhysicalPerceptionPrimitiveBus.
+        GRIM::Perception::Physical::TickPhysicalPerceptionPrimitives();
 
         UIRoot::get().update(input, 0.016f);
 
@@ -671,6 +678,7 @@ int main(int argc, char* argv[])
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
+    GRIM::Perception::Physical::ShutdownPhysicalPerceptionPrimitives();
     GRIM::Perception::Physical::ShutdownPhysicalEnvironment();
     GRIM::Perception::shutdown();  
     Mouse::shutdown();

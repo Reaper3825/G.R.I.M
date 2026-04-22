@@ -105,6 +105,21 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]() { setActiveTab(Tab::Camera); });
     tab_calibration_btn_ = std::make_shared<UIButton>(" Calibration ",
         [this]() { setActiveTab(Tab::Calibration); });
+    tab_perception_btn_ = std::make_shared<UIButton>(" Perception ",
+        [this]() { setActiveTab(Tab::Perception); });
+
+    // ── Perception tab toggle buttons (labels refreshed at end of ctor) ──
+    perc_btn_obj_  = std::make_shared<UIButton>(" Detector: on ",
+        [this]{ HandleTogglePerceptionObjectDetector(); });
+    perc_btn_seg_  = std::make_shared<UIButton>(" Segmenter: on ",
+        [this]{ HandleTogglePerceptionSemanticSegmenter(); });
+    perc_btn_cls_  = std::make_shared<UIButton>(" Classifier: on ",
+        [this]{ HandleTogglePerceptionImageClassifier(); });
+    perc_btn_pose_ = std::make_shared<UIButton>(" Pose: on ",
+        [this]{ HandleTogglePerceptionPoseEstimator(); });
+    perc_btn_text_ = std::make_shared<UIButton>(" Text: on ",
+        [this]{ HandleTogglePerceptionSceneTextReader(); });
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
 
     // ── Camera tab widgets ──
     url_inputbox_ = std::make_shared<UIInputBox>(&url_buffer_);
@@ -594,11 +609,17 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         tab_calibration_btn_->setPosition(position.x + kTabBarPad + 116.0f, tab_y);
         tab_calibration_btn_->update(input, dt);
     }
+    if (tab_perception_btn_) {
+        tab_perception_btn_->setSize(130.0f, kTabBarHeight - 4.0f);
+        tab_perception_btn_->setPosition(position.x + kTabBarPad + 252.0f, tab_y);
+        tab_perception_btn_->update(input, dt);
+    }
 
     // ── Tab content ──
     switch (active_tab_) {
         case Tab::Camera:      UpdateCameraTab(input, dt);      break;
         case Tab::Calibration: UpdateCalibrationTab(input, dt); break;
+        case Tab::Perception:  UpdatePerceptionTab(input, dt);  break;
     }
 }
 
@@ -811,6 +832,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     // ── Tab buttons ──
     if (tab_camera_btn_)      tab_camera_btn_->drawOverlay(renderer, position);
     if (tab_calibration_btn_) tab_calibration_btn_->drawOverlay(renderer, position);
+    if (tab_perception_btn_)  tab_perception_btn_->drawOverlay(renderer, position);
 
     // Active-tab underline indicator (matches DataHub/Training pattern).
     {
@@ -821,6 +843,8 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
                 ix = position.x + kTabBarPad;          iw = 110.0f; break;
             case Tab::Calibration:
                 ix = position.x + kTabBarPad + 116.0f; iw = 130.0f; break;
+            case Tab::Perception:
+                ix = position.x + kTabBarPad + 252.0f; iw = 130.0f; break;
         }
         renderer.drawRect({ix, y}, {iw, 2.0f}, UITheme::Colors::Primary);
     }
@@ -834,6 +858,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     switch (active_tab_) {
         case Tab::Camera:      DrawCameraTab(renderer);      break;
         case Tab::Calibration: DrawCalibrationTab(renderer); break;
+        case Tab::Perception:  DrawPerceptionTab(renderer);  break;
     }
 
     renderer.popClipRect();
@@ -1262,4 +1287,436 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationDataReadout(
         if (n > 5) ss << ", ...";
         renderer.drawText({x, y + 72}, ss.str(), UITheme::Colors::TextSecondary);
     }
+}
+
+// ============================================================================
+//  Perception tab
+// ============================================================================
+
+namespace {
+
+uint32_t PercMakeArgb(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
+    return (static_cast<uint32_t>(a) << 24)
+         | (static_cast<uint32_t>(r) << 16)
+         | (static_cast<uint32_t>(g) << 8)
+         |  static_cast<uint32_t>(b);
+}
+
+// Deterministic class-id -> ARGB so the same id always gets the same colour.
+uint32_t PercColorForClassId(int32_t id, uint8_t alpha = 0xFF) {
+    if (id < 0) return PercMakeArgb(alpha, 0x80, 0x80, 0x80);
+    const uint32_t k = static_cast<uint32_t>(id) * 2654435761u; // Knuth multiplicative hash
+    const uint8_t r = static_cast<uint8_t>(40 + ((k >>  0) & 0xFF) * 200 / 255);
+    const uint8_t g = static_cast<uint8_t>(40 + ((k >>  8) & 0xFF) * 200 / 255);
+    const uint8_t b = static_cast<uint8_t>(40 + ((k >> 16) & 0xFF) * 200 / 255);
+    return PercMakeArgb(alpha, r, g, b);
+}
+
+const char* OnOffStr(bool v) { return v ? "on" : "off"; }
+
+} // anonymous
+
+// ── Toggle handlers ─────────────────────────────────────────────────────────
+
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionObjectDetector() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.object_detector = !f.object_detector;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionSemanticSegmenter() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.semantic_segmenter = !f.semantic_segmenter;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionImageClassifier() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.image_classifier = !f.image_classifier;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionPoseEstimator() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.pose_estimator = !f.pose_estimator;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionSceneTextReader() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.scene_text_reader = !f.scene_text_reader;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
+
+void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsystem() {
+    const auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    if (perc_btn_obj_)  perc_btn_obj_->setText(std::string(" Detector: ")   + OnOffStr(f.object_detector)    + " ");
+    if (perc_btn_seg_)  perc_btn_seg_->setText(std::string(" Segmenter: ")  + OnOffStr(f.semantic_segmenter) + " ");
+    if (perc_btn_cls_)  perc_btn_cls_->setText(std::string(" Classifier: ") + OnOffStr(f.image_classifier)   + " ");
+    if (perc_btn_pose_) perc_btn_pose_->setText(std::string(" Pose: ")      + OnOffStr(f.pose_estimator)     + " ");
+    if (perc_btn_text_) perc_btn_text_->setText(std::string(" Text: ")      + OnOffStr(f.scene_text_reader)  + " ");
+}
+
+// ── Update ──────────────────────────────────────────────────────────────────
+
+void UIPhysicalEnvironmentPanel::UpdatePerceptionTab(const InputState& input, float dt) {
+    // Pull latest perception results (frame is already in last_view_, pulled
+    // by UIPhysicalEnvironmentPanel::update() above).
+    try {
+        if (PE::PhysicalPerceptionPrimitiveBus::Instance()
+                .PullLatestPhysicalPerceptionResultsView(perc_results_view_,
+                                                         last_perc_results_counter_)) {
+            have_any_perc_results_ = true;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+                  std::string("UpdatePerceptionTab: results pull threw: ") + e.what());
+    }
+
+    // Toolbar buttons across the top of the content area.
+    const float content_top = position.y + titleBarHeight + kTabBarHeight + 8.0f;
+    const float bx0 = position.x + 16.0f;
+    const float btn_w = 132.0f;
+    const float btn_h = 24.0f;
+    auto place = [&](std::shared_ptr<UIButton>& b, int slot) {
+        if (!b) return;
+        b->setSize(btn_w, btn_h);
+        b->setPosition(bx0 + slot * (btn_w + 4.0f), content_top);
+        b->update(input, dt);
+    };
+    place(perc_btn_obj_,  0);
+    place(perc_btn_seg_,  1);
+    place(perc_btn_cls_,  2);
+    place(perc_btn_pose_, 3);
+    place(perc_btn_text_, 4);
+}
+
+// ── Draw: detection boxes ───────────────────────────────────────────────────
+
+void UIPhysicalEnvironmentPanel::DrawPerceptionDetectionsOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalObjectDetectorOutput& dets,
+    int blit_x, int blit_y, int blit_w, int blit_h,
+    int model_w, int model_h)
+{
+    if (dets.detections.empty() || model_w <= 0 || model_h <= 0) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(model_w);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(model_h);
+    for (const auto& d : dets.detections) {
+        const float x = blit_x + d.model_box.x * sx;
+        const float y = blit_y + d.model_box.y * sy;
+        const float w = d.model_box.width  * sx;
+        const float h = d.model_box.height * sy;
+        const uint32_t col = PercColorForClassId(d.class_id);
+        renderer.drawRect({x,         y         }, {w, 1.0f}, col);
+        renderer.drawRect({x,         y + h - 1 }, {w, 1.0f}, col);
+        renderer.drawRect({x,         y         }, {1.0f, h}, col);
+        renderer.drawRect({x + w - 1, y         }, {1.0f, h}, col);
+        std::ostringstream ss;
+        ss << d.class_label << " " << FormatDouble(d.confidence * 100.0, 0) << "%";
+        const std::string label = ss.str();
+        const float tw = renderer.measureTextWidth(label) + 6.0f;
+        const float ly = std::max(static_cast<float>(blit_y), y - 16.0f);
+        renderer.drawRect({x, ly}, {tw, 14.0f}, PercMakeArgb(0xC0, 0, 0, 0));
+        renderer.drawText({x + 3.0f, ly + 2.0f}, label, col);
+    }
+}
+
+// ── Draw: segmentation alpha-blend ──────────────────────────────────────────
+
+void UIPhysicalEnvironmentPanel::DrawPerceptionSegmentationOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalSemanticSegmenterOutput& seg,
+    int blit_x, int blit_y, int blit_w, int blit_h)
+{
+    if (seg.segmentation.class_id_image.empty()) return;
+    if (seg.segmentation.class_id_image.type() != CV_32SC1) return;
+    if (blit_w <= 0 || blit_h <= 0) return;
+
+    auto* pixels = static_cast<uint32_t*>(renderer.getPixels());
+    if (!pixels) return;
+    const int dest_buf_w = renderer.getWidth();
+    const int dest_buf_h = renderer.getHeight();
+    const cv::Mat& labels = seg.segmentation.class_id_image;
+
+    const bool cache_hit =
+        seg_overlay_source_id_ == perc_results_view_.results.source_frame_counter
+        && seg_overlay_source_id_ != 0
+        && seg_overlay_w_ == blit_w && seg_overlay_h_ == blit_h
+        && seg_overlay_argb_.size() == static_cast<size_t>(blit_w) * static_cast<size_t>(blit_h);
+
+    if (!cache_hit) {
+        seg_overlay_argb_.assign(static_cast<size_t>(blit_w) * static_cast<size_t>(blit_h), 0);
+        const float inv_sx = static_cast<float>(labels.cols) / static_cast<float>(blit_w);
+        const float inv_sy = static_cast<float>(labels.rows) / static_cast<float>(blit_h);
+        for (int y = 0; y < blit_h; ++y) {
+            const int src_y = std::min(labels.rows - 1, static_cast<int>(y * inv_sy));
+            const int32_t* src_row = labels.ptr<int32_t>(src_y);
+            uint32_t* dst_row = seg_overlay_argb_.data() + static_cast<size_t>(y) * blit_w;
+            for (int x = 0; x < blit_w; ++x) {
+                const int src_x = std::min(labels.cols - 1, static_cast<int>(x * inv_sx));
+                dst_row[x] = PercColorForClassId(src_row[src_x], /*alpha=*/0x80);
+            }
+        }
+        seg_overlay_w_ = blit_w; seg_overlay_h_ = blit_h;
+        seg_overlay_source_id_ = perc_results_view_.results.source_frame_counter;
+    }
+
+    const int x0 = std::max(0, blit_x);
+    const int y0 = std::max(0, blit_y);
+    const int x1 = std::min(dest_buf_w, blit_x + blit_w);
+    const int y1 = std::min(dest_buf_h, blit_y + blit_h);
+    for (int y = y0; y < y1; ++y) {
+        const uint32_t* ov = seg_overlay_argb_.data()
+                             + static_cast<size_t>(y - blit_y) * blit_w
+                             + static_cast<size_t>(x0 - blit_x);
+        uint32_t* dst = pixels + static_cast<size_t>(y) * dest_buf_w + static_cast<size_t>(x0);
+        for (int x = x0; x < x1; ++x) {
+            const uint32_t s = *ov++;
+            const uint32_t d = *dst;
+            const uint32_t sa = (s >> 24) & 0xFF;
+            const uint32_t inv = 255 - sa;
+            const uint32_t r = ((((s >> 16) & 0xFF) * sa) + (((d >> 16) & 0xFF) * inv)) / 255;
+            const uint32_t g = ((((s >>  8) & 0xFF) * sa) + (((d >>  8) & 0xFF) * inv)) / 255;
+            const uint32_t b = ((((s >>  0) & 0xFF) * sa) + (((d >>  0) & 0xFF) * inv)) / 255;
+            *dst++ = (0xFFu << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
+// ── Draw: pose ─────────────────────────────────────────────────────────────
+
+void UIPhysicalEnvironmentPanel::DrawPerceptionPoseOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalPoseKeypointEstimatorOutput& pose,
+    int blit_x, int blit_y, int blit_w, int blit_h,
+    int model_w, int model_h)
+{
+    if (pose.instances.empty() || model_w <= 0 || model_h <= 0) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(model_w);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(model_h);
+    const uint32_t kp_col   = PercMakeArgb(0xFF, 0xFF, 0xC0, 0x40);
+    const uint32_t bbox_col = PercMakeArgb(0xFF, 0xFF, 0xFF, 0x00);
+    for (const auto& inst : pose.instances) {
+        const float x = blit_x + inst.model_bbox.x * sx;
+        const float y = blit_y + inst.model_bbox.y * sy;
+        const float w = inst.model_bbox.width  * sx;
+        const float h = inst.model_bbox.height * sy;
+        renderer.drawRect({x, y         }, {w, 1.0f}, bbox_col);
+        renderer.drawRect({x, y + h - 1 }, {w, 1.0f}, bbox_col);
+        renderer.drawRect({x, y         }, {1.0f, h}, bbox_col);
+        renderer.drawRect({x + w - 1, y }, {1.0f, h}, bbox_col);
+        for (const auto& kp : inst.keypoints) {
+            if (!kp.visible) continue;
+            const float kx = blit_x + kp.model_xy.x * sx;
+            const float ky = blit_y + kp.model_xy.y * sy;
+            renderer.drawRect({kx - 2.0f, ky - 2.0f}, {4.0f, 4.0f}, kp_col);
+        }
+    }
+}
+
+// ── Draw: scene text quads + recognised string ─────────────────────────────
+
+void UIPhysicalEnvironmentPanel::DrawPerceptionSceneTextOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalSceneTextReaderOutput& text,
+    int blit_x, int blit_y, int blit_w, int blit_h,
+    int model_w, int model_h)
+{
+    if (text.lines.empty() || model_w <= 0 || model_h <= 0) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(model_w);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(model_h);
+    const uint32_t quad_col = PercMakeArgb(0xFF, 0x40, 0xC0, 0xFF);
+
+    auto map = [&](const cv::Point2f& p) {
+        return Vec2{ blit_x + p.x * sx, blit_y + p.y * sy };
+    };
+    for (const auto& ln : text.lines) {
+        const Vec2 p0 = map(ln.model_quad.p0);
+        const Vec2 p1 = map(ln.model_quad.p1);
+        const Vec2 p2 = map(ln.model_quad.p2);
+        const Vec2 p3 = map(ln.model_quad.p3);
+        renderer.drawLine(p0, p1, quad_col);
+        renderer.drawLine(p1, p2, quad_col);
+        renderer.drawLine(p2, p3, quad_col);
+        renderer.drawLine(p3, p0, quad_col);
+        if (!ln.text.empty()) {
+            renderer.drawText({p0.x, std::max(static_cast<float>(blit_y), p0.y - 14.0f)},
+                              ln.text, quad_col);
+        }
+    }
+}
+
+// ── Draw: sidebar status ────────────────────────────────────────────────────
+
+void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
+    OverlayRenderer& renderer, float x, float y, float w, float /*h*/,
+    const PE::PhysicalPerceptionPrimitiveResults& r, bool have_results)
+{
+    (void)w;
+    float row_y = y;
+    auto line = [&](const std::string& s, uint32_t col = UITheme::Colors::TextPrimary) {
+        renderer.drawText({x, row_y}, s, col);
+        row_y += 16.0f;
+    };
+    auto sep = [&]() { row_y += 4.0f; };
+
+    line("Stage-2 Perception Primitives", UITheme::Colors::TextPrimary);
+    line(std::string("Tick=")
+         + std::to_string(PE::GetPhysicalPerceptionPrimitivesTickCount())
+         + "  processed="
+         + std::to_string(PE::GetPhysicalPerceptionPrimitivesProcessedCount()),
+         UITheme::Colors::TextSecondary);
+    {
+        const std::string err = PE::GetLastPhysicalPerceptionPrimitivesError();
+        if (!err.empty()) line(std::string("err: ") + err, UITheme::Colors::Danger);
+    }
+    sep();
+
+    if (!have_results) {
+        line("No results yet on PhysicalPerceptionPrimitiveBus.",
+             UITheme::Colors::TextSecondary);
+        return;
+    }
+
+    line(std::string("frame#=") + std::to_string(r.source_frame_counter)
+         + "  model="
+         + std::to_string(r.model_image_width) + "x"
+         + std::to_string(r.model_image_height));
+    sep();
+
+    auto opStatus = [&](const char* name, PE::PhysicalImageOperatorState st,
+                        const std::string& err, uint64_t infcnt, double ms,
+                        const std::string& extra)
+    {
+        const uint32_t col =
+            st == PE::PhysicalImageOperatorState::ModelLoaded
+                ? PercMakeArgb(0xFF, 0x70, 0xD8, 0x70)
+            : st == PE::PhysicalImageOperatorState::NoModelConfigured
+                ? UITheme::Colors::TextSecondary
+                : UITheme::Colors::Danger;
+        line(std::string(name) + ": " + PE::DescribePhysicalImageOperatorState(st), col);
+        if (st == PE::PhysicalImageOperatorState::ModelLoaded) {
+            line(std::string("  inf=") + std::to_string(infcnt)
+                 + "  " + FormatDouble(ms, 1) + " ms"
+                 + (extra.empty() ? std::string{} : ("  " + extra)),
+                 UITheme::Colors::TextSecondary);
+        }
+        if (!err.empty()) {
+            line(std::string("  ") + err, UITheme::Colors::Danger);
+        }
+        sep();
+    };
+
+    opStatus("Detector",
+             r.object_detector.state, r.object_detector.last_error_reason,
+             r.object_detector.inference_count, r.object_detector.last_inference_ms,
+             std::string("dets=") + std::to_string(r.object_detector.detections.size()));
+    opStatus("Segmenter",
+             r.semantic_segmenter.state, r.semantic_segmenter.last_error_reason,
+             r.semantic_segmenter.inference_count, r.semantic_segmenter.last_inference_ms,
+             std::string("classes=") + std::to_string(r.semantic_segmenter.segmentation.num_classes));
+    opStatus("Classifier",
+             r.image_classifier.state, r.image_classifier.last_error_reason,
+             r.image_classifier.inference_count, r.image_classifier.last_inference_ms,
+             std::string("topK=") + std::to_string(r.image_classifier.top_k.size()));
+    if (r.image_classifier.state == PE::PhysicalImageOperatorState::ModelLoaded) {
+        for (const auto& c : r.image_classifier.top_k) {
+            line(std::string("    ") + FormatDouble(c.score * 100.0, 1) + "%  "
+                 + c.class_label,
+                 UITheme::Colors::TextPrimary);
+        }
+        sep();
+    }
+    opStatus("Pose",
+             r.pose_estimator.state, r.pose_estimator.last_error_reason,
+             r.pose_estimator.inference_count, r.pose_estimator.last_inference_ms,
+             std::string("instances=") + std::to_string(r.pose_estimator.instances.size()));
+    opStatus("Text",
+             r.scene_text_reader.state, r.scene_text_reader.last_error_reason,
+             r.scene_text_reader.inference_count, r.scene_text_reader.last_inference_ms,
+             std::string("lines=") + std::to_string(r.scene_text_reader.lines.size())
+             + (r.scene_text_reader.recogniser_configured ? " (+OCR)" : " (det-only)"));
+}
+
+// ── Draw: tab body ─────────────────────────────────────────────────────────
+
+void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
+    // Toolbar buttons (already laid out + ticked in UpdatePerceptionTab).
+    if (perc_btn_obj_)  perc_btn_obj_->drawOverlay(renderer, position);
+    if (perc_btn_seg_)  perc_btn_seg_->drawOverlay(renderer, position);
+    if (perc_btn_cls_)  perc_btn_cls_->drawOverlay(renderer, position);
+    if (perc_btn_pose_) perc_btn_pose_->drawOverlay(renderer, position);
+    if (perc_btn_text_) perc_btn_text_->drawOverlay(renderer, position);
+
+    const float pad         = 12.0f;
+    const float toolbar_h   = 32.0f;
+    const float content_top = position.y + titleBarHeight + kTabBarHeight + toolbar_h + pad;
+
+    const float sidebar_w = 290.0f;
+    const float frame_x = position.x + pad;
+    const float frame_y = content_top;
+    const float frame_w = std::max(64.0f, size.x - sidebar_w - pad * 3.0f);
+    const float frame_h = std::max(64.0f, position.y + size.y - frame_y - pad);
+    const float sidebar_x = frame_x + frame_w + pad;
+    const float sidebar_y = frame_y;
+    const float sidebar_h = frame_h;
+
+    // Frame area background
+    renderer.drawRect({frame_x - 1, frame_y - 1}, {frame_w + 2, frame_h + 2},
+                      UITheme::Colors::DividerLine);
+    renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h}, UITheme::Colors::Background);
+
+    int blit_x = 0, blit_y = 0, blit_w = 0, blit_h = 0;
+    int model_w = 0, model_h = 0;
+
+    if (!have_any_frame_ || last_view_.model_image.empty()) {
+        renderer.drawText({frame_x + 12, frame_y + 12},
+                          "No frame on PhysicalFrameBus yet \u2014 connect a camera in the Camera tab.",
+                          UITheme::Colors::TextSecondary);
+    } else {
+        // Reuse the shared blit helper. Tag the cache by frame_counter +
+        // a constant 'true' for the model-image view (Perception always
+        // shows the model-space image, NOT the raw image).
+        DrawBgrFrameIntoOverlay(renderer, last_view_.model_image,
+                                last_seen_counter_, /*source_undistort=*/true,
+                                frame_x, frame_y, frame_w, frame_h,
+                                perception_blit_cache_);
+        // Recover the actual blit rect from the cache so overlays land where
+        // the pixels did. DrawBgrFrameIntoOverlay computes letterboxed out_w/h.
+        model_w = last_view_.model_image.cols;
+        model_h = last_view_.model_image.rows;
+        blit_w  = perception_blit_cache_.out_w;
+        blit_h  = perception_blit_cache_.out_h;
+        blit_x  = static_cast<int>(frame_x + (frame_w - blit_w) * 0.5f);
+        blit_y  = static_cast<int>(frame_y + (frame_h - blit_h) * 0.5f);
+
+        if (have_any_perc_results_
+            && perc_results_view_.results.source_frame_counter == last_view_.frame_counter) {
+            const auto& r = perc_results_view_.results;
+            DrawPerceptionSegmentationOverlay(renderer, r.semantic_segmenter,
+                                              blit_x, blit_y, blit_w, blit_h);
+            DrawPerceptionDetectionsOverlay(renderer, r.object_detector,
+                                            blit_x, blit_y, blit_w, blit_h, model_w, model_h);
+            DrawPerceptionPoseOverlay(renderer, r.pose_estimator,
+                                      blit_x, blit_y, blit_w, blit_h, model_w, model_h);
+            DrawPerceptionSceneTextOverlay(renderer, r.scene_text_reader,
+                                           blit_x, blit_y, blit_w, blit_h, model_w, model_h);
+        } else if (have_any_perc_results_) {
+            renderer.drawText({frame_x + 12, frame_y + frame_h - 22},
+                              "Latest results are for an older frame "
+                              "(perception is catching up)",
+                              UITheme::Colors::TextSecondary);
+        }
+    }
+
+    // Sidebar background
+    renderer.drawRect({sidebar_x - 1, sidebar_y - 1},
+                      {sidebar_w + 2, sidebar_h + 2}, UITheme::Colors::DividerLine);
+    renderer.drawRect({sidebar_x, sidebar_y},
+                      {sidebar_w, sidebar_h}, UITheme::Colors::PanelBg);
+    DrawPerceptionSidebar(renderer, sidebar_x + 8, sidebar_y + 8,
+                          sidebar_w - 16, sidebar_h - 16,
+                          perc_results_view_.results, have_any_perc_results_);
 }

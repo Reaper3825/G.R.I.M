@@ -8,6 +8,8 @@
 #include "perception/physical/PhysicalCameraCalibrator.hpp"
 #include "perception/physical/PhysicalFrameConditioner.hpp"
 #include "perception/physical/PhysicalFrameBus.hpp"
+#include "perception/physical/PhysicalPerceptionPrimitiveBus.hpp"
+#include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 
 #include <opencv2/core/mat.hpp>
 
@@ -33,7 +35,8 @@ class UIPhysicalEnvironmentPanel : public UIPanel {
 public:
     enum class Tab : uint8_t {
         Camera      = 0,
-        Calibration = 1
+        Calibration = 1,
+        Perception  = 2
     };
 
     UIPhysicalEnvironmentPanel();
@@ -163,6 +166,7 @@ private:
     // ── Tab bar ──
     std::shared_ptr<UIButton>   tab_camera_btn_;
     std::shared_ptr<UIButton>   tab_calibration_btn_;
+    std::shared_ptr<UIButton>   tab_perception_btn_;
     Tab                         active_tab_ = Tab::Camera;
 
     // ── Shared frame pull state (one bus, one cached frame) ──
@@ -186,4 +190,58 @@ private:
     GRIM::Perception::Physical::DetectedCalibrationPattern calib_overlay_pattern_;
     bool               calib_overlay_pattern_valid_  = false;
     double             calib_overlay_seconds_since_  = 1.0e9;  // start "stale"
+
+    // ── Perception tab ──
+    void HandleTogglePerceptionObjectDetector();
+    void HandleTogglePerceptionSemanticSegmenter();
+    void HandleTogglePerceptionImageClassifier();
+    void HandleTogglePerceptionPoseEstimator();
+    void HandleTogglePerceptionSceneTextReader();
+    void RefreshPerceptionEnableButtonLabelsFromSubsystem();
+    void UpdatePerceptionTab(const InputState& input, float dt);
+    void DrawPerceptionTab(OverlayRenderer& renderer);
+    void DrawPerceptionDetectionsOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalObjectDetectorOutput& dets,
+        int blit_x, int blit_y, int blit_w, int blit_h,
+        int model_w, int model_h);
+    void DrawPerceptionSegmentationOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalSemanticSegmenterOutput& seg,
+        int blit_x, int blit_y, int blit_w, int blit_h);
+    void DrawPerceptionPoseOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalPoseKeypointEstimatorOutput& pose,
+        int blit_x, int blit_y, int blit_w, int blit_h,
+        int model_w, int model_h);
+    void DrawPerceptionSceneTextOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalSceneTextReaderOutput& text,
+        int blit_x, int blit_y, int blit_w, int blit_h,
+        int model_w, int model_h);
+    void DrawPerceptionSidebar(
+        OverlayRenderer& renderer, float x, float y, float w, float h,
+        const GRIM::Perception::Physical::PhysicalPerceptionPrimitiveResults& r,
+        bool have_results);
+
+    std::shared_ptr<UIButton> perc_btn_obj_;
+    std::shared_ptr<UIButton> perc_btn_seg_;
+    std::shared_ptr<UIButton> perc_btn_cls_;
+    std::shared_ptr<UIButton> perc_btn_pose_;
+    std::shared_ptr<UIButton> perc_btn_text_;
+
+    // Frame blit cache for the Perception tab (model-image view).
+    PreviewBlitCache perception_blit_cache_;
+
+    // Bus-pull state for perception results.
+    GRIM::Perception::Physical::PhysicalPerceptionPrimitiveBus::ResultsView
+        perc_results_view_;
+    uint64_t last_perc_results_counter_ = 0;
+    bool     have_any_perc_results_     = false;
+
+    // Cached colour-mapped segmentation overlay (alpha-blended into the blit).
+    std::vector<uint32_t> seg_overlay_argb_;
+    int                   seg_overlay_w_         = 0;
+    int                   seg_overlay_h_         = 0;
+    uint64_t              seg_overlay_source_id_ = 0;
 };
