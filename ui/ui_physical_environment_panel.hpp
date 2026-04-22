@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 // Tabbed UI panel for the perception/physical/ subsystem.
@@ -198,6 +200,7 @@ private:
     void HandleTogglePerceptionPoseEstimator();
     void HandleTogglePerceptionSceneTextReader();
     void HandleTogglePerceptionFacialExpressionDetector();
+    void HandleTogglePerceptionEntityTracker();
     void RefreshPerceptionEnableButtonLabelsFromSubsystem();
     void UpdatePerceptionTab(const InputState& input, float dt);
     void DrawPerceptionTab(OverlayRenderer& renderer);
@@ -225,6 +228,11 @@ private:
         const GRIM::Perception::Physical::PhysicalFacialExpressionDetectorOutput& faces,
         int blit_x, int blit_y, int blit_w, int blit_h,
         int model_w, int model_h);
+    void DrawPerceptionEntityTracksOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalEntityTrackerOutput& tracker,
+        int blit_x, int blit_y, int blit_w, int blit_h,
+        int model_w, int model_h);
     void DrawPerceptionSidebar(
         OverlayRenderer& renderer, float x, float y, float w, float h,
         const GRIM::Perception::Physical::PhysicalPerceptionPrimitiveResults& r,
@@ -236,6 +244,7 @@ private:
     std::shared_ptr<UIButton> perc_btn_pose_;
     std::shared_ptr<UIButton> perc_btn_text_;
     std::shared_ptr<UIButton> perc_btn_face_;
+    std::shared_ptr<UIButton> perc_btn_track_;
 
     // Frame blit cache for the Perception tab (model-image view).
     PreviewBlitCache perception_blit_cache_;
@@ -251,4 +260,15 @@ private:
     int                   seg_overlay_w_         = 0;
     int                   seg_overlay_h_         = 0;
     uint64_t              seg_overlay_source_id_ = 0;
+
+    // Per-track motion trail history. Keyed by track_id; value is a ring of
+    // recent MODEL-space centres. Drawn as a fading polyline so the user can
+    // see persistence over time. Capped at kMaxTrailPoints entries; tracks
+    // not seen for several frames are evicted in UpdatePerceptionTab.
+    static constexpr size_t kMaxTrailPoints = 32;
+    struct TrackTrail {
+        std::vector<std::pair<float,float>> model_centres; // back = newest
+        uint64_t                            last_seen_frame_counter = 0;
+    };
+    std::unordered_map<uint64_t, TrackTrail> track_trails_;
 };

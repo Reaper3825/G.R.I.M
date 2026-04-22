@@ -79,7 +79,68 @@ struct PhysicalSceneTextLine {
     float        confidence = 0.0f;
 };
 
-// 6. Facial expression — one detected face plus its top emotion class
+// 7. Entity track — one persistent identity carried across frames. Produced
+//    by PhysicalEntityTracker by associating PhysicalObjectDetection results
+//    over time. The track's box is exponentially smoothed in MODEL space and
+//    the raw-space box is recomputed from raw_to_model on each update so the
+//    two coordinate spaces are guaranteed coherent.
+//
+//    Lifecycle:
+//      Tentative  — newly spawned, not yet confirmed. Drawn dimly by UI.
+//      Confirmed  — survived enough hits in a row to be trusted.
+//      Coasting   — confirmed but missed by detector this frame; box predicted
+//                   from last velocity. Will revert to Confirmed on next hit
+//                   or be culled when miss_streak exceeds max_age_misses.
+enum class PhysicalEntityTrackState : uint8_t {
+    Tentative = 0,
+    Confirmed = 1,
+    Coasting  = 2
+};
+
+inline const char* DescribePhysicalEntityTrackState(PhysicalEntityTrackState s) {
+    switch (s) {
+        case PhysicalEntityTrackState::Tentative: return "Tentative";
+        case PhysicalEntityTrackState::Confirmed: return "Confirmed";
+        case PhysicalEntityTrackState::Coasting:  return "Coasting";
+    }
+    return "InvalidPhysicalEntityTrackState";
+}
+
+struct PhysicalEntityTrack {
+    uint64_t                  track_id                   = 0;     // monotonically increasing; never reused
+    int32_t                   class_id                   = -1;    // class locked at spawn
+    std::string               class_label;
+    PhysicalEntityTrackState  state                      = PhysicalEntityTrackState::Tentative;
+
+    // Boxes: model-space is the canonical smoothed estimate; raw-space is
+    // back-projected via raw_to_model so downstream consumers do NOT need to
+    // re-derive it. Letterbox padding makes the relationship affine.
+    cv::Rect2f                smoothed_model_box;
+    cv::Rect2f                smoothed_raw_box;
+
+    // Per-frame velocity in MODEL pixel space, computed from the centre
+    // delta divided by the wall-time delta in seconds (steady_clock-based,
+    // so monotonic). Used by the Coasting prediction step.
+    double                    velocity_px_per_sec_x      = 0.0;
+    double                    velocity_px_per_sec_y      = 0.0;
+
+    float                     last_detection_confidence  = 0.0f;
+    float                     smoothed_confidence        = 0.0f;
+
+    uint32_t                  age_in_frames              = 0;     // frames since spawn (incl. coasted)
+    uint32_t                  hit_streak                 = 0;     // consecutive frames matched
+    uint32_t                  miss_streak                = 0;     // consecutive frames missed
+    uint32_t                  total_hits                 = 0;
+    uint32_t                  total_misses               = 0;
+
+    uint64_t                  first_seen_frame_counter   = 0;
+    uint64_t                  last_update_frame_counter  = 0;     // matched OR coasted
+    uint64_t                  last_matched_frame_counter = 0;     // match only
+    int64_t                   first_seen_steady_ns       = 0;
+    int64_t                   last_update_steady_ns      = 0;
+};
+
+// 8. Facial expression — one detected face plus its top emotion class
 struct PhysicalFacialExpression {
     cv::Rect2f               model_bbox;           // MODEL pixel space (always populated)
     cv::Rect2f               raw_bbox;            // RAW   pixel space (back-projected)
@@ -152,6 +213,32 @@ struct PhysicalFacialExpressionDetectorOutput {
     std::vector<PhysicalFacialExpression> faces;
 };
 
+// PhysicalEntityTracker has no ONNX model — its "model" is its parameter
+// set. State semantics:
+//   NoModelConfigured — never configured AND never default-initialised
+//                        (only happens between Reset and the next Configure).
+//   ModelLoaded       — parameter set is in effect; ready to consume detections.
+//   ModelLoadFailed   — last Configure rejected its config (e.g. bad alpha).
+//   InferenceFailed   — last RouteDetectionsTo... threw.
+struct PhysicalEntityTrackerOutput {
+    PhysicalImageOperatorState  state            = PhysicalImageOperatorState::NoModelConfigured;
+    std::string                 last_error_reason;
+    uint64_t                    inference_count  = 0;     // total successful Route* calls
+    uint64_t                    last_frame_counter = 0;
+    double                      last_route_ms     = 0.0;
+
+    // Snapshot of every track that is alive AT THE END of this frame
+    // (Tentative + Confirmed + Coasting). Tracks culled this frame are not
+    // included.
+    std::vector<PhysicalEntityTrack> tracks;
+
+    // Cumulative counters since last Reset. Useful for sanity-checking the
+    // tracker's behaviour over a session.
+    uint64_t                    total_tracks_spawned   = 0;
+    uint64_t                    total_tracks_confirmed = 0;
+    uint64_t                    total_tracks_culled    = 0;
+};
+
 // Aggregate snapshot — one frame's worth of results from all five operators.
 // Carries the source frame counter so the UI can verify it is rendering a
 // coherent set (same input frame for every operator).
@@ -168,6 +255,7 @@ struct PhysicalPerceptionPrimitiveResults {
     PhysicalPoseKeypointEstimatorOutput   pose_estimator;
     PhysicalSceneTextReaderOutput         scene_text_reader;
     PhysicalFacialExpressionDetectorOutput facial_expression_detector;
+    PhysicalEntityTrackerOutput            entity_tracker;
 };
 
 }}} // namespace GRIM::Perception::Physical

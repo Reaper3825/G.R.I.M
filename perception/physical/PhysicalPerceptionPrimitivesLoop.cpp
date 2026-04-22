@@ -30,6 +30,7 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalPoseKeypointEstimator>   pose_estimator;
     std::unique_ptr<PhysicalSceneTextReader>         scene_text_reader;
     std::unique_ptr<PhysicalFacialExpressionDetector> facial_expression_detector;
+    std::unique_ptr<PhysicalEntityTracker>           entity_tracker;
 
     // Pending configs deposited via Request* before lazy init. Applied at
     // the first Tick. After init these are emptied; subsequent Request*
@@ -40,6 +41,7 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalPoseKeypointEstimatorConfig>   pending_pose_cfg;
     std::unique_ptr<PhysicalSceneTextReaderConfig>         pending_text_cfg;
     std::unique_ptr<PhysicalFacialExpressionDetectorConfig> pending_face_cfg;
+    std::unique_ptr<PhysicalEntityTrackerConfig>            pending_track_cfg;
 
     std::string  last_error_reason;
     uint64_t     tick_count           = 0;
@@ -65,6 +67,7 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     s.pose_estimator     = std::make_unique<PhysicalPoseKeypointEstimator>();
     s.scene_text_reader  = std::make_unique<PhysicalSceneTextReader>();
     s.facial_expression_detector = std::make_unique<PhysicalFacialExpressionDetector>();
+    s.entity_tracker     = std::make_unique<PhysicalEntityTracker>();
 
     // Apply any pending configs. Failures are loud but do not abort init —
     // the operator simply ends up in ModelLoadFailed state and the UI
@@ -98,6 +101,23 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     apply(s.pending_face_cfg,
           [&](auto& c){ s.facial_expression_detector->LoadOnnxModelsIntoPhysicalFacialExpressionDetector(c); },
           "PhysicalFacialExpressionDetector");
+    // Tracker has no model file. If no pending config was supplied, install
+    // the default config so the operator transitions to ModelLoaded and
+    // starts running on first frame. This matches the user-facing contract:
+    // "on first update it should check if this is running" — the tracker
+    // is always running once the subsystem is up.
+    if (s.pending_track_cfg) {
+        apply(s.pending_track_cfg,
+              [&](auto& c){ s.entity_tracker->ConfigurePhysicalEntityTracker(c); },
+              "PhysicalEntityTracker");
+    } else {
+        try {
+            s.entity_tracker->ConfigurePhysicalEntityTracker(PhysicalEntityTrackerConfig{});
+        } catch (const std::exception& e) {
+            s.last_error_reason = std::string("LazyInit: default PhysicalEntityTracker config failed: ") + e.what();
+            LOG_ERROR(PHYSICAL_PERC_PRIM_LOG_TAG, s.last_error_reason);
+        }
+    }
 
     s.initialized = true;
 }
@@ -188,6 +208,20 @@ void TickPhysicalPerceptionPrimitives() {
             results.facial_expression_detector);
     }
 
+    // Entity tracker runs LAST among the operators because it consumes
+    // the object detector's output as its input. It is given the same
+    // raw_to_model + raw dims so its raw-space track boxes are coherent
+    // with everything else in the result envelope.
+    if (s.enable_flags.entity_tracker && s.entity_tracker) {
+        s.entity_tracker->RouteDetectionsToPhysicalEntityTracker(
+            results.object_detector.detections,
+            results.raw_to_model,
+            results.raw_image_width,
+            results.raw_image_height,
+            results.source_frame_counter,
+            results.entity_tracker);
+    }
+
     try {
         PhysicalPerceptionPrimitiveBus::Instance().PublishPhysicalPerceptionResultsToBus(results);
         ++s.processed_count;
@@ -208,18 +242,21 @@ void ShutdownPhysicalPerceptionPrimitives() {
     if (s.pose_estimator)     s.pose_estimator->ResetPhysicalPoseKeypointEstimator();
     if (s.scene_text_reader)  s.scene_text_reader->ResetPhysicalSceneTextReader();
     if (s.facial_expression_detector) s.facial_expression_detector->ResetPhysicalFacialExpressionDetector();
+    if (s.entity_tracker)     s.entity_tracker->ResetPhysicalEntityTracker();
     s.object_detector.reset();
     s.semantic_segmenter.reset();
     s.image_classifier.reset();
     s.pose_estimator.reset();
     s.scene_text_reader.reset();
     s.facial_expression_detector.reset();
+    s.entity_tracker.reset();
     s.pending_obj_cfg.reset();
     s.pending_seg_cfg.reset();
     s.pending_cls_cfg.reset();
     s.pending_pose_cfg.reset();
     s.pending_text_cfg.reset();
     s.pending_face_cfg.reset();
+    s.pending_track_cfg.reset();
     PhysicalPerceptionPrimitiveBus::Instance().ResetPhysicalPerceptionPrimitiveBus();
     s.initialized          = false;
     s.tick_count           = 0;
@@ -271,7 +308,8 @@ void RequestSetPhysicalPerceptionPrimitivesEnableFlags(
               + " cls=" + (flags.image_classifier   ? "1" : "0")
               + " pose="+ (flags.pose_estimator     ? "1" : "0")
               + " text="+ (flags.scene_text_reader  ? "1" : "0")
-              + " face="+ (flags.facial_expression_detector ? "1" : "0"));
+              + " face="+ (flags.facial_expression_detector ? "1" : "0")
+              + " track="+ (flags.entity_tracker ? "1" : "0"));
 }
 
 // Each Request* either applies immediately (init done) or stages the cfg
@@ -355,6 +393,21 @@ void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpres
         throw std::runtime_error("RequestConfigurePhysicalFacialExpressionDetector: facial_expression_detector is null");
     }
     s.facial_expression_detector->LoadOnnxModelsIntoPhysicalFacialExpressionDetector(cfg);
+}
+
+void RequestConfigurePhysicalEntityTracker(const PhysicalEntityTrackerConfig& cfg) {
+    auto& s = GetState();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    if (!s.initialized) {
+        s.pending_track_cfg = std::make_unique<PhysicalEntityTrackerConfig>(cfg);
+        return;
+    }
+    if (!s.entity_tracker) {
+        throw std::runtime_error(
+            "RequestConfigurePhysicalEntityTracker: subsystem initialised but "
+            "entity_tracker is null \u2014 likely after ShutdownPhysicalPerceptionPrimitives()");
+    }
+    s.entity_tracker->ConfigurePhysicalEntityTracker(cfg);
 }
 
 }}} // namespace

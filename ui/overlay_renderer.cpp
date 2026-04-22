@@ -1431,6 +1431,20 @@ float OverlayRenderer::measureTextWidth(const std::string& text) const
 
 void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t color, float thickness)
 {
+    // Degenerate (zero-length) lines must be handled BEFORE we acquire
+    // m_renderMutex, because the fallback path calls drawRect() which
+    // re-locks the same non-recursive mutex \u2014 self-deadlock otherwise.
+    // This case fires constantly for stationary entity-tracker trails
+    // where consecutive centres are identical.
+    {
+        const float dx0 = end.x - start.x;
+        const float dy0 = end.y - start.y;
+        if (dx0 * dx0 + dy0 * dy0 < 0.0001f) {
+            drawRect(start, {thickness, thickness}, color);
+            return;
+        }
+    }
+
     int lx1 = (int)std::min(start.x, end.x) - (int)thickness;
     int ly1 = (int)std::min(start.y, end.y) - (int)thickness;
     int lx2 = (int)std::max(start.x, end.x) + (int)thickness + 1;
@@ -1457,11 +1471,6 @@ void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t colo
     float dx = end.x - start.x;
     float dy = end.y - start.y;
     float len = std::sqrt(dx * dx + dy * dy);
-
-    if (len < 0.01f) {
-        drawRect(start, {thickness, thickness}, color);
-        return;
-    }
 
     int segments = static_cast<int>(len * 2.0f) + 1;
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);

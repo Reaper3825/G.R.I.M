@@ -6,6 +6,7 @@
 #include "PhysicalSceneTextReader.hpp"
 #include "PhysicalSemanticSegmenter.hpp"
 #include "PhysicalFacialExpressionDetector.hpp"
+#include "PhysicalEntityTracker.hpp"
 
 #include <string>
 
@@ -45,6 +46,10 @@ struct PhysicalPerceptionPrimitivesEnableFlags {
     bool pose_estimator     = true;
     bool scene_text_reader  = true;
     bool facial_expression_detector = true;
+    // Entity tracker consumes the object detector's output; if
+    // object_detector is off OR has no model loaded, the tracker still runs
+    // but sees an empty detection list (it will simply age out tracks).
+    bool entity_tracker     = true;
 };
 
 // Mainloop entry point. Cheap; safe to call every frame. Lazy-inits.
@@ -76,5 +81,6 @@ void RequestConfigurePhysicalImageClassifier(const PhysicalImageClassifierConfig
 void RequestConfigurePhysicalPoseKeypointEstimator(const PhysicalPoseKeypointEstimatorConfig& cfg);
 void RequestConfigurePhysicalSceneTextReader(const PhysicalSceneTextReaderConfig& cfg);
 void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpressionDetectorConfig& cfg);
+void RequestConfigurePhysicalEntityTracker(const PhysicalEntityTrackerConfig& cfg);
 
 }}} // namespace GRIM::Perception::Physical

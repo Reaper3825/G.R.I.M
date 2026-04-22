@@ -121,6 +121,8 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]{ HandleTogglePerceptionSceneTextReader(); });
     perc_btn_face_ = std::make_shared<UIButton>(" Face: on ",
         [this]{ HandleTogglePerceptionFacialExpressionDetector(); });
+    perc_btn_track_ = std::make_shared<UIButton>(" Tracks: on ",
+        [this]{ HandleTogglePerceptionEntityTracker(); });
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
 
     // ── Camera tab widgets ──
@@ -1356,6 +1358,12 @@ void UIPhysicalEnvironmentPanel::HandleTogglePerceptionFacialExpressionDetector(
     PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
 }
+void UIPhysicalEnvironmentPanel::HandleTogglePerceptionEntityTracker() {
+    auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
+    f.entity_tracker = !f.entity_tracker;
+    PE::RequestSetPhysicalPerceptionPrimitivesEnableFlags(f);
+    RefreshPerceptionEnableButtonLabelsFromSubsystem();
+}
 
 void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsystem() {
     const auto f = PE::GetPhysicalPerceptionPrimitivesEnableFlags();
@@ -1365,6 +1373,7 @@ void UIPhysicalEnvironmentPanel::RefreshPerceptionEnableButtonLabelsFromSubsyste
     if (perc_btn_pose_) perc_btn_pose_->setText(std::string(" Pose: ")      + OnOffStr(f.pose_estimator)     + " ");
     if (perc_btn_text_) perc_btn_text_->setText(std::string(" Text: ")      + OnOffStr(f.scene_text_reader)  + " ");
     if (perc_btn_face_) perc_btn_face_->setText(std::string(" Face: ")      + OnOffStr(f.facial_expression_detector) + " ");
+    if (perc_btn_track_)perc_btn_track_->setText(std::string(" Tracks: ")    + OnOffStr(f.entity_tracker) + " ");
 }
 
 // ── Update ──────────────────────────────────────────────────────────────────
@@ -1386,7 +1395,7 @@ void UIPhysicalEnvironmentPanel::UpdatePerceptionTab(const InputState& input, fl
     // Toolbar buttons across the top of the content area.
     const float content_top = position.y + titleBarHeight + kTabBarHeight + 8.0f;
     const float bx0 = position.x + 16.0f;
-    const float btn_w = 132.0f;
+    const float btn_w = 116.0f;
     const float btn_h = 24.0f;
     auto place = [&](std::shared_ptr<UIButton>& b, int slot) {
         if (!b) return;
@@ -1400,6 +1409,7 @@ void UIPhysicalEnvironmentPanel::UpdatePerceptionTab(const InputState& input, fl
     place(perc_btn_pose_, 3);
     place(perc_btn_text_, 4);
     place(perc_btn_face_, 5);
+    place(perc_btn_track_,6);
 }
 
 // ── Draw: detection boxes ───────────────────────────────────────────────────
@@ -1589,6 +1599,113 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionFacialExpressionOverlay(
     }
 }
 
+// ── Draw: entity tracks (Stage-3 identity persistence) ─────────────────────
+//
+// Renders one box per live track in MODEL space, plus a fading polyline
+// connecting the historical centres so the user can see motion / identity
+// continuity. Track ID is rendered above the box so it is unmistakeable
+// when two same-class objects are present (e.g. "person #4" vs "person #7").
+//
+// Internal validity (Rule 3): we BUMP the per-track trail history here. That
+// happens exactly once per published frame because DrawPerceptionTab guards
+// the overlay calls on `perc_results_view_.results.source_frame_counter ==
+// last_view_.frame_counter`, and that counter advances monotonically. We
+// also evict trails for tracks that no longer appear in the latest snapshot.
+void UIPhysicalEnvironmentPanel::DrawPerceptionEntityTracksOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalEntityTrackerOutput& tracker,
+    int blit_x, int blit_y, int blit_w, int blit_h,
+    int model_w, int model_h)
+{
+    if (model_w <= 0 || model_h <= 0) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(model_w);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(model_h);
+    const uint64_t fc = tracker.last_frame_counter;
+
+    // Update trail history for every live track in this snapshot.
+    for (const auto& t : tracker.tracks) {
+        auto& tr = track_trails_[t.track_id];
+        const float cx = t.smoothed_model_box.x + t.smoothed_model_box.width  * 0.5f;
+        const float cy = t.smoothed_model_box.y + t.smoothed_model_box.height * 0.5f;
+        tr.model_centres.emplace_back(cx, cy);
+        if (tr.model_centres.size() > kMaxTrailPoints) {
+            tr.model_centres.erase(tr.model_centres.begin(),
+                                   tr.model_centres.begin()
+                                   + (tr.model_centres.size() - kMaxTrailPoints));
+        }
+        tr.last_seen_frame_counter = fc;
+    }
+    // Evict trails for tracks not seen for a while (uses unsigned subtraction
+    // safe-guarded against fc==0 or stale entries).
+    for (auto it = track_trails_.begin(); it != track_trails_.end(); ) {
+        const uint64_t age = (fc >= it->second.last_seen_frame_counter)
+                             ? (fc - it->second.last_seen_frame_counter) : 0;
+        if (age > 90) it = track_trails_.erase(it);
+        else          ++it;
+    }
+
+    // Render boxes + IDs + trail.
+    for (const auto& t : tracker.tracks) {
+        // State-driven colour: confirmed = bright class colour, tentative =
+        // dim, coasting = warning yellow. Rule 3: state visible at a glance.
+        uint8_t alpha = 0xFF;
+        uint32_t col = PercColorForClassId(t.class_id, alpha);
+        if (t.state == PE::PhysicalEntityTrackState::Tentative) {
+            col = PercColorForClassId(t.class_id, 0x70);
+        } else if (t.state == PE::PhysicalEntityTrackState::Coasting) {
+            col = PercMakeArgb(0xC0, 0xFF, 0xC0, 0x40); // amber, semi-transparent
+        }
+
+        const float x = blit_x + t.smoothed_model_box.x * sx;
+        const float y = blit_y + t.smoothed_model_box.y * sy;
+        const float w = t.smoothed_model_box.width  * sx;
+        const float h = t.smoothed_model_box.height * sy;
+
+        // 2-px box so it visibly differs from the raw detector overlay.
+        for (int dx = 0; dx < 2; ++dx) {
+            renderer.drawRect({x + dx,         y + dx        }, {std::max(0.0f, w - dx*2), 1.0f}, col);
+            renderer.drawRect({x + dx,         y + h - 1 - dx}, {std::max(0.0f, w - dx*2), 1.0f}, col);
+            renderer.drawRect({x + dx,         y + dx        }, {1.0f, std::max(0.0f, h - dx*2)}, col);
+            renderer.drawRect({x + w - 1 - dx, y + dx        }, {1.0f, std::max(0.0f, h - dx*2)}, col);
+        }
+
+        // ID + class label + age, drawn ABOVE the box.
+        std::ostringstream ss;
+        ss << "#" << t.track_id << " " << t.class_label
+           << " [" << PE::DescribePhysicalEntityTrackState(t.state) << "]"
+           << " age=" << t.age_in_frames
+           << " hits=" << t.total_hits;
+        const std::string label = ss.str();
+        const float tw = renderer.measureTextWidth(label) + 6.0f;
+        const float ly = std::max(static_cast<float>(blit_y), y - 16.0f);
+        renderer.drawRect({x, ly}, {tw, 14.0f}, PercMakeArgb(0xC0, 0, 0, 0));
+        renderer.drawText({x + 3.0f, ly + 2.0f}, label, col);
+
+        // Trail polyline. Older points fade toward transparent.
+        auto it = track_trails_.find(t.track_id);
+        if (it != track_trails_.end() && it->second.model_centres.size() >= 2) {
+            const auto& pts = it->second.model_centres;
+            const size_t n = pts.size();
+            for (size_t i = 1; i < n; ++i) {
+                const float a = static_cast<float>(i) / static_cast<float>(n);
+                const uint8_t la = static_cast<uint8_t>(40 + 215.0f * a);
+                const uint32_t lcol =
+                    (col & 0x00FFFFFFu) | (static_cast<uint32_t>(la) << 24);
+                const float x0 = blit_x + pts[i-1].first  * sx;
+                const float y0 = blit_y + pts[i-1].second * sy;
+                const float x1 = blit_x + pts[i  ].first  * sx;
+                const float y1 = blit_y + pts[i  ].second * sy;
+                // Skip stationary segments \u2014 they degenerate to zero-length
+                // lines and add no visual information.
+                const float ddx = x1 - x0;
+                const float ddy = y1 - y0;
+                if (ddx * ddx + ddy * ddy < 0.25f) continue;
+                renderer.drawLine({x0, y0}, {x1, y1}, lcol);
+            }
+        }
+    }
+}
+
 void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
     OverlayRenderer& renderer, float x, float y, float w, float /*h*/,
     const PE::PhysicalPerceptionPrimitiveResults& r, bool have_results)
@@ -1692,6 +1809,44 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionSidebar(
         }
         sep();
     }
+    {
+        // Stage-3 tracker. Use last_route_ms (NOT last_inference_ms) because
+        // tracker has no ONNX inference \u2014 it's a pure association step.
+        const auto& tk = r.entity_tracker;
+        std::ostringstream extra;
+        extra << "tracks=" << tk.tracks.size()
+              << "  spawned=" << tk.total_tracks_spawned
+              << "  confirmed=" << tk.total_tracks_confirmed
+              << "  culled=" << tk.total_tracks_culled;
+        opStatus("Tracker", tk.state, tk.last_error_reason,
+                 tk.inference_count, tk.last_route_ms, extra.str());
+        if (tk.state == PE::PhysicalImageOperatorState::ModelLoaded && !tk.tracks.empty()) {
+            // Sort by id ascending (tracks vector is in spawn order already
+            // because we never reorder it; but be explicit for the UI).
+            std::vector<const PE::PhysicalEntityTrack*> sorted;
+            sorted.reserve(tk.tracks.size());
+            for (const auto& t : tk.tracks) sorted.push_back(&t);
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const PE::PhysicalEntityTrack* a,
+                         const PE::PhysicalEntityTrack* b){ return a->track_id < b->track_id; });
+            const size_t shown = std::min<size_t>(6, sorted.size());
+            for (size_t i = 0; i < shown; ++i) {
+                const auto& t = *sorted[i];
+                std::ostringstream row;
+                row << "    #" << t.track_id << " " << t.class_label
+                    << " [" << PE::DescribePhysicalEntityTrackState(t.state) << "]"
+                    << "  hits=" << t.total_hits
+                    << "  miss=" << t.miss_streak
+                    << "  conf=" << FormatDouble(t.smoothed_confidence * 100.0, 0) << "%";
+                line(row.str(), UITheme::Colors::TextPrimary);
+            }
+            if (sorted.size() > shown) {
+                line(std::string("    \u2026 ") + std::to_string(sorted.size() - shown)
+                     + " more", UITheme::Colors::TextSecondary);
+            }
+            sep();
+        }
+    }
 }
 
 // ── Draw: tab body ─────────────────────────────────────────────────────────
@@ -1704,6 +1859,7 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
     if (perc_btn_pose_) perc_btn_pose_->drawOverlay(renderer, position);
     if (perc_btn_text_) perc_btn_text_->drawOverlay(renderer, position);
     if (perc_btn_face_) perc_btn_face_->drawOverlay(renderer, position);
+    if (perc_btn_track_)perc_btn_track_->drawOverlay(renderer, position);
 
     const float pad         = 12.0f;
     const float toolbar_h   = 32.0f;
@@ -1760,6 +1916,8 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
                                            blit_x, blit_y, blit_w, blit_h, model_w, model_h);
             DrawPerceptionFacialExpressionOverlay(renderer, r.facial_expression_detector,
                                                   blit_x, blit_y, blit_w, blit_h, model_w, model_h);
+            DrawPerceptionEntityTracksOverlay(renderer, r.entity_tracker,
+                                              blit_x, blit_y, blit_w, blit_h, model_w, model_h);
         } else if (have_any_perc_results_) {
             renderer.drawText({frame_x + 12, frame_y + frame_h - 22},
                               "Latest results are for an older frame "
