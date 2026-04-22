@@ -109,6 +109,8 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]() { setActiveTab(Tab::Perception); });
     tab_spatial_btn_ = std::make_shared<UIButton>(" Spatial ",
         [this]() { setActiveTab(Tab::Spatial); });
+    tab_world_btn_ = std::make_shared<UIButton>(" World ",
+        [this]() { setActiveTab(Tab::World); });
 
     // ── Perception tab toggle buttons (labels refreshed at end of ctor) ──
     perc_btn_obj_  = std::make_shared<UIButton>(" Detector: on ",
@@ -634,6 +636,11 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         tab_spatial_btn_->setPosition(position.x + kTabBarPad + 388.0f, tab_y);
         tab_spatial_btn_->update(input, dt);
     }
+    if (tab_world_btn_) {
+        tab_world_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
+        tab_world_btn_->setPosition(position.x + kTabBarPad + 504.0f, tab_y);
+        tab_world_btn_->update(input, dt);
+    }
 
     // ── Tab content ──
     switch (active_tab_) {
@@ -641,6 +648,7 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         case Tab::Calibration: UpdateCalibrationTab(input, dt); break;
         case Tab::Perception:  UpdatePerceptionTab(input, dt);  break;
         case Tab::Spatial:     UpdateSpatialTab(input, dt);     break;
+        case Tab::World:       UpdateWorldTab(input, dt);       break;
     }
 }
 
@@ -855,6 +863,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     if (tab_calibration_btn_) tab_calibration_btn_->drawOverlay(renderer, position);
     if (tab_perception_btn_)  tab_perception_btn_->drawOverlay(renderer, position);
     if (tab_spatial_btn_)     tab_spatial_btn_->drawOverlay(renderer, position);
+    if (tab_world_btn_)       tab_world_btn_->drawOverlay(renderer, position);
 
     // Active-tab underline indicator (matches DataHub/Training pattern).
     {
@@ -869,6 +878,8 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
                 ix = position.x + kTabBarPad + 252.0f; iw = 130.0f; break;
             case Tab::Spatial:
                 ix = position.x + kTabBarPad + 388.0f; iw = 110.0f; break;
+            case Tab::World:
+                ix = position.x + kTabBarPad + 504.0f; iw = 110.0f; break;
         }
         renderer.drawRect({ix, y}, {iw, 2.0f}, UITheme::Colors::Primary);
     }
@@ -884,6 +895,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
         case Tab::Calibration: DrawCalibrationTab(renderer); break;
         case Tab::Perception:  DrawPerceptionTab(renderer);  break;
         case Tab::Spatial:     DrawSpatialTab(renderer);     break;
+        case Tab::World:       DrawWorldTab(renderer);       break;
     }
 
     renderer.popClipRect();
@@ -2407,4 +2419,292 @@ void UIPhysicalEnvironmentPanel::DrawSpatialTab(OverlayRenderer& renderer) {
     DrawSpatialSidebar(renderer, sidebar_x + 8, sidebar_y + 8,
                        sidebar_w - 16, sidebar_h - 16,
                        spatial_results_view_.results, have_any_spatial_results_);
+}
+
+// ============================================================================
+//  World tab (Stage-4) — the model's view of the scene
+// ============================================================================
+//
+// Displays exactly what GRIM sees when it reasons over the environment:
+// identity-keyed entities (object_id), per-entity visibility/depth/text and
+// inter-entity relations. Pulls from PhysicalWorldStateBus (already-fused);
+// does NOT re-fuse from upstream buses.
+//
+// Visibility legend (matches the colour code used in the overlay):
+//   green   = Visible
+//   orange  = Occluded (with line back to the occluder)
+//   gray    = Coasting (no fresh visual evidence; tracker extrapolation)
+// ----------------------------------------------------------------------------
+
+namespace {
+
+uint32_t WorldVisibilityColor(PE::PhysicalEntityVisibility v) {
+    switch (v) {
+        case PE::PhysicalEntityVisibility::Visible:  return 0xFF22DD66u; // green
+        case PE::PhysicalEntityVisibility::Occluded: return 0xFFFF9933u; // orange
+        case PE::PhysicalEntityVisibility::Coasting: return 0xFF888888u; // gray
+        case PE::PhysicalEntityVisibility::Unknown:  return 0xFFCCCCCCu;
+    }
+    return 0xFFCCCCCCu;
+}
+
+} // anonymous
+
+void UIPhysicalEnvironmentPanel::UpdateWorldTab(const InputState& /*input*/, float /*dt*/) {
+    // Pull latest published snapshot. The world-state loop publishes at most
+    // once per matched (perception, grounding) pair; a Pull that returns
+    // false simply means "nothing new" — keep the previous view.
+    try {
+        const bool advanced =
+            PE::PhysicalWorldStateBus::Instance()
+                .PullLatestPhysicalWorldStateSnapshotView(
+                    world_snapshot_view_, world_last_seen_counter_);
+        if (advanced) {
+            world_last_seen_counter_ =
+                world_snapshot_view_.snapshot.source_frame_counter;
+            have_any_world_results_  = true;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+                  std::string("UpdateWorldTab: snapshot pull threw: ") + e.what());
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawWorldEntitiesOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalWorldStateSnapshot& snap,
+    int blit_x, int blit_y, int blit_w, int blit_h)
+{
+    if (snap.model_image_width <= 0 || snap.model_image_height <= 0) return;
+    if (blit_w <= 0 || blit_h <= 0) return;
+
+    // model → blit transform (model coords are the snapshot's authoritative
+    // coordinate system; we rendered the raw frame letterboxed to the blit
+    // rect, so we must transform via raw → letterbox, NOT model → letterbox.
+    // The world-state snapshot also stores raw_box for exactly this reason).
+    if (snap.raw_image_width <= 0 || snap.raw_image_height <= 0) return;
+    const float sx = static_cast<float>(blit_w) / static_cast<float>(snap.raw_image_width);
+    const float sy = static_cast<float>(blit_h) / static_cast<float>(snap.raw_image_height);
+
+    auto raw_pt = [&](float rx, float ry) {
+        return std::pair<float,float>(
+            static_cast<float>(blit_x) + rx * sx,
+            static_cast<float>(blit_y) + ry * sy);
+    };
+
+    // Pre-build an id → centre table for relation lines.
+    std::unordered_map<uint64_t, std::pair<float,float>> id_to_screen_centre;
+    id_to_screen_centre.reserve(snap.entities.size());
+    for (const auto& e : snap.entities) {
+        id_to_screen_centre[e.object_id] = raw_pt(e.raw_centre.x, e.raw_centre.y);
+    }
+
+    // 1. Relation lines (drawn first so boxes sit on top).
+    for (const auto& e : snap.entities) {
+        const auto self_pt = id_to_screen_centre[e.object_id];
+        for (const auto& rel : e.relations) {
+            const auto it = id_to_screen_centre.find(rel.other_object_id);
+            if (it == id_to_screen_centre.end()) continue;
+            uint32_t color;
+            switch (rel.kind) {
+                case PE::PhysicalEntityRelationKind::Contains:
+                case PE::PhysicalEntityRelationKind::ContainedBy:
+                case PE::PhysicalEntityRelationKind::Overlaps:
+                    color = 0x66FFFFFFu; break;
+                case PE::PhysicalEntityRelationKind::NearerThan:
+                case PE::PhysicalEntityRelationKind::FartherThan:
+                    color = 0x6633CCFFu; break;
+                default:
+                    color = 0x4488AAFFu; break;
+            }
+            renderer.drawLine({self_pt.first, self_pt.second},
+                              {it->second.first, it->second.second},
+                              color, 1.0f);
+        }
+    }
+
+    // 2. Entity boxes (colour by visibility) + occluder linkage.
+    for (const auto& e : snap.entities) {
+        const uint32_t col = WorldVisibilityColor(e.visibility);
+        const auto tl = raw_pt(e.raw_box.x, e.raw_box.y);
+        const float w_px = e.raw_box.width  * sx;
+        const float h_px = e.raw_box.height * sy;
+        // Top + bottom + left + right edges as 1-px rects (drawRect = filled).
+        renderer.drawRect({tl.first,            tl.second           }, {w_px, 1.0f}, col);
+        renderer.drawRect({tl.first,            tl.second + h_px - 1}, {w_px, 1.0f}, col);
+        renderer.drawRect({tl.first,            tl.second           }, {1.0f, h_px}, col);
+        renderer.drawRect({tl.first + w_px - 1, tl.second           }, {1.0f, h_px}, col);
+
+        // Label band above the box.
+        std::stringstream ss;
+        ss << "#" << e.object_id;
+        if (!e.class_label.empty()) ss << " " << e.class_label;
+        ss << "  " << PE::DescribePhysicalEntityVisibility(e.visibility);
+        if (e.has_depth) {
+            ss << "  ";
+            if (e.depth_units == PE::DepthUnits::Meters)
+                ss << std::fixed << std::setprecision(2) << e.range_value_meters << "m";
+            else
+                ss << "r=" << std::fixed << std::setprecision(2) << e.range_value;
+        }
+        const float label_y = std::max(static_cast<float>(blit_y),
+                                       tl.second - 14.0f);
+        renderer.drawText({tl.first, label_y}, ss.str(), col);
+
+        // Occlusion linkage (orange line from this box centre to occluder).
+        if (e.occluded_by_object_id != 0) {
+            const auto it = id_to_screen_centre.find(e.occluded_by_object_id);
+            if (it != id_to_screen_centre.end()) {
+                const auto self_pt = id_to_screen_centre[e.object_id];
+                renderer.drawLine({self_pt.first, self_pt.second},
+                                  {it->second.first, it->second.second},
+                                  0xCCFF9933u, 2.0f);
+            }
+        }
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawWorldEntitiesSidebar(
+    OverlayRenderer& renderer, float x, float y, float w, float h,
+    const PE::PhysicalWorldStateSnapshot& snap, bool have_results)
+{
+    (void)w; (void)h;
+    float ly = y;
+
+    if (!have_results) {
+        renderer.drawText({x, ly},
+                          "World-state bus: no snapshots published yet.",
+                          UITheme::Colors::TextSecondary);
+        ly += 16.0f;
+        renderer.drawText({x, ly},
+                          "Stage-4 publishes only on matched (perception, grounding) frames.",
+                          UITheme::Colors::TextSecondary);
+        return;
+    }
+
+    {
+        std::stringstream ss;
+        ss << "frame=" << snap.source_frame_counter
+           << "  perc=" << snap.source_perception_results_counter
+           << "  ground=" << snap.source_grounding_results_counter;
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextPrimary);
+        ly += 16.0f;
+    }
+    {
+        std::stringstream ss;
+        ss << "model=" << snap.model_image_width << "x" << snap.model_image_height
+           << "  raw=" << snap.raw_image_width  << "x" << snap.raw_image_height;
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+        ly += 16.0f;
+    }
+    {
+        std::stringstream ss;
+        ss << "entities: " << snap.entities.size()
+           << "  visible=" << snap.num_visible_entities
+           << "  occluded=" << snap.num_occluded_entities
+           << "  coasting=" << snap.num_coasting_entities;
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextPrimary);
+        ly += 18.0f;
+    }
+
+    // Per-entity rows (truncated so we stay inside the sidebar).
+    constexpr size_t kMaxRows = 14;
+    const size_t n = std::min(kMaxRows, snap.entities.size());
+    for (size_t i = 0; i < n; ++i) {
+        const auto& e = snap.entities[i];
+        const uint32_t col = WorldVisibilityColor(e.visibility);
+        std::stringstream ss;
+        ss << "#" << e.object_id;
+        if (!e.class_label.empty()) ss << " " << e.class_label;
+        ss << " | " << PE::DescribePhysicalEntityVisibility(e.visibility);
+        ss << " | conf=" << std::fixed << std::setprecision(2) << e.confidence;
+        if (e.has_depth) {
+            ss << " | ";
+            if (e.depth_units == PE::DepthUnits::Meters)
+                ss << std::fixed << std::setprecision(2) << e.range_value_meters << "m";
+            else
+                ss << "r=" << std::fixed << std::setprecision(2) << e.range_value;
+        }
+        ss << " | rels=" << e.relations.size();
+        renderer.drawText({x, ly}, ss.str(), col);
+        ly += 14.0f;
+
+        if (!e.text_on_object.empty()) {
+            std::stringstream ts;
+            ts << "    text:";
+            for (size_t k = 0; k < e.text_on_object.size() && k < 3; ++k)
+                ts << " \"" << e.text_on_object[k] << "\"";
+            if (e.text_on_object.size() > 3) ts << " ...";
+            renderer.drawText({x, ly}, ts.str(), UITheme::Colors::TextSecondary);
+            ly += 14.0f;
+        }
+        if (e.occluded_by_object_id != 0) {
+            std::stringstream os;
+            os << "    occluded by #" << e.occluded_by_object_id
+               << "  visible_frac=" << std::fixed << std::setprecision(2)
+               << e.visible_area_fraction;
+            renderer.drawText({x, ly}, os.str(), UITheme::Colors::TextSecondary);
+            ly += 14.0f;
+        }
+    }
+    if (snap.entities.size() > n) {
+        std::stringstream ss;
+        ss << "  ... (+" << (snap.entities.size() - n) << " more)";
+        renderer.drawText({x, ly}, ss.str(), UITheme::Colors::TextSecondary);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawWorldTab(OverlayRenderer& renderer) {
+    const float pad         = 16.0f;
+    const float content_top = position.y + titleBarHeight + kTabBarHeight + 8.0f;
+
+    // Frame on the left (~62%), sidebar on the right.
+    const float total_w = size.x - 2.0f * pad;
+    const float frame_w = total_w * 0.62f;
+    const float frame_h = size.y - (content_top - position.y) - pad;
+    const float frame_x = position.x + pad;
+    const float frame_y = content_top;
+
+    const float sidebar_x = frame_x + frame_w + 8.0f;
+    const float sidebar_y = content_top;
+    const float sidebar_w = size.x - pad - (sidebar_x - position.x);
+    const float sidebar_h = frame_h;
+
+    // Draw the latest raw frame as the canvas (Rule 20: if no frame is on
+    // the bus, say so — no stub graphic).
+    if (have_any_frame_ && !last_view_.raw_image.empty()) {
+        DrawBgrFrameIntoOverlay(renderer,
+                                last_view_.raw_image,
+                                last_seen_counter_,
+                                /*source_undistort=*/false,
+                                frame_x, frame_y, frame_w, frame_h,
+                                world_blit_cache_);
+
+        if (have_any_world_results_
+            && world_blit_cache_.out_w > 0 && world_blit_cache_.out_h > 0) {
+            const int out_w = world_blit_cache_.out_w;
+            const int out_h = world_blit_cache_.out_h;
+            const int out_x = static_cast<int>(frame_x + (frame_w - out_w) * 0.5f);
+            const int out_y = static_cast<int>(frame_y + (frame_h - out_h) * 0.5f);
+            DrawWorldEntitiesOverlay(renderer,
+                                     world_snapshot_view_.snapshot,
+                                     out_x, out_y, out_w, out_h);
+        }
+    } else {
+        renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
+                          UITheme::Colors::PanelBg);
+        renderer.drawText({frame_x + 12.0f, frame_y + 12.0f},
+                          "PhysicalFrameBus: no frame published yet.",
+                          UITheme::Colors::TextSecondary);
+    }
+
+    // Sidebar background + content.
+    renderer.drawRect({sidebar_x - 1, sidebar_y - 1},
+                      {sidebar_w + 2, sidebar_h + 2}, UITheme::Colors::DividerLine);
+    renderer.drawRect({sidebar_x, sidebar_y},
+                      {sidebar_w, sidebar_h}, UITheme::Colors::PanelBg);
+    DrawWorldEntitiesSidebar(renderer, sidebar_x + 8, sidebar_y + 8,
+                             sidebar_w - 16, sidebar_h - 16,
+                             world_snapshot_view_.snapshot,
+                             have_any_world_results_);
 }

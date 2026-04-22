@@ -12,6 +12,8 @@
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingBus.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
+#include "perception/physical/PhysicalWorldStateBus.hpp"
+#include "perception/physical/PhysicalWorldStateLoop.hpp"
 
 #include <opencv2/core/mat.hpp>
 
@@ -41,7 +43,8 @@ public:
         Camera      = 0,
         Calibration = 1,
         Perception  = 2,
-        Spatial     = 3
+        Spatial     = 3,
+        World       = 4
     };
 
     UIPhysicalEnvironmentPanel();
@@ -173,6 +176,7 @@ private:
     std::shared_ptr<UIButton>   tab_calibration_btn_;
     std::shared_ptr<UIButton>   tab_perception_btn_;
     std::shared_ptr<UIButton>   tab_spatial_btn_;
+    std::shared_ptr<UIButton>   tab_world_btn_;
     Tab                         active_tab_ = Tab::Camera;
 
     // ── Shared frame pull state (one bus, one cached frame) ──
@@ -317,4 +321,27 @@ private:
     PreviewBlitCache spatial_heatmap_blit_cache_;
     cv::Mat          spatial_heatmap_bgr_;             // built lazily from depth_map
     uint64_t         spatial_heatmap_source_id_ = 0;   // 0 = not yet built
+
+    // ── World-state tab (Stage-4) ──
+    // The model's view: identity-keyed entities with class, position,
+    // velocity, visibility, depth, text-on-object, and inter-entity
+    // relations. Pulls directly from PhysicalWorldStateBus — does NOT
+    // re-fuse from upstream buses, because the world-state loop already
+    // did that exactly once per matched frame.
+    void UpdateWorldTab(const InputState& input, float dt);
+    void DrawWorldTab(OverlayRenderer& renderer);
+    void DrawWorldEntitiesOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalWorldStateSnapshot& snap,
+        int blit_x, int blit_y, int blit_w, int blit_h);
+    void DrawWorldEntitiesSidebar(
+        OverlayRenderer& renderer, float x, float y, float w, float h,
+        const GRIM::Perception::Physical::PhysicalWorldStateSnapshot& snap,
+        bool have_results);
+
+    GRIM::Perception::Physical::PhysicalWorldStateBus::SnapshotView
+        world_snapshot_view_;
+    uint64_t world_last_seen_counter_ = 0;
+    bool     have_any_world_results_  = false;
+    PreviewBlitCache world_blit_cache_;
 };

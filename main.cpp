@@ -38,6 +38,7 @@
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
+#include "perception/physical/PhysicalWorldStateLoop.hpp"
 #include "ui/ui_physical_environment_panel.hpp"
 #include "MMO/UI/UISurfaceRegistry.hpp"
 #ifdef _WIN32
@@ -597,6 +598,11 @@ int main(int argc, char* argv[])
         // monocular depth estimator and the spatial grounder, publishes the
         // per-track grounded results to PhysicalSpatialGroundingBus.
         GRIM::Perception::Physical::TickPhysicalSpatialGrounding();
+        // Stage 4: fuses the perception-primitive bus + spatial-grounding bus into
+        // a single identity-keyed PhysicalWorldStateSnapshot (object_id, class,
+        // position, velocity, visibility, depth, text_on_object, relations) and
+        // publishes it to PhysicalWorldStateBus. This is what the model reads.
+        GRIM::Perception::Physical::TickPhysicalWorldState();
 
         UIRoot::get().update(input, 0.016f);
 
@@ -683,6 +689,7 @@ int main(int argc, char* argv[])
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
+    GRIM::Perception::Physical::ShutdownPhysicalWorldState();
     GRIM::Perception::Physical::ShutdownPhysicalSpatialGrounding();
     GRIM::Perception::Physical::ShutdownPhysicalPerceptionPrimitives();
     GRIM::Perception::Physical::ShutdownPhysicalEnvironment();
