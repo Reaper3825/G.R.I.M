@@ -7,7 +7,9 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
+#include <tuple>
 
 namespace GRIM { namespace Perception { namespace Physical {
 
@@ -106,6 +108,12 @@ void PhysicalEntityTracker::ConfigurePhysicalEntityTracker(
         state_             = PhysicalImageOperatorState::ModelLoadFailed;
         last_error_reason_ = "ConfigurePhysicalEntityTracker: min_iou_for_match must be in [0, 1] (got "
                              + std::to_string(cfg.min_iou_for_match) + ")";
+        throw std::runtime_error(last_error_reason_);
+    }
+    if (!(cfg.cross_track_nms_iou >= 0.0f && cfg.cross_track_nms_iou <= 1.0f)) {
+        state_             = PhysicalImageOperatorState::ModelLoadFailed;
+        last_error_reason_ = "ConfigurePhysicalEntityTracker: cross_track_nms_iou must be in [0, 1] (got "
+                             + std::to_string(cfg.cross_track_nms_iou) + ")";
         throw std::runtime_error(last_error_reason_);
     }
     if (cfg.max_predict_seconds < 0.0) {
@@ -320,6 +328,60 @@ void PhysicalEntityTracker::RouteDetectionsToPhysicalEntityTracker(
                 }),
             live_tracks_.end());
         total_tracks_culled_ += (before_cull - live_tracks_.size());
+
+        // ── 5b. CROSS-TRACK NMS (same-class) ──────────────────
+        // Detectors (notably YOLO at low conf thresholds) regularly spawn
+        // two near-identical boxes for one physical object. Each becomes a
+        // separate track, and downstream consumers see ghost duplicates.
+        // Greedy NMS over (state, total_hits, smoothed_confidence, age).
+        if (cfg_.cross_track_nms_iou > 0.0f && live_tracks_.size() >= 2) {
+            // Rank index: lower index == "keep" priority.
+            std::vector<size_t> order(live_tracks_.size());
+            std::iota(order.begin(), order.end(), size_t{0});
+            auto rank_tuple = [&](size_t i) {
+                const auto& s = live_tracks_[i].snapshot;
+                // Confirmed=2, Coasting=1, Tentative=0 — higher beats lower.
+                int state_rank = 0;
+                switch (s.state) {
+                    case PhysicalEntityTrackState::Confirmed: state_rank = 2; break;
+                    case PhysicalEntityTrackState::Coasting:  state_rank = 1; break;
+                    case PhysicalEntityTrackState::Tentative: state_rank = 0; break;
+                }
+                return std::make_tuple(state_rank,
+                                       static_cast<int>(s.total_hits),
+                                       s.smoothed_confidence,
+                                       static_cast<int>(s.age_in_frames));
+            };
+            std::sort(order.begin(), order.end(),
+                      [&](size_t a, size_t b){ return rank_tuple(a) > rank_tuple(b); });
+
+            std::vector<bool> suppressed(live_tracks_.size(), false);
+            for (size_t ai = 0; ai < order.size(); ++ai) {
+                const size_t a = order[ai];
+                if (suppressed[a]) continue;
+                const auto& sa = live_tracks_[a].snapshot;
+                for (size_t bi = ai + 1; bi < order.size(); ++bi) {
+                    const size_t b = order[bi];
+                    if (suppressed[b]) continue;
+                    const auto& sb = live_tracks_[b].snapshot;
+                    if (sb.class_id != sa.class_id) continue;
+                    const float iou = IntersectionOverUnion(
+                        sa.smoothed_model_box, sb.smoothed_model_box);
+                    if (iou >= cfg_.cross_track_nms_iou) {
+                        suppressed[b] = true;
+                    }
+                }
+            }
+            // Erase suppressed tracks; preserve original order otherwise.
+            const size_t before_nms = live_tracks_.size();
+            std::vector<LiveTrack> kept;
+            kept.reserve(live_tracks_.size());
+            for (size_t i = 0; i < live_tracks_.size(); ++i) {
+                if (!suppressed[i]) kept.push_back(std::move(live_tracks_[i]));
+            }
+            live_tracks_ = std::move(kept);
+            total_tracks_culled_ += (before_nms - live_tracks_.size());
+        }
 
         // ── 6. EMIT snapshot ───────────────────────────────────────────
         out.tracks.reserve(live_tracks_.size());

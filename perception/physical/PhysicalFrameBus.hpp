@@ -8,6 +8,7 @@
 #include <opencv2/core.hpp>
 
 #include "PhysicalFrameConditioner.hpp"  // for PhysicalSignalRawToModelTransform
+#include "PhysicalSceneStability.hpp"    // for PhysicalSceneStability
 
 namespace GRIM { namespace Perception { namespace Physical {
 
@@ -27,6 +28,11 @@ struct PhysicalFrameMetadata {
     std::string                       color_space_label;       // "BGR8_SRGB" / "GRAY8_SRGB"
     std::string                       pipeline_summary;
     double                            applied_exposure_gain = 1.0;
+
+    // Per-frame scene-change signal computed by PhysicalFrameConditioner.
+    // Consumed by every cache-aware operator gate so the test runs exactly
+    // once per frame (not once per operator).
+    PhysicalSceneStability            scene_stability{};
 };
 
 // Latest-frame slot. Single producer (PhysicalEnvironmentLoop), multiple

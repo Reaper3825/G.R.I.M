@@ -6,6 +6,7 @@
 #include "logger.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -52,11 +53,133 @@ struct PhysicalPerceptionPrimitivesState {
 
     // Pre-allocated FrameView so we don't reallocate cv::Mats every Tick.
     PhysicalFrameBus::FrameView frame_view;
+
+    // ── Per-operator cadence + cache state ───────────────────────────────
+    // Each cache-aware operator gets:
+    //   * cached_*_cadence — copy of the cadence config last requested.
+    //     Loop owns this (rather than calling back into the operator) so
+    //     the gating decision is local and the operators stay pure.
+    //   * cached_*_output  — the most recent FRESH (i.e. cache_hit==false)
+    //     result produced by RouteFrameTo*. Reused verbatim on cache hits.
+    //   * last_*_run_steady_ns / last_*_fresh_frame_counter — provenance
+    //     for cadence floor + cache age.
+    // The entity_tracker is intentionally excluded — it is cheap and runs
+    // in lock-step with whatever detections it is fed.
+    PhysicalOperatorCadenceConfig cached_obj_cadence{};
+    PhysicalObjectDetectorOutput  cached_obj_output{};
+    uint64_t last_obj_run_steady_ns       = 0;
+    uint64_t last_obj_fresh_frame_counter = 0;
+
+    PhysicalOperatorCadenceConfig    cached_seg_cadence{};
+    PhysicalSemanticSegmenterOutput  cached_seg_output{};
+    uint64_t last_seg_run_steady_ns       = 0;
+    uint64_t last_seg_fresh_frame_counter = 0;
+
+    PhysicalOperatorCadenceConfig    cached_inst_seg_cadence{};
+    PhysicalInstanceSegmenterOutput  cached_inst_seg_output{};
+    uint64_t last_inst_seg_run_steady_ns       = 0;
+    uint64_t last_inst_seg_fresh_frame_counter = 0;
+
+    PhysicalOperatorCadenceConfig  cached_cls_cadence{};
+    PhysicalImageClassifierOutput  cached_cls_output{};
+    uint64_t last_cls_run_steady_ns       = 0;
+    uint64_t last_cls_fresh_frame_counter = 0;
+
+    PhysicalOperatorCadenceConfig         cached_pose_cadence{};
+    PhysicalPoseKeypointEstimatorOutput   cached_pose_output{};
+    uint64_t last_pose_run_steady_ns       = 0;
+    uint64_t last_pose_fresh_frame_counter = 0;
+
+    PhysicalOperatorCadenceConfig    cached_text_cadence{};
+    PhysicalSceneTextReaderOutput    cached_text_output{};
+    uint64_t last_text_run_steady_ns       = 0;
+    uint64_t last_text_fresh_frame_counter = 0;
+
+    PhysicalOperatorCadenceConfig            cached_face_cadence{};
+    PhysicalFacialExpressionDetectorOutput   cached_face_output{};
+    uint64_t last_face_run_steady_ns       = 0;
+    uint64_t last_face_fresh_frame_counter = 0;
 };
 
 PhysicalPerceptionPrimitivesState& GetState() {
     static PhysicalPerceptionPrimitivesState s;
     return s;
+}
+
+// ── Cadence gate ─────────────────────────────────────────────────────────
+// Returns the decision for one operator for the current frame.
+//
+// Rule 20 contract:
+//   * If the scene-stability signal is INVALID (cond. failed / first frame),
+//     we ALWAYS run inference and surface "no_signal" so the caller can see
+//     why the cache wasn't consulted. We never silently fall back.
+//   * Defaults (`min_period_ms=0`, `reuse_on_stable_scene=false`) preserve
+//     every-frame inference exactly. The gate is a strict opt-in.
+enum class PhysicalCadenceDecision : uint8_t {
+    Run          = 0,   // run inference, populate fresh result
+    ReuseStable  = 1,   // scene unchanged → reuse cached result
+    ReuseCadence = 2,   // min-period not yet elapsed → reuse cached result
+    ReuseBoth    = 3,   // both gates active simultaneously
+    NoSignal     = 4    // scene_stability invalid → forced run
+};
+
+inline const char* DescribePhysicalCadenceDecision(PhysicalCadenceDecision d) {
+    switch (d) {
+        case PhysicalCadenceDecision::Run:          return "";
+        case PhysicalCadenceDecision::ReuseStable:  return "stable_scene";
+        case PhysicalCadenceDecision::ReuseCadence: return "cadence_floor";
+        case PhysicalCadenceDecision::ReuseBoth:    return "stable_and_cadence";
+        case PhysicalCadenceDecision::NoSignal:     return "no_signal";
+    }
+    return "invalid";
+}
+
+PhysicalCadenceDecision DecidePhysicalCadence(
+    const PhysicalOperatorCadenceConfig& cfg,
+    const PhysicalSceneStability&        scene,
+    bool                                 has_cached_result,
+    uint64_t                             last_run_steady_ns,
+    uint64_t                             now_steady_ns)
+{
+    // No cached fresh output → must run regardless of cadence config.
+    if (!has_cached_result) return PhysicalCadenceDecision::Run;
+
+    // Loud-failure path: if the scene-stability signal is invalid we cannot
+    // safely consult either gate. Run and report.
+    if (!scene.valid) return PhysicalCadenceDecision::NoSignal;
+
+    const bool stable_gate_active  = cfg.reuse_on_stable_scene && scene.is_stable;
+    bool       cadence_gate_active = false;
+    if (cfg.min_period_ms > 0 && last_run_steady_ns != 0) {
+        const uint64_t min_period_ns =
+            static_cast<uint64_t>(cfg.min_period_ms) * 1'000'000ULL;
+        cadence_gate_active = (now_steady_ns - last_run_steady_ns) < min_period_ns;
+    }
+
+    if (stable_gate_active && cadence_gate_active) return PhysicalCadenceDecision::ReuseBoth;
+    if (stable_gate_active)                        return PhysicalCadenceDecision::ReuseStable;
+    if (cadence_gate_active)                       return PhysicalCadenceDecision::ReuseCadence;
+    return PhysicalCadenceDecision::Run;
+}
+
+// Stamp the cache_status fields on a result envelope. `cache_age_frames` is
+// 0 for fresh runs, or `current_frame - last_fresh_frame` otherwise.
+void StampPhysicalCacheStatus(PhysicalCacheStatus& status,
+                              PhysicalCadenceDecision decision,
+                              uint64_t current_frame_counter,
+                              uint64_t last_fresh_frame_counter)
+{
+    const bool is_reuse =
+        decision == PhysicalCadenceDecision::ReuseStable  ||
+        decision == PhysicalCadenceDecision::ReuseCadence ||
+        decision == PhysicalCadenceDecision::ReuseBoth;
+    status.cache_hit        = is_reuse;
+    status.cache_age_frames = is_reuse
+        ? (current_frame_counter > last_fresh_frame_counter
+              ? static_cast<uint32_t>(current_frame_counter - last_fresh_frame_counter)
+              : 0u)
+        : 0u;
+    status.cache_reason = DescribePhysicalCadenceDecision(decision);
 }
 
 void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
@@ -162,69 +285,205 @@ void TickPhysicalPerceptionPrimitives() {
     if (results.raw_image_width    <= 0) results.raw_image_width    = s.frame_view.raw_image.cols;
     if (results.raw_image_height   <= 0) results.raw_image_height   = s.frame_view.raw_image.rows;
 
+    // Per-frame scene-stability signal (computed once by the conditioner).
+    // Loop-local cadence gates consult this; operators stay pure.
+    const PhysicalSceneStability& scene = s.frame_view.metadata.scene_stability;
+    const uint64_t now_steady_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    const uint64_t frame_ctr = results.source_frame_counter;
+
     // Each operator runs only if its enable flag is on; the operator itself
     // gates on its state, so calling RouteFrameTo* when NoModelConfigured
     // is cheap and just fills the output envelope with state info.
     if (s.enable_flags.object_detector && s.object_detector) {
-        s.object_detector->RouteFrameToPhysicalObjectDetector(
-            s.frame_view.model_image,
-            results.raw_to_model,
-            results.raw_image_width,
-            results.raw_image_height,
-            results.source_frame_counter,
-            results.object_detector);
+        const bool has_cached =
+            s.cached_obj_output.state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_obj_fresh_frame_counter != 0;
+        const auto decision = DecidePhysicalCadence(
+            s.cached_obj_cadence, scene, has_cached,
+            s.last_obj_run_steady_ns, now_steady_ns);
+        if (decision == PhysicalCadenceDecision::Run ||
+            decision == PhysicalCadenceDecision::NoSignal) {
+            s.object_detector->RouteFrameToPhysicalObjectDetector(
+                s.frame_view.model_image,
+                results.raw_to_model,
+                results.raw_image_width,
+                results.raw_image_height,
+                frame_ctr,
+                results.object_detector);
+            StampPhysicalCacheStatus(results.object_detector.cache_status,
+                                     decision, frame_ctr, frame_ctr);
+            if (results.object_detector.state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_obj_output            = results.object_detector;
+                s.last_obj_run_steady_ns       = now_steady_ns;
+                s.last_obj_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            results.object_detector = s.cached_obj_output;
+            StampPhysicalCacheStatus(results.object_detector.cache_status,
+                                     decision, frame_ctr,
+                                     s.last_obj_fresh_frame_counter);
+        }
     }
     if (s.enable_flags.semantic_segmenter && s.semantic_segmenter) {
-        s.semantic_segmenter->RouteFrameToPhysicalSemanticSegmenter(
-            s.frame_view.model_image,
-            results.source_frame_counter,
-            results.semantic_segmenter);
+        const bool has_cached =
+            s.cached_seg_output.state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_seg_fresh_frame_counter != 0;
+        const auto decision = DecidePhysicalCadence(
+            s.cached_seg_cadence, scene, has_cached,
+            s.last_seg_run_steady_ns, now_steady_ns);
+        if (decision == PhysicalCadenceDecision::Run ||
+            decision == PhysicalCadenceDecision::NoSignal) {
+            s.semantic_segmenter->RouteFrameToPhysicalSemanticSegmenter(
+                s.frame_view.model_image,
+                frame_ctr,
+                results.semantic_segmenter);
+            StampPhysicalCacheStatus(results.semantic_segmenter.cache_status,
+                                     decision, frame_ctr, frame_ctr);
+            if (results.semantic_segmenter.state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_seg_output            = results.semantic_segmenter;
+                s.last_seg_run_steady_ns       = now_steady_ns;
+                s.last_seg_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            results.semantic_segmenter = s.cached_seg_output;
+            StampPhysicalCacheStatus(results.semantic_segmenter.cache_status,
+                                     decision, frame_ctr,
+                                     s.last_seg_fresh_frame_counter);
+        }
     }
     if (s.enable_flags.image_classifier && s.image_classifier) {
-        s.image_classifier->RouteFrameToPhysicalImageClassifier(
-            s.frame_view.model_image,
-            results.source_frame_counter,
-            results.image_classifier);
+        const bool has_cached =
+            s.cached_cls_output.state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_cls_fresh_frame_counter != 0;
+        const auto decision = DecidePhysicalCadence(
+            s.cached_cls_cadence, scene, has_cached,
+            s.last_cls_run_steady_ns, now_steady_ns);
+        if (decision == PhysicalCadenceDecision::Run ||
+            decision == PhysicalCadenceDecision::NoSignal) {
+            s.image_classifier->RouteFrameToPhysicalImageClassifier(
+                s.frame_view.model_image,
+                frame_ctr,
+                results.image_classifier);
+            StampPhysicalCacheStatus(results.image_classifier.cache_status,
+                                     decision, frame_ctr, frame_ctr);
+            if (results.image_classifier.state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_cls_output            = results.image_classifier;
+                s.last_cls_run_steady_ns       = now_steady_ns;
+                s.last_cls_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            results.image_classifier = s.cached_cls_output;
+            StampPhysicalCacheStatus(results.image_classifier.cache_status,
+                                     decision, frame_ctr,
+                                     s.last_cls_fresh_frame_counter);
+        }
     }
     if (s.enable_flags.pose_estimator && s.pose_estimator) {
-        s.pose_estimator->RouteFrameToPhysicalPoseKeypointEstimator(
-            s.frame_view.model_image,
-            results.raw_to_model,
-            results.raw_image_width,
-            results.raw_image_height,
-            results.source_frame_counter,
-            results.pose_estimator);
+        const bool has_cached =
+            s.cached_pose_output.state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_pose_fresh_frame_counter != 0;
+        const auto decision = DecidePhysicalCadence(
+            s.cached_pose_cadence, scene, has_cached,
+            s.last_pose_run_steady_ns, now_steady_ns);
+        if (decision == PhysicalCadenceDecision::Run ||
+            decision == PhysicalCadenceDecision::NoSignal) {
+            s.pose_estimator->RouteFrameToPhysicalPoseKeypointEstimator(
+                s.frame_view.model_image,
+                results.raw_to_model,
+                results.raw_image_width,
+                results.raw_image_height,
+                frame_ctr,
+                results.pose_estimator);
+            StampPhysicalCacheStatus(results.pose_estimator.cache_status,
+                                     decision, frame_ctr, frame_ctr);
+            if (results.pose_estimator.state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_pose_output            = results.pose_estimator;
+                s.last_pose_run_steady_ns       = now_steady_ns;
+                s.last_pose_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            results.pose_estimator = s.cached_pose_output;
+            StampPhysicalCacheStatus(results.pose_estimator.cache_status,
+                                     decision, frame_ctr,
+                                     s.last_pose_fresh_frame_counter);
+        }
     }
     if (s.enable_flags.scene_text_reader && s.scene_text_reader) {
-        s.scene_text_reader->RouteFrameToPhysicalSceneTextReader(
-            s.frame_view.model_image,
-            results.raw_to_model,
-            results.raw_image_width,
-            results.raw_image_height,
-            results.source_frame_counter,
-            results.scene_text_reader);
+        const bool has_cached =
+            s.cached_text_output.state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_text_fresh_frame_counter != 0;
+        const auto decision = DecidePhysicalCadence(
+            s.cached_text_cadence, scene, has_cached,
+            s.last_text_run_steady_ns, now_steady_ns);
+        if (decision == PhysicalCadenceDecision::Run ||
+            decision == PhysicalCadenceDecision::NoSignal) {
+            s.scene_text_reader->RouteFrameToPhysicalSceneTextReader(
+                s.frame_view.model_image,
+                results.raw_to_model,
+                results.raw_image_width,
+                results.raw_image_height,
+                frame_ctr,
+                results.scene_text_reader);
+            StampPhysicalCacheStatus(results.scene_text_reader.cache_status,
+                                     decision, frame_ctr, frame_ctr);
+            if (results.scene_text_reader.state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_text_output            = results.scene_text_reader;
+                s.last_text_run_steady_ns       = now_steady_ns;
+                s.last_text_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            results.scene_text_reader = s.cached_text_output;
+            StampPhysicalCacheStatus(results.scene_text_reader.cache_status,
+                                     decision, frame_ctr,
+                                     s.last_text_fresh_frame_counter);
+        }
     }
     if (s.enable_flags.facial_expression_detector && s.facial_expression_detector) {
-        s.facial_expression_detector->RouteFrameToPhysicalFacialExpressionDetector(
-            s.frame_view.model_image,
-            results.raw_to_model,
-            results.raw_image_width,
-            results.raw_image_height,
-            results.source_frame_counter,
-            results.facial_expression_detector);
+        const bool has_cached =
+            s.cached_face_output.state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_face_fresh_frame_counter != 0;
+        const auto decision = DecidePhysicalCadence(
+            s.cached_face_cadence, scene, has_cached,
+            s.last_face_run_steady_ns, now_steady_ns);
+        if (decision == PhysicalCadenceDecision::Run ||
+            decision == PhysicalCadenceDecision::NoSignal) {
+            s.facial_expression_detector->RouteFrameToPhysicalFacialExpressionDetector(
+                s.frame_view.model_image,
+                results.raw_to_model,
+                results.raw_image_width,
+                results.raw_image_height,
+                frame_ctr,
+                results.facial_expression_detector);
+            StampPhysicalCacheStatus(results.facial_expression_detector.cache_status,
+                                     decision, frame_ctr, frame_ctr);
+            if (results.facial_expression_detector.state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_face_output            = results.facial_expression_detector;
+                s.last_face_run_steady_ns       = now_steady_ns;
+                s.last_face_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            results.facial_expression_detector = s.cached_face_output;
+            StampPhysicalCacheStatus(results.facial_expression_detector.cache_status,
+                                     decision, frame_ctr,
+                                     s.last_face_fresh_frame_counter);
+        }
     }
 
     // Entity tracker runs LAST among the operators because it consumes
     // the object detector's output as its input. It is given the same
     // raw_to_model + raw dims so its raw-space track boxes are coherent
-    // with everything else in the result envelope.
+    // with everything else in the result envelope. The tracker is never
+    // cadence-gated — it is cheap and downstream consumers expect it to
+    // smooth/extrapolate every frame.
     if (s.enable_flags.entity_tracker && s.entity_tracker) {
         s.entity_tracker->RouteDetectionsToPhysicalEntityTracker(
             results.object_detector.detections,
             results.raw_to_model,
             results.raw_image_width,
             results.raw_image_height,
-            results.source_frame_counter,
+            frame_ctr,
             results.entity_tracker);
     }
 
@@ -234,11 +493,32 @@ void TickPhysicalPerceptionPrimitives() {
     // independent (no shared mutable state) but we keep the segmenter last
     // because its encoder pass is the most expensive operator on the bus.
     if (s.enable_flags.instance_segmenter && s.instance_segmenter) {
-        s.instance_segmenter->RouteFrameAndDetectionsToPhysicalInstanceSegmenter(
-            s.frame_view.model_image,
-            results.object_detector.detections,
-            results.source_frame_counter,
-            results.instance_segmenter);
+        const bool has_cached =
+            s.cached_inst_seg_output.state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_inst_seg_fresh_frame_counter != 0;
+        const auto decision = DecidePhysicalCadence(
+            s.cached_inst_seg_cadence, scene, has_cached,
+            s.last_inst_seg_run_steady_ns, now_steady_ns);
+        if (decision == PhysicalCadenceDecision::Run ||
+            decision == PhysicalCadenceDecision::NoSignal) {
+            s.instance_segmenter->RouteFrameAndDetectionsToPhysicalInstanceSegmenter(
+                s.frame_view.model_image,
+                results.object_detector.detections,
+                frame_ctr,
+                results.instance_segmenter);
+            StampPhysicalCacheStatus(results.instance_segmenter.cache_status,
+                                     decision, frame_ctr, frame_ctr);
+            if (results.instance_segmenter.state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_inst_seg_output            = results.instance_segmenter;
+                s.last_inst_seg_run_steady_ns       = now_steady_ns;
+                s.last_inst_seg_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            results.instance_segmenter = s.cached_inst_seg_output;
+            StampPhysicalCacheStatus(results.instance_segmenter.cache_status,
+                                     decision, frame_ctr,
+                                     s.last_inst_seg_fresh_frame_counter);
+        }
     }
 
     try {
@@ -284,6 +564,21 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.tick_count           = 0;
     s.processed_count      = 0;
     s.last_seen_frame_ctr  = 0;
+    // Drop cached cadence outputs so a re-init starts fresh (defaults).
+    s.cached_obj_output            = {};
+    s.cached_seg_output            = {};
+    s.cached_inst_seg_output       = {};
+    s.cached_cls_output            = {};
+    s.cached_pose_output           = {};
+    s.cached_text_output           = {};
+    s.cached_face_output           = {};
+    s.last_obj_run_steady_ns = s.last_obj_fresh_frame_counter = 0;
+    s.last_seg_run_steady_ns = s.last_seg_fresh_frame_counter = 0;
+    s.last_inst_seg_run_steady_ns = s.last_inst_seg_fresh_frame_counter = 0;
+    s.last_cls_run_steady_ns = s.last_cls_fresh_frame_counter = 0;
+    s.last_pose_run_steady_ns = s.last_pose_fresh_frame_counter = 0;
+    s.last_text_run_steady_ns = s.last_text_fresh_frame_counter = 0;
+    s.last_face_run_steady_ns = s.last_face_fresh_frame_counter = 0;
     LOG_DEBUG(PHYSICAL_PERC_PRIM_LOG_TAG, "ShutdownPhysicalPerceptionPrimitives: complete");
 }
 
@@ -341,6 +636,7 @@ void RequestSetPhysicalPerceptionPrimitivesEnableFlags(
 void RequestConfigurePhysicalObjectDetector(const PhysicalObjectDetectorConfig& cfg) {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_obj_cadence = cfg.cadence;
     if (!s.initialized) {
         s.pending_obj_cfg = std::make_unique<PhysicalObjectDetectorConfig>(cfg);
         return;
@@ -356,6 +652,7 @@ void RequestConfigurePhysicalObjectDetector(const PhysicalObjectDetectorConfig& 
 void RequestConfigurePhysicalSemanticSegmenter(const PhysicalSemanticSegmenterConfig& cfg) {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_seg_cadence = cfg.cadence;
     if (!s.initialized) {
         s.pending_seg_cfg = std::make_unique<PhysicalSemanticSegmenterConfig>(cfg);
         return;
@@ -369,6 +666,7 @@ void RequestConfigurePhysicalSemanticSegmenter(const PhysicalSemanticSegmenterCo
 void RequestConfigurePhysicalImageClassifier(const PhysicalImageClassifierConfig& cfg) {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_cls_cadence = cfg.cadence;
     if (!s.initialized) {
         s.pending_cls_cfg = std::make_unique<PhysicalImageClassifierConfig>(cfg);
         return;
@@ -382,6 +680,7 @@ void RequestConfigurePhysicalImageClassifier(const PhysicalImageClassifierConfig
 void RequestConfigurePhysicalPoseKeypointEstimator(const PhysicalPoseKeypointEstimatorConfig& cfg) {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_pose_cadence = cfg.cadence;
     if (!s.initialized) {
         s.pending_pose_cfg = std::make_unique<PhysicalPoseKeypointEstimatorConfig>(cfg);
         return;
@@ -395,6 +694,7 @@ void RequestConfigurePhysicalPoseKeypointEstimator(const PhysicalPoseKeypointEst
 void RequestConfigurePhysicalSceneTextReader(const PhysicalSceneTextReaderConfig& cfg) {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_text_cadence = cfg.cadence;
     if (!s.initialized) {
         s.pending_text_cfg = std::make_unique<PhysicalSceneTextReaderConfig>(cfg);
         return;
@@ -408,6 +708,7 @@ void RequestConfigurePhysicalSceneTextReader(const PhysicalSceneTextReaderConfig
 void RequestConfigurePhysicalFacialExpressionDetector(const PhysicalFacialExpressionDetectorConfig& cfg) {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_face_cadence = cfg.cadence;
     if (!s.initialized) {
         s.pending_face_cfg = std::make_unique<PhysicalFacialExpressionDetectorConfig>(cfg);
         return;
@@ -436,6 +737,7 @@ void RequestConfigurePhysicalEntityTracker(const PhysicalEntityTrackerConfig& cf
 void RequestConfigurePhysicalInstanceSegmenter(const PhysicalInstanceSegmenterConfig& cfg) {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_inst_seg_cadence = cfg.cadence;
     if (!s.initialized) {
         s.pending_inst_seg_cfg = std::make_unique<PhysicalInstanceSegmenterConfig>(cfg);
         return;

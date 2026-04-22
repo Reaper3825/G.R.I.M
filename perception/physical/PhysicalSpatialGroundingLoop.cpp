@@ -6,6 +6,7 @@
 #include "PhysicalSpatialGroundingLogTag.hpp"
 #include "logger.hpp"
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -42,6 +43,19 @@ struct PhysicalSpatialGroundingState {
     // Pre-allocated views so we don't reallocate every Tick.
     PhysicalFrameBus::FrameView                  frame_view;
     PhysicalPerceptionPrimitiveBus::ResultsView  perc_view;
+
+    // Cadence + cache state for the depth estimator. Defaults preserve
+    // every-frame inference exactly (min_period_ms=0, reuse_on_stable_scene=false).
+    // Loud-failure: when the per-frame scene-stability signal is invalid
+    // we always re-run depth and report cache_reason="no_signal".
+    PhysicalOperatorCadenceConfig cached_depth_cadence{};
+    PhysicalDepthMap              cached_depth_map{};
+    PhysicalImageOperatorState    cached_depth_state =
+        PhysicalImageOperatorState::NoModelConfigured;
+    double                        cached_last_depth_inference_ms = 0.0;
+    uint64_t                      cached_depth_inference_count   = 0;
+    uint64_t                      last_depth_run_steady_ns       = 0;
+    uint64_t                      last_depth_fresh_frame_counter = 0;
 };
 
 PhysicalSpatialGroundingState& GetState() {
@@ -133,15 +147,79 @@ void TickPhysicalSpatialGrounding() {
     if (results.raw_image_width    <= 0) results.raw_image_width    = s.frame_view.raw_image.cols;
     if (results.raw_image_height   <= 0) results.raw_image_height   = s.frame_view.raw_image.rows;
 
-    // ── Depth estimation ───────────────────────────────────────────────
+    // ── Depth estimation (cadence-gated) ──────────────────────
     if (s.enable_flags.depth_estimator && s.depth_estimator) {
-        s.depth_estimator->RouteFrameToPhysicalMonocularDepthEstimator(
-            s.frame_view.model_image,
-            results.depth_map,
-            results.depth_estimator_state,
-            results.depth_estimator_last_error,
-            results.last_depth_inference_ms);
-        results.depth_inference_count = s.depth_estimator->GetPhysicalMonocularDepthEstimatorInferenceCount();
+        const PhysicalSceneStability& scene = s.frame_view.metadata.scene_stability;
+        const uint64_t now_steady_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        const uint64_t frame_ctr = results.source_frame_counter;
+
+        const bool has_cached =
+            s.cached_depth_state == PhysicalImageOperatorState::ModelLoaded &&
+            s.last_depth_fresh_frame_counter != 0;
+
+        // Inline cadence decision (mirrors PhysicalPerceptionPrimitivesLoop's
+        // DecidePhysicalCadence helper). Kept local so the two loops remain
+        // independent translation units — avoids creating a shared header for
+        // a 20-line policy that may diverge per loop in the future.
+        const char* cache_reason = "";
+        bool        run_now      = true;
+
+        if (!has_cached) {
+            run_now = true; cache_reason = "";
+        } else if (!scene.valid) {
+            run_now = true; cache_reason = "no_signal";
+        } else {
+            const bool stable_gate  = s.cached_depth_cadence.reuse_on_stable_scene && scene.is_stable;
+            bool       cadence_gate = false;
+            if (s.cached_depth_cadence.min_period_ms > 0 && s.last_depth_run_steady_ns != 0) {
+                const uint64_t min_period_ns =
+                    static_cast<uint64_t>(s.cached_depth_cadence.min_period_ms) * 1'000'000ULL;
+                cadence_gate = (now_steady_ns - s.last_depth_run_steady_ns) < min_period_ns;
+            }
+            if (stable_gate && cadence_gate) { run_now = false; cache_reason = "stable_and_cadence"; }
+            else if (stable_gate)            { run_now = false; cache_reason = "stable_scene";       }
+            else if (cadence_gate)           { run_now = false; cache_reason = "cadence_floor";      }
+            else                             { run_now = true;  cache_reason = "";                   }
+        }
+
+        if (run_now) {
+            s.depth_estimator->RouteFrameToPhysicalMonocularDepthEstimator(
+                s.frame_view.model_image,
+                results.depth_map,
+                results.depth_estimator_state,
+                results.depth_estimator_last_error,
+                results.last_depth_inference_ms);
+            results.depth_inference_count =
+                s.depth_estimator->GetPhysicalMonocularDepthEstimatorInferenceCount();
+            results.depth_cache_status.cache_hit        = false;
+            results.depth_cache_status.cache_age_frames = 0;
+            results.depth_cache_status.cache_reason     = cache_reason;
+            // Cache only successful runs.
+            if (results.depth_estimator_state == PhysicalImageOperatorState::ModelLoaded) {
+                s.cached_depth_map               = results.depth_map;
+                s.cached_depth_state             = results.depth_estimator_state;
+                s.cached_last_depth_inference_ms = results.last_depth_inference_ms;
+                s.cached_depth_inference_count   = results.depth_inference_count;
+                s.last_depth_run_steady_ns       = now_steady_ns;
+                s.last_depth_fresh_frame_counter = frame_ctr;
+            }
+        } else {
+            // Reuse cached depth map and provenance verbatim. Consumers MUST
+            // inspect depth_cache_status before correlating timing.
+            results.depth_map                  = s.cached_depth_map;
+            results.depth_estimator_state      = s.cached_depth_state;
+            results.depth_estimator_last_error.clear();
+            results.last_depth_inference_ms    = s.cached_last_depth_inference_ms;
+            results.depth_inference_count      = s.cached_depth_inference_count;
+            results.depth_cache_status.cache_hit        = true;
+            results.depth_cache_status.cache_age_frames =
+                frame_ctr > s.last_depth_fresh_frame_counter
+                    ? static_cast<uint32_t>(frame_ctr - s.last_depth_fresh_frame_counter)
+                    : 0u;
+            results.depth_cache_status.cache_reason     = cache_reason;
+        }
     } else {
         results.depth_estimator_state      = PhysicalImageOperatorState::NoModelConfigured;
         results.depth_estimator_last_error = "depth_estimator disabled by enable_flags";
@@ -191,6 +269,12 @@ void ShutdownPhysicalSpatialGrounding() {
     s.processed_count      = 0;
     s.last_seen_frame_ctr  = 0;
     s.last_seen_perc_ctr   = 0;
+    s.cached_depth_map     = {};
+    s.cached_depth_state   = PhysicalImageOperatorState::NoModelConfigured;
+    s.cached_last_depth_inference_ms = 0.0;
+    s.cached_depth_inference_count   = 0;
+    s.last_depth_run_steady_ns       = 0;
+    s.last_depth_fresh_frame_counter = 0;
     LOG_DEBUG(PHYSICAL_SPATIAL_GROUND_LOG_TAG, "ShutdownPhysicalSpatialGrounding: complete");
 }
 
@@ -237,6 +321,7 @@ void RequestConfigurePhysicalMonocularDepthEstimator(
 {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
+    s.cached_depth_cadence = cfg.cadence;
     if (!s.initialized) {
         s.pending_depth_cfg = std::make_unique<PhysicalMonocularDepthEstimatorConfig>(cfg);
         return;

@@ -1493,9 +1493,7 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionDetectionsOverlay(
         std::ostringstream ss;
         ss << d.class_label << " " << FormatDouble(d.confidence * 100.0, 0) << "%";
         const std::string label = ss.str();
-        const float tw = renderer.measureTextWidth(label) + 6.0f;
         const float ly = std::max(static_cast<float>(blit_y), y - 16.0f);
-        renderer.drawRect({x, ly}, {tw, 14.0f}, PercMakeArgb(0xC0, 0, 0, 0));
         renderer.drawText({x + 3.0f, ly + 2.0f}, label, col);
     }
 }
@@ -1733,9 +1731,7 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionEntityTracksOverlay(
            << " age=" << t.age_in_frames
            << " hits=" << t.total_hits;
         const std::string label = ss.str();
-        const float tw = renderer.measureTextWidth(label) + 6.0f;
         const float ly = std::max(static_cast<float>(blit_y), y - 16.0f);
-        renderer.drawRect({x, ly}, {tw, 14.0f}, PercMakeArgb(0xC0, 0, 0, 0));
         renderer.drawText({x + 3.0f, ly + 2.0f}, label, col);
 
         // Trail polyline. Older points fade toward transparent.
@@ -1823,8 +1819,6 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionInstanceMasksOverlay(
         label_ss << m.class_label
                  << "  iou=" << FormatDouble(m.mask_confidence * 100.0, 0) << "%";
         const std::string label = label_ss.str();
-        const float tw = renderer.measureTextWidth(label) + 6.0f;
-        renderer.drawRect({lx, ly}, {tw, 14.0f}, PercMakeArgb(0xC0, 0, 0, 0));
         renderer.drawText({lx + 3.0f, ly + 2.0f}, label, outline_col);
 
         // Suppress an unused-variable warning while keeping the alpha-fill

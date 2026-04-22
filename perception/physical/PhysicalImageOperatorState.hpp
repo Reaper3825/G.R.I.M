@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "PhysicalSceneStability.hpp"  // PhysicalOperatorCadenceConfig + PhysicalCacheStatus
+
 namespace GRIM { namespace Perception { namespace Physical {
 
 // Lifecycle state shared by every Stage-2 image operator. Surfacing this

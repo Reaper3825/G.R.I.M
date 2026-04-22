@@ -30,6 +30,9 @@ struct PhysicalImageClassifierConfig {
     int          top_k          = 5;
     int          dnn_backend_id = cv::dnn::DNN_BACKEND_OPENCV;
     int          dnn_target_id  = cv::dnn::DNN_TARGET_CPU;
+
+    // Latency knobs. Defaults preserve every-frame inference.
+    PhysicalOperatorCadenceConfig cadence{};
 };
 
 class PhysicalImageClassifier {

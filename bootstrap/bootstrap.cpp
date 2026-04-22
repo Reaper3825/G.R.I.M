@@ -314,6 +314,12 @@ static void bootstrapMMOLayer() {
                         c.confidence_threshold = vm->vision.confidence_threshold;
                     if (vm->vision.iou_threshold > 0.0f)
                         c.iou_threshold = vm->vision.iou_threshold;
+                    // Cadence: detector feeds the tracker, so we want it
+                    // fresh on motion but reusable on a truly stable scene.
+                    // 33 ms floor caps it at ~30 fps even when the camera
+                    // pipeline runs faster.
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms         = 33;
                     PE::RequestConfigurePhysicalObjectDetector(c);
                     break;
                 }
@@ -323,6 +329,10 @@ static void bootstrapMMOLayer() {
                     c.class_names_path = vm->vision.class_names_path;
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
+                    // Semantic segmentation is dense + expensive. Hard cap
+                    // at ~10 fps and skip entirely on a stable scene.
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms         = 100;
                     PE::RequestConfigurePhysicalSemanticSegmenter(c);
                     break;
                 }
@@ -333,6 +343,10 @@ static void bootstrapMMOLayer() {
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     if (vm->vision.top_k > 0) c.top_k = vm->vision.top_k;
+                    // Whole-image classification — semantically a scene
+                    // label. Cheap to reuse, ~5 fps refresh is plenty.
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms         = 200;
                     PE::RequestConfigurePhysicalImageClassifier(c);
                     break;
                 }
@@ -361,6 +375,10 @@ static void bootstrapMMOLayer() {
                         c.person_confidence_threshold = vm->vision.confidence_threshold;
                     if (vm->vision.iou_threshold > 0.0f)
                         c.nms_iou_threshold = vm->vision.iou_threshold;
+                    // Pose tracks fast human motion. Reuse only on a truly
+                    // stable scene; otherwise hold a 30 fps floor.
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms         = 33;
                     PE::RequestConfigurePhysicalPoseKeypointEstimator(c);
                     break;
                 }
@@ -372,6 +390,10 @@ static void bootstrapMMOLayer() {
                     c.recogniser_input_grayscale = vm->vision.recogniser_input_grayscale;
                     if (vm->vision.input_width  > 0) c.detector_input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.detector_input_height = vm->vision.input_height;
+                    // Scene text is among the slowest-changing signals in
+                    // a typical scene. ~2 fps + reuse on stable scene.
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms         = 500;
                     PE::RequestConfigurePhysicalSceneTextReader(c);
                     break;
                 }
@@ -391,6 +413,10 @@ static void bootstrapMMOLayer() {
                     if (vm->vision.expression_classifier_input_height > 0)
                         c.classifier_input_height = vm->vision.expression_classifier_input_height;
                     c.classifier_input_grayscale = vm->vision.expression_classifier_input_grayscale;
+                    // Expressions change quickly under motion; cap at
+                    // ~10 fps and reuse on a stable scene.
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms         = 100;
                     PE::RequestConfigurePhysicalFacialExpressionDetector(c);
                     break;
                 }
@@ -410,6 +436,11 @@ static void bootstrapMMOLayer() {
                     c.output_is_disparity  = vm->vision.depth_output_is_disparity;
                     c.metric_scale_meters  = vm->vision.depth_metric_scale_meters;
                     c.metric_epsilon       = static_cast<float>(vm->vision.depth_metric_epsilon);
+                    // Depth dominates Stage-3 latency. Cap at ~10 fps and
+                    // reuse on a stable scene; spatial grounding fuses the
+                    // cached map with fresh tracker boxes every frame.
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms         = 100;
                     PE::RequestConfigurePhysicalMonocularDepthEstimator(c);
                     break;
                 }
@@ -423,6 +454,11 @@ static void bootstrapMMOLayer() {
                         c.max_prompts_per_frame = vm->vision.instance_seg_max_prompts_per_frame;
                     if (vm->vision.instance_seg_min_prompt_confidence > 0.0f)
                         c.min_prompt_confidence = vm->vision.instance_seg_min_prompt_confidence;
+                    // SAM-2 encoder is the heaviest operator on the bus.
+                    // Cap at ~5 fps and reuse on stable scene; the
+                    // mask-decoder pass with fresh prompts is still cheap.
+                    c.cadence.reuse_on_stable_scene = true;
+                    c.cadence.min_period_ms         = 200;
                     PE::RequestConfigurePhysicalInstanceSegmenter(c);
                     break;
                 }

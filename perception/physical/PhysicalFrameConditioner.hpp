@@ -5,6 +5,8 @@
 
 #include <opencv2/core.hpp>
 
+#include "PhysicalSceneStability.hpp"
+
 namespace GRIM { namespace Perception { namespace Physical {
 
 enum class PhysicalSignalColorMode : uint8_t {
@@ -36,13 +38,12 @@ struct PhysicalSignalConditioningConfig {
     PhysicalSignalResizeMode resize_mode = PhysicalSignalResizeMode::Letterbox;
     int    letterbox_pad_value         = 114;     // 0..255; 114 matches YOLO/Ultralytics convention
 
-    bool   enable_denoise              = true;
-    int    denoise_strength            = 6;
-
-    bool   enable_exposure_correction  = true;
-    bool   exposure_auto               = true;
-    double manual_exposure_gain        = 1.00;
-    double target_luma                 = 112.0;
+    bool   enable_denoise              = true; // median blur is cheap and helps stabilize the scene-stability signal (and downstream cache reuse) when sensor noise is high — e.g. in low light or with aggressive digital zoom.
+    int    denoise_strength            = 6; // median blur kernel size. Must be odd. 5 is a good default for 640x360 input; adjust up/down for larger/smaller resolutions.
+    bool   enable_exposure_correction  = true; // master switch for the exposure-correction subsystem (auto and manual paths both gated on this).
+    bool   exposure_auto               = true; // when true, overrides manual_exposure_gain and automatically computes a gain to push the mean luma towards target_luma.
+    double manual_exposure_gain        = 1.00; // applied when exposure_auto is false. Multiplier on the input pixel values; 1.0 means no change, <1.0 darkens, >1.0 brightens.
+    double target_luma                 = 112.0; // target mean luma for auto exposure. 112 is ~midpoint between pure black and pure white, giving the model the best chance to see texture in either case.
 
     bool   enable_deblur               = false;
     double deblur_amount               = 0.60;
@@ -55,6 +56,11 @@ struct PhysicalSignalConditioningConfig {
     PhysicalSignalColorMode color_mode = PhysicalSignalColorMode::Bgr;
 
     PhysicalSignalQualityGateConfig quality_gate{};
+
+    // Per-frame scene-stability signal computed AFTER the model image is
+    // built. Cheap (small thumbnail). Consumed by every cache-aware
+    // downstream operator via PhysicalFrameBus::FrameView::scene_stability.
+    PhysicalSceneStabilityConfig    scene_stability{};
 };
 
 // Affine transform from RAW sensor pixel space to MODEL pixel space:
@@ -97,6 +103,10 @@ struct PhysicalSignalConditioningStatus {
     // Geometric provenance: how raw maps into model
     PhysicalSignalRawToModelTransform last_raw_to_model{};
 
+    // Last computed scene-stability signal. Snapshotted into the FrameView
+    // metadata at publish time; also surfaced here for diagnostics panels.
+    PhysicalSceneStability  last_scene_stability{};
+
     std::string last_pipeline_summary;
     std::string last_failure_reason;
 };
@@ -113,6 +123,11 @@ struct PhysicalSignalConditioningResult {
     int                               raw_height = 0;
     int                               model_width  = 0;
     int                               model_height = 0;
+
+    // Scene-stability snapshot for THIS frame. Populated only when accepted
+    // is true. Producer (PhysicalEnvironmentLoop) attaches this to the
+    // FrameMetadata published on PhysicalFrameBus.
+    PhysicalSceneStability            scene_stability{};
 };
 
 class PhysicalFrameConditioner {
@@ -143,6 +158,14 @@ private:
     PhysicalSignalConditioningStatus status_;
 
     cv::Mat previous_gray_for_flow_;
+
+    // Scene-stability state. previous_scene_thumbnail_gray_ is empty until
+    // the first conditioned frame is published; in that case the very first
+    // signal is reported as is_stable=false / change_reason="first_frame".
+    cv::Mat  previous_scene_thumbnail_gray_;
+    uint64_t previous_scene_hash_64_ = 0;
+    bool     previous_scene_hash_valid_ = false;
+    uint32_t scene_stable_streak_      = 0;
 };
 
 PhysicalSignalConditioningConfig BuildDefaultPhysicalSignalConditioningConfig();

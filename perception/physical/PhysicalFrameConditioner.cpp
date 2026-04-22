@@ -123,6 +123,10 @@ void PhysicalFrameConditioner::ConfigurePhysicalSignalConditioning(
 void PhysicalFrameConditioner::ResetPhysicalSignalConditioningToDefaults() {
     config_ = BuildDefaultPhysicalSignalConditioningConfig();
     previous_gray_for_flow_.release();
+    previous_scene_thumbnail_gray_.release();
+    previous_scene_hash_64_    = 0;
+    previous_scene_hash_valid_ = false;
+    scene_stable_streak_       = 0;
     status_ = {};
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
               "ResetPhysicalSignalConditioningToDefaults: restored default pipeline settings");
@@ -130,9 +134,14 @@ void PhysicalFrameConditioner::ResetPhysicalSignalConditioningToDefaults() {
 
 void PhysicalFrameConditioner::ResetPhysicalSignalConditioningTemporalState() {
     previous_gray_for_flow_.release();
+    previous_scene_thumbnail_gray_.release();
+    previous_scene_hash_64_    = 0;
+    previous_scene_hash_valid_ = false;
+    scene_stable_streak_       = 0;
     status_.last_flow_dx = 0.0;
     status_.last_flow_dy = 0.0;
     status_.last_flow_tracked_points = 0;
+    status_.last_scene_stability = {};
 }
 
 PhysicalSignalConditioningConfig PhysicalFrameConditioner::GetPhysicalSignalConditioningConfigSnapshot() const {
@@ -223,6 +232,65 @@ PhysicalSignalRawToModelTransform LetterboxResize(const cv::Mat& src,
     t.offset_x = static_cast<double>(pad_left);
     t.offset_y = static_cast<double>(pad_top);
     return t;
+}
+
+} // namespace
+
+namespace {
+
+// Compute a 64-bit average-hash bitmap from a small grayscale thumbnail.
+// We tile the thumbnail into an 8x8 grid (block-mean) and compare each
+// block mean against the overall mean. Bit i (LSB-first) is 1 iff the
+// i-th block mean >= overall mean. Robust to small luma drift; sensitive
+// to layout changes.
+uint64_t ComputeAverageHash64FromGray(const cv::Mat& gray) {
+    if (gray.empty() || gray.type() != CV_8UC1) {
+        throw std::runtime_error(
+            "ComputeAverageHash64FromGray: expected non-empty CV_8UC1 thumbnail");
+    }
+    if (gray.cols < 8 || gray.rows < 8) {
+        throw std::runtime_error(
+            "ComputeAverageHash64FromGray: thumbnail must be at least 8x8, got "
+            + std::to_string(gray.cols) + "x" + std::to_string(gray.rows));
+    }
+    cv::Mat block_means(8, 8, CV_32F, cv::Scalar(0.0f));
+    const double bw = static_cast<double>(gray.cols) / 8.0;
+    const double bh = static_cast<double>(gray.rows) / 8.0;
+    double total = 0.0;
+    for (int by = 0; by < 8; ++by) {
+        const int y0 = static_cast<int>(std::floor(by * bh));
+        const int y1 = std::max(y0 + 1, static_cast<int>(std::floor((by + 1) * bh)));
+        for (int bx = 0; bx < 8; ++bx) {
+            const int x0 = static_cast<int>(std::floor(bx * bw));
+            const int x1 = std::max(x0 + 1, static_cast<int>(std::floor((bx + 1) * bw)));
+            const cv::Rect roi(x0, y0,
+                               std::min(x1 - x0, gray.cols - x0),
+                               std::min(y1 - y0, gray.rows - y0));
+            const float m = static_cast<float>(cv::mean(gray(roi))[0]);
+            block_means.at<float>(by, bx) = m;
+            total += m;
+        }
+    }
+    const float overall_mean = static_cast<float>(total / 64.0);
+    uint64_t bits = 0;
+    for (int i = 0; i < 64; ++i) {
+        const int by = i / 8;
+        const int bx = i % 8;
+        if (block_means.at<float>(by, bx) >= overall_mean) {
+            bits |= (uint64_t{1} << i);
+        }
+    }
+    return bits;
+}
+
+int Popcount64(uint64_t x) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_popcountll(x);
+#else
+    int n = 0;
+    while (x) { x &= (x - 1); ++n; }
+    return n;
+#endif
 }
 
 } // namespace
@@ -470,6 +538,100 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     status_.last_pipeline_summary = pipeline.str();
     status_.last_raw_to_model     = raw_to_model;
 
+    // ---- Scene-stability signal. Cheap thumbnail + 64-bit average hash. ----
+    // Computed on the CONDITIONED model image so it benefits from any
+    // stabilization / denoise that already ran. Skipped (and reported as
+    // valid=false) only if the operator was explicitly disabled in config —
+    // Rule 20: never silently fall through.
+    PhysicalSceneStability stability{};
+    const auto& sc = config_.scene_stability;
+    if (sc.enable) {
+        if (sc.thumbnail_width < 8 || sc.thumbnail_height < 8) {
+            throw std::runtime_error(
+                "ProcessRawFrameToModelSignal: scene_stability thumbnail must be"
+                " at least 8x8, got "
+                + std::to_string(sc.thumbnail_width) + "x"
+                + std::to_string(sc.thumbnail_height));
+        }
+        cv::Mat thumb_bgr;
+        cv::resize(out_model_bgr,
+                   thumb_bgr,
+                   cv::Size(sc.thumbnail_width, sc.thumbnail_height),
+                   0.0, 0.0, cv::INTER_AREA);
+        cv::Mat thumb_gray;
+        cv::cvtColor(thumb_bgr, thumb_gray, cv::COLOR_BGR2GRAY);
+
+        const uint64_t curr_hash = ComputeAverageHash64FromGray(thumb_gray);
+        const bool have_prev = !previous_scene_thumbnail_gray_.empty()
+                               && previous_scene_thumbnail_gray_.size() == thumb_gray.size()
+                               && previous_scene_hash_valid_;
+
+        double mad = 0.0;
+        int    hamming = 64;
+        bool   is_stable = false;
+        std::string change_reason;
+
+        if (!have_prev) {
+            change_reason = "first_frame";
+            scene_stable_streak_ = 0;
+        } else {
+            cv::Mat diff;
+            cv::absdiff(previous_scene_thumbnail_gray_, thumb_gray, diff);
+            mad = cv::mean(diff)[0];
+            hamming = Popcount64(curr_hash ^ previous_scene_hash_64_);
+            const bool motion_ok = (mad <= sc.motion_threshold);
+            const bool hash_ok   = (hamming <= sc.hash_hamming_threshold);
+            if (!motion_ok && !hash_ok) {
+                change_reason = "motion_and_hash(mad=" + std::to_string(mad)
+                              + ",hamming=" + std::to_string(hamming) + ")";
+            } else if (!motion_ok) {
+                change_reason = "motion(mad=" + std::to_string(mad)
+                              + ">thr=" + std::to_string(sc.motion_threshold) + ")";
+            } else if (!hash_ok) {
+                change_reason = "hash(hamming=" + std::to_string(hamming)
+                              + ">thr=" + std::to_string(sc.hash_hamming_threshold) + ")";
+            } else {
+                is_stable = true;
+            }
+        }
+
+        if (is_stable) {
+            if (scene_stable_streak_ >= sc.max_stable_streak_frames) {
+                // Force a refresh — break the gate so caches re-prime.
+                is_stable = false;
+                change_reason = "stable_streak_capped("
+                              + std::to_string(scene_stable_streak_) + ")";
+                stability.stable_streak_capped = true;
+                scene_stable_streak_ = 0;
+            } else {
+                ++scene_stable_streak_;
+            }
+        } else {
+            scene_stable_streak_ = 0;
+        }
+
+        stability.valid                = true;
+        stability.motion_magnitude     = mad;
+        stability.scene_hash_64        = curr_hash;
+        stability.hamming_vs_previous  = hamming;
+        stability.is_stable            = is_stable;
+        stability.frames_since_change  = scene_stable_streak_;
+        stability.change_reason        = change_reason;
+
+        previous_scene_thumbnail_gray_ = thumb_gray;  // shallow share is fine; we own it
+        previous_scene_hash_64_        = curr_hash;
+        previous_scene_hash_valid_     = true;
+    } else {
+        // Disabled by config. Drop temporal state so re-enabling starts fresh.
+        previous_scene_thumbnail_gray_.release();
+        previous_scene_hash_valid_ = false;
+        scene_stable_streak_       = 0;
+        stability.valid            = false;
+        stability.change_reason    = "disabled";
+    }
+
+    status_.last_scene_stability = stability;
+
     result.accepted          = true;
     result.raw_to_model      = raw_to_model;
     result.color_space_label = (config_.color_mode == PhysicalSignalColorMode::Gray)
@@ -478,6 +640,7 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     result.pipeline_summary  = status_.last_pipeline_summary;
     result.model_width       = out_model_bgr.cols;
     result.model_height      = out_model_bgr.rows;
+    result.scene_stability   = stability;
     return result;
 }
 

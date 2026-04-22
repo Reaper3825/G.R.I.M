@@ -195,6 +195,7 @@ struct PhysicalObjectDetectorOutput {
     uint64_t                    inference_count  = 0;   // total successful inferences since load
     uint64_t                    last_frame_counter = 0; // PhysicalFrameBus counter that produced this
     double                      last_inference_ms = 0.0;
+    PhysicalCacheStatus         cache_status{};
     std::vector<PhysicalObjectDetection> detections;
 };
 
@@ -204,6 +205,7 @@ struct PhysicalSemanticSegmenterOutput {
     uint64_t                     inference_count  = 0;
     uint64_t                     last_frame_counter = 0;
     double                       last_inference_ms = 0.0;
+    PhysicalCacheStatus          cache_status{};
     PhysicalSemanticSegmentation segmentation;
 };
 
@@ -223,6 +225,7 @@ struct PhysicalInstanceSegmenterOutput {
     double                         last_encoder_ms   = 0.0;
     double                         last_decoder_total_ms = 0.0;
     int32_t                        prompt_count     = 0;
+    PhysicalCacheStatus            cache_status{};
     PhysicalInstanceSegmentation   segmentation;
 };
 
@@ -232,6 +235,7 @@ struct PhysicalImageClassifierOutput {
     uint64_t                    inference_count  = 0;
     uint64_t                    last_frame_counter = 0;
     double                      last_inference_ms = 0.0;
+    PhysicalCacheStatus         cache_status{};
     std::vector<PhysicalImageClassification> top_k;
 };
 
@@ -241,6 +245,7 @@ struct PhysicalPoseKeypointEstimatorOutput {
     uint64_t                    inference_count  = 0;
     uint64_t                    last_frame_counter = 0;
     double                      last_inference_ms = 0.0;
+    PhysicalCacheStatus         cache_status{};
     std::vector<PhysicalPoseInstance> instances;
 };
 
@@ -251,6 +256,7 @@ struct PhysicalSceneTextReaderOutput {
     uint64_t                    last_frame_counter = 0;
     double                      last_inference_ms = 0.0;
     bool                        recogniser_configured = false; // false → only detection ran
+    PhysicalCacheStatus         cache_status{};
     std::vector<PhysicalSceneTextLine> lines;
 };
 
@@ -261,6 +267,7 @@ struct PhysicalFacialExpressionDetectorOutput {
     uint64_t                    last_frame_counter = 0;
     double                      last_inference_ms = 0.0;
     bool                        classifier_configured = false; // false → only face detection ran
+    PhysicalCacheStatus         cache_status{};
     std::vector<PhysicalFacialExpression> faces;
 };
 

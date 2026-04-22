@@ -93,6 +93,19 @@ struct PhysicalEntityTrackerConfig {
     // detector (where the user can see them in raw form) without polluting
     // the track set.
     float    detection_confidence_floor  = 0.0f;
+
+    // Greedy same-class NMS over the LIVE TRACK set, applied AFTER
+    // association and cull. Collapses duplicate tracks that the detector
+    // keeps re-spawning over the same physical object (a common YOLO
+    // failure mode where one object scores under two anchors / classes
+    // close to NMS threshold). Tracks are ranked by:
+    //   1. state          (Confirmed > Coasting > Tentative)
+    //   2. total_hits     (more evidence wins)
+    //   3. smoothed_confidence
+    //   4. age_in_frames  (older wins ties)
+    // The loser is removed entirely (counted toward total_tracks_culled).
+    // 0.0f disables the pass; 1.0f means "only collapse on exact overlap".
+    float    cross_track_nms_iou         = 0.70f;
 };
 
 class PhysicalEntityTracker {

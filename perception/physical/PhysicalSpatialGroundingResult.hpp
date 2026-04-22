@@ -40,7 +40,7 @@ inline const char* DescribePhysicalSupportSurfaceClass(PhysicalSupportSurfaceCla
         case PhysicalSupportSurfaceClass::Unknown: return "Unknown";
         case PhysicalSupportSurfaceClass::Floor:   return "Floor";
         case PhysicalSupportSurfaceClass::Table:   return "Table";
-        case PhysicalSupportSurfaceClass::Wall:    return "Wall";
+        case PhysicalSupportSurfaceClass::Wall:    return "Wall"; //
     }
     return "InvalidPhysicalSupportSurfaceClass";
 }
@@ -126,6 +126,11 @@ struct PhysicalSpatialGroundingResults {
     std::string                         depth_estimator_last_error;
     double                              last_depth_inference_ms = 0.0;
     uint64_t                            depth_inference_count   = 0;
+    // True when this frame's depth_map was REUSED from the previous fresh
+    // depth inference (cadence floor not elapsed AND/OR scene was stable).
+    // Loud-by-default: consumers can decide whether to colour the overlay
+    // differently or to recompute downstream values.
+    PhysicalCacheStatus                 depth_cache_status{};
 
     PhysicalImageOperatorState          grounder_state = PhysicalImageOperatorState::NoModelConfigured;
     std::string                         grounder_last_error;

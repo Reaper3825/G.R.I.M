@@ -103,6 +103,11 @@ struct PhysicalInstanceSegmenterConfig {
     // onnxruntime port does not ship the CoreML provider headers/symbols,
     // so we cannot honor an EP-selection toggle without violating Rule 20.
     int          intra_op_num_threads  = 0;
+
+    // Latency knobs. Defaults preserve every-frame inference. Note: the
+    // SAM 2 encoder is the dominant cost; turning on reuse_on_stable_scene
+    // here is the single biggest win for static-camera scenarios.
+    PhysicalOperatorCadenceConfig cadence{};
 };
 
 // Forward declaration — implementation lives in the .cpp to avoid leaking

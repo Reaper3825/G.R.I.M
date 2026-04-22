@@ -50,6 +50,9 @@ struct PhysicalPoseKeypointEstimatorConfig {
     float        nms_iou_threshold           = 0.45f;
     int          dnn_backend_id = cv::dnn::DNN_BACKEND_OPENCV;
     int          dnn_target_id  = cv::dnn::DNN_TARGET_CPU;
+
+    // Latency knobs. Defaults preserve every-frame inference.
+    PhysicalOperatorCadenceConfig cadence{};
 };
 
 class PhysicalPoseKeypointEstimator {

@@ -113,6 +113,7 @@ void DrainActiveStreamLocked(PhysicalEnvironmentState& s) {
             md.applied_exposure_gain = s.conditioner
                 .GetPhysicalSignalConditioningStatusSnapshot()
                 .last_applied_exposure_gain;
+            md.scene_stability       = cond_result.scene_stability;
 
             PhysicalFrameBus::Instance().PublishPhysicalFrameToBus(
                 s.pull_scratch,
