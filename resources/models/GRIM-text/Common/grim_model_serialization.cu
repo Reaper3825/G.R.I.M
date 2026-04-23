@@ -534,7 +534,7 @@ bool LanguageModel::load(const std::string& path) {
     if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data
         && !config_.lm_head_freeze_final_rms_gamma) {
         assignWrite(request.final_rms_gamma,
-                    lm_head_layer_->finalRmsGamma().data,
+                    lm_head_layer_->finalRmsGammaMutable_UnfrozenOnly("serialization::load").data,
                     static_cast<std::size_t>(config_.d_model));
     }
 

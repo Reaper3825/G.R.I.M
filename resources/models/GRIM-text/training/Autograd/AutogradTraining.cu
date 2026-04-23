@@ -1632,7 +1632,8 @@ BackwardResult executeAutogradBackward(
         // γ_final may be frozen (lm_head_freeze_final_rms_gamma=true) — in that case
         // it has no grad tensor and zero_grad would no-op; gate explicitly for clarity.
         if (ctx.lm_head->finalRmsGamma().requires_grad) {
-            ctx.lm_head->finalRmsGamma().zero_grad(ctx.stream);
+            ctx.lm_head->finalRmsGammaMutable_UnfrozenOnly("AutogradTraining::zero_grad")
+                .zero_grad(ctx.stream);
         }
 
         // Encoder parameters

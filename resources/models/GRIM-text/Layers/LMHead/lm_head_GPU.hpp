@@ -102,10 +102,31 @@ public:
     //--------------------------------------------------
     Tensor& weights() { return weights_; }
     Tensor& bias() { return bias_; }
-    Tensor& finalRmsGamma() { return final_rms_gamma_; }
+
+    // ---- final_rms_gamma access ----
+    // The READ accessor is always safe (telemetry, save, MTP forward, warn-checks).
+    const Tensor& finalRmsGamma() const { return final_rms_gamma_frozen_or_trained_; }
+
+    // The WRITE accessor THROWS if the gamma is configured frozen.
+    // Only four legitimate writers exist:
+    //   1. LMHeadLayer ctor (uses the private member directly)
+    //   2. LanguageModel_Training::buildParameterGroups (registerTensor)
+    //   3. AutogradTraining (zero_grad before backward)
+    //   4. grim_model_serialization::load (assignWrite to .data)
+    // Any other path that obtains a mutable reference will trip the throw and
+    // produce a stack trace pinpointing the leak.
+    Tensor& finalRmsGammaMutable_UnfrozenOnly(const char* caller) {
+        if (config_.freeze_final_rms_gamma) {
+            throw std::runtime_error(
+                std::string("[FROZEN-GAMMA-LEAK] mutable access to final_rms_gamma while "
+                            "freeze_final_rms_gamma=true. caller=") +
+                (caller ? caller : "<unknown>"));
+        }
+        return final_rms_gamma_frozen_or_trained_;
+    }
+
     const Tensor& weights() const { return weights_; }
     const Tensor& bias() const { return bias_; }
-    const Tensor& finalRmsGamma() const { return final_rms_gamma_; }
 
     /// Whether this layer allocated its own weights (false = tied to embedding)
     bool ownsWeights() const { return owns_weights_; }
@@ -123,7 +144,7 @@ public:
     // Forward Pass - Autograd
     //--------------------------------------------------
     /// LM head forward with autograd tracking:
-    ///   0. Optional: RMSNorm(input, final_rms_gamma_) — pre-LM-head normalization
+    ///   0. Optional: RMSNorm(input, final_rms_gamma_frozen_or_trained_) — pre-LM-head normalization
     ///   1. Optional: center_columns + center_rows on normalized input (Issue #125/#132)
     ///   2. logits = input @ weights^T  (autograd::matmul, transpose_b=true)
     ///   3. Optional: center_rows on logits (numerical stability)
@@ -144,7 +165,10 @@ private:
     // Weight Tensors with autograd (requires_grad=true)
     Tensor weights_;          // [vocab_size, d_model] — owned or aliased from embedding
     Tensor bias_;             // [vocab_size] — optional, always owned
-    Tensor final_rms_gamma_;  // [d_model] — pre-LM-head RMSNorm gamma, always owned
+    // Renamed (April 2026) so any stray reference to the old name `final_rms_gamma_`
+    // outside this class fails to compile. Combined with the split const/mutable
+    // accessors above, this constrains writes to the four declared paths.
+    Tensor final_rms_gamma_frozen_or_trained_;  // [d_model] — pre-LM-head RMSNorm gamma, always owned
 
     // April 2026: Workspace for the row-centered LM head weight matrix
     // (Σ_d W[v,d]=0 constraint that replaces row-centering of hidden states).

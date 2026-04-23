@@ -313,7 +313,9 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
                 (void*)lm_head_layer_->finalRmsGamma().data, (int)lm_head_layer_->finalRmsGamma().has_grad(),
                 lm_head_layer_->finalRmsGamma().numel()); fflush(stderr);
-        registerTensor("final_rms_gamma", lm_head_layer_->finalRmsGamma(), ParamGroupType::RMSNORM, -1, 1.0f, 0.1f);
+        registerTensor("final_rms_gamma",
+                       lm_head_layer_->finalRmsGammaMutable_UnfrozenOnly("buildParameterGroups"),
+                       ParamGroupType::RMSNORM, -1, 1.0f, 0.1f);
         fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
     } else {
         fprintf(stderr, "[buildParameterGroups] final_rms_gamma FROZEN (no grad, no param group) — held at 1.0\n");

@@ -107,19 +107,19 @@ LMHeadLayer::LMHeadLayer(const LMHeadLayerConfig& config,
     //  FINAL RMSNORM GAMMA: Always self-allocated, initialized to 1.0
     // ══════════════════════════════════════════════════════════════
     if (config_.has_final_rms_norm) {
-        final_rms_gamma_ = Tensor::zeros({config_.d_model}, init_stream, "final_rms_gamma");
+        final_rms_gamma_frozen_or_trained_ = Tensor::zeros({config_.d_model}, init_stream, "final_rms_gamma");
 
         // freeze_final_rms_gamma=true: γ stays at 1.0 forever — do NOT mark as a leaf
         // parameter. autograd will skip producing its gradient and buildParameterGroups
         // will skip registering it (gated on has_grad()).
         if (!config_.freeze_final_rms_gamma) {
-            final_rms_gamma_.requires_grad_();
-            final_rms_gamma_.ensure_grad();
+            final_rms_gamma_frozen_or_trained_.requires_grad_();
+            final_rms_gamma_frozen_or_trained_.ensure_grad();
         }
 
         // Initialize gamma to 1.0 (identity normalization at start)
         std::vector<float> ones(config_.d_model, 1.0f);
-        cudaMemcpyAsync(final_rms_gamma_.data, ones.data(),
+        cudaMemcpyAsync(final_rms_gamma_frozen_or_trained_.data, ones.data(),
                         config_.d_model * sizeof(float), cudaMemcpyHostToDevice, init_stream);
 
         fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to 1.0 (eps=%.1e) frozen=%s\n",
@@ -142,7 +142,7 @@ LMHeadLayer::LMHeadLayer(LMHeadLayer&& other) noexcept
     : config_(other.config_)
     , weights_(std::move(other.weights_))
     , bias_(std::move(other.bias_))
-    , final_rms_gamma_(std::move(other.final_rms_gamma_))
+    , final_rms_gamma_frozen_or_trained_(std::move(other.final_rms_gamma_frozen_or_trained_))
     , owns_weights_(other.owns_weights_) {
     other.config_.cublas_handle = nullptr;
     other.owns_weights_ = false;
@@ -153,7 +153,7 @@ LMHeadLayer& LMHeadLayer::operator=(LMHeadLayer&& other) noexcept {
         config_ = other.config_;
         weights_ = std::move(other.weights_);
         bias_ = std::move(other.bias_);
-        final_rms_gamma_ = std::move(other.final_rms_gamma_);
+        final_rms_gamma_frozen_or_trained_ = std::move(other.final_rms_gamma_frozen_or_trained_);
         owns_weights_ = other.owns_weights_;
         other.config_.cublas_handle = nullptr;
         other.owns_weights_ = false;
@@ -197,13 +197,13 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
     const Tensor* current_input = &input;
     Tensor normalized;
 
-    if (config_.has_final_rms_norm && final_rms_gamma_.data) {
+    if (config_.has_final_rms_norm && final_rms_gamma_frozen_or_trained_.data) {
         // Only flip requires_grad when γ is trainable. When frozen the rms_norm
         // GradFn will skip the gamma path entirely (no grad accumulation).
         if (!config_.freeze_final_rms_gamma) {
-            final_rms_gamma_.requires_grad = true;
+            final_rms_gamma_frozen_or_trained_.requires_grad = true;
         }
-        normalized = autograd::rms_norm(input, final_rms_gamma_, config_.rms_epsilon, stream);
+        normalized = autograd::rms_norm(input, final_rms_gamma_frozen_or_trained_, config_.rms_epsilon, stream);
         current_input = &normalized;
     }
 
