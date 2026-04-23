@@ -316,14 +316,15 @@ struct TrainingHyperparameters {
     // are passed to launch*Step(...) by signature.
     //
     // optimizer_kind ∈ {"adamw", "radam"}.  Default "adamw" preserves prior behavior.
-    // radam_compute_b2_halflife: when false (default), RAdam SKIPS the ρ_∞/ρ_t
-    // half-life rectification and uses β₂ directly (≡ bias-corrected Adam with
-    // decoupled WD). When true, runs the full RAdam variance-rectification math.
+    // radam_use_rectification: when false (default), RAdam SKIPS the ρ_∞/ρ_t
+    // variance-rectification math and degrades to plain bias-corrected Adam with
+    // decoupled WD. When true, runs the full RAdam paper math (ρ_t > 4 → rectified
+    // adaptive step using r_t; otherwise un-adapted SGD-with-momentum warmup step).
     std::string optimizer_kind = "adamw";
     float optimizer_beta1   = 0.9f;
     float optimizer_beta2   = 0.999f;
     float optimizer_epsilon = 1e-8f;
-    bool  radam_compute_b2_halflife = false;
+    bool  radam_use_rectification = false;
 
     // Stability overrides - NO DEFAULTS
     bool stability_overrides_enabled;
@@ -1287,12 +1288,12 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.embedding_freeze_after_step = ef.value("freeze_after_step", params.embedding_freeze_after_step);
     }
 
-    // Load optimizer selector + RAdam β₂-half-life guard.
+    // Load optimizer selector + RAdam rectification toggle.
     // JSON layout (all fields optional; struct defaults from HyperParameters apply):
     //   "optimizer": {
     //     "kind": "adamw" | "radam",
     //     "beta1": 0.9, "beta2": 0.999, "epsilon": 1e-8,
-    //     "radam_compute_b2_halflife": false
+    //     "radam_use_rectification": false
     //   }
     if (auto it = trainConfig.find("optimizer"); it != trainConfig.end() && it->is_object()) {
         const auto& opt = *it;
@@ -1300,8 +1301,8 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.optimizer_beta1  = opt.value("beta1",   params.optimizer_beta1);
         params.optimizer_beta2  = opt.value("beta2",   params.optimizer_beta2);
         params.optimizer_epsilon = opt.value("epsilon", params.optimizer_epsilon);
-        params.radam_compute_b2_halflife = opt.value("radam_compute_b2_halflife",
-                                                     params.radam_compute_b2_halflife);
+        params.radam_use_rectification = opt.value("radam_use_rectification",
+                                                   params.radam_use_rectification);
         // Rule 20: validate kind explicitly — fail loud on typo.
         if (params.optimizer_kind != "adamw" && params.optimizer_kind != "radam") {
             throw std::runtime_error(

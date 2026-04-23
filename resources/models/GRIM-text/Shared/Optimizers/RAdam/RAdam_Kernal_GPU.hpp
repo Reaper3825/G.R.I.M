@@ -6,16 +6,16 @@
 //  Hyperparameter convention (per training-loop request):
 //    - HyperParameters_GPU.hpp is the single source of truth
 //      for DEFAULT constants (RADAM_BETA1/2/EPSILON,
-//      RADAM_COMPUTE_B2_HALFLIFE_DEFAULT).
+//      RADAM_USE_RECTIFICATION_DEFAULT).
 //    - The RUNTIME values are passed into launch* by signature
 //      so the kernel never reads global hyperparameter symbols.
 //
-//  β₂ half-life guard (`compute_b2_halflife`):
+//  Variance-rectification toggle (`use_rectification`):
 //    - false (DEFAULT): SKIP the ρ_∞ / ρ_t variance-rectification
 //      math entirely. Kernel becomes plain bias-corrected Adam with
-//      decoupled weight decay using β₂ directly.
-//    - true:  Run full RAdam — when ρ_t > 4 use the rectified
-//      adaptive update (with `r_t`); otherwise use un-adapted
+//      decoupled weight decay (standard Adam math, NOT RAdam).
+//    - true:  Run full RAdam (Liu et al. 2019) — when ρ_t > 4 use the
+//      rectified adaptive update (with `r_t`); otherwise use un-adapted
 //      first-moment (SGD-with-momentum) warmup step.
 //
 //  Moment buffers (m, v) live on `ParameterGroup` and are SHARED
@@ -46,7 +46,7 @@ void launchRAdamKernel(ParameterGroup& group,
                        float beta1,
                        float beta2,
                        float epsilon,
-                       bool  compute_b2_halflife,
+                       bool  use_rectification,
                        cudaStream_t stream);
 
 //------------------------------------------------------//
@@ -66,7 +66,7 @@ void launchRAdamStep(std::vector<ParameterGroup>& groups,
                      float beta1,
                      float beta2,
                      float epsilon,
-                     bool  compute_b2_halflife,
+                     bool  use_rectification,
                      cudaStream_t stream,
                      int   embedding_freeze_after_step = -1);
 

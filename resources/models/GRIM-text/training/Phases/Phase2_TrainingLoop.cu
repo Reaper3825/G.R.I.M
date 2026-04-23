@@ -2606,7 +2606,7 @@ BatchResult processBatch(
                                   opt_hp.optimizer_beta1,
                                   opt_hp.optimizer_beta2,
                                   opt_hp.optimizer_epsilon,
-                                  opt_hp.radam_compute_b2_halflife,
+                                  opt_hp.radam_use_rectification,
                                   ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
                                   emb_freeze_step);
         } else {

@@ -142,16 +142,17 @@ constexpr float ADAMW_WEIGHT_DECAY = 0.01f;       // Issue #134: was 0.1 (7000x 
 // Rectified Adam (Liu et al. 2019). Shares m/v moment buffers
 // with AdamW so checkpoints stay format-compatible.
 //
-// RADAM_COMPUTE_B2_HALFLIFE_DEFAULT: When TRUE, computes ρ_∞/ρ_t
-// rectification term derived from the β₂ half-life (full RAdam).
-// When FALSE (DEFAULT), the ρ_t branch is SKIPPED — kernel degrades
-// to plain bias-corrected Adam with decoupled weight decay using β₂
-// directly. Defaults to FALSE per training-loop guard request.
+// RADAM_USE_RECTIFICATION_DEFAULT: When TRUE, runs the full RAdam
+// variance-rectification math (ρ_∞ / ρ_t / r_t per the paper).
+// When FALSE (DEFAULT), the rectification branch is SKIPPED entirely
+// and the kernel becomes plain bias-corrected Adam with decoupled
+// weight decay (standard Adam math, NOT RAdam). Defaults to FALSE so
+// flipping `optimizer.kind` alone does not silently change the math.
 //======================================================//
 constexpr float RADAM_BETA1 = 0.9f;
 constexpr float RADAM_BETA2 = 0.999f;
 constexpr float RADAM_EPSILON = 1e-8f;
-constexpr bool  RADAM_COMPUTE_B2_HALFLIFE_DEFAULT = false;
+constexpr bool  RADAM_USE_RECTIFICATION_DEFAULT = false;
 
 // Depth-Aware Upsilon (Υ) Regularization
 // Formula: Υ_l = UPSILON_BASE * sqrt(L_ref / L)

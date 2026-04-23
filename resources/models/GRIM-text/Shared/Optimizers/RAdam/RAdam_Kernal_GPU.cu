@@ -4,7 +4,7 @@
 //  RAdam_Kernal_GPU.cu
 //  CUDA implementation for Rectified Adam optimizer step.
 //
-//  Math (per-element, when compute_b2_halflife = TRUE):
+//  Math (per-element, when use_rectification = TRUE — full RAdam):
 //      m_t   = β₁·m_{t-1} + (1-β₁)·g
 //      v_t   = β₂·v_{t-1} + (1-β₂)·g²
 //      m̂    = m_t / (1 − β₁^t)
@@ -18,14 +18,16 @@
 //          update = m̂
 //      θ ← θ − lr·(update + wd·θ)
 //
-//  When compute_b2_halflife = FALSE (DEFAULT — half-life guard OFF):
+//  When use_rectification = FALSE (DEFAULT — NOT RAdam):
 //      v̂  = v_t / (1 − β₂^t)
 //      update = m̂ · rsqrt(v̂ + ε)
 //      θ ← θ − lr·(update + wd·θ)
-//  i.e., bias-corrected Adam with decoupled weight decay using β₂
-//  directly (no ρ_t, no r_t).
+//  i.e., bias-corrected Adam with decoupled weight decay. The ρ_t /
+//  r_t variance-rectification math is skipped entirely — selecting
+//  optimizer.kind = "radam" with this flag off intentionally yields
+//  AdamW math, NOT RAdam math.
 //
-//  Hyperparameters (β₁, β₂, ε, compute_b2_halflife) are passed
+//  Hyperparameters (β₁, β₂, ε, use_rectification) are passed
 //  through the launch signature — kernel reads no globals.
 //  Defaults live in HyperParameters_GPU.hpp (single source of truth).
 //======================================================//
@@ -51,7 +53,7 @@ namespace {
 //  Per-element kernels
 //------------------------------------------------------//
 
-// Plain Adam (compute_b2_halflife = false). Decoupled weight decay.
+// Plain bias-corrected Adam (use_rectification = false). Decoupled weight decay.
 __global__ void RAdamPlainKernel(float* __restrict__ params,
                                  const float* __restrict__ grads,
                                  float* __restrict__ moments1,
@@ -87,7 +89,7 @@ __global__ void RAdamPlainKernel(float* __restrict__ params,
     }
 }
 
-// Full RAdam (compute_b2_halflife = true). use_rectified == (ρ_t > 4).
+// Full RAdam (use_rectification = true). use_rectified == (ρ_t > 4).
 __global__ void RAdamRectifiedKernel(float* __restrict__ params,
                                      const float* __restrict__ grads,
                                      float* __restrict__ moments1,
@@ -160,7 +162,7 @@ void launchRAdamKernel(ParameterGroup& group,
                        float beta1,
                        float beta2,
                        float epsilon,
-                       bool  compute_b2_halflife,
+                       bool  use_rectification,
                        cudaStream_t stream) {
     float* params      = group.weights();
     const float* grads = group.grads();
@@ -230,8 +232,8 @@ void launchRAdamKernel(ParameterGroup& group,
     const int grid = computeGridSize(size, HyperParameters::CUDA_BLOCK_SIZE_STANDARD);
     const int block = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 
-    if (!compute_b2_halflife) {
-        // Half-life guard OFF (default): plain bias-corrected Adam (decoupled WD).
+    if (!use_rectification) {
+        // Rectification OFF (default): plain bias-corrected Adam (decoupled WD).
         RAdamPlainKernel<<<grid, block, 0, stream>>>(params, grads, moments1, moments2,
                                                      size,
                                                      learning_rate, weight_decay,
@@ -239,7 +241,7 @@ void launchRAdamKernel(ParameterGroup& group,
                                                      inv_bias_correction1,
                                                      inv_bias_correction2);
     } else {
-        // Half-life guard ON: full RAdam with ρ_∞ / ρ_t rectification.
+        // Rectification ON: full RAdam with ρ_∞ / ρ_t variance-rectification math.
         const float rho_inf = 2.0f / (1.0f - beta2) - 1.0f;
         const float beta2_t = powf(beta2, static_cast<float>(iteration));
         // ρ_t = ρ_∞ − 2·t·β₂^t / (1 − β₂^t)
@@ -298,7 +300,7 @@ void launchRAdamStep(std::vector<ParameterGroup>& groups,
                      float beta1,
                      float beta2,
                      float epsilon,
-                     bool  compute_b2_halflife,
+                     bool  use_rectification,
                      cudaStream_t stream,
                      int   embedding_freeze_after_step) {
     if (groups.empty()) {
@@ -344,7 +346,7 @@ void launchRAdamStep(std::vector<ParameterGroup>& groups,
         const float effective_lr = learning_rate * group.lr_multiplier;
 
         launchRAdamKernel(group, effective_lr, effective_weight_decay, step,
-                          beta1, beta2, epsilon, compute_b2_halflife, stream);
+                          beta1, beta2, epsilon, use_rectification, stream);
     }
 }
 

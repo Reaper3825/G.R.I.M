@@ -450,7 +450,7 @@
                 "beta1": 0.9,
                 "beta2": 0.999,
                 "epsilon": 1e-8,
-                "radam_compute_b2_halflife": false
+                "radam_use_rectification": false
             },
             "execution_block": {
                 "d_type": 16,
