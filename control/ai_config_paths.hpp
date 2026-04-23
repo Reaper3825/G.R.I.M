@@ -310,6 +310,21 @@ struct TrainingHyperparameters {
     bool embedding_freeze_enabled = false;
     int embedding_freeze_after_step = 0;
 
+    // Optimizer selection - NO DEFAULTS for kind, but betas/eps fall back to
+    // HyperParameters constants if absent in JSON. Single source of truth for
+    // the *constants* is HyperParameters_GPU.hpp; runtime values live here and
+    // are passed to launch*Step(...) by signature.
+    //
+    // optimizer_kind ∈ {"adamw", "radam"}.  Default "adamw" preserves prior behavior.
+    // radam_compute_b2_halflife: when false (default), RAdam SKIPS the ρ_∞/ρ_t
+    // half-life rectification and uses β₂ directly (≡ bias-corrected Adam with
+    // decoupled WD). When true, runs the full RAdam variance-rectification math.
+    std::string optimizer_kind = "adamw";
+    float optimizer_beta1   = 0.9f;
+    float optimizer_beta2   = 0.999f;
+    float optimizer_epsilon = 1e-8f;
+    bool  radam_compute_b2_halflife = false;
+
     // Stability overrides - NO DEFAULTS
     bool stability_overrides_enabled;
     int stability_override_batch_size;
@@ -1270,6 +1285,29 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         const auto& ef = *it;
         params.embedding_freeze_enabled = ef.value("enabled", params.embedding_freeze_enabled);
         params.embedding_freeze_after_step = ef.value("freeze_after_step", params.embedding_freeze_after_step);
+    }
+
+    // Load optimizer selector + RAdam β₂-half-life guard.
+    // JSON layout (all fields optional; struct defaults from HyperParameters apply):
+    //   "optimizer": {
+    //     "kind": "adamw" | "radam",
+    //     "beta1": 0.9, "beta2": 0.999, "epsilon": 1e-8,
+    //     "radam_compute_b2_halflife": false
+    //   }
+    if (auto it = trainConfig.find("optimizer"); it != trainConfig.end() && it->is_object()) {
+        const auto& opt = *it;
+        params.optimizer_kind   = opt.value("kind",    params.optimizer_kind);
+        params.optimizer_beta1  = opt.value("beta1",   params.optimizer_beta1);
+        params.optimizer_beta2  = opt.value("beta2",   params.optimizer_beta2);
+        params.optimizer_epsilon = opt.value("epsilon", params.optimizer_epsilon);
+        params.radam_compute_b2_halflife = opt.value("radam_compute_b2_halflife",
+                                                     params.radam_compute_b2_halflife);
+        // Rule 20: validate kind explicitly — fail loud on typo.
+        if (params.optimizer_kind != "adamw" && params.optimizer_kind != "radam") {
+            throw std::runtime_error(
+                "[ai_config] training.config.optimizer.kind must be \"adamw\" or \"radam\", got \""
+                + params.optimizer_kind + "\"");
+        }
     }
 
     // Load stability overrides - ALWAYS parse values even if disabled

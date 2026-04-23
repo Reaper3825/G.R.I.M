@@ -445,6 +445,13 @@
                 "enabled": true
             },
             "epochs": 3,
+            "optimizer": {
+                "kind": "adamw",
+                "beta1": 0.9,
+                "beta2": 0.999,
+                "epsilon": 1e-8,
+                "radam_compute_b2_halflife": false
+            },
             "execution_block": {
                 "d_type": 16,
                 "enabled": true,
@@ -491,7 +498,7 @@
             "lm_head_centering": {
                 "center_encoder_residuals": true,
                 "center_hidden_states": true,
-                "center_logits": false,
+                "center_logits": true,
                 "enabled": true,
                 "freeze_final_rms_gamma": true,
                 "project_out_pc1": true

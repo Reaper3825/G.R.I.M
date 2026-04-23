@@ -476,9 +476,6 @@ LoggingContext initializeLogging(const PathConfig& paths) {
         }
     }
     
-    // Set grad check log path
-    GRIM::setGradCheckLogPath(ctx.raw_log_path);
-    
     ctx.logger = std::make_unique<TrainingLogger>(paths.log_dir, ctx.session_id);
     ctx.metrics_collector = std::make_unique<MetricsCollector>();
     ctx.status_writer = std::make_unique<StatusFileWriter>(paths.status_path);
@@ -1508,24 +1505,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         
         ctx->logging.logger->log("BatchLogTape initialized: " + GRIM::Logging::dumpTapeConfig(tc));
     }
-    
-    // PyTorch verification for side-by-side comparison (compile with -DGRIM_PYTORCH_VERIFY)
-#ifdef GRIM_PYTORCH_VERIFY
-    ctx->logging.logger->log("🔬 PyTorch verification: ENABLED (compile flag GRIM_PYTORCH_VERIFY)");
-    // Get GRIM root using the centralized resolver
-    fs::path grim_root_path = GRIM::Config::detail::resolveGrimRoot();
-    std::string grim_root = grim_root_path.string();
-    bool pytorch_ok = PYTORCH_VERIFY_INIT(grim_root);
-    if (pytorch_ok) {
-        ctx->logging.logger->log("✓ PyTorch verifier initialized (root=" + grim_root + ")");
-        fs::path script_path = grim_root_path / "resources/models/GRIM-text/Shared/EquationLogging/pytorch_verify.py";
-        ctx->logging.logger->log("  Script: " + script_path.string());
-    } else {
-        ctx->logging.logger->log("[WARNING] PyTorch verifier failed to initialize - verification disabled");
-    }
-#else
-    ctx->logging.logger->log("PyTorch verification: DISABLED (compile with -DGRIM_PYTORCH_VERIFY to enable)");
-#endif
     
     // 2b. Auto-prepare training data/vocab from merged cache when needed.
     {

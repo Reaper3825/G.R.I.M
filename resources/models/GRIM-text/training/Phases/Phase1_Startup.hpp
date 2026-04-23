@@ -58,9 +58,6 @@
 #include "../metrics_collector.hpp"
 #include "../training_data_loader.hpp"
 
-// Forward declaration for setGradCheckLogPath (defined in LanguageModel_Training.cu)
-namespace GRIM { void setGradCheckLogPath(const std::string& path); }
-
 namespace fs = std::filesystem;
 
 namespace GRIMText::Training {

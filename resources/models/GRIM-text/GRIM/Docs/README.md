@@ -1,0 +1,25 @@
+# GRIM-text Feature Docs
+
+Per-feature documentation. Load only the feature(s) relevant to the current task. Universal coding rules (Rule 20, Rule 21) live in [`.github/copilot-instructions.md`](../../../../../.github/copilot-instructions.md).
+
+## Index
+
+| Doc | Scope |
+|-----|-------|
+| [Build.md](Build.md) | Build commands, CMake cache traps |
+| [TrainingArchitecture.md](TrainingArchitecture.md) | Three-phase training entry/orchestration |
+| [TrainingState.md](TrainingState.md) | Centralized GPU resource ownership |
+| [Autograd.md](Autograd.md) | TensorContract, GradFn, intermediates lifetime |
+| [Loss.md](Loss.md) | Unified loss, per-component gradient clipping |
+| [GQA.md](GQA.md) | Grouped Query Attention shapes & backward scaling |
+| [FlashAttention.md](FlashAttention.md) | FA2 kernel ordering, GQA backward buffers |
+| [LMHead.md](LMHead.md) | Tied embeddings, γ_final, hidden-state centering |
+| [Encoder.md](Encoder.md) | Encoder layer, bias autograd, FFN cache, LayerScale |
+| [ScratchBlock.md](ScratchBlock.md) | ScratchBlock forward/backward and buffer sync |
+| [PositionEncoding.md](PositionEncoding.md) | ALiBi & RoPE NTK |
+| [Tokenizer.md](Tokenizer.md) | Unigram+byte fallback, AtomTable, sliding window |
+| [Initialization.md](Initialization.md) | Xavier/splitmix64, embedding scale |
+| [Diagnostics.md](Diagnostics.md) | RMSNorm formula, CUDA events, LibTorch baselines |
+| [Config.md](Config.md) | ai_config.json conventions, fail-loud defaults |
+| [CppCudaFootguns.md](CppCudaFootguns.md) | General language/runtime traps |
+| [DeletedCode.md](DeletedCode.md) | Removed subsystems — do not recreate |

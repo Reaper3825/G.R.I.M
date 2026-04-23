@@ -59,13 +59,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Disable Windows min/max macros to prevent conflicts with std::min/std::max
 add_compile_definitions(NOMINMAX)
 
-# Option: PyTorch verification for side-by-side comparison (SLOW - debug only!)
-option(GRIM_PYTORCH_VERIFY "Enable PyTorch verification via subprocess" OFF)
-if(GRIM_PYTORCH_VERIFY)
-    add_compile_definitions(GRIM_PYTORCH_VERIFY)
-    message(STATUS "PyTorch verification ENABLED (debug mode - will be slow!)")
-endif()
-
 # Enable precompiled headers for faster compilation
 set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 
@@ -221,6 +214,7 @@ add_library(grim_cuda_kernels OBJECT
     # QKV_Projector.cu MOVED to grim_language_model_gpu_impl — depends on TensorConversion (same library)
     # Old Embedding_GPU.cu (dead code) removed. New Embedding_GPU.cu in grim_training_kernels (Pattern B layer).
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
+    ../../Shared/Optimizers/RAdam/RAdam_Kernal_GPU.cu
     ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)
 )
 set_target_properties(grim_cuda_kernels PROPERTIES

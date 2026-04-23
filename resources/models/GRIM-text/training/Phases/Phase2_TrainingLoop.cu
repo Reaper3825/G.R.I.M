@@ -41,6 +41,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
+#include "../../Shared/Optimizers/RAdam/RAdam_Kernal_GPU.hpp"  // launchRAdamStep — selectable via training.config.optimizer.kind
 #include "../../../../../control/ai_config_paths.hpp"  // For resolveGrimRoot()
 
 #include <iostream>
@@ -424,149 +425,6 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     PHASE2_DEBUG_STDERR("[DEBUG-BUILD] All logger.log calls completed\n");
     
     return schedule;
-}
-
-//======================================================//
-//  Numerical Gradient Check (Finite Difference)
-//======================================================//
-// Verifies backward pass correctness by comparing analytical gradients
-// against numerical gradients computed via finite differences:
-//   numerical_grad ≈ (L(θ + ε) - L(θ - ε)) / (2ε)
-//
-// This is an expensive operation (2 extra forward passes) and should only
-// be enabled for debugging. Control via GRIM_GRAD_CHECK_ENABLED env var.
-//======================================================//
-
-struct NumericalGradCheckResult {
-    bool performed = false;
-    bool passed = false;
-    float analytical_grad = 0.0f;
-    float numerical_grad = 0.0f;
-    float relative_error = 0.0f;
-    float loss_plus = 0.0f;
-    float loss_minus = 0.0f;
-    std::string param_name;
-    int param_index = 0;
-};
-
-NumericalGradCheckResult performNumericalGradientCheck(
-    TrainingContext& ctx,
-    const GRIM::Batching::BatchPayload& payload,
-    int batch_idx)
-{
-    NumericalGradCheckResult result;
-    
-    // Check if enabled via environment variable
-    static const bool enabled = []() {
-        const char* env = std::getenv("GRIM_GRAD_CHECK_ENABLED");
-        return env && (std::string(env) == "1" || std::string(env) == "true");
-    }();
-    
-    // Only run on first few batches to avoid performance impact
-    static const int max_check_batches = readEnvInt("GRIM_GRAD_CHECK_MAX_BATCHES", 3);
-    
-    if (!enabled || batch_idx >= max_check_batches) {
-        return result;
-    }
-    
-    result.performed = true;
-    
-    auto& ts = ctx.model->getTrainingState();
-    const auto& cfg = ctx.model->getConfig();
-    cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-    
-    // Choose a parameter to check - use embedding weight at a specific index
-    // This is a good choice because it's directly involved in both forward and backward
-    float* weight_ptr = ctx.model->getLmHeadLayer()->weights().data;  // [vocab_size, d_model]
-    const float* grad_ptr = ctx.model->getLmHeadLayer()->weights().grad_data();
-    
-    if (!weight_ptr || !grad_ptr) {
-        ctx.logging.logger->log("[NumGradCheck] ERROR: lm_head weights or grads not available");
-        return result;
-    }
-    
-    // Pick a random but deterministic index based on batch number
-    // Use middle of vocabulary to avoid edge cases
-    const int vocab_mid = cfg.vocab_size / 2;
-    const int d_mid = cfg.d_model / 2;
-    result.param_index = vocab_mid * cfg.d_model + d_mid;
-    result.param_name = "lm_head_weights[" + std::to_string(vocab_mid) + "," + std::to_string(d_mid) + "]";
-    
-    // Read analytical gradient from backward pass
-    cudaMemcpyAsync(&result.analytical_grad, grad_ptr + result.param_index, 
-                    sizeof(float), cudaMemcpyDeviceToHost, stream);
-    
-    // Read original weight value
-    float original_weight = 0.0f;
-    cudaMemcpyAsync(&original_weight, weight_ptr + result.param_index, 
-                    sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
-    
-    // Epsilon for finite difference - choose based on weight magnitude
-    // Rule of thumb: ε ≈ sqrt(machine_epsilon) * max(1, |θ|)
-    const float eps = 1e-4f * std::max(1.0f, std::abs(original_weight));
-    
-    // === Perturb +ε ===
-    float perturbed_plus = original_weight + eps;
-    cudaMemcpyAsync(weight_ptr + result.param_index, &perturbed_plus, 
-                    sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaStreamSynchronize(stream);
-    
-    // Forward pass with perturbed weight (no gradient computation needed)
-    // NOTE: We use the same batch data to ensure consistency
-    // Rule 20: each computeLossBatch call is its own autograd step — RAII clears.
-    {
-        GRIM::Autograd::AutogradStepScope plus_scope(ts);
-        result.loss_plus = ctx.model->computeLossBatch(payload);
-    }
-    
-    // === Perturb -ε ===
-    float perturbed_minus = original_weight - eps;
-    cudaMemcpyAsync(weight_ptr + result.param_index, &perturbed_minus, 
-                    sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaStreamSynchronize(stream);
-    
-    // Forward pass with perturbed weight
-    {
-        GRIM::Autograd::AutogradStepScope minus_scope(ts);
-        result.loss_minus = ctx.model->computeLossBatch(payload);
-    }
-    
-    // === Restore original weight ===
-    cudaMemcpyAsync(weight_ptr + result.param_index, &original_weight, 
-                    sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaStreamSynchronize(stream);
-    
-    // Compute numerical gradient: (L(θ+ε) - L(θ-ε)) / (2ε)
-    result.numerical_grad = (result.loss_plus - result.loss_minus) / (2.0f * eps);
-    
-    // Compute relative error
-    // Use formula that handles small gradients: |a - n| / max(|a|, |n|, 1e-8)
-    float max_grad = std::max(std::abs(result.analytical_grad), std::abs(result.numerical_grad));
-    max_grad = std::max(max_grad, 1e-8f);  // Avoid division by zero
-    result.relative_error = std::abs(result.analytical_grad - result.numerical_grad) / max_grad;
-    
-    // Threshold for pass/fail (typically 1e-4 to 1e-2 depending on precision)
-    const float error_threshold = 0.01f;  // 1% relative error
-    result.passed = (result.relative_error < error_threshold);
-    
-    // Log results
-    std::ostringstream log_msg;
-    log_msg << std::fixed << std::setprecision(8);
-    log_msg << "[NumGradCheck] batch=" << (batch_idx + 1) << " " << result.param_name << "\n";
-    log_msg << "  analytical_grad = " << result.analytical_grad << "\n";
-    log_msg << "  numerical_grad  = " << result.numerical_grad << "\n";
-    log_msg << "  L(θ+ε) = " << result.loss_plus << ", L(θ-ε) = " << result.loss_minus << "\n";
-    log_msg << "  ε = " << eps << "\n";
-    log_msg << "  relative_error  = " << (result.relative_error * 100.0f) << "%\n";
-    log_msg << "  " << (result.passed ? "✓ PASSED" : "✗ FAILED (threshold=" + std::to_string(error_threshold * 100) + "%)");
-    
-    ctx.logging.logger->log(log_msg.str());
-    
-    // Also print to stderr for visibility during debugging
-    PHASE2_DEBUG_STDERR("\n%s\n", log_msg.str().c_str());
-    
-    return result;
 }
 
 bool maybeSaveCheckpoint(
@@ -2243,125 +2101,6 @@ BatchResult processBatch(
             }
     }
     
-    // ========================================================================
-    // DIAGNOSTIC: Export gradients for PyTorch comparison (EVERY batch)
-    // ========================================================================
-    const bool export_grads = false;
-    static bool exported_grads = false;
-    if (batch_idx < 10 && export_grads ) {  // Export first 10 batches for gradient tracking
-        exported_grads = true;
-        
-        const auto& ts = ctx.model->getTrainingState();
-        const auto& cfg = ctx.model->getConfig();
-        cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-        
-        auto exportBuffer = [&](const char* name, const float* d_ptr, size_t count) {
-            if (!d_ptr) {
-                printf("[GradExport] SKIP %s: nullptr\n", name);
-                return;
-            }
-            std::vector<float> h_data(count);
-            cudaMemcpyAsync(h_data.data(), d_ptr, count * sizeof(float), 
-                            cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            
-            // Get GRIM root for gradient dumps directory
-            fs::path grim_root = GRIM::Config::detail::resolveGrimRoot();
-            fs::path dump_dir = grim_root / "gradient_dumps";
-            fs::create_directories(dump_dir);
-            std::string path = (dump_dir / (std::string(name) + ".bin")).string();
-            FILE* f = fopen(path.c_str(), "wb");
-            if (f) {
-                fwrite(&count, sizeof(size_t), 1, f);
-                fwrite(h_data.data(), sizeof(float), count, f);
-                fclose(f);
-                
-                // Compute RMS for logging
-                float sq_sum = 0.0f;
-                for (size_t i = 0; i < count; ++i) sq_sum += h_data[i] * h_data[i];
-                printf("[GradExport] %s: %zu elements, rms=%.6f\n", name, count, sqrtf(sq_sum / count));
-            }
-        };
-        
-        printf("\n========================================\n");
-        printf("GRADIENT EXPORT BATCH %d FOR PYTORCH COMPARISON\n", batch_idx);
-        printf("========================================\n");
-        
-        // Embedding grads
-        exportBuffer("embedding_grads", ctx.model->getEmbeddingLayer()->tokenWeights().grad_data(), 
-                     static_cast<size_t>(cfg.vocab_size) * cfg.d_model);
-        
-        // Per-layer gradients (via encoder's Tensor.grad per AUTOGRAD MIGRATION)
-        auto* gpu_encoder = &ctx.model->getGpuEncoder();
-        for (int layer = 0; layer < cfg.num_layers; ++layer) {
-            std::string prefix = "layer" + std::to_string(layer) + "_";
-            auto* enc = gpu_encoder ? gpu_encoder->getLayer(layer) : nullptr;
-            
-            if (enc) {
-                exportBuffer((prefix + "qkv_grads").c_str(), enc->attnWqkv().grad_data(), enc->attnWqkv().numel());
-                exportBuffer((prefix + "wo_grads").c_str(), enc->attnWo().grad_data(), enc->attnWo().numel());
-                exportBuffer((prefix + "ffn_w_gate_grads").c_str(), enc->ffnWGate().grad_data(), enc->ffnWGate().numel());
-                exportBuffer((prefix + "ffn_w1_grads").c_str(), enc->ffnW1().grad_data(), enc->ffnW1().numel());
-                exportBuffer((prefix + "ffn_w2_grads").c_str(), enc->ffnW2().grad_data(), enc->ffnW2().numel());
-            } else {
-                printf("[GradExport] SKIP layer %d: encoder layer is null\n", layer);
-            }
-        }
-        
-        printf("========================================\n");
-        printf("Export complete. Run: python compare_gradients_pytorch.py\n");
-        printf("========================================\n\n");
-        
-        // ========================================================================
-        // TEXT DUMP: Export gradient values for comparison with PyTorch
-        // ========================================================================
-        if (batch_idx < 2) {
-            fs::path grim_root = GRIM::Config::detail::resolveGrimRoot();
-            std::string grad_txt_path = (grim_root / "grim_gradients.txt").string();
-            ctx.model->dumpGradientValues(batch_idx + 1, grad_txt_path);
-        }
-    }
-    
-    // ========================================================================
-    // NUMERICAL GRADIENT CHECK (Finite Difference Verification)
-    // ========================================================================
-    // Compares analytical gradients from backward pass against numerical gradients
-    // computed via central differences: numerical_grad ≈ (L(θ+ε) - L(θ-ε)) / (2ε)
-    // Enable via: GRIM_GRAD_CHECK_ENABLED=1 environment variable
-    // Control batch count via: GRIM_GRAD_CHECK_MAX_BATCHES=N (default: 3)
-    // WARNING: This is EXPENSIVE - adds 2 extra forward passes per checked batch!
-    //
-    // IMPORTANT: Only run on LAST micro-batch when gradients are fully accumulated
-    // ========================================================================
-    // Logic: After this batch's backward, increment micro_step. If it reaches accum_steps,
-    // this was the last micro-batch and we should run numerical checks.
-    const int micro_step_after_backward = ctx.optimizer.current_micro_step + 1;
-    const bool is_last_micro_batch = (micro_step_after_backward >= accum_steps);
-    
-    // DEBUG: Log gradient check decision
-    ctx.logging.logger->log("[GradCheckDebug] batch=" + std::to_string(batch_idx + 1) + 
-                            " micro_step=" + std::to_string(ctx.optimizer.current_micro_step) + 
-                            "/" + std::to_string(accum_steps) + 
-                            " is_last=" + (is_last_micro_batch ? "yes" : "no"));
-    
-    Internal::NumericalGradCheckResult grad_check_result{};
-    if (is_last_micro_batch) {
-        grad_check_result = Internal::performNumericalGradientCheck(
-            ctx, payload, batch_idx);
-        
-        // DEBUG: Log whether check was performed
-        ctx.logging.logger->log("[GradCheckDebug] performed=" + 
-                                std::string(grad_check_result.performed ? "yes" : "no"));
-    }
-    
-    if (grad_check_result.performed && !grad_check_result.passed) {
-        // Log a warning but don't abort - gradient check failures could be due to
-        // numerical precision issues, especially with mixed-precision training
-        ctx.logging.logger->log("[NumGradCheck] WARNING: Gradient check failed with " +
-                                Internal::formatScalar(grad_check_result.relative_error * 100.0f, 2) +
-                                "% relative error. This may indicate a bug in the backward pass.");
-    }
-    
     // NOTE: Window closes automatically via beginOptimizerStep() → endOptimizerStep()
     // State flow: ACCUMULATING → READY_FOR_STEP → IDLE
     
@@ -2854,12 +2593,30 @@ BatchResult processBatch(
             }
         }
 
-        GRIM::launchAdamWStep(ctx.model->parameterGroups(),
-                              result.learning_rate,
-                              ctx.config.hyperparameters.weight_decay,
-                              ctx.optimizer.optimizer_state.step,
-                              ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
-                              emb_freeze_step);
+        // Optimizer dispatch — single source of truth: ctx.config.hyperparameters
+        // (loaded from training.config.optimizer in ai_config.json). Kernel hyperparams
+        // are passed by signature so kernels read no globals. Rule 20: kind already
+        // validated at config-load time ("adamw" | "radam" only).
+        const auto& opt_hp = ctx.config.hyperparameters;
+        if (opt_hp.optimizer_kind == "radam") {
+            GRIM::launchRAdamStep(ctx.model->parameterGroups(),
+                                  result.learning_rate,
+                                  opt_hp.weight_decay,
+                                  ctx.optimizer.optimizer_state.step,
+                                  opt_hp.optimizer_beta1,
+                                  opt_hp.optimizer_beta2,
+                                  opt_hp.optimizer_epsilon,
+                                  opt_hp.radam_compute_b2_halflife,
+                                  ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
+                                  emb_freeze_step);
+        } else {
+            GRIM::launchAdamWStep(ctx.model->parameterGroups(),
+                                  result.learning_rate,
+                                  opt_hp.weight_decay,
+                                  ctx.optimizer.optimizer_state.step,
+                                  ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
+                                  emb_freeze_step);
+        }
         
         // RULE 20: Post-optimizer weight NaN spot check
         // Catches the EXACT batch where optimizer corrupts weights (instead of crashing

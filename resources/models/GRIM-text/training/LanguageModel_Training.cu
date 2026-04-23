@@ -9,7 +9,6 @@
 //
 //  Methods in this file:
 //  - buildParameterGroups() - Collect learnable parameters from layers
-//  - dumpGradientValues() - Debug gradient dump
 //
 //  MOVED to AdamW_Kernal_GPU.{hpp,cu} (ownership cleanup):
 //  - updateWeights() → launchAdamWStep() free function
@@ -56,17 +55,10 @@ constexpr auto kBwdModule = GRIM::Logging::ModuleId::BackwardPass;
 #define BWD_INFO(msg) do { std::ostringstream _oss; _oss << msg; GRIM::Logging::EmitModuleInfo(kBwdModule, _oss.str()); } while (0)
 #define BWD_WARN(msg) do { std::ostringstream _oss; _oss << msg; GRIM::Logging::EmitModuleWarning(kBwdModule, _oss.str()); } while (0)
 #define BWD_ERROR(msg) do { std::ostringstream _oss; _oss << msg; GRIM::Logging::EmitModuleError(kBwdModule, _oss.str()); } while (0)
-std::string g_gradcheck_log_path;
-std::mutex g_gradcheck_mutex;
 
 // NonFiniteScanResult, scanNonFiniteKernel, endsWith, getGroupShape, scanFirstNonFinite
 // ALL DELETED (Rule 26). They were only used by computeGradNorm() which is now deleted.
 // Gradient norm measurement is done via free functions in GradNormGPU.{cu,hpp}.
-}
-
-void setGradCheckLogPath(const std::string& path) {
-    std::lock_guard<std::mutex> lock(g_gradcheck_mutex);
-    g_gradcheck_log_path = path;
 }
 
 // zeroGrad() and backward() DELETED (Rule 20).
@@ -354,43 +346,6 @@ void LanguageModel::buildParameterGroups() {
     }
     fprintf(stderr, "[buildParameterGroups] TOTAL: %zu groups (emb=%d, attn=%d, ffn=%d, rms=%d, other=%d)\n",
             parameter_groups_.size(), emb_count, attn_count, ffn_count, rms_count, other_count);
-}
-
-//======================================================
-//  dumpGradientValues - Debug: Dump gradient RMS stats for each parameter group
-//======================================================//
-
-void LanguageModel::dumpGradientValues(int step, const std::string& filepath) {
-    if (parameter_groups_.empty()) {
-        buildParameterGroups();
-    }
-    
-    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-    cudaStreamSynchronize(stream);  // Ensure all gradients computed
-    
-    std::ofstream file(filepath, std::ios::app);
-    file << "\n========== STEP " << step << " GRADIENT VALUES (GRIM-text) ==========\n";
-    
-    for (const auto& group : parameter_groups_) {
-        if (!group.grads() || group.size() == 0) continue;
-        
-        std::vector<float> full_buffer(group.size());
-        cudaMemcpy(full_buffer.data(), group.grads(), group.size() * sizeof(float), cudaMemcpyDeviceToHost);
-        double sum_sq = 0.0;
-        float min_val = full_buffer[0], max_val = full_buffer[0];
-        for (size_t i = 0; i < group.size(); ++i) {
-            sum_sq += (double)full_buffer[i] * full_buffer[i];
-            if (full_buffer[i] < min_val) min_val = full_buffer[i];
-            if (full_buffer[i] > max_val) max_val = full_buffer[i];
-        }
-        const float rms = std::sqrt(static_cast<float>(sum_sq / group.size()));
-        
-        file << "\n[" << group.name << "] size=" << group.size() 
-             << " rms=" << std::scientific << std::setprecision(6) << rms
-             << " min=" << min_val << " max=" << max_val << "\n";
-    }
-    
-    file.close();
 }
 
 #endif // USE_CUDA

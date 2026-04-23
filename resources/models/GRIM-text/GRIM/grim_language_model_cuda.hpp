@@ -384,7 +384,7 @@ struct LanguageModelConfig : public HyperParameters::ModelArchitecture {
     bool project_out_pc1 = false;              // Project out PC1 direction before LM head (Issue #149)
     int  pc1_power_iters = 5;                  // Power iteration steps for PC1 estimation
     bool center_logits = false;                 // Center logits per position (row-wise, mean→0)
-    bool center_encoder_residuals = false;        // Center residuals INSIDE encoder layers. Prevents ρ buildup from causal attention prefix averaging.
+    bool center_encoder_residuals = true;        // Center residuals INSIDE encoder layers. Prevents ρ buildup from causal attention prefix averaging.
                                                      // Gradient cost: negligible ((1-1/n_tokens)^24 ≈ 0.996 for n≈6000).
     
     // Hardcoded Hidden States Diagnostic (Issue #42)
@@ -647,7 +647,6 @@ public:
     // scaleAdamWMoments(). AdamW stepping is training infrastructure, not model logic.
     // computeGradNorm(), scaleGradientsByType(), recordGradientClip() DELETED (Rule 26).
     // Phase2 calls GradNorm::measureGradientNorms() + launchScaleGradients() directly.
-    void dumpGradientValues(int step, const std::string& filepath);  // Dump gradient values to text file for comparison
     
 #ifdef USE_CUDA
     void setLossOptions(const LossContext::LossOptions& opts) { loss_options_ = opts; }
