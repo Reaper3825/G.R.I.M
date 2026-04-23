@@ -137,7 +137,9 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
         "pbm_alibi_slope_rms", "pbm_alibi_eff_bias_max", "pbm_rope_inv_freq_rms", "pbm_batch_max_seq_len",
         "rho_raw_avg_abs_dot", "rho_raw_avg_norm_prod", "rho_raw_h_rms_min", "rho_raw_h_rms_max",
         "rms_gamma_pre_attn_rms", "rms_gamma_pre_ffn_rms", "rms_gamma_final_rms",
-        "rho_raw_rms_spread"
+        "rho_raw_rms_spread",
+        "hw_cos_rms", "hw_cos_signed_mean", "hw_cos_abs_max",
+        "hw_hbar_wbar_cos", "hw_h_dc_mean", "hw_h_dc_abs_max"
     };
     static constexpr int num_named_streams = sizeof(stream_names) / sizeof(stream_names[0]);
 

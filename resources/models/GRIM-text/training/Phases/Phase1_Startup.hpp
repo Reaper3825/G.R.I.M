@@ -202,12 +202,13 @@ struct LoggingContext {
  * @brief Telemetry lattice context for multi-scale monitoring
  * Pattern B: TelemetryLattice is self-managing (RAII via unique_ptr).
  * 
- * last_obs[39] holds the most recent raw observation for ALL metric streams (0-38 inclusive).
+ * last_obs[45] holds the most recent raw observation for ALL metric streams (0-44 inclusive).
  * Streams 0-4 are updated every batch; streams 5-8 (rho) are updated at
  * diagnostic intervals. Streams 9-13 (Adam warmup causation) are updated
  * every batch. Streams 14-20 (exec block health). Streams 21-26 (EB/SB injection diagnostics).
  * Streams 27-30 (PBM positional bias diagnostics). Streams 31-34 (rho raw decomposition).
  * Streams 35-37 (RMSNorm learned gamma tracking). Stream 38 (RHO_RAW_RMS_SPREAD).
+ * Streams 39-44 (h↔W alignment / LM-head leak channel — updated at LOGIT_SCALE_EQUATION cadence).
  * lattice->update() always receives the full array.
  */
 struct TelemetryContext {
@@ -216,7 +217,7 @@ struct TelemetryContext {
     GRIM::Telemetry::TelemetryControlConfig control_config;
     std::unique_ptr<GRIM::Telemetry::TelemetryControl> controller;
     std::unique_ptr<GRIM::Telemetry::TelemetryCsvLogger> csv_logger;
-    float last_obs[39] = {};  // All metric streams (0-38 inclusive) — rho slots persist between diagnostic intervals
+    float last_obs[45] = {};  // All metric streams (0-44 inclusive) — rho slots persist between diagnostic intervals
     float adam_cumulative_disp = 0.0f;  // Running sum of lr(t) for Adam disruption tracking
     bool enabled = true;
 

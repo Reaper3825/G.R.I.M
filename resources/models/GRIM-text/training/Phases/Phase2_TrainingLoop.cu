@@ -1689,6 +1689,167 @@ BatchResult processBatch(
                 const float expected_logit_std = std::sqrt(static_cast<float>(d_model)) * h_rms_mean * w_rms_rms;
                 const float logit_std_ratio = (expected_logit_std > 1e-10f) ? logit_std / expected_logit_std : 0.0f;
 
+                // ============================================================
+                // h↔W ALIGNMENT DIAGNOSTICS (Issue #149, telemetry streams 39-44)
+                //
+                // Detects the LM-head leak channel: grad_W[v] += (p_v - y_v) * h_t
+                // accumulating across batches makes every W row drift along the
+                // dominant h direction. This produces a coherent (h-aligned) bias
+                // in W that inflates logit_std beyond the random-baseline formula
+                // sqrt(d) * h_rms * W_rms (which assumes uncorrelated h, W).
+                //
+                // Random baseline (uncorrelated unit vectors in R^d):
+                //   RMS(cos(h, W_v)) ≈ 1 / sqrt(d_model)        (≈ 0.0361 at d=768)
+                // logit_std_ratio² ≈ 1 + d_model · cos_hW_rms²  (correlation correction)
+                //
+                // ALL ACCUMULATORS USE DOUBLE PRECISION (Rule 21: numerical precision).
+                // Reads full-row data once; cost is ~500 D2H copies (already paid by
+                // existing W sampling above, plus h_sample copy above). LOGIT_SCALE
+                // cadence is already low-frequency so this is negligible overhead.
+                // ============================================================
+                float hw_cos_rms = 0.0f;
+                float hw_cos_signed_mean = 0.0f;
+                float hw_cos_abs_max = 0.0f;
+                float hw_hbar_wbar_cos = 0.0f;
+                float hw_h_dc_mean = 0.0f;
+                float hw_h_dc_abs_max = 0.0f;
+                if (h_src && lm_head_weights) {
+                    // (1) Re-fetch h_sample (out-of-scope from earlier block).
+                    const size_t h_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
+                    std::vector<float> h_sample(static_cast<size_t>(sample_positions) * d_model);
+                    cudaMemcpy(h_sample.data(), h_src, h_bytes, cudaMemcpyDeviceToHost);
+
+                    // (2) Per-position ||h_t||² and Σ_d h[t,d] (DC component) — double accum.
+                    std::vector<double> h_norm_sq(sample_positions, 0.0);
+                    std::vector<double> h_dc(sample_positions, 0.0);
+                    for (int t = 0; t < sample_positions; ++t) {
+                        const float* row = &h_sample[static_cast<size_t>(t) * d_model];
+                        double sum_sq = 0.0;
+                        double sum   = 0.0;
+                        for (int d = 0; d < d_model; ++d) {
+                            const double v = static_cast<double>(row[d]);
+                            sum_sq += v * v;
+                            sum   += v;
+                        }
+                        h_norm_sq[t] = sum_sq;
+                        h_dc[t]      = sum / static_cast<double>(d_model);
+                    }
+                    // h_bar = mean_t h_t (per-dimension), accumulated in double.
+                    std::vector<double> h_bar(d_model, 0.0);
+                    for (int t = 0; t < sample_positions; ++t) {
+                        const float* row = &h_sample[static_cast<size_t>(t) * d_model];
+                        for (int d = 0; d < d_model; ++d) {
+                            h_bar[d] += static_cast<double>(row[d]);
+                        }
+                    }
+                    const double inv_T = 1.0 / static_cast<double>(sample_positions);
+                    for (int d = 0; d < d_model; ++d) h_bar[d] *= inv_T;
+
+                    // h DC summary stats.
+                    double dc_sum = 0.0;
+                    double dc_abs_max = 0.0;
+                    for (int t = 0; t < sample_positions; ++t) {
+                        dc_sum     += h_dc[t];
+                        const double a = std::abs(h_dc[t]);
+                        if (a > dc_abs_max) dc_abs_max = a;
+                    }
+                    hw_h_dc_mean    = static_cast<float>(dc_sum * inv_T);
+                    hw_h_dc_abs_max = static_cast<float>(dc_abs_max);
+
+                    // (3) Stream sampled W rows; compute cos(h_t, W_v) pairs with double accum.
+                    //     Re-use the same strided sample as the W_rms loop above for consistency.
+                    const int hw_stride = std::max(1, vocab_size / w_sample_count);
+                    std::vector<float>  w_row_buf(d_model);
+                    std::vector<double> w_bar(d_model, 0.0);
+
+                    long double cos_sq_sum  = 0.0L;  // long double for RMS over up to 500*sample_positions terms
+                    long double cos_signed  = 0.0L;
+                    double      cos_abs_max_d = 0.0;
+                    int64_t     pair_count  = 0;
+                    int64_t     w_sampled   = 0;
+
+                    for (int tok = 0; tok < vocab_size && w_sampled < w_sample_count;
+                         tok += hw_stride, ++w_sampled)
+                    {
+                        const size_t row_offset = static_cast<size_t>(tok) * d_model;
+                        cudaMemcpy(w_row_buf.data(),
+                                   lm_head_weights + row_offset,
+                                   d_model * sizeof(float),
+                                   cudaMemcpyDeviceToHost);
+
+                        // ||W_v||² in double.
+                        double w_norm_sq = 0.0;
+                        for (int d = 0; d < d_model; ++d) {
+                            const double v = static_cast<double>(w_row_buf[d]);
+                            w_norm_sq += v * v;
+                            w_bar[d]  += v;
+                        }
+                        if (w_norm_sq <= 0.0 || !std::isfinite(w_norm_sq)) continue;
+                        const double inv_w_norm = 1.0 / std::sqrt(w_norm_sq);
+
+                        for (int t = 0; t < sample_positions; ++t) {
+                            if (h_norm_sq[t] <= 0.0 || !std::isfinite(h_norm_sq[t])) continue;
+                            const float* h_row = &h_sample[static_cast<size_t>(t) * d_model];
+                            // dot(h_t, W_v) in double.
+                            double dot = 0.0;
+                            for (int d = 0; d < d_model; ++d) {
+                                dot += static_cast<double>(h_row[d]) * static_cast<double>(w_row_buf[d]);
+                            }
+                            const double inv_h_norm = 1.0 / std::sqrt(h_norm_sq[t]);
+                            const double cos_tv = dot * inv_h_norm * inv_w_norm;
+                            cos_signed += static_cast<long double>(cos_tv);
+                            cos_sq_sum += static_cast<long double>(cos_tv) * static_cast<long double>(cos_tv);
+                            const double a = std::abs(cos_tv);
+                            if (a > cos_abs_max_d) cos_abs_max_d = a;
+                            ++pair_count;
+                        }
+                    }
+
+                    if (pair_count > 0) {
+                        const long double inv_n = 1.0L / static_cast<long double>(pair_count);
+                        hw_cos_rms         = static_cast<float>(std::sqrt(static_cast<double>(cos_sq_sum * inv_n)));
+                        hw_cos_signed_mean = static_cast<float>(static_cast<double>(cos_signed * inv_n));
+                        hw_cos_abs_max     = static_cast<float>(cos_abs_max_d);
+                    }
+
+                    // (4) Rank-1 DC channel: cos(h_bar, W_bar).
+                    if (w_sampled > 0) {
+                        const double inv_W = 1.0 / static_cast<double>(w_sampled);
+                        double hbar_dot_wbar = 0.0;
+                        double hbar_norm_sq  = 0.0;
+                        double wbar_norm_sq  = 0.0;
+                        for (int d = 0; d < d_model; ++d) {
+                            const double w = w_bar[d] * inv_W;
+                            const double h = h_bar[d];
+                            hbar_dot_wbar += h * w;
+                            hbar_norm_sq  += h * h;
+                            wbar_norm_sq  += w * w;
+                        }
+                        if (hbar_norm_sq > 0.0 && wbar_norm_sq > 0.0) {
+                            hw_hbar_wbar_cos = static_cast<float>(
+                                hbar_dot_wbar / std::sqrt(hbar_norm_sq * wbar_norm_sq));
+                        }
+                    }
+
+                    // Rule 20: fail loud on NaN/Inf in alignment metrics.
+                    if (!std::isfinite(hw_cos_rms) || !std::isfinite(hw_cos_signed_mean) ||
+                        !std::isfinite(hw_cos_abs_max) || !std::isfinite(hw_hbar_wbar_cos) ||
+                        !std::isfinite(hw_h_dc_mean) || !std::isfinite(hw_h_dc_abs_max))
+                    {
+                        throw std::runtime_error(
+                            "[HW_ALIGNMENT] FATAL: h↔W alignment metrics contain NaN/Inf at batch " +
+                            std::to_string(batch_idx + 1));
+                    }
+                }
+
+                // Publish to telemetry lattice (streams 39-44). CSV logger picks these up.
+                ctx.telemetry.last_obs[39] = hw_cos_rms;          // HW_COS_RMS
+                ctx.telemetry.last_obs[40] = hw_cos_signed_mean;  // HW_COS_SIGNED_MEAN
+                ctx.telemetry.last_obs[41] = hw_cos_abs_max;      // HW_COS_ABS_MAX
+                ctx.telemetry.last_obs[42] = hw_hbar_wbar_cos;    // HW_HBAR_WBAR_COS
+                ctx.telemetry.last_obs[43] = hw_h_dc_mean;        // HW_H_DC_MEAN
+                ctx.telemetry.last_obs[44] = hw_h_dc_abs_max;     // HW_H_DC_ABS_MAX
+
                 struct LogitTrendState {
                     bool initialized = false;
                     float ema_logit_std = 0.0f;

@@ -186,6 +186,16 @@ enum class MetricStream : int {
                                      // (>2.0 indicates row-centering or upstream collapse
                                      //  is stripping certain positions to near-zero,
                                      //  driving spurious high ρ via tiny denominators)
+    // h↔W alignment diagnostics (April 2026) — LM-head leak channel detector.
+    // Random-baseline RMS(cos) = 1/sqrt(d_model) ≈ 0.0361 at d=768.
+    // logit_std_ratio² ≈ 1 + d_model · cos_hW_rms²; ratio>1 implies coherent
+    // h-aligned drift in W rows (e.g., from Σ_t(p_v−y_v)·h_t accumulating in grad_W).
+    HW_COS_RMS = 39,                 // sqrt(mean cos²(h_t, W_v)) over sampled t,v — primary alignment metric
+    HW_COS_SIGNED_MEAN = 40,         // mean cos(h_t, W_v) — DC-leak channel (rank-1 component)
+    HW_COS_ABS_MAX = 41,             // max |cos(h_t, W_v)| — worst-case single-row alignment
+    HW_HBAR_WBAR_COS = 42,           // cos(mean_t h_t, mean_v W_v) — explicit rank-1 DC coupling
+    HW_H_DC_MEAN = 43,               // mean over t of (1/d) Σ_d h[t,d] — DC component of hidden state
+    HW_H_DC_ABS_MAX = 44,            // max  over t of |(1/d) Σ_d h[t,d]| — worst-position DC offset
 };
 
 const char* getMetricStreamName(MetricStream stream);

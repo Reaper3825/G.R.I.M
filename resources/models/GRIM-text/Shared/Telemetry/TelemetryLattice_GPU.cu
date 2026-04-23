@@ -332,6 +332,12 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RMS_GAMMA_PRE_FFN_RMS: return "rms_gamma_pre_ffn_rms";
         case MetricStream::RMS_GAMMA_FINAL_RMS: return "rms_gamma_final_rms";
         case MetricStream::RHO_RAW_RMS_SPREAD: return "rho_raw_rms_spread";
+        case MetricStream::HW_COS_RMS: return "hw_cos_rms";
+        case MetricStream::HW_COS_SIGNED_MEAN: return "hw_cos_signed_mean";
+        case MetricStream::HW_COS_ABS_MAX: return "hw_cos_abs_max";
+        case MetricStream::HW_HBAR_WBAR_COS: return "hw_hbar_wbar_cos";
+        case MetricStream::HW_H_DC_MEAN: return "hw_h_dc_mean";
+        case MetricStream::HW_H_DC_ABS_MAX: return "hw_h_dc_abs_max";
         default: return "unknown";
     }
 }
