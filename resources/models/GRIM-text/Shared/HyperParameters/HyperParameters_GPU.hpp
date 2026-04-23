@@ -1,4 +1,11 @@
 #pragma once
+// Traditional include guard in addition to #pragma once: nvcc dedupes by
+// path-string, not by canonical inode, so the same header pulled in via two
+// different ../ chains (e.g. .../GRIM/../Shared/... vs .../Layers/Embedding/../../Shared/...)
+// would otherwise be expanded twice and produce "already defined" errors on
+// the constexpr globals.
+#ifndef GRIM_SHARED_HYPERPARAMETERS_GPU_HPP
+#define GRIM_SHARED_HYPERPARAMETERS_GPU_HPP
 
 #include <algorithm>
 #include <cmath>
@@ -679,3 +686,5 @@ inline void printModelArchitecture(const ModelArchitecture& arch) {
 } // namespace GRIM
 
 #endif // __CUDACC__
+
+#endif // GRIM_SHARED_HYPERPARAMETERS_GPU_HPP
