@@ -1263,13 +1263,13 @@ BatchResult processBatch(
     if (shouldSyncDiagnostics(ctx, batch_idx)) {
         const auto& ts = ctx.model->getTrainingState();
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-        if (ts.autograd_intermediates.hasLogits() && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
+        if (ts.cached_logits_tensor.data && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
             const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
             const int vocab_size = ctx.config.actual_vocab_size;
             const int sample_positions = total_tokens;
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(sample_positions * vocab_size);
-            cudaMemcpyAsync(logit_sample.data(), ts.autograd_intermediates.logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost, stream);
+            cudaMemcpyAsync(logit_sample.data(), ts.cached_logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
             // Count argmax predictions
             std::map<int, int> pred_counts;
@@ -1437,7 +1437,7 @@ BatchResult processBatch(
     // ========================================================================
     {
         const auto& ts = ctx.model->getTrainingState();
-        if (ts.autograd_intermediates.hasLogits() && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
+        if (ts.cached_logits_tensor.data && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
             const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
             const int vocab_size = ctx.config.actual_vocab_size;
             const int d_model = ctx.model->getConfig().d_model;
@@ -1446,7 +1446,7 @@ BatchResult processBatch(
             const int sample_positions = total_tokens;
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(sample_positions * vocab_size);
-            cudaMemcpy(logit_sample.data(), ts.autograd_intermediates.logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
+            cudaMemcpy(logit_sample.data(), ts.cached_logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
             
             // Compute argmax predictions and logit statistics
             std::map<int, int> argmax_counts;

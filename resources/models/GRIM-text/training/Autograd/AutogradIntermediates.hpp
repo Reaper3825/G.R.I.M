@@ -48,13 +48,12 @@ struct AutogradIntermediates {
     std::vector<Tensor> encoder_layer_outputs;  // One per encoder layer
     Tensor encoder_output_tensor;      // [total_tokens, d_model] - after final RMSNorm
     Tensor centered_encoder_output;    // [total_tokens, d_model] - Issue #127
-    // TODO(Rule 20 ownership taxonomy): logits_tensor is read after backward by
-    // GuessCacheTraining, Phase2 diag blocks, and ComputeLossBatch debug path.
-    // Strict Cat 1 forbids that. Two valid resolutions, both deferred:
-    //   (a) snapshot a reduced argmax/stat struct (BatchDiagnostics) here before clear
-    //   (b) relocate this field to TrainingState as step_output_logits (Cat 2)
-    // Until done, the AutogradStepScope RAII (single-owner clear) will surface any
-    // post-clear reader as a NULL-data crash — that's the desired fail-loud trigger.
+    // Cat 1 (graph-owned, transient): the autograd Tensor wrapper for the LM
+    // head output. Used INSIDE the autograd boundary (loss assembly,
+    // backward). Post-backward consumers MUST read from
+    // TrainingState::cached_logits_tensor (Cat 3 step-output snapshot)
+    // populated in executeAutogradForward() — NOT from this field, which
+    // AutogradStepScope clears at the boundary.
     Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
     Tensor loss_tensor;                // Scalar loss driving backward
     std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward

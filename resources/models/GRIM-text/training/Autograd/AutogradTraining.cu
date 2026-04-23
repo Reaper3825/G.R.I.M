@@ -913,14 +913,16 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ctx.lm_head->setStream(ctx.stream);
     ctx.lm_head->setCublasHandle(ctx.cublas_handle);
 
-    // Inference path needs cached_logits for return value; training reads from autograd_intermediates directly
-    float* logits_output = ctx.is_training ? nullptr : ts->cached_logits_tensor.data;
-    if (!ctx.is_training && !logits_output) {
-        throw std::runtime_error("AutogradTraining: cached_logits_tensor buffer is NULL - TrainingState MUST allocate logits buffer for inference");
+    // Inference path needs cached_logits for return value; training also writes
+    // a Cat-3 snapshot to cached_logits_tensor (Rule 20 step-output buffer) so
+    // post-backward diagnostics never read intermediates.logits_tensor (Cat 1).
+    float* logits_output = ts->cached_logits_tensor.data;
+    if (!logits_output) {
+        throw std::runtime_error("AutogradTraining: cached_logits_tensor buffer is NULL - TrainingState MUST allocate logits buffer for inference and training");
     }
     
     // Forward pass: builds autograd graph through RMSNorm → centering → matmul → bias
-    Tensor logits_tensor = ctx.lm_head->forward(intermediates.encoder_output_tensor, intermediates.centered_encoder_output);
+    Tensor logits_tensor = ctx.lm_head->forward(intermediates.encoder_output_tensor, intermediates.centered_encoder_output); // Pass centered output tensor for diagnostics, even if centering is disabled (will be empty tensor in that case, LM head ignores it).
     
     // Overwrite cached_encoder_output with what the LM head actually used.
     // When centering is on, this is the centered output; otherwise the raw encoder output
@@ -1085,13 +1087,14 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     // Shape validation, centering, bias addition all handled by LMHeadLayer::forward()
 
-    // Inference: copy logits to pre-allocated buffer (inference return path reads cached_logits_tensor)
-    // Training: skip D2D copy — Phase2 diagnostics read directly from autograd_intermediates.logits_tensor
-    if (!ctx.is_training) {
-        cudaMemcpyAsync(logits_output, logits_tensor.data,
-                        logits_tensor.shape.total_elements() * sizeof(float),
-                        cudaMemcpyDeviceToDevice, ctx.stream);
-    }
+    // Rule 20 ownership taxonomy: snapshot Cat-1 logits.data into the Cat-3
+    // workspace `cached_logits_tensor` BEFORE the autograd boundary so
+    // post-backward diagnostics (Phase2_TrainingLoop, GuessCacheTraining,
+    // ComputeLossBatch) read from TrainingState rather than from
+    // intermediates.logits_tensor (which AutogradStepScope clears).
+    cudaMemcpyAsync(logits_output, logits_tensor.data,
+                    logits_tensor.shape.total_elements() * sizeof(float),
+                    cudaMemcpyDeviceToDevice, ctx.stream);
     
     // Move the autograd tensor to intermediates (preserves grad_fn chain)
     intermediates.logits_tensor = std::move(logits_tensor);
@@ -2269,9 +2272,10 @@ LossResult autogradTrainingStep(
     training_state.sequence_weight_count = 0;
     
     // Rule 20 ownership taxonomy: AutogradIntermediates::clear() is owned by
-    // the caller's AutogradStepScope RAII guard. Do NOT clear here — post-step
-    // diagnostics (Phase2_TrainingLoop, GuessCache) read intermediates.logits_tensor
-    // and friends BEFORE the scope ends. Adding a clear() here is a Rule 20 violation.
+    // the caller's AutogradStepScope RAII guard. Do NOT clear here. Post-step
+    // diagnostics (Phase2_TrainingLoop, GuessCache, ComputeLossBatch) read
+    // from TrainingState::cached_logits_tensor (Cat 3 step-output snapshot),
+    // never from intermediates.logits_tensor (Cat 1, transient).
     
     AG_INFO("Training step complete: loss=" << loss_result.loss_value);
     

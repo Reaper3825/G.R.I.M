@@ -359,7 +359,7 @@ float LanguageModel::computeLossBatch(
 		std::vector<float> logit_sample(sample_tokens * cfg.vocab_size);
 		std::vector<int> target_sample(sample_tokens);
 		
-		cudaMemcpy(logit_sample.data(), training_state_.autograd_intermediates.logits_tensor.data, 
+		cudaMemcpy(logit_sample.data(), training_state_.cached_logits_tensor.data, // Copy entire [total_tokens, vocab_size] for the first few tokens
 		           logit_sample.size() * sizeof(float), cudaMemcpyDeviceToHost);
 		cudaMemcpy(target_sample.data(), reinterpret_cast<int*>(training_state_.cached_targets_tensor.data), 
 		           target_sample.size() * sizeof(int), cudaMemcpyDeviceToHost);

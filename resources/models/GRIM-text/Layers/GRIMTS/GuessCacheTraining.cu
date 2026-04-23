@@ -234,7 +234,7 @@ void updateGuessCacheFromBatch(
         return;
     }
 
-    if (!training_state.autograd_intermediates.hasLogits() ||
+    if (!training_state.cached_logits_tensor.data ||
         training_state.cached_batch_size != static_cast<int>(guess_count) ||
         training_state.cached_seq_len <= 0) {
         EmitModuleWarning(ModuleId::GuessCache,
@@ -273,7 +273,7 @@ void updateGuessCacheFromBatch(
             (static_cast<std::size_t>(i) * cached_seq_len + pos) * vocab_size;
         err = cudaMemcpyAsync(
             pred_logits.data() + static_cast<std::size_t>(i) * vocab_size,
-            training_state.autograd_intermediates.logits_tensor.data + offset,
+            training_state.cached_logits_tensor.data + offset,
             static_cast<std::size_t>(vocab_size) * sizeof(float),
             cudaMemcpyDeviceToHost, stream);
         if (err != cudaSuccess) break;
