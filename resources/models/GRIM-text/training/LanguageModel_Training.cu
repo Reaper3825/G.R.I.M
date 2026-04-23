@@ -9,7 +9,6 @@
 //
 //  Methods in this file:
 //  - buildParameterGroups() - Collect learnable parameters from layers
-//  - configureUpdateProbe() / disableUpdateProbe() - Debug probes
 //  - dumpGradientValues() - Debug gradient dump
 //
 //  MOVED to AdamW_Kernal_GPU.{hpp,cu} (ownership cleanup):
@@ -360,68 +359,6 @@ void LanguageModel::buildParameterGroups() {
     }
     fprintf(stderr, "[buildParameterGroups] TOTAL: %zu groups (emb=%d, attn=%d, ffn=%d, rms=%d, other=%d)\n",
             parameter_groups_.size(), emb_count, attn_count, ffn_count, rms_count, other_count);
-}
-
-//======================================================//
-//  configureUpdateProbe / disableUpdateProbe
-//======================================================//
-
-void LanguageModel::configureUpdateProbe(const std::string& group_name, size_t sample_elems) {
-    fprintf(stderr, "[configureUpdateProbe] ENTER group='%s' sample_elems=%zu\n", group_name.c_str(), sample_elems); fflush(stderr);
-    update_probe_group_name_ = group_name;
-    update_probe_sample_elems_ = sample_elems;
-    update_probe_ready_ = false;
-    
-    // Ensure parameter groups are built before configuring probe
-    if (parameter_groups_.empty()) {
-        fprintf(stderr, "[configureUpdateProbe] parameter_groups_ is empty, calling buildParameterGroups()\n"); fflush(stderr);
-        buildParameterGroups();
-        fprintf(stderr, "[configureUpdateProbe] buildParameterGroups() returned, groups=%zu\n", parameter_groups_.size()); fflush(stderr);
-    }
-    
-    if (parameter_groups_.empty()) {
-        update_probe_group_index_ = static_cast<size_t>(-1);
-        update_probe_weights_before_.clear();
-        update_probe_weights_after_.clear();
-        update_probe_grad_sample_.clear();
-        return;
-    }
-
-    update_probe_group_index_ = static_cast<size_t>(-1);
-    for (size_t i = 0; i < parameter_groups_.size(); ++i) {
-        if (parameter_groups_[i].name == update_probe_group_name_) {
-            update_probe_group_index_ = i;
-            break;
-        }
-    }
-
-    if (update_probe_group_index_ == static_cast<size_t>(-1)) {
-        BWD_WARN("[configureUpdateProbe] target group '" << update_probe_group_name_
-                 << "' not found");
-        return;
-    }
-
-    const auto& probe_group = parameter_groups_[update_probe_group_index_];
-    if (update_probe_sample_elems_ == 0 || update_probe_sample_elems_ > probe_group.size()) {
-        update_probe_sample_elems_ = std::min<size_t>(probe_group.size(), 2048);
-    }
-    update_probe_weights_before_.assign(update_probe_sample_elems_, 0.0f);
-    update_probe_weights_after_.assign(update_probe_sample_elems_, 0.0f);
-    update_probe_grad_sample_.assign(update_probe_sample_elems_, 0.0f);
-    fprintf(stderr, "[configureUpdateProbe] EXIT: group_index=%zu sample_elems=%zu probe_group_size=%zu\n",
-            update_probe_group_index_, update_probe_sample_elems_,
-            update_probe_group_index_ != static_cast<size_t>(-1) ? parameter_groups_[update_probe_group_index_].size() : 0);
-    fflush(stderr);
-}
-
-void LanguageModel::disableUpdateProbe() {
-    update_probe_group_name_.clear();
-    update_probe_group_index_ = static_cast<size_t>(-1);
-    update_probe_sample_elems_ = 0;
-    update_probe_weights_before_.clear();
-    update_probe_weights_after_.clear();
-    update_probe_grad_sample_.clear();
-    update_probe_ready_ = false;
 }
 
 //======================================================

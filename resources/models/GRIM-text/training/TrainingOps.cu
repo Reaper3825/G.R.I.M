@@ -46,9 +46,18 @@ namespace GRIM {
 // This function was using deleted ComputeLossHost_GPU which relied on deleted UnifiedLoss_GPU.
 
 LanguageModel::ModelStats LanguageModel::getModelStats() const {
-    ModelStats stats;
+    // Rule 20 / Rule 26: parameter_groups_ is the single source of truth for parameter
+    // counts. The previous formula-based estimate duplicated that data and silently
+    // drifted whenever a new subsystem (ExecutionBlock, ReasoningHead, SlotSelector,
+    // MTP heads, ...) was added. The formula has been deleted; counting walks the
+    // registered parameter groups directly.
+    if (parameter_groups_.empty()) {
+        throw std::runtime_error(
+            "getModelStats called before buildParameterGroups — parameter_groups_ is empty at " +
+            std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
 
-    // Count actual allocated parameters from parameter groups (ground truth)
+    ModelStats stats;
     for (const auto& group : parameter_groups_) {
         if (group.name == "embedding" || group.name == "embedding_lm_head_tied") {
             stats.embedding_params += group.size();
@@ -59,138 +68,16 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         } else {
             stats.encoder_params += group.size();
         }
-    }
 
-    if (parameter_groups_.empty()) {
-        const auto& cfg = config_;
-        const int head_dim = cfg.head_dim;
-        const int kv_dim = cfg.num_kv_heads * head_dim;
-        const int total_qkv_dim = cfg.d_model + 2 * kv_dim;
-
-        stats.embedding_params = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-
-        if (!cfg.tie_embeddings) {
-            stats.lm_head_params = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-        }
-        if (cfg.use_bias) {
-            stats.lm_head_params += cfg.vocab_size;  // lm_head_bias
-        }
-
-        size_t per_layer = 0;
-        per_layer += static_cast<size_t>(total_qkv_dim) * cfg.d_model;  // W_qkv
-        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_model;    // W_o
-        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_ff;       // W1
-        per_layer += static_cast<size_t>(cfg.d_ff) * cfg.d_model;       // W2
-        per_layer += cfg.d_model; // RMSNorm1 gamma
-        per_layer += cfg.d_model; // RMSNorm2 gamma
-        // Issue #148: Sandwich norm gammas REMOVED (no post-residual normalization)
-        if (cfg.use_bias) {
-            per_layer += total_qkv_dim;  // b_qkv
-            per_layer += cfg.d_model;    // b_o
-            per_layer += cfg.d_ff;       // b1
-            per_layer += cfg.d_model;    // b2
-        }
-
-        stats.encoder_params = per_layer * cfg.num_layers;
-        stats.encoder_params += cfg.d_model;  // Final RMSNorm gamma
-    } else {
-        const auto& cfg = config_;
-        const int head_dim = cfg.head_dim;
-        const int kv_dim = cfg.num_kv_heads * head_dim;
-        const int total_qkv_dim = cfg.d_model + 2 * kv_dim;
-
-        TensorContract::GQADims gqa_dims{cfg.num_heads, cfg.num_kv_heads, head_dim};
-        if (!gqa_dims.is_valid()) {
-            std::cerr << "[WARNING] TensorContract GQA validation failed!\n";
-            std::cerr << "  d_model=" << cfg.d_model
-                      << " num_heads=" << cfg.num_heads
-                      << " head_dim=" << head_dim << "\n";
-            assert(false && "GQA dimension validation failed");
-        }
-
-        const int expected_qkv_dim = gqa_dims.total_qkv_dim();
-        if (total_qkv_dim != expected_qkv_dim) {
-            std::cerr << "[WARNING] QKV dimension mismatch: computed=" << total_qkv_dim
-                      << " expected=" << expected_qkv_dim << "\n";
-            assert(false && "QKV dimension formula drift from TensorContract");
-        }
-
-        const size_t est_embedding = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-
-        // Position embeddings: only when actually allocated (ALiBi/RoPE = 0)
-        const size_t est_position_embedding = stats.position_embedding_params;
-
-        // LM head: weight (0 when tied — counted under embedding) + bias when use_bias
-        size_t est_lm_head = cfg.tie_embeddings ? 0 : static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-        if (cfg.use_bias) {
-            est_lm_head += cfg.vocab_size;  // lm_head_bias [vocab_size]
-        }
-
-        // Per-layer encoder: weights + biases + pre-norm
-        size_t per_layer = 0;
-        per_layer += static_cast<size_t>(total_qkv_dim) * cfg.d_model;  // W_qkv
-        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_model;    // W_o
-        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_ff;       // W1
-        per_layer += static_cast<size_t>(cfg.d_ff) * cfg.d_model;       // W2
-        per_layer += cfg.d_model;  // RMSNorm1 gamma (pre-attn)
-        per_layer += cfg.d_model;  // RMSNorm2 gamma (pre-ffn)
-        // Issue #148: Sandwich norm gammas REMOVED (no post-residual normalization)
-        if (cfg.use_bias) {
-            per_layer += total_qkv_dim;  // b_qkv
-            per_layer += cfg.d_model;    // b_o
-            per_layer += cfg.d_ff;       // b1
-            per_layer += cfg.d_model;    // b2
-        }
-
-        size_t est_encoder = per_layer * cfg.num_layers;
-        est_encoder += cfg.d_model; // Final RMSNorm gamma (not per-layer)
-
-        // ScratchBlock params are classified as encoder_params by parameter_groups
-        if (cfg.use_scratch_block) {
-            constexpr int num_atom_types = GRIM::Tokenizer::kAtomTypeCount;
-            const int atom_dim = cfg.scratch_block_atom_embedding_dim;
-            est_encoder += static_cast<size_t>(num_atom_types) * atom_dim;  // atom_type_embeddings
-            est_encoder += static_cast<size_t>(atom_dim) * cfg.d_model;     // atom_projection
-            // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
-        }
-
-        const size_t est_total = est_embedding + est_position_embedding + est_encoder + est_lm_head;
-        const size_t actual_total =
-            stats.embedding_params + stats.position_embedding_params + stats.encoder_params +
-            stats.lm_head_params;
-
-        if (actual_total > 0) {
-            const float drift_pct =
-                100.0f * std::abs(static_cast<int64_t>(est_total - actual_total)) /
-                static_cast<float>(actual_total);
-
-            if (drift_pct > 0.1f) {
-                std::cerr << "[WARNING] getModelStats formula drift detected: "
-                          << "actual=" << actual_total << " estimate=" << est_total
-                          << " (" << drift_pct << "%)\n";
-                std::cerr << "  Embedding: actual=" << stats.embedding_params << " est=" << est_embedding << "\n";
-                std::cerr << "  Pos Embed: actual=" << stats.position_embedding_params << " est=" << est_position_embedding << "\n";
-                std::cerr << "  Encoder:   actual=" << stats.encoder_params << " est=" << est_encoder << "\n";
-                std::cerr << "  LM Head:   actual=" << stats.lm_head_params << " est=" << est_lm_head << "\n";
-                assert(false && "Parameter count formula drifted from actual allocations");
-            }
+        // Sub-bucket: scratch_block_* params are also reported separately for diagnostics.
+        // They remain counted under encoder_params above (do NOT double-count in total_params).
+        if (group.name.rfind("scratch_block_", 0) == 0) {
+            stats.scratchblock_params += group.size();
         }
     }
 
-    stats.total_params = stats.embedding_params + stats.position_embedding_params + stats.encoder_params +
-                         stats.lm_head_params;
-
-    // ScratchBlock stats for reporting (already counted in encoder_params via parameter_groups)
-    if (config_.use_scratch_block) {
-        constexpr int num_atom_types = GRIM::Tokenizer::kAtomTypeCount;
-        const int atom_dim = config_.scratch_block_atom_embedding_dim;
-        stats.scratchblock_params =
-            static_cast<size_t>(num_atom_types) * atom_dim +
-            static_cast<size_t>(atom_dim) * config_.d_model;
-            // text_feature_projection ELIMINATED — merged into atom embeddings
-        // NOTE: scratchblock_params NOT added to total_params — already in encoder_params
-    }
-
+    stats.total_params = stats.embedding_params + stats.position_embedding_params +
+                         stats.encoder_params + stats.lm_head_params;
     stats.model_size_mb = (stats.total_params * sizeof(float)) / (1024.0f * 1024.0f);
     return stats;
 }

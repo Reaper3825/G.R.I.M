@@ -1223,19 +1223,11 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         logger.log(tie_msg.str());
     }
 
-    if (config.hyperparameters.logit_update_trace_enabled) {
-        const bool tied = model->getConfig().tie_embeddings;
-        const std::string group = tied ? "embedding_lm_head_tied" : "lm_head_weight";
-        fprintf(stderr, "[initializeModel] DIAG: About to call configureUpdateProbe('%s')...\n", group.c_str()); fflush(stderr);
-        model->configureUpdateProbe(group);
-        fprintf(stderr, "[initializeModel] DIAG: configureUpdateProbe returned\n"); fflush(stderr);
-        logger.log("[LogitTrace] update_probe enabled group='" + group + "'");
-    } else {
-        fprintf(stderr, "[initializeModel] DIAG: logit_update_trace DISABLED, calling disableUpdateProbe\n"); fflush(stderr);
-        model->disableUpdateProbe();
-        fprintf(stderr, "[initializeModel] DIAG: disableUpdateProbe returned\n"); fflush(stderr);
-    }
-    
+    // UpdateProbe subsystem deleted (Rule 26): probe was instrumentation that
+    // was never wired to actually populate the weights/grads sample buffers,
+    // so the consumer in Phase2 never fired. logit_update_trace_enabled still
+    // controls the PostLoss cached_logits trace below.
+
     // Configure scratch blocks
     fprintf(stderr, "[initializeModel] DIAG: About to configure scratch blocks (pool_init=%d)\n", (int)model->isScratchPoolInitialized()); fflush(stderr);
     if (model->isScratchPoolInitialized()) {

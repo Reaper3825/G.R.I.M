@@ -569,18 +569,6 @@ public:
         float model_size_mb = 0.0f;
     };
 
-    struct UpdateProbeResult {
-        std::string group_name;
-        float parameter_rms = 0.0f;
-        float grad_rms = 0.0f;
-        float update_rms = 0.0f;
-        float relative_update = 0.0f;
-        float max_abs_update = 0.0f;
-        float learning_rate = 0.0f;
-        uint64_t optimizer_step = 0;
-        uint32_t sample_size = 0;
-    };
-    
     // Constructor / Destructor
     explicit LanguageModel(const LanguageModelConfig& config);
     ~LanguageModel();
@@ -677,15 +665,6 @@ public:
     void buildParameterGroups();
 #endif
 
-    const UpdateProbeResult& updateProbe() const { return update_probe_result_; }
-    bool hasUpdateProbe() const { return update_probe_ready_; }
-    void clearUpdateProbeFlag() { update_probe_ready_ = false; }
-    void configureUpdateProbe(const std::string& group_name, size_t sample_elems = 1024);
-    void disableUpdateProbe();
-    const std::vector<float>& updateProbeWeightsBefore() const { return update_probe_weights_before_; }
-    const std::vector<float>& updateProbeWeightsAfter() const { return update_probe_weights_after_; }
-    const std::vector<float>& updateProbeGradSample() const { return update_probe_grad_sample_; }
-    
     // Utilities
     ModelStats getModelStats() const;
     bool save(const std::string& path);
@@ -793,17 +772,6 @@ private:
     
     bool staged_prompt_ready_ = false;
     int staged_prompt_len_ = 0;
-    
-    UpdateProbeResult update_probe_result_;
-    bool update_probe_ready_ = false;
-    float last_grad_scale_ = 1.0f;
-    std::string update_probe_group_name_;
-    size_t update_probe_group_index_ = static_cast<size_t>(-1);
-    size_t update_probe_sample_elems_ = 0;
-    size_t update_probe_sample_offset_ = 0;  // Offset into buffer to sample from (token 277 for embedding/LM head)
-    std::vector<float> update_probe_weights_before_;
-    std::vector<float> update_probe_weights_after_;
-    std::vector<float> update_probe_grad_sample_;
 
 #ifdef USE_CUDA
     TrainingState training_state_;

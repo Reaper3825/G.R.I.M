@@ -3011,81 +3011,11 @@ BatchResult processBatch(
     
     ctx.global_step++;
     state.last_grad_rms = result.grad_rms;
-    
-    // Log update probe for QKV weights (if configured)
-    if (ctx.model->hasUpdateProbe()) {
-        const auto& probe = ctx.model->updateProbe();
-        const bool should_log_probe = (ctx.global_step <= 5) || (ctx.global_step % 10 == 0);
-        if (should_log_probe) {
-            // Log aggregate metrics
-            std::ostringstream probe_msg;
-            probe_msg << "[UpdateProbe] group=" << probe.group_name
-                      << " upd_rms=" << std::fixed << std::setprecision(6) << probe.update_rms
-                      << " grad_rms=" << std::fixed << std::setprecision(6) << probe.grad_rms
-                      << " param_rms=" << std::fixed << std::setprecision(6) << probe.parameter_rms
-                      << " rel=" << std::fixed << std::setprecision(5) << probe.relative_update
-                      << " max_abs=" << std::scientific << std::setprecision(3) << probe.max_abs_update
-                      << " lr=" << std::scientific << std::setprecision(6) << probe.learning_rate
-                      << " step=" << probe.optimizer_step
-                      << " n=" << probe.sample_size;
-            ctx.logging.logger->log(probe_msg.str());
-            
-            // Log first 10 weight values (before/after/gradient)
-            const auto& w_before = ctx.model->updateProbeWeightsBefore();
-            const auto& w_after = ctx.model->updateProbeWeightsAfter();
-            const auto& w_grad = ctx.model->updateProbeGradSample();
-            
-            if (!w_before.empty() && !w_after.empty() && !w_grad.empty()) {
-                const size_t n = std::min<size_t>(10, w_before.size());
-                
-                std::ostringstream before_msg, after_msg, grad_msg, delta_msg;
-                before_msg << "[UpdateProbe] weights_before[0:" << n << "]=[";
-                after_msg << "[UpdateProbe] weights_after[0:" << n << "]=[";
-                grad_msg << "[UpdateProbe] gradients[0:" << n << "]=[";
-                delta_msg << "[UpdateProbe] deltas[0:" << n << "]=[";
-                
-                for (size_t i = 0; i < n; ++i) {
-                    if (i > 0) {
-                        before_msg << ",";
-                        after_msg << ",";
-                        grad_msg << ",";
-                        delta_msg << ",";
-                    }
-                    before_msg << std::fixed << std::setprecision(6) << w_before[i];
-                    after_msg << std::fixed << std::setprecision(6) << w_after[i];
-                    grad_msg << std::scientific << std::setprecision(3) << w_grad[i];
-                    delta_msg << std::scientific << std::setprecision(3) << (w_after[i] - w_before[i]);
-                }
-                
-                before_msg << "]";
-                after_msg << "]";
-                grad_msg << "]";
-                delta_msg << "]";
-                
-                ctx.logging.logger->log(before_msg.str());
-                ctx.logging.logger->log(after_msg.str());
-                ctx.logging.logger->log(grad_msg.str());
-                ctx.logging.logger->log(delta_msg.str());
-            }
-        }
-        if (logit_trace_enabled) {
-            std::ostringstream trace_msg;
-            trace_msg << "[LogitTrace][PostOptimizer] source=update_probe"
-                      << " batch=" << (batch_idx + 1)
-                      << " opt_step=" << ctx.optimizer.optimizer_state.step
-                      << " group=" << probe.group_name
-                      << " upd_rms=" << std::fixed << std::setprecision(6) << probe.update_rms
-                      << " grad_rms=" << std::fixed << std::setprecision(6) << probe.grad_rms
-                      << " param_rms=" << std::fixed << std::setprecision(6) << probe.parameter_rms
-                      << " rel=" << std::fixed << std::setprecision(5) << probe.relative_update
-                      << " max_abs=" << std::scientific << std::setprecision(3) << probe.max_abs_update
-                      << " lr=" << std::scientific << std::setprecision(6) << probe.learning_rate
-                      << " n=" << probe.sample_size;
-            ctx.logging.logger->log(trace_msg.str());
-        }
-        ctx.model->clearUpdateProbeFlag();
-    }
-    
+
+    // UpdateProbe consumer deleted (Rule 26): hasUpdateProbe() never returned
+    // true because update_probe_ready_ was never set anywhere. Entire probe
+    // subsystem removed; PostLoss cached_logits trace at line ~1362 remains.
+
     // Rule 20 single-owner clear: handled by AutogradStepScope at processBatch entry.
     // Tape flush below does not read autograd intermediates.
     

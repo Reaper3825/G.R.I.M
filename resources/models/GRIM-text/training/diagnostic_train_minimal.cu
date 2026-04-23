@@ -85,28 +85,6 @@ float computeGradNormSync(float* d_buffer, size_t size, cudaStream_t stream) {
 }
 
 //======================================================//
-//  Update Probe Helpers
-//======================================================//
-struct UpdateProbeConfig {
-    std::string name;
-    size_t sample_elems;
-};
-
-void logUpdateProbe(const GRIM::LanguageModel::UpdateProbeResult& probe, int batch) {
-    std::ostringstream oss;
-    oss << "[UpdateProbe] batch=" << batch
-        << " group=" << probe.group_name
-        << " step=" << probe.optimizer_step
-        << " lr=" << std::scientific << std::setprecision(3) << probe.learning_rate
-        << " param_rms=" << probe.parameter_rms
-        << " grad_rms=" << probe.grad_rms
-        << " update_rms=" << probe.update_rms
-        << " rel=" << probe.relative_update
-        << " max_abs=" << probe.max_abs_update;
-    std::cout << oss.str() << std::endl;
-}
-
-//======================================================//
 //  Detailed Gradient Component Tracer
 //  
 //  PURPOSE: Show WHERE gradients collapse during backward
