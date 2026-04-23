@@ -214,7 +214,7 @@ add_library(grim_cuda_kernels OBJECT
     # QKV_Projector.cu MOVED to grim_language_model_gpu_impl — depends on TensorConversion (same library)
     # Old Embedding_GPU.cu (dead code) removed. New Embedding_GPU.cu in grim_training_kernels (Pattern B layer).
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
-    ../../Shared/Optimizers/RAdam/RAdam_Kernal_GPU.cu
+    ../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.cu
     ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)
 )
 set_target_properties(grim_cuda_kernels PROPERTIES

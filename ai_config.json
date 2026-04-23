@@ -446,11 +446,10 @@
             },
             "epochs": 3,
             "optimizer": {
-                "kind": "adamw",
+                "kind": "radamw",
                 "beta1": 0.9,
                 "beta2": 0.999,
-                "epsilon": 1e-8,
-                "radam_use_rectification": false
+                "epsilon": 1e-8
             },
             "execution_block": {
                 "d_type": 16,

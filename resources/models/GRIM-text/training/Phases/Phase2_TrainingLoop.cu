@@ -41,7 +41,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
-#include "../../Shared/Optimizers/RAdam/RAdam_Kernal_GPU.hpp"  // launchRAdamStep — selectable via training.config.optimizer.kind
+#include "../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.hpp"  // launchRAdamWStep — selectable via training.config.optimizer.kind
 #include "../../../../../control/ai_config_paths.hpp"  // For resolveGrimRoot()
 
 #include <iostream>
@@ -2596,19 +2596,18 @@ BatchResult processBatch(
         // Optimizer dispatch — single source of truth: ctx.config.hyperparameters
         // (loaded from training.config.optimizer in ai_config.json). Kernel hyperparams
         // are passed by signature so kernels read no globals. Rule 20: kind already
-        // validated at config-load time ("adamw" | "radam" only).
+        // validated at config-load time ("adamw" | "radamw" only).
         const auto& opt_hp = ctx.config.hyperparameters;
-        if (opt_hp.optimizer_kind == "radam") {
-            GRIM::launchRAdamStep(ctx.model->parameterGroups(),
-                                  result.learning_rate,
-                                  opt_hp.weight_decay,
-                                  ctx.optimizer.optimizer_state.step,
-                                  opt_hp.optimizer_beta1,
-                                  opt_hp.optimizer_beta2,
-                                  opt_hp.optimizer_epsilon,
-                                  opt_hp.radam_use_rectification,
-                                  ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
-                                  emb_freeze_step);
+        if (opt_hp.optimizer_kind == "radamw") {
+            GRIM::launchRAdamWStep(ctx.model->parameterGroups(),
+                                   result.learning_rate,
+                                   opt_hp.weight_decay,
+                                   ctx.optimizer.optimizer_state.step,
+                                   opt_hp.optimizer_beta1,
+                                   opt_hp.optimizer_beta2,
+                                   opt_hp.optimizer_epsilon,
+                                   ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
+                                   emb_freeze_step);
         } else {
             GRIM::launchAdamWStep(ctx.model->parameterGroups(),
                                   result.learning_rate,
