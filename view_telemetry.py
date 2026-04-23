@@ -802,12 +802,13 @@ def main():
     rho_raw_norm = streams.get("rho_raw_avg_norm_prod")
     rho_raw_hmin = streams.get("rho_raw_h_rms_min")
     rho_raw_hmax = streams.get("rho_raw_h_rms_max")
+    rho_raw_spread = streams.get("rho_raw_rms_spread")
 
-    has_rho_raw = any(s is not None for s in [rho_raw_dot, rho_raw_norm, rho_raw_hmin, rho_raw_hmax])
+    has_rho_raw = any(s is not None for s in [rho_raw_dot, rho_raw_norm, rho_raw_hmin, rho_raw_hmax, rho_raw_spread])
     if has_rho_raw:
-        fig9 = plt.figure(figsize=(16, 10), constrained_layout=True)
+        fig9 = plt.figure(figsize=(16, 14), constrained_layout=True)
         fig9.suptitle("GRIM-text Telemetry — Rho Raw Decomposition", fontsize=14, fontweight="bold")
-        gs9 = GridSpec(2, 2, figure=fig9)
+        gs9 = GridSpec(3, 2, figure=fig9)
 
         # 9-1a) avg|dot(h_i,h_j)| — alignment numerator
         ax = fig9.add_subplot(gs9[0, 0])
@@ -859,6 +860,40 @@ def main():
         ax.set_ylabel("Ratio / ρ")
         ax.set_title("Dot/Norm Ratio vs ρ_final (should track)")
         ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 9-3a) rho_raw_rms_spread (rms_max / rms_min) — denominator-collapse detector
+        ax = fig9.add_subplot(gs9[2, 0])
+        if rho_raw_spread is not None:
+            ax.plot(rho_raw_spread.index, rho_raw_spread["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:red")
+            ax.plot(rho_raw_spread.index, smooth(rho_raw_spread["raw_observation"]),
+                    linewidth=1.5, color="tab:red", label="rms_max / rms_min")
+            ax.axhline(1.5, color="gray", linewidth=0.8, linestyle=":", alpha=0.6,
+                       label="warning (1.5×)")
+            ax.axhline(2.0, color="tab:orange", linewidth=0.8, linestyle="--", alpha=0.6,
+                       label="anomaly (2.0×)")
+            ax.axhline(4.0, color="tab:red", linewidth=0.8, linestyle="--", alpha=0.6,
+                       label="bifurcation (4.0×)")
+        ax.set_ylabel("rms spread (max/min)")
+        ax.set_title("ρ Denominator Collapse Detector (>2× = warning)")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 9-3b) Spread vs rho_final overlay (denominator collapse → spurious ρ)
+        ax = fig9.add_subplot(gs9[2, 1])
+        if rho_raw_spread is not None:
+            ax.plot(rho_raw_spread.index, smooth(rho_raw_spread["raw_observation"]),
+                    linewidth=1.5, color="tab:red", label="rms spread")
+        ax.set_ylabel("rms spread", color="tab:red")
+        if rho_final is not None:
+            ax2 = ax.twinx()
+            ax2.plot(rho_final.index, smooth(rho_final["raw_observation"]),
+                     linewidth=1.2, color="tab:blue", alpha=0.7, label="ρ_final")
+            ax2.set_ylabel("ρ_final", color="tab:blue")
+            ax2.legend(loc="center right", fontsize=8)
+        ax.set_title("rms_spread vs ρ_final (collapse drives spurious ρ)")
+        ax.legend(loc="upper left", fontsize=8)
         ax.grid(True, alpha=0.3)
 
         fig9.savefig(os.path.splitext(path)[0] + "_rho_raw.png", dpi=150)
@@ -944,6 +979,137 @@ def main():
         print(f"Saved: {os.path.splitext(path)[0]}_rms_gamma.png")
     else:
         print("RMS gamma figure skipped: no gamma streams in CSV")
+
+    # --- Figure 11: h↔W Alignment (LM-head leak channel) ---
+    # Streams 39-44. Detects coherent drift in W rows along h direction caused by
+    # grad_W[v] += (p_v − y_v)·h_t accumulating across batches → logit_std inflation
+    # without any change in ||h|| or ||W||.
+    #
+    # Random baseline: RMS(cos(h, W_v)) ≈ 1/sqrt(d_model). At d=768 → 0.0361.
+    # Correlation correction: logit_std_ratio² ≈ 1 + d_model · cos_hW_rms²
+    #   so ratio=2.31 ⇒ cos_rms ≈ sqrt(2.31²−1)/sqrt(768) ≈ 0.075 (≈2× baseline).
+    hw_cos_rms = streams.get("hw_cos_rms")
+    hw_cos_signed = streams.get("hw_cos_signed_mean")
+    hw_cos_amax = streams.get("hw_cos_abs_max")
+    hw_hbar_wbar = streams.get("hw_hbar_wbar_cos")
+    hw_h_dc_mean = streams.get("hw_h_dc_mean")
+    hw_h_dc_amax = streams.get("hw_h_dc_abs_max")
+
+    has_hw = any(s is not None for s in [hw_cos_rms, hw_cos_signed, hw_cos_amax,
+                                          hw_hbar_wbar, hw_h_dc_mean, hw_h_dc_amax])
+    if has_hw:
+        # Infer d_model from random-cosine baseline: this is the data-independent
+        # reference line we plot. Default d=768; override via env var if needed.
+        import math
+        try:
+            d_model_for_baseline = int(os.environ.get("GRIM_TEXT_D_MODEL", "768"))
+        except ValueError:
+            d_model_for_baseline = 768
+        cos_random_baseline = 1.0 / math.sqrt(float(d_model_for_baseline))
+
+        fig11 = plt.figure(figsize=(16, 14), constrained_layout=True)
+        fig11.suptitle("GRIM-text Telemetry — h↔W Alignment (LM-head Leak Channel)",
+                       fontsize=14, fontweight="bold")
+        gs11 = GridSpec(3, 2, figure=fig11)
+
+        # 11-1a) cos_hW_rms vs random baseline + 2× warning band
+        ax = fig11.add_subplot(gs11[0, 0])
+        if hw_cos_rms is not None:
+            ax.plot(hw_cos_rms.index, hw_cos_rms["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:red")
+            ax.plot(hw_cos_rms.index, smooth(hw_cos_rms["raw_observation"]),
+                    linewidth=1.5, color="tab:red", label="RMS cos(h, W_v)")
+        ax.axhline(cos_random_baseline, color="gray", linewidth=1, linestyle="--",
+                   alpha=0.7, label=f"random (1/√d={cos_random_baseline:.4f})")
+        ax.axhline(2 * cos_random_baseline, color="tab:orange", linewidth=0.8,
+                   linestyle=":", alpha=0.7, label="2× baseline (warning)")
+        ax.set_ylabel("RMS cosine")
+        ax.set_title("h↔W Alignment RMS (primary leak metric)")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 11-1b) cos_signed_mean — DC channel (rank-1 leak)
+        ax = fig11.add_subplot(gs11[0, 1])
+        if hw_cos_signed is not None:
+            ax.plot(hw_cos_signed.index, hw_cos_signed["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:purple")
+            ax.plot(hw_cos_signed.index, smooth(hw_cos_signed["raw_observation"]),
+                    linewidth=1.5, color="tab:purple", label="signed mean cos(h, W_v)")
+        ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+        ax.set_ylabel("Signed mean cosine")
+        ax.set_title("Signed Mean Cosine (DC-leak channel; should ≈ 0)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 11-2a) Worst-case row alignment
+        ax = fig11.add_subplot(gs11[1, 0])
+        if hw_cos_amax is not None:
+            ax.plot(hw_cos_amax.index, hw_cos_amax["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:brown")
+            ax.plot(hw_cos_amax.index, smooth(hw_cos_amax["raw_observation"]),
+                    linewidth=1.5, color="tab:brown", label="max |cos(h, W_v)|")
+        ax.axhline(cos_random_baseline, color="gray", linewidth=0.8, linestyle="--",
+                   alpha=0.5, label=f"1/√d={cos_random_baseline:.4f}")
+        ax.set_ylabel("|cos|")
+        ax.set_ylim(0, 1)
+        ax.set_title("Worst-Case Row Alignment (single-token leak)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 11-2b) Rank-1 explicit DC channel: cos(h̄, W̄)
+        ax = fig11.add_subplot(gs11[1, 1])
+        if hw_hbar_wbar is not None:
+            ax.plot(hw_hbar_wbar.index, hw_hbar_wbar["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:cyan")
+            ax.plot(hw_hbar_wbar.index, smooth(hw_hbar_wbar["raw_observation"]),
+                    linewidth=1.5, color="tab:cyan", label="cos(mean_t h, mean_v W)")
+        ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+        ax.set_ylabel("cos(h̄, W̄)")
+        ax.set_ylim(-1.05, 1.05)
+        ax.set_title("Rank-1 DC Coupling (Σ_t(p−y)·h aggregated leak)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 11-3a) h DC component: mean and abs-max
+        ax = fig11.add_subplot(gs11[2, 0])
+        if hw_h_dc_mean is not None:
+            ax.plot(hw_h_dc_mean.index, smooth(hw_h_dc_mean["raw_observation"]),
+                    linewidth=1.5, color="tab:blue", label="mean_t (1/d)Σ_d h")
+        if hw_h_dc_amax is not None:
+            ax.plot(hw_h_dc_amax.index, smooth(hw_h_dc_amax["raw_observation"]),
+                    linewidth=1.5, color="tab:red", label="max_t |(1/d)Σ_d h|")
+        ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+        ax.set_ylabel("DC offset")
+        ax.set_title("Hidden-State DC Component (column-centering check)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 11-3b) Predicted logit_std inflation factor from cos_rms.
+        # Theory: logit_std² = h_rms²·d·W_rms_rms²·(1 + d·cos_rms²)
+        # so the inflation ratio is sqrt(1 + d · cos_rms²).
+        ax = fig11.add_subplot(gs11[2, 1])
+        if hw_cos_rms is not None:
+            cos_vals = hw_cos_rms["raw_observation"].astype(float).values
+            d_f = float(d_model_for_baseline)
+            inflation = np.sqrt(np.maximum(0.0, 1.0 + d_f * (cos_vals * cos_vals)))
+            ax.plot(hw_cos_rms.index, inflation,
+                    alpha=0.3, linewidth=0.5, color="tab:orange")
+            ax.plot(hw_cos_rms.index, smooth(pd.Series(inflation, index=hw_cos_rms.index)),
+                    linewidth=1.5, color="tab:orange",
+                    label="√(1 + d·cos_rms²)")
+        ax.axhline(1.0, color="gray", linewidth=0.8, linestyle="--",
+                   alpha=0.7, label="no leak (1.0)")
+        ax.axhline(2.0, color="tab:red", linewidth=0.8, linestyle="--",
+                   alpha=0.7, label="2× inflation (alarm)")
+        ax.set_ylabel("Predicted logit_std / expected")
+        ax.set_title(f"Predicted Logit-Std Inflation from Alignment (d={d_model_for_baseline})")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        fig11.savefig(os.path.splitext(path)[0] + "_hw_alignment.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_hw_alignment.png")
+    else:
+        print("h↔W alignment figure skipped: no hw_cos_* streams in CSV")
 
     plt.show()
 

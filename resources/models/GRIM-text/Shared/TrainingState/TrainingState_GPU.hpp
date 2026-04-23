@@ -189,6 +189,18 @@ struct TrainingState {
     Autograd::AutogradIntermediates autograd_intermediates;
 
     //======================================================//
+    //  CROSS-ATTENTION READ-GATE TELEMETRY (Rule 20 ownership taxonomy)
+    //======================================================//
+    // d_read_gate_accum: Category 3 (workspace). [2] device buffer
+    //   = [sum_of_gate_values, total_token_count]. Reusable across batches;
+    //   contents are stale across the autograd boundary — must be re-zeroed
+    //   before each forward and snapshotted before backward consumes the tape.
+    // h_read_gate_mean: Category 2 (durable telemetry scalar). Survives the
+    //   autograd boundary by design — consumed by TelemetryUpdate after clear().
+    float* d_read_gate_accum = nullptr;
+    float  h_read_gate_mean  = 0.0f;
+
+    //======================================================//
     //  INTERMEDIATE GRADIENT TENSORS (Issue #45 FIX)
     //======================================================//
     Tensor grad_logits_tensor;            // [max_logit_tokens, vocab_size]

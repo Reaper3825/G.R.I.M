@@ -204,8 +204,8 @@ void populateEBInjectionStreams(
     }
     obs[21] = inject_gate_mean;
 
-    // Stream 22: EB_READ_GATE_MEAN
-    obs[22] = ai.h_read_gate_mean;
+    // Stream 22: EB_READ_GATE_MEAN (Category 2 telemetry snapshot on TrainingState)
+    obs[22] = training_state.h_read_gate_mean;
 
     // Streams 23-24: Gate weight norms
     float inject_w_rms = 0.0f;

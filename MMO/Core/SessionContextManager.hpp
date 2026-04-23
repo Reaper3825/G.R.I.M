@@ -116,10 +116,19 @@ struct VisualContext {
         std::string monitor_id;
     } digital;
 
-    // Physical: real-world / camera semantic input (future)
+    // Physical: real-world / camera semantic input.
+    // Populated each frame by PhysicalWorldStateContextProjector from the
+    // latest PhysicalWorldStateBus snapshot. All fields are LM-readable
+    // strings — no pixel coordinates, no boxes, no per-frame floats — so
+    // the router never sees raw geometry tokens. provenance_frame_counter
+    // is for diagnostics only; consumers MUST NOT use it for routing.
     struct PhysicalVisual {
-        std::string scene_summary;
-        std::vector<std::string> detected_objects;
+        std::string scene_summary;                       // 1-line headline ("3 visible, 1 occluded")
+        std::vector<std::string> detected_objects;       // class labels with counts ("cup x2, person x1")
+        std::vector<std::string> entities_in_focus;      // "cup#7 on desk, 0.4m, holds 'COFFEE'"
+        std::vector<std::string> spatial_relations_top_k;// "cup#7 Contains lid#9 (0.81)"
+        std::vector<std::string> active_alerts;          // "path_blocked: chair#4 (0.92)"
+        uint64_t provenance_frame_counter = 0;
     } physical;
 };
 

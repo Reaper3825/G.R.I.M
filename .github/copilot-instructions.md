@@ -39,87 +39,84 @@
 
 ---
 
-## 🟡 MANDATORY: Equation-Based Diagnostic Logging (Rule 21)
+### 🔴 Rule 20 — OWNERSHIP TAXONOMY (Boundary Discipline)
 
-**When adding diagnostic logging for AI/ML math operations, ALWAYS use the `[*_EQUATION]` format:**
+Every piece of state in the training loop MUST belong to **exactly one** of three categories. Mixing categories in a single struct, or letting one category leak across a boundary into another, is a Rule 20 violation of equal severity to silent fallbacks.
 
-This format is non-negotiable for training/inference debugging because **you cannot argue with hard mathematical facts**.
+**Category 1 — Graph-owned (TRANSIENT)**
+Lives only inside the autograd tape window (forward → loss assembly → backward).
+Examples: `loss_tensor`, `logits_tensor`, `encoder_layer_outputs`, all `GradFn` saved tensors, dropout grad taps, aux-loss `autograd::add` results.
+- ❌ MUST NOT be read by any code that runs after `Tensor::backward()` returns.
+- ❌ MUST NOT be stored in a struct that also holds Category 2 or Category 3 state.
+- ✅ MUST be cleared by a single RAII owner at the boundary (e.g. `AutogradStepScope`).
+- ✅ If a "late consumer" needs information from a Category 1 object, snapshot a **reduced/scalar** form into a Category 2 telemetry struct **before** `clear()` runs. Never extend the lifetime of the tensor.
 
-**Required Format Structure:**
+**Category 2 — Persistent training state (DURABLE)**
+Lives across many steps; the contents are meaningful between steps.
+Examples: `ParameterGroup.tensor` data, parameter `grad_` buffers (across the accumulation window), `optimizer_m_states` / `optimizer_v_states`, LR scheduler state, `optimizer_state.step`, `current_micro_step`, `global_step`, `best_val_loss`, telemetry lattice, EMA, checkpoint metadata, `BatchDiagnostics` snapshots, `BatchLogTape`.
+- ✅ Owned by `TrainingState` or by long-lived loop structs (`TrainingContext.optimizer`, etc.).
+- ❌ MUST NOT alias or wrap a Category 1 tensor.
+- Parameter grads are Category 2 only because the accumulation window deliberately persists them; intermediate (activation) grads are Category 1.
 
-```
-[OPERATION_EQUATION] operation_name: mathematical_formula
-  INPUT (description): shape=[dims] min=X max=Y rms=Z
-  ACTUAL result: shape=[dims] min=X max=Y rms=Z
-```
+**Category 3 — Workspace / cache (PERSISTENT BUFFER, STALE CONTENTS)**
+A buffer that persists for performance reasons but whose contents are meaningless across the boundary.
+Examples: `cached_token_ids_tensor`, `cached_targets_tensor`, `cached_token_numeric_values`, `cached_token_to_slot_map`, `d_read_gate_accum`, deferred-cleanup queue object, `cublas_handle`, `stream_ctrl`.
+- ✅ Owned by `TrainingState` directly (NOT by `AutogradIntermediates`).
+- ✅ Re-zeroed / re-filled at the start of the next pass; never read across the boundary as if the previous pass's contents were valid.
+- ❌ A Category 3 buffer in a Category 1 struct is a violation, even if `clear()` "skips freeing it" — that is an admission the field is in the wrong struct.
 
-**Optional additions (use only when applicable):**
-```
-  PARAMETERS: param1=value1, param2=value2  // Only if operation has configurable params
-  EXPECTED result = formula                  // Only if result is predictable from inputs
-                  = substituted_values
-                  = computed_value
-  [ANOMALY] description                      // Only if something is wrong
-```
+**Boundary rules:**
 
-**Statistics explanation:**
-- `min/max` = minimum/maximum value in tensor
-- `rms` = Root Mean Square = sqrt(mean(x²)) = typical size/scale of values in the tensor
-- `shape` = tensor dimensions [batch, seq_len, features] etc.
+1. **Single boundary owner.** `autograd_intermediates.clear()` MUST be called from exactly one site (an RAII scope around the autograd step). Multiple call sites = ownership smell.
+2. **Single teardown owner.** `flushDeferredCleanup()` is owned by `Tensor::backward()`. Additional calls outside it are forbidden unless code between them enqueues new deferred work (it does not, today).
+3. **Tape sealing is explicit.** Once `loss_tensor` is read out as a host scalar, no further `autograd::add` / tape mutation is permitted on it. Functions that finish loss assembly and functions that read the loss scalar must be distinct.
+4. **No "exception field" in `clear()`.** If a struct's `clear()` method has to skip a field, that field belongs to a different category — move it.
 
-**Examples of Good Logging Tags:**
+**Pre-commit checklist for ownership:**
 
-- `[GRAD_A_EQUATION]` - Matrix A weight gradient computation
-- `[ATTN_SCORE_EQUATION]` - Attention score computation (Q @ K^T / sqrt(d))
-- `[LSE_EQUATION]` - Log-Sum-Exp computation
-- `[RMSNORM_EQUATION]` - RMSNorm computation
-- `[LOSS_EQUATION]` - Loss computation (cross-entropy, focal, etc.)
+- New field added to `AutogradIntermediates`? → It MUST be Category 1. If it's a buffer that persists, move it to `TrainingState`.
+- New `autograd_intermediates.clear()` call site? → Delete it; route through the RAII scope instead.
+- New `flushDeferredCleanup()` call outside `Tensor::backward()`? → Delete it.
+- New "let me peek at `intermediates.X` after backward" code? → Snapshot it into a Category 2 diagnostics struct **before** the boundary instead.
 
-**Mandatory Elements:**
-
-1. **Mathematical equation** - The EXACT formula being computed
-2. **Input shapes** - Tensor dimensions for dimensional analysis
-3. **Input statistics** - min, max, rms (and optionally mean, std)
-4. **Expected value** - What the result SHOULD be (only when predictable)
-5. **Actual value** - What was actually computed
-6. **Anomaly detection** - Flag when actual >> expected or contains NaN/Inf
-
-**When to Add Equation Logging:**
-
-- ✅ ANY new forward/backward kernel implementation
-- ✅ When debugging gradient explosion/vanishing
-- ✅ When investigating loss anomalies
-- ✅ When verifying weight initialization
-- ✅ Any GEMM operation (grad_A = C^T @ B, grad_B = A^T @ C, etc.)
+**Why:** Category mixing is how `logits_tensor` (Category 1, ~tokens × vocab floats of GPU memory) ended up surviving the autograd boundary just because a histogram wanted it, and how `d_read_gate_accum` (Category 3 workspace) ended up with a special-case exemption inside a Category 1 `clear()`. Both are silent contracts that the next refactor will break. Enforcing the taxonomy at the type / file-organization level removes the entire class of bug.
 
 ---
 
-## 🔴 ACTIVE BUG INVESTIGATION
+## 🟡 Equation-Based Diagnostic Logging (Rule 21)
 
-**READ FIRST:**
+When adding diagnostic logging for ML math, use the `[*_EQUATION]` format:
 
-1. [docs/LOG_FILE_CONVENTION.md](../docs/LOG_FILE_CONVENTION.md) - **CRITICAL: Always verify which log file before making claims**
-2. [docs/PLATEAU_BUG_INVESTIGATION.md](../docs/PLATEAU_BUG_INVESTIGATION.md) - Check "CURRENT RUN TRACKING" section first
+```
+[OPERATION_EQUATION] name: formula
+  INPUT (desc): shape=[...] min=X max=Y rms=Z
+  ACTUAL result: shape=[...] min=X max=Y rms=Z
+  [ANOMALY] description     // only if wrong
+```
 
-Training plateau bug under investigation. The docs above track what has been verified correct, known issues found and fixed, diagnostic data, and next steps. Check here first to avoid re-investigating ruled-out causes.
+Required: equation, input shape + (min/max/rms), actual result. Optional: PARAMETERS, EXPECTED (when predictable), ANOMALY tag. Use for any new forward/backward kernel, GEMM, or when debugging grad explosion/vanishing/loss anomalies.
+
+---
+
+## Reference Docs
+
+- [docs/LOG_FILE_CONVENTION.md](../docs/LOG_FILE_CONVENTION.md) — verify which log file before making claims
+- [docs/PLATEAU_BUG_INVESTIGATION.md](../docs/PLATEAU_BUG_INVESTIGATION.md) — active training investigation notes
 
 ---
 
 ## Project Overview
 
-GRIM-text is a custom transformer model with:
+GRIM-text is a custom transformer:
 - Flash Attention v2, cuBLAS, custom fused CUDA kernels
-- **ScratchBlock Reasoning Layer** - Structured reasoning with atom detection (numbers, URLs, emails, paths, dates, code literals)
-- **Unigram + Byte Fallback Tokenizer** - High-quality subword segmentation with 100% UTF-8 coverage
-  - Token layout: [0-255] = bytes, [256-511] = atom placeholders, [512+] = unigram vocab
-- **Grouped Query Attention (GQA)** - num_heads=12, num_kv_heads=4
-- **Unified Loss System** - Focal loss + label smoothing + entropy reg in single autograd kernel
-- **TelemetryLattice** - Hierarchical streaming statistics (8 levels, 5 metric streams)
-- Config driven via `ai_config.json`
-- Runs as HTTP server (`grim_text_server.exe`) on port 11435
-- Training executable: `train_gpu.exe` (three-phase architecture)
+- **GQA**: num_heads=12, num_kv_heads=4
+- **Tokenizer**: Unigram + byte fallback. Token layout: [0-255]=bytes, [256-511]=atom placeholders, [512+]=unigram
+- **ScratchBlock Reasoning Layer** with atom detection
+- **Unified Loss**: focal + label smoothing + entropy reg, single autograd kernel
+- **TelemetryLattice**: hierarchical streaming stats
+- Config: `ai_config.json`. Server: `grim_text_server.exe` (port 11435). Trainer: `train_gpu.exe` (three-phase).
 
-**GRIM-text is a SEPARATE build from the main GRIM program.** GRIM-text MUST NOT include headers from `../../../../core/` or any G.R.I.M main-program libraries.
+**GRIM-text is a SEPARATE build.** MUST NOT include headers from `../../../../core/` or any G.R.I.M main-program libraries.
 
 ---
 
@@ -170,124 +167,91 @@ If modifying training logic, edit the appropriate phase file, not `train_gpu.cu`
 
 ## Architecture Details
 
-### Unified Loss System
+### Unified Loss
+Use `autograd::unified_loss()` in `AutogradLoss.cu` — the ONLY loss path. Formula: `L = α(1-p_t)^γ * CE_smooth + λ * H(p)`. `cross_entropy_loss()` is a wrapper. Config: `ai_config.json → training.config.loss`.
 
-Use `autograd::unified_loss()` in `AutogradLoss.cu` — this is the ONLY loss path.
-- Formula: `L = α(1-p_t)^γ * CE_smooth + λ * H(p)`
-- `cross_entropy_loss()` is a wrapper that calls `unified_loss()` with plain CE config
-- Config: `ai_config.json` → `training.config.loss`
-- **DELETED**: `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` — old path was disconnected from autograd gradients
+### Centralized Controller — MANDATORY
+All GPU resources go through `TrainingState`. Structs hold pointers only.
+- Streams: `training_state.stream_ctrl.getPrimaryStream()` — never raw `cudaStream_t`
+- cuBLAS: `training_state.cublas_handle` — never separate handles
+- Gradients: `ctx.model->zeroGradients()` / `backward()`
+- Optimizer states: `training_state.optimizer_m_states/optimizer_v_states`
 
-### Centralized Controller Pattern — MANDATORY
+### GQA
+- `W_qkv` shape: `[(num_heads + 2*num_kv_heads) * head_dim, d_model]` = `[1280, 768]`
+- Backward MUST apply `gqa_grad_scale = 1.0f / heads_per_kv_group` to dV/dK
+- MHA and GQA checkpoints are incompatible — serialization throws on mismatch
 
-All GPU resource management MUST go through `TrainingState`. VIOLATIONS ARE BUGS:
-- **CUDA Streams**: `training_state.stream_ctrl.getPrimaryStream()` — NEVER create raw `cudaStream_t` locals
-- **cuBLAS**: `training_state.cublas_handle` — NEVER create separate handles
-- **Gradient Buffers**: via autograd system (`ctx.model->zeroGradients()`, `ctx.model->backward()`)
-- **Optimizer States**: `training_state.optimizer_m_states/optimizer_v_states` — ParameterGroup holds pointers only
-- Structs store pointers only. TrainingState owns allocations.
-
-### Tokenization: Unigram + Byte Fallback
-
-- **Files**: `resources/models/GRIM-text/Shared/UnigramByte/`
-- **Key Implementation**: GrimTokenizer.hpp (alias to UniByte), AhoCorasick.cu (pattern matching), Unigram.cu (vocab + Viterbi)
-- Trie must be built before encoding — constructor auto-builds with special tokens
-- Aho-Corasick DFA built during DetectorState construction, not lazily
-
-### Grouped Query Attention (GQA)
-
-- Config: num_heads=12, num_kv_heads=4, heads_per_kv_group=3
-- W_qkv shape: `[(num_heads + 2*num_kv_heads) * head_dim, d_model]` = `[1280, 768]`
-- Backward kernel MUST apply `gqa_grad_scale = 1.0f / heads_per_kv_group` to dV/dK
-- MHA and GQA checkpoints are incompatible — serialization validates and throws on mismatch
-- Old GQA checkpoints (num_kv_heads=0) cannot load into current model; must retrain
-
-### Tied Embedding / LM Head Weight Gradients
-
-When `tie_embeddings=true`, LM head backward and embedding backward both write to the SAME gradient buffer via PyTorch-style direct accumulation (same approach as GPT-2/LLaMA):
-- `g_final = g_lm + g_emb` (accumulated into shared buffer)
-- LM head: dense GEMM (`grad_W = centered^T @ grad_logits`)
-- Embedding: sparse scatter-add (`grad_W[tok] += grad_encoder[t]`)
-- Weight tying aliasing: `embedding_grads` and `lm_head_weight_grads` are the SAME pointer. NEVER zero both separately, add both to param groups, or free both.
+### Tied Embedding / LM Head Gradients
+With `tie_embeddings=true`, LM head and embedding backward write to the SAME buffer (PyTorch-style direct accumulation). `embedding_grads` and `lm_head_weight_grads` ARE the same pointer — never zero, register, or free both.
 
 ### Per-Component Gradient Clipping
+Three independent clips:
+1. **emb** — LM_HEAD (+ EMBEDDING if untied)
+2. **enc** — ATTENTION + FFN + RMSNORM + SCRATCHBLOCK
+3. **num** — NUMERIC_HEAD
 
-Three independent clips (Issue #139):
-1. **emb clip** — LM_HEAD (+ EMBEDDING if untied)
-2. **enc clip** — ATTENTION + FFN + RMSNORM + SCRATCHBLOCK
-3. **num clip** — NUMERIC_HEAD
+Never clip jointly when one component dominates the L2 norm.
 
-NEVER clip components jointly when one dominates L2 norm — it crushes the smaller ones.
-
-### ALiBi / RoPE Position Encoding
-
-- Position info injected INSIDE attention, NOT in residual stream. No position embeddings added to token embeddings.
-- **ALiBi**: Slopes capped via `ALIBI_MAX_BIAS = -10.0f` in `HyperParameters_GPU.hpp`. Ensures `exp(-10) ≈ 0.000045` (computable) not `exp(-256) ≈ 0` (underflow → gradient explosion).
-- **FlashAttention expects NEGATIVE slopes** (library uses `+= slope * col_idx`)
-- **Always match `max_seq_len` to actual context length** — mismatched slopes cause weak attention at distance
-- **RoPE NTK scaling**: `effective_theta = theta * (max_seq_len / 2048)^(rotary_dim / (rotary_dim - 2))` when max_seq_len > 2048
+### Position Encoding
+Position injected INSIDE attention, never in the residual stream.
+- **ALiBi**: slopes capped via `ALIBI_MAX_BIAS = -10.0f`. FlashAttention expects NEGATIVE slopes. Match `max_seq_len` to actual context length.
+- **RoPE NTK**: `effective_theta = theta * (max_seq_len / 2048)^(rotary_dim / (rotary_dim - 2))` when `max_seq_len > 2048`.
 
 ---
 
-## Known Issues / Pitfalls
+## Known Footguns
 
 ### C++ / CUDA
+- Never hold references across vector mutations (`emplace_back` invalidates).
+- `int arr[256] = {-1}` only sets element 0. Use `std::fill()`.
+- Always explicitly `return output;` from autograd forward functions — missing return destroys the grad_fn chain.
+- When kernel B reads atomicAdd output of kernel A, `cudaStreamSynchronize` between them even on the same stream.
+- `computeGradNorm` sync drains the backward pipeline. Pass `sync_for_host_read=false` except when logging.
 
-- **C++ Vector Invalidation**: NEVER hold references (`auto& node`) across vector mutations (`emplace_back`, `push_back`) — reallocation invalidates all references.
-- **C++ Array Initialization**: `int arr[256] = {-1}` only sets first element to -1, rest are 0. Use `std::fill()`.
-- **Autograd Return Statements**: ALWAYS explicitly `return output;` from autograd forward functions. Missing return causes the grad_fn chain to be destroyed during forward pass → illegal memory access in backward.
-- **Atomic Kernel Ordering**: When kernel B reads data written by kernel A via `atomicAdd`, you MUST `cudaStreamSynchronize` between them even on the same stream.
-- **GPU Gradient Norm Sync**: `cudaStreamSynchronize` inside `computeGradNorm` drains the entire backward pipeline. Pass `sync_for_host_read=false` for 9 out of 10 batches; only sync when logging gradient components.
-
-### Config / Initialization
-
-- **Hardcoded Defaults Violate Rule 20**: Config struct fields for algorithmic parameters MUST default to `0`. Throw if still 0 after loading. Example: `int max_seq_len = 0;` not `= 512`.
-- **Validation Token Budget**: Validation MUST use `ctx.model->getConfig().max_tokens_per_batch`, not hardcoded constants — buffer overflow crash otherwise.
-- **`positional_encoding` config**: Parsed from JSON in `loadConfiguration()`. Do not hardcode `DEFAULT_POSITIONAL_ENCODING`.
+### Config
+- Algorithmic config fields default to `0` and throw if not loaded (Rule 20). No hardcoded defaults like `int max_seq_len = 512;`.
+- Validation must use `ctx.model->getConfig().max_tokens_per_batch`, never a hardcoded constant.
 
 ### Training Data
-
-- **HTML artifacts** corrupt tokenizer vocab — always strip tags before training. `DataLoader.cu` handles this automatically via `stripHtmlTags()` / `decodeHtmlEntities()` / `normalizeWhitespace()`.
-- **AtomTable Token IDs** include `ATOM_TOKEN_BASE` (256) offset. When accessing `entries_[]` array: `uint32_t idx = id - ATOM_TOKEN_BASE`.
-- **Sliding Window Overlap**: `overlap_len = raw_overlap - 1` (reduces by 1 when raw_overlap > 0) to avoid masking the same boundary target in two consecutive windows.
+- HTML must be stripped pre-tokenization. `DataLoader.cu` handles this.
+- `AtomTable` IDs include `ATOM_TOKEN_BASE` (256) offset: `idx = id - ATOM_TOKEN_BASE`.
+- Sliding window: `overlap_len = raw_overlap - 1` to avoid duplicate boundary targets.
 
 ### Architecture
-
-- **Embedding scale = 1.0**: Do NOT scale embeddings by `sqrt(d_model)`. GRIM-text uses ALiBi/RoPE inside attention — the AIAYN scaling has no purpose and creates a 27.7x gradient asymmetry with tied weights.
-- **γ_final (final RMSNorm) MUST have weight decay AND slow LR**: Without weight decay, γ_final acts as an unregulated logit temperature and grows unbounded (1.0→3.0), causing overconfident predictions → mode collapse. Registered as `ParamGroupType::RMSNORM` with `wd_mult=1.0` (NOT 0.0) AND `lr_mult=0.1` (10× slower learning rate). Weight decay provides long-term restoring force; `lr_mult=0.1` prevents the initial spike (γ_final has a monotonic "scale up" gradient bias because scaling logits reduces CE faster than learning representations). Per-layer gammas (γ₁, γ₂) remain `RMSNORM` with no decay and `lr_mult=1.0` — they get mixed gradient signals through encoder nonlinearities that naturally constrain growth. **EMPIRICAL UPDATE (Apr 2026, 20k-step run):** even `wd_mult=1.0 + lr_mult=0.1 + ADAMW_WEIGHT_DECAY=0.01` produces effective decay ≈6e-7/step, ~25× too weak to counter the inflation gradient; γ_final still drifts +31% in 20k steps and is the dominant driver of `h_rms_growth` and `denom` (Pearson r=+0.99 each). Mitigation: set `ai_config.json → training.config.lm_head_centering.freeze_final_rms_gamma=true` to hold γ_final at 1.0. Frozen mode skips `requires_grad_()`, `ensure_grad()`, and param-group registration; the LM head W absorbs any needed scale (GPT-2-style).
-- **Sandwich Norm removed** (Issue #148): Architecture is standard pre-norm (`output = input + LayerScale(sublayer_output)`). Post-residual RMSNorm constrained hidden norms to a hypersphere → mode collapse.
-- **LayerScale init_value = 1.0** in `ai_config.json`. Value 0.1 causes catastrophic gradient vanishing through encoder layers.
-- **`per_token_grad_scale=true` is REQUIRED**: Gradient RMS ~1e-6 with ~3000 tokens is CORRECT. Disabling causes 3000x effective LR explosion.
-- **ScratchBlock backward**: Uses `grad_output_tap` on `DropoutGradFn` — set tap before `loss_tensor.backward()`, then pass captured gradient to ScratchBlock backward. Do NOT check `has_grad()` on dropout outputs (always false for non-leaf tensors).
-- **FFN Post-GELU Cache**: `EncodingLayer::forward()` MUST write post-GELU activations to `args.cache_ffn_output` via `cudaMemcpyAsync` after `ffn_->forward()`. Forgetting this fills the cache with garbage → corrupted W2 gradients.
-- **ScratchBlock Buffer Desync**: After `autograd::add(emb, pos_emb)`, copy `ts->cached_embeddings` back to `ctx.embedding_tensor.data` after ScratchBlock forward. Layer 0 will receive stale pre-ScratchBlock data otherwise.
-- **Encoder Bias Autograd**: Use `autograd::broadcast_add()` for all bias additions (b_qkv, b_o, b1, b2). Raw `launchFFNBiasAdd` bypasses autograd → zero bias gradients.
-- **Encoder Activation Centering**: Center cached activations (`cached_ln1_output`, `cached_ffn_input`, etc.) BEFORE weight gradient GEMMs to eliminate systematic gradient bias from non-zero mean.
-- **Hidden State Centering**: Apply column centering (`Σ_t h[t,d] = 0`) on h before LM head. Row centering moved off h onto the LM head WEIGHT matrix instead (`Σ_d W[v,d] = 0`, applied via `autograd::center_rows(weights_)` inside `LMHeadLayer::forward`). Mathematically equivalent invariance to the original Issue #132 row-centering-of-h, but **preserves per-position energy in h** (row-centering h destroyed energy when h drifted toward the all-ones direction → `rms_max/rms_min` climbed 1.02x → 4.0x and produced spurious high ρ from collapsed denominators) AND **also makes back-propagated `Σ_d grad_h[t,d] = 0`** (Issue #132's original fix only enforced this in forward). `CenterRowsGradFn` was generalized to accumulate centered gradients into leaf parameter buffers so this works on `weights_`. Watch `rho_raw_rms_spread` (telemetry stream 38): healthy ≈ 1.0–1.5x, >2x = warning, >4x = bifurcation anomaly.
+- **Embedding scale = 1.0** — do NOT scale by `sqrt(d_model)`. ALiBi/RoPE go inside attention; AIAYN scaling creates a 27.7× gradient asymmetry with tied weights.
+- **`per_token_grad_scale=true` is REQUIRED** — gradient RMS ~1e-6 with ~3000 tokens is correct. Disabling causes ~3000× LR explosion.
+- **LayerScale init_value = 1.0**. Value 0.1 causes catastrophic gradient vanishing.
+- **γ_final**: registered as `RMSNORM` with `wd_mult=1.0` AND `lr_mult=0.1`. Without both, γ_final inflates as a logit temperature → mode collapse. Empirically the inflation gradient still wins; set `lm_head_centering.freeze_final_rms_gamma=true` in `ai_config.json` to hold it at 1.0 (LM head W absorbs scale, GPT-2-style).
+- **Standard pre-norm only** — sandwich norm was deleted (Issue #148).
+- **FFN post-GELU cache**: `EncodingLayer::forward()` MUST `cudaMemcpyAsync` post-GELU activations to `args.cache_ffn_output`, else W2 gradients are corrupted.
+- **ScratchBlock buffer desync**: copy `ts->cached_embeddings` back to `ctx.embedding_tensor.data` after ScratchBlock forward, else Layer 0 sees stale data.
+- **Encoder bias**: use `autograd::broadcast_add()` for b_qkv, b_o, b1, b2. Raw `launchFFNBiasAdd` bypasses autograd → zero bias gradients.
+- **Encoder activation centering**: center cached activations (`cached_ln1_output`, etc.) BEFORE weight gradient GEMMs.
+- **Hidden state centering**: column-center h before LM head; row-center the LM head WEIGHT (not h) via `autograd::center_rows(weights_)` inside `LMHeadLayer::forward`. Watch telemetry stream 38 (`rho_raw_rms_spread`): healthy 1.0–1.5×, >2× warn, >4× anomaly.
+- **ScratchBlock backward**: set `grad_output_tap` on `DropoutGradFn` before `loss_tensor.backward()`, then pass captured gradient to ScratchBlock backward. Do not check `has_grad()` on dropout outputs.
 
 ### FlashAttention
+- **dot_do_o preprocessing kernel** MUST run before `dq_dk_dv_loop_kernel`, else `dsoftmax_sum` is garbage → dQ/dK explosion (Issue #84).
+- **GQA backward dk/dv buffers**: allocate for `num_heads` (12), not `num_kv_heads` (4). Dao-AILab kernel writes by query head index (Issue #72).
+- **GQA reduction**: apply `gqa_grad_scale = 1.0f / heads_per_kv_group` in the reduction kernel (Issue #73).
 
-- **Missing Preprocessing Kernel** (Issue #84): `flash_bwd_dot_do_o_kernel` MUST be launched BEFORE `flash_bwd_dq_dk_dv_loop_kernel`. Without it, `dsoftmax_sum` buffer contains garbage for most m_blocks → dQ/dK explosion.
-- **GQA Buffer Sizing** (Issue #72): Allocate `dk_bf16`/`dv_bf16` for `num_heads` (12), NOT `num_kv_heads` (4). The Dao-AILab backward kernel writes using query head index. Both allocation sites in `TensorContract_GPU.cu` MUST use `num_heads`.
-- **GQA Reduction Scaling** (Issue #73): Apply `gqa_grad_scale = 1.0f / heads_per_kv_group` IN the reduction kernel. The external FlashAttention library does NOT apply this internally.
+### Diagnostics
+- RMSNorm expected output: `input_rms * gamma_rms / sqrt(input_rms² + eps)` — not just `gamma_rms`.
+- Xavier init uses splitmix64 seed + 16 LCG iterations. A single iteration produces correlated outputs.
+- Read `cached_encoder_output` (post-centering) for hidden-state diagnostics.
+- For kernel timing use CUDA events, not `cudaStreamSynchronize` wall-time.
+- Loss backward already applies `1/N`. Do NOT add another `1/tokens` scaling in parameter grad kernels.
+- LibTorch gradient comparisons require IDENTICAL config (d_model, num_layers, num_heads, batch_tokens).
 
-### Diagnostic Pitfalls
-
-- **RMSNorm diagnostic formula**: `expected_output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps)` — not just `gamma_rms`. With small Xavier-init embeddings (rms≈0.006), epsilon contributes ~20%.
-- **Xavier Init LCG**: Uses splitmix64-style per-element seed + 16 iterations. Single-iteration LCG produces correlated outputs (avg|cos| ≈ 0.37 instead of expected 0.036).
-- **Diagnostic buffer selection**: Read `cached_encoder_output` (post-centering, overwritten after LM head forward) for all hidden-state diagnostics. `centering_scratch_tensor` was deleted — single buffer is the source of truth.
-- **Wall-time vs GPU-time**: `cudaStreamSynchronize` timing includes draining prior pipeline work. Use CUDA events (`cudaEventRecord`/`cudaEventElapsedTime`) to isolate actual kernel time.
-- **Mean reduction double-application**: Loss backward already scales by `1/N`. Do NOT apply additional `1/tokens` scaling in parameter gradient kernels (RMSNorm gamma, etc.).
-- **LibTorch gradient comparisons**: Only valid when baseline uses IDENTICAL config (d_model, num_layers, num_heads, batch_tokens). Different configs produce inherently different gradient magnitudes.
-
-### Deleted Code — Do Not Recreate
-
+### Deleted — Do Not Recreate
 - `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` — replaced by `AutogradLoss.cu`
-- `Embedding_GPU.cu` kernels/launchers/EmbeddingLayer class — dead code, only `destroyEmbeddingRuntime()` remains
-- `ScaleGradFn` / `autograd::scale()` — deleted (embedding scale removed)
-- Value extraction head (`value_extraction_weight_`, `value_extraction_bias_`) — deleted (Issue #142). ScratchBlock is a reasoning layer, not scalar regression.
-- `rms_post_attn_gamma_`, `rms_post_ffn_gamma_` — sandwich norm deleted (Issue #148)
-- GPU delegate system (`Shared/Delegate/Delegate.hpp`) — zero registered callbacks, deleted per Rule 26
+- `Embedding_GPU.cu` kernels / `EmbeddingLayer` class
+- `ScaleGradFn` / `autograd::scale()`
+- Value extraction head (`value_extraction_weight_/_bias_`) — Issue #142
+- `rms_post_attn_gamma_`, `rms_post_ffn_gamma_` — Issue #148
+- GPU delegate system (`Shared/Delegate/Delegate.hpp`)
+- `centering_scratch_tensor` — single buffer is the source of truth
 
 ---
 

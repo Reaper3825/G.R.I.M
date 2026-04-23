@@ -514,8 +514,11 @@ NumericalGradCheckResult performNumericalGradientCheck(
     
     // Forward pass with perturbed weight (no gradient computation needed)
     // NOTE: We use the same batch data to ensure consistency
-    result.loss_plus = ctx.model->computeLossBatch(payload);
-    ts.autograd_intermediates.clear();
+    // Rule 20: each computeLossBatch call is its own autograd step — RAII clears.
+    {
+        GRIM::Autograd::AutogradStepScope plus_scope(ts);
+        result.loss_plus = ctx.model->computeLossBatch(payload);
+    }
     
     // === Perturb -ε ===
     float perturbed_minus = original_weight - eps;
@@ -524,8 +527,10 @@ NumericalGradCheckResult performNumericalGradientCheck(
     cudaStreamSynchronize(stream);
     
     // Forward pass with perturbed weight
-    result.loss_minus = ctx.model->computeLossBatch(payload);
-    ts.autograd_intermediates.clear();
+    {
+        GRIM::Autograd::AutogradStepScope minus_scope(ts);
+        result.loss_minus = ctx.model->computeLossBatch(payload);
+    }
     
     // === Restore original weight ===
     cudaMemcpyAsync(weight_ptr + result.param_index, &original_weight, 
@@ -660,7 +665,10 @@ ValidationResult runValidation(TrainingContext& ctx) {
     }
 
     // Match GPU state to "start of training step" so validation has same memory as training.
-    ctx.model->getTrainingState().autograd_intermediates.clear();
+    // Rule 20: pre-validation reset is one boundary; per-batch RAII handles the rest.
+    {
+        GRIM::Autograd::AutogradStepScope pre_val_scope(ctx.model->getTrainingState());
+    }
     flushDeferredCleanup();
     cudaDeviceSynchronize();
     (void)cudaGetLastError();
@@ -726,8 +734,14 @@ ValidationResult runValidation(TrainingContext& ctx) {
                 0);  // mtp_k=0 for validation — no MTP shifting needed
             if (val_payload.batch_size == 0) continue;
             
-            float batch_val_loss = ctx.model->computeLossBatch(val_payload, /*is_training=*/false);
-            ctx.model->getTrainingState().autograd_intermediates.clear();
+            // Rule 20 single-owner clear: AutogradStepScope covers this validation
+            // batch and unwinds on both normal exit and exception (catch handler
+            // below MUST NOT call clear() again).
+            float batch_val_loss = 0.0f;
+            {
+                GRIM::Autograd::AutogradStepScope val_step_scope(ctx.model->getTrainingState());
+                batch_val_loss = ctx.model->computeLossBatch(val_payload, /*is_training=*/false);
+            }
             flushDeferredCleanup();
 
             // Check for deferred CUDA errors after each batch
@@ -758,8 +772,8 @@ ValidationResult runValidation(TrainingContext& ctx) {
                 "/" + std::to_string(total_val_batches) + ": " + std::string(e.what()));
             val_batches_failed++;
             
-            // Clear autograd intermediates to prevent memory buildup after failed batch
-            ctx.model->getTrainingState().autograd_intermediates.clear();
+            // Rule 20 single-owner clear: AutogradStepScope already destructed when
+            // the try-block scope unwound the exception. Do NOT add a clear() here.
             
             // Sync and clear CUDA state for recovery — also flushes deferred GPU frees
             cudaDeviceSynchronize();
@@ -1184,6 +1198,12 @@ BatchResult processBatch(
     // ctx.step is used downstream by MTP alpha warmup ramp and dropout seeds.
     // With gradient_accumulation_steps > 1, global_step advances accum_steps
     // times faster than actual weight updates, completing warmup ramps too early.
+    //
+    // Rule 20 ownership taxonomy: AutogradStepScope is the SINGLE owner of
+    // AutogradIntermediates::clear() for this batch. It covers autogradTrainingStep
+    // + GuessCache update + post-step diagnostics + tape logging. Do NOT add an
+    // explicit clear() anywhere inside this scope.
+    GRIM::Autograd::AutogradStepScope autograd_step_scope(ctx.model->getTrainingState());
     auto loss_result = GRIM::Autograd::autogradTrainingStep(
         *ctx.model,
         ctx.model->getTrainingState(),
@@ -3066,9 +3086,8 @@ BatchResult processBatch(
         ctx.model->clearUpdateProbeFlag();
     }
     
-    // Free autograd intermediate tensors (logits, encoder outputs, etc.)
-    // Must happen AFTER all diagnostics that read from intermediates
-    ctx.model->getTrainingState().autograd_intermediates.clear();
+    // Rule 20 single-owner clear: handled by AutogradStepScope at processBatch entry.
+    // Tape flush below does not read autograd intermediates.
     
     // Flush tape: sort by phase, dispatch to all sinks
     if (ctx.logging.tape) {

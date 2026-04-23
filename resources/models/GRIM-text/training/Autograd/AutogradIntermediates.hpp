@@ -48,6 +48,13 @@ struct AutogradIntermediates {
     std::vector<Tensor> encoder_layer_outputs;  // One per encoder layer
     Tensor encoder_output_tensor;      // [total_tokens, d_model] - after final RMSNorm
     Tensor centered_encoder_output;    // [total_tokens, d_model] - Issue #127
+    // TODO(Rule 20 ownership taxonomy): logits_tensor is read after backward by
+    // GuessCacheTraining, Phase2 diag blocks, and ComputeLossBatch debug path.
+    // Strict Cat 1 forbids that. Two valid resolutions, both deferred:
+    //   (a) snapshot a reduced argmax/stat struct (BatchDiagnostics) here before clear
+    //   (b) relocate this field to TrainingState as step_output_logits (Cat 2)
+    // Until done, the AutogradStepScope RAII (single-owner clear) will surface any
+    // post-clear reader as a NULL-data crash — that's the desired fail-loud trigger.
     Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
     Tensor loss_tensor;                // Scalar loss driving backward
     std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward
@@ -67,11 +74,11 @@ struct AutogradIntermediates {
     // alive from computeAutogradLoss() through executeAutogradBackward().
     std::vector<SelectorForwardResult> selector_fwd_results;
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // INJECTION DIAGNOSTICS — accumulated during forward for telemetry
-    // ═══════════════════════════════════════════════════════════════════════════
-    float* d_read_gate_accum = nullptr;   // [2] device: [sum_of_gate_values, total_token_count]
-    float  h_read_gate_mean  = 0.0f;     // host: mean gate after forward-pass readback
+    // NOTE (Rule 20 — Ownership Taxonomy): The cross-attention read-gate
+    // accumulator (Category 3 workspace) and its host snapshot (Category 2
+    // telemetry) live on TrainingState, NOT here. This struct is Category 1
+    // (graph-owned, transient). See TrainingState::d_read_gate_accum /
+    // h_read_gate_mean.
 
     // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
@@ -94,9 +101,9 @@ struct AutogradIntermediates {
         exec_memories.clear();
         exec_outputs_per_row.clear();
         selector_fwd_results.clear();
-        // Note: d_read_gate_accum is NOT freed here — it's a persistent buffer
-        // owned by TrainingState, zeroed before each forward pass.
-        h_read_gate_mean = 0.0f;
+        // Rule 20 ownership taxonomy: this struct holds ONLY Category 1
+        // (graph-owned, transient) state. There are no exception fields.
+        // The cross-attention read-gate buffer/scalar live on TrainingState.
     }
     
     /** Check if intermediates are populated (forward has run) */

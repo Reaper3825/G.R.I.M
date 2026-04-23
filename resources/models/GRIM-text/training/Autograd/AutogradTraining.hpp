@@ -277,5 +277,31 @@ LossResult autogradTrainingStep(
     uint64_t step
 );
 
+/**
+ * AutogradStepScope — RAII single-owner of AutogradIntermediates::clear().
+ *
+ * Rule 20 ownership taxonomy enforcement: clearing of Category 1 (graph-owned,
+ * transient) state MUST happen at exactly one site per autograd step. Wrap the
+ * entire step (forward + loss + backward + post-step diagnostics that consume
+ * intermediate .data) in this scope. The destructor calls clear() unconditionally
+ * — including on early return / exception — so explicit clear() calls in error
+ * paths are no longer required and MUST NOT be added back.
+ *
+ * Lifetime contract: the scope MUST outlive every reader of any field in
+ * training_state.autograd_intermediates. After the scope ends, those fields
+ * are reset to default-constructed Tensors — reading them is undefined.
+ */
+class AutogradStepScope {
+public:
+    explicit AutogradStepScope(TrainingState& ts) : ts_(ts) {}
+    ~AutogradStepScope() { ts_.autograd_intermediates.clear(); }
+    AutogradStepScope(const AutogradStepScope&) = delete;
+    AutogradStepScope& operator=(const AutogradStepScope&) = delete;
+    AutogradStepScope(AutogradStepScope&&) = delete;
+    AutogradStepScope& operator=(AutogradStepScope&&) = delete;
+private:
+    TrainingState& ts_;
+};
+
 }  // namespace Autograd
 }  // namespace GRIM

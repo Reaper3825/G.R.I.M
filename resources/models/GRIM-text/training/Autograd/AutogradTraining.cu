@@ -191,6 +191,25 @@ AutogradContext initAutogradContext(
 // PRODUCTION-READY: Runs entire model with autograd graph intact
 //======================================================================
 
+// Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on accumulation
+// micro-batches. Scope MUST cover the full autograd step (forward + loss +
+// backward) — sealing only forward leaves loss/backward to log identical output
+// per micro-batch, defeating the optimization and producing duplicate logs.
+namespace {
+struct TapeSkipScope {
+    GRIM::Logging::BatchLogTape* tape;
+    bool prev;
+    explicit TapeSkipScope(bool skip)
+        : tape(GRIM::Logging::getGlobalTape()),
+          prev(tape ? tape->skipThisPass() : false) {
+        if (tape) tape->setSkipThisPass(skip);
+    }
+    ~TapeSkipScope() { if (tape) tape->setSkipThisPass(prev); }
+    TapeSkipScope(const TapeSkipScope&) = delete;
+    TapeSkipScope& operator=(const TapeSkipScope&) = delete;
+};
+}  // namespace
+
 ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ForwardResult result{};
     result.success = false;
@@ -202,16 +221,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         ctx.payload = &ctx.inference_payload_;
     }
 
-    // Skip QKV_EQUATION D2H + fprintf on gradient-accumulation micro-batches (same weights, duplicate output)
-    struct TapeSkipScope {
-        GRIM::Logging::BatchLogTape* tape;
-        bool prev;
-        explicit TapeSkipScope(bool skip) : tape(GRIM::Logging::getGlobalTape()), prev(tape ? tape->skipThisPass() : false) {
-            if (tape) tape->setSkipThisPass(skip);
-        }
-        ~TapeSkipScope() { if (tape) tape->setSkipThisPass(prev); }
-    };
-    TapeSkipScope eq_scope(ctx.skip_equation_logging);
+    // Skip QKV_EQUATION D2H + fprintf on gradient-accumulation micro-batches.
+    // Rule 20 ownership taxonomy: tape skip is now scoped at autogradTrainingStep
+    // so forward + loss + backward all observe the same skip flag. The local
+    // scope here was a Rule 20 violation — forward sealed early, leaving loss
+    // and backward to log on accumulation micro-batches anyway.
+    (void)0;
 
     // Rule 20: Fail loud
     ctx.validate("executeAutogradForward");
@@ -824,7 +839,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         layer_output, intermediates.exec_memories[b],
                         total_tokens, ctx.stream,
                         b * sl, sl,
-                        intermediates.d_read_gate_accum);
+                        ts->d_read_gate_accum);
                     Tensor padded = autograd::zero_pad(row_delta, b * sl, total_tokens, ctx.stream);
                     layer_output = autograd::add(layer_output, padded, ctx.stream);
                 }
@@ -2166,6 +2181,12 @@ LossResult autogradTrainingStep(
     // This is the ONLY mutation site — eval paths (computeLossBatch) read but never write.
     training_state.autograd_step = step;
 
+    // Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on accumulation
+    // micro-batches across the ENTIRE step (forward + loss + backward). Sealing
+    // only forward (the previous behavior) was a Rule 20 violation: loss and
+    // backward kept logging duplicated tape entries on every micro-batch.
+    TapeSkipScope tape_skip_scope(accumulate);
+
     ExecutionBlockLayer* execution_block = model.getExecutionBlockLayer();
 
     AutogradContext ctx = initAutogradContext(
@@ -2192,14 +2213,14 @@ LossResult autogradTrainingStep(
     // FORWARD → LOSS → BACKWARD
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Allocate read-gate accumulator once (persistent across batches)
+    // Allocate read-gate accumulator once (Category 3 workspace on TrainingState)
     auto& intermediates = training_state.autograd_intermediates;
-    if (!intermediates.d_read_gate_accum && cfg.execution_block_enabled) {
-        CUDA_CHECK(cudaMalloc(&intermediates.d_read_gate_accum, 2 * sizeof(float)));
+    if (!training_state.d_read_gate_accum && cfg.execution_block_enabled) {
+        CUDA_CHECK(cudaMalloc(&training_state.d_read_gate_accum, 2 * sizeof(float)));
     }
     // Zero the accumulator before forward (sum=0, count=0)
-    if (intermediates.d_read_gate_accum) {
-        CUDA_CHECK(cudaMemsetAsync(intermediates.d_read_gate_accum, 0, 2 * sizeof(float), stream));
+    if (training_state.d_read_gate_accum) {
+        CUDA_CHECK(cudaMemsetAsync(training_state.d_read_gate_accum, 0, 2 * sizeof(float), stream));
     }
     
     ForwardResult fwd_result = executeAutogradForward(ctx);
@@ -2208,12 +2229,14 @@ LossResult autogradTrainingStep(
     }
 
     // Read back the cross-attention read gate accumulator (sum/count on device)
-    if (intermediates.d_read_gate_accum) {
+    // Snapshot Category 3 workspace into Category 2 telemetry scalar BEFORE the
+    // autograd boundary (Rule 20).
+    if (training_state.d_read_gate_accum) {
         float h_accum[2] = {0.0f, 0.0f};
-        CUDA_CHECK(cudaMemcpyAsync(h_accum, intermediates.d_read_gate_accum,
+        CUDA_CHECK(cudaMemcpyAsync(h_accum, training_state.d_read_gate_accum,
                                    2 * sizeof(float), cudaMemcpyDeviceToHost, stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
-        intermediates.h_read_gate_mean = (h_accum[1] > 0.0f)
+        training_state.h_read_gate_mean = (h_accum[1] > 0.0f)
             ? (h_accum[0] / h_accum[1])
             : 0.0f;
     }
@@ -2221,7 +2244,7 @@ LossResult autogradTrainingStep(
     LossResult loss_result = computeAutogradLoss(ctx);
     if (!loss_result.success) {
         loss_result.error_message = "autogradTrainingStep: Loss failed - " + loss_result.error_message;
-        training_state.autograd_intermediates.clear();
+        // Rule 20 single-owner clear: caller's AutogradStepScope handles intermediates.
         return loss_result;
     }
     
@@ -2230,7 +2253,7 @@ LossResult autogradTrainingStep(
     if (!std::isfinite(loss_result.loss_value)) {
         loss_result.success = false;
         loss_result.error_message = "Non-finite loss: " + std::to_string(loss_result.loss_value);
-        training_state.autograd_intermediates.clear();
+        // Rule 20 single-owner clear: caller's AutogradStepScope handles intermediates.
         return loss_result;
     }
     
@@ -2238,15 +2261,17 @@ LossResult autogradTrainingStep(
     if (!bwd_result.success) {
         loss_result.success = false;
         loss_result.error_message = "autogradTrainingStep: Backward failed - " + bwd_result.error_message;
-        training_state.autograd_intermediates.clear();
+        // Rule 20 single-owner clear: caller's AutogradStepScope handles intermediates.
         return loss_result;
     }
     
     // Post-backward cleanup (matches LanguageModel::backward() behavior)
     training_state.sequence_weight_count = 0;
     
-    // NOTE: Do NOT clear autograd_intermediates here — caller (processBatch) reads
-    // intermediates.logits_tensor.data for diagnostics and MUST call clear() when done.
+    // Rule 20 ownership taxonomy: AutogradIntermediates::clear() is owned by
+    // the caller's AutogradStepScope RAII guard. Do NOT clear here — post-step
+    // diagnostics (Phase2_TrainingLoop, GuessCache) read intermediates.logits_tensor
+    // and friends BEFORE the scope ends. Adding a clear() here is a Rule 20 violation.
     
     AG_INFO("Training step complete: loss=" << loss_result.loss_value);
     

@@ -54,6 +54,9 @@ TrainingState::~TrainingState() {
 	
 	// Free class-balanced loss weights (raw cudaMalloc)
 	if (d_class_weights) { cudaFree(d_class_weights); d_class_weights = nullptr; }
+
+	// Free cross-attention read-gate accumulator (Rule 20 Category 3 workspace)
+	if (d_read_gate_accum) { cudaFree(d_read_gate_accum); d_read_gate_accum = nullptr; }
 	
 	// Free per-layer KV cache (raw cudaMalloc, BF16)
 	for (auto& ptr : kv_cache_k) { if (ptr) { cudaFree(ptr); ptr = nullptr; } }

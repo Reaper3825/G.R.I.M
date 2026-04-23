@@ -40,6 +40,8 @@
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "perception/physical/PhysicalLocalizationLoop.hpp"
 #include "perception/physical/PhysicalWorldStateLoop.hpp"
+#include "perception/physical/PhysicalWorldStateContextProjector.hpp"
+#include "perception/physical/PhysicalWorldStateMemoryWriter.hpp"
 #include "ui/ui_physical_environment_panel.hpp"
 #include "MMO/UI/UISurfaceRegistry.hpp"
 #ifdef _WIN32
@@ -84,6 +86,12 @@ BOOL WINAPI consoleHandler(DWORD signal) {
 
         // Stop idle-tick thread first
         stopMMOIdleTick();
+
+        // Stop perception-side world-state consumers BEFORE the facade is
+        // freed — the memory writer flushes long-dwell entity summaries on
+        // shutdown and needs g_memoryFacade alive to do so.
+        GRIM::Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
+        GRIM::Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
 
         // Flush rotation pipeline to long-term storage
         GRIM::MemoryBufferRotation::instance().mergeToWorking();
@@ -144,6 +152,12 @@ void signalHandler(int signal) {
 
         // Stop idle-tick thread first
         stopMMOIdleTick();
+
+        // Stop perception-side world-state consumers BEFORE the facade is
+        // freed — the memory writer flushes long-dwell entity summaries on
+        // shutdown and needs g_memoryFacade alive to do so.
+        GRIM::Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
+        GRIM::Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
 
         // Flush rotation pipeline to long-term storage
         GRIM::MemoryBufferRotation::instance().mergeToWorking();
@@ -611,6 +625,14 @@ int main(int argc, char* argv[])
         // position, velocity, visibility, depth, text_on_object, relations) and
         // publishes it to PhysicalWorldStateBus. This is what the model reads.
         GRIM::Perception::Physical::TickPhysicalWorldState();
+        // Stage 4 consumers: project the latest world-state snapshot into the
+        // live router context (SessionContextManager.VisualContext.physical)
+        // and diff it into MemoryFacade as durable state-change events for
+        // the personality LoRA training corpus. Both are cheap pull-only
+        // consumers of PhysicalWorldStateBus and no-op when the bus has not
+        // advanced. Order: projector first so router sees the freshest scene.
+        GRIM::Perception::Physical::TickPhysicalWorldStateContextProjector();
+        GRIM::Perception::Physical::TickPhysicalWorldStateMemoryWriter();
 
         UIRoot::get().update(input, 0.016f);
 
@@ -650,6 +672,13 @@ int main(int argc, char* argv[])
 
     // Stop idle-tick thread first
     stopMMOIdleTick();
+
+    // Stop perception-side world-state consumers BEFORE the facade is freed —
+    // the memory writer flushes long-dwell entity summaries on shutdown and
+    // needs g_memoryFacade alive to do so. The bus producer
+    // (ShutdownPhysicalWorldState) runs later in the perception teardown.
+    GRIM::Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
+    GRIM::Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
 
     // Flush rotation pipeline to long-term storage before teardown
     GRIM::MemoryBufferRotation::instance().mergeToWorking();
@@ -697,6 +726,8 @@ int main(int argc, char* argv[])
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
+    GRIM::Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
+    GRIM::Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
     GRIM::Perception::Physical::ShutdownPhysicalWorldState();
     GRIM::Perception::Physical::ShutdownPhysicalLocalization();
     GRIM::Perception::Physical::ShutdownPhysicalSpatialGrounding();
