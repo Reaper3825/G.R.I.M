@@ -602,20 +602,25 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
             if (pe.is_object()) {
                 const bool use_rope = pe.value("use_rope", false);
                 const bool use_alibi = pe.value("use_alibi", false);
-                const bool use_learned = pe.value("use_learned", false);
-                if (use_learned) {
-                    arch.positional_encoding = PositionalEncodingType::NONE;
-                } else if (use_rope && use_alibi) {
+                if (use_rope && use_alibi) {
                     arch.positional_encoding = PositionalEncodingType::ALIBI_ROPE;
                 } else if (use_rope) {
                     arch.positional_encoding = PositionalEncodingType::ROPE;
                 } else if (use_alibi) {
                     arch.positional_encoding = PositionalEncodingType::ALIBI;
                 } else {
-                    arch.positional_encoding = PositionalEncodingType::NONE;
+                    // Rule 20: learned position embeddings were removed; require ALiBi and/or RoPE.
+                    throw std::runtime_error(
+                        "loadModelArchitecture: positional_encoding requires use_rope and/or use_alibi "
+                        "(learned position embeddings have been removed)");
                 }
             } else if (pe.is_string()) {
                 arch.positional_encoding = parsePositionalEncodingType(pe.get<std::string>());
+                if (arch.positional_encoding == PositionalEncodingType::NONE) {
+                    throw std::runtime_error(
+                        "loadModelArchitecture: positional_encoding=NONE is no longer supported "
+                        "(learned position embeddings have been removed). Use ALIBI, ROPE, or ALIBI_ROPE.");
+                }
             } else {
                 throw std::runtime_error(
                     "loadModelArchitecture: training.config.positional_encoding must be object or string");

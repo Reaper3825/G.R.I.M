@@ -1,17 +1,15 @@
 //======================================================//
 //  Embedding Layer - GPU (Pattern B: Layer Ownership)
-//  Token + optional Position embedding lookup
+//  Token embedding lookup
 //
-//  Owns: token_weights [vocab_size, d_model],
-//        position_weights [max_seq_len, d_model] (optional, learned mode only).
+//  Owns: token_weights [vocab_size, d_model].
+//  Position information is injected inside attention (ALiBi/RoPE); the learned
+//  position-embedding path has been removed (Rule 26).
 //
-//  Architecture: output = token_embed(input_ids) [+ pos_embed(pos_ids)]
-//  Position embeddings are only allocated for LEARNED mode (PositionalEncodingType::NONE).
-//  ALiBi/RoPE modes inject position information inside attention, not here.
+//  Architecture: output = token_embed(input_ids)
 //
 //  Backward is handled automatically by the autograd tape system:
 //    grad_W_token[token_id] += grad_output[t] * scale  (scatter accumulate)
-//    grad_W_pos[pos_id] += grad_output[t] * scale       (scatter accumulate)
 //
 //  Weight tying: When tie_embeddings=true, LMHeadLayer aliases this layer's
 //  token_weights via Tensor::from_ptr + share_grad. EmbeddingLayer always OWNS
@@ -39,8 +37,6 @@ struct EmbeddingLayerConfig {
     int vocab_size = 0;        // Token vocabulary size (MUST be populated)
     int d_model = 0;           // Hidden dimension (MUST be populated)
     int max_seq_len = 0;       // Maximum sequence length (MUST be populated)
-    HyperParameters::PositionalEncodingType positional_encoding =
-        HyperParameters::PositionalEncodingType::ALIBI_ROPE;
     float embedding_scale = 1.0f;  // Issue #140: No scaling (1.0f) for ALiBi/RoPE
     bool requires_grad = true;     // false for inference-only (skip grad allocation)
 };
@@ -48,10 +44,10 @@ struct EmbeddingLayerConfig {
 //======================================================//
 //  EmbeddingLayer - Self-Allocating (Pattern B: Layer Ownership)
 //
-//  Owns token embedding weights. Optionally owns position embedding weights
-//  (only for LEARNED positional encoding mode).
+//  Owns token embedding weights. Position information is injected inside
+//  attention via ALiBi/RoPE (no separate learned position-embedding table).
 //
-//  forward() performs: output = token_embed(ids) [+ pos_embed(pos_ids)]
+//  forward() performs: output = token_embed(ids)
 //  backward() handled by autograd chain (EmbeddingGradFn)
 //======================================================//
 
@@ -63,8 +59,6 @@ public:
     /// Self-allocating constructor (Pattern B - Layer Ownership)
     ///
     /// Allocates token embedding weights [vocab_size, d_model] with Xavier init.
-    /// If positional_encoding == NONE (learned mode), also allocates
-    /// position embedding weights [max_seq_len, d_model].
     ///
     /// @param config     Layer configuration
     /// @param seed       Xavier init seed
@@ -89,12 +83,6 @@ public:
     Tensor& tokenWeights() { return token_weights_; }
     const Tensor& tokenWeights() const { return token_weights_; }
 
-    Tensor& positionWeights() { return position_weights_; }
-    const Tensor& positionWeights() const { return position_weights_; }
-
-    /// Whether position embeddings are allocated (learned mode only)
-    bool hasPositionEmbeddings() const { return position_weights_.data != nullptr; }
-
     /// Whether weights are initialized and ready for forward pass
     bool weightsReady() const { return token_weights_.data != nullptr; }
 
@@ -108,7 +96,6 @@ private:
 
     // Weight Tensors with autograd (requires_grad=true)
     Tensor token_weights_;       // [vocab_size, d_model] — always owned
-    Tensor position_weights_;    // [max_seq_len, d_model] — optional (learned mode only)
 };
 
 } // namespace GRIM

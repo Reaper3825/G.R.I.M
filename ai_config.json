@@ -574,7 +574,6 @@
             "per_token_grad_scale": true,
             "positional_encoding": {
                 "use_alibi": true,
-                "use_learned": false,
                 "use_rope": true
             },
             "prediction_comparison": {

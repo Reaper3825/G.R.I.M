@@ -19,7 +19,7 @@ namespace GRIM {
 //======================================================//
 //  Weight tensor accessors
 //  Session 6: Embedding accessors DELETED — weights now owned by EmbeddingLayer (Pattern B).
-//  Access via LanguageModel::getEmbeddingLayer()->tokenWeights() / positionWeights().
+//  Access via LanguageModel::getEmbeddingLayer()->tokenWeights().
 //======================================================//
 
 TrainingState::TrainingState() = default;

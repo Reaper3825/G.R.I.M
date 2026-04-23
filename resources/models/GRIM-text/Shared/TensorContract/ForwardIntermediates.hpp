@@ -170,8 +170,7 @@ struct AllLayerIntermediates {
     
     // Embedding intermediates (before encoder layers)
     Tensor embedding_lookup_out;  // Raw embedding lookup result
-    Tensor position_embedding_out; // Position embedding if separate
-    Tensor embedding_combined;     // embedding + position
+    Tensor embedding_combined;     // embedding (position info is injected inside attention)
     
     // Post-encoder intermediates
     Tensor final_rms_out;         // Final RMSNorm output (before LM head)
@@ -186,7 +185,6 @@ struct AllLayerIntermediates {
         }
         layers.clear();
         embedding_lookup_out = Tensor();
-        position_embedding_out = Tensor();
         embedding_combined = Tensor();
         final_rms_out = Tensor();
     }
@@ -200,7 +198,6 @@ struct AllLayerIntermediates {
             count += layer.countGradFns();
         }
         if (embedding_lookup_out.grad_fn) count++;
-        if (position_embedding_out.grad_fn) count++;
         if (embedding_combined.grad_fn) count++;
         if (final_rms_out.grad_fn) count++;
         return count;

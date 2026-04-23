@@ -243,7 +243,7 @@ float GeneratedSequence::getNormalizedScore(float length_penalty) const {
 ALiBiPositionalBias::ALiBiPositionalBias()
     : num_heads(0),
       initialized(false),
-      type(PositionalEncodingType::NONE) {}
+      type(PositionalEncodingType::ALIBI_ROPE) {}
 
 ALiBiPositionalBias::ALiBiPositionalBias(ALiBiPositionalBias&& other) noexcept {
     *this = std::move(other);
@@ -362,7 +362,7 @@ void ALiBiPositionalBias::cleanup() {
     PBM::releasePBM(pbm_state_);
 #endif
     initialized = false;
-    type = PositionalEncodingType::NONE;
+    type = PositionalEncodingType::ALIBI_ROPE;
     num_heads = 0;
 }
 

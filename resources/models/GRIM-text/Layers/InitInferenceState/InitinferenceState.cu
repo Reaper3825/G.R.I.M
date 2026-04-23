@@ -92,7 +92,6 @@ void LanguageModel::initInferenceState() {
         emb_cfg.vocab_size = cfg.vocab_size;
         emb_cfg.d_model = cfg.d_model;
         emb_cfg.max_seq_len = cfg.max_seq_len;
-        emb_cfg.positional_encoding = cfg.positional_encoding;
         emb_cfg.embedding_scale = 1.0f;  // Issue #140: no scaling for ALiBi/RoPE
         emb_cfg.requires_grad = false;   // Inference only — no gradients
 

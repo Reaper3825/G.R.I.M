@@ -59,28 +59,6 @@ namespace {
 
 constexpr int kBlockSize = 256;
 
-//======================================================//
-// Issue #57 FIX: Position embedding support
-// Generate position IDs [0,1,2,...,seq_len-1] repeated for each batch element
-// and add position embeddings to token embeddings
-//======================================================//
-
-__global__ void generatePositionIdsKernel(int* __restrict__ position_ids,
-                                          int total_tokens,
-                                          int seq_len) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= total_tokens) return;
-    
-    // Position within sequence = idx % seq_len
-    // This gives [0,1,2,...,seq_len-1] for each batch element
-    position_ids[idx] = idx % seq_len;
-}
-
-inline void generatePositionIds(int* position_ids, int total_tokens, int seq_len, cudaStream_t stream) {
-    const int blocks = (total_tokens + kBlockSize - 1) / kBlockSize;
-    generatePositionIdsKernel<<<blocks, kBlockSize, 0, stream>>>(position_ids, total_tokens, seq_len);
-}
-
 // Finding 1 (Rule 26): countValidTokensKernel/countValidTokens DELETED — zero callers
 // Finding 2 (Rule 26): sumSquaredKernel/computeSumSquared DELETED — only caller was
 //   computeGradientNorm() which is redundant with Phase2's computeGradNorm()
@@ -302,60 +280,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     //
     // Issue #96/103 FIX: ONLY add position embeddings for LEARNED positional encoding!
     // With ALIBI or ROPE, position embeddings are ISOTROPIC (all columns have same variance)
-    // which causes GEMM coherent summation and QKV explosion.
-    // Config says use_learned=false but code was ignoring it!
-    // ═══════════════════════════════════════════════════════════════════════════
-    const bool use_learned_pos_emb = (cfg->positional_encoding == HyperParameters::PositionalEncodingType::NONE);
-    if (use_learned_pos_emb) {
-        if (!ctx.embedding_layer->hasPositionEmbeddings()) {
-            throw std::runtime_error(
-                "AutogradForward: positional_encoding=NONE requires position embeddings, but EmbeddingLayer has none");
-        }
-        Tensor& pos_weights = ctx.embedding_layer->positionWeights();
-        if (!pos_weights.data) {
-            throw std::runtime_error(
-                "AutogradForward: positional_encoding=NONE requires position_weights.data, but it is NULL");
-        }
-        pos_weights.requires_grad = ctx.is_training;
-        
-        // Ensure position embedding weights have correct shape [max_seq_len, d_model]
-        if (!pos_weights.shape.is_valid()) {
-            pos_weights.shape = TensorContract::TensorShape::make_BSM(
-                cfg->max_seq_len, cfg->d_model);
-        }
-        
-        // Allocate temporary buffer for position IDs on device
-        int* d_position_ids = nullptr;
-        cudaMallocAsync(&d_position_ids, total_tokens * sizeof(int), ctx.stream);
-        
-        // Generate position IDs: [0,1,2,...,seq_len-1] repeated for each batch
-        generatePositionIds(d_position_ids, total_tokens, ctx.seq_len, ctx.stream);
-        
-        // Look up position embeddings with autograd tracking
-        // Issue #140: Same scale as token embeddings (1.0f — no scaling)
-        Tensor pos_emb_output = autograd::embedding(
-            pos_weights,
-            d_position_ids,
-            total_tokens,
-            ctx.stream,
-            embedding_scale  // Issue #140: No scaling (1.0f)
-        );
-        
-        // Free temporary position IDs (embedding lookup already copied them)
-        cudaFreeAsync(d_position_ids, ctx.stream);
-        
-        // Add token embeddings + position embeddings (both tracked by autograd)
-        emb_output = autograd::add(emb_output, pos_emb_output, ctx.stream);
-        
-        AG_INFO("Step 1b: Position embeddings added (Issue #57 FIX)");
-    } else {
-        // ALiBi/RoPE: No position embedding added to residual stream.
-        // Position information is injected directly inside attention via bias/rotary.
-        AG_INFO("Step 1b: No position embeddings (using " 
-                << HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding)
-                << " inside attention)");
-    }
-    
+    // ALiBi/RoPE inject position info inside attention (not in residual stream).
+    // The learned position embedding path (PositionalEncodingType::NONE) was removed
+    // per Rule 26 — ALIBI_ROPE is the sole active path.
+    AG_INFO("Step 1b: No position embeddings (using "
+            << HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding)
+            << " inside attention)");
+
     // Store in intermediates for backward
     intermediates.embedding_tensor = std::move(emb_output);
     
@@ -1640,10 +1571,7 @@ BackwardResult executeAutogradBackward(
     if (!accumulate) {
         // Top-level parameters (Pattern B: owned by EmbeddingLayer)
         ctx.embedding_layer->tokenWeights().zero_grad(ctx.stream);
-        if (ctx.embedding_layer->hasPositionEmbeddings()) {
-            ctx.embedding_layer->positionWeights().zero_grad(ctx.stream);
-        }
-        
+
         // LM Head parameters (Pattern B: owned by persistent LMHeadLayer)
         ctx.lm_head->weights().zero_grad(ctx.stream);
         ctx.lm_head->bias().zero_grad(ctx.stream);

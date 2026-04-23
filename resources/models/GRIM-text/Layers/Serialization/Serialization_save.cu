@@ -82,7 +82,11 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
 
     GRIMTransformer::PositionalEncodingType fb_pos_enc;
     switch (cfg.positional_encoding) {
-        case HyperParameters::PositionalEncodingType::NONE: fb_pos_enc = GRIMTransformer::PositionalEncodingType_NONE; break;
+        case HyperParameters::PositionalEncodingType::NONE:
+            // Rule 20: learned position embeddings were removed; NONE must never be serialized.
+            throw std::runtime_error(
+                "SerializationLayer::save: positional_encoding=NONE is no longer supported "
+                "(learned position embeddings have been removed). Use ALIBI, ROPE, or ALIBI_ROPE.");
         case HyperParameters::PositionalEncodingType::ALIBI: fb_pos_enc = GRIMTransformer::PositionalEncodingType_ALIBI; break;
         case HyperParameters::PositionalEncodingType::ROPE: fb_pos_enc = GRIMTransformer::PositionalEncodingType_ROPE; break;
         case HyperParameters::PositionalEncodingType::ALIBI_ROPE: fb_pos_enc = GRIMTransformer::PositionalEncodingType_ALIBI_ROPE; break;

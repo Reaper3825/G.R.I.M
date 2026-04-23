@@ -192,20 +192,6 @@ void LanguageModel::initTrainingState() {
     float* emb_grad = embedding_layer_->tokenWeights().grad_data();
     std::cout << "[DEBUG-INIT-4d] emb_grad=" << (void*)emb_grad << std::endl << std::flush;
     
-    float* pos_data = nullptr;
-    float* pos_grad = nullptr;
-    if (embedding_layer_->hasPositionEmbeddings()) {
-        std::cout << "[DEBUG-INIT-4e] About to read embedding positionWeights().data..." << std::endl << std::flush;
-        pos_data = embedding_layer_->positionWeights().data;
-        std::cout << "[DEBUG-INIT-4f] pos_data=" << (void*)pos_data << std::endl << std::flush;
-        
-        std::cout << "[DEBUG-INIT-4g] About to read embedding positionWeights().grad_data()..." << std::endl << std::flush;
-        pos_grad = embedding_layer_->positionWeights().grad_data();
-        std::cout << "[DEBUG-INIT-4h] pos_grad=" << (void*)pos_grad << std::endl << std::flush;
-    } else {
-        std::cout << "[DEBUG-INIT-4e] No position embeddings (ALiBi/RoPE mode)" << std::endl << std::flush;
-    }
-    
     std::cout << "[DEBUG-INIT-4i] About to read lm_head_layer_->weights().data..." << std::endl << std::flush;
     if (!lm_head_layer_) throw std::runtime_error("[InitTrainingState] FATAL: lm_head_layer_ is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     float* lm_data = lm_head_layer_->weights().data;
@@ -218,8 +204,6 @@ void LanguageModel::initTrainingState() {
     std::cout << "✓ Embeddings initialized via EmbeddingLayer (Pattern B ownership)\n";
     std::cout << "  tokenWeights.data=" << (void*)emb_data
               << " grad=" << (void*)emb_grad << "\n";
-    std::cout << "  positionWeights.data=" << (void*)pos_data
-              << " grad=" << (void*)pos_grad << "\n";
     std::cout << "  lm_head weights.data=" << (void*)lm_data
               << " grad=" << (void*)lm_grad << "\n";
     

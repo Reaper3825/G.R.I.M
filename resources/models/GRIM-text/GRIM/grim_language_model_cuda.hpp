@@ -562,7 +562,6 @@ public:
     struct ModelStats {
         size_t total_params = 0;
         size_t embedding_params = 0;
-        size_t position_embedding_params = 0;  // Position embeddings (max_seq_len * d_model)
         size_t encoder_params = 0;
         size_t lm_head_params = 0;
         size_t scratchblock_params = 0;  // Atom type embeddings + projection

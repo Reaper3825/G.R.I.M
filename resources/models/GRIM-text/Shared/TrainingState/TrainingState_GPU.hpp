@@ -54,7 +54,7 @@ struct TrainingState {
     // Rule 20: NO raw float* for gradients - use GRIM::Tensor with autograd
     //
     // ALL weight tensors are owned by Pattern B layers (self-managing):
-    //   - Embedding: LanguageModel::getEmbeddingLayer()->tokenWeights() / positionWeights()
+    //   - Embedding: LanguageModel::getEmbeddingLayer()->tokenWeights()
     //   - LM Head: LanguageModel::getLmHeadLayer()->weights() / bias() / finalRmsGamma()
     //   - Encoder: Each EncodingLayer self-allocates in constructor
     //   - ScratchBlock: ScratchBlockLayer self-allocates in constructor

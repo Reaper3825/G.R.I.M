@@ -61,8 +61,6 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
     for (const auto& group : parameter_groups_) {
         if (group.name == "embedding" || group.name == "embedding_lm_head_tied") {
             stats.embedding_params += group.size();
-        } else if (group.name == "position_embedding") {
-            stats.position_embedding_params += group.size();
         } else if (group.name.find("lm_head") != std::string::npos) {
             stats.lm_head_params += group.size();
         } else {
@@ -76,7 +74,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         }
     }
 
-    stats.total_params = stats.embedding_params + stats.position_embedding_params +
+    stats.total_params = stats.embedding_params +
                          stats.encoder_params + stats.lm_head_params;
     stats.model_size_mb = (stats.total_params * sizeof(float)) / (1024.0f * 1024.0f);
     return stats;
@@ -210,9 +208,10 @@ void LanguageModel::initGPU() {
 
         //======================================================//
         //  6a) Build persistent Embedding layer (Pattern B)
-        //  
-        //  Self-allocates token weights [vocab_size, d_model] + optional
-        //  position weights [max_seq_len, d_model] for learned mode.
+        //
+        //  Self-allocates token weights [vocab_size, d_model]. Position
+        //  information is injected inside attention via ALiBi/RoPE, so no
+        //  separate position-embedding table is allocated (Rule 26).
         //  Must be created BEFORE LMHeadLayer (LM head aliases embedding for tied config).
         //======================================================//
         {
@@ -220,7 +219,6 @@ void LanguageModel::initGPU() {
             emb_config.vocab_size = cfg.vocab_size;
             emb_config.d_model = cfg.d_model;
             emb_config.max_seq_len = cfg.max_seq_len;
-            emb_config.positional_encoding = cfg.positional_encoding;
             emb_config.embedding_scale = 1.0f;  // Issue #140: No scaling for ALiBi/RoPE
 
             // Seed convention: embedding uses weight_init_seed + 0
@@ -233,7 +231,6 @@ void LanguageModel::initGPU() {
             }
             std::cout << "✓ Embedding layer created (vocab=" << cfg.vocab_size
                       << ", d_model=" << cfg.d_model
-                      << ", pos_emb=" << (embedding_layer_->hasPositionEmbeddings() ? "learned" : "none")
                       << ")\n";
         }
 

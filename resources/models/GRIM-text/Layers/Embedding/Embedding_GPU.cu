@@ -3,18 +3,16 @@
 //  GPU-accelerated Embedding layer using autograd
 //  Pattern B: Layer Ownership — self-allocates weights
 //
-//  Owns: token_weights [vocab_size, d_model],
-//        position_weights [max_seq_len, d_model] (optional).
+//  Owns: token_weights [vocab_size, d_model].
+//  Position information is injected inside attention (ALiBi/RoPE);
+//  the learned position-embedding path has been removed (Rule 26).
 //
 //  PyTorch equivalent:
 //    class Embedding(nn.Module):
-//        def __init__(self, vocab_size, d_model, max_seq_len=None):
+//        def __init__(self, vocab_size, d_model):
 //            self.token_embed = nn.Embedding(vocab_size, d_model)
-//            self.pos_embed = nn.Embedding(max_seq_len, d_model) if learned else None
-//        def forward(self, input_ids, position_ids=None):
-//            x = self.token_embed(input_ids)
-//            if self.pos_embed: x = x + self.pos_embed(position_ids)
-//            return x
+//        def forward(self, input_ids):
+//            return self.token_embed(input_ids)
 //======================================================//
 
 #include "Embedding_GPU.hpp"
@@ -60,25 +58,6 @@ EmbeddingLayer::EmbeddingLayer(const EmbeddingLayerConfig& config,
 
     fprintf(stdout, "[EmbeddingLayer] Token weights: [%d, %d] Xavier seed=%llu\n",
             config_.vocab_size, config_.d_model, static_cast<unsigned long long>(seed));
-
-    // ══════════════════════════════════════════════════════════════
-    //  POSITION EMBEDDINGS: Only for LEARNED mode (PositionalEncodingType::NONE)
-    //  ALiBi/RoPE inject position info inside attention, not residual stream
-    // ══════════════════════════════════════════════════════════════
-    if (config_.positional_encoding == HyperParameters::PositionalEncodingType::NONE) {
-        position_weights_ = Tensor::zeros({config_.max_seq_len, config_.d_model}, stream, "embedding.position_weights");
-        if (config_.requires_grad) {
-            position_weights_.requires_grad_();
-            position_weights_.ensure_grad();
-        }
-        Tensor::xavier_uniform_(position_weights_, seed + 200, stream);
-
-        fprintf(stdout, "[EmbeddingLayer] Position weights: ALLOCATED [%d, %d] (learned/additive mode)\n",
-                config_.max_seq_len, config_.d_model);
-    } else {
-        fprintf(stdout, "[EmbeddingLayer] Position weights: SKIPPED (%s uses attention-based encoding)\n",
-                HyperParameters::positionalEncodingTypeToString(config_.positional_encoding));
-    }
 }
 
 //======================================================//
@@ -88,7 +67,6 @@ EmbeddingLayer::EmbeddingLayer(const EmbeddingLayerConfig& config,
 EmbeddingLayer::EmbeddingLayer(EmbeddingLayer&& other) noexcept
     : config_(other.config_)
     , token_weights_(std::move(other.token_weights_))
-    , position_weights_(std::move(other.position_weights_))
 {
 }
 
@@ -96,7 +74,6 @@ EmbeddingLayer& EmbeddingLayer::operator=(EmbeddingLayer&& other) noexcept {
     if (this != &other) {
         config_ = other.config_;
         token_weights_ = std::move(other.token_weights_);
-        position_weights_ = std::move(other.position_weights_);
     }
     return *this;
 }

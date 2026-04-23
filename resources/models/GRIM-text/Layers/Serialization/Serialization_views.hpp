@@ -17,7 +17,7 @@ struct SerializationModelConfigView {
 	int d_ff = 0;
 	int max_seq_len = 0;
 	float dropout_rate = 0.0f;
-	HyperParameters::PositionalEncodingType positional_encoding = HyperParameters::PositionalEncodingType::NONE;
+	HyperParameters::PositionalEncodingType positional_encoding = HyperParameters::PositionalEncodingType::ALIBI_ROPE;
 	bool tie_embeddings = false;
 	bool use_gpu = false;
 	bool use_bias = false;

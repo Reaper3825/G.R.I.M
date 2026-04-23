@@ -301,22 +301,26 @@ StartupConfig loadConfiguration(int argc, char** argv) {
             if (pe.is_object()) {
                 const bool use_rope = pe.value("use_rope", false);
                 const bool use_alibi = pe.value("use_alibi", false);
-                const bool use_learned = pe.value("use_learned", false);
-                if (use_learned) {
-                    // Learned overrides rope/alibi (different code path)
-                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::NONE;
-                } else if (use_rope && use_alibi) {
+                if (use_rope && use_alibi) {
                     config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ALIBI_ROPE;
                 } else if (use_rope) {
                     config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ROPE;
                 } else if (use_alibi) {
                     config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ALIBI;
                 } else {
-                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::NONE;
+                    // Rule 20: learned position embeddings were removed; require ALiBi and/or RoPE.
+                    throw std::runtime_error(
+                        "Phase1_Startup::loadConfiguration: positional_encoding requires use_rope and/or use_alibi "
+                        "(learned position embeddings have been removed)");
                 }
             } else if (pe.is_string()) {
                 config.architecture.positional_encoding =
                     GRIM::HyperParameters::parsePositionalEncodingType(pe.get<std::string>());
+                if (config.architecture.positional_encoding == GRIM::HyperParameters::PositionalEncodingType::NONE) {
+                    throw std::runtime_error(
+                        "Phase1_Startup::loadConfiguration: positional_encoding=NONE is no longer supported "
+                        "(learned position embeddings have been removed). Use ALIBI, ROPE, or ALIBI_ROPE.");
+                }
             } else {
                 throw std::runtime_error(
                     "Phase1_Startup::loadConfiguration: training.config.positional_encoding must be object or string");

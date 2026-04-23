@@ -150,13 +150,8 @@ void LanguageModel::buildParameterGroups() {
         registerTensor("embedding", embedding_layer_->tokenWeights(), ParamGroupType::EMBEDDING);
     }
 
-    // Issue #113: Sinusoidal position embeddings are FIXED (not learned).
-    // Only register if EmbeddingLayer allocated them (i.e., learned position embeddings are in use).
-    if (embedding_layer_->hasPositionEmbeddings() && embedding_layer_->positionWeights().has_grad()) {
-        registerTensor("position_embedding", embedding_layer_->positionWeights(), ParamGroupType::EMBEDDING);
-    } else {
-        fprintf(stderr, "[buildParameterGroups] position_embedding skipped (sinusoidal/fixed, not learned)\n");
-    }
+    // Learned position embeddings removed (Rule 26): ALiBi/RoPE inject position info
+    // inside attention, so no position_embedding parameter group exists.
 
     // LM head weights (includes tied embedding grads when tie_embeddings=true)
     fprintf(stderr, "[buildParameterGroups] DIAG-A: about to register LM head\n"); fflush(stderr);
