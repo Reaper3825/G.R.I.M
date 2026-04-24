@@ -27,6 +27,10 @@
 #include "../Diagnostics/LogitScaleDiagnostic.hpp"
 #include "../Diagnostics/BoundaryDiagnostic.hpp"
 #include "../Diagnostics/SpecialTokenDiagnostic.hpp"
+#include "../Diagnostics/AtomStatsDiagnostic.hpp"
+#include "../Diagnostics/LossSpikeDiagnostic.hpp"
+#include "../Diagnostics/TieVerifyDiagnostic.hpp"
+#include "../Diagnostics/MtpDiagnostic.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
@@ -148,55 +152,8 @@ bool shouldLogLogitTrace(const TrainingContext& ctx, std::size_t batch_idx) {
     return ((batch_idx + 1) % static_cast<std::size_t>(interval)) == 0;
 }
 
-struct AtomStats {
-    int total_atoms = 0;
-    int total_tokens = 0;
-    int min_atoms = 0;
-    int max_atoms = 0;
-    double avg_atoms = 0.0;
-};
-
-AtomStats computeAtomStats(const std::vector<std::vector<int>>& batch_inputs,
-                           const GRIM::Tokenizer::UniByte& tokenizer,
-                           std::vector<int>* per_seq_atoms,
-                           std::vector<int>* per_seq_lengths) {
-    AtomStats stats{};
-    if (batch_inputs.empty()) {
-        return stats;
-    }
-
-    stats.min_atoms = std::numeric_limits<int>::max();
-    for (const auto& seq : batch_inputs) {
-        int atom_count = 0;
-        for (int tid : seq) {
-            if (tokenizer.isAtomToken(tid)) {
-                ++atom_count;
-            }
-        }
-        if (per_seq_atoms) {
-            per_seq_atoms->push_back(atom_count);
-        }
-        if (per_seq_lengths) {
-            per_seq_lengths->push_back(static_cast<int>(seq.size()));
-        }
-        stats.total_atoms += atom_count;
-        stats.total_tokens += static_cast<int>(seq.size());
-        stats.min_atoms = std::min(stats.min_atoms, atom_count);
-        stats.max_atoms = std::max(stats.max_atoms, atom_count);
-    }
-
-    stats.avg_atoms = static_cast<double>(stats.total_atoms) /
-                      static_cast<double>(batch_inputs.size());
-    return stats;
-}
-
-bool shouldLogAtomStats(const TrainingContext& ctx, int batch_idx) {
-    const int interval = ctx.config.hyperparameters.atom_stats_interval;
-    if (interval <= 0) {
-        return false;
-    }
-    return ((batch_idx + 1) % interval) == 0;
-}
+// AtomStats / computeAtomStats / shouldLogAtomStats moved to
+// Diagnostics/AtomStatsDiagnostic.{hpp,cu} and Diagnostics/DiagnosticGates.{hpp,cu}.
 
 constexpr int kMomentSamplePerGroup = 4;
 
@@ -792,69 +749,11 @@ BatchResult processBatch(
     }
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After BATCH_INFO log, checking shouldLogAtomStats...\n");
-    if (shouldLogAtomStats(ctx, batch_idx)) {
-        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] shouldLogAtomStats=true, creating vectors...\n");
-        std::vector<int> per_seq_atoms;
-        std::vector<int> per_seq_lengths;
-        per_seq_atoms.reserve(payload.batch_size);
-        per_seq_lengths.reserve(payload.batch_size);
-
-        // Reconstruct per-sequence views from flat payload for atom detection
-        std::vector<std::vector<int>> seq_views;
-        seq_views.reserve(payload.batch_size);
-        int offset = 0;
-        for (int i = 0; i < payload.batch_size; ++i) {
-            const int len = payload.seq_lengths[i];
-            seq_views.emplace_back(payload.input_ids.begin() + offset,
-                                   payload.input_ids.begin() + offset + len);
-            offset += payload.max_seq_len; // stride is padded length
-        }
-        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call computeAtomStats...\n");
-        const AtomStats stats = computeAtomStats(seq_views, ctx.tokenizer,
-                                                 &per_seq_atoms, &per_seq_lengths);
-        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] computeAtomStats returned\n");
-        const double atom_ratio = stats.total_tokens > 0
-            ? static_cast<double>(stats.total_atoms) / static_cast<double>(stats.total_tokens)
-            : 0.0;
-
-        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] Building atom_msg...\n");
-        std::ostringstream atom_msg;
-        atom_msg << "[AtomStats] batch=" << (batch_idx + 1)
-                 << " seqs=" << payload.batch_size
-                 << " atoms=" << stats.total_atoms
-                 << " tokens=" << stats.total_tokens
-                 << " atom_ratio=" << std::fixed << std::setprecision(4) << atom_ratio
-                 << " min=" << stats.min_atoms
-                 << " max=" << stats.max_atoms
-                 << " avg=" << std::fixed << std::setprecision(2) << stats.avg_atoms;
-        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to log atom_msg...\n");
-        ctx.logging.logger->log(atom_msg.str());
-        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] atom_msg logged\n");
-
-        const int max_seq_log = std::max(0, ctx.config.hyperparameters.atom_stats_max_seqs);
-        if (max_seq_log > 0 && !per_seq_atoms.empty()) {
-            const int to_log = std::min<int>(max_seq_log,
-                                             static_cast<int>(per_seq_atoms.size()));
-            std::ostringstream per_seq_msg;
-            per_seq_msg << "[AtomStats] per_seq=";
-            for (int i = 0; i < to_log; ++i) {
-                const int seq_len = per_seq_lengths[i];
-                const int atom_count = per_seq_atoms[i];
-                const double ratio = seq_len > 0
-                    ? static_cast<double>(atom_count) / static_cast<double>(seq_len)
-                    : 0.0;
-                per_seq_msg << i << ":" << atom_count << "/" << seq_len
-                            << "(" << std::fixed << std::setprecision(3) << ratio << ")";
-                if (i + 1 < to_log) {
-                    per_seq_msg << " ";
-                }
-            }
-            if (static_cast<int>(per_seq_atoms.size()) > to_log) {
-                per_seq_msg << " ...";
-            }
-            ctx.logging.logger->log(per_seq_msg.str());
-        }
-    }
+    // ========================================================================
+    // DIAGNOSTIC: Atom-token statistics for the batch
+    // (extracted to Diagnostics/AtomStatsDiagnostic.cu)
+    // ========================================================================
+    GRIM::Diagnostics::runAtomStatsDiagnostic(ctx, payload, batch_idx);
     
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After atom stats, entering boundary diagnostic...\n");
     // ========================================================================
@@ -1189,52 +1088,11 @@ BatchResult processBatch(
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));
     }
     
-    // DIAGNOSTIC: If loss is suspiciously high (>50), log per-sequence breakdown
-    if (result.loss > 50.0f) {
-        std::ostringstream spike_diag;
-        spike_diag << "[LossDiag] SPIKE DETECTED loss=" << result.loss << " batch=" << (batch_idx + 1) << "\n";
-        spike_diag << "  Sequences: ";
-        size_t max_seq_in_batch = 0;
-        for (int i = 0; i < payload.batch_size; ++i) {
-            spike_diag << payload.seq_ids[i] << "(len=" << payload.seq_lengths[i] << ")";
-            max_seq_in_batch = std::max(max_seq_in_batch, static_cast<size_t>(payload.seq_lengths[i]));
-            if (i + 1 < payload.batch_size) spike_diag << ", ";
-        }
-        const bool stability_seq_override = ctx.config.stability.enabled && ctx.config.stability.max_seq_len > 0;
-        const int config_seq_len_limit = stability_seq_override
-            ? ctx.config.stability.max_seq_len
-            : ctx.config.hyperparameters.max_seq_len;
-        const int effective_seq_len_limit = config_seq_len_limit > 0
-            ? config_seq_len_limit
-            : ctx.model->getConfig().max_seq_len;
-        spike_diag << "\n  MAX_SEQ_LEN=" << max_seq_in_batch;
-        spike_diag << " d_model=" << ctx.model->getConfig().d_model;
-        spike_diag << " limit=" << effective_seq_len_limit;
-        if (stability_seq_override) {
-            spike_diag << " (stability_override)";
-        }
-        if (effective_seq_len_limit > 0 &&
-            max_seq_in_batch >= static_cast<size_t>(effective_seq_len_limit)) {
-            spike_diag << " *** BOUNDARY CROSSED (seq_len >= " << effective_seq_len_limit
-                       << (stability_seq_override ? " = stability_override.max_seq_len" : " = max_seq_len")
-                       << ") ***";
-        }
-        spike_diag << "\n  First 10 targets per seq: ";
-        for (int s = 0; s < payload.batch_size; ++s) {
-            spike_diag << "[";
-            const int flat_start = s * payload.max_seq_len;
-            const int len = payload.seq_lengths[s];
-            for (int t = 0; t < std::min(10, len); ++t) {
-                spike_diag << payload.target_ids[flat_start + t];
-                if (t + 1 < std::min(10, len)) spike_diag << ",";
-            }
-            spike_diag << "] ";
-        }
-        spike_diag << "\n  Loss indicates model p_t ~ exp(-" << result.loss << ") -> EXTREME WRONG CONFIDENCE";
-        spike_diag << "\n  HYPOTHESIS: Position embedding corrupted for pos >= " << effective_seq_len_limit;
-        spike_diag << "\n  Check: Is attention collapsing? Are embeddings for these tokens corrupted?";
-        ctx.logging.logger->log(spike_diag.str());
-    }
+    // ========================================================================
+    // DIAGNOSTIC: Per-sequence breakdown when batch loss > 50
+    // (extracted to Diagnostics/LossSpikeDiagnostic.cu)
+    // ========================================================================
+    GRIM::Diagnostics::runLossSpikeDiagnostic(ctx, payload, result.loss, batch_idx);
     
     // Adaptive loss tracking - record baseline and minimum
     // NOTE: Loss alone is NOT sufficient to skip batches. Skipping hard examples
@@ -1750,61 +1608,9 @@ BatchResult processBatch(
         
         // ════════════════════════════════════════════════════════════════════
         // RUNTIME tie_embeddings pointer verification (every batch)
-        // Startup logging only proves state at init. This proves state at
-        // the moment the optimizer actually consumes the buffers.
+        // (extracted to Diagnostics/TieVerifyDiagnostic.cu)
         // ════════════════════════════════════════════════════════════════════
-        {
-            const float* emb_w = ctx.model->getEmbeddingLayer()->tokenWeights().data;
-            const float* emb_g = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
-            const float* lm_w  = ctx.model->getLmHeadLayer()->weights().data;
-            const float* lm_g  = ctx.model->getLmHeadLayer()->weights().grad_data();
-            const bool cfg_tied = ctx.model->getConfig().tie_embeddings;
-            const bool w_same = (emb_w == lm_w);
-            const bool g_same = (emb_g == lm_g);
-
-            // Count parameter groups referencing each buffer
-            int emb_w_groups = 0, lm_w_groups = 0;
-            for (const auto& pg : ctx.model->parameterGroups()) {
-                if (pg.tensor && pg.tensor->data == emb_w) ++emb_w_groups;
-                if (pg.tensor && pg.tensor->data == lm_w)  ++lm_w_groups;
-            }
-
-            // Log every 10 batches to avoid spam, but ALWAYS log if inconsistent
-            const bool inconsistent = (cfg_tied != w_same) || (cfg_tied != g_same);
-            if (inconsistent || (batch_idx % 10 == 0)) {
-                std::ostringstream oss;
-                oss << "[TIE_VERIFY] B=" << (batch_idx + 1)
-                    << " step=" << ctx.optimizer.optimizer_state.step
-                    << " cfg_tied=" << (cfg_tied ? "yes" : "no")
-                    << " w_ptrs=" << (w_same ? "SAME" : "DIFF")
-                    << " g_ptrs=" << (g_same ? "SAME" : "DIFF")
-                    << " emb_w=" << (const void*)emb_w
-                    << " lm_w=" << (const void*)lm_w
-                    << " emb_g=" << (const void*)emb_g
-                    << " lm_g=" << (const void*)lm_g
-                    << " emb_w_groups=" << emb_w_groups
-                    << " lm_w_groups=" << lm_w_groups;
-                if (inconsistent) {
-                    oss << " [ANOMALY] POINTER ALIASING MISMATCH — cfg says "
-                        << (cfg_tied ? "tied" : "untied")
-                        << " but weights " << (w_same ? "match" : "DIFFER")
-                        << " and grads " << (g_same ? "match" : "DIFFER");
-                }
-                ctx.logging.logger->log(oss.str());
-            }
-
-            // Rule 20: crash on mismatch — this is an architectural bug
-            if (cfg_tied && !w_same) {
-                throw std::runtime_error("[TIE_VERIFY] FATAL: tie_embeddings=true but weight pointers differ at batch "
-                    + std::to_string(batch_idx + 1) + " emb=" + std::to_string(reinterpret_cast<uintptr_t>(emb_w))
-                    + " lm=" + std::to_string(reinterpret_cast<uintptr_t>(lm_w)));
-            }
-            if (cfg_tied && !g_same) {
-                throw std::runtime_error("[TIE_VERIFY] FATAL: tie_embeddings=true but grad pointers differ at batch "
-                    + std::to_string(batch_idx + 1) + " emb_g=" + std::to_string(reinterpret_cast<uintptr_t>(emb_g))
-                    + " lm_g=" + std::to_string(reinterpret_cast<uintptr_t>(lm_g)));
-            }
-        }
+        GRIM::Diagnostics::runTieVerifyDiagnostic(ctx, batch_idx);
 
         const int emb_freeze_step = ctx.config.hyperparameters.embedding_freeze_enabled
             ? ctx.config.hyperparameters.embedding_freeze_after_step : -1;
@@ -2179,44 +1985,11 @@ EpochResult runEpoch(
             ctx.logging.logger->log("[Step " + std::to_string(ctx.global_step) + "] " +
                                     Internal::formatMetric("loss", batch_result.loss) + " " +
                                     Internal::formatMetric("lr", batch_result.learning_rate, 8));
-            // MTP diagnostics: per-head loss, acc, loss_ratio, alpha_effective, L_total
-            {
-                auto& ts = ctx.model->getTrainingState();
-                if (ts.mtp_diagnostics.valid && !ts.mtp_diagnostics.head_loss.empty()) {
-                    const float L0 = ts.mtp_diagnostics.L0_main > 0.0f ? ts.mtp_diagnostics.L0_main : batch_result.loss;
-                    std::ostringstream mtp_log;
-                    for (size_t i = 0; i < ts.mtp_diagnostics.head_loss.size(); ++i) {
-                        const float Lk = ts.mtp_diagnostics.head_loss[i];
-                        const float acc = i < ts.mtp_diagnostics.head_acc.size() ? ts.mtp_diagnostics.head_acc[i] : 0.0f;
-                        const float ratio = (L0 > 0.0f) ? (Lk / L0) : 0.0f;
-                        mtp_log << "[MTP_EQUATION] head_k=" << (i + 1) << ": loss=" << Internal::formatScalar(Lk, 4)
-                                << " acc=" << Internal::formatScalar(acc, 2) << "%"
-                                << " loss_ratio=" << Internal::formatScalar(ratio, 4) << " ";
-                    }
-                    mtp_log << "alpha_effective=" << Internal::formatScalar(ts.mtp_diagnostics.alpha_effective, 4)
-                            << " L_total=" << Internal::formatScalar(ts.mtp_diagnostics.L_total, 4);
-                    ctx.logging.logger->log(mtp_log.str());
-                    // MTP Monitor: Lk/L0 with healthy-range indication (configurable via log_ratio_monitor)
-                    if (hp.mtp_log_ratio_monitor) {
-                        static const float kHealthyLow[] = { 1.1f, 1.3f, 1.5f, 1.6f };
-                        static const float kHealthyHigh[] = { 1.3f, 1.6f, 2.0f, 2.2f };
-                        std::ostringstream mon;
-                        mon << "[MTP_Monitor]";
-                        for (size_t i = 0; i < ts.mtp_diagnostics.head_loss.size(); ++i) {
-                            const float ratio = (L0 > 0.0f) ? (ts.mtp_diagnostics.head_loss[i] / L0) : 0.0f;
-                            const int k = static_cast<int>(i) + 1;
-                            const size_t idx = std::min(static_cast<size_t>(k - 1), static_cast<size_t>(4));
-                            const float lo = kHealthyLow[idx];
-                            const float hi = kHealthyHigh[idx];
-                            const bool ok = (ratio >= lo && ratio <= hi);
-                            mon << " k=" << k << ": Lk/L0=" << Internal::formatScalar(ratio, 3)
-                                << " (healthy " << Internal::formatScalar(lo, 1) << "-" << Internal::formatScalar(hi, 1)
-                                << (ok ? " OK" : " OUT_OF_RANGE") << ")";
-                        }
-                        ctx.logging.logger->log(mon.str());
-                    }
-                }
-            }
+            // ================================================================
+            // DIAGNOSTIC: Multi-Token-Prediction per-head telemetry + monitor
+            // (extracted to Diagnostics/MtpDiagnostic.cu)
+            // ================================================================
+            GRIM::Diagnostics::runMtpDiagnostic(ctx, batch_result);
             if (ctx.config.hyperparameters.guess_aux_enabled) {
                 GRIMTS::Training::logGuessCacheTelemetry(state.guess_cache, ctx.global_step);
             }

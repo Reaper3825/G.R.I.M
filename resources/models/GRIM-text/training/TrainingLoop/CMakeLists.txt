@@ -362,6 +362,14 @@ add_executable(train_gpu
     ../Diagnostics/BoundaryDiagnostic.hpp
     ../Diagnostics/SpecialTokenDiagnostic.cu
     ../Diagnostics/SpecialTokenDiagnostic.hpp
+    ../Diagnostics/AtomStatsDiagnostic.cu
+    ../Diagnostics/AtomStatsDiagnostic.hpp
+    ../Diagnostics/LossSpikeDiagnostic.cu
+    ../Diagnostics/LossSpikeDiagnostic.hpp
+    ../Diagnostics/TieVerifyDiagnostic.cu
+    ../Diagnostics/TieVerifyDiagnostic.hpp
+    ../Diagnostics/MtpDiagnostic.cu
+    ../Diagnostics/MtpDiagnostic.hpp
     ../Diagnostics/DiagnosticGates.cu
     ../Diagnostics/DiagnosticGates.hpp
     ../Phases/Phase3_Cleanup.cu
