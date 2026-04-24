@@ -2746,15 +2746,19 @@ struct ProjectOutPC1GradFn : public GradFn {
         input_grad_fn = input.grad_fn;
 
         if (input.is_leaf) {
-            // Leaf tensor: use its persistent grad buffer
+            // Leaf tensor: use its persistent grad buffer.
             input.ensure_grad();
             input_grad = input.grad_data();
             AG_TRACE("[ProjectOutPC1GradFn] Using persistent input_grad buffer (leaf): %p\n", (void*)input_grad);
         } else {
-            // Non-leaf: DEFER allocation to apply() — saves ~24MB GPU during forward
-            // (Issue #149 OOM fix: forward must leave room for logits allocation)
-            input_grad = nullptr;
-            AG_TRACE("[ProjectOutPC1GradFn] Non-leaf input: deferring grad buffer allocation to backward\n");
+            // Non-leaf: allocate an owned, zero-initialized grad buffer eagerly.
+            // Backward kernel ACCUMULATES into this buffer, so it must start at zero.
+            float* buf = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "ProjectOutPC1GradFn_input_grad");
+            cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
+            owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+            input_grad = owned_input_grad.get();
+            AG_TRACE("[ProjectOutPC1GradFn] Allocated input_grad buffer (non-leaf): %zu floats at %p\n", element_count, (void*)input_grad);
         }
     }
 
@@ -2768,23 +2772,14 @@ struct ProjectOutPC1GradFn : public GradFn {
             throw std::runtime_error("ProjectOutPC1GradFn::apply: grad_output.numel()=" +
                                      std::to_string(grad_output.numel()) +
                                      " != captured element_count=" + std::to_string(element_count));
+        if (!input_grad)
+            throw std::runtime_error("ProjectOutPC1GradFn::apply: input_grad is NULL — capture_input did not run or wiring is broken");
         applied = true;
-
-        // Allocate grad buffer on-demand for non-leaf inputs (deferred from capture_input)
-        if (!input_grad) {
-            float* buf = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "ProjectOutPC1GradFn_deferred_input_grad");
-            cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
-            owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
-            input_grad = owned_input_grad.get();
-            AG_TRACE("[ProjectOutPC1GradFn] Allocated deferred input_grad buffer: %zu floats at %p\n", element_count, (void*)input_grad);
-        }
 
         // BACKWARD: grad_h += (I - gg^T/D) * grad_h̃  — same projection as forward.
         // ACCUMULATES so leaf parameters (whose grad buffer persists across multiple
-        // graph branches in an accumulation window) compose correctly. The non-leaf
-        // path above zero-inits input_grad first, so accumulating into zero is
-        // equivalent to assigning.
+        // graph branches in an accumulation window) compose correctly. Non-leaf
+        // input_grad was zero-initialized in capture_input.
         kernel_pc1_project_accum<<<num_rows, 256, 0, stream>>>(
             grad_output.data, g_saved, input_grad, num_rows, num_cols);
 
