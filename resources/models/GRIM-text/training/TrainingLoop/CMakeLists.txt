@@ -356,6 +356,8 @@ add_executable(train_gpu
     ../Diagnostics/RhoDiagnostic.hpp
     ../Diagnostics/LMHeadWeightStats.cu
     ../Diagnostics/LMHeadWeightStats.hpp
+    ../Diagnostics/LogitScaleDiagnostic.cu
+    ../Diagnostics/LogitScaleDiagnostic.hpp
     ../Phases/Phase3_Cleanup.cu
     ../Phases/Phase3_Cleanup.hpp
     ../OptimizerCheckpoint.cu
