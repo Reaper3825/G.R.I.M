@@ -23,6 +23,7 @@
 #include "../OptimizerCheckpoint.hpp"
 #include "../Diagnostics/DiagnosticInference.hpp"
 #include "../Diagnostics/RhoDiagnostic.hpp"
+#include "../Diagnostics/LMHeadWeightStats.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
@@ -1510,52 +1511,26 @@ BatchResult processBatch(
 
                 float w_rms_mean = 0.0f, w_rms_sq_mean = 0.0f, w_rms_max = 0.0f;
                 int w_rms_max_tok = -1;
-                const int w_sample_count = std::min(500, vocab_size);  // Sample 500 rows for better coverage
+                // Issue #138 / Apr 2026 follow-up: replace the 500-row host-side
+                // sampled CPU loop with a full-vocab on-device warp-shuffle
+                // reduction (Diagnostics/LMHeadWeightStats.{cu,hpp}). Result is
+                // exact over the entire vocab — no sampling miss — and costs
+                // one kernel launch + 16-byte D2H instead of `vocab_sample`
+                // synchronous cudaMemcpys.
                 if (lm_head_weights) {
-                    std::vector<float> w_row(d_model);
-                    
-                    // Helper: compute RMS of a weight row on host
-                    auto compute_row_rms = [&](int tok) -> float {
-                        const size_t row_offset = static_cast<size_t>(tok) * d_model;
-                        cudaMemcpy(w_row.data(),
-                                   lm_head_weights + row_offset,
-                                   d_model * sizeof(float), cudaMemcpyDeviceToHost);
-                        float sum_sq = 0.0f;
-                        for (int d = 0; d < d_model; ++d) {
-                            sum_sq += w_row[d] * w_row[d];
-                        }
-                        return std::sqrt(sum_sq / d_model);
-                    };
-                    
-                    // Sample evenly-spaced vocab tokens for mean/rms statistics
-                    const int stride = std::max(1, vocab_size / w_sample_count);
-                    int sampled = 0;
-                    for (int tok = 0; tok < vocab_size && sampled < w_sample_count; tok += stride, ++sampled) {
-                        const float rms = compute_row_rms(tok);
-                        w_rms_mean += rms;
-                        const float rms_sq = rms * rms;
-                        w_rms_sq_mean += rms_sq;
-                        if (rms > w_rms_max) {
-                            w_rms_max = rms;
-                            w_rms_max_tok = tok;
-                        }
-                    }
-                    w_rms_mean /= sampled;
-                    w_rms_sq_mean /= sampled;
-                    
-                    // FIX: Also check top-predicted tokens for ||W||_max.
-                    // The strided sample (stride=100) can miss tokens with growing norms.
-                    // Include top-argmax tokens to ensure ||W||_max is accurate.
-                    for (size_t i = 0; i < std::min(sorted_argmax.size(), size_t(5)); ++i) {
-                        const int tok = sorted_argmax[i].first;
-                        // Skip if already in strided sample
-                        if (tok % stride == 0 && tok / stride < w_sample_count) continue;
-                        const float rms = compute_row_rms(tok);
-                        if (rms > w_rms_max) {
-                            w_rms_max = rms;
-                            w_rms_max_tok = tok;
-                        }
-                    }
+                    // SSoT: vocab_size from BatchPayload (validated by payload.validate()),
+                    // d_model from ModelArchitecture (validated at config load).
+                    cudaStream_t diag_stream = ts.stream_ctrl.getPrimaryStream();
+                    GRIM::Diagnostics::LMHeadWeightStats stats =
+                        GRIM::Diagnostics::computeLMHeadWeightStats(
+                            lm_head_weights,
+                            payload.vocab_size,
+                            ctx.model->getConfig().d_model,
+                            diag_stream);
+                    w_rms_mean    = stats.w_rms_mean;
+                    w_rms_sq_mean = stats.w_rms_quadmean * stats.w_rms_quadmean;
+                    w_rms_max     = stats.w_rms_max;
+                    w_rms_max_tok = stats.w_rms_max_tok;
                 }
                 
                 // --- Expected logit magnitude ---
@@ -1565,6 +1540,10 @@ BatchResult processBatch(
                 // Correct: logit_std ≈ h_rms × sqrt(E[||W||²]) = h_rms × ||W||_rms
                 const float w_rms_rms = std::sqrt(w_rms_sq_mean);  // sqrt(E[rms²])
                 const float expected_logit_std = std::sqrt(static_cast<float>(d_model)) * h_rms_mean * w_rms_rms;
+
+                // Publish raw W_rms to telemetry lattice (stream 47). CSV logger picks it up.
+                // This is the W_rms term that enters logit_std = sqrt(d_model) × h_rms × W_rms_rms.
+                ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::LM_HEAD_W_RMS_RMS] = w_rms_rms;
                 const float logit_std_ratio = (expected_logit_std > 1e-10f) ? logit_std / expected_logit_std : 0.0f;
 
                 // ============================================================

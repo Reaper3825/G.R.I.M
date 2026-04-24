@@ -140,7 +140,8 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
         "rho_raw_rms_spread",
         "hw_cos_rms", "hw_cos_signed_mean", "hw_cos_abs_max",
         "hw_hbar_wbar_cos", "hw_h_dc_mean", "hw_h_dc_abs_max",
-        "unigram_dir_cos_abs_mean", "unigram_dir_cos_signed_mean"
+        "unigram_dir_cos_abs_mean", "unigram_dir_cos_signed_mean",
+        "lm_head_w_rms_rms"
     };
     static constexpr int num_named_streams = sizeof(stream_names) / sizeof(stream_names[0]);
 

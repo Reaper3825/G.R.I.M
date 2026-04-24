@@ -204,6 +204,12 @@ enum class MetricStream : int {
     // (post-centering when `lm_head_centering.project_out_pc1` is enabled).
     UNIGRAM_DIR_COS_ABS_MEAN = 45,    // mean_t |cos(h_t, e_uf_dir)| at LM-input tensor
     UNIGRAM_DIR_COS_SIGNED_MEAN = 46, // mean_t  cos(h_t, e_uf_dir) at LM-input tensor
+
+    // Raw LM-head weight RMS that enters the logit-scale equation
+    //   logit_std ≈ sqrt(d_model) × h_rms × W_rms_rms
+    // where W_rms_rms = sqrt(E[||W_v||² / d_model]) over a strided sample of vocab rows.
+    // Published every step the LOGIT_SCALE diagnostic runs (see Phase2_TrainingLoop.cu).
+    LM_HEAD_W_RMS_RMS = 47,
 };
 
 const char* getMetricStreamName(MetricStream stream);
