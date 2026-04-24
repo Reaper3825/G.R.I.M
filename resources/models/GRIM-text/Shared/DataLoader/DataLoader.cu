@@ -830,14 +830,26 @@ bool PrepareTrainingDataFromCache(
 	// For a filtered (named) curriculum, every selected entry was hand-picked
 	// by config; an unexpected build failure on any of them is a data/config
 	// bug, not noise to be swallowed. Fail loud so it gets fixed at the
-	// source instead of producing a quietly-degraded GRMT. Silent skips
-	// (short text, empty encoder output) count too — the curriculum names
-	// the entries it expects to train on, so dropping any of them silently
-	// is a partial GRMT.
-	if (curriculum_filter.has_filter &&
-	    (concept_build_failures > 0 || selected_entries_skipped > 0)) {
+	// source instead of producing a quietly-degraded GRMT.
+	//
+	// Concept build failures are ALWAYS fatal (Rule 20): a thrown exception
+	// during concept assembly means a malformed source row, and silently
+	// dropping it produces a corpus that diverges from what the user shipped.
+	// If a future workflow genuinely needs lenient ingestion, gate it behind
+	// an explicit dirty-corpus mode — do not regress this default.
+	if (concept_build_failures > 0) {
 		std::cerr << "[DataLoader] FATAL: " << concept_build_failures
-		          << " build failure(s) and " << selected_entries_skipped
+		          << " concept build failure(s) during encode. Refusing to "
+		          << "produce a partial GRMT (Rule 20: no silent drops)."
+		          << std::endl;
+		return false;
+	}
+
+	// Silent skips (short text, empty encoder output) are only fatal under a
+	// filtered curriculum, where the curriculum names exactly the entries it
+	// expects to train on — dropping any of them silently is a partial GRMT.
+	if (curriculum_filter.has_filter && selected_entries_skipped > 0) {
+		std::cerr << "[DataLoader] FATAL: " << selected_entries_skipped
 		          << " silently-skipped selected entry/entries under a filtered "
 		          << "curriculum. Refusing to produce a partial GRMT."
 		          << std::endl;
@@ -883,10 +895,14 @@ bool PrepareTrainingDataFromCache(
 
 	// Write all sequences to single GRMT file (no chunking — Phase1_Startup
 	// handles sliding windows with stride and BOS prepending for long sequences)
+	//
+	// Returns {ok, dropped_targetless_count}. The drop count lets the caller
+	// re-apply the filtered-curriculum guard against late, writer-internal
+	// drops (e.g. token-length-degenerate rows whose targets all mask to -1).
 	auto save_grmt = [&tokenizer](const fs::path& path,
-		const std::vector<TokenizedSequence>& data) {
+		const std::vector<TokenizedSequence>& data) -> std::pair<bool, size_t> {
 		std::ofstream file(path, std::ios::binary);
-		if (!file.is_open()) return false;
+		if (!file.is_open()) return {false, 0};
 
 		// Pre-scan: count valid sequences and warn about degenerate ones.
 		// Skip 0-length sequences entirely — they cause division-by-zero
@@ -917,7 +933,7 @@ bool PrepareTrainingDataFromCache(
 			std::cerr << "[DataLoader] FATAL: save_grmt would write num_sequences=0 "
 			          << "(all " << data.size() << " candidate sequences were dropped). "
 			          << "Refusing to emit an empty GRMT." << std::endl;
-			return false;
+			return {false, sequences_with_no_valid_targets};
 		}
 
 		uint32_t magic = 0x474D5254; // "GRMT"
@@ -1020,7 +1036,19 @@ bool PrepareTrainingDataFromCache(
 					sizeof(int32_t));
 			}
 		}
-		return file.good();
+		// Surface buffered write errors before declaring success. file.good()
+		// alone does not flush libstdc++'s filebuf; some failures (ENOSPC,
+		// EIO, quota) only set the failbit when the buffer is actually pushed
+		// to the kernel on flush() or close().
+		file.flush();
+		file.close();
+		if (!file.good()) {
+			std::cerr << "[DataLoader] FATAL: GRMT stream entered fail state on "
+			          << "flush/close (path=" << path.string() << "). "
+			          << "Treating write as failed." << std::endl;
+			return {false, sequences_with_no_valid_targets};
+		}
+		return {true, sequences_with_no_valid_targets};
 	};
 
 	// Atomic write: serialize to a sibling temp path, then rename to the final
@@ -1033,8 +1061,11 @@ bool PrepareTrainingDataFromCache(
 	fs::remove(tmp_grmt, ec);  // best-effort cleanup of any prior crash residue
 
 	bool wrote_ok = false;
+	size_t writer_dropped_targetless = 0;
 	try {
-		wrote_ok = save_grmt(tmp_grmt, all_tokens);
+		auto result = save_grmt(tmp_grmt, all_tokens);
+		wrote_ok = result.first;
+		writer_dropped_targetless = result.second;
 	} catch (const std::exception& e) {
 		std::cerr << "[DataLoader] FATAL: exception while writing GRMT: " << e.what() << std::endl;
 		wrote_ok = false;
@@ -1043,6 +1074,21 @@ bool PrepareTrainingDataFromCache(
 	if (!wrote_ok) {
 		fs::remove(tmp_grmt, ec);  // never leave a partial temp file behind
 		std::cerr << "[DataLoader] Failed to write GRMT file." << std::endl;
+		return false;
+	}
+
+	// Re-apply the filtered-curriculum guard against writer-internal drops.
+	// The pre-writer guard above only sees encode-time skips; save_grmt can
+	// additionally drop token-length-degenerate rows whose targets all mask
+	// to -1. Under a named curriculum those are still selected entries that
+	// silently failed to land in the GRMT — reject the partial output.
+	if (curriculum_filter.has_filter && writer_dropped_targetless > 0) {
+		fs::remove(tmp_grmt, ec);
+		std::cerr << "[DataLoader] FATAL: save_grmt dropped "
+		          << writer_dropped_targetless
+		          << " sequence(s) with 0 valid targets under a filtered "
+		          << "curriculum. Refusing to publish a partial GRMT."
+		          << std::endl;
 		return false;
 	}
 

@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cfloat>
 #include <cstdint>
+#include <cassert>
 #include <algorithm>
 #include <mutex>
 #include <vector>
