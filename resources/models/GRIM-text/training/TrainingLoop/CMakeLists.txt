@@ -358,6 +358,12 @@ add_executable(train_gpu
     ../Diagnostics/LMHeadWeightStats.hpp
     ../Diagnostics/LogitScaleDiagnostic.cu
     ../Diagnostics/LogitScaleDiagnostic.hpp
+    ../Diagnostics/BoundaryDiagnostic.cu
+    ../Diagnostics/BoundaryDiagnostic.hpp
+    ../Diagnostics/SpecialTokenDiagnostic.cu
+    ../Diagnostics/SpecialTokenDiagnostic.hpp
+    ../Diagnostics/DiagnosticGates.cu
+    ../Diagnostics/DiagnosticGates.hpp
     ../Phases/Phase3_Cleanup.cu
     ../Phases/Phase3_Cleanup.hpp
     ../OptimizerCheckpoint.cu

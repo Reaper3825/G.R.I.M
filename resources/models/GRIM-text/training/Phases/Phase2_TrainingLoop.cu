@@ -25,6 +25,8 @@
 #include "../Diagnostics/RhoDiagnostic.hpp"
 #include "../Diagnostics/LMHeadWeightStats.hpp"
 #include "../Diagnostics/LogitScaleDiagnostic.hpp"
+#include "../Diagnostics/BoundaryDiagnostic.hpp"
+#include "../Diagnostics/SpecialTokenDiagnostic.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
@@ -857,124 +859,9 @@ BatchResult processBatch(
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After atom stats, entering boundary diagnostic...\n");
     // ========================================================================
     // DIAGNOSTIC: Boundary crossing check (simplified for FlashAttention v2)
-    // NOTE: FlashAttention v2 does NOT use O(seq²) attention buffers.
-    // The O(N) memory tiled attention means seq_len boundaries are NOT
-    // inherently problematic for memory. This diagnostic only checks:
-    // - Position embedding bounds (seq_len vs model.max_seq_len)
-    // - Training cache capacity (total tokens vs max_cached_tokens)
-    // - Token ID validity (vocab bounds)
+    // (extracted to Diagnostics/BoundaryDiagnostic.cu)
     // ========================================================================
-    {
-        // Use payload geometry — single source of truth
-        const size_t max_seq_len = static_cast<size_t>(payload.max_seq_len);
-        const size_t total_tokens = static_cast<size_t>(payload.actual_tokens);
-
-        
-        const auto& model_cfg_bd = ctx.model->getConfig();
-        static bool logged_max_seq = false;
-        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(model_cfg_bd.max_seq_len) && !logged_max_seq);
-
-        
-        if (is_boundary_max_seq) {
-            std::ostringstream diag;
-            diag << "\n[BOUNDARY_DIAGNOSTIC] ========================================\n";
-            diag << "[BOUNDARY_DIAGNOSTIC] Batch " << (batch_idx + 1) << " CROSSING BOUNDARY\n";
-            
-            // Identify which boundary was crossed
-            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << model_cfg_bd.max_seq_len << " ***\n";
-
-            diag << "[BOUNDARY_DIAGNOSTIC] max_seq_len=" << max_seq_len 
-                 << " total_tokens=" << total_tokens 
-                 << " batch_size=" << payload.batch_size << "\n";
-            
-            diag << "[BOUNDARY_DIAGNOSTIC] MODEL CONFIG:\n";
-            diag << "  d_model=" << model_cfg_bd.d_model << "\n";
-            diag << "  max_seq_len=" << model_cfg_bd.max_seq_len << "\n";
-            diag << "  num_heads=" << model_cfg_bd.num_heads << "\n";
-            diag << "  num_layers=" << model_cfg_bd.num_layers << "\n";
-            diag << "  vocab_size=" << model_cfg_bd.vocab_size << "\n";
-            
-            // Position embedding checks (this IS a valid concern)
-            diag << "[BOUNDARY_DIAGNOSTIC] POSITION EMBEDDING CHECKS:\n";
-            diag << "  Current max_seq_len in batch: " << max_seq_len << "\n";
-            diag << "  Model max_seq_len: " << model_cfg_bd.max_seq_len << "\n";
-            diag << "  Position index range needed: [0, " << (max_seq_len - 1) << "]\n";
-            if (max_seq_len > static_cast<size_t>(model_cfg_bd.max_seq_len)) {
-                diag << "  *** ERROR: Sequence exceeds model max_seq_len! Position embeddings will OOB! ***\n";
-            }
-            
-            // Per-sequence breakdown using payload geometry
-            diag << "[BOUNDARY_DIAGNOSTIC] PER-SEQUENCE BREAKDOWN:\n";
-            for (int s = 0; s < payload.batch_size; ++s) {
-                const int seq_len = payload.seq_lengths[s];
-                diag << "  seq[" << s << "]: len=" << seq_len;
-                
-                // Check for position IDs that would overflow
-                if (seq_len > model_cfg_bd.max_seq_len) {
-                    diag << " *** OVERFLOW pos=" << seq_len 
-                         << " > max=" << model_cfg_bd.max_seq_len << " ***";
-                }
-                
-                // Sample first and last tokens from flat payload
-                if (seq_len > 0) {
-                    const int flat_start = s * payload.max_seq_len;
-                    diag << " tokens[0]=" << payload.input_ids[flat_start];
-                    if (seq_len > 1) {
-                        diag << " tokens[" << (seq_len-1) << "]=" << payload.input_ids[flat_start + seq_len - 1];
-                    }
-                }
-                diag << "\n";
-            }
-            
-            // Training state checks - TRAINING cache info (not inference KV cache)
-            const auto& ts = ctx.model->getTrainingState();
-            diag << "[BOUNDARY_DIAGNOSTIC] TRAINING STATE:\n";
-            diag << "  cached_batch_size=" << ts.cached_batch_size << "\n";
-            diag << "  cached_seq_len=" << ts.cached_seq_len << "\n";
-            diag << "  cached_valid_tokens=" << ts.cached_valid_tokens << "\n";
-            
-            // Training cache allocation check (the correct fields!)
-            diag << "  max_cached_batch=" << ts.max_cached_batch << "\n";
-            diag << "  max_cached_seq_len=" << ts.max_cached_seq_len << "\n";
-            diag << "  max_cached_tokens=" << ts.max_cached_tokens << "\n";
-            
-            // Check if sequence fits in TRAINING cache — use payload.total_tokens (already batch*max_seq)
-            diag << "  Required tokens for this batch: " << payload.total_tokens << "\n";
-            if (static_cast<size_t>(payload.total_tokens) > ts.max_cached_tokens) {
-                diag << "  *** WARNING: Batch exceeds training cache capacity! ***\n";
-                diag << "  *** Need " << payload.total_tokens << " but have " << ts.max_cached_tokens << " ***\n";
-            }
-            if (max_seq_len > static_cast<size_t>(ts.max_cached_seq_len)) {
-                diag << "  *** WARNING: Sequence exceeds max_cached_seq_len! ***\n";
-                diag << "  *** max_seq_len=" << max_seq_len << " > max_cached=" << ts.max_cached_seq_len << " ***\n";
-            }
-            
-            // NOTE: FlashAttention v2 uses O(N) tiled attention, NOT O(N²) buffers.
-            // No attention buffer check needed - memory scales linearly with seq_len.
-            diag << "[BOUNDARY_DIAGNOSTIC] ATTENTION: Using FlashAttention v2 (O(N) memory)\n";
-            
-            // Token ID sanity check — scan flat payload
-            diag << "[BOUNDARY_DIAGNOSTIC] TOKEN ID SANITY:\n";
-            int max_token_id = 0;
-            int min_token_id = INT_MAX;
-            for (int s = 0; s < payload.batch_size; ++s) {
-                const int flat_start = s * payload.max_seq_len;
-                const int len = payload.seq_lengths[s];
-                for (int t = 0; t < len; ++t) {
-                    const int tok = payload.input_ids[flat_start + t];
-                    max_token_id = std::max(max_token_id, tok);
-                    min_token_id = std::min(min_token_id, tok);
-                }
-            }
-            diag << "  Token ID range: [" << min_token_id << ", " << max_token_id << "]\n";
-            diag << "  Vocab size: " << model_cfg_bd.vocab_size << "\n";
-            if (max_token_id >= static_cast<int>(model_cfg_bd.vocab_size)) {
-                diag << "  *** ERROR: Token ID exceeds vocab size! ***\n";
-            }
-    
-            if (is_boundary_max_seq) logged_max_seq = true;
-        }
-    }
+    GRIM::Diagnostics::runBoundaryDiagnostic(ctx, payload, batch_idx);
     
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After boundary diagnostic, entering forward pass...\n");
     // Forward pass
@@ -1437,146 +1324,9 @@ BatchResult processBatch(
 
     // ========================================================================
     // DIAGNOSTIC: Issue #142 - Special Token Weight & Gradient Verification
-    // (Rule 21 Equation-Based)
-    //
-    // After removing -inf logit masking (Issue #142), special tokens
-    // (UNK=0, PAD=1, BOS=2, EOS=3) participate naturally in softmax.
-    // Loss masking via target=-1 handles them correctly (zero loss, zero grad
-    // at those TARGET positions). But their EMBEDDING WEIGHT ROWS still receive
-    // gradients from:
-    //   1. LM head backward: grad_W[v,d] = Σ_t hidden[t,d] * grad_logits[t,v]
-    //      (summed across ALL positions, not just target-v positions)
-    //   2. Embedding forward: grad_W[tok_id] += grad_encoder[t] * scale
-    //      (only at positions where tok_id appears as INPUT)
-    //
-    // This diagnostic tracks whether special token weight rows are:
-    //   - Receiving meaningful gradients (they SHOULD, from LM head backward)
-    //   - Diverging in norm from content tokens (ANOMALY if so)
-    //   - Drifting toward zero (could indicate implicit suppression)
-    //
-    // [SPECIAL_TOKEN_EQUATION] W_special health check:
-    //   ||W[v]|| should be ~same magnitude as ||W[content]||_mean
-    //   ||grad_W[v]|| should be non-zero (from LM head backward)
+    // (extracted to Diagnostics/SpecialTokenDiagnostic.cu)
     // ========================================================================
-    if (shouldSyncDiagnostics(ctx, batch_idx) && ctx.logging.tape && ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
-        const auto& cfg = ctx.model->getConfig();
-        const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
-        // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
-        // Read gradients from the SAME layer as weights (LM head) so rms(W) and
-        // rms(grad) refer to the same parameter. Previously read embedding grads,
-        // which showed PAD scatter-add accumulation (~1754 positions) as 76x spike
-        // vs BOS/EOS — misleading because that gradient doesn't affect LM head.
-        const bool weights_tied = ctx.model->getEmbeddingLayer()->tokenWeights().data
-                               == ctx.model->getLmHeadLayer()->weights().data;
-        const float* grads_ptr = weights_tied
-            ? ctx.model->getEmbeddingLayer()->tokenWeights().grad_data()   // tied: same tensor, either pointer works
-            : ctx.model->getLmHeadLayer()->weights().grad_data();          // untied: use LM head's own gradients
-
-        if (weights_ptr) {
-                constexpr int SPECIAL_IDS[] = {
-                    GRIM::Tokenizer::UNK_TOKEN_ID,   // 0
-                    GRIM::Tokenizer::PAD_TOKEN_ID,    // 1
-                    GRIM::Tokenizer::BOS_TOKEN_ID,    // 2
-                    GRIM::Tokenizer::EOS_TOKEN_ID     // 3
-                };
-                constexpr const char* SPECIAL_NAMES[] = {"UNK", "PAD", "BOS", "EOS"};
-                constexpr int NUM_SPECIALS = 4;
-
-                std::vector<float> row_buf(cfg.d_model);
-                std::ostringstream diag;
-                diag << std::fixed << std::setprecision(8);
-                diag << "[SPECIAL_TOKEN_EQUATION] batch=" << (batch_idx + 1)
-                     << " W_special health: logit[v] = h · W[v]^T\n";
-
-                // Also sample a few content token norms for comparison baseline
-                double content_norm_sum = 0.0;
-                int content_norm_count = 0;
-                constexpr int CONTENT_SAMPLE_IDS[] = {512, 1000, 5000, 10000, 25000, 40000};
-                for (int cid : CONTENT_SAMPLE_IDS) {
-                    if (cid >= cfg.vocab_size) continue;
-                    const size_t off = static_cast<size_t>(cid) * cfg.d_model;
-                    cudaMemcpy(row_buf.data(), weights_ptr + off,
-                               cfg.d_model * sizeof(float), cudaMemcpyDeviceToHost);
-                    double sq = 0.0;
-                    for (int d = 0; d < cfg.d_model; ++d) sq += static_cast<double>(row_buf[d]) * row_buf[d];
-                    content_norm_sum += std::sqrt(sq / cfg.d_model);
-                    content_norm_count++;
-                }
-                const double content_norm_mean = (content_norm_count > 0)
-                    ? content_norm_sum / content_norm_count : 0.0;
-
-                for (int s = 0; s < NUM_SPECIALS; ++s) {
-                    const int tok_id = SPECIAL_IDS[s];
-                    const size_t row_offset = static_cast<size_t>(tok_id) * cfg.d_model;
-
-                    // Weight row
-                    cudaMemcpy(row_buf.data(), weights_ptr + row_offset,
-                               cfg.d_model * sizeof(float), cudaMemcpyDeviceToHost);
-                    double w_sq = 0.0, w_sum = 0.0;
-                    for (int d = 0; d < cfg.d_model; ++d) {
-                        w_sq += static_cast<double>(row_buf[d]) * row_buf[d];
-                        w_sum += row_buf[d];
-                    }
-                    const float w_rms = static_cast<float>(std::sqrt(w_sq / cfg.d_model));
-                    const float w_mean = static_cast<float>(w_sum / cfg.d_model);
-
-                    // Gradient row (may be null if not yet computed)
-                    float g_rms = 0.0f, g_sum = 0.0f;
-                    bool has_grad = false;
-                    if (grads_ptr) {
-                        cudaMemcpy(row_buf.data(), grads_ptr + row_offset,
-                                   cfg.d_model * sizeof(float), cudaMemcpyDeviceToHost);
-                        double g_sq = 0.0, gs = 0.0;
-                        bool any_nonzero = false;
-                        for (int d = 0; d < cfg.d_model; ++d) {
-                            g_sq += static_cast<double>(row_buf[d]) * row_buf[d];
-                            gs += row_buf[d];
-                            if (row_buf[d] != 0.0f) any_nonzero = true;
-                        }
-                        g_rms = static_cast<float>(std::sqrt(g_sq / cfg.d_model));
-                        g_sum = static_cast<float>(gs);
-                        has_grad = any_nonzero;
-                    }
-
-                    // Count appearances as INPUT token in this batch
-                    // (special tokens only appear as input if BOS is prepended, etc.)
-                    // We don't have input_ids readily available here, so skip input count.
-
-                    diag << "  " << SPECIAL_NAMES[s] << "(id=" << tok_id << "): "
-                         << "rms(W)=" << w_rms
-                         << " w_mean=" << w_mean;
-                    if (grads_ptr) {
-                        diag << " rms(grad)=" << g_rms
-                             << " grad_sum=" << g_sum
-                             << (has_grad ? "" : " [ZERO_GRAD]");
-                    } else {
-                        diag << " [NO_GRAD_BUFFER]";
-                    }
-
-                    // Anomaly: special token weight RMS diverging from content tokens
-                    if (content_norm_mean > 0.0 && w_rms > 3.0f * content_norm_mean) {
-                        diag << " [ANOMALY] rms(W)=" << w_rms
-                             << " >> content_mean=" << Internal::formatScalar(static_cast<float>(content_norm_mean), 6);
-                    }
-                    if (w_rms < 1e-6f) {
-                        diag << " [ANOMALY] NEAR_ZERO_WEIGHT";
-                    }
-                    if (!std::isfinite(w_rms) || !std::isfinite(g_rms)) {
-                        throw std::runtime_error(
-                            "[SPECIAL_TOKEN_EQUATION] Non-finite special token weight/grad: "
-                            + std::string(SPECIAL_NAMES[s]) + " rms(W)=" + std::to_string(w_rms)
-                            + " rms(grad)=" + std::to_string(g_rms)
-                            + " at batch " + std::to_string(batch_idx + 1));
-                    }
-                    diag << "\n";
-                }
-                diag << "  content_baseline: rms(W)_mean=" << Internal::formatScalar(static_cast<float>(content_norm_mean), 6)
-                     << " (sampled " << content_norm_count << " tokens)";
-
-                ctx.logging.logger->log(diag.str());
-                EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Embedding, GRIM::Logging::LogPhase::GRADIENT_CLIP, 0, "SPECIAL_TOKEN_EQUATION", diag.str().c_str());
-            }
-    }
+    GRIM::Diagnostics::runSpecialTokenDiagnostic(ctx, payload, batch_idx);
     
     // NOTE: Window closes automatically via beginOptimizerStep() → endOptimizerStep()
     // State flow: ACCUMULATING → READY_FOR_STEP → IDLE
