@@ -308,6 +308,14 @@ CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& cu
 								}
 							}
 						}
+						// Mixed PT/concept curriculums: registry must honor plaintext_block_ids
+						// with the same semantics as the per-curriculum manifest path.
+						if (curr.contains("plaintext_block_ids") && curr["plaintext_block_ids"].is_array()) {
+							for (const auto& id : curr["plaintext_block_ids"]) {
+								if (id.is_string())
+									filter.plaintext_ids.insert(id.get<std::string>());
+							}
+						}
 						std::cout << "[DataLoader] Curriculum '" << curriculum_name
 						          << "' loaded from registry: " << registry_path.string() << std::endl;
 						break;
@@ -361,6 +369,27 @@ CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& cu
 	}
 
 	filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
+
+	// For a NAMED curriculum, an empty ID set is always a configuration error.
+	// Without this, an empty/missing/typo'd ID list silently expands to the
+	// full corpus because loadConceptBlocksJson() only filters when has_filter
+	// is true. Rule 20: fail loud rather than train on the wrong data.
+	if (!curriculum_name.empty() && !filter.has_filter) {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: curriculum '" + curriculum_name +
+			"' resolved to an empty filter (concept_block_ids and plaintext_block_ids "
+			"are both empty/missing). Refusing to silently train on the entire corpus. "
+			"Fix the curriculum definition or remove the curriculum name to opt in to "
+			"full-corpus training.");
+	}
+
+	// Also force has_filter=true for any named curriculum so that the loader
+	// applies an explicit (possibly all-rejecting) filter rather than falling
+	// through to the unfiltered branch.
+	if (!curriculum_name.empty()) {
+		filter.has_filter = true;
+	}
+
 	std::cout << "[DataLoader]   format_as_concept=" << (filter.format_as_concept ? "true" : "false")
 	          << ", concept_ids=" << filter.concept_ids.size()
 	          << ", plaintext_ids=" << filter.plaintext_ids.size()
@@ -640,13 +669,16 @@ bool PrepareTrainingDataFromCache(
 		if (!out_vocab_path.empty()) {
 			std::cout << "[DataLoader] Saving vocab to " << out_vocab_path << "..." << std::endl << std::flush;
 			if (!tokenizer.save(out_vocab_path, save_text_vocab, config_tok.vocab_score_multiplier)) {
-				std::cerr << "[DataLoader] Failed to save vocab to "
+				// Vocab is a hard dependency for Phase1; without it the GRMT we
+				// would write next is unusable. Fail immediately rather than
+				// returning true and leaving training data and vocab out of sync.
+				std::cerr << "[DataLoader] FATAL: failed to save vocab to "
 						  << out_vocab_path << std::endl;
-			} else {
-				std::cout << "[DataLoader] Vocab saved successfully" << std::endl << std::flush;
-				if (save_text_vocab) {
-					std::cout << "[DataLoader] Also saved human-readable .txt vocab" << std::endl;
-				}
+				return false;
+			}
+			std::cout << "[DataLoader] Vocab saved successfully" << std::endl << std::flush;
+			if (save_text_vocab) {
+				std::cout << "[DataLoader] Also saved human-readable .txt vocab" << std::endl;
 			}
 		}
 	}
@@ -715,6 +747,8 @@ bool PrepareTrainingDataFromCache(
 	}
 	const int expected_exec_steps = train_config.execution_block_num_steps;
 	size_t plaintext_count = 0;
+	size_t concept_build_failures = 0;
+	size_t selected_entries_skipped = 0;  // short text / encoder returned nullopt
 	for (const auto& cj : concept_json_entries) {
 		try {
 			std::string entry_id = cj.value("id", std::string());
@@ -725,10 +759,10 @@ bool PrepareTrainingDataFromCache(
 			if (is_plaintext) {
 				// ── Pretraining path: plain text, no execution payload ──
 				std::string text = GRIM::DataLoader::renderPlainText(cj, false);
-				if (text.size() < kMinCleanedTextLength) continue;
+				if (text.size() < kMinCleanedTextLength) { ++selected_entries_skipped; continue; }
 
 				auto seq = build_sequence(text);
-				if (!seq) continue;
+				if (!seq) { ++selected_entries_skipped; continue; }
 				seq->execution_active = false;
 				all_tokens.push_back(std::move(*seq));
 				++plaintext_count;
@@ -737,7 +771,7 @@ bool PrepareTrainingDataFromCache(
 
 			// ── Concept path: canonical formatting + execution payload ──
 			auto built = GRIM::DataLoader::buildConceptSequence(cj, tokenizer, concept_exec_base_slot);
-			if (built.canonical_text.size() < kMinCleanedTextLength) continue;
+			if (built.canonical_text.size() < kMinCleanedTextLength) { ++selected_entries_skipped; continue; }
 
 			if (built.payload.execution_active) {
 				const int actual_steps = static_cast<int>(built.payload.teacher_steps.size());
@@ -763,7 +797,7 @@ bool PrepareTrainingDataFromCache(
 			}
 
 			auto seq = build_sequence(built.canonical_text);
-			if (!seq) continue;
+			if (!seq) { ++selected_entries_skipped; continue; }
 			seq->execution_active = built.payload.execution_active;
 			if (built.payload.execution_active) {
 				seq->token_exec_slots = std::move(built.payload.token_exec_slots);
@@ -773,12 +807,41 @@ bool PrepareTrainingDataFromCache(
 			}
 			all_tokens.push_back(std::move(*seq));
 		} catch (const std::exception& e) {
+			++concept_build_failures;
 			std::cerr << "[DataLoader] concept build failed: " << e.what() << "\n";
 		}
 	}
 	if (plaintext_count > 0) {
 		std::cout << "[DataLoader] Encoded " << plaintext_count << " plaintext (PT) + "
 		          << (all_tokens.size() - plaintext_count) << " concept sequences" << std::endl;
+	}
+
+	// Refuse to write a zero-sequence GRMT — every selected entry failed or was
+	// skipped, so there is nothing to train on. Better to fail here than to
+	// return true and have Phase1 silently load an empty dataset.
+	if (all_tokens.empty()) {
+		std::cerr << "[DataLoader] FATAL: no sequences produced from "
+		          << concept_json_entries.size() << " selected entries ("
+		          << concept_build_failures << " build failures). "
+		          << "Cannot write a zero-sequence GRMT." << std::endl;
+		return false;
+	}
+
+	// For a filtered (named) curriculum, every selected entry was hand-picked
+	// by config; an unexpected build failure on any of them is a data/config
+	// bug, not noise to be swallowed. Fail loud so it gets fixed at the
+	// source instead of producing a quietly-degraded GRMT. Silent skips
+	// (short text, empty encoder output) count too — the curriculum names
+	// the entries it expects to train on, so dropping any of them silently
+	// is a partial GRMT.
+	if (curriculum_filter.has_filter &&
+	    (concept_build_failures > 0 || selected_entries_skipped > 0)) {
+		std::cerr << "[DataLoader] FATAL: " << concept_build_failures
+		          << " build failure(s) and " << selected_entries_skipped
+		          << " silently-skipped selected entry/entries under a filtered "
+		          << "curriculum. Refusing to produce a partial GRMT."
+		          << std::endl;
+		return false;
 	}
 
 	// Write single GRMT file — Phase1_Startup handles train/val splitting
@@ -847,6 +910,16 @@ bool PrepareTrainingDataFromCache(
 					  << " sequences with 0 valid targets" << std::endl;
 		}
 
+		// Refuse to write a header with num_sequences=0. Without this, every
+		// sequence being dropped here (e.g. all targets masked) still produces
+		// a header-valid GRMT and a "successful" return.
+		if (valid_seq_count == 0) {
+			std::cerr << "[DataLoader] FATAL: save_grmt would write num_sequences=0 "
+			          << "(all " << data.size() << " candidate sequences were dropped). "
+			          << "Refusing to emit an empty GRMT." << std::endl;
+			return false;
+		}
+
 		uint32_t magic = 0x474D5254; // "GRMT"
 		uint32_t version = GRIM::GRMT_FORMAT_VERSION;
 		uint32_t num_sequences = static_cast<uint32_t>(valid_seq_count);
@@ -902,7 +975,18 @@ bool PrepareTrainingDataFromCache(
 
 			std::vector<int32_t> slots = seq.token_exec_slots;
 			if (slots.size() != len) {
-				slots.assign(len, -1);
+				// Slot map MUST be aligned with the token stream. Silently rewriting
+				// to all -1 while still emitting compiled_bootstrap_bindings and
+				// teacher_steps produces a GRMT whose payload no longer agrees with
+				// itself — downstream validation later flags it as broken with no
+				// pointer to the real cause. Fail at the source instead.
+				throw std::runtime_error(
+					"[DataLoader] save_grmt: token_exec_slots.size()=" +
+					std::to_string(seq.token_exec_slots.size()) +
+					" != token_ids.size()=" + std::to_string(len) +
+					(seq.execution_active
+						? " (execution_active row \u2014 cannot recover)"
+						: " (execution_inactive row \u2014 still a builder bug)"));
 			}
 			file.write(reinterpret_cast<const char*>(slots.data()), len * sizeof(int32_t));
 
@@ -939,8 +1023,36 @@ bool PrepareTrainingDataFromCache(
 		return file.good();
 	};
 
-	if (!save_grmt(train_grmt, all_tokens)) {
+	// Atomic write: serialize to a sibling temp path, then rename to the final
+	// path only after success. Without this, any mid-write failure (slot-map
+	// throw, disk error, etc.) leaves a header-valid but truncated GRMT at
+	// `train_grmt`, and the freshness check on the next run accepts it.
+	fs::path tmp_grmt = train_grmt;
+	tmp_grmt += ".tmp";
+	std::error_code ec;
+	fs::remove(tmp_grmt, ec);  // best-effort cleanup of any prior crash residue
+
+	bool wrote_ok = false;
+	try {
+		wrote_ok = save_grmt(tmp_grmt, all_tokens);
+	} catch (const std::exception& e) {
+		std::cerr << "[DataLoader] FATAL: exception while writing GRMT: " << e.what() << std::endl;
+		wrote_ok = false;
+	}
+
+	if (!wrote_ok) {
+		fs::remove(tmp_grmt, ec);  // never leave a partial temp file behind
 		std::cerr << "[DataLoader] Failed to write GRMT file." << std::endl;
+		return false;
+	}
+
+	// Atomically replace the destination. fs::rename overwrites on POSIX and
+	// is atomic-on-same-filesystem on Windows for files (ReplaceFileW path).
+	fs::rename(tmp_grmt, train_grmt, ec);
+	if (ec) {
+		fs::remove(tmp_grmt, ec);
+		std::cerr << "[DataLoader] Failed to rename temp GRMT into place: "
+		          << ec.message() << std::endl;
 		return false;
 	}
 

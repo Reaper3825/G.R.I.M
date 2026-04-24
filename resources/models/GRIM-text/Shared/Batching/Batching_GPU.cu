@@ -176,6 +176,23 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             std::mt19937_64 shuffle_rng(rd());
             std::shuffle(view_indices.begin(), view_indices.end(), shuffle_rng);
         }
+
+        // Apply curriculum / prefer_short_first ordering on top of the shuffle.
+        // stable_sort preserves the shuffled order among entries with equal sort
+        // keys, so we still mix sequences within each curriculum tier rather than
+        // reverting to a strict length-sorted order. Without this, computeSortKey()
+        // (and therefore curriculum_progress / prefer_short_first) is never used
+        // on the GREEDY path, which is the path training selects.
+        const bool curriculum_active =
+            opts.prefer_short_first ||
+            (opts.curriculum_progress < 1.0f &&
+             schedule.p99_seq_len > schedule.p50_seq_len);
+        if (curriculum_active) {
+            std::stable_sort(view_indices.begin(), view_indices.end(),
+                [&](uint32_t idx_a, uint32_t idx_b) {
+                    return computeSortKey(idx_a) < computeSortKey(idx_b);
+                });
+        }
     }
     
     // Use pre-computed token budget from analyzeAndRecommend() (Phase2 sets opts.max_tokens_per_batch)
@@ -223,9 +240,11 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
                 
                 uint32_t new_max = std::max(ob.assignment.max_seq_len, seq_len);
                 uint32_t new_size = static_cast<uint32_t>(ob.assignment.seq_ids.size()) + 1;
-                uint32_t new_total = new_max * new_size;
-                
-                if (new_total > token_budget || new_size > opts.max_batch_size) continue;
+                // Use uint64_t to avoid uint32_t wrap on max_seq_len * batch_size.
+                uint64_t new_total = static_cast<uint64_t>(new_max) * new_size;
+
+                if (new_total > static_cast<uint64_t>(token_budget) ||
+                    new_size > opts.max_batch_size) continue;
                 
                 // Check similarity constraint if enabled
                 if (opts.similarity_threshold < 1.0f) {
@@ -235,9 +254,14 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
                     }
                 }
                 
-                uint32_t old_total = ob.assignment.total_tokens;
-                uint32_t waste_increase = new_total - old_total - seq_len;
-                
+                uint64_t old_total = ob.assignment.total_tokens;
+                // new_total >= old_total + seq_len by construction (new_max >= old_max,
+                // new_size = old_size + 1), so this subtraction is safe in uint64_t.
+                uint64_t waste_increase_u64 = new_total - old_total - seq_len;
+                uint32_t waste_increase = waste_increase_u64 > UINT32_MAX
+                    ? UINT32_MAX
+                    : static_cast<uint32_t>(waste_increase_u64);
+
                 if (waste_increase < best_waste_increase) {
                     best_waste_increase = waste_increase;
                     best_batch = static_cast<int>(i);
@@ -251,14 +275,26 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
                 ob.assignment.max_seq_len = std::max(ob.assignment.max_seq_len, seq_len);
                 ob.assignment.min_seq_len = std::min(ob.assignment.min_seq_len, seq_len);
                 ob.assignment.actual_tokens += seq_len;
-                ob.assignment.total_tokens = ob.assignment.max_seq_len * static_cast<uint32_t>(ob.assignment.seq_ids.size());
+                {
+                    uint64_t total64 = static_cast<uint64_t>(ob.assignment.max_seq_len) *
+                                       static_cast<uint64_t>(ob.assignment.seq_ids.size());
+                    ob.assignment.total_tokens = total64 > UINT32_MAX
+                        ? UINT32_MAX
+                        : static_cast<uint32_t>(total64);
+                }
                 ob.lengths.push_back(seq_len);
                 ob.remaining_slots--;
-                
-                // Check if batch is now "full enough" to close
-                float efficiency = static_cast<float>(ob.assignment.actual_tokens) / ob.assignment.total_tokens;
-                if (ob.remaining_slots == 0 || efficiency >= 0.9f || 
-                    ob.assignment.total_tokens >= token_budget * 0.85f) {
+
+                // Close the batch only when no more sequences can fit. Previously
+                // we also closed at packing efficiency >= 0.9, which caused two
+                // equal-length sequences to seal a batch at 100% efficiency even
+                // when both max_batch_size and the token budget could fit many
+                // more — turning four length-100 seqs (budget 400, max 4) into
+                // two batches of 2 instead of one batch of 4.
+                const uint64_t budget_close_threshold =
+                    static_cast<uint64_t>(token_budget) * 85ULL / 100ULL;
+                if (ob.remaining_slots == 0 ||
+                    static_cast<uint64_t>(ob.assignment.total_tokens) >= budget_close_threshold) {
                     finalizeBatchStats(ob.assignment, ob.lengths);
                     schedule.batches.push_back(std::move(ob.assignment));
                     open_batches.erase(open_batches.begin() + best_batch);
@@ -321,9 +357,11 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             
             uint32_t prospective_size = static_cast<uint32_t>(current.seq_ids.size()) + 1;
             uint32_t prospective_max = std::max(current.max_seq_len, seq_len);
-            uint32_t prospective_tokens = prospective_size * prospective_max;
-            
-            bool exceeds_budget = prospective_tokens > token_budget;
+            // Use uint64_t to avoid uint32_t wrap on max_seq_len * batch_size.
+            uint64_t prospective_tokens =
+                static_cast<uint64_t>(prospective_size) * static_cast<uint64_t>(prospective_max);
+
+            bool exceeds_budget = prospective_tokens > static_cast<uint64_t>(token_budget);
             bool exceeds_size = prospective_size > opts.max_batch_size;
             bool breaks_similarity = false;
             
@@ -341,7 +379,13 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             current.max_seq_len = std::max(current.max_seq_len, seq_len);
             current.min_seq_len = current.min_seq_len == 0 ? seq_len : std::min(current.min_seq_len, seq_len);
             current.actual_tokens += seq_len;
-            current.total_tokens = current.max_seq_len * static_cast<uint32_t>(current.seq_ids.size());
+            {
+                uint64_t total64 = static_cast<uint64_t>(current.max_seq_len) *
+                                   static_cast<uint64_t>(current.seq_ids.size());
+                current.total_tokens = total64 > UINT32_MAX
+                    ? UINT32_MAX
+                    : static_cast<uint32_t>(total64);
+            }
             current_lengths.push_back(seq_len);
         }
         
@@ -443,14 +487,20 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             }
                 
             case BatchOrdering::RANDOM: {
-                // Fisher-Yates shuffle — use opts.rng_seed for reproducibility
-                const uint64_t order_seed = (opts.rng_seed != 0)
-                    ? opts.rng_seed + 0x9E3779B97F4A7C15ULL  // derive distinct seed from packing seed
-                    : std::random_device{}();
-                std::mt19937_64 rng(order_seed);
-                for (size_t i = normal_batches.size() - 1; i > 0; --i) {
-                    std::uniform_int_distribution<size_t> dist(0, i);
-                    std::swap(normal_batches[i], normal_batches[dist(rng)]);
+                // Fisher-Yates shuffle — use opts.rng_seed for reproducibility.
+                // Guard against size() == 0: with size_t, `size() - 1` underflows
+                // to SIZE_MAX. This path is reachable when interleave_overflow=true
+                // moves every batch into overflow_batches, leaving normal_batches
+                // empty.
+                if (normal_batches.size() > 1) {
+                    const uint64_t order_seed = (opts.rng_seed != 0)
+                        ? opts.rng_seed + 0x9E3779B97F4A7C15ULL  // derive distinct seed from packing seed
+                        : std::random_device{}();
+                    std::mt19937_64 rng(order_seed);
+                    for (size_t i = normal_batches.size() - 1; i > 0; --i) {
+                        std::uniform_int_distribution<size_t> dist(0, i);
+                        std::swap(normal_batches[i], normal_batches[dist(rng)]);
+                    }
                 }
                 break;
             }

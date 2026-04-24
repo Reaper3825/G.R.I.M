@@ -148,15 +148,27 @@ BatchPayload buildBatchPayload(
                 " != token_ids.size()=" + std::to_string(seq_len));
         }
 
-        // Validate targets for invalid token IDs (root cause of loss=165)
+        // Validate per-token IDs against the loss contract:
+        //   input_id MUST be in [0, vocab_size)
+        //   target  MUST be in {-1} ∪ [0, vocab_size)
+        // Catching this here prevents OOB GPU reads in CE / embedding lookup.
         for (int t = 0; t < seq_len; ++t) {
+            const int iid = seq->token_ids[t];
+            if (iid < 0 || iid >= vocab_size) {
+                throw std::runtime_error(
+                    "buildBatchPayload: sequence " + std::to_string(sid) +
+                    " has invalid input token " + std::to_string(iid) +
+                    " at position " + std::to_string(t) +
+                    " (must be in [0, " + std::to_string(vocab_size) + "))");
+            }
             const int tid = seq->targets[t];
-            if (tid >= 0 && tid >= vocab_size) {
+            // Loss contract: -1 (masked) is the ONLY legal negative value.
+            if (tid < -1 || tid >= vocab_size) {
                 throw std::runtime_error(
                     "buildBatchPayload: sequence " + std::to_string(sid) +
                     " has invalid target token " + std::to_string(tid) +
                     " at position " + std::to_string(t) +
-                    " (vocab_size=" + std::to_string(vocab_size) + ")");
+                    " (must be -1 or in [0, " + std::to_string(vocab_size) + "))");
             }
         }
 
@@ -382,17 +394,26 @@ BatchPayload buildBatchPayload(
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 4b: Execution-slot target masking
     //
-    // Tokens owned by the execution block (token_to_slot_map[t] >= 0) are
-    // supervised by the numeric head, NOT by LM cross-entropy.  Mask their
-    // targets to -1 so unified_loss ignores them.
+    // Tokens owned by the execution block (token_to_slot_map[p] >= 0) are
+    // supervised by the numeric head, NOT by LM cross-entropy.  Because the
+    // DataLoader shift convention is target_ids[t] = token_ids[t+1] (the LM
+    // at position t predicts the token at position t+1), the LM CE that
+    // would supervise predicting an execution-owned token at position p lives
+    // at target_ids[p-1].  We mask THAT position, not target_ids[p] (which
+    // predicts the *next* token after the slot and is generally a normal LM
+    // target).  If p is the first token in its row (p == row_start) there is
+    // no in-row LM position predicting it, so nothing to mask.
     //
     // Only execution-active rows can have valid slots.  Tokens that are atoms
     // but have NO slot (slot == -1) remain under LM CE — they are ordinary
     // numeric text, not execution-owned.
     //
-    // lm_valid_tokens = valid_tokens minus execution-slot-masked positions.
+    // Accounting: each masked LM target decrements both valid_target_counts[b]
+    // and the batch-level valid_tokens, so the validate() invariant
+    // sum(valid_target_counts) == valid_tokens is preserved.  lm_valid_tokens
+    // is then equal to the post-mask valid_tokens (kept as a distinct field so
+    // downstream callers that read it continue to work unchanged).
     // ═════════════════════════════════════════════════════════════════════════
-    payload.lm_valid_tokens = payload.valid_tokens;
     {
         int slots_masked = 0;
         for (int b = 0; b < payload.batch_size; ++b) {
@@ -400,17 +421,21 @@ BatchPayload buildBatchPayload(
                 continue;  // Row has no execution supervision — no slots possible
             const int row_start = b * S;
             const int row_end   = row_start + payload.seq_lengths[b];
-            for (int t = row_start; t < row_end; ++t) {
-                if (payload.token_to_slot_map[t] >= 0) {
-                    if (payload.target_ids[t] != -1) {
-                        slots_masked++;
-                        payload.valid_target_counts[b]--;
-                    }
-                    payload.target_ids[t] = -1;
+            for (int p = row_start; p < row_end; ++p) {
+                if (payload.token_to_slot_map[p] < 0) continue;
+                // The LM CE predicting position p lives at target_ids[p-1].
+                // Skip when p is the row's first token (no in-row predictor).
+                if (p == row_start) continue;
+                const int pred_idx = p - 1;
+                if (payload.target_ids[pred_idx] != -1) {
+                    payload.target_ids[pred_idx] = -1;
+                    payload.valid_target_counts[b]--;
+                    slots_masked++;
                 }
             }
         }
-        payload.lm_valid_tokens -= slots_masked;
+        payload.valid_tokens   -= slots_masked;
+        payload.lm_valid_tokens = payload.valid_tokens;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
