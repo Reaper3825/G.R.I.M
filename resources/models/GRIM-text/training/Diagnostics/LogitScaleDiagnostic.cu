@@ -3,7 +3,6 @@
 //  Lifted verbatim from Phase2_TrainingLoop.cu — the
 //  "TRAINING SIGNAL: Logit Statistics" scope (formerly
 //  inline at lines 1295-1890 of that file).
-//
 //  Behavior: identical. No logic, gating, ordering, or
 //  log-string changes vs. the original inline block.
 //======================================================//
@@ -367,7 +366,9 @@ void runLogitScaleDiagnostic(
                     hw_h_dc_abs_max = static_cast<float>(dc_abs_max);
 
                     // (3) Stream sampled W rows; compute cos(h_t, W_v) pairs with double accum.
-                    //     Re-use the same strided sample as the W_rms loop above for consistency.
+                    //     Strided sample of up to 500 rows across the full vocab — matches
+                    //     the cadence of the (now-replaced) host-side W_rms sampling loop.
+                    const int w_sample_count = 500;
                     const int hw_stride = std::max(1, vocab_size / w_sample_count);
                     std::vector<float>  w_row_buf(d_model);
                     std::vector<double> w_bar(d_model, 0.0);
