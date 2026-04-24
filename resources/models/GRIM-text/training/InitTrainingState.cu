@@ -112,22 +112,19 @@ void LanguageModel::initTrainingState() {
     const auto& cfg = getConfig();
     
     // ═══════════════════════════════════════════════════════════════════════
-    //  STEP 1: Initialize StreamController if not already done
-    //  (May be pre-initialized by Phase1_Startup before initGPU)
+    //  STEP 1: Verify StreamController is initialized
+    //  RULE 20: stream_ctrl MUST be initialized by Phase1_Startup before this
+    //  point. NO silent fallback — if it's missing, it's a bug in call order.
     // ═══════════════════════════════════════════════════════════════════════
     if (!training_state_.stream_ctrl.isInitialized()) {
-        StreamControllerConfig stream_config;
-        stream_config.verbose = true;
-        
-        if (!training_state_.stream_ctrl.initialize(stream_config)) {
-            throw std::runtime_error("[initTrainingState] Failed to initialize StreamController - CUDA device may be unavailable");
-        }
-        std::cout << "✓ StreamController initialized (Primary stream)" << std::endl;
-    } else {
-        std::cout << "✓ StreamController already initialized" << std::endl;
+        throw std::runtime_error(
+            "[initTrainingState] StreamController not initialized! "
+            "Phase1_Startup must call stream_ctrl.initialize() before "
+            "initTrainingState() — Rule 20: no silent fallbacks");
     }
     StreamController::fatalIfDefaultStream(training_state_.stream_ctrl.getPrimaryStream(),
                                            "LanguageModel::initTrainingState");
+    std::cout << "✓ StreamController pre-initialized" << std::endl;
     
     // ═══════════════════════════════════════════════════════════════════════
     //  STEP 2: cuBLAS handle (should already be initialized by initCuBLASHandle)

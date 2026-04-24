@@ -8,9 +8,12 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <cstring>
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <stdexcept>
+#include <string>
 
 namespace GRIM {
 namespace Tokenizer {
@@ -34,6 +37,10 @@ __global__ void kernelByteEncode(
 }
 
 // Kernel: Decode token IDs to bytes
+//
+// Per-slot output is one byte. Non-byte tokens (specials, atoms, unigram pieces)
+// cannot be represented here, so we emit ASCII '?' (0x3F) as a single-byte,
+// valid-UTF-8 placeholder. CPU decode() does the same so both paths agree.
 __global__ void kernelByteDecode(
     const int* __restrict__ input,
     uint8_t* __restrict__ output,
@@ -43,11 +50,10 @@ __global__ void kernelByteDecode(
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < count) {
         int token_id = input[idx];
-        // Only decode valid byte tokens
         if (token_id >= token_offset && token_id < token_offset + 256) {
             output[idx] = static_cast<uint8_t>(token_id - token_offset);
         } else {
-            output[idx] = 0xEF;  // Replacement character (first byte of U+FFFD in UTF-8)
+            output[idx] = static_cast<uint8_t>('?');
         }
     }
 }
@@ -75,135 +81,14 @@ __global__ void kernelByteBatchEncode(
     }
 }
 
-// Kernel: Initialize lookup tables
-__global__ void kernelInitByteTables(
-    uint8_t* __restrict__ token_to_byte,
-    int* __restrict__ byte_to_token,
-    bool* __restrict__ is_continuation,
-    int token_offset
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < 256) {
-        uint8_t byte_val = static_cast<uint8_t>(idx);
-        
-        token_to_byte[idx] = byte_val;
-        byte_to_token[idx] = idx + token_offset;
-        is_continuation[idx] = ((byte_val & 0xC0) == 0x80);  // 10xxxxxx
-    }
-}
-
 //======================================================//
 //  ByteEncoder Implementation
 //======================================================//
 
-ByteEncoder::ByteEncoder()
-    : d_token_to_byte_(nullptr)
-    , d_byte_to_token_(nullptr)
-    , d_is_continuation_(nullptr)
-    , gpu_initialized_(false) 
-{
-}
-
-ByteEncoder::~ByteEncoder() {
-    releaseGPU();
-}
-
-ByteEncoder::ByteEncoder(ByteEncoder&& other) noexcept
-    : d_token_to_byte_(other.d_token_to_byte_)
-    , d_byte_to_token_(other.d_byte_to_token_)
-    , d_is_continuation_(other.d_is_continuation_)
-    , gpu_initialized_(other.gpu_initialized_)
-{
-    other.d_token_to_byte_ = nullptr;
-    other.d_byte_to_token_ = nullptr;
-    other.d_is_continuation_ = nullptr;
-    other.gpu_initialized_ = false;
-}
-
-ByteEncoder& ByteEncoder::operator=(ByteEncoder&& other) noexcept {
-    if (this != &other) {
-        releaseGPU();
-        d_token_to_byte_ = other.d_token_to_byte_;
-        d_byte_to_token_ = other.d_byte_to_token_;
-        d_is_continuation_ = other.d_is_continuation_;
-        gpu_initialized_ = other.gpu_initialized_;
-        
-        other.d_token_to_byte_ = nullptr;
-        other.d_byte_to_token_ = nullptr;
-        other.d_is_continuation_ = nullptr;
-        other.gpu_initialized_ = false;
-    }
-    return *this;
-}
-
-void ByteEncoder::initGPU() {
-    if (gpu_initialized_) return;
-    
-    cudaError_t err;
-    
-    // Allocate lookup tables
-    err = cudaMalloc(&d_token_to_byte_, 256 * sizeof(uint8_t));
-    if (err != cudaSuccess) {
-        std::cerr << "[ByteEncoder] Failed to allocate token_to_byte: " 
-                  << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-    
-    err = cudaMalloc(&d_byte_to_token_, 256 * sizeof(int));
-    if (err != cudaSuccess) {
-        cudaFree(d_token_to_byte_);
-        d_token_to_byte_ = nullptr;
-        std::cerr << "[ByteEncoder] Failed to allocate byte_to_token: "
-                  << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-    
-    err = cudaMalloc(&d_is_continuation_, 256 * sizeof(bool));
-    if (err != cudaSuccess) {
-        cudaFree(d_token_to_byte_);
-        cudaFree(d_byte_to_token_);
-        d_token_to_byte_ = nullptr;
-        d_byte_to_token_ = nullptr;
-        std::cerr << "[ByteEncoder] Failed to allocate is_continuation: "
-                  << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-    
-    // INTENTIONAL: Stream 0 used for one-time initialization (cudaDeviceSynchronize follows at line 180)
-    // Initialize tables with kernel
-    kernelInitByteTables<<<1, 256, 0, 0>>>(
-        d_token_to_byte_,
-        d_byte_to_token_,
-        d_is_continuation_,
-        BYTE_TOKEN_OFFSET
-    );
-    
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        std::cerr << "[ByteEncoder] Failed to initialize tables: "
-                  << cudaGetErrorString(err) << std::endl;
-        releaseGPU();
-        return;
-    }
-    
-    gpu_initialized_ = true;
-}
-
-void ByteEncoder::releaseGPU() {
-    if (d_token_to_byte_) {
-        cudaFree(d_token_to_byte_);
-        d_token_to_byte_ = nullptr;
-    }
-    if (d_byte_to_token_) {
-        cudaFree(d_byte_to_token_);
-        d_byte_to_token_ = nullptr;
-    }
-    if (d_is_continuation_) {
-        cudaFree(d_is_continuation_);
-        d_is_continuation_ = nullptr;
-    }
-    gpu_initialized_ = false;
-}
+ByteEncoder::ByteEncoder() = default;
+ByteEncoder::~ByteEncoder() = default;
+ByteEncoder::ByteEncoder(ByteEncoder&&) noexcept = default;
+ByteEncoder& ByteEncoder::operator=(ByteEncoder&&) noexcept = default;
 
 //--------------------------------------------------//
 // CPU Interface
@@ -226,12 +111,16 @@ std::string ByteEncoder::decode(const std::vector<int>& token_ids) const {
 }
 
 std::string ByteEncoder::decode(const int* token_ids, size_t count) const {
+    // Non-byte tokens (specials, atoms, unigram pieces) become ASCII '?' so the
+    // output stays valid UTF-8 and matches kernelByteDecode's per-slot behavior.
     std::string result;
     result.reserve(count);
     for (size_t i = 0; i < count; ++i) {
         int tid = token_ids[i];
         if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + 256) {
             result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
+        } else {
+            result.push_back('?');
         }
     }
     return result;
@@ -267,9 +156,10 @@ std::string ByteEncoder::tokenToString(int token_id) const {
     uint8_t byte_val = tokenToByte(token_id);
     std::ostringstream oss;
     
-    if (UTF8::isPrintable(byte_val)) {
-        oss << "'" << static_cast<char>(byte_val) << "'";
-    } else if (byte_val == ' ') {
+    // Whitespace specials must come before the printable branch: ' ' is
+    // printable per UTF8::isPrintable, and the other whitespace bytes are not
+    // printable but reach here as control bytes.
+    if (byte_val == ' ') {
         oss << "<SP>";
     } else if (byte_val == '\n') {
         oss << "<LF>";
@@ -277,6 +167,8 @@ std::string ByteEncoder::tokenToString(int token_id) const {
         oss << "<CR>";
     } else if (byte_val == '\t') {
         oss << "<TAB>";
+    } else if (UTF8::isPrintable(byte_val)) {
+        oss << "'" << static_cast<char>(byte_val) << "'";
     } else {
         oss << "<0x" << std::hex << std::setw(2) << std::setfill('0') 
             << static_cast<int>(byte_val) << ">";
@@ -335,33 +227,77 @@ bool ByteEncoder::decodeGPU(const int* d_input,
     return true;
 }
 
-bool ByteEncoder::encodeBatchGPU(const uint8_t* const* d_inputs,
+// CONTRACT: `inputs` is a HOST array of `batch_size` device pointers (each
+// pointing to a sequence's bytes in device memory). Same for `outputs` and
+// `lengths`. The arrays themselves live on the host and are staged into device
+// memory below; the data they reference must already be on the device.
+//
+// This call is ENQUEUE-ONLY: every allocation, copy, kernel launch, and free is
+// stream-ordered on `stream`. The function returns as soon as the work is
+// queued; the caller is responsible for synchronizing `stream` before consuming
+// `outputs`. Errors observed before kernel launch are reported synchronously;
+// post-launch errors surface on the next stream synchronization point.
+//
+// HOST-ARRAY LIFETIME: `inputs`, `lengths`, and `outputs` are read by
+// cudaMemcpyAsync below. They MUST remain valid and unchanged until the
+// caller synchronizes `stream`. Do not pass stack temporaries that go out of
+// scope before the sync, and do not mutate these arrays before the sync. See
+// the contract block in Byte.hpp on encodeBatchGPU().
+bool ByteEncoder::encodeBatchGPU(const uint8_t* const* inputs,
                                   const size_t* lengths,
-                                  int** d_outputs,
+                                  int** outputs,
                                   size_t batch_size,
                                   cudaStream_t stream) {
     if (batch_size == 0) return true;
-    
-    // Copy pointers to device
-    uint8_t** d_input_ptrs;
-    size_t* d_lengths;
-    int** d_output_ptrs;
-    
-    cudaMalloc(&d_input_ptrs, batch_size * sizeof(uint8_t*));
-    cudaMalloc(&d_lengths, batch_size * sizeof(size_t));
-    cudaMalloc(&d_output_ptrs, batch_size * sizeof(int*));
-    
-    cudaMemcpyAsync(d_input_ptrs, d_inputs, batch_size * sizeof(uint8_t*), 
-                    cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_lengths, lengths, batch_size * sizeof(size_t),
-                    cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_output_ptrs, d_outputs, batch_size * sizeof(int*),
-                    cudaMemcpyHostToDevice, stream);
-    
+
+    if (!inputs || !lengths || !outputs) {
+        throw std::runtime_error(
+            "[ByteEncoder] encodeBatchGPU: inputs/lengths/outputs must be non-null host arrays "
+            "(" + std::string(__FILE__) + ":" + std::to_string(__LINE__) + ")");
+    }
+
+    // Stage host arrays of device pointers into device memory using
+    // stream-ordered allocation so the staging buffers stay alive exactly as
+    // long as the kernel needs them, and are freed in stream order afterwards.
+    uint8_t** d_input_ptrs  = nullptr;
+    size_t*   d_lengths     = nullptr;
+    int**     d_output_ptrs = nullptr;
+
+    auto cleanup_async = [&]() {
+        if (d_input_ptrs)  cudaFreeAsync(d_input_ptrs,  stream);
+        if (d_lengths)     cudaFreeAsync(d_lengths,     stream);
+        if (d_output_ptrs) cudaFreeAsync(d_output_ptrs, stream);
+    };
+
+    auto fail = [&](const char* what, cudaError_t e) {
+        std::cerr << "[ByteEncoder] encodeBatchGPU " << what << ": "
+                  << cudaGetErrorString(e) << std::endl;
+        cleanup_async();
+        return false;
+    };
+
+    cudaError_t err;
+    if ((err = cudaMallocAsync(&d_input_ptrs,  batch_size * sizeof(uint8_t*), stream)) != cudaSuccess)
+        return fail("cudaMallocAsync(d_input_ptrs)", err);
+    if ((err = cudaMallocAsync(&d_lengths,     batch_size * sizeof(size_t),   stream)) != cudaSuccess)
+        return fail("cudaMallocAsync(d_lengths)", err);
+    if ((err = cudaMallocAsync(&d_output_ptrs, batch_size * sizeof(int*),     stream)) != cudaSuccess)
+        return fail("cudaMallocAsync(d_output_ptrs)", err);
+
+    if ((err = cudaMemcpyAsync(d_input_ptrs, inputs, batch_size * sizeof(uint8_t*),
+                               cudaMemcpyHostToDevice, stream)) != cudaSuccess)
+        return fail("cudaMemcpyAsync(d_input_ptrs)", err);
+    if ((err = cudaMemcpyAsync(d_lengths, lengths, batch_size * sizeof(size_t),
+                               cudaMemcpyHostToDevice, stream)) != cudaSuccess)
+        return fail("cudaMemcpyAsync(d_lengths)", err);
+    if ((err = cudaMemcpyAsync(d_output_ptrs, outputs, batch_size * sizeof(int*),
+                               cudaMemcpyHostToDevice, stream)) != cudaSuccess)
+        return fail("cudaMemcpyAsync(d_output_ptrs)", err);
+
     // Launch 2D grid: x for sequence position, y for batch
     dim3 threads(256, 1);
-    dim3 blocks(64, std::min(batch_size, size_t(65535)));
-    
+    dim3 blocks(64, static_cast<unsigned>(std::min(batch_size, size_t(65535))));
+
     kernelByteBatchEncode<<<blocks, threads, 0, stream>>>(
         const_cast<const uint8_t* const*>(d_input_ptrs),
         d_lengths,
@@ -369,19 +305,18 @@ bool ByteEncoder::encodeBatchGPU(const uint8_t* const* d_inputs,
         batch_size,
         BYTE_TOKEN_OFFSET
     );
-    
-    cudaError_t err = cudaGetLastError();
-    
-    cudaFree(d_input_ptrs);
-    cudaFree(d_lengths);
-    cudaFree(d_output_ptrs);
-    
+
+    // Check launch-time error BEFORE enqueuing frees so a launch failure is
+    // reported. Any kernel runtime error will surface on the caller's next
+    // synchronization of `stream`.
+    err = cudaGetLastError();
+    cleanup_async();
+
     if (err != cudaSuccess) {
-        std::cerr << "[ByteEncoder] Batch encode failed: "
+        std::cerr << "[ByteEncoder] kernelByteBatchEncode launch failed: "
                   << cudaGetErrorString(err) << std::endl;
         return false;
     }
-    
     return true;
 }
 

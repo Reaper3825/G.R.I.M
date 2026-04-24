@@ -52,11 +52,11 @@ bool testByteEncodeBasic(std::string& message) {
     std::vector<int> tokens = byte.encode(input);
     
     ASSERT_EQ(tokens.size(), 5, "Token count mismatch");
-    ASSERT_EQ(tokens[0], static_cast<int>('H'), "First token mismatch");
-    ASSERT_EQ(tokens[1], static_cast<int>('e'), "Second token mismatch");
-    ASSERT_EQ(tokens[2], static_cast<int>('l'), "Third token mismatch");
-    ASSERT_EQ(tokens[3], static_cast<int>('l'), "Fourth token mismatch");
-    ASSERT_EQ(tokens[4], static_cast<int>('o'), "Fifth token mismatch");
+    ASSERT_EQ(tokens[0], byte.byteToToken('H'), "First token mismatch");
+    ASSERT_EQ(tokens[1], byte.byteToToken('e'), "Second token mismatch");
+    ASSERT_EQ(tokens[2], byte.byteToToken('l'), "Third token mismatch");
+    ASSERT_EQ(tokens[3], byte.byteToToken('l'), "Fourth token mismatch");
+    ASSERT_EQ(tokens[4], byte.byteToToken('o'), "Fifth token mismatch");
     
     return true;
 }
@@ -64,7 +64,13 @@ bool testByteEncodeBasic(std::string& message) {
 bool testByteDecodeBasic(std::string& message) {
     ByteEncoder byte;
     
-    std::vector<int> tokens = {'H', 'e', 'l', 'l', 'o'};
+    std::vector<int> tokens = {
+        byte.byteToToken('H'),
+        byte.byteToToken('e'),
+        byte.byteToToken('l'),
+        byte.byteToToken('l'),
+        byte.byteToToken('o'),
+    };
     std::string output = byte.decode(tokens);
     
     ASSERT_STR_EQ(output, "Hello", "Decoded string mismatch");

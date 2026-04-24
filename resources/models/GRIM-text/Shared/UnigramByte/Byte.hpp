@@ -109,10 +109,24 @@ public:
                    size_t count,
                    cudaStream_t stream = nullptr);
     
-    // Batch encode multiple sequences
-    bool encodeBatchGPU(const uint8_t* const* d_inputs,
+    // Batch encode multiple sequences.
+    //
+    // CONTRACT: `inputs` and `outputs` are HOST arrays of `batch_size` device
+    // pointers (one per sequence). `lengths` is a HOST array of `batch_size`
+    // entries. The arrays themselves are staged H2D internally; the data they
+    // point to must already live on the device.
+    //
+    // ENQUEUE-ONLY / LIFETIME: This call is asynchronous. It enqueues
+    // `cudaMemcpyAsync` reads of `inputs`, `lengths`, and `outputs` on
+    // `stream` and returns without synchronizing. The caller MUST keep these
+    // three host arrays alive and unmodified until the staging copies
+    // complete — i.e. until `cudaStreamSynchronize(stream)` (or an equivalent
+    // sync point) returns. Passing temporaries, stack arrays that go out of
+    // scope, or mutating these buffers before sync will read stale memory.
+    // Pinned host memory is recommended for best async behavior.
+    bool encodeBatchGPU(const uint8_t* const* inputs,
                         const size_t* lengths,
-                        int** d_outputs,
+                        int** outputs,
                         size_t batch_size,
                         cudaStream_t stream = nullptr);
 
@@ -126,16 +140,11 @@ public:
     // Get display string for a byte token (for debugging)
     std::string tokenToString(int token_id) const;
 
-private:
-    // Lookup tables (device pointers)
-    uint8_t* d_token_to_byte_;    // [256] token_id -> byte value
-    int* d_byte_to_token_;        // [256] byte value -> token_id
-    bool* d_is_continuation_;     // [256] is UTF-8 continuation byte
-    
-    bool gpu_initialized_;
-    
-    void initGPU();
-    void releaseGPU();
+    // No private device-side lookup tables: encode is a pure offset add and
+    // decode is a pure offset subtract, so the kernels in Byte.cu need no
+    // precomputed table. (Earlier versions allocated token<->byte tables that
+    // were never read by any kernel; they were removed as dead state per the
+    // project's delete-dead-code rule.)
 };
 
 //======================================================//
