@@ -39,9 +39,12 @@ namespace GRIM {
 #ifdef USE_CUDA
 
 void LanguageModel::initInferenceState() {
+    // RULE 20: double-init is a caller-order bug, not a recoverable condition.
     if (training_state_.initialized) {
-        std::cout << "[InitInferenceState] Already initialized, skipping" << std::endl;
-        return;
+        throw std::runtime_error(
+            "[InitInferenceState] FATAL: training_state_.initialized is already true. "
+            "Caller invoked initInferenceState() twice (or after initTrainingState). "
+            "This is a call-order bug.");
     }
     
     const auto& cfg = getConfig();
@@ -74,14 +77,22 @@ void LanguageModel::initInferenceState() {
     
     training_state_.cached_num_layers = cfg.num_layers;
 
-    const int num_kv_heads = (cfg.num_kv_heads > 0) ? cfg.num_kv_heads : cfg.num_heads;
-    if (cfg.num_heads % num_kv_heads != 0) {
+    // RULE 20: require an explicit num_kv_heads in config — no silent fallback to num_heads.
+    // Inference must use the same GQA topology as training; if config is missing/invalid,
+    // crash here instead of silently running as full multi-head attention.
+    if (cfg.num_kv_heads <= 0) {
+        throw std::runtime_error("[InitInferenceState] Invalid GQA config: cfg.num_kv_heads=" +
+                                 std::to_string(cfg.num_kv_heads) +
+                                 " (must be > 0; set explicitly in ai_config.json)");
+    }
+    if (!HyperParameters::isValidGQAConfig(cfg.num_heads, cfg.num_kv_heads)) {
         throw std::runtime_error("[InitInferenceState] Invalid GQA config: num_heads=" +
-                                 std::to_string(cfg.num_heads) + " not divisible by num_kv_heads=" +
-                                 std::to_string(num_kv_heads));
+                                 std::to_string(cfg.num_heads) + " num_kv_heads=" +
+                                 std::to_string(cfg.num_kv_heads));
     }
     training_state_.num_heads = cfg.num_heads;
-    training_state_.num_kv_heads = num_kv_heads;
+    training_state_.num_kv_heads = cfg.num_kv_heads;
+    const int num_kv_heads = cfg.num_kv_heads;  // local alias for downstream sizing math
     
     // TensorContract shape helpers
     using TC = TensorContract::TensorShape;

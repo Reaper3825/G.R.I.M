@@ -104,9 +104,12 @@ void LanguageModel::initPBM() {
 }
 
 void LanguageModel::initTrainingState() {
+    // RULE 20: double-init is a caller-order bug, not a recoverable condition.
     if (training_state_.initialized) {
-        fprintf(stderr, "[initTrainingState] WARNING: Already initialized, skipping re-init\n");
-        return;
+        throw std::runtime_error(
+            "[initTrainingState] FATAL: training_state_.initialized is already true. "
+            "Caller invoked initTrainingState() twice (or after initInferenceState). "
+            "This is a call-order bug.");
     }
     
     const auto& cfg = getConfig();
