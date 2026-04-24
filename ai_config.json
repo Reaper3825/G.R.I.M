@@ -615,7 +615,7 @@
                     "enabled": true
                 }
             },
-            "tie_embeddings": true,
+            "tie_embeddings": false,
             "use_flash_attention": true,
             "use_gpu": true,
             "validation_interval": 2000,

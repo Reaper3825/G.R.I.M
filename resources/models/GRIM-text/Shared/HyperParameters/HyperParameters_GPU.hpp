@@ -59,7 +59,7 @@ constexpr int DEFAULT_D_MODEL = 768;
 constexpr int DEFAULT_NUM_LAYERS = 6;
 constexpr int DEFAULT_NUM_HEADS = 12;
 constexpr int DEFAULT_D_FF_MULTIPLIER = 4;  // d_ff = d_model * multiplier
-constexpr int DEFAULT_MAX_SEQ_LEN = 2048;
+constexpr int DEFAULT_MAX_SEQ_LEN = 1024;
 constexpr float DEFAULT_DROPOUT_RATE = 0.1f;
 // Residual and attention dropout are always derived from dropout_rate (no separate defaults)
 

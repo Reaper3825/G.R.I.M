@@ -1591,6 +1591,12 @@ BatchResult processBatch(
                 float hw_hbar_wbar_cos = 0.0f;
                 float hw_h_dc_mean = 0.0f;
                 float hw_h_dc_abs_max = 0.0f;
+                // Unigram-frequency-direction collapse detector (Issue #150, streams 45-46).
+                // Empirical e_uf_dir = normalize(Σ_t E[input_ids[t]]) — since positions are
+                // sampled from the empirical unigram distribution, this is a Monte-Carlo
+                // estimator of Σ_v p(v)·E[v].
+                float unigram_dir_cos_abs_mean    = 0.0f;
+                float unigram_dir_cos_signed_mean = 0.0f;
                 if (h_src && lm_head_weights) {
                     // (1) Re-fetch h_sample (out-of-scope from earlier block).
                     const size_t h_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
@@ -1709,10 +1715,91 @@ BatchResult processBatch(
                         }
                     }
 
+                    // ============================================================
+                    // UNIGRAM-FREQUENCY-DIRECTION COLLAPSE DETECTOR (Issue #150)
+                    //
+                    // Build empirical e_uf_dir = normalize(Σ_t E[input_ids[t]]) using
+                    // ONLY tokens at valid positions (b<batch_size, t<seq_lengths[b]).
+                    // Then compute mean_t |cos(h_t, e_uf_dir)| and signed mean.
+                    //
+                    // High |cos| during steps 0–600 confirms hidden states are
+                    // collapsing toward the dominant-token direction (representation
+                    // bug, not optimizer bug). Random baseline ≈ sqrt(2/(π·d)) ≈ 0.029.
+                    // ============================================================
+                    if (embedding_weights && payload.batch_size > 0) {
+                        // (1) Tally unique token counts at valid positions in the
+                        //     same flattened layout as h_sample (pos = b*seq_len + t).
+                        std::map<int, int> tok_counts;
+                        std::vector<int> pos_to_tok(sample_positions, -1);
+                        for (int pos = 0; pos < sample_positions; ++pos) {
+                            const int b = pos / ts.cached_seq_len;
+                            const int t = pos % ts.cached_seq_len;
+                            if (b >= payload.batch_size) continue;
+                            if (t >= payload.seq_lengths[b]) continue;
+                            const int tok = payload.input_ids[b * payload.max_seq_len + t];
+                            if (tok < 0 || tok >= vocab_size) continue;
+                            pos_to_tok[pos] = tok;
+                            ++tok_counts[tok];
+                        }
+
+                        if (!tok_counts.empty()) {
+                            // (2) Accumulate e_uf_dir = Σ count(tok) · E[tok] in double.
+                            std::vector<double> e_uf_dir(d_model, 0.0);
+                            std::vector<float>  e_row(d_model);
+                            int64_t total_valid = 0;
+                            for (const auto& kv : tok_counts) {
+                                const int tok = kv.first;
+                                const int cnt = kv.second;
+                                cudaMemcpy(e_row.data(),
+                                           embedding_weights + static_cast<size_t>(tok) * d_model,
+                                           d_model * sizeof(float),
+                                           cudaMemcpyDeviceToHost);
+                                for (int d = 0; d < d_model; ++d) {
+                                    e_uf_dir[d] += static_cast<double>(cnt) * static_cast<double>(e_row[d]);
+                                }
+                                total_valid += cnt;
+                            }
+
+                            // (3) Normalize e_uf_dir.
+                            double e_norm_sq = 0.0;
+                            for (int d = 0; d < d_model; ++d) e_norm_sq += e_uf_dir[d] * e_uf_dir[d];
+                            if (e_norm_sq > 0.0 && std::isfinite(e_norm_sq) && total_valid > 0) {
+                                const double inv_e_norm = 1.0 / std::sqrt(e_norm_sq);
+
+                                // (4) Per-position cos(h_t, e_uf_dir); mean abs / signed.
+                                long double cos_signed_sum  = 0.0L;
+                                long double cos_abs_sum     = 0.0L;
+                                int64_t     cos_count       = 0;
+                                for (int pos = 0; pos < sample_positions; ++pos) {
+                                    if (pos_to_tok[pos] < 0) continue;             // skip pad
+                                    if (h_norm_sq[pos] <= 0.0 || !std::isfinite(h_norm_sq[pos])) continue;
+                                    const float* h_row = &h_sample[static_cast<size_t>(pos) * d_model];
+                                    double dot = 0.0;
+                                    for (int d = 0; d < d_model; ++d) {
+                                        dot += static_cast<double>(h_row[d]) * e_uf_dir[d];
+                                    }
+                                    const double inv_h_norm = 1.0 / std::sqrt(h_norm_sq[pos]);
+                                    const double cos_te     = dot * inv_h_norm * inv_e_norm;
+                                    cos_signed_sum += static_cast<long double>(cos_te);
+                                    cos_abs_sum    += static_cast<long double>(std::abs(cos_te));
+                                    ++cos_count;
+                                }
+
+                                if (cos_count > 0) {
+                                    const long double inv_n = 1.0L / static_cast<long double>(cos_count);
+                                    unigram_dir_cos_abs_mean    = static_cast<float>(static_cast<double>(cos_abs_sum    * inv_n));
+                                    unigram_dir_cos_signed_mean = static_cast<float>(static_cast<double>(cos_signed_sum * inv_n));
+                                }
+                            }
+                        }
+                    }
+
                     // Rule 20: fail loud on NaN/Inf in alignment metrics.
                     if (!std::isfinite(hw_cos_rms) || !std::isfinite(hw_cos_signed_mean) ||
                         !std::isfinite(hw_cos_abs_max) || !std::isfinite(hw_hbar_wbar_cos) ||
-                        !std::isfinite(hw_h_dc_mean) || !std::isfinite(hw_h_dc_abs_max))
+                        !std::isfinite(hw_h_dc_mean) || !std::isfinite(hw_h_dc_abs_max) ||
+                        !std::isfinite(unigram_dir_cos_abs_mean) ||
+                        !std::isfinite(unigram_dir_cos_signed_mean))
                     {
                         throw std::runtime_error(
                             "[HW_ALIGNMENT] FATAL: h↔W alignment metrics contain NaN/Inf at batch " +
@@ -1720,13 +1807,15 @@ BatchResult processBatch(
                     }
                 }
 
-                // Publish to telemetry lattice (streams 39-44). CSV logger picks these up.
+                // Publish to telemetry lattice (streams 39-46). CSV logger picks these up.
                 ctx.telemetry.last_obs[39] = hw_cos_rms;          // HW_COS_RMS
                 ctx.telemetry.last_obs[40] = hw_cos_signed_mean;  // HW_COS_SIGNED_MEAN
                 ctx.telemetry.last_obs[41] = hw_cos_abs_max;      // HW_COS_ABS_MAX
                 ctx.telemetry.last_obs[42] = hw_hbar_wbar_cos;    // HW_HBAR_WBAR_COS
                 ctx.telemetry.last_obs[43] = hw_h_dc_mean;        // HW_H_DC_MEAN
                 ctx.telemetry.last_obs[44] = hw_h_dc_abs_max;     // HW_H_DC_ABS_MAX
+                ctx.telemetry.last_obs[45] = unigram_dir_cos_abs_mean;    // UNIGRAM_DIR_COS_ABS_MEAN
+                ctx.telemetry.last_obs[46] = unigram_dir_cos_signed_mean; // UNIGRAM_DIR_COS_SIGNED_MEAN
 
                 struct LogitTrendState {
                     bool initialized = false;

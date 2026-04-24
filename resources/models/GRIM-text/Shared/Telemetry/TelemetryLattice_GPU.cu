@@ -338,6 +338,8 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::HW_HBAR_WBAR_COS: return "hw_hbar_wbar_cos";
         case MetricStream::HW_H_DC_MEAN: return "hw_h_dc_mean";
         case MetricStream::HW_H_DC_ABS_MAX: return "hw_h_dc_abs_max";
+        case MetricStream::UNIGRAM_DIR_COS_ABS_MEAN: return "unigram_dir_cos_abs_mean";
+        case MetricStream::UNIGRAM_DIR_COS_SIGNED_MEAN: return "unigram_dir_cos_signed_mean";
         default: return "unknown";
     }
 }

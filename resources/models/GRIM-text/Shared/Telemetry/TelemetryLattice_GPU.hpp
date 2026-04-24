@@ -196,6 +196,14 @@ enum class MetricStream : int {
     HW_HBAR_WBAR_COS = 42,           // cos(mean_t h_t, mean_v W_v) — explicit rank-1 DC coupling
     HW_H_DC_MEAN = 43,               // mean over t of (1/d) Σ_d h[t,d] — DC component of hidden state
     HW_H_DC_ABS_MAX = 44,            // max  over t of |(1/d) Σ_d h[t,d]| — worst-position DC offset
+    // Unigram-frequency-direction collapse detector (Apr 2026).
+    // e_uf_dir := mean over valid positions of embedding[input_ids[t]] — empirical
+    // estimator of Σ_v p(v)·E[v] since positions are sampled from p(v).
+    // High |cos(h_t, e_uf_dir)| during steps 0–600 → unigram-frequency collapse mode
+    // (h aligned with the dominant-token direction). Compared at the LM-input tensor
+    // (post-centering when `lm_head_centering.project_out_pc1` is enabled).
+    UNIGRAM_DIR_COS_ABS_MEAN = 45,    // mean_t |cos(h_t, e_uf_dir)| at LM-input tensor
+    UNIGRAM_DIR_COS_SIGNED_MEAN = 46, // mean_t  cos(h_t, e_uf_dir) at LM-input tensor
 };
 
 const char* getMetricStreamName(MetricStream stream);

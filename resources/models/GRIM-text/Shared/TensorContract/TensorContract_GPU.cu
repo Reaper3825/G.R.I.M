@@ -2552,8 +2552,9 @@ struct CenterColumnsGradFn : public GradFn {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PC1 PROJECTION KERNELS — Issue #149
-// Forward:  h̃[t] = h[t] - (h[t]·g)*g   (g = PC1 via power iteration, stop-grad)
-// Backward: grad_h = (I - gg^T) * grad_h̃  (same projection, g is constant)
+// g is RMS-normalized (g·g = D), so the projection coefficient is (h·g)/D, not (h·g).
+// Forward:  h̃[t] = h[t] - (h[t]·g / D) * g   (g = PC1 via power iteration, stop-grad)
+// Backward: grad_h += (I - gg^T/D) * grad_h̃  (same projection, ACCUMULATES; g constant)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Init PC1 guess from column mean: g[d] = mean_t H[t,d] / ||·||
@@ -2569,10 +2570,15 @@ static __global__ void kernel_pc1_col_mean(
 }
 
 // Normalize g in-place: g = g / rms(g)   where rms = sqrt(sum(g²)/D)
-// Launch: <<<1, 256, 0, stream>>>
+// If ||g||² is below a numerical floor (degenerate / near-zero H), substitutes a
+// canonical unit vector g = (1,0,…,0) so downstream power iteration cannot blow up.
+// Launch: <<<1, 256, 0, stream>>>  (requires blockDim.x == 256)
 static __global__ void kernel_pc1_normalize(float* __restrict__ g, int D)
 {
+    assert(blockDim.x == 256);  // sdata[256] reduction is hard-coded
     __shared__ float sdata[256];
+    __shared__ float s_inv;
+    __shared__ int   s_degenerate;
     float local = 0.f;
     for (int d = threadIdx.x; d < D; d += blockDim.x)
         local += g[d] * g[d];
@@ -2582,11 +2588,24 @@ static __global__ void kernel_pc1_normalize(float* __restrict__ g, int D)
         if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x + s];
         __syncthreads();
     }
-    // RMS normalization: inv = 1/rms(g) = 1/sqrt(sum_sq/D)
-    float inv = 1.f / sqrtf(sdata[0] / (float)D + 1e-12f);
+    if (threadIdx.x == 0) {
+        const float sum_sq = sdata[0];
+        // Floor in absolute terms — well above fp32 denormals, well below any
+        // realistic ||g||² for non-collapsed H. If we trip it we substitute a
+        // canonical direction rather than producing a 1e6-magnitude g from noise.
+        const float kFloor = 1e-20f;
+        s_degenerate = (sum_sq < kFloor) ? 1 : 0;
+        s_inv = (sum_sq < kFloor) ? 0.f : (1.f / sqrtf(sum_sq / (float)D));
+    }
     __syncthreads();
-    for (int d = threadIdx.x; d < D; d += blockDim.x)
-        g[d] *= inv;
+    if (s_degenerate) {
+        for (int d = threadIdx.x; d < D; d += blockDim.x)
+            g[d] = (d == 0) ? 1.f : 0.f;
+    } else {
+        const float inv = s_inv;
+        for (int d = threadIdx.x; d < D; d += blockDim.x)
+            g[d] *= inv;
+    }
 }
 
 // v[t] = H[t,:] · g  (matrix-vector product H @ g)
@@ -2615,14 +2634,16 @@ static __global__ void kernel_pc1_gemv_HtV(
     g_out[d] = dot;
 }
 
-// H_out[t,d] = H[t,d] - (H[t,:]·g / D) * g[d]  — project each row
+// H_out[t,d] = H[t,d] - (H[t,:]·g / D) * g[d]  — project each row (overwrite)
 // With RMS-normalized g (rms(g)=1 → g·g=D), proper projection is (h·g)/(g·g) * g = (h·g)/D * g
-// Used in both forward pass and backward (same linear projection since (I-gg^T/D) is symmetric)
+// Used in FORWARD pass (writes into a fresh output buffer).
 // Launch: <<<T, 256, 0, stream>>>  (one block per row for shared-mem dot product)
+// Requires blockDim.x == 256 (shared-mem reduction width is hard-coded).
 static __global__ void kernel_pc1_project(
     const float* __restrict__ H, const float* __restrict__ g,
     float* __restrict__ H_out, int T, int D)
 {
+    assert(blockDim.x == 256);  // sdata[256] reduction is hard-coded
     int t = blockIdx.x;
     if (t >= T) return;
     __shared__ float sdata[256];
@@ -2637,9 +2658,37 @@ static __global__ void kernel_pc1_project(
     }
     // Divide by D because g is RMS-normalized (g·g = D, not 1)
     float coeff = sdata[0] / (float)D;
-    __syncthreads();
     for (int d = threadIdx.x; d < D; d += blockDim.x)
         H_out[(size_t)t * D + d] = H[(size_t)t * D + d] - coeff * g[d];
+}
+
+// H_out[t,d] += H[t,d] - (H[t,:]·g / D) * g[d]  — same projection but ACCUMULATES.
+// Used in BACKWARD: grad_h += (I - gg^T/D) * grad_h̃ so multiple GradFns sharing
+// a leaf parameter's persistent grad buffer compose correctly (grads must accumulate,
+// never overwrite — Rule 20).
+// Launch: <<<T, 256, 0, stream>>>  with blockDim.x == 256.
+static __global__ void kernel_pc1_project_accum(
+    const float* __restrict__ H, const float* __restrict__ g,
+    float* __restrict__ H_out, int T, int D)
+{
+    assert(blockDim.x == 256);  // sdata[256] reduction is hard-coded
+    int t = blockIdx.x;
+    if (t >= T) return;
+    __shared__ float sdata[256];
+    float local = 0.f;
+    for (int d = threadIdx.x; d < D; d += blockDim.x)
+        local += H[(size_t)t * D + d] * g[d];
+    sdata[threadIdx.x] = local;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x + s];
+        __syncthreads();
+    }
+    float coeff = sdata[0] / (float)D;
+    for (int d = threadIdx.x; d < D; d += blockDim.x) {
+        const size_t idx = (size_t)t * D + d;
+        H_out[idx] += H[idx] - coeff * g[d];
+    }
 }
 
 /**
@@ -2665,19 +2714,31 @@ struct ProjectOutPC1GradFn : public GradFn {
 
     ProjectOutPC1GradFn() { op_name = "project_out_pc1"; }
 
+    // Takes ownership of g_device (must be a cudaMalloc'd [cols]-float buffer).
+    // Caller MUST NOT free g_device after this call — the GradFn owns it.
     __host__ void capture_input(Tensor& input, int rows, int cols,
-                                const float* g_ptr, cudaStream_t stream) {
+                                float* g_device, cudaStream_t stream) {
+        // ── Edge-case validation (Rule 20) ──
+        if (g_device == nullptr)
+            throw std::runtime_error("ProjectOutPC1GradFn::capture_input: g_device is NULL");
+        if (rows <= 0 || cols <= 0)
+            throw std::runtime_error("ProjectOutPC1GradFn::capture_input: invalid dims rows=" +
+                                     std::to_string(rows) + " cols=" + std::to_string(cols));
+        if (input.numel() != (std::size_t)rows * (std::size_t)cols)
+            throw std::runtime_error("ProjectOutPC1GradFn::capture_input: input.numel()=" +
+                                     std::to_string(input.numel()) + " != rows*cols=" +
+                                     std::to_string((std::size_t)rows * (std::size_t)cols));
+
         input_requires_grad = input.requires_grad;
         input_shape = input.shape;
         element_count = input.numel();
         num_rows = rows;
         num_cols = cols;
+        (void)stream;
 
-        // Save g direction (device copy, stop-gradient)
-        float* gp = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&gp), cols * sizeof(float), "ProjectOutPC1GradFn_g_saved");
-        cudaMemcpyAsync(gp, g_ptr, cols * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        owned_g.reset(gp, [](float* p) { queueForDeferredCleanup(p); });
+        // Take ownership of g (stop-gradient direction). Avoids a per-step cudaMalloc
+        // + D2D copy on the hot path.
+        owned_g.reset(g_device, [](float* p) { queueForDeferredCleanup(p); });
         g_saved = owned_g.get();
 
         if (!input.requires_grad) return;
@@ -2701,6 +2762,12 @@ struct ProjectOutPC1GradFn : public GradFn {
         if (applied) return;
         if (!input_requires_grad) return;
         if (!g_saved) throw std::runtime_error("ProjectOutPC1GradFn::apply: g_saved is NULL - g direction was freed before backward");
+        if (grad_output.data == nullptr)
+            throw std::runtime_error("ProjectOutPC1GradFn::apply: grad_output.data is NULL");
+        if (grad_output.numel() != element_count)
+            throw std::runtime_error("ProjectOutPC1GradFn::apply: grad_output.numel()=" +
+                                     std::to_string(grad_output.numel()) +
+                                     " != captured element_count=" + std::to_string(element_count));
         applied = true;
 
         // Allocate grad buffer on-demand for non-leaf inputs (deferred from capture_input)
@@ -2713,8 +2780,12 @@ struct ProjectOutPC1GradFn : public GradFn {
             AG_TRACE("[ProjectOutPC1GradFn] Allocated deferred input_grad buffer: %zu floats at %p\n", element_count, (void*)input_grad);
         }
 
-        // BACKWARD: grad_h = (I - gg^T/D) * grad_h̃  — same projection as forward (g is RMS-normalized)
-        kernel_pc1_project<<<num_rows, 256, 0, stream>>>(
+        // BACKWARD: grad_h += (I - gg^T/D) * grad_h̃  — same projection as forward.
+        // ACCUMULATES so leaf parameters (whose grad buffer persists across multiple
+        // graph branches in an accumulation window) compose correctly. The non-leaf
+        // path above zero-inits input_grad first, so accumulating into zero is
+        // equivalent to assigning.
+        kernel_pc1_project_accum<<<num_rows, 256, 0, stream>>>(
             grad_output.data, g_saved, input_grad, num_rows, num_cols);
 
         if (input_grad_fn) {
@@ -5540,13 +5611,28 @@ Tensor center_columns(const Tensor& x, cudaStream_t stream) {
 // steps of the power method (H^T H g normalised each step).
 // ─────────────────────────────────────────────────────────────────────────────
 Tensor project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_t stream) {
+    // ── Edge-case validation (Rule 20: fail loud, no silent fallbacks) ──
     if (x.numel() == 0)
         throw std::runtime_error("project_out_pc1: input tensor is empty");
+    if (x.data == nullptr)
+        throw std::runtime_error("project_out_pc1: input tensor data is NULL");
+    if (!x.shape.is_2d_layout())
+        throw std::runtime_error("project_out_pc1: expected 2D (flat) tensor [T, D]");
+    if (n_power_iters < 0)
+        throw std::runtime_error("project_out_pc1: n_power_iters must be >= 0, got " + std::to_string(n_power_iters));
 
     const int D = (int)x.shape.flat.cols;
     const int T = (int)(x.numel() / (std::size_t)D);
     if (D <= 0 || T <= 0)
         throw std::runtime_error("project_out_pc1: invalid dimensions T=" + std::to_string(T) + " D=" + std::to_string(D));
+    // T==1 and D==1 are degenerate: with a single row, g is collinear with H[0,:]
+    // and the projection produces all-zero output, which silently zeros the LM-head
+    // input. With D==1 the only direction is g itself — same outcome. Both indicate
+    // a caller bug (wrong shape / micro-batch=1 row), not a recoverable runtime state.
+    if (T < 2)
+        throw std::runtime_error("project_out_pc1: requires T >= 2 (got T=" + std::to_string(T) + "); projection of a single row collapses to zero");
+    if (D < 2)
+        throw std::runtime_error("project_out_pc1: requires D >= 2 (got D=" + std::to_string(D) + "); projection in 1D collapses to zero");
 
     bool track_grad = x.requires_grad;
 
@@ -5563,12 +5649,13 @@ Tensor project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_t stream) 
     kernel_pc1_normalize<<<1, 256, 0, stream>>>(g_buf, D);
 
     // Power iteration: g ← normalize(H^T (H g))
+    // Ping-pong g_buf <-> g_tmp instead of D2D-copying every iter.
     const int blk = 256;
     for (int iter = 0; iter < n_power_iters; ++iter) {
         kernel_pc1_gemv_Hg<<<(T + blk - 1) / blk, blk, 0, stream>>>(x.data, g_buf, v_buf, T, D);
         kernel_pc1_gemv_HtV<<<(D + blk - 1) / blk, blk, 0, stream>>>(x.data, v_buf, g_tmp, T, D);
         kernel_pc1_normalize<<<1, 256, 0, stream>>>(g_tmp, D);
-        cudaMemcpyAsync(g_buf, g_tmp, D * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+        std::swap(g_buf, g_tmp);  // freshly-normalized g is now in g_buf
     }
     // Single sync after all PC1 kernels — needed before host-side autograd capture
     cudaError_t pc1_err = cudaStreamSynchronize(stream);
@@ -5591,18 +5678,19 @@ Tensor project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_t stream) 
     // Project: H_out[t,d] = H[t,d] - (H[t,:]·g / D) * g[d]  (g is RMS-normalized, g·g=D)
     kernel_pc1_project<<<T, 256, 0, stream>>>(x.data, g_buf, out_data, T, D);
 
-    // Wire autograd: GradFn captures g (device copy) and chains to input's grad_fn.
-    // Must happen BEFORE g_buf is freed.
+    // Free scratch buffers we no longer need. g_buf is either (a) handed to the
+    // GradFn below (track_grad==true), or (b) freed here.
+    cudaFreeAsync(v_buf, stream);
+    cudaFreeAsync(g_tmp, stream);
+
     if (track_grad) {
+        // Transfer ownership of g_buf to the GradFn — no per-step malloc/D2D copy.
         auto grad_fn = std::make_shared<ProjectOutPC1GradFn>();
         grad_fn->capture_input(const_cast<Tensor&>(x), T, D, g_buf, stream);
         result.grad_fn = grad_fn;
+    } else {
+        cudaFreeAsync(g_buf, stream);
     }
-
-    // Free temporary buffers (async safe — project kernel submitted to stream before free)
-    cudaFreeAsync(v_buf, stream);
-    cudaFreeAsync(g_tmp, stream);
-    cudaFreeAsync(g_buf, stream);  // GradFn already captured its own copy
 
     return result;
 }

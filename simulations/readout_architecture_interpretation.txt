@@ -1,0 +1,150 @@
+═══════════════════════════════════════════════════════════════════════════════
+  READOUT ARCHITECTURE SIMULATION — INTERPRETATION
+  Toy test of whether NON-dot-product readouts (MLP / MoS / factorized)
+  break the directional unigram-collapse on hidden states.
+═══════════════════════════════════════════════════════════════════════════════
+
+Source         : simulations/readout_architecture_simulation.py
+Raw output     : simulations/readout_architecture_simulation.txt
+Setup          : V=200, D=32, alpha=0.7, Zipf s=1.0, 4000 steps, lr=0.05
+Honest goal    : measure cos(h_mean, e_unigram_dir) and KL(p_model||p_true)
+                 across 4 readouts under IDENTICAL data, init seed, lr, steps.
+
+─────────────────────────────────────────────────────────────────────────────
+ BASELINES (NL-like Zipfian distribution)
+─────────────────────────────────────────────────────────────────────────────
+  loss_oracle           = 1.8465   (knowing p(y|x) exactly)
+  loss_unigram          = 5.5059   (predicting marginal p(y))
+  KL(unigram || true)   = 3.6593   (cost of "predict marginal")
+  random baseline cos   = 1/√D = 0.1768
+  P1 threshold          = cos_u  ≤ 0.300
+  P2 threshold          = eff_r  ≥ 8.00
+  P3 threshold          = cond_KL ≤ 1.830  (= 0.5 · KL_unigram_true)
+  P4 threshold          = loss   ≤ 4.408   (= 0.7·unigram + 0.3·oracle)
+
+─────────────────────────────────────────────────────────────────────────────
+ RESULTS @ step 4000
+─────────────────────────────────────────────────────────────────────────────
+  readout    loss   cos_unigram   eff_rank   cond_KL    P1 P2 P3 P4   verdict
+  ────────   ─────  ───────────   ────────   ───────    ─────────    ────────
+  TIED       4.210      0.859       21.42     1.944     N  Y  N  Y   FAILS
+  UNTIED     4.631      0.059       20.29     1.928     Y  Y  N  N   FAILS
+  MLP        2.365      0.065       19.81     0.990     Y  Y  Y  Y   PASSES
+  MoS        5.364      0.080       22.73     1.963     Y  Y  N  N   FAILS
+
+─────────────────────────────────────────────────────────────────────────────
+ INTERPRETATION (honest, what the numbers actually say)
+─────────────────────────────────────────────────────────────────────────────
+
+1. TIED is the textbook collapse.
+   cos_unigram_dir climbs MONOTONICALLY: 0.054 → 0.179 → 0.313 → 0.419 →
+   0.513 → 0.623 → 0.717 → 0.765 → 0.859. The encoder mean is being
+   actively pulled into the unigram-frequency direction in embedding space,
+   exactly as the theory predicts. Loss DOES drop to 4.21 (technically
+   passes P4) — but cond_KL is barely changed from the unigram baseline
+   (1.94 vs 1.96 at init). The loss drop is a *magnitude* artifact: as h
+   aligns with the unigram direction, log-marginal probabilities sharpen
+   without learning the conditional. Confirms the user's diagnosis on the
+   real run.
+
+2. UNTIED keeps h DIRECTIONALLY clean but does NOT solve the problem.
+   cos_unigram_dir stays at ~0.06 the whole run. But cond_KL barely moves
+   (1.96 → 1.93) and loss only reaches 4.63 (fails P4). Mechanism: with
+   independent W, the unigram direction gets absorbed by W's bias / its
+   first principal component instead of by h. h stays "clean" but the
+   encoder is still not learning the conditional — the readout absorbs the
+   marginal and the encoder is irrelevant. This matches the
+   tied_vs_untied_comparison.txt empirical finding from real runs:
+   "untying does NOT prevent collapse."
+
+3. MLP head is the ONLY readout that passes all four.
+   Loss 2.37 (vs oracle 1.85 — 87% of the way from unigram to oracle).
+   cond_KL 0.99 (vs threshold 1.83). cos_unigram_dir 0.065. The non-linear
+   transformation between h and logits breaks the direct geometric
+   coupling: ∂L/∂h flows through ReLU(W1·) which is NOT structurally tied
+   to E. The encoder receives a usable directional gradient that is not
+   the unigram direction, and h ends up encoding x-information rather
+   than aligning with marginal-frequency.
+
+4. MoS as implemented is the WORST performer — and this is honest.
+   Loss never improves (5.30 → 5.36 — slightly WORSE than init). The
+   gating π_k(h) collapses to near-uniform under the shared lr / init,
+   degenerating MoS into K identical softmaxes that average out. With
+   K shared-init mixture components the gradient on each W_k is
+   1/K-attenuated and the gating gradient is small. To make MoS work
+   you'd need either (a) a much larger lr on the gate, (b) larger
+   gating init, or (c) a temperature on the gate logits. None of those
+   were applied — the test is fair (same lr/init for all readouts).
+
+   This DOES NOT validate MoS architecturally; it shows MoS is brittle
+   under naive hyperparams. It also does NOT confirm the user's "MoS
+   breaks the rank bottleneck" claim in this setting — MoS didn't even
+   start learning, so we can't read its directional behavior.
+
+─────────────────────────────────────────────────────────────────────────────
+ WHAT THIS SAYS ABOUT THE USER'S CLAIM
+─────────────────────────────────────────────────────────────────────────────
+
+User's claim:
+  "A non-dot-product readout (MLP head, mixture-of-softmaxes, factorized
+   head) breaks the Yang et al. softmax-rank bottleneck that mathematically
+   forces h into the column span of W's most-frequent-token directions."
+
+Verdict from this sim:
+  - PARTIALLY SUPPORTED for MLP. The MLP head DOES break the directional
+    pull AND learns the conditional in this toy. The mechanism is real:
+    inserting a non-linearity between h and logits decouples ∂L/∂h from
+    the embedding rows.
+  - NOT SUPPORTED for MoS in this sim (MoS failed to train; we can't tell
+    whether it would have decoupled if it had).
+  - The Yang-et-al RANK argument (that softmax(hWᵀ) has rank ≤ d) is NOT
+    what's doing the work for MLP here. MLP's win is the BREAK in the
+    geometric coupling, not the rank lift. With V=200 and D=32, V > D so
+    the rank bottleneck is technically present, but no readout in this
+    test is rank-limited — they all have eff_rank ≥ 19.
+
+─────────────────────────────────────────────────────────────────────────────
+ LIMITATIONS — DO NOT OVER-CLAIM FROM THIS TOY
+─────────────────────────────────────────────────────────────────────────────
+
+  - V=200, D=32. Real GRIM-text is V=10262, D=768.
+  - No sequence dimension, no attention, no RMSNorm, no LayerScale.
+  - Encoder is a single tanh(W·E[x]) — vastly simpler than 12 layers.
+  - True conditional has alpha=0.7 signal — easier than NL.
+  - lr/init are the same for all readouts (fair, but not optimal for any).
+  - MoS may work with proper gating-lr, just not in THIS test.
+  - MLP "wins" here may not survive when V grows large: the W2
+    (H × V = 128 × 10262 ≈ 1.3M params) eventually has to align with E
+    to produce correct predictions, recreating the geometric coupling
+    one matrix removed.
+
+─────────────────────────────────────────────────────────────────────────────
+ RECOMMENDED NEXT TESTS (if pursuing this direction)
+─────────────────────────────────────────────────────────────────────────────
+
+  T1) Repeat with V=2000, D=128 to test whether MLP's directional-decoupling
+      survives at scale.
+  T2) MoS with separate gating lr (5×–10×) to give it a fair shot.
+  T3) Add a "gradient-projection" baseline: tied head + project unigram
+      direction out of ∂L/∂E each step. Should match MLP's directional
+      cleanness but with O(d) cost vs MLP's O(H·V).
+  T4) Negative-sampling baseline (literature-standard fix): subsample
+      negatives from p_unigram, drop softmax-CE for sampled-NCE. Predicted
+      to match or beat MLP on all 4 metrics.
+
+═══════════════════════════════════════════════════════════════════════════════
+ BOTTOM LINE
+═══════════════════════════════════════════════════════════════════════════════
+
+In this honest toy:
+  - MLP head breaks the directional collapse (P1 pass) AND learns the
+    conditional (P3, P4 pass). It is the only readout that does both.
+  - Untied head fixes direction but not learning.
+  - MoS, as naively implemented with shared hyperparams, doesn't train.
+  - Tied head exhibits the exact textbook collapse mechanism.
+
+The user's claim about non-dot-product readouts has SOME mechanistic
+support (MLP wins) but the specific Yang-et-al rank-bottleneck argument
+is not what's doing the work here. The actual mechanism that helps MLP
+is the broken geometric coupling between (p−y) and ∂L/∂h — which is
+exactly the directional argument the user has been making.

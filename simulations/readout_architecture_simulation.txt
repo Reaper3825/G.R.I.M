@@ -1,0 +1,68 @@
+==============================================================================
+ READOUT ARCHITECTURE SIMULATION
+==============================================================================
+ V=200 D=32 alpha=0.7 zipf_s=1.0  steps=4000  lr=0.05
+ BASELINES:
+   loss_oracle           = 1.8465
+   loss_unigram          = 5.5059
+   KL(unigram || true)   = 3.6593
+   random baseline cos   = 1/sqrt(D) = 0.1768
+
+--- TIED ----------------------------------------------------------------------
+  step=    1  loss= 5.301  cos_unigram_dir=0.054  eff_rank= 24.97  cond_KL= 1.959
+  step=  500  loss= 5.279  cos_unigram_dir=0.179  eff_rank= 25.04  cond_KL= 1.958
+  step= 1000  loss= 5.256  cos_unigram_dir=0.313  eff_rank= 24.81  cond_KL= 1.957
+  step= 1500  loss= 5.226  cos_unigram_dir=0.419  eff_rank= 24.29  cond_KL= 1.955
+  step= 2000  loss= 5.177  cos_unigram_dir=0.513  eff_rank= 23.63  cond_KL= 1.953
+  step= 2500  loss= 5.094  cos_unigram_dir=0.623  eff_rank= 22.92  cond_KL= 1.950
+  step= 3000  loss= 4.932  cos_unigram_dir=0.717  eff_rank= 22.23  cond_KL= 1.946
+  step= 3500  loss= 4.663  cos_unigram_dir=0.765  eff_rank= 21.51  cond_KL= 1.946
+  step= 4000  loss= 4.210  cos_unigram_dir=0.859  eff_rank= 21.42  cond_KL= 1.944
+
+--- UNTIED --------------------------------------------------------------------
+  step=    1  loss= 5.299  cos_unigram_dir=0.005  eff_rank= 25.07  cond_KL= 1.959
+  step=  500  loss= 5.280  cos_unigram_dir=0.078  eff_rank= 24.85  cond_KL= 1.958
+  step= 1000  loss= 5.258  cos_unigram_dir=0.065  eff_rank= 24.70  cond_KL= 1.957
+  step= 1500  loss= 5.229  cos_unigram_dir=0.052  eff_rank= 24.15  cond_KL= 1.956
+  step= 2000  loss= 5.186  cos_unigram_dir=0.077  eff_rank= 23.69  cond_KL= 1.953
+  step= 2500  loss= 5.135  cos_unigram_dir=0.090  eff_rank= 22.91  cond_KL= 1.951
+  step= 3000  loss= 5.022  cos_unigram_dir=0.026  eff_rank= 22.02  cond_KL= 1.946
+  step= 3500  loss= 4.890  cos_unigram_dir=0.030  eff_rank= 21.12  cond_KL= 1.941
+  step= 4000  loss= 4.631  cos_unigram_dir=0.059  eff_rank= 20.29  cond_KL= 1.928
+
+--- MLP -----------------------------------------------------------------------
+  step=    1  loss= 5.298  cos_unigram_dir=0.027  eff_rank= 25.10  cond_KL= 1.959
+  step=  500  loss= 5.162  cos_unigram_dir=0.083  eff_rank= 24.96  cond_KL= 1.807
+  step= 1000  loss= 5.113  cos_unigram_dir=0.190  eff_rank= 24.56  cond_KL= 1.648
+  step= 1500  loss= 5.033  cos_unigram_dir=0.044  eff_rank= 23.88  cond_KL= 1.589
+  step= 2000  loss= 4.891  cos_unigram_dir=0.041  eff_rank= 22.60  cond_KL= 1.559
+  step= 2500  loss= 4.585  cos_unigram_dir=0.029  eff_rank= 20.86  cond_KL= 1.539
+  step= 3000  loss= 4.019  cos_unigram_dir=0.072  eff_rank= 19.52  cond_KL= 1.601
+  step= 3500  loss= 3.131  cos_unigram_dir=0.074  eff_rank= 19.28  cond_KL= 1.532
+  step= 4000  loss= 2.365  cos_unigram_dir=0.065  eff_rank= 19.81  cond_KL= 0.990
+
+--- MoS -----------------------------------------------------------------------
+  step=    1  loss= 5.300  cos_unigram_dir=0.018  eff_rank= 25.05  cond_KL= 1.958
+  step=  500  loss= 5.304  cos_unigram_dir=0.011  eff_rank= 24.85  cond_KL= 1.959
+  step= 1000  loss= 5.309  cos_unigram_dir=0.025  eff_rank= 24.68  cond_KL= 1.959
+  step= 1500  loss= 5.315  cos_unigram_dir=0.020  eff_rank= 24.40  cond_KL= 1.959
+  step= 2000  loss= 5.322  cos_unigram_dir=0.098  eff_rank= 24.18  cond_KL= 1.960
+  step= 2500  loss= 5.328  cos_unigram_dir=0.129  eff_rank= 23.92  cond_KL= 1.960
+  step= 3000  loss= 5.339  cos_unigram_dir=0.176  eff_rank= 23.48  cond_KL= 1.961
+  step= 3500  loss= 5.350  cos_unigram_dir=0.095  eff_rank= 23.01  cond_KL= 1.962
+  step= 4000  loss= 5.364  cos_unigram_dir=0.080  eff_rank= 22.73  cond_KL= 1.963
+
+==============================================================================
+ PASS / FAIL  (criteria stated in file header, NOT tuned per readout)
+==============================================================================
+ Thresholds:
+   P1 cos_unigram_dir <= 0.300
+   P2 eff_rank        >= 8.00
+   P3 cond_KL         <= 1.830   (= 0.5 * KL_unigram_true)
+   P4 loss            <= 4.408   (= 0.7*unigram + 0.3*oracle)
+
+ readout     loss   cos_u   eff_r   cond_KL   P1  P2  P3  P4  verdict
+ TIED       4.210   0.859   21.42     1.944    N   Y   N   Y  FAILS
+ UNTIED     4.631   0.059   20.29     1.928    Y   Y   N   N  FAILS
+ MLP        2.365   0.065   19.81     0.990    Y   Y   Y   Y  BREAKS unigram pull
+ MoS        5.364   0.080   22.73     1.963    Y   Y   N   N  FAILS

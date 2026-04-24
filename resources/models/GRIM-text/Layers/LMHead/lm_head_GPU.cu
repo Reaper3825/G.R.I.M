@@ -238,10 +238,11 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
         out_centered_hidden = std::move(col_centered);
         matmul_input = &out_centered_hidden;
     } else if (config_.project_out_pc1) {
-        // Issue #149: project out dominant PC1 direction via power iteration
-        // h̃[t] = h[t] - (h[t]·g)*g  where g = PC1(H), g treated as stop-gradient
-        // Backward: grad_h = (I - gg^T) * grad_h̃
-        // Returns owning tensor with separate output buffer — input is not mutated
+        // Issue #149: project out dominant PC1 direction via power iteration.
+        // g is RMS-normalized (g·g = D), so the projection coefficient is (h·g)/D:
+        //   h̃[t] = h[t] - (h[t]·g / D) * g     where g = PC1(H), stop-gradient
+        // Backward: grad_h += (I - gg^T/D) * grad_h̃  (accumulates into input grad)
+        // Returns owning tensor with separate output buffer — input is not mutated.
         out_centered_hidden = autograd::project_out_pc1(*current_input, config_.pc1_power_iters, stream);
         matmul_input = &out_centered_hidden;
     } else {
