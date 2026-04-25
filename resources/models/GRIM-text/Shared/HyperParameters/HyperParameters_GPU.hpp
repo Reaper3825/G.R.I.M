@@ -16,12 +16,18 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <fstream>
-#include <filesystem>
 #include <map>
 #include <set>
 #include <vector>
+
+// JSON loaders are host-only; CUDA TUs that pull this header in (e.g. via
+// Unigram.hpp) must NOT require nlohmann/json.hpp. Gated below alongside the
+// loader bodies (which are themselves wrapped in #ifndef __CUDACC__).
+#ifndef __CUDACC__
+#include <fstream>
+#include <filesystem>
 #include <nlohmann/json.hpp>
+#endif
 
 #include "../UnigramByte/Unigram.hpp"
 
@@ -1693,18 +1699,21 @@ inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& conf
 }
 
 // ── loadTrainingHyperparameters ──
+// Reads ai_config.json directly (no AiConfigSnapshot dependency, since the
+// snapshot loader lives in ai_config_paths.hpp which now depends on this
+// header — the cycle is broken by inlining a minimal file read here).
 inline bool loadTrainingHyperparameters(TrainingHyperparameters& params, const std::string& configPath = "ai_config.json") {
-    auto snapshot = loadAiConfigSnapshot(configPath);
-    if (!snapshot) {
+    std::ifstream in(configPath);
+    if (!in.is_open()) {
         return false;
     }
-
-    if (!snapshot->has_training) {
+    nlohmann::json doc;
+    try {
+        in >> doc;
+    } catch (const std::exception&) {
         return false;
     }
-
-    params = snapshot->hyperparameters;
-    return true;
+    return populateTrainingHyperparametersFromConfig(doc, params);
 }
 
 namespace detail {
