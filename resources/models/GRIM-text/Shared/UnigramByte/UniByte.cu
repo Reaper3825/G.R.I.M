@@ -224,23 +224,46 @@ bool UniByte::train(const std::vector<std::string>& texts) {
     // Atom regions (URLs, emails, numbers, dates, paths, etc.) are SKIPPED
     // during character counting and subword mining so their internal chars
     // (://@.com etc.) don't contaminate the vocabulary.
+    //
+    // When scratch block reasoning is disabled, atom detection is bypassed
+    // entirely so vocab mining matches the runtime tokenization path
+    // (encode() -> unigram_.encode() with no atom emission).
+    //
+    // We must also use the SAME parse-success predicate as encodeInternal():
+    // a span whose AtomTable::parseAtom() fails will be encoded as regular
+    // text at runtime, so it must NOT be skipped during vocab mining.
     std::vector<std::vector<AtomSpan>> all_atom_spans;
     all_atom_spans.reserve(texts.size());
-    
+
     size_t total_atoms = 0;
+    size_t total_skipped_unparseable = 0;
+    const bool detect = config_.enable_scratch_block_reasoning;
     for (const auto& text : texts) {
-        auto structures = detectStructures(text);
         std::vector<AtomSpan> spans;
-        spans.reserve(structures.size());
-        for (const auto& s : structures) {
-            spans.push_back({s.start, s.end});
+        if (detect) {
+            auto structures = detectStructures(text);
+            spans.reserve(structures.size());
+            for (const auto& s : structures) {
+                // Mirror encodeInternal()'s fallback: if the parser fails,
+                // the runtime encoder emits raw text for this span, so vocab
+                // mining must see those characters too.
+                auto parsed = AtomTable::parseAtom(
+                    s.atom_type, std::string(s.contentView()));
+                if (!parsed.success) {
+                    ++total_skipped_unparseable;
+                    continue;
+                }
+                spans.push_back({s.start, s.end});
+            }
+            total_atoms += spans.size();
         }
-        total_atoms += spans.size();
         all_atom_spans.push_back(std::move(spans));
     }
-    
+
     std::cout << "[UniByte] Detected " << total_atoms << " atoms across "
-              << texts.size() << " texts (will skip during vocab training)" << std::endl;
+              << texts.size() << " texts (will skip during vocab training); "
+              << "unparseable spans treated as text: " << total_skipped_unparseable
+              << "; scratch_block_reasoning=" << (detect ? "on" : "off") << std::endl;
     
     return unigram_.trainFromCorpus(texts, all_atom_spans,
                                      config_.target_vocab_size, 
@@ -334,38 +357,59 @@ std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) c
 
 std::string UniByte::injectPlaceholders(const std::string& text,
                                          std::vector<StructuralSpan>& out_spans) const {
-    out_spans = detectStructures(text);
-    
+    out_spans.clear();
+
+    // Honor scratch_block_reasoning: when disabled, no atoms exist as far as
+    // the rest of the pipeline is concerned, so the input must pass through
+    // verbatim with no placeholders injected.
+    if (!config_.enable_scratch_block_reasoning) {
+        return text;
+    }
+
+    // Apply the SAME parse-success filter that train() and encodeInternal()
+    // use, so an injected placeholder never represents a span that the
+    // encoder would have emitted as raw text instead.
+    auto detected = detectStructures(text);
+    out_spans.reserve(detected.size());
+    for (const auto& s : detected) {
+        auto parsed = AtomTable::parseAtom(
+            s.atom_type, std::string(s.contentView()));
+        if (!parsed.success) {
+            continue;
+        }
+        out_spans.push_back(s);
+    }
+
     if (out_spans.empty()) {
         return text;
     }
-    
+
     // Build result with placeholders
     std::string result;
     result.reserve(text.size());
-    
+
     size_t pos = 0;
     for (const auto& span : out_spans) {
         // Add text before span
         if (span.start > pos) {
             result += text.substr(pos, span.start - pos);
         }
-        
+
         // Add placeholder character (will be tokenized as atom token)
         // Use private-use Unicode area: U+E000 + atom_type
         // For simplicity, we use a control character sequence
         result += '\x1F';  // Unit separator
         result += static_cast<char>(static_cast<int>(span.atom_type));
         result += '\x1F';
-        
+
         pos = span.end;
     }
-    
+
     // Add remaining text
     if (pos < text.size()) {
         result += text.substr(pos);
     }
-    
+
     return result;
 }
 
@@ -394,8 +438,13 @@ std::vector<int> UniByte::encode(const std::string& text) const {
 }
 
 UniByteResult UniByte::encodeWithMetadata(const std::string& text) const {
-    // Detect structures first
-    auto structures = detectStructures(text);
+    // Honor scratch block reasoning toggle: when disabled, skip atom detection
+    // entirely so callers on the metadata path see the same plain unigram
+    // tokenization as encode(). Atom side-channels remain zero-filled.
+    std::vector<StructuralSpan> structures;
+    if (config_.enable_scratch_block_reasoning) {
+        structures = detectStructures(text);
+    }
     auto result = encodeInternal(text, structures);
     
     // Pipeline contract: validate all per-token arrays are consistent
@@ -520,8 +569,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
     // Process text in segments between structures
     size_t pos = 0;
     size_t struct_idx = 0;
-    
-    bool is_first_segment = true;
+
     auto appendSegmentTokens = [&](size_t start, size_t end) {
         if (end <= start) {
             return;
@@ -529,10 +577,14 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
         std::string segment = text.substr(start, end - start);
         // encode() returns token IDs directly — no need for encodeWithPieces
         // Note: UnigramLM::encode() normalizes to lowercase internally.
-        // Only prepend ▁ for the first text segment; subsequent segments
-        // after atoms already have their leading space as a regular character.
-        auto segment_ids = unigram_.encode(segment, is_first_segment);
-        is_first_segment = false;
+        // Only prepend ▁ when this is genuinely the first emitted token of
+        // the sequence: start-of-text AND nothing has been emitted yet (no
+        // prior atom, no prior segment). Tracking via a flag that was only
+        // cleared on segment emission caused atom-first inputs ("42apples")
+        // to be tokenized like "42 apples".
+        const bool prepend_word_boundary =
+            (start == 0) && result.token_ids.empty();
+        auto segment_ids = unigram_.encode(segment, prepend_word_boundary);
                         
         for (int tid : segment_ids) {
             result.token_ids.push_back(tid);
@@ -667,13 +719,26 @@ bool UniByte::encodeGPU(const char* d_text,
                         int* d_token_ids,
                         int* d_token_count,
                         int max_tokens) {
+    // Rule 20: encodeGPU is plain unigram tokenization with no atom
+    // detection, no AtomTable side-channels, and no parse-success fallback.
+    // It CANNOT match the CPU encode() path when scratch block reasoning is
+    // enabled, so callers must opt in to the mismatch by disabling reasoning
+    // first. Silently diverging from encode() would hide tokenization drift.
+    if (config_.enable_scratch_block_reasoning) {
+        throw std::runtime_error(
+            "UniByte::encodeGPU: scratch_block_reasoning is enabled but the "
+            "GPU path performs plain unigram tokenization only (no atom "
+            "detection, no AtomTable, no side-channels). Disable scratch "
+            "block reasoning explicitly via setScratchBlockReasoning(false) "
+            "or use encodeWithMetadata() on the CPU.");
+    }
     if (!gpu_initialized_) {
         if (!initGPU()) return false;
     }
-    
+
     // Note: Byte fallback flags not needed - fallback tokens are indistinguishable from regular tokens
     // Position embeddings work identically for all token IDs (byte fallback or unigram)
-    return unigram_.encodeGPU(d_text, length, d_token_ids, 
+    return unigram_.encodeGPU(d_text, length, d_token_ids,
                               d_token_count, max_tokens, nullptr);
 }
 
@@ -738,6 +803,43 @@ std::string UniByte::decodeWithAtoms(const std::vector<int>& token_ids,
         }
     }
     
+    return UnigramLM::denormalizeFromTokenization(result);
+}
+
+std::string UniByte::decodeWithAtoms(const std::vector<int>& token_ids,
+                                      const std::vector<uint32_t>& atom_entry_ids,
+                                      const AtomEntryResolver& resolver) const {
+    if (atom_entry_ids.size() != token_ids.size()) {
+        throw std::runtime_error(
+            "UniByte::decodeWithAtoms: atom_entry_ids.size()=" +
+            std::to_string(atom_entry_ids.size()) +
+            " != token_ids.size()=" + std::to_string(token_ids.size()) +
+            " — caller MUST provide a per-token entry array (use "
+            "UniByteResult.atom_entry_ids).");
+    }
+
+    std::string result;
+    for (size_t i = 0; i < token_ids.size(); ++i) {
+        const int tid = token_ids[i];
+        if (isSpecialToken(tid)) {
+            if (tid == UNK_TOKEN_ID) result += "<unk>";
+            else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
+            else if (tid == BOS_TOKEN_ID) result += "<s>";
+            else if (tid == EOS_TOKEN_ID) result += "</s>";
+        } else if (isByteToken(tid)) {
+            result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
+        } else if (isAtomToken(tid)) {
+            const AtomType type = tokenIdToAtomType(tid);
+            const uint32_t entry_id = atom_entry_ids[i];
+            result += resolver(entry_id, type);
+        } else if (isUnigramToken(tid)) {
+            const UnigramPiece* piece = unigram_.getPiece(tid);
+            if (piece) {
+                result += piece->text;
+            }
+        }
+    }
+
     return UnigramLM::denormalizeFromTokenization(result);
 }
 

@@ -287,10 +287,25 @@ public:
     std::string decode(const std::vector<int>& token_ids) const;
     std::string decode(const int* token_ids, size_t count) const;
     
-    // Decode with atom resolution (needs atom values from ScratchBlock)
+    // Decode with atom resolution (needs atom values from ScratchBlock).
+    //
+    // NOTE: this type-only resolver cannot disambiguate repeated atoms of the
+    // same type (e.g. two ATOM_INTs in the same sequence map to identical
+    // token IDs). Prefer the entry-aware overload below when the caller has
+    // access to UniByteResult::atom_entry_ids.
     using AtomResolver = std::function<std::string(int token_id, AtomType type)>;
     std::string decodeWithAtoms(const std::vector<int>& token_ids,
                                  const AtomResolver& resolver) const;
+
+    // Entry-aware decode: resolver receives the per-token atom_entry_id from
+    // UniByteResult::atom_entry_ids, so callers can resolve repeated same-type
+    // atoms without relying on call-order state. atom_entry_ids must have the
+    // same length as token_ids; non-atom positions are ignored by the resolver.
+    using AtomEntryResolver =
+        std::function<std::string(uint32_t entry_id, AtomType type)>;
+    std::string decodeWithAtoms(const std::vector<int>& token_ids,
+                                 const std::vector<uint32_t>& atom_entry_ids,
+                                 const AtomEntryResolver& resolver) const;
 
     //--------------------------------------------------//
     // Structural Detection
