@@ -1,5 +1,6 @@
 #include "tokenizer_subprocess.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -20,7 +21,28 @@ namespace fs = std::filesystem;
 namespace GRIMText {
 namespace Subprocess {
 
-subprocess_result run_tokenizer_subprocess(const tokenizer_subprocess_request& req) {
+namespace {
+
+// Tokenizer-specific decode of the foundational success payload. Domain
+// validation lives HERE — not in subprocess_status_io — so the foundational
+// module stays subprocess-agnostic.
+std::uint32_t extract_vocab_size(const subprocess_result& env,
+                                 const std::string& status_file_path_for_error) {
+    if (!env.success_payload.is_object() ||
+        !env.success_payload.contains("vocab_size") ||
+        !env.success_payload["vocab_size"].is_number_unsigned()) {
+        throw std::runtime_error(
+            "tokenizer_subprocess: child reported success but status payload "
+            "is missing required uint field 'vocab_size' at " +
+            status_file_path_for_error);
+    }
+    return env.success_payload["vocab_size"].get<std::uint32_t>();
+}
+
+} // namespace
+
+tokenizer_subprocess_result run_tokenizer_subprocess(
+    const tokenizer_subprocess_request& req) {
     if (req.config_path.empty()) {
         throw std::runtime_error(
             "tokenizer_subprocess: tokenizer_subprocess_request.config_path is empty");
@@ -64,11 +86,39 @@ subprocess_result run_tokenizer_subprocess(const tokenizer_subprocess_request& r
         sreq.arguments.push_back("--force");
     }
 
-    subprocess_result result = spawn_and_wait(sreq);
+    const subprocess_result env = spawn_and_wait(sreq);
+
+    tokenizer_subprocess_result result;
+    result.outcome = env.outcome;
+    result.subprocess_name = env.subprocess_name;
+    result.error_message = env.error_message;
+
+    if (env.outcome == subprocess_outcome::error) {
+        return result;
+    }
+
+    // Decode the tokenizer-specific payload field.
+    result.vocab_size = extract_vocab_size(env, sreq.status_file_path);
+
+    // Fill paths from the central config layer (single source of truth:
+    // ai_config.json -> GRIM::Config::GrimTextPaths). The child does NOT
+    // echo these over IPC; doing so would let the wire schema drift from
+    // ai_config.json.
+    GRIM::Config::GrimTextPaths paths;
+    if (!GRIM::Config::loadGrimTextPaths(paths, req.config_path)) {
+        throw std::runtime_error(
+            "tokenizer_subprocess: child reported success but "
+            "GRIM::Config::loadGrimTextPaths failed for: " + req.config_path);
+    }
+    if (!paths.isValid()) {
+        throw std::runtime_error(
+            "tokenizer_subprocess: child reported success but ai_config.json "
+            "GrimTextPaths are not valid (vocab and/or training_data missing)");
+    }
+    result.vocab_path = paths.vocab;
+    result.training_data_path = paths.training_data;
 
     // Rewrite ok_proceed -> ok_one_off when the config requested a one-off.
-    // Errors are passed through unchanged so the caller still sees a precise
-    // error_message even when one-off mode is set.
     if (sub_cfg.tokenizer_only_mode && result.outcome == subprocess_outcome::ok_proceed) {
         result.outcome = subprocess_outcome::ok_one_off;
     }

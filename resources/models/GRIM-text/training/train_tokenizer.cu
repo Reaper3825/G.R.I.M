@@ -14,12 +14,14 @@
 // Contract (Rule 20): the process MUST write a status JSON file at
 // <status-file> before exiting, regardless of outcome:
 //
-//   { "outcome": "success",
-//     "vocab_path": "...",
-//     "training_data_path": "...",
-//     "vocab_size": <uint32> }
+//   { "outcome": "success", "vocab_size": <uint32> }
 //
 //   { "outcome": "error", "error_message": "<precise>" }
+//
+// vocab_path / training_data_path are NOT in the IPC payload — they are
+// owned by ai_config.json (GRIM::Config::GrimTextPaths) and the parent
+// resolves them from the central config layer. Echoing them over IPC would
+// create a second source of truth.
 //
 // The parent process refuses to proceed when the status file is missing or
 // malformed, so all error paths funnel through writeStatusError().
@@ -38,6 +40,7 @@
 // it transitively includes control/ai_config_paths.hpp in the correct order.
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../Shared/DataLoader/DataLoader.hpp"
+#include "Subprocess/subprocess_status_io.hpp" // Foundational status-file IPC. The envelope schema lives there; tokenizer-
 
 namespace fs = std::filesystem;
 
@@ -78,59 +81,20 @@ CliArgs parseArgs(int argc, char** argv) {
     return out;
 }
 
-// Atomic write: write to <path>.tmp then rename. The parent watches for the
-// final file appearing, so we never want it to read a half-written JSON.
-void writeStatusFile(const std::string& path, const nlohmann::json& doc) {
-    fs::path target(path);
-    fs::path parent = target.parent_path();
-    if (!parent.empty()) {
-        std::error_code ec;
-        fs::create_directories(parent, ec);
-        if (ec) {
-            std::cerr << "train_tokenizer: cannot create status directory "
-                      << parent.string() << ": " << ec.message() << "\n";
-            return;
-        }
-    }
-    fs::path tmp = target;
-    tmp += ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out.is_open()) {
-            std::cerr << "train_tokenizer: cannot open status temp file " << tmp.string() << "\n";
-            return;
-        }
-        out << doc.dump(2);
-    }
-    std::error_code ec;
-    fs::rename(tmp, target, ec);
-    if (ec) {
-        fs::remove(target, ec);
-        fs::rename(tmp, target, ec);
-        if (ec) {
-            std::cerr << "train_tokenizer: failed to publish status file "
-                      << target.string() << ": " << ec.message() << "\n";
-        }
-    }
-}
+// Atomic status-file writers and the schema itself live in
+// Subprocess/subprocess_status_io.{hpp,cpp}. This file MUST NOT define them.
 
 void writeStatusError(const std::string& path, const std::string& message) {
-    nlohmann::json doc;
-    doc["outcome"] = "error";
-    doc["error_message"] = message;
-    writeStatusFile(path, doc);
+    (void)GRIMText::Subprocess::write_status_error(path, message);
 }
 
-void writeStatusSuccess(const std::string& path,
-                        const std::string& vocab_path,
-                        const std::string& training_data_path,
-                        std::uint32_t vocab_size) {
-    nlohmann::json doc;
-    doc["outcome"] = "success";
-    doc["vocab_path"] = vocab_path;
-    doc["training_data_path"] = training_data_path;
-    doc["vocab_size"] = vocab_size;
-    writeStatusFile(path, doc);
+void writeStatusSuccess(const std::string& path, std::uint32_t vocab_size) {
+    // The IPC envelope is generic; tokenizer-specific fields go inside the
+    // success payload. Only `vocab_size` crosses the wire — paths are owned
+    // by ai_config.json and the parent reads them from GrimTextPaths.
+    nlohmann::json payload;
+    payload["vocab_size"] = vocab_size;
+    (void)GRIMText::Subprocess::write_status_success(path, payload);
 }
 
 // Read vocab_size from the GRMT header. Throws if the file is missing or its
@@ -223,7 +187,7 @@ int main(int argc, char** argv) {
                   << "GRMT:       " << out_training_data << "\n"
                   << "Vocab size: " << vocab_size << std::endl;
 
-        writeStatusSuccess(args.status_file, out_vocab, out_training_data, vocab_size);
+        writeStatusSuccess(args.status_file, vocab_size);
         return 0;
     } catch (const std::exception& e) {
         const std::string msg =

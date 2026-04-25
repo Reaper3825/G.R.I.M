@@ -399,6 +399,8 @@ add_executable(train_gpu
     ../Phases/Phase3_Cleanup.cu
     ../Phases/Phase3_Cleanup.hpp
     ../Subprocess/subprocess_status.hpp
+    ../Subprocess/subprocess_status_io.hpp
+    ../Subprocess/subprocess_status_io.cpp
     ../Subprocess/subprocess_manager.hpp
     ../Subprocess/subprocess_manager.cpp
     ../Subprocess/tokenizer_subprocess.hpp
@@ -638,6 +640,7 @@ target_include_directories(grmt_vocab_metrics_test PRIVATE
 # ============================================================================
 add_executable(train_tokenizer
     ../train_tokenizer.cu
+    ../Subprocess/subprocess_status_io.cpp
     ../../Shared/DataLoader/DataLoader.cu
     ../../Shared/DataLoader/ConceptExecutionSequenceBuilder.cu
 )

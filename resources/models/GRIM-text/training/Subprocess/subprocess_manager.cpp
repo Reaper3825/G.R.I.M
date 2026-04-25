@@ -5,14 +5,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
 
-#include <nlohmann/json.hpp>
+#include "subprocess_status_io.hpp"
 
 #if defined(_WIN32)
   #ifndef NOMINMAX
@@ -190,75 +189,8 @@ int spawn_blocking(const std::string& executable_path,
 #endif
 }
 
-subprocess_result parse_status_file(const std::string& path,
-                                    const std::string& subprocess_name) {
-    std::ifstream in(path);
-    if (!in.is_open()) {
-        throw std::runtime_error(
-            "subprocess_manager: subprocess '" + subprocess_name +
-            "' did not produce status file at: " + path);
-    }
-
-    nlohmann::json j;
-    try {
-        in >> j;
-    } catch (const std::exception& e) {
-        throw std::runtime_error(
-            "subprocess_manager: subprocess '" + subprocess_name +
-            "' wrote malformed status JSON at " + path + ": " + e.what());
-    }
-
-    if (!j.is_object() || !j.contains("outcome") || !j["outcome"].is_string()) {
-        throw std::runtime_error(
-            "subprocess_manager: subprocess '" + subprocess_name +
-            "' status file missing required string field 'outcome' at " + path);
-    }
-
-    subprocess_result result;
-    result.subprocess_name = subprocess_name;
-
-    const std::string outcome_str = j["outcome"].get<std::string>();
-    if (outcome_str == "success") {
-        // ok_proceed by default; the manager will rewrite this to ok_one_off
-        // upstream if the caller's request asked for one-off mode.
-        result.outcome = subprocess_outcome::ok_proceed;
-
-        if (!j.contains("vocab_path") || !j["vocab_path"].is_string() ||
-            !j.contains("training_data_path") || !j["training_data_path"].is_string() ||
-            !j.contains("vocab_size") || !j["vocab_size"].is_number_unsigned()) {
-            throw std::runtime_error(
-                "subprocess_manager: subprocess '" + subprocess_name +
-                "' reported success but status file is missing required fields "
-                "(vocab_path, training_data_path, vocab_size) at " + path);
-        }
-        result.vocab_path = j["vocab_path"].get<std::string>();
-        result.training_data_path = j["training_data_path"].get<std::string>();
-        result.vocab_size = j["vocab_size"].get<std::uint32_t>();
-        return result;
-    }
-
-    if (outcome_str == "error") {
-        result.outcome = subprocess_outcome::error;
-        if (!j.contains("error_message") || !j["error_message"].is_string()) {
-            throw std::runtime_error(
-                "subprocess_manager: subprocess '" + subprocess_name +
-                "' reported error but no 'error_message' field in status file at " +
-                path);
-        }
-        result.error_message = j["error_message"].get<std::string>();
-        if (result.error_message.empty()) {
-            throw std::runtime_error(
-                "subprocess_manager: subprocess '" + subprocess_name +
-                "' reported error with empty error_message at " + path);
-        }
-        return result;
-    }
-
-    throw std::runtime_error(
-        "subprocess_manager: subprocess '" + subprocess_name +
-        "' reported unknown outcome '" + outcome_str +
-        "' (must be 'success' or 'error') at " + path);
-}
+// NOTE: status-file parsing lives in subprocess_status_io.cpp (single-owner
+// schema). This module is responsible only for spawn/wait + boundary checks.
 
 } // namespace
 
@@ -333,7 +265,7 @@ subprocess_result spawn_and_wait(const subprocess_request& req) {
             " but did not write a status file at " + req.status_file_path);
     }
 
-    subprocess_result result = parse_status_file(req.status_file_path, req.name);
+    subprocess_result result = read_status_file(req.status_file_path, req.name);
 
     // Cross-check: a non-zero exit MUST correspond to an error outcome. If the
     // child claimed success but exited non-zero, we treat that as an error and
