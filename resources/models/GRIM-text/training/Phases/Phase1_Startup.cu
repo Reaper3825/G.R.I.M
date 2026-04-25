@@ -21,7 +21,7 @@
 
 #include "Phase1_Startup.hpp"
 #include "../OptimizerCheckpoint.hpp"
-
+#include "ConfigDump.hpp"
 // MUST be first - defines GRIM_CONFIG_AI_CONFIG_PATHS_HPP_INCLUDED
 #include "../../../../../control/ai_config_paths.hpp"
 
@@ -1552,11 +1552,10 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     EmitModuleInfo(ModuleId::Training, "[Phase1] ✓ All paths validated", 0);
 
     EmitModuleInfo(ModuleId::Training, "Configuration:", 0);
-    EmitModuleInfo(ModuleId::Training, std::string("  Data: ") + ctx->config.paths.data_path, 0);
-    EmitModuleInfo(ModuleId::Training, std::string("  Vocab: ") + ctx->config.paths.vocab_path, 0);
-    EmitModuleInfo(ModuleId::Training, std::string("  Epochs: ") + std::to_string(ctx->config.hyperparameters.epochs), 0);
-    EmitModuleInfo(ModuleId::Training, std::string("  Batch size: ") + std::to_string(ctx->config.hyperparameters.batch_size), 0);
-    EmitModuleInfo(ModuleId::Training, std::string("  Learning rate: ") + std::to_string(ctx->config.hyperparameters.learning_rate), 0);
+    // Data paths + vocab + sequence counts are logged together with the
+    // hyperparameter dump (post-harmonize) via DataStatsSnapshot below,
+    // so derived ratios from HyperParameters_GPU.hpp are reflected and
+    // the visual block is unified.
     
     // 4. Initialize tokenizer
     GRIM::Config::TokenizerConfig tok_cfg;
@@ -1599,8 +1598,8 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             << "Delete .grmt files to force regeneration.";
         throw std::runtime_error(err.str());
     }
-    ctx->logging.logger->log("✓ Vocab size validated: tokenizer and training data match (" + 
-                            std::to_string(tokenizer_vocab_size) + " tokens)");
+    // (Successful vocab match is logged as part of the unified data-stats
+    // block emitted by dumpAllHyperparameters below.)
     
     // 6. Harmonize hyperparameters
     GRIM::HyperParameters::DerivationContext hp_ctx;
@@ -1608,8 +1607,34 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     hp_ctx.validation_interval = ctx->config.hyperparameters.validation_interval;
     
     auto hp_logger = [&](const std::string& msg) { ctx->logging.logger->log(msg); };
-    ctx->derived_schedule = GRIM::HyperParameters::harmonizeTrainingHyperparameters(
-        ctx->config.hyperparameters, hp_ctx, hp_logger);
+
+    // Three primitives, in order:
+    //   (A) validate inputs (fail loud)
+    //   (B) compute derived schedule from (seq_count, batch_size, epochs) ratios
+    //   (C) apply cross-field policy / clamps (mutates hp, logs adjustments)
+    GRIM::HyperParameters::validateTrainingHyperparameters(ctx->config.hyperparameters);
+    ctx->derived_schedule = GRIM::HyperParameters::computeDerivedSchedule(
+        ctx->config.hyperparameters, hp_ctx);
+    GRIM::HyperParameters::applyTrainingHyperparameterPolicy(
+        ctx->config.hyperparameters, ctx->derived_schedule, hp_ctx, hp_logger);
+
+    // Single-source hyperparameter dump (post-policy, includes derived
+    // schedule values computed in HyperParameters_GPU.hpp). The
+    // DataStatsSnapshot folds vocab + sequence-count info into the same
+    // visual block.
+    GRIMText::Training::DataStatsSnapshot data_stats;
+    data_stats.data_path            = ctx->config.paths.data_path;
+    data_stats.vocab_path           = ctx->config.paths.vocab_path;
+    data_stats.tokenizer_vocab_size = tokenizer_vocab_size;
+    data_stats.actual_vocab_size    = ctx->config.actual_vocab_size;
+    data_stats.train_sequence_count = ctx->data.train_seqs.size();
+    data_stats.val_sequence_count   = ctx->data.val_seqs.size();
+
+    dumpAllHyperparameters(
+        ctx->config.hyperparameters,
+        &ctx->derived_schedule,
+        &data_stats,
+        [](const std::string& msg) { EmitModuleInfo(ModuleId::Training, msg, 0); });
     
     // 8. Initialize production-grade RNG system (BEFORE model init for Xavier seeding)
     ctx->rng = Internal::initializeRNG(ctx->config, *ctx->logging.logger);

@@ -346,6 +346,10 @@ add_executable(train_gpu
     ../train_gpu.cu
     ../Phases/Phase1_Startup.cu
     ../Phases/Phase1_Startup.hpp
+    ../Phases/ConfigDump.cu
+    ../Phases/ConfigDump.hpp
+    ../Phases/DataStatsDump.cu
+    ../Phases/DataStatsDump.hpp
     ../Phases/Phase2_TrainingLoop.cu
     ../Phases/Phase2_TrainingLoop.hpp
     ../Diagnostics/TrainingDiagnostics.cu
@@ -368,8 +372,12 @@ add_executable(train_gpu
     ../Diagnostics/LossSpikeDiagnostic.hpp
     ../Diagnostics/LossBaselineDiagnostic.cu
     ../Diagnostics/LossBaselineDiagnostic.hpp
+    ../Diagnostics/LossStatsDiagnostic.cu
+    ../Diagnostics/LossStatsDiagnostic.hpp
     ../Diagnostics/GradientNormDiagnostic.cu
     ../Diagnostics/GradientNormDiagnostic.hpp
+    ../Diagnostics/OptimizerStepGuards.cu
+    ../Diagnostics/OptimizerStepGuards.hpp
     ../Diagnostics/TieVerifyDiagnostic.cu
     ../Diagnostics/TieVerifyDiagnostic.hpp
     ../Diagnostics/MtpDiagnostic.cu

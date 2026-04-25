@@ -461,11 +461,12 @@ using LogCallback = std::function<void(const std::string&)>;
 namespace GRIM {
 namespace HyperParameters {
 
-inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
-    GRIM::Config::TrainingHyperparameters& params,
-    const DerivationContext& context,
-    LogCallback log_callback = {}) {
-    // Rule 20: Fail hard on invalid config instead of silently fixing
+//======================================================//
+// (A) Validation primitive.
+// Throws std::runtime_error on any invalid required field.
+// Pure: does not mutate, does not log.
+//======================================================//
+inline void validateTrainingHyperparameters(const GRIM::Config::TrainingHyperparameters& params) {
     if (params.batch_size <= 0) {
         throw std::runtime_error("FATAL: batch_size must be > 0, got " + std::to_string(params.batch_size));
     }
@@ -475,16 +476,42 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     if (params.validation_interval <= 0) {
         throw std::runtime_error("FATAL: validation_interval must be > 0, got " + std::to_string(params.validation_interval));
     }
+}
 
+//======================================================//
+// (B) Pure schedule derivation.
+// Computes batches_per_epoch / total_training_steps / safe_last_step
+// from the (sequence_count, batch_size, epochs) ratio. No mutation,
+// no logging. warmup_steps is NOT computed here (set in Phase2 from
+// warmup_fraction * total_training_steps).
+// Caller MUST have already passed validateTrainingHyperparameters().
+//======================================================//
+inline DerivedScheduleInfo computeDerivedSchedule(
+    const GRIM::Config::TrainingHyperparameters& params,
+    const DerivationContext& context) {
     DerivedScheduleInfo info;
-
     const int safe_batch_size = params.batch_size;
-    const int sequence_count = std::max(0, context.train_sequence_count);
-
-    info.batches_per_epoch = std::max(1, (sequence_count + safe_batch_size - 1) / safe_batch_size);
+    const int sequence_count  = std::max(0, context.train_sequence_count);
+    info.batches_per_epoch    = std::max(1, (sequence_count + safe_batch_size - 1) / safe_batch_size);
     info.total_training_steps = std::max(1, info.batches_per_epoch * params.epochs);
-    info.safe_last_step = std::max(info.total_training_steps - 1, 1);
+    info.safe_last_step       = std::max(info.total_training_steps - 1, 1);
+    return info;
+}
 
+//======================================================//
+// (C) Cross-field policy / coercion.
+// Mutates `params` to keep cadence-coupled fields consistent with the
+// derived schedule, and floors non-negative integer knobs at zero.
+// Each adjustment is logged through `log_callback` as
+// `[ConfigAdjust] <field> <before> -> <after>` (only when the value
+// actually changed). This is the ONLY function in the trio that mutates.
+// Caller MUST have already called validate + computeDerivedSchedule.
+//======================================================//
+inline void applyTrainingHyperparameterPolicy(
+    GRIM::Config::TrainingHyperparameters& params,
+    const DerivedScheduleInfo& derived,
+    const DerivationContext& context,
+    LogCallback log_callback = {}) {
     auto log_adjustment = [&](std::string_view label, auto before, auto after) {
         if (!log_callback || before == after) {
             return;
@@ -494,25 +521,11 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
         log_callback(oss.str());
     };
 
-    auto ensure_ordered = [&](auto& low, auto& high, std::string_view low_label, std::string_view high_label) {
-        if (low <= high) {
-            return;
-        }
-        if (log_callback) {
-            std::ostringstream oss;
-            oss << "[ConfigAdjust] swapped " << low_label << " and " << high_label
-                << " (expected " << low_label << " <= " << high_label << ")";
-            log_callback(oss.str());
-        }
-        std::swap(low, high);
-    };
-
-    const int cadence_reference = std::max(info.batches_per_epoch, std::max(0, context.validation_interval));
+    const int cadence_reference =
+        std::max(derived.batches_per_epoch, std::max(0, context.validation_interval));
 
     // warmup_steps is derived in Phase2 from warmup_fraction * estimated_total_steps.
-    // At harmonize time it is 0 — skip clamping here; it will be set correctly in Phase2.
-
-    // validation_interval already validated > 0 above
+    // At policy time it is 0 — skip clamping here; it will be set correctly in Phase2.
 
     const int original_sr_window = params.soft_restart_max_step_window;
     params.soft_restart_max_step_window = std::max(params.soft_restart_max_step_window, cadence_reference);
@@ -529,8 +542,6 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     const int original_auto_high_loss = params.auto_stop_high_loss_patience;
     params.auto_stop_high_loss_patience = std::max(0, params.auto_stop_high_loss_patience);
     log_adjustment("auto_stop_high_loss_patience", original_auto_high_loss, params.auto_stop_high_loss_patience);
-
-    return info;
 }
 
 } // namespace HyperParameters

@@ -29,7 +29,9 @@
 #include "../Diagnostics/AtomStatsDiagnostic.hpp"
 #include "../Diagnostics/LossSpikeDiagnostic.hpp"
 #include "../Diagnostics/LossBaselineDiagnostic.hpp"
+#include "../Diagnostics/LossStatsDiagnostic.hpp"
 #include "../Diagnostics/GradientNormDiagnostic.hpp"
+#include "../Diagnostics/OptimizerStepGuards.hpp"
 #include "../Diagnostics/TieVerifyDiagnostic.hpp"
 #include "../Diagnostics/MtpDiagnostic.hpp"
 #include "../Diagnostics/OptimizerMomentDiagnostic.hpp"
@@ -744,39 +746,11 @@ BatchResult processBatch(
     ctx.logging.logger->log("[GradTrace] POST-FORWARD loss=" + Internal::formatScalar(result.loss, 4));
 
     // ========================================================================
-    // EQUATION LOGGING: Per-batch loss computation trace (Issue #120 debug)
+    // BATCH_LOSS equation log + LossStats summary line
+    // (extracted to Diagnostics/LossStatsDiagnostic.cu)
     // ========================================================================
-    {
-        const auto& ts_eq = ctx.model->getTrainingState();
-        const int valid_tokens_eq = ts_eq.cached_valid_tokens;
-        const float expected_random_loss = std::log(static_cast<float>(ctx.config.actual_vocab_size));
-        
-        std::ostringstream eq;
-        eq << "[BATCH_LOSS] loss = -sum(log(p_target)) / valid_tokens\n";
-        eq << "  valid_tokens=" << valid_tokens_eq << " vocab_size=" << ctx.config.actual_vocab_size << "\n";
-        eq << "  EXPECTED loss (random) = ln(" << ctx.config.actual_vocab_size << ") = " << expected_random_loss << "\n";
-        eq << "  ACTUAL loss = " << result.loss << "\n";
-        EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Loss, GRIM::Logging::LogPhase::LOSS_COMPUTATION, -1, "BATCH_LOSS", eq.str().c_str());
-    }
+    GRIM::Diagnostics::runLossStatsDiagnostic(ctx, result, batch_idx);
 
-    {
-        const auto& ts = ctx.model->getTrainingState();
-        const int valid_tokens = ts.cached_valid_tokens;
-        const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
-        const int masked_tokens = std::max(total_tokens - valid_tokens, 0);
-        const float loss_sum = (valid_tokens > 0)
-            ? result.loss * static_cast<float>(valid_tokens)
-            : 0.0f;
-        std::ostringstream loss_stats;
-        loss_stats << "[LossStats] batch=" << (batch_idx + 1)
-                   << " loss_mean=" << Internal::formatScalar(result.loss, 4)
-                   << " loss_sum=" << Internal::formatScalar(loss_sum, 4)
-                   << " valid_tokens=" << valid_tokens
-                   << " masked_tokens=" << masked_tokens
-                   << " total_tokens=" << total_tokens;
-        ctx.logging.logger->log(loss_stats.str());
-    }
-    
     // ========================================================================
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
     // (extracted to Diagnostics/LogitScaleDiagnostic.cu)
@@ -1117,27 +1091,8 @@ BatchResult processBatch(
         }
         
         // RULE 20: Post-optimizer weight NaN spot check
-        // Catches the EXACT batch where optimizer corrupts weights (instead of crashing
-        // on the NEXT batch's forward pass with an unhelpful "logits NaN" message).
-        {
-            cudaStreamSynchronize(ctx.model->getTrainingState().stream_ctrl.getPrimaryStream());
-            const auto& groups = ctx.model->parameterGroups();
-            for (size_t g = 0; g < groups.size(); ++g) {
-                if (!groups[g].weights() || groups[g].size() == 0) continue;
-                // Sample first element of each parameter group (fast: 1 float per group)
-                float h_sample = 0.0f;
-                cudaMemcpy(&h_sample, groups[g].weights(), sizeof(float), cudaMemcpyDeviceToHost);
-                if (!std::isfinite(h_sample)) {
-                    throw std::runtime_error("[FATAL] Post-optimizer NaN/Inf in parameter group '" +
-                        groups[g].name + "' (group " + std::to_string(g) + ") at batch " +
-                        std::to_string(batch_idx + 1) + " optimizer_step=" +
-                        std::to_string(ctx.optimizer.optimizer_state.step) +
-                        " lr=" + std::to_string(result.learning_rate) +
-                        " — THIS batch's optimizer step corrupted weights. "
-                        "Check gradient magnitude and clipping for this group.");
-                }
-            }
-        }
+        // (extracted to Diagnostics/OptimizerStepGuards.cu)
+        GRIM::Diagnostics::checkPostOptimizerWeightsFinite(ctx, result, batch_idx);
 
         // Reset micro_step counter after optimizer step completes
         ctx.optimizer.current_micro_step = 0;
