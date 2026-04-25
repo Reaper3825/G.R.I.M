@@ -18,7 +18,6 @@
 //  Date: December 2025
 //  Version: 1.0.0
 //======================================================//
-
 #include "Phase2_TrainingLoop.hpp"
 #include "../OptimizerCheckpoint.hpp"
 #include "../Diagnostics/DiagnosticInference.hpp"
@@ -29,12 +28,12 @@
 #include "../Diagnostics/SpecialTokenDiagnostic.hpp"
 #include "../Diagnostics/AtomStatsDiagnostic.hpp"
 #include "../Diagnostics/LossSpikeDiagnostic.hpp"
+#include "../Diagnostics/LossBaselineDiagnostic.hpp"
 #include "../Diagnostics/TieVerifyDiagnostic.hpp"
 #include "../Diagnostics/MtpDiagnostic.hpp"
 #include "../Diagnostics/OptimizerMomentDiagnostic.hpp"
 #include "../Diagnostics/PredictionDistributionDiagnostic.hpp"
 #include "../Diagnostics/DiagnosticGates.hpp"
-
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
@@ -54,7 +53,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
 #include "../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.hpp"  // launchRAdamWStep — selectable via training.config.optimizer.kind
 #include "../../../../../control/ai_config_paths.hpp"  // For resolveGrimRoot()
-
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -65,7 +63,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include <cstdint>
 #include <memory>
 #include <filesystem>
-
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #endif
@@ -798,81 +795,16 @@ BatchResult processBatch(
     // ========================================================================
     GRIM::Diagnostics::runLossSpikeDiagnostic(ctx, payload, result.loss, batch_idx,
                                               state.initial_loss);
-    
-    // Adaptive loss tracking - record baseline and minimum
-    // NOTE: Loss alone is NOT sufficient to skip batches. Skipping hard examples
-    // based on loss biases the model away from difficult regions of the data manifold,
-    // causing apparent early improvement but later generalization failure.
-    // Only skip on CONFIRMED corruption: invalid tokens, NaNs, or gradient spikes.
-    if (state.initial_loss == 0.0f) {
-        state.initial_loss = result.loss;
-        state.min_observed_loss = result.loss;
-        // Calculate expected random baseline for reference (ln(vocab_size))
-        const float expected_random_baseline = std::log(static_cast<float>(ctx.config.actual_vocab_size));
-        const bool likely_from_checkpoint = result.loss < (expected_random_baseline - 1.0f);
-        std::string baseline_note = likely_from_checkpoint
-            ? "(from checkpoint, expected random=" + Internal::formatScalar(expected_random_baseline) + ")"
-            : "(random baseline for vocab=" + std::to_string(ctx.config.actual_vocab_size) + ")";
-        ctx.logging.logger->log("[LossBaseline] Initial loss=" + Internal::formatScalar(state.initial_loss) +
-                                " " + baseline_note);
-    } else {
-        state.warmup_batches++;
-        
-        // Track minimum observed loss
-        if (result.loss < state.min_observed_loss) {
-            state.min_observed_loss = result.loss;
-        }
-        
-        // Check for CONFIRMED corruption: invalid token IDs
-        // NaN/Inf loss is already handled by autogradTrainingStep() → early return above.
-        // Loss-only skipping removes hard examples and destroys generalization
-        bool has_invalid_tokens = false;
-        
-        // Scan for token IDs outside vocab range (actual corruption) — using flat payload
-        for (int s = 0; s < payload.batch_size && !has_invalid_tokens; ++s) {
-            const int flat_start = s * payload.max_seq_len;
-            const int len = payload.seq_lengths[s];
-            for (int t = 0; t < len; ++t) {
-                if (payload.input_ids[flat_start + t] < 0 ||
-                    payload.input_ids[flat_start + t] >= static_cast<int>(ctx.config.actual_vocab_size)) {
-                    has_invalid_tokens = true;
-                    break;
-                }
-            }
-        }
-        for (int s = 0; s < payload.batch_size && !has_invalid_tokens; ++s) {
-            const int flat_start = s * payload.max_seq_len;
-            const int len = payload.seq_lengths[s];
-            for (int t = 0; t < len; ++t) {
-                const int tid = payload.target_ids[flat_start + t];
-                // targets can be -1 for masked positions, but not other negatives or OOB
-                if (tid < -1 || tid >= static_cast<int>(ctx.config.actual_vocab_size)) {
-                    has_invalid_tokens = true;
-                    break;
-                }
-            }
-        }
-        
-        // Rule 20: Data corruption = CRASH. Fix the data pipeline, don't silently skip.
-        if (has_invalid_tokens) {
-            throw std::runtime_error(
-                "DATA CORRUPTION: batch " + std::to_string(batch_idx + 1) +
-                " contains token IDs outside vocab range [0, " + std::to_string(ctx.config.actual_vocab_size) +
-                ") — fix data pipeline at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-        }
-        
-        // Log high loss for monitoring, but DO NOT skip
-        // Hard examples are valuable for learning - removing them biases the model
-        float loss_threshold = (state.warmup_batches < 100) 
-            ? state.initial_loss * 2.0f 
-            : state.min_observed_loss * 1.5f + 2.0f;
-        if (result.loss > loss_threshold) {
-            ctx.logging.logger->log("[LossMonitor] HIGH_LOSS batch=" + std::to_string(batch_idx + 1) +
-                                    " loss=" + Internal::formatScalar(result.loss) +
-                                    " threshold=" + Internal::formatScalar(loss_threshold));
-        }
-    }
-    
+
+    // ========================================================================
+    // Adaptive loss baseline tracking + invalid-token validation
+    // (extracted to Diagnostics/LossBaselineDiagnostic.cu)
+    // Mutates: state.initial_loss, state.min_observed_loss, state.warmup_batches.
+    // Throws on data corruption (Rule 20).
+    // ========================================================================
+    GRIM::Diagnostics::runLossBaselineAndTokenValidation(
+        ctx, state, payload, result.loss, batch_idx);
+
     // ═══════════════════════════════════════════════════════════════════════════
     // POST-STEP: Backward already ran inside autogradTrainingStep().
     // Diagnostics below read from TrainingState (persists through backward).

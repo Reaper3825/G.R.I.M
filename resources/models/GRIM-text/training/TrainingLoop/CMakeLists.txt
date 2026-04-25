@@ -366,6 +366,8 @@ add_executable(train_gpu
     ../Diagnostics/AtomStatsDiagnostic.hpp
     ../Diagnostics/LossSpikeDiagnostic.cu
     ../Diagnostics/LossSpikeDiagnostic.hpp
+    ../Diagnostics/LossBaselineDiagnostic.cu
+    ../Diagnostics/LossBaselineDiagnostic.hpp
     ../Diagnostics/TieVerifyDiagnostic.cu
     ../Diagnostics/TieVerifyDiagnostic.hpp
     ../Diagnostics/MtpDiagnostic.cu
