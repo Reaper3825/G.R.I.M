@@ -41,7 +41,7 @@ namespace GRIM {
 namespace Autograd {
 
 using ::GRIM::GPUGrimEncoder;
-using ::GRIM::LanguageModelConfig;
+using ::GRIM::HyperParameters::LanguageModelConfig;
 using ::GRIM::LanguageModel;
 
 /**

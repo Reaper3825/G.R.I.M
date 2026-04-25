@@ -47,6 +47,7 @@ namespace GRIM {
 using GRIM::HyperParameters::GenerationConfig;
 using GRIM::HyperParameters::SamplingStrategy;
 using GRIM::HyperParameters::GenerationStreamCallback;
+using GRIM::HyperParameters::ModelExecutionMode;
 
 //======================================================//
 //  GPU Runtime Accessors (StreamController pattern)
@@ -433,7 +434,7 @@ const Matrix& GrimEmbeddingStack::getTokenEmbeddings() const {
 //  Constructor - moved from header to avoid duplicates
 //======================================================//
 
-LanguageModel::LanguageModel(const LanguageModelConfig& config)
+LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
     : config_(config)
 {
     if (config_.infer_vocab_from_file) {

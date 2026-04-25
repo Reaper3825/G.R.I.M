@@ -12,11 +12,17 @@
 
 class TrainingLogger;
 
+// PathConfig + StartupConfig live in Shared/HyperParameters/HyperParameters_GPU.hpp;
+// forward-declare them here in their owning namespace to avoid a circular
+// include with Phase1_Startup.hpp.
+namespace GRIM { namespace HyperParameters {
+    struct PathConfig;
+    struct StartupConfig;
+} }
+
 namespace GRIMText::Training {
 
-struct PathConfig;
 struct LoggingContext;
-struct StartupConfig;
 
 namespace Internal {
 
@@ -25,7 +31,7 @@ namespace Internal {
  *        TrainingLogger, MetricsCollector, StatusFileWriter.
  *        Also registers default logging profiles on first call.
  */
-LoggingContext initializeLogging(const PathConfig& paths);
+LoggingContext initializeLogging(const ::GRIM::HyperParameters::PathConfig& paths);
 
 /**
  * @brief Build the BatchLogTape and attach sinks (text / equation CSV /
@@ -34,7 +40,8 @@ LoggingContext initializeLogging(const PathConfig& paths);
  *
  * Must be called after initializeLogging (uses session_id and logger).
  */
-void setupBatchLogTape(LoggingContext& logging, const StartupConfig& config);
+void setupBatchLogTape(LoggingContext& logging,
+                       const ::GRIM::HyperParameters::StartupConfig& config);
 
 } // namespace Internal
 } // namespace GRIMText::Training

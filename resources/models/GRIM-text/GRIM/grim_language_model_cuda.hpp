@@ -131,11 +131,10 @@ struct ContextState {
 //  DO NOT redeclare architecture fields here.
 //======================================================//
 
-// Model execution mode - determines memory allocation strategy
-enum class ModelExecutionMode {
-    TRAINING,    // Full training state with gradient buffers (~1GB+)
-    INFERENCE    // Lightweight inference state with only forward caches (~385MB)
-};
+// ModelExecutionMode moved to HyperParameters::ModelExecutionMode
+// (Shared/HyperParameters/HyperParameters_GPU.hpp). HyperParameters is the
+// single source of truth for all model configuration; this header is the
+// model class declaration only.
 
 struct EncoderConfig : public HyperParameters::ModelArchitecture {
     // Architecture fields (d_model, num_heads, num_kv_heads, head_dim, d_ff,
@@ -204,168 +203,11 @@ struct LMHeadConfig {
     float epsilon = 1e-5f;
 };
 
-// SamplingStrategy / GenerationConfig / GenerationStreamCallback are now defined in
-// Shared/HyperParameters/HyperParameters_GPU.hpp (single source of truth).
-// Refer to them as `GRIM::HyperParameters::SamplingStrategy`, etc.
-
- struct ActivationQuantizationConfig {
-    bool enabled = false;
-    bool apply_to_embeddings = false;
-    bool apply_to_encoder_outputs = false;
-    bool apply_to_layer_caches = false;
-    bool apply_to_qkv_cache = false;
-    bool apply_to_logits = false;
-    float scale = 1.0f;
-    float clip_min = -127.0f;
-    float clip_max = 127.0f;
-    int zero_point = 0;
-    bool symmetric = false;
-};
-
-struct LanguageModelConfig : public HyperParameters::ModelArchitecture {
-    // Architecture fields (d_model, num_heads, num_kv_heads, head_dim, d_ff,
-    // num_layers, max_seq_len, dropout_rate, attention_dropout, positional_encoding,
-    // tie_embeddings) inherited from HyperParameters::ModelArchitecture
-
-    int vocab_size = 0;        // MUST come from .grmt training data or tokenizer
-    
-    // Validates architecture and computes derived values (head_dim = d_model / num_heads)
-    // MUST be called after populating architecture fields
-    void computeDerivedValues() {
-        validate();  // ModelArchitecture::validate() computes head_dim and validates all arch fields
-    }
-    
-    // Cache limits
-    int max_cached_batch = 0;
-    int max_cached_seq_len = 0;
-    int max_tokens_per_batch = 0;  // Optional token budget for training logits/loss
-    
-    // Fixed config values (not architecture-dependent)
-    // Issue #104 FIX: Changed from 1e-3 to 1e-5 (see TransformerConfig above for rationale)
-    float rms_epsilon = 1e-5f;  // RMSNorm epsilon - shared across all RMSNorm layers
-    bool causal_mask = true;
-    bool use_pre_norm = true;
-    bool fuse_qkv = true;
-    bool use_simd = true;
-    int num_threads = 4;
-    bool use_bias = true;
-    bool qk_norm_enabled = false;  // QK-Norm: RMSNorm applied to Q and K before attention scoring
-    
-    // Issue #109: LayerScale - learnable residual scaling from CaiT paper
-    // Reduces correlation buildup between layers by gating sublayer outputs
-    // with learnable scalars (initialized to layer_scale_init, typically 0.1)
-    bool use_layer_scale = false;         // Enable LayerScale (gated residual scaling)
-    float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
-    
-    bool use_gpu = true;
-    bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency
-    int min_seq_len_for_flash = 0;     // REQUIRED - set from hyperparameters (no defaults)
-    std::string vocab_path;            // Optional: source vocab file for auto-detection
-    bool infer_vocab_from_file = false; // When true, read vocab size from vocab_path at init
-    
-    // Execution mode - determines memory allocation strategy
-    ModelExecutionMode execution_mode = ModelExecutionMode::INFERENCE;
-    
-    // ScratchBlock reasoning layer config - populated from ai_config.json
-    bool use_scratch_block = true;            // Enable ScratchBlock reasoning layer
-    int scratch_block_atom_embedding_dim = 64; // Atom embedding dimension
-    int scratch_block_max_atoms = 256;         // Max atoms per sequence
-    float scratch_block_atom_scale = 1.0f;     // Scale factor for atom injection (unit scale)
-    /// When true with ExecutionBlock: ScratchBlock uses type embedding only (no magnitude/sign/text value leak).
-    bool scratch_block_execution_first_type_only = true;
-
-    // ReasoningHead config
-    bool reasoning_head_enabled = false;       // Enable ReasoningHead parallel layer
-    int reasoning_num_ops = 8;                 // Number of reasoning operations (output dim)
-
-    // ExecutionBlock config — differentiable register machine
-    bool execution_block_enabled = false;
-    int execution_block_layer = -1;            // encoder layer to run after (-1 = num_layers - 2)
-    int execution_block_num_ops = 4;           // +, -, *, / only
-    int execution_block_num_slots = 4;         // V — memory slots
-    int execution_block_num_steps = 2;         // K — execution steps per forward
-    int execution_block_d_key = 64;
-    int execution_block_d_type = 8;
-    int execution_block_cross_attn_head_dim = 64;
-    int execution_block_cross_attn_topk = 1;
-    float execution_block_usage_decay = 0.9f;
-    float execution_block_diversity_kappa = 2.0f;
-    float execution_block_temp_start = 2.0f;
-    float execution_block_temp_end = 0.5f;
-    int   execution_block_temp_schedule = 0;   // 0=linear, 1=cosine
-    float execution_block_entropy_weight = 0.01f;
-
-    // Causal state loss weights (Fixes 1-9)
-    float execution_block_transition_hard_threshold = 0.0f; // 0 = disabled
-    int   execution_block_gate_warmup_steps = 0;
-    float execution_block_causal_w1_transition = 1.0f;
-
-    // Fix #6: Division invalid penalty (0 = disabled)
-    float div_invalid_penalty_weight = 0.0f;
-
-    // Fix #8: Division magnitude penalty (0 = disabled)
-    float div_magnitude_penalty_weight = 0.0f;
-
-    // Fix #7: Arg REINFORCE weight (0 = disabled)
-    float arg_reinforce_weight = 0.0f;
-    float arg_reinforce_baseline_decay = 0.99f;
-
-    // Autograd-connected structured CE for execution selection decisions
-    bool  structured_ce_enabled = false;  // Enable device-side logits-space CE on teacher targets
-    float structured_ce_weight  = 0.0f;   // Weight for selection CE (0 = must be set if enabled)
-
-    // Decode-time slot selector config
-    bool  selector_enabled = false;       // Enable decode-time selector layer
-    int   selector_d_selector = 64;       // Query/key projection dimension
-    float selector_selection_margin = 1.0f; // top1 - top2 >= margin → Selected
-    float selector_supervision_weight = 0.0f; // Training-time supervision loss weight
-
-    // Execution-first structured CE loss config (Step X / Y multipliers)
-    float step_x_multiplier = 2.0f;
-    float step_y_multiplier = 2.0f;
-    bool  step_y_overrides_x = false;
-    float entropy_aux_weight = 0.0f;
-    float value_match_epsilon = 1e-6f;
-    float final_slot_consistency_weight = 0.0f; // Spec Step 9 (optional): MSE penalty on final slot values vs target
-    
-    // LM Head centering config (Issue #37 / #40 fixes)
-    // When enabled, centers hidden states before LM head projection.
-    // Centering backward is handled automatically by CenterRowsGradFn/CenterColumnsGradFn
-    // inside the autograd graph (Issues #125/#132).
-    bool lm_head_center_hidden_states = false;  // Center encoder output before projection
-    bool lm_head_freeze_final_rms_gamma = false;  // Freeze γ_final at 1.0 (no requires_grad,
-                                                  // no param group). Use when γ_final exhibits
-                                                  // monotonic logit-temperature inflation that
-                                                  // wd_mult/lr_mult cannot brake.
-    bool project_out_pc1 = false;              // Project out PC1 direction before LM head (Issue #149)
-    int  pc1_power_iters = 5;                  // Power iteration steps for PC1 estimation
-    bool center_logits = false;                 // Center logits per position (row-wise, mean→0)
-    bool center_encoder_residuals = true;        // Center residuals INSIDE encoder layers. Prevents ρ buildup from causal attention prefix averaging.
-                                                     // Gradient cost: negligible ((1-1/n_tokens)^24 ≈ 0.996 for n≈6000).
-    
-    // Hardcoded Hidden States Diagnostic (Issue #42)
-    // When enabled, replaces encoder output with synthetic patterns to isolate
-    // whether mode collapse is caused by encoder or LM head/gradient system.
-    enum class HardcodedPattern {
-        DISABLED,
-        RANDOM_CENTERED,      // Random normal with mean=0 (tests Issue #37)
-        ORTHOGONAL_W277,      // Orthogonal to W[277] (should give logit[277]≈0)
-        ALIGNED_W277,         // Aligned with W[277] (tests collapse mechanism)
-        CONSTANT_UNIFORM,     // Constant [1/√768] (tests Issue #40 row sum bias)
-        ZERO_MEAN_SINE        // Sine wave with zero mean (centering robustness)
-    };
-    HardcodedPattern hardcoded_hidden_pattern = HardcodedPattern::DISABLED;
-    int hardcoded_log_every_n_batches = 1;
-    
-    HyperParameters::GenerationConfig generation;
-    ActivationQuantizationConfig activation_quantization;
-
-    // Multi-token prediction (MTP) - auxiliary heads for trajectory learning (Gloeckle et al. 2024)
-    bool mtp_enabled = false;
-    int mtp_k = 0;                    // Number of auxiliary future-prediction heads (2-4)
-    float mtp_alpha = 0.2f;           // MTP loss coefficient
-    int mtp_alpha_warmup_steps = 500; // Steps to linearly warm up alpha from 0 to mtp_alpha
-};
+// SamplingStrategy / GenerationConfig / GenerationStreamCallback /
+// ActivationQuantizationConfig / LanguageModelConfig / ModelExecutionMode
+// are defined in Shared/HyperParameters/HyperParameters_GPU.hpp
+// (single source of truth). Refer to them as
+// `GRIM::HyperParameters::LanguageModelConfig`, etc.
 
 // GPU Configuration - FULL definition (source of truth)
 struct GPUConfig {
@@ -525,7 +367,7 @@ public:
     };
 
     // Constructor / Destructor
-    explicit LanguageModel(const LanguageModelConfig& config);
+    explicit LanguageModel(const HyperParameters::LanguageModelConfig& config);
     ~LanguageModel();
     
     // Main API
@@ -625,7 +467,7 @@ public:
     bool load(const std::string& path);
     
     // Config access
-    const LanguageModelConfig& getConfig() const { return config_; }
+    const HyperParameters::LanguageModelConfig& getConfig() const { return config_; }
     
     // GPU methods
     void initGPU();
@@ -716,7 +558,7 @@ private:
     // Returns logits vector for the new token.
     Vector executeDecodeForward_(int token_pos);
 
-    LanguageModelConfig config_;
+    HyperParameters::LanguageModelConfig config_;
     std::unique_ptr<GrimEmbeddingStack> embedder_;
     
 #ifdef USE_CUDA

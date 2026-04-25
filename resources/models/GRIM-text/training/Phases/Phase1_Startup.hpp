@@ -63,8 +63,6 @@
 #include "Startup/Rng.hpp"
 #include "Startup/Logging.hpp"
 
-namespace fs = std::filesystem;
-
 namespace GRIMText::Training {
 
 // Use types from training_data_loader.hpp (global namespace)
@@ -75,51 +73,12 @@ using ::GRMTDataLoader;
 //  Startup Configuration Structures
 //======================================================//
 
-/**
- * @brief Configuration paths loaded from ai_config.json
- */
-struct PathConfig {
-    std::string data_path;
-    std::string vocab_path;
-    std::string output_model_path;
-    std::string checkpoint_dir;
-    std::string log_dir;
-    std::string status_path;
-    fs::path config_path;
-    
-    bool validate() const;
-};
-
-/**
- * @brief All startup configuration combined.
- *
- * Source-of-truth fields live in `GRIM::Config::TrainingHyperparameters`
- * (see control/ai_config_paths.hpp) and `GRIM::HyperParameters::ModelArchitecture`
- * (see Shared/HyperParameters/HyperParameters_GPU.hpp). Do NOT add
- * parallel sub-structs that re-copy fields out of those types — read
- * `hyperparameters.X` directly at the consumer site.
- */
-struct StartupConfig {
-    PathConfig paths;
-    GRIM::Config::TrainingHyperparameters hyperparameters;
-    GRIM::Config::TokenizerConfig tokenizer_config;
-    GRIM::HyperParameters::ModelArchitecture architecture;
-
-    // Generation config for inference samples during training
-    GRIM::HyperParameters::GenerationConfig generation;
-    
-    // Derived values (Rule 20: No defaults - must be explicitly set during loadConfiguration)
-    int max_seq_len = 0;  // MUST be set from hyperparameters or stability override, throw if 0
-    int sliding_window_stride = 0;  // Derived from max_seq_len
-    uint32_t actual_vocab_size = 0;
-    
-    // Flags
-    bool save_test_mode = false;
-    // NOTE: training.config.force_rebuild_vocab is now read directly by the
-    // train_tokenizer subprocess wrapper (see Subprocess/tokenizer_subprocess.cpp)
-    // and is intentionally NOT mirrored on TrainingConfig (Rule 26: a single
-    // owner per state).
-};
+// PathConfig + StartupConfig are owned by Shared/HyperParameters/HyperParameters_GPU.hpp
+// (single source of truth for ai_config.json loading + validation +
+// derivation). The aliases below give phase-internal code the short
+// names it has always used; do NOT redefine these types here.
+using PathConfig    = ::GRIM::HyperParameters::PathConfig;
+using StartupConfig = ::GRIM::HyperParameters::StartupConfig;
 
 //======================================================//
 //  Data Structures for Training Loop

@@ -478,7 +478,7 @@ int main(int argc, char** argv) {
     //--------------------------------------------------
     std::cout << "\n[4] Initializing model..." << std::endl;
     
-    GRIM::LanguageModelConfig lm_config;
+    GRIM::HyperParameters::LanguageModelConfig lm_config;
     lm_config.vocab_size = vocab_size;
     lm_config.d_model = d_model;
     lm_config.num_layers = num_layers;
@@ -488,7 +488,7 @@ int main(int argc, char** argv) {
     lm_config.tie_embeddings = tie_embeddings;
     lm_config.max_seq_len = max_seq_len;
     lm_config.use_bias = false;
-    lm_config.execution_mode = GRIM::ModelExecutionMode::TRAINING;
+    lm_config.execution_mode = GRIM::HyperParameters::ModelExecutionMode::TRAINING;
     lm_config.computeDerivedValues();  // Compute head_dim = d_model / num_heads
     
     std::cout << "  d_model=" << lm_config.d_model 

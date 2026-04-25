@@ -49,6 +49,8 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 // Xavier.hpp removed - weights initialized via Tensor::xavier_uniform_() with Philox PRNG (Issue #107)
 #endif
 
+namespace fs = std::filesystem;
+
 // Module logging aliases
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
@@ -61,73 +63,35 @@ namespace GRIMText::Training {
 //======================================================//
 
 //======================================================//
-//  PathConfig Implementation
-//======================================================//
-
-bool PathConfig::validate() const {
-    return !data_path.empty() &&
-           !vocab_path.empty() &&
-           !output_model_path.empty() &&
-           !checkpoint_dir.empty() &&
-           !log_dir.empty();
-}
-
-//======================================================//
 //  Internal Helper Implementations
 //======================================================//
 
 namespace Internal {
 
+//======================================================//
+//  loadConfiguration
+//
+//  Thin wrapper over GRIM::HyperParameters::loadStartupConfig().
+//  All ai_config.json parsing, validation, derivation, and CLI
+//  override handling lives in HyperParameters_GPU.hpp (single owner).
+//  This wrapper only performs the two training-side side effects:
+//    - GRIM::Tokenizer::configureTokenLayout()
+//    - GRIM::Logging::InitLogRecorder() + ConfigureLayerLogging()
+//  These deliberately stay outside HyperParameters to preserve the
+//  Shared → Training layering rule.
+//======================================================//
+
 StartupConfig loadConfiguration(int argc, char** argv) {
-    StartupConfig config;
-    
-    // Resolve config path: --config overrides default ai_config.json discovery
-    std::string config_path = "ai_config.json";
-    for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--config" && i + 1 < argc) {
-            config_path = argv[++i];
-            break;
-        }
-    }
-    
-    // Load ai_config.json snapshot (or path from --config, e.g. model_config.json)
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot(config_path);
-    if (!snapshot) {
-        throw std::runtime_error("FATAL: ai_config.json not found or unreadable");
-    }
-    
-    config.paths.config_path = snapshot->config_path;
+    // Centralized load + validate + derive (single source of truth).
+    StartupConfig config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
 
-    // Snapshot already parsed paths into the typed GrimTextPaths struct
-    // (with relative-path resolution against the GRIM root). Phase1 just
-    // copies field-by-field — no JSON parsing here.
-    if (!snapshot->grim_paths.isValid()) {
-        throw std::runtime_error(
-            "FATAL: ai_config.json paths.grim_text missing required fields "
-            "(at minimum vocab + training_data must be non-empty)");
-    }
-    const auto& gp = snapshot->grim_paths;
-    config.paths.data_path        = gp.training_data;
-    config.paths.vocab_path       = gp.vocab;
-    config.paths.output_model_path = gp.model;
-    config.paths.checkpoint_dir   = gp.checkpoints;
-    config.paths.log_dir          = gp.logs;
-    config.paths.status_path      = gp.training_status;
-
-    // Hyperparameters & tokenizer config — already typed on the snapshot.
-    if (snapshot->has_training) {
-        config.hyperparameters = snapshot->hyperparameters;
-    }
-    config.tokenizer_config = snapshot->tokenizer_config;
-
+    // Tokenizer global token-layout setup (Tokenizer subsystem side effect).
     GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
 
-    // Configure LogRecorder
+    // Log recorder bootstrap (training log-subsystem side effect).
     if (config.hyperparameters.log_recorder.enabled) {
-        // Initialize log recorder system - MUST pass path (Rule 20: no hardcoded fallback)
         GRIM::Logging::InitLogRecorder(config.paths.log_dir);
 
-        // Configure layer logging enables
         const auto& layers = config.hyperparameters.log_recorder.layers;
         GRIM::Logging::ConfigureLayerLogging(
             config.hyperparameters.log_recorder.enabled,
@@ -140,81 +104,10 @@ StartupConfig loadConfiguration(int argc, char** argv) {
             layers.serialization,
             layers.execution_block);
     } else {
-        // Disable all layer logging if master disabled
-        GRIM::Logging::ConfigureLayerLogging(false, false, false, false, false, false, false, false, false);
+        GRIM::Logging::ConfigureLayerLogging(
+            false, false, false, false, false, false, false, false, false);
     }
 
-    // Loss / stability / scratch / cuda_exec / prediction_comparison fields
-    // are NOT copied into wrapper sub-structs. Consumers read
-    // `config.hyperparameters.*` directly (see ai_config_paths.hpp).
-
-    // Architecture: delegate to HyperParameters_GPU's loadModelArchitecture —
-    // the SINGLE place that translates training.config JSON keys
-    // (d_model / num_layers / num_heads / num_kv_heads / dropout_rate /
-    // tie_embeddings / positional_encoding) into ModelArchitecture.
-    GRIM::HyperParameters::loadModelArchitecture(*snapshot, config.architecture);
-
-    // Generation config (for inference samples during training) — also delegated
-    // to HyperParameters_GPU so all ai_config.json parsing lives in one place.
-    GRIM::HyperParameters::loadGenerationConfig(*snapshot, config.generation);
-    config.architecture.max_seq_len = config.hyperparameters.max_seq_len;
-    config.architecture.validate();
-    
-    // Compute derived values
-    // Rule 20: No fallback - max_seq_len must be configured (used for cache allocation)
-    // ONLY use stability override if stability mode is actually enabled
-    const auto& hp = config.hyperparameters;
-    if (hp.stability_overrides_enabled && hp.stability_override_max_seq_len > 0) {
-        config.max_seq_len = hp.stability_override_max_seq_len;
-    } else if (hp.max_seq_len > 0) {
-        config.max_seq_len = hp.max_seq_len;
-    } else {
-        throw std::runtime_error("FATAL: max_seq_len not configured in ai_config.json (stability or hyperparameters)");
-    }
-    // stride = 7/8 of max_seq_len → 12.5% overlap (128 context tokens at seq_len=1024)
-    // Previous: max_seq_len/2 = 50% overlap wasted ~30% of total GPU compute on masked tokens.
-    // 12.5% overlap is standard practice — enough context for attention continuity
-    // without burning half the token budget on zero-gradient positions.
-    config.sliding_window_stride = std::max(1, config.max_seq_len * 7 / 8);
-
-    // Apply stability overrides to batch size and LR (only if stability mode enabled)
-    if (hp.stability_overrides_enabled) {
-        if (hp.stability_override_batch_size <= 0) {
-            throw std::runtime_error("FATAL: stability_overrides enabled but stability_override_batch_size=" +
-                                     std::to_string(hp.stability_override_batch_size) + " (must be > 0)");
-        }
-        config.hyperparameters.batch_size = hp.stability_override_batch_size;
-        if (hp.stability_override_clip_per_token > 0.0f) {
-            config.hyperparameters.grad_clip_norm = hp.stability_override_clip_per_token;
-        }
-    }
- 
-    // Parse command line arguments
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--data" && i + 1 < argc) config.paths.data_path = argv[++i];
-        else if (arg == "--vocab" && i + 1 < argc) config.paths.vocab_path = argv[++i];
-        else if (arg == "--output" && i + 1 < argc) config.paths.output_model_path = argv[++i];
-        else if (arg == "--epochs" && i + 1 < argc) config.hyperparameters.epochs = std::atoi(argv[++i]);
-        else if (arg == "--batch-size" && i + 1 < argc) config.hyperparameters.batch_size = std::atoi(argv[++i]);
-        else if (arg == "--lr" && i + 1 < argc) config.hyperparameters.learning_rate = std::atof(argv[++i]);
-        else if (arg == "--save-test") config.save_test_mode = true;
-        else if (arg == "--config" && i + 1 < argc) { ++i; }  // consumed above for loadAiConfigSnapshot
-        else if (arg == "--help") {
-            std::cout << "Usage: " << argv[0] << " [options]\n";
-            std::cout << "Options:\n";
-            std::cout << "  --config <path>    Config file (ai_config.json or model_config.json)\n";
-            std::cout << "  --data <path>      Training data path\n";
-            std::cout << "  --vocab <path>     Vocabulary path\n";
-            std::cout << "  --output <path>    Output model path\n";
-            std::cout << "  --epochs <n>       Number of epochs\n";
-            std::cout << "  --batch-size <n>   Batch size\n";
-            std::cout << "  --lr <rate>        Learning rate\n";
-            std::cout << "  --save-test        Test serialization save and exit\n";
-            std::exit(0);
-        }
-    }
-    
     return config;
 }
 
@@ -660,7 +553,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const auto& arch = config.architecture;
     const auto& hp = config.hyperparameters;
     
-    GRIM::LanguageModelConfig model_config;
+    GRIM::HyperParameters::LanguageModelConfig model_config;
     // Copy all architecture fields from validated ModelArchitecture (Single Source of Truth)
     static_cast<GRIM::HyperParameters::ModelArchitecture&>(model_config) = arch;
     model_config.max_seq_len = config.max_seq_len;  // Override: uses StartupConfig's derived value
@@ -778,10 +671,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     }
 
     // Hardcoded Hidden States Diagnostic (Issue #42)
-    model_config.hardcoded_hidden_pattern = static_cast<GRIM::LanguageModelConfig::HardcodedPattern>(hp.hardcoded_hidden_pattern);
+    model_config.hardcoded_hidden_pattern = static_cast<GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern>(hp.hardcoded_hidden_pattern);
     model_config.hardcoded_log_every_n_batches = hp.hardcoded_log_every_n_batches;
     
-    if (model_config.hardcoded_hidden_pattern != GRIM::LanguageModelConfig::HardcodedPattern::DISABLED) {
+    if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED) {
         logger.log("⚠️  HARDCODED HIDDEN STATES DIAGNOSTIC ENABLED: pattern=" + std::to_string(static_cast<int>(model_config.hardcoded_hidden_pattern)) +
                   ", log_every_n=" + std::to_string(model_config.hardcoded_log_every_n_batches));
         logger.log("⚠️  Encoder output will be REPLACED with synthetic patterns - this is a DIAGNOSTIC MODE ONLY!");

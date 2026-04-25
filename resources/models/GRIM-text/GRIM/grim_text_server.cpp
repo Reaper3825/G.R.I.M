@@ -125,7 +125,7 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
         std::cout << "[GRIM-text] EOS token ID: " << g_tokenizer->eosId() << "\n";
         std::cout << "[GRIM-text] PAD token ID: " << g_tokenizer->padId() << "\n";
 
-        LanguageModelConfig config;
+        HyperParameters::LanguageModelConfig config;
         
         // Load architecture from HyperParameters (THE source of truth)
         HyperParameters::ModelArchitecture arch;
@@ -147,7 +147,7 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
         config.generation.pad_token_id = g_tokenizer->padId();
         
         // INFERENCE MODE: Use lightweight inference state (~385MB vs ~15GB training state)
-        config.execution_mode = ModelExecutionMode::INFERENCE;
+        config.execution_mode = HyperParameters::ModelExecutionMode::INFERENCE;
         
         // INFERENCE-ONLY: Use much smaller activation cache (batch=1, max_seq=512)
         // This reduces GPU memory requirements from ~15GB to ~2GB

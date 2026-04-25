@@ -16,10 +16,12 @@
 // Phase1_Startup.hpp before this header so a forward decl is safe.
 class TrainingLogger;
 
-namespace GRIMText::Training {
+// StartupConfig lives in Shared/HyperParameters/HyperParameters_GPU.hpp.
+// Forward-declare in its owning namespace to avoid pulling that header
+// transitively (and to keep this header circular-include-safe).
+namespace GRIM { namespace HyperParameters { struct StartupConfig; } }
 
-// Forward decl: defined in Phase1_Startup.hpp.
-struct StartupConfig;
+namespace GRIMText::Training {
 
 /**
  * @brief Production-grade RNG context with reproducibility support.
@@ -63,7 +65,8 @@ namespace Internal {
  * @brief Initialize RNG with hierarchical seeding from config.
  *        Reads training.config.seed (-1 = nondeterministic).
  */
-RNGContext initializeRNG(const StartupConfig& config, TrainingLogger& logger);
+RNGContext initializeRNG(const ::GRIM::HyperParameters::StartupConfig& config,
+                         TrainingLogger& logger);
 
 } // namespace Internal
 } // namespace GRIMText::Training

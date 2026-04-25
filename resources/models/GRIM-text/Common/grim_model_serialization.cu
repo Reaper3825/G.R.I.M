@@ -22,6 +22,8 @@
 
 namespace GRIM {
 
+using GRIM::HyperParameters::ModelExecutionMode;
+
 //======================================================//
 //  Helper: Flatten Matrix to Vector
 //======================================================//
@@ -63,7 +65,7 @@ static void unflattenMatrix(const std::vector<float>& data, Matrix& mat, int row
 
 namespace {
 
-SerializationModelConfigView makeConfigView(const LanguageModelConfig& cfg) {
+SerializationModelConfigView makeConfigView(const HyperParameters::LanguageModelConfig& cfg) {
     SerializationModelConfigView view{};
     view.vocab_size = cfg.vocab_size;
     view.d_model = cfg.d_model;
@@ -80,7 +82,7 @@ SerializationModelConfigView makeConfigView(const LanguageModelConfig& cfg) {
     return view;
 }
 
-std::size_t embeddingElementCount(const LanguageModelConfig& cfg) {
+std::size_t embeddingElementCount(const HyperParameters::LanguageModelConfig& cfg) {
     return static_cast<std::size_t>(cfg.vocab_size) * static_cast<std::size_t>(cfg.d_model);
 }
 

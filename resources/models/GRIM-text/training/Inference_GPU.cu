@@ -29,6 +29,7 @@
 #include "../Shared/Batching/BatchPayload.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
+using GRIM::HyperParameters::ModelExecutionMode;
 
 namespace GRIM {
 
@@ -88,7 +89,7 @@ void copyTokenSlotMapH2D(TrainingState& ts, cudaStream_t stream, int seq_len,
 
 ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
     ScratchBlockLayer& scratch_block,
-    const LanguageModelConfig& cfg,
+    const HyperParameters::LanguageModelConfig& cfg,
     TrainingState& ts,
     cudaStream_t stream,
     int token_pos)
