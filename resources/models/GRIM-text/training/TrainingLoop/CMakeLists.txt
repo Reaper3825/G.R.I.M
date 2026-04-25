@@ -398,6 +398,11 @@ add_executable(train_gpu
     ../Diagnostics/DiagnosticGates.hpp
     ../Phases/Phase3_Cleanup.cu
     ../Phases/Phase3_Cleanup.hpp
+    ../Subprocess/subprocess_status.hpp
+    ../Subprocess/subprocess_manager.hpp
+    ../Subprocess/subprocess_manager.cpp
+    ../Subprocess/tokenizer_subprocess.hpp
+    ../Subprocess/tokenizer_subprocess.cpp
     ../OptimizerCheckpoint.cu
     ../OptimizerCheckpoint.hpp
     ../training_status_writer.hpp
@@ -625,10 +630,11 @@ target_include_directories(grmt_vocab_metrics_test PRIVATE
 )
 
 # ============================================================================
-# STANDALONE TOKENIZER TRAINING
-# Runs full tokenizer pipeline on entire corpus: train vocab + encode GRMT
-# No model training, no GPU kernels beyond tokenizer
-# Usage: train_tokenizer [--force]
+# STANDALONE TOKENIZER TRAINING SUBPROCESS
+# Spawned by train_gpu via Subprocess/tokenizer_subprocess.cpp.
+# Runs full tokenizer pipeline on entire corpus: train vocab + encode GRMT.
+# Writes a JSON status file the parent reads.
+# Usage: train_tokenizer --status-file <path> [--config <ai_config.json>] [--force]
 # ============================================================================
 add_executable(train_tokenizer
     ../train_tokenizer.cu

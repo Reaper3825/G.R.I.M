@@ -158,6 +158,30 @@ struct TokenizerConfig {
     float vocab_score_multiplier = 1.0f;  // Multiply all vocab scores by this value on save (experiment knob)
 };
 
+/**
+ * @brief Subprocess coordinator configuration
+ *
+ * Read by the primitive subprocess coordinator (training/Subprocess/) BEFORE
+ * any training phase begins. The fields here aggregate the JSON keys consumed
+ * by the coordinator across multiple top-level sections (subprocess.* and
+ * training.config.*). This is the single, centralized C++ view those flags;
+ * Subprocess/ code MUST go through this struct (via loadAiConfigSnapshot /
+ * loadSubprocessConfig) and MUST NOT raw-parse ai_config.json itself.
+ */
+struct SubprocessConfig {
+    // subprocess.tokenizer.only_mode
+    // When true, train_gpu spawns the train_tokenizer subprocess, waits for
+    // completion, and exits cleanly without entering Phase 1. When false,
+    // tokenizer training runs as a normal pre-Phase-1 step and training
+    // continues on success.
+    bool tokenizer_only_mode = false;
+
+    // training.config.force_rebuild_vocab
+    // Mirrored here (and ONLY here, post-refactor) because the train_tokenizer
+    // subprocess wrapper is the sole consumer.
+    bool tokenizer_force_rebuild_vocab = false;
+};
+
 struct AiConfigSnapshot {
     std::filesystem::path config_path;
     nlohmann::json document;
@@ -165,10 +189,12 @@ struct AiConfigSnapshot {
     TrainingHyperparameters hyperparameters;
     TokenizerConfig tokenizer_config;
     DataCollectionConfig data_collection_config;
+    SubprocessConfig subprocess_config;
     bool has_grim_paths = false;
     bool has_training = false;
     bool has_tokenizer = false;
     bool has_data_collection = false;
+    bool has_subprocess = false;
 };
 
 inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& configPath = "ai_config.json");
@@ -1227,6 +1253,57 @@ inline bool populateDataCollectionConfigFromConfig(const nlohmann::json& config,
     return true;
 }
 
+// Populate SubprocessConfig from ai_config.json. Reads two semantically-related
+// flags from different top-level sections so the coordinator (training/Subprocess/)
+// has a single, validated, type-checked view. Throws std::runtime_error on a
+// type mismatch (Rule 20: fail loud — wrong type is NEVER silently coerced).
+// Missing fields default to false. Returns true if either field was found.
+inline bool populateSubprocessConfigFromConfig(const nlohmann::json& config, SubprocessConfig& sc) {
+    bool found_any = false;
+
+    // subprocess.tokenizer.only_mode
+    if (config.contains("subprocess")) {
+        const auto& subp = config["subprocess"];
+        if (!subp.is_object()) {
+            throw std::runtime_error(
+                "ai_config.json: 'subprocess' must be an object");
+        }
+        if (subp.contains("tokenizer")) {
+            const auto& tok = subp["tokenizer"];
+            if (!tok.is_object()) {
+                throw std::runtime_error(
+                    "ai_config.json: 'subprocess.tokenizer' must be an object");
+            }
+            if (tok.contains("only_mode")) {
+                if (!tok["only_mode"].is_boolean()) {
+                    throw std::runtime_error(
+                        "ai_config.json: 'subprocess.tokenizer.only_mode' must be a boolean");
+                }
+                sc.tokenizer_only_mode = tok["only_mode"].get<bool>();
+                found_any = true;
+            }
+        }
+    }
+
+    // training.config.force_rebuild_vocab
+    if (config.contains("training") && config["training"].is_object()) {
+        const auto& training = config["training"];
+        if (training.contains("config") && training["config"].is_object()) {
+            const auto& tcfg = training["config"];
+            if (tcfg.contains("force_rebuild_vocab")) {
+                if (!tcfg["force_rebuild_vocab"].is_boolean()) {
+                    throw std::runtime_error(
+                        "ai_config.json: 'training.config.force_rebuild_vocab' must be a boolean");
+                }
+                sc.tokenizer_force_rebuild_vocab = tcfg["force_rebuild_vocab"].get<bool>();
+                found_any = true;
+            }
+        }
+    }
+
+    return found_any;
+}
+
 inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, TokenizerConfig& tokenizer_config, TrainingHyperparameters& hyperparameters) {
     if (!config.contains("tokenizer")) {
         return false;
@@ -1329,6 +1406,7 @@ inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& c
         snapshot.has_training = detail::populateTrainingHyperparametersFromConfig(snapshot.document, snapshot.hyperparameters);
         snapshot.has_tokenizer = detail::populateTokenizerConfigFromConfig(snapshot.document, snapshot.tokenizer_config, snapshot.hyperparameters);
         snapshot.has_data_collection = detail::populateDataCollectionConfigFromConfig(snapshot.document, snapshot.data_collection_config);
+        snapshot.has_subprocess = detail::populateSubprocessConfigFromConfig(snapshot.document, snapshot.subprocess_config);
         return snapshot;
     } catch (const std::exception& e) {
         std::cerr << "[Config] ERROR: Exception loading ai_config.json: " << e.what() << std::endl;
@@ -1427,6 +1505,26 @@ inline bool loadDataCollectionConfig(DataCollectionConfig& config, const std::st
     }
 
     config = snapshot->data_collection_config;
+    return true;
+}
+
+/**
+ * @brief Load the SubprocessConfig view (subprocess.tokenizer.* and
+ *        training.config.force_rebuild_vocab) from ai_config.json.
+ *
+ * Returns true on success, false if the config file is missing or unreadable.
+ * Throws std::runtime_error (via the populator) on a present-but-malformed
+ * field — the coordinator MUST fail loud rather than spawn a subprocess with
+ * silently-wrong flags.
+ *
+ * Missing fields default to false (the field defaults on SubprocessConfig).
+ */
+inline bool loadSubprocessConfig(SubprocessConfig& config, const std::string& configPath = "ai_config.json") {
+    auto snapshot = loadAiConfigSnapshot(configPath);
+    if (!snapshot) {
+        return false;
+    }
+    config = snapshot->subprocess_config;
     return true;
 }
 

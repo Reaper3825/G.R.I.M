@@ -114,7 +114,10 @@ struct StartupConfig {
     
     // Flags
     bool save_test_mode = false;
-    bool force_rebuild_vocab = false;
+    // NOTE: training.config.force_rebuild_vocab is now read directly by the
+    // train_tokenizer subprocess wrapper (see Subprocess/tokenizer_subprocess.cpp)
+    // and is intentionally NOT mirrored on TrainingConfig (Rule 26: a single
+    // owner per state).
 };
 
 //======================================================//

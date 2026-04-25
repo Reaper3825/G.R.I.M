@@ -228,7 +228,10 @@ StartupConfig loadConfiguration(int argc, char** argv) {
             }
         }
             
-        config.force_rebuild_vocab = cfg.value("force_rebuild_vocab", false);
+        // training.config.force_rebuild_vocab is consumed by the
+        // train_tokenizer subprocess wrapper directly from ai_config.json
+        // (see Subprocess/tokenizer_subprocess.cpp). Phase 1 deliberately
+        // does NOT mirror it onto TrainingConfig.
         
         // Load generation config for inference samples during training
         if (cfg.contains("generation") && cfg["generation"].is_object()) {
@@ -1292,51 +1295,12 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // Initialize unified BatchLogTape system (sinks + global tape pointer)
     Internal::setupBatchLogTape(ctx->logging, ctx->config);
 
-    // 2b. Auto-prepare training data/vocab from merged cache when needed.
-    {
-        const fs::path vocab_path = ctx->config.paths.vocab_path;
-        const bool data_missing = !fs::exists(ctx->config.paths.data_path);
-        const bool vocab_missing = vocab_path.empty() || !fs::exists(vocab_path);
-
-        if (ctx->config.force_rebuild_vocab || data_missing || vocab_missing) {
-            if (ctx->logging.logger) {
-                ctx->logging.logger->log("[Phase1] Auto-preparing training data/vocab...");
-            }
-            GRIM::Config::GrimTextPaths grim_paths{};
-            grim_paths.training_data = ctx->config.paths.data_path;
-            grim_paths.vocab = ctx->config.paths.vocab_path;
-            std::string training_path = ctx->config.paths.data_path;
-            std::string vocab_path_str = ctx->config.paths.vocab_path;
-            bool prepared = false;
-
-            try {
-                prepared = GRIM::PrepareTrainingDataFromCache(
-                    grim_paths,
-                    training_path,
-                    vocab_path_str,
-                    ctx->config.force_rebuild_vocab);
-            } catch (const std::exception& e) {
-                if (ctx->logging.logger) {
-                    ctx->logging.logger->log(std::string("[Phase1] Auto-prepare exception: ") + e.what());
-                }
-                throw;
-            }
-
-            if (prepared) {
-                ctx->config.paths.data_path = training_path;
-                ctx->config.paths.vocab_path = vocab_path_str;
-                if (ctx->logging.logger) {
-                    ctx->logging.logger->log("[Phase1] Auto-prepare completed.");
-                }
-            } else {
-                if (ctx->logging.logger) {
-                    ctx->logging.logger->log("[Phase1] Auto-prepare failed.");
-                }
-                throw std::runtime_error(
-                    "FATAL: training data/vocab missing and cache preparation failed");
-            }
-        }
-    }
+    // 2b. Tokenizer / training_data preparation is owned by the
+    //      train_tokenizer subprocess that ran BEFORE Phase 1 (see
+    //      Subprocess/tokenizer_subprocess.hpp). By the time we get here,
+    //      the GRMT and vocab artifacts are guaranteed to exist on disk;
+    //      validatePaths() below is the single place that fails loud if
+    //      they don't (Rule 20: no in-Phase fallback path).
 
     // 3. Validate paths
     EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
