@@ -744,7 +744,7 @@ bool PrepareTrainingDataFromCache(
 			concept_exec_base_slot = std::stoi(ev);
 		} catch (...) {}
 	}
-	const int expected_exec_steps = train_config.execution_block_num_steps;
+	const int expected_exec_steps = train_config.architecture.execution_block_num_steps;
 	size_t plaintext_count = 0;
 	size_t concept_build_failures = 0;
 	size_t selected_entries_skipped = 0;  // short text / encoder returned nullopt

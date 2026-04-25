@@ -55,6 +55,18 @@ std::string fmt(double v) {
 }
 std::string fmt(const std::string& v) { return v; }
 std::string fmt(const char* v)        { return v ? v : "(null)"; }
+std::string fmt(::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern v) {
+    using HCP = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern;
+    switch (v) {
+        case HCP::DISABLED:          return "DISABLED";
+        case HCP::RANDOM_CENTERED:   return "RANDOM_CENTERED";
+        case HCP::ORTHOGONAL_W277:   return "ORTHOGONAL_W277";
+        case HCP::ALIGNED_W277:      return "ALIGNED_W277";
+        case HCP::CONSTANT_UNIFORM:  return "CONSTANT_UNIFORM";
+        case HCP::ZERO_MEAN_SINE:    return "ZERO_MEAN_SINE";
+    }
+    throw std::runtime_error("fmt(HardcodedPattern): unknown enum value");
+}
 
 // Format byte counts as "<bytes> B (<MiB> MiB / <GiB> GiB)" for readability.
 std::string fmtBytes(std::size_t bytes) {

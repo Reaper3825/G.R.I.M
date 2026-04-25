@@ -2,6 +2,10 @@
 # Prerequisites
 # ==============================
 *.d
+# Anvil SSH/sbatch scripts (kept local only)
+scripts/run_train_on_anvil.sh
+scripts/train_anvil.sbatch
+scripts/README_ANVIL_RUN.md
 
 # Local API keys / secrets (never commit)
 ai_config.local.json

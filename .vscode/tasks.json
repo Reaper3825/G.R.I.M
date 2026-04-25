@@ -36,34 +36,6 @@
                 "--target", "clean"
             ],
             "problemMatcher": []
-        },
-        {
-            "label": "Run GRIM-text training on Anvil",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/run_train_on_anvil.sh",
-            "args": [],
-            "problemMatcher": [],
-            "group": "none",
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": true,
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "Run GRIM-text training on Anvil (build first)",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/run_train_on_anvil.sh",
-            "args": ["--build"],
-            "problemMatcher": [],
-            "group": "none",
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": true,
-                "panel": "shared"
-            }
         }
     ]
 }
