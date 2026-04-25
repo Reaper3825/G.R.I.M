@@ -1,0 +1,70 @@
+//======================================================//
+//  EpochBatching.hpp
+//  Per-epoch batching policy: builds the BatchSchedule for
+//  one epoch by configuring BatchOptions and calling
+//  GRIM::Batching::buildBatches(...). Logs the resulting
+//  schedule via a caller-supplied log callback.
+//
+//  This lives in Shared/Batching (next to Batching_GPU and
+//  BatchPayload) rather than in the training-loop
+//  orchestration file so the per-epoch packing policy is
+//  co-located with the rest of the batch construction
+//  logic. To avoid pulling training-layer types
+//  (TrainingContext / TrainingLogger) into Shared, the API
+//  accepts only the primitives it actually needs.
+//======================================================//
+
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <string>
+
+#include "Batching_GPU.hpp"   // BatchSchedule, BatchOptions, Catalog
+
+namespace GRIM { namespace Batching {
+
+using EpochBatchingLogFn = std::function<void(const std::string&)>;
+
+//======================================================//
+// Per-epoch batching constants. Mirror what was previously
+// declared inline in Phase2_TrainingLoop.hpp; kept here so
+// the policy lives with the batching code that consumes
+// them.
+//======================================================//
+inline constexpr int kWarmupTokenSteps = 2048;
+inline constexpr int kCurriculumEpochs = 1;
+
+//======================================================//
+// Build the BatchSchedule for one epoch.
+//
+//  catalog      — per-epoch shuffled catalog of training sequences.
+//  batch_size   — max sequences per batch (also caps token budget).
+//  max_seq_len  — model max sequence length (token budget = batch_size * max_seq_len).
+//  global_step  — current optimizer step (used for warmup gating).
+//  epoch        — 0-based epoch index (used for curriculum gating + RNG).
+//  data_seed    — base data RNG seed; per-epoch seed = data_seed + epoch.
+//  log_fn       — optional callback for the [Batching] summary lines.
+//                 Pass {} to suppress logging.
+//======================================================//
+BatchSchedule buildEpochBatches(
+    const Catalog& catalog,
+    int batch_size,
+    uint32_t max_seq_len,
+    int global_step,
+    int epoch,
+    uint64_t data_seed,
+    const EpochBatchingLogFn& log_fn);
+
+//======================================================//
+// Emit the standard [Batching] summary block for an
+// already-built BatchSchedule. Called internally by
+// buildEpochBatches when log_fn is non-null; exposed so
+// callers can re-log a schedule (e.g. validation epochs).
+//======================================================//
+void logBatchSchedule(
+    const BatchSchedule& schedule,
+    const BatchOptions& opts,
+    const EpochBatchingLogFn& log_fn);
+
+} } // namespace GRIM::Batching

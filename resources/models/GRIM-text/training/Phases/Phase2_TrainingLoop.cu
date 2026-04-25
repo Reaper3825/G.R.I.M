@@ -52,6 +52,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Batching/EpochBatching.hpp"  // GRIM::Batching::buildEpochBatches
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
 #include "../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.hpp"  // launchRAdamWStep — selectable via training.config.optimizer.kind
@@ -173,82 +174,14 @@ float getScheduledLearningRate(
     return schedule.lr(step);
 }
 
-GRIM::Batching::BatchSchedule buildEpochBatches(
-    const TrainingContext& ctx,
-    const GRIM::DynaSeq::Catalog& catalog,
-    int batch_size,
-    int global_step,
-    int epoch,
-    TrainingLogger& logger) {
-    
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] ENTER buildEpochBatches batch_size=%d\n", batch_size);
-    
-    const bool warmup_phase = (global_step < kWarmupTokenSteps);
-    const bool curriculum_active = (epoch < kCurriculumEpochs);
-    
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] warmup_phase=%d curriculum_active=%d\n",
-                        warmup_phase ? 1 : 0, curriculum_active ? 1 : 0);
-    
-    GRIM::Batching::BatchOptions opts;
-    
-    // Derive token budget directly from batch_size and max_seq_len
-    const auto& model_cfg = ctx.model->getConfig();
-    const uint32_t config_token_budget = static_cast<uint32_t>(batch_size) *
-        static_cast<uint32_t>(model_cfg.max_seq_len);
-    opts.max_tokens_per_batch = config_token_budget;
-    
-    opts.max_batch_size = static_cast<uint32_t>(batch_size);
-    
-    // Issue #90: GREEDY forced — SIMILARITY_GROUPED causes mode collapse promotes mode collapse (many small batches of similar sequences → unstable loss spikes)
-    opts.strategy = GRIM::Batching::PackingStrategy::GREEDY;
-    
-    opts.similarity_threshold = 0.30f;
-    opts.prefer_short_first = curriculum_active;
-    opts.curriculum_progress = curriculum_active ? static_cast<float>(epoch + 1) / kCurriculumEpochs : 1.0f;
-    opts.rng_seed = ctx.rng.data_seed + epoch;  // Vary by epoch for different shuffle each epoch
-    // Use RANDOM ordering to avoid loss spikes at epoch end
-    // LENGTH_ASCENDING causes easy→hard progression: loss plateaus then explodes
-    // RANDOM interleaves difficulties for stable gradient flow
-    opts.batch_ordering = GRIM::Batching::BatchOrdering::RANDOM;
-    opts.interleave_overflow = true;
-    
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to call buildBatches...\n");
-    auto schedule = GRIM::Batching::buildBatches(catalog, opts);
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] buildBatches returned, batches=%zu\n", schedule.batches.size());
-    PHASE2_DEBUG_FLUSH_STDERR();  // Force flush before potential crash
-
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] Checking schedule.batches.empty()...\n");
-    PHASE2_DEBUG_FLUSH_STDERR();
-    bool is_empty = schedule.batches.empty();
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] is_empty=%d\n", is_empty ? 1 : 0);
-    PHASE2_DEBUG_FLUSH_STDERR();
-
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] Checking schedule stats...\n");
-    PHASE2_DEBUG_FLUSH_STDERR();
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] min_batch=%u max_batch=%u avg_eff=%.2f\n",
-                        schedule.min_batch_size_observed,
-                        schedule.max_batch_size_observed,
-                        schedule.avg_packing_efficiency);
-    PHASE2_DEBUG_FLUSH_STDERR();
-
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log batches created...\n");
-    PHASE2_DEBUG_FLUSH_STDERR();
-    logger.log("Created " + std::to_string(schedule.batches.size()) + " dynamic batches");
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log token budget...\n");
-    logger.log("[Batching] Token budget: " + std::to_string(opts.max_tokens_per_batch));
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log strategy...\n");
-    logger.log("[Batching] Strategy: GREEDY (forced - Issue #90)");
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log batch size range...\n");
-    logger.log("[Batching] Batch size range: " +
-               std::to_string(schedule.min_batch_size_observed) + "-" +
-               std::to_string(schedule.max_batch_size_observed));
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log packing efficiency...\n");
-    logger.log("[Batching] Packing efficiency: " + 
-               std::to_string(static_cast<int>(schedule.avg_packing_efficiency * 100)) + "%");
-    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] All logger.log calls completed\n");
-    
-    return schedule;
-}
+// Emits the standard "[Batching] ..." log block summarizing a freshly-built
+// BatchSchedule. Kept out of buildEpochBatches() so the orchestration step
+// only contains the construction call.
+// NOTE: buildEpochBatches() and logBatchSchedule() now live in
+// Shared/Batching/EpochBatching.{hpp,cu} (namespace GRIM::Batching) so the
+// per-epoch batching policy is co-located with the rest of the batch
+// construction logic. Phase2 calls GRIM::Batching::buildEpochBatches(...)
+// directly via the include above.
 
 bool maybeSaveCheckpoint(
     TrainingContext& ctx,
@@ -1289,14 +1222,17 @@ EpochResult runEpoch(
     }
     
     PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] About to build epoch batches...\n");
-    // Build batches for this epoch
-    auto schedule = Internal::buildEpochBatches(
-        ctx,
+    // Build batches for this epoch (per-epoch batching policy lives in
+    // Shared/Batching/EpochBatching.cu).
+    auto log_batching = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
+    auto schedule = GRIM::Batching::buildEpochBatches(
         ctx.data.train_catalog,
         hp.batch_size,
+        static_cast<uint32_t>(ctx.model->getConfig().max_seq_len),
         ctx.global_step,
         epoch_idx,
-        *ctx.logging.logger);
+        ctx.rng.data_seed,
+        log_batching);
     
     const int total_batches = static_cast<int>(schedule.batches.size());
     if (ctx.estimated_total_steps == 0 && total_batches > 0) {

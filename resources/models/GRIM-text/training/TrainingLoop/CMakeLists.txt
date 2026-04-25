@@ -269,6 +269,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/DynaSeqs/DynaSeq_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchPayload.cu
+    ../../Shared/Batching/EpochBatching.cu
     ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu

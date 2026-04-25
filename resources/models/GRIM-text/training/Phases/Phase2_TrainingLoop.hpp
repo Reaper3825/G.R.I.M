@@ -42,8 +42,10 @@ namespace GRIMText::Training {
 //======================================================//
 constexpr int kDefaultMaxTokensPerBatch = 8192;
 constexpr int kWarmupTokenCap = 4096;
-constexpr int kWarmupTokenSteps = 2048;
-constexpr int kCurriculumEpochs = 1;
+// kWarmupTokenSteps / kCurriculumEpochs moved to
+// Shared/Batching/EpochBatching.hpp (GRIM::Batching) along with
+// buildEpochBatches() — they are batching-policy constants, not
+// training-loop orchestration constants.
 constexpr float kTokenAwareGradReference = 1024.0f;
 constexpr float kBoilerplateBaseWeight = 0.7f;
 constexpr float kJunkBaseWeight = 0.5f;
@@ -209,17 +211,6 @@ std::string formatScalar(float value, int precision = 4);
  * @brief Format metric for logging
  */
 std::string formatMetric(std::string_view name, float value, int precision = 4);
-
-/**
- * @brief Build batches for an epoch with appropriate settings
- */
-GRIM::Batching::BatchSchedule buildEpochBatches(
-    const GRIM::DynaSeq::Catalog& catalog,
-    int batch_size,
-    int global_step,
-    int epoch,
-    int max_tokens_override,
-    TrainingLogger& logger);
 
 /**
  * @brief Save checkpoint if this is the best validation loss
