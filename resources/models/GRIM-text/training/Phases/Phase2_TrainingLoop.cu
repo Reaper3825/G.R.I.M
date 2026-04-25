@@ -790,7 +790,6 @@ BatchResult processBatch(
         ctx.optimizer.current_micro_step = 0;
 
         // Tape flush at end of processBatch is the safety flush.
-
         GRIM::Diagnostics::runOptimizerMomentDiagnostic(
             ctx, batch_idx, micro_step_for_log, accum_steps_for_log, sync_diag);
 

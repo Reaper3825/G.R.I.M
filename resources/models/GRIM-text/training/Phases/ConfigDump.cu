@@ -20,6 +20,18 @@
 #include <utility>
 #include <vector>
 
+#include <cuda_runtime.h>
+
+#if defined(_WIN32)
+#  include <windows.h>
+#  include <psapi.h>
+#elif defined(__APPLE__)
+#  include <mach/mach.h>
+#else
+#  include <sys/resource.h>
+#  include <unistd.h>
+#endif
+
 namespace GRIMText { namespace Training {
 
 namespace {
@@ -42,6 +54,49 @@ std::string fmt(double v) {
 }
 std::string fmt(const std::string& v) { return v; }
 std::string fmt(const char* v)        { return v ? v : "(null)"; }
+
+// Format byte counts as "<bytes> B (<MiB> MiB / <GiB> GiB)" for readability.
+std::string fmtBytes(std::size_t bytes) {
+    const double mib = static_cast<double>(bytes) / (1024.0 * 1024.0);
+    const double gib = mib / 1024.0;
+    std::ostringstream oss;
+    oss << bytes << " B (" << std::fixed << std::setprecision(2)
+        << mib << " MiB, " << std::setprecision(3) << gib << " GiB)";
+    return oss.str();
+}
+
+std::string fmtPercent(double frac) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2) << (frac * 100.0) << "%";
+    return oss.str();
+}
+
+// Resident set size of the current process (host RAM actually held).
+// Returns 0 if the platform query fails.
+std::size_t queryHostResidentBytes() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        return static_cast<std::size_t>(pmc.WorkingSetSize);
+    }
+    return 0;
+#elif defined(__APPLE__)
+    mach_task_basic_info_data_t info{};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                  reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+        return static_cast<std::size_t>(info.resident_size);
+    }
+    return 0;
+#else
+    struct rusage ru{};
+    if (getrusage(RUSAGE_SELF, &ru) == 0) {
+        // ru_maxrss is KB on Linux, bytes on macOS (handled above).
+        return static_cast<std::size_t>(ru.ru_maxrss) * 1024;
+    }
+    return 0;
+#endif
+}
 
 } // namespace
 
@@ -303,6 +358,57 @@ void dumpAllHyperparameters(
         rows.emplace_back("derived.batches_per_epoch",   fmt(derived->batches_per_epoch));
         rows.emplace_back("derived.total_training_steps", fmt(derived->total_training_steps));
         rows.emplace_back("derived.safe_last_step",       fmt(derived->safe_last_step));
+    }
+
+    // Memory snapshot at config-dump time. Useful to know the headroom
+    // before model allocation, and to see how much was already consumed by
+    // tokenizer/data loading. cudaMemGetInfo failure is logged but does not
+    // abort the dump (Rule 20: this is a diagnostic, not a load-bearing read).
+    {
+        rows.emplace_back(std::string("---"), std::string("Memory"));
+
+        std::size_t gpu_free = 0, gpu_total = 0;
+        cudaError_t mem_err = cudaMemGetInfo(&gpu_free, &gpu_total);
+        if (mem_err == cudaSuccess) {
+            const std::size_t gpu_used = (gpu_total >= gpu_free) ? (gpu_total - gpu_free) : 0;
+            const double used_frac = (gpu_total > 0)
+                ? static_cast<double>(gpu_used) / static_cast<double>(gpu_total) : 0.0;
+            const double free_frac = (gpu_total > 0)
+                ? static_cast<double>(gpu_free) / static_cast<double>(gpu_total) : 0.0;
+
+            int device_id = -1;
+            cudaGetDevice(&device_id);
+            cudaDeviceProp prop{};
+            const bool prop_ok = (device_id >= 0)
+                && (cudaGetDeviceProperties(&prop, device_id) == cudaSuccess);
+
+            rows.emplace_back("memory.gpu.device_id",   fmt(device_id));
+            rows.emplace_back("memory.gpu.device_name", fmt(prop_ok ? prop.name : "(unknown)"));
+            rows.emplace_back("memory.gpu.total",       fmtBytes(gpu_total));
+            rows.emplace_back("memory.gpu.used",        fmtBytes(gpu_used));
+            rows.emplace_back("memory.gpu.free",        fmtBytes(gpu_free));
+            rows.emplace_back("memory.gpu.used_pct",    fmtPercent(used_frac));
+            rows.emplace_back("memory.gpu.free_pct",    fmtPercent(free_frac));
+
+            // Diagnostic flag — surface a warning row when headroom is tight
+            // BEFORE model allocation. Anything <20% free at this stage means
+            // model + optimizer states + activation workspace will OOM.
+            const char* status = "ok";
+            if (used_frac >= 0.95) status = "CRITICAL (<5% free)";
+            else if (used_frac >= 0.80) status = "WARNING (<20% free)";
+            else if (used_frac >= 0.50) status = "elevated (<50% free)";
+            rows.emplace_back("memory.gpu.status", fmt(status));
+        } else {
+            rows.emplace_back("memory.gpu.error",
+                fmt(std::string("cudaMemGetInfo failed: ") + cudaGetErrorString(mem_err)));
+        }
+
+        const std::size_t host_rss = queryHostResidentBytes();
+        if (host_rss > 0) {
+            rows.emplace_back("memory.host.rss", fmtBytes(host_rss));
+        } else {
+            rows.emplace_back("memory.host.rss", fmt("(unavailable)"));
+        }
     }
 
 #undef DUMP
