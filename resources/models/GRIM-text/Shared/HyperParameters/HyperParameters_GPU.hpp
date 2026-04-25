@@ -466,6 +466,8 @@ using LogCallback = std::function<void(const std::string&)>;
 // Only compile if TrainingHyperparameters is fully defined
 // (checked via the marker defined in ai_config_paths.hpp)
 
+#ifndef __CUDACC__
+
 namespace GRIM {
 namespace HyperParameters {
 
@@ -478,7 +480,6 @@ namespace HyperParameters {
 // no longer need to include the JSON-reader header directly.
 //======================================================//
 
-#ifndef __CUDACC__
 
 namespace GRIM {
 namespace Config {
@@ -1726,7 +1727,8 @@ namespace detail {
 } // namespace Config
 } // namespace GRIM
 
-#endif // __CUDACC__
+// (Validation/derivation/policy helpers below also reference
+// GRIM::Config::TrainingHyperparameters and so must stay inside the gate.)
 //======================================================//
 // (A) Validation primitive.
 // Throws std::runtime_error on any invalid required field.
@@ -1812,6 +1814,8 @@ inline void applyTrainingHyperparameterPolicy(
 
 } // namespace HyperParameters
 } // namespace GRIM
+
+#endif // __CUDACC__ (covers Config block + (A)/(B)/(C) helpers)
 
 
 //======================================================//
