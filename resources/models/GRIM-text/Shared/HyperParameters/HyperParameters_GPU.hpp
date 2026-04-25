@@ -1849,19 +1849,31 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
     arch.dropout_rate = DEFAULT_DROPOUT_RATE;
     arch.attention_dropout = DEFAULT_DROPOUT_RATE;       // = dropout_rate
     
-    // Try to load from config
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
-    if (!snapshot || !snapshot->has_training) {
+    // Try to load from config (read JSON directly — AiConfigSnapshot lives in
+    // ai_config_paths.hpp which now depends on this header; cycle broken).
+    std::ifstream in(configPath);
+    if (!in.is_open()) {
         arch.validate();
         return false;
     }
-    
-    // Override with config values
-    const auto& hp = snapshot->hyperparameters;
-    
+    nlohmann::json doc;
+    try {
+        in >> doc;
+    } catch (const std::exception&) {
+        arch.validate();
+        return false;
+    }
+    if (!doc.contains("training") || !doc["training"].contains("config")) {
+        arch.validate();
+        return false;
+    }
+
+    // Populate hyperparameters (only need max_seq_len from it for this fn)
+    GRIM::Config::TrainingHyperparameters hp{};
+    GRIM::Config::populateTrainingHyperparametersFromConfig(doc, hp);
+
     // Check for explicit model architecture in training.config
-    const auto& doc = snapshot->document;
-    if (doc.contains("training") && doc["training"].contains("config")) {
+    {
         const auto& cfg = doc["training"]["config"];
         
         if (cfg.contains("d_model") && cfg["d_model"].is_number()) {
