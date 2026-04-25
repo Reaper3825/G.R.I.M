@@ -386,6 +386,8 @@ add_executable(train_gpu
     ../Diagnostics/MtpDiagnostic.hpp
     ../Diagnostics/OptimizerMomentDiagnostic.cu
     ../Diagnostics/OptimizerMomentDiagnostic.hpp
+    ../Diagnostics/PostOptimizerWeightTrace.cu
+    ../Diagnostics/PostOptimizerWeightTrace.hpp
     ../Diagnostics/PredictionDistributionDiagnostic.cu
     ../Diagnostics/PredictionDistributionDiagnostic.hpp
     ../Diagnostics/DiagnosticGates.cu

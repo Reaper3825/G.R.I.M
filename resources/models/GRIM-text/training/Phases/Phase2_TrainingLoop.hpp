@@ -68,9 +68,10 @@ struct BatchResult {
     float learning_rate = 0.0f;
     int sequences_processed = 0;
     int tokens_processed = 0;
-    bool skipped = false;
     bool gradient_clipped = false;
-    std::string skip_reason;
+    // NOTE: `skipped` / `skip_reason` were removed. Per Rule 20 a batch either
+    // completes a real step or the trainer crashes — there is no third "silent
+    // skip" outcome for callers to handle.
 };
 
 /**
@@ -92,7 +93,7 @@ struct EpochResult {
     float best_batch_loss = std::numeric_limits<float>::infinity();
     float worst_batch_loss = 0.0f;
     int batches_processed = 0;
-    int batches_skipped = 0;
+    // batches_skipped removed — batches no longer skip silently (Rule 20).
     ValidationResult validation;
     bool auto_stop_triggered = false;
     std::string auto_stop_reason;
