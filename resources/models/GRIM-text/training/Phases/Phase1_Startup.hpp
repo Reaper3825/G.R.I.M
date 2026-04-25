@@ -60,6 +60,7 @@
 
 // Extracted startup subsystems
 #include "Startup/Rng.hpp"
+#include "Startup/Logging.hpp"
 
 namespace fs = std::filesystem;
 
@@ -336,9 +337,8 @@ StartupConfig loadConfiguration(int argc, char** argv);
 void validatePaths(const PathConfig& paths);
 
 /**
- * @brief Initialize logging infrastructure
+ * @brief Initialize logging infrastructure (declared in Startup/Logging.hpp)
  */
-LoggingContext initializeLogging(const PathConfig& paths);
 
 /**
  * @brief Load and initialize tokenizer

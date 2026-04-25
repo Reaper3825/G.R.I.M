@@ -77,11 +77,6 @@ std::string toLowerCopy(const std::string& value) {
     return result;
 }
 
-void registerDefaultLoggingProfiles() {
-    // Module log profile registration removed: API never implemented.
-    // EmitModule*() functions remain available via LogRecorder.hpp.
-}
-
 } // anonymous namespace
 
 //======================================================//
@@ -403,31 +398,7 @@ void validatePaths(const PathConfig& paths) {
     fs::create_directories(paths.log_dir);
 }
 
-LoggingContext initializeLogging(const PathConfig& paths) {
-    LoggingContext ctx;
-    
-    ctx.session_id = std::to_string(
-        std::chrono::system_clock::now().time_since_epoch().count());
-    ctx.raw_log_path = paths.log_dir + "/training_" + ctx.session_id + ".log";
-    
-    // Bootstrap log file
-    {
-        std::ofstream bootstrap(ctx.raw_log_path, std::ios::app);
-        if (bootstrap.is_open()) {
-            auto now = std::chrono::system_clock::now();
-            auto tt = std::chrono::system_clock::to_time_t(now);
-            bootstrap << "[BOOT] Phase1 logging bootstrap at "
-                      << std::put_time(std::localtime(&tt), "%Y-%m-%d %H:%M:%S")
-                      << std::endl;
-        }
-    }
-    
-    ctx.logger = std::make_unique<TrainingLogger>(paths.log_dir, ctx.session_id);
-    ctx.metrics_collector = std::make_unique<MetricsCollector>();
-    ctx.status_writer = std::make_unique<StatusFileWriter>(paths.status_path);
-    
-    return ctx;
-}
+// initializeLogging moved to Startup/Logging.cu
 
 GRIM::Tokenizer::UniByte initializeTokenizer(
     const std::string& vocab_path,
@@ -1314,9 +1285,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     EmitModuleInfo(ModuleId::Training, "  Phase 1: Startup & Initialization", 0);
     EmitModuleInfo(ModuleId::Training, "  GRIM-text GPU Training v3.0.0", 0);
     EmitModuleInfo(ModuleId::Training, "========================================", 0);
-    
-    registerDefaultLoggingProfiles();
-    
+
     // 1. Load configuration
     EmitModuleInfo(ModuleId::Training, "[Phase1] Loading configuration...", 0);
     ctx->config = Internal::loadConfiguration(argc, argv);
@@ -1335,50 +1304,10 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     }
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing logging...", 0);
         ctx->logging = Internal::initializeLogging(ctx->config.paths);
-    
-    // ================================================================
-    //  Initialize unified BatchLogTape system
-    // ================================================================
-    {
-        const auto& tape_cfg = ctx->config.hyperparameters.tape_logging;
-        
-        auto tc = GRIM::Logging::parseTapeConfig(
-            tape_cfg.default_level.c_str(),
-            tape_cfg.equation_csv_enabled,
-            tape_cfg.stderr_enabled,
-            tape_cfg.initial_capacity);
-        
-        // Apply per-group overrides from ai_config.json
-        for (const auto& [group_name, level_name] : tape_cfg.group_overrides) {
-            GRIM::Logging::applyGroupOverride(tc, group_name.c_str(), level_name.c_str());
-        }
-        
-        ctx->logging.tape = std::make_unique<GRIM::Logging::BatchLogTape>(tc);
-        
-        // Create sinks
-        std::string text_log_path = ctx->config.paths.log_dir + "/training_" + ctx->logging.session_id + "_tape.log";
-        ctx->logging.text_sink = std::make_unique<GRIM::Logging::TextLogSink>(
-            text_log_path.c_str(), /*also_stdout=*/false);
-        ctx->logging.tape->addSink(ctx->logging.text_sink.get());
-        
-        if (tape_cfg.equation_csv_enabled) {
-            std::string eq_csv_path = ctx->config.paths.log_dir + "/equation_log.csv";
-            ctx->logging.equation_sink = std::make_unique<GRIM::Logging::CsvEquationSink>(
-                eq_csv_path.c_str());
-            ctx->logging.tape->addSink(ctx->logging.equation_sink.get());
-        }
-        
-        if (tape_cfg.stderr_enabled) {
-            ctx->logging.stderr_sink = std::make_unique<GRIM::Logging::StderrSink>();
-            ctx->logging.tape->addSink(ctx->logging.stderr_sink.get());
-        }
-        
-        // Set global tape pointer for layer-level code
-        GRIM::Logging::setGlobalTape(ctx->logging.tape.get());
-        
-        ctx->logging.logger->log("BatchLogTape initialized: " + GRIM::Logging::dumpTapeConfig(tc));
-    }
-    
+
+    // Initialize unified BatchLogTape system (sinks + global tape pointer)
+    Internal::setupBatchLogTape(ctx->logging, ctx->config);
+
     // 2b. Auto-prepare training data/vocab from merged cache when needed.
     {
         const fs::path vocab_path = ctx->config.paths.vocab_path;
