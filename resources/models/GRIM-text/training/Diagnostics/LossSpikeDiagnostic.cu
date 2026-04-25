@@ -1,10 +1,8 @@
 //======================================================//
 //  LossSpikeDiagnostic.cu
-//  Lifted verbatim from Phase2_TrainingLoop.cu — the
-//  "DIAGNOSTIC: If loss is suspiciously high (>50)"
-//  per-sequence breakdown block.
-//  Behavior: identical. No logic, gating, ordering, or
-//  log-string changes vs. the original inline block.
+//  Per-sequence breakdown when loss spikes far above the
+//  captured baseline (initial) loss — originally extracted
+//  from Phase2_TrainingLoop.cu.
 //======================================================//
 
 #include "LossSpikeDiagnostic.hpp"
@@ -21,11 +19,21 @@ void runLossSpikeDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
     float loss,
-    int batch_idx)
+    int batch_idx,
+    float baseline_loss)
 {
-    if (loss > 50.0f) {
+    // Baseline not yet captured (very first batch): nothing to compare against.
+    if (baseline_loss <= 0.0f) {
+        return;
+    }
+    const float spike_threshold = baseline_loss * kLossSpikeBaselineMultiplier;
+    if (loss > spike_threshold) {
         std::ostringstream spike_diag;
-        spike_diag << "[LossDiag] SPIKE DETECTED loss=" << loss << " batch=" << (batch_idx + 1) << "\n";
+        spike_diag << "[LossDiag] SPIKE DETECTED loss=" << loss
+                   << " baseline=" << baseline_loss
+                   << " threshold=" << spike_threshold
+                   << " (=" << kLossSpikeBaselineMultiplier << "x baseline)"
+                   << " batch=" << (batch_idx + 1) << "\n";
         spike_diag << "  Sequences: ";
         size_t max_seq_in_batch = 0;
         for (int i = 0; i < payload.batch_size; ++i) {

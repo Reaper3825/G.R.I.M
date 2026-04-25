@@ -370,6 +370,10 @@ add_executable(train_gpu
     ../Diagnostics/TieVerifyDiagnostic.hpp
     ../Diagnostics/MtpDiagnostic.cu
     ../Diagnostics/MtpDiagnostic.hpp
+    ../Diagnostics/OptimizerMomentDiagnostic.cu
+    ../Diagnostics/OptimizerMomentDiagnostic.hpp
+    ../Diagnostics/PredictionDistributionDiagnostic.cu
+    ../Diagnostics/PredictionDistributionDiagnostic.hpp
     ../Diagnostics/DiagnosticGates.cu
     ../Diagnostics/DiagnosticGates.hpp
     ../Phases/Phase3_Cleanup.cu
