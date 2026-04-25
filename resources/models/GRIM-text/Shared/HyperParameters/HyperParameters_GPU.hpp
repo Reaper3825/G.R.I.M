@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "../UnigramByte/Unigram.hpp"
 
@@ -435,6 +436,63 @@ struct DerivedScheduleInfo {
 };
 
 using LogCallback = std::function<void(const std::string&)>;
+
+//======================================================//
+// Generation / Sampling configuration (single source of truth)
+//
+// Owned here (NOT in grim_language_model_cuda.hpp) so that ai_config.json
+// generation parsing can live in this same header next to the rest of
+// the typed config helpers. Consumers (grim_text_server, training Phase1,
+// LanguageModelConfig, generate*() APIs, Sampling bridge) refer to these
+// as `GRIM::HyperParameters::SamplingStrategy` / `GenerationConfig`.
+//======================================================//
+enum class SamplingStrategy {
+    GREEDY,
+    TOP_K,
+    TOP_P,
+    MIN_P,           // Min-P (relative threshold)
+    TYPICAL,         // Locally typical sampling
+    TOP_K_TOP_P,     // Combined: Top-K first, then Top-P within survivors
+    BEAM_SEARCH      // NOT SUPPORTED - exists only to give clear error
+};
+
+struct GenerationConfig {
+    SamplingStrategy strategy = SamplingStrategy::TOP_P;
+    int max_new_tokens = 100;
+    int min_new_tokens = 0;
+    float temperature = 1.0f;
+    int top_k = 50;
+    float top_p = 0.9f;
+    float min_p = 0.0f;                    // Min-P threshold (0 = disabled)
+    float typical_p = 1.0f;                // Typical sampling mass (1.0 = disabled)
+    float repetition_penalty = 1.0f;
+    int repetition_penalty_window = 64;
+    float frequency_penalty = 0.0f;        // Additive penalty per occurrence (0 = disabled)
+    float presence_penalty = 0.0f;         // Additive penalty if token appeared (0 = disabled)
+    float length_penalty = 1.0f;
+    int num_beams = 1;
+    int num_return_sequences = 1;
+    bool early_stopping = false;
+    int eos_token_id = 0;
+    int pad_token_id = 0;
+    int bos_token_id = 2;
+    int unk_token_id = 0;
+    int no_repeat_ngram_size = 0;
+    bool do_sample = true;
+    float diversity_penalty = 0.0f;
+    std::vector<int> bad_words_ids;
+    /// Token IDs to mask at sampling (e.g. byte-level digit tokens); `<NUM>` must remain unmasked.
+    std::vector<int> masked_numeric_literal_ids;
+    unsigned int seed = 0;
+
+    // ScratchBlock reasoning during inference
+    // When true, generated atom tokens (numbers, URLs, etc.) are classified
+    // and their metadata (numeric_value, atom_mask) is fed back into forwardStep()
+    // so the ScratchBlock layer can inject structured reasoning embeddings.
+    bool enable_scratchblock_reasoning = true;
+};
+
+using GenerationStreamCallback = std::function<void(int token_id, float score)>;
 
 } // namespace HyperParameters
 } // namespace GRIM
@@ -1058,6 +1116,72 @@ inline void printModelArchitecture(const ModelArchitecture& arch) {
     std::cout << "  max_seq_len: " << arch.max_seq_len << std::endl;
     std::cout << "  dropout_rate: " << arch.dropout_rate << std::endl;
     std::cout << "  attention_dropout: " << arch.attention_dropout << std::endl;
+}
+
+//======================================================//
+// Generation config loader (single source of truth for
+// translating training.config.generation JSON → GenerationConfig)
+//======================================================//
+inline bool loadGenerationConfig(const GRIM::Config::AiConfigSnapshot& snapshot,
+                                 GenerationConfig& generation) {
+    const auto& doc = snapshot.document;
+    if (!doc.contains("training") || !doc["training"].contains("config")) {
+        return false;
+    }
+    const auto& cfg = doc["training"]["config"];
+    if (!cfg.contains("generation") || !cfg["generation"].is_object()) {
+        return false;
+    }
+    const auto& gen = cfg["generation"];
+
+    if (gen.contains("strategy") && gen["strategy"].is_string()) {
+        const std::string strat = gen["strategy"].get<std::string>();
+        if (strat == "greedy") {
+            generation.strategy = SamplingStrategy::GREEDY;
+            generation.do_sample = false;
+        } else if (strat == "top_k")       generation.strategy = SamplingStrategy::TOP_K;
+        else if (strat == "top_p")       generation.strategy = SamplingStrategy::TOP_P;
+        else if (strat == "min_p")       generation.strategy = SamplingStrategy::MIN_P;
+        else if (strat == "typical")     generation.strategy = SamplingStrategy::TYPICAL;
+        else if (strat == "top_k_top_p") generation.strategy = SamplingStrategy::TOP_K_TOP_P;
+        else throw std::runtime_error("loadGenerationConfig: unknown generation.strategy: " + strat);
+    }
+    if (gen.contains("max_new_tokens") && gen["max_new_tokens"].is_number())
+        generation.max_new_tokens = gen["max_new_tokens"].get<int>();
+    if (gen.contains("min_new_tokens") && gen["min_new_tokens"].is_number())
+        generation.min_new_tokens = gen["min_new_tokens"].get<int>();
+    if (gen.contains("temperature") && gen["temperature"].is_number())
+        generation.temperature = gen["temperature"].get<float>();
+    if (gen.contains("top_k") && gen["top_k"].is_number())
+        generation.top_k = gen["top_k"].get<int>();
+    if (gen.contains("top_p") && gen["top_p"].is_number())
+        generation.top_p = gen["top_p"].get<float>();
+    if (gen.contains("min_p") && gen["min_p"].is_number())
+        generation.min_p = gen["min_p"].get<float>();
+    if (gen.contains("typical_p") && gen["typical_p"].is_number())
+        generation.typical_p = gen["typical_p"].get<float>();
+    if (gen.contains("repetition_penalty") && gen["repetition_penalty"].is_number())
+        generation.repetition_penalty = gen["repetition_penalty"].get<float>();
+    if (gen.contains("repetition_penalty_window") && gen["repetition_penalty_window"].is_number())
+        generation.repetition_penalty_window = gen["repetition_penalty_window"].get<int>();
+    if (gen.contains("frequency_penalty") && gen["frequency_penalty"].is_number())
+        generation.frequency_penalty = gen["frequency_penalty"].get<float>();
+    if (gen.contains("presence_penalty") && gen["presence_penalty"].is_number())
+        generation.presence_penalty = gen["presence_penalty"].get<float>();
+    if (gen.contains("no_repeat_ngram_size") && gen["no_repeat_ngram_size"].is_number())
+        generation.no_repeat_ngram_size = gen["no_repeat_ngram_size"].get<int>();
+    if (gen.contains("do_sample") && gen["do_sample"].is_boolean())
+        generation.do_sample = gen["do_sample"].get<bool>();
+    if (gen.contains("enable_scratchblock_reasoning") && gen["enable_scratchblock_reasoning"].is_boolean())
+        generation.enable_scratchblock_reasoning = gen["enable_scratchblock_reasoning"].get<bool>();
+    return true;
+}
+
+inline bool loadGenerationConfig(GenerationConfig& generation,
+                                 const std::string& configPath = "ai_config.json") {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
+    if (!snapshot) return false;
+    return loadGenerationConfig(*snapshot, generation);
 }
 
 } // namespace HyperParameters

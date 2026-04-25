@@ -106,7 +106,7 @@ struct StartupConfig {
     GRIM::HyperParameters::ModelArchitecture architecture;
 
     // Generation config for inference samples during training
-    GRIM::GenerationConfig generation;
+    GRIM::HyperParameters::GenerationConfig generation;
     
     // Derived values (Rule 20: No defaults - must be explicitly set during loadConfiguration)
     int max_seq_len = 0;  // MUST be set from hyperparameters or stability override, throw if 0

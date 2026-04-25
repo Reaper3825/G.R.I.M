@@ -204,53 +204,9 @@ struct LMHeadConfig {
     float epsilon = 1e-5f;
 };
 
-enum class SamplingStrategy {
-    GREEDY,
-    TOP_K,
-    TOP_P,
-    MIN_P,           // Min-P (relative threshold)
-    TYPICAL,         // Locally typical sampling
-    TOP_K_TOP_P,     // Combined: Top-K first, then Top-P within survivors
-    BEAM_SEARCH      // NOT SUPPORTED - exists only to give clear error
-};
-
-struct GenerationConfig {
-    SamplingStrategy strategy = SamplingStrategy::TOP_P;
-    int max_new_tokens = 100;
-    int min_new_tokens = 0;
-    float temperature = 1.0f;
-    int top_k = 50;
-    float top_p = 0.9f;
-    float min_p = 0.0f;                    // Min-P threshold (0 = disabled)
-    float typical_p = 1.0f;                // Typical sampling mass (1.0 = disabled)
-    float repetition_penalty = 1.0f;
-    int repetition_penalty_window = 64;
-    float frequency_penalty = 0.0f;        // Additive penalty per occurrence (0 = disabled)
-    float presence_penalty = 0.0f;         // Additive penalty if token appeared (0 = disabled)
-    float length_penalty = 1.0f;
-    int num_beams = 1;
-    int num_return_sequences = 1;
-    bool early_stopping = false;
-    int eos_token_id = 0;
-    int pad_token_id = 0;
-    int bos_token_id = 2;
-    int unk_token_id = 0;
-    int no_repeat_ngram_size = 0;
-    bool do_sample = true;
-    float diversity_penalty = 0.0f;
-    std::vector<int> bad_words_ids;
-    /// Token IDs to mask at sampling (e.g. byte-level digit tokens); `<NUM>` must remain unmasked.
-    std::vector<int> masked_numeric_literal_ids;
-    unsigned int seed = 0;
-
-    // ScratchBlock reasoning during inference
-    // When true, generated atom tokens (numbers, URLs, etc.) are classified
-    // and their metadata (numeric_value, atom_mask) is fed back into forwardStep()
-    // so the ScratchBlock layer can inject structured reasoning embeddings.
-    bool enable_scratchblock_reasoning = true;
-};
-
-using GenerationStreamCallback = std::function<void(int token_id, float score)>;
+// SamplingStrategy / GenerationConfig / GenerationStreamCallback are now defined in
+// Shared/HyperParameters/HyperParameters_GPU.hpp (single source of truth).
+// Refer to them as `GRIM::HyperParameters::SamplingStrategy`, etc.
 
  struct ActivationQuantizationConfig {
     bool enabled = false;
@@ -401,7 +357,7 @@ struct LanguageModelConfig : public HyperParameters::ModelArchitecture {
     HardcodedPattern hardcoded_hidden_pattern = HardcodedPattern::DISABLED;
     int hardcoded_log_every_n_batches = 1;
     
-    GenerationConfig generation;
+    HyperParameters::GenerationConfig generation;
     ActivationQuantizationConfig activation_quantization;
 
     // Multi-token prediction (MTP) - auxiliary heads for trajectory learning (Gloeckle et al. 2024)
@@ -584,15 +540,15 @@ public:
     std::vector<GeneratedSequence> generate(const std::vector<int>& prompt_tokens,
                                             const std::vector<float>& prompt_numeric_values,
                                             const std::vector<uint8_t>& prompt_atom_mask,
-                                            const GenerationConfig* gen_config = nullptr,
+                                            const HyperParameters::GenerationConfig* gen_config = nullptr,
                                             std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
                                             const std::vector<uint32_t>& prompt_atom_entry_ids = {},
                                             const std::vector<int32_t>& prompt_token_to_slot_map = {});
     GeneratedSequence generateStream(const std::vector<int>& prompt_tokens,
                                      const std::vector<float>& prompt_numeric_values,
                                      const std::vector<uint8_t>& prompt_atom_mask,
-                                     GenerationStreamCallback callback,
-                                     const GenerationConfig* gen_config = nullptr,
+                                     HyperParameters::GenerationStreamCallback callback,
+                                     const HyperParameters::GenerationConfig* gen_config = nullptr,
                                      std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
                                      const std::vector<uint32_t>& prompt_atom_entry_ids = {},
                                      const std::vector<int32_t>& prompt_token_to_slot_map = {});
@@ -740,8 +696,8 @@ public:
     GeneratedSequence generateSequenceGPU(const std::vector<int>& prompt_tokens,
                                           const std::vector<float>& prompt_numeric_values,
                                           const std::vector<uint8_t>& prompt_atom_mask,
-                                          const GenerationConfig& cfg,
-                                          GenerationStreamCallback* stream_callback = nullptr,
+                                          const HyperParameters::GenerationConfig& cfg,
+                                          HyperParameters::GenerationStreamCallback* stream_callback = nullptr,
                                           std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
                                           const std::vector<uint32_t>& prompt_atom_entry_ids = {},
                                           const std::vector<int32_t>& prompt_token_to_slot_map = {});
@@ -803,7 +759,7 @@ private:
 #endif
 };
 
-using StreamCallback = GenerationStreamCallback;
+using StreamCallback = HyperParameters::GenerationStreamCallback;
 
 //======================================================//
 //  GPU Classes (Forward Declarations Only)

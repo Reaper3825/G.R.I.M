@@ -184,7 +184,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
     }
 
     // Use generation config from ai_config.json (configurable strategy, penalties, etc.)
-    GRIM::GenerationConfig cfg = ctx.config.generation;
+    GRIM::HyperParameters::GenerationConfig cfg = ctx.config.generation;
     cfg.max_new_tokens = max_new_tokens;
     if (cfg.min_new_tokens <= 0) {
         cfg.min_new_tokens = std::max(1, max_new_tokens / 4);

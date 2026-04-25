@@ -43,6 +43,11 @@
 
 namespace GRIM {
 
+// Generation types live in HyperParameters_GPU.hpp (single source of truth).
+using GRIM::HyperParameters::GenerationConfig;
+using GRIM::HyperParameters::SamplingStrategy;
+using GRIM::HyperParameters::GenerationStreamCallback;
+
 //======================================================//
 //  GPU Runtime Accessors (StreamController pattern)
 //======================================================//

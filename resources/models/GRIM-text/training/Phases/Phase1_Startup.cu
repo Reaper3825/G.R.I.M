@@ -34,7 +34,6 @@
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
-#include <nlohmann/json.hpp>
 #include <iostream>
 #include <fstream>
 #include <iomanip>
@@ -50,8 +49,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 // Xavier.hpp removed - weights initialized via Tensor::xavier_uniform_() with Philox PRNG (Issue #107)
 #endif
 
-using json = nlohmann::json;
-
 // Module logging aliases
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
@@ -62,59 +59,6 @@ namespace GRIMText::Training {
 //======================================================//
 //  String Utilities
 //======================================================//
-
-namespace {
-
-// Parse training.config.generation into GenerationConfig.
-// Sole consumer is Phase1 (used for inference samples during training);
-// kept Phase1-local on purpose so HyperParameters_GPU.hpp does not need
-// to know about GRIM::GenerationConfig / SamplingStrategy.
-void parseGenerationConfig(const json& cfg, GRIM::GenerationConfig& generation) {
-    if (!cfg.contains("generation") || !cfg["generation"].is_object()) {
-        return;
-    }
-    const auto& gen = cfg["generation"];
-    if (gen.contains("strategy") && gen["strategy"].is_string()) {
-        const std::string strat = gen["strategy"].get<std::string>();
-        if (strat == "greedy") { generation.strategy = GRIM::SamplingStrategy::GREEDY; generation.do_sample = false; }
-        else if (strat == "top_k")       generation.strategy = GRIM::SamplingStrategy::TOP_K;
-        else if (strat == "top_p")       generation.strategy = GRIM::SamplingStrategy::TOP_P;
-        else if (strat == "min_p")       generation.strategy = GRIM::SamplingStrategy::MIN_P;
-        else if (strat == "typical")     generation.strategy = GRIM::SamplingStrategy::TYPICAL;
-        else if (strat == "top_k_top_p") generation.strategy = GRIM::SamplingStrategy::TOP_K_TOP_P;
-        else throw std::runtime_error("Phase1_Startup: unknown generation.strategy: " + strat);
-    }
-    if (gen.contains("max_new_tokens") && gen["max_new_tokens"].is_number())
-        generation.max_new_tokens = gen["max_new_tokens"].get<int>();
-    if (gen.contains("min_new_tokens") && gen["min_new_tokens"].is_number())
-        generation.min_new_tokens = gen["min_new_tokens"].get<int>();
-    if (gen.contains("temperature") && gen["temperature"].is_number())
-        generation.temperature = gen["temperature"].get<float>();
-    if (gen.contains("top_k") && gen["top_k"].is_number())
-        generation.top_k = gen["top_k"].get<int>();
-    if (gen.contains("top_p") && gen["top_p"].is_number())
-        generation.top_p = gen["top_p"].get<float>();
-    if (gen.contains("min_p") && gen["min_p"].is_number())
-        generation.min_p = gen["min_p"].get<float>();
-    if (gen.contains("typical_p") && gen["typical_p"].is_number())
-        generation.typical_p = gen["typical_p"].get<float>();
-    if (gen.contains("repetition_penalty") && gen["repetition_penalty"].is_number())
-        generation.repetition_penalty = gen["repetition_penalty"].get<float>();
-    if (gen.contains("repetition_penalty_window") && gen["repetition_penalty_window"].is_number())
-        generation.repetition_penalty_window = gen["repetition_penalty_window"].get<int>();
-    if (gen.contains("frequency_penalty") && gen["frequency_penalty"].is_number())
-        generation.frequency_penalty = gen["frequency_penalty"].get<float>();
-    if (gen.contains("presence_penalty") && gen["presence_penalty"].is_number())
-        generation.presence_penalty = gen["presence_penalty"].get<float>();
-    if (gen.contains("no_repeat_ngram_size") && gen["no_repeat_ngram_size"].is_number())
-        generation.no_repeat_ngram_size = gen["no_repeat_ngram_size"].get<int>();
-    if (gen.contains("do_sample") && gen["do_sample"].is_boolean())
-        generation.do_sample = gen["do_sample"].get<bool>();
-    if (gen.contains("enable_scratchblock_reasoning") && gen["enable_scratchblock_reasoning"].is_boolean())
-        generation.enable_scratchblock_reasoning = gen["enable_scratchblock_reasoning"].get<bool>();
-}
-
-} // anonymous namespace
 
 //======================================================//
 //  PathConfig Implementation
@@ -210,13 +154,9 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     // tie_embeddings / positional_encoding) into ModelArchitecture.
     GRIM::HyperParameters::loadModelArchitecture(*snapshot, config.architecture);
 
-    // Generation config (for inference samples during training) — Phase1-local
-    // because GRIM::GenerationConfig lives in grim_language_model_cuda.hpp
-    // which the shared HyperParameters header must not depend on.
-    const json& doc = snapshot->document;
-    if (doc.contains("training") && doc["training"].contains("config")) {
-        parseGenerationConfig(doc["training"]["config"], config.generation);
-    }
+    // Generation config (for inference samples during training) — also delegated
+    // to HyperParameters_GPU so all ai_config.json parsing lives in one place.
+    GRIM::HyperParameters::loadGenerationConfig(*snapshot, config.generation);
     config.architecture.max_seq_len = config.hyperparameters.max_seq_len;
     config.architecture.validate();
     
