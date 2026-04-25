@@ -265,6 +265,7 @@ GradNormSnapshot runGradientNormDiagnostic(
     snap.emb_rms_pre = emb_rms_pre;
     snap.enc_rms_pre = enc_rms_pre;
     snap.sb_rms_pre = sb_rms_pre;
+    snap.metrics = gm;
     return snap;
 }
 

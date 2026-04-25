@@ -92,35 +92,6 @@ std::string formatMetric(std::string_view name, float value, int precision) {
     return std::string(name) + "=" + formatScalar(value, precision);
 }
 
-std::string formatGradientComponents(const GRIM::GradNorm::GradMetrics& gm, bool tied) {
-    using GM = GRIM::GradNorm::GradMetrics;
-    std::ostringstream comp_msg;
-    comp_msg << "[GradTrace] COMPONENTS(rms):";
-
-    // tie=true: tied buffer registered as LM_HEAD (embedding_sum_sq=0).
-    // tie=false: separate EMBEDDING + LM_HEAD groups.
-    constexpr int kComponentPrecision = 10;
-
-    if (tied) {
-        comp_msg << " emb_lm_tied=" << formatScalar(GM::rms(gm.lm_head_sum_sq, gm.lm_head_count), kComponentPrecision);
-    } else {
-        comp_msg << " emb=" << formatScalar(GM::rms(gm.embedding_sum_sq, gm.embedding_count), kComponentPrecision)
-                 << " lm=" << formatScalar(GM::rms(gm.lm_head_sum_sq, gm.lm_head_count), kComponentPrecision);
-    }
-    
-    comp_msg << " attn=" << formatScalar(GM::rms(gm.attention_sum_sq, gm.attention_count), kComponentPrecision)
-             << " ffn=" << formatScalar(GM::rms(gm.ffn_sum_sq, gm.ffn_count), kComponentPrecision)
-             << " rmsnorm=" << formatScalar(GM::rms(gm.rmsnorm_sum_sq, gm.rmsnorm_count), kComponentPrecision);
-
-    comp_msg << " tied=" << (tied ? "yes" : "no");
-
-    if (gm.scratchblock_sum_sq > 0.0f) {
-        comp_msg << " sb=" << formatScalar(GM::rms(gm.scratchblock_sum_sq, gm.scratchblock_count), kComponentPrecision);
-    }
-    
-    return comp_msg.str();
-}
-
 // Query LR schedule at a given step, honoring stability overrides.
 float getScheduledLearningRate(
     const GRIM::LR::LRSchedule& schedule,
@@ -469,17 +440,8 @@ BatchResult processBatch(
             " — scheduler produced batch_size=0; fix the upstream filter");
     }
 
-    // First batch diagnostics — check weight initialization
-    if (batch_idx == 0 && ctx.global_step == 0) {
-        ctx.logging.logger->log("[GradTrace] FIRST_BATCH: Checking initial model state...");
-        auto model_stats = ctx.model->getModelStats();
-        ctx.logging.logger->log("[GradTrace] FIRST_BATCH: total_params=" + std::to_string(model_stats.total_params) +
-                                " embedding_params=" + std::to_string(model_stats.embedding_params) +
-                                " encoder_params=" + std::to_string(model_stats.encoder_params) +
-                                " lm_head_params=" + std::to_string(model_stats.lm_head_params));
-    }
-    
     // Token stats already in payload; per-batch seq_len from payload, not config.
+
     const auto& token_stats = payload.token_stats;
     const int long_seq_threshold = payload.max_seq_len;
     const auto clip_selection = GRIM::TNC::computeClipSelection(
@@ -492,24 +454,6 @@ BatchResult processBatch(
     // beginBatch() must run EVERY batch to clear previous entries; otherwise
     // micro-batches 1+ inherit stale entries.
     GRIM::GradStats::beginBatch();
-
-    // Log batch info for diagnostics
-    {
-        std::ostringstream batch_info;
-        batch_info << "[GradTrace] BATCH_INFO batch=" << (batch_idx + 1)
-                   << " seqs=[";
-        for (size_t i = 0; i < payload.seq_ids.size(); ++i) {
-            batch_info << payload.seq_ids[i];
-            if (i + 1 < payload.seq_ids.size()) batch_info << ",";
-        }
-        batch_info << "] lens=[";
-        for (int i = 0; i < payload.batch_size; ++i) {
-            batch_info << payload.seq_lengths[i];
-            if (i + 1 < payload.batch_size) batch_info << ",";
-        }
-        batch_info << "]";
-        ctx.logging.logger->log(batch_info.str());
-    }
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After BATCH_INFO log, checking shouldLogAtomStats...\n");
     GRIM::Diagnostics::runAtomStatsDiagnostic(ctx, payload, batch_idx);
@@ -590,12 +534,6 @@ BatchResult processBatch(
             ": " + loss_result.error_message);
     }
     
-    // Log gradient accumulation status
-    ctx.logging.logger->log("[GradAccum] batch=" + std::to_string(batch_idx + 1) +
-                            " micro_step=" + std::to_string(ctx.optimizer.current_micro_step) +
-                            "/" + std::to_string(accum_steps) +
-                            " accumulate=" + (should_accumulate ? "true" : "false"));
-
     // Update guess cache with predictions from this batch
     if (std::isfinite(result.loss) && ctx.config.hyperparameters.guess_aux_enabled) {
         GRIMTS::Training::updateGuessCacheFromBatch(
@@ -613,8 +551,6 @@ BatchResult processBatch(
     // NOTE: Loss variance computation removed (was causing 5-second GPU sync bottleneck).
     // Variance is now tracked on GPU by TelemetryLattice (σ_tilde, v_σ fields).
     // Use computeTelemetryFeedback() to access grad_norm variance for adaptive decisions.
-    
-    ctx.logging.logger->log("[GradTrace] POST-FORWARD loss=" + Internal::formatScalar(result.loss, 4));
 
     // ========================================================================
     // BATCH_LOSS equation log + LossStats summary line
@@ -660,10 +596,6 @@ BatchResult processBatch(
     // POST-STEP: Backward already ran inside autogradTrainingStep().
     // Diagnostics below read from TrainingState (persists through backward).
     // ═══════════════════════════════════════════════════════════════════════════
-    
-    ctx.logging.logger->log("[GradTrace] POST-BACKWARD batch=" + std::to_string(batch_idx + 1) + 
-                            " loss=" + Internal::formatScalar(result.loss) + 
-                            " valid_tokens=" + std::to_string(payload.valid_tokens));
 
     // Issue #142: special-token weight & gradient verification
     GRIM::Diagnostics::runSpecialTokenDiagnostic(ctx, payload, batch_idx);
@@ -677,66 +609,29 @@ BatchResult processBatch(
     const float preclip_grad_rms = grad_norm_snap.preclip_grad_rms;
     const float enc_rms_pre = grad_norm_snap.enc_rms_pre;
 
-    // === TIMING GUARD: Track operations between POST-BACKWARD and PRE-OPTIMIZER ===
-    auto pre_optimizer_start = std::chrono::steady_clock::now();
-
     // Issue #135: gradient clipping is DEFERRED to post-accumulation (inside
     // should_step block). Clipping ONCE on the averaged gradients matches
     // PyTorch; the old per-micro-batch clipping crushed text gradients M×.
-    auto clipping_start = std::chrono::steady_clock::now();
-
     const float effective_per_token_limit = clip_selection.per_token_limit;
     const bool clipping_enabled = (hp.grad_clip_norm > 0.0f);
 
-    auto clipping_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - clipping_start).count();
-
     // LR: index by optimizer step (NOT global_step). global_step is per-micro-batch;
     // using it advances warmup/decay accum_steps times too fast.
-    auto lr_start = std::chrono::steady_clock::now();
     const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_state.step);
     if (!ctx.lr_schedule) {
         throw std::runtime_error("lr_schedule is not initialized at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
-    const float scheduled_lr = Internal::getScheduledLearningRate(
+    result.learning_rate = Internal::getScheduledLearningRate(
         *ctx.lr_schedule, optimizer_step, hp.learning_rate,
         ctx.config.stability.enabled);
-    
-    result.learning_rate = scheduled_lr;
-    
-    auto lr_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - lr_start).count();
-    
+
     // Optimizer step
     const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
-    auto optimizer_step_start = std::chrono::steady_clock::now();
-    float sample_elapsed_ms = 0.0f;
     GRIM::Diagnostics::WeightSample pre_sample{};
-    std::string pre_weights = "lm_head_weights=skipped";
     if (sync_diag) {
-        auto sample_start = std::chrono::steady_clock::now();
         pre_sample = GRIM::Diagnostics::sampleWeightStats(ctx.model->getLmHeadLayer(), ctx.model->getTrainingState(), true);
-        if (pre_sample.valid) {
-            pre_weights = GRIM::Diagnostics::formatWeightSample(pre_sample);
-        }
-        sample_elapsed_ms = std::chrono::duration<float, std::milli>(
-            std::chrono::steady_clock::now() - sample_start).count();
     }
-    
-    // Log total time for pre-optimizer setup (spike handling, telemetry, clipping, LR)
-    auto pre_optimizer_elapsed_ms = std::chrono::duration<float, std::milli>(
-        optimizer_step_start - pre_optimizer_start).count();
-    if (pre_optimizer_elapsed_ms > 1000.0f) {  // Log if > 1 second
-        ctx.logging.logger->log("[PERF] Pre-optimizer setup took " + Internal::formatScalar(pre_optimizer_elapsed_ms, 2) + 
-                                "ms (clipping=" + Internal::formatScalar(clipping_elapsed_ms, 2) + 
-                                "ms, lr=" + Internal::formatScalar(lr_elapsed_ms, 2) + 
-                                "ms, sample=" + Internal::formatScalar(sample_elapsed_ms, 2) + "ms)");
-    }
-    
-    ctx.logging.logger->log("[GradTrace] PRE-OPTIMIZER batch=" + std::to_string(batch_idx + 1) +
-                            " lr=" + Internal::formatScalar(result.learning_rate, 8) +
-                            " grad_rms=" + Internal::formatScalar(result.grad_rms) +
-                            " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
-                            " " + pre_weights);
-    
+
     if (sync_diag) {
         auto& training_state = ctx.model->getTrainingState();
         const auto flush_result = GRIM::GradStats::flushAndLog(
@@ -823,38 +718,26 @@ BatchResult processBatch(
         // Norm measurement, bucket aggregation, and gradient scaling all happen
         // inside GradientCC against the registered ParameterGroup tensors.
         if (clipping_enabled) {
-            clipping_start = std::chrono::steady_clock::now();
-            
             auto& clip_ts = ctx.model->getTrainingState();
             cudaStream_t clip_stream = clip_ts.stream_ctrl.getPrimaryStream();
             auto& clip_groups = ctx.model->parameterGroups();
-            
+
             if (!clip_ts.grad_norm_scratch) {
                 throw std::runtime_error("[FATAL] grad_norm_scratch is NULL at clipping stage - "
                                          "diagnostic norm should have allocated it");
             }
-            
+
             GRIM::GradClip::ClipConfig clip_cfg;
             clip_cfg.max_rms = effective_per_token_limit;
             clip_cfg.tie_embeddings = ctx.model->getConfig().tie_embeddings;
-            
+
             const auto clip = GRIM::GradClip::clipGradientNorms(
                 clip_groups.data(), clip_groups.size(),
                 clip_ts.grad_norm_scratch, clip_cfg, clip_stream);
-            
+
             result.grad_rms = clip.total_rms_post;
             result.normalized_grad_rms = clip.total_rms_post;
             result.gradient_clipped = clip.any_clipped();
-            
-            ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +
-                                    " post_accum_rms=" + Internal::formatScalar(clip.total_rms_pre, 6) +
-                                    " emb_rms=" + Internal::formatScalar(clip.emb_rms, 6) +
-                                    " enc_rms=" + Internal::formatScalar(clip.enc_rms, 6) +
-                                    " emb_clipped=" + (clip.emb_clipped ? "YES" : "NO") +
-                                    " enc_clipped=" + (clip.enc_clipped ? "YES" : "NO") +
-                                    " post_clip_total=" + Internal::formatScalar(clip.total_rms_post, 6));
-            
-            clipping_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - clipping_start).count();
         }
         
         // ════════════════════════════════════════════════════════════════════
@@ -917,11 +800,6 @@ BatchResult processBatch(
             ctx, result, pre_sample, batch_idx, sync_diag);
 
         ctx.optimizer.optimizer_state.step++;
-    } else {
-        ctx.logging.logger->log("[GradTrace] ACCUMULATING batch=" + std::to_string(batch_idx + 1) + 
-                                " micro_step=" + std::to_string(ctx.optimizer.current_micro_step) +
-                                " of " + std::to_string(accum_steps) +
-                                " (skipping optimizer step)");
     }
     
     // Rule 20: an async CUDA error here means a kernel launch faulted earlier
@@ -943,16 +821,6 @@ BatchResult processBatch(
         GRIM::Logging::FlushDeviceLogs();
     }
 
-    // Record layer log for post-run analysis (matches old train_gpu.cu behavior)
-    GRIM::Logging::RecordLayerLogHost(
-        GRIM::LayerType::kEncoding,         // aggregate marker
-        -1,                                 // -1 = global (no specific layer)
-        static_cast<std::uint64_t>(ctx.global_step),
-        result.grad_rms,                   // primary: gradient RMS
-        result.normalized_grad_rms,        // secondary: per-token RMS
-        "grad_rms",
-        "post_backward");
-
     // Update telemetry lattice — metric computation lives in TelemetryUpdate.cu.
     {
         GRIM::Telemetry::TelemetryBatchInput tel_input;
@@ -971,7 +839,7 @@ BatchResult processBatch(
         tel_input.actual_vocab_size = ctx.config.actual_vocab_size;
         tel_input.d_model           = ctx.model->getConfig().d_model;
 
-        GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, gm, &payload);
+        GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, grad_norm_snap.metrics, &payload);
     }
     
     // First-batch CUDA checkpoint (runs even if telemetry disabled): last point before step++

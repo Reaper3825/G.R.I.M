@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "../../Shared/GradNorm/GradNormGPU.hpp"
+
 namespace GRIM::Batching { struct BatchPayload; }
 namespace GRIMText { namespace Training {
     struct TrainingContext;
@@ -27,6 +29,7 @@ struct GradNormSnapshot {
     float emb_rms_pre = 0.0f;
     float enc_rms_pre = 0.0f;
     float sb_rms_pre = 0.0f;
+    GRIM::GradNorm::GradMetrics metrics{};  // raw per-component sums for telemetry
 };
 
 // Runs the full grad-norm sync block:
