@@ -16,14 +16,12 @@
 #include "../../training/training_data_loader.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"  // TokenLayout
 #include "../Execution/ExecutionPayloadValidation.hpp"
-
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-
 namespace GRIM {
 namespace Batching {
 
@@ -297,18 +295,24 @@ BatchPayload buildBatchPayload(
                     r.token_ids->data(),
                     seq_len * sizeof(int));
 
-        // Copy targets with final-position masking (autoregressive boundary).
-        // All tokens except the last get their target copied; the final position
-        // is masked with -1 since there is no valid next-token target.
-        if (seq_len > 1) {
-            std::memcpy(&payload.target_ids[row_offset],
-                        r.targets->data(),
-                        (seq_len - 1) * sizeof(int));
+        // Copy targets and enforce final-position autoregressive boundary.
+        // Rule 20: upstream MUST already mark the final position with -1 (no
+        // valid next-token target exists at the sequence boundary). We assert
+        // that contract instead of silently overwriting — silent overwrite
+        // would mask a real upstream bug where supervision was wrongly
+        // assigned to the boundary token.
+        if (r.targets->at(seq_len - 1) != -1) {
+            throw std::runtime_error(
+                "buildBatchPayload: sequence " + std::to_string(payload.seq_ids[b]) +
+                " has non-(-1) target at final position " + std::to_string(seq_len - 1) +
+                " (got target=" + std::to_string(r.targets->at(seq_len - 1)) +
+                "). Upstream must mask the final-position target with -1; "
+                "BatchPayload refuses to silently drop supervision.");
         }
-        // Mask the final position of the sequence
-        payload.target_ids[row_offset + seq_len - 1] = -1;
+        std::memcpy(&payload.target_ids[row_offset],
+                    r.targets->data(),
+                    seq_len * sizeof(int));
         // Padding positions beyond seq_len already have target=-1 from assign()
-
         // Defense-mask non-content tokens and count valid targets — SINGLE PASS
         // isNonContent() = UNK, PAD, BOS (never valid prediction targets).
         // EOS IS a valid target — model must learn to predict end-of-sequence.
@@ -403,11 +407,9 @@ BatchPayload buildBatchPayload(
     // predicts the *next* token after the slot and is generally a normal LM
     // target).  If p is the first token in its row (p == row_start) there is
     // no in-row LM position predicting it, so nothing to mask.
-    //
     // Only execution-active rows can have valid slots.  Tokens that are atoms
     // but have NO slot (slot == -1) remain under LM CE — they are ordinary
     // numeric text, not execution-owned.
-    //
     // Accounting: each masked LM target decrements both valid_target_counts[b]
     // and the batch-level valid_tokens, so the validate() invariant
     // sum(valid_target_counts) == valid_tokens is preserved.  lm_valid_tokens
@@ -440,11 +442,9 @@ BatchPayload buildBatchPayload(
 
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 4c: MTP shifted targets (multi-token prediction)
-    //
     // For each MTP head k (shift = k+1), build shifted target array from the
     // ALREADY-MASKED target_ids.  This inherits execution-slot masking, final-
     // position masking, and non-content defense masking — all done above.
-    //
     // Shift rule per sequence row b:
     //   shifted[b*S + t] = target_ids[b*S + t + shift]  if (t + shift) < S
     //                     = -1                            otherwise (out of bounds)

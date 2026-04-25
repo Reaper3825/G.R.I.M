@@ -149,6 +149,17 @@ void computeMTPAuxiliaryLosses(
         LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
         if (!head || !head->weight.data || !head->bias.data) continue;
 
+        // Soft-skip heads with zero valid shifted targets. Short or heavily
+        // masked batches may legitimately have no valid horizon-(k+1) targets
+        // while still having valid LM targets. The head contributes 0 to total
+        // loss and receives no gradient; we still emit zero diagnostics so the
+        // head_loss / head_acc vectors stay aligned with K.
+        if (payload.mtp_valid_counts[k] == 0) {
+            ts.mtp_diagnostics.head_loss.push_back(0.0f);
+            ts.mtp_diagnostics.head_acc.push_back(0.0f);
+            continue;
+        }
+
         // Allocate per-head GPU target buffer (owned by Tensor in intermediates)
         Tensor targets_k;
         auto target_shape = TensorContract::TensorShape::make_BSM(total_tokens, 1);

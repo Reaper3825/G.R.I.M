@@ -354,12 +354,17 @@ struct BatchPayload {
                         std::to_string(mtp_shifted_targets[k].size()) +
                         " != total_tokens=" + std::to_string(total_tokens));
                 }
-                if (mtp_valid_counts[k] <= 0) {
+                if (mtp_valid_counts[k] < 0) {
                     throw std::runtime_error(
                         std::string(caller) + ": BatchPayload.mtp_valid_counts[" +
                         std::to_string(k) + "]=" + std::to_string(mtp_valid_counts[k]) +
-                        " — no valid shifted targets for MTP head " + std::to_string(k));
+                        " — negative count is impossible (data corruption)");
                 }
+                // mtp_valid_counts[k] == 0 is LEGAL: short / heavily-masked
+                // batches may have valid LM targets but no valid targets at
+                // horizon (k+1). MTP_GPU treats zero-count heads as zero
+                // contribution (no loss, no grad). Aborting the batch would
+                // discard otherwise-valid LM training signal.
             }
         }
     }

@@ -115,7 +115,6 @@ public:
     // pointers (one per sequence). `lengths` is a HOST array of `batch_size`
     // entries. The arrays themselves are staged H2D internally; the data they
     // point to must already live on the device.
-    //
     // ENQUEUE-ONLY / LIFETIME: This call is asynchronous. It enqueues
     // `cudaMemcpyAsync` reads of `inputs`, `lengths`, and `outputs` on
     // `stream` and returns without synchronizing. The caller MUST keep these

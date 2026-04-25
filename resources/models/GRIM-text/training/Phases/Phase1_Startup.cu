@@ -614,45 +614,43 @@ SequenceData loadTrainingData(
     data.train_seqs.assign(all_sequences.begin() + val_size, all_sequences.end());
     data.val_seqs.assign(all_sequences.begin(), all_sequences.begin() + val_size);
     
-    // Apply sliding windows
+    // Apply sliding windows.
+    //
+    // Padding ownership: BatchPayload is the SINGLE owner of padded
+    // [batch_size * max_seq_len] layout. Phase1 produces variable-length
+    // TrainingSequences (length ∈ [min_seq_valid_tokens, max_seq_len]) and
+    // does NOT pre-pad. BatchPayload's per-row memcpy fills [0, seq_len) and
+    // leaves [seq_len, max_seq_len) at its assign() defaults (PAD / -1 / 0).
+    // Pre-padding here would destroy the logical length, polluting
+    // seq_lengths / actual_tokens / token_stats / MTP shift math.
+    //
+    // Final-target contract: BatchPayload asserts targets.back() == -1
+    // (no autoregressive supervision at the sequence boundary). Phase1 must
+    // always mask the final target before handing the sequence off, for both
+    // train and val — there is no "keep the val final target" path because
+    // BatchPayload would silently drop it anyway.
     auto applySlidingWindows = [&](std::vector<TrainingSequence>& sequences,
-                                   const std::string& split_name,
-                                   bool mask_window_last_token) {
+                                   const std::string& split_name) {
         std::vector<TrainingSequence> windowed;
         windowed.reserve(sequences.size());
-        
+
         size_t long_seq_count = 0;
         size_t generated_windows = 0;
         size_t bos_prepended = 0;
-        size_t padded_count = 0;
-        
-        const int pad_id = tokenizer.padId();
-        
-        // Helper lambda to pad sequences to exactly max_seq_len
-        auto PadToSeqMaxLen = [&](TrainingSequence& seq) {
-            if (static_cast<int>(seq.token_ids.size()) < max_seq_len) {
-                seq.token_ids.resize(max_seq_len, pad_id);
-                seq.targets.resize(max_seq_len, -1);
-                seq.token_numeric_values.resize(max_seq_len, 0.0f);
-                seq.token_atom_mask.resize(max_seq_len, 0);
-                seq.atom_entry_ids.resize(max_seq_len, GRIM::Tokenizer::kAtomEntryNone);
-                seq.token_atom_flags.resize(max_seq_len, 0);
-                seq.token_text_features.resize(
-                    max_seq_len * GRIM::Tokenizer::kTextFeatureDim, 0);
-                if (!seq.token_exec_slots.empty())
-                    seq.token_exec_slots.resize(max_seq_len, static_cast<int32_t>(-1));
-                if (!seq.slot_selection_targets.empty())
-                    seq.slot_selection_targets.resize(max_seq_len,
-                        GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
-                padded_count++;
+
+        // Final-position autoregressive boundary mask. Required by
+        // BatchPayload's Rule 20 invariant.
+        auto MaskFinalTarget = [](TrainingSequence& seq) {
+            if (!seq.targets.empty()) {
+                seq.targets.back() = -1;
             }
         };
-        
+
         for (const auto& seq : sequences) {
             if (static_cast<int>(seq.token_ids.size()) <= max_seq_len) {
-                // Short sequence or exactly max_seq_len
+                // Short sequence or exactly max_seq_len — no windowing.
                 TrainingSequence copy = seq;
-                PadToSeqMaxLen(copy);
+                MaskFinalTarget(copy);
                 windowed.push_back(std::move(copy));
                 continue;
             }
@@ -762,8 +760,11 @@ SequenceData loadTrainingData(
                     }
                 }
                 
-                // Mask last position for window boundary (except validation)
-                if (mask_window_last_token && !window.targets.empty()) {
+                // Mask last position for window boundary.
+                // BatchPayload requires targets.back() == -1 unconditionally;
+                // val no longer gets a special-cased "keep the final target"
+                // path because BatchPayload would have masked it anyway.
+                if (!window.targets.empty()) {
                     window.targets.back() = -1;
                 }
                 
@@ -794,9 +795,7 @@ SequenceData loadTrainingData(
                     }
                 }
                 
-                // Pad window to max_seq_len (last windows are typically short)
-                PadToSeqMaxLen(window);
-                
+                // Variable-length window — BatchPayload owns padding.
                 windowed.push_back(std::move(window));
                 generated_windows++;
                 
@@ -814,15 +813,10 @@ SequenceData loadTrainingData(
                        std::to_string(generated_windows) + " windows" +
                        " (BOS prepended to " + std::to_string(bos_prepended) + " mid-sequence windows)");
         }
-        if (padded_count > 0) {
-            logger.log("[Data] " + split_name + ": Padded " + std::to_string(padded_count) +
-                       " sequences to max_seq_len=" + std::to_string(max_seq_len) +
-                       " (pad_id=" + std::to_string(pad_id) + ")");
-        }
     };
-    
-    applySlidingWindows(data.train_seqs, "train", true);
-    applySlidingWindows(data.val_seqs, "val", false);
+
+    applySlidingWindows(data.train_seqs, "train");
+    applySlidingWindows(data.val_seqs, "val");
     
     // HARD FILTER: Remove any sequences still exceeding max_seq_len after sliding window
     // This catches cached .grmt files with old sequence lengths
