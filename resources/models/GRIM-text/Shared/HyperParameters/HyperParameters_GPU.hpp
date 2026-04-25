@@ -30,10 +30,10 @@
 // 1. Core constants (always available, even in CUDA)
 // 2. Struct definitions (always available)
 // 3. Helper functions that don't need JSON (always available)
-// 4. JSON-based config loading (only in non-CUDA code)
 //
 // RULE: NO other file should define hyperparameters!
-// All values come from here or ai_config.json via this header.
+// All values come from here which is the preprocesseing layer for ai_config_paths.hpp.
+// NO OTHER FILE SHOULD HAVE TRAINING CONFIGURABLE CONSTANTS OR DEFAULTS - this is the single source of truth.
 //======================================================//
 
 namespace GRIM {
@@ -81,7 +81,6 @@ constexpr float EPSILON_TEMPERATURE = 1e-6f;      // Temperature comparison thre
 constexpr float EPSILON_DYNAMIC_LR = 1e-12f;      // Dynamic LR controller precision
 constexpr float EPSILON_RMSNORM = 1e-5f;          // RMSNorm numerical stability
 constexpr float EPSILON_GRADIENT_CLIP = 1e-6f;    // Gradient clipping minimum threshold
-
 constexpr float LOG_CLAMP_MIN = -100.0f;          // Minimum log value (prevents -inf)
 constexpr float NEG_INF_ATTENTION = -1e9f;        // Attention masking value
 constexpr float NEG_INF_THRESHOLD = -1e30f;       // Invalid/uninitialized threshold
@@ -337,7 +336,6 @@ constexpr bool DEFAULT_LOSS_MASKING_ENABLED = true;
 
 // Entropy Regularization: penalizes low entropy (overconfidence), encourages diversity
 // reg = -λ * H(p) = λ * Σ p*log(p)
-// Issue #133: Disabled by default (was masking true CE)
 constexpr bool DEFAULT_LOSS_ENTROPY_REG_ENABLED = false;
 constexpr float DEFAULT_LOSS_ENTROPY_REG_LAMBDA = 0.0f;  // Regularization strength when enabled (try 0.1-1.0)
 
@@ -957,11 +955,13 @@ inline void applyTrainingHyperparameterPolicy(
 #endif // GRIM_CONFIG_AI_CONFIG_PATHS_HPP_INCLUDED
 
 //======================================================//
-// JSON-based Config Loading (non-CUDA only)
-// These functions parse JSON and cannot be compiled by nvcc
+// JSON-based Config Loading
+// These inline helpers parse the ai_config.json snapshot. Modern nvcc
+// (CUDA 12+) compiles them in host code paths, so they are NOT gated
+// behind #ifndef __CUDACC__ — Phase1_Startup.cu (a .cu TU) calls them
+// directly. This matches the policy used for TrainingHyperparameters
+// above (see comment at the top of this file's middle section).
 //======================================================//
-
-#ifndef __CUDACC__
 
 namespace GRIM {
 namespace HyperParameters {
@@ -1186,7 +1186,5 @@ inline bool loadGenerationConfig(GenerationConfig& generation,
 
 } // namespace HyperParameters
 } // namespace GRIM
-
-#endif // __CUDACC__
 
 #endif // GRIM_SHARED_HYPERPARAMETERS_GPU_HPP
