@@ -170,6 +170,20 @@ public:
         addInt   (params.telemetry_plateau_noise_cooldown,         "telemetry_plateau_noise_cooldown",         "Plateau Noise Cooldown",      "Telemetry");
         addInt   (params.telemetry_plateau_noise_max_per_epoch,    "telemetry_plateau_noise_max_per_epoch",    "Plateau Noise Max/Epoch",     "Telemetry");
 
+        // ── Telemetry Lattice (TelemetryLattice construction params) ──
+        addInt   (params.telemetry_lattice_num_levels,  "telemetry_lattice_num_levels",  "Lattice Num Levels",  "Telemetry Lattice");
+        addInt   (params.telemetry_lattice_num_streams, "telemetry_lattice_num_streams", "Lattice Num Streams", "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_beta_mu,     "telemetry_lattice_beta_mu",     "Lattice beta_mu",     "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_beta_a,      "telemetry_lattice_beta_a",      "Lattice beta_a",      "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_beta_delta,  "telemetry_lattice_beta_delta",  "Lattice beta_delta",  "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_beta_r,      "telemetry_lattice_beta_r",      "Lattice beta_r",      "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_beta_run,    "telemetry_lattice_beta_run",    "Lattice beta_run",    "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_beta_v,      "telemetry_lattice_beta_v",      "Lattice beta_v",      "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_k_out0,      "telemetry_lattice_k_out0",      "Lattice k_out0",      "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_alpha_v,     "telemetry_lattice_alpha_v",     "Lattice alpha_v",     "Telemetry Lattice");
+        addFloat (params.telemetry_lattice_epsilon,     "telemetry_lattice_epsilon",     "Lattice epsilon",     "Telemetry Lattice");
+        addBool  (params.telemetry_lattice_strict_mode, "telemetry_lattice_strict_mode", "Lattice Strict Mode", "Telemetry Lattice");
+
         // ── Loss ──
         addBool  (params.loss_label_smoothing_enabled, "loss_label_smoothing_enabled", "Label Smoothing",     "Loss");
         addFloat (params.loss_label_smoothing_epsilon, "loss_label_smoothing_epsilon", "Smoothing Epsilon",   "Loss");

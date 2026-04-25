@@ -217,6 +217,20 @@ void dumpAllHyperparameters(
     DUMP(telemetry_plateau_noise_cooldown);
     DUMP(telemetry_plateau_noise_max_per_epoch);
 
+    SECTION("Telemetry lattice");
+    DUMP(telemetry_lattice_num_levels);
+    DUMP(telemetry_lattice_num_streams);
+    DUMP(telemetry_lattice_beta_mu);
+    DUMP(telemetry_lattice_beta_a);
+    DUMP(telemetry_lattice_beta_delta);
+    DUMP(telemetry_lattice_beta_r);
+    DUMP(telemetry_lattice_beta_run);
+    DUMP(telemetry_lattice_beta_v);
+    DUMP(telemetry_lattice_k_out0);
+    DUMP(telemetry_lattice_alpha_v);
+    DUMP(telemetry_lattice_epsilon);
+    DUMP(telemetry_lattice_strict_mode);
+
     SECTION("Loss options");
     DUMP(loss_label_smoothing_enabled);
     DUMP(loss_label_smoothing_epsilon);

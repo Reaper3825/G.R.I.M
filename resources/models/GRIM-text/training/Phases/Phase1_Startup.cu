@@ -32,6 +32,8 @@
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
+#include "../../Shared/Telemetry/TelemetryLatticeConfig_FromHyperParams.hpp"
+#include "../../Shared/Telemetry/TelemetryControlConfig_FromHyperParams.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
@@ -198,129 +200,23 @@ SequenceData loadTrainingData(
     const int bos_id = tokenizer.bosId();
     const int eos_id = tokenizer.eosId();
 
-    size_t added_bos = 0;
-    size_t added_eos = 0;
-
-    for (auto& seq : all_sequences) {
-        if (seq.token_ids.empty()) continue;
-
-        // Add BOS if missing at start (controlled by config flag add_bos_token)
-        if (add_bos_token && bos_id >= 0 && seq.token_ids.front() != bos_id) {
-            seq.token_ids.insert(seq.token_ids.begin(), bos_id);
-            seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
-            seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
-            seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
-            seq.token_atom_flags.insert(seq.token_atom_flags.begin(), 0);
-            for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
-                seq.token_text_features.insert(seq.token_text_features.begin(), 0);
-            }
-            seq.targets.insert(seq.targets.begin(), -1);
-            if (!seq.token_exec_slots.empty())
-                seq.token_exec_slots.insert(seq.token_exec_slots.begin(), static_cast<int32_t>(-1));
-            if (!seq.slot_selection_targets.empty())
-                seq.slot_selection_targets.insert(seq.slot_selection_targets.begin(),
-                    GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
-            // BOS insertion shifted all existing token positions right by 1.
-            // Remap compiled_bootstrap_bindings token_pos to match.
-            for (auto& b : seq.compiled_bootstrap_bindings)
-                b.token_pos += 1;
-            added_bos++;
-        }
-
-        // Add EOS if missing at end (controlled by config flag add_eos_token)
-        if (add_eos_token && eos_id >= 0 && seq.token_ids.back() != eos_id) {
-            seq.token_ids.push_back(eos_id);
-            seq.token_numeric_values.push_back(0.0f);
-            seq.token_atom_mask.push_back(0);
-            seq.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
-            seq.token_atom_flags.push_back(0);
-            for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
-                seq.token_text_features.push_back(0);
-            }
-            // Fix shift: the PREVIOUS position's target was -1 (no next token existed
-            // when DataLoader ran). Now EOS follows it, so set target = eos_id.
-            if (!seq.targets.empty()) {
-                seq.targets.back() = eos_id;  // position before EOS → predict EOS
-            }
-            seq.targets.push_back(-1);  // EOS position itself: nothing follows
-            if (!seq.token_exec_slots.empty())
-                seq.token_exec_slots.push_back(static_cast<int32_t>(-1));
-            if (!seq.slot_selection_targets.empty())
-                seq.slot_selection_targets.push_back(
-                    GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
-            added_eos++;
-        }
-    }
-
-    if (added_bos > 0 || added_eos > 0) {
-        logger.log("[Data] Boundary tokens: added_bos=" + std::to_string(added_bos) +
-                   " added_eos=" + std::to_string(added_eos) + " (controlled by config flags)");
-    } else {
-        logger.log("[Data] Boundary token insertion disabled by config flags (add_bos=" + 
-                   std::string(add_bos_token ? "true" : "false") + ", add_eos=" + 
-                   std::string(add_eos_token ? "true" : "false") + ")");
-    }
-
     // Split train/val
     size_t val_size = all_sequences.size() / 10;
     data.train_seqs.assign(all_sequences.begin() + val_size, all_sequences.end());
     data.val_seqs.assign(all_sequences.begin(), all_sequences.begin() + val_size);
-    
+
     // Apply sliding windows. Implementation lives in
     // Phases/Startup/SlidingWindow.cu — see that file for the full
     // padding-ownership / final-target / overlap-masking contracts.
+    // applySlidingWindows owns the entire post-load shaping pipeline:
+    // BOS/EOS injection, windowing, overlong filtering, and short-sequence
+    // filtering. Callers don't bracket or filter sequences themselves.
     applySlidingWindows(data.train_seqs, "train",
-                        max_seq_len, sliding_window_stride,
-                        add_bos_token, bos_id, eos_id, logger);
+                        max_seq_len, sliding_window_stride, min_seq_valid_tokens,
+                        add_bos_token, add_eos_token, bos_id, eos_id, logger);
     applySlidingWindows(data.val_seqs, "val",
-                        max_seq_len, sliding_window_stride,
-                        add_bos_token, bos_id, eos_id, logger);
-
-    // HARD FILTER: Remove any sequences still exceeding max_seq_len after sliding window
-    // This catches cached .grmt files with old sequence lengths
-    auto filterOverlong = [&](std::vector<TrainingSequence>& sequences, const std::string& split_name) {
-        size_t before = sequences.size();
-        sequences.erase(
-            std::remove_if(sequences.begin(), sequences.end(),
-                [max_seq_len](const TrainingSequence& seq) {
-                    return static_cast<int>(seq.token_ids.size()) > max_seq_len;
-                }),
-            sequences.end());
-        size_t removed = before - sequences.size();
-        if (removed > 0) {
-            logger.log("[FILTER] " + split_name + ": Removed " + std::to_string(removed) + 
-                       " sequences exceeding max_seq_len=" + std::to_string(max_seq_len));
-        }
-    };
-    filterOverlong(data.train_seqs, "train");
-    filterOverlong(data.val_seqs, "val");
-
-    // HARD FILTER: Remove sequences with too few valid tokens after masking
-    // This prevents "valid_tokens=0" errors during loss computation
-    // (position 0 is always masked as BOS, final position is masked as boundary)
-    auto filterShortSequences = [&](std::vector<TrainingSequence>& sequences, const std::string& split_name) {
-        if (min_seq_valid_tokens <= 0) return;  // Disabled if <= 0
-        size_t before = sequences.size();
-        sequences.erase(
-            std::remove_if(sequences.begin(), sequences.end(),
-                [min_seq_valid_tokens](const TrainingSequence& seq) {
-                    // Count valid targets: excludes position 0 (BOS) and final position (boundary)
-                    // Mirrors the masking logic in BatchPayload.cu::buildBatchPayload()
-                    int valid = 0;
-                    for (size_t i = 1; i + 1 < seq.targets.size(); ++i) {
-                        if (seq.targets[i] >= 0) valid++;
-                    }
-                    return valid < min_seq_valid_tokens;
-                }),
-            sequences.end());
-        size_t removed = before - sequences.size();
-        if (removed > 0) {
-            logger.log("[FILTER] " + split_name + ": Removed " + std::to_string(removed) + 
-                       " sequences with < " + std::to_string(min_seq_valid_tokens) + " valid tokens");
-        }
-    };
-    filterShortSequences(data.train_seqs, "train");
-    filterShortSequences(data.val_seqs, "val");
+                        max_seq_len, sliding_window_stride, min_seq_valid_tokens,
+                        add_bos_token, add_eos_token, bos_id, eos_id, logger);
 
     // Build views and catalogs
     data.train_views.reserve(data.train_seqs.size());
@@ -1038,22 +934,12 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     // 11. Initialize telemetry lattice
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry lattice...", 0);
-    ctx->telemetry.config.num_levels = 8;  // k ∈ [0,7]: strides [1,2,4,8,16,32,64,128]
-    ctx->telemetry.config.num_streams = 48; // 0-4: core, 5-8: rho, 9-13: adam, 14-20: exec block, 21-26: EB/SB injection, 27-30: PBM, 31-34: rho raw, 35-37: RMS gamma, 38: rho rms-spread, 39-44: h↔W alignment, 45-46: unigram-dir cosine, 47: lm_head_w_rms_rms
-    ctx->telemetry.config.hyperparams.beta_mu = 0.95f;
-    ctx->telemetry.config.hyperparams.beta_a = 0.995f;
-    ctx->telemetry.config.hyperparams.beta_delta = 0.90f;
-    ctx->telemetry.config.hyperparams.beta_r = 0.85f;
-    ctx->telemetry.config.hyperparams.beta_run = 0.80f;
-    ctx->telemetry.config.hyperparams.beta_v = 0.90f;
-    ctx->telemetry.config.hyperparams.k_out0 = 2.5f;
-    ctx->telemetry.config.hyperparams.alpha_v = 1.5f;
-    ctx->telemetry.config.hyperparams.epsilon = 1e-7f;
-    ctx->telemetry.config.hyperparams.strict_mode = true; // Fail loud (Rule 20: no compatibility shims)
-    ctx->telemetry.config.stream = ctx->model->getTrainingState().stream_ctrl.getPrimaryStream(); // Use same stream as training
-    
+    ctx->telemetry.config = GRIM::Telemetry::makeLatticeConfigFromHyperparameters(
+        ctx->config.hyperparameters,
+        ctx->model->getTrainingState().stream_ctrl.getPrimaryStream());
+
     ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(ctx->telemetry.config);
-    ctx->logging.logger->log("✓ Telemetry lattice: 8 levels, " + std::to_string(ctx->telemetry.config.num_streams) + " streams, GPU-resident");
+    ctx->logging.logger->log("✓ Telemetry lattice: " + std::to_string(ctx->telemetry.config.num_levels) + " levels, " + std::to_string(ctx->telemetry.config.num_streams) + " streams, GPU-resident");
 
     // 11a. Initialize telemetry CSV logger (per-step measured data export)
     {
@@ -1070,28 +956,10 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     if (token_budget == 0) {
         throw std::runtime_error("FATAL: model token_budget is 0 - cache allocation failed");
     }
-    ctx->telemetry.control_config.reference_tokens = static_cast<float>(token_budget);
-    ctx->telemetry.control_config.reference_seq_len = static_cast<float>(ctx->config.max_seq_len);
-    // architecture.max_seq_len is reported by ConfigDump.
-
-    // TelemetryControl configuration - load from global config
-    const auto& hp = ctx->config.hyperparameters;
-    
-    // Spike thresholds (diagnostic only — no interventions)
-    ctx->telemetry.control_config.spike_mild_threshold = hp.telemetry_spike_mild_threshold;
-    ctx->telemetry.control_config.spike_moderate_threshold = hp.telemetry_spike_moderate_threshold;
-    ctx->telemetry.control_config.spike_severe_threshold = hp.telemetry_spike_severe_threshold;
-
-    // Accumulation bug detection (Rule 20: crash on zero gradients with non-zero loss)
-    ctx->telemetry.control_config.min_grad_for_nonzero_loss = hp.telemetry_min_grad_for_nonzero_loss;
-    ctx->telemetry.control_config.loss_threshold_for_grad_check = hp.telemetry_loss_threshold_for_grad_check;
-    ctx->telemetry.control_config.max_consecutive_zero_grad_steps = hp.telemetry_max_consecutive_zero_grad_steps;
-
-    // Monitoring config
-    ctx->telemetry.control_config.warmup_steps = hp.telemetry_warmup_steps;
-    ctx->telemetry.control_config.baseline_stabilization_steps = hp.telemetry_baseline_stabilization_steps;
-    ctx->telemetry.control_config.verbose_logging = hp.telemetry_verbose_logging;
-    ctx->telemetry.control_config.fail_loud_on_accumulation_bug = hp.telemetry_fail_loud_on_accumulation_bug;
+    ctx->telemetry.control_config = GRIM::Telemetry::makeControlConfigFromHyperparameters(
+        ctx->config.hyperparameters,
+        token_budget,
+        static_cast<uint32_t>(ctx->config.max_seq_len));
 
     // Telemetry control field values are reported by ConfigDump
     // (telemetry_* section). GPU free/total memory is reported by ConfigDump

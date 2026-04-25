@@ -16,14 +16,90 @@
 
 namespace GRIMText::Training {
 
+void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
+                          bool add_bos_token,
+                          bool add_eos_token,
+                          int bos_id,
+                          int eos_id,
+                          size_t& added_bos_out,
+                          size_t& added_eos_out) {
+    added_bos_out = 0;
+    added_eos_out = 0;
+
+    for (auto& seq : sequences) {
+        if (seq.token_ids.empty()) continue;
+
+        // Add BOS if missing at start (controlled by config flag add_bos_token)
+        if (add_bos_token && bos_id >= 0 && seq.token_ids.front() != bos_id) {
+            seq.token_ids.insert(seq.token_ids.begin(), bos_id);
+            seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
+            seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
+            seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
+            seq.token_atom_flags.insert(seq.token_atom_flags.begin(), 0);
+            for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
+                seq.token_text_features.insert(seq.token_text_features.begin(), 0);
+            }
+            seq.targets.insert(seq.targets.begin(), -1);
+            if (!seq.token_exec_slots.empty())
+                seq.token_exec_slots.insert(seq.token_exec_slots.begin(), static_cast<int32_t>(-1));
+            if (!seq.slot_selection_targets.empty())
+                seq.slot_selection_targets.insert(seq.slot_selection_targets.begin(),
+                    GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
+            // BOS insertion shifted all existing token positions right by 1.
+            // Remap compiled_bootstrap_bindings token_pos to match.
+            for (auto& b : seq.compiled_bootstrap_bindings)
+                b.token_pos += 1;
+            added_bos_out++;
+        }
+
+        // Add EOS if missing at end (controlled by config flag add_eos_token)
+        if (add_eos_token && eos_id >= 0 && seq.token_ids.back() != eos_id) {
+            seq.token_ids.push_back(eos_id);
+            seq.token_numeric_values.push_back(0.0f);
+            seq.token_atom_mask.push_back(0);
+            seq.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+            seq.token_atom_flags.push_back(0);
+            for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
+                seq.token_text_features.push_back(0);
+            }
+            // Fix shift: the PREVIOUS position's target was -1 (no next token existed
+            // when DataLoader ran). Now EOS follows it, so set target = eos_id.
+            if (!seq.targets.empty()) {
+                seq.targets.back() = eos_id;  // position before EOS → predict EOS
+            }
+            seq.targets.push_back(-1);  // EOS position itself: nothing follows
+            if (!seq.token_exec_slots.empty())
+                seq.token_exec_slots.push_back(static_cast<int32_t>(-1));
+            if (!seq.slot_selection_targets.empty())
+                seq.slot_selection_targets.push_back(
+                    GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
+            added_eos_out++;
+        }
+    }
+}
+
 void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                          const std::string& split_name,
                          int max_seq_len,
                          int sliding_window_stride,
+                         int min_seq_valid_tokens,
                          bool add_bos_token,
+                         bool add_eos_token,
                          int bos_id,
                          int eos_id,
                          TrainingLogger& logger) {
+    // Bracket sequences with BOS/EOS before windowing so window math sees
+    // fully-bracketed input. Per-split summary is emitted here so each
+    // train/val pass reports its own boundary-injection count.
+    size_t added_bos = 0;
+    size_t added_eos = 0;
+    injectBoundaryTokens(sequences, add_bos_token, add_eos_token,
+                         bos_id, eos_id, added_bos, added_eos);
+    if (added_bos > 0 || added_eos > 0) {
+        logger.log("[Data] Boundary tokens (" + split_name + "): added_bos=" +
+                   std::to_string(added_bos) + " added_eos=" + std::to_string(added_eos));
+    }
+
     std::vector<TrainingSequence> windowed;
     windowed.reserve(sequences.size());
 
@@ -205,6 +281,58 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                    std::to_string(long_seq_count) + " long sequences expanded into " +
                    std::to_string(generated_windows) + " windows" +
                    " (BOS prepended to " + std::to_string(bos_prepended) + " mid-sequence windows)");
+    }
+
+    // Post-window cleanup. Both filters exist because windowing + BatchPayload
+    // masking can leave sequences that downstream code can't consume.
+    filterOverlongSequences(sequences, split_name, max_seq_len, logger);
+    filterShortSequences(sequences, split_name, min_seq_valid_tokens, logger);
+}
+
+void filterOverlongSequences(std::vector<TrainingSequence>& sequences,
+                             const std::string& split_name,
+                             int max_seq_len,
+                             TrainingLogger& logger) {
+    // HARD FILTER: Remove any sequences still exceeding max_seq_len after sliding window.
+    // This catches cached .grmt files with old sequence lengths.
+    const size_t before = sequences.size();
+    sequences.erase(
+        std::remove_if(sequences.begin(), sequences.end(),
+            [max_seq_len](const TrainingSequence& seq) {
+                return static_cast<int>(seq.token_ids.size()) > max_seq_len;
+            }),
+        sequences.end());
+    const size_t removed = before - sequences.size();
+    if (removed > 0) {
+        logger.log("[FILTER] " + split_name + ": Removed " + std::to_string(removed) +
+                   " sequences exceeding max_seq_len=" + std::to_string(max_seq_len));
+    }
+}
+
+void filterShortSequences(std::vector<TrainingSequence>& sequences,
+                          const std::string& split_name,
+                          int min_seq_valid_tokens,
+                          TrainingLogger& logger) {
+    // HARD FILTER: Remove sequences with too few valid tokens after masking.
+    // Prevents "valid_tokens=0" errors during loss computation.
+    // (position 0 is always masked as BOS, final position is masked as boundary —
+    // mirrors the masking in BatchPayload.cu::buildBatchPayload())
+    if (min_seq_valid_tokens <= 0) return;
+    const size_t before = sequences.size();
+    sequences.erase(
+        std::remove_if(sequences.begin(), sequences.end(),
+            [min_seq_valid_tokens](const TrainingSequence& seq) {
+                int valid = 0;
+                for (size_t i = 1; i + 1 < seq.targets.size(); ++i) {
+                    if (seq.targets[i] >= 0) valid++;
+                }
+                return valid < min_seq_valid_tokens;
+            }),
+        sequences.end());
+    const size_t removed = before - sequences.size();
+    if (removed > 0) {
+        logger.log("[FILTER] " + split_name + ": Removed " + std::to_string(removed) +
+                   " sequences with < " + std::to_string(min_seq_valid_tokens) + " valid tokens");
     }
 }
 

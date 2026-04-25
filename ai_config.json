@@ -610,6 +610,20 @@
             "stability_overrides_enabled": false,
             "telemetry_control": {
                 "enabled": false,
+                "lattice": {
+                    "alpha_v": 1.5,
+                    "beta_a": 0.995,
+                    "beta_delta": 0.9,
+                    "beta_mu": 0.95,
+                    "beta_r": 0.85,
+                    "beta_run": 0.8,
+                    "beta_v": 0.9,
+                    "epsilon": 1e-07,
+                    "k_out0": 2.5,
+                    "num_levels": 8,
+                    "num_streams": 48,
+                    "strict_mode": true
+                },
                 "logging": {
                     "fail_loud_on_accumulation_bug": true,
                     "verbose": false

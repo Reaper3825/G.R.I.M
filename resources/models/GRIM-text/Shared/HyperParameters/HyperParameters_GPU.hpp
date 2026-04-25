@@ -813,7 +813,21 @@ struct TrainingHyperparameters {
     bool telemetry_plateau_noise_proportional;
     int telemetry_plateau_noise_cooldown;
     int telemetry_plateau_noise_max_per_epoch;
-    
+
+    // Telemetry lattice (TelemetryLattice construction params) - NO DEFAULTS
+    int telemetry_lattice_num_levels;
+    int telemetry_lattice_num_streams;
+    float telemetry_lattice_beta_mu;
+    float telemetry_lattice_beta_a;
+    float telemetry_lattice_beta_delta;
+    float telemetry_lattice_beta_r;
+    float telemetry_lattice_beta_run;
+    float telemetry_lattice_beta_v;
+    float telemetry_lattice_k_out0;
+    float telemetry_lattice_alpha_v;
+    float telemetry_lattice_epsilon;
+    bool  telemetry_lattice_strict_mode;
+
     // Loss options - NO DEFAULTS
     bool loss_label_smoothing_enabled;
     float loss_label_smoothing_epsilon;

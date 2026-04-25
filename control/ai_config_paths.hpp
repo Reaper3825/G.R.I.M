@@ -428,6 +428,23 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     params.telemetry_plateau_noise_cooldown = 10;
     params.telemetry_plateau_noise_max_per_epoch = 3;
 
+    // ── Telemetry lattice (TelemetryLattice construction params) ──
+    // num_streams=48: 0-4 core, 5-8 rho, 9-13 adam, 14-20 exec block, 21-26 EB/SB injection,
+    // 27-30 PBM, 31-34 rho raw, 35-37 RMS gamma, 38 rho rms-spread, 39-44 h<->W alignment,
+    // 45-46 unigram-dir cosine, 47 lm_head_w_rms_rms
+    params.telemetry_lattice_num_levels = 8;     // k in [0,7]: strides [1,2,4,8,16,32,64,128]
+    params.telemetry_lattice_num_streams = 48;
+    params.telemetry_lattice_beta_mu = 0.95f;
+    params.telemetry_lattice_beta_a = 0.995f;
+    params.telemetry_lattice_beta_delta = 0.90f;
+    params.telemetry_lattice_beta_r = 0.85f;
+    params.telemetry_lattice_beta_run = 0.80f;
+    params.telemetry_lattice_beta_v = 0.90f;
+    params.telemetry_lattice_k_out0 = 2.5f;
+    params.telemetry_lattice_alpha_v = 1.5f;
+    params.telemetry_lattice_epsilon = 1e-7f;
+    params.telemetry_lattice_strict_mode = true;  // Rule 20: fail loud on NaN/Inf
+
     // ── Loss sub-parameters ──
     params.loss_label_smoothing_epsilon = 0.05f;
     params.loss_focal_gamma = 0.75f;
@@ -778,6 +795,23 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
                 params.telemetry_plateau_noise_proportional = pn.value("proportional", params.telemetry_plateau_noise_proportional);
                 params.telemetry_plateau_noise_cooldown = pn.value("cooldown", params.telemetry_plateau_noise_cooldown);
                 params.telemetry_plateau_noise_max_per_epoch = pn.value("max_per_epoch", params.telemetry_plateau_noise_max_per_epoch);
+            }
+
+            // Lattice construction sub-config (TelemetryLattice EMA hyperparams)
+            if (auto lat_it = tc.find("lattice"); lat_it != tc.end() && lat_it->is_object()) {
+                const auto& lat = *lat_it;
+                params.telemetry_lattice_num_levels  = lat.value("num_levels",  params.telemetry_lattice_num_levels);
+                params.telemetry_lattice_num_streams = lat.value("num_streams", params.telemetry_lattice_num_streams);
+                params.telemetry_lattice_beta_mu     = lat.value("beta_mu",     params.telemetry_lattice_beta_mu);
+                params.telemetry_lattice_beta_a      = lat.value("beta_a",      params.telemetry_lattice_beta_a);
+                params.telemetry_lattice_beta_delta  = lat.value("beta_delta",  params.telemetry_lattice_beta_delta);
+                params.telemetry_lattice_beta_r      = lat.value("beta_r",      params.telemetry_lattice_beta_r);
+                params.telemetry_lattice_beta_run    = lat.value("beta_run",    params.telemetry_lattice_beta_run);
+                params.telemetry_lattice_beta_v      = lat.value("beta_v",      params.telemetry_lattice_beta_v);
+                params.telemetry_lattice_k_out0      = lat.value("k_out0",      params.telemetry_lattice_k_out0);
+                params.telemetry_lattice_alpha_v     = lat.value("alpha_v",     params.telemetry_lattice_alpha_v);
+                params.telemetry_lattice_epsilon     = lat.value("epsilon",     params.telemetry_lattice_epsilon);
+                params.telemetry_lattice_strict_mode = lat.value("strict_mode", params.telemetry_lattice_strict_mode);
             }
         }
     }
