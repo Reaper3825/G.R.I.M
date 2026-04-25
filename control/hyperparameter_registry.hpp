@@ -96,14 +96,14 @@ public:
         addBool  (params.single_batch_overfit_enabled, "single_batch_overfit_enabled", "Single Batch Overfit", "Core");
         addInt   (params.single_batch_overfit_max_steps, "single_batch_overfit_max_steps", "Overfit Max Steps", "Core");
         addString(params.batch_strategy,      "batch_strategy",      "Batch Strategy",      "Core");
-        addInt   (params.max_seq_len,         "max_seq_len",         "Max Seq Length",      "Core");
+        addInt   (params.architecture.max_seq_len,         "max_seq_len",         "Max Seq Length",      "Core");
         addInt   (params.min_seq_valid_tokens,"min_seq_valid_tokens","Min Valid Tokens",    "Core");
         addInt   (params.log_interval,        "log_interval",        "Log Interval",        "Core");
         addInt   (params.atom_stats_interval, "atom_stats_interval", "Atom Stats Interval", "Core");
         addInt   (params.atom_stats_max_seqs, "atom_stats_max_seqs", "Atom Stats Max Seqs", "Core");
         addInt   (params.validation_interval, "validation_interval", "Validation Interval", "Core");
         addInt   (params.checkpoint_interval, "checkpoint_interval", "Checkpoint Interval", "Core");
-        addBool  (params.use_gpu,             "use_gpu",             "Use GPU",             "Core");
+        addBool  (params.architecture.use_gpu,             "use_gpu",             "Use GPU",             "Core");
 
         // ── Optimizer ──
         addFloat (params.weight_decay,        "weight_decay",        "Weight Decay",        "Optimizer");
@@ -198,8 +198,8 @@ public:
         addInt   (params.pc1_power_iters,               "pc1_power_iters",               "PC1 Power Iters",       "LM Head");
 
         // ── Attention ──
-        addBool  (params.use_flash_attention,      "use_flash_attention",      "Flash Attention",      "Attention");
-        addInt   (params.min_seq_len_for_flash,    "min_seq_len_for_flash",    "Min Seq For Flash",    "Attention");
+        addBool  (params.architecture.use_flash_attention,      "use_flash_attention",      "Flash Attention",      "Attention");
+        addInt   (params.architecture.min_seq_len_for_flash,    "min_seq_len_for_flash",    "Min Seq For Flash",    "Attention");
         addBool  (params.qk_norm_enabled,          "qk_norm_enabled",          "QK-Norm",              "Attention");
         addBool  (params.attention_diag_enabled,   "attention_diag_enabled",   "Attention Diag",       "Attention");
         addInt   (params.attention_diag_layer,     "attention_diag_layer",     "Diag Layer",           "Attention");

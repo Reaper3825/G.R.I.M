@@ -378,6 +378,13 @@ struct ModelArchitecture {
     float attention_dropout = DEFAULT_DROPOUT_RATE;        // Derived: always = dropout_rate
     bool tie_embeddings = true;  // Weight tying: share embedding/LM head weights
     PositionalEncodingType positional_encoding = DEFAULT_POSITIONAL_ENCODING;
+
+    // Flash Attention (architectural choice — affects kernel selection)
+    bool use_flash_attention = true;
+    int min_seq_len_for_flash = 0;     // Derived: max_seq_len / 4 (see deriveComputedHyperparameters)
+
+    // Runtime device flag (GPU-only build forces this true; kept for plumbing)
+    bool use_gpu = true;
     
     // Derived (computed from above)
     int head_dim = DEFAULT_HEAD_DIM;
@@ -541,9 +548,7 @@ struct LanguageModelConfig : public ModelArchitecture {
     bool use_layer_scale = false;
     float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1)
 
-    bool use_gpu = true;
-    bool use_flash_attention = true;
-    int min_seq_len_for_flash = 0;
+    // use_gpu, use_flash_attention, min_seq_len_for_flash inherited from ModelArchitecture (Phase 3b)
     std::string vocab_path;
     bool infer_vocab_from_file = false;
 
@@ -741,18 +746,15 @@ struct TrainingHyperparameters {
     bool cosine_decay_enabled;
     bool cosine_warm_restarts;
     float cosine_decay_min_lr;
-    int max_seq_len;
+    // max_seq_len, use_gpu, use_flash_attention, min_seq_len_for_flash now live in `architecture` (Phase 3b)
     int min_seq_valid_tokens;  // Minimum valid tokens required (after masking first/last positions)
     int log_interval;
     int atom_stats_interval;
     int atom_stats_max_seqs;
     int validation_interval;
     int checkpoint_interval;
-    bool use_gpu;
-    bool use_flash_attention;
-    int min_seq_len_for_flash;
-    
-    // Soft restart - NO DEFAULTS
+
+    // Soft restart — NO DEFAULTS
     bool soft_restart_enabled;
     float soft_restart_loss_increase_threshold;
     int soft_restart_max_step_window;
@@ -1125,12 +1127,13 @@ namespace HyperParameters {
 // ModelArchitecture struct.
 inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot,
                                   ModelArchitecture& arch) {
-    // Start with defaults (derived fields computed from base defaults)
+    // Start with defaults for the fields THIS function owns (other fields like
+    // max_seq_len / use_gpu / use_flash_attention are populated upstream by the
+    // TrainingHyperparameters JSON loader — do NOT reset them here).
     arch.d_model = DEFAULT_D_MODEL;
     arch.num_layers = DEFAULT_NUM_LAYERS;
     arch.num_heads = DEFAULT_NUM_HEADS;
     arch.d_ff = DEFAULT_D_MODEL * DEFAULT_D_FF_MULTIPLIER;
-    arch.max_seq_len = DEFAULT_MAX_SEQ_LEN;
     arch.dropout_rate = DEFAULT_DROPOUT_RATE;
     arch.attention_dropout = DEFAULT_DROPOUT_RATE;       // = dropout_rate
 
@@ -1199,8 +1202,8 @@ inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot
         }
     }
 
-    // max_seq_len comes from hyperparameters (validated & populated by snapshot)
-    arch.max_seq_len = snapshot.hyperparameters.max_seq_len;
+    // max_seq_len is populated by the TrainingHyperparameters JSON loader (Phase 3b);
+    // do not source from snapshot.hyperparameters here.
 
     // Validate and compute derived values (head_dim)
     arch.validate();
@@ -1391,7 +1394,7 @@ struct StartupConfig {
  *   4. Copy hyperparameters + tokenizer_config from snapshot
  *   5. loadModelArchitecture()      — JSON → ModelArchitecture
  *   6. loadGenerationConfig()       — JSON → GenerationConfig
- *   7. Resolve max_seq_len (stability_override vs hyperparameters.max_seq_len)
+ *   7. Resolve max_seq_len (stability_override vs hyperparameters.architecture.max_seq_len)
  *   8. Derive sliding_window_stride = max_seq_len * 7/8
  *   9. Apply stability overrides to batch_size + grad_clip_norm
  *  10. Apply CLI overrides (--data, --vocab, --output, --epochs,
@@ -1440,20 +1443,20 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
     }
     config.tokenizer_config = snapshot->tokenizer_config;
 
-    // 5. + 6. Architecture and generation — single source of truth for JSON keys
-    //         architecture now lives inside hyperparameters (Phase 3a).
+    // 5. + 6. Architecture and generation — single source of truth for JSON keys.
+    //         max_seq_len/use_gpu/use_flash_attention were populated into
+    //         hyperparameters.architecture by the TrainingHyperparameters loader
+    //         (Phase 3b); loadModelArchitecture fills the remaining arch fields.
     loadModelArchitecture(*snapshot, config.hyperparameters.architecture);
     loadGenerationConfig(*snapshot, config.generation);
-    config.hyperparameters.architecture.max_seq_len = config.hyperparameters.max_seq_len;
-    config.hyperparameters.architecture.validate();
 
     // 7. Derive max_seq_len (no fallback — must be configured)
     {
         const auto& hp = config.hyperparameters;
         if (hp.stability_overrides_enabled && hp.stability_override_max_seq_len > 0) {
             config.max_seq_len = hp.stability_override_max_seq_len;
-        } else if (hp.max_seq_len > 0) {
-            config.max_seq_len = hp.max_seq_len;
+        } else if (hp.architecture.max_seq_len > 0) {
+            config.max_seq_len = hp.architecture.max_seq_len;
         } else {
             throw std::runtime_error(
                 "FATAL: max_seq_len not configured in ai_config.json "

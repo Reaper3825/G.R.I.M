@@ -156,9 +156,9 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
 
         GRIM::Config::TrainingHyperparameters hyperparams;
         if (GRIM::Config::loadTrainingHyperparameters(hyperparams)) {
-            config.max_seq_len = hyperparams.max_seq_len;
-            config.use_flash_attention = hyperparams.use_flash_attention;
-            config.min_seq_len_for_flash = hyperparams.min_seq_len_for_flash;
+            config.max_seq_len = hyperparams.architecture.max_seq_len;
+            config.use_flash_attention = hyperparams.architecture.use_flash_attention;
+            config.min_seq_len_for_flash = hyperparams.architecture.min_seq_len_for_flash;
             // MTP: load() uses sidecar when checkpoint was saved with MTP
             config.mtp_enabled = hyperparams.mtp_enabled;
             config.mtp_k = hyperparams.mtp_k;

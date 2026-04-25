@@ -564,9 +564,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.use_pre_norm = true;
     model_config.fuse_qkv = true;
     model_config.use_bias = true;
-    model_config.use_gpu = true;
-    model_config.use_flash_attention = hp.use_flash_attention;
-    model_config.min_seq_len_for_flash = hp.min_seq_len_for_flash;
+    // use_gpu, use_flash_attention, min_seq_len_for_flash are inherited via the
+    // ModelArchitecture slice-copy above (Phase 3b).
     logger.log("Flash attention: enabled=" + std::string(model_config.use_flash_attention ? "true" : "false") +
                ", min_seq_len=" + std::to_string(model_config.min_seq_len_for_flash));
     
@@ -707,7 +706,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("Derived hyperparameters: d_ff=" + std::to_string(arch.d_ff) + " (d_model*4)" +
                ", attention_dropout=" + std::to_string(arch.attention_dropout) + " (=dropout_rate)" +
                ", min_seq_valid_tokens=" + std::to_string(hp.min_seq_valid_tokens) +
-               ", min_seq_len_for_flash=" + std::to_string(hp.min_seq_len_for_flash) +
+               ", min_seq_len_for_flash=" + std::to_string(arch.min_seq_len_for_flash) +
                ", cosine_decay_min_lr=" + std::to_string(hp.cosine_decay_min_lr) +
                ", cosine_warm_restarts=" + std::string(hp.cosine_warm_restarts ? "true" : "false") +
                ", scratch_max_tokens_per_block=" + std::to_string(hp.scratch_max_tokens_per_block) +

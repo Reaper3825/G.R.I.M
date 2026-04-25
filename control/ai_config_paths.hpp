@@ -601,9 +601,9 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.grad_clip_norm, trainConfig, "gradient_clip");
     assignTrainingField(params.grad_clip_norm, trainConfig, "grad_clip_norm");
     assignTrainingField(params.per_token_grad_scale, trainConfig, "per_token_grad_scale");
-    assignTrainingField(params.max_seq_len, trainConfig, "max_seq_len");
+    assignTrainingField(params.architecture.max_seq_len, trainConfig, "max_seq_len");
     // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
-    // min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
+    // architecture.min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
     assignTrainingField(params.warmup_fraction, trainConfig, "warmup_fraction");
     if (auto it = trainConfig.find("cosine_decay"); it != trainConfig.end() && it->is_object()) {
         params.cosine_decay_enabled = it->value("enabled", false);
@@ -618,9 +618,9 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.atom_stats_max_seqs, trainConfig, "atom_stats_max_seqs");
     assignTrainingField(params.validation_interval, trainConfig, "validation_interval");
     assignTrainingField(params.checkpoint_interval, trainConfig, "checkpoint_interval");
-    assignTrainingField(params.use_gpu, trainConfig, "use_gpu");
-    assignTrainingField(params.use_flash_attention, trainConfig, "use_flash_attention");
-    // min_seq_len_for_flash: derived from max_seq_len (see deriveComputedHyperparameters)
+    assignTrainingField(params.architecture.use_gpu, trainConfig, "use_gpu");
+    assignTrainingField(params.architecture.use_flash_attention, trainConfig, "use_flash_attention");
+    // architecture.min_seq_len_for_flash: derived from max_seq_len (see deriveComputedHyperparameters)
 
     if (auto it = trainConfig.find("soft_restart"); it != trainConfig.end()) {
         const auto& soft = *it;
@@ -1132,12 +1132,12 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
 // These ALWAYS overwrite — they are mathematical derivations, not defaults.
 // Rule 20: throws if any base field needed for derivation is invalid.
 inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const nlohmann::json& trainConfig) {
-    // ── Sequence length derivations ──
-    if (params.max_seq_len <= 0)
-        throw std::runtime_error("deriveComputedHyperparameters: max_seq_len must be > 0, got " + std::to_string(params.max_seq_len));
-    params.min_seq_valid_tokens = params.max_seq_len / 4;
-    params.min_seq_len_for_flash = params.max_seq_len / 4;
-    params.scratch_max_tokens_per_block = static_cast<size_t>(params.max_seq_len);
+    // ── Sequence length derivations (max_seq_len lives on architecture, Phase 3b) ──
+    if (params.architecture.max_seq_len <= 0)
+        throw std::runtime_error("deriveComputedHyperparameters: architecture.max_seq_len must be > 0, got " + std::to_string(params.architecture.max_seq_len));
+    params.min_seq_valid_tokens = params.architecture.max_seq_len / 4;
+    params.architecture.min_seq_len_for_flash = params.architecture.max_seq_len / 4;
+    params.scratch_max_tokens_per_block = static_cast<size_t>(params.architecture.max_seq_len);
 
     // ── LR floor ──
     if (params.cosine_decay_enabled) {
@@ -1168,7 +1168,7 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
     // ── Stability overrides derived from base values ──
     params.stability_override_batch_size = params.batch_size * 2 / 3;
     if (params.stability_override_batch_size < 1) params.stability_override_batch_size = 1;
-    params.stability_override_max_seq_len = params.max_seq_len;
+    params.stability_override_max_seq_len = params.architecture.max_seq_len;
     params.stability_override_clip_per_token = 0.02f;
     params.stability_override_lr_min = params.learning_rate * 0.83f;
 }

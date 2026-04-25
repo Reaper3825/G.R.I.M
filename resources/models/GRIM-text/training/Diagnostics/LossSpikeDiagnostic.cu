@@ -48,7 +48,7 @@ void runLossSpikeDiagnostic(
                                         && ctx.config.hyperparameters.stability_override_max_seq_len > 0;
     const int config_seq_len_limit = stability_seq_override
         ? ctx.config.hyperparameters.stability_override_max_seq_len
-        : ctx.config.hyperparameters.max_seq_len;
+        : ctx.config.hyperparameters.architecture.max_seq_len;
     const int effective_seq_len_limit = config_seq_len_limit > 0
         ? config_seq_len_limit
         : ctx.model->getConfig().max_seq_len;

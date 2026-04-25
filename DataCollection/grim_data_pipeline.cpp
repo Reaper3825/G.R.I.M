@@ -1294,7 +1294,7 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     GRIM::Config::TrainingHyperparameters train_params;
     int max_seq_len = 900;  // Default fallback
     if (GRIM::Config::loadTrainingHyperparameters(train_params)) {
-        max_seq_len = train_params.max_seq_len;
+        max_seq_len = train_params.architecture.max_seq_len;
         std::cout << "  Using max_seq_len=" << max_seq_len << " from ai_config.json\n";
     } else {
         std::cout << "  WARNING: Could not load training config, using default max_seq_len=" << max_seq_len << "\n";

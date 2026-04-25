@@ -164,7 +164,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         return;
     }
 
-    const int max_seq_len = hp.max_seq_len;
+    const int max_seq_len = hp.architecture.max_seq_len;
     if (max_seq_len > 1 && static_cast<int>(prompt_tokens.size()) >= max_seq_len) {
         const size_t keep = static_cast<size_t>(max_seq_len - 1);
         const size_t drop = prompt_tokens.size() - keep;

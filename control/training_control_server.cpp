@@ -1176,10 +1176,10 @@ int main(int argc, char** argv) {
         config.epochs = hyperparams.epochs;
         config.batchSize = hyperparams.batch_size;
         config.learningRate = hyperparams.learning_rate;
-        config.maxSeqLen = hyperparams.max_seq_len;
+        config.maxSeqLen = hyperparams.architecture.max_seq_len;
         config.warmupSteps = hyperparams.warmup_steps;  // 0 until Phase2 derives from warmup_fraction
-        config.useGPU = hyperparams.use_gpu;
-        config.useFlashAttention = hyperparams.use_flash_attention;
+        config.useGPU = hyperparams.architecture.use_gpu;
+        config.useFlashAttention = hyperparams.architecture.use_flash_attention;
         g_state.updateConfig(config);
         std::cout << "[Server] ✓ Loaded training hyperparameters from ai_config.json" << std::endl;
     }
