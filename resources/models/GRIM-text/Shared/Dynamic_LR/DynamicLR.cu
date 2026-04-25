@@ -5,6 +5,7 @@
 
 #include "DynamicLR.hpp"
 #include "../HyperParameters/HyperParameters_GPU.hpp"
+#include "../Loss/LossSignals/LossSignals.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -90,12 +91,10 @@ void DynamicLRController::reset() {
     momentum_counter_ = 0;
     safety_counter_ = 0;
     momentum_score_ = 0.0f;
-    current_loss_spike_threshold_ = 0.0f;
     adaptive_cooldown_steps_ = std::max(config_.cooldown_steps, 0);
     runtime_min_lr_ = config_.min_learning_rate;
     runtime_max_lr_ = config_.max_learning_rate;
     grad_stats_.reset();
-    loss_stats_.reset();
 }
 
 void DynamicLRController::setBaseLearningRate(float lr) {
@@ -146,7 +145,10 @@ void DynamicLRController::setRuntimeLimits(float min_lr, float max_lr) {
     runtime_max_lr_ = std::max(max_lr, runtime_min_lr_ * 1.05f);
 }
 
-float DynamicLRController::update(float grad_rms, float loss, float scheduled_lr_ceiling) {
+float DynamicLRController::update(float grad_rms,
+                                  float loss,
+                                  const GRIM::Loss::LossSignals& signals,
+                                  float scheduled_lr_ceiling) {
     diagnostics_ = {};
     diagnostics_.applied_learning_rate = current_lr_;
     diagnostics_.proposed_learning_rate = current_lr_;
@@ -201,6 +203,13 @@ float DynamicLRController::update(float grad_rms, float loss, float scheduled_lr
     refreshAdaptiveParameters();
     updateBandScaling();
 
+    // Snapshot for momentum-trend use happens AFTER updateBandScaling reads it,
+    // so do it at the very end of the function (below).
+
+    // Surface the bus's smoothed-spike threshold for diagnostics. DynamicLR no
+    // longer maintains its own; LossSignalBus is the single source of truth.
+    diagnostics_.loss_spike_threshold = signals.smoothed_threshold;
+
     diagnostics_.smoothed_grad_norm = smoothed_grad_norm_;
     diagnostics_.smoothed_loss = smoothed_loss_;
     diagnostics_.cooldown_remaining = cooldown_;
@@ -246,8 +255,8 @@ float DynamicLRController::update(float grad_rms, float loss, float scheduled_lr
         return current_lr_;
     }
 
-    applyDynamicAdjustment();
-    prev_smoothed_loss_ = smoothed_loss_;
+    applyDynamicAdjustment(signals);
+    prev_smoothed_loss_ = smoothed_loss_;  // momentum-score trend only
     runtime_max_lr_ = saved_max;  // Restore before return
     return current_lr_;
 }
@@ -281,7 +290,6 @@ void DynamicLRController::applyWarmupPhase() {
 
 void DynamicLRController::refreshAdaptiveParameters() {
     grad_stats_.push(static_cast<double>(smoothed_grad_norm_));
-    loss_stats_.push(static_cast<double>(smoothed_loss_));
 
     const float grad_mean = grad_stats_.meanf();
     const float grad_std = std::max(grad_stats_.stddevf(), 1e-6f);
@@ -336,18 +344,11 @@ void DynamicLRController::refreshAdaptiveParameters() {
         adaptive_cooldown_steps_ = std::max(config_.cooldown_steps, 0);
     }
 
-    if (config_.adaptive_loss && loss_stats_.samples() >= config_.loss_min_samples) {
-        const float loss_mean = loss_stats_.meanf();
-        const float loss_std = std::max(loss_stats_.stddevf(), 1e-6f);
-        current_loss_spike_threshold_ = std::max(config_.loss_floor,
-                                                loss_mean + config_.loss_sigma * loss_std);
-    } else {
-        current_loss_spike_threshold_ = 0.0f;
-    }
-    diagnostics_.loss_spike_threshold = current_loss_spike_threshold_;
+    // Loss-spike threshold removed: GRIM::Loss::LossSignalBus owns it.
+    // diagnostics_.loss_spike_threshold is set in update() from the bus.
 }
 
-void DynamicLRController::applyDynamicAdjustment() {
+void DynamicLRController::applyDynamicAdjustment(const GRIM::Loss::LossSignals& signals) {
     using AdjustmentReason = DynamicLRDiagnostics::AdjustmentReason;
 
     float proposed = current_lr_;
@@ -372,20 +373,14 @@ void DynamicLRController::applyDynamicAdjustment() {
         changed = true;
     }
 
-    const bool adaptive_loss_ready = config_.adaptive_loss && current_loss_spike_threshold_ > 0.0f;
-    if (!changed && adaptive_loss_ready) {
-        if (smoothed_loss_ > current_loss_spike_threshold_) {
-            proposed = current_lr_ * config_.decrease_factor;
-            reason = AdjustmentReason::LossSpike;
-            changed = true;
-        }
-    } else if (!changed && isFinite(prev_smoothed_loss_) && prev_smoothed_loss_ > kEpsilon) {
-        float loss_ratio = smoothed_loss_ / prev_smoothed_loss_;
-        if (loss_ratio > config_.max_loss_jump) {
-            proposed = current_lr_ * config_.decrease_factor;
-            reason = AdjustmentReason::LossSpike;
-            changed = true;
-        }
+    // Loss-spike branch: subscribe to the central detector. Replaces both the
+    // old adaptive_loss (statistical band) and max_loss_jump (Delta-loss)
+    // arms; LossSignalBus computes both internally and exposes the unified
+    // smoothed_spike boolean.
+    if (!changed && signals.smoothed_spike) {
+        proposed = current_lr_ * config_.decrease_factor;
+        reason = AdjustmentReason::LossSpike;
+        changed = true;
     }
 
     if (!changed) {

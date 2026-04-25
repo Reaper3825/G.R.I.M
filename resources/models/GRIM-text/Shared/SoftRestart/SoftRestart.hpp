@@ -10,6 +10,8 @@
 #include <limits>
 #include <string_view>
 
+namespace GRIM::Loss { struct LossSignals; }
+
 namespace GRIM {
 
 struct OptimizerState;
@@ -18,14 +20,13 @@ class LanguageModel;
 namespace SoftRestart {
 
 struct SoftRestartConfig {
-    float loss_increase_threshold = 0.2f;    // Minimum delta to consider a spike
-    int max_step_window = 50;                // Maximum steps between evaluations
+    // NOTE: loss_increase_threshold and max_step_window used to live here.
+    // The validation-delta spike check now lives in GRIM::Loss::LossSignalBus
+    // (validation_delta_threshold). SoftRestart owns ONLY the cooldown.
     int cooldown_steps = 200;                // Minimum steps between soft restarts
 };
 
 struct SoftRestartState {
-    float last_val_loss = std::numeric_limits<float>::quiet_NaN();
-    int64_t last_val_step = -1;
     int64_t last_restart_step = -1;
 };
 
@@ -33,8 +34,9 @@ class SoftRestartController {
 public:
     explicit SoftRestartController(const SoftRestartConfig& config = {});
 
-    // Returns true when the latest validation loss warrants a soft restart.
-    bool shouldTrigger(float val_loss, int64_t global_step);
+    // Returns true when the central LossSignalBus has flagged a validation-delta
+    // spike AND the cooldown window has elapsed since the previous restart.
+    bool shouldTrigger(const GRIM::Loss::LossSignals& signals, int64_t global_step);
 
     // Record that a restart was executed.
     void markRestart(int64_t global_step);

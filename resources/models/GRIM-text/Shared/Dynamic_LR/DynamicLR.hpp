@@ -14,6 +14,8 @@
 #include <string>
 #include <string_view>
 
+namespace GRIM::Loss { struct LossSignals; }
+
 namespace GRIM {
 namespace DynamicLR {
 
@@ -26,7 +28,10 @@ struct DynamicLRConfig {
     float target_grad_norm = 8.0f;
     float upper_grad_norm = 12.0f;
     float lower_grad_norm = 4.0f;
-    float max_loss_jump = 1.5f;
+    // NOTE: loss-spike detection (max_loss_jump / adaptive_loss / loss_sigma /
+    // loss_min_samples / loss_floor) used to live here. It now lives in
+    // GRIM::Loss::LossSignalConfig (Shared/Loss/LossSignals/). DynamicLR is a
+    // pure subscriber to LossSignals::smoothed_spike for LR cuts.
     float smoothing = 0.2f;
     int warmup_steps = 25;
     int cooldown_steps = 5;
@@ -45,10 +50,6 @@ struct DynamicLRConfig {
     bool adaptive_cooldown = true;
     int cooldown_min = 1;
     int cooldown_max = 8;
-    bool adaptive_loss = true;
-    float loss_sigma = 3.0f;
-    int loss_min_samples = 8;
-    float loss_floor = 0.25f;
     bool guard_logging = true;
     int guard_floor_steps = 200;
     float guard_grad_multiplier = 1.6f;
@@ -108,7 +109,10 @@ public:
     void reset();
     void setBaseLearningRate(float lr);
 
-    float update(float grad_rms, float loss, float scheduled_lr_ceiling = -1.0f);
+    float update(float grad_rms,
+                 float loss,
+                 const GRIM::Loss::LossSignals& signals,
+                 float scheduled_lr_ceiling = -1.0f);
     float currentLearningRate() const { return current_lr_; }
     void setRuntimeLimits(float min_lr, float max_lr);
 
@@ -122,14 +126,15 @@ private:
     bool enabled_ = false;
     float current_lr_ = 0.0f;
     float smoothed_grad_norm_ = 0.0f;
-    float smoothed_loss_ = 0.0f;
+    float smoothed_loss_ = 0.0f;  // diagnostics-only EMA; not used for spike detection
+    // Previous smoothed loss is kept ONLY to compute the loss-trend component
+    // of momentum_score_; spike detection lives in GRIM::Loss::LossSignalBus.
     float prev_smoothed_loss_ = std::numeric_limits<float>::quiet_NaN();
     int step_ = 0;
     int cooldown_ = 0;
     float current_smoothing_ = 0.2f;
     float current_lower_band_ = 0.0f;
     float current_upper_band_ = 0.0f;
-    float current_loss_spike_threshold_ = 0.0f;
     int adaptive_cooldown_steps_ = 5;
     float runtime_min_lr_ = 0.0f;
     float runtime_max_lr_ = 0.0f;
@@ -163,11 +168,12 @@ private:
         std::int64_t samples() const { return count; }
     };
     RunningStats grad_stats_{};
-    RunningStats loss_stats_{};
+    // loss_stats_ removed — LossSignalBus owns the EWMA mean/var used for
+    // SmoothedSpike. DynamicLR no longer recomputes its own loss statistics.
 
     void applySmoothing(float grad_rms, float loss);
     void applyWarmupPhase();
-    void applyDynamicAdjustment();
+    void applyDynamicAdjustment(const GRIM::Loss::LossSignals& signals);
     void clampAndCommit(float proposed_lr, DynamicLRDiagnostics::AdjustmentReason reason);
     bool inNeutralBand() const;
     bool atLearningRateFloor() const;

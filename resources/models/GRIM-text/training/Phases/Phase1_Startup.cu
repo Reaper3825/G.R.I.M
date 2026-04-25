@@ -1325,10 +1325,11 @@ OptimizerContext initializeOptimizer(
     // Optimizer state (AdamW hyperparameters are defined as constants in AdamW_Kernal_GPU.cu)
     ctx.optimizer_state.step = 0;
     
-    // Soft restart controller
+    // Soft restart controller — loss-detection thresholds (loss_increase_threshold,
+    // max_step_window) now live in GRIM::Loss::LossSignalConfig (validation_delta_threshold)
+    // and are wired in Phase2 when the LossSignalBus is constructed. SoftRestartConfig
+    // owns ONLY cooldown_steps now.
     GRIM::SoftRestart::SoftRestartConfig sr_cfg;
-    sr_cfg.loss_increase_threshold = hp.soft_restart_loss_increase_threshold;
-    sr_cfg.max_step_window = hp.soft_restart_max_step_window;
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
     ctx.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
     

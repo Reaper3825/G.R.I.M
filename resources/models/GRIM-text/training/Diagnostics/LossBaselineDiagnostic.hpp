@@ -20,7 +20,10 @@ namespace GRIM::Diagnostics {
 //   - updates `state.min_observed_loss` and `state.warmup_batches`
 //   - scans payload.input_ids and payload.target_ids for IDs outside
 //     the vocab range; THROWS std::runtime_error on corruption (Rule 20)
-//   - logs [LossMonitor] HIGH_LOSS when loss exceeds an adaptive threshold
+//
+// High-loss detection is owned exclusively by runLossSpikeDiagnostic
+// (Diagnostics/LossSpikeDiagnostic.{hpp,cu}); this function does NOT
+// emit a separate HIGH_LOSS log line.
 //
 // Mutates: state.initial_loss, state.min_observed_loss, state.warmup_batches.
 void runLossBaselineAndTokenValidation(

@@ -9,20 +9,20 @@
 
 namespace GRIM::Batching { struct BatchPayload; }
 namespace GRIMText { namespace Training { struct TrainingContext; } }
+namespace GRIM::Loss { class LossSignalBus; }
 
 namespace GRIM::Diagnostics {
 
-// Spike threshold = baseline_loss * kLossSpikeBaselineMultiplier.
-// Chosen so that a model that has already learned anything non-trivial
-// (loss well below the random baseline) will flag any regression back
-// toward, and well past, the random-init regime as a spike.
-constexpr float kLossSpikeBaselineMultiplier = 1.5f;
-
+// Spike detection lives in GRIM::Loss::LossSignalBus (see
+// Shared/Loss/LossSignals/LossSignals.hpp). This diagnostic is now a pure
+// LOG SUBSCRIBER: it fires when bus.latest().baseline_spike is set and emits
+// the per-sequence breakdown. The threshold/baseline are sourced from the
+// bus so every loss-spike consumer sees the same numbers.
 void runLossSpikeDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
     float loss,
     int batch_idx,
-    float baseline_loss);
+    const GRIM::Loss::LossSignalBus& bus);
 
 } // namespace GRIM::Diagnostics

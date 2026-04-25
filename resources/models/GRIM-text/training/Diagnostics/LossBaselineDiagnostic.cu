@@ -103,16 +103,12 @@ void runLossBaselineAndTokenValidation(
             ") — fix data pipeline at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
 
-    // Log high loss for monitoring, but DO NOT skip
-    // Hard examples are valuable for learning - removing them biases the model
-    float loss_threshold = (state.warmup_batches < 100)
-        ? state.initial_loss * 2.0f
-        : state.min_observed_loss * 1.5f + 2.0f;
-    if (loss > loss_threshold) {
-        ctx.logging.logger->log("[LossMonitor] HIGH_LOSS batch=" + std::to_string(batch_idx + 1) +
-                                " loss=" + formatScalar(loss) +
-                                " threshold=" + formatScalar(loss_threshold));
-    }
+    // High-loss detection for this batch is owned solely by
+    // runLossSpikeDiagnostic (Diagnostics/LossSpikeDiagnostic.cu), which emits
+    // the per-sequence breakdown. Do NOT add a second [LossMonitor] HIGH_LOSS
+    // log line here — it was redundant with the spike diagnostic and triggered
+    // on the same condition (loss > initial * multiplier).
+    (void)loss;
 }
 
 } // namespace GRIM::Diagnostics

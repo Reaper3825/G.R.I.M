@@ -183,6 +183,55 @@ float getScheduledLearningRate(
 // construction logic. Phase2 calls GRIM::Batching::buildEpochBatches(...)
 // directly via the include above.
 
+void evaluateAutoStop(
+    TrainingContext& ctx,
+    TrainingLoopState& state,
+    EpochResult& result,
+    int epoch_idx) {
+    const auto& hp = ctx.config.hyperparameters;
+    if (!hp.auto_stop_enabled || ctx.auto_stop_triggered) {
+        return;
+    }
+
+    const float prev_best = ctx.best_val_loss;
+    bool significant_improvement = true;
+    if (std::isfinite(prev_best)) {
+        significant_improvement = (prev_best - result.validation.loss) > hp.auto_stop_plateau_min_delta;
+    }
+
+    auto trip = [&](const char* reason) {
+        ctx.auto_stop_triggered = true;
+        ctx.auto_stop_reason = reason;
+        ctx.auto_stop_epoch = epoch_idx + 1;
+        ctx.auto_stop_metric = result.validation.loss;
+        result.auto_stop_triggered = true;
+        result.auto_stop_reason = reason;
+    };
+
+    // Plateau detection
+    if (hp.auto_stop_plateau_patience > 0) {
+        if (significant_improvement) {
+            state.plateau_epochs_without_improvement = 0;
+        } else {
+            state.plateau_epochs_without_improvement++;
+            if (state.plateau_epochs_without_improvement >= hp.auto_stop_plateau_patience) {
+                trip("plateau");
+            }
+        }
+    }
+
+    // High-loss detection (validation policy) — delegated to the central
+    // LossSignalBus. The bus owns the consecutive-validation-high counter and
+    // sets `validation_high = true` on the epoch the patience trips. We just
+    // honor it. The hp.auto_stop_high_loss_patience guard is kept so a value of
+    // 0 disables the policy outright (consistent with the plateau guard above).
+    if (!ctx.auto_stop_triggered && hp.auto_stop_high_loss_patience > 0) {
+        if (state.loss_signals->latest().validation_high) {
+            trip("high_loss");
+        }
+    }
+}
+
 bool maybeSaveCheckpoint(
     TrainingContext& ctx,
     float val_loss,
@@ -693,6 +742,13 @@ BatchResult processBatch(
     if (!std::isfinite(result.loss)) {
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));
     }
+
+    // Publish this batch's loss to the central detector BEFORE any consumer
+    // diagnostic reads it. Consumers (LossSpikeDiagnostic / DynamicLR / ...)
+    // will be migrated to read state.loss_signals->latest() in subsequent
+    // refactor tasks; today they still own their own detection.
+    state.loss_signals->recordTrainStep(
+        static_cast<int64_t>(ctx.global_step), result.loss);
     
     // ========================================================================
     // DIAGNOSTIC: Per-sequence breakdown when batch loss spikes far above
@@ -700,7 +756,7 @@ BatchResult processBatch(
     // (extracted to Diagnostics/LossSpikeDiagnostic.cu)
     // ========================================================================
     GRIM::Diagnostics::runLossSpikeDiagnostic(ctx, payload, result.loss, batch_idx,
-                                              state.initial_loss);
+                                              *state.loss_signals);
 
     // ========================================================================
     // Adaptive loss baseline tracking + invalid-token validation
@@ -1378,49 +1434,15 @@ EpochResult runEpoch(
     
     // Run validation
     result.validation = runValidation(ctx);
-    
-    // Auto-stop checks
-    if (hp.auto_stop_enabled && !ctx.auto_stop_triggered) {
-        const float prev_best = ctx.best_val_loss;
-        bool significant_improvement = true;
-        if (std::isfinite(prev_best)) {
-            significant_improvement = (prev_best - result.validation.loss) > hp.auto_stop_plateau_min_delta;
-        }
-        
-        // Plateau detection
-        if (hp.auto_stop_plateau_patience > 0) {
-            if (significant_improvement) {
-                state.plateau_epochs_without_improvement = 0;
-            } else {
-                state.plateau_epochs_without_improvement++;
-                if (state.plateau_epochs_without_improvement >= hp.auto_stop_plateau_patience) {
-                    ctx.auto_stop_triggered = true;
-                    ctx.auto_stop_reason = "plateau";
-                    ctx.auto_stop_epoch = epoch_idx + 1;
-                    ctx.auto_stop_metric = result.validation.loss;
-                    result.auto_stop_triggered = true;
-                    result.auto_stop_reason = "plateau";
-                }
-            }
-        }
-        
-        // High loss detection
-        if (!ctx.auto_stop_triggered && hp.auto_stop_high_loss_patience > 0) {
-            if (result.validation.loss >= hp.auto_stop_high_loss_threshold) {
-                state.high_loss_epochs++;
-            } else {
-                state.high_loss_epochs = 0;
-            }
-            if (state.high_loss_epochs >= hp.auto_stop_high_loss_patience) {
-                ctx.auto_stop_triggered = true;
-                ctx.auto_stop_reason = "high_loss";
-                ctx.auto_stop_epoch = epoch_idx + 1;
-                ctx.auto_stop_metric = result.validation.loss;
-                result.auto_stop_triggered = true;
-                result.auto_stop_reason = "high_loss";
-            }
-        }
+
+    // Publish validation loss to central detector before any consumer
+    // (evaluateAutoStop / SoftRestart) reads it.
+    if (std::isfinite(result.validation.loss)) {
+        state.loss_signals->recordValidation(epoch_idx, result.validation.loss);
     }
+    
+    // Auto-stop checks (plateau + high-loss). See Internal::evaluateAutoStop.
+    Internal::evaluateAutoStop(ctx, state, result, epoch_idx);
     
     // Checkpoint
     if (result.validation.is_best) {
@@ -1456,6 +1478,18 @@ bool executePhase2(TrainingContext& ctx) {
     
     // Initialize loop state
     TrainingLoopState state;
+
+    // Construct the central loss-signal detector. Wire the validation policy
+    // (auto-stop high-loss) from hyperparameters NOW so evaluateAutoStop can
+    // subscribe to signals.validation_high directly. Other thresholds (smoothed
+    // sigma, baseline multiplier, etc.) stay defaulted; task 7 will plumb the
+    // full ai_config.json "loss_signals" block through HyperParameters.
+    {
+        GRIM::Loss::LossSignalConfig sig_cfg{};
+        sig_cfg.validation_high_threshold = hp.auto_stop_high_loss_threshold;
+        sig_cfg.validation_high_patience  = hp.auto_stop_high_loss_patience;
+        state.loss_signals = std::make_unique<GRIM::Loss::LossSignalBus>(sig_cfg);
+    }
     
     // Initialize guess cache (Rule 22: pass TrainingState for buffer allocation)
     auto guess_cache_scope = GRIMTS::Training::initGuessCache(

@@ -11,9 +11,9 @@
 #include <sstream>
 #include <vector>
 #include "SoftRestart.hpp"
+#include "../Loss/LossSignals/LossSignals.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
-
 namespace GRIM {
 namespace SoftRestart {
 
@@ -30,29 +30,18 @@ std::vector<Logging::LogCallback> g_sr_log_callbacks;
 SoftRestartController::SoftRestartController(const SoftRestartConfig& config)
     : config_(config) {}
 
-bool SoftRestartController::shouldTrigger(float val_loss, int64_t global_step) {
-    if (!isFinite(val_loss) || global_step < 0) {
+bool SoftRestartController::shouldTrigger(const GRIM::Loss::LossSignals& signals,
+                                          int64_t global_step) {
+    if (global_step < 0) {
         return false;
     }
-
-    bool trigger = false;
-    if (isFinite(state_.last_val_loss) && state_.last_val_step >= 0) {
-        const float loss_delta = val_loss - state_.last_val_loss;
-        const int64_t step_delta = global_step - state_.last_val_step;
-        const int64_t since_restart = (state_.last_restart_step < 0)
-            ? std::numeric_limits<int64_t>::max()
-            : global_step - state_.last_restart_step;
-
-        if (loss_delta > config_.loss_increase_threshold &&
-            step_delta > 0 && step_delta <= config_.max_step_window &&
-            since_restart >= config_.cooldown_steps) {
-            trigger = true;
-        }
+    if (!signals.validation_delta_spike) {
+        return false;
     }
-
-    state_.last_val_loss = val_loss;
-    state_.last_val_step = global_step;
-    return trigger;
+    const int64_t since_restart = (state_.last_restart_step < 0)
+        ? std::numeric_limits<int64_t>::max()
+        : global_step - state_.last_restart_step;
+    return since_restart >= config_.cooldown_steps;
 }
 
 void SoftRestartController::markRestart(int64_t global_step) {

@@ -32,8 +32,10 @@
 #include "../../Shared/TNC/Token-normalized_clipping.hpp"
 #include "../../Layers/GRIMTS/GRIM-TS.hpp"
 #include "../../Layers/GRIMTS/GuessCacheTraining.hpp"
+#include "../../Shared/Loss/LossSignals/LossSignals.hpp"
 
 #include <functional>
+#include <memory>
 
 namespace GRIMText::Training {
 
@@ -116,9 +118,9 @@ struct TrainingLoopState {
     // Shuffle tracking
     bool shuffle_window_exhausted_notified = false;
     
-    // Auto-stop tracking
+    // Auto-stop tracking. Plateau is local (best-so-far improvement gap);
+    // high-loss patience is owned by GRIM::Loss::LossSignalBus.
     int plateau_epochs_without_improvement = 0;
-    int high_loss_epochs = 0;
     
     // Prediction comparison counter
     int prediction_comparison_good_batch_counter = 0;
@@ -128,6 +130,15 @@ struct TrainingLoopState {
 
     // Last optimizer step that emitted a sample
     int last_sample_step = -1;
+
+    // Central loss-signal detector. Owns ALL loss-spike detection state
+    // (initial_loss baseline, EWMA mean/var, prev_step_loss,
+    // last_validation_loss, plateau / high-loss patience counters) so that
+    // LossSpikeDiagnostic, DynamicLR, SoftRestart, and evaluateAutoStop
+    // share a single canonical definition. Constructed in executePhase2
+    // from TrainingContext::config.hyperparameters.loss_signals; never null
+    // after Phase2 enters the loop.
+    std::unique_ptr<GRIM::Loss::LossSignalBus> loss_signals;
 
     ~TrainingLoopState();
 };
@@ -219,6 +230,19 @@ bool maybeSaveCheckpoint(
     TrainingContext& ctx,
     float val_loss,
     int epoch);
+
+/**
+ * @brief Evaluate end-of-epoch auto-stop conditions (plateau + high-loss).
+ *        Mutates ctx.auto_stop_*, state.plateau_epochs_without_improvement,
+ *        and result.auto_stop_* when a condition trips. High-loss patience
+ *        is read from state.loss_signals (LossSignalBus).
+ *        No-op if hp.auto_stop_enabled is false or auto-stop already triggered.
+ */
+void evaluateAutoStop(
+    TrainingContext& ctx,
+    TrainingLoopState& state,
+    EpochResult& result,
+    int epoch_idx);
 
 } // namespace Internal
 
