@@ -924,7 +924,14 @@ namespace HyperParameters {
  * @param configPath Path to ai_config.json (defaults to auto-discovery)
  * @return true if config was loaded, false if using defaults only
  */
-inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& configPath = "ai_config.json") {
+// Snapshot-based overload — preferred entry point. Avoids re-reading
+// ai_config.json when the caller already loaded a snapshot (e.g. Phase1).
+// All architecture fields come from the snapshot's typed structs +
+// training.config block; this is the SINGLE place where JSON keys like
+// d_model / num_layers / positional_encoding are translated to the typed
+// ModelArchitecture struct.
+inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot,
+                                  ModelArchitecture& arch) {
     // Start with defaults (derived fields computed from base defaults)
     arch.d_model = DEFAULT_D_MODEL;
     arch.num_layers = DEFAULT_NUM_LAYERS;
@@ -933,22 +940,16 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
     arch.max_seq_len = DEFAULT_MAX_SEQ_LEN;
     arch.dropout_rate = DEFAULT_DROPOUT_RATE;
     arch.attention_dropout = DEFAULT_DROPOUT_RATE;       // = dropout_rate
-    
-    // Try to load from config
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
-    if (!snapshot || !snapshot->has_training) {
+
+    if (!snapshot.has_training) {
         arch.validate();
         return false;
     }
-    
-    // Override with config values
-    const auto& hp = snapshot->hyperparameters;
-    
-    // Check for explicit model architecture in training.config
-    const auto& doc = snapshot->document;
+
+    const auto& doc = snapshot.document;
     if (doc.contains("training") && doc["training"].contains("config")) {
         const auto& cfg = doc["training"]["config"];
-        
+
         if (cfg.contains("d_model") && cfg["d_model"].is_number()) {
             arch.d_model = cfg["d_model"].get<int>();
         }
@@ -972,9 +973,8 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
         // attention_dropout: always derived from dropout_rate
         arch.attention_dropout = arch.dropout_rate;
 
-        // Issue #142: Parse positional encoding from shared architecture loader.
-        // This path is used by runtime inference/server startup and must match
-        // Phase1 training config semantics.
+        // Issue #142: Parse positional encoding. Used by both training (Phase1)
+        // and runtime inference/server startup; semantics must match exactly.
         if (cfg.contains("positional_encoding")) {
             const auto& pe = cfg["positional_encoding"];
             if (pe.is_object()) {
@@ -1005,14 +1005,32 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
             }
         }
     }
-    
-    // max_seq_len comes from hyperparameters
-    arch.max_seq_len = hp.max_seq_len;
-    
+
+    // max_seq_len comes from hyperparameters (validated & populated by snapshot)
+    arch.max_seq_len = snapshot.hyperparameters.max_seq_len;
+
     // Validate and compute derived values (head_dim)
     arch.validate();
-    
     return true;
+}
+
+// Path-based overload — loads a snapshot internally. Kept for callers that
+// don't already hold a snapshot (e.g. grim_text_server startup).
+inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& configPath = "ai_config.json") {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
+    if (!snapshot) {
+        // No config available — populate defaults and bail.
+        arch.d_model = DEFAULT_D_MODEL;
+        arch.num_layers = DEFAULT_NUM_LAYERS;
+        arch.num_heads = DEFAULT_NUM_HEADS;
+        arch.d_ff = DEFAULT_D_MODEL * DEFAULT_D_FF_MULTIPLIER;
+        arch.max_seq_len = DEFAULT_MAX_SEQ_LEN;
+        arch.dropout_rate = DEFAULT_DROPOUT_RATE;
+        arch.attention_dropout = DEFAULT_DROPOUT_RATE;
+        arch.validate();
+        return false;
+    }
+    return loadModelArchitecture(*snapshot, arch);
 }
 
 /**

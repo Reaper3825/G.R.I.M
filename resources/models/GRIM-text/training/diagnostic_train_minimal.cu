@@ -407,22 +407,26 @@ int main(int argc, char** argv) {
         return 1;
     }
     
-    // Get model architecture from config (path: training.config)
+    // Get model architecture from config (path: training.config).
+    // Delegates to the single source of truth in HyperParameters_GPU.hpp —
+    // do NOT re-parse training.config keys here.
     std::cout << "  Getting model architecture..." << std::endl;
-    
+
     if (!snapshot->document.contains("training") || !snapshot->document["training"].contains("config")) {
         std::cerr << "  ✗ No 'training.config' object in ai_config.json" << std::endl;
         return 1;
     }
-    
-    const auto& model_cfg = snapshot->document["training"]["config"];
-    int d_model = model_cfg.value("d_model", 768);
-    int num_layers = model_cfg.value("num_layers", 12);
-    int num_heads = model_cfg.value("num_heads", 12);
-    int num_kv_heads = model_cfg.value("num_kv_heads", 4);
-    int d_ff = model_cfg.value("d_ff", 3072);
-    bool tie_embeddings = model_cfg.value("tie_embeddings", true);
-    
+
+    GRIM::HyperParameters::ModelArchitecture arch;
+    GRIM::HyperParameters::loadModelArchitecture(*snapshot, arch);
+
+    int d_model        = arch.d_model;
+    int num_layers     = arch.num_layers;
+    int num_heads      = arch.num_heads;
+    int num_kv_heads   = arch.num_kv_heads;
+    int d_ff           = arch.d_ff;
+    bool tie_embeddings = arch.tie_embeddings;
+
     std::cout << "  Model config: d_model=" << d_model << " layers=" << num_layers 
               << " heads=" << num_heads << " kv_heads=" << num_kv_heads << std::endl;
     

@@ -65,18 +65,53 @@ namespace GRIMText::Training {
 
 namespace {
 
-std::string trimCopy(const std::string& value) {
-    const auto start = value.find_first_not_of(" \t\n\r");
-    if (start == std::string::npos) return {};
-    const auto end = value.find_last_not_of(" \t\n\r");
-    return value.substr(start, end - start + 1);
-}
-
-std::string toLowerCopy(const std::string& value) {
-    std::string result = value;
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    return result;
+// Parse training.config.generation into GenerationConfig.
+// Sole consumer is Phase1 (used for inference samples during training);
+// kept Phase1-local on purpose so HyperParameters_GPU.hpp does not need
+// to know about GRIM::GenerationConfig / SamplingStrategy.
+void parseGenerationConfig(const json& cfg, GRIM::GenerationConfig& generation) {
+    if (!cfg.contains("generation") || !cfg["generation"].is_object()) {
+        return;
+    }
+    const auto& gen = cfg["generation"];
+    if (gen.contains("strategy") && gen["strategy"].is_string()) {
+        const std::string strat = gen["strategy"].get<std::string>();
+        if (strat == "greedy") { generation.strategy = GRIM::SamplingStrategy::GREEDY; generation.do_sample = false; }
+        else if (strat == "top_k")       generation.strategy = GRIM::SamplingStrategy::TOP_K;
+        else if (strat == "top_p")       generation.strategy = GRIM::SamplingStrategy::TOP_P;
+        else if (strat == "min_p")       generation.strategy = GRIM::SamplingStrategy::MIN_P;
+        else if (strat == "typical")     generation.strategy = GRIM::SamplingStrategy::TYPICAL;
+        else if (strat == "top_k_top_p") generation.strategy = GRIM::SamplingStrategy::TOP_K_TOP_P;
+        else throw std::runtime_error("Phase1_Startup: unknown generation.strategy: " + strat);
+    }
+    if (gen.contains("max_new_tokens") && gen["max_new_tokens"].is_number())
+        generation.max_new_tokens = gen["max_new_tokens"].get<int>();
+    if (gen.contains("min_new_tokens") && gen["min_new_tokens"].is_number())
+        generation.min_new_tokens = gen["min_new_tokens"].get<int>();
+    if (gen.contains("temperature") && gen["temperature"].is_number())
+        generation.temperature = gen["temperature"].get<float>();
+    if (gen.contains("top_k") && gen["top_k"].is_number())
+        generation.top_k = gen["top_k"].get<int>();
+    if (gen.contains("top_p") && gen["top_p"].is_number())
+        generation.top_p = gen["top_p"].get<float>();
+    if (gen.contains("min_p") && gen["min_p"].is_number())
+        generation.min_p = gen["min_p"].get<float>();
+    if (gen.contains("typical_p") && gen["typical_p"].is_number())
+        generation.typical_p = gen["typical_p"].get<float>();
+    if (gen.contains("repetition_penalty") && gen["repetition_penalty"].is_number())
+        generation.repetition_penalty = gen["repetition_penalty"].get<float>();
+    if (gen.contains("repetition_penalty_window") && gen["repetition_penalty_window"].is_number())
+        generation.repetition_penalty_window = gen["repetition_penalty_window"].get<int>();
+    if (gen.contains("frequency_penalty") && gen["frequency_penalty"].is_number())
+        generation.frequency_penalty = gen["frequency_penalty"].get<float>();
+    if (gen.contains("presence_penalty") && gen["presence_penalty"].is_number())
+        generation.presence_penalty = gen["presence_penalty"].get<float>();
+    if (gen.contains("no_repeat_ngram_size") && gen["no_repeat_ngram_size"].is_number())
+        generation.no_repeat_ngram_size = gen["no_repeat_ngram_size"].get<int>();
+    if (gen.contains("do_sample") && gen["do_sample"].is_boolean())
+        generation.do_sample = gen["do_sample"].get<bool>();
+    if (gen.contains("enable_scratchblock_reasoning") && gen["enable_scratchblock_reasoning"].is_boolean())
+        generation.enable_scratchblock_reasoning = gen["enable_scratchblock_reasoning"].get<bool>();
 }
 
 } // anonymous namespace
@@ -118,41 +153,36 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     }
     
     config.paths.config_path = snapshot->config_path;
-    const json& doc = snapshot->document;
-    
-    // Extract GRIM-text paths
-    if (!doc.contains("paths") || !doc["paths"].contains("grim_text")) {
-        throw std::runtime_error("FATAL: ai_config.json missing 'paths.grim_text' section");
+
+    // Snapshot already parsed paths into the typed GrimTextPaths struct
+    // (with relative-path resolution against the GRIM root). Phase1 just
+    // copies field-by-field — no JSON parsing here.
+    if (!snapshot->grim_paths.isValid()) {
+        throw std::runtime_error(
+            "FATAL: ai_config.json paths.grim_text missing required fields "
+            "(at minimum vocab + training_data must be non-empty)");
     }
-    
-    const auto& grim_text = doc["paths"]["grim_text"];
-    
-    // Required paths
-    if (!grim_text.contains("training_data") || grim_text["training_data"].get<std::string>().empty()) {
-        throw std::runtime_error("FATAL: ai_config.json missing or empty 'grim_text.training_data'");
-    }
-    if (!grim_text.contains("vocab") || grim_text["vocab"].get<std::string>().empty()) {
-        throw std::runtime_error("FATAL: ai_config.json missing or empty 'grim_text.vocab'");
-    }
-    
-    config.paths.data_path = grim_text["training_data"].get<std::string>();
-    config.paths.vocab_path = grim_text["vocab"].get<std::string>();
-    config.paths.output_model_path = grim_text.value("model", "");
-    config.paths.checkpoint_dir = grim_text.value("checkpoints", "checkpoints");
-    config.paths.log_dir = grim_text.value("logs", "logs");
-    config.paths.status_path = grim_text.value("training_status", "temp_status.txt");
-    
-    // Load hyperparameters
+    const auto& gp = snapshot->grim_paths;
+    config.paths.data_path        = gp.training_data;
+    config.paths.vocab_path       = gp.vocab;
+    config.paths.output_model_path = gp.model;
+    config.paths.checkpoint_dir   = gp.checkpoints;
+    config.paths.log_dir          = gp.logs;
+    config.paths.status_path      = gp.training_status;
+
+    // Hyperparameters & tokenizer config — already typed on the snapshot.
     if (snapshot->has_training) {
         config.hyperparameters = snapshot->hyperparameters;
     }
+    config.tokenizer_config = snapshot->tokenizer_config;
+
     GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
 
     // Configure LogRecorder
     if (config.hyperparameters.log_recorder.enabled) {
         // Initialize log recorder system - MUST pass path (Rule 20: no hardcoded fallback)
         GRIM::Logging::InitLogRecorder(config.paths.log_dir);
-        
+
         // Configure layer logging enables
         const auto& layers = config.hyperparameters.log_recorder.layers;
         GRIM::Logging::ConfigureLayerLogging(
@@ -174,107 +204,18 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     // are NOT copied into wrapper sub-structs. Consumers read
     // `config.hyperparameters.*` directly (see ai_config_paths.hpp).
 
-    // Load architecture
-    if (doc.contains("training") && doc["training"].contains("config")) {
-        const auto& cfg = doc["training"]["config"];
-        if (cfg.contains("d_model") && cfg["d_model"].is_number())
-            config.architecture.d_model = cfg["d_model"].get<int>();
-        if (cfg.contains("num_layers") && cfg["num_layers"].is_number())
-            config.architecture.num_layers = cfg["num_layers"].get<int>();
-        if (cfg.contains("num_heads") && cfg["num_heads"].is_number())
-            config.architecture.num_heads = cfg["num_heads"].get<int>();
-        if (cfg.contains("num_kv_heads") && cfg["num_kv_heads"].is_number())
-            config.architecture.num_kv_heads = cfg["num_kv_heads"].get<int>();
-        // d_ff: always derived as d_model * DEFAULT_D_FF_MULTIPLIER (never read from JSON)
-        config.architecture.d_ff = config.architecture.d_model * GRIM::HyperParameters::DEFAULT_D_FF_MULTIPLIER;
-        if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number())
-            config.architecture.dropout_rate = cfg["dropout_rate"].get<float>();
-        // attention_dropout: always derived from dropout_rate
-        config.architecture.attention_dropout = config.architecture.dropout_rate;
-        
-        // Load tie_embeddings config (affects memory layout and parameter count)
-        if (cfg.contains("tie_embeddings") && cfg["tie_embeddings"].is_boolean())
-            config.architecture.tie_embeddings = cfg["tie_embeddings"].get<bool>();
+    // Architecture: delegate to HyperParameters_GPU's loadModelArchitecture —
+    // the SINGLE place that translates training.config JSON keys
+    // (d_model / num_layers / num_heads / num_kv_heads / dropout_rate /
+    // tie_embeddings / positional_encoding) into ModelArchitecture.
+    GRIM::HyperParameters::loadModelArchitecture(*snapshot, config.architecture);
 
-        // Parse positional_encoding from JSON config (object or string form).
-        if (cfg.contains("positional_encoding")) {
-            const auto& pe = cfg["positional_encoding"];
-            if (pe.is_object()) {
-                const bool use_rope = pe.value("use_rope", false);
-                const bool use_alibi = pe.value("use_alibi", false);
-                if (use_rope && use_alibi) {
-                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ALIBI_ROPE;
-                } else if (use_rope) {
-                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ROPE;
-                } else if (use_alibi) {
-                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ALIBI;
-                } else {
-                    // Rule 20: learned position embeddings were removed; require ALiBi and/or RoPE.
-                    throw std::runtime_error(
-                        "Phase1_Startup::loadConfiguration: positional_encoding requires use_rope and/or use_alibi "
-                        "(learned position embeddings have been removed)");
-                }
-            } else if (pe.is_string()) {
-                config.architecture.positional_encoding =
-                    GRIM::HyperParameters::parsePositionalEncodingType(pe.get<std::string>());
-                if (config.architecture.positional_encoding == GRIM::HyperParameters::PositionalEncodingType::NONE) {
-                    throw std::runtime_error(
-                        "Phase1_Startup::loadConfiguration: positional_encoding=NONE is no longer supported "
-                        "(learned position embeddings have been removed). Use ALIBI, ROPE, or ALIBI_ROPE.");
-                }
-            } else {
-                throw std::runtime_error(
-                    "Phase1_Startup::loadConfiguration: training.config.positional_encoding must be object or string");
-            }
-        }
-            
-        // training.config.force_rebuild_vocab is consumed by the
-        // train_tokenizer subprocess wrapper directly from ai_config.json
-        // (see Subprocess/tokenizer_subprocess.cpp). Phase 1 deliberately
-        // does NOT mirror it onto TrainingConfig.
-        
-        // Load generation config for inference samples during training
-        if (cfg.contains("generation") && cfg["generation"].is_object()) {
-            const auto& gen = cfg["generation"];
-            if (gen.contains("strategy") && gen["strategy"].is_string()) {
-                const std::string strat = gen["strategy"].get<std::string>();
-                if (strat == "greedy") { config.generation.strategy = GRIM::SamplingStrategy::GREEDY; config.generation.do_sample = false; }
-                else if (strat == "top_k") config.generation.strategy = GRIM::SamplingStrategy::TOP_K;
-                else if (strat == "top_p") config.generation.strategy = GRIM::SamplingStrategy::TOP_P;
-                else if (strat == "min_p") config.generation.strategy = GRIM::SamplingStrategy::MIN_P;
-                else if (strat == "typical") config.generation.strategy = GRIM::SamplingStrategy::TYPICAL;
-                else if (strat == "top_k_top_p") config.generation.strategy = GRIM::SamplingStrategy::TOP_K_TOP_P;
-                else throw std::runtime_error("Phase1_Startup: unknown generation.strategy: " + strat);
-            }
-            if (gen.contains("max_new_tokens") && gen["max_new_tokens"].is_number())
-                config.generation.max_new_tokens = gen["max_new_tokens"].get<int>();
-            if (gen.contains("min_new_tokens") && gen["min_new_tokens"].is_number())
-                config.generation.min_new_tokens = gen["min_new_tokens"].get<int>();
-            if (gen.contains("temperature") && gen["temperature"].is_number())
-                config.generation.temperature = gen["temperature"].get<float>();
-            if (gen.contains("top_k") && gen["top_k"].is_number())
-                config.generation.top_k = gen["top_k"].get<int>();
-            if (gen.contains("top_p") && gen["top_p"].is_number())
-                config.generation.top_p = gen["top_p"].get<float>();
-            if (gen.contains("min_p") && gen["min_p"].is_number())
-                config.generation.min_p = gen["min_p"].get<float>();
-            if (gen.contains("typical_p") && gen["typical_p"].is_number())
-                config.generation.typical_p = gen["typical_p"].get<float>();
-            if (gen.contains("repetition_penalty") && gen["repetition_penalty"].is_number())
-                config.generation.repetition_penalty = gen["repetition_penalty"].get<float>();
-            if (gen.contains("repetition_penalty_window") && gen["repetition_penalty_window"].is_number())
-                config.generation.repetition_penalty_window = gen["repetition_penalty_window"].get<int>();
-            if (gen.contains("frequency_penalty") && gen["frequency_penalty"].is_number())
-                config.generation.frequency_penalty = gen["frequency_penalty"].get<float>();
-            if (gen.contains("presence_penalty") && gen["presence_penalty"].is_number())
-                config.generation.presence_penalty = gen["presence_penalty"].get<float>();
-            if (gen.contains("no_repeat_ngram_size") && gen["no_repeat_ngram_size"].is_number())
-                config.generation.no_repeat_ngram_size = gen["no_repeat_ngram_size"].get<int>();
-            if (gen.contains("do_sample") && gen["do_sample"].is_boolean())
-                config.generation.do_sample = gen["do_sample"].get<bool>();
-            if (gen.contains("enable_scratchblock_reasoning") && gen["enable_scratchblock_reasoning"].is_boolean())
-                config.generation.enable_scratchblock_reasoning = gen["enable_scratchblock_reasoning"].get<bool>();
-        }
+    // Generation config (for inference samples during training) — Phase1-local
+    // because GRIM::GenerationConfig lives in grim_language_model_cuda.hpp
+    // which the shared HyperParameters header must not depend on.
+    const json& doc = snapshot->document;
+    if (doc.contains("training") && doc["training"].contains("config")) {
+        parseGenerationConfig(doc["training"]["config"], config.generation);
     }
     config.architecture.max_seq_len = config.hyperparameters.max_seq_len;
     config.architecture.validate();
@@ -1313,13 +1254,9 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // so derived ratios from HyperParameters_GPU.hpp are reflected and
     // the visual block is unified.
     
-    // 4. Initialize tokenizer
-    GRIM::Config::TokenizerConfig tok_cfg;
-    if (auto snapshot = GRIM::Config::loadAiConfigSnapshot()) {
-        if (snapshot->has_tokenizer) {
-            tok_cfg = snapshot->tokenizer_config;
-        }
-    }
+    // 4. Initialize tokenizer — use the tokenizer_config already captured on
+    // StartupConfig during loadConfiguration(); no second snapshot read.
+    const GRIM::Config::TokenizerConfig& tok_cfg = ctx->config.tokenizer_config;
     ctx->tokenizer = Internal::initializeTokenizer(ctx->config.paths.vocab_path, tok_cfg, ctx->config.hyperparameters, *ctx->logging.logger);
     
     ctx->logging.logger->log("[DEBUG] Starting training data load...");

@@ -102,6 +102,7 @@ struct PathConfig {
 struct StartupConfig {
     PathConfig paths;
     GRIM::Config::TrainingHyperparameters hyperparameters;
+    GRIM::Config::TokenizerConfig tokenizer_config;
     GRIM::HyperParameters::ModelArchitecture architecture;
 
     // Generation config for inference samples during training
