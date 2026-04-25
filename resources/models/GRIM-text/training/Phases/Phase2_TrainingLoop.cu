@@ -33,6 +33,7 @@
 #include "../Diagnostics/MtpDiagnostic.hpp"
 #include "../Diagnostics/OptimizerMomentDiagnostic.hpp"
 #include "../Diagnostics/PredictionDistributionDiagnostic.hpp"
+#include "../Diagnostics/DiagnosticGates.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
@@ -84,83 +85,15 @@ TrainingLoopState::~TrainingLoopState() = default;
 //  String Utilities
 //======================================================//
 
-namespace {
-
-int readEnvInt(const char* name, int fallback) {
-    const char* raw = std::getenv(name);
-    if (!raw || !*raw) {
-        return fallback;
-    }
-    char* end = nullptr;
-    long value = std::strtol(raw, &end, 10);
-    if (end == raw) {
-        return fallback;
-    }
-    if (value < 0) {
-        return fallback;
-    }
-    return static_cast<int>(value);
-}
-
-std::string readEnvString(const char* name, const std::string& fallback) {
-    const char* raw = std::getenv(name);
-    if (!raw || !*raw) {
-        return fallback;
-    }
-    return std::string(raw);
-}
-
-bool isPhase2DebugEnabled() {
-    static const bool enabled = readEnvInt("GRIM_PHASE2_DEBUG", 0) > 0;
-    return enabled;
-}
-
-#define PHASE2_DEBUG_STDERR(...)             \
-    do {                                     \
-        if (isPhase2DebugEnabled()) {        \
-            fprintf(stderr, __VA_ARGS__);    \
-        }                                    \
-    } while (0)
-
-#define PHASE2_DEBUG_FLUSH_STDERR()          \
-    do {                                     \
-        if (isPhase2DebugEnabled()) {        \
-            fflush(stderr);                  \
-        }                                    \
-    } while (0)
-
-bool shouldSyncDiagnostics(const TrainingContext& ctx, std::size_t batch_idx) {
-    // Skip expensive D2H syncs when equation logging disabled (avoids GPU pipeline drain)
-    if (!ctx.logging.tape || !ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
-        return false;
-    }
-    const int default_interval = ctx.config.hyperparameters.log_interval;
-    const int interval = readEnvInt("GRIM_SYNC_INTERVAL", default_interval);
-    if (interval <= 0) {
-        return false;
-    }
-    return ((batch_idx + 1) % static_cast<std::size_t>(interval)) == 0;
-}
-
-bool shouldLogLogitTrace(const TrainingContext& ctx, std::size_t batch_idx) {
-    const auto& hp = ctx.config.hyperparameters;
-    if (!hp.logit_update_trace_enabled) {
-        return false;
-    }
-    const int interval = readEnvInt("GRIM_LOGIT_TRACE_INTERVAL", hp.logit_update_trace_interval);
-    if (interval <= 0) {
-        return false;
-    }
-    return ((batch_idx + 1) % static_cast<std::size_t>(interval)) == 0;
-}
-
-// AtomStats / computeAtomStats / shouldLogAtomStats moved to
-// Diagnostics/AtomStatsDiagnostic.{hpp,cu} and Diagnostics/DiagnosticGates.{hpp,cu}.
-//
-// MomentSample / sampleOptimizerMomentStats / kMomentSamplePerGroup moved to
+// Anon-namespace gate helpers (readEnvInt, readEnvString,
+// isPhase2DebugEnabled, PHASE2_DEBUG_STDERR/FLUSH_STDERR,
+// shouldSyncDiagnostics, shouldLogLogitTrace, shouldLogAtomStats)
+// and the AtomStats / MomentSample / sampleOptimizerMomentStats helpers
+// have all been moved to Diagnostics/DiagnosticGates.{hpp,cu},
+// Diagnostics/AtomStatsDiagnostic.{hpp,cu}, and
 // Diagnostics/OptimizerMomentDiagnostic.{hpp,cu}.
-
-} // anonymous namespace
+// They are reachable here via #include "../Diagnostics/DiagnosticGates.hpp"
+// at the top of this file.
 
 // GuessCacheScope, GuessCacheBatchBuffers implementations moved to
 // Layers/GRIMTS/GuessCacheTraining.cu (namespace GRIMTS::Training)
@@ -1123,7 +1056,7 @@ BatchResult processBatch(
         
         // Gate behind shouldSyncDiagnostics so full vocab gradient D2H only runs on diagnostic sync interval
         static int emb_grad_diag_interval = 10;
-        const bool kEmbGradDiagEnabled = shouldSyncDiagnostics(ctx, batch_idx) &&
+        const bool kEmbGradDiagEnabled = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx) &&
             ctx.logging.tape && ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug) &&
             (batch_idx == 0 || (batch_idx + 1) % std::max(emb_grad_diag_interval, 1) == 0);
         
@@ -1205,7 +1138,7 @@ BatchResult processBatch(
     auto lr_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - lr_start).count();
     
     // Optimizer step
-    const bool sync_diag = shouldSyncDiagnostics(ctx, batch_idx);
+    const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
     auto optimizer_step_start = std::chrono::steady_clock::now();
     float sample_elapsed_ms = 0.0f;
     GRIM::Diagnostics::WeightSample pre_sample{};
