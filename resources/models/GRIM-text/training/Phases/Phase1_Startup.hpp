@@ -35,13 +35,14 @@
 #include <chrono>
 
 // Core includes
-#include "../../../../control/ai_config_paths.hpp"
+// NOTE: ai_config_paths.hpp must NOT be included directly. It is pulled in
+// transitively (and in the correct order) by HyperParameters_GPU.hpp below.
+#include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
 #include "../../Shared/Batching/Batching_GPU.hpp"
-#include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/Dynamic_LR/DynamicLR.hpp"
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"
 #include "../../Shared/SoftRestart/SoftRestart.hpp"
