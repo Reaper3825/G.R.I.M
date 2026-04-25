@@ -156,37 +156,14 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
 
         GRIM::Config::TrainingHyperparameters hyperparams;
         if (GRIM::Config::loadTrainingHyperparameters(hyperparams)) {
-            config.max_seq_len = hyperparams.architecture.max_seq_len;
-            config.use_flash_attention = hyperparams.architecture.use_flash_attention;
-            config.min_seq_len_for_flash = hyperparams.architecture.min_seq_len_for_flash;
-            // MTP: load() uses sidecar when checkpoint was saved with MTP
-            config.mtp_enabled = hyperparams.mtp_enabled;
-            config.mtp_k = hyperparams.mtp_k;
-            config.execution_block_enabled = hyperparams.execution_block_enabled;
-            config.scratch_block_execution_first_type_only = hyperparams.scratch_block_execution_first_type_only;
-            config.execution_block_layer = hyperparams.execution_block_layer;
-            config.execution_block_num_ops = hyperparams.execution_block_num_ops;
-            config.execution_block_num_slots = hyperparams.execution_block_num_slots;
-            config.execution_block_num_steps = hyperparams.execution_block_num_steps;
-            config.execution_block_d_key = hyperparams.execution_block_d_key;
-            config.execution_block_d_type = hyperparams.execution_block_d_type;
-            config.execution_block_cross_attn_head_dim = hyperparams.execution_block_cross_attn_head_dim;
-            config.execution_block_cross_attn_topk = hyperparams.execution_block_cross_attn_topk;
-            config.execution_block_usage_decay = hyperparams.execution_block_usage_decay;
-            config.execution_block_diversity_kappa = hyperparams.execution_block_diversity_kappa;
-            config.execution_block_temp_start = hyperparams.execution_block_temp_start;
-            config.execution_block_temp_end = hyperparams.execution_block_temp_end;
-            config.execution_block_temp_schedule = hyperparams.execution_block_temp_schedule;
-            config.execution_block_entropy_weight = hyperparams.execution_block_entropy_weight;
-            config.execution_block_transition_hard_threshold = hyperparams.execution_block_transition_hard_threshold;
-            config.execution_block_gate_warmup_steps = hyperparams.execution_block_gate_warmup_steps;
-            config.execution_block_causal_w1_transition = hyperparams.execution_block_causal_w1_transition;
-            config.step_x_multiplier = hyperparams.step_x_multiplier;
-            config.step_y_multiplier = hyperparams.step_y_multiplier;
-            config.step_y_overrides_x = hyperparams.step_y_overrides_x;
-            config.entropy_aux_weight = hyperparams.entropy_aux_weight;
-            config.value_match_epsilon = hyperparams.value_match_epsilon;
-            config.final_slot_consistency_weight = hyperparams.final_slot_consistency_weight;
+            // Slice-copy entire LanguageModelConfig from hyperparams.architecture
+            // (Phase B: architecture is now the model SoT — single assignment
+            // carries all model + feature fields). Per-field copies removed —
+            // Rule 20 (no dual-source state).
+            // NOTE: this overwrites a few fields set above (max_seq_len,
+            // use_flash_attention, etc.); that is intentional — the values
+            // from ai_config.json take precedence over loadModelArchitecture().
+            static_cast<HyperParameters::LanguageModelConfig&>(config) = hyperparams.architecture;
         }
 
         config.computeDerivedValues();  // Compute head_dim = d_model / num_heads

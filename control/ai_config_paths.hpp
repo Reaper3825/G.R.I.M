@@ -395,9 +395,9 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     params.scratch_num_blocks = 4;
     params.scratch_write_combined = true;
 
-    // ── Scratch block reasoning ──
-    params.scratch_block_max_atoms = 8192;
-    params.scratch_block_atom_scale = 1.0f;
+    // ── Scratch block reasoning (model fields, live on architecture) ──
+    params.architecture.scratch_block_max_atoms = 8192;
+    params.architecture.scratch_block_atom_scale = 1.0f;
 
     // ── Telemetry control ──
     params.telemetry_spike_mild_threshold = 3.0f;
@@ -438,45 +438,45 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     params.loss_entropy_reg_lambda = 0.0f;
     params.loss_class_balanced_beta = 0.5f;
 
-    // ── LM head centering ──
-    params.pc1_power_iters = 5;
+    // ── LM head centering (model fields, live on architecture) ──
+    params.architecture.pc1_power_iters = 5;
 
-    // ── Layer scale ──
-    params.layer_scale_init = 1.0f;
+    // ── Layer scale (model field, lives on architecture) ──
+    params.architecture.layer_scale_init = 1.0f;
 
-    // ── Execution block tuning ──
-    params.execution_block_cross_attn_topk = 2;
-    params.execution_block_usage_decay = 0.95f;
-    params.execution_block_diversity_kappa = 2.0f;
-    params.execution_block_temp_start = 1.5f;
-    params.execution_block_temp_end = 0.5f;
-    params.execution_block_temp_schedule = 0;
-    params.execution_block_entropy_weight = 0.01f;
-    params.step_x_multiplier = 2.0f;
-    params.step_y_multiplier = 3.0f;
-    params.step_y_overrides_x = false;
-    params.entropy_aux_weight = 0.01f;
-    params.value_match_epsilon = 0.0001f;
-    params.final_slot_consistency_weight = 0.1f;
-    params.execution_block_transition_hard_threshold = 0.0f;
-    params.execution_block_causal_w1_transition = 1.5f;
-    params.div_invalid_penalty_weight = 0.5f;
-    params.div_magnitude_penalty_weight = 0.1f;
-    params.arg_reinforce_weight = 0.0f;
-    params.arg_reinforce_baseline_decay = 0.99f;
-    params.structured_ce_weight = 0.1f;
-    params.selector_d_selector = 64;
-    params.selector_selection_margin = 1.0f;
-    params.selector_supervision_weight = 1.0f;
+    // ── Execution block tuning (model fields, live on architecture) ──
+    params.architecture.execution_block_cross_attn_topk = 2;
+    params.architecture.execution_block_usage_decay = 0.95f;
+    params.architecture.execution_block_diversity_kappa = 2.0f;
+    params.architecture.execution_block_temp_start = 1.5f;
+    params.architecture.execution_block_temp_end = 0.5f;
+    params.architecture.execution_block_temp_schedule = 0;
+    params.architecture.execution_block_entropy_weight = 0.01f;
+    params.architecture.step_x_multiplier = 2.0f;
+    params.architecture.step_y_multiplier = 3.0f;
+    params.architecture.step_y_overrides_x = false;
+    params.architecture.entropy_aux_weight = 0.01f;
+    params.architecture.value_match_epsilon = 0.0001f;
+    params.architecture.final_slot_consistency_weight = 0.1f;
+    params.architecture.execution_block_transition_hard_threshold = 0.0f;
+    params.architecture.execution_block_causal_w1_transition = 1.5f;
+    params.architecture.div_invalid_penalty_weight = 0.5f;
+    params.architecture.div_magnitude_penalty_weight = 0.1f;
+    params.architecture.arg_reinforce_weight = 0.0f;
+    params.architecture.arg_reinforce_baseline_decay = 0.99f;
+    params.architecture.structured_ce_weight = 0.1f;
+    params.architecture.selector_d_selector = 64;
+    params.architecture.selector_selection_margin = 1.0f;
+    params.architecture.selector_supervision_weight = 1.0f;
 
-    // ── Multi-token prediction ──
-    params.mtp_k = 3;
-    params.mtp_alpha = 0.2f;
+    // ── Multi-token prediction (k/alpha live on architecture; monitor flag is training-only) ──
+    params.architecture.mtp_k = 3;
+    params.architecture.mtp_alpha = 0.2f;
     params.mtp_log_ratio_monitor = true;
 
-    // ── Diagnostics ──
-    params.hardcoded_hidden_pattern = 0;
-    params.hardcoded_log_every_n_batches = 1;
+    // ── Diagnostics (hardcoded-hidden lives on architecture as enum) ──
+    params.architecture.hardcoded_hidden_pattern = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED;
+    params.architecture.hardcoded_log_every_n_batches = 1;
     params.prediction_comparison_interval = 100;
     params.prediction_comparison_top_k = 5;
     params.prediction_comparison_max_positions = 8;
@@ -913,64 +913,66 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     }
     
     // LM Head centering configuration (Issue #37 / #40)
-    // When enabled, centers hidden states before LM head projection.
-    // Set to false for standard PyTorch-style implementation.
+    // Master toggle is training-only (lm_head_centering_enabled). Per-knob fields
+    // (center_hidden_states / freeze_final_rms_gamma / center_logits /
+    // center_encoder_residuals / project_out_pc1 / pc1_power_iters) live on architecture.
     params.lm_head_centering_enabled = false;  // Default to disabled (standard implementation)
-    params.lm_head_center_hidden_states = false;
-    params.lm_head_freeze_final_rms_gamma = false;  // Default: γ_final is trainable
-    params.center_logits = false;  // Default to disabled (standard implementation)
-    params.center_encoder_residuals = false;  // Default: disabled. Enable to prevent ρ buildup across layers (mode collapse fix).
+    params.architecture.lm_head_center_hidden_states = false;
+    params.architecture.lm_head_freeze_final_rms_gamma = false;  // Default: γ_final is trainable
+    params.architecture.center_logits = false;  // Default to disabled (standard implementation)
+    params.architecture.center_encoder_residuals = false;  // Default: disabled. Enable to prevent ρ buildup across layers (mode collapse fix).
                                                // Gradient cost: (1-1/n_tokens)^24 ≈ 0.996 for n≈6000 — negligible.
-    params.project_out_pc1 = false;  // Default: disabled (Issue #149)
-    params.pc1_power_iters = 5;
+    params.architecture.project_out_pc1 = false;  // Default: disabled (Issue #149)
+    params.architecture.pc1_power_iters = 5;
     if (auto it = trainConfig.find("lm_head_centering"); it != trainConfig.end() && it->is_object()) {
         const auto& lmc = *it;
         params.lm_head_centering_enabled = lmc.value("enabled", false);
-        params.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
-        params.lm_head_freeze_final_rms_gamma = lmc.value("freeze_final_rms_gamma", false);
-        params.center_logits = lmc.value("center_logits", false);
-        params.center_encoder_residuals = lmc.value("center_encoder_residuals", false);
-        params.project_out_pc1 = lmc.value("project_out_pc1", false);
-        params.pc1_power_iters = lmc.value("pc1_power_iters", 5);
+        params.architecture.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
+        params.architecture.lm_head_freeze_final_rms_gamma = lmc.value("freeze_final_rms_gamma", false);
+        params.architecture.center_logits = lmc.value("center_logits", false);
+        params.architecture.center_encoder_residuals = lmc.value("center_encoder_residuals", false);
+        params.architecture.project_out_pc1 = lmc.value("project_out_pc1", false);
+        params.architecture.pc1_power_iters = lmc.value("pc1_power_iters", 5);
     }
     
     // Issue #109: LayerScale (learnable residual scaling from CaiT paper)
     // Reduces correlation buildup between layers by gating sublayer outputs
-    params.use_layer_scale = false;   // Default: disabled (standard residual connections)
-    params.layer_scale_init = 0.1f;   // CaiT paper recommends 0.1 for deeper networks
+    params.architecture.use_layer_scale = false;   // Default: disabled (standard residual connections)
+    params.architecture.layer_scale_init = 0.1f;   // CaiT paper recommends 0.1 for deeper networks
     if (auto it = trainConfig.find("layer_scale"); it != trainConfig.end() && it->is_object()) {
         const auto& ls = *it;
-        params.use_layer_scale = ls.value("enabled", false);
-        params.layer_scale_init = ls.value("init_value", 0.1f);
+        params.architecture.use_layer_scale = ls.value("enabled", false);
+        params.architecture.layer_scale_init = ls.value("init_value", 0.1f);
     }
     
     // QK-norm: Per-head RMSNorm applied to Q and K after QKV projection, before RoPE.
     // Bounds attention logit magnitudes, prevents entropy collapse in deeper models.
-    params.qk_norm_enabled = false;   // Default: disabled (standard unscaled Q/K)
+    params.architecture.qk_norm_enabled = false;   // Default: disabled (standard unscaled Q/K)
     if (auto it = trainConfig.find("qk_norm"); it != trainConfig.end() && it->is_object()) {
         const auto& qkn = *it;
-        params.qk_norm_enabled = qkn.value("enabled", false);
+        params.architecture.qk_norm_enabled = qkn.value("enabled", false);
     }
     
     // Hardcoded Hidden States Diagnostic (Issue #42)
-    params.hardcoded_hidden_pattern = 0;  // 0 = DISABLED
-    params.hardcoded_log_every_n_batches = 1;
+    using HCP = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern;
+    params.architecture.hardcoded_hidden_pattern = HCP::DISABLED;
+    params.architecture.hardcoded_log_every_n_batches = 1;
     if (auto it = trainConfig.find("hardcoded_hidden_states"); it != trainConfig.end() && it->is_object()) {
         const auto& hcs = *it;
         if (hcs.value("enabled", false)) {
             std::string pattern_str = hcs.value("pattern", "random_centered");
             if (pattern_str == "random_centered") {
-                params.hardcoded_hidden_pattern = 1;  // RANDOM_CENTERED
+                params.architecture.hardcoded_hidden_pattern = HCP::RANDOM_CENTERED;
             } else if (pattern_str == "orthogonal_w277") {
-                params.hardcoded_hidden_pattern = 2;  // ORTHOGONAL_W277
+                params.architecture.hardcoded_hidden_pattern = HCP::ORTHOGONAL_W277;
             } else if (pattern_str == "aligned_w277") {
-                params.hardcoded_hidden_pattern = 3;  // ALIGNED_W277
+                params.architecture.hardcoded_hidden_pattern = HCP::ALIGNED_W277;
             } else if (pattern_str == "constant_uniform") {
-                params.hardcoded_hidden_pattern = 4;  // CONSTANT_UNIFORM
+                params.architecture.hardcoded_hidden_pattern = HCP::CONSTANT_UNIFORM;
             } else if (pattern_str == "zero_mean_sine") {
-                params.hardcoded_hidden_pattern = 5;  // ZERO_MEAN_SINE
+                params.architecture.hardcoded_hidden_pattern = HCP::ZERO_MEAN_SINE;
             }
-            params.hardcoded_log_every_n_batches = hcs.value("log_every_n_batches", 1);
+            params.architecture.hardcoded_log_every_n_batches = hcs.value("log_every_n_batches", 1);
         }
     }
     
@@ -1025,56 +1027,56 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         }
     }
     
-    // Load scratch_block_reasoning configuration (model config)
+    // Load scratch_block_reasoning configuration (model fields, live on architecture)
     if (auto it = trainConfig.find("scratch_block_reasoning"); it != trainConfig.end() && it->is_object()) {
         const auto& sbr = *it;
-        params.use_scratch_block = sbr.value("enabled", params.use_scratch_block);
-        params.scratch_block_atom_embedding_dim = sbr.value("atom_embedding_dim", params.scratch_block_atom_embedding_dim);
-        params.scratch_block_max_atoms = sbr.value("max_atoms", params.scratch_block_max_atoms);
-        params.scratch_block_atom_scale = sbr.value("atom_scale", params.scratch_block_atom_scale);
+        params.architecture.use_scratch_block = sbr.value("enabled", params.architecture.use_scratch_block);
+        params.architecture.scratch_block_atom_embedding_dim = sbr.value("atom_embedding_dim", params.architecture.scratch_block_atom_embedding_dim);
+        params.architecture.scratch_block_max_atoms = sbr.value("max_atoms", params.architecture.scratch_block_max_atoms);
+        params.architecture.scratch_block_atom_scale = sbr.value("atom_scale", params.architecture.scratch_block_atom_scale);
     }
 
     if (auto it = trainConfig.find("execution_block"); it != trainConfig.end() && it->is_object()) {
         const auto& eb = *it;
-        assignTrainingField(params.execution_block_enabled, eb, "enabled");
-        assignTrainingField(params.scratch_block_execution_first_type_only, eb, "execution_first_type_only");
-        assignTrainingField(params.execution_block_layer, eb, "layer");
-        assignTrainingField(params.execution_block_num_ops, eb, "num_ops");
-        assignTrainingField(params.execution_block_num_slots, eb, "num_slots");
-        assignTrainingField(params.execution_block_num_steps, eb, "num_steps");
+        assignTrainingField(params.architecture.execution_block_enabled, eb, "enabled");
+        assignTrainingField(params.architecture.scratch_block_execution_first_type_only, eb, "execution_first_type_only");
+        assignTrainingField(params.architecture.execution_block_layer, eb, "layer");
+        assignTrainingField(params.architecture.execution_block_num_ops, eb, "num_ops");
+        assignTrainingField(params.architecture.execution_block_num_slots, eb, "num_slots");
+        assignTrainingField(params.architecture.execution_block_num_steps, eb, "num_steps");
         // execution_block_d_key: derived as d_model / num_heads (see deriveComputedHyperparameters)
-        assignTrainingField(params.execution_block_d_type, eb, "d_type");
+        assignTrainingField(params.architecture.execution_block_d_type, eb, "d_type");
         // execution_block_cross_attn_head_dim: derived as d_model / num_heads (see deriveComputedHyperparameters)
-        assignTrainingField(params.execution_block_cross_attn_topk, eb, "cross_attn_topk");
-        assignTrainingField(params.execution_block_usage_decay, eb, "usage_decay");
-        assignTrainingField(params.execution_block_diversity_kappa, eb, "diversity_kappa");
-        assignTrainingField(params.execution_block_temp_start, eb, "temp_start");
-        assignTrainingField(params.execution_block_temp_end, eb, "temp_end");
-        assignTrainingField(params.execution_block_temp_schedule, eb, "temp_schedule");
-        assignTrainingField(params.execution_block_entropy_weight, eb, "entropy_weight");
-        assignTrainingField(params.step_x_multiplier, eb, "step_x_multiplier");
-        assignTrainingField(params.step_y_multiplier, eb, "step_y_multiplier");
-        assignTrainingField(params.step_y_overrides_x, eb, "step_y_overrides_x");
-        assignTrainingField(params.entropy_aux_weight, eb, "entropy_aux_weight");
-        assignTrainingField(params.value_match_epsilon, eb, "value_match_epsilon");
-        assignTrainingField(params.final_slot_consistency_weight, eb, "final_slot_consistency_weight");
-        assignTrainingField(params.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
+        assignTrainingField(params.architecture.execution_block_cross_attn_topk, eb, "cross_attn_topk");
+        assignTrainingField(params.architecture.execution_block_usage_decay, eb, "usage_decay");
+        assignTrainingField(params.architecture.execution_block_diversity_kappa, eb, "diversity_kappa");
+        assignTrainingField(params.architecture.execution_block_temp_start, eb, "temp_start");
+        assignTrainingField(params.architecture.execution_block_temp_end, eb, "temp_end");
+        assignTrainingField(params.architecture.execution_block_temp_schedule, eb, "temp_schedule");
+        assignTrainingField(params.architecture.execution_block_entropy_weight, eb, "entropy_weight");
+        assignTrainingField(params.architecture.step_x_multiplier, eb, "step_x_multiplier");
+        assignTrainingField(params.architecture.step_y_multiplier, eb, "step_y_multiplier");
+        assignTrainingField(params.architecture.step_y_overrides_x, eb, "step_y_overrides_x");
+        assignTrainingField(params.architecture.entropy_aux_weight, eb, "entropy_aux_weight");
+        assignTrainingField(params.architecture.value_match_epsilon, eb, "value_match_epsilon");
+        assignTrainingField(params.architecture.final_slot_consistency_weight, eb, "final_slot_consistency_weight");
+        assignTrainingField(params.architecture.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
         // execution_block_gate_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
-        assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
-        assignTrainingField(params.div_invalid_penalty_weight, eb, "div_invalid_penalty_weight");
-        assignTrainingField(params.div_magnitude_penalty_weight, eb, "div_magnitude_penalty_weight");
-        assignTrainingField(params.arg_reinforce_weight, eb, "arg_reinforce_weight");
-        assignTrainingField(params.arg_reinforce_baseline_decay, eb, "arg_reinforce_baseline_decay");
-        assignTrainingField(params.structured_ce_enabled, eb, "structured_ce_enabled");
-        assignTrainingField(params.structured_ce_weight, eb, "structured_ce_weight");
+        assignTrainingField(params.architecture.execution_block_causal_w1_transition, eb, "causal_w1_transition");
+        assignTrainingField(params.architecture.div_invalid_penalty_weight, eb, "div_invalid_penalty_weight");
+        assignTrainingField(params.architecture.div_magnitude_penalty_weight, eb, "div_magnitude_penalty_weight");
+        assignTrainingField(params.architecture.arg_reinforce_weight, eb, "arg_reinforce_weight");
+        assignTrainingField(params.architecture.arg_reinforce_baseline_decay, eb, "arg_reinforce_baseline_decay");
+        assignTrainingField(params.architecture.structured_ce_enabled, eb, "structured_ce_enabled");
+        assignTrainingField(params.architecture.structured_ce_weight, eb, "structured_ce_weight");
 
         // Decode-time slot selector (nested under execution_block)
         if (auto sit = eb.find("selector"); sit != eb.end() && sit->is_object()) {
             const auto& sel = *sit;
-            assignTrainingField(params.selector_enabled, sel, "enabled");
-            assignTrainingField(params.selector_d_selector, sel, "d_selector");
-            assignTrainingField(params.selector_selection_margin, sel, "selection_margin");
-            assignTrainingField(params.selector_supervision_weight, sel, "supervision_weight");
+            assignTrainingField(params.architecture.selector_enabled, sel, "enabled");
+            assignTrainingField(params.architecture.selector_d_selector, sel, "d_selector");
+            assignTrainingField(params.architecture.selector_selection_margin, sel, "selection_margin");
+            assignTrainingField(params.architecture.selector_supervision_weight, sel, "supervision_weight");
         }
     }
     
@@ -1089,9 +1091,9 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     // Load multi_token_prediction (MTP) configuration
     if (auto it = trainConfig.find("multi_token_prediction"); it != trainConfig.end() && it->is_object()) {
         const auto& mtp = *it;
-        params.mtp_enabled = mtp.value("enabled", params.mtp_enabled);
-        params.mtp_k = mtp.value("k", params.mtp_k);
-        params.mtp_alpha = mtp.value("alpha", params.mtp_alpha);
+        params.architecture.mtp_enabled = mtp.value("enabled", params.architecture.mtp_enabled);
+        params.architecture.mtp_k = mtp.value("k", params.architecture.mtp_k);
+        params.architecture.mtp_alpha = mtp.value("alpha", params.architecture.mtp_alpha);
         // mtp_alpha_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
         params.mtp_log_ratio_monitor = mtp.value("log_ratio_monitor", params.mtp_log_ratio_monitor);
     }
@@ -1146,15 +1148,15 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
         params.cosine_decay_min_lr = params.learning_rate * 0.1f;
     }
 
-    // ── Head dimension propagation ──
+    // ── Head dimension propagation (model fields live on architecture) ──
     if (trainConfig.contains("d_model") && trainConfig.contains("num_heads")) {
         int d_model = trainConfig["d_model"].get<int>();
         int num_heads = trainConfig["num_heads"].get<int>();
         if (d_model > 0 && num_heads > 0) {
             int head_dim = d_model / num_heads;
-            params.execution_block_d_key = head_dim;
-            params.execution_block_cross_attn_head_dim = head_dim;
-            params.scratch_block_atom_embedding_dim = d_model / 8;
+            params.architecture.execution_block_d_key = head_dim;
+            params.architecture.execution_block_cross_attn_head_dim = head_dim;
+            params.architecture.scratch_block_atom_embedding_dim = d_model / 8;
         }
     }
 
@@ -1182,9 +1184,9 @@ inline void deriveWarmupSteps(TrainingHyperparameters& params, int estimated_tot
         throw std::runtime_error("deriveWarmupSteps: warmup_fraction must be in (0, 1), got " + std::to_string(params.warmup_fraction));
 
     params.warmup_steps = std::max(1, static_cast<int>(params.warmup_fraction * estimated_total_steps));
-    params.mtp_alpha_warmup_steps = params.warmup_steps;
+    params.architecture.mtp_alpha_warmup_steps = params.warmup_steps;
     params.telemetry_warmup_steps = params.warmup_steps;
-    params.execution_block_gate_warmup_steps = params.warmup_steps;
+    params.architecture.execution_block_gate_warmup_steps = params.warmup_steps;
 }
 
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
@@ -1347,9 +1349,9 @@ inline void deriveWarmupSteps(TrainingHyperparameters& params, int estimated_tot
         throw std::runtime_error("deriveWarmupSteps: warmup_fraction must be in (0, 1), got " + std::to_string(params.warmup_fraction));
 
     params.warmup_steps = std::max(1, static_cast<int>(params.warmup_fraction * estimated_total_steps));
-    params.mtp_alpha_warmup_steps = params.warmup_steps;
+    params.architecture.mtp_alpha_warmup_steps = params.warmup_steps;
     params.telemetry_warmup_steps = params.warmup_steps;
-    params.execution_block_gate_warmup_steps = params.warmup_steps;
+    params.architecture.execution_block_gate_warmup_steps = params.warmup_steps;
 }
 
 inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& configPath) {

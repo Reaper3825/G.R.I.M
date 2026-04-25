@@ -554,9 +554,16 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const auto& hp = config.hyperparameters;
     
     GRIM::HyperParameters::LanguageModelConfig model_config;
-    // Copy all architecture fields from validated ModelArchitecture (Single Source of Truth)
-    static_cast<GRIM::HyperParameters::ModelArchitecture&>(model_config) = arch;
-    model_config.max_seq_len = config.max_seq_len;  // Override: uses StartupConfig's derived value
+    // Slice-copy the full LanguageModelConfig from hyperparameters.architecture
+    // (Phase B: TrainingHyperparameters::architecture is now LanguageModelConfig,
+    // so this single assignment carries ALL model architecture + feature fields:
+    // d_model/heads/layers, ScratchBlock, ExecutionBlock, LM-head centering,
+    // LayerScale, QK-norm, hardcoded-hidden, MTP, etc.). Per-field copies
+    // deleted — Rule 20 (no dual-source state).
+    model_config = arch;
+
+    // Phase1-specific overrides (not in hyperparameters.architecture)
+    model_config.max_seq_len = config.max_seq_len;  // StartupConfig's derived value
     model_config.vocab_size = vocab_size;
     model_config.vocab_path = config.paths.vocab_path;
     model_config.infer_vocab_from_file = true;
@@ -564,66 +571,22 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.use_pre_norm = true;
     model_config.fuse_qkv = true;
     model_config.use_bias = true;
-    // use_gpu, use_flash_attention, min_seq_len_for_flash are inherited via the
-    // ModelArchitecture slice-copy above (Phase 3b).
+
     logger.log("Flash attention: enabled=" + std::string(model_config.use_flash_attention ? "true" : "false") +
                ", min_seq_len=" + std::to_string(model_config.min_seq_len_for_flash));
-    
-    // ScratchBlock reasoning config (loaded from ai_config.json via config.hyperparameters)
-    model_config.use_scratch_block = hp.use_scratch_block;
-    model_config.scratch_block_atom_embedding_dim = hp.scratch_block_atom_embedding_dim;
-    model_config.scratch_block_max_atoms = hp.scratch_block_max_atoms;
-    model_config.scratch_block_atom_scale = hp.scratch_block_atom_scale;
-    
+
     // Compute derived values (head_dim = d_model / num_heads)
     model_config.computeDerivedValues();
-    
+
     logger.log("ScratchBlock reasoning: enabled=" + std::string(model_config.use_scratch_block ? "true" : "false") +
               ", atom_embedding_dim=" + std::to_string(model_config.scratch_block_atom_embedding_dim) +
               ", max_atoms=" + std::to_string(model_config.scratch_block_max_atoms) +
               ", atom_scale=" + std::to_string(model_config.scratch_block_atom_scale));
 
-    model_config.execution_block_enabled = hp.execution_block_enabled;
-    model_config.scratch_block_execution_first_type_only = hp.scratch_block_execution_first_type_only;
-    model_config.execution_block_layer = hp.execution_block_layer;
-    model_config.execution_block_num_ops = hp.execution_block_num_ops;
-    model_config.execution_block_num_slots = hp.execution_block_num_slots;
-    model_config.execution_block_num_steps = hp.execution_block_num_steps;
-    model_config.execution_block_d_key = hp.execution_block_d_key;
-    model_config.execution_block_d_type = hp.execution_block_d_type;
-    model_config.execution_block_cross_attn_head_dim = hp.execution_block_cross_attn_head_dim;
-    model_config.execution_block_cross_attn_topk = hp.execution_block_cross_attn_topk;
-    model_config.execution_block_usage_decay = hp.execution_block_usage_decay;
-    model_config.execution_block_diversity_kappa = hp.execution_block_diversity_kappa;
-    model_config.execution_block_temp_start = hp.execution_block_temp_start;
-    model_config.execution_block_temp_end = hp.execution_block_temp_end;
-    model_config.execution_block_temp_schedule = hp.execution_block_temp_schedule;
-    model_config.execution_block_entropy_weight = hp.execution_block_entropy_weight;
-    model_config.step_x_multiplier = hp.step_x_multiplier;
-    model_config.step_y_multiplier = hp.step_y_multiplier;
-    model_config.step_y_overrides_x = hp.step_y_overrides_x;
-    model_config.entropy_aux_weight = hp.entropy_aux_weight;
-    model_config.value_match_epsilon = hp.value_match_epsilon;
-    model_config.final_slot_consistency_weight = hp.final_slot_consistency_weight;
-    model_config.execution_block_transition_hard_threshold = hp.execution_block_transition_hard_threshold;
-    model_config.execution_block_gate_warmup_steps = hp.execution_block_gate_warmup_steps;
-    model_config.execution_block_causal_w1_transition = hp.execution_block_causal_w1_transition;
-    model_config.div_invalid_penalty_weight = hp.div_invalid_penalty_weight;
-    model_config.div_magnitude_penalty_weight = hp.div_magnitude_penalty_weight;
-    model_config.arg_reinforce_weight = hp.arg_reinforce_weight;
-    model_config.arg_reinforce_baseline_decay = hp.arg_reinforce_baseline_decay;
-    model_config.structured_ce_enabled = hp.structured_ce_enabled;
-    model_config.structured_ce_weight  = hp.structured_ce_weight;
     if (model_config.structured_ce_enabled && model_config.structured_ce_weight <= 0.0f) {
         throw std::runtime_error("structured_ce_enabled=true but structured_ce_weight=" +
                                  std::to_string(model_config.structured_ce_weight) + " (must be > 0)");
     }
-
-    // Decode-time slot selector config
-    model_config.selector_enabled = hp.selector_enabled;
-    model_config.selector_d_selector = hp.selector_d_selector;
-    model_config.selector_selection_margin = hp.selector_selection_margin;
-    model_config.selector_supervision_weight = hp.selector_supervision_weight;
 
     logger.log("ExecutionBlock: enabled=" + std::string(model_config.execution_block_enabled ? "true" : "false") +
               ", V=" + std::to_string(model_config.execution_block_num_slots) +
@@ -633,46 +596,22 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
               ", execution_first_type_only=" +
               std::string(model_config.scratch_block_execution_first_type_only ? "true" : "false"));
 
-    // LM Head centering configuration (Issue #37 / #40)
-    model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
-    model_config.project_out_pc1 = hp.project_out_pc1;
-    model_config.pc1_power_iters = hp.pc1_power_iters;
-    model_config.center_logits = hp.center_logits;
-    model_config.center_encoder_residuals = hp.center_encoder_residuals;
-    model_config.lm_head_freeze_final_rms_gamma = hp.lm_head_freeze_final_rms_gamma;
-
     logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
               ", project_out_pc1=" + std::string(model_config.project_out_pc1 ? "true" : "false") +
               ", pc1_power_iters=" + std::to_string(model_config.pc1_power_iters) +
               ", center_logits=" + std::string(model_config.center_logits ? "true" : "false") +
               ", center_encoder_residuals=" + std::string(model_config.center_encoder_residuals ? "true" : "false") +
               ", freeze_final_rms_gamma=" + std::string(model_config.lm_head_freeze_final_rms_gamma ? "true" : "false"));
-    
-    // Issue #109: LayerScale configuration (learnable residual scaling from CaiT paper)
-    model_config.use_layer_scale = hp.use_layer_scale;
-    model_config.layer_scale_init = hp.layer_scale_init;
-    
-    // QK-norm: per-head RMSNorm on Q and K (Gemma-2 style)
-    model_config.qk_norm_enabled = hp.qk_norm_enabled;
-    
+
     logger.log("LayerScale: enabled=" + std::string(model_config.use_layer_scale ? "true" : "false") +
               ", init=" + std::to_string(model_config.layer_scale_init) +
               " | QK-norm: " + std::string(model_config.qk_norm_enabled ? "ENABLED" : "disabled"));
-    
-    // Multi-token prediction (MTP) - auxiliary heads
-    model_config.mtp_enabled = hp.mtp_enabled;
-    model_config.mtp_k = hp.mtp_k;
-    model_config.mtp_alpha = hp.mtp_alpha;
-    model_config.mtp_alpha_warmup_steps = hp.mtp_alpha_warmup_steps;
+
     if (model_config.mtp_enabled && (model_config.mtp_k <= 0 || model_config.mtp_alpha <= 0.0f)) {
         throw std::runtime_error("multi_token_prediction: when enabled, k and alpha must be > 0 (k=" +
             std::to_string(model_config.mtp_k) + " alpha=" + std::to_string(model_config.mtp_alpha) + ")");
     }
 
-    // Hardcoded Hidden States Diagnostic (Issue #42)
-    model_config.hardcoded_hidden_pattern = static_cast<GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern>(hp.hardcoded_hidden_pattern);
-    model_config.hardcoded_log_every_n_batches = hp.hardcoded_log_every_n_batches;
-    
     if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED) {
         logger.log("⚠️  HARDCODED HIDDEN STATES DIAGNOSTIC ENABLED: pattern=" + std::to_string(static_cast<int>(model_config.hardcoded_hidden_pattern)) +
                   ", log_every_n=" + std::to_string(model_config.hardcoded_log_every_n_batches));
@@ -712,9 +651,9 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", scratch_max_tokens_per_block=" + std::to_string(hp.scratch_max_tokens_per_block) +
                ", warmup_fraction=" + std::to_string(hp.warmup_fraction) +
                " (warmup_steps derived in Phase2 from fraction * total_steps)");
-    logger.log("Derived hyperparameters (cont): d_key=" + std::to_string(hp.execution_block_d_key) +
-               ", cross_attn_head_dim=" + std::to_string(hp.execution_block_cross_attn_head_dim) +
-               ", atom_embedding_dim=" + std::to_string(hp.scratch_block_atom_embedding_dim) +
+    logger.log("Derived hyperparameters (cont): d_key=" + std::to_string(hp.architecture.execution_block_d_key) +
+               ", cross_attn_head_dim=" + std::to_string(hp.architecture.execution_block_cross_attn_head_dim) +
+               ", atom_embedding_dim=" + std::to_string(hp.architecture.scratch_block_atom_embedding_dim) +
                ", stability_batch=" + std::to_string(hp.stability_override_batch_size) +
                ", stability_max_seq=" + std::to_string(hp.stability_override_max_seq_len) +
                ", stability_clip_per_token=" + std::to_string(hp.stability_override_clip_per_token) +

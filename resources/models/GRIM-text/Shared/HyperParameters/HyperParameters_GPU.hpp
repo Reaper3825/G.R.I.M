@@ -712,11 +712,15 @@ struct TapeLogConfig {
  */
 struct TrainingHyperparameters {
     
-    // Model architecture (d_model, num_heads, num_layers, head_dim, d_ff,
-    // max_seq_len, dropout_rate, attention_dropout, positional_encoding,
-    // tie_embeddings, num_kv_heads). Single source of truth — populated by
-    // loadModelArchitecture() during JSON load.
-    GRIM::HyperParameters::ModelArchitecture architecture;
+    // Full model configuration (architecture + feature toggles). Single source
+    // of truth — populated by loadModelArchitecture() (base ModelArchitecture
+    // fields) plus the various model-feature parsers in ai_config_paths.hpp
+    // (ScratchBlock, ExecutionBlock, LM-head centering, LayerScale, QK-norm,
+    // hardcoded-hidden, MTP). Sliced into model_config in Phase1_Startup.
+    //
+    // Field name kept as `architecture` for backward compatibility with the
+    // many call sites that read hp.architecture.<arch_field>.
+    GRIM::HyperParameters::LanguageModelConfig architecture;
 
     // Training run selectors — which model and curriculum to use
     std::string current_model_training;
@@ -834,33 +838,13 @@ struct TrainingHyperparameters {
     float loss_class_balanced_beta = 0.5f;
 
 
-    // LM Head centering (Issue #37 / #40) - NO DEFAULTS
-    // When enabled, centers hidden states before LM head projection.
-    // Centering backward handled by autograd GradFns (Issue #142).
+    // LM Head centering master toggle (training-only, no LMC counterpart).
+    // The per-knob fields (center_hidden_states / freeze_final_rms_gamma /
+    // center_logits / center_encoder_residuals / project_out_pc1 /
+    // pc1_power_iters) live in `architecture` (LanguageModelConfig).
     bool lm_head_centering_enabled;
-    bool lm_head_center_hidden_states;
-    bool lm_head_freeze_final_rms_gamma;  // Freeze γ_final at 1.0 (no requires_grad, no param group)
-    bool center_logits;  // Center logits per position (row-wise) before softmax
-    bool center_encoder_residuals;  // Center residuals INSIDE encoder layers (24 projections - can attenuate gradients)
-    bool project_out_pc1;            // Issue #149: project out PC1 direction before LM head
-    int  pc1_power_iters;            // Power iteration steps for PC1 (default 5)
-    
-    // Issue #109: LayerScale (learnable residual scaling from CaiT paper)
-    // Reduces correlation buildup between layers by gating sublayer outputs
-    // with learnable scalars (initialized to layer_scale_init, typically 0.1)
-    bool use_layer_scale;
-    float layer_scale_init;
-    
-    // QK-norm: Per-head RMSNorm on Q and K before RoPE (Gemma-2 style)
-    // Bounds attention logit magnitudes, prevents entropy collapse
-    bool qk_norm_enabled;
-    
-    // Hardcoded Hidden States Diagnostic (Issue #42) - NO DEFAULTS
-    // When enabled, replaces encoder output with synthetic patterns to isolate
-    // whether mode collapse is caused by encoder or LM head/gradient system.
-    // Requires including grim_language_model_cuda.hpp for HardcodedPattern enum.
-    int hardcoded_hidden_pattern;  // 0=DISABLED, 1=RANDOM_CENTERED, 2=ORTHOGONAL_W277, etc.
-    int hardcoded_log_every_n_batches;
+
+    // LayerScale, QK-norm, hardcoded-hidden-states fields live in `architecture`.
     
     // Embedding freeze guard - freezes embedding weights after N optimizer steps
     bool embedding_freeze_enabled = false;
@@ -893,72 +877,20 @@ struct TrainingHyperparameters {
     size_t scratch_num_blocks;
     bool scratch_write_combined;
     
-    // ScratchBlock reasoning - NO DEFAULTS
-    bool use_scratch_block;
-    int scratch_block_atom_embedding_dim;
-    int scratch_block_max_atoms;
-    float scratch_block_atom_scale;
+    // ScratchBlock reasoning fields (use_scratch_block / atom_embedding_dim /
+    // max_atoms / atom_scale / execution_first_type_only) live in `architecture`.
 
-    // ExecutionBlock + execution-first loss (training.config.execution_block) — NO DEFAULTS
-    bool execution_block_enabled;
-    /// When true with ExecutionBlock: ScratchBlock uses type embedding only (matches LanguageModelConfig).
-    bool scratch_block_execution_first_type_only;
-    int execution_block_layer;
-    int execution_block_num_ops;
-    int execution_block_num_slots;
-    int execution_block_num_steps;
-    int execution_block_d_key;
-    int execution_block_d_type;
-    int execution_block_cross_attn_head_dim;
-    int execution_block_cross_attn_topk;
-    float execution_block_usage_decay;
-    float execution_block_diversity_kappa;
-    float execution_block_temp_start;
-    float execution_block_temp_end;
-    int execution_block_temp_schedule;
-    float execution_block_entropy_weight;
-    float step_x_multiplier;
-    float step_y_multiplier;
-    bool step_y_overrides_x;
-    float entropy_aux_weight;
-    float value_match_epsilon;
-    float final_slot_consistency_weight;
-
-    // Causal state loss (Fixes 1-9)
-    float execution_block_transition_hard_threshold;
-    int   execution_block_gate_warmup_steps;
-    float execution_block_causal_w1_transition;
-
-    // Fix #6: Division invalid penalty (penalize selecting ÷ when |v2| < eps)
-    float div_invalid_penalty_weight;
-
-    // Fix #8: Division magnitude penalty (penalize large |v_out| after clamped division)
-    float div_magnitude_penalty_weight;
-
-    // Fix #7: Arg REINFORCE weight (0 = disabled)
-    float arg_reinforce_weight;
-    float arg_reinforce_baseline_decay;
-
-    // Autograd structured CE
-    bool  structured_ce_enabled;
-    float structured_ce_weight;
-
-    // Decode-time slot selector
-    bool  selector_enabled;
-    int   selector_d_selector;
-    float selector_selection_margin;
-    float selector_supervision_weight;
+    // ExecutionBlock + execution-first loss fields (execution_block_*, step_x/y_*,
+    // entropy_aux_weight, value_match_epsilon, final_slot_consistency_weight,
+    // div_*, arg_*, structured_ce_*, selector_*) all live in `architecture`.
 
     // CUDA execution mode - NO DEFAULTS
     bool single_stream_mode;
     bool disable_async_frees;
     bool synchronize_after_kernels;
-    
-    // Multi-token prediction (MTP) - auxiliary heads for trajectory learning
-    bool mtp_enabled = false;
-    int mtp_k = 0;
-    float mtp_alpha = 0.2f;
-    int mtp_alpha_warmup_steps = 500;
+
+    // Multi-token prediction (MTP) — log-ratio monitor is training-only.
+    // The other MTP fields (enabled, k, alpha, alpha_warmup_steps) live in `architecture`.
     bool mtp_log_ratio_monitor = true;
 
     // Prediction comparison - NO DEFAULTS
