@@ -1,5 +1,6 @@
+#ifndef USE_CUDA
 #define USE_CUDA
-
+#endif
 //======================================================//
 //  RAdamW_Kernal_GPU.cu
 //  CUDA implementation for Rectified AdamW optimizer step

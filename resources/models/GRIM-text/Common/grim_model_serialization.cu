@@ -1,5 +1,7 @@
 #ifndef USE_CUDA
+#ifndef USE_CUDA
 #define USE_CUDA
+#endif
 #endif
 
 #include <fstream>

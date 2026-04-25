@@ -1,5 +1,6 @@
+#ifndef USE_CUDA
 #define USE_CUDA
-
+#endif
 #include <memory>
 #include <vector>
 

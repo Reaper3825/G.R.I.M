@@ -15,8 +15,9 @@
  * Run: gradient_verification_test.exe
  */
 
+#ifndef USE_CUDA
 #define USE_CUDA
-
+#endif
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
 #include <cublas_v2.h>

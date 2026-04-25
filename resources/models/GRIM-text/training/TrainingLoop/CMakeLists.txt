@@ -498,6 +498,7 @@ target_include_directories(grim_unigrambyte_tokenizer PRIVATE
 )
 target_link_libraries(grim_unigrambyte_tokenizer PUBLIC
     CUDA::cudart
+    nlohmann_json::nlohmann_json
 )
 target_compile_options(grim_unigrambyte_tokenizer PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>

@@ -6,8 +6,9 @@
 //  into a single initialization path. Both are ALWAYS enabled.
 //======================================================//
 
+#ifndef USE_CUDA
 #define USE_CUDA
-
+#endif
 #include "PositionalBiasMethod.hpp"
 
 #include <cuda_runtime.h>

@@ -3,8 +3,9 @@
 //  Comprehensive test suite for Flash Attention
 //======================================================//
 
+#ifndef USE_CUDA
 #define USE_CUDA
-
+#endif
 #include "flash_attention_test.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/TensorConversion/TensorConversion.hpp"

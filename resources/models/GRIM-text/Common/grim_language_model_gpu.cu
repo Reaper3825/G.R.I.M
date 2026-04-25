@@ -4,8 +4,9 @@
 //  Compiled with nvcc and linked with C++ code
 //======================================================//
 
+#ifndef USE_CUDA
 #define USE_CUDA
-
+#endif
 // Standard library includes - BEFORE namespace
 #include <iostream>
 #include <vector>

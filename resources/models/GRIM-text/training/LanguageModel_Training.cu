@@ -1,5 +1,6 @@
+#ifndef USE_CUDA
 #define USE_CUDA
-
+#endif
 //======================================================//
 //  LanguageModel_Training.cu - Parameter Group Management
 //======================================================//
