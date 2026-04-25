@@ -11,7 +11,7 @@
 #include "DiagnosticGates.hpp"
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
-#include "../../TrainingState_GPU.hpp"
+#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 
 #include <algorithm>
