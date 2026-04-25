@@ -572,40 +572,18 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.fuse_qkv = true;
     model_config.use_bias = true;
 
-    logger.log("Flash attention: enabled=" + std::string(model_config.use_flash_attention ? "true" : "false") +
-               ", min_seq_len=" + std::to_string(model_config.min_seq_len_for_flash));
-
-    // Compute derived values (head_dim = d_model / num_heads)
+    // Compute and validate derived hyperparameter values
     model_config.computeDerivedValues();
 
-    logger.log("ScratchBlock reasoning: enabled=" + std::string(model_config.use_scratch_block ? "true" : "false") +
-              ", atom_embedding_dim=" + std::to_string(model_config.scratch_block_atom_embedding_dim) +
-              ", max_atoms=" + std::to_string(model_config.scratch_block_max_atoms) +
-              ", atom_scale=" + std::to_string(model_config.scratch_block_atom_scale));
+    // Hyperparameter narration is the exclusive responsibility of
+    // dumpAllHyperparameters() (ConfigDump.cu), which has already run in
+    // executePhase1(). Local logging here is limited to validations
+    // (throw on misconfiguration) and abnormal-mode warnings.
 
     if (model_config.structured_ce_enabled && model_config.structured_ce_weight <= 0.0f) {
         throw std::runtime_error("structured_ce_enabled=true but structured_ce_weight=" +
                                  std::to_string(model_config.structured_ce_weight) + " (must be > 0)");
     }
-
-    logger.log("ExecutionBlock: enabled=" + std::string(model_config.execution_block_enabled ? "true" : "false") +
-              ", V=" + std::to_string(model_config.execution_block_num_slots) +
-              ", K=" + std::to_string(model_config.execution_block_num_steps) +
-              ", ops=" + std::to_string(model_config.execution_block_num_ops) +
-              ", layer=" + std::to_string(model_config.execution_block_layer) +
-              ", execution_first_type_only=" +
-              std::string(model_config.scratch_block_execution_first_type_only ? "true" : "false"));
-
-    logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
-              ", project_out_pc1=" + std::string(model_config.project_out_pc1 ? "true" : "false") +
-              ", pc1_power_iters=" + std::to_string(model_config.pc1_power_iters) +
-              ", center_logits=" + std::string(model_config.center_logits ? "true" : "false") +
-              ", center_encoder_residuals=" + std::string(model_config.center_encoder_residuals ? "true" : "false") +
-              ", freeze_final_rms_gamma=" + std::string(model_config.lm_head_freeze_final_rms_gamma ? "true" : "false"));
-
-    logger.log("LayerScale: enabled=" + std::string(model_config.use_layer_scale ? "true" : "false") +
-              ", init=" + std::to_string(model_config.layer_scale_init) +
-              " | QK-norm: " + std::string(model_config.qk_norm_enabled ? "ENABLED" : "disabled"));
 
     if (model_config.mtp_enabled && (model_config.mtp_k <= 0 || model_config.mtp_alpha <= 0.0f)) {
         throw std::runtime_error("multi_token_prediction: when enabled, k and alpha must be > 0 (k=" +
@@ -636,28 +614,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("Cache allocation: batch=" + std::to_string(actual_batch_size) + 
                ", seq_len=" + std::to_string(seq_cap) + 
                ", tokens=" + std::to_string(token_budget));
-    
-    logger.log("Model architecture: d_model=" + std::to_string(arch.d_model) + 
-               ", num_layers=" + std::to_string(arch.num_layers) + 
-               ", num_heads=" + std::to_string(arch.num_heads) + 
-               ", d_ff=" + std::to_string(arch.d_ff) +
-               ", max_seq_len=" + std::to_string(model_config.max_seq_len));
-    logger.log("Derived hyperparameters: d_ff=" + std::to_string(arch.d_ff) + " (d_model*4)" +
-               ", attention_dropout=" + std::to_string(arch.attention_dropout) + " (=dropout_rate)" +
-               ", min_seq_valid_tokens=" + std::to_string(hp.min_seq_valid_tokens) +
-               ", min_seq_len_for_flash=" + std::to_string(arch.min_seq_len_for_flash) +
-               ", cosine_decay_min_lr=" + std::to_string(hp.cosine_decay_min_lr) +
-               ", cosine_warm_restarts=" + std::string(hp.cosine_warm_restarts ? "true" : "false") +
-               ", scratch_max_tokens_per_block=" + std::to_string(hp.scratch_max_tokens_per_block) +
-               ", warmup_fraction=" + std::to_string(hp.warmup_fraction) +
-               " (warmup_steps derived in Phase2 from fraction * total_steps)");
-    logger.log("Derived hyperparameters (cont): d_key=" + std::to_string(hp.architecture.execution_block_d_key) +
-               ", cross_attn_head_dim=" + std::to_string(hp.architecture.execution_block_cross_attn_head_dim) +
-               ", atom_embedding_dim=" + std::to_string(hp.architecture.scratch_block_atom_embedding_dim) +
-               ", stability_batch=" + std::to_string(hp.stability_override_batch_size) +
-               ", stability_max_seq=" + std::to_string(hp.stability_override_max_seq_len) +
-               ", stability_clip_per_token=" + std::to_string(hp.stability_override_clip_per_token) +
-               ", stability_lr_min=" + std::to_string(hp.stability_override_lr_min) + ")");
     
     // STEP 0: Initialize CUDA device context FIRST (REQUIRED before any stream/allocation operations)
     // This ensures CUDA driver is loaded and device context exists before StreamController creates streams.
