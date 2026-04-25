@@ -90,58 +90,19 @@ struct PathConfig {
 };
 
 /**
- * @brief CUDA execution mode flags for debugging/profiling
- */
-struct CUDAExecutionConfig {
-    bool single_stream_mode = false;
-    bool disable_async_frees = false;
-    bool synchronize_after_kernels = false;
-};
-
-/**
- * @brief Prediction comparison logging configuration
- */
-struct PredictionComparisonConfig {
-    bool enabled = false;
-    int interval = 100;
-    int top_k = 5;
-    int max_positions = 10;
-    std::string log_path;
-};
-
-/**
- * @brief Stability override configuration
- */
-struct StabilityOverrides {
-    bool enabled = false;
-    int batch_size = 0;
-    int max_seq_len = 0;
-    float clip_per_token = 0.0f;
-    float lr_min = 0.0f;
-};
-
-/**
- * @brief Scratch block configuration
- */
-struct ScratchBlockConfig {
-    bool enabled = false;
-    size_t num_blocks = 0;
-    bool write_combined = false;
-};
-
-/**
- * @brief All startup configuration combined
+ * @brief All startup configuration combined.
+ *
+ * Source-of-truth fields live in `GRIM::Config::TrainingHyperparameters`
+ * (see control/ai_config_paths.hpp) and `GRIM::HyperParameters::ModelArchitecture`
+ * (see Shared/HyperParameters/HyperParameters_GPU.hpp). Do NOT add
+ * parallel sub-structs that re-copy fields out of those types — read
+ * `hyperparameters.X` directly at the consumer site.
  */
 struct StartupConfig {
     PathConfig paths;
     GRIM::Config::TrainingHyperparameters hyperparameters;
-    GRIM::LossContext::LossOptions loss_options;
     GRIM::HyperParameters::ModelArchitecture architecture;
-    CUDAExecutionConfig cuda_exec;
-    PredictionComparisonConfig pred_comparison;
-    StabilityOverrides stability;
-    ScratchBlockConfig scratch;
-    
+
     // Generation config for inference samples during training
     GRIM::GenerationConfig generation;
     

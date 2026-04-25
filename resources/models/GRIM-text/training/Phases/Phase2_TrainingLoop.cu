@@ -623,7 +623,7 @@ BatchResult processBatch(
     }
     result.learning_rate = Internal::getScheduledLearningRate(
         *ctx.lr_schedule, optimizer_step, hp.learning_rate,
-        ctx.config.stability.enabled);
+        ctx.config.hyperparameters.stability_overrides_enabled);
 
     // Optimizer step
     const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
@@ -1116,7 +1116,7 @@ bool executePhase2(TrainingContext& ctx) {
     auto guess_cache_scope = GRIMTS::Training::initGuessCache(
         ctx.model->getTrainingState(),
         ctx.config.hyperparameters.guess_aux_enabled,
-        ctx.config.cuda_exec.single_stream_mode,
+        ctx.config.hyperparameters.single_stream_mode,
         ctx.global_step,
         state.guess_cache);
     

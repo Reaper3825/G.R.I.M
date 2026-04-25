@@ -167,53 +167,11 @@ StartupConfig loadConfiguration(int argc, char** argv) {
         // Disable all layer logging if master disabled
         GRIM::Logging::ConfigureLayerLogging(false, false, false, false, false, false, false, false, false);
     }
-    
-    // Map loss options
-    config.loss_options.label_smoothing_enabled = config.hyperparameters.loss_label_smoothing_enabled;
-    config.loss_options.label_smoothing_epsilon = config.hyperparameters.loss_label_smoothing_epsilon;
-    config.loss_options.focal_enabled = config.hyperparameters.loss_focal_enabled;
-    config.loss_options.focal_gamma = config.hyperparameters.loss_focal_gamma;
-    config.loss_options.focal_alpha = config.hyperparameters.loss_focal_alpha;
-    config.loss_options.preference_enabled = config.hyperparameters.loss_preference_enabled;
-    config.loss_options.preference_beta = config.hyperparameters.loss_preference_beta;
-    config.loss_options.distillation_enabled = config.hyperparameters.loss_distillation_enabled;
-    config.loss_options.distillation_temperature = config.hyperparameters.loss_distillation_temperature;
-    config.loss_options.distillation_lambda = config.hyperparameters.loss_distillation_lambda;
-    config.loss_options.masking_enabled = config.hyperparameters.loss_masking_enabled;
-    config.loss_options.masking_tag = config.hyperparameters.loss_masking_tag;
-    // Issue #44 FIX: Entropy regularization to prevent mode collapse
-    config.loss_options.entropy_reg_enabled = config.hyperparameters.loss_entropy_reg_enabled;
-    config.loss_options.entropy_reg_lambda = config.hyperparameters.loss_entropy_reg_lambda;
 
-    // Class-balanced loss: reweights per-token loss by 1/freq^β
-    config.loss_options.class_balanced_enabled = config.hyperparameters.loss_class_balanced_enabled;
-    config.loss_options.class_balanced_beta = config.hyperparameters.loss_class_balanced_beta;
+    // Loss / stability / scratch / cuda_exec / prediction_comparison fields
+    // are NOT copied into wrapper sub-structs. Consumers read
+    // `config.hyperparameters.*` directly (see ai_config_paths.hpp).
 
-    // Map stability overrides
-    config.stability.enabled = config.hyperparameters.stability_overrides_enabled;
-    config.stability.batch_size = config.hyperparameters.stability_override_batch_size;
-    config.stability.max_seq_len = config.hyperparameters.stability_override_max_seq_len;
-    config.stability.clip_per_token = config.hyperparameters.stability_override_clip_per_token;
-    config.stability.lr_min = config.hyperparameters.stability_override_lr_min;
-    
-    // Map scratch block configuration
-    config.scratch.enabled = config.hyperparameters.scratch_blocks_enabled;
-    // max_tokens_per_block is computed from max_cached_tokens in InitTrainingState — not from config
-    config.scratch.num_blocks = config.hyperparameters.scratch_num_blocks;
-    config.scratch.write_combined = config.hyperparameters.scratch_write_combined;
-    
-    // Map CUDA execution mode
-    config.cuda_exec.single_stream_mode = config.hyperparameters.single_stream_mode;
-    config.cuda_exec.disable_async_frees = config.hyperparameters.disable_async_frees;
-    config.cuda_exec.synchronize_after_kernels = config.hyperparameters.synchronize_after_kernels;
-    
-    // Map prediction comparison
-    config.pred_comparison.enabled = config.hyperparameters.prediction_comparison_enabled;
-    config.pred_comparison.interval = config.hyperparameters.prediction_comparison_interval;
-    config.pred_comparison.top_k = config.hyperparameters.prediction_comparison_top_k;
-    config.pred_comparison.max_positions = config.hyperparameters.prediction_comparison_max_positions;
-    config.pred_comparison.log_path = config.hyperparameters.prediction_comparison_log_path;
-    
     // Load architecture
     if (doc.contains("training") && doc["training"].contains("config")) {
         const auto& cfg = doc["training"]["config"];
@@ -319,10 +277,11 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     // Compute derived values
     // Rule 20: No fallback - max_seq_len must be configured (used for cache allocation)
     // ONLY use stability override if stability mode is actually enabled
-    if (config.stability.enabled && config.stability.max_seq_len > 0) {
-        config.max_seq_len = config.stability.max_seq_len;
-    } else if (config.hyperparameters.max_seq_len > 0) {
-        config.max_seq_len = config.hyperparameters.max_seq_len;
+    const auto& hp = config.hyperparameters;
+    if (hp.stability_overrides_enabled && hp.stability_override_max_seq_len > 0) {
+        config.max_seq_len = hp.stability_override_max_seq_len;
+    } else if (hp.max_seq_len > 0) {
+        config.max_seq_len = hp.max_seq_len;
     } else {
         throw std::runtime_error("FATAL: max_seq_len not configured in ai_config.json (stability or hyperparameters)");
     }
@@ -331,16 +290,16 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     // 12.5% overlap is standard practice — enough context for attention continuity
     // without burning half the token budget on zero-gradient positions.
     config.sliding_window_stride = std::max(1, config.max_seq_len * 7 / 8);
-    
+
     // Apply stability overrides to batch size and LR (only if stability mode enabled)
-    if (config.stability.enabled) {
-        if (config.stability.batch_size <= 0) {
-            throw std::runtime_error("FATAL: stability_overrides enabled but stability_override_batch_size=" + 
-                                     std::to_string(config.stability.batch_size) + " (must be > 0)");
+    if (hp.stability_overrides_enabled) {
+        if (hp.stability_override_batch_size <= 0) {
+            throw std::runtime_error("FATAL: stability_overrides enabled but stability_override_batch_size=" +
+                                     std::to_string(hp.stability_override_batch_size) + " (must be > 0)");
         }
-        config.hyperparameters.batch_size = config.stability.batch_size;
-        if (config.stability.clip_per_token > 0.0f) {
-            config.hyperparameters.grad_clip_norm = config.stability.clip_per_token;
+        config.hyperparameters.batch_size = hp.stability_override_batch_size;
+        if (hp.stability_override_clip_per_token > 0.0f) {
+            config.hyperparameters.grad_clip_norm = hp.stability_override_clip_per_token;
         }
     }
  
@@ -1143,27 +1102,50 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     // Configure scratch blocks
     fprintf(stderr, "[initializeModel] DIAG: About to configure scratch blocks (pool_init=%d)\n", (int)model->isScratchPoolInitialized()); fflush(stderr);
     if (model->isScratchPoolInitialized()) {
-        model->configureScratchPool(config.scratch.enabled);
-        if (config.scratch.enabled) {
+        model->configureScratchPool(config.hyperparameters.scratch_blocks_enabled);
+        if (config.hyperparameters.scratch_blocks_enabled) {
             logger.log("✓ Scratch blocks enabled (" +
-                      std::to_string(config.scratch.num_blocks) + " blocks, sized from max_cached_tokens)");
+                      std::to_string(config.hyperparameters.scratch_num_blocks) + " blocks, sized from max_cached_tokens)");
         }
     }
-    
-    model->setLossOptions(config.loss_options);
-    
+
+    // Build LossOptions inline from hyperparameters (single source of truth lives in
+    // ai_config_paths.hpp::TrainingHyperparameters; LossOptions is the consumer-side
+    // type defined by Shared/Loss/LossContext/LossContext.hpp).
+    GRIM::LossContext::LossOptions loss_opts{};
+    {
+        const auto& hp = config.hyperparameters;
+        loss_opts.label_smoothing_enabled    = hp.loss_label_smoothing_enabled;
+        loss_opts.label_smoothing_epsilon    = hp.loss_label_smoothing_epsilon;
+        loss_opts.focal_enabled              = hp.loss_focal_enabled;
+        loss_opts.focal_gamma                = hp.loss_focal_gamma;
+        loss_opts.focal_alpha                = hp.loss_focal_alpha;
+        loss_opts.preference_enabled         = hp.loss_preference_enabled;
+        loss_opts.preference_beta            = hp.loss_preference_beta;
+        loss_opts.distillation_enabled       = hp.loss_distillation_enabled;
+        loss_opts.distillation_temperature   = hp.loss_distillation_temperature;
+        loss_opts.distillation_lambda        = hp.loss_distillation_lambda;
+        loss_opts.masking_enabled            = hp.loss_masking_enabled;
+        loss_opts.masking_tag                = hp.loss_masking_tag;
+        loss_opts.entropy_reg_enabled        = hp.loss_entropy_reg_enabled;
+        loss_opts.entropy_reg_lambda         = hp.loss_entropy_reg_lambda;
+        loss_opts.class_balanced_enabled     = hp.loss_class_balanced_enabled;
+        loss_opts.class_balanced_beta        = hp.loss_class_balanced_beta;
+    }
+    model->setLossOptions(loss_opts);
+
     // Log loss configuration
     {
         std::ostringstream loss_msg;
         loss_msg << "[LossConfig] startup: "
-                 << "label_smoothing=" << (config.loss_options.label_smoothing_enabled ? "ON" : "off")
-                 << " focal=" << (config.loss_options.focal_enabled ? "ON" : "off")
-                 << " distill=" << (config.loss_options.distillation_enabled ? "ON" : "off")
-                 << " pref=" << (config.loss_options.preference_enabled ? "ON" : "off")
-                 << " entropy_reg=" << (config.loss_options.entropy_reg_enabled ? "ON" : "off")
-                 << " ent_lambda=" << config.loss_options.entropy_reg_lambda
-                 << " class_balanced=" << (config.loss_options.class_balanced_enabled ? "ON" : "off")
-                 << " cb_beta=" << config.loss_options.class_balanced_beta;
+                 << "label_smoothing=" << (loss_opts.label_smoothing_enabled ? "ON" : "off")
+                 << " focal=" << (loss_opts.focal_enabled ? "ON" : "off")
+                 << " distill=" << (loss_opts.distillation_enabled ? "ON" : "off")
+                 << " pref=" << (loss_opts.preference_enabled ? "ON" : "off")
+                 << " entropy_reg=" << (loss_opts.entropy_reg_enabled ? "ON" : "off")
+                 << " ent_lambda=" << loss_opts.entropy_reg_lambda
+                 << " class_balanced=" << (loss_opts.class_balanced_enabled ? "ON" : "off")
+                 << " cb_beta=" << loss_opts.class_balanced_beta;
 
         logger.log(loss_msg.str());
     }
@@ -1513,10 +1495,10 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // 10b. Compute class-balanced loss weights if enabled
     // w_v = 1/freq(v)^β where freq(v) = count(v) / total_targets
     // Weights indexed by vocab token ID, uploaded to GPU once at startup.
-    if (ctx->config.loss_options.class_balanced_enabled) {
+    if (ctx->config.hyperparameters.loss_class_balanced_enabled) {
         auto& ts = ctx->model->getTrainingState();
         const uint32_t vocab_size = ctx->config.actual_vocab_size;
-        const float beta = ctx->config.loss_options.class_balanced_beta;
+        const float beta = ctx->config.hyperparameters.loss_class_balanced_beta;
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
         
         // Count target frequencies across ALL training sequences

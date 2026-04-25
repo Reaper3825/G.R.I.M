@@ -44,9 +44,10 @@ void runLossSpikeDiagnostic(
         max_seq_in_batch = std::max(max_seq_in_batch, static_cast<size_t>(payload.seq_lengths[i]));
         if (i + 1 < payload.batch_size) spike_diag << ", ";
     }
-    const bool stability_seq_override = ctx.config.stability.enabled && ctx.config.stability.max_seq_len > 0;
+    const bool stability_seq_override = ctx.config.hyperparameters.stability_overrides_enabled
+                                        && ctx.config.hyperparameters.stability_override_max_seq_len > 0;
     const int config_seq_len_limit = stability_seq_override
-        ? ctx.config.stability.max_seq_len
+        ? ctx.config.hyperparameters.stability_override_max_seq_len
         : ctx.config.hyperparameters.max_seq_len;
     const int effective_seq_len_limit = config_seq_len_limit > 0
         ? config_seq_len_limit
