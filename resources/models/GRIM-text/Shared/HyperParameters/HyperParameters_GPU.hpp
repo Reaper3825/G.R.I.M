@@ -17,11 +17,16 @@
 #include <string_view>
 #include <utility>
 
-// JSON loaders + their stdlib dependencies are host-only; CUDA TUs that pull
-// this header in (e.g. via Unigram.hpp) must NOT see <map>/<set>/<filesystem>/
-// <fstream>/<nlohmann> because nvcc + libstdc++ choke on the locale machinery
-// those drag in. Gated below alongside the loader bodies.
-#ifndef __CUDACC__
+// JSON loaders + their stdlib dependencies are host-only. By default we omit
+// them so light CUDA TUs (Unigram.cu / UnigramTrainer.cu) that only need a
+// couple of constexpr constants don't drag in <map>/<set>/<filesystem>/
+// <nlohmann> (gcc 8 + nvcc choke on the locale machinery they pull in).
+//
+// Hosts (and CUDA TUs that DO need TrainingHyperparameters) opt in by defining
+// GRIM_HP_HOST_TYPES_REQUIRED *before* including this header — ai_config_paths.hpp
+// does this for everything that goes through it.
+#if !defined(__CUDACC__) || defined(GRIM_HP_HOST_TYPES_REQUIRED)
+#define GRIM_HP_HOST_TYPES_AVAILABLE 1
 #include <fstream>
 #include <filesystem>
 #include <map>
@@ -466,10 +471,7 @@ using LogCallback = std::function<void(const std::string&)>;
 // Only compile if TrainingHyperparameters is fully defined
 // (checked via the marker defined in ai_config_paths.hpp)
 
-#ifndef __CUDACC__
-
-namespace GRIM {
-namespace HyperParameters {
+#ifdef GRIM_HP_HOST_TYPES_AVAILABLE
 
 
 //======================================================//
@@ -1729,6 +1731,9 @@ namespace detail {
 
 // (Validation/derivation/policy helpers below also reference
 // GRIM::Config::TrainingHyperparameters and so must stay inside the gate.)
+namespace GRIM {
+namespace HyperParameters {
+
 //======================================================//
 // (A) Validation primitive.
 // Throws std::runtime_error on any invalid required field.
@@ -1815,15 +1820,15 @@ inline void applyTrainingHyperparameterPolicy(
 } // namespace HyperParameters
 } // namespace GRIM
 
-#endif // __CUDACC__ (covers Config block + (A)/(B)/(C) helpers)
+#endif // GRIM_HP_HOST_TYPES_AVAILABLE (covers Config block + (A)/(B)/(C) helpers)
 
 
 //======================================================//
-// JSON-based Config Loading (non-CUDA only)
-// These functions parse JSON and cannot be compiled by nvcc
+// JSON-based Config Loading (host only)
+// These functions parse JSON; require GRIM_HP_HOST_TYPES_AVAILABLE.
 //======================================================//
 
-#ifndef __CUDACC__
+#ifdef GRIM_HP_HOST_TYPES_AVAILABLE
 
 namespace GRIM {
 namespace HyperParameters {

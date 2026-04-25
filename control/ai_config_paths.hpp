@@ -35,6 +35,8 @@
 #include <vector>
 
 // TrainingHyperparameters and its loaders moved to HyperParameters_GPU.hpp
+// Opt in to the host-types block (TrainingHyperparameters + JSON loaders).
+#define GRIM_HP_HOST_TYPES_REQUIRED 1
 // (Phase A refactor: HyperParameters_GPU.hpp is the single source of truth.)
 #include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 
@@ -440,7 +442,7 @@ inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& c
         snapshot.config_path = *resolved_path;
         snapshot.document = std::move(config);
         snapshot.has_grim_paths = detail::populateGrimTextPathsFromConfig(snapshot.document, snapshot.grim_paths);
-        snapshot.has_training = detail::populateTrainingHyperparametersFromConfig(snapshot.document, snapshot.hyperparameters);
+        snapshot.has_training = populateTrainingHyperparametersFromConfig(snapshot.document, snapshot.hyperparameters);
         snapshot.has_tokenizer = detail::populateTokenizerConfigFromConfig(snapshot.document, snapshot.tokenizer_config, snapshot.hyperparameters);
         snapshot.has_data_collection = detail::populateDataCollectionConfigFromConfig(snapshot.document, snapshot.data_collection_config);
         return snapshot;
