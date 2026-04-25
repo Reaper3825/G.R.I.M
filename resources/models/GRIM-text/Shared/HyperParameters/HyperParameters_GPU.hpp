@@ -16,16 +16,17 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <map>
-#include <set>
-#include <vector>
 
-// JSON loaders are host-only; CUDA TUs that pull this header in (e.g. via
-// Unigram.hpp) must NOT require nlohmann/json.hpp. Gated below alongside the
-// loader bodies (which are themselves wrapped in #ifndef __CUDACC__).
+// JSON loaders + their stdlib dependencies are host-only; CUDA TUs that pull
+// this header in (e.g. via Unigram.hpp) must NOT see <map>/<set>/<filesystem>/
+// <fstream>/<nlohmann> because nvcc + libstdc++ choke on the locale machinery
+// those drag in. Gated below alongside the loader bodies.
 #ifndef __CUDACC__
 #include <fstream>
 #include <filesystem>
+#include <map>
+#include <set>
+#include <vector>
 #include <nlohmann/json.hpp>
 #endif
 
