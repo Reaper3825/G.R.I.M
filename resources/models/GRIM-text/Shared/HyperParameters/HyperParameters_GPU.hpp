@@ -508,20 +508,6 @@ enum class ModelExecutionMode {
     INFERENCE    // Lightweight inference state with only forward caches (~385MB)
 };
 
-struct ActivationQuantizationConfig {
-    bool enabled = false;
-    bool apply_to_embeddings = false;
-    bool apply_to_encoder_outputs = false;
-    bool apply_to_layer_caches = false;
-    bool apply_to_qkv_cache = false;
-    bool apply_to_logits = false;
-    float scale = 1.0f;
-    float clip_min = -127.0f;
-    float clip_max = 127.0f;
-    int zero_point = 0;
-    bool symmetric = false;
-};
-
 struct LanguageModelConfig : public ModelArchitecture {
     // Architecture fields (d_model, num_heads, num_kv_heads, head_dim, d_ff,
     // num_layers, max_seq_len, dropout_rate, attention_dropout, positional_encoding,
@@ -641,7 +627,6 @@ struct LanguageModelConfig : public ModelArchitecture {
     int hardcoded_log_every_n_batches = 1;
 
     GenerationConfig generation;
-    ActivationQuantizationConfig activation_quantization;
 
     // Multi-token prediction (MTP) - auxiliary heads (Gloeckle et al. 2024)
     bool mtp_enabled = false;
@@ -956,20 +941,6 @@ struct TrainingHyperparameters {
     float selector_selection_margin;
     float selector_supervision_weight;
 
-    
-    // Activation quantization - NO DEFAULTS
-    bool activation_quantization_enabled;
-    bool activation_quantization_apply_to_embeddings;
-    bool activation_quantization_apply_to_encoder_outputs;
-    bool activation_quantization_apply_to_layer_caches;
-    bool activation_quantization_apply_to_qkv_cache;
-    bool activation_quantization_apply_to_logits;
-    float activation_quantization_scale;
-    float activation_quantization_clip_min;
-    float activation_quantization_clip_max;
-    int activation_quantization_zero_point;
-    bool activation_quantization_symmetric;
-    
     // CUDA execution mode - NO DEFAULTS
     bool single_stream_mode;
     bool disable_async_frees;

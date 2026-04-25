@@ -306,19 +306,6 @@ void dumpAllHyperparameters(
     DUMP(selector_selection_margin);
     DUMP(selector_supervision_weight);
 
-    SECTION("Activation quantization");
-    DUMP(activation_quantization_enabled);
-    DUMP(activation_quantization_apply_to_embeddings);
-    DUMP(activation_quantization_apply_to_encoder_outputs);
-    DUMP(activation_quantization_apply_to_layer_caches);
-    DUMP(activation_quantization_apply_to_qkv_cache);
-    DUMP(activation_quantization_apply_to_logits);
-    DUMP(activation_quantization_scale);
-    DUMP(activation_quantization_clip_min);
-    DUMP(activation_quantization_clip_max);
-    DUMP(activation_quantization_zero_point);
-    DUMP(activation_quantization_symmetric);
-
     SECTION("CUDA execution mode");
     DUMP(single_stream_mode);
     DUMP(disable_async_frees);

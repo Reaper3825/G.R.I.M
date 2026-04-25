@@ -422,9 +422,6 @@
     },
     "training": {
         "config": {
-            "activation_quantization": {
-                "enabled": false
-            },
             "atom_stats_interval": 200,
             "atom_stats_max_seqs": 32,
             "attention_diagnostics": {

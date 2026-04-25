@@ -204,7 +204,7 @@ struct LMHeadConfig {
 };
 
 // SamplingStrategy / GenerationConfig / GenerationStreamCallback /
-// ActivationQuantizationConfig / LanguageModelConfig / ModelExecutionMode
+// LanguageModelConfig / ModelExecutionMode
 // are defined in Shared/HyperParameters/HyperParameters_GPU.hpp
 // (single source of truth). Refer to them as
 // `GRIM::HyperParameters::LanguageModelConfig`, etc.

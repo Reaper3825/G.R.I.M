@@ -469,18 +469,6 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     params.selector_selection_margin = 1.0f;
     params.selector_supervision_weight = 1.0f;
 
-    // ── Activation quantization ──
-    params.activation_quantization_apply_to_embeddings = false;
-    params.activation_quantization_apply_to_encoder_outputs = false;
-    params.activation_quantization_apply_to_layer_caches = false;
-    params.activation_quantization_apply_to_qkv_cache = false;
-    params.activation_quantization_apply_to_logits = false;
-    params.activation_quantization_scale = 1.0f;
-    params.activation_quantization_clip_min = -127.0f;
-    params.activation_quantization_clip_max = 127.0f;
-    params.activation_quantization_zero_point = 0;
-    params.activation_quantization_symmetric = false;
-
     // ── Multi-token prediction ──
     params.mtp_k = 3;
     params.mtp_alpha = 0.2f;
@@ -525,7 +513,6 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         
         "telemetry_control.enabled",
         "stability_overrides_enabled",
-        "activation_quantization.enabled",
         "multi_token_prediction.enabled",
         "execution_block.enabled",
         "scratch_blocks.enabled",
@@ -1089,22 +1076,6 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             assignTrainingField(params.selector_selection_margin, sel, "selection_margin");
             assignTrainingField(params.selector_supervision_weight, sel, "supervision_weight");
         }
-    }
-    
-    // Load activation quantization configuration
-    if (auto it = trainConfig.find("activation_quantization"); it != trainConfig.end() && it->is_object()) {
-        const auto& quant = *it;
-        params.activation_quantization_enabled = quant.value("enabled", params.activation_quantization_enabled);
-        params.activation_quantization_apply_to_embeddings = quant.value("apply_to_embeddings", params.activation_quantization_apply_to_embeddings);
-        params.activation_quantization_apply_to_encoder_outputs = quant.value("apply_to_encoder_outputs", params.activation_quantization_apply_to_encoder_outputs);
-        params.activation_quantization_apply_to_layer_caches = quant.value("apply_to_layer_caches", params.activation_quantization_apply_to_layer_caches);
-        params.activation_quantization_apply_to_qkv_cache = quant.value("apply_to_qkv_cache", params.activation_quantization_apply_to_qkv_cache);
-        params.activation_quantization_apply_to_logits = quant.value("apply_to_logits", params.activation_quantization_apply_to_logits);
-        params.activation_quantization_scale = quant.value("scale", params.activation_quantization_scale);
-        params.activation_quantization_clip_min = quant.value("clip_min", params.activation_quantization_clip_min);
-        params.activation_quantization_clip_max = quant.value("clip_max", params.activation_quantization_clip_max);
-        params.activation_quantization_zero_point = quant.value("zero_point", params.activation_quantization_zero_point);
-        params.activation_quantization_symmetric = quant.value("symmetric", params.activation_quantization_symmetric);
     }
     
     // Load CUDA execution mode configuration

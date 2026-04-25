@@ -699,19 +699,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", seq_len=" + std::to_string(seq_cap) + 
                ", tokens=" + std::to_string(token_budget));
     
-    // Activation quantization
-    model_config.activation_quantization.enabled = hp.activation_quantization_enabled;
-    model_config.activation_quantization.apply_to_embeddings = hp.activation_quantization_apply_to_embeddings;
-    model_config.activation_quantization.apply_to_encoder_outputs = hp.activation_quantization_apply_to_encoder_outputs;
-    model_config.activation_quantization.apply_to_layer_caches = hp.activation_quantization_apply_to_layer_caches;
-    model_config.activation_quantization.apply_to_qkv_cache = hp.activation_quantization_apply_to_qkv_cache;
-    model_config.activation_quantization.apply_to_logits = hp.activation_quantization_apply_to_logits;
-    model_config.activation_quantization.scale = hp.activation_quantization_scale;
-    model_config.activation_quantization.clip_min = hp.activation_quantization_clip_min;
-    model_config.activation_quantization.clip_max = hp.activation_quantization_clip_max;
-    model_config.activation_quantization.zero_point = hp.activation_quantization_zero_point;
-    model_config.activation_quantization.symmetric = hp.activation_quantization_symmetric;
-    
     logger.log("Model architecture: d_model=" + std::to_string(arch.d_model) + 
                ", num_layers=" + std::to_string(arch.num_layers) + 
                ", num_heads=" + std::to_string(arch.num_heads) + 

@@ -359,21 +359,6 @@ void LanguageModel::initInferenceState() {
         }
     }
     
-    // 7. Check if activation quantization is enabled
-    const auto& quant_cfg = cfg.activation_quantization;
-    if (quant_cfg.enabled) {
-        std::cout << "  ℹ Activation quantization ENABLED:" << std::endl;
-        std::cout << "    - Scale: " << quant_cfg.scale << std::endl;
-        std::cout << "    - Range: [" << quant_cfg.clip_min << ", " << quant_cfg.clip_max << "]" << std::endl;
-        std::cout << "    - Apply to embeddings: " << (quant_cfg.apply_to_embeddings ? "YES" : "NO") << std::endl;
-        std::cout << "    - Apply to encoder outputs: " << (quant_cfg.apply_to_encoder_outputs ? "YES" : "NO") << std::endl;
-        std::cout << "    - Apply to logits: " << (quant_cfg.apply_to_logits ? "YES" : "NO") << std::endl;
-        
-        // Quantization layer will be initialized on first use in executeInferenceForward_
-    } else {
-        std::cout << "  ℹ Activation quantization DISABLED" << std::endl;
-    }
-    
     training_state_.initialized = true;
     std::cout << "[InitInferenceState] ✓ Inference state initialized successfully" << std::endl;
     std::cout << "  Memory allocated for: batch=" << training_state_.max_cached_batch
