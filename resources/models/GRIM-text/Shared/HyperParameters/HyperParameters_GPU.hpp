@@ -894,10 +894,10 @@ struct TrainingHyperparameters {
     bool scratch_write_combined;
     
     // ScratchBlock reasoning - NO DEFAULTS
-    bool scratch_block_reasoning_enabled;
-    int scratch_block_reasoning_atom_embedding_dim;
-    int scratch_block_reasoning_max_atoms;
-    float scratch_block_reasoning_atom_scale;
+    bool use_scratch_block;
+    int scratch_block_atom_embedding_dim;
+    int scratch_block_max_atoms;
+    float scratch_block_atom_scale;
 
     // ExecutionBlock + execution-first loss (training.config.execution_block) — NO DEFAULTS
     bool execution_block_enabled;
@@ -917,12 +917,12 @@ struct TrainingHyperparameters {
     float execution_block_temp_end;
     int execution_block_temp_schedule;
     float execution_block_entropy_weight;
-    float execution_step_x_multiplier;
-    float execution_step_y_multiplier;
-    bool execution_step_y_overrides_x;
-    float execution_entropy_aux_weight;
-    float execution_value_match_epsilon;
-    float execution_final_slot_consistency_weight;
+    float step_x_multiplier;
+    float step_y_multiplier;
+    bool step_y_overrides_x;
+    float entropy_aux_weight;
+    float value_match_epsilon;
+    float final_slot_consistency_weight;
 
     // Causal state loss (Fixes 1-9)
     float execution_block_transition_hard_threshold;
@@ -930,14 +930,14 @@ struct TrainingHyperparameters {
     float execution_block_causal_w1_transition;
 
     // Fix #6: Division invalid penalty (penalize selecting ÷ when |v2| < eps)
-    float execution_div_invalid_penalty_weight;
+    float div_invalid_penalty_weight;
 
     // Fix #8: Division magnitude penalty (penalize large |v_out| after clamped division)
-    float execution_div_magnitude_penalty_weight;
+    float div_magnitude_penalty_weight;
 
     // Fix #7: Arg REINFORCE weight (0 = disabled)
-    float execution_arg_reinforce_weight;
-    float execution_arg_reinforce_baseline_decay;
+    float arg_reinforce_weight;
+    float arg_reinforce_baseline_decay;
 
     // Autograd structured CE
     bool  structured_ce_enabled;

@@ -264,10 +264,10 @@ void dumpAllHyperparameters(
     DUMP(scratch_write_combined);
 
     SECTION("ScratchBlock reasoning");
-    DUMP(scratch_block_reasoning_enabled);
-    DUMP(scratch_block_reasoning_atom_embedding_dim);
-    DUMP(scratch_block_reasoning_max_atoms);
-    DUMP(scratch_block_reasoning_atom_scale);
+    DUMP(use_scratch_block);
+    DUMP(scratch_block_atom_embedding_dim);
+    DUMP(scratch_block_max_atoms);
+    DUMP(scratch_block_atom_scale);
 
     SECTION("ExecutionBlock");
     DUMP(execution_block_enabled);
@@ -286,19 +286,19 @@ void dumpAllHyperparameters(
     DUMP(execution_block_temp_end);
     DUMP(execution_block_temp_schedule);
     DUMP(execution_block_entropy_weight);
-    DUMP(execution_step_x_multiplier);
-    DUMP(execution_step_y_multiplier);
-    DUMP(execution_step_y_overrides_x);
-    DUMP(execution_entropy_aux_weight);
-    DUMP(execution_value_match_epsilon);
-    DUMP(execution_final_slot_consistency_weight);
+    DUMP(step_x_multiplier);
+    DUMP(step_y_multiplier);
+    DUMP(step_y_overrides_x);
+    DUMP(entropy_aux_weight);
+    DUMP(value_match_epsilon);
+    DUMP(final_slot_consistency_weight);
     DUMP(execution_block_transition_hard_threshold);
     DUMP(execution_block_gate_warmup_steps);
     DUMP(execution_block_causal_w1_transition);
-    DUMP(execution_div_invalid_penalty_weight);
-    DUMP(execution_div_magnitude_penalty_weight);
-    DUMP(execution_arg_reinforce_weight);
-    DUMP(execution_arg_reinforce_baseline_decay);
+    DUMP(div_invalid_penalty_weight);
+    DUMP(div_magnitude_penalty_weight);
+    DUMP(arg_reinforce_weight);
+    DUMP(arg_reinforce_baseline_decay);
     DUMP(structured_ce_enabled);
     DUMP(structured_ce_weight);
     DUMP(selector_enabled);

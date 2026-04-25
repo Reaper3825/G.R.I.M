@@ -181,12 +181,12 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
             config.execution_block_transition_hard_threshold = hyperparams.execution_block_transition_hard_threshold;
             config.execution_block_gate_warmup_steps = hyperparams.execution_block_gate_warmup_steps;
             config.execution_block_causal_w1_transition = hyperparams.execution_block_causal_w1_transition;
-            config.step_x_multiplier = hyperparams.execution_step_x_multiplier;
-            config.step_y_multiplier = hyperparams.execution_step_y_multiplier;
-            config.step_y_overrides_x = hyperparams.execution_step_y_overrides_x;
-            config.entropy_aux_weight = hyperparams.execution_entropy_aux_weight;
-            config.value_match_epsilon = hyperparams.execution_value_match_epsilon;
-            config.final_slot_consistency_weight = hyperparams.execution_final_slot_consistency_weight;
+            config.step_x_multiplier = hyperparams.step_x_multiplier;
+            config.step_y_multiplier = hyperparams.step_y_multiplier;
+            config.step_y_overrides_x = hyperparams.step_y_overrides_x;
+            config.entropy_aux_weight = hyperparams.entropy_aux_weight;
+            config.value_match_epsilon = hyperparams.value_match_epsilon;
+            config.final_slot_consistency_weight = hyperparams.final_slot_consistency_weight;
         }
 
         config.computeDerivedValues();  // Compute head_dim = d_model / num_heads

@@ -214,10 +214,10 @@ public:
         addSizeT (params.scratch_max_tokens_per_block,         "scratch_max_tokens_per_block",         "Max Tokens/Block",       "Scratch Block");
         addSizeT (params.scratch_num_blocks,                   "scratch_num_blocks",                   "Num Blocks",             "Scratch Block");
         addBool  (params.scratch_write_combined,               "scratch_write_combined",               "Write Combined",         "Scratch Block");
-        addBool  (params.scratch_block_reasoning_enabled,      "scratch_block_reasoning_enabled",      "Reasoning Enabled",      "Scratch Block");
-        addInt   (params.scratch_block_reasoning_atom_embedding_dim, "scratch_block_reasoning_atom_embedding_dim", "Atom Embed Dim", "Scratch Block");
-        addInt   (params.scratch_block_reasoning_max_atoms,    "scratch_block_reasoning_max_atoms",    "Max Atoms",              "Scratch Block");
-        addFloat (params.scratch_block_reasoning_atom_scale,   "scratch_block_reasoning_atom_scale",   "Atom Scale",             "Scratch Block");
+        addBool  (params.use_scratch_block,                    "use_scratch_block",                    "Reasoning Enabled",      "Scratch Block");
+        addInt   (params.scratch_block_atom_embedding_dim,     "scratch_block_atom_embedding_dim",     "Atom Embed Dim",         "Scratch Block");
+        addInt   (params.scratch_block_max_atoms,              "scratch_block_max_atoms",              "Max Atoms",              "Scratch Block");
+        addFloat (params.scratch_block_atom_scale,             "scratch_block_atom_scale",             "Atom Scale",             "Scratch Block");
 
         // ── Execution Block ──
         addBool  (params.execution_block_enabled,                    "execution_block_enabled",                    "Enabled",                  "Execution Block");
@@ -236,18 +236,18 @@ public:
         addFloat (params.execution_block_temp_end,                   "execution_block_temp_end",                   "Temp End",                 "Execution Block");
         addInt   (params.execution_block_temp_schedule,              "execution_block_temp_schedule",              "Temp Schedule",            "Execution Block");
         addFloat (params.execution_block_entropy_weight,             "execution_block_entropy_weight",             "Entropy Weight",           "Execution Block");
-        addFloat (params.execution_step_x_multiplier,                "execution_step_x_multiplier",                "Step X Multiplier",        "Execution Block");
-        addFloat (params.execution_step_y_multiplier,                "execution_step_y_multiplier",                "Step Y Multiplier",        "Execution Block");
-        addBool  (params.execution_step_y_overrides_x,               "execution_step_y_overrides_x",               "Y Overrides X",            "Execution Block");
-        addFloat (params.execution_entropy_aux_weight,               "execution_entropy_aux_weight",               "Entropy Aux Weight",       "Execution Block");
-        addFloat (params.execution_value_match_epsilon,              "execution_value_match_epsilon",              "Value Match Epsilon",      "Execution Block");
-        addFloat (params.execution_final_slot_consistency_weight,    "execution_final_slot_consistency_weight",    "Slot Consistency Weight",  "Execution Block");
+        addFloat (params.step_x_multiplier,                          "step_x_multiplier",                          "Step X Multiplier",        "Execution Block");
+        addFloat (params.step_y_multiplier,                          "step_y_multiplier",                          "Step Y Multiplier",        "Execution Block");
+        addBool  (params.step_y_overrides_x,                         "step_y_overrides_x",                         "Y Overrides X",            "Execution Block");
+        addFloat (params.entropy_aux_weight,                         "entropy_aux_weight",                         "Entropy Aux Weight",       "Execution Block");
+        addFloat (params.value_match_epsilon,                        "value_match_epsilon",                        "Value Match Epsilon",      "Execution Block");
+        addFloat (params.final_slot_consistency_weight,              "final_slot_consistency_weight",              "Slot Consistency Weight",  "Execution Block");
         addFloat (params.execution_block_transition_hard_threshold,  "execution_block_transition_hard_threshold",  "Transition Hard Threshold","Execution Block");
         addInt   (params.execution_block_gate_warmup_steps,          "execution_block_gate_warmup_steps",          "Gate Warmup Steps",        "Execution Block");
         addFloat (params.execution_block_causal_w1_transition,       "execution_block_causal_w1_transition",       "Causal W1 Transition",    "Execution Block");
-        addFloat (params.execution_div_magnitude_penalty_weight,     "execution_div_magnitude_penalty_weight",     "Div Magnitude Penalty",   "Execution Block");
-        addFloat (params.execution_arg_reinforce_weight,             "execution_arg_reinforce_weight",             "Arg REINFORCE Weight",    "Execution Block");
-        addFloat (params.execution_arg_reinforce_baseline_decay,      "execution_arg_reinforce_baseline_decay",      "REINFORCE Baseline Decay","Execution Block");
+        addFloat (params.div_magnitude_penalty_weight,               "div_magnitude_penalty_weight",               "Div Magnitude Penalty",   "Execution Block");
+        addFloat (params.arg_reinforce_weight,                       "arg_reinforce_weight",                       "Arg REINFORCE Weight",    "Execution Block");
+        addFloat (params.arg_reinforce_baseline_decay,               "arg_reinforce_baseline_decay",               "REINFORCE Baseline Decay","Execution Block");
         addBool  (params.structured_ce_enabled,                       "structured_ce_enabled",                       "Structured CE Enabled",   "Execution Block");
         addFloat (params.structured_ce_weight,                        "structured_ce_weight",                        "Structured CE Weight",    "Execution Block");
         addBool  (params.selector_enabled,                           "selector_enabled",                           "Selector Enabled",         "Execution Block");

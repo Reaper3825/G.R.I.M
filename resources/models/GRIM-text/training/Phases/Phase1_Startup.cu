@@ -570,10 +570,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                ", min_seq_len=" + std::to_string(model_config.min_seq_len_for_flash));
     
     // ScratchBlock reasoning config (loaded from ai_config.json via config.hyperparameters)
-    model_config.use_scratch_block = hp.scratch_block_reasoning_enabled;
-    model_config.scratch_block_atom_embedding_dim = hp.scratch_block_reasoning_atom_embedding_dim;
-    model_config.scratch_block_max_atoms = hp.scratch_block_reasoning_max_atoms;
-    model_config.scratch_block_atom_scale = hp.scratch_block_reasoning_atom_scale;
+    model_config.use_scratch_block = hp.use_scratch_block;
+    model_config.scratch_block_atom_embedding_dim = hp.scratch_block_atom_embedding_dim;
+    model_config.scratch_block_max_atoms = hp.scratch_block_max_atoms;
+    model_config.scratch_block_atom_scale = hp.scratch_block_atom_scale;
     
     // Compute derived values (head_dim = d_model / num_heads)
     model_config.computeDerivedValues();
@@ -599,19 +599,19 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.execution_block_temp_end = hp.execution_block_temp_end;
     model_config.execution_block_temp_schedule = hp.execution_block_temp_schedule;
     model_config.execution_block_entropy_weight = hp.execution_block_entropy_weight;
-    model_config.step_x_multiplier = hp.execution_step_x_multiplier;
-    model_config.step_y_multiplier = hp.execution_step_y_multiplier;
-    model_config.step_y_overrides_x = hp.execution_step_y_overrides_x;
-    model_config.entropy_aux_weight = hp.execution_entropy_aux_weight;
-    model_config.value_match_epsilon = hp.execution_value_match_epsilon;
-    model_config.final_slot_consistency_weight = hp.execution_final_slot_consistency_weight;
+    model_config.step_x_multiplier = hp.step_x_multiplier;
+    model_config.step_y_multiplier = hp.step_y_multiplier;
+    model_config.step_y_overrides_x = hp.step_y_overrides_x;
+    model_config.entropy_aux_weight = hp.entropy_aux_weight;
+    model_config.value_match_epsilon = hp.value_match_epsilon;
+    model_config.final_slot_consistency_weight = hp.final_slot_consistency_weight;
     model_config.execution_block_transition_hard_threshold = hp.execution_block_transition_hard_threshold;
     model_config.execution_block_gate_warmup_steps = hp.execution_block_gate_warmup_steps;
     model_config.execution_block_causal_w1_transition = hp.execution_block_causal_w1_transition;
-    model_config.div_invalid_penalty_weight = hp.execution_div_invalid_penalty_weight;
-    model_config.div_magnitude_penalty_weight = hp.execution_div_magnitude_penalty_weight;
-    model_config.arg_reinforce_weight = hp.execution_arg_reinforce_weight;
-    model_config.arg_reinforce_baseline_decay = hp.execution_arg_reinforce_baseline_decay;
+    model_config.div_invalid_penalty_weight = hp.div_invalid_penalty_weight;
+    model_config.div_magnitude_penalty_weight = hp.div_magnitude_penalty_weight;
+    model_config.arg_reinforce_weight = hp.arg_reinforce_weight;
+    model_config.arg_reinforce_baseline_decay = hp.arg_reinforce_baseline_decay;
     model_config.structured_ce_enabled = hp.structured_ce_enabled;
     model_config.structured_ce_weight  = hp.structured_ce_weight;
     if (model_config.structured_ce_enabled && model_config.structured_ce_weight <= 0.0f) {
@@ -714,7 +714,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                " (warmup_steps derived in Phase2 from fraction * total_steps)");
     logger.log("Derived hyperparameters (cont): d_key=" + std::to_string(hp.execution_block_d_key) +
                ", cross_attn_head_dim=" + std::to_string(hp.execution_block_cross_attn_head_dim) +
-               ", atom_embedding_dim=" + std::to_string(hp.scratch_block_reasoning_atom_embedding_dim) +
+               ", atom_embedding_dim=" + std::to_string(hp.scratch_block_atom_embedding_dim) +
                ", stability_batch=" + std::to_string(hp.stability_override_batch_size) +
                ", stability_max_seq=" + std::to_string(hp.stability_override_max_seq_len) +
                ", stability_clip_per_token=" + std::to_string(hp.stability_override_clip_per_token) +

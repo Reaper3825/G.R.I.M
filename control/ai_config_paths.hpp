@@ -396,8 +396,8 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     params.scratch_write_combined = true;
 
     // ── Scratch block reasoning ──
-    params.scratch_block_reasoning_max_atoms = 8192;
-    params.scratch_block_reasoning_atom_scale = 1.0f;
+    params.scratch_block_max_atoms = 8192;
+    params.scratch_block_atom_scale = 1.0f;
 
     // ── Telemetry control ──
     params.telemetry_spike_mild_threshold = 3.0f;
@@ -452,18 +452,18 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     params.execution_block_temp_end = 0.5f;
     params.execution_block_temp_schedule = 0;
     params.execution_block_entropy_weight = 0.01f;
-    params.execution_step_x_multiplier = 2.0f;
-    params.execution_step_y_multiplier = 3.0f;
-    params.execution_step_y_overrides_x = false;
-    params.execution_entropy_aux_weight = 0.01f;
-    params.execution_value_match_epsilon = 0.0001f;
-    params.execution_final_slot_consistency_weight = 0.1f;
+    params.step_x_multiplier = 2.0f;
+    params.step_y_multiplier = 3.0f;
+    params.step_y_overrides_x = false;
+    params.entropy_aux_weight = 0.01f;
+    params.value_match_epsilon = 0.0001f;
+    params.final_slot_consistency_weight = 0.1f;
     params.execution_block_transition_hard_threshold = 0.0f;
     params.execution_block_causal_w1_transition = 1.5f;
-    params.execution_div_invalid_penalty_weight = 0.5f;
-    params.execution_div_magnitude_penalty_weight = 0.1f;
-    params.execution_arg_reinforce_weight = 0.0f;
-    params.execution_arg_reinforce_baseline_decay = 0.99f;
+    params.div_invalid_penalty_weight = 0.5f;
+    params.div_magnitude_penalty_weight = 0.1f;
+    params.arg_reinforce_weight = 0.0f;
+    params.arg_reinforce_baseline_decay = 0.99f;
     params.structured_ce_weight = 0.1f;
     params.selector_d_selector = 64;
     params.selector_selection_margin = 1.0f;
@@ -1028,10 +1028,10 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     // Load scratch_block_reasoning configuration (model config)
     if (auto it = trainConfig.find("scratch_block_reasoning"); it != trainConfig.end() && it->is_object()) {
         const auto& sbr = *it;
-        params.scratch_block_reasoning_enabled = sbr.value("enabled", params.scratch_block_reasoning_enabled);
-        params.scratch_block_reasoning_atom_embedding_dim = sbr.value("atom_embedding_dim", params.scratch_block_reasoning_atom_embedding_dim);
-        params.scratch_block_reasoning_max_atoms = sbr.value("max_atoms", params.scratch_block_reasoning_max_atoms);
-        params.scratch_block_reasoning_atom_scale = sbr.value("atom_scale", params.scratch_block_reasoning_atom_scale);
+        params.use_scratch_block = sbr.value("enabled", params.use_scratch_block);
+        params.scratch_block_atom_embedding_dim = sbr.value("atom_embedding_dim", params.scratch_block_atom_embedding_dim);
+        params.scratch_block_max_atoms = sbr.value("max_atoms", params.scratch_block_max_atoms);
+        params.scratch_block_atom_scale = sbr.value("atom_scale", params.scratch_block_atom_scale);
     }
 
     if (auto it = trainConfig.find("execution_block"); it != trainConfig.end() && it->is_object()) {
@@ -1052,19 +1052,19 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         assignTrainingField(params.execution_block_temp_end, eb, "temp_end");
         assignTrainingField(params.execution_block_temp_schedule, eb, "temp_schedule");
         assignTrainingField(params.execution_block_entropy_weight, eb, "entropy_weight");
-        assignTrainingField(params.execution_step_x_multiplier, eb, "step_x_multiplier");
-        assignTrainingField(params.execution_step_y_multiplier, eb, "step_y_multiplier");
-        assignTrainingField(params.execution_step_y_overrides_x, eb, "step_y_overrides_x");
-        assignTrainingField(params.execution_entropy_aux_weight, eb, "entropy_aux_weight");
-        assignTrainingField(params.execution_value_match_epsilon, eb, "value_match_epsilon");
-        assignTrainingField(params.execution_final_slot_consistency_weight, eb, "final_slot_consistency_weight");
+        assignTrainingField(params.step_x_multiplier, eb, "step_x_multiplier");
+        assignTrainingField(params.step_y_multiplier, eb, "step_y_multiplier");
+        assignTrainingField(params.step_y_overrides_x, eb, "step_y_overrides_x");
+        assignTrainingField(params.entropy_aux_weight, eb, "entropy_aux_weight");
+        assignTrainingField(params.value_match_epsilon, eb, "value_match_epsilon");
+        assignTrainingField(params.final_slot_consistency_weight, eb, "final_slot_consistency_weight");
         assignTrainingField(params.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
         // execution_block_gate_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
         assignTrainingField(params.execution_block_causal_w1_transition, eb, "causal_w1_transition");
-        assignTrainingField(params.execution_div_invalid_penalty_weight, eb, "div_invalid_penalty_weight");
-        assignTrainingField(params.execution_div_magnitude_penalty_weight, eb, "div_magnitude_penalty_weight");
-        assignTrainingField(params.execution_arg_reinforce_weight, eb, "arg_reinforce_weight");
-        assignTrainingField(params.execution_arg_reinforce_baseline_decay, eb, "arg_reinforce_baseline_decay");
+        assignTrainingField(params.div_invalid_penalty_weight, eb, "div_invalid_penalty_weight");
+        assignTrainingField(params.div_magnitude_penalty_weight, eb, "div_magnitude_penalty_weight");
+        assignTrainingField(params.arg_reinforce_weight, eb, "arg_reinforce_weight");
+        assignTrainingField(params.arg_reinforce_baseline_decay, eb, "arg_reinforce_baseline_decay");
         assignTrainingField(params.structured_ce_enabled, eb, "structured_ce_enabled");
         assignTrainingField(params.structured_ce_weight, eb, "structured_ce_weight");
 
@@ -1154,7 +1154,7 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
             int head_dim = d_model / num_heads;
             params.execution_block_d_key = head_dim;
             params.execution_block_cross_attn_head_dim = head_dim;
-            params.scratch_block_reasoning_atom_embedding_dim = d_model / 8;
+            params.scratch_block_atom_embedding_dim = d_model / 8;
         }
     }
 
