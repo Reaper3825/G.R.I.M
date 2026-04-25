@@ -707,6 +707,12 @@ struct TapeLogConfig {
  */
 struct TrainingHyperparameters {
     
+    // Model architecture (d_model, num_heads, num_layers, head_dim, d_ff,
+    // max_seq_len, dropout_rate, attention_dropout, positional_encoding,
+    // tie_embeddings, num_kv_heads). Single source of truth — populated by
+    // loadModelArchitecture() during JSON load.
+    GRIM::HyperParameters::ModelArchitecture architecture;
+
     // Training run selectors — which model and curriculum to use
     std::string current_model_training;
     std::string current_curriculum;
@@ -1358,8 +1364,11 @@ struct StartupConfig {
     PathConfig paths;
     GRIM::Config::TrainingHyperparameters hyperparameters;
     GRIM::Config::TokenizerConfig tokenizer_config;
-    ModelArchitecture architecture;
     GenerationConfig generation;
+
+    // Convenience accessor: architecture lives inside hyperparameters now.
+    ModelArchitecture& architecture() { return hyperparameters.architecture; }
+    const ModelArchitecture& architecture() const { return hyperparameters.architecture; }
 
     // Derived values (populated by loadStartupConfig)
     int max_seq_len = 0;
@@ -1432,10 +1441,11 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
     config.tokenizer_config = snapshot->tokenizer_config;
 
     // 5. + 6. Architecture and generation — single source of truth for JSON keys
-    loadModelArchitecture(*snapshot, config.architecture);
+    //         architecture now lives inside hyperparameters (Phase 3a).
+    loadModelArchitecture(*snapshot, config.hyperparameters.architecture);
     loadGenerationConfig(*snapshot, config.generation);
-    config.architecture.max_seq_len = config.hyperparameters.max_seq_len;
-    config.architecture.validate();
+    config.hyperparameters.architecture.max_seq_len = config.hyperparameters.max_seq_len;
+    config.hyperparameters.architecture.validate();
 
     // 7. Derive max_seq_len (no fallback — must be configured)
     {

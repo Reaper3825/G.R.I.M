@@ -750,7 +750,7 @@ BatchResult processBatch(
             ? ctx.config.hyperparameters.embedding_freeze_after_step : -1;
 
         if (emb_freeze_step > 0 && ctx.optimizer.optimizer_state.step == emb_freeze_step) {
-            if (ctx.config.architecture.tie_embeddings) {
+            if (ctx.config.hyperparameters.architecture.tie_embeddings) {
                 ctx.logging.logger->log("[EmbeddingFreeze] WARNING: tie_embeddings=true — "
                     "embedding and LM head share weights. Set tie_embeddings=false to freeze "
                     "embedding independently. Freeze has no effect on tied weights.");

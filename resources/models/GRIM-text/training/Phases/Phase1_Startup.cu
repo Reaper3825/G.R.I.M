@@ -550,7 +550,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     
     logger.log("Initializing model with xavier_seed=" + std::to_string(xavier_seed) + "...");
     
-    const auto& arch = config.architecture;
+    const auto& arch = config.hyperparameters.architecture;
     const auto& hp = config.hyperparameters;
     
     GRIM::HyperParameters::LanguageModelConfig model_config;
