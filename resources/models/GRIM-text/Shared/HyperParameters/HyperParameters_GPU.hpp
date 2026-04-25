@@ -449,11 +449,12 @@ using LogCallback = std::function<void(const std::string&)>;
 // For regular C++: We include it automatically below
 //======================================================//
 
-#ifndef __CUDACC__
 // LogRecorderConfig / TapeLogConfig / TrainingHyperparameters live here (the
-// middle layer). They depend on <map>/<vector>/<string> which are host-only
-// from nvcc's POV (gcc 8 + nvcc choke on the locale machinery <map> drags in),
-// so they are gated alongside the JSON loader include.
+// middle layer). They use <map>/<vector>/<string> in host context only;
+// modern nvcc (CUDA 12+) handles these in host code paths fine, so they are
+// no longer gated behind #ifndef __CUDACC__. The structs MUST be visible to
+// CUDA TUs (e.g. Phase1_Startup.hpp / TelemetryUpdate.cu) — "hyperparameters
+// live in HyperParameters_GPU.hpp" is the load-bearing invariant.
 #include <map>
 #include <string>
 #include <vector>
@@ -796,11 +797,11 @@ struct TrainingHyperparameters {
 // only be entered through this header).
 #define GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS 1
 
-// Regular C++ compilation - include the config header (loaders + path utils).
-// ai_config_paths.hpp does NOT include this file back; it asserts via #error
-// that this sentinel is set, so it can only be entered through this header.
+// Include the config header (JSON loaders + path utils + TokenizerConfig +
+// GrimTextPaths + AiConfigSnapshot). ai_config_paths.hpp does NOT include
+// this file back; it asserts via #error that the sentinel above is set, so
+// it can only be entered through this header.
 #include "../../../../../control/ai_config_paths.hpp"
-#endif
 
 // Only compile if TrainingHyperparameters is fully defined
 // (checked via the marker defined in ai_config_paths.hpp)
