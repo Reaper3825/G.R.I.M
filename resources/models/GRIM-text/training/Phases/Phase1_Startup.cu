@@ -23,6 +23,7 @@
 #include "../OptimizerCheckpoint.hpp"
 #include "ConfigDump.hpp"
 #include "Startup/SlidingWindow.hpp"
+#include "Startup/ClassBalancedWeights.hpp"
 // HyperParameters_GPU.hpp is the single entry point; it defines
 // GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS and transitively includes
 // control/ai_config_paths.hpp in the correct order.
@@ -788,114 +789,16 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         }
     }
     
-    // 10b. Compute class-balanced loss weights if enabled
-    // w_v = 1/freq(v)^β where freq(v) = count(v) / total_targets
-    // Weights indexed by vocab token ID, uploaded to GPU once at startup.
+    // 10b. Compute class-balanced loss weights if enabled.
+    // Implementation lives in Phases/Startup/ClassBalancedWeights.cu —
+    // see that file for the frequency math and logging contract.
     if (ctx->config.hyperparameters.loss_class_balanced_enabled) {
-        auto& ts = ctx->model->getTrainingState();
-        const uint32_t vocab_size = ctx->config.actual_vocab_size;
-        const float beta = ctx->config.hyperparameters.loss_class_balanced_beta;
-        cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-        
-        // Count target frequencies across ALL training sequences
-        std::vector<int64_t> target_counts(vocab_size, 0);
-        int64_t total_targets = 0;
-        for (const auto& seq : ctx->data.train_seqs) {
-            for (int tgt : seq.targets) {
-                if (tgt >= 0 && tgt < static_cast<int>(vocab_size)) {
-                    target_counts[tgt]++;
-                    total_targets++;
-                }
-            }
-        }
-        
-        if (total_targets <= 0) {
-            throw std::runtime_error("[class_balanced] total_targets=0 — no valid targets in training data");
-        }
-        
-        // Compute weights: w_v = 1/freq(v)^β, clamped for unseen tokens
-        // Unseen tokens get weight = max_weight (same as freq=1 token)
-        std::vector<float> h_class_weights(vocab_size);
-        float max_weight = 0.0f;
-        int seen_count = 0;
-        int unseen_count = 0;
-        
-        for (uint32_t v = 0; v < vocab_size; v++) {
-            if (target_counts[v] > 0) {
-                const float freq = static_cast<float>(target_counts[v]) / static_cast<float>(total_targets);
-                h_class_weights[v] = 1.0f / std::pow(freq, beta);
-                max_weight = std::max(max_weight, h_class_weights[v]);
-                seen_count++;
-            } else {
-                h_class_weights[v] = 0.0f;  // placeholder, filled after loop
-                unseen_count++;
-            }
-        }
-        
-        // Unseen tokens: clamp to max_weight (the rarest seen token's weight)
-        // This prevents infinite weights while still giving rare tokens maximum upweight
-        if (max_weight <= 0.0f) max_weight = 1.0f;  // Safety: shouldn't happen
-        for (uint32_t v = 0; v < vocab_size; v++) {
-            if (target_counts[v] == 0) {
-                h_class_weights[v] = max_weight;
-            }
-        }
-        
-        // Upload to GPU
-        const size_t weights_bytes = vocab_size * sizeof(float);
-        cudaMallocOrThrow(reinterpret_cast<void**>(&ts.d_class_weights), weights_bytes, "phase1_class_weights");
-        cudaMemcpyAsync(ts.d_class_weights, h_class_weights.data(), weights_bytes,
-                         cudaMemcpyHostToDevice, stream);
-        ts.class_weights_vocab_size = static_cast<int>(vocab_size);
-        cudaStreamSynchronize(stream);
-        
-        // Log top-10 highest and lowest weight tokens for verification
-        {
-            std::vector<std::pair<float, uint32_t>> weight_pairs;
-            for (uint32_t v = 0; v < vocab_size; v++) {
-                if (target_counts[v] > 0) {
-                    weight_pairs.push_back({h_class_weights[v], v});
-                }
-            }
-            std::sort(weight_pairs.begin(), weight_pairs.end());
-            
-            std::ostringstream cb_msg;
-            cb_msg << "[CLASS_BALANCED] β=" << beta
-                   << " total_targets=" << total_targets
-                   << " seen_tokens=" << seen_count
-                   << " unseen_tokens=" << unseen_count
-                   << " max_weight=" << max_weight;
-            ctx->logging.logger->log(cb_msg.str());
-            
-            // Lowest weights = most frequent tokens
-            cb_msg.str("");
-            cb_msg << "[CLASS_BALANCED] Lowest weights (most frequent): ";
-            for (int i = 0; i < std::min(10, (int)weight_pairs.size()); i++) {
-                cb_msg << "tok" << weight_pairs[i].second 
-                       << "(w=" << std::fixed << std::setprecision(2) << weight_pairs[i].first
-                       << ",cnt=" << target_counts[weight_pairs[i].second] << ") ";
-            }
-            ctx->logging.logger->log(cb_msg.str());
-            
-            // Highest weights = rarest seen tokens
-            cb_msg.str("");
-            cb_msg << "[CLASS_BALANCED] Highest weights (rarest seen): ";
-            for (int i = std::max(0, (int)weight_pairs.size() - 10); i < (int)weight_pairs.size(); i++) {
-                cb_msg << "tok" << weight_pairs[i].second
-                       << "(w=" << std::fixed << std::setprecision(2) << weight_pairs[i].first
-                       << ",cnt=" << target_counts[weight_pairs[i].second] << ") ";
-            }
-            ctx->logging.logger->log(cb_msg.str());
-            
-            // Log ratio: max_weight / min_weight shows the dynamic range
-            if (!weight_pairs.empty()) {
-                float ratio = weight_pairs.back().first / weight_pairs.front().first;
-                cb_msg.str("");
-                cb_msg << "[CLASS_BALANCED] Dynamic range: max/min weight ratio = " 
-                       << std::fixed << std::setprecision(1) << ratio << "x";
-                ctx->logging.logger->log(cb_msg.str());
-            }
-        }
+        computeAndUploadClassBalancedWeights(
+            ctx->data.train_seqs,
+            ctx->config.actual_vocab_size,
+            ctx->config.hyperparameters.loss_class_balanced_beta,
+            ctx->model->getTrainingState(),
+            *ctx->logging.logger);
     }
     
     // 10d. Issue #60 DEBUG: Allocate gradient attribution buffers if enabled
@@ -934,12 +837,12 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     // 11. Initialize telemetry lattice
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry lattice...", 0);
-    ctx->telemetry.config = GRIM::Telemetry::makeLatticeConfigFromHyperparameters(
-        ctx->config.hyperparameters,
-        ctx->model->getTrainingState().stream_ctrl.getPrimaryStream());
-
-    ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(ctx->telemetry.config);
-    ctx->logging.logger->log("✓ Telemetry lattice: " + std::to_string(ctx->telemetry.config.num_levels) + " levels, " + std::to_string(ctx->telemetry.config.num_streams) + " streams, GPU-resident");
+    ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(
+        GRIM::Telemetry::makeLatticeConfigFromHyperparameters(
+            ctx->config.hyperparameters,
+            ctx->model->getTrainingState().stream_ctrl.getPrimaryStream()));
+    const auto& lattice_cfg = ctx->telemetry.lattice->config();
+    ctx->logging.logger->log("✓ Telemetry lattice: " + std::to_string(lattice_cfg.num_levels) + " levels, " + std::to_string(lattice_cfg.num_streams) + " streams, GPU-resident");
 
     // 11a. Initialize telemetry CSV logger (per-step measured data export)
     {
