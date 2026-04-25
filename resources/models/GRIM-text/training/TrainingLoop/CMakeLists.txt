@@ -352,6 +352,8 @@ add_executable(train_gpu
     ../Phases/Startup/Rng.hpp
     ../Phases/Startup/Logging.cu
     ../Phases/Startup/Logging.hpp
+    ../Phases/Startup/SlidingWindow.cu
+    ../Phases/Startup/SlidingWindow.hpp
     ../Phases/ConfigDump.cu
     ../Phases/ConfigDump.hpp
     ../Phases/DataStatsDump.cu

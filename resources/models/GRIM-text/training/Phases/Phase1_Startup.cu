@@ -22,6 +22,7 @@
 #include "Phase1_Startup.hpp"
 #include "../OptimizerCheckpoint.hpp"
 #include "ConfigDump.hpp"
+#include "Startup/SlidingWindow.hpp"
 // HyperParameters_GPU.hpp is the single entry point; it defines
 // GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS and transitively includes
 // control/ai_config_paths.hpp in the correct order.
@@ -163,14 +164,12 @@ GRIM::Tokenizer::UniByte initializeTokenizer(
     if (!tokenizer.load(vocab_path)) {
         throw std::runtime_error("Failed to load vocabulary: " + vocab_path);
     }
-    
+
+    // Vocab size is reported by DataStatsDump (tokenizer_vocab_size).
     // The GRMT is the ground truth — it was written with totalVocabSize() at encode time.
     // Phase1 must match that exactly.  Post-load capping is wrong: it reduces totalVocabSize()
     // below what the GRMT recorded, guaranteeing a mismatch.  If you want fewer tokens,
     // lower vocab_size in ai_config.json and let the DataLoader retrain the tokenizer.
-    logger.log("✓ Loaded " + std::to_string(tokenizer.totalVocabSize()) + " tokens (" +
-               std::to_string(tokenizer.vocabSize()) + " pieces)");
-    
     return tokenizer;
 }
 
@@ -185,14 +184,12 @@ SequenceData loadTrainingData(
     TrainingLogger& logger) {
     
     SequenceData data;
-    
-    logger.log("Loading training data...");
+
     GRMTDataLoader loader;
     if (!loader.load(data_path)) {
         throw std::runtime_error("Failed to load training data");
     }
-    logger.log("✓ Loaded " + std::to_string(loader.size()) + " sequences");
-    
+
     // Store vocab size from training data for later validation
     data.vocab_size = loader.vocabSize();
     
@@ -269,210 +266,16 @@ SequenceData loadTrainingData(
     data.train_seqs.assign(all_sequences.begin() + val_size, all_sequences.end());
     data.val_seqs.assign(all_sequences.begin(), all_sequences.begin() + val_size);
     
-    // Apply sliding windows.
-    //
-    // Padding ownership: BatchPayload is the SINGLE owner of padded
-    // [batch_size * max_seq_len] layout. Phase1 produces variable-length
-    // TrainingSequences (length ∈ [min_seq_valid_tokens, max_seq_len]) and
-    // does NOT pre-pad. BatchPayload's per-row memcpy fills [0, seq_len) and
-    // leaves [seq_len, max_seq_len) at its assign() defaults (PAD / -1 / 0).
-    // Pre-padding here would destroy the logical length, polluting
-    // seq_lengths / actual_tokens / token_stats / MTP shift math.
-    //
-    // Final-target contract: BatchPayload asserts targets.back() == -1
-    // (no autoregressive supervision at the sequence boundary). Phase1 must
-    // always mask the final target before handing the sequence off, for both
-    // train and val — there is no "keep the val final target" path because
-    // BatchPayload would silently drop it anyway.
-    auto applySlidingWindows = [&](std::vector<TrainingSequence>& sequences,
-                                   const std::string& split_name) {
-        std::vector<TrainingSequence> windowed;
-        windowed.reserve(sequences.size());
+    // Apply sliding windows. Implementation lives in
+    // Phases/Startup/SlidingWindow.cu — see that file for the full
+    // padding-ownership / final-target / overlap-masking contracts.
+    applySlidingWindows(data.train_seqs, "train",
+                        max_seq_len, sliding_window_stride,
+                        add_bos_token, bos_id, eos_id, logger);
+    applySlidingWindows(data.val_seqs, "val",
+                        max_seq_len, sliding_window_stride,
+                        add_bos_token, bos_id, eos_id, logger);
 
-        size_t long_seq_count = 0;
-        size_t generated_windows = 0;
-        size_t bos_prepended = 0;
-
-        // Final-position autoregressive boundary mask. Required by
-        // BatchPayload's Rule 20 invariant.
-        auto MaskFinalTarget = [](TrainingSequence& seq) {
-            if (!seq.targets.empty()) {
-                seq.targets.back() = -1;
-            }
-        };
-
-        for (const auto& seq : sequences) {
-            if (static_cast<int>(seq.token_ids.size()) <= max_seq_len) {
-                // Short sequence or exactly max_seq_len — no windowing.
-                TrainingSequence copy = seq;
-                MaskFinalTarget(copy);
-                windowed.push_back(std::move(copy));
-                continue;
-            }
-            
-            // Execution-active rows MUST NOT be fragmented — compiled_bootstrap_bindings
-            // and teacher_steps are whole-sequence structures with no windowing semantics.
-            if (seq.execution_active) {
-                throw std::runtime_error(
-                    "Execution-active sequence exceeds max_seq_len (" +
-                    std::to_string(seq.token_ids.size()) + " > " +
-                    std::to_string(max_seq_len) +
-                    "). Execution rows cannot be split by sliding window. "
-                    "Increase max_seq_len or shorten the source data.");
-            }
-            
-            long_seq_count++;
-            const size_t seq_len = seq.token_ids.size();
-            size_t start = 0;
-            const size_t stride = static_cast<size_t>(sliding_window_stride);
-            bool is_first_window = true;
-            size_t prev_source_end = 0;  // Track previous window's source end for overlap masking
-            
-            while (start < seq_len) {
-                // Reserve 1 token for BOS if this is not the first window and BOS is enabled
-                const bool prepend_bos = !is_first_window && add_bos_token && bos_id >= 0;
-                const size_t effective_max = (is_first_window || !prepend_bos)
-                    ? static_cast<size_t>(max_seq_len) 
-                    : static_cast<size_t>(max_seq_len - 1);
-                size_t end = std::min(seq_len, start + effective_max);
-                
-                TrainingSequence window;
-                
-                // For non-first windows, prepend BOS token (gated on add_bos_token config)
-                if (prepend_bos) {
-                    window.token_ids.push_back(bos_id);
-                    window.targets.push_back(-1);  // BOS position masked
-                    window.token_numeric_values.push_back(0.0f);
-                    window.token_atom_mask.push_back(0);
-                    window.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
-                    window.token_atom_flags.push_back(0);
-                    for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
-                        window.token_text_features.push_back(0);
-                    }
-                    if (!seq.token_exec_slots.empty())
-                        window.token_exec_slots.push_back(static_cast<int32_t>(-1));
-                    if (!seq.slot_selection_targets.empty())
-                        window.slot_selection_targets.push_back(
-                            GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
-                    bos_prepended++;
-                }
-                
-                // Copy window content
-                window.token_ids.insert(window.token_ids.end(),
-                    seq.token_ids.begin() + start, seq.token_ids.begin() + end);
-                window.targets.insert(window.targets.end(),
-                    seq.targets.begin() + start, seq.targets.begin() + end);
-                window.token_numeric_values.insert(window.token_numeric_values.end(),
-                    seq.token_numeric_values.begin() + start, seq.token_numeric_values.begin() + end);
-                window.token_atom_mask.insert(window.token_atom_mask.end(),
-                    seq.token_atom_mask.begin() + start, seq.token_atom_mask.begin() + end);
-                // Atom side channel — share parent sequence's AtomTable
-                window.atom_table = seq.atom_table;
-                window.atom_entry_ids.insert(window.atom_entry_ids.end(),
-                    seq.atom_entry_ids.begin() + start, seq.atom_entry_ids.begin() + end);
-                window.token_atom_flags.insert(window.token_atom_flags.end(),
-                    seq.token_atom_flags.begin() + start, seq.token_atom_flags.begin() + end);
-                // GRMT v4: slice text features (16 values per token)
-                window.token_text_features.insert(window.token_text_features.end(),
-                    seq.token_text_features.begin() + start * GRIM::Tokenizer::kTextFeatureDim,
-                    seq.token_text_features.begin() + end * GRIM::Tokenizer::kTextFeatureDim);
-
-                if (!seq.token_exec_slots.empty()) {
-                    window.token_exec_slots.insert(window.token_exec_slots.end(),
-                        seq.token_exec_slots.begin() + static_cast<ptrdiff_t>(start),
-                        seq.token_exec_slots.begin() + static_cast<ptrdiff_t>(end));
-                }
-                if (!seq.slot_selection_targets.empty()) {
-                    window.slot_selection_targets.insert(window.slot_selection_targets.end(),
-                        seq.slot_selection_targets.begin() + static_cast<ptrdiff_t>(start),
-                        seq.slot_selection_targets.begin() + static_cast<ptrdiff_t>(end));
-                }
-
-                
-                // Mask first position if it's the first window (BOS already there)
-                // For non-first windows, BOS was prepended above with target=-1
-                if (is_first_window && !window.targets.empty()) {
-                    window.targets[0] = -1;  // Mask BOS position
-                }
-                
-                // Issue #143: Mask overlap prefix targets in non-first windows.
-                // With stride < max_seq_len, the first (prev_source_end - start)
-                // tokens were already trained on in the previous window. Mask them
-                // to prevent double-training on the same targets.
-                //
-                // Issue #147: Subtract 1 from overlap_len. The position at
-                // (prev_source_end - 1) was the LAST position in the previous
-                // window, which was already  masked there (last-position mask).
-                // Its target was NEVER trained. If we mask it here too, we create
-                // a one-token training gap at every window boundary. By reducing
-                // overlap by 1, this window trains that target instead.
-                if (!is_first_window && prev_source_end > start) {
-                    const size_t raw_overlap = prev_source_end - start;
-                    const size_t overlap_len = (raw_overlap > 0) ? (raw_overlap - 1) : 0;
-                    const size_t bos_offset = prepend_bos ? 1 : 0;  // Skip BOS (already masked)
-                    for (size_t i = bos_offset; i < bos_offset + overlap_len && i < window.targets.size(); ++i) {
-                        window.targets[i] = -1;
-                    }
-                }
-                
-                // Mask last position for window boundary.
-                // BatchPayload requires targets.back() == -1 unconditionally;
-                // val no longer gets a special-cased "keep the final target"
-                // path because BatchPayload would have masked it anyway.
-                if (!window.targets.empty()) {
-                    window.targets.back() = -1;
-                }
-                
-                // Issue #146: Inject EOS at end of non-final windows.
-                // Without this, ~55% of training windows have NO EOS token,
-                // so the model never learns when to stop generating.
-                // The last position is already target-masked above, so replacing
-                // its token_id with EOS costs nothing — the model sees EOS as
-                // input and the second-to-last position learns to predict EOS.
-                const bool is_final_window = (end == seq_len);
-                if (!is_final_window && eos_id >= 0 && !window.token_ids.empty()) {
-                    window.token_ids.back() = eos_id;
-                    window.token_numeric_values.back() = 0.0f;
-                    window.token_atom_mask.back() = 0;
-                    if (!window.token_exec_slots.empty())
-                        window.token_exec_slots.back() = static_cast<int32_t>(-1);
-                    if (!window.slot_selection_targets.empty())
-                        window.slot_selection_targets.back() =
-                            GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1};
-                    // Clear text features for the replaced position
-                    const size_t last_tf_start = (window.token_ids.size() - 1) * GRIM::Tokenizer::kTextFeatureDim;
-                    for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
-                        window.token_text_features[last_tf_start + i] = 0;
-                    }
-                    // Second-to-last position learns to predict EOS
-                    if (window.targets.size() >= 2) {
-                        window.targets[window.targets.size() - 2] = eos_id;
-                    }
-                }
-                
-                // Variable-length window — BatchPayload owns padding.
-                windowed.push_back(std::move(window));
-                generated_windows++;
-                
-                prev_source_end = end;  // Track for overlap masking in next window
-                if (end == seq_len) break;
-                start += stride;
-                is_first_window = false;
-            }
-        }
-        
-        sequences = std::move(windowed);
-        if (long_seq_count > 0) {
-            logger.log("Sliding window (" + split_name + "): " +
-                       std::to_string(long_seq_count) + " long sequences expanded into " +
-                       std::to_string(generated_windows) + " windows" +
-                       " (BOS prepended to " + std::to_string(bos_prepended) + " mid-sequence windows)");
-        }
-    };
-
-    applySlidingWindows(data.train_seqs, "train");
-    applySlidingWindows(data.val_seqs, "val");
-    
     // HARD FILTER: Remove any sequences still exceeding max_seq_len after sliding window
     // This catches cached .grmt files with old sequence lengths
     auto filterOverlong = [&](std::vector<TrainingSequence>& sequences, const std::string& split_name) {
@@ -518,7 +321,7 @@ SequenceData loadTrainingData(
     };
     filterShortSequences(data.train_seqs, "train");
     filterShortSequences(data.val_seqs, "val");
-    
+
     // Build views and catalogs
     data.train_views.reserve(data.train_seqs.size());
     for (uint32_t i = 0; i < data.train_seqs.size(); ++i) {
@@ -533,10 +336,8 @@ SequenceData loadTrainingData(
         const uint32_t len = static_cast<uint32_t>(data.val_seqs[i].token_ids.size());
         data.val_catalog.add(len, len, 0, 0, 0);
     }
-    
-    logger.log("Train sequences: " + std::to_string(data.train_seqs.size()));
-    logger.log("Val sequences: " + std::to_string(data.val_seqs.size()));
-    
+
+    // Train/val sequence counts are reported by DataStatsDump.
     return data;
 }
 
@@ -610,11 +411,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     // Token budget is just batch * seq_len (used for logits allocation limit)
     const uint32_t token_budget = static_cast<uint32_t>(actual_batch_size) * seq_cap;
     model_config.max_tokens_per_batch = static_cast<int>(token_budget);
-    
-    logger.log("Cache allocation: batch=" + std::to_string(actual_batch_size) + 
-               ", seq_len=" + std::to_string(seq_cap) + 
-               ", tokens=" + std::to_string(token_budget));
-    
+
+    // batch_size, max_seq_len → max_tokens_per_batch is fully derivable from
+    // ConfigDump rows (batch_size, architecture.max_seq_len). No local echo.
+
     // STEP 0: Initialize CUDA device context FIRST (REQUIRED before any stream/allocation operations)
     // This ensures CUDA driver is loaded and device context exists before StreamController creates streams.
     // MUST be done exactly once at the start of training, not in StreamController or initGPU.
@@ -759,14 +559,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     // so the consumer in Phase2 never fired. logit_update_trace_enabled still
     // controls the PostLoss cached_logits trace below.
 
-    // Configure scratch blocks
-    fprintf(stderr, "[initializeModel] DIAG: About to configure scratch blocks (pool_init=%d)\n", (int)model->isScratchPoolInitialized()); fflush(stderr);
+    // Configure scratch blocks (scratch_blocks_enabled / scratch_num_blocks are
+    // reported by ConfigDump; no local echo).
     if (model->isScratchPoolInitialized()) {
         model->configureScratchPool(config.hyperparameters.scratch_blocks_enabled);
-        if (config.hyperparameters.scratch_blocks_enabled) {
-            logger.log("✓ Scratch blocks enabled (" +
-                      std::to_string(config.hyperparameters.scratch_num_blocks) + " blocks, sized from max_cached_tokens)");
-        }
     }
 
     // Build LossOptions inline from hyperparameters (single source of truth lives in
@@ -794,22 +590,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     }
     model->setLossOptions(loss_opts);
 
-    // Log loss configuration
-    {
-        std::ostringstream loss_msg;
-        loss_msg << "[LossConfig] startup: "
-                 << "label_smoothing=" << (loss_opts.label_smoothing_enabled ? "ON" : "off")
-                 << " focal=" << (loss_opts.focal_enabled ? "ON" : "off")
-                 << " distill=" << (loss_opts.distillation_enabled ? "ON" : "off")
-                 << " pref=" << (loss_opts.preference_enabled ? "ON" : "off")
-                 << " entropy_reg=" << (loss_opts.entropy_reg_enabled ? "ON" : "off")
-                 << " ent_lambda=" << loss_opts.entropy_reg_lambda
-                 << " class_balanced=" << (loss_opts.class_balanced_enabled ? "ON" : "off")
-                 << " cb_beta=" << loss_opts.class_balanced_beta;
+    // Loss options (label_smoothing / focal / distillation / preference /
+    // entropy_reg / class_balanced + their scalars) are reported in the
+    // "Loss options" section of ConfigDump. No local echo.
 
-        logger.log(loss_msg.str());
-    }
-    
 #ifdef USE_CUDA
     // Verify encoder weights are initialized (Pattern B layers handle Xavier init via Tensor::xavier_uniform_)
     {
@@ -892,11 +676,10 @@ OptimizerContext initializeOptimizer(
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
     ctx.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
     
-    // Gradient accumulation now tracked directly via hyperparameters
-    // ctx.optimizer.current_micro_step is reset at start of each accumulation window
-    const int accum_steps = std::max(1, hp.gradient_accumulation_steps);
-    logger.log("✓ Gradient accumulation configured: " + std::to_string(accum_steps) + 
-               " steps (effective batch = " + std::to_string(hp.batch_size * accum_steps) + ")");
+    // Gradient accumulation now tracked directly via hyperparameters.
+    // ctx.optimizer.current_micro_step is reset at start of each accumulation
+    // window. batch_size and gradient_accumulation_steps are reported by
+    // ConfigDump; no local echo.
     ctx.current_micro_step = 0;
     
     // Verify ALL encoder layers initialized (prevents lazy init during forward pass)
@@ -962,19 +745,19 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     Internal::validatePaths(ctx->config.paths);
     EmitModuleInfo(ModuleId::Training, "[Phase1] ✓ All paths validated", 0);
 
-    EmitModuleInfo(ModuleId::Training, "Configuration:", 0);
     // Data paths + vocab + sequence counts are logged together with the
     // hyperparameter dump (post-harmonize) via DataStatsSnapshot below,
     // so derived ratios from HyperParameters_GPU.hpp are reflected and
     // the visual block is unified.
-    
+
     // 4. Initialize tokenizer — use the tokenizer_config already captured on
     // StartupConfig during loadConfiguration(); no second snapshot read.
     const GRIM::Config::TokenizerConfig& tok_cfg = ctx->config.tokenizer_config;
     ctx->tokenizer = Internal::initializeTokenizer(ctx->config.paths.vocab_path, tok_cfg, ctx->config.hyperparameters, *ctx->logging.logger);
     
-    ctx->logging.logger->log("[DEBUG] Starting training data load...");
-    // 5. Load training data
+    // 5. Load training data (parses .grmt artifact written by the
+    //    tokenizer subprocess; subprocess only returned vocab_size, not
+    //    the sequence buffer — that has to be loaded into this process).
     ctx->data = Internal::loadTrainingData(
         ctx->config.paths.data_path,
         ctx->config.max_seq_len,
@@ -1289,8 +1072,8 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     }
     ctx->telemetry.control_config.reference_tokens = static_cast<float>(token_budget);
     ctx->telemetry.control_config.reference_seq_len = static_cast<float>(ctx->config.max_seq_len);
-    ctx->logging.logger->log("[DEBUG] ctx->config.max_seq_len = " + std::to_string(ctx->config.max_seq_len));
-    
+    // architecture.max_seq_len is reported by ConfigDump.
+
     // TelemetryControl configuration - load from global config
     const auto& hp = ctx->config.hyperparameters;
     
@@ -1309,16 +1092,11 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->telemetry.control_config.baseline_stabilization_steps = hp.telemetry_baseline_stabilization_steps;
     ctx->telemetry.control_config.verbose_logging = hp.telemetry_verbose_logging;
     ctx->telemetry.control_config.fail_loud_on_accumulation_bug = hp.telemetry_fail_loud_on_accumulation_bug;
-    
-    ctx->logging.logger->log("Telemetry control: MONITORING ONLY (all interventions removed)");
-    
-    // 12. Check GPU memory
-    size_t free_mem, total_mem;
-    cudaMemGetInfo(&free_mem, &total_mem);
-    EmitModuleInfo(ModuleId::Training, 
-        std::string("GPU Memory: ") + std::to_string(free_mem / (1024*1024)) + " MB free / " + 
-        std::to_string(total_mem / (1024*1024)) + " MB total", 0);
-    
+
+    // Telemetry control field values are reported by ConfigDump
+    // (telemetry_* section). GPU free/total memory is reported by ConfigDump
+    // (memory.gpu.* rows). No local echoes here.
+
     // Write initial status
     ctx->logging.status_writer->writeStatus(
         GRIMText::Control::TrainingState_Training,
