@@ -58,6 +58,9 @@
 #include "../metrics_collector.hpp"
 #include "../training_data_loader.hpp"
 
+// Extracted startup subsystems
+#include "Startup/Rng.hpp"
+
 namespace fs = std::filesystem;
 
 namespace GRIMText::Training {
@@ -228,51 +231,6 @@ struct TelemetryContext {
 };
 
 /**
- * @brief Production-grade RNG context with reproducibility support
- * 
- * Hierarchical seeding strategy (like PyTorch/JAX):
- * - base_seed: Master seed from config (user-specified or time-based)
- * - data_seed = base_seed + 0: CPU RNG for data shuffling
- * - init_seed = base_seed + 1000: Weight initialization (Xavier)
- * - cuda_seed = base_seed + 2000: GPU dropout/sampling operations
- * 
- * This ensures:
- * 1. Different RNG streams avoid statistical correlations
- * 2. Exact reproducibility when same seed is provided
- * 3. CUDA operations (dropout, attention dropout) use controlled RNG
- * 4. Checkpoints can save/restore RNG state for perfect resume
- */
-struct RNGContext {
-    // Seeds
-    uint64_t base_seed = 0;       // Master seed (0 = use timestamp)
-    uint64_t data_seed = 0;       // Data shuffling seed
-    uint64_t init_seed = 0;       // Weight initialization seed
-    uint64_t cuda_seed = 0;       // CUDA RNG seed
-    
-    // CPU RNG for data operations
-    std::mt19937_64 data_rng;
-    
-    // CUDA RNG for GPU dropout/sampling (nullptr if not initialized)
-    void* cuda_rng_generator = nullptr;  // curandGenerator_t (void* to avoid curand.h here)
-    
-    // State tracking
-    bool deterministic = false;   // Whether using fixed seed
-    bool cuda_rng_initialized = false;
-    
-    // Rule of Five: Move-only semantics (CUDA generator cannot be copied)
-    RNGContext() = default;
-    ~RNGContext();
-    
-    // Delete copy operations (CUDA generator is unique resource)
-    RNGContext(const RNGContext&) = delete;
-    RNGContext& operator=(const RNGContext&) = delete;
-    
-    // Move operations transfer ownership
-    RNGContext(RNGContext&& other) noexcept;
-    RNGContext& operator=(RNGContext&& other) noexcept;
-};
-
-/**
  * @brief Complete training context returned by Phase1
  * 
  * This is the "contract" between phases - everything needed to run training
@@ -427,20 +385,7 @@ OptimizerContext initializeOptimizer(
     const StartupConfig& config,
     TrainingLogger& logger);
 
-/**
- * @brief Initialize production-grade RNG system with hierarchical seeding
- * 
- * Implements PyTorch/JAX-style reproducibility:
- * - Reads seed from ai_config.json (training.config.seed)
- * - seed = -1 or missing: random seed from system clock
- * - seed >= 0: deterministic mode with that seed
- * - Creates separate RNG streams for data/init/cuda
- * - Initializes cuRAND for GPU dropout operations
- * - Logs seed values for reproducibility
- */
-RNGContext initializeRNG(
-    const StartupConfig& config,
-    TrainingLogger& logger);
+// initializeRNG declaration moved to Startup/Rng.hpp
 } // namespace Internal
 
 } // namespace GRIMText::Training
