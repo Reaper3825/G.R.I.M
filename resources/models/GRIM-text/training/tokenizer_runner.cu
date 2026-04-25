@@ -40,7 +40,7 @@
 
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Common/grim_model_serialization_version.hpp"
-#include "../../../../control/ai_config_paths.hpp"
+#include "../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; pulls in control/ai_config_paths.hpp transitively
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;

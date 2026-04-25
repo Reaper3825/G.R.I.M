@@ -22,9 +22,8 @@
 #include <nlohmann/json.hpp>
 #include "../../Common/grim_model_serialization_version.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
-#include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // also pulls in control/ai_config_paths.hpp transitively (correct order)
 #include "../Batching/BatchPayload.hpp"
-#include "../../../../control/ai_config_paths.hpp"
 #include "ConceptExecutionSequenceBuilder.hpp"
 
 namespace fs = std::filesystem;

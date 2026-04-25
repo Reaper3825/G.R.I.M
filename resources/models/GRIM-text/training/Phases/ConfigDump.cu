@@ -9,8 +9,9 @@
 
 #include "ConfigDump.hpp"
 
-// MUST be first - defines GRIM_CONFIG_AI_CONFIG_PATHS_HPP_INCLUDED
-#include "../../../../../control/ai_config_paths.hpp"
+// HyperParameters_GPU.hpp is the single entry point; it defines
+// GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS and transitively includes
+// control/ai_config_paths.hpp in the correct order.
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 #include <cstdint>

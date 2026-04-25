@@ -43,7 +43,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
 #include "../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.hpp"  // launchRAdamWStep — selectable via training.config.optimizer.kind
-#include "../../../../../control/ai_config_paths.hpp"  // For resolveGrimRoot()
+#include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; transitively pulls in control/ai_config_paths.hpp (resolveGrimRoot, etc.)
 #include <iostream>
 #include <fstream>
 #include <sstream>

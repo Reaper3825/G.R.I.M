@@ -22,7 +22,7 @@
 #include <nlohmann/json.hpp>
 
 #include "../Shared/UnigramByte/UniByte.hpp"
-#include "../../../../control/ai_config_paths.hpp"
+#include "../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; pulls in control/ai_config_paths.hpp transitively
 
 using GrimTokenizer = GRIM::Tokenizer::UniByte;
 

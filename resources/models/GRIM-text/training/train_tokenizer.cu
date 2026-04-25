@@ -14,7 +14,9 @@
 #include <string>
 #include <stdexcept>
 
-#include "../../../../control/ai_config_paths.hpp"
+// HyperParameters_GPU.hpp is the single entry point for GRIM::Config structs;
+// it transitively includes control/ai_config_paths.hpp in the correct order.
+#include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../Shared/DataLoader/DataLoader.hpp"
 
 int main(int argc, char* argv[]) {
