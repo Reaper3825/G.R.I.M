@@ -206,6 +206,8 @@ plugins/
 plugins/*
 data/
 data/*
+!resources/models/GRIM-text/training/Phases/Startup/Data/
+!resources/models/GRIM-text/training/Phases/Startup/Data/**
 .venv310/
 .venv310/*
 .cache/
