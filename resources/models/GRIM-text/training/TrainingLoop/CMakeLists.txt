@@ -356,6 +356,8 @@ add_executable(train_gpu
     ../Phases/Startup/SlidingWindow.hpp
     ../Phases/Startup/ClassBalancedWeights.cu
     ../Phases/Startup/ClassBalancedWeights.hpp
+    ../Phases/Startup/InitFacts.cu
+    ../Phases/Startup/InitFacts.hpp
     ../Phases/ConfigDump.cu
     ../Phases/ConfigDump.hpp
     ../Phases/DataStatsDump.cu

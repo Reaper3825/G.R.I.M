@@ -210,6 +210,21 @@ enum class MetricStream : int {
     // where W_rms_rms = sqrt(E[||W_v||² / d_model]) over a strided sample of vocab rows.
     // Published every step the LOGIT_SCALE diagnostic runs (see Phase2_TrainingLoop.cu).
     LM_HEAD_W_RMS_RMS = 47,
+
+    // Init-time structural invariants — published once by Phase1 (after
+    // buildParameterGroups) and held constant for the whole run. Phase2's
+    // per-step lattice update keeps re-pushing them, so mu == value and
+    // sigma == 0 across every level. These are the *machine-readable* twin
+    // of the init_facts_<session>.csv written by Phases/Startup/InitFacts.cu.
+    // Pointer values themselves cannot fit in a float stream and are only
+    // emitted to that CSV; the streams here cover bools and counts.
+    INIT_TIE_CFG          = 48,  // 1.0 if config.tie_embeddings, else 0.0
+    INIT_TIE_PTRS_SAME    = 49,  // 1.0 if emb_weight_ptr == lm_weight_ptr
+    INIT_TIE_GRADS_SAME   = 50,  // 1.0 if emb_grad_ptr  == lm_grad_ptr
+    INIT_LM_OWNS_WEIGHTS  = 51,  // 1.0 if LMHeadLayer owns its weight buffer
+    INIT_OPT_GROUPS_TOTAL = 52,  // count of parameter groups built
+    INIT_OPT_GROUPS_EMB   = 53,  // groups whose tensor matches emb_weight_ptr
+    INIT_OPT_GROUPS_LM    = 54,  // groups whose tensor matches lm_weight_ptr
 };
 
 const char* getMetricStreamName(MetricStream stream);

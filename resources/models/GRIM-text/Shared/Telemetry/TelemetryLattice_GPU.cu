@@ -341,6 +341,13 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::UNIGRAM_DIR_COS_ABS_MEAN: return "unigram_dir_cos_abs_mean";
         case MetricStream::UNIGRAM_DIR_COS_SIGNED_MEAN: return "unigram_dir_cos_signed_mean";
         case MetricStream::LM_HEAD_W_RMS_RMS: return "lm_head_w_rms_rms";
+        case MetricStream::INIT_TIE_CFG: return "init_tie_cfg";
+        case MetricStream::INIT_TIE_PTRS_SAME: return "init_tie_ptrs_same";
+        case MetricStream::INIT_TIE_GRADS_SAME: return "init_tie_grads_same";
+        case MetricStream::INIT_LM_OWNS_WEIGHTS: return "init_lm_owns_weights";
+        case MetricStream::INIT_OPT_GROUPS_TOTAL: return "init_opt_groups_total";
+        case MetricStream::INIT_OPT_GROUPS_EMB: return "init_opt_groups_emb";
+        case MetricStream::INIT_OPT_GROUPS_LM: return "init_opt_groups_lm";
         default: return "unknown";
     }
 }

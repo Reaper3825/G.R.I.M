@@ -24,6 +24,7 @@
 #include "ConfigDump.hpp"
 #include "Startup/SlidingWindow.hpp"
 #include "Startup/ClassBalancedWeights.hpp"
+#include "Startup/InitFacts.hpp"
 // HyperParameters_GPU.hpp is the single entry point; it defines
 // GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS and transitively includes
 // control/ai_config_paths.hpp in the correct order.
@@ -403,53 +404,12 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
     // Build parameter groups for optimizer and grad-norm (required even when logit_update_trace is off).
     // Otherwise Phase2 allocateGradNormScratch gets max_groups=0 and fails.
+    // Init-time structural invariants (tie_embeddings pointer/grad equality,
+    // optimizer group accounting) are verified by verifyAndDumpInitFacts() in
+    // executePhase1, after this function returns. See Startup/InitFacts.cu —
+    // contract is fail-loud throws on violation, dual-channel emission to
+    // telemetry stream slots 48-54 and init_facts_<session>.csv on success.
     model->buildParameterGroups();
-
-    // ═══════════════════════════════════════════════════════════════
-    // tie_embeddings pointer verification (Step C: non-negotiable truth)
-    // Log raw pointers, ownership, and optimizer group count
-    // ═══════════════════════════════════════════════════════════════
-    {
-        const float* emb_w_ptr = model->getEmbeddingLayer()->tokenWeights().data;
-        const float* lm_w_ptr  = model->getLmHeadLayer()->weights().data;
-        const float* emb_g_ptr = model->getEmbeddingLayer()->tokenWeights().grad_data();
-        const float* lm_g_ptr  = model->getLmHeadLayer()->weights().grad_data();
-        const bool cfg_tied = model->getConfig().tie_embeddings;
-        const bool lm_owns = model->getLmHeadLayer()->ownsWeights();
-        const bool ptrs_same = (emb_w_ptr == lm_w_ptr);
-        const bool grads_same = (emb_g_ptr == lm_g_ptr);
-
-        // Count optimizer groups referencing each buffer
-        int emb_groups = 0, lm_groups = 0;
-        for (const auto& g : model->parameterGroups()) {
-            if (g.tensor && g.tensor->data == emb_w_ptr) ++emb_groups;
-            if (g.tensor && g.tensor->data == lm_w_ptr)  ++lm_groups;
-        }
-
-        std::ostringstream tie_msg;
-        tie_msg << "[TieEmbeddingsVerify] config.tie_embeddings=" << (cfg_tied ? "true" : "false")
-                << " lm_owns_weights=" << (lm_owns ? "true" : "false")
-                << "\n  emb_weight_ptr=" << (const void*)emb_w_ptr
-                << " lm_weight_ptr=" << (const void*)lm_w_ptr
-                << " SAME=" << (ptrs_same ? "YES" : "NO")
-                << "\n  emb_grad_ptr=" << (const void*)emb_g_ptr
-                << " lm_grad_ptr=" << (const void*)lm_g_ptr
-                << " SAME=" << (grads_same ? "YES" : "NO")
-                << "\n  optimizer_groups: emb_buffer=" << emb_groups
-                << " lm_buffer=" << lm_groups
-                << " total=" << model->parameterGroups().size();
-        if (cfg_tied && !ptrs_same) {
-            tie_msg << "\n  [BUG] tie_embeddings=true but pointers differ!";
-        }
-        if (!cfg_tied && ptrs_same) {
-            tie_msg << "\n  [BUG] tie_embeddings=false but pointers are SAME!";
-        }
-        if (cfg_tied && (emb_groups + lm_groups) > lm_groups) {
-            // When tied, only lm_groups should reference the buffer (not emb separately)
-            tie_msg << "\n  [WARNING] tied buffer has " << emb_groups << " emb refs + " << lm_groups << " lm refs (expect lm only)";
-        }
-        logger.log(tie_msg.str());
-    }
 
     // UpdateProbe subsystem deleted (Rule 26): probe was instrumentation that
     // was never wired to actually populate the weights/grads sample buffers,
@@ -740,7 +700,13 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         EmitModuleError(ModuleId::Training, std::string("FATAL: Model initialization failed: ") + e.what(), 0);
         throw;
     }
-    
+
+    // 9a. Verify init-time structural invariants and dual-emit them to
+    // telemetry stream slots (48-54) and init_facts_<session>.csv.
+    // Implementation lives in Phases/Startup/InitFacts.cu — throws on
+    // tie_embeddings contract violations, otherwise silent in the human log.
+    verifyAndDumpInitFacts(*ctx);
+
     // Handle save test mode
     if (ctx->config.save_test_mode) {
         ctx->logging.logger->log("========================================");
