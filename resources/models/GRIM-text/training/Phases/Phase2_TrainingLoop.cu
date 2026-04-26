@@ -45,6 +45,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
 #include "../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.hpp"  // launchRAdamWStep — selectable via training.config.optimizer.kind
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; transitively pulls in control/ai_config_paths.hpp (resolveGrimRoot, etc.)
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // CoreRunHP / LearningRateScheduleInputs — single source of truth for grouped HP reads
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -205,18 +206,9 @@ int validatedAccumulationSteps(const TrainingContext& ctx) {
     const int accum_steps = ctx.config.hyperparameters.gradient_accumulation_steps;
     if (accum_steps <= 0) {
         throw std::runtime_error("FATAL: gradient_accumulation_steps must be > 0 in Phase2 (got " +
-                                 std::to_string(accum_steps) + ")");
+                                 std::to_string(core.gradient_accumulation_steps) + ")");
     }
-    return accum_steps;
-}
-
-int validatedEpochCount(const TrainingContext& ctx) {
-    const int epochs = ctx.config.hyperparameters.epochs;
-    if (epochs <= 0) {
-        throw std::runtime_error("FATAL: epochs must be > 0 in Phase2 (got " +
-                                 std::to_string(epochs) + ")");
-    }
-    return epochs;
+    return core;
 }
 
 GRIM::Batching::BatchPayload buildPayloadFromAssignment(
@@ -485,9 +477,14 @@ BatchResult processBatch(
     const auto clip_selection = GRIM::TNC::computeClipSelection(
         hp.grad_clip_norm, token_stats, 1.0f, long_seq_threshold);
 
+    // CoreRunHP view — single source of truth for epochs/accumulation in this
+    // function. Do not introduce direct ctx.config.hyperparameters reads for
+    // CoreRunHP fields below this line.
+    const auto core = validatedCoreRunHP(ctx);
+
     // Gradient zeroing: backward(accumulate=false) at micro_step=0 zeros grads;
     // backward(accumulate=true) at micro_step>0 accumulates.
-    const int accum_steps = validatedAccumulationSteps(ctx);
+    const int accum_steps = core.gradient_accumulation_steps;
 
     // beginBatch() must run EVERY batch to clear previous entries; otherwise
     // micro-batches 1+ inherit stale entries.
@@ -659,8 +656,9 @@ BatchResult processBatch(
     if (!ctx.lr_schedule) {
         throw std::runtime_error("lr_schedule is not initialized at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
+    const auto lr_inputs = ::GRIM::HyperParameters::learningRateScheduleInputs(hp);
     result.learning_rate = Internal::getScheduledLearningRate(
-        *ctx.lr_schedule, optimizer_step, hp.learning_rate,
+        *ctx.lr_schedule, optimizer_step, lr_inputs.learning_rate,
         ctx.config.hyperparameters.stability_overrides_enabled);
 
     // Optimizer step
@@ -916,7 +914,10 @@ EpochResult runEpoch(
     result.epoch = epoch_idx;
     
     const auto& hp = ctx.config.hyperparameters;
-    const int num_epochs = hp.epochs;
+    // CoreRunHP view — Phase2's single read path for epochs / accumulation /
+    // single-batch-overfit. Phase2 must NOT re-read these fields from `hp`.
+    const auto core = validatedCoreRunHP(ctx);
+    const int num_epochs = core.epochs;
     
     ctx.logging.logger->log("Epoch " + std::to_string(epoch_idx + 1) + "/" + std::to_string(num_epochs));
     
@@ -978,21 +979,21 @@ EpochResult runEpoch(
                                  std::to_string(epoch_idx) + " in Phase2");
     }
     int total_batches_to_run = total_batches;
-    const bool single_batch_overfit = hp.single_batch_overfit_enabled;
+    const bool single_batch_overfit = core.single_batch_overfit_enabled;
     if (single_batch_overfit) {
-        if (hp.single_batch_overfit_max_steps <= 0) {
+        if (core.single_batch_overfit_max_steps <= 0) {
             throw std::runtime_error("FATAL: single_batch_overfit_max_steps must be > 0 when single_batch_overfit_enabled=true (got " +
-                                     std::to_string(hp.single_batch_overfit_max_steps) + ")");
+                                     std::to_string(core.single_batch_overfit_max_steps) + ")");
         }
-        total_batches_to_run = hp.single_batch_overfit_max_steps;
+        total_batches_to_run = core.single_batch_overfit_max_steps;
         ctx.logging.logger->log("[SingleBatch] Enabled: repeating batch 1 for " +
                                 std::to_string(total_batches_to_run) + " steps.");
     }
     const auto epoch_start = std::chrono::steady_clock::now();
     float epoch_loss = 0.0f;
     
-    // Get accumulation steps from hyperparameters
-    const int accum_steps = validatedAccumulationSteps(ctx);
+    // Accumulation steps come from the CoreRunHP view built at function entry.
+    const int accum_steps = core.gradient_accumulation_steps;
     
     // Process batches: scheduler (BatchAssignment) dictates order; build
     // BatchPayload via buildTrainPayload (single source of truth).
@@ -1148,7 +1149,11 @@ bool executePhase2(TrainingContext& ctx) {
     // second source of truth that drifts every time a field is added.
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
 
-    const int num_epochs = validatedEpochCount(ctx);
+    // CoreRunHP view for executePhase2's top-level epoch loop. Subroutines
+    // (runEpoch / processBatch) build their own views — keeping the read path
+    // local makes each function self-contained and independently auditable.
+    const auto core = validatedCoreRunHP(ctx);
+    const int num_epochs = core.epochs;
     EmitModuleInfo(ModuleId::Training,
         std::string("Total epochs to run: ") + std::to_string(num_epochs), ctx.global_step);
     
