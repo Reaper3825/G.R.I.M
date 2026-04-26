@@ -146,11 +146,15 @@ ANVIL_EXPORT_CUDA="${GRIM_CUDA_ROOT:+export GRIM_CUDA_ROOT='$GRIM_CUDA_ROOT'; }"
 # Anvil-G has A100 (sm_80) only. Default to sm_80; override with GRIM_CUDA_ARCH if needed (e.g. 80;86 for A100+RTX).
 ANVIL_CUDA_ARCH="export GRIM_CUDA_ARCH=${GRIM_CUDA_ARCH:-80}; "
 
-# --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu
+# --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu + train_tokenizer
+# train_gpu spawns train_tokenizer as a subprocess at runtime; the two share an IPC
+# schema (--status-file/--config + status JSON envelope). Building only train_gpu
+# leaves a stale train_tokenizer that breaks the next run with "subprocess exited
+# but did not write a status file" — so build both targets in lockstep.
 if [[ "$DO_BUILD" == true ]]; then
-  echo "Building train_gpu (training loop) on Anvil in $ANVIL_DIR/$BUILD_DIR ..."
+  echo "Building train_gpu + train_tokenizer (training loop) on Anvil in $ANVIL_DIR/$BUILD_DIR ..."
   [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT (user-installed CUDA 12)"
-  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_PREFER_PROJECT_CUDA12 && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && ${ANVIL_CLEAN_BEFORE_BUILD}mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
+  ssh anvil "$ANVIL_EXPORT_CUDA $ANVIL_CUDA_ARCH cd $ANVIL_DIR && $ANVIL_PREFER_PROJECT_CUDA12 && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && ${ANVIL_CLEAN_BEFORE_BUILD}mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_ENSURE_CUDA12 && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu train_tokenizer"
 fi
 
 # --build-grim: GRIM-text/GRIM CMake → grim_text_server (inference)

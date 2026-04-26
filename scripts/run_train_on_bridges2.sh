@@ -231,7 +231,15 @@ fi
 BRIDGES2_CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_DIR=$BRIDGES2_DIR/$TRAINING_DIR"
 
 # --build
-BUILD_TARGET="train_gpu"
+# Default to building train_gpu PLUS train_tokenizer because train_gpu spawns
+# train_tokenizer as a subprocess at runtime (see Subprocess/tokenizer_subprocess.cpp);
+# rebuilding train_gpu alone leaves a stale train_tokenizer that's pinned to whatever
+# IPC contract was current the last time it was built. The two binaries share an
+# IPC schema (--status-file / --config flags + status JSON envelope), so any time
+# train_gpu is rebuilt train_tokenizer MUST be rebuilt too or the parent will fail
+# with "subprocess exited but did not write a status file" the first time it spawns
+# the child. Sub-target builds (--TD/--UT/--TT) keep their single-target footprint.
+BUILD_TARGET="train_gpu train_tokenizer"
 if [[ "$DO_TD" == true ]]; then
   BUILD_TARGET="grmt_vocab_metrics_test"
 elif [[ "$DO_UT" == true ]]; then

@@ -306,12 +306,21 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     std::string& loaded_checkpoint_path);
 
 /**
- * @brief Initialize optimizer and gradient controller
+ * @brief Initialize optimizer state AND restore the sidecar that pairs with
+ *        the .bin checkpoint that loaded the model weights.
+ *
+ * Writes ctx.optimizer in-place. When ctx.loaded_checkpoint_path is non-empty,
+ * pairs it with optimizerSidecarPath() and calls loadOptimizerState(ctx, ...);
+ * a missing sidecar is logged and treated as a fresh-optimizer start. A failed
+ * sidecar load is also logged and tolerated — fresh optimizer state, weights
+ * keep what initializeModel loaded.
+ *
+ * Why this lives here (Rule 20: single source of truth): the sidecar path
+ * MUST be derived from the EXACT checkpoint that loaded weights. Splitting
+ * the work across the call site let an independent rescan of the checkpoint
+ * dir creep in and pick a different epoch's .opt.
  */
-OptimizerContext initializeOptimizer(
-    GRIM::LanguageModel& model,
-    const StartupConfig& config,
-    TrainingLogger& logger);
+void initializeOptimizer(TrainingContext& ctx);
 
 // initializeRNG declaration moved to Startup/Rng.hpp
 } // namespace Internal

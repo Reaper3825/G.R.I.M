@@ -42,7 +42,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include <iostream>
 #include <fstream>
 #include <iomanip>
-#include <sstream>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -512,33 +511,31 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     return model;
 }
 
-OptimizerContext initializeOptimizer(
-    GRIM::LanguageModel& model,
-    const StartupConfig& config,
-    TrainingLogger& logger) {
-    
-    OptimizerContext ctx;
-    const auto& hp = config.hyperparameters;
-    
+void initializeOptimizer(TrainingContext& ctx) {
+    auto& logger = *ctx.logging.logger;
+    auto& opt = ctx.optimizer;
+    auto& model = *ctx.model;
+    const auto& hp = ctx.config.hyperparameters;
+
     logger.log("Initializing optimizer state...");
-    
+
     // Optimizer state (AdamW hyperparameters are defined as constants in AdamW_Kernal_GPU.cu)
-    ctx.optimizer_state.step = 0;
-    
+    opt.optimizer_state.step = 0;
+
     // Soft restart controller — loss-detection thresholds (loss_increase_threshold,
     // max_step_window) now live in GRIM::Loss::LossSignalConfig (validation_delta_threshold)
     // and are wired in Phase2 when the LossSignalBus is constructed. SoftRestartConfig
     // owns ONLY cooldown_steps now.
     GRIM::SoftRestart::SoftRestartConfig sr_cfg;
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
-    ctx.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
-    
+    opt.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
+
     // Gradient accumulation now tracked directly via hyperparameters.
-    // ctx.optimizer.current_micro_step is reset at start of each accumulation
+    // opt.current_micro_step is reset at start of each accumulation
     // window. batch_size and gradient_accumulation_steps are reported by
     // ConfigDump; no local echo.
-    ctx.current_micro_step = 0;
-    
+    opt.current_micro_step = 0;
+
     // Verify ALL encoder layers initialized (prevents lazy init during forward pass)
     auto* gpu_encoder = &model.getGpuEncoder();
     for (int layer = 0; layer < model.getConfig().num_layers; ++layer) {
@@ -547,9 +544,33 @@ OptimizerContext initializeOptimizer(
                                      "ensure model.initGPU() completes all layers before training");
         }
     }
-    
+
     logger.log("✓ Optimizer state initialized");
-    return ctx;
+
+    // Restore optimizer sidecar paired to the EXACT checkpoint that loaded
+    // weights. Do NOT rescan the checkpoint dir here — that's how a different
+    // epoch's .opt could shadow the one matching the loaded .bin.
+    // loadOptimizerState() emits its own success line via EmitModuleInfo
+    // (step/global_step/best_val_loss/epoch/micro_step/groups), so the
+    // success branch deliberately stays silent here (Rule 20: single source
+    // of truth for the restore log). Failures are tolerated — we keep the
+    // freshly-initialized optimizer state and let training resume.
+    if (ctx.loaded_checkpoint_path.empty()) return;
+
+    const std::string opt_path = optimizerSidecarPath(ctx.loaded_checkpoint_path);
+    if (!fs::exists(opt_path)) {
+        logger.log("⚠ No optimizer sidecar for loaded checkpoint: " + ctx.loaded_checkpoint_path);
+        logger.log("  Continuing with fresh optimizer state (moments reset, LR from step 0)");
+        return;
+    }
+
+    logger.log("Found optimizer sidecar for loaded checkpoint: " + opt_path);
+    try {
+        loadOptimizerState(ctx, opt_path);
+    } catch (const std::exception& e) {
+        logger.log(std::string("⚠ Optimizer sidecar load failed: ") + e.what());
+        logger.log("  Continuing with fresh optimizer state for checkpoint: " + ctx.loaded_checkpoint_path);
+    }
 }
 
 // initializeRNG moved to Startup/Rng.cu
@@ -635,19 +656,15 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + ")");
     }
     
-    // CRITICAL: Validate vocab size matches tokenizer (detects stale .grmt files after atom encoding changes)
+    // GRMT/vocab.bin header equality is enforced inside the tokenizer
+    // subprocess: PrepareTrainingDataFromCache (DataLoader.cu ~480-538)
+    // re-reads both headers and forces a full rebuild on mismatch, then writes
+    // a fresh .grmt using tokenizer.totalVocabSize() (line ~942). By the time
+    // we land here the two are guaranteed equal at the byte level — a second
+    // runtime equality check would only fire on loader bugs, not on stale
+    // artifacts. Keep this local for the DataStatsSnapshot below.
     const uint32_t tokenizer_vocab_size = ctx->tokenizer.totalVocabSize();
-    if (ctx->config.actual_vocab_size != tokenizer_vocab_size) {
-        std::ostringstream err;
-        err << "FATAL: Vocab size mismatch!\n"
-            << "  Training data (.grmt): " << ctx->config.actual_vocab_size << " tokens\n"
-            << "  Current tokenizer:     " << tokenizer_vocab_size << " tokens\n"
-            << "Delete .grmt files to force regeneration.";
-        throw std::runtime_error(err.str());
-    }
-    // (Successful vocab match is logged as part of the unified data-stats
-    // block emitted by dumpAllHyperparameters below.)
-    
+
     // 6. Harmonize hyperparameters
     GRIM::HyperParameters::DerivationContext hp_ctx;
     hp_ctx.train_sequence_count = static_cast<int>(ctx->data.train_seqs.size());
@@ -728,34 +745,11 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         std::exit(save_ok ? 0 : 1);
     }
     
-    // 10. Initialize optimizer
-    ctx->optimizer = Internal::initializeOptimizer(*ctx->model, ctx->config, *ctx->logging.logger);
-    
-    // 10a. Restore optimizer state from the EXACT checkpoint that loaded weights.
-    // CRITICAL: Do NOT rescan the checkpoint dir independently — that can pick a
-    // different epoch's .opt sidecar if a newer .bin failed to load.
-    if (!ctx->loaded_checkpoint_path.empty()) {
-        std::string opt_path = optimizerSidecarPath(ctx->loaded_checkpoint_path);
-        if (fs::exists(opt_path)) {
-            ctx->logging.logger->log("Found optimizer sidecar for loaded checkpoint: " + opt_path);
-            try {
-                loadOptimizerState(*ctx, opt_path);
-                ctx->logging.logger->log("✓ Optimizer state restored (step=" + 
-                    std::to_string(ctx->optimizer.optimizer_state.step) +
-                    ", global_step=" + std::to_string(ctx->global_step) +
-                    ", best_val_loss=" + std::to_string(ctx->best_val_loss) +
-                    ", epochs_completed=" + std::to_string(ctx->epochs_completed) + ")");
-            } catch (const std::exception& e) {
-                ctx->logging.logger->log(std::string("⚠ Optimizer sidecar load failed: ") + e.what());
-                ctx->logging.logger->log("  Continuing with fresh optimizer state for checkpoint: " + ctx->loaded_checkpoint_path);
-            }
-        } else {
-            ctx->logging.logger->log("⚠ No optimizer sidecar for loaded checkpoint: " + ctx->loaded_checkpoint_path);
-            ctx->logging.logger->log("  Continuing with fresh optimizer state (moments reset, LR from step 0)");
-        }
-    }
-    
-    // 10b. Compute class-balanced loss weights if enabled.
+    // 10. Initialize optimizer (also restores optimizer sidecar paired to the
+    // exact checkpoint that loaded weights — see Internal::initializeOptimizer).
+    Internal::initializeOptimizer(*ctx);
+
+    // 10a. Compute class-balanced loss weights if enabled.
     // Implementation lives in Phases/Startup/ClassBalancedWeights.cu —
     // see that file for the frequency math and logging contract.
     if (ctx->config.hyperparameters.loss_class_balanced_enabled) {

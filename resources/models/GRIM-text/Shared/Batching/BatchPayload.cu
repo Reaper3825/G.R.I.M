@@ -199,13 +199,34 @@ BatchPayload buildBatchPayload(
         });
 
         payload.seq_lengths[b] = seq_len;
-        payload.max_seq_len = std::max(payload.max_seq_len, seq_len);
         payload.actual_tokens += seq_len;
 
-        // Token stats accumulation
+        // Token stats accumulation: actual (pre-padding) per-row max for diagnostics.
         payload.token_stats.total_tokens += seq_len;
         payload.token_stats.max_sequence_length = std::max(
             payload.token_stats.max_sequence_length, seq_len);
+    }
+
+    // Pad every batch to the configured sliding-window / cache cap so the
+    // training-time token rectangle is constant across batches. The sliding
+    // window stage in Phase1 already guarantees seq_len <= max_cached_seq_len
+    // for every row, so this is a pure pad-up (never a truncation).
+    // Rule 20: total_tokens MUST be deterministic per run — do NOT collapse to
+    // the per-batch max, which silently shrinks the rectangle for batches that
+    // happen to contain only short sequences and breaks downstream consumers
+    // (loss accounting, GPU cache fit, telemetry totals).
+    payload.max_seq_len = static_cast<int>(max_cached_seq_len);
+
+    // Defense-in-depth: any individual row exceeding the cap is a sliding-window
+    // contract violation — fail loud rather than silently truncating.
+    for (int b = 0; b < payload.batch_size; ++b) {
+        if (payload.seq_lengths[b] > payload.max_seq_len) {
+            throw std::runtime_error(
+                "buildBatchPayload: seq " + std::to_string(payload.seq_ids[b]) +
+                " length=" + std::to_string(payload.seq_lengths[b]) +
+                " exceeds max_cached_seq_len=" + std::to_string(payload.max_seq_len) +
+                " — sliding window invariant violated");
+        }
     }
 
     // Derived geometry
