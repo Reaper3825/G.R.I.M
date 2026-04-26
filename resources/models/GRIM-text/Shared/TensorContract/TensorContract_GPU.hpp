@@ -32,21 +32,6 @@
 //  (defined in TensorContract_GPU.cu)
 extern bool g_autograd_verbose;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ISSUE #60: DEBUG GRADIENT ATTRIBUTION
-// Global hooks for capturing gradient sources separately (tied-weight debugging)
-// Set these from TrainingState to enable gradient attribution logging
-// ═══════════════════════════════════════════════════════════════════════════
-extern float* g_debug_lm_head_only_grad;   // Buffer to capture LM head backward contribution
-extern float* g_debug_embedding_only_grad; // Buffer to capture embedding backward contribution  
-extern size_t g_debug_grad_buffer_size;    // Size in elements (vocab_size * d_model)
-extern bool g_debug_capture_enabled;       // Set to true to enable capturing
-
-
-// Call these to capture gradient sources (called internally by GradFn::apply)
-void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream);
-void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream);
-
 //  TENSOR LAYOUTS
 //  ==============
 //  2D LAYOUTS (flat tensors):

@@ -276,16 +276,6 @@ struct TrainingState {
     //======================================================//
     float* d_class_weights = nullptr;     // [vocab_size] on GPU, w_v = 1/freq(v)^β
     int class_weights_vocab_size = 0;     // For validation
-    
-    //======================================================//
-    //  DEBUG GRADIENT ATTRIBUTION (Issue #60)
-    //======================================================//
-    bool debug_gradient_attribution = false;
-    Tensor debug_lm_head_only_grad;
-    Tensor debug_embedding_only_grad;
-    
-    void allocateDebugGradBuffers(int vocab_size, int d_model, cudaStream_t stream);
-    void freeDebugGradBuffers();
 
     //======================================================//
     //  GUESS CACHE BUFFERS (GRIM-TS - typed buffers, NOT Tensors)

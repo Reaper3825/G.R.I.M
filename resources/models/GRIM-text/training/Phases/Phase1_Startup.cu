@@ -801,40 +801,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             *ctx->logging.logger);
     }
     
-    // 10d. Issue #60 DEBUG: Allocate gradient attribution buffers if enabled
-    // This lets us separately track LM head vs embedding backward contributions
-    // to debug the positive feedback loop causing mode collapse to the tracked token
-    {
-        auto& ts = ctx->model->getTrainingState();
-        const auto& model_cfg = ctx->model->getConfig();
-        
-        // PRODUCTION: Disabled (causes GPU sync + D2H copies every backward pass)
-        // Set to true only when debugging tied embedding gradient issues
-        ts.debug_gradient_attribution = false;
-        
-        if (ts.debug_gradient_attribution) {
-            const int vocab_size = static_cast<int>(model_cfg.vocab_size);
-            const int d_model = model_cfg.d_model;
-            cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-            
-            ts.allocateDebugGradBuffers(vocab_size, d_model, stream);
-            
-            // Set global hooks for gradient capture (use Tensor.data for raw pointer)
-            g_debug_lm_head_only_grad = ts.debug_lm_head_only_grad.data;
-            g_debug_embedding_only_grad = ts.debug_embedding_only_grad.data;
-            g_debug_grad_buffer_size = static_cast<size_t>(ts.debug_lm_head_only_grad.numel());
-            g_debug_capture_enabled = true;
-            
-            ctx->logging.logger->log("✓ Issue #60 DEBUG: Gradient attribution buffers allocated");
-            ctx->logging.logger->log("  LM_HEAD_ONLY buffer: " + std::to_string(ts.debug_lm_head_only_grad.numel() * sizeof(float) / (1024*1024)) + " MB");
-            ctx->logging.logger->log("  Will log tracked collapse token gradient sources after each backward pass");
-        }
-
-        if (model_cfg.tie_embeddings) {
-            ctx->logging.logger->log("✓ Tied weight gradients use PyTorch-style direct accumulation");
-        }
-    }
-    
     // 11. Initialize telemetry lattice
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry lattice...", 0);
     ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(

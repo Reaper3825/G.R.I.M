@@ -48,10 +48,7 @@ TrainingState::~TrainingState() {
 	
 	// Free guess cache buffers (GRIM-TS - not Tensor-based, uses raw cudaMalloc)
 	freeGuessCacheBuffers();
-	
-	// Issue #60: Free debug gradient attribution buffers
-	freeDebugGradBuffers();
-	
+
 	// Free class-balanced loss weights (raw cudaMalloc)
 	if (d_class_weights) { cudaFree(d_class_weights); d_class_weights = nullptr; }
 
@@ -330,38 +327,6 @@ void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 	safe_zero(grad_qkv_concat_tensor, "grad_qkv_concat");
 	safe_zero(grad_qkv_input_tensor, "grad_qkv_input");
 	safe_zero(grad_attn_bsm_tensor, "grad_attn_bsm");
-}
-
-//======================================================//
-//  ISSUE #60 FIX: PCGrad Buffer for Tied Weights (Tensor-based)
-//======================================================//
-
-
-//======================================================//
-//  DEBUG: Gradient Attribution Buffers (Issue #60) - Tensor-based
-//======================================================//
-
-void TrainingState::allocateDebugGradBuffers(int vocab_size, int d_model, cudaStream_t stream) {
-	if (debug_lm_head_only_grad.data || debug_embedding_only_grad.data) {
-		freeDebugGradBuffers();  // Clean up any existing buffers
-	}
-	
-	// Rule 22: getPrimaryStream() throws if not initialized (Rule 20)
-	cudaStream_t primary_stream = stream ? stream : stream_ctrl.getPrimaryStream();
-	
-	// Allocate as Tensors [vocab_size, d_model]
-	debug_lm_head_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream, "debug_lm_head_only_grad");
-	debug_embedding_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream, "debug_embedding_only_grad");
-	
-	const size_t buffer_size = static_cast<size_t>(vocab_size) * d_model;
-	fprintf(stdout, "[DEBUG] Allocated gradient attribution buffers: %zu elements (%zu MB each)\n",
-	        buffer_size, buffer_size * sizeof(float) / (1024 * 1024));
-}
-
-void TrainingState::freeDebugGradBuffers() {
-	// Tensor auto-cleanup - just replace with empty tensors
-	debug_lm_head_only_grad = Tensor();
-	debug_embedding_only_grad = Tensor();
 }
 
 } // namespace GRIM

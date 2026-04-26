@@ -54,35 +54,6 @@ std::atomic<int> TensorLifecycleCounters::move_counter{0};
 
 #define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ISSUE #60: DEBUG GRADIENT ATTRIBUTION
-// Hooks to capture gradient sources separately for tied-weight debugging
-
-// Global buffers for capturing gradient contributions (set by TrainingState)
-float* g_debug_lm_head_only_grad = nullptr;   // Where to copy LM head backward contribution
-float* g_debug_embedding_only_grad = nullptr; // Where to copy embedding backward contribution
-size_t g_debug_grad_buffer_size = 0;          // Size in elements (vocab_size * d_model)
-
-// Call this after LM head matmul backward to capture its contribution
-void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
-    if (!g_autograd_verbose) return;  // Debug capture not enabled - valid skip
-    if (!g_debug_lm_head_only_grad) throw std::runtime_error("debugCaptureLMHeadGrad: g_debug_lm_head_only_grad buffer is NULL - initDebugGradCapture() must be called first");
-    if (!grad_ptr) throw std::runtime_error("debugCaptureLMHeadGrad: grad_ptr is NULL - caller MUST provide valid gradient pointer");
-    const size_t copy_size = (size < g_debug_grad_buffer_size ? size : g_debug_grad_buffer_size);
-    cudaMemcpyAsync(g_debug_lm_head_only_grad, grad_ptr, copy_size * sizeof(float), 
-                    cudaMemcpyDeviceToDevice, stream);
-}
-
-// Call this after embedding backward to capture its contribution
-void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
-    if (!g_autograd_verbose) return;  // Debug capture not enabled - valid skip
-    if (!g_debug_embedding_only_grad) throw std::runtime_error("debugCaptureEmbeddingGrad: g_debug_embedding_only_grad buffer is NULL - initDebugGradCapture() must be called first");
-    if (!grad_ptr) throw std::runtime_error("debugCaptureEmbeddingGrad: grad_ptr is NULL - caller MUST provide valid gradient pointer");
-    const size_t copy_size = (size < g_debug_grad_buffer_size ? size : g_debug_grad_buffer_size);
-    cudaMemcpyAsync(g_debug_embedding_only_grad, grad_ptr, copy_size * sizeof(float), 
-                    cudaMemcpyDeviceToDevice, stream);
-}
-
 // Global stream for async cleanup - initialized on first use
 static cudaStream_t g_cleanup_stream = nullptr;
 static std::mutex g_cleanup_stream_mutex;
@@ -4378,12 +4349,6 @@ struct EmbeddingGradFn : public GradFn {
             grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
         trackKernelLaunch("kernel_embedding_backward", stream);
         
-        // DEBUG: Capture embedding gradient
-        if (g_autograd_verbose && g_debug_embedding_only_grad && weight_grad) {
-            const size_t total_size = weight_shape.total_elements();
-            debugCaptureEmbeddingGrad(weight_grad, total_size, stream);
-        }
-
         // CONTINUE AUTOGRAD CHAIN using stored grad_fn
         if (weight_grad_fn) {
             Tensor view;

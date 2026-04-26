@@ -638,14 +638,6 @@ struct MatMulGradFn : public GradFn {
                 );
                 trackCublasCall("cublasSgemm_grad_B", cublas_handle, stream, sgemm_status_4);
             }
-            
-            // ISSUE #60 DEBUG: Capture LM head grad contribution if debugging enabled
-            // Check if this looks like LM head (N=vocab_size is large, K=d_model is small)
-            // Typical LM head: N=50377, K=768
-            if (g_autograd_verbose && N > 10000 && K < 2000) {
-                debugCaptureLMHeadGrad(grad_b, static_cast<size_t>(N) * K, stream);
-                AG_TRACE("[MatMulGradFn] DEBUG: Captured LM head grad, N=%d K=%d\n", N, K);
-            }
         }
 
         // Issue #142: applyLmHeadGradCorrections removed.
