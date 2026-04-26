@@ -26,6 +26,7 @@
 #include "Startup/ClassBalancedWeights.hpp"
 #include "Startup/InitFacts.hpp"
 #include "Startup/Capacity/CapacityStem.hpp"
+#include "Startup/Capacity/MemorySnapshot.hpp"
 // HyperParameters_GPU.hpp is the single entry point; it defines
 // GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS and transitively includes
 // control/ai_config_paths.hpp in the correct order.
@@ -600,6 +601,9 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
 
     // Initialize unified BatchLogTape system (sinks + global tape pointer)
     Internal::setupBatchLogTape(ctx->logging, ctx->config);
+
+    // 2a. Capture memory snapshot (evidence-only; never clamps capacity).
+    ctx->memory_snapshot = captureMemorySnapshotOrThrow();
 
     // 2b. Tokenizer / training_data preparation is owned by the
     //      train_tokenizer subprocess that ran BEFORE Phase 1 (see

@@ -1,4 +1,5 @@
 #include "Batching_GPU.hpp"
+#include "PackerPolicy.hpp"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -87,21 +88,26 @@ std::string BatchSchedule::summary() const {
 // =============================================================================
 // Build Batches - Main Implementation
 // =============================================================================
-BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
+BatchSchedule buildBatches(
+    const Catalog& catalog,
+    uint32_t max_tokens_per_batch,
+    uint32_t max_batch_size,
+    const PackerPolicy& policy)
+{
     BatchSchedule schedule{};
     
     if (catalog.entries().empty()) {
         return schedule;
     }
-    if (opts.max_tokens_per_batch == 0) {
+    if (max_tokens_per_batch == 0) {
         throw std::runtime_error("buildBatches: max_tokens_per_batch=0 — caller MUST set token budget");
     }
-    if (opts.max_batch_size == 0) {
+    if (max_batch_size == 0) {
         throw std::runtime_error("buildBatches: max_batch_size=0 — caller MUST set batch size limit");
     }
 
     const auto& entries = catalog.entries();
-    const uint32_t bucket_step = std::max(1u, opts.bucket_step);
+    const uint32_t bucket_step = std::max(1u, policy.bucket_step);
     
     // Build indices of valid sequences + compute length percentiles in ONE pass
     std::vector<uint32_t> view_indices;
@@ -129,12 +135,12 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
     // Lambda to compute sort key for a sequence by index
     auto computeSortKey = [&](uint32_t entry_idx) -> float {
         const uint32_t len = entries[entry_idx].seq_length;
-        float len_key = opts.prefer_short_first ? static_cast<float>(len) : -static_cast<float>(len);
+        float len_key = policy.prefer_short_first ? static_cast<float>(len) : -static_cast<float>(len);
         
         // Apply curriculum: filter long sequences early in training
-        if (opts.curriculum_progress < 1.0f) {
+        if (policy.curriculum_progress < 1.0f) {
             uint32_t max_allowed = static_cast<uint32_t>(
-                schedule.p50_seq_len + opts.curriculum_progress * (schedule.p99_seq_len - schedule.p50_seq_len)
+                schedule.p50_seq_len + policy.curriculum_progress * (schedule.p99_seq_len - schedule.p50_seq_len)
             );
             if (len > max_allowed) {
                 len_key += 1e6f;  // push to end
@@ -144,18 +150,18 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
     };
     
     // Sort indices based on strategy
-    if (opts.strategy == PackingStrategy::SIMILARITY_GROUPED) {
+    if (policy.strategy == PackingStrategy::SIMILARITY_GROUPED) {
         // Sort by bucket (groups similar lengths together)
         std::stable_sort(view_indices.begin(), view_indices.end(),
             [&](uint32_t idx_a, uint32_t idx_b) {
                 uint32_t bucket_a = bucketize(entries[idx_a].seq_length, bucket_step);
                 uint32_t bucket_b = bucketize(entries[idx_b].seq_length, bucket_step);
                 if (bucket_a != bucket_b) {
-                    return opts.prefer_short_first ? (bucket_a < bucket_b) : (bucket_a > bucket_b);
+                    return policy.prefer_short_first ? (bucket_a < bucket_b) : (bucket_a > bucket_b);
                 }
                 return computeSortKey(idx_a) < computeSortKey(idx_b);
             });
-    } else if (opts.strategy == PackingStrategy::BEST_FIT_DECREASING) {
+    } else if (policy.strategy == PackingStrategy::BEST_FIT_DECREASING) {
         // Sort longest first (FFD algorithm)
         std::stable_sort(view_indices.begin(), view_indices.end(),
             [&](uint32_t idx_a, uint32_t idx_b) {
@@ -166,9 +172,9 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
         // Issue #90: Length-sorted batching caused mode collapse at max_seq_len boundary.
         // By shuffling, we expose ALL position ranges from batch 1, preventing the
         // boundary effect where positions 671-1023 were only first seen in batch 5.
-        if (opts.rng_seed != 0) {
+        if (policy.rng_seed != 0) {
             // Deterministic shuffle using provided seed
-            std::mt19937_64 shuffle_rng(opts.rng_seed);
+            std::mt19937_64 shuffle_rng(policy.rng_seed);
             std::shuffle(view_indices.begin(), view_indices.end(), shuffle_rng);
         } else {
             // Non-deterministic shuffle (fallback)
@@ -184,8 +190,8 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
         // (and therefore curriculum_progress / prefer_short_first) is never used
         // on the GREEDY path, which is the path training selects.
         const bool curriculum_active =
-            opts.prefer_short_first ||
-            (opts.curriculum_progress < 1.0f &&
+            policy.prefer_short_first ||
+            (policy.curriculum_progress < 1.0f &&
              schedule.p99_seq_len > schedule.p50_seq_len);
         if (curriculum_active) {
             std::stable_sort(view_indices.begin(), view_indices.end(),
@@ -195,14 +201,13 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
         }
     }
     
-    // Use pre-computed token budget from analyzeAndRecommend() (Phase2 sets opts.max_tokens_per_batch)
-    const uint32_t token_budget = opts.max_tokens_per_batch;
+    const uint32_t token_budget = max_tokens_per_batch;
     
     // =======================================================================
     // Packing algorithm
     // =======================================================================
     
-    if (opts.strategy == PackingStrategy::BEST_FIT_DECREASING) {
+    if (policy.strategy == PackingStrategy::BEST_FIT_DECREASING) {
         // FFD: For each sequence, find the batch where it fits best (least waste)
         // Open batches that we can still add to
         struct OpenBatch {
@@ -216,18 +221,13 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             const uint32_t seq_len = entries[entry_idx].seq_length;
             const uint32_t seq_id = entries[entry_idx].seq_id;
             
-            // Check for overflow
+            // Capacity contract (Rule 20): scheduler must not emit "overflow batches"
+            // that violate the declared token budget.
             if (seq_len > token_budget) {
-                BatchAssignment overflow{};
-                overflow.seq_ids.push_back(seq_id);
-                overflow.max_seq_len = seq_len;
-                overflow.min_seq_len = seq_len;
-                overflow.actual_tokens = seq_len;
-                overflow.overflow = true;
-                finalizeBatchStats(overflow, {seq_len});
-                schedule.batches.push_back(std::move(overflow));
-                schedule.overflow_batches++;
-                continue;
+                throw std::runtime_error(
+                    "buildBatches: sequence exceeds token budget (seq_id=" + std::to_string(seq_id) +
+                    " seq_len=" + std::to_string(seq_len) +
+                    " token_budget=" + std::to_string(token_budget) + ")");
             }
             
             // Find best-fit batch (minimize waste increase)
@@ -244,12 +244,12 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
                 uint64_t new_total = static_cast<uint64_t>(new_max) * new_size;
 
                 if (new_total > static_cast<uint64_t>(token_budget) ||
-                    new_size > opts.max_batch_size) continue;
+                    new_size > max_batch_size) continue;
                 
                 // Check similarity constraint if enabled
-                if (opts.similarity_threshold < 1.0f) {
-                    if (!areSimilarLengths(ob.assignment.min_seq_len, seq_len, opts.similarity_threshold) ||
-                        !areSimilarLengths(ob.assignment.max_seq_len, seq_len, opts.similarity_threshold)) {
+                if (policy.similarity_threshold < 1.0f) {
+                    if (!areSimilarLengths(ob.assignment.min_seq_len, seq_len, policy.similarity_threshold) ||
+                        !areSimilarLengths(ob.assignment.max_seq_len, seq_len, policy.similarity_threshold)) {
                         continue;
                     }
                 }
@@ -258,7 +258,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
                 // new_total >= old_total + seq_len by construction (new_max >= old_max,
                 // new_size = old_size + 1), so this subtraction is safe in uint64_t.
                 uint64_t waste_increase_u64 = new_total - old_total - seq_len;
-                uint32_t waste_increase = waste_increase_u64 > UINT32_MAX
+                uint32_t waste_increase = waste_increase_u64 > static_cast<uint64_t>(UINT32_MAX)
                     ? UINT32_MAX
                     : static_cast<uint32_t>(waste_increase_u64);
 
@@ -278,9 +278,14 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
                 {
                     uint64_t total64 = static_cast<uint64_t>(ob.assignment.max_seq_len) *
                                        static_cast<uint64_t>(ob.assignment.seq_ids.size());
-                    ob.assignment.total_tokens = total64 > UINT32_MAX
-                        ? UINT32_MAX
-                        : static_cast<uint32_t>(total64);
+                    if (total64 > static_cast<uint64_t>(UINT32_MAX)) {
+                        throw std::runtime_error(
+                            "buildBatches: total_tokens overflow (max_seq_len=" +
+                            std::to_string(ob.assignment.max_seq_len) +
+                            " batch_size=" + std::to_string(ob.assignment.seq_ids.size()) +
+                            " product=" + std::to_string(total64) + ")");
+                    }
+                    ob.assignment.total_tokens = static_cast<uint32_t>(total64);
                 }
                 ob.lengths.push_back(seq_len);
                 ob.remaining_slots--;
@@ -308,7 +313,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
                 new_batch.assignment.actual_tokens = seq_len;
                 new_batch.assignment.total_tokens = seq_len;
                 new_batch.lengths.push_back(seq_len);
-                new_batch.remaining_slots = opts.max_batch_size - 1;
+                new_batch.remaining_slots = max_batch_size - 1;
                 open_batches.push_back(std::move(new_batch));
             }
         }
@@ -340,19 +345,13 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             const uint32_t seq_len = entries[entry_idx].seq_length;
             const uint32_t seq_id = entries[entry_idx].seq_id;
             
-            // Check for overflow
+            // Capacity contract (Rule 20): no overflow batches. If a single
+            // sequence violates the token budget, fail loud with identifiers.
             if (seq_len > token_budget) {
-                finalizeCurrent();
-                BatchAssignment overflow{};
-                overflow.seq_ids.push_back(seq_id);
-                overflow.max_seq_len = seq_len;
-                overflow.min_seq_len = seq_len;
-                overflow.actual_tokens = seq_len;
-                overflow.overflow = true;
-                finalizeBatchStats(overflow, {seq_len});
-                schedule.batches.push_back(std::move(overflow));
-                schedule.overflow_batches++;
-                continue;
+                throw std::runtime_error(
+                    "buildBatches: sequence exceeds token budget (seq_id=" + std::to_string(seq_id) +
+                    " seq_len=" + std::to_string(seq_len) +
+                    " token_budget=" + std::to_string(token_budget) + ")");
             }
             
             uint32_t prospective_size = static_cast<uint32_t>(current.seq_ids.size()) + 1;
@@ -362,12 +361,12 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
                 static_cast<uint64_t>(prospective_size) * static_cast<uint64_t>(prospective_max);
 
             bool exceeds_budget = prospective_tokens > static_cast<uint64_t>(token_budget);
-            bool exceeds_size = prospective_size > opts.max_batch_size;
+            bool exceeds_size = prospective_size > max_batch_size;
             bool breaks_similarity = false;
             
-            if (opts.strategy == PackingStrategy::SIMILARITY_GROUPED && !current.seq_ids.empty()) {
-                breaks_similarity = !areSimilarLengths(current.min_seq_len, seq_len, opts.similarity_threshold) ||
-                                   !areSimilarLengths(current.max_seq_len, seq_len, opts.similarity_threshold);
+            if (policy.strategy == PackingStrategy::SIMILARITY_GROUPED && !current.seq_ids.empty()) {
+                breaks_similarity = !areSimilarLengths(current.min_seq_len, seq_len, policy.similarity_threshold) ||
+                                   !areSimilarLengths(current.max_seq_len, seq_len, policy.similarity_threshold);
             }
             
             if (!current.seq_ids.empty() && (exceeds_budget || exceeds_size || breaks_similarity)) {
@@ -382,9 +381,14 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             {
                 uint64_t total64 = static_cast<uint64_t>(current.max_seq_len) *
                                    static_cast<uint64_t>(current.seq_ids.size());
-                current.total_tokens = total64 > UINT32_MAX
-                    ? UINT32_MAX
-                    : static_cast<uint32_t>(total64);
+                if (total64 > static_cast<uint64_t>(UINT32_MAX)) {
+                    throw std::runtime_error(
+                        "buildBatches: total_tokens overflow (max_seq_len=" +
+                        std::to_string(current.max_seq_len) +
+                        " batch_size=" + std::to_string(current.seq_ids.size()) +
+                        " product=" + std::to_string(total64) + ")");
+                }
+                current.total_tokens = static_cast<uint32_t>(total64);
             }
             current_lengths.push_back(seq_len);
         }
@@ -427,12 +431,12 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
     // Post-packing batch ordering (curriculum learning)
     // =======================================================================
     
-    if (opts.batch_ordering != BatchOrdering::PRESERVE && schedule.batches.size() > 1) {
+    if (policy.batch_ordering != BatchOrdering::PRESERVE && schedule.batches.size() > 1) {
         // Separate overflow batches if requested
         std::vector<BatchAssignment> overflow_batches;
         std::vector<BatchAssignment> normal_batches;
         
-        if (opts.interleave_overflow) {
+        if (policy.interleave_overflow) {
             for (auto& batch : schedule.batches) {
                 if (batch.overflow) {
                     overflow_batches.push_back(std::move(batch));
@@ -449,7 +453,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             return b.seq_ids.empty() ? 0.0f : static_cast<float>(b.actual_tokens) / b.seq_ids.size();
         };
         
-        switch (opts.batch_ordering) {
+        switch (policy.batch_ordering) {
             case BatchOrdering::LENGTH_ASCENDING:
                 std::stable_sort(normal_batches.begin(), normal_batches.end(),
                     [&](const BatchAssignment& a, const BatchAssignment& b) {
@@ -487,14 +491,14 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             }
                 
             case BatchOrdering::RANDOM: {
-                // Fisher-Yates shuffle — use opts.rng_seed for reproducibility.
+                // Fisher-Yates shuffle — use policy.rng_seed for reproducibility.
                 // Guard against size() == 0: with size_t, `size() - 1` underflows
                 // to SIZE_MAX. This path is reachable when interleave_overflow=true
                 // moves every batch into overflow_batches, leaving normal_batches
                 // empty.
                 if (normal_batches.size() > 1) {
-                    const uint64_t order_seed = (opts.rng_seed != 0)
-                        ? opts.rng_seed + 0x9E3779B97F4A7C15ULL  // derive distinct seed from packing seed
+                    const uint64_t order_seed = (policy.rng_seed != 0)
+                        ? policy.rng_seed + 0x9E3779B97F4A7C15ULL  // derive distinct seed from packing seed
                         : std::random_device{}();
                     std::mt19937_64 rng(order_seed);
                     for (size_t i = normal_batches.size() - 1; i > 0; --i) {
@@ -511,7 +515,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
         }
         
         // Reintegrate overflow batches if they were separated
-        if (opts.interleave_overflow && !overflow_batches.empty()) {
+        if (policy.interleave_overflow && !overflow_batches.empty()) {
             // Sort overflow by length too
             std::stable_sort(overflow_batches.begin(), overflow_batches.end(),
                 [&](const BatchAssignment& a, const BatchAssignment& b) {

@@ -1,7 +1,7 @@
 //======================================================//
 //  EpochBatching.hpp
 //  Per-epoch batching policy: builds the BatchSchedule for
-//  one epoch by configuring BatchOptions and calling
+//  one epoch by configuring PackerPolicy and calling
 //  GRIM::Batching::buildBatches(...). Logs the resulting
 //  schedule via a caller-supplied log callback.
 //
@@ -20,7 +20,8 @@
 #include <functional>
 #include <string>
 
-#include "Batching_GPU.hpp"   // BatchSchedule, BatchOptions, Catalog
+#include "Batching_GPU.hpp"   // BatchSchedule, Catalog
+#include "PackerPolicy.hpp"
 
 namespace GRIM { namespace Batching {
 
@@ -39,8 +40,8 @@ inline constexpr int kCurriculumEpochs = 1;
 // Build the BatchSchedule for one epoch.
 //
 //  catalog      — per-epoch shuffled catalog of training sequences.
-//  batch_size   — max sequences per batch (also caps token budget).
-//  max_seq_len  — model max sequence length (token budget = batch_size * max_seq_len).
+//  max_tokens_per_batch — run capacity token rectangle (batch_rows * seq_cap).
+//  max_batch_size       — run capacity batch rows.
 //  global_step  — current optimizer step (used for warmup gating).
 //  epoch        — 0-based epoch index (used for curriculum gating + RNG).
 //  data_seed    — base data RNG seed; per-epoch seed = data_seed + epoch.
@@ -49,8 +50,8 @@ inline constexpr int kCurriculumEpochs = 1;
 //======================================================//
 BatchSchedule buildEpochBatches(
     const Catalog& catalog,
-    int batch_size,
-    uint32_t max_seq_len,
+    uint32_t max_tokens_per_batch,
+    uint32_t max_batch_size,
     int global_step,
     int epoch,
     uint64_t data_seed,
@@ -64,7 +65,8 @@ BatchSchedule buildEpochBatches(
 //======================================================//
 void logBatchSchedule(
     const BatchSchedule& schedule,
-    const BatchOptions& opts,
+    uint32_t max_tokens_per_batch,
+    const PackerPolicy& policy,
     const EpochBatchingLogFn& log_fn);
 
 } } // namespace GRIM::Batching

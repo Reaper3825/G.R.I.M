@@ -63,6 +63,7 @@
 #include "Startup/Rng.hpp"
 #include "Startup/Logging.hpp"
 #include "Startup/Capacity/RunCapacity.hpp"
+#include "Startup/Capacity/MemorySnapshot.hpp"
 
 namespace GRIMText::Training {
 
@@ -172,6 +173,8 @@ struct TrainingContext {
     StartupConfig config;
     // Capacity stem (single author after HP policy)
     RunCapacity run_capacity;
+    // Memory snapshot (evidence only; never authors capacity)
+    MemorySnapshot memory_snapshot;
     
     // Model and tokenizer
     std::unique_ptr<GRIM::LanguageModel> model;

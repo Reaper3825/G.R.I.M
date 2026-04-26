@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <limits>
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -244,12 +245,49 @@ void LanguageModel::initTrainingState() {
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
     // DO NOT duplicate Xavier init here per Rule 20 (no backwards compatibility shims).
     
-    const size_t max_batch_size = static_cast<size_t>(std::max(1, cfg.max_cached_batch));
-    const size_t max_seq_len_cache = static_cast<size_t>(std::max(1, std::min(cfg.max_seq_len, cfg.max_cached_seq_len)));
-    size_t max_tokens = max_batch_size * max_seq_len_cache;
-    const size_t max_logit_tokens = (cfg.max_tokens_per_batch > 0)
-        ? std::min(max_tokens, static_cast<size_t>(cfg.max_tokens_per_batch))
-        : max_tokens;
+    // Rule 20: capacity is authored upstream (RunCapacity -> LanguageModelConfig mirrors).
+    // This layer must not silently clamp mismatches; it must throw.
+    if (cfg.max_cached_batch <= 0) {
+        throw std::runtime_error("[initTrainingState] FATAL: cfg.max_cached_batch <= 0 (" +
+                                 std::to_string(cfg.max_cached_batch) + ")");
+    }
+    if (cfg.max_seq_len <= 0 || cfg.max_cached_seq_len <= 0) {
+        throw std::runtime_error("[initTrainingState] FATAL: invalid seq lens (max_seq_len=" +
+                                 std::to_string(cfg.max_seq_len) + " max_cached_seq_len=" +
+                                 std::to_string(cfg.max_cached_seq_len) + ")");
+    }
+    if (cfg.max_seq_len != cfg.max_cached_seq_len) {
+        throw std::runtime_error("[initTrainingState] FATAL: cfg.max_seq_len != cfg.max_cached_seq_len (max_seq_len=" +
+                                 std::to_string(cfg.max_seq_len) + " max_cached_seq_len=" +
+                                 std::to_string(cfg.max_cached_seq_len) + ")");
+    }
+    if (cfg.max_tokens_per_batch <= 0) {
+        throw std::runtime_error("[initTrainingState] FATAL: cfg.max_tokens_per_batch <= 0 (" +
+                                 std::to_string(cfg.max_tokens_per_batch) + ")");
+    }
+
+    const size_t max_batch_size = static_cast<size_t>(cfg.max_cached_batch);
+    const size_t max_seq_len_cache = static_cast<size_t>(cfg.max_cached_seq_len);
+
+    const uint64_t max_tokens_u64 =
+        static_cast<uint64_t>(max_batch_size) * static_cast<uint64_t>(max_seq_len_cache);
+    if (max_tokens_u64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        throw std::runtime_error("[initTrainingState] FATAL: max_tokens overflow (batch=" +
+                                 std::to_string(max_batch_size) + " seq_len=" +
+                                 std::to_string(max_seq_len_cache) + " product=" +
+                                 std::to_string(max_tokens_u64) + ")");
+    }
+    const size_t max_tokens = static_cast<size_t>(max_tokens_u64);
+
+    if (static_cast<size_t>(cfg.max_tokens_per_batch) != max_tokens) {
+        throw std::runtime_error("[initTrainingState] FATAL: cfg.max_tokens_per_batch does not match cache rectangle (cfg=" +
+                                 std::to_string(cfg.max_tokens_per_batch) + " expected=" +
+                                 std::to_string(max_tokens) + " batch=" +
+                                 std::to_string(max_batch_size) + " seq_len=" +
+                                 std::to_string(max_seq_len_cache) + ")");
+    }
+
+    const size_t max_logit_tokens = max_tokens;
 
     training_state_.max_cached_batch = static_cast<int>(max_batch_size);
     training_state_.max_cached_seq_len = static_cast<int>(max_seq_len_cache);

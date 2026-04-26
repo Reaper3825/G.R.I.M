@@ -207,10 +207,23 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignment(
     int mtp_k)
 {
     const auto& model_cfg = ctx.model->getConfig();
-    const size_t max_cached_batch = static_cast<size_t>(
-        std::max(1, model_cfg.max_cached_batch));
-    const size_t max_cached_seq = static_cast<size_t>(
-        std::max(1, std::min(model_cfg.max_seq_len, model_cfg.max_cached_seq_len)));
+    const size_t max_cached_batch = static_cast<size_t>(std::max<uint32_t>(1, ctx.run_capacity.batch_rows));
+    const size_t max_cached_seq   = static_cast<size_t>(std::max<uint32_t>(1, ctx.run_capacity.seq_cap));
+
+    // Rule 20: caches are authored by the capacity stem. Clamp-free: if model mirrors
+    // disagree, that is a startup contract bug, not something Phase2 should hide.
+    if (static_cast<uint32_t>(std::max(1, model_cfg.max_cached_batch)) != ctx.run_capacity.batch_rows) {
+        throw std::runtime_error(
+            "FATAL: model max_cached_batch does not match RunCapacity (model=" +
+            std::to_string(model_cfg.max_cached_batch) +
+            " stem=" + std::to_string(ctx.run_capacity.batch_rows) + ")");
+    }
+    if (model_cfg.max_cached_seq_len != static_cast<int>(ctx.run_capacity.seq_cap)) {
+        throw std::runtime_error(
+            "FATAL: model max_cached_seq_len does not match RunCapacity (model=" +
+            std::to_string(model_cfg.max_cached_seq_len) +
+            " stem=" + std::to_string(ctx.run_capacity.seq_cap) + ")");
+    }
 
     return GRIM::Batching::buildBatchPayload(
         assignment, views, ctx.config.actual_vocab_size,
@@ -300,21 +313,24 @@ ValidationResult runValidation(TrainingContext& ctx) {
             std::to_string(total_mem / (1024*1024)) + " MB total");
     }
 
-    // Use the same batch limits as training so validation uses the same memory path.
-    const auto& model_cfg = ctx.model->getConfig();
-    const int batch_size = std::max(1, ctx.config.hyperparameters.batch_size);
-    const uint32_t config_token_budget = static_cast<uint32_t>(batch_size) *
-        static_cast<uint32_t>(std::max(1, model_cfg.max_seq_len));
+    const uint32_t batch_rows = std::max<uint32_t>(1, ctx.run_capacity.batch_rows);
+    const uint32_t seq_cap    = std::max<uint32_t>(1, ctx.run_capacity.seq_cap);
+    const uint32_t token_budget = ctx.run_capacity.max_tokens_per_batch;
+    if (token_budget == 0) {
+        throw std::runtime_error("[Val] FATAL: RunCapacity.max_tokens_per_batch=0");
+    }
 
-    ctx.logging.logger->log("[Val] Token budget: " + std::to_string(config_token_budget) +
-        " (same as training: batch_size=" + std::to_string(batch_size) + " x max_seq_len=" + std::to_string(model_cfg.max_seq_len) + ")");
+    ctx.logging.logger->log("[Val] Token budget: " + std::to_string(token_budget) +
+        " (RunCapacity: batch_rows=" + std::to_string(batch_rows) + " x seq_cap=" + std::to_string(seq_cap) + ")");
 
-    GRIM::Batching::BatchOptions val_opts;
-    val_opts.max_tokens_per_batch = config_token_budget;
-    val_opts.max_batch_size = static_cast<uint32_t>(batch_size);
-    val_opts.bucket_step = 256;
-    
-    auto val_schedule = GRIM::Batching::buildBatches(ctx.data.val_catalog, val_opts);
+    GRIM::Batching::PackerPolicy val_policy;
+    val_policy.bucket_step = 256;
+
+    auto val_schedule = GRIM::Batching::buildBatches(
+        ctx.data.val_catalog,
+        token_budget,
+        batch_rows,
+        val_policy);
     const int total_val_batches = static_cast<int>(val_schedule.batches.size());
     ctx.logging.logger->log("Created " + std::to_string(total_val_batches) + " validation batches");
     
@@ -927,8 +943,8 @@ EpochResult runEpoch(
     auto log_batching = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
     auto schedule = GRIM::Batching::buildEpochBatches(
         ctx.data.train_catalog,
-        hp.batch_size,
-        static_cast<uint32_t>(ctx.model->getConfig().max_seq_len),
+        ctx.run_capacity.max_tokens_per_batch,
+        ctx.run_capacity.batch_rows,
         ctx.global_step,
         epoch_idx,
         ctx.rng.data_seed,

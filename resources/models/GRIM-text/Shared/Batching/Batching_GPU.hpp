@@ -75,35 +75,15 @@ struct BatchSchedule {
 };
 
 // =============================================================================
-// Batch Options
-// =============================================================================
-struct BatchOptions {
-    // === Core limits ===
-    uint32_t max_tokens_per_batch = 0;     // MUST be set by caller (Rule 20: no silent defaults)
-    uint32_t max_batch_size = 32;          // max sequences per batch
-    
-    // === Packing strategy ===
-    PackingStrategy strategy = PackingStrategy::SIMILARITY_GROUPED;
-    uint32_t bucket_step = 128;            // length bucket granularity (smaller = better packing)
-    float similarity_threshold = 0.25f;    // max length ratio variance in batch (0.25 = within 25%)
-    
-    // === Curriculum learning ===
-    bool prefer_short_first = false;       // process shorter sequences first
-    float curriculum_progress = 1.0f;      // 0.0 = start (short only), 1.0 = full curriculum
-    
-    // === Batch ordering (post-packing) ===
-    BatchOrdering batch_ordering = BatchOrdering::LENGTH_ASCENDING;  // curriculum by default
-    bool interleave_overflow = true;       // spread overflow batches throughout instead of clustering
-    
-    // === RNG for shuffling (Issue #90) ===
-    uint64_t rng_seed = 0;                 // 0 = use random_device, >0 = deterministic shuffle
-};
-
-// =============================================================================
 // Public API
 // =============================================================================
 
 // Build batches from catalog with given options
-BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts);
+struct PackerPolicy;
+BatchSchedule buildBatches(
+    const Catalog& catalog,
+    uint32_t max_tokens_per_batch,
+    uint32_t max_batch_size,
+    const PackerPolicy& policy);
 
 } // namespace GRIM::Batching
