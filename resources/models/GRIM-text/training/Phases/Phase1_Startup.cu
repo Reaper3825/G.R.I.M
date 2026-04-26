@@ -25,6 +25,7 @@
 #include "Startup/SlidingWindow.hpp"
 #include "Startup/ClassBalancedWeights.hpp"
 #include "Startup/InitFacts.hpp"
+#include "Startup/Capacity/CapacityStem.hpp"
 // HyperParameters_GPU.hpp is the single entry point; it defines
 // GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS and transitively includes
 // control/ai_config_paths.hpp in the correct order.
@@ -240,6 +241,7 @@ SequenceData loadTrainingData(
 
 std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const StartupConfig& config,
+    const RunCapacity& run_capacity,
     uint32_t vocab_size,
     uint64_t xavier_seed,
     TrainingLogger& logger,
@@ -293,24 +295,12 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                   ", log_every_n=" + std::to_string(model_config.hardcoded_log_every_n_batches));
         logger.log("⚠️  Encoder output will be REPLACED with synthetic patterns - this is a DIAGNOSTIC MODE ONLY!");
     }
-    
-    // Cache sizing - Use configured batch_size directly (stability override already applied in loadConfiguration)
-    const int actual_batch_size = config.hyperparameters.batch_size;
-    
-    // Cache sequence length derives directly from configured max_seq_len
-    const uint32_t seq_cap = static_cast<uint32_t>(model_config.max_seq_len);
-    
-    // Cache allocation: allocate for the ACTUAL batch size, not some derived "max"
-    // No arbitrary margins - if you need more, increase batch_size in config
-    model_config.max_cached_batch = actual_batch_size;
-    model_config.max_cached_seq_len = seq_cap;
-    
-    // Token budget is just batch * seq_len (used for logits allocation limit)
-    const uint32_t token_budget = static_cast<uint32_t>(actual_batch_size) * seq_cap;
-    model_config.max_tokens_per_batch = static_cast<int>(token_budget);
 
-    // batch_size, max_seq_len → max_tokens_per_batch is fully derivable from
-    // ConfigDump rows (batch_size, architecture.max_seq_len). No local echo.
+    // Cache sizing is authored by the post-policy capacity stem (RunCapacity).
+    // Rule 20: no local re-derivation here (prevents drift vs scheduler/payload).
+    model_config.max_cached_batch = static_cast<int>(run_capacity.batch_rows);
+    model_config.max_cached_seq_len = run_capacity.seq_cap;
+    model_config.max_tokens_per_batch = static_cast<int>(run_capacity.max_tokens_per_batch);
 
     // STEP 0: Initialize CUDA device context FIRST (REQUIRED before any stream/allocation operations)
     // This ensures CUDA driver is loaded and device context exists before StreamController creates streams.
@@ -682,6 +672,9 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     GRIM::HyperParameters::applyTrainingHyperparameterPolicy(
         ctx->config.hyperparameters, ctx->derived_schedule, hp_ctx, hp_logger);
 
+    // 7. Capacity stem (single author after HP policy).
+    ctx->run_capacity = deriveRunCapacityOrThrow(ctx->config);
+
     // Single-source hyperparameter dump (post-policy, includes derived
     // schedule values computed in HyperParameters_GPU.hpp). The
     // DataStatsSnapshot folds vocab + sequence-count info into the same
@@ -709,6 +702,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     try {
         ctx->model = Internal::initializeModel(
             ctx->config,
+            ctx->run_capacity,
             ctx->config.actual_vocab_size,
             ctx->rng.init_seed,
             *ctx->logging.logger,
@@ -780,15 +774,23 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
 
     // 11b. Initialize telemetry control (GPU-native kernel-based control)
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry control...", 0);
-    // Rule 20: Use model's actual token budget (already computed during cache allocation)
-    const uint32_t token_budget = ctx->model->getConfig().max_tokens_per_batch;
-    if (token_budget == 0) {
-        throw std::runtime_error("FATAL: model token_budget is 0 - cache allocation failed");
+    // Rule 20: telemetry control must use the capacity stem (single author),
+    // and verify the model mirrors match it (no independent derivations).
+    const uint32_t token_budget = ctx->run_capacity.max_tokens_per_batch;
+    const uint32_t seq_cap = ctx->run_capacity.seq_cap;
+    if (token_budget == 0 || seq_cap == 0) {
+        throw std::runtime_error("FATAL: RunCapacity is invalid (token_budget=" +
+                                 std::to_string(token_budget) + " seq_cap=" + std::to_string(seq_cap) + ")");
+    }
+    if (static_cast<uint32_t>(ctx->model->getConfig().max_tokens_per_batch) != token_budget) {
+        throw std::runtime_error("FATAL: model max_tokens_per_batch does not match RunCapacity (model=" +
+                                 std::to_string(ctx->model->getConfig().max_tokens_per_batch) +
+                                 " stem=" + std::to_string(token_budget) + ")");
     }
     ctx->telemetry.control_config = GRIM::Telemetry::makeControlConfigFromHyperparameters(
         ctx->config.hyperparameters,
         token_budget,
-        static_cast<uint32_t>(ctx->config.max_seq_len));
+        seq_cap);
 
     // Telemetry control field values are reported by ConfigDump
     // (telemetry_* section). GPU free/total memory is reported by ConfigDump

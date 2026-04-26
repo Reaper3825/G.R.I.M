@@ -62,6 +62,7 @@
 // Extracted startup subsystems
 #include "Startup/Rng.hpp"
 #include "Startup/Logging.hpp"
+#include "Startup/Capacity/RunCapacity.hpp"
 
 namespace GRIMText::Training {
 
@@ -169,6 +170,8 @@ struct TelemetryContext {
 struct TrainingContext {
     // Configuration
     StartupConfig config;
+    // Capacity stem (single author after HP policy)
+    RunCapacity run_capacity;
     
     // Model and tokenizer
     std::unique_ptr<GRIM::LanguageModel> model;
@@ -300,6 +303,7 @@ SequenceData loadTrainingData(
  */
 std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const StartupConfig& config,
+    const RunCapacity& run_capacity,
     uint32_t vocab_size,
     uint64_t xavier_seed,
     TrainingLogger& logger,
