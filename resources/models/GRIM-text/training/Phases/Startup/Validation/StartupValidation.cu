@@ -64,5 +64,9 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(ctx.lr_schedule.has_value(), "lr_schedule is not initialized");
 }
 
+void StartupValidated(TrainingContext& ctx) {
+    validateStartupOrThrow(StartupValidationInputs{ctx});
+}
+
 } // namespace GRIMText::Training
 

@@ -17,6 +17,7 @@ struct ModelAllocationState {
 };
 
 ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingContext& ctx);
+void ModelAllocated(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

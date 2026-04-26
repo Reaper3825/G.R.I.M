@@ -23,6 +23,9 @@ namespace GRIM { namespace HyperParameters {
 namespace GRIMText::Training {
 
 struct LoggingContext;
+struct TrainingContext;
+
+void LoggingReady(TrainingContext& ctx, int argc, char** argv);
 
 namespace Internal {
 

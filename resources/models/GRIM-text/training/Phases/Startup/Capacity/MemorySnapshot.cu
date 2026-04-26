@@ -1,5 +1,7 @@
 #include "MemorySnapshot.hpp"
 
+#include "../../Phase1_Startup.hpp"
+
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #endif
@@ -38,6 +40,10 @@ MemorySnapshot captureMemorySnapshotOrThrow() {
 #endif
 
     return snap;
+}
+
+void MemorySnapshotReady(TrainingContext& ctx) {
+    ctx.memory_snapshot = captureMemorySnapshotOrThrow();
 }
 
 } // namespace GRIMText::Training

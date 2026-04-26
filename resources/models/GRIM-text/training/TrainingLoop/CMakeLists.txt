@@ -352,6 +352,9 @@ add_executable(train_gpu
     ../Phases/Startup/Rng.hpp
     ../Phases/Startup/Logging.cu
     ../Phases/Startup/Logging.hpp
+    ../Phases/Startup/Capacity/CapacityStem.cu
+    ../Phases/Startup/Capacity/CapacityStem.hpp
+    ../Phases/Startup/Capacity/RunCapacity.hpp
     ../Phases/Startup/Capacity/MemorySnapshot.cu
     ../Phases/Startup/Capacity/MemorySnapshot.hpp
     ../Phases/Startup/Data/DataInfo.cu
@@ -362,6 +365,7 @@ add_executable(train_gpu
     ../Phases/Startup/Resume/ResumeState.hpp
     ../Phases/Startup/Scheduling/SchedulerPreflight.cu
     ../Phases/Startup/Scheduling/SchedulerPreflight.hpp
+    ../Phases/Startup/Epoch/EpochPlan.cu
     ../Phases/Startup/Epoch/EpochPlan.hpp
     ../Phases/Startup/Telemetry/TelemetryInitInputs.cu
     ../Phases/Startup/Telemetry/TelemetryInitInputs.hpp

@@ -1,11 +1,223 @@
 #include "ModelAllocationState.hpp"
 
+#include "../InitFacts.hpp"
 #include "../../Phase1_Startup.hpp"
 
+#include "../../../../Shared/LogRecorder/LogRecorder.hpp"
+
+#include <algorithm>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
+
+#ifdef USE_CUDA
+#include <cuda_runtime.h>
+#endif
+
+namespace fs = std::filesystem;
 
 namespace GRIMText::Training {
+
+namespace Internal {
+
+std::unique_ptr<GRIM::LanguageModel> initializeModel(
+    const StartupConfig& config,
+    const RunCapacity& run_capacity,
+    uint32_t vocab_size,
+    uint64_t xavier_seed,
+    TrainingLogger& logger,
+    std::string& loaded_checkpoint_path)
+{
+    loaded_checkpoint_path.clear();
+
+    logger.log("Initializing model with xavier_seed=" + std::to_string(xavier_seed) + "...");
+
+    const auto& arch = config.hyperparameters.architecture;
+
+    GRIM::HyperParameters::LanguageModelConfig model_config;
+    model_config = arch;
+    model_config.max_seq_len = config.max_seq_len;
+    model_config.vocab_size = vocab_size;
+    model_config.vocab_path = config.paths.vocab_path;
+    model_config.infer_vocab_from_file = true;
+    model_config.causal_mask = true;
+    model_config.use_pre_norm = true;
+    model_config.fuse_qkv = true;
+    model_config.use_bias = true;
+    model_config.computeDerivedValues();
+
+    if (model_config.structured_ce_enabled && model_config.structured_ce_weight <= 0.0f) {
+        throw std::runtime_error("structured_ce_enabled=true but structured_ce_weight=" +
+                                 std::to_string(model_config.structured_ce_weight) + " (must be > 0)");
+    }
+
+    if (model_config.mtp_enabled && (model_config.mtp_k <= 0 || model_config.mtp_alpha <= 0.0f)) {
+        throw std::runtime_error("multi_token_prediction: when enabled, k and alpha must be > 0 (k=" +
+            std::to_string(model_config.mtp_k) + " alpha=" + std::to_string(model_config.mtp_alpha) + ")");
+    }
+
+    if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED) {
+        logger.log("⚠️  HARDCODED HIDDEN STATES DIAGNOSTIC ENABLED: pattern=" + std::to_string(static_cast<int>(model_config.hardcoded_hidden_pattern)) +
+                  ", log_every_n=" + std::to_string(model_config.hardcoded_log_every_n_batches));
+        logger.log("⚠️  Encoder output will be REPLACED with synthetic patterns - this is a DIAGNOSTIC MODE ONLY!");
+    }
+
+    model_config.max_cached_batch = static_cast<int>(run_capacity.batch_rows);
+    model_config.max_cached_seq_len = run_capacity.seq_cap;
+    model_config.max_tokens_per_batch = static_cast<int>(run_capacity.max_tokens_per_batch);
+
+    {
+        logger.log("Initializing CUDA device context...");
+        cudaError_t err = cudaSetDevice(0);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("FATAL: cudaSetDevice(0) failed: ") + cudaGetErrorString(err));
+        }
+
+        err = cudaFree(0);
+        if (err != cudaSuccess && err != cudaErrorInvalidValue) {
+            throw std::runtime_error(std::string("FATAL: CUDA context creation failed: ") + cudaGetErrorString(err));
+        }
+
+        int device;
+        err = cudaGetDevice(&device);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("FATAL: cudaGetDevice() failed: ") + cudaGetErrorString(err));
+        }
+
+        cudaDeviceProp props;
+        err = cudaGetDeviceProperties(&props, device);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("FATAL: cudaGetDeviceProperties() failed: ") + cudaGetErrorString(err));
+        }
+
+        logger.log("✓ CUDA device initialized: " + std::string(props.name));
+    }
+
+    auto model = std::make_unique<GRIM::LanguageModel>(model_config);
+
+    {
+        GRIM::StreamControllerConfig stream_config;
+        stream_config.verbose = true;
+
+        if (!model->getTrainingState().stream_ctrl.initialize(stream_config)) {
+            throw std::runtime_error("FATAL: Failed to initialize StreamController");
+        }
+        logger.log("✓ StreamController initialized");
+    }
+
+    logger.log("Initializing cuBLAS handle...");
+    model->initCuBLASHandle();
+    logger.log("✓ cuBLAS handle initialized with Tensor Core acceleration");
+
+    logger.log("Initializing RoPE (required before encoder construction)...");
+    model->initPBM();
+    logger.log("✓ RoPE initialized");
+
+    {
+        logger.log("Storing autograd weight init seed...");
+        model->getTrainingState().initializeAutogradSeed(xavier_seed);
+        logger.log("✓ Autograd seed stored (weight_init_seed=" + std::to_string(xavier_seed) + ")");
+    }
+
+    logger.log("Initializing GPU encoder...");
+    model->initGPU();
+    logger.log("✓ GPU encoder fully initialized");
+
+    logger.log("Initializing TrainingState (grad buffers, activation caches)...");
+    model->initTrainingState();
+    logger.log("✓ TrainingState fully initialized");
+
+    model->buildParameterGroups();
+
+    if (model->isScratchPoolInitialized()) {
+        model->configureScratchPool(config.hyperparameters.scratch_blocks_enabled);
+    }
+
+    GRIM::LossContext::LossOptions loss_opts{};
+    {
+        const auto& hp = config.hyperparameters;
+        loss_opts.label_smoothing_enabled    = hp.loss_label_smoothing_enabled;
+        loss_opts.label_smoothing_epsilon    = hp.loss_label_smoothing_epsilon;
+        loss_opts.focal_enabled              = hp.loss_focal_enabled;
+        loss_opts.focal_gamma                = hp.loss_focal_gamma;
+        loss_opts.focal_alpha                = hp.loss_focal_alpha;
+        loss_opts.preference_enabled         = hp.loss_preference_enabled;
+        loss_opts.preference_beta            = hp.loss_preference_beta;
+        loss_opts.distillation_enabled       = hp.loss_distillation_enabled;
+        loss_opts.distillation_temperature   = hp.loss_distillation_temperature;
+        loss_opts.distillation_lambda        = hp.loss_distillation_lambda;
+        loss_opts.masking_enabled            = hp.loss_masking_enabled;
+        loss_opts.masking_tag                = hp.loss_masking_tag;
+        loss_opts.entropy_reg_enabled        = hp.loss_entropy_reg_enabled;
+        loss_opts.entropy_reg_lambda         = hp.loss_entropy_reg_lambda;
+        loss_opts.class_balanced_enabled     = hp.loss_class_balanced_enabled;
+        loss_opts.class_balanced_beta        = hp.loss_class_balanced_beta;
+    }
+    model->setLossOptions(loss_opts);
+
+#ifdef USE_CUDA
+    {
+        auto* gpu_encoder = &model->getGpuEncoder();
+        const auto& cfg = model->getConfig();
+        for (int layer = 0; layer < cfg.num_layers; ++layer) {
+            auto* enc = gpu_encoder->getLayer(layer);
+            if (!enc) {
+                throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after initGPU");
+            }
+        }
+        logger.log("✓ All " + std::to_string(cfg.num_layers) + " encoder layers verified");
+    }
+#endif
+
+    std::vector<std::pair<int, std::string>> checkpoint_candidates;
+    if (fs::exists(config.paths.checkpoint_dir) && fs::is_directory(config.paths.checkpoint_dir)) {
+        for (const auto& entry : fs::directory_iterator(config.paths.checkpoint_dir)) {
+            const auto& p = entry.path();
+            if (p.extension() == ".bin" && p.stem().string().rfind("checkpoint_epoch_", 0) == 0) {
+                std::string stem = p.stem().string();
+                std::string epoch_str = stem.substr(std::string("checkpoint_epoch_").size());
+                try {
+                    int epoch = std::stoi(epoch_str);
+                    checkpoint_candidates.emplace_back(epoch, p.string());
+                } catch (const std::exception& e) {
+                    logger.log("[WARNING] Skipping malformed checkpoint filename: " + stem + " (" + e.what() + ")");
+                }
+            }
+        }
+    }
+
+    std::sort(checkpoint_candidates.begin(), checkpoint_candidates.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    bool loaded_checkpoint = false;
+    for (const auto& [epoch, checkpoint_path] : checkpoint_candidates) {
+        logger.log("Found checkpoint candidate: " + checkpoint_path + " (epoch " + std::to_string(epoch) + ")");
+        if (model->load(checkpoint_path)) {
+            logger.log("✓ Loaded weights from checkpoint: " + checkpoint_path);
+            loaded_checkpoint = true;
+            loaded_checkpoint_path = checkpoint_path;
+            break;
+        }
+        logger.log("⚠ Failed to load checkpoint candidate, trying older checkpoint");
+    }
+
+    if (!loaded_checkpoint) {
+        if (!checkpoint_candidates.empty()) {
+            logger.log("⚠ No loadable checkpoint found, starting fresh");
+        } else {
+            logger.log("No checkpoint found, starting fresh");
+        }
+    }
+
+    logger.log("✓ Model initialized");
+    return model;
+}
+
+} // namespace Internal
 
 ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingContext& ctx) {
     if (!ctx.model) {
@@ -57,6 +269,50 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
     }
 
     return allocation;
+}
+
+void ModelAllocated(TrainingContext& ctx) {
+    using GRIM::Logging::EmitModuleError;
+    using GRIM::Logging::EmitModuleInfo;
+    using GRIM::Logging::ModuleId;
+
+    ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
+
+    try {
+        ctx.model = Internal::initializeModel(
+            ctx.config,
+            ctx.run_capacity,
+            ctx.config.actual_vocab_size,
+            ctx.rng.init_seed,
+            *ctx.logging.logger,
+            ctx.loaded_checkpoint_path);
+    } catch (const std::exception& e) {
+        EmitModuleError(ModuleId::Training, std::string("FATAL: Model initialization failed: ") + e.what(), 0);
+        throw;
+    }
+
+    verifyAndDumpInitFacts(ctx);
+    ctx.model_allocation = captureAndValidateModelAllocationOrThrow(ctx);
+
+    if (ctx.config.save_test_mode) {
+        ctx.logging.logger->log("========================================");
+        ctx.logging.logger->log("  SAVE TEST MODE");
+        ctx.logging.logger->log("========================================");
+        std::string test_save_path = ctx.config.paths.checkpoint_dir + "/save_test.bin";
+        ctx.logging.logger->log("Testing model->save() to: " + test_save_path);
+        bool save_ok = ctx.model->save(test_save_path);
+        if (save_ok) {
+            EmitModuleInfo(ModuleId::Checkpoint, "✓ Save test PASSED", 0);
+            if (fs::exists(test_save_path)) {
+                auto file_size = fs::file_size(test_save_path);
+                EmitModuleInfo(ModuleId::Checkpoint,
+                    std::string("  File size: ") + std::to_string(file_size) + " bytes", 0);
+            }
+        } else {
+            EmitModuleError(ModuleId::Checkpoint, "✗ Save test FAILED", 0);
+        }
+        std::exit(save_ok ? 0 : 1);
+    }
 }
 
 } // namespace GRIMText::Training

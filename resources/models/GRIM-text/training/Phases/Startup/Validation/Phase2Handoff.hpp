@@ -9,6 +9,7 @@ struct Phase2HandoffInputs {
 };
 
 Phase2HandoffInputs makePhase2HandoffReady(TrainingContext& ctx);
+void Phase2HandoffReady(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

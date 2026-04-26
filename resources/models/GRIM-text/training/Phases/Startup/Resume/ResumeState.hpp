@@ -20,6 +20,7 @@ struct ResumeState {
 };
 
 ResumeState captureResumeState(const TrainingContext& ctx);
+void ResumeStateReady(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

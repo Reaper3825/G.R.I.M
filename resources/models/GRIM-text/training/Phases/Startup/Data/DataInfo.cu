@@ -1,12 +1,127 @@
 #include "DataInfo.hpp"
 
+#include "../SlidingWindow.hpp"
+#include "../../ConfigDump.hpp"
 #include "../../Phase1_Startup.hpp"
 
+#include "../../../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../../../Shared/UnigramByte/Unigram.hpp"
+
 #include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
+namespace fs = std::filesystem;
+
 namespace GRIMText::Training {
+
+namespace Internal {
+
+void validatePaths(const PathConfig& paths) {
+    if (!fs::exists(paths.vocab_path)) {
+        throw std::runtime_error("Vocabulary file does not exist: " + paths.vocab_path);
+    }
+    if (!fs::exists(paths.data_path)) {
+        throw std::runtime_error("Training data file does not exist: " + paths.data_path);
+    }
+    if (paths.output_model_path.empty()) {
+        throw std::runtime_error("Output model path not configured");
+    }
+    if (paths.checkpoint_dir.empty()) {
+        throw std::runtime_error("Checkpoint directory not configured");
+    }
+    if (paths.log_dir.empty()) {
+        throw std::runtime_error("Log directory not configured");
+    }
+
+    auto model_parent = fs::path(paths.output_model_path).parent_path();
+    if (!model_parent.empty()) {
+        fs::create_directories(model_parent);
+    }
+    fs::create_directories(paths.checkpoint_dir);
+    fs::create_directories(paths.log_dir);
+}
+
+GRIM::Tokenizer::UniByte initializeTokenizer(
+    const std::string& vocab_path,
+    const GRIM::Config::TokenizerConfig& tok_config,
+    const GRIM::Config::TrainingHyperparameters& hyperparameters,
+    TrainingLogger& logger)
+{
+    logger.log("Loading tokenizer configuration...");
+
+    GRIM::Tokenizer::UniByteConfig cfg;
+    if (tok_config.vocab_size <= 0) {
+        throw std::runtime_error("FATAL: tokenizer.vocab_size not configured in ai_config.json");
+    }
+    cfg.target_vocab_size = tok_config.vocab_size;
+    cfg.character_coverage = GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE;
+    cfg.enable_scratch_block_reasoning = hyperparameters.tokenizer_enable_scratch_block_reasoning;
+    cfg.detect_numbers = hyperparameters.tokenizer_detect_numbers;
+    cfg.enable_byte_fallback = tok_config.enable_byte_fallback;
+    cfg.prefer_gpu = GRIM::HyperParameters::TOKENIZER_PREFER_GPU;
+
+    GRIM::Tokenizer::UniByte tokenizer(cfg);
+    if (!tokenizer.load(vocab_path)) {
+        throw std::runtime_error("Failed to load vocabulary: " + vocab_path);
+    }
+
+    return tokenizer;
+}
+
+SequenceData loadTrainingData(
+    const std::string& data_path,
+    int max_seq_len,
+    int min_seq_valid_tokens,
+    int sliding_window_stride,
+    bool add_bos_token,
+    bool add_eos_token,
+    const GRIM::Tokenizer::UniByte& tokenizer,
+    TrainingLogger& logger)
+{
+    SequenceData data;
+
+    GRMTDataLoader loader;
+    if (!loader.load(data_path)) {
+        throw std::runtime_error("Failed to load training data");
+    }
+
+    data.vocab_size = loader.vocabSize();
+    auto all_sequences = loader.getSequences();
+
+    const int bos_id = tokenizer.bosId();
+    const int eos_id = tokenizer.eosId();
+
+    size_t val_size = all_sequences.size() / 10;
+    data.train_seqs.assign(all_sequences.begin() + val_size, all_sequences.end());
+    data.val_seqs.assign(all_sequences.begin(), all_sequences.begin() + val_size);
+
+    applySlidingWindows(data.train_seqs, "train",
+                        max_seq_len, sliding_window_stride, min_seq_valid_tokens,
+                        add_bos_token, add_eos_token, bos_id, eos_id, logger);
+    applySlidingWindows(data.val_seqs, "val",
+                        max_seq_len, sliding_window_stride, min_seq_valid_tokens,
+                        add_bos_token, add_eos_token, bos_id, eos_id, logger);
+
+    data.train_views.reserve(data.train_seqs.size());
+    for (uint32_t i = 0; i < data.train_seqs.size(); ++i) {
+        data.train_views.push_back(&data.train_seqs[i]);
+        const uint32_t len = static_cast<uint32_t>(data.train_seqs[i].token_ids.size());
+        data.train_catalog.add(len, len, 0, 0, 0);
+    }
+
+    data.val_views.reserve(data.val_seqs.size());
+    for (uint32_t i = 0; i < data.val_seqs.size(); ++i) {
+        data.val_views.push_back(&data.val_seqs[i]);
+        const uint32_t len = static_cast<uint32_t>(data.val_seqs[i].token_ids.size());
+        data.val_catalog.add(len, len, 0, 0, 0);
+    }
+
+    return data;
+}
+
+} // namespace Internal
 
 namespace {
 
@@ -49,6 +164,69 @@ DataInfo summarizeDataInfoOrThrow(
     info.max_train_seq_len = maxSequenceLen(data.train_seqs);
     info.max_val_seq_len = maxSequenceLen(data.val_seqs);
     return info;
+}
+
+void DataInfoReady(TrainingContext& ctx) {
+    using GRIM::Logging::EmitModuleInfo;
+    using GRIM::Logging::ModuleId;
+
+    EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
+    Internal::validatePaths(ctx.config.paths);
+    EmitModuleInfo(ModuleId::Training, "[Phase1] ✓ All paths validated", 0);
+
+    const GRIM::Config::TokenizerConfig& tok_cfg = ctx.config.tokenizer_config;
+    ctx.tokenizer = Internal::initializeTokenizer(
+        ctx.config.paths.vocab_path, tok_cfg, ctx.config.hyperparameters, *ctx.logging.logger);
+
+    DataLoadInputs data_inputs;
+    data_inputs.data_path = ctx.config.paths.data_path;
+    data_inputs.vocab_path = ctx.config.paths.vocab_path;
+    data_inputs.max_seq_len = ctx.config.max_seq_len;
+    data_inputs.min_seq_valid_tokens = ctx.config.hyperparameters.min_seq_valid_tokens;
+    data_inputs.sliding_window_stride = ctx.config.sliding_window_stride;
+    data_inputs.add_bos = tok_cfg.add_bos;
+    data_inputs.add_eos = tok_cfg.add_eos;
+
+    ctx.data = Internal::loadTrainingData(
+        data_inputs.data_path,
+        data_inputs.max_seq_len,
+        data_inputs.min_seq_valid_tokens,
+        data_inputs.sliding_window_stride,
+        data_inputs.add_bos,
+        data_inputs.add_eos,
+        ctx.tokenizer,
+        *ctx.logging.logger);
+
+    const uint32_t tokenizer_vocab_size = ctx.tokenizer.totalVocabSize();
+    ctx.data_info = summarizeDataInfoOrThrow(data_inputs, ctx.data, tokenizer_vocab_size);
+    ctx.config.actual_vocab_size = ctx.data_info.actual_vocab_size;
+    if (ctx.config.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
+        throw std::runtime_error("FATAL: training data vocab_size must include special+byte+atom ranges (>= " +
+            std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + ")");
+    }
+
+    GRIM::HyperParameters::DerivationContext hp_ctx;
+    hp_ctx.train_sequence_count = static_cast<int>(ctx.data.train_seqs.size());
+    hp_ctx.validation_interval = ctx.config.hyperparameters.validation_interval;
+    ctx.derived_schedule = GRIM::HyperParameters::computeDerivedSchedule(
+        ctx.config.hyperparameters, hp_ctx);
+    auto hp_logger = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
+    GRIM::HyperParameters::applyTrainingHyperparameterPolicy(
+        ctx.config.hyperparameters, ctx.derived_schedule, hp_ctx, hp_logger);
+
+    GRIMText::Training::DataStatsSnapshot data_stats;
+    data_stats.data_path = ctx.data_info.data_path;
+    data_stats.vocab_path = ctx.data_info.vocab_path;
+    data_stats.tokenizer_vocab_size = ctx.data_info.tokenizer_vocab_size;
+    data_stats.actual_vocab_size = ctx.data_info.actual_vocab_size;
+    data_stats.train_sequence_count = ctx.data_info.train_sequence_count;
+    data_stats.val_sequence_count = ctx.data_info.val_sequence_count;
+
+    dumpAllHyperparameters(
+        ctx.config.hyperparameters,
+        &ctx.derived_schedule,
+        &data_stats,
+        [](const std::string& msg) { GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Training, msg, 0); });
 }
 
 } // namespace GRIMText::Training

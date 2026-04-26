@@ -201,6 +201,24 @@ bool maybeSaveCheckpoint(
 //======================================================//
 namespace {
 
+int validatedAccumulationSteps(const TrainingContext& ctx) {
+    const int accum_steps = ctx.config.hyperparameters.gradient_accumulation_steps;
+    if (accum_steps <= 0) {
+        throw std::runtime_error("FATAL: gradient_accumulation_steps must be > 0 in Phase2 (got " +
+                                 std::to_string(accum_steps) + ")");
+    }
+    return accum_steps;
+}
+
+int validatedEpochCount(const TrainingContext& ctx) {
+    const int epochs = ctx.config.hyperparameters.epochs;
+    if (epochs <= 0) {
+        throw std::runtime_error("FATAL: epochs must be > 0 in Phase2 (got " +
+                                 std::to_string(epochs) + ")");
+    }
+    return epochs;
+}
+
 GRIM::Batching::BatchPayload buildPayloadFromAssignment(
     const TrainingContext& ctx,
     const GRIM::Batching::BatchAssignment& assignment,
@@ -208,12 +226,12 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignment(
     int mtp_k)
 {
     const auto& model_cfg = ctx.model->getConfig();
-    const size_t max_cached_batch = static_cast<size_t>(std::max<uint32_t>(1, ctx.run_capacity.batch_rows));
-    const size_t max_cached_seq   = static_cast<size_t>(std::max<uint32_t>(1, ctx.run_capacity.seq_cap));
+    const size_t max_cached_batch = static_cast<size_t>(ctx.run_capacity.batch_rows);
+    const size_t max_cached_seq   = static_cast<size_t>(ctx.run_capacity.seq_cap);
 
     // Rule 20: caches are authored by the capacity stem. Clamp-free: if model mirrors
     // disagree, that is a startup contract bug, not something Phase2 should hide.
-    if (static_cast<uint32_t>(std::max(1, model_cfg.max_cached_batch)) != ctx.run_capacity.batch_rows) {
+    if (model_cfg.max_cached_batch != static_cast<int>(ctx.run_capacity.batch_rows)) {
         throw std::runtime_error(
             "FATAL: model max_cached_batch does not match RunCapacity (model=" +
             std::to_string(model_cfg.max_cached_batch) +
@@ -314,11 +332,14 @@ ValidationResult runValidation(TrainingContext& ctx) {
             std::to_string(total_mem / (1024*1024)) + " MB total");
     }
 
-    const uint32_t batch_rows = std::max<uint32_t>(1, ctx.run_capacity.batch_rows);
-    const uint32_t seq_cap    = std::max<uint32_t>(1, ctx.run_capacity.seq_cap);
+    const uint32_t batch_rows = ctx.run_capacity.batch_rows;
+    const uint32_t seq_cap    = ctx.run_capacity.seq_cap;
     const uint32_t token_budget = ctx.run_capacity.max_tokens_per_batch;
-    if (token_budget == 0) {
-        throw std::runtime_error("[Val] FATAL: RunCapacity.max_tokens_per_batch=0");
+    if (batch_rows == 0 || seq_cap == 0 || token_budget == 0) {
+        throw std::runtime_error("[Val] FATAL: invalid RunCapacity (batch_rows=" +
+                                 std::to_string(batch_rows) + " seq_cap=" +
+                                 std::to_string(seq_cap) + " token_budget=" +
+                                 std::to_string(token_budget) + ")");
     }
 
     ctx.logging.logger->log("[Val] Token budget: " + std::to_string(token_budget) +
@@ -466,7 +487,7 @@ BatchResult processBatch(
 
     // Gradient zeroing: backward(accumulate=false) at micro_step=0 zeros grads;
     // backward(accumulate=true) at micro_step>0 accumulates.
-    const int accum_steps = std::max(1, ctx.config.hyperparameters.gradient_accumulation_steps);
+    const int accum_steps = validatedAccumulationSteps(ctx);
 
     // beginBatch() must run EVERY batch to clear previous entries; otherwise
     // micro-batches 1+ inherit stale entries.
@@ -952,23 +973,26 @@ EpochResult runEpoch(
         log_batching);
     
     const int total_batches = static_cast<int>(schedule.batches.size());
+    if (total_batches <= 0) {
+        throw std::runtime_error("FATAL: scheduler produced 0 batches for epoch " +
+                                 std::to_string(epoch_idx) + " in Phase2");
+    }
     int total_batches_to_run = total_batches;
     const bool single_batch_overfit = hp.single_batch_overfit_enabled;
     if (single_batch_overfit) {
-        if (total_batches == 0) {
-            ctx.logging.logger->log("[SingleBatch] WARNING: No batches available to repeat.");
-            total_batches_to_run = 0;
-        } else {
-            total_batches_to_run = std::max(1, hp.single_batch_overfit_max_steps);
-            ctx.logging.logger->log("[SingleBatch] Enabled: repeating batch 1 for " +
-                                    std::to_string(total_batches_to_run) + " steps.");
+        if (hp.single_batch_overfit_max_steps <= 0) {
+            throw std::runtime_error("FATAL: single_batch_overfit_max_steps must be > 0 when single_batch_overfit_enabled=true (got " +
+                                     std::to_string(hp.single_batch_overfit_max_steps) + ")");
         }
+        total_batches_to_run = hp.single_batch_overfit_max_steps;
+        ctx.logging.logger->log("[SingleBatch] Enabled: repeating batch 1 for " +
+                                std::to_string(total_batches_to_run) + " steps.");
     }
     const auto epoch_start = std::chrono::steady_clock::now();
     float epoch_loss = 0.0f;
     
     // Get accumulation steps from hyperparameters
-    const int accum_steps = std::max(1, ctx.config.hyperparameters.gradient_accumulation_steps);
+    const int accum_steps = validatedAccumulationSteps(ctx);
     
     // Process batches: scheduler (BatchAssignment) dictates order; build
     // BatchPayload via buildTrainPayload (single source of truth).
@@ -1037,7 +1061,10 @@ EpochResult runEpoch(
 
     }
     
-    result.avg_loss = epoch_loss / std::max(result.batches_processed, 1);
+    if (result.batches_processed <= 0) {
+        throw std::runtime_error("FATAL: epoch completed with 0 processed batches");
+    }
+    result.avg_loss = epoch_loss / result.batches_processed;
     result.duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - epoch_start);
     
@@ -1121,7 +1148,7 @@ bool executePhase2(TrainingContext& ctx) {
     // second source of truth that drifts every time a field is added.
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
 
-    const int num_epochs = std::max(1, hp.epochs);
+    const int num_epochs = validatedEpochCount(ctx);
     EmitModuleInfo(ModuleId::Training,
         std::string("Total epochs to run: ") + std::to_string(num_epochs), ctx.global_step);
     

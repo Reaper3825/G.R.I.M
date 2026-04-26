@@ -1,5 +1,7 @@
 #include "SchedulerPreflight.hpp"
 
+#include "../../Phase1_Startup.hpp"
+
 #include <stdexcept>
 #include <string>
 
@@ -46,6 +48,17 @@ SchedulerPreflightState runSchedulerPreflightOrThrow(
     }
 
     return state;
+}
+
+void SchedulerPreflightReady(TrainingContext& ctx) {
+    auto log_batching = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
+    SchedulerInputs inputs;
+    inputs.train_catalog = &ctx.data.train_catalog;
+    inputs.capacity = ctx.run_capacity;
+    inputs.global_step = ctx.global_step;
+    inputs.epoch = 0;
+    inputs.data_seed = ctx.rng.data_seed;
+    ctx.scheduler_preflight = runSchedulerPreflightOrThrow(inputs, log_batching);
 }
 
 } // namespace GRIMText::Training

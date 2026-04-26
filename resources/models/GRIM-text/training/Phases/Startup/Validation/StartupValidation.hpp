@@ -9,6 +9,7 @@ struct StartupValidationInputs {
 };
 
 void validateStartupOrThrow(const StartupValidationInputs& inputs);
+void StartupValidated(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

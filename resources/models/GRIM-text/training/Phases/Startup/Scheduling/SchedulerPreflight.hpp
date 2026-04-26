@@ -7,6 +7,8 @@
 
 namespace GRIMText::Training {
 
+struct TrainingContext;
+
 struct SchedulerInputs {
     const ::GRIM::DynaSeq::Catalog* train_catalog = nullptr;
     RunCapacity capacity;
@@ -28,6 +30,8 @@ struct SchedulerPreflightState {
 SchedulerPreflightState runSchedulerPreflightOrThrow(
     const SchedulerInputs& inputs,
     const ::GRIM::Batching::EpochBatchingLogFn& log_fn);
+
+void SchedulerPreflightReady(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

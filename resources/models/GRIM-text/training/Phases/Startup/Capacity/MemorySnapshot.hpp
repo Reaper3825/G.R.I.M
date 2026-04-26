@@ -5,6 +5,8 @@
 
 namespace GRIMText::Training {
 
+struct TrainingContext;
+
 struct MemorySnapshot {
     int device = -1;
     std::string device_name;
@@ -13,6 +15,7 @@ struct MemorySnapshot {
 };
 
 MemorySnapshot captureMemorySnapshotOrThrow();
+void MemorySnapshotReady(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

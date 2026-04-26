@@ -7,6 +7,7 @@
 namespace GRIMText::Training {
 
 struct SequenceData;
+struct TrainingContext;
 
 struct DataLoadInputs {
     std::string data_path;
@@ -33,6 +34,8 @@ DataInfo summarizeDataInfoOrThrow(
     const DataLoadInputs& inputs,
     const SequenceData& data,
     std::uint32_t tokenizer_vocab_size);
+
+void DataInfoReady(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

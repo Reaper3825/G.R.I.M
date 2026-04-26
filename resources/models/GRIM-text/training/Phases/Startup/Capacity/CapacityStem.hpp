@@ -11,6 +11,8 @@
 
 namespace GRIMText::Training {
 
+struct TrainingContext;
+
 inline RunCapacity deriveRunCapacityOrThrow(const ::GRIM::HyperParameters::StartupConfig& config) {
     const int batch_size_i = config.hyperparameters.batch_size;
     const int max_seq_len_i = config.max_seq_len;
@@ -40,6 +42,9 @@ inline RunCapacity deriveRunCapacityOrThrow(const ::GRIM::HyperParameters::Start
     cap.max_tokens_per_batch = static_cast<uint32_t>(tokens_u64);
     return cap;
 }
+
+void HyperparametersReady(TrainingContext& ctx);
+void CapacityStemReady(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

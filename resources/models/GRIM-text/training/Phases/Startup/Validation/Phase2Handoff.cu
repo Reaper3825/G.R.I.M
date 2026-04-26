@@ -17,5 +17,9 @@ Phase2HandoffInputs makePhase2HandoffReady(TrainingContext& ctx) {
     return Phase2HandoffInputs{ctx};
 }
 
+void Phase2HandoffReady(TrainingContext& ctx) {
+    (void)makePhase2HandoffReady(ctx);
+}
+
 } // namespace GRIMText::Training
 

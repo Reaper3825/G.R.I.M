@@ -11,6 +11,7 @@ struct TelemetryInitInputs {
 };
 
 TelemetryInitInputs makeTelemetryInitInputs(const TrainingContext& ctx);
+void TelemetryReady(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 
