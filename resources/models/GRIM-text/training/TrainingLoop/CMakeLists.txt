@@ -352,6 +352,23 @@ add_executable(train_gpu
     ../Phases/Startup/Rng.hpp
     ../Phases/Startup/Logging.cu
     ../Phases/Startup/Logging.hpp
+    ../Phases/Startup/Capacity/MemorySnapshot.cu
+    ../Phases/Startup/Capacity/MemorySnapshot.hpp
+    ../Phases/Startup/Data/DataInfo.cu
+    ../Phases/Startup/Data/DataInfo.hpp
+    ../Phases/Startup/Model/ModelAllocationState.cu
+    ../Phases/Startup/Model/ModelAllocationState.hpp
+    ../Phases/Startup/Resume/ResumeState.cu
+    ../Phases/Startup/Resume/ResumeState.hpp
+    ../Phases/Startup/Scheduling/SchedulerPreflight.cu
+    ../Phases/Startup/Scheduling/SchedulerPreflight.hpp
+    ../Phases/Startup/Epoch/EpochPlan.hpp
+    ../Phases/Startup/Telemetry/TelemetryInitInputs.cu
+    ../Phases/Startup/Telemetry/TelemetryInitInputs.hpp
+    ../Phases/Startup/Validation/StartupValidation.cu
+    ../Phases/Startup/Validation/StartupValidation.hpp
+    ../Phases/Startup/Validation/Phase2Handoff.cu
+    ../Phases/Startup/Validation/Phase2Handoff.hpp
     ../Phases/Startup/SlidingWindow.cu
     ../Phases/Startup/SlidingWindow.hpp
     ../Phases/Startup/ClassBalancedWeights.cu

@@ -27,6 +27,9 @@
 #include "Startup/InitFacts.hpp"
 #include "Startup/Capacity/CapacityStem.hpp"
 #include "Startup/Capacity/MemorySnapshot.hpp"
+#include "Startup/Scheduling/SchedulerPreflight.hpp"
+#include "Startup/Validation/StartupValidation.hpp"
+#include "Startup/Validation/Phase2Handoff.hpp"
 // HyperParameters_GPU.hpp is the single entry point; it defines
 // GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS and transitively includes
 // control/ai_config_paths.hpp in the correct order.
@@ -38,6 +41,7 @@
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Telemetry/TelemetryLatticeConfig_FromHyperParams.hpp"
 #include "../../Shared/Telemetry/TelemetryControlConfig_FromHyperParams.hpp"
+#include "Startup/Epoch/EpochPlan.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
@@ -47,6 +51,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 
 #ifdef USE_CUDA
@@ -568,173 +573,134 @@ void initializeOptimizer(TrainingContext& ctx) {
 
 } // namespace Internal
 
-//======================================================//
-//  Phase1 Main Entry Point
-//======================================================//
-
-std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
-    auto ctx = std::make_unique<TrainingContext>();
-    
+void LoggingReady(TrainingContext& ctx, int argc, char** argv) {
     EmitModuleInfo(ModuleId::Training, "========================================", 0);
     EmitModuleInfo(ModuleId::Training, "  Phase 1: Startup & Initialization", 0);
     EmitModuleInfo(ModuleId::Training, "  GRIM-text GPU Training v3.0.0", 0);
     EmitModuleInfo(ModuleId::Training, "========================================", 0);
-
-    // 1. Load configuration
     EmitModuleInfo(ModuleId::Training, "[Phase1] Loading configuration...", 0);
-    ctx->config = Internal::loadConfiguration(argc, argv);
-    EmitModuleInfo(ModuleId::Training, 
-        std::string("[Phase1] ✓ Configuration loaded from: ") + ctx->config.paths.config_path.string(), 0);
+    ctx.config = Internal::loadConfiguration(argc, argv);
+    EmitModuleInfo(ModuleId::Training,
+        std::string("[Phase1] ✓ Configuration loaded from: ") + ctx.config.paths.config_path.string(), 0);
 
-    // 2. Initialize logging as early as possible (before cache prep)
-    if (!ctx->config.paths.log_dir.empty()) {
-        fs::create_directories(ctx->config.paths.log_dir);
+    if (!ctx.config.paths.log_dir.empty()) {
+        fs::create_directories(ctx.config.paths.log_dir);
     }
-    if (!ctx->config.paths.status_path.empty()) {
-        fs::path status_parent = fs::path(ctx->config.paths.status_path).parent_path();
+    if (!ctx.config.paths.status_path.empty()) {
+        fs::path status_parent = fs::path(ctx.config.paths.status_path).parent_path();
         if (!status_parent.empty()) {
             fs::create_directories(status_parent);
         }
     }
+
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing logging...", 0);
-        ctx->logging = Internal::initializeLogging(ctx->config.paths);
+    ctx.logging = Internal::initializeLogging(ctx.config.paths);
+    Internal::setupBatchLogTape(ctx.logging, ctx.config);
+}
 
-    // Initialize unified BatchLogTape system (sinks + global tape pointer)
-    Internal::setupBatchLogTape(ctx->logging, ctx->config);
+void MemorySnapshotReady(TrainingContext& ctx) {
+    ctx.memory_snapshot = captureMemorySnapshotOrThrow();
+}
 
-    // 2a. Capture memory snapshot (evidence-only; never clamps capacity).
-    ctx->memory_snapshot = captureMemorySnapshotOrThrow();
+void HyperparametersReady(TrainingContext& ctx) {
+    GRIM::HyperParameters::validateTrainingHyperparameters(ctx.config.hyperparameters);
+}
 
-    // 2b. Tokenizer / training_data preparation is owned by the
-    //      train_tokenizer subprocess that ran BEFORE Phase 1 (see
-    //      Subprocess/tokenizer_subprocess.hpp). By the time we get here,
-    //      the GRMT and vocab artifacts are guaranteed to exist on disk;
-    //      validatePaths() below is the single place that fails loud if
-    //      they don't (Rule 20: no in-Phase fallback path).
+void CapacityStemReady(TrainingContext& ctx) {
+    ctx.run_capacity = deriveRunCapacityOrThrow(ctx.config);
+}
 
-    // 3. Validate paths
+void DataInfoReady(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
-    Internal::validatePaths(ctx->config.paths);
+    Internal::validatePaths(ctx.config.paths);
     EmitModuleInfo(ModuleId::Training, "[Phase1] ✓ All paths validated", 0);
 
-    // Data paths + vocab + sequence counts are logged together with the
-    // hyperparameter dump (post-harmonize) via DataStatsSnapshot below,
-    // so derived ratios from HyperParameters_GPU.hpp are reflected and
-    // the visual block is unified.
+    const GRIM::Config::TokenizerConfig& tok_cfg = ctx.config.tokenizer_config;
+    ctx.tokenizer = Internal::initializeTokenizer(
+        ctx.config.paths.vocab_path, tok_cfg, ctx.config.hyperparameters, *ctx.logging.logger);
 
-    // 4. Initialize tokenizer — use the tokenizer_config already captured on
-    // StartupConfig during loadConfiguration(); no second snapshot read.
-    const GRIM::Config::TokenizerConfig& tok_cfg = ctx->config.tokenizer_config;
-    ctx->tokenizer = Internal::initializeTokenizer(ctx->config.paths.vocab_path, tok_cfg, ctx->config.hyperparameters, *ctx->logging.logger);
-    
-    // 5. Load training data (parses .grmt artifact written by the
-    //    tokenizer subprocess; subprocess only returned vocab_size, not
-    //    the sequence buffer — that has to be loaded into this process).
-    ctx->data = Internal::loadTrainingData(
-        ctx->config.paths.data_path,
-        ctx->config.max_seq_len,
-        ctx->config.hyperparameters.min_seq_valid_tokens,
-        ctx->config.sliding_window_stride,
-        tok_cfg.add_bos,
-        tok_cfg.add_eos,
-        ctx->tokenizer,
-        *ctx->logging.logger);
-    
-    // Use vocab size extracted during data loading (no second load needed)
-    ctx->config.actual_vocab_size = ctx->data.vocab_size;
-    if (ctx->config.actual_vocab_size == 0) {
-        throw std::runtime_error("FATAL: training data missing vocab_size; regenerate GRMT with tokenizer.totalVocabSize()");
-    }
-    if (ctx->config.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
-        throw std::runtime_error("FATAL: training data vocab_size must include special+byte+atom ranges (>= " + 
+    DataLoadInputs data_inputs;
+    data_inputs.data_path = ctx.config.paths.data_path;
+    data_inputs.vocab_path = ctx.config.paths.vocab_path;
+    data_inputs.max_seq_len = ctx.config.max_seq_len;
+    data_inputs.min_seq_valid_tokens = ctx.config.hyperparameters.min_seq_valid_tokens;
+    data_inputs.sliding_window_stride = ctx.config.sliding_window_stride;
+    data_inputs.add_bos = tok_cfg.add_bos;
+    data_inputs.add_eos = tok_cfg.add_eos;
+
+    ctx.data = Internal::loadTrainingData(
+        data_inputs.data_path,
+        data_inputs.max_seq_len,
+        data_inputs.min_seq_valid_tokens,
+        data_inputs.sliding_window_stride,
+        data_inputs.add_bos,
+        data_inputs.add_eos,
+        ctx.tokenizer,
+        *ctx.logging.logger);
+
+    const uint32_t tokenizer_vocab_size = ctx.tokenizer.totalVocabSize();
+    ctx.data_info = summarizeDataInfoOrThrow(data_inputs, ctx.data, tokenizer_vocab_size);
+    ctx.config.actual_vocab_size = ctx.data_info.actual_vocab_size;
+    if (ctx.config.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
+        throw std::runtime_error("FATAL: training data vocab_size must include special+byte+atom ranges (>= " +
             std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + ")");
     }
-    
-    // GRMT/vocab.bin header equality is enforced inside the tokenizer
-    // subprocess: PrepareTrainingDataFromCache (DataLoader.cu ~480-538)
-    // re-reads both headers and forces a full rebuild on mismatch, then writes
-    // a fresh .grmt using tokenizer.totalVocabSize() (line ~942). By the time
-    // we land here the two are guaranteed equal at the byte level — a second
-    // runtime equality check would only fire on loader bugs, not on stale
-    // artifacts. Keep this local for the DataStatsSnapshot below.
-    const uint32_t tokenizer_vocab_size = ctx->tokenizer.totalVocabSize();
 
-    // 6. Harmonize hyperparameters
     GRIM::HyperParameters::DerivationContext hp_ctx;
-    hp_ctx.train_sequence_count = static_cast<int>(ctx->data.train_seqs.size());
-    hp_ctx.validation_interval = ctx->config.hyperparameters.validation_interval;
-    
-    auto hp_logger = [&](const std::string& msg) { ctx->logging.logger->log(msg); };
-
-    // Three primitives, in order:
-    //   (A) validate inputs (fail loud)
-    //   (B) compute derived schedule from (seq_count, batch_size, epochs) ratios
-    //   (C) apply cross-field policy / clamps (mutates hp, logs adjustments)
-    GRIM::HyperParameters::validateTrainingHyperparameters(ctx->config.hyperparameters);
-    ctx->derived_schedule = GRIM::HyperParameters::computeDerivedSchedule(
-        ctx->config.hyperparameters, hp_ctx);
+    hp_ctx.train_sequence_count = static_cast<int>(ctx.data.train_seqs.size());
+    hp_ctx.validation_interval = ctx.config.hyperparameters.validation_interval;
+    ctx.derived_schedule = GRIM::HyperParameters::computeDerivedSchedule(
+        ctx.config.hyperparameters, hp_ctx);
+    auto hp_logger = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
     GRIM::HyperParameters::applyTrainingHyperparameterPolicy(
-        ctx->config.hyperparameters, ctx->derived_schedule, hp_ctx, hp_logger);
+        ctx.config.hyperparameters, ctx.derived_schedule, hp_ctx, hp_logger);
 
-    // 7. Capacity stem (single author after HP policy).
-    ctx->run_capacity = deriveRunCapacityOrThrow(ctx->config);
-
-    // Single-source hyperparameter dump (post-policy, includes derived
-    // schedule values computed in HyperParameters_GPU.hpp). The
-    // DataStatsSnapshot folds vocab + sequence-count info into the same
-    // visual block.
     GRIMText::Training::DataStatsSnapshot data_stats;
-    data_stats.data_path            = ctx->config.paths.data_path;
-    data_stats.vocab_path           = ctx->config.paths.vocab_path;
-    data_stats.tokenizer_vocab_size = tokenizer_vocab_size;
-    data_stats.actual_vocab_size    = ctx->config.actual_vocab_size;
-    data_stats.train_sequence_count = ctx->data.train_seqs.size();
-    data_stats.val_sequence_count   = ctx->data.val_seqs.size();
+    data_stats.data_path = ctx.data_info.data_path;
+    data_stats.vocab_path = ctx.data_info.vocab_path;
+    data_stats.tokenizer_vocab_size = ctx.data_info.tokenizer_vocab_size;
+    data_stats.actual_vocab_size = ctx.data_info.actual_vocab_size;
+    data_stats.train_sequence_count = ctx.data_info.train_sequence_count;
+    data_stats.val_sequence_count = ctx.data_info.val_sequence_count;
 
     dumpAllHyperparameters(
-        ctx->config.hyperparameters,
-        &ctx->derived_schedule,
+        ctx.config.hyperparameters,
+        &ctx.derived_schedule,
         &data_stats,
         [](const std::string& msg) { EmitModuleInfo(ModuleId::Training, msg, 0); });
-    
-    // 8. Initialize production-grade RNG system (BEFORE model init for Xavier seeding)
-    ctx->rng = Internal::initializeRNG(ctx->config, *ctx->logging.logger);
-    
-    // 9. Initialize model (uses RNG init_seed for Xavier)
-    //    loaded_checkpoint_path receives the path that ACTUALLY loaded
-    //    so the optimizer sidecar can be matched exactly (no independent scan).
+}
+
+void ModelAllocated(TrainingContext& ctx) {
+    ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
+
     try {
-        ctx->model = Internal::initializeModel(
-            ctx->config,
-            ctx->run_capacity,
-            ctx->config.actual_vocab_size,
-            ctx->rng.init_seed,
-            *ctx->logging.logger,
-            ctx->loaded_checkpoint_path);
+        ctx.model = Internal::initializeModel(
+            ctx.config,
+            ctx.run_capacity,
+            ctx.config.actual_vocab_size,
+            ctx.rng.init_seed,
+            *ctx.logging.logger,
+            ctx.loaded_checkpoint_path);
     } catch (const std::exception& e) {
         EmitModuleError(ModuleId::Training, std::string("FATAL: Model initialization failed: ") + e.what(), 0);
         throw;
     }
 
-    // 9a. Verify init-time structural invariants and dual-emit them to
-    // telemetry stream slots (48-54) and init_facts_<session>.csv.
-    // Implementation lives in Phases/Startup/InitFacts.cu — throws on
-    // tie_embeddings contract violations, otherwise silent in the human log.
-    verifyAndDumpInitFacts(*ctx);
+    verifyAndDumpInitFacts(ctx);
+    ctx.model_allocation = captureAndValidateModelAllocationOrThrow(ctx);
 
-    // Handle save test mode
-    if (ctx->config.save_test_mode) {
-        ctx->logging.logger->log("========================================");
-        ctx->logging.logger->log("  SAVE TEST MODE");
-        ctx->logging.logger->log("========================================");
-        std::string test_save_path = ctx->config.paths.checkpoint_dir + "/save_test.bin";
-        ctx->logging.logger->log("Testing model->save() to: " + test_save_path);
-        bool save_ok = ctx->model->save(test_save_path);
+    if (ctx.config.save_test_mode) {
+        ctx.logging.logger->log("========================================");
+        ctx.logging.logger->log("  SAVE TEST MODE");
+        ctx.logging.logger->log("========================================");
+        std::string test_save_path = ctx.config.paths.checkpoint_dir + "/save_test.bin";
+        ctx.logging.logger->log("Testing model->save() to: " + test_save_path);
+        bool save_ok = ctx.model->save(test_save_path);
         if (save_ok) {
             EmitModuleInfo(ModuleId::Checkpoint, "✓ Save test PASSED", 0);
             if (fs::exists(test_save_path)) {
                 auto file_size = fs::file_size(test_save_path);
-                EmitModuleInfo(ModuleId::Checkpoint, 
+                EmitModuleInfo(ModuleId::Checkpoint,
                     std::string("  File size: ") + std::to_string(file_size) + " bytes", 0);
             }
         } else {
@@ -742,77 +708,102 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         }
         std::exit(save_ok ? 0 : 1);
     }
-    
-    // 10. Initialize optimizer (also restores optimizer sidecar paired to the
-    // exact checkpoint that loaded weights — see Internal::initializeOptimizer).
-    Internal::initializeOptimizer(*ctx);
+}
 
-    // 10a. Compute class-balanced loss weights if enabled.
-    // Implementation lives in Phases/Startup/ClassBalancedWeights.cu —
-    // see that file for the frequency math and logging contract.
-    if (ctx->config.hyperparameters.loss_class_balanced_enabled) {
+void ResumeStateReady(TrainingContext& ctx) {
+    Internal::initializeOptimizer(ctx);
+    ctx.resume_state = captureResumeState(ctx);
+
+    if (ctx.config.hyperparameters.loss_class_balanced_enabled) {
         computeAndUploadClassBalancedWeights(
-            ctx->data.train_seqs,
-            ctx->config.actual_vocab_size,
-            ctx->config.hyperparameters.loss_class_balanced_beta,
-            ctx->model->getTrainingState(),
-            *ctx->logging.logger);
+            ctx.data.train_seqs,
+            ctx.config.actual_vocab_size,
+            ctx.config.hyperparameters.loss_class_balanced_beta,
+            ctx.model->getTrainingState(),
+            *ctx.logging.logger);
     }
-    
-    // 11. Initialize telemetry lattice
+}
+
+void TelemetryReady(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry lattice...", 0);
-    ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(
+    ctx.telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(
         GRIM::Telemetry::makeLatticeConfigFromHyperparameters(
-            ctx->config.hyperparameters,
-            ctx->model->getTrainingState().stream_ctrl.getPrimaryStream()));
-    const auto& lattice_cfg = ctx->telemetry.lattice->config();
-    ctx->logging.logger->log("✓ Telemetry lattice: " + std::to_string(lattice_cfg.num_levels) + " levels, " + std::to_string(lattice_cfg.num_streams) + " streams, GPU-resident");
+            ctx.config.hyperparameters,
+            ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()));
+    const auto& lattice_cfg = ctx.telemetry.lattice->config();
+    ctx.logging.logger->log("✓ Telemetry lattice: " + std::to_string(lattice_cfg.num_levels) +
+                            " levels, " + std::to_string(lattice_cfg.num_streams) + " streams, GPU-resident");
 
-    // 11a. Initialize telemetry CSV logger (per-step measured data export)
-    {
-        const std::string csv_path = ctx->config.paths.log_dir + "/telemetry_" + ctx->logging.session_id + ".csv";
-        ctx->telemetry.csv_logger = std::make_unique<GRIM::Telemetry::TelemetryCsvLogger>(
-            csv_path, *ctx->telemetry.lattice);
-        ctx->logging.logger->log("✓ Telemetry CSV logger: " + csv_path);
-    }
+    const std::string csv_path = ctx.config.paths.log_dir + "/telemetry_" + ctx.logging.session_id + ".csv";
+    ctx.telemetry.csv_logger = std::make_unique<GRIM::Telemetry::TelemetryCsvLogger>(
+        csv_path, *ctx.telemetry.lattice);
+    ctx.logging.logger->log("✓ Telemetry CSV logger: " + csv_path);
 
-    // 11b. Initialize telemetry control (GPU-native kernel-based control)
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry control...", 0);
-    // Rule 20: telemetry control must use the capacity stem (single author),
-    // and verify the model mirrors match it (no independent derivations).
-    const uint32_t token_budget = ctx->run_capacity.max_tokens_per_batch;
-    const uint32_t seq_cap = ctx->run_capacity.seq_cap;
+    const uint32_t token_budget = ctx.run_capacity.max_tokens_per_batch;
+    const uint32_t seq_cap = ctx.run_capacity.seq_cap;
     if (token_budget == 0 || seq_cap == 0) {
         throw std::runtime_error("FATAL: RunCapacity is invalid (token_budget=" +
                                  std::to_string(token_budget) + " seq_cap=" + std::to_string(seq_cap) + ")");
     }
-    if (static_cast<uint32_t>(ctx->model->getConfig().max_tokens_per_batch) != token_budget) {
+    if (static_cast<uint32_t>(ctx.model->getConfig().max_tokens_per_batch) != token_budget) {
         throw std::runtime_error("FATAL: model max_tokens_per_batch does not match RunCapacity (model=" +
-                                 std::to_string(ctx->model->getConfig().max_tokens_per_batch) +
+                                 std::to_string(ctx.model->getConfig().max_tokens_per_batch) +
                                  " stem=" + std::to_string(token_budget) + ")");
     }
-    ctx->telemetry.control_config = GRIM::Telemetry::makeControlConfigFromHyperparameters(
-        ctx->config.hyperparameters,
+    ctx.telemetry.control_config = GRIM::Telemetry::makeControlConfigFromHyperparameters(
+        ctx.config.hyperparameters,
         token_budget,
         seq_cap);
+}
 
-    // Telemetry control field values are reported by ConfigDump
-    // (telemetry_* section). GPU free/total memory is reported by ConfigDump
-    // (memory.gpu.* rows). No local echoes here.
+void SchedulerPreflightReady(TrainingContext& ctx) {
+    auto log_batching = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
+    SchedulerInputs inputs;
+    inputs.train_catalog = &ctx.data.train_catalog;
+    inputs.capacity = ctx.run_capacity;
+    inputs.global_step = ctx.global_step;
+    inputs.epoch = 0;
+    inputs.data_seed = ctx.rng.data_seed;
+    ctx.scheduler_preflight = runSchedulerPreflightOrThrow(inputs, log_batching);
+}
 
-    // Write initial status
-    ctx->logging.status_writer->writeStatus(
-        GRIMText::Control::TrainingState_Training,
-        0, ctx->config.hyperparameters.epochs, 0, 0,
-        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-        "Phase 1 complete - ready for training"
-    );
-    
-    // Initialize timing
-    ctx->start_time = std::chrono::steady_clock::now();
-    
+void EpochPlanReady(TrainingContext& ctx) {
+    ctx.epoch_plan = finalizeEpochPlanOrThrow(ctx.config, ctx.scheduler_preflight);
+    ctx.estimated_total_steps = ctx.epoch_plan.estimated_total_steps;
+    ctx.lr_schedule.emplace(ctx.epoch_plan.lr_config);
+    if (!ctx.lr_schedule) {
+        throw std::runtime_error("FATAL: lr_schedule not initialized during startup");
+    }
+}
 
-    return ctx;  // Heap-allocated, no move
+void StartupValidated(TrainingContext& ctx) {
+    validateStartupOrThrow(StartupValidationInputs{ctx});
+}
+
+void Phase2HandoffReady(TrainingContext& ctx) {
+    (void)makePhase2HandoffReady(ctx);
+}
+
+//======================================================//
+//  Phase1 Main Entry Point
+//======================================================//
+
+std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
+    auto ctx = std::make_unique<TrainingContext>();
+    LoggingReady(*ctx, argc, argv);
+    MemorySnapshotReady(*ctx);
+    HyperparametersReady(*ctx);
+    CapacityStemReady(*ctx);
+    DataInfoReady(*ctx);
+    ModelAllocated(*ctx);
+    ResumeStateReady(*ctx);
+    TelemetryReady(*ctx);
+    SchedulerPreflightReady(*ctx);
+    EpochPlanReady(*ctx);
+    StartupValidated(*ctx);
+    Phase2HandoffReady(*ctx);
+    return ctx;
 }
 
 } // namespace GRIMText::Training

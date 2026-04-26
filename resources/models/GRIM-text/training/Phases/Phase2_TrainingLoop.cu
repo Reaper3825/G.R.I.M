@@ -39,6 +39,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Batching/PackerPolicy.hpp"
 #include "../../Shared/Batching/EpochBatching.hpp"  // GRIM::Batching::buildEpochBatches
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
@@ -951,31 +952,6 @@ EpochResult runEpoch(
         log_batching);
     
     const int total_batches = static_cast<int>(schedule.batches.size());
-    if (ctx.estimated_total_steps == 0 && total_batches > 0) {
-        // estimated_total_steps counts OPTIMIZER STEPS (not micro-batches).
-        // LR schedule, warmup, and cosine decay all index by optimizer step.
-        const int accum = std::max(1, hp.gradient_accumulation_steps);
-        ctx.estimated_total_steps = (num_epochs * total_batches) / accum;
-        
-        // Derive warmup_steps from warmup_fraction now that total_steps is known.
-        GRIM::Config::deriveWarmupSteps(ctx.config.hyperparameters, ctx.estimated_total_steps);
-        
-        // Construct the deterministic LR schedule now that total_steps is known.
-        // Cosine decay spans all epochs; warm restarts are disabled.
-        GRIM::LR::LRScheduleConfig lr_cfg;
-        lr_cfg.base_lr = hp.learning_rate;
-        lr_cfg.cosine_decay_min_lr = hp.cosine_decay_min_lr;
-        lr_cfg.warmup_steps = ctx.config.hyperparameters.warmup_steps;
-        lr_cfg.total_steps = ctx.estimated_total_steps;
-        lr_cfg.steps_per_epoch = total_batches / accum;
-        lr_cfg.cosine_decay_enabled = hp.cosine_decay_enabled;
-        lr_cfg.warm_restarts = hp.cosine_warm_restarts;
-        ctx.lr_schedule.emplace(lr_cfg);
-        
-        ctx.logging.logger->log("[LRSchedule] warmup_fraction=" + std::to_string(hp.warmup_fraction)
-            + " -> warmup_steps=" + std::to_string(ctx.config.hyperparameters.warmup_steps)
-            + " / total_steps=" + std::to_string(ctx.estimated_total_steps));
-    }
     int total_batches_to_run = total_batches;
     const bool single_batch_overfit = hp.single_batch_overfit_enabled;
     if (single_batch_overfit) {

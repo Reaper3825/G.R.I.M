@@ -13,7 +13,7 @@ todos:
     content: "Document linear startup + ownership: `CapacityStem` derives `RunCapacity` once after post-policy HP; model cache fields receive mirrors from it; legacy `BatchOptions` capacity fields may be filled only during migration; batching types remain the schedule/batch/payload story—no second parallel struct for the same fields."
     status: pending
   - id: phase1-hp-stem-to-batching-types
-    content: "Phase 1: one function/site after `applyTrainingHyperparameterPolicy` derives `RunCapacity` from `StartupConfig`, applies those integers to `LanguageModelConfig` cache fields, and only temporarily mirrors them into legacy `BatchOptions` while old call sites exist—remove duplicate locals in `initializeModel`."
+    content: "Phase 1: the `CapacityStemReady` subsystem call derives `RunCapacity` from post-policy `StartupConfig`; the `ModelAllocated` subsystem applies those integers to `LanguageModelConfig` cache fields. `executePhase1` must not contain either derivation or mirror-application logic."
     status: pending
   - id: priority-context-carries-options
     content: "Store frozen `RunCapacity` (and policy-only `PackerPolicy` once available) on `TrainingContext` so Phase2 val, `buildEpochBatches`, and `buildPayloadFromAssignment` do not re-derive `batch_size × max_seq_len` from scattered sources."
@@ -34,7 +34,7 @@ todos:
     content: "Refactor legacy `BatchOptions` out of [`Batching_GPU.hpp`](resources/models/GRIM-text/Shared/Batching/Batching_GPU.hpp): **drop** `max_tokens_per_batch` and `max_batch_size`; introduce [`Shared/Batching/PackerPolicy.hpp`](resources/models/GRIM-text/Shared/Batching/PackerPolicy.hpp) for packer policy only—at minimum `PackingStrategy` and `BatchOrdering`; relocate/delete bucket/similarity/curriculum/RNG if they belong in HP or `EpochBatching` only."
     status: pending
   - id: startup-order-contract
-    content: "Adopt and document the initialization order: **Logging → Memory snapshot/capability → Hyperparameter constants → HP groupings/stem → Data info → Payload builder/scheduler → Final validation**. Each stage may only read previous stages and write its owned artifact."
+    content: "Adopt and document the exact 12-callsite initialization order: `LoggingReady`, `MemorySnapshotReady`, `HyperparametersReady`, `CapacityStemReady`, `DataInfoReady`, `ModelAllocated`, `ResumeStateReady`, `TelemetryReady`, `SchedulerPreflightReady`, `EpochPlanReady`, `StartupValidated`, `Phase2HandoffReady`. Each callsite only invokes its subsystem; all logic lives behind the subsystem boundary."
     status: pending
   - id: startup-event-taxonomy
     content: "Define startup as a linear event/artifact pipeline (`LoggingReady`, `MemorySnapshotReady`, `HyperparametersReady`, `CapacityStemReady`, `DataInfoReady`, `ModelAllocated`, `ResumeStateReady`, `TelemetryReady`, `SchedulerPreflightReady`, `EpochPlanReady`, `StartupValidated`, `Phase2HandoffReady`). Events are one-way handoffs; `Phase2HandoffReady` is the prepared-input boundary equivalent to starting an epoch, and only Phase2 epoch/batch loops are loops."
@@ -195,6 +195,27 @@ StartupValidated -> Phase2HandoffReady -> executePhase2(phase2_handoff_inputs)
 ```
 
 Treat `Phase2HandoffReady` as the equivalent of **standing at the start of an epoch**: Phase2 has everything needed to choose/build that epoch's schedule, materialize the first batch payload, run forward/backward, step the optimizer, validate, and checkpoint. Startup can dry-run or preflight scheduling only to prove the handoff is coherent; real epoch scheduling, batch iteration, payload materialization, training, validation, and training checkpoint writes belong to Phase2.
+
+### Strict Phase1 orchestration contract
+
+[`training/Phases/Phase1_Startup.cu`](resources/models/GRIM-text/training/Phases/Phase1_Startup.cu) is the **event orchestrator only**. Its `executePhase1` body must collapse to exactly these twelve ordered subsystem callsites:
+
+1. `LoggingReady`
+2. `MemorySnapshotReady`
+3. `HyperparametersReady`
+4. `CapacityStemReady`
+5. `DataInfoReady`
+6. `ModelAllocated`
+7. `ResumeStateReady`
+8. `TelemetryReady`
+9. `SchedulerPreflightReady`
+10. `EpochPlanReady`
+11. `StartupValidated`
+12. `Phase2HandoffReady`
+
+Each callsite may assign the returned artifact into `TrainingContext` / `Phase2HandoffInputs`, but it must not contain local derivation blocks, field-by-field mapping, scheduler construction, LR config mapping, telemetry setup, validation comparisons, or data/model/control policy logic. Those details belong inside the owning subsystem file for the event (`Startup/Capacity/`, `Startup/Data/`, `Startup/Model/`, `Startup/Resume/`, `Startup/Telemetry/`, `Startup/Scheduling/`, `Startup/Epoch/`, `Startup/Validation/`, or the existing `Shared/HyperParameters/` / batching owner).
+
+Hard review rule: if `executePhase1` needs braces for anything other than function scope, the phase is not done. Banners, directory creation, status writes, error detail, scheduler dry-runs, LR setup, telemetry construction, and final comparisons all belong behind one of the twelve subsystem callsites. Do not satisfy this plan by moving a large block from Phase2 or `train_gpu.cu` into Phase1; satisfy it by giving the block an owner subsystem and leaving Phase1 with the named event callsite.
 
 ### Phase 0: Baseline audit and guardrails
 
@@ -414,12 +435,12 @@ Treat `Phase2HandoffReady` as the equivalent of **standing at the start of an ep
 
 - Add `StartupValidationInputs` and `StartupValidation` under `training/Phases/Startup/Validation/`.
 - Wire the final validator immediately before returning `Phase2HandoffInputs` / `TrainingContext` to Phase2.
-- Thin `Phase1_Startup.cu` so it orders events rather than owning all domain logic.
+- Thin `Phase1_Startup.cu` so `executePhase1` is exactly the twelve event callsites from **Strict Phase1 orchestration contract** and owns no domain logic.
 - Remove migration-only mirrors and comments that are no longer needed.
 
 **Ownership boundaries:**
 
-- **Owns:** `StartupValidationInputs` as const references to completed startup artifacts; `StartupValidation` as the final read-only coherence gate; `Phase2HandoffInputs` as the narrow prepared-input view over `TrainingContext`; `Phase2HandoffReady` as the boundary event; Phase1 orchestration order.
+- **Owns:** `StartupValidationInputs` as const references to completed startup artifacts; `StartupValidation` as the final read-only coherence gate; `Phase2HandoffInputs` as the narrow prepared-input view over `TrainingContext`; `Phase2HandoffReady` as the boundary event; the exact twelve-callsite Phase1 orchestration order.
 - **Consumes:** logging/memory, post-policy HP, `RunCapacity`, `DataInfo`, model allocation state, resume state, telemetry state, scheduler preflight, epoch plan, and existing context handles.
 - **May change:** Phase1 orchestration and prior stage outputs only to expose const validation inputs and remove migration-only wiring.
 - **Must not own / recreate:** validator writes no config, allocates no GPU memory, mutates no artifact, derives no new capacity/schedule/telemetry/resume facts, creates no flat startup dumping-ground files, and does not hide the handoff behind an unstructured full-context dependency.
@@ -427,12 +448,12 @@ Treat `Phase2HandoffReady` as the equivalent of **standing at the start of an ep
 
 **Completion criteria:**
 
-- The runtime startup order is visibly linear: logging, memory, HP, capacity, data, model allocation, resume, telemetry, scheduler preflight, epoch plan, final validation, Phase2 prepared-input handoff.
+- The runtime startup order is visibly linear and exact: `LoggingReady`, `MemorySnapshotReady`, `HyperparametersReady`, `CapacityStemReady`, `DataInfoReady`, `ModelAllocated`, `ResumeStateReady`, `TelemetryReady`, `SchedulerPreflightReady`, `EpochPlanReady`, `StartupValidated`, `Phase2HandoffReady`.
 - The final validator writes no configuration and allocates nothing.
 - Final validation compares HP/capacity/model allocation/scheduler/payload/telemetry/resume/epoch plan facts and throws on disagreement.
 - `Phase2HandoffInputs` clearly names the inputs Phase2 needs to behave like it is starting an epoch: context refs/handles, `RunCapacity`, `DataInfo` / sequence views, `PackerPolicy`, `EpochPlan`, resume/global-step position, telemetry/control state, and scheduler preflight facts.
 - No forward pass, backward pass, optimizer step, validation epoch, training checkpoint write, or real per-batch payload execution occurs before the Phase2 handoff.
-- `Phase1_Startup.cu` no longer contains uncontrolled declares/defines for capacity or scheduler configuration.
+- `executePhase1` contains no local derivation blocks, no field-by-field config mapping, no scheduler construction, no LR config mapping, no telemetry setup logic, and no validation comparison logic; it only invokes the twelve subsystems and stores their artifacts.
 - Every new startup file lives under the approved domain folder; no new flat `training/Phases/Startup/*.hpp` grouping files are added.
 
 ### Phase 9: Removal and regression sweep
@@ -507,13 +528,13 @@ flowchart TB
 
 **Not** a new mega-struct for "grouping" for its own sake. **Yes:**
 
-1. **After** `validate` → `computeDerivedSchedule` → `applyTrainingHyperparameterPolicy`, treat **one site** (module or `executePhase1` block) as the **only author** of:
+1. **After** `validate` → `computeDerivedSchedule` → `applyTrainingHyperparameterPolicy`, treat the `CapacityStemReady` subsystem as the **only author** of:
    - the **capacity artifact** (`RunCapacity`: effective batch rows, sequence cap, checked token product, overflow policy), with legacy `BatchOptions.max_batch_size` / `max_tokens_per_batch` filled from it only while old call sites still exist, and
    - the **mirror** on `LanguageModelConfig` (`max_cached_batch`, `max_cached_seq_len`, `max_tokens_per_batch`) so GPU allocation and `buildBatchPayload` cache-fit use **aligned** numbers.
 
 2. **Persist** the training **capacity/stem** (and, temporarily during migration, legacy `BatchOptions` capacity mirrors if needed) on [`TrainingContext`](resources/models/GRIM-text/training/Phases/Phase1_Startup.hpp) so Phase2 validation, epoch batching, and payload helpers **read** the stem instead of recomputing `ctx.config.hyperparameters.batch_size * model_cfg.max_seq_len` at each callsite.
 
-3. **Remove** ad-hoc locals in `initializeModel` that re-derive the same product—the stem runs **before** or feeds **into** model config assembly, not in the middle of `initializeModel` with new names.
+3. **Remove** ad-hoc locals in `initializeModel` that re-derive the same product—the stem runs **before** model config assembly, and `ModelAllocated` receives it as an input. Do not put the derivation or mirror mapping in `executePhase1`.
 
 4. **Follow-on:** see **§Refactor `BatchOptions`**—first PR may only **fill** legacy `max_*` on `BatchOptions` from the stem; **deleting** those fields from the struct is the explicit next refactor (`slim-batch-options`).
 

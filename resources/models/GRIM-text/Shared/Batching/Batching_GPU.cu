@@ -258,9 +258,15 @@ BatchSchedule buildBatches(
                 // new_total >= old_total + seq_len by construction (new_max >= old_max,
                 // new_size = old_size + 1), so this subtraction is safe in uint64_t.
                 uint64_t waste_increase_u64 = new_total - old_total - seq_len;
-                uint32_t waste_increase = waste_increase_u64 > static_cast<uint64_t>(UINT32_MAX)
-                    ? UINT32_MAX
-                    : static_cast<uint32_t>(waste_increase_u64);
+                if (waste_increase_u64 > static_cast<uint64_t>(UINT32_MAX)) {
+                    throw std::runtime_error(
+                        "buildBatches: waste_increase overflow (new_total=" +
+                        std::to_string(new_total) +
+                        " old_total=" + std::to_string(old_total) +
+                        " seq_len=" + std::to_string(seq_len) +
+                        " waste_increase=" + std::to_string(waste_increase_u64) + ")");
+                }
+                uint32_t waste_increase = static_cast<uint32_t>(waste_increase_u64);
 
                 if (waste_increase < best_waste_increase) {
                     best_waste_increase = waste_increase;

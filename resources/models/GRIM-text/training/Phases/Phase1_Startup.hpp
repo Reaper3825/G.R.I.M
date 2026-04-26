@@ -64,6 +64,11 @@
 #include "Startup/Logging.hpp"
 #include "Startup/Capacity/RunCapacity.hpp"
 #include "Startup/Capacity/MemorySnapshot.hpp"
+#include "Startup/Data/DataInfo.hpp"
+#include "Startup/Model/ModelAllocationState.hpp"
+#include "Startup/Scheduling/SchedulerPreflight.hpp"
+#include "Startup/Epoch/EpochPlan.hpp"
+#include "Startup/Resume/ResumeState.hpp"
 
 namespace GRIMText::Training {
 
@@ -175,6 +180,16 @@ struct TrainingContext {
     RunCapacity run_capacity;
     // Memory snapshot (evidence only; never authors capacity)
     MemorySnapshot memory_snapshot;
+    // Post-allocation validation evidence (fails loud on mismatch)
+    ModelAllocationState model_allocation;
+    // Resume metadata (populated after optimizer sidecar restore attempt)
+    ResumeState resume_state;
+    // Data summary/reference artifact (SequenceData remains storage owner)
+    DataInfo data_info;
+    // Scheduler dry-run/preflight facts used by epoch planning/final validation
+    SchedulerPreflightState scheduler_preflight;
+    // Startup-owned epoch plan facts (LR schedule config, total steps, warmup)
+    EpochPlan epoch_plan;
     
     // Model and tokenizer
     std::unique_ptr<GRIM::LanguageModel> model;
@@ -203,11 +218,11 @@ struct TrainingContext {
     
     // State tracking
     int global_step = 0;
-    /** Estimated total steps (epochs * batches per epoch), set in runEpoch; used for cosine LR decay. */
+    /** Estimated total steps (epochs * batches per epoch), set during Phase1 EpochPlanReady. */
     int estimated_total_steps = 0;
     
     /** Deterministic LR schedule — exposed curve queryable at any step.
-     *  Constructed in Phase2 once estimated_total_steps is known. */
+     *  Constructed in Phase1 once SchedulerPreflightReady has produced total_batches. */
     std::optional<GRIM::LR::LRSchedule> lr_schedule;
     
     
