@@ -12,8 +12,9 @@
 //    - ctx.train_payloads        : prebuilt host BatchPayloads (one per batch)
 //    - ctx.fixed_val_schedule    : single validation BatchSchedule
 //    - ctx.val_payloads          : prebuilt host BatchPayloads (one per val batch)
-//    - ctx.epoch_batch_order     : per-epoch permutation of train batch indices
-//                                  (deterministic from rng.data_seed)
+//    - ctx.epoch_batch_order     : per-epoch executable train batch-index order
+//                                  (normal mode: deterministic permutation;
+//                                   diagnostic overfit: repeated index 0)
 //
 //  Phase2 NEVER calls buildBatches / buildEpochBatches / buildBatchPayload.
 //  It selects the active batch via:

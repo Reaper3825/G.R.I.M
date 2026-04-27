@@ -2,6 +2,7 @@
 
 #include "../../Phase1_Startup.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -56,12 +57,31 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
             "telemetry reference seq len does not match RunCapacity");
 
     require(ctx.scheduler_preflight.total_batches > 0, "scheduler preflight total_batches <= 0");
-    require(ctx.epoch_plan.total_batches == ctx.scheduler_preflight.total_batches,
-            "EpochPlan total_batches does not match SchedulerPreflightState");
+    if (ctx.config.hyperparameters.single_batch_overfit_enabled) {
+        require(ctx.epoch_plan.total_batches == ctx.config.hyperparameters.single_batch_overfit_max_steps,
+                "EpochPlan total_batches does not match single_batch_overfit_max_steps");
+    } else {
+        require(ctx.epoch_plan.total_batches == ctx.scheduler_preflight.total_batches,
+                "EpochPlan total_batches does not match SchedulerPreflightState");
+    }
     require(ctx.epoch_plan.estimated_total_steps == ctx.estimated_total_steps,
             "EpochPlan estimated_total_steps does not match TrainingContext");
     require(ctx.epoch_plan.estimated_total_steps > 0, "estimated_total_steps <= 0");
     require(ctx.lr_schedule.has_value(), "lr_schedule is not initialized");
+
+    require(static_cast<int>(ctx.epoch_batch_order.size()) == ctx.config.hyperparameters.epochs,
+            "epoch_batch_order size does not match epochs");
+    require(!ctx.train_payloads.empty(), "train_payloads is empty");
+    for (std::size_t epoch = 0; epoch < ctx.epoch_batch_order.size(); ++epoch) {
+        const auto& order = ctx.epoch_batch_order[epoch];
+        require(static_cast<int>(order.size()) == ctx.epoch_plan.total_batches,
+                "epoch_batch_order entry size does not match EpochPlan total_batches");
+        for (int batch_index : order) {
+            require(batch_index >= 0 &&
+                    batch_index < static_cast<int>(ctx.train_payloads.size()),
+                    "epoch_batch_order contains out-of-range train payload index");
+        }
+    }
 }
 
 void StartupValidated(TrainingContext& ctx) {

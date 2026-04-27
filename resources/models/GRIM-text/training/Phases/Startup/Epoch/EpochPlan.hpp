@@ -39,9 +39,17 @@ inline EpochPlan finalizeEpochPlanOrThrow(
     const int accum = hp.gradient_accumulation_steps;
 
     EpochPlan plan;
-    plan.total_batches = preflight.total_batches;
-    if (plan.total_batches <= 0) {
+    if (preflight.total_batches <= 0) {
         throw std::runtime_error("FATAL: scheduler produced 0 batches during startup epoch-plan finalization");
+    }
+    if (hp.single_batch_overfit_enabled) {
+        if (hp.single_batch_overfit_max_steps <= 0) {
+            throw std::runtime_error("FATAL: single_batch_overfit_max_steps must be > 0 during startup when single_batch_overfit_enabled=true (got " +
+                                     std::to_string(hp.single_batch_overfit_max_steps) + ")");
+        }
+        plan.total_batches = hp.single_batch_overfit_max_steps;
+    } else {
+        plan.total_batches = preflight.total_batches;
     }
 
     const int64_t total_micro_batches =

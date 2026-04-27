@@ -10,7 +10,7 @@ namespace GRIMText::Training {
 Phase2HandoffInputs makePhase2HandoffReady(TrainingContext& ctx) {
     ctx.logging.status_writer->writeStatus(
         GRIMText::Control::TrainingState_Training,
-        0, ctx.config.hyperparameters.epochs, 0, 0,
+        0, static_cast<int>(ctx.epoch_batch_order.size()), 0, ctx.epoch_plan.total_batches,
         0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         "Phase 1 complete - ready for training");
     ctx.start_time = std::chrono::steady_clock::now();

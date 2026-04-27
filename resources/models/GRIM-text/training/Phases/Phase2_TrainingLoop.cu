@@ -186,17 +186,11 @@ bool maybeSaveCheckpoint(
 //======================================================//
 namespace {
 
-// Single Phase2 entry point for CoreRunHP fields (epochs, accumulation,
-// single-batch-overfit). Re-validates Phase1's invariants as defense-in-depth.
-// Phase2 must read these fields ONLY via this helper — never via
-// ctx.config.hyperparameters.* directly. See Shared/HyperParameters/
-// HyperparameterGroupings.hpp for the grouping definition.
+// Single Phase2 entry point for CoreRunHP fields still needed inside the
+// compute loop. Executable epoch/batch geometry is authored by Phase1 in
+// ctx.epoch_batch_order; do not rederive it here.
 ::GRIM::HyperParameters::CoreRunHP validatedCoreRunHP(const TrainingContext& ctx) {
     auto core = ::GRIM::HyperParameters::coreRunHP(ctx.config);
-    if (core.epochs <= 0) {
-        throw std::runtime_error("FATAL: epochs must be > 0 in Phase2 (got " +
-                                 std::to_string(core.epochs) + ")");
-    }
     if (core.gradient_accumulation_steps <= 0) {
         throw std::runtime_error("FATAL: gradient_accumulation_steps must be > 0 in Phase2 (got " +
                                  std::to_string(core.gradient_accumulation_steps) + ")");
@@ -853,10 +847,11 @@ EpochResult runEpoch(
     result.epoch = epoch_idx;
     
     const auto& hp = ctx.config.hyperparameters;
-    // CoreRunHP view — Phase2's single read path for epochs / accumulation /
-    // single-batch-overfit. Phase2 must NOT re-read these fields from `hp`.
     const auto core = validatedCoreRunHP(ctx);
-    const int num_epochs = core.epochs;
+    const int num_epochs = static_cast<int>(ctx.epoch_batch_order.size());
+    if (num_epochs <= 0) {
+        throw std::runtime_error("FATAL: Phase2 received empty epoch_batch_order from Phase1");
+    }
     
     ctx.logging.logger->log("Epoch " + std::to_string(epoch_idx + 1) + "/" + std::to_string(num_epochs));
     
@@ -871,8 +866,8 @@ EpochResult runEpoch(
     // Phase1 owns all batch packing (Startup/Batching/PlannedBatches.cu).
     // Phase2 NEVER shuffles ctx.data.train_views, never rebuilds
     // ctx.data.train_catalog, and never calls buildEpochBatches /
-    // buildBatchPayload — diversity across epochs is expressed solely as a
-    // permutation of fixed batch indices in ctx.epoch_batch_order.
+    // buildBatchPayload. Phase1 authors ctx.epoch_batch_order as the exact
+    // executable batch-index order for this epoch.
     if (ctx.train_payloads.empty()) {
         throw std::runtime_error(
             "FATAL: ctx.train_payloads is empty at runEpoch — "
@@ -885,25 +880,20 @@ EpochResult runEpoch(
             std::to_string(ctx.epoch_batch_order.size()) + ")");
     }
     const auto& batch_order = ctx.epoch_batch_order[epoch_idx];
-    if (batch_order.size() != ctx.train_payloads.size()) {
+    if (batch_order.empty()) {
         throw std::runtime_error(
-            "FATAL: epoch_batch_order[" + std::to_string(epoch_idx) +
-            "].size()=" + std::to_string(batch_order.size()) +
-            " != train_payloads.size()=" + std::to_string(ctx.train_payloads.size()));
+            "FATAL: epoch_batch_order[" + std::to_string(epoch_idx) + "] is empty");
+    }
+    for (int active_idx : batch_order) {
+        if (active_idx < 0 || active_idx >= static_cast<int>(ctx.train_payloads.size())) {
+            throw std::runtime_error(
+                "FATAL: epoch_batch_order[" + std::to_string(epoch_idx) +
+                "] contains out-of-range train payload index " +
+                std::to_string(active_idx));
+        }
     }
 
     const int total_batches = static_cast<int>(batch_order.size());
-    int total_batches_to_run = total_batches;
-    const bool single_batch_overfit = core.single_batch_overfit_enabled;
-    if (single_batch_overfit) {
-        if (core.single_batch_overfit_max_steps <= 0) {
-            throw std::runtime_error("FATAL: single_batch_overfit_max_steps must be > 0 when single_batch_overfit_enabled=true (got " +
-                                     std::to_string(core.single_batch_overfit_max_steps) + ")");
-        }
-        total_batches_to_run = core.single_batch_overfit_max_steps;
-        ctx.logging.logger->log("[SingleBatch] Enabled: repeating batch 1 for " +
-                                std::to_string(total_batches_to_run) + " steps.");
-    }
     const auto epoch_start = std::chrono::steady_clock::now();
     float epoch_loss = 0.0f;
 
@@ -914,14 +904,14 @@ EpochResult runEpoch(
     // Phase1-authored payload is active each step. The hard invariant from
     // the plan is:
     //     active_batch = ctx.train_payloads[ctx.epoch_batch_order[epoch][i]]
-    for (int batch_idx = 0; batch_idx < total_batches_to_run; ++batch_idx) {
-        const int active_idx = batch_order[single_batch_overfit ? 0 : batch_idx];
+    for (int batch_idx = 0; batch_idx < total_batches; ++batch_idx) {
+        const int active_idx = batch_order[batch_idx];
         const GRIM::Batching::BatchPayload& payload = ctx.train_payloads[active_idx];
 
         // Log progress periodically (from payload — single source of truth)
         if (batch_idx % 5 == 0) {
             std::ostringstream msg;
-            msg << "[Batch " << (batch_idx + 1) << "/" << total_batches_to_run << "] "
+            msg << "[Batch " << (batch_idx + 1) << "/" << total_batches << "] "
                 << "size=" << payload.seq_ids.size()
                 << " len=" << payload.min_seq_len << "-" << payload.max_seq_len
                 << " eff=" << static_cast<int>(payload.packing_efficiency * 100) << "%"
@@ -971,7 +961,7 @@ EpochResult runEpoch(
         ctx.logging.status_writer->writeStatus(
             GRIMText::Control::TrainingState_Training,
             epoch_idx + 1, num_epochs,
-            batch_idx + 1, total_batches_to_run,
+            batch_idx + 1, total_batches,
             batch_result.loss, current_avg_loss,
             train_perplexity, 0.0f, 0.0f, 0.0f,
             "Training epoch " + std::to_string(epoch_idx + 1) + " batch " + std::to_string(batch_idx + 1));
@@ -1050,11 +1040,10 @@ bool executePhase2(TrainingContext& ctx) {
     // second source of truth that drifts every time a field is added.
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
 
-    // CoreRunHP view for executePhase2's top-level epoch loop. Subroutines
-    // (runEpoch / processBatch) build their own views — keeping the read path
-    // local makes each function self-contained and independently auditable.
-    const auto core = validatedCoreRunHP(ctx);
-    const int num_epochs = core.epochs;
+    const int num_epochs = static_cast<int>(ctx.epoch_batch_order.size());
+    if (num_epochs <= 0) {
+        throw std::runtime_error("FATAL: Phase2 received empty epoch_batch_order from Phase1");
+    }
     EmitModuleInfo(ModuleId::Training,
         std::string("Total epochs to run: ") + std::to_string(num_epochs), ctx.global_step);
     

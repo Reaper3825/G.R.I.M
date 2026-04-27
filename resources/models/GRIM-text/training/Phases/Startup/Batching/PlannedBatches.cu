@@ -144,8 +144,8 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     // We delegate to GRIM::Batching::buildEpochBatches with epoch=0 so the
     // packing policy (greedy, RANDOM ordering, bucket settings) matches the
     // historical per-epoch behaviour exactly. Per the plan's "fixed batch
-    // membership" rule, this schedule is authored once and never rebuilt;
-    // per-epoch diversity comes from `epoch_batch_order` permutations only.
+    // membership" rule, this schedule is authored once and never rebuilt.
+    // Normal-mode per-epoch diversity comes from `epoch_batch_order`.
     //======================================================//
     log("[PlannedBatches] Building fixed train schedule (epochs=" +
         std::to_string(num_epochs) + ")");
@@ -220,32 +220,43 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     }
 
     //======================================================//
-    // Per-epoch order: deterministic permutations of [0, num_train_batches).
+    // Per-epoch executable order.
     //
-    // Honors hp.shuffle_train_enabled and hp.shuffle_train_epochs the same
-    // way Phase2's old per-epoch shuffle did, but the permutations are now
-    // fixed at startup. The RNG is seeded from ctx.rng.data_seed + epoch so
-    // resumes reproduce the same batch order.
+    // Normal training: deterministic permutations of [0, num_train_batches).
+    // Single-batch overfit: diagnostic mode authored here as repeated index 0.
+    // Phase2 treats this vector as the complete executable step plan and does
+    // not branch on the diagnostic hyperparameter.
     //======================================================//
     ctx.epoch_batch_order.assign(num_epochs, std::vector<int>{});
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         auto& order = ctx.epoch_batch_order[epoch];
-        order.resize(num_train_batches);
-        std::iota(order.begin(), order.end(), 0);
+        if (core.single_batch_overfit_enabled) {
+            order.assign(core.single_batch_overfit_max_steps, 0);
+        } else {
+            order.resize(num_train_batches);
+            std::iota(order.begin(), order.end(), 0);
 
-        const bool shuffle_this_epoch =
-            hp.shuffle_train_enabled &&
-            (hp.shuffle_train_epochs == 0 || epoch < hp.shuffle_train_epochs);
+            const bool shuffle_this_epoch =
+                hp.shuffle_train_enabled &&
+                (hp.shuffle_train_epochs == 0 || epoch < hp.shuffle_train_epochs);
 
-        if (shuffle_this_epoch) {
-            std::mt19937_64 epoch_rng(
-                ctx.rng.data_seed + static_cast<uint64_t>(epoch));
-            std::shuffle(order.begin(), order.end(), epoch_rng);
+            if (shuffle_this_epoch) {
+                std::mt19937_64 epoch_rng(
+                    ctx.rng.data_seed + static_cast<uint64_t>(epoch));
+                std::shuffle(order.begin(), order.end(), epoch_rng);
+            }
         }
     }
-    log("[PlannedBatches] Authored epoch_batch_order for " +
-        std::to_string(num_epochs) + " epochs (" +
-        std::to_string(num_train_batches) + " batches/epoch)");
+    if (core.single_batch_overfit_enabled) {
+        log("[PlannedBatches] Authored single-batch overfit diagnostic order for " +
+            std::to_string(num_epochs) + " epochs (" +
+            std::to_string(core.single_batch_overfit_max_steps) +
+            " repeated steps/epoch)");
+    } else {
+        log("[PlannedBatches] Authored epoch_batch_order for " +
+            std::to_string(num_epochs) + " epochs (" +
+            std::to_string(num_train_batches) + " batches/epoch)");
+    }
 }
 
 } // namespace GRIMText::Training

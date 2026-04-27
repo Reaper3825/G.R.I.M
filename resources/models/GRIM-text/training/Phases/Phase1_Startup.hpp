@@ -217,9 +217,10 @@ struct TrainingContext {
     std::vector<GRIM::Batching::BatchPayload> train_payloads;
     GRIM::Batching::BatchSchedule fixed_val_schedule;
     std::vector<GRIM::Batching::BatchPayload> val_payloads;
-    /** Per-epoch permutation of [0, train_payloads.size()). Outer size = number
-     *  of epochs to train; inner vector is a shuffled index list. Authored in
-     *  Phase1 (deterministic from the run RNG) so Phase2 only reads it. */
+    /** Per-epoch executable train batch-index order. Outer size = number of
+     *  epochs to train; inner vector is the exact step order Phase2 reads.
+     *  Normal mode is a permutation; single-batch diagnostic mode repeats
+     *  index 0 for the authored step count. */
     std::vector<std::vector<int>> epoch_batch_order;
 
     // Model and tokenizer
