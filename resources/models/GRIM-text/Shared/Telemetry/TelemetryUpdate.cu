@@ -11,6 +11,10 @@
 
 #include "TelemetryUpdate.hpp"
 #include "../../training/Phases/Phase1_Startup.hpp"  // TrainingContext
+#include "../../training/Phases/Phase2_TrainingLoop.hpp"  // BatchResult
+#include "../../training/Diagnostics/DiagnosticInference.hpp"
+#include "../../training/Diagnostics/MtpDiagnostic.hpp"
+#include "../../Layers/GRIMTS/GuessCacheTraining.hpp"
 #include "../TrainingState/TrainingState_GPU.hpp"
 
 #include <cuda_runtime.h>
@@ -19,6 +23,7 @@
 #include <iomanip>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace GRIM::Telemetry {
@@ -40,6 +45,10 @@ std::string formatScalar(float value, int precision = 4) {
         oss << (value > 0 ? "inf" : "-inf");
     }
     return oss.str();
+}
+
+std::string formatMetric(std::string_view name, float value, int precision = 4) {
+    return std::string(name) + "=" + formatScalar(value, precision);
 }
 
 /// Compute RMS of a host-side float vector. Returns 0 if empty.
@@ -375,6 +384,28 @@ void updateTelemetryObservations(
             ctx.logging.logger->log("[CUDA] first_batch AFTER telemetry update: ok");
         }
     }
+}
+
+void logIntervalTelemetry(
+    GRIMText::Training::TrainingContext& ctx,
+    GRIMText::Training::TrainingLoopState& state,
+    const GRIMText::Training::BatchResult& batch_result) {
+
+    const int interval = ctx.config.hyperparameters.log_interval;
+    if (interval > 0 && ctx.global_step % interval == 0) {
+        ctx.logging.logger->log("[Step " + std::to_string(ctx.global_step) + "] " +
+                                formatMetric("loss", batch_result.loss) + " " +
+                                formatMetric("lr", batch_result.learning_rate, 8));
+
+        GRIM::Diagnostics::runMtpDiagnostic(ctx, batch_result);
+
+        if (ctx.config.hyperparameters.guess_aux_enabled) {
+            GRIMTS::Training::logGuessCacheTelemetry(
+                ctx.guess_cache_state, ctx.global_step);
+        }
+    }
+
+    GRIMText::Training::logDiagnosticSample(ctx, state);
 }
 
 //======================================================//

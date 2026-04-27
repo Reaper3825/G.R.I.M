@@ -11,8 +11,7 @@
 //  - Batch construction and processing
 //  - Forward/backward passes
 //  - Gradient clipping and optimizer steps
-//  - Validation and checkpointing
-//  - Auto-stop detection
+//  - Validation measurement
 //
 //  DESIGN PRINCIPLES
 //  =================
@@ -31,7 +30,6 @@
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/TNC/Token-normalized_clipping.hpp"
 #include "../../Layers/GRIMTS/GRIM-TS.hpp"
-#include "../../Layers/GRIMTS/GuessCacheTraining.hpp"
 #include "../../Shared/Loss/LossSignals/LossSignals.hpp"
 
 #include <functional>
@@ -113,9 +111,6 @@ struct TrainingLoopState {
     float min_observed_loss = std::numeric_limits<float>::infinity();
     int warmup_batches = 0;
     
-    // GuessCache state (lifecycle + batch buffers owned by GRIMTS::Training)
-    GRIMTS::Training::GuessCacheState guess_cache;
-    
     // Shuffle tracking
     bool shuffle_window_exhausted_notified = false;
     
@@ -135,8 +130,8 @@ struct TrainingLoopState {
     // Central loss-signal detector. Owns ALL loss-spike detection state
     // (initial_loss baseline, EWMA mean/var, prev_step_loss,
     // last_validation_loss, plateau / high-loss patience counters) so that
-    // LossSpikeDiagnostic, DynamicLR, SoftRestart, and evaluateAutoStop
-    // share a single canonical definition. Constructed in executePhase2
+    // LossSpikeDiagnostic, DynamicLR, SoftRestart, and Phase3 epoch
+    // finalization share a single canonical definition. Constructed in executePhase2
     // from TrainingContext::config.hyperparameters.loss_signals; never null
     // after Phase2 enters the loop.
     std::unique_ptr<GRIM::Loss::LossSignalBus> loss_signals;
@@ -162,12 +157,16 @@ bool executePhase2(TrainingContext& ctx);
  * @param ctx Training context
  * @param state Loop state that persists across epochs
  * @param epoch_idx Zero-based epoch index
+ * @param num_epochs Static epoch count from grouped startup hyperparameters
+ * @param accum_steps Startup-authored gradient accumulation window size
  * @return EpochResult Results from this epoch
  */
 EpochResult runEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    int epoch_idx);
+    int epoch_idx,
+    int num_epochs,
+    int accum_steps);
 
 /**
  * @brief Process a single batch
@@ -177,6 +176,7 @@ EpochResult runEpoch(
  * @param payload Batch payload (single source of truth; built from BatchAssignment in runEpoch)
  * @param batch_idx Batch index within epoch
  * @param epoch_idx Epoch index
+ * @param accum_steps Startup-authored gradient accumulation window size
  * @return BatchResult Result from this batch
  */
 BatchResult processBatch(
@@ -184,7 +184,8 @@ BatchResult processBatch(
     TrainingLoopState& state,
     const GRIM::Batching::BatchPayload& payload,
     int batch_idx,
-    int epoch_idx);
+    int epoch_idx,
+    int accum_steps);
 
 /**
  * @brief Run validation after an epoch
@@ -224,30 +225,6 @@ std::string formatScalar(float value, int precision = 4);
  */
 std::string formatMetric(std::string_view name, float value, int precision = 4);
 
-/**
- * @brief Save checkpoint if this is the best validation loss
- */
-bool maybeSaveCheckpoint(
-    TrainingContext& ctx,
-    float val_loss,
-    int epoch);
-
-/**
- * @brief Evaluate end-of-epoch auto-stop conditions (plateau + high-loss).
- *        Mutates ctx.auto_stop_*, state.plateau_epochs_without_improvement,
- *        and result.auto_stop_* when a condition trips. High-loss patience
- *        is read from state.loss_signals (LossSignalBus).
- *        No-op if hp.auto_stop_enabled is false or auto-stop already triggered.
- */
-void evaluateAutoStop(
-    TrainingContext& ctx,
-    TrainingLoopState& state,
-    EpochResult& result,
-    int epoch_idx);
-
 } // namespace Internal
-
-// GuessCacheScope and GuessCacheBatchBuffers are now in
-// Layers/GRIMTS/GuessCacheTraining.hpp (namespace GRIMTS::Training)
 
 } // namespace GRIMText::Training

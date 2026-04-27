@@ -6,6 +6,7 @@
 #include "Startup/Data/DataInfo.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
 #include "Startup/Resume/ResumeState.hpp"
+#include "Startup/GuessCache/GuessCacheInit.hpp"
 #include "Startup/Telemetry/TelemetryInitInputs.hpp"
 #include "Startup/Scheduling/SchedulerPreflight.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
@@ -25,6 +26,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     DataInfoReady(*ctx);
     ModelAllocated(*ctx);
     ResumeStateReady(*ctx);
+    GuessCacheReady(*ctx);
     TelemetryReady(*ctx);
     SchedulerPreflightReady(*ctx);
     EpochPlanReady(*ctx);

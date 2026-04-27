@@ -22,7 +22,11 @@
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 
-namespace GRIMText::Training { struct TrainingContext; }
+namespace GRIMText::Training {
+struct BatchResult;
+struct TrainingContext;
+struct TrainingLoopState;
+}
 
 namespace GRIM::Telemetry {
 
@@ -77,6 +81,13 @@ void updateTelemetryObservations(
     const TelemetryBatchInput& input,
     const GRIM::GradNorm::GradMetrics& gm,
     const GRIM::Batching::BatchPayload* payload);
+
+/// Emits log-interval telemetry/monitoring derived from the latest batch:
+/// step loss/lr, MTP per-head telemetry, and GuessCache telemetry.
+void logIntervalTelemetry(
+    GRIMText::Training::TrainingContext& ctx,
+    GRIMText::Training::TrainingLoopState& state,
+    const GRIMText::Training::BatchResult& batch_result);
 
 //======================================================//
 //  Epoch-level telemetry summary log

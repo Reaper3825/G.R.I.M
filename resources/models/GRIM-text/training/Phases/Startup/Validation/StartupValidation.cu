@@ -49,6 +49,18 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(ctx.model_allocation.model_max_tokens_per_batch == static_cast<int>(ctx.run_capacity.max_tokens_per_batch),
             "model allocation token mirror does not match RunCapacity");
 
+    if (ctx.config.hyperparameters.guess_aux_enabled) {
+        require(ctx.guess_cache_scope != nullptr,
+                "guess cache scope is null while guess_aux_enabled=true");
+        require(ctx.guess_cache_state.guess_cache_ready,
+                "guess cache is not ready while guess_aux_enabled=true");
+        require(ctx.guess_cache_state.batch_buffers != nullptr,
+                "guess cache batch buffers are null while guess_aux_enabled=true");
+    } else {
+        require(!ctx.guess_cache_state.guess_cache_ready,
+                "guess cache ready while guess_aux_enabled=false");
+    }
+
     require(ctx.telemetry.lattice != nullptr, "telemetry lattice is null");
     require(ctx.telemetry.csv_logger != nullptr, "telemetry CSV logger is null");
     require(static_cast<std::uint32_t>(ctx.telemetry.control_config.reference_tokens) == ctx.run_capacity.max_tokens_per_batch,

@@ -42,6 +42,7 @@
 #include "../../Shared/Optimizers/OptimizerState.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
+#include "../../Layers/GRIMTS/GuessCacheTraining.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
 #include "../../Shared/Batching/Batching_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
@@ -187,6 +188,9 @@ struct TrainingContext {
     ModelAllocationState model_allocation;
     // Resume metadata (populated after optimizer sidecar restore attempt)
     ResumeState resume_state;
+    // GuessCache lifecycle/state (authored during Phase1 startup; Phase2 only uses it)
+    std::unique_ptr<GRIMTS::Training::GuessCacheScope> guess_cache_scope;
+    GRIMTS::Training::GuessCacheState guess_cache_state;
     // Data summary/reference artifact (SequenceData remains storage owner)
     DataInfo data_info;
     // Scheduler dry-run/preflight facts used by epoch planning/final validation

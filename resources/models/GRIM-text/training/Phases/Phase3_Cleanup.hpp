@@ -27,6 +27,9 @@
 
 namespace GRIMText::Training {
 
+struct EpochResult;
+struct TrainingLoopState;
+
 //======================================================//
 //  Cleanup Configuration
 //======================================================//
@@ -141,6 +144,41 @@ void writeFinalStatus(
     TrainingContext& ctx,
     const TrainingSummary& summary,
     bool success);
+
+/**
+ * Finalize one completed epoch after Phase2 has produced train/validation
+ * metrics. Owns epoch-end telemetry summaries, validation-policy state,
+ * auto-stop decisions, and best-checkpoint persistence.
+ */
+void finalizeEpochOutcome(
+    TrainingContext& ctx,
+    TrainingLoopState& state,
+    EpochResult& result,
+    int epoch_idx,
+    float epoch_loss,
+    std::chrono::steady_clock::time_point epoch_start);
+
+/**
+ * Write live training progress. Phase2 supplies the raw loop counters/losses;
+ * Phase3 owns status-file formatting and derived status metrics.
+ */
+void writeTrainingProgressStatus(
+    TrainingContext& ctx,
+    int epoch_idx,
+    int num_epochs,
+    int batch_idx,
+    int total_batches,
+    float batch_loss,
+    float epoch_loss,
+    int batches_processed);
+
+/**
+ * Write a training-loop error status.
+ */
+void writeTrainingErrorStatus(
+    TrainingContext& ctx,
+    int num_epochs,
+    const std::string& error);
 
 /**
  * Release all GPU and CPU resources

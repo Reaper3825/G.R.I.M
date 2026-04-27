@@ -2,10 +2,10 @@
 //  Phase2_TrainingLoop.cu
 //  Core training computation: epoch iteration, batch
 //  processing, forward/backward, optimizer steps,
-//  validation, checkpointing, auto-stop.
+//  validation measurement.
 //======================================================//
 #include "Phase2_TrainingLoop.hpp"
-#include "../OptimizerCheckpoint.hpp"
+#include "Phase3_Cleanup.hpp"
 #include "../Diagnostics/Diagnostics.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
@@ -34,7 +34,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
-#include <filesystem>
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #endif
@@ -46,7 +45,6 @@ using GRIM::Logging::EmitModuleWarning;
 using GRIM::Logging::EmitModuleError;
 
 namespace GRIMText::Training {
-namespace fs = std::filesystem;
 
 TrainingLoopState::~TrainingLoopState() = default;
 
@@ -85,93 +83,6 @@ float getScheduledLearningRate(
     return schedule.lr(step);
 }
 
-void evaluateAutoStop(
-    TrainingContext& ctx,
-    TrainingLoopState& state,
-    EpochResult& result,
-    int epoch_idx) {
-    const auto& hp = ctx.config.hyperparameters;
-    if (!hp.auto_stop_enabled || ctx.auto_stop_triggered) {
-        return;
-    }
-
-    const float prev_best = ctx.best_val_loss;
-    bool significant_improvement = true;
-    if (std::isfinite(prev_best)) {
-        significant_improvement = (prev_best - result.validation.loss) > hp.auto_stop_plateau_min_delta;
-    }
-
-    auto trip = [&](const char* reason) {
-        ctx.auto_stop_triggered = true;
-        ctx.auto_stop_reason = reason;
-        ctx.auto_stop_epoch = epoch_idx + 1;
-        ctx.auto_stop_metric = result.validation.loss;
-        result.auto_stop_triggered = true;
-        result.auto_stop_reason = reason;
-    };
-
-    // Plateau detection
-    if (hp.auto_stop_plateau_patience > 0) {
-        if (significant_improvement) {
-            state.plateau_epochs_without_improvement = 0;
-        } else {
-            state.plateau_epochs_without_improvement++;
-            if (state.plateau_epochs_without_improvement >= hp.auto_stop_plateau_patience) {
-                trip("plateau");
-            }
-        }
-    }
-
-    // High-loss policy: LossSignalBus owns the patience counter; we honor
-    // its validation_high flag. patience=0 disables the policy entirely.
-    if (!ctx.auto_stop_triggered && hp.auto_stop_high_loss_patience > 0) {
-        if (state.loss_signals->latest().validation_high) {
-            trip("high_loss");
-        }
-    }
-}
-
-bool maybeSaveCheckpoint(
-    TrainingContext& ctx,
-    float val_loss,
-    int epoch) {
-    
-    if (val_loss >= ctx.best_val_loss) {
-        return false;
-    }
-    
-    ctx.best_val_loss = val_loss;
-    ctx.logging.logger->log("✓ New best! Saving checkpoint...");
-    
-    std::string checkpoint_path = ctx.config.paths.checkpoint_dir + 
-                                  "/checkpoint_epoch_" + std::to_string(epoch + 1) + ".bin";
-    // model->save() handles its own sync before reading weights.
-    try {
-        bool save_result = ctx.model->save(checkpoint_path);
-        if (save_result) {
-            ctx.logging.logger->log("  ✓ Checkpoint saved: " + checkpoint_path);
-            if (fs::exists(checkpoint_path)) {
-                auto file_size = fs::file_size(checkpoint_path);
-                ctx.logging.logger->log("  File size: " + std::to_string(file_size / (1024*1024)) + " MB");
-            }
-            // Save optimizer sidecar (.opt) alongside model checkpoint
-            try {
-                std::string opt_path = optimizerSidecarPath(checkpoint_path);
-                saveOptimizerState(ctx, opt_path);
-            } catch (const std::exception& e) {
-                ctx.logging.logger->log(std::string("  ⚠ Optimizer state save failed: ") + e.what());
-            }
-            return true;
-        } else {
-            ctx.logging.logger->log("  ✗ Save returned false");
-        }
-    } catch (const std::exception& e) {
-        ctx.logging.logger->log(std::string("  ✗ Exception: ") + e.what());
-    }
-    
-    return false;
-}
-
 } // namespace Internal
 
 //======================================================//
@@ -198,6 +109,55 @@ namespace {
     return core;
 }
 
+struct AccumulationAdvance {
+    bool should_step = false;
+    int micro_step_for_log = 0;
+    int accum_steps_for_log = 0;
+};
+
+void validateMicroStepBeforeBackward(
+    const OptimizerContext& optimizer,
+    int accum_steps,
+    int batch_idx,
+    int global_step)
+{
+    if (optimizer.current_micro_step >= accum_steps) {
+        fprintf(stderr, "\n[Phase2] FATAL: Training step attempted with micro_step=%d >= accum_steps=%d\n",
+                optimizer.current_micro_step, accum_steps);
+        fprintf(stderr, "[Phase2] batch=%d global_step=%d\n", batch_idx + 1, global_step);
+        fprintf(stderr, "[Phase2] This indicates current_micro_step was not reset after optimizer step.\n");
+        std::abort();
+    }
+}
+
+bool shouldAccumulateGradients(const OptimizerContext& optimizer) {
+    return optimizer.current_micro_step > 0;
+}
+
+AccumulationAdvance advanceAccumulationOrThrow(
+    OptimizerContext& optimizer,
+    int accum_steps)
+{
+    if (accum_steps <= 0) {
+        throw std::runtime_error("FATAL: accum_steps must be > 0 when advancing accumulation");
+    }
+    if (optimizer.current_micro_step < 0 || optimizer.current_micro_step >= accum_steps) {
+        throw std::runtime_error("FATAL: current_micro_step out of range before accumulation advance");
+    }
+
+    optimizer.current_micro_step++;
+    return AccumulationAdvance{
+        optimizer.current_micro_step >= accum_steps,
+        optimizer.current_micro_step,
+        accum_steps
+    };
+}
+
+void completeOptimizerStep(OptimizerContext& optimizer) {
+    optimizer.current_micro_step = 0;
+    optimizer.optimizer_state.step++;
+}
+
 } // namespace
 
 //======================================================//
@@ -221,24 +181,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
         if (deferred_err != cudaSuccess) {
             ctx.logging.logger->log("[Val] WARNING: Cleared deferred CUDA error before validation: " +
                 std::string(cudaGetErrorString(deferred_err)));
-        }
-    }
-
-    // PRE-VALIDATION CHECKPOINT: a val crash via SEH would otherwise lose the
-    // entire epoch of training.
-    {
-        std::string safety_path = ctx.config.paths.checkpoint_dir + "/checkpoint_pre_validation.bin";
-        ctx.logging.logger->log("[Val] Saving pre-validation safety checkpoint...");
-        try {
-            bool saved = ctx.model->save(safety_path);
-            if (saved) {
-                ctx.logging.logger->log("[Val] Safety checkpoint saved: " + safety_path);
-            } else {
-                ctx.logging.logger->log("[Val] WARNING: Safety checkpoint save returned false");
-            }
-        } catch (const std::exception& e) {
-            ctx.logging.logger->log("[Val] WARNING: Safety checkpoint failed: " + std::string(e.what()));
-            // Non-fatal — continue with validation anyway
         }
     }
 
@@ -337,8 +279,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
     result.perplexity = (std::isfinite(result.loss) && result.loss < 50.0f)
         ? std::exp(result.loss)
         : std::numeric_limits<float>::infinity();
-    result.is_best = (result.loss < ctx.best_val_loss);
-    
     ctx.logging.logger->log("[Val] " + Internal::formatMetric("loss", result.loss) + " " +
                             Internal::formatMetric("ppl", result.perplexity, 3) +
                             " seqs=" + std::to_string(val_sequences_processed) +
@@ -356,7 +296,8 @@ BatchResult processBatch(
     TrainingLoopState& state,
     const GRIM::Batching::BatchPayload& payload,
     int batch_idx,
-    int epoch_idx) {
+    int epoch_idx,
+    int accum_steps) {
     
     BatchResult result;
     result.batch_idx = batch_idx;
@@ -405,15 +346,6 @@ BatchResult processBatch(
     const auto clip_selection = GRIM::TNC::computeClipSelection(
         hp.grad_clip_norm, token_stats, 1.0f, long_seq_threshold);
 
-    // CoreRunHP view — single source of truth for epochs/accumulation in this
-    // function. Do not introduce direct ctx.config.hyperparameters reads for
-    // CoreRunHP fields below this line.
-    const auto core = validatedCoreRunHP(ctx);
-
-    // Gradient zeroing: backward(accumulate=false) at micro_step=0 zeros grads;
-    // backward(accumulate=true) at micro_step>0 accumulates.
-    const int accum_steps = core.gradient_accumulation_steps;
-
     // beginBatch() must run EVERY batch to clear previous entries; otherwise
     // micro-batches 1+ inherit stale entries.
     GRIM::GradStats::beginBatch();
@@ -431,21 +363,13 @@ BatchResult processBatch(
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] forward_call_count=%d, building target distribution...\n", forward_call_count);
     GRIM::Diagnostics::runTargetDistributionLog(ctx, payload, batch_idx);
 
-    // Unified training step: forward → loss → backward.
-    // Rule 20: micro_step MUST be in bounds before starting the step.
-    if (ctx.optimizer.current_micro_step >= accum_steps) {
-        fprintf(stderr, "\n[Phase2] FATAL: Training step attempted with micro_step=%d >= accum_steps=%d\n", 
-                ctx.optimizer.current_micro_step, accum_steps);
-        fprintf(stderr, "[Phase2] batch=%d global_step=%d\n", batch_idx + 1, ctx.global_step);
-        fprintf(stderr, "[Phase2] This indicates current_micro_step was not reset after optimizer step.\n");
-        std::abort();
-    }
+    validateMicroStepBeforeBackward(ctx.optimizer, accum_steps, batch_idx, ctx.global_step);
 
     // Issue #22: first micro-batch overwrites (accumulate=false), rest accumulate.
-    const bool should_accumulate = ctx.optimizer.current_micro_step > 0;
+    const bool should_accumulate = shouldAccumulateGradients(ctx.optimizer);
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call autogradTrainingStep...\n");
-    // First-batch CUDA checkpoint: surface any error before fwd/loss/bwd.
+    // First-batch CUDA check: surface any error before fwd/loss/bwd.
     if (batch_idx == 0) {
         cudaError_t e = cudaDeviceSynchronize();
         cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
@@ -480,7 +404,7 @@ BatchResult processBatch(
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] autogradTrainingStep returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
 
-    // First-batch CUDA checkpoint: a fault here means fwd/loss/bwd produced it.
+    // First-batch CUDA check: a fault here means fwd/loss/bwd produced it.
     // Rule 20: crash with the exact error — don't defer to teardown.
     if (batch_idx == 0) {
         cudaError_t e = cudaDeviceSynchronize();
@@ -510,7 +434,7 @@ BatchResult processBatch(
             result.loss,
             epoch_idx,
             ctx.global_step,
-            state.guess_cache);
+            ctx.guess_cache_state);
     }
     
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
@@ -633,14 +557,12 @@ BatchResult processBatch(
         }
     }
     
-    // Run optimizer step only when accumulation is complete.
-    // Increment micro_step BEFORE checking (we already processed this batch's backward).
-    ctx.optimizer.current_micro_step++;
-    const bool should_step = (ctx.optimizer.current_micro_step >= accum_steps);
+    const auto accumulation = advanceAccumulationOrThrow(ctx.optimizer, accum_steps);
+    const bool should_step = accumulation.should_step;
 
     if (should_step) {
-        const int micro_step_for_log = ctx.optimizer.current_micro_step;
-        const int accum_steps_for_log = accum_steps;
+        const int micro_step_for_log = accumulation.micro_step_for_log;
+        const int accum_steps_for_log = accumulation.accum_steps_for_log;
 
         // Issue #149: zero PAD/UNK gradients before optimizer step.
         // PAD (id=1) and UNK (id=0) are never valid targets but accumulate grads via:
@@ -755,9 +677,6 @@ BatchResult processBatch(
         // Rule 20: post-optimizer weight NaN spot check.
         GRIM::Diagnostics::checkPostOptimizerWeightsFinite(ctx, result, batch_idx);
 
-        // Reset micro_step counter after optimizer step completes
-        ctx.optimizer.current_micro_step = 0;
-
         // Tape flush at end of processBatch is the safety flush.
         GRIM::Diagnostics::runOptimizerMomentDiagnostic(
             ctx, batch_idx, micro_step_for_log, accum_steps_for_log, sync_diag);
@@ -767,7 +686,7 @@ BatchResult processBatch(
         GRIM::Diagnostics::runPostOptimizerWeightTrace(
             ctx, result, pre_sample, batch_idx, sync_diag);
 
-        ctx.optimizer.optimizer_state.step++;
+        completeOptimizerStep(ctx.optimizer);
     }
     
     // Rule 20: an async CUDA error here means a kernel launch faulted earlier
@@ -810,7 +729,7 @@ BatchResult processBatch(
         GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, grad_norm_snap.metrics, &payload);
     }
     
-    // First-batch CUDA checkpoint (runs even if telemetry disabled): last point before step++
+    // First-batch CUDA check (runs even if telemetry disabled): last point before step++
     if (batch_idx == 0) {
         cudaError_t e = cudaDeviceSynchronize();
         cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
@@ -841,16 +760,21 @@ BatchResult processBatch(
 EpochResult runEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    int epoch_idx) {
+    int epoch_idx,
+    int num_epochs,
+    int accum_steps) {
     
     EpochResult result;
     result.epoch = epoch_idx;
     
-    const auto& hp = ctx.config.hyperparameters;
-    const auto core = validatedCoreRunHP(ctx);
-    const int num_epochs = static_cast<int>(ctx.epoch_batch_order.size());
     if (num_epochs <= 0) {
-        throw std::runtime_error("FATAL: Phase2 received empty epoch_batch_order from Phase1");
+        throw std::runtime_error("FATAL: Phase2 received non-positive epoch count");
+    }
+    if (static_cast<int>(ctx.epoch_batch_order.size()) != num_epochs) {
+        throw std::runtime_error(
+            "FATAL: Phase2 epoch count does not match Phase1 epoch_batch_order size (epochs=" +
+            std::to_string(num_epochs) + " order_size=" +
+            std::to_string(ctx.epoch_batch_order.size()) + ")");
     }
     
     ctx.logging.logger->log("Epoch " + std::to_string(epoch_idx + 1) + "/" + std::to_string(num_epochs));
@@ -858,7 +782,7 @@ EpochResult runEpoch(
     // Reset guess cache at epoch start
     if (ctx.config.hyperparameters.guess_aux_enabled) {
         GRIMTS::Training::resetGuessCacheForEpoch(
-            ctx.model->getTrainingState(), state.guess_cache);
+            ctx.model->getTrainingState(), ctx.guess_cache_state);
     }
     
     PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] After ResetGuessCache, indexing Phase1 schedule...\n");
@@ -897,29 +821,16 @@ EpochResult runEpoch(
     const auto epoch_start = std::chrono::steady_clock::now();
     float epoch_loss = 0.0f;
 
-    // Accumulation steps come from the CoreRunHP view built at function entry.
-    const int accum_steps = core.gradient_accumulation_steps;
-
     // Process batches: ctx.epoch_batch_order[epoch_idx] dictates which
     // Phase1-authored payload is active each step. The hard invariant from
     // the plan is:
-    //     active_batch = ctx.train_payloads[ctx.epoch_batch_order[epoch][i]]
+    //     active_batch = ctx.train_payloads[ctx.epoch_batch_order[epoch_idx][batch_idx]]
     for (int batch_idx = 0; batch_idx < total_batches; ++batch_idx) {
-        const int active_idx = batch_order[batch_idx];
-        const GRIM::Batching::BatchPayload& payload = ctx.train_payloads[active_idx];
+        const GRIM::Batching::BatchPayload& payload =
+            ctx.train_payloads[ctx.epoch_batch_order[epoch_idx][batch_idx]];
 
-        // Log progress periodically (from payload — single source of truth)
-        if (batch_idx % 5 == 0) {
-            std::ostringstream msg;
-            msg << "[Batch " << (batch_idx + 1) << "/" << total_batches << "] "
-                << "size=" << payload.seq_ids.size()
-                << " len=" << payload.min_seq_len << "-" << payload.max_seq_len
-                << " eff=" << static_cast<int>(payload.packing_efficiency * 100) << "%"
-                << " accum_steps=" << accum_steps;
-            ctx.logging.logger->log(msg.str());
-        }
-
-        BatchResult batch_result = processBatch(ctx, state, payload, batch_idx, epoch_idx);
+        BatchResult batch_result = processBatch(
+            ctx, state, payload, batch_idx, epoch_idx, accum_steps);
 
         // Rule 20: surface any first-batch CUDA error here so the real fault
         // shows up rather than a teardown cudaFree failure.
@@ -938,66 +849,21 @@ EpochResult runEpoch(
         result.best_batch_loss = std::min(result.best_batch_loss, batch_result.loss);
         result.worst_batch_loss = std::max(result.worst_batch_loss, batch_result.loss);
         
-        // Log at interval
-        if (ctx.global_step % hp.log_interval == 0) {
-            ctx.logging.logger->log("[Step " + std::to_string(ctx.global_step) + "] " +
-                                    Internal::formatMetric("loss", batch_result.loss) + " " +
-                                    Internal::formatMetric("lr", batch_result.learning_rate, 8));
-            // Multi-Token-Prediction per-head telemetry + monitor
-            GRIM::Diagnostics::runMtpDiagnostic(ctx, batch_result);
-            if (ctx.config.hyperparameters.guess_aux_enabled) {
-                GRIMTS::Training::logGuessCacheTelemetry(state.guess_cache, ctx.global_step);
-            }
-        }
-
-        logDiagnosticSample(ctx, state);
+        GRIM::Telemetry::logIntervalTelemetry(ctx, state, batch_result);
         
-        // Status update
-        float current_avg_loss = epoch_loss / result.batches_processed;
-        float train_perplexity = (std::isfinite(current_avg_loss) && current_avg_loss < 50.0f)
-            ? std::exp(current_avg_loss)
-            : std::numeric_limits<float>::infinity();
-        
-        ctx.logging.status_writer->writeStatus(
-            GRIMText::Control::TrainingState_Training,
-            epoch_idx + 1, num_epochs,
-            batch_idx + 1, total_batches,
-            batch_result.loss, current_avg_loss,
-            train_perplexity, 0.0f, 0.0f, 0.0f,
-            "Training epoch " + std::to_string(epoch_idx + 1) + " batch " + std::to_string(batch_idx + 1));
-        
+        writeTrainingProgressStatus(
+            ctx, epoch_idx, num_epochs, batch_idx, total_batches,
+            batch_result.loss, epoch_loss, result.batches_processed);
 
     }
     
     if (result.batches_processed <= 0) {
         throw std::runtime_error("FATAL: epoch completed with 0 processed batches");
     }
-    result.avg_loss = epoch_loss / result.batches_processed;
-    result.duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - epoch_start);
-    
-    ctx.logging.logger->log("[Epoch " + std::to_string(epoch_idx + 1) + "] " +
-                            Internal::formatMetric("avg_loss", result.avg_loss));
-    
-    // Log telemetry vectors (multi-scale summary)
-    GRIM::Telemetry::logTelemetrySummary(ctx);
     
     // Run validation
     result.validation = runValidation(ctx);
-
-    // Publish validation loss to central detector before any consumer
-    // (evaluateAutoStop / SoftRestart) reads it.
-    if (std::isfinite(result.validation.loss)) {
-        state.loss_signals->recordValidation(epoch_idx, result.validation.loss);
-    }
-    
-    // Auto-stop checks (plateau + high-loss). See Internal::evaluateAutoStop.
-    Internal::evaluateAutoStop(ctx, state, result, epoch_idx);
-    
-    // Checkpoint
-    if (result.validation.is_best) {
-        Internal::maybeSaveCheckpoint(ctx, result.validation.loss, epoch_idx);
-    }
+    finalizeEpochOutcome(ctx, state, result, epoch_idx, epoch_loss, epoch_start);
     
     return result;
 }
@@ -1012,8 +878,8 @@ bool executePhase2(TrainingContext& ctx) {
     // Initialize loop state
     TrainingLoopState state;
 
-    // Construct the central loss-signal detector. Wire validation auto-stop
-    // policy from hp now so evaluateAutoStop subscribes to validation_high.
+    // Construct the central loss-signal detector. Phase3 epoch finalization
+    // owns validation high-loss policy reads.
     // Other thresholds stay defaulted; task 7 plumbs the full ai_config.json
     // "loss_signals" block through HyperParameters.
     {
@@ -1022,14 +888,6 @@ bool executePhase2(TrainingContext& ctx) {
         sig_cfg.validation_high_patience  = hp.auto_stop_high_loss_patience;
         state.loss_signals = std::make_unique<GRIM::Loss::LossSignalBus>(sig_cfg);
     }
-    
-    // Initialize guess cache (Rule 22: pass TrainingState for buffer allocation)
-    auto guess_cache_scope = GRIMTS::Training::initGuessCache(
-        ctx.model->getTrainingState(),
-        ctx.config.hyperparameters.guess_aux_enabled,
-        ctx.config.hyperparameters.single_stream_mode,
-        ctx.global_step,
-        state.guess_cache);
     
     PHASE2_DEBUG_STDERR("[DEBUG] About to initialize training log...");
 
@@ -1040,30 +898,22 @@ bool executePhase2(TrainingContext& ctx) {
     // second source of truth that drifts every time a field is added.
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
 
-    const int num_epochs = static_cast<int>(ctx.epoch_batch_order.size());
+    const auto core = validatedCoreRunHP(ctx);
+    const int accum_steps = core.gradient_accumulation_steps;
+    const int num_epochs = core.epochs;
     if (num_epochs <= 0) {
-        throw std::runtime_error("FATAL: Phase2 received empty epoch_batch_order from Phase1");
+        throw std::runtime_error("FATAL: epochs must be > 0 in Phase2");
     }
-    EmitModuleInfo(ModuleId::Training,
-        std::string("Total epochs to run: ") + std::to_string(num_epochs), ctx.global_step);
-    
-    // Reconstruct adam_cumulative_disp = Σlr(0..optimizer_step-1) for resume
-    // correctness. Iterate optimizer steps (NOT global_step / batch counter).
-    const int resumed_optimizer_step = static_cast<int>(ctx.optimizer.optimizer_state.step);
-    if (resumed_optimizer_step > 0 && ctx.telemetry.adam_cumulative_disp == 0.0f) {
-        float reconstructed = 0.0f;
-        for (int t = 0; t < resumed_optimizer_step; ++t) {
-            reconstructed += ctx.lr_schedule->lr(t);
-        }
-        ctx.telemetry.adam_cumulative_disp = reconstructed;
-        EmitModuleInfo(ModuleId::Training,
-            "[AdamCausation] Reconstructed cumulative_displacement=" + std::to_string(reconstructed) +
-            " from " + std::to_string(resumed_optimizer_step) + " optimizer steps", ctx.global_step);
+    if (static_cast<int>(ctx.epoch_batch_order.size()) != num_epochs) {
+        throw std::runtime_error(
+            "FATAL: Phase2 epoch count does not match Phase1 epoch_batch_order size (epochs=" +
+            std::to_string(num_epochs) + " order_size=" +
+            std::to_string(ctx.epoch_batch_order.size()) + ")");
     }
     
     try {
         for (int epoch = 0; epoch < num_epochs; ++epoch) {
-            EpochResult epoch_result = runEpoch(ctx, state, epoch);
+            EpochResult epoch_result = runEpoch(ctx, state, epoch, num_epochs, accum_steps);
             ctx.epochs_completed = epoch + 1;
             
             if (epoch_result.auto_stop_triggered) {
@@ -1085,11 +935,7 @@ bool executePhase2(TrainingContext& ctx) {
         EmitModuleError(ModuleId::Training, 
             std::string("TRAINING ERROR: ") + e.what(), ctx.global_step);
         
-        ctx.logging.status_writer->writeStatus(
-            GRIMText::Control::TrainingState_Error,
-            0, num_epochs, 0, 0,
-            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-            "Training error", std::string(e.what()));
+        writeTrainingErrorStatus(ctx, num_epochs, std::string(e.what()));
         
         throw;
     }

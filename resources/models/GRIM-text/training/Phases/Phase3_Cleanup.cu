@@ -17,17 +17,21 @@
 //======================================================//
 
 #include "Phase3_Cleanup.hpp"
+#include "Phase2_TrainingLoop.hpp"
 #include "../OptimizerCheckpoint.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/Telemetry/TelemetryUpdate.hpp"
+#include "../../../../../control/training_control_generated.h"
 
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <cmath>
+#include <filesystem>
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -39,6 +43,7 @@ using GRIM::Logging::EmitModuleWarning;
 using GRIM::Logging::EmitModuleError;
 
 namespace GRIMText::Training {
+namespace fs = std::filesystem;
 
 //======================================================//
 //  Internal Helpers
@@ -74,8 +79,8 @@ std::pair<float, float> getGPUMemoryStats() {
 #ifdef USE_CUDA
     cudaMemGetInfo(&free_mem, &total_mem);
 #endif
-    float used_mb = static_cast<float>((total_mem - free_mem) / (1024 * 1024));
-    float total_mb = static_cast<float>(total_mem / (1024 * 1024));
+    float used_mb = static_cast<float>(total_mem - free_mem) / (1024.0f * 1024.0f);
+    float total_mb = static_cast<float>(total_mem) / (1024.0f * 1024.0f);
     return {used_mb, total_mb};
 }
 
@@ -172,6 +177,163 @@ std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
     }
     
     return "";
+}
+
+//======================================================//
+//  Epoch Outcome Finalization
+//======================================================//
+
+namespace {
+
+void evaluateAutoStop(
+    TrainingContext& ctx,
+    TrainingLoopState& state,
+    EpochResult& result,
+    int epoch_idx)
+{
+    const auto& hp = ctx.config.hyperparameters;
+    if (!hp.auto_stop_enabled || ctx.auto_stop_triggered) {
+        return;
+    }
+
+    const float prev_best = ctx.best_val_loss;
+    bool significant_improvement = true;
+    if (std::isfinite(prev_best)) {
+        significant_improvement =
+            (prev_best - result.validation.loss) > hp.auto_stop_plateau_min_delta;
+    }
+
+    auto trip = [&](const char* reason) {
+        ctx.auto_stop_triggered = true;
+        ctx.auto_stop_reason = reason;
+        ctx.auto_stop_epoch = epoch_idx + 1;
+        ctx.auto_stop_metric = result.validation.loss;
+        result.auto_stop_triggered = true;
+        result.auto_stop_reason = reason;
+    };
+
+    if (hp.auto_stop_plateau_patience > 0) {
+        if (significant_improvement) {
+            state.plateau_epochs_without_improvement = 0;
+        } else {
+            state.plateau_epochs_without_improvement++;
+            if (state.plateau_epochs_without_improvement >= hp.auto_stop_plateau_patience) {
+                trip("plateau");
+            }
+        }
+    }
+
+    if (!ctx.auto_stop_triggered && hp.auto_stop_high_loss_patience > 0) {
+        if (state.loss_signals->latest().validation_high) {
+            trip("high_loss");
+        }
+    }
+}
+
+bool saveBestCheckpoint(
+    TrainingContext& ctx,
+    float val_loss,
+    int epoch)
+{
+    if (val_loss >= ctx.best_val_loss) {
+        return false;
+    }
+
+    ctx.best_val_loss = val_loss;
+    ctx.logging.logger->log("✓ New best! Saving checkpoint...");
+
+    std::string checkpoint_path = ctx.config.paths.checkpoint_dir +
+                                  "/checkpoint_epoch_" + std::to_string(epoch + 1) + ".bin";
+    try {
+        bool save_result = ctx.model->save(checkpoint_path);
+        if (save_result) {
+            ctx.logging.logger->log("  ✓ Checkpoint saved: " + checkpoint_path);
+            if (fs::exists(checkpoint_path)) {
+                auto file_size = fs::file_size(checkpoint_path);
+                ctx.logging.logger->log("  File size: " + std::to_string(file_size / (1024 * 1024)) + " MB");
+            }
+
+            try {
+                std::string opt_path = optimizerSidecarPath(checkpoint_path);
+                saveOptimizerState(ctx, opt_path);
+            } catch (const std::exception& e) {
+                ctx.logging.logger->log(std::string("  ⚠ Optimizer state save failed: ") + e.what());
+            }
+            return true;
+        }
+        ctx.logging.logger->log("  ✗ Save returned false");
+    } catch (const std::exception& e) {
+        ctx.logging.logger->log(std::string("  ✗ Exception: ") + e.what());
+    }
+
+    return false;
+}
+
+} // namespace
+
+void finalizeEpochOutcome(
+    TrainingContext& ctx,
+    TrainingLoopState& state,
+    EpochResult& result,
+    int epoch_idx,
+    float epoch_loss,
+    std::chrono::steady_clock::time_point epoch_start)
+{
+    result.avg_loss = epoch_loss / result.batches_processed;
+    result.duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - epoch_start);
+
+    ctx.logging.logger->log("[Epoch " + std::to_string(epoch_idx + 1) + "] " +
+                            Internal::formatMetric("avg_loss", result.avg_loss));
+
+    GRIM::Telemetry::logTelemetrySummary(ctx);
+
+    if (std::isfinite(result.validation.loss)) {
+        state.loss_signals->recordValidation(epoch_idx, result.validation.loss);
+    }
+
+    evaluateAutoStop(ctx, state, result, epoch_idx);
+
+    result.validation.is_best =
+        saveBestCheckpoint(ctx, result.validation.loss, epoch_idx);
+}
+
+void writeTrainingProgressStatus(
+    TrainingContext& ctx,
+    int epoch_idx,
+    int num_epochs,
+    int batch_idx,
+    int total_batches,
+    float batch_loss,
+    float epoch_loss,
+    int batches_processed)
+{
+    const float current_avg_loss = epoch_loss / batches_processed;
+    const float train_perplexity =
+        (std::isfinite(current_avg_loss) && current_avg_loss < 50.0f)
+            ? std::exp(current_avg_loss)
+            : std::numeric_limits<float>::infinity();
+
+    ctx.logging.status_writer->writeStatus(
+        GRIMText::Control::TrainingState_Training,
+        epoch_idx + 1, num_epochs,
+        batch_idx + 1, total_batches,
+        batch_loss, current_avg_loss,
+        train_perplexity, 0.0f, 0.0f, 0.0f,
+        "Training epoch " + std::to_string(epoch_idx + 1) +
+            " batch " + std::to_string(batch_idx + 1));
+}
+
+void writeTrainingErrorStatus(
+    TrainingContext& ctx,
+    int num_epochs,
+    const std::string& error)
+{
+    ctx.logging.status_writer->writeStatus(
+        GRIMText::Control::TrainingState_Error,
+        0, num_epochs, 0, 0,
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        "Training error", error);
 }
 
 //======================================================//
@@ -281,6 +443,13 @@ void releaseResources(TrainingContext& ctx) {
 
     // Release model (TrainingState destructor frees all Tensor buffers, PBM, TeacherLogits, etc.)
     if (ctx.model) {
+        // GuessCacheScope owns GRIMTS shutdown/free calls against TrainingState,
+        // so it must be released before the model/TrainingState disappears.
+        ctx.guess_cache_scope.reset();
+        ctx.guess_cache_state.batch_buffers.reset();
+        ctx.guess_cache_state.guess_cache_ready = false;
+        ctx.guess_cache_state.guess_cache_faulted = false;
+
         ctx.model.reset();
         EmitModuleInfo(ModuleId::Training, "✓ Model released", ctx.global_step);
     }
