@@ -52,8 +52,8 @@ struct ConfigDumpOptions {
 // actual effective ratios computed in HyperParameters_GPU.hpp.
 //
 // If `data_stats` is non-null, dumpDataStats(...) is invoked inside
-// the same banner block so vocab + sequence-count info is shown
-// alongside the hyperparameters.
+// the same banner block so vocab, sequence-count, and startup memory
+// info is shown alongside the hyperparameters.
 //======================================================//
 void dumpAllHyperparameters(
     const GRIM::Config::TrainingHyperparameters& hp,

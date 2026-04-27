@@ -6,28 +6,10 @@
 //======================================================//
 #include "Phase2_TrainingLoop.hpp"
 #include "../OptimizerCheckpoint.hpp"
-#include "../Diagnostics/DiagnosticInference.hpp"
-#include "../Diagnostics/RhoDiagnostic.hpp"
-#include "../Diagnostics/LMHeadWeightStats.hpp"
-#include "../Diagnostics/LogitScaleDiagnostic.hpp"
-#include "../Diagnostics/BoundaryDiagnostic.hpp"
-#include "../Diagnostics/SpecialTokenDiagnostic.hpp"
-#include "../Diagnostics/AtomStatsDiagnostic.hpp"
-#include "../Diagnostics/LossSpikeDiagnostic.hpp"
-#include "../Diagnostics/LossBaselineDiagnostic.hpp"
-#include "../Diagnostics/LossStatsDiagnostic.hpp"
-#include "../Diagnostics/GradientNormDiagnostic.hpp"
-#include "../Diagnostics/OptimizerStepGuards.hpp"
-#include "../Diagnostics/TieVerifyDiagnostic.hpp"
-#include "../Diagnostics/MtpDiagnostic.hpp"
-#include "../Diagnostics/OptimizerMomentDiagnostic.hpp"
-#include "../Diagnostics/PostOptimizerWeightTrace.hpp"
-#include "../Diagnostics/PredictionDistributionDiagnostic.hpp"
-#include "../Diagnostics/DiagnosticGates.hpp"
+#include "../Diagnostics/Diagnostics.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
-
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"       // GradClip::clipGradientNorms (registry-level clipping)
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"          // GRIM::LR::LRSchedule (exposed LR curve)
@@ -35,7 +17,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/Telemetry/TelemetryUpdate.hpp"
-#include "../Diagnostics/TrainingDiagnostics.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
@@ -275,14 +256,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
     flushDeferredCleanup();
     cudaDeviceSynchronize();
     (void)cudaGetLastError();
-
-    {
-        size_t free_mem = 0, total_mem = 0;
-        cudaMemGetInfo(&free_mem, &total_mem);
-        ctx.logging.logger->log("[Val] GPU memory: " +
-            std::to_string(free_mem / (1024*1024)) + " MB free / " +
-            std::to_string(total_mem / (1024*1024)) + " MB total");
-    }
 
     const uint32_t batch_rows = ctx.run_capacity.batch_rows;
     const uint32_t seq_cap    = ctx.run_capacity.seq_cap;
@@ -1035,22 +1008,6 @@ EpochResult runEpoch(
     if (result.validation.is_best) {
         Internal::maybeSaveCheckpoint(ctx, result.validation.loss, epoch_idx);
     }
-    
-    // Update status — GPU memory query at epoch granularity (cudaMemGetInfo
-    // is implicitly synchronizing on some drivers).
-    size_t free_mem = 0, total_mem = 0;
-    cudaMemGetInfo(&free_mem, &total_mem);
-    float gpu_used_mb = static_cast<float>((total_mem - free_mem)) / (1024.0f*1024.0f);
-    float gpu_total_mb = static_cast<float>(total_mem) / (1024.0f*1024.0f);
-    
-    ctx.logging.status_writer->writeStatus(
-        GRIMText::Control::TrainingState_Training,
-        epoch_idx + 1, num_epochs,
-        total_batches, total_batches,
-        result.validation.loss, result.avg_loss,
-        result.validation.perplexity, 0.0f,
-        gpu_used_mb, gpu_total_mb,
-        "Validation complete - epoch " + std::to_string(epoch_idx + 1));
     
     return result;
 }

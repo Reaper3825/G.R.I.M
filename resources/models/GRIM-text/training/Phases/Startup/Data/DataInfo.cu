@@ -221,6 +221,10 @@ void DataInfoReady(TrainingContext& ctx) {
     data_stats.actual_vocab_size = ctx.data_info.actual_vocab_size;
     data_stats.train_sequence_count = ctx.data_info.train_sequence_count;
     data_stats.val_sequence_count = ctx.data_info.val_sequence_count;
+    data_stats.memory_device = ctx.memory_snapshot.device;
+    data_stats.memory_device_name = ctx.memory_snapshot.device_name;
+    data_stats.memory_total_bytes = ctx.memory_snapshot.total_bytes;
+    data_stats.memory_free_bytes = ctx.memory_snapshot.free_bytes;
 
     dumpAllHyperparameters(
         ctx.config.hyperparameters,
