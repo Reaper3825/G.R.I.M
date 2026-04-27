@@ -1881,6 +1881,7 @@ void executeStepCoordinatorImpl(
     const int* atom_positions,
     int num_atoms,
     const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     int batch_row,
     int step,
     float temperature,
@@ -1904,8 +1905,9 @@ void executeStepCoordinatorImpl(
     int* d_exec_record_i = LayerAccess::execRecordI(layer);
     float* d_exec_record_f = LayerAccess::execRecordF(layer);
 
-    // Row-local device slot map: derived from payload's device mirror
-    const int32_t* d_slot_map_row = payload.d_token_to_slot_map
+    // Row-local device slot map: derived from BatchDeviceBindings (host BatchPayload no
+    // longer carries device pointers — see Shared/Batching/BatchDeviceBindings.hpp).
+    const int32_t* d_slot_map_row = bindings.d_token_to_slot_map
         + static_cast<size_t>(batch_row) * payload.max_seq_len;
 
     StepWorkingSet work;
@@ -1916,9 +1918,9 @@ void executeStepCoordinatorImpl(
 
     // Row-local device atom mask: used by ReduceMean to exclude atom positions
     // from the decision context, preventing numeric surface leakage into
-    // execution op/arg/write selection.
-    const uint8_t* d_atom_mask_row = payload.d_atom_mask
-        ? payload.d_atom_mask + static_cast<size_t>(batch_row) * payload.max_seq_len
+    // execution op/arg/write selection. Sourced from BatchDeviceBindings.
+    const uint8_t* d_atom_mask_row = bindings.d_atom_mask
+        ? bindings.d_atom_mask + static_cast<size_t>(batch_row) * payload.max_seq_len
         : nullptr;
 
     work.context = Tensor::zeros({1, dm}, stream, "exec_context");

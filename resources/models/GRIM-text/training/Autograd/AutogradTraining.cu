@@ -74,7 +74,9 @@ constexpr int kBlockSize = 256;
 // Context Initialization
 //======================================================================
 
-// Training overload — derives batch geometry from BatchPayload
+// Training overload — derives batch geometry from BatchPayload.
+// `bindings` must describe the same batch (geometry-checked) and must already
+// have been populated by uploadBatchToDevice(payload) at the H2D sync slice.
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,
@@ -87,10 +89,25 @@ AutogradContext initAutogradContext(
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     float grad_scale,
     uint64_t step,
     bool is_training
 ) {
+    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
+        throw std::runtime_error(
+            "initAutogradContext(payload): BatchDeviceBindings geometry (" +
+            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
+            ") does not match payload (" +
+            std::to_string(payload.batch_size) + "x" + std::to_string(payload.max_seq_len) +
+            ")");
+    }
+    if (!bindings.d_token_to_slot_map) {
+        throw std::runtime_error(
+            "initAutogradContext(payload): bindings.d_token_to_slot_map is NULL — "
+            "caller must call uploadBatchToDevice() before initAutogradContext");
+    }
+
     AutogradContext ctx{};
     ctx.config = config;
     ctx.training_state = training_state;
@@ -103,15 +120,16 @@ AutogradContext initAutogradContext(
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.payload = &payload;
+    ctx.device_bindings = &bindings;
     ctx.batch_size = payload.batch_size;
     ctx.seq_len = payload.max_seq_len;
     ctx.grad_scale = grad_scale;
     ctx.step = step;
     ctx.is_training = is_training;
-    
+
     // Rule 20: Fail loud on invalid context
     ctx.validate("initAutogradContext(payload)");
-    
+
     return ctx;
 }
 
@@ -653,7 +671,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
                     // WS7: Execution-active rows MUST have bootstrap data.
                     // Throw instead of silently entering executeStep with empty memory.
-                    if (!ctx.payload->d_token_to_slot_map || !ts->cached_token_numeric_values.data) {
+                    if (!ctx.device_bindings || !ctx.device_bindings->d_token_to_slot_map
+                        || !ts->cached_token_numeric_values.data) {
                         throw std::runtime_error(
                             "AutogradTraining: execution-active row " + std::to_string(b)
                             + " has no slot map or numeric values for bootstrap — "
@@ -662,7 +681,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     ctx.execution_block->bootstrapMemoryFromSlotMap(
                         M_b,
                         ts->cached_token_numeric_values.data + tok_off,
-                        ctx.payload->d_token_to_slot_map + tok_off,
+                        ctx.device_bindings->d_token_to_slot_map + tok_off,
                         sl, ctx.stream);
 
                     for (int step = 0; step < exec_K; ++step) {
@@ -739,7 +758,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         ctx.execution_block->executeStep(
                             layer_output, M_b,
                             reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
-                            row_atom_view.num_atoms, *ctx.payload, b,
+                            row_atom_view.num_atoms, *ctx.payload, *ctx.device_bindings, b,
                             step, T, ctx.stream,
                             &step_diag,
                             ts->trace_state_by_row[b],
@@ -1971,12 +1990,27 @@ LossResult autogradTrainingStep(
     LanguageModel& model,
     TrainingState& training_state,
     const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     bool accumulate,
     float grad_scale,
     uint64_t step
 ) {
     payload.validate("autogradTrainingStep");
-    
+
+    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
+        throw std::runtime_error(
+            "autogradTrainingStep: BatchDeviceBindings geometry (" +
+            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
+            ") does not match payload (" +
+            std::to_string(payload.batch_size) + "x" + std::to_string(payload.max_seq_len) +
+            "). Caller must pass the bindings returned by uploadBatchToDevice(payload).");
+    }
+    if (!bindings.d_input_ids || !bindings.d_target_ids || !bindings.d_token_to_slot_map) {
+        throw std::runtime_error(
+            "autogradTrainingStep: BatchDeviceBindings has NULL device pointers — "
+            "caller must invoke model.uploadBatchToDevice(payload) before this step.");
+    }
+
     const auto& cfg = model.getConfig();
 
     // Execution payload validation (WS4: single shared validator)
@@ -2013,13 +2047,16 @@ LossResult autogradTrainingStep(
     ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
     ReasoningHeadLayer* reasoning_head = model.getReasoningHeadLayer();
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
-    
+
     // ═══════════════════════════════════════════════════════════════════════════
-    // GPU COPIES: Transfer padded data from payload to GPU tensors
-    // Uses BatchPayload byte-size helpers for consistent transfer sizing.
+    // GPU COPIES: handled upstream by LanguageModel::uploadBatchToDevice(payload).
+    // The returned BatchDeviceBindings is the single source of truth for device
+    // pointers in this step. autogradTrainingStep no longer issues any H2D copy
+    // for the payload (Rule: BatchPayload host-only, BatchDeviceBindings device-only).
     // ═══════════════════════════════════════════════════════════════════════════
-    
-    // Validate buffer capacity
+
+    // Logit buffer capacity is still enforced here so a mis-sized payload trips
+    // immediately, before any forward kernel is launched.
     const size_t logit_limit = training_state.max_logit_tokens > 0
         ? training_state.max_logit_tokens
         : training_state.max_cached_tokens;
@@ -2028,82 +2065,7 @@ LossResult autogradTrainingStep(
             "autogradTrainingStep: total_tokens=" + std::to_string(total_tokens) +
             " exceeds logit buffer capacity=" + std::to_string(logit_limit));
     }
-    
-    // Token IDs
-    if (!training_state.cached_token_ids_tensor.data) {
-        throw std::runtime_error("autogradTrainingStep: cached_token_ids_tensor.data is NULL");
-    }
-    CUDA_CHECK(cudaMemcpyAsync(
-        reinterpret_cast<int*>(training_state.cached_token_ids_tensor.data),
-        payload.input_ids.data(),
-        payload.inputIdBytes(),
-        cudaMemcpyHostToDevice, stream));
-    
-    // Targets
-    if (!training_state.cached_targets_tensor.data) {
-        throw std::runtime_error("autogradTrainingStep: cached_targets_tensor.data is NULL");
-    }
 
-    // Targets arrive pre-masked from buildBatchPayload() Phase 4b.
-    // payload.lm_valid_tokens is already set by the builder.
-    CUDA_CHECK(cudaMemcpyAsync(
-        reinterpret_cast<int*>(training_state.cached_targets_tensor.data),
-        payload.target_ids.data(),
-        payload.targetIdBytes(),
-        cudaMemcpyHostToDevice, stream));
-    
-    // Numeric values
-    if (!training_state.cached_token_numeric_values.data) {
-        throw std::runtime_error("autogradTrainingStep: cached_token_numeric_values.data is NULL");
-    }
-    CUDA_CHECK(cudaMemcpyAsync(
-        training_state.cached_token_numeric_values.data,
-        payload.numeric_values.data(),
-        payload.numericValueBytes(),
-        cudaMemcpyHostToDevice, stream));
-    
-    // Atom mask + text features
-    (void)Batching::BatchPayload::kTextFeatureDim;  // reserved for validation
-    if (training_state.cached_token_atom_mask.data) {
-        CUDA_CHECK(cudaMemcpyAsync(
-            reinterpret_cast<uint8_t*>(training_state.cached_token_atom_mask.data),
-            payload.atom_mask.data(),
-            payload.atomMaskBytes(),
-            cudaMemcpyHostToDevice, stream));
-    }
-    if (training_state.cached_token_text_features.data) {
-        CUDA_CHECK(cudaMemcpyAsync(
-            reinterpret_cast<uint16_t*>(training_state.cached_token_text_features.data),
-            payload.text_features.data(),
-            payload.textFeatureBytes(),
-            cudaMemcpyHostToDevice, stream));
-    }
-    // Atom flags (type-specific metadata from AtomTable)
-    if (training_state.cached_token_atom_flags.data) {
-        CUDA_CHECK(cudaMemcpyAsync(
-            reinterpret_cast<uint32_t*>(training_state.cached_token_atom_flags.data),
-            payload.atom_flags.data(),
-            payload.atomFlagBytes(),
-            cudaMemcpyHostToDevice, stream));
-    }
-    // Execution slot map (runtime substrate metadata — stable for full forward/execute sequence)
-    if (!training_state.cached_token_to_slot_map.data) {
-        throw std::runtime_error("copyBatchToDevice: cached_token_to_slot_map.data is NULL — "
-            "slot map is unconditionally allocated in InitTrainingState");
-    }
-    CUDA_CHECK(cudaMemcpyAsync(
-        reinterpret_cast<int32_t*>(training_state.cached_token_to_slot_map.data),
-        payload.token_to_slot_map.data(),
-        payload.slotMapBytes(),
-        cudaMemcpyHostToDevice, stream));
-    payload.d_token_to_slot_map =
-        reinterpret_cast<const int32_t*>(training_state.cached_token_to_slot_map.data);
-    
-    // Store dimensions in TrainingState for downstream consumers
-    training_state.cached_batch_size = payload.batch_size;
-    training_state.cached_seq_len = payload.max_seq_len;
-    training_state.cached_num_layers = cfg.num_layers;
-    
     // ═══════════════════════════════════════════════════════════════════════════
     // AUTOGRAD CONTEXT
     // ═══════════════════════════════════════════════════════════════════════════
@@ -2132,6 +2094,7 @@ LossResult autogradTrainingStep(
         training_state.cublas_handle,
         stream,
         payload,
+        bindings,
         grad_scale,
         step,
         true

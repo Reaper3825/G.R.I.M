@@ -4,6 +4,7 @@
 
 #include "execution_block_internal.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Batching/BatchDeviceBindings.hpp"
 
 namespace GRIM::ExecutionBlockInternal {
 void executeStepCoordinatorImpl(
@@ -13,6 +14,7 @@ void executeStepCoordinatorImpl(
 	const int* atom_positions,
 	int num_atoms,
 	const Batching::BatchPayload& payload,
+	const Batching::BatchDeviceBindings& bindings,
 	int batch_row,
 	int step,
 	float temperature,

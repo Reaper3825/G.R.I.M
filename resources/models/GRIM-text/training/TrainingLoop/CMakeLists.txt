@@ -367,6 +367,10 @@ add_executable(train_gpu
     ../Phases/Startup/Scheduling/SchedulerPreflight.hpp
     ../Phases/Startup/Epoch/EpochPlan.cu
     ../Phases/Startup/Epoch/EpochPlan.hpp
+    ../Phases/Startup/Payload/PayloadBuildInputs.cu
+    ../Phases/Startup/Payload/PayloadBuildInputs.hpp
+    ../Phases/Startup/Batching/PlannedBatches.cu
+    ../Phases/Startup/Batching/PlannedBatches.hpp
     ../Phases/Startup/Telemetry/TelemetryInitInputs.cu
     ../Phases/Startup/Telemetry/TelemetryInitInputs.hpp
     ../Phases/Startup/Validation/StartupValidation.cu

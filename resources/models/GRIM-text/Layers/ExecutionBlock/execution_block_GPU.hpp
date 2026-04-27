@@ -22,7 +22,7 @@
 
 namespace GRIM {
 
-namespace Batching { struct BatchPayload; }
+namespace Batching { struct BatchPayload; struct BatchDeviceBindings; }
 namespace ExecutionBlockInternal {
 struct LayerAccess;
 }
@@ -222,6 +222,7 @@ public:
         const int* atom_positions,          // row-local [max(1, num_atoms)] positions relative to current row [0, row_tokens)
         int num_atoms,
         const Batching::BatchPayload& payload,
+        const Batching::BatchDeviceBindings& bindings,
         int batch_row,
         int step,
         float temperature,
@@ -272,11 +273,13 @@ public:
     //--------------------------------------------------//
     void validateConfigOrThrow() const;
     void validateMemoryOrThrow(const ExecutionMemory& M) const;
+    // Forward-declared in this header (see top): namespace Batching { struct BatchDeviceBindings; }
     void validateExecuteStepInputsOrThrow(
         const Tensor& H,
         const int* atom_positions,
         int num_atoms,
         const Batching::BatchPayload& payload,
+        const Batching::BatchDeviceBindings& bindings,
         int batch_row,
         const ExecutionMemory& M,
         int step) const;

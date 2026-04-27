@@ -1,4 +1,5 @@
 #include "../../Batching/BatchPayload.hpp"
+#include "../../Batching/BatchDeviceBindings.hpp"
 #include "../../Execution/ExecutionPayloadValidation.hpp"
 
 #include <algorithm>
@@ -50,8 +51,167 @@ void orderLog(const char* stage,
 
 }  // namespace
 
+// =============================================================================
+// uploadBatchToDevice
+//
+// Performs the H2D copies for a single BatchPayload into TrainingState's
+// reusable cache buffers and returns a BatchDeviceBindings naming the resulting
+// device pointers. Uses the pinned ScratchBlockPool double-buffered staging
+// path (no pageable copies). Synchronizes before returning so callers may
+// consume the bindings immediately.
+//
+// This is the SINGLE H2D sync slice for a step. Both eval (computeLossBatch)
+// and training (autogradTrainingStep) paths route through this helper so there
+// is exactly one place where device pointers for "the current batch" are
+// authored.
+// =============================================================================
+GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
+	const GRIM::Batching::BatchPayload& payload)
+{
+	// Re-validate (cheap) so any corruption between buildBatchPayload and the
+	// upload site fails loud here instead of inside a kernel.
+	payload.validate("uploadBatchToDevice");
+
+	if (!training_state_.initialized) {
+		initTrainingState();
+		if (!training_state_.initialized) {
+			throw std::runtime_error("uploadBatchToDevice: initTrainingState() completed but flag still false");
+		}
+	}
+
+	const auto& cfg = getConfig();
+
+	const size_t batch_size   = static_cast<size_t>(payload.batch_size);
+	const size_t seq_len      = static_cast<size_t>(payload.max_seq_len);
+	const size_t total_tokens = static_cast<size_t>(payload.total_tokens);
+
+	const size_t logit_limit = training_state_.max_logit_tokens > 0
+		? training_state_.max_logit_tokens
+		: training_state_.max_cached_tokens;
+	if (total_tokens > logit_limit) {
+		throw std::runtime_error(
+			"uploadBatchToDevice: total_tokens=" + std::to_string(total_tokens) +
+			" exceeds logit buffer capacity=" + std::to_string(logit_limit));
+	}
+
+	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+
+	auto* scratch_pool = training_state_.scratch_pool;
+	if (!scratch_pool || !scratch_pool->isInitialized()) {
+		throw std::runtime_error("uploadBatchToDevice: scratch_pool not initialized — "
+			"pinned memory staging is REQUIRED for batch transfers");
+	}
+
+	int* cached_token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
+	if (!cached_token_ids_ptr) {
+		throw std::runtime_error("uploadBatchToDevice: cached_token_ids_tensor.data is NULL");
+	}
+	int* cached_targets_ptr = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
+	if (!cached_targets_ptr) {
+		throw std::runtime_error("uploadBatchToDevice: cached_targets_tensor.data is NULL");
+	}
+	float* cached_numeric_values_ptr = training_state_.cached_token_numeric_values.data;
+	if (!cached_numeric_values_ptr) {
+		throw std::runtime_error("uploadBatchToDevice: cached_token_numeric_values.data is NULL");
+	}
+	float* cached_atom_mask_ptr = training_state_.cached_token_atom_mask.data;
+	if (!cached_atom_mask_ptr) {
+		throw std::runtime_error("uploadBatchToDevice: cached_token_atom_mask.data is NULL");
+	}
+	int32_t* cached_slot_map_ptr = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data);
+	if (!cached_slot_map_ptr) {
+		throw std::runtime_error("uploadBatchToDevice: cached_token_to_slot_map.data is NULL — "
+			"slot map is unconditionally allocated in InitTrainingState");
+	}
+
+	const size_t input_ids_bytes   = payload.inputIdBytes();
+	const size_t target_ids_bytes  = payload.targetIdBytes();
+	const size_t numeric_val_bytes = payload.numericValueBytes();
+	const size_t atom_mask_bytes   = payload.atomMaskBytes();
+	const size_t atom_flag_bytes   = payload.atomFlagBytes();
+
+	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
+	const bool has_text_features = (cached_text_features_ptr != nullptr);
+	const size_t text_feat_bytes = payload.textFeatureBytes();
+	const size_t slot_map_bytes  = payload.slotMapBytes();
+
+	auto copy_start = std::chrono::high_resolution_clock::now();
+
+	ScratchBlock::ScratchBlockGuard handleA(*scratch_pool, std::max({input_ids_bytes, numeric_val_bytes, text_feat_bytes, slot_map_bytes}));
+	ScratchBlock::ScratchBlockGuard handleB(*scratch_pool, std::max({target_ids_bytes, atom_mask_bytes, atom_flag_bytes}));
+
+	// Round 1: input_ids (A) + target_ids (B). Targets arrive pre-masked from
+	// buildBatchPayload Phase 4b; payload.lm_valid_tokens already accounts for
+	// the post-masking LM-supervised count.
+	std::memcpy(handleA.data(), payload.input_ids.data(), input_ids_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, handleA.data(),
+		input_ids_bytes, cudaMemcpyHostToDevice, stream));
+	std::memcpy(handleB.data(), payload.target_ids.data(), target_ids_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, handleB.data(),
+		target_ids_bytes, cudaMemcpyHostToDevice, stream));
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+
+	// Round 2: numeric_values (A) + atom_mask (B).
+	std::memcpy(handleA.data(), payload.numeric_values.data(), numeric_val_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, handleA.data(),
+		numeric_val_bytes, cudaMemcpyHostToDevice, stream));
+	std::memcpy(handleB.data(), payload.atom_mask.data(), atom_mask_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), handleB.data(),
+		atom_mask_bytes, cudaMemcpyHostToDevice, stream));
+
+	// Round 3: text_features (A) + atom_flags (B).
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+	if (has_text_features) {
+		std::memcpy(handleA.data(), payload.text_features.data(), text_feat_bytes);
+		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), handleA.data(),
+			text_feat_bytes, cudaMemcpyHostToDevice, stream));
+	}
+	if (training_state_.cached_token_atom_flags.data) {
+		std::memcpy(handleB.data(), payload.atom_flags.data(), atom_flag_bytes);
+		CUDA_CHECK(cudaMemcpyAsync(
+			reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data), handleB.data(),
+			atom_flag_bytes, cudaMemcpyHostToDevice, stream));
+	}
+
+	// Round 4: token_to_slot_map (reuse A; pool is only double-buffered).
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+	std::memcpy(handleA.data(), payload.token_to_slot_map.data(), slot_map_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_slot_map_ptr, handleA.data(),
+		slot_map_bytes, cudaMemcpyHostToDevice, stream));
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+
+	auto copy_end = std::chrono::high_resolution_clock::now();
+	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
+	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
+		fprintf(stderr, "[VOCAB_TIMING] uploadBatchToDevice complete (pinned staging): %.2f ms\n", copy_ms);
+	}
+
+	// Store dimensions in TrainingState for downstream consumers (diagnostics
+	// and bookkeeping). The bindings struct returned below is the canonical
+	// reader-facing view of the device pointers for this step.
+	training_state_.cached_batch_size = static_cast<int>(batch_size);
+	training_state_.cached_seq_len    = static_cast<int>(seq_len);
+	training_state_.cached_num_layers = cfg.num_layers;
+
+	GRIM::Batching::BatchDeviceBindings bindings;
+	bindings.d_input_ids        = cached_token_ids_ptr;
+	bindings.d_target_ids       = cached_targets_ptr;
+	bindings.d_numeric_values   = cached_numeric_values_ptr;
+	bindings.d_text_features    = has_text_features
+		? reinterpret_cast<uint16_t*>(cached_text_features_ptr) : nullptr;
+	bindings.d_atom_mask        = reinterpret_cast<uint8_t*>(cached_atom_mask_ptr);
+	bindings.d_atom_flags       = training_state_.cached_token_atom_flags.data
+		? reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data)
+		: nullptr;
+	bindings.d_token_to_slot_map = cached_slot_map_ptr;
+	bindings.batch_size  = payload.batch_size;
+	bindings.max_seq_len = payload.max_seq_len;
+	return bindings;
+}
+
 float LanguageModel::computeLossBatch(
 	const GRIM::Batching::BatchPayload& payload,
+	const GRIM::Batching::BatchDeviceBindings& bindings,
 	bool is_training)
 {
 	// Keep intermediates for the legacy computeLossBatch() -> backward() flow on success,
@@ -69,24 +229,32 @@ float LanguageModel::computeLossBatch(
 	IntermediateExceptionGuard exception_guard{training_state_};
 
 	// ═══════════════════════════════════════════════════════════════════════════
-	// BatchPayload is the SINGLE SOURCE OF TRUTH for all batch metadata.
-	// All padding, masking, sequence lengths, valid token counts, and cache fit
-	// checks were computed ONCE in buildBatchPayload(). No recomputation here.
+	// BatchPayload is the SINGLE SOURCE OF TRUTH for all batch *host* metadata.
+	// BatchDeviceBindings is the single source of truth for *device* pointers
+	// for this step. Neither is rederived here.
 	// ═══════════════════════════════════════════════════════════════════════════
 
 	orderLog("computeLossBatch.enter",
 		payload.batch_size, payload.max_seq_len, payload.total_tokens, payload.valid_tokens);
 
-	// Ensure training state is initialized
+	// Caller is required to upload first (Phase2 sync slice). Bindings must
+	// describe THIS payload; geometry mismatch is a contract violation.
+	if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
+		throw std::runtime_error(
+			"computeLossBatch: BatchDeviceBindings geometry (" +
+			std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
+			") does not match payload (" +
+			std::to_string(payload.batch_size) + "x" + std::to_string(payload.max_seq_len) +
+			") — caller must upload before calling computeLossBatch");
+	}
+	if (!bindings.d_token_to_slot_map) {
+		throw std::runtime_error("computeLossBatch: bindings.d_token_to_slot_map is NULL — "
+			"caller must call uploadBatchToDevice() first");
+	}
+
 	if (!training_state_.initialized) {
-		orderLog("computeLossBatch.init_start",
-			payload.batch_size, 0, 0, 0);
-		initTrainingState();
-		if (!training_state_.initialized) {
-			throw std::runtime_error("computeLossBatch: initTrainingState() completed but flag still false");
-		}
-		orderLog("computeLossBatch.init_done",
-			payload.batch_size, 0, 0, 0);
+		throw std::runtime_error("computeLossBatch: training_state_ not initialized — "
+			"uploadBatchToDevice() runs initTrainingState() and must be called first");
 	}
 
 	// Rule 20: payload was already validated by buildBatchPayload, but re-validate here
@@ -95,12 +263,10 @@ float LanguageModel::computeLossBatch(
 
 	const auto& cfg = getConfig();
 
-	// Execution payload validation (WS4: single shared validator)
 	GRIM::Execution::validateExecutionPayload(
 		payload, "computeLossBatch",
 		cfg.execution_block_num_slots, cfg.execution_block_num_ops, cfg.execution_block_num_steps);
 
-	// When execution_block is disabled, teacher_steps are ignored — batch validates with plain cross-entropy.
 	if (!payload.teacher_steps.empty() && !cfg.execution_block_enabled) {
 		fprintf(stderr, "[ComputeLossBatch] WARN: batch has teacher_steps (arithmetic) but execution_block_enabled=false; "
 		        "validating with plain cross-entropy over text tokens (teacher supervision skipped)\n");
@@ -134,136 +300,7 @@ float LanguageModel::computeLossBatch(
 	const size_t total_tokens = static_cast<size_t>(payload.total_tokens);
 	const int valid_tokens = payload.valid_tokens;
 
-	const size_t logit_limit = training_state_.max_logit_tokens > 0
-		? training_state_.max_logit_tokens
-		: training_state_.max_cached_tokens;
-	if (total_tokens > logit_limit) {
-		throw std::runtime_error(
-			"computeLossBatch: total_tokens=" + std::to_string(total_tokens) +
-			" exceeds logit buffer capacity=" + std::to_string(logit_limit));
-	}
-
-	// ═══════════════════════════════════════════════════════════════════════════
-	// GPU COPIES: Pinned-memory staged transfers via ScratchBlockPool
-	// Double-buffered: submit DMA from block A while CPU fills block B.
-	// ═══════════════════════════════════════════════════════════════════════════
-	auto copy_start = std::chrono::high_resolution_clock::now();
-	orderLog("computeLossBatch.copy_inputs",
-		batch_size, seq_len, total_tokens, 0);
-
 	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-
-	// Rule 20: scratch pool MUST be available — no fallback to pageable memory
-	auto* scratch_pool = training_state_.scratch_pool;
-	if (!scratch_pool || !scratch_pool->isInitialized()) {
-		throw std::runtime_error("computeLossBatch: scratch_pool not initialized — "
-			"pinned memory staging is REQUIRED for batch transfers");
-	}
-
-	// Validate GPU destination pointers (Rule 20: crash if null)
-	int* cached_token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
-	if (!cached_token_ids_ptr) {
-		throw std::runtime_error("computeLossBatch: cached_token_ids_tensor.data is NULL");
-	}
-	int* cached_targets_ptr = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
-	if (!cached_targets_ptr) {
-		throw std::runtime_error("computeLossBatch: cached_targets_tensor.data is NULL");
-	}
-	float* cached_numeric_values_ptr = training_state_.cached_token_numeric_values.data;
-	if (!cached_numeric_values_ptr) {
-		throw std::runtime_error("computeLossBatch: cached_token_numeric_values.data is NULL");
-	}
-	float* cached_atom_mask_ptr = training_state_.cached_token_atom_mask.data;
-	if (!cached_atom_mask_ptr) {
-		throw std::runtime_error("computeLossBatch: cached_token_atom_mask.data is NULL");
-	}
-	int32_t* cached_slot_map_ptr = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data);
-	if (!cached_slot_map_ptr) {
-		throw std::runtime_error("computeLossBatch: cached_token_to_slot_map.data is NULL — "
-			"slot map is unconditionally allocated in InitTrainingState");
-	}
-
-	// Compute transfer sizes using BatchPayload helpers
-	const size_t input_ids_bytes    = payload.inputIdBytes();
-	const size_t target_ids_bytes   = payload.targetIdBytes();
-	const size_t numeric_val_bytes  = payload.numericValueBytes();
-	const size_t atom_mask_bytes    = payload.atomMaskBytes();
-	const size_t atom_flag_bytes    = payload.atomFlagBytes();
-
-	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
-	const bool has_text_features = (cached_text_features_ptr != nullptr);
-	const size_t text_feat_bytes = payload.textFeatureBytes();
-	const size_t slot_map_bytes  = payload.slotMapBytes();
-
-	// Acquire double-buffer blocks (A and B) — RAII guards release on any exit path.
-	// Block A is reused across rounds: input_ids, numeric_values, text_features, slot_map.
-	// Block B: target_ids, atom_mask, atom_flags.
-	ScratchBlock::ScratchBlockGuard handleA(*scratch_pool, std::max({input_ids_bytes, numeric_val_bytes, text_feat_bytes, slot_map_bytes}));
-	ScratchBlock::ScratchBlockGuard handleB(*scratch_pool, std::max({target_ids_bytes, atom_mask_bytes, atom_flag_bytes}));
-
-	// --- Round 1: input_ids (block A) + target_ids (block B) ---
-	std::memcpy(handleA.data(), payload.input_ids.data(), input_ids_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, handleA.data(),
-		input_ids_bytes, cudaMemcpyHostToDevice, stream));
-
-	// Targets are already execution-slot-masked by buildBatchPayload().
-	// payload.lm_valid_tokens reflects the post-masking LM-supervised count.
-	std::memcpy(handleB.data(), payload.target_ids.data(), target_ids_bytes);
-
-	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, handleB.data(),
-		target_ids_bytes, cudaMemcpyHostToDevice, stream));
-
-	// Sync before reusing blocks — GPU must finish reading A and B
-	CUDA_CHECK(cudaStreamSynchronize(stream));
-
-	// --- Round 2: numeric_values (block A) + atom_mask (block B) ---
-	std::memcpy(handleA.data(), payload.numeric_values.data(), numeric_val_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, handleA.data(),
-		numeric_val_bytes, cudaMemcpyHostToDevice, stream));
-
-	std::memcpy(handleB.data(), payload.atom_mask.data(), atom_mask_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), handleB.data(),
-		atom_mask_bytes, cudaMemcpyHostToDevice, stream));
-
-	// --- Round 3: text_features (block A) + atom_flags (block B) ---
-	CUDA_CHECK(cudaStreamSynchronize(stream));
-	if (has_text_features) {
-		std::memcpy(handleA.data(), payload.text_features.data(), text_feat_bytes);
-		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), handleA.data(),
-			text_feat_bytes, cudaMemcpyHostToDevice, stream));
-	}
-	if (training_state_.cached_token_atom_flags.data) {
-		std::memcpy(handleB.data(), payload.atom_flags.data(), atom_flag_bytes);
-		CUDA_CHECK(cudaMemcpyAsync(
-			reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data), handleB.data(),
-			atom_flag_bytes, cudaMemcpyHostToDevice, stream));
-	}
-
-	// --- Round 4: token_to_slot_map (reuse block A; pool is only double-buffered) ---
-	CUDA_CHECK(cudaStreamSynchronize(stream));
-	std::memcpy(handleA.data(), payload.token_to_slot_map.data(), slot_map_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(
-		cached_slot_map_ptr,
-		handleA.data(), slot_map_bytes, cudaMemcpyHostToDevice, stream));
-	CUDA_CHECK(cudaStreamSynchronize(stream));
-	payload.d_token_to_slot_map =
-		reinterpret_cast<const int32_t*>(training_state_.cached_token_to_slot_map.data);
-	payload.d_atom_mask =
-		reinterpret_cast<const uint8_t*>(training_state_.cached_token_atom_mask.data);
-
-	// Final sync ensures all DMAs complete before guards release pinned blocks
-	CUDA_CHECK(cudaStreamSynchronize(stream));
-
-	auto copy_end = std::chrono::high_resolution_clock::now();
-	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
-	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
-		fprintf(stderr, "[VOCAB_TIMING] GPU copies complete (pinned staging): %.2f ms\n", copy_ms);
-	}
-
-	// Store dimensions in TrainingState for downstream consumers
-	training_state_.cached_batch_size = static_cast<int>(batch_size);
-	training_state_.cached_seq_len = static_cast<int>(seq_len);
-	training_state_.cached_num_layers = cfg.num_layers;
 
 	orderLog("computeLossBatch.inputs_copied",
 		batch_size, seq_len, total_tokens, 0);
@@ -294,6 +331,7 @@ float LanguageModel::computeLossBatch(
 		training_state_.cublas_handle,
 		stream,
 		payload,
+		bindings,
 		1.0f,
 		autograd_forward_step,
 		is_training

@@ -27,6 +27,7 @@
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../Shared/CudaAllocUtils.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
+#include "../Shared/Batching/BatchDeviceBindings.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 using GRIM::HyperParameters::ModelExecutionMode;
@@ -687,15 +688,23 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                 slot_ptr,
                 1, stream);
 
-            // Construct minimal BatchPayload for single-token decode execution.
+            // Construct a minimal host BatchPayload (geometry-only) plus a
+            // single-token BatchDeviceBindings for decode-time execution.
+            // Decode is NOT a full training step — there is no host-side payload
+            // upload, just the row-local slot map / atom mask already living in
+            // TrainingState's cached buffers.
             GRIM::Batching::BatchPayload decode_payload;
             decode_payload.batch_size = 1;
             decode_payload.max_seq_len = 1;
             decode_payload.total_tokens = 1;
-            decode_payload.d_token_to_slot_map = slot_ptr;
-            decode_payload.d_atom_mask =
+
+            GRIM::Batching::BatchDeviceBindings decode_bindings;
+            decode_bindings.batch_size  = 1;
+            decode_bindings.max_seq_len = 1;
+            decode_bindings.d_token_to_slot_map = const_cast<int32_t*>(slot_ptr);
+            decode_bindings.d_atom_mask =
                 ts.cached_token_atom_mask.data
-                    ? reinterpret_cast<const uint8_t*>(ts.cached_token_atom_mask.data) + token_pos
+                    ? reinterpret_cast<uint8_t*>(ts.cached_token_atom_mask.data) + token_pos
                     : nullptr;
 
             ExecutionBlockStepOutput last_step_diag;
@@ -705,7 +714,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                     hidden, ts.inference_exec_memory,
                     reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
                     row_atom_view.num_atoms,
-                    decode_payload, 0,
+                    decode_payload, decode_bindings, 0,
                     step, T, stream,
                     &step_diag,
                     ts.trace_state_by_row[0],

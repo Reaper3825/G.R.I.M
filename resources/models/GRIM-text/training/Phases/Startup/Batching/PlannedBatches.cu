@@ -1,0 +1,251 @@
+//======================================================//
+//  Startup/Batching/PlannedBatches.cu
+//======================================================//
+
+#include "PlannedBatches.hpp"
+
+#include "../../Phase1_Startup.hpp"
+
+#include "../../../../Shared/Batching/EpochBatching.hpp"      // buildEpochBatches
+#include "../../../../Shared/Batching/PackerPolicy.hpp"
+#include "../../../../Shared/Batching/Batching_GPU.hpp"       // buildBatches
+#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // coreRunHP
+#include "../../../../Shared/UnigramByte/UniByte.hpp"          // GRIM::Tokenizer::TokenLayout
+
+#include <algorithm>
+#include <numeric>
+#include <random>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+
+namespace GRIMText::Training {
+
+namespace {
+
+//======================================================//
+// Per-batch payload builder. Reads ALL static run-invariant inputs (cache
+// geometry, execution-block sizes, vocab size, token layout) from
+// ctx.payload_build_inputs — authored by PayloadBuildInputsReady. This is
+// the single Phase1 entry point for GRIM::Batching::buildBatchPayload.
+//======================================================//
+GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
+    const TrainingContext& ctx,
+    const GRIM::Batching::BatchAssignment& assignment,
+    const std::vector<TrainingSequence*>& views,
+    int mtp_k)
+{
+    const auto& inputs = ctx.payload_build_inputs;
+
+    GRIM::Tokenizer::TokenLayout layout;
+    layout.num_special = inputs.token_layout.num_special;
+    layout.num_bytes   = inputs.token_layout.num_bytes;
+    layout.num_atoms   = inputs.token_layout.num_atoms;
+    layout.num_unigram = inputs.token_layout.num_unigram;
+
+    return GRIM::Batching::buildBatchPayload(
+        assignment, views, inputs.actual_vocab_size,
+        layout,
+        inputs.max_cached_batch, inputs.max_cached_seq,
+        inputs.execution_block_num_slots,
+        inputs.execution_block_num_ops,
+        inputs.execution_block_num_steps,
+        mtp_k);
+}
+
+//======================================================//
+// Validate that a Phase1-authored payload is complete and ready for Phase2
+// indexing. Mirrors the per-batch invariants Phase2 used to assert at
+// runtime; surfacing them at startup is the whole point of the contract.
+//======================================================//
+void validatePlannedPayloadOrThrow(
+    const GRIM::Batching::BatchPayload& payload,
+    const char* split,
+    int batch_idx)
+{
+    payload.validate("PlannedBatches");
+
+    if (payload.batch_size <= 0) {
+        std::ostringstream oss;
+        oss << "FATAL: PlannedBatches " << split << " batch " << batch_idx
+            << " has batch_size=" << payload.batch_size
+            << " — scheduler produced empty batch; fix the upstream filter";
+        throw std::runtime_error(oss.str());
+    }
+}
+
+void log_fn_to(TrainingContext& ctx, const std::string& msg) {
+    if (ctx.logging.logger) {
+        ctx.logging.logger->log(msg);
+    }
+}
+
+} // namespace
+
+GRIM::Batching::BatchPayload buildTrainPayload(
+    const TrainingContext& ctx,
+    const GRIM::Batching::BatchAssignment& assignment)
+{
+    return buildPayloadFromAssignmentImpl(
+        ctx, assignment, ctx.data.train_views,
+        ctx.payload_build_inputs.train_mtp_k);
+}
+
+GRIM::Batching::BatchPayload buildValPayload(
+    const TrainingContext& ctx,
+    const GRIM::Batching::BatchAssignment& assignment)
+{
+    return buildPayloadFromAssignmentImpl(
+        ctx, assignment, ctx.data.val_views, /*mtp_k=*/0);
+}
+
+void PlannedBatchesReady(TrainingContext& ctx) {
+    if (!ctx.model) {
+        throw std::runtime_error(
+            "FATAL: PlannedBatchesReady requires an allocated model — "
+            "call ModelAllocated before this step");
+    }
+    if (ctx.payload_build_inputs.actual_vocab_size <= 0) {
+        throw std::runtime_error(
+            "FATAL: PlannedBatchesReady requires PayloadBuildInputsReady to "
+            "have authored ctx.payload_build_inputs");
+    }
+    if (ctx.run_capacity.batch_rows == 0 ||
+        ctx.run_capacity.seq_cap == 0 ||
+        ctx.run_capacity.max_tokens_per_batch == 0) {
+        std::ostringstream oss;
+        oss << "FATAL: PlannedBatchesReady requires a valid RunCapacity "
+            << "(batch_rows=" << ctx.run_capacity.batch_rows
+            << " seq_cap=" << ctx.run_capacity.seq_cap
+            << " max_tokens_per_batch=" << ctx.run_capacity.max_tokens_per_batch
+            << ")";
+        throw std::runtime_error(oss.str());
+    }
+    if (ctx.data.train_views.empty()) {
+        throw std::runtime_error(
+            "FATAL: PlannedBatchesReady requires DataInfoReady to have loaded "
+            "ctx.data.train_views");
+    }
+
+    const auto core    = ::GRIM::HyperParameters::coreRunHP(ctx.config);
+    const auto& hp     = ctx.config.hyperparameters;
+    const int num_epochs = core.epochs;
+    if (num_epochs <= 0) {
+        throw std::runtime_error(
+            "FATAL: PlannedBatchesReady requires hp.epochs > 0 (got " +
+            std::to_string(num_epochs) + ")");
+    }
+
+    auto log = [&](const std::string& msg) { log_fn_to(ctx, msg); };
+
+    //======================================================//
+    // Train: build ONE fixed BatchSchedule.
+    //
+    // We delegate to GRIM::Batching::buildEpochBatches with epoch=0 so the
+    // packing policy (greedy, RANDOM ordering, bucket settings) matches the
+    // historical per-epoch behaviour exactly. Per the plan's "fixed batch
+    // membership" rule, this schedule is authored once and never rebuilt;
+    // per-epoch diversity comes from `epoch_batch_order` permutations only.
+    //======================================================//
+    log("[PlannedBatches] Building fixed train schedule (epochs=" +
+        std::to_string(num_epochs) + ")");
+
+    ctx.fixed_train_schedule = GRIM::Batching::buildEpochBatches(
+        ctx.data.train_catalog,
+        ctx.run_capacity.max_tokens_per_batch,
+        ctx.run_capacity.batch_rows,
+        /*global_step=*/0,
+        /*epoch=*/0,
+        /*data_seed=*/ctx.rng.data_seed,
+        log);
+
+    const int num_train_batches =
+        static_cast<int>(ctx.fixed_train_schedule.batches.size());
+    if (num_train_batches <= 0) {
+        throw std::runtime_error(
+            "FATAL: PlannedBatchesReady produced 0 training batches");
+    }
+
+    //======================================================//
+    // Train payloads: materialize a host BatchPayload per assignment.
+    //
+    // Every payload is validated immediately; a contract violation here is
+    // caught at startup, not in the training hot loop (Rule 20).
+    //======================================================//
+    ctx.train_payloads.clear();
+    ctx.train_payloads.reserve(num_train_batches);
+    for (int i = 0; i < num_train_batches; ++i) {
+        auto payload = buildTrainPayload(ctx, ctx.fixed_train_schedule.batches[i]);
+        validatePlannedPayloadOrThrow(payload, "train", i);
+        ctx.train_payloads.push_back(std::move(payload));
+    }
+    log("[PlannedBatches] Built " + std::to_string(ctx.train_payloads.size()) +
+        " train payloads");
+
+    //======================================================//
+    // Validation: build a fixed BatchSchedule + payload vector.
+    //
+    // Validation never shuffles, so we use buildBatches directly with the
+    // same policy Phase2 used historically (bucket_step=256, defaults
+    // otherwise). val_payloads are iterated in order.
+    //======================================================//
+    if (!ctx.data.val_views.empty()) {
+        GRIM::Batching::PackerPolicy val_policy;
+        val_policy.bucket_step = 256;
+
+        ctx.fixed_val_schedule = GRIM::Batching::buildBatches(
+            ctx.data.val_catalog,
+            ctx.run_capacity.max_tokens_per_batch,
+            ctx.run_capacity.batch_rows,
+            val_policy);
+
+        const int num_val_batches =
+            static_cast<int>(ctx.fixed_val_schedule.batches.size());
+        log("[PlannedBatches] Built " + std::to_string(num_val_batches) +
+            " val batches");
+
+        ctx.val_payloads.clear();
+        ctx.val_payloads.reserve(num_val_batches);
+        for (int i = 0; i < num_val_batches; ++i) {
+            auto payload = buildValPayload(ctx, ctx.fixed_val_schedule.batches[i]);
+            validatePlannedPayloadOrThrow(payload, "val", i);
+            ctx.val_payloads.push_back(std::move(payload));
+        }
+        log("[PlannedBatches] Built " + std::to_string(ctx.val_payloads.size()) +
+            " val payloads");
+    } else {
+        ctx.fixed_val_schedule = GRIM::Batching::BatchSchedule{};
+        ctx.val_payloads.clear();
+        log("[PlannedBatches] No validation data configured — skipping val schedule");
+    }
+
+    //======================================================//
+    // Per-epoch order: deterministic permutations of [0, num_train_batches).
+    //
+    // Honors hp.shuffle_train_enabled and hp.shuffle_train_epochs the same
+    // way Phase2's old per-epoch shuffle did, but the permutations are now
+    // fixed at startup. The RNG is seeded from ctx.rng.data_seed + epoch so
+    // resumes reproduce the same batch order.
+    //======================================================//
+    ctx.epoch_batch_order.assign(num_epochs, std::vector<int>{});
+    for (int epoch = 0; epoch < num_epochs; ++epoch) {
+        auto& order = ctx.epoch_batch_order[epoch];
+        order.resize(num_train_batches);
+        std::iota(order.begin(), order.end(), 0);
+
+        const bool shuffle_this_epoch =
+            hp.shuffle_train_enabled &&
+            (hp.shuffle_train_epochs == 0 || epoch < hp.shuffle_train_epochs);
+
+        if (shuffle_this_epoch) {
+            std::mt19937_64 epoch_rng(
+                ctx.rng.data_seed + static_cast<uint64_t>(epoch));
+            std::shuffle(order.begin(), order.end(), epoch_rng);
+        }
+    }
+    log("[PlannedBatches] Authored epoch_batch_order for " +
+        std::to_string(num_epochs) + " epochs (" +
+        std::to_string(num_train_batches) + " batches/epoch)");
+}
+
+} // namespace GRIMText::Training

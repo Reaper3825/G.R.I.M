@@ -732,9 +732,11 @@ int main(int argc, char** argv) {
                     payload.token_to_slot_map.assign(payload.total_tokens, -1);
                     payload.fits_in_cache = true;  // Assume fits for diagnostic purposes
                     
-                    // Unified forward+loss+backward via autograd
+                    // Unified forward+loss+backward via autograd. Sync slice:
+                    // upload host BatchPayload once and reuse the bindings.
+                    const auto bindings = model.uploadBatchToDevice(payload);
                     auto loss_result = GRIM::Autograd::autogradTrainingStep(
-                        model, model.getTrainingState(), payload,
+                        model, model.getTrainingState(), payload, bindings,
                         /*accumulate=*/false, /*grad_scale=*/1.0f, manual_optimizer_state.step);
                     if (!loss_result.success) {
                         std::cout << "  → autogradTrainingStep FAILED: " << loss_result.error_message << std::endl;

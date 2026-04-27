@@ -43,6 +43,7 @@
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
 #include "../../Shared/Batching/Batching_GPU.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/Dynamic_LR/DynamicLR.hpp"
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"
 #include "../../Shared/SoftRestart/SoftRestart.hpp"
@@ -68,6 +69,7 @@
 #include "Startup/Model/ModelAllocationState.hpp"
 #include "Startup/Scheduling/SchedulerPreflight.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
+#include "Startup/Payload/PayloadBuildInputs.hpp"
 #include "Startup/Resume/ResumeState.hpp"
 
 namespace GRIMText::Training {
@@ -190,7 +192,35 @@ struct TrainingContext {
     SchedulerPreflightState scheduler_preflight;
     // Startup-owned epoch plan facts (LR schedule config, total steps, warmup)
     EpochPlan epoch_plan;
-    
+    // Phase1-authored snapshot of static inputs to GRIM::Batching::buildBatchPayload.
+    // Contract-checks the model ↔ run_capacity cache agreement once at startup so
+    // Phase2's per-batch payload builder never re-reads or re-validates them.
+    PayloadBuildInputs payload_build_inputs;
+
+    //==================================================//
+    // Phase1-owned PLANNED BATCHES (PrecomputeBatchPayloads.plan.md)
+    //
+    // Phase1 builds the train and val schedules ONCE and materializes every
+    // BatchPayload into the vectors below. Phase2 NEVER calls buildBatches /
+    // buildEpochBatches / buildBatchPayload — it only:
+    //   1. Indexes train_payloads via epoch_batch_order[epoch][batch_i] for
+    //      training (the per-epoch "shuffle" is a permutation over fixed batch
+    //      indices, never over sequence membership).
+    //   2. Iterates val_payloads in order for validation.
+    //
+    // BatchPayload is host-only and immutable after the builder returns
+    // (BatchDeviceBindings is the parallel device-pointer surface produced by
+    // LanguageModel::uploadBatchToDevice at the per-step sync boundary).
+    //==================================================//
+    GRIM::Batching::BatchSchedule fixed_train_schedule;
+    std::vector<GRIM::Batching::BatchPayload> train_payloads;
+    GRIM::Batching::BatchSchedule fixed_val_schedule;
+    std::vector<GRIM::Batching::BatchPayload> val_payloads;
+    /** Per-epoch permutation of [0, train_payloads.size()). Outer size = number
+     *  of epochs to train; inner vector is a shuffled index list. Authored in
+     *  Phase1 (deterministic from the run RNG) so Phase2 only reads it. */
+    std::vector<std::vector<int>> epoch_batch_order;
+
     // Model and tokenizer
     std::unique_ptr<GRIM::LanguageModel> model;
     GRIM::Tokenizer::UniByte tokenizer;

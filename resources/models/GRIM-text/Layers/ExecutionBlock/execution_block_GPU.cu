@@ -10,6 +10,7 @@
 #include "execution_block_internal.hpp"
 #include "execution_block_memory_stream_GPU.hpp"
 #include "execution_block_data_stream_GPU.hpp"
+#include "../../Shared/Batching/BatchDeviceBindings.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
@@ -59,14 +60,18 @@ void ExecutionBlockLayer::validateMemoryOrThrow(const ExecutionMemory& M) const 
 void ExecutionBlockLayer::validateExecuteStepInputsOrThrow(
     const Tensor& H,
     const int* atom_positions,
-    int num_atoms, const Batching::BatchPayload& payload, int batch_row,
+    int num_atoms, const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int batch_row,
     const ExecutionMemory& M, int step) const
 {
     const int dm = config_.d_model;
     EXEC_CHECK_SHAPE2(H, "H (executeStep)", payload.total_tokens, dm);
     EXEC_CHECK(atom_positions != nullptr,
                "atom_positions is null - caller MUST provide a row-local atom view (empty buffer allowed)");
-    EXEC_CHECK(payload.d_token_to_slot_map != nullptr, "payload.d_token_to_slot_map is null");
+    EXEC_CHECK(bindings.d_token_to_slot_map != nullptr, "bindings.d_token_to_slot_map is null");
+    EXEC_CHECK(bindings.batch_size == payload.batch_size && bindings.max_seq_len == payload.max_seq_len,
+               "BatchDeviceBindings geometry must match BatchPayload");
     EXEC_CHECK(num_atoms >= 0, "num_atoms must be non-negative");
     EXEC_CHECK(payload.total_tokens > 0, "payload.total_tokens must be positive");
     EXEC_CHECK(step >= 0 && step < config_.num_exec_steps, "step out of range");
@@ -353,6 +358,7 @@ void ExecutionBlockLayer::executeStep(
     const int* atom_positions,
     int num_atoms,
     const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     int batch_row,
     int step,
     float temperature,
@@ -364,7 +370,7 @@ void ExecutionBlockLayer::executeStep(
     const TeacherSelectionTargets* selection_targets)
 {
     validateExecuteStepInputsOrThrow(H, atom_positions,
-                                     num_atoms, payload, batch_row, M, step);
+                                     num_atoms, payload, bindings, batch_row, M, step);
     executeStepCoordinatorImpl(
         *this,
         H,
@@ -372,6 +378,7 @@ void ExecutionBlockLayer::executeStep(
         atom_positions,
         num_atoms,
         payload,
+        bindings,
         batch_row,
         step,
         temperature,

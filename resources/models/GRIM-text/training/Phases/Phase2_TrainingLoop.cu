@@ -39,8 +39,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
-#include "../../Shared/Batching/PackerPolicy.hpp"
-#include "../../Shared/Batching/EpochBatching.hpp"  // GRIM::Batching::buildEpochBatches
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
 #include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
 #include "../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.hpp"  // launchRAdamWStep — selectable via training.config.optimizer.kind
@@ -196,74 +194,36 @@ bool maybeSaveCheckpoint(
 } // namespace Internal
 
 //======================================================//
-//  Payload builders — single source of truth for
-//  buildBatchPayload(...) constants block. Train and val
-//  call sites differ only in the views vector and mtp_k.
+//  CoreRunHP read path
+//
+//  All BatchPayloads are authored once in Phase1
+//  (Startup/Batching/PlannedBatches.cu); Phase2 only INDEXES into
+//  ctx.train_payloads / ctx.val_payloads via ctx.epoch_batch_order. The
+//  per-batch payload builder, the per-epoch BatchSchedule construction, and
+//  the train_views shuffle that used to live here have all moved to
+//  PlannedBatchesReady.
 //======================================================//
 namespace {
 
-int validatedAccumulationSteps(const TrainingContext& ctx) {
-    const int accum_steps = ctx.config.hyperparameters.gradient_accumulation_steps;
-    if (accum_steps <= 0) {
+// Single Phase2 entry point for CoreRunHP fields (epochs, accumulation,
+// single-batch-overfit). Re-validates Phase1's invariants as defense-in-depth.
+// Phase2 must read these fields ONLY via this helper — never via
+// ctx.config.hyperparameters.* directly. See Shared/HyperParameters/
+// HyperparameterGroupings.hpp for the grouping definition.
+::GRIM::HyperParameters::CoreRunHP validatedCoreRunHP(const TrainingContext& ctx) {
+    auto core = ::GRIM::HyperParameters::coreRunHP(ctx.config);
+    if (core.epochs <= 0) {
+        throw std::runtime_error("FATAL: epochs must be > 0 in Phase2 (got " +
+                                 std::to_string(core.epochs) + ")");
+    }
+    if (core.gradient_accumulation_steps <= 0) {
         throw std::runtime_error("FATAL: gradient_accumulation_steps must be > 0 in Phase2 (got " +
                                  std::to_string(core.gradient_accumulation_steps) + ")");
     }
     return core;
 }
 
-GRIM::Batching::BatchPayload buildPayloadFromAssignment(
-    const TrainingContext& ctx,
-    const GRIM::Batching::BatchAssignment& assignment,
-    const std::vector<TrainingSequence*>& views,
-    int mtp_k)
-{
-    const auto& model_cfg = ctx.model->getConfig();
-    const size_t max_cached_batch = static_cast<size_t>(ctx.run_capacity.batch_rows);
-    const size_t max_cached_seq   = static_cast<size_t>(ctx.run_capacity.seq_cap);
-
-    // Rule 20: caches are authored by the capacity stem. Clamp-free: if model mirrors
-    // disagree, that is a startup contract bug, not something Phase2 should hide.
-    if (model_cfg.max_cached_batch != static_cast<int>(ctx.run_capacity.batch_rows)) {
-        throw std::runtime_error(
-            "FATAL: model max_cached_batch does not match RunCapacity (model=" +
-            std::to_string(model_cfg.max_cached_batch) +
-            " stem=" + std::to_string(ctx.run_capacity.batch_rows) + ")");
-    }
-    if (model_cfg.max_cached_seq_len != static_cast<int>(ctx.run_capacity.seq_cap)) {
-        throw std::runtime_error(
-            "FATAL: model max_cached_seq_len does not match RunCapacity (model=" +
-            std::to_string(model_cfg.max_cached_seq_len) +
-            " stem=" + std::to_string(ctx.run_capacity.seq_cap) + ")");
-    }
-
-    return GRIM::Batching::buildBatchPayload(
-        assignment, views, ctx.config.actual_vocab_size,
-        ctx.tokenizer.tokenLayout(),
-        max_cached_batch, max_cached_seq,
-        model_cfg.execution_block_num_slots,
-        model_cfg.execution_block_num_ops,
-        model_cfg.execution_block_num_steps,
-        mtp_k);
-}
-
 } // namespace
-
-GRIM::Batching::BatchPayload buildTrainPayload(
-    const TrainingContext& ctx,
-    const GRIM::Batching::BatchAssignment& assignment)
-{
-    const auto& model_cfg = ctx.model->getConfig();
-    const int mtp_k = model_cfg.mtp_enabled ? model_cfg.mtp_k : 0;
-    return buildPayloadFromAssignment(ctx, assignment, ctx.data.train_views, mtp_k);
-}
-
-GRIM::Batching::BatchPayload buildValPayload(
-    const TrainingContext& ctx,
-    const GRIM::Batching::BatchAssignment& assignment)
-{
-    // mtp_k=0 for validation — no MTP shifting needed.
-    return buildPayloadFromAssignment(ctx, assignment, ctx.data.val_views, /*mtp_k=*/0);
-}
 
 //======================================================//
 //  Validation Implementation
@@ -337,46 +297,47 @@ ValidationResult runValidation(TrainingContext& ctx) {
     ctx.logging.logger->log("[Val] Token budget: " + std::to_string(token_budget) +
         " (RunCapacity: batch_rows=" + std::to_string(batch_rows) + " x seq_cap=" + std::to_string(seq_cap) + ")");
 
-    GRIM::Batching::PackerPolicy val_policy;
-    val_policy.bucket_step = 256;
+    // Validation iterates the Phase1-authored ctx.val_payloads in order.
+    // Phase2 MUST NOT call buildBatches / buildValPayload — that work is
+    // owned by PlannedBatchesReady at startup (Rule 20: fixed batch
+    // membership; per-step batch creation is forbidden in the hot loop).
+    const int total_val_batches = static_cast<int>(ctx.val_payloads.size());
+    ctx.logging.logger->log("[Val] Iterating " + std::to_string(total_val_batches) +
+                            " Phase1-authored validation payloads");
 
-    auto val_schedule = GRIM::Batching::buildBatches(
-        ctx.data.val_catalog,
-        token_budget,
-        batch_rows,
-        val_policy);
-    const int total_val_batches = static_cast<int>(val_schedule.batches.size());
-    ctx.logging.logger->log("Created " + std::to_string(total_val_batches) + " validation batches");
-    
     float val_loss = 0.0f;
     int val_sequences_processed = 0;
 
     const auto val_start_time = std::chrono::steady_clock::now();
 
     for (int val_idx = 0; val_idx < total_val_batches; ++val_idx) {
-        const auto& val_batch = val_schedule.batches[val_idx];
+        const auto& val_payload = ctx.val_payloads[val_idx];
 
         // Progress logging every 50 batches
         if (val_idx % 50 == 0) {
-            ctx.logging.logger->log("[Val] Processing batch " + std::to_string(val_idx + 1) + 
+            ctx.logging.logger->log("[Val] Processing batch " + std::to_string(val_idx + 1) +
                 "/" + std::to_string(total_val_batches) +
                 " (processed=" + std::to_string(val_sequences_processed) + ")");
         }
 
-        auto val_payload = buildValPayload(ctx, val_batch);
         if (val_payload.batch_size == 0) {
-            // Rule 20: scheduler MUST NOT emit empty batches.
+            // Rule 20: PlannedBatches.cu validates payloads at startup, so an
+            // empty payload arriving here means startup invariants regressed.
             throw std::runtime_error(
                 "[Val] empty payload at batch " + std::to_string(val_idx + 1) +
                 "/" + std::to_string(total_val_batches) +
-                " — scheduler produced batch_size=0; fix the upstream filter");
+                " — Phase1 PlannedBatches authored an empty val payload");
         }
 
         // Rule 20 single-owner clear: AutogradStepScope covers this batch.
+        // Sync slice: upload the host-only payload to device once per val batch,
+        // then pass the resulting bindings to computeLossBatch. computeLossBatch
+        // never authors device pointers itself.
         float batch_val_loss = 0.0f;
         {
             GRIM::Autograd::AutogradStepScope val_step_scope(ctx.model->getTrainingState());
-            batch_val_loss = ctx.model->computeLossBatch(val_payload, /*is_training=*/false);
+            const auto val_bindings = ctx.model->uploadBatchToDevice(val_payload);
+            batch_val_loss = ctx.model->computeLossBatch(val_payload, val_bindings, /*is_training=*/false);
         }
         flushDeferredCleanup();
 
@@ -535,10 +496,15 @@ BatchResult processBatch(
     // AutogradIntermediates::clear() for this batch. Do NOT add an explicit
     // clear() anywhere inside this scope.
     GRIM::Autograd::AutogradStepScope autograd_step_scope(ctx.model->getTrainingState());
+    // Sync slice: upload the prebuilt host BatchPayload once and reuse the
+    // returned BatchDeviceBindings inside autogradTrainingStep — payload itself
+    // is host-only/immutable and never carries device pointers.
+    const auto train_bindings = ctx.model->uploadBatchToDevice(payload);
     auto loss_result = GRIM::Autograd::autogradTrainingStep(
         *ctx.model,
         ctx.model->getTrainingState(),
         payload,
+        train_bindings,
         should_accumulate,
         grad_scale,
         static_cast<uint64_t>(ctx.optimizer.optimizer_state.step)
@@ -927,57 +893,33 @@ EpochResult runEpoch(
             ctx.model->getTrainingState(), state.guess_cache);
     }
     
-    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] After ResetGuessCache, checking shuffle...\n");
-    
-    // Shuffle train catalog if enabled
-    const bool shuffle_this_epoch = hp.shuffle_train_enabled &&
-        (hp.shuffle_train_epochs == 0 || epoch_idx < hp.shuffle_train_epochs);
-    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] shuffle_this_epoch=%d hp.shuffle_train_enabled=%d\n",
-                        shuffle_this_epoch ? 1 : 0, hp.shuffle_train_enabled ? 1 : 0);
-    
-    if (shuffle_this_epoch) {
-        PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] Entering shuffle block\n");
-        ctx.logging.logger->log("[Shuffle] Randomizing train catalog for epoch " + std::to_string(epoch_idx + 1));
-        PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] train_views.size()=%zu\n", ctx.data.train_views.size());
-        
-        std::vector<size_t> perm(ctx.data.train_views.size());
-        for (size_t i = 0; i < perm.size(); ++i) perm[i] = i;
-        std::shuffle(perm.begin(), perm.end(), ctx.rng.data_rng);
-        
-        std::vector<TrainingSequence*> shuffled;
-        shuffled.reserve(ctx.data.train_views.size());
-        GRIM::DynaSeq::Catalog shuffled_catalog;
-        
-        for (size_t new_idx = 0; new_idx < perm.size(); ++new_idx) {
-            auto* seq = ctx.data.train_views[perm[new_idx]];
-            shuffled.push_back(seq);
-            const uint32_t len = static_cast<uint32_t>(seq->token_ids.size());
-            shuffled_catalog.add(len, len, 0, 0, 0);
-        }
-        
-        ctx.data.train_views.swap(shuffled);
-        ctx.data.train_catalog = std::move(shuffled_catalog);
-        PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] Shuffle complete\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] After ResetGuessCache, indexing Phase1 schedule...\n");
+
+    // Phase1 owns all batch packing (Startup/Batching/PlannedBatches.cu).
+    // Phase2 NEVER shuffles ctx.data.train_views, never rebuilds
+    // ctx.data.train_catalog, and never calls buildEpochBatches /
+    // buildBatchPayload — diversity across epochs is expressed solely as a
+    // permutation of fixed batch indices in ctx.epoch_batch_order.
+    if (ctx.train_payloads.empty()) {
+        throw std::runtime_error(
+            "FATAL: ctx.train_payloads is empty at runEpoch — "
+            "PlannedBatchesReady must run during Phase1");
     }
-    
-    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] About to build epoch batches...\n");
-    // Build batches for this epoch (per-epoch batching policy lives in
-    // Shared/Batching/EpochBatching.cu).
-    auto log_batching = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
-    auto schedule = GRIM::Batching::buildEpochBatches(
-        ctx.data.train_catalog,
-        ctx.run_capacity.max_tokens_per_batch,
-        ctx.run_capacity.batch_rows,
-        ctx.global_step,
-        epoch_idx,
-        ctx.rng.data_seed,
-        log_batching);
-    
-    const int total_batches = static_cast<int>(schedule.batches.size());
-    if (total_batches <= 0) {
-        throw std::runtime_error("FATAL: scheduler produced 0 batches for epoch " +
-                                 std::to_string(epoch_idx) + " in Phase2");
+    if (epoch_idx < 0 || epoch_idx >= static_cast<int>(ctx.epoch_batch_order.size())) {
+        throw std::runtime_error(
+            "FATAL: epoch_idx " + std::to_string(epoch_idx) +
+            " out of range for ctx.epoch_batch_order (size=" +
+            std::to_string(ctx.epoch_batch_order.size()) + ")");
     }
+    const auto& batch_order = ctx.epoch_batch_order[epoch_idx];
+    if (batch_order.size() != ctx.train_payloads.size()) {
+        throw std::runtime_error(
+            "FATAL: epoch_batch_order[" + std::to_string(epoch_idx) +
+            "].size()=" + std::to_string(batch_order.size()) +
+            " != train_payloads.size()=" + std::to_string(ctx.train_payloads.size()));
+    }
+
+    const int total_batches = static_cast<int>(batch_order.size());
     int total_batches_to_run = total_batches;
     const bool single_batch_overfit = core.single_batch_overfit_enabled;
     if (single_batch_overfit) {
@@ -991,15 +933,17 @@ EpochResult runEpoch(
     }
     const auto epoch_start = std::chrono::steady_clock::now();
     float epoch_loss = 0.0f;
-    
+
     // Accumulation steps come from the CoreRunHP view built at function entry.
     const int accum_steps = core.gradient_accumulation_steps;
-    
-    // Process batches: scheduler (BatchAssignment) dictates order; build
-    // BatchPayload via buildTrainPayload (single source of truth).
+
+    // Process batches: ctx.epoch_batch_order[epoch_idx] dictates which
+    // Phase1-authored payload is active each step. The hard invariant from
+    // the plan is:
+    //     active_batch = ctx.train_payloads[ctx.epoch_batch_order[epoch][i]]
     for (int batch_idx = 0; batch_idx < total_batches_to_run; ++batch_idx) {
-        const auto& assignment = schedule.batches[single_batch_overfit ? 0 : batch_idx];
-        GRIM::Batching::BatchPayload payload = buildTrainPayload(ctx, assignment);
+        const int active_idx = batch_order[single_batch_overfit ? 0 : batch_idx];
+        const GRIM::Batching::BatchPayload& payload = ctx.train_payloads[active_idx];
 
         // Log progress periodically (from payload — single source of truth)
         if (batch_idx % 5 == 0) {

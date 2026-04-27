@@ -94,17 +94,13 @@ struct BatchPayload {
     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
     std::vector<int32_t> token_to_slot_map;   // [total_tokens] padded with -1 (slot_id for execution; -1 = non-state-bearing)
 
-    // Device mirror of token_to_slot_map.  Non-owning — points into the GPU
-    // cache allocated by TrainingState (training) or the inference upload buffer.
-    // Set after cudaMemcpyAsync; read-only by execution kernels.
-    // mutable: payload is passed as const& but device ptr is set post-upload.
-    mutable const int32_t* d_token_to_slot_map = nullptr;
-
-    // Device mirror of atom_mask.  Non-owning — points into the GPU cache
-    // allocated by TrainingState.  Used by ExecutionBlock to exclude atom
-    // positions from the mean-pooled decision context, preventing numeric
-    // surface features from leaking into execution decisions.
-    mutable const uint8_t* d_atom_mask = nullptr;
+    // NOTE: Device pointers used to live here as `mutable d_token_to_slot_map`
+    // and `mutable d_atom_mask`, written by the upload path and read by the
+    // forward/loss path. They have moved to `GRIM::Batching::BatchDeviceBindings`
+    // (Shared/Batching/BatchDeviceBindings.hpp). BatchPayload is host-only and
+    // immutable after buildBatchPayload() returns — see the header banner and
+    // the BatchPayload contract section in
+    // .cursor/plans/precomputebatchpayloads_*.plan.md.
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TEACHER EXECUTION STEPS (for structured CE supervision)

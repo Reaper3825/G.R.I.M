@@ -9,6 +9,8 @@
 #include "Startup/Telemetry/TelemetryInitInputs.hpp"
 #include "Startup/Scheduling/SchedulerPreflight.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
+#include "Startup/Payload/PayloadBuildInputs.hpp"
+#include "Startup/Batching/PlannedBatches.hpp"
 #include "Startup/Validation/StartupValidation.hpp"
 #include "Startup/Validation/Phase2Handoff.hpp"
 
@@ -26,6 +28,8 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     TelemetryReady(*ctx);
     SchedulerPreflightReady(*ctx);
     EpochPlanReady(*ctx);
+    PayloadBuildInputsReady(*ctx);
+    PlannedBatchesReady(*ctx);
     StartupValidated(*ctx);
     Phase2HandoffReady(*ctx);
     return ctx;

@@ -27,6 +27,10 @@
 // BatchPayload - Single source of truth for per-batch metadata
 #include "../Shared/Batching/BatchPayload.hpp"
 
+// BatchDeviceBindings - Explicit device pointers per step (replaces the old
+// `mutable d_*` fields that used to live on BatchPayload).
+#include "../Shared/Batching/BatchDeviceBindings.hpp"
+
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -395,8 +399,22 @@ public:
                                      const std::vector<uint32_t>& prompt_atom_entry_ids = {},
                                      const std::vector<int32_t>& prompt_token_to_slot_map = {});
     
-    // Training
+    // Training / Eval
+    //
+    // Two-step contract (Phase2 sync slice):
+    //   1) auto bindings = model.uploadBatchToDevice(payload);
+    //   2) float loss     = model.computeLossBatch(payload, bindings, is_training);
+    //
+    // uploadBatchToDevice() performs the H2D copies into TrainingState's
+    // reusable cache buffers and returns a BatchDeviceBindings that names the
+    // resulting device pointers. computeLossBatch() never writes through
+    // payload (BatchPayload is host-only and immutable); device addresses are
+    // read only via `bindings`.
+    GRIM::Batching::BatchDeviceBindings uploadBatchToDevice(
+        const GRIM::Batching::BatchPayload& payload);
+
     float computeLossBatch(const GRIM::Batching::BatchPayload& payload,
+                           const GRIM::Batching::BatchDeviceBindings& bindings,
                            bool is_training = true);
     
     // =========================================================================

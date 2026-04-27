@@ -21,6 +21,7 @@
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Batching/BatchDeviceBindings.hpp"
 // MUST include full definitions for types used in AutogradContext
 #include "../../GRIM/grim_language_model_cuda.hpp"
 // ScratchBlock for autograd forward path
@@ -120,8 +121,16 @@ struct AutogradContext {
     // Training: payload points to the caller-owned BatchPayload (single source of truth).
     // Inference: payload points to inference_payload_ below (geometry-only, vectors empty).
     // payload is NEVER null after initAutogradContext.
+    //
+    // device_bindings carries the device pointers for THIS step (slot map,
+    // atom mask, etc.). Replaces the old `mutable d_*` fields on BatchPayload.
+    // - Training/eval path: filled by LanguageModel::uploadBatchToDevice() and
+    //   passed to initAutogradContext; non-null.
+    // - Inference geometry-only path: null (decode constructs its own row-local
+    //   bindings at the call site).
     // ═══════════════════════════════════════════════════════════════════════════
     const Batching::BatchPayload* payload = nullptr;
+    const Batching::BatchDeviceBindings* device_bindings = nullptr;
     int batch_size = 0;
     int seq_len = 0;
     float grad_scale = 1.0f;
@@ -159,7 +168,9 @@ struct AutogradContext {
 };
 
 /**
- * Initialize autograd context for TRAINING (derives batch_size/seq_len from payload)
+ * Initialize autograd context for TRAINING (derives batch_size/seq_len from payload).
+ * `bindings` must describe the same batch as `payload` (geometry-checked) and
+ * must point at device memory already populated by uploadBatchToDevice().
  */
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
@@ -173,6 +184,7 @@ AutogradContext initAutogradContext(
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     float grad_scale,
     uint64_t step,
     bool is_training = true
@@ -254,14 +266,17 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
 // computeGradientNorm() DELETED — redundant with Phase2's computeGradNorm()
 
 /**
- * Full autograd training step: GPU copies → forward → loss → backward
- * 
- * This is the SINGLE entry point for a complete training iteration.
- * Replaces the scattered computeLossBatch() + backward() two-call pattern.
- * 
+ * Full autograd training step: forward → loss → backward.
+ *
+ * Caller is responsible for the H2D upload via
+ * LanguageModel::uploadBatchToDevice(payload) and must pass the resulting
+ * BatchDeviceBindings as `bindings`. autogradTrainingStep does not write any
+ * device pointers back through `payload`.
+ *
  * @param model          LanguageModel (provides config, encoder, loss options)
  * @param training_state TrainingState (GPU buffers, optimizer state)
- * @param payload        BatchPayload (single source of truth for batch data)
+ * @param payload        BatchPayload (host-only single source of truth)
+ * @param bindings       BatchDeviceBindings produced by uploadBatchToDevice(payload)
  * @param accumulate     Whether to accumulate gradients (true for micro-batches > 0)
  * @param grad_scale     Gradient scaling factor
  * @param step           Global training step counter
@@ -272,6 +287,7 @@ LossResult autogradTrainingStep(
     LanguageModel& model,
     TrainingState& training_state,
     const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     bool accumulate,
     float grad_scale,
     uint64_t step
