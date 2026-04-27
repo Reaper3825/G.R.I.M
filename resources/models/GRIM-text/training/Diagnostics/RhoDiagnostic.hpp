@@ -21,13 +21,10 @@
 
 #include <cstdint>
 
-// Forward declarations — avoid pulling in heavy headers
+#include "../../GRIM/grim_language_model_cuda.hpp"
+
 namespace GRIMText::Training {
     struct TrainingContext;
-}
-
-namespace GRIM::Batching {
-    struct BatchPayload;
 }
 
 namespace GRIM::Diagnostics {

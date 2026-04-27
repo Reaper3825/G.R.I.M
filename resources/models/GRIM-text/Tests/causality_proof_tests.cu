@@ -22,6 +22,7 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
+#include "../Shared/Optimizers/OptimizerState.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>

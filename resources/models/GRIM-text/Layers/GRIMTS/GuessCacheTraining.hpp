@@ -16,6 +16,7 @@
 //======================================================//
 
 #include "GRIM-TS.hpp"
+#include "../../GRIM/grim_language_model_cuda.hpp"
 
 #include <memory>
 #include <cstddef>

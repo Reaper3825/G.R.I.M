@@ -39,6 +39,7 @@
 // transitively (and in the correct order) by HyperParameters_GPU.hpp below.
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../../Shared/Optimizers/OptimizerState.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"

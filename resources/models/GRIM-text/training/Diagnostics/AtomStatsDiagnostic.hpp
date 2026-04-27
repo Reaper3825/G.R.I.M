@@ -10,8 +10,9 @@
 
 #include <vector>
 
+#include "../../GRIM/grim_language_model_cuda.hpp"
+
 namespace GRIM { namespace Tokenizer { class UniByte; } }
-namespace GRIM { namespace Batching { struct BatchPayload; } }
 namespace GRIMText { namespace Training { struct TrainingContext; } }
 
 namespace GRIM::Diagnostics {

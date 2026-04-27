@@ -6,7 +6,7 @@
 //  baseline). Lifted verbatim from Phase2_TrainingLoop.cu.
 //======================================================//
 
-#include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../GRIM/grim_language_model_cuda.hpp"
 
 namespace GRIMText { namespace Training { struct TrainingContext; } }
 

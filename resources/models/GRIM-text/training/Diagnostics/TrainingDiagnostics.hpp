@@ -14,14 +14,7 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-// Forward declarations — only pointers/references used in signatures
-namespace GRIM {
-    class EmbeddingLayer;
-    class LMHeadLayer;
-    struct TrainingState;
-    struct ParameterGroup;
-    enum class ParamGroupType : uint8_t;
-}
+#include "../../GRIM/grim_language_model_cuda.hpp"
 
 namespace GRIM::Diagnostics {
 

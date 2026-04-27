@@ -20,8 +20,8 @@
 #include <string>
 #include <cstdint>
 
-// Forward declarations to avoid header coupling
-namespace GRIM { struct TrainingState; }
+#include "../../GRIM/grim_language_model_cuda.hpp"
+
 namespace GRIMText::Training { struct TrainingContext; }
 
 namespace GRIM::Telemetry {

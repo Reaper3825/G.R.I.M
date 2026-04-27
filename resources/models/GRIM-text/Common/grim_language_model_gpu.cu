@@ -231,10 +231,6 @@ Vector& Matrix::operator[](size_t idx) { return rows[idx]; }
 
 const Vector& Matrix::operator[](size_t idx) const { return rows[idx]; }
 
-ContextState::ContextState() 
-    : sentiment(0.0f), depth(0) 
-{}
-
 float GeneratedSequence::getNormalizedScore(float length_penalty) const {
     if (token_ids.empty()) {
         return score;

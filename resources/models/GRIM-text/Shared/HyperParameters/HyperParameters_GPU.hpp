@@ -360,8 +360,9 @@ constexpr bool DEFAULT_SCRATCH_WRITE_COMBINED = false;
 //
 // Parsed into GRIM::Config::TrainingHyperparameters (ai_config_paths.hpp).
 // Training startup maps those fields onto GRIM::HyperParameters::LanguageModelConfig in Phase1_Startup.cu.
-// LanguageModelConfig and EncoderConfig inherit from ModelArchitecture —
-// architecture fields are defined ONLY here (Single Source of Truth).
+// LanguageModelConfig inherits from ModelArchitecture — architecture fields
+// are defined ONLY here (Single Source of Truth). The encoder consumes
+// LanguageModelConfig directly; there is no intermediate EncoderConfig.
 //======================================================//
 
 //======================================================//

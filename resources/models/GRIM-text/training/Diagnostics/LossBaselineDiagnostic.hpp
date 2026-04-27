@@ -7,7 +7,8 @@
 
 #pragma once
 
-namespace GRIM::Batching { struct BatchPayload; }
+#include "../../GRIM/grim_language_model_cuda.hpp"
+
 namespace GRIMText { namespace Training {
     struct TrainingContext;
     struct TrainingLoopState;

@@ -59,31 +59,6 @@ namespace GRIM {
 class GPUGrimEncoder;
 
 //======================================================//
-//  CUDA Error Handling Macros
-//======================================================//
-
-#ifdef USE_CUDA
-#define CUDA_CHECK(call) \
-    do { \
-        cudaError_t err = call; \
-        if (err != cudaSuccess) { \
-            throw std::runtime_error(std::string("CUDA error at ") + __FILE__ + ":" + \
-                                   std::to_string(__LINE__) + " - " + \
-                                   cudaGetErrorString(err)); \
-        } \
-    } while(0)
-
-#define CUBLAS_CHECK(call) \
-    do { \
-        cublasStatus_t status = call; \
-        if (status != CUBLAS_STATUS_SUCCESS) { \
-            throw std::runtime_error(std::string("cuBLAS error at ") + __FILE__ + ":" + \
-                                   std::to_string(__LINE__)); \
-        } \
-    } while(0)
-#endif
-
-//======================================================//
 //  Core Data Structures - Minimal Declarations
 //======================================================//
 
@@ -118,112 +93,47 @@ public:
     const Vector& operator[](size_t idx) const;
 };
 
-// Context state for embeddings
-struct ContextState {
-    std::string domain;
-    float sentiment;
-    int depth;
-    std::vector<std::string> active_tags;
-    
-    ContextState();
-};
-
 //======================================================//
-//  Configuration Structures
-//  Architecture fields (d_model, num_heads, etc.) are inherited
-//  from HyperParameters::ModelArchitecture — the ONLY source of truth.
-//  DO NOT redeclare architecture fields here.
+//  Configuration ownership
+//
+//  All model hyperparameters live in HyperParameters_GPU.hpp:
+//    - ModelArchitecture        (d_model, num_heads, ...)
+//    - LanguageModelConfig      (full model + feature toggles, inherits ModelArchitecture)
+//    - GenerationConfig         (sampling / decoding)
+//    - SamplingStrategy
+//    - ModelExecutionMode       (TRAINING vs INFERENCE)
+//
+//  This header MUST NOT redeclare any of those fields. The encoder
+//  consumes LanguageModelConfig directly; the only thing genuinely
+//  owned here is the runtime-binding struct below — pointers to live
+//  device state that are created at initGPU() time and have no place
+//  in a config object.
 //======================================================//
 
-// ModelExecutionMode moved to HyperParameters::ModelExecutionMode
-// (Shared/HyperParameters/HyperParameters_GPU.hpp). HyperParameters is the
-// single source of truth for all model configuration; this header is the
-// model class declaration only.
-
-struct EncoderConfig : public HyperParameters::ModelArchitecture {
-    // Architecture fields (d_model, num_heads, num_kv_heads, head_dim, d_ff,
-    // num_layers, max_seq_len, dropout_rate, attention_dropout, positional_encoding,
-    // tie_embeddings) inherited from HyperParameters::ModelArchitecture
-
-    // Cache limits
-    int max_cached_batch = 0;
-    int max_cached_seq_len = 0;
-    
-    // Fixed config values (not architecture-dependent)
-    // Issue #104 FIX: Changed from 1e-3 to 1e-5. The old value was too large for Layer 0 embeddings:
-    // - Layer 0 input: per_row_rms ≈ 0.006, so mean(x²) ≈ 0.00004
-    // - With eps=1e-3: epsilon dominated denominator (25x larger than mean(x²))
-    // - Result: output_rms = 0.19 instead of expected 1.0
-    // Standard practice (LLaMA, Mistral, GPT): eps = 1e-5 to 1e-6
-    float rms_epsilon = 1e-5f;  // RMSNorm epsilon - standard value matching LLaMA/Mistral
-    bool causal_mask = true;                        
-    bool use_pre_norm = true;
-    bool fuse_qkv = true;
-    bool use_simd = true;
-    int num_threads = 4;
-    
-    // Flash Attention settings
-    bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency
-    int min_seq_len_for_flash = 0;    // REQUIRED - set from hyperparameters (no defaults)
-    
-    // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state in TrainingState
-    // WARNING: If nullptr, attention sees no positional info - positions become equivalent!
+#ifdef USE_CUDA
+/// Runtime device bindings for GPUGrimEncoder construction.
+///
+/// These are NOT hyperparameters — they're live runtime handles created
+/// during initGPU(). Hyperparameter fields (architecture, layer scale,
+/// QK-norm, biases, dropout, etc.) come from LanguageModelConfig directly.
+struct EncoderRuntimeBindings {
+    /// Shared positional-bias state (ALiBi/RoPE), owned by TrainingState.
+    /// REQUIRED: encoder construction throws if null.
     const PBM::PBMSpec* pos_encoding = nullptr;
-    
-    // LayerScale (Issue #109/#129 fix - config propagation)
-    // These fields were missing, causing reliance on EncoderLayerConfig defaults
-    bool use_layer_scale = false;        // Enable per-sublayer learnable scaling
-    float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
-    
-    // Per-layer residual centering (Issue #126 fix - can be disabled to improve gradient signal)
-    // When true, applies center_columns after each residual add in every encoder layer (24 total).
-    // This prevents mode collapse but attenuates gradient signal through 24 centering projections.
-    // When false, only the LM head centering (center_hidden_states) helps prevent mode collapse.
-    bool center_encoder_residuals = false;
-    
-    // Bias control - when false, encoder layers skip bias addition (b_qkv, b_o not used)
-    bool use_bias = true;
 
-    // QK-Norm: RMSNorm applied to Q and K projections before attention scoring
-    bool qk_norm_enabled = false;
-    
-    // Layer self-allocation (Pattern B): seed and scaling config for weight initialization
-    uint64_t weight_seed = 0;         // Base seed for Xavier init (per-layer offset: seed + layer*10)
-    float residual_scale = 1.0f;      // Issue #142: 1/sqrt(2*num_layers) for W_o and W2
-    float layer_scale_init_value = 1.0f;  // Issue #109: CaiT LayerScale initial scalar value
-    
-    // CUDA execution
-    cudaStream_t stream = nullptr;       // CUDA stream for async execution
-    cublasHandle_t cublas_handle = nullptr;  // Centralized cuBLAS handle (Rule 22)
+    /// CUDA stream for async kernel launches.
+    cudaStream_t stream = nullptr;
+
+    /// Centralized cuBLAS handle (Rule 22 — single handle per process).
+    cublasHandle_t cublas_handle = nullptr;
+
+    /// Base seed for layer self-allocation Xavier init (per-layer offset = seed + 2 + i*10).
+    uint64_t weight_seed = 0;
+
+    /// Residual projection init scaling (Issue #142: 1/sqrt(2 * num_layers)).
+    float residual_scale = 1.0f;
 };
-
-struct LMHeadConfig {
-    int d_model = 0;        // MUST be populated from HyperParameters
-    int vocab_size = 0;     // MUST come from .grmt training data or tokenizer
-    bool tie_weights = false;
-    const Matrix* embedding_weights = nullptr;
-    bool use_bias = true;
-    bool use_simd = true;
-    float epsilon = 1e-5f;
-};
-
-// SamplingStrategy / GenerationConfig / GenerationStreamCallback /
-// LanguageModelConfig / ModelExecutionMode
-// are defined in Shared/HyperParameters/HyperParameters_GPU.hpp
-// (single source of truth). Refer to them as
-// `GRIM::HyperParameters::LanguageModelConfig`, etc.
-
-// GPU Configuration - FULL definition (source of truth)
-struct GPUConfig {
-    bool use_tensor_cores = true;        // Enable FP16 Tensor Core ops
-    bool use_cuda_graphs = true;         // Use CUDA graphs for repeated inference
-    bool use_pinned_memory = true;       // Pinned host buffers
-    bool use_dynamic_batching = true;    // Merge micro-batches
-    int max_batch_size = 1024;            // Max dynamic batch size
-    int micro_batch_size = 64;           // Micro-batch for long sequences
-    cudaStream_t stream = 0;             // CUDA stream for async ops
-    int device_id = 0;                   // CUDA device to use
-};
+#endif
 
 //======================================================//
 //  Forward Declarations
@@ -310,16 +220,9 @@ struct GeneratedSequence {
     float getNormalizedScore(float length_penalty) const;
 };
 
-//======================================================//
-//  Optimizer State for Training
-//======================================================//
-
-struct OptimizerState {
-    // AdamW optimizer step counter for bias correction
-    // NOTE: Actual moment buffers (m, v) are stored in ParameterGroup
-    // AdamW hyperparameters are defined in LanguageModel_Training.cu
-    int step = 0;
-};
+// OptimizerState (AdamW/RAdamW step counter) lives in
+// Shared/Optimizers/OptimizerState.hpp — it's optimizer state, not model state.
+// Consumers should include that header directly.
 
 //======================================================//
 //  Forward Declarations - Classes Defined Later
@@ -638,21 +541,24 @@ struct FlashAttentionBF16Scratch {
 class EncodingLayer;
 using GPUEncoderLayer = EncodingLayer;
 
-// GPUGrimEncoder - Container for encoder layers, manages layer lifecycle
-// Forward pass logic is in ForwardPhase2_Encoder.cu::runFullEncoder()
-// This class only owns layers and provides access to them
+// GPUGrimEncoder - Container for encoder layers, manages layer lifecycle.
+// Forward pass logic is in ForwardPhase2_Encoder.cu::runFullEncoder().
+// This class only owns layers and provides access to them.
+//
+// Constructor takes the hyperparameter config (LanguageModelConfig — single
+// source of truth for architecture + feature toggles) and the runtime
+// bindings (live device handles). NO intermediate config struct.
 class GPUGrimEncoder {
 public:
-    explicit GPUGrimEncoder(const EncoderConfig& config);
-    
-    // Access to layers for training/forward pass
+    GPUGrimEncoder(const HyperParameters::LanguageModelConfig& config,
+                   const EncoderRuntimeBindings& bindings);
+
     GPUEncoderLayer* getLayer(int index);
     const GPUEncoderLayer* getLayer(int index) const;
     int getNumLayers() const;
-    
-    // Configure Flash Attention for all layers
+
     void setFlashAttention(bool enable, int min_seq_len);
-    
+
 private:
     struct Impl;
     Impl* pImpl = nullptr;

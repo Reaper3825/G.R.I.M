@@ -46,6 +46,7 @@
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "Autograd/AutogradTraining.hpp"
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
+#include "../Shared/Optimizers/OptimizerState.hpp"
 
 // Tokenizer  
 #include "../Shared/UnigramByte/UniByte.hpp"

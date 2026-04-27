@@ -16,15 +16,22 @@ namespace GRIM {
 //======================================================//
 // GPUGrimEncoder::Impl - Layer Container
 // Owns the encoder layers; forward pass uses autograd in AutogradTraining.cu
+//
+// Hyperparameters come from LanguageModelConfig (single source of truth in
+// HyperParameters_GPU.hpp). Runtime device handles (PBM, stream, cuBLAS,
+// init seed) come from EncoderRuntimeBindings. There is no intermediate
+// EncoderConfig struct — config and runtime are not the same thing.
 //======================================================//
 struct GPUGrimEncoder::Impl {
-    EncoderConfig config_;
+    HyperParameters::LanguageModelConfig config_;
+    EncoderRuntimeBindings bindings_;
     std::vector<std::unique_ptr<GPUEncoderLayer>> gpu_layers_;
-    
-    explicit Impl(const EncoderConfig& config)
-        : config_(config)
+
+    Impl(const HyperParameters::LanguageModelConfig& config,
+         const EncoderRuntimeBindings& bindings)
+        : config_(config), bindings_(bindings)
     {
-        if (!config.pos_encoding) {
+        if (!bindings.pos_encoding) {
             throw std::runtime_error("[GPUGrimEncoder] pos_encoding is NULL — "
                                      "PBM must be initialized BEFORE encoder construction");
         }
@@ -38,9 +45,9 @@ struct GPUGrimEncoder::Impl {
         enc_cfg.causal_mask = config.causal_mask;
         enc_cfg.use_flash_attention = config.use_flash_attention;
         enc_cfg.min_seq_len_for_flash = config.min_seq_len_for_flash;
-        enc_cfg.stream = config.stream;
-        enc_cfg.cublas_handle = config.cublas_handle;
-        enc_cfg.pos_encoding = config.pos_encoding;  // RoPE/ALiBi positional encoding
+        enc_cfg.stream = bindings.stream;
+        enc_cfg.cublas_handle = bindings.cublas_handle;
+        enc_cfg.pos_encoding = bindings.pos_encoding;
         enc_cfg.use_layer_scale = config.use_layer_scale;
         enc_cfg.layer_scale_init = config.layer_scale_init;
         enc_cfg.center_encoder_residuals = config.center_encoder_residuals;
@@ -52,16 +59,16 @@ struct GPUGrimEncoder::Impl {
         for (int i = 0; i < config.num_layers; ++i) {
             // Pattern B: Layer self-allocates and Xavier-inits its own weights.
             // Seed offsets per layer: base + 2 + layer*10
-            const uint64_t layer_seed = config.weight_seed + 2 + i * 10;
+            const uint64_t layer_seed = bindings.weight_seed + 2 + i * 10;
             gpu_layers_.emplace_back(std::make_unique<GPUEncoderLayer>(
-                enc_cfg, layer_seed, config.residual_scale, config.layer_scale_init_value));
+                enc_cfg, layer_seed, bindings.residual_scale, config.layer_scale_init));
         }
     }
 };
 
-// Constructor: Creates all encoder layers
-GPUGrimEncoder::GPUGrimEncoder(const EncoderConfig& config)
-    : pImpl(new Impl(config))
+GPUGrimEncoder::GPUGrimEncoder(const HyperParameters::LanguageModelConfig& config,
+                               const EncoderRuntimeBindings& bindings)
+    : pImpl(new Impl(config, bindings))
 {
 }
 

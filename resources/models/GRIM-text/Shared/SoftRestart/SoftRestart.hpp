@@ -10,12 +10,12 @@
 #include <limits>
 #include <string_view>
 
+#include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../Optimizers/OptimizerState.hpp"
+
 namespace GRIM::Loss { struct LossSignals; }
 
 namespace GRIM {
-
-struct OptimizerState;
-class LanguageModel;
 
 namespace SoftRestart {
 

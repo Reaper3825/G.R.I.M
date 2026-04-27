@@ -136,57 +136,38 @@ void LanguageModel::initGPU() {
 
         //======================================================//
         //  3) Build GPU encoder
+        //
+        //  Hyperparameters come from `cfg` (LanguageModelConfig, the single
+        //  source of truth in HyperParameters_GPU.hpp). Runtime device
+        //  handles — PBM, stream, cuBLAS, init seed — come from
+        //  EncoderRuntimeBindings. No intermediate EncoderConfig: there's
+        //  nothing to copy because there's no second config.
         //======================================================//
-        EncoderConfig enc_config;
-        // Copy architecture fields from LanguageModelConfig (both inherit ModelArchitecture)
-        static_cast<GRIM::HyperParameters::ModelArchitecture&>(enc_config) =
-            static_cast<const GRIM::HyperParameters::ModelArchitecture&>(cfg);
-        enc_config.use_pre_norm = cfg.use_pre_norm;
-        enc_config.use_simd = cfg.use_simd;
-        enc_config.num_threads = cfg.num_threads;
-
-        // Must propagate flash attention toggles
-        enc_config.use_flash_attention = cfg.use_flash_attention;
-        enc_config.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
-        enc_config.causal_mask = cfg.causal_mask;
-        enc_config.max_cached_batch = cfg.max_cached_batch;
-        enc_config.max_cached_seq_len = cfg.max_cached_seq_len;
-
-        // Issue #109 FIX: Propagate LayerScale config from LanguageModelConfig → EncoderConfig
-        enc_config.use_layer_scale = cfg.use_layer_scale;
-        enc_config.layer_scale_init = cfg.layer_scale_init;
-        enc_config.center_encoder_residuals = cfg.center_encoder_residuals;
-        enc_config.use_bias = cfg.use_bias;
-        enc_config.qk_norm_enabled = cfg.qk_norm_enabled;
-
-        // Pattern B: Enable layer self-allocation. Encoder layers allocate and Xavier-init
-        // their own weights in the constructor. No god object involved.
-        {
-            enc_config.weight_seed = training_state_.weight_init_seed;
-            // Issue #142: 1/sqrt(2*num_layers) for residual projection init
-            enc_config.residual_scale = 1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
-            enc_config.layer_scale_init_value = cfg.layer_scale_init;
-            fprintf(stdout, "[initGPU] Layers will self-allocate weights "
-                    "(seed=%llu, residual_scale=%.6f)\n",
-                    static_cast<unsigned long long>(enc_config.weight_seed),
-                    enc_config.residual_scale);
-        }
-        
-        enc_config.stream = primary_stream;
-        enc_config.cublas_handle = training_state_.cublas_handle;
-
-        // PBM must be initialized before encoder creation
         if (!training_state_.pbm_initialized) {
             throw std::runtime_error(
                 "[initGPU] FATAL: PBM not initialized before encoder construction! "
                 "Call initPBM() BEFORE createGPUEncoder()");
         }
-        enc_config.pos_encoding = &training_state_.pbm_spec;
 
-        std::cout << "✓ Encoder using TrainingState primary stream (handle=" << training_state_.cublas_handle
+        EncoderRuntimeBindings enc_bindings;
+        enc_bindings.pos_encoding = &training_state_.pbm_spec;
+        enc_bindings.stream = primary_stream;
+        enc_bindings.cublas_handle = training_state_.cublas_handle;
+        enc_bindings.weight_seed = training_state_.weight_init_seed;
+        // Issue #142: 1/sqrt(2*num_layers) for residual projection init
+        enc_bindings.residual_scale =
+            1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
+
+        fprintf(stdout, "[initGPU] Layers will self-allocate weights "
+                "(seed=%llu, residual_scale=%.6f)\n",
+                static_cast<unsigned long long>(enc_bindings.weight_seed),
+                enc_bindings.residual_scale);
+
+        std::cout << "✓ Encoder using TrainingState primary stream (handle="
+                  << training_state_.cublas_handle
                   << ", stream=" << primary_stream << ")\n";
 
-        auto* encoder_ptr = new GPUGrimEncoder(enc_config);
+        auto* encoder_ptr = new GPUGrimEncoder(cfg, enc_bindings);
         gpu_encoder_.reset(encoder_ptr);
 
         //======================================================//
