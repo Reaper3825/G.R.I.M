@@ -128,7 +128,7 @@ void launchBiasAdd(float* tensor, const float* bias,
     if (total_tokens <= 0 || features <= 0) throw std::runtime_error("launchBiasAdd: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
 
     const int total_elements = total_tokens * features;
-    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
+    constexpr int kBlockSize = GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
     const int grid = (total_elements + kBlockSize - 1) / kBlockSize;
     biasAddKernel<<<grid, kBlockSize, 0, stream>>>(tensor, bias, total_elements, features);
 }
@@ -140,7 +140,7 @@ void launchBiasBackward(const float* grad_output, float* grad_bias,
     if (!grad_bias) throw std::runtime_error("launchBiasBackward: grad_bias is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     if (total_tokens <= 0 || features <= 0) throw std::runtime_error("launchBiasBackward: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
 
-    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
+    constexpr int kBlockSize = GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
     const int shared_bytes = kBlockSize * sizeof(float);
     biasBackwardKernel<<<features, kBlockSize, shared_bytes, stream>>>(
         grad_output, grad_bias, total_tokens, features);
