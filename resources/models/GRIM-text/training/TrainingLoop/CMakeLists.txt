@@ -107,10 +107,10 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM)    # GRIM/ folder (s
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../Shared)  # Shared/ folder for TrainingState, etc.
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})               # TrainingLoop/
 
-# TensorContract sources: glob the entire folder so new GradFn splits
+# TensorContract sources: glob recursively so GradFn splits in subfolders
 # automatically link everywhere (CONFIGURE_DEPENDS triggers reconfigure).
 set(GRIM_TENSORCONTRACT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/TensorContract")
-file(GLOB GRIM_TENSORCONTRACT_CU CONFIGURE_DEPENDS
+file(GLOB_RECURSE GRIM_TENSORCONTRACT_CU CONFIGURE_DEPENDS
     "${GRIM_TENSORCONTRACT_DIR}/*.cu"
 )
 
