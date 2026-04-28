@@ -3,7 +3,6 @@
 //  CUDA implementation of type-safe tensor operations
 //======================================================//
 #include "TensorContract_GPU.hpp"
-#include "AddGradFn.hpp"  // Refactor: dropout still constructs AddGradFn for identity-edge path
 #include "HyperParameters/HyperParameters_GPU.hpp"
 #include "../Batching/BatchPayload.hpp"  // BatchPayload for batch geometry in autograd ops
 #include "../VerboseLogging.hpp"
@@ -1313,62 +1312,9 @@ __global__ void kernel_concat_backward_b(
         grad_b[static_cast<size_t>(row) * D2 + j] += grad_out[static_cast<size_t>(row) * D_total + (D1 + j)];
 }
 
-// Dropout forward: y = x * mask / (1 - p)
-// mask is 0 where dropped, 1 where kept; scale = 1/(1-p) for inverted dropout
-__global__ void kernel_dropout_forward(
-    const float* __restrict__ input,
-    const uint8_t* __restrict__ mask,
-    float* __restrict__ output,
-    float scale,                // 1.0 / (1.0 - dropout_prob)
-    size_t count
-) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        // Inverted dropout: scale up kept values so expected value unchanged
-        output[idx] = input[idx] * (mask[idx] ? scale : 0.0f);
-    }
-}
+// kernel_dropout_forward + kernel_generate_dropout_mask + kernel_dropout_backward moved to DropoutGradFn.cu
 
-// Generate random dropout mask using Philox PRNG
-// Each element is 1 (keep) with probability (1-p), 0 (drop) with probability p
-__global__ void kernel_generate_dropout_mask(
-    uint8_t* __restrict__ mask,
-    size_t count,
-    float dropout_prob,         // Probability of dropping (e.g., 0.1)
-    uint64_t seed
-) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        // Initialize Philox RNG per-element with unique sequence
-        curandStatePhilox4_32_10_t state;
-        curand_init(seed, idx, 0, &state);
-        
-        // Generate random value in (0, 1]
-        float rnd = curand_uniform(&state);
-        
-        // Keep if random > dropout_prob (so dropout_prob fraction gets dropped)
-        mask[idx] = (rnd > dropout_prob) ? 1 : 0;
-    }
-}
-
-// Dropout backward: grad_x = grad_y * mask / (1 - p)
-// mask is 0 where dropped, 1 where kept
-__global__ void kernel_dropout_backward(
-    const float* grad_output,
-    const uint8_t* mask,        // Binary mask from forward
-    float* grad_input,
-    float scale,                // 1.0 / (1.0 - dropout_prob)
-    size_t count
-) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        grad_input[idx] = grad_output[idx] * (mask[idx] ? scale : 0.0f);
-    }
-}
-
+// kernel_center_rows moved to CenterRowsGradFn.cu
 // kernel_center_rows moved to CenterRowsGradFn.cu
 // kernel_center_columns moved to CenterColumnsGradFn.cu
 
@@ -1414,100 +1360,9 @@ __global__ void kernel_dropout_backward(
 
 // LogSoftmaxGradFn moved to LogSoftmaxGradFn.hpp / LogSoftmaxGradFn.cu
 
-/**
- * DropoutGradFn - Backward for dropout operation (ISSUE #48 FIX)
-/**
- * DropoutGradFn - Backward for dropout operation (ISSUE #48 FIX)
- * DOES NOT store Tensor* - stores stable data instead
- * ISSUE #133 FIX: Allocates own gradient buffer (same pattern as Issue #126 RMSNormGradFn)
- */
-struct DropoutGradFn : public GradFn {
-    // ISSUE #48: Store stable data, NOT Tensor* pointers
-    bool input_requires_grad = false;
-    float* input_grad = nullptr;
-    bool owns_input_grad = false;  // ISSUE #133: Track if we own the buffer
-    TensorContract::TensorShape input_shape;
-    std::shared_ptr<GradFn> input_grad_fn;
-    uint8_t* saved_mask = nullptr;  // Binary mask from forward
-    float scale = 1.0f;             // 1.0 / (1.0 - dropout_prob)
-    size_t count = 0;
-    
-    DropoutGradFn() { op_name = "dropout"; }
-    
-    ~DropoutGradFn() override {
-        release_saved();
-    }
-    
-    void capture_input(Tensor& x) {
-        input_requires_grad = x.requires_grad;
-        input_shape = x.shape;
-        
-        // Copy shared_ptr to captured grad_fn
-        input_grad_fn = x.grad_fn;
-        
-        // ISSUE #133 FIX: Allocate our OWN gradient buffer (same as Issue #126 for RMSNormGradFn)
-        // The input tensor x may be destroyed before backward() runs, so we can't borrow its buffer
-        if (input_requires_grad) {
-            size_t grad_size = x.numel();
-            cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "DropoutGradFn_input_grad");
-            cudaMemset(input_grad, 0, grad_size * sizeof(float));
-            owns_input_grad = true;
-        }
-    }
-    
-    void save(const uint8_t* mask, float dropout_prob, size_t n, cudaStream_t stream) {
-        count = n;
-        scale = (dropout_prob < 1.0f) ? 1.0f / (1.0f - dropout_prob) : 0.0f;
-        
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_mask), n * sizeof(uint8_t), "DropoutGradFn_saved_mask");
-        cudaMemcpyAsync(saved_mask, mask, n * sizeof(uint8_t), cudaMemcpyDeviceToDevice, stream);
-    }
-    
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        // RULE 20: Track current operation for error context
-        setCurrentGradFnOp("dropout", this);
-        
-        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
-        if (applied) {
-            return;
-        }
-        applied = true;
-        
-        if (!input_requires_grad) return;  // No grad needed
-        if (!saved_mask) {
-            throw std::runtime_error("DropoutGradFn::apply: saved_mask is NULL - forward must save dropout mask for backward");
-        }
-        if (!input_grad) {
-            throw std::runtime_error("DropoutGradFn::apply: input_grad is NULL - capture_input() must be called first");
-        }
-        if (!grad_output.data) {
-            throw std::runtime_error("DropoutGradFn::apply: grad_output.data is NULL");
-        }
-        
-        kernel_dropout_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_output.data, saved_mask, input_grad, scale, count);
-        trackKernelLaunch("kernel_dropout_backward", stream);
+// DropoutGradFn moved to DropoutGradFn.hpp / DropoutGradFn.cu
 
-        // CONTINUE AUTOGRAD CHAIN using stored grad_fn
-        if (input_grad_fn) {
-            Tensor view;
-            view.data = input_grad; view.shape = input_shape;
-            view.owns_data = false; view.stream = stream;
-            input_grad_fn->apply(view, stream);
-            // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
-        }
-    }
-    
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_mask) { cudaFree(saved_mask); saved_mask = nullptr; }
-        // ISSUE #133: Free owned gradient buffer
-        if (owns_input_grad && input_grad) { cudaFree(input_grad); owns_input_grad = false; }
-        input_grad = nullptr;
-        input_grad_fn.reset();
-    }
-};
-
+// ResidualAddGradFn moved to ResidualAddGradFn.hpp / ResidualAddGradFn.cu
 // ResidualAddGradFn moved to ResidualAddGradFn.hpp / ResidualAddGradFn.cu
 
 //======================================================//
@@ -1624,82 +1479,9 @@ namespace autograd {
 
 // autograd::log_softmax(...) moved to LogSoftmaxGradFn.cu
 
-Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStream_t stream) {
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_seeded_result");
-    
-    if (!training || p == 0.0f) {
-        // No dropout during inference or when p=0
-        cudaMemcpyAsync(result.data, x.data, x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
-        
-        if (x.requires_grad) {
-            result.is_leaf = false;
-            auto grad_fn = std::make_shared<AddGradFn>();
-            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);
-            result.grad_fn = grad_fn;
-        }
-        return result;
-    }
+// autograd::dropout(...) moved to DropoutGradFn.cu
 
-    if (p < 0.0f || p >= 1.0f) {
-        throw std::invalid_argument(
-            "autograd::dropout: dropout probability p must be in [0, 1), got " +
-            std::to_string(p));
-    }
-    
-    const size_t count = x.numel();
-    if (count == 0) {
-        // Empty tensor: dropout is a no-op, keep gradient identity edge.
-        if (x.requires_grad) {
-            result.is_leaf = false;
-            auto grad_fn = std::make_shared<AddGradFn>();
-            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);
-            result.grad_fn = grad_fn;
-        }
-        return result;
-    }
-    const float scale = 1.0f / (1.0f - p);
-    
-    // Allocate mask on device
-    uint8_t* mask = nullptr;
-    TC_CUDA_CHECK(cudaMalloc(&mask, count * sizeof(uint8_t)));
-    if (!x.data || !result.data || !mask) {
-        throw std::runtime_error("autograd::dropout: null buffer(s) before kernel launch");
-    }
-    
-    // Generate random mask: 1 = keep (with prob 1-p), 0 = drop (with prob p)
-    kernel_generate_dropout_mask<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        mask, count, p, seed);
-    trackKernelLaunch("kernel_generate_dropout_mask", stream);
-    TC_CUDA_CHECK(cudaGetLastError());
-    
-    // Forward: y = x * mask * scale
-    kernel_dropout_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        x.data, mask, result.data, scale, count);
-    trackKernelLaunch("kernel_dropout_forward", stream);
-    TC_CUDA_CHECK(cudaGetLastError());
-    
-    // Set up backward - ISSUE #48: capture stable data
-    if (x.requires_grad) {
-        result.is_leaf = false;
-        auto grad_fn = std::make_shared<DropoutGradFn>();
-        grad_fn->capture_input(const_cast<Tensor&>(x));
-        // save() copies the mask and takes ownership - we must free our copy
-        grad_fn->save(mask, p, count, stream);
-        result.grad_fn = grad_fn;
-    }
-    
-    // Free our mask copy (DropoutGradFn::save() made its own copy).
-    // Use stream-ordered async free to avoid host-side synchronization.
-    const cudaError_t free_err = cudaFreeAsync(mask, stream);
-    if (free_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("autograd::dropout: cudaFreeAsync(mask) failed: ") +
-            cudaGetErrorString(free_err));
-    }
-    
-    return result;
-}
-
+// autograd::residual_add(...) moved to ResidualAddGradFn.cu
 // autograd::residual_add(...) moved to ResidualAddGradFn.cu
 
 // autograd::scale() DELETED — dead code from reverted Issue #98 (Rule 20)
