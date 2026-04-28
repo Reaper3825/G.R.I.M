@@ -107,6 +107,13 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM)    # GRIM/ folder (s
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../Shared)  # Shared/ folder for TrainingState, etc.
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})               # TrainingLoop/
 
+# TensorContract sources: glob the entire folder so new GradFn splits
+# automatically link everywhere (CONFIGURE_DEPENDS triggers reconfigure).
+set(GRIM_TENSORCONTRACT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/TensorContract")
+file(GLOB GRIM_TENSORCONTRACT_CU CONFIGURE_DEPENDS
+    "${GRIM_TENSORCONTRACT_DIR}/*.cu"
+)
+
 # GPU training kernels library (from parent directory)
 add_library(grim_training_kernels STATIC 
     # Rule 26: CrossEntropy_GPU.cu DELETED — dead code. Production loss uses autograd::unified_loss() in AutogradLoss.cu
@@ -277,22 +284,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Sampling/Sampling.cu
     ../../Layers/InitInferenceState/InitinferenceState.cu
     ../../Shared/TensorConversion/TensorConversion.cu
-    ../../Shared/TensorContract/TensorContract_GPU.cu
-    ../../Shared/TensorContract/AutogradAttention.cu
-    ../../Shared/TensorContract/EmbeddingGradFn.cu
-    ../../Shared/TensorContract/ScaleScalarGradFn.cu
-    ../../Shared/TensorContract/MulScalarGradFn.cu
-    ../../Shared/TensorContract/AddScalarGradFn.cu
-    ../../Shared/TensorContract/ReciprocalGradFn.cu
-    ../../Shared/TensorContract/ExpGradFn.cu
-    ../../Shared/TensorContract/SiluGradFn.cu
-    ../../Shared/TensorContract/GeluGradFn.cu
-    ../../Shared/TensorContract/ZeroPadGradFn.cu
-    ../../Shared/TensorContract/AddGradFn.cu
-    ../../Shared/TensorContract/BiasAddGradFn.cu
-    ../../Shared/TensorContract/ElementwiseMulGradFn.cu
-    ../../Shared/TensorContract/BroadcastRowMulGradFn.cu
-    ../../Shared/TensorContract/ResidualAddGradFn.cu
+    ${GRIM_TENSORCONTRACT_CU}
     ../../Layers/FeedForward/Feed_Forward_GPU.cu
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
@@ -766,11 +758,7 @@ add_executable(gradient_verification_test
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/StreamController/StreamController_GPU.cu
-    ../../Shared/TensorContract/TensorContract_GPU.cu
-    ../../Shared/TensorContract/AutogradAttention.cu
-    ../../Shared/TensorContract/SiluGradFn.cu
-    ../../Shared/TensorContract/ElementwiseMulGradFn.cu
-    ../../Shared/TensorContract/BiasAddGradFn.cu
+    ${GRIM_TENSORCONTRACT_CU}
     ../../Shared/PBM/PositionalBiasMethod.cu
 )
 
@@ -815,16 +803,7 @@ add_executable(execution_block_test
     ../../Shared/Batching/BatchPayload.cu
     ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Shared/PBM/PositionalBiasMethod.cu
-    ../../Shared/TensorContract/TensorContract_GPU.cu
-    ../../Shared/TensorContract/AutogradAttention.cu
-    ../../Shared/TensorContract/SiluGradFn.cu
-    ../../Shared/TensorContract/MulScalarGradFn.cu
-    ../../Shared/TensorContract/AddScalarGradFn.cu
-    ../../Shared/TensorContract/ReciprocalGradFn.cu
-    ../../Shared/TensorContract/ExpGradFn.cu
-    ../../Shared/TensorContract/AddGradFn.cu
-    ../../Shared/TensorContract/BiasAddGradFn.cu
-    ../../Shared/TensorContract/BroadcastRowMulGradFn.cu
+    ${GRIM_TENSORCONTRACT_CU}
     ../../Shared/TensorConversion/TensorConversion.cu
 )
 
