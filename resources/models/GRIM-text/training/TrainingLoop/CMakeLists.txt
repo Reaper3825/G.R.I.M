@@ -288,6 +288,11 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/TensorContract/SiluGradFn.cu
     ../../Shared/TensorContract/GeluGradFn.cu
     ../../Shared/TensorContract/ZeroPadGradFn.cu
+    ../../Shared/TensorContract/AddGradFn.cu
+    ../../Shared/TensorContract/BiasAddGradFn.cu
+    ../../Shared/TensorContract/ElementwiseMulGradFn.cu
+    ../../Shared/TensorContract/BroadcastRowMulGradFn.cu
+    ../../Shared/TensorContract/ResidualAddGradFn.cu
     ../../Layers/FeedForward/Feed_Forward_GPU.cu
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
@@ -764,6 +769,8 @@ add_executable(gradient_verification_test
     ../../Shared/TensorContract/TensorContract_GPU.cu
     ../../Shared/TensorContract/AutogradAttention.cu
     ../../Shared/TensorContract/SiluGradFn.cu
+    ../../Shared/TensorContract/ElementwiseMulGradFn.cu
+    ../../Shared/TensorContract/BiasAddGradFn.cu
     ../../Shared/PBM/PositionalBiasMethod.cu
 )
 
@@ -815,6 +822,9 @@ add_executable(execution_block_test
     ../../Shared/TensorContract/AddScalarGradFn.cu
     ../../Shared/TensorContract/ReciprocalGradFn.cu
     ../../Shared/TensorContract/ExpGradFn.cu
+    ../../Shared/TensorContract/AddGradFn.cu
+    ../../Shared/TensorContract/BiasAddGradFn.cu
+    ../../Shared/TensorContract/BroadcastRowMulGradFn.cu
     ../../Shared/TensorConversion/TensorConversion.cu
 )
 
