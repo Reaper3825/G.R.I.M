@@ -279,6 +279,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu
     ../../Shared/TensorContract/AutogradAttention.cu
+    ../../Shared/TensorContract/EmbeddingGradFn.cu
     ../../Layers/FeedForward/Feed_Forward_GPU.cu
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
@@ -383,6 +384,8 @@ add_executable(train_gpu
     ../Phases/Startup/ClassBalancedWeights.hpp
     ../Phases/Startup/InitFacts.cu
     ../Phases/Startup/InitFacts.hpp
+    ../Phases/Startup/GuessCache/GuessCacheInit.cu
+    ../Phases/Startup/GuessCache/GuessCacheInit.hpp
     ../Phases/ConfigDump.cu
     ../Phases/ConfigDump.hpp
     ../Phases/DataStatsDump.cu
