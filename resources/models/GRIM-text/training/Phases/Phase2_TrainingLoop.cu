@@ -17,7 +17,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/Telemetry/TelemetryUpdate.hpp"
-#include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
@@ -555,50 +554,9 @@ BatchResult processBatch(
     if (should_step) {
         const int micro_step_for_log = accumulation.micro_step_for_log;
         const int accum_steps_for_log = accumulation.accum_steps_for_log;
-
-        // Issue #149: zero PAD/UNK gradients before optimizer step.
-        // PAD (id=1) and UNK (id=0) are never valid targets but accumulate grads via:
-        //   1. LM head bwd: label-smoothing redistributes tiny grad to all rows
-        //   2. Embedding bwd: attention bwd leaks grad from valid positions to PAD
-        //      input positions through K/V cross-attention (~76× BOS/EOS)
-        // Zero them here so they don't inflate norms or waste optimizer capacity.
-        {
-            auto& zero_ts = ctx.model->getTrainingState();
-            cudaStream_t zero_stream = zero_ts.stream_ctrl.getPrimaryStream();
-            const auto& zero_cfg = ctx.model->getConfig();
-            const size_t row_bytes = static_cast<size_t>(zero_cfg.d_model) * sizeof(float);
-            
-            constexpr int NON_TRAINABLE_TOKENS[] = {
-                GRIM::Tokenizer::UNK_TOKEN_ID,  // 0
-                GRIM::Tokenizer::PAD_TOKEN_ID   // 1
-            };
-            
-            // Zero embedding gradients for non-trainable tokens
-            float* emb_grads = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
-            if (emb_grads) {
-                for (int tok : NON_TRAINABLE_TOKENS) {
-                    cudaMemsetAsync(
-                        emb_grads + static_cast<size_t>(tok) * zero_cfg.d_model,
-                        0, row_bytes, zero_stream);
-                }
-            }
-            
-            // Zero LM head gradients for non-trainable tokens
-            float* lm_grads = ctx.model->getLmHeadLayer()->weights().grad_data();
-            if (lm_grads) {
-                for (int tok : NON_TRAINABLE_TOKENS) {
-                    cudaMemsetAsync(
-                        lm_grads + static_cast<size_t>(tok) * zero_cfg.d_model,
-                        0, row_bytes, zero_stream);
-                }
-            }
-        }
         
-        // Issue #135: per-component clipping on accumulated + 1/M-scaled gradients.
-        //   1. emb_clip — LM_HEAD (+ EMBEDDING if untied)
-        //   2. enc_clip — ATTENTION + FFN + RMSNORM + SCRATCHBLOCK + MTP +
-        //                  REASONING_HEAD + EXECUTION_BLOCK
-        // Norm measurement, bucket aggregation, and gradient scaling all happen
+        // Global clipping on accumulated + 1/M-scaled gradients.
+        // Norm measurement, global aggregation, and gradient scaling all happen
         // inside GradientCC against the registered ParameterGroup tensors.
         if (clipping_enabled) {
             auto& clip_ts = ctx.model->getTrainingState();
@@ -612,14 +570,13 @@ BatchResult processBatch(
 
             GRIM::GradClip::ClipConfig clip_cfg;
             clip_cfg.max_rms = effective_per_token_limit;
-            clip_cfg.tie_embeddings = ctx.model->getConfig().tie_embeddings;
 
             const auto clip = GRIM::GradClip::clipGradientNorms(
                 clip_groups.data(), clip_groups.size(),
                 clip_ts.grad_norm_scratch, clip_cfg, clip_stream);
 
-            result.grad_rms = clip.total_rms_post;
-            result.normalized_grad_rms = clip.total_rms_post;
+            result.grad_rms = clip.global_rms_post;
+            result.normalized_grad_rms = clip.global_rms_post;
             result.gradient_clipped = clip.any_clipped();
         }
         

@@ -5,7 +5,7 @@
 //  Two layers:
 //    1. Raw kernel launchers (extern "C") — operate on float* buffers
 //    2. Registry API (GRIM::GradClip) — operates on ParameterGroup tensors
-//       via GradNorm measurement + per-component RMS clipping
+//       via GradNorm measurement + global RMS clipping
 //======================================================//
 
 #pragma once
@@ -49,55 +49,39 @@ void launchScaleGradients(
 //
 //  Operates on the ParameterGroup tensor registry:
 //    1. Measures per-type gradient norms via GradNormGPU
-//    2. Computes per-component RMS (emb bucket vs enc bucket)
-//    3. Scales gradients in-place through the tensor registry
-//
-//  Two independent clip buckets (Issue #139):
-//    emb: LM_HEAD (+ EMBEDDING if untied)
-//    enc: ATTENTION + FFN + RMSNORM + SCRATCHBLOCK +
-//         MTP + REASONING_HEAD + EXECUTION_BLOCK
+//    2. Computes one global RMS over all registered gradient tensors
+//    3. Scales all gradients in-place through the tensor registry
 //======================================================//
 
 namespace GRIM::GradClip {
 
 /// Configuration for registry-level clipping (passed by caller)
 struct ClipConfig {
-    float max_rms = 0.0f;       ///< RMS threshold — components exceeding this get scaled down
-    bool tie_embeddings = false; ///< When true, EMBEDDING bucket is empty (shares LM_HEAD grad)
+    float max_rms = 0.0f;       ///< Global RMS threshold — gradients above this get scaled down
 };
 
 /// Result of a clipGradientNorms() call — all values valid immediately on return
 struct ClipResult {
-    // Per-component RMS BEFORE clipping
-    float emb_rms = 0.0f;
-    float enc_rms = 0.0f;
+    float global_rms_pre = 0.0f;
+    float global_rms_post = 0.0f;
 
-    // Per-component RMS AFTER clipping (clamped to max_rms)
-    float emb_rms_post = 0.0f;
-    float enc_rms_post = 0.0f;
-
-    // Combined RMS: sqrt(emb² + enc²)
-    float total_rms_pre = 0.0f;
-    float total_rms_post = 0.0f;
-
-    bool emb_clipped = false;
-    bool enc_clipped = false;
-    bool any_clipped() const { return emb_clipped || enc_clipped; }
+    bool clipped = false;
+    bool any_clipped() const { return clipped; }
 };
 
 /**
- * Measure gradient norms and clip per-component through the tensor registry.
+ * Measure gradient norms and clip globally through the tensor registry.
  *
  * 1. Calls measureGradientNorms() on the ParameterGroup array
- * 2. Aggregates per-type sum_sq into emb/enc buckets
- * 3. If bucket RMS > config.max_rms, scales that bucket's gradients in-place
+ * 2. Aggregates all finite per-group sum_sq values into one global RMS
+ * 3. If global RMS > config.max_rms, scales all gradients in-place
  *    via launchScaleGradients on each ParameterGroup's grad tensor
  * 4. Syncs stream internally — ClipResult is valid on return
  *
  * @param groups     ParameterGroup array (from model->parameterGroups())
  * @param num_groups Number of groups in the array
  * @param scratch    Pre-allocated GradNormScratch (from allocateGradNormScratch)
- * @param config     Clip threshold + tie_embeddings flag
+ * @param config     Clip threshold
  * @param stream     CUDA stream for all GPU work
  * @return           Pre/post clip metrics
  *

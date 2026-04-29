@@ -445,7 +445,7 @@
             "d_model": 768,
             "dropout_rate": 0.1,
             "embedding_freeze": {
-                "enabled": true
+                "enabled": false
             },
             "epochs": 3,
             "optimizer": {

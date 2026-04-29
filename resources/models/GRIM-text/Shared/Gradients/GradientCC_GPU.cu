@@ -121,29 +121,6 @@ void launchScaleGradients(
 
 namespace GRIM::GradClip {
 
-/// Returns true if this type belongs to the embedding/LM-head clip bucket
-static inline bool isEmbBucket(ParamGroupType type, bool tie_embeddings) {
-    if (type == ParamGroupType::LM_HEAD) return true;
-    if (!tie_embeddings && type == ParamGroupType::EMBEDDING) return true;
-    return false;
-}
-
-/// Returns true if this type belongs to the encoder clip bucket
-static inline bool isEncBucket(ParamGroupType type) {
-    switch (type) {
-        case ParamGroupType::ATTENTION:
-        case ParamGroupType::FFN:
-        case ParamGroupType::RMSNORM:
-        case ParamGroupType::SCRATCHBLOCK:
-        case ParamGroupType::MTP:
-        case ParamGroupType::REASONING_HEAD:
-        case ParamGroupType::EXECUTION_BLOCK:
-            return true;
-        default:
-            return false;
-    }
-}
-
 ClipResult clipGradientNorms(
     ParameterGroup* groups,
     size_t num_groups,
@@ -161,73 +138,49 @@ ClipResult clipGradientNorms(
         throw std::runtime_error("[GradClip] max_rms must be > 0, got " + std::to_string(config.max_rms));
     }
 
-    // Step 1: Measure per-type gradient norms through the tensor registry
+    // Step 1: Measure gradient norms through the tensor registry
     auto status = GradNorm::measureGradientNorms(groups, num_groups, scratch, stream);
     if (status != GradNorm::GradNormStatus::SUCCESS) {
         throw std::runtime_error("[GradClip] measureGradientNorms failed: " +
                                  std::string(GradNorm::statusToString(status)));
     }
-    // measureGradientNorms syncs internally — h_metrics is valid
+    // measureGradientNorms syncs internally — h_partial_sums is valid.
 
-    const auto& m = *scratch->h_metrics;
+    // Step 2: Aggregate all finite per-group sums into one global RMS. Use the
+    // per-group scratch directly so every registered group type participates.
+    float global_sum_sq = 0.0f;
+    int64_t global_count = 0;
+    for (size_t i = 0; i < num_groups; ++i) {
+        if (!groups[i].grads() || groups[i].size() == 0) continue;
 
-    // Step 2: Aggregate per-type metrics into clip buckets
-    float emb_sum_sq = m.lm_head_sum_sq;
-    int64_t emb_count = m.lm_head_count;
-    if (!config.tie_embeddings) {
-        emb_sum_sq += m.embedding_sum_sq;
-        emb_count += m.embedding_count;
+        const float sq = scratch->h_partial_sums[i];
+        if (!std::isfinite(sq)) continue;
+
+        global_sum_sq += sq;
+        global_count += static_cast<int64_t>(groups[i].size());
     }
 
-    const float enc_sum_sq = m.attention_sum_sq + m.ffn_sum_sq
-                           + m.rmsnorm_sum_sq + m.scratchblock_sum_sq
-                           + m.mtp_sum_sq
-                           + m.reasoning_head_sum_sq + m.execution_block_sum_sq;
-    const int64_t enc_count = m.attention_count + m.ffn_count
-                            + m.rmsnorm_count + m.scratchblock_count
-                            + m.mtp_count
-                            + m.reasoning_head_count + m.execution_block_count;
-
-    const float emb_rms = (emb_count > 0) ? std::sqrt(emb_sum_sq / static_cast<float>(emb_count)) : 0.0f;
-    const float enc_rms = (enc_count > 0) ? std::sqrt(enc_sum_sq / static_cast<float>(enc_count)) : 0.0f;
+    const float global_rms = (global_count > 0)
+        ? std::sqrt(global_sum_sq / static_cast<float>(global_count))
+        : 0.0f;
 
     ClipResult result;
-    result.emb_rms = emb_rms;
-    result.enc_rms = enc_rms;
-    result.total_rms_pre = std::sqrt(emb_rms * emb_rms + enc_rms * enc_rms);
+    result.global_rms_pre = global_rms;
 
-    // Step 3: Clip each bucket independently through the tensor registry
-    if (emb_rms > config.max_rms) {
-        const float coef = config.max_rms / (emb_rms + 1e-8f);
+    // Step 3: Clip all registered gradients with one global coefficient
+    if (global_rms > config.max_rms) {
+        const float coef = config.max_rms / (global_rms + 1e-8f);
         for (size_t i = 0; i < num_groups; ++i) {
             if (!groups[i].grads() || groups[i].size() == 0) continue;
-            if (isEmbBucket(groups[i].type, config.tie_embeddings)) {
-                launchScaleGradients(groups[i].grads(),
-                                     static_cast<int>(groups[i].size()),
-                                     coef, stream);
-            }
+            launchScaleGradients(groups[i].grads(),
+                                 static_cast<int>(groups[i].size()),
+                                 coef, stream);
         }
-        result.emb_clipped = true;
-    }
-
-    if (enc_rms > config.max_rms) {
-        const float coef = config.max_rms / (enc_rms + 1e-8f);
-        for (size_t i = 0; i < num_groups; ++i) {
-            if (!groups[i].grads() || groups[i].size() == 0) continue;
-            if (isEncBucket(groups[i].type)) {
-                launchScaleGradients(groups[i].grads(),
-                                     static_cast<int>(groups[i].size()),
-                                     coef, stream);
-            }
-        }
-        result.enc_clipped = true;
+        result.clipped = true;
     }
 
     // Step 4: Compute post-clip RMS
-    result.emb_rms_post = std::min(emb_rms, config.max_rms);
-    result.enc_rms_post = std::min(enc_rms, config.max_rms);
-    result.total_rms_post = std::sqrt(result.emb_rms_post * result.emb_rms_post
-                                    + result.enc_rms_post * result.enc_rms_post);
+    result.global_rms_post = result.clipped ? config.max_rms : global_rms;
 
     return result;
 }

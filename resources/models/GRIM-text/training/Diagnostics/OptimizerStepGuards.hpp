@@ -7,9 +7,9 @@
 //        Zero embedding + LM head grad rows for PAD / UNK
 //        before clipping or stepping.
 //
-//   2. clipPostAccumulationGradients (Issue #135 + #139)
-//        Per-component gradient clipping on the accumulated
-//        + scaled gradients. Mutates result.grad_rms /
+//   2. clipPostAccumulationGradients
+//        Global gradient clipping on the accumulated + scaled gradients.
+//        Mutates result.grad_rms /
 //        result.normalized_grad_rms / result.gradient_clipped.
 //
 //   3. checkPostOptimizerWeightsFinite (Rule 20)

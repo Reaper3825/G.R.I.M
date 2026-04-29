@@ -75,7 +75,7 @@ void zeroNonTrainableTokenGrads(GRIMText::Training::TrainingContext& ctx) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Issue #135 + #139: POST-ACCUMULATION per-component gradient clipping
+// POST-ACCUMULATION global gradient clipping
 // ────────────────────────────────────────────────────────────────────────────
 void clipPostAccumulationGradients(
     GRIMText::Training::TrainingContext& ctx,
@@ -97,23 +97,19 @@ void clipPostAccumulationGradients(
 
     GRIM::GradClip::ClipConfig clip_cfg;
     clip_cfg.max_rms = per_token_limit;
-    clip_cfg.tie_embeddings = ctx.model->getConfig().tie_embeddings;
 
     const auto clip = GRIM::GradClip::clipGradientNorms(
         clip_groups.data(), clip_groups.size(),
         clip_ts.grad_norm_scratch, clip_cfg, clip_stream);
 
-    result.grad_rms = clip.total_rms_post;
-    result.normalized_grad_rms = clip.total_rms_post;
+    result.grad_rms = clip.global_rms_post;
+    result.normalized_grad_rms = clip.global_rms_post;
     result.gradient_clipped = clip.any_clipped();
 
     ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +
-                            " post_accum_rms=" + formatScalar(clip.total_rms_pre, 6) +
-                            " emb_rms=" + formatScalar(clip.emb_rms, 6) +
-                            " enc_rms=" + formatScalar(clip.enc_rms, 6) +
-                            " emb_clipped=" + (clip.emb_clipped ? "YES" : "NO") +
-                            " enc_clipped=" + (clip.enc_clipped ? "YES" : "NO") +
-                            " post_clip_total=" + formatScalar(clip.total_rms_post, 6));
+                            " pre_clip_global_rms=" + formatScalar(clip.global_rms_pre, 6) +
+                            " clipped=" + (clip.clipped ? "YES" : "NO") +
+                            " post_clip_global_rms=" + formatScalar(clip.global_rms_post, 6));
 
     clipping_elapsed_ms = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - clipping_start).count();
