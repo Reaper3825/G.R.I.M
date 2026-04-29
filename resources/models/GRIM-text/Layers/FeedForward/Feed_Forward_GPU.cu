@@ -152,7 +152,6 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
 
     // Extract dimensions from input shape
     const auto& in_shape = input.shape.as_2d();
-    const int total_tokens = in_shape.rows;
     const int d_model = in_shape.cols;
 
     if (d_model != config_.d_model) {

@@ -55,15 +55,9 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 namespace GRIM {
 namespace Autograd {
 
-namespace {
-
-constexpr int kBlockSize = 256;
-
 // Finding 1 (Rule 26): countValidTokensKernel/countValidTokens DELETED — zero callers
 // Finding 2 (Rule 26): sumSquaredKernel/computeSumSquared DELETED — only caller was
 //   computeGradientNorm() which is redundant with Phase2's computeGradNorm()
-
-} // namespace
 
 // NOTE: linkEncoderWeightsToTrainingState was removed.
 // Encoder owns its weights internally; optimizer accesses gradients via
@@ -1821,7 +1815,6 @@ LossResult autogradTrainingStep(
     // ═══════════════════════════════════════════════════════════════════════════
 
     // Allocate read-gate accumulator once (Category 3 workspace on TrainingState)
-    auto& intermediates = training_state.autograd_intermediates;
     if (!training_state.d_read_gate_accum && cfg.execution_block_enabled) {
         CUDA_CHECK(cudaMalloc(&training_state.d_read_gate_accum, 2 * sizeof(float)));
     }

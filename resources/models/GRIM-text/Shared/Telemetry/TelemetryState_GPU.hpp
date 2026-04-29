@@ -85,7 +85,20 @@ struct TelemetryState {
     float mu_raw = 0.0f;        // Uncorrected EMA of x_t
     float m2_raw = 0.0f;        // Uncorrected EMA of x_t²
     float beta_mu_power = 1.0f; // beta_mu^t — decays each step
-    
+
+    // σ-decoupled companions (spike attribution, see
+    // docs/TELEMETRY_SIGMA_DEPENDENCY.md "Resolution"). Every other
+    // derived metric flows through σ or σ_prev; these mirrors do not,
+    // so a spike in (e.g.) delta_bar can be split into
+    //   raw input movement   ↔ delta_raw / delta_bar_raw
+    //   σ collapse           ↔ sigma_prev (already exposed)
+    //   σ regime change      ↔ sigma_jump
+    //   cutoff crossing      ↔ outlier_raw
+    float delta_raw = 0.0f;     // x_t - mu_prev (instantaneous, signed, σ-free)
+    float delta_bar_raw = 0.0f; // EMA(delta_raw) with beta_delta — σ-free momentum
+    float sigma_jump = 0.0f;    // σ - σ_prev (signed instantaneous σ-derivative)
+    float outlier_raw = 0.0f;   // x_t - c_out (signed gap from cutoff, no sigmoid/EMA)
+
     // Metadata
     uint32_t step_count = 0;    // Total updates
     uint32_t initialized = 0;   // 1 after first update

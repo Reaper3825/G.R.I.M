@@ -94,8 +94,9 @@ __global__ void updateTelemetryStateKernel(
     s->sigma = sqrtf(fmaxf(variance, 0.0f));
     s->sigma_tilde = s->sigma / (fabsf(s->mu) + hp.epsilon);
 
-    // STEP 2: Volatility-of-volatility
+    // STEP 2: Volatility-of-volatility (σ-decoupled mirror: sigma_jump)
     const float sigma_delta = s->sigma - s->sigma_prev;
+    s->sigma_jump = sigma_delta;
     s->v_sigma = hp.beta_v * s->v_sigma + (1.0f - hp.beta_v) * (sigma_delta * sigma_delta);
     s->sigma_prev = s->sigma;
 
@@ -104,15 +105,19 @@ __global__ void updateTelemetryStateKernel(
     s->k_out = hp.k_out0 * (1.0f + hp.alpha_v * v_sigma_sqrt);
     s->c_out = s->mu + s->k_out * s->sigma;
 
-    // STEP 4: Normalized slope + direction
-    // First sample: sigma_prev=0, mu_prev=0 → delta_hat=0 to avoid garbage
+    // STEP 4: Normalized slope + direction (σ-decoupled mirrors: delta_raw, delta_bar_raw)
+    // First sample: sigma_prev=0, mu_prev=0 → delta_hat=0 and delta_raw=0 to avoid garbage
+    const float delta_raw_inst = (s->step_count == 0) ? 0.0f : (x_t - s->mu_prev);
+    s->delta_raw = delta_raw_inst;
+    s->delta_bar_raw = hp.beta_delta * s->delta_bar_raw + (1.0f - hp.beta_delta) * delta_raw_inst;
     const float delta_hat = (s->step_count == 0) ? 0.0f
         : (x_t - s->mu_prev) / (s->sigma_prev + hp.epsilon);
     s->delta_bar = hp.beta_delta * s->delta_bar + (1.0f - hp.beta_delta) * delta_hat;
     s->p = hp.beta_delta * s->p + (1.0f - hp.beta_delta) * safeSign(delta_hat);
     s->mu_prev = s->mu;
 
-    // STEP 5: Soft outlier gating
+    // STEP 5: Soft outlier gating (σ-decoupled mirror: outlier_raw)
+    s->outlier_raw = x_t - s->c_out;
     const float outlier_arg = (x_t - s->c_out) / (s->sigma + hp.epsilon);
     const float w_out = 1.0f / (1.0f + expf(-outlier_arg));
     s->r_out = hp.beta_r * s->r_out + (1.0f - hp.beta_r) * w_out;
@@ -136,8 +141,9 @@ __global__ void updateTelemetryStateKernel(
     level_0->last_update = global_step;
 
     if (strict_mode) {
-        if (!isFiniteValue(s->mu) || !isFiniteValue(s->sigma) || 
-            !isFiniteValue(s->delta_bar) || !isFiniteValue(s->v_sigma)) {
+        if (!isFiniteValue(s->mu) || !isFiniteValue(s->sigma) ||
+            !isFiniteValue(s->delta_bar) || !isFiniteValue(s->v_sigma) ||
+            !isFiniteValue(s->delta_bar_raw)) {
             atomicOr(error_flag, (int)TelemetryError::ERR_NAN_IN_STATE);
         }
     }
@@ -181,18 +187,23 @@ __global__ void updateTelemetryStateKernel(
         sk->sigma_tilde = sk->sigma / (fabsf(sk->mu) + hp.epsilon);
         
         const float sd_k = sk->sigma - sk->sigma_prev;
+        sk->sigma_jump = sd_k;
         sk->v_sigma = hp.beta_v * sk->v_sigma + (1.0f - hp.beta_v) * (sd_k * sd_k);
         sk->sigma_prev = sk->sigma;
         
         sk->k_out = hp.k_out0 * (1.0f + hp.alpha_v * safeSqrt(sk->v_sigma, hp.epsilon));
         sk->c_out = sk->mu + sk->k_out * sk->sigma;
         
+        const float delta_raw_k = (sk->step_count == 0) ? 0.0f : (x_k - sk->mu_prev);
+        sk->delta_raw = delta_raw_k;
+        sk->delta_bar_raw = hp.beta_delta * sk->delta_bar_raw + (1.0f - hp.beta_delta) * delta_raw_k;
         const float dh_k = (sk->step_count == 0) ? 0.0f
             : (x_k - sk->mu_prev) / (sk->sigma_prev + hp.epsilon);
         sk->delta_bar = hp.beta_delta * sk->delta_bar + (1.0f - hp.beta_delta) * dh_k;
         sk->p = hp.beta_delta * sk->p + (1.0f - hp.beta_delta) * safeSign(dh_k);
         sk->mu_prev = sk->mu;
         
+        sk->outlier_raw = x_k - sk->c_out;
         const float out_arg_k = (x_k - sk->c_out) / (sk->sigma + hp.epsilon);
         const float w_k = 1.0f / (1.0f + expf(-out_arg_k));
         sk->r_out = hp.beta_r * sk->r_out + (1.0f - hp.beta_r) * w_k;

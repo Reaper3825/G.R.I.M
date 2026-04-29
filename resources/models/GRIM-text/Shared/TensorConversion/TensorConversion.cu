@@ -15,10 +15,8 @@ namespace TensorConversion {
 
 // Use HyperParameters for kernel configuration
 using GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
-using GRIM::HyperParameters::CUDA_TILE_DIM_TRANSPOSE;
 
 constexpr int BLOCK_SIZE = CUDA_BLOCK_SIZE_STANDARD;
-constexpr int TILE_DIM = CUDA_TILE_DIM_TRANSPOSE;
 
 // ----------------------------------------------------------------------------
 // BHSD float <-> BSHD bf16 Conversions (FlashAttention v2 input/output)

@@ -94,16 +94,20 @@ void TelemetryCsvLogger::writeHeader() {
           // --- TelemetryState: meta-volatility ---
           << ",v_sigma"
           << ",sigma_prev"
+          << ",sigma_jump"        // σ-decoupled: σ - σ_prev (signed, unsmoothed)
 
           // --- TelemetryState: trend ---
           << ",delta_bar"
           << ",p"
           << ",mu_prev"
+          << ",delta_raw"         // σ-decoupled: x_t - μ_prev (instantaneous)
+          << ",delta_bar_raw"     // σ-decoupled: EMA(delta_raw) — momentum without σ amplification
 
           // --- TelemetryState: outliers ---
           << ",r_out"
           << ",ell_out"
           << ",mu_ex"
+          << ",outlier_raw"       // σ-decoupled: x_t - c_out (signed, unsmoothed)
 
           // --- TelemetryState: adaptive threshold ---
           << ",k_out"
@@ -186,16 +190,20 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
                   // meta-volatility
                   << "," << std::setprecision(10) << state.v_sigma
                   << "," << std::setprecision(8) << state.sigma_prev
+                  << "," << std::setprecision(8) << state.sigma_jump
 
                   // trend
                   << "," << std::setprecision(8) << state.delta_bar
                   << "," << std::setprecision(8) << state.p
                   << "," << std::setprecision(8) << state.mu_prev
+                  << "," << std::setprecision(8) << state.delta_raw
+                  << "," << std::setprecision(8) << state.delta_bar_raw
 
                   // outliers
                   << "," << std::setprecision(8) << state.r_out
                   << "," << std::setprecision(8) << state.ell_out
                   << "," << std::setprecision(8) << state.mu_ex
+                  << "," << std::setprecision(8) << state.outlier_raw
 
                   // adaptive threshold
                   << "," << std::setprecision(8) << state.k_out

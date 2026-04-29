@@ -1067,7 +1067,6 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         const size_t q_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;
         const size_t kv_elems = static_cast<size_t>(batch_size) * seq_len * num_kv_heads * head_dim;
         const int block_size = 256;
-        const int q_blocks = static_cast<int>((q_elems + block_size - 1) / block_size);
         const int kv_blocks = static_cast<int>((kv_elems + block_size - 1) / block_size);
         
         // Convert grad_output (FP32 BHSD) to BF16 BSHD

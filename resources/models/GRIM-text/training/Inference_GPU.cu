@@ -483,7 +483,6 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     const int num_heads = cfg.num_heads;
     const int num_kv_heads = ts.num_kv_heads;
     const int head_dim = d_model / num_heads;
-    const int kv_dim = num_kv_heads * head_dim;
     const int num_layers = cfg.num_layers;
     const float rms_eps = cfg.rms_epsilon;
     const int seqlen_k = token_pos + 1;  // K cache has [0..token_pos] inclusive

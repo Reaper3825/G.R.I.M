@@ -30,19 +30,12 @@ std::string fmt(bool v)              { return v ? "true" : "false"; }
 std::string fmt(int v)               { return std::to_string(v); }
 std::string fmt(int64_t v)           { return std::to_string(v); }
 std::string fmt(unsigned long v)     { return std::to_string(v); }
-std::string fmt(unsigned long long v){ return std::to_string(v); }
 std::string fmt(float v) {
     std::ostringstream oss;
     oss << std::setprecision(8) << v;
     return oss.str();
 }
-std::string fmt(double v) {
-    std::ostringstream oss;
-    oss << std::setprecision(10) << v;
-    return oss.str();
-}
 std::string fmt(const std::string& v) { return v; }
-std::string fmt(const char* v)        { return v ? v : "(null)"; }
 std::string fmt(::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern v) {
     using HCP = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern;
     switch (v) {

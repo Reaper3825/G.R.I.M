@@ -692,8 +692,6 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
         const float expected_q_full_row_rms = expected_q_elem_rms;
         const float expected_q_head_row_rms = expected_q_elem_rms;
 
-        // Actual Q magnitudes in matching units.
-        const float actual_q_elem_rms = qkv_rms;
         const float actual_q_full_row_rms = qkv_row_rms_mean;
         const float actual_q_head_row_rms = qkv_head_row_rms_mean;
 
@@ -734,11 +732,6 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
                     actual_q_full_row_rms / target_q_full_row_rms,
                     actual_q_head_row_rms / target_q_head_row_rms);
 
-            // Best-available IDs in this layer scope.
-            // NOTE: Global optimizer step is not available here.
-            const int batch_idx_local = 0;  // Not available in layer scope
-            const int step_idx_local = 0;  // Not available in layer scope
-            
             {
                 std::ostringstream eq;
                 eq << "[QKV_PROJECTION_EQUATION] qkv_out = ln1_out @ W_qkv^T + b_qkv\n";

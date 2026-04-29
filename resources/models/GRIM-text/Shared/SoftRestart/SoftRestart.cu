@@ -5,7 +5,6 @@
 
 
 #include <cuda_runtime.h>
-#include <cmath>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -18,10 +17,6 @@ namespace GRIM {
 namespace SoftRestart {
 
 namespace {
-inline bool isFinite(float value) {
-    return std::isfinite(static_cast<double>(value));
-}
-
 // Logging infrastructure
 std::mutex g_sr_log_mutex;
 std::vector<Logging::LogCallback> g_sr_log_callbacks;

@@ -235,7 +235,6 @@ namespace TensorContract {
 //======================================================//
 
 constexpr int BLOCK_SIZE = GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
-constexpr int WARP_SIZE = GRIM::HyperParameters::CUDA_WARP_SIZE;
 
 //======================================================//
 //  CUDA Error Checking
@@ -712,30 +711,6 @@ __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t coun
     const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         dst[idx] += src[idx] * scale;
-    }
-}
-
-// Kernel: Dot product a·b reduced to a single scalar, ACCUMULATED to *dst (not overwritten)
-// Uses shared memory block reduction. Grid must be (1) block.
-__global__ void kernel_dot_accumulate_scalar(float* dst, const float* a, const float* b, size_t count) {
-    __shared__ float sdata[256];
-    const int tid = threadIdx.x;
-    float sum = 0.0f;
-    for (size_t i = tid; i < count; i += blockDim.x) {
-        sum += a[i] * b[i];
-    }
-    sdata[tid] = sum;
-    __syncthreads();
-    // Block reduction
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s) {
-            sdata[tid] += sdata[tid + s];
-        }
-        __syncthreads();
-    }
-    // Thread 0 accumulates (not overwrites) to dst
-    if (tid == 0) {
-        atomicAdd(dst, sdata[0]);
     }
 }
 

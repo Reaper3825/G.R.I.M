@@ -40,12 +40,6 @@ namespace GRIM {
 namespace autograd {
 
 //========================================================================
-// Constants
-//========================================================================
-
-constexpr float kEpsilon = 1e-10f;
-
-//========================================================================
 // CUDA Kernels — NLL Loss on log-probabilities
 // These kernels receive log_probs = log_softmax(logits), NOT raw logits.
 // Softmax is computed ONCE in autograd::log_softmax() and saved for backward.
@@ -835,7 +829,6 @@ __global__ void kernelToken277DiagnosticActual(
     if (tracked_token < 0 || tracked_token >= vocab_size) return;
     
     const float* log_row = log_probs + static_cast<size_t>(token_idx) * vocab_size;
-    const float* logit_row = logits + static_cast<size_t>(token_idx) * vocab_size;
     const float* grad_row = grad_log_probs + static_cast<size_t>(token_idx) * vocab_size;
     
     // Compute softmax probabilities from log_probs for the tracked token

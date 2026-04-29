@@ -144,12 +144,6 @@ __device__ __forceinline__ std::uint64_t AtomicCASKey(std::uint64_t* ptr,
                      static_cast<unsigned long long>(desired));
 }
 
-__device__ __forceinline__ std::uint64_t AtomicExchKey(std::uint64_t* ptr,
-                                                       std::uint64_t value) {
-    return atomicExch(reinterpret_cast<unsigned long long*>(ptr),
-                      static_cast<unsigned long long>(value));
-}
-
 // Host-driven monotonic step counter — deterministic across SMs unlike clock64()
 __device__ float d_current_step = 0.0f;
 

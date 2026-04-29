@@ -7,10 +7,10 @@
  * after each update. Only measured/computed values — no constants.
  * 
  * CSV columns:
- *   global_step, stream_name, level,
+ *   global_step, stream_idx, stream_name, level, stride,
  *   <raw input observation>,
- *   <all 20 measured TelemetryState fields>,
- *   <10 TelemetryVector output fields>
+ *   <all measured TelemetryState fields including σ-decoupled
+ *    companions: delta_raw, delta_bar_raw, sigma_jump, outlier_raw>
  */
 
 #include "TelemetryLattice_GPU.hpp"
