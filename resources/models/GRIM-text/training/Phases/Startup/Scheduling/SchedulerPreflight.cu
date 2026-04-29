@@ -11,8 +11,8 @@ SchedulerPreflightState runSchedulerPreflightOrThrow(
     const SchedulerInputs& inputs,
     const ::GRIM::Batching::EpochBatchingLogFn& log_fn)
 {
-    if (inputs.train_catalog == nullptr) {
-        throw std::runtime_error("FATAL: SchedulerPreflightReady received null train_catalog");
+    if (inputs.train_seq_lengths == nullptr) {
+        throw std::runtime_error("FATAL: SchedulerPreflightReady received null train_seq_lengths");
     }
     if (inputs.capacity.max_tokens_per_batch == 0 || inputs.capacity.batch_rows == 0) {
         throw std::runtime_error("FATAL: SchedulerPreflightReady received invalid RunCapacity (tokens=" +
@@ -21,7 +21,7 @@ SchedulerPreflightState runSchedulerPreflightOrThrow(
     }
 
     const auto schedule = ::GRIM::Batching::buildEpochBatches(
-        *inputs.train_catalog,
+        *inputs.train_seq_lengths,
         inputs.capacity.max_tokens_per_batch,
         inputs.capacity.batch_rows,
         inputs.global_step,
@@ -53,7 +53,7 @@ SchedulerPreflightState runSchedulerPreflightOrThrow(
 void SchedulerPreflightReady(TrainingContext& ctx) {
     auto log_batching = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
     SchedulerInputs inputs;
-    inputs.train_catalog = &ctx.data.train_catalog;
+    inputs.train_seq_lengths = &ctx.data.train_seq_lengths;
     inputs.capacity = ctx.run_capacity;
     inputs.global_step = ctx.global_step;
     inputs.epoch = 0;

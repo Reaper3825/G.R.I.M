@@ -2,11 +2,8 @@
 #include <vector>
 #include <cstdint>
 #include <string>
-#include "../DynaSeqs/DynaSeq_GPU.hpp"
 
 namespace GRIM::Batching {
-
-using GRIM::DynaSeq::Catalog;
 
 // =============================================================================
 // Packing Strategy
@@ -78,10 +75,11 @@ struct BatchSchedule {
 // Public API
 // =============================================================================
 
-// Build batches from catalog with given options
+// Build batches from sequence lengths with given options. The vector index is the
+// seq_id consumed later by buildBatchPayload().
 struct PackerPolicy;
 BatchSchedule buildBatches(
-    const Catalog& catalog,
+    const std::vector<uint32_t>& sequence_lengths,
     uint32_t max_tokens_per_batch,
     uint32_t max_batch_size,
     const PackerPolicy& policy);

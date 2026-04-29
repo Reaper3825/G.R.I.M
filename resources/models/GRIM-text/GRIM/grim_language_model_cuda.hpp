@@ -275,6 +275,8 @@ public:
 
     // Constructor / Destructor
     explicit LanguageModel(const HyperParameters::LanguageModelConfig& config);
+    LanguageModel(const HyperParameters::LanguageModelConfig& config,
+                  const Config::TrainingHyperparameters& training_hyperparameters);
     ~LanguageModel();
     
     // Main API
@@ -389,6 +391,11 @@ public:
     
     // Config access
     const HyperParameters::LanguageModelConfig& getConfig() const { return config_; }
+    // Non-owning Phase1 snapshot; null for inference/test callers that only
+    // construct from LanguageModelConfig.
+    const Config::TrainingHyperparameters* getTrainingHyperparameters() const { return training_hyperparameters_; }
+    bool hasTrainingHyperparameters() const { return training_hyperparameters_ != nullptr; }
+    const Config::TrainingHyperparameters& requireTrainingHyperparameters(const char* caller) const;
     
     // GPU methods
     void initGPU();
@@ -466,6 +473,9 @@ public:
                                           const std::vector<int32_t>& prompt_token_to_slot_map = {});
     
 private:
+    LanguageModel(const HyperParameters::LanguageModelConfig& config,
+                  const Config::TrainingHyperparameters* training_hyperparameters);
+
     // Core inference forward: assumes data already in cached_* tensors.
     // Runs autograd forward, extracts last-token logits, returns them.
     // All public inference methods (forwardGPU, getNextTokenLogitsGPU,
@@ -480,6 +490,10 @@ private:
     Vector executeDecodeForward_(int token_pos);
 
     HyperParameters::LanguageModelConfig config_;
+    // Phase1 owns the StartupConfig/TrainingHyperparameters for the lifetime of
+    // TrainingContext; LanguageModel only keeps a read-only handle to avoid
+    // re-slicing training-only knobs into LanguageModelConfig.
+    const Config::TrainingHyperparameters* training_hyperparameters_ = nullptr;
     std::unique_ptr<GrimEmbeddingStack> embedder_;
     
 #ifdef USE_CUDA

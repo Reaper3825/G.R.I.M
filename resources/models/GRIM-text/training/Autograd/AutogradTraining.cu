@@ -291,30 +291,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         embedding_scale  // Issue #140: No scaling (1.0f)
     );
     
-    // Store embedding output in intermediates (keeps autograd graph alive)
-    // Issue #57 FIX: Add position embeddings
-    // PyTorch baseline: x = tok_emb->forward(idx) + pos_emb->forward(pos)
-    // GRIM was MISSING this step, causing training plateau!
-    //
-    // Issue #96/103 FIX: ONLY add position embeddings for LEARNED positional encoding!
-    // With ALIBI or ROPE, position embeddings are ISOTROPIC (all columns have same variance)
-    // ALiBi/RoPE inject position info inside attention (not in residual stream).
-    // The learned position embedding path (PositionalEncodingType::NONE) was removed
-    // per Rule 26 — ALIBI_ROPE is the sole active path.
     AG_INFO("Step 1b: No position embeddings (using "
             << HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding)
             << " inside attention)");
 
     // Store in intermediates for backward
     intermediates.embedding_tensor = std::move(emb_output);
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  EMBEDDING DROPOUT (Issue #133)
-    //  
-    //  Apply dropout to embeddings BEFORE encoder layers. This breaks symmetry
-    //  between hidden states and prevents mode collapse to dominant tokens.
-    //  PyTorch transformers do this - we weren't, which caused mode collapse.
-    // ═══════════════════════════════════════════════════════════════════════════
     if (cfg->dropout_rate > 0.0f) {
         // Vary seed per step so each batch sees a DIFFERENT dropout mask.
         const uint64_t emb_dropout_seed = ctx.step * 2654435761ULL + 500;
@@ -328,11 +310,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP 1.5: ScratchBlock (numeric/code processing)
-    //  
-    //  Processes numeric atoms (integers, floats, hex, etc.) and injects
-    //  learned embeddings into the token representations. This enables
-    //  the model to understand numeric patterns and code structures.
-    //  
     //  NOTE: ScratchBlock operates IN-PLACE on the embedding buffer.
     //  The backward pass uses cached atom positions and types.
     // ═══════════════════════════════════════════════════════════════════════════

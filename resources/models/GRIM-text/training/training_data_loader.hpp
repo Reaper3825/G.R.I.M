@@ -12,7 +12,6 @@
 #include <optional>
 #include <unordered_map>
 #include "../Common/grim_model_serialization_version.hpp"
-#include "../Shared/DynaSeqs/DynaSeq_GPU.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"  // For kTextFeatureDim
 #include "../Shared/Execution/ExecutionMetadata.hpp"
 
@@ -49,7 +48,7 @@ struct TrainingSequence {
 };
 
 //======================================================//
-//  Sequence accessor by id (aligned with catalog seq_id)
+//  Sequence accessor by id
 //======================================================//
 struct TrainingSampleView {
     uint32_t seq_id;
@@ -89,27 +88,7 @@ bool load(const std::string& path) {
     }
     
     void shuffle(std::mt19937& rng) {
-        if (catalog_dirty_) rebuildCatalog();
-        // Shuffle sequences and keep catalog aligned by applying the same permutation.
-        std::vector<size_t> perm(sequences_.size());
-        for (size_t i = 0; i < perm.size(); ++i) perm[i] = i;
-        std::shuffle(perm.begin(), perm.end(), rng);
-
-        std::vector<TrainingSequence> shuffled_seq;
-        shuffled_seq.reserve(sequences_.size());
-        std::vector<GRIM::DynaSeq::SequenceMetadata> shuffled_meta;
-        shuffled_meta.reserve(catalog_.entries().size());
-
-        for (size_t new_idx = 0; new_idx < perm.size(); ++new_idx) {
-            size_t old_idx = perm[new_idx];
-            shuffled_seq.push_back(std::move(sequences_[old_idx]));
-            auto meta = catalog_.entries()[old_idx];
-            meta.seq_id = static_cast<uint32_t>(new_idx);
-            shuffled_meta.push_back(meta);
-        }
-
-        sequences_ = std::move(shuffled_seq);
-        catalog_override_ = std::move(shuffled_meta);
+        std::shuffle(sequences_.begin(), sequences_.end(), rng);
     }
     
     const std::vector<TrainingSequence>& getSequences() const { return sequences_; }
@@ -155,15 +134,8 @@ bool load(const std::string& path) {
         return true;
     }
 
-    // Catalog of measured lengths for batching.
-    const GRIM::DynaSeq::Catalog& catalog() {
-        if (catalog_dirty_) rebuildCatalog();
-        return catalog_;
-    }
-
-    // Direct sample view by seq_id (after shuffle preserves ordering).
+    // Direct sample view by seq_id in the current sequence order.
     std::optional<TrainingSampleView> getSample(uint32_t seq_id) {
-        if (catalog_dirty_) rebuildCatalog();
         if (seq_id >= sequences_.size()) return std::nullopt;
         const auto& seq = sequences_[seq_id];
         return TrainingSampleView{seq_id,
@@ -393,33 +365,9 @@ private:
                       << "Delete .grmt files and regenerate with scratch_block_reasoning.enabled=true"
                       << std::endl;
         }
-      
-        catalog_dirty_ = true;
         return true;
     }
 
-    void rebuildCatalog() {
-        catalog_.clear();
-        if (!catalog_override_.empty()) {
-            // reuse shuffled metadata (seq_ids already re-written)
-            for (auto meta : catalog_override_) {
-                catalog_.add(meta.seq_length, meta.active_tokens, meta.data_offset, meta.difficulty, meta.source_id);
-            }
-            catalog_override_.clear();
-            catalog_dirty_ = false;
-            return;
-        }
-        for (uint32_t i = 0; i < sequences_.size(); ++i) {
-            const auto& seq = sequences_[i];
-            const uint32_t len = static_cast<uint32_t>(seq.token_ids.size());
-            catalog_.add(len, len, /*data_offset*/0, /*difficulty*/0, /*source_id*/0);
-        }
-        catalog_dirty_ = false;
-    }
-
     std::vector<TrainingSequence> sequences_;
-    GRIM::DynaSeq::Catalog catalog_;
-    std::vector<GRIM::DynaSeq::SequenceMetadata> catalog_override_; // used when shuffled
-    bool catalog_dirty_ = true;
     uint32_t vocab_size_ = 0; // Vocab size from GRMT file header
 };

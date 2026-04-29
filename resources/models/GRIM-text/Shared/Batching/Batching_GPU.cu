@@ -89,14 +89,14 @@ std::string BatchSchedule::summary() const {
 // Build Batches - Main Implementation
 // =============================================================================
 BatchSchedule buildBatches(
-    const Catalog& catalog,
+    const std::vector<uint32_t>& sequence_lengths,
     uint32_t max_tokens_per_batch,
     uint32_t max_batch_size,
     const PackerPolicy& policy)
 {
     BatchSchedule schedule{};
     
-    if (catalog.entries().empty()) {
+    if (sequence_lengths.empty()) {
         return schedule;
     }
     if (max_tokens_per_batch == 0) {
@@ -106,20 +106,19 @@ BatchSchedule buildBatches(
         throw std::runtime_error("buildBatches: max_batch_size=0 — caller MUST set batch size limit");
     }
 
-    const auto& entries = catalog.entries();
     const uint32_t bucket_step = std::max(1u, policy.bucket_step);
     
     // Build indices of valid sequences + compute length percentiles in ONE pass
     std::vector<uint32_t> view_indices;
     std::vector<uint32_t> all_lengths;
     
-    view_indices.reserve(entries.size());
-    all_lengths.reserve(entries.size());
+    view_indices.reserve(sequence_lengths.size());
+    all_lengths.reserve(sequence_lengths.size());
 
-    for (size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].seq_length > 0) {
+    for (size_t i = 0; i < sequence_lengths.size(); ++i) {
+        if (sequence_lengths[i] > 0) {
             view_indices.push_back(static_cast<uint32_t>(i));
-            all_lengths.push_back(entries[i].seq_length);
+            all_lengths.push_back(sequence_lengths[i]);
         }
     }
 
@@ -134,7 +133,7 @@ BatchSchedule buildBatches(
     
     // Lambda to compute sort key for a sequence by index
     auto computeSortKey = [&](uint32_t entry_idx) -> float {
-        const uint32_t len = entries[entry_idx].seq_length;
+        const uint32_t len = sequence_lengths[entry_idx];
         float len_key = policy.prefer_short_first ? static_cast<float>(len) : -static_cast<float>(len);
         
         // Apply curriculum: filter long sequences early in training
@@ -154,8 +153,8 @@ BatchSchedule buildBatches(
         // Sort by bucket (groups similar lengths together)
         std::stable_sort(view_indices.begin(), view_indices.end(),
             [&](uint32_t idx_a, uint32_t idx_b) {
-                uint32_t bucket_a = bucketize(entries[idx_a].seq_length, bucket_step);
-                uint32_t bucket_b = bucketize(entries[idx_b].seq_length, bucket_step);
+                uint32_t bucket_a = bucketize(sequence_lengths[idx_a], bucket_step);
+                uint32_t bucket_b = bucketize(sequence_lengths[idx_b], bucket_step);
                 if (bucket_a != bucket_b) {
                     return policy.prefer_short_first ? (bucket_a < bucket_b) : (bucket_a > bucket_b);
                 }
@@ -165,7 +164,7 @@ BatchSchedule buildBatches(
         // Sort longest first (FFD algorithm)
         std::stable_sort(view_indices.begin(), view_indices.end(),
             [&](uint32_t idx_a, uint32_t idx_b) {
-                return entries[idx_a].seq_length > entries[idx_b].seq_length;
+                return sequence_lengths[idx_a] > sequence_lengths[idx_b];
             });
     } else {
         // GREEDY / Gradient-balanced: SHUFFLE to mix short and long sequences!
@@ -218,8 +217,8 @@ BatchSchedule buildBatches(
         std::vector<OpenBatch> open_batches;
         
         for (uint32_t entry_idx : view_indices) {
-            const uint32_t seq_len = entries[entry_idx].seq_length;
-            const uint32_t seq_id = entries[entry_idx].seq_id;
+            const uint32_t seq_len = sequence_lengths[entry_idx];
+            const uint32_t seq_id = entry_idx;
             
             // Capacity contract (Rule 20): scheduler must not emit "overflow batches"
             // that violate the declared token budget.
@@ -348,8 +347,8 @@ BatchSchedule buildBatches(
         };
         
         for (uint32_t entry_idx : view_indices) {
-            const uint32_t seq_len = entries[entry_idx].seq_length;
-            const uint32_t seq_id = entries[entry_idx].seq_id;
+            const uint32_t seq_len = sequence_lengths[entry_idx];
+            const uint32_t seq_id = entry_idx;
             
             // Capacity contract (Rule 20): no overflow batches. If a single
             // sequence violates the token budget, fail loud with identifiers.

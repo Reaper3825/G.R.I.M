@@ -459,8 +459,8 @@ void releaseResources(TrainingContext& ctx) {
     ctx.data.val_seqs.clear();
     ctx.data.train_views.clear();
     ctx.data.val_views.clear();
-    ctx.data.train_catalog = GRIM::DynaSeq::Catalog{};
-    ctx.data.val_catalog = GRIM::DynaSeq::Catalog{};
+    ctx.data.train_seq_lengths.clear();
+    ctx.data.val_seq_lengths.clear();
     EmitModuleInfo(ModuleId::Training, "✓ Training data released", ctx.global_step);
     
     // Note: Gradient accumulation now tracked via current_micro_step counter in OptimizerContext

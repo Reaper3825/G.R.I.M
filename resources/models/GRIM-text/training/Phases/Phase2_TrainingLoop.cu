@@ -789,7 +789,7 @@ EpochResult runEpoch(
 
     // Phase1 owns all batch packing (Startup/Batching/PlannedBatches.cu).
     // Phase2 NEVER shuffles ctx.data.train_views, never rebuilds
-    // ctx.data.train_catalog, and never calls buildEpochBatches /
+    // ctx.data.train_seq_lengths, and never calls buildEpochBatches /
     // buildBatchPayload. Phase1 authors ctx.epoch_batch_order as the exact
     // executable batch-index order for this epoch.
     if (ctx.train_payloads.empty()) {

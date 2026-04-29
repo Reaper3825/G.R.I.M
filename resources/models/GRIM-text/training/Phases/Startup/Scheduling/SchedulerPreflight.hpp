@@ -4,13 +4,14 @@
 #include "../../../../Shared/Batching/EpochBatching.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace GRIMText::Training {
 
 struct TrainingContext;
 
 struct SchedulerInputs {
-    const ::GRIM::DynaSeq::Catalog* train_catalog = nullptr;
+    const std::vector<std::uint32_t>* train_seq_lengths = nullptr;
     RunCapacity capacity;
     int global_step = 0;
     int epoch = 0;

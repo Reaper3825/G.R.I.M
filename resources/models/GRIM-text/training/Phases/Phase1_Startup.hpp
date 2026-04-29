@@ -27,6 +27,7 @@
 //======================================================//
 
 #include <memory>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -103,8 +104,8 @@ struct SequenceData {
     std::vector<TrainingSequence> val_seqs;
     std::vector<TrainingSequence*> train_views;
     std::vector<TrainingSequence*> val_views;
-    GRIM::DynaSeq::Catalog train_catalog;
-    GRIM::DynaSeq::Catalog val_catalog;
+    std::vector<std::uint32_t> train_seq_lengths;
+    std::vector<std::uint32_t> val_seq_lengths;
     uint32_t vocab_size = 0;  // Vocab size from training data file
 };
 

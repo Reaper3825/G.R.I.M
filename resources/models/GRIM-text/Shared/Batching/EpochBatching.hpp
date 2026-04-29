@@ -19,8 +19,9 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
-#include "Batching_GPU.hpp"   // BatchSchedule, Catalog
+#include "Batching_GPU.hpp"   // BatchSchedule
 #include "PackerPolicy.hpp"
 
 namespace GRIM { namespace Batching {
@@ -39,7 +40,7 @@ inline constexpr int kCurriculumEpochs = 1;
 //======================================================//
 // Build the BatchSchedule for one epoch.
 //
-//  catalog      — per-epoch shuffled catalog of training sequences.
+//  sequence_lengths       — sequence lengths; index is the seq_id.
 //  max_tokens_per_batch — run capacity token rectangle (batch_rows * seq_cap).
 //  max_batch_size       — run capacity batch rows.
 //  global_step  — current optimizer step (used for warmup gating).
@@ -49,7 +50,7 @@ inline constexpr int kCurriculumEpochs = 1;
 //                 Pass {} to suppress logging.
 //======================================================//
 BatchSchedule buildEpochBatches(
-    const Catalog& catalog,
+    const std::vector<uint32_t>& sequence_lengths,
     uint32_t max_tokens_per_batch,
     uint32_t max_batch_size,
     int global_step,

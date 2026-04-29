@@ -29,7 +29,7 @@ void logBatchSchedule(
 }
 
 BatchSchedule buildEpochBatches(
-    const Catalog& catalog,
+    const std::vector<uint32_t>& sequence_lengths,
     uint32_t max_tokens_per_batch,
     uint32_t max_batch_size,
     int global_step,
@@ -63,7 +63,7 @@ BatchSchedule buildEpochBatches(
     policy.batch_ordering      = BatchOrdering::RANDOM;
     policy.interleave_overflow = true;
 
-    auto schedule = buildBatches(catalog, max_tokens_per_batch, max_batch_size, policy);
+    auto schedule = buildBatches(sequence_lengths, max_tokens_per_batch, max_batch_size, policy);
 
     logBatchSchedule(schedule, max_tokens_per_batch, policy, log_fn);
 

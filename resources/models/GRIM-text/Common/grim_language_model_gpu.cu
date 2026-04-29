@@ -431,7 +431,20 @@ const Matrix& GrimEmbeddingStack::getTokenEmbeddings() const {
 //======================================================//
 
 LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
-    : config_(config)
+    : LanguageModel(config, static_cast<const Config::TrainingHyperparameters*>(nullptr))
+{
+}
+
+LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config,
+                             const Config::TrainingHyperparameters& training_hyperparameters)
+    : LanguageModel(config, &training_hyperparameters)
+{
+}
+
+LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config,
+                             const Config::TrainingHyperparameters* training_hyperparameters)
+    : config_(config),
+      training_hyperparameters_(training_hyperparameters)
 {
     if (config_.infer_vocab_from_file) {
         if (config_.vocab_path.empty()) {
@@ -490,6 +503,14 @@ LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
 }
 
 LanguageModel::~LanguageModel() = default;
+
+const Config::TrainingHyperparameters& LanguageModel::requireTrainingHyperparameters(const char* caller) const {
+    if (!training_hyperparameters_) {
+        throw std::runtime_error(std::string(caller ? caller : "LanguageModel") +
+                                 ": Phase1 training hyperparameters are not attached");
+    }
+    return *training_hyperparameters_;
+}
 
 //======================================================//
 //  Helper methods - moved from header

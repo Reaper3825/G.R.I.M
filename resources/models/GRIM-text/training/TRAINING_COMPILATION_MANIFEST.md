@@ -401,7 +401,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ---
 
-### 2.1b Batch Composition & Dynamic Sequences
+### 2.1b Batch Composition
 
 - [x] **Shared/Batching/Batching_GPU.cu** ✅ AUDITED & CLEANED
   - Dynamic batch composition: GREEDY, BEST_FIT_DECREASING, SIMILARITY_GROUPED packing
@@ -412,12 +412,8 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: `max_tokens_per_batch` default changed 8192→0 (Rule 20: caller MUST set, throws if 0)
   - **FIXED**: `BatchOrdering::RANDOM` seed changed from hardcoded 42 → derived from `opts.rng_seed`
   - **FIXED**: `buildBatches()` throws on `max_tokens_per_batch=0` or `max_batch_size=0` instead of silent empty return (Rule 20)
+  - **DELETED**: `Shared/DynaSeqs/DynaSeq_GPU.{hpp,cu}` catalog middleman — scheduler now consumes Phase1-authored sequence length vectors directly
   - BatchPayload.cu: Excellent Rule 20 compliance — thorough cross-check validation ✅
-
-- [x] **Shared/DynaSeqs/DynaSeq_GPU.cu** ✅ AUDITED & CLEANED
-  - `Catalog` class: lightweight sequence metadata store, used by Batching and Phase1/2/3 ✅
-  - **DELETED**: `planBatches()` function + `BatchPlan` struct — ZERO callers, superseded by `Batching::buildBatches()` (Rule 26)
-  - **DELETED**: Dead config parsing in Phase2 (`batch_strategy` read+uppercase+ignore, strategy always forced GREEDY per Issue #90)
 
 ---
 

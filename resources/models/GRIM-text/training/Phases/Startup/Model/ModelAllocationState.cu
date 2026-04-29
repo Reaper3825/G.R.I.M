@@ -97,7 +97,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         logger.log("✓ CUDA device initialized: " + std::string(props.name));
     }
 
-    auto model = std::make_unique<GRIM::LanguageModel>(model_config);
+    auto model = std::make_unique<GRIM::LanguageModel>(model_config, config.hyperparameters);
+    const auto& hp = model->requireTrainingHyperparameters("initializeModel");
 
     {
         GRIM::StreamControllerConfig stream_config;
@@ -134,12 +135,11 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->buildParameterGroups();
 
     if (model->isScratchPoolInitialized()) {
-        model->configureScratchPool(config.hyperparameters.scratch_blocks_enabled);
+        model->configureScratchPool(hp.scratch_blocks_enabled);
     }
 
     GRIM::LossContext::LossOptions loss_opts{};
     {
-        const auto& hp = config.hyperparameters;
         loss_opts.label_smoothing_enabled    = hp.loss_label_smoothing_enabled;
         loss_opts.label_smoothing_epsilon    = hp.loss_label_smoothing_epsilon;
         loss_opts.focal_enabled              = hp.loss_focal_enabled;

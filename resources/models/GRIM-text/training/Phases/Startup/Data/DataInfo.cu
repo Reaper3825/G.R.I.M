@@ -105,17 +105,19 @@ SequenceData loadTrainingData(
                         add_bos_token, add_eos_token, bos_id, eos_id, logger);
 
     data.train_views.reserve(data.train_seqs.size());
+    data.train_seq_lengths.reserve(data.train_seqs.size());
     for (uint32_t i = 0; i < data.train_seqs.size(); ++i) {
         data.train_views.push_back(&data.train_seqs[i]);
         const uint32_t len = static_cast<uint32_t>(data.train_seqs[i].token_ids.size());
-        data.train_catalog.add(len, len, 0, 0, 0);
+        data.train_seq_lengths.push_back(len);
     }
 
     data.val_views.reserve(data.val_seqs.size());
+    data.val_seq_lengths.reserve(data.val_seqs.size());
     for (uint32_t i = 0; i < data.val_seqs.size(); ++i) {
         data.val_views.push_back(&data.val_seqs[i]);
         const uint32_t len = static_cast<uint32_t>(data.val_seqs[i].token_ids.size());
-        data.val_catalog.add(len, len, 0, 0, 0);
+        data.val_seq_lengths.push_back(len);
     }
 
     return data;

@@ -23,7 +23,7 @@
 //
 //  PRECONDITIONS
 //  =============
-//  - DataInfoReady (train_catalog / val_catalog populated)
+//  - DataInfoReady (train/val views and sequence lengths populated)
 //  - ModelAllocated (ctx.model is non-null)
 //  - CapacityStemReady (ctx.run_capacity has token rectangle + batch rows)
 //  - PayloadBuildInputsReady (ctx.payload_build_inputs is authored)

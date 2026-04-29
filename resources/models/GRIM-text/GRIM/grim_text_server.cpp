@@ -24,14 +24,13 @@
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include <iostream>
-#include <fstream>
 #include <filesystem>
 #include <memory>
 #include <chrono>
 #include <sstream>
+#include <vector>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
-#include "../../control/ai_config_paths.hpp"
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -54,61 +53,12 @@ GenerationConfig g_generation_defaults = [] {
     return cfg;
 }();
 
-bool loadGenerationDefaultsFromAIConfig(const std::string& config_path = "ai_config.json") {
-    try {
-        std::ifstream config_file(config_path);
-        if (!config_file.is_open()) {
-            std::cerr << "[GRIM-text] ERROR: ai_config.json not found at " << config_path << "\n";
-            return false;
-        }
-
-        json config = json::parse(config_file, nullptr, true, true);
-
-        if (!config.contains("max_tokens")) {
-            std::cerr << "[GRIM-text] ERROR: ai_config.json missing required field: max_tokens\n";
-            return false;
-        }
-        g_generation_defaults.max_new_tokens = config["max_tokens"].get<int>();
-
-        if (!config.contains("ollama_options")) {
-            std::cerr << "[GRIM-text] ERROR: ai_config.json missing required object: ollama_options\n";
-            return false;
-        }
-        const auto& ollama = config["ollama_options"];
-        if (!ollama.contains("temperature") || !ollama.contains("top_p") || !ollama.contains("top_k")) {
-            std::cerr << "[GRIM-text] ERROR: ai_config.json missing required ollama_options fields\n";
-            return false;
-        }
-        g_generation_defaults.temperature = ollama["temperature"].get<float>();
-        g_generation_defaults.top_p = ollama["top_p"].get<float>();
-        g_generation_defaults.top_k = ollama["top_k"].get<int>();
-        
-        // Optional advanced sampling parameters from ollama_options
-        if (ollama.contains("min_p")) g_generation_defaults.min_p = ollama["min_p"].get<float>();
-        if (ollama.contains("typical_p")) g_generation_defaults.typical_p = ollama["typical_p"].get<float>();
-        if (ollama.contains("repetition_penalty")) g_generation_defaults.repetition_penalty = ollama["repetition_penalty"].get<float>();
-        if (ollama.contains("frequency_penalty")) g_generation_defaults.frequency_penalty = ollama["frequency_penalty"].get<float>();
-        if (ollama.contains("presence_penalty")) g_generation_defaults.presence_penalty = ollama["presence_penalty"].get<float>();
-        if (ollama.contains("no_repeat_ngram_size")) g_generation_defaults.no_repeat_ngram_size = ollama["no_repeat_ngram_size"].get<int>();
-
-        if (config.contains("training") && config["training"].contains("config")) {
-            const auto& train_cfg = config["training"]["config"];
-            if (train_cfg.contains("max_new_tokens")) {
-                g_generation_defaults.max_new_tokens = train_cfg["max_new_tokens"].get<int>();
-            }
-        }
-
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "[GRIM-text] ERROR: Failed to load ai_config.json: " << e.what() << "\n";
-        return false;
-    }
-}
-
 //======================================================//
 //  Initialize Model
 //======================================================//
-bool initializeModel(const std::string& model_path, const std::string& vocab_path)
+bool initializeModel(const HyperParameters::StartupConfig& startup_config,
+                     const std::string& model_path,
+                     const std::string& vocab_path)
 {
     std::cout << "[GRIM-text] Initializing model...\n";
     std::cout << "[GRIM-text] Vocab: " << vocab_path << "\n";
@@ -125,22 +75,17 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
         std::cout << "[GRIM-text] EOS token ID: " << g_tokenizer->eosId() << "\n";
         std::cout << "[GRIM-text] PAD token ID: " << g_tokenizer->padId() << "\n";
 
-        HyperParameters::LanguageModelConfig config;
-        
-        // Load architecture from HyperParameters (THE source of truth)
-        HyperParameters::ModelArchitecture arch;
-        HyperParameters::loadModelArchitecture(arch);
-        // Copy all architecture fields via base class assignment
-        static_cast<HyperParameters::ModelArchitecture&>(config) = arch;
-        
-        // vocab_size comes from actual tokenizer (from .grmt data)
+        // Start from the same Phase1-loaded hyperparameter snapshot as training.
+        // Inference-specific runtime fields are applied after this assignment so
+        // they cannot be overwritten by a late architecture slice.
+        HyperParameters::LanguageModelConfig config = startup_config.hyperparameters.architecture;
+        config.max_seq_len = startup_config.max_seq_len;
         config.vocab_size = g_tokenizer->totalVocabSize();
-
         config.causal_mask = true;
         config.use_gpu = true;
         config.vocab_path = vocab_path;
         config.infer_vocab_from_file = true;
-        config.generation = g_generation_defaults;
+        config.generation = startup_config.generation;
         
         // CRITICAL: Set correct EOS/PAD tokens from tokenizer
         config.generation.eos_token_id = g_tokenizer->eosId();
@@ -149,26 +94,15 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
         // INFERENCE MODE: Use lightweight inference state (~385MB vs ~15GB training state)
         config.execution_mode = HyperParameters::ModelExecutionMode::INFERENCE;
         
-        // INFERENCE-ONLY: Use much smaller activation cache (batch=1, max_seq=512)
-        // This reduces GPU memory requirements from ~15GB to ~2GB
+        // INFERENCE-ONLY: batch=1, but sequence capacity comes from the same
+        // Phase1-derived max_seq_len so prompt/cache bounds match training config.
         config.max_cached_batch = 1;
-        config.max_cached_seq_len = 512;
-
-        GRIM::Config::TrainingHyperparameters hyperparams;
-        if (GRIM::Config::loadTrainingHyperparameters(hyperparams)) {
-            // Slice-copy entire LanguageModelConfig from hyperparams.architecture
-            // (Phase B: architecture is now the model SoT — single assignment
-            // carries all model + feature fields). Per-field copies removed —
-            // Rule 20 (no dual-source state).
-            // NOTE: this overwrites a few fields set above (max_seq_len,
-            // use_flash_attention, etc.); that is intentional — the values
-            // from ai_config.json take precedence over loadModelArchitecture().
-            static_cast<HyperParameters::LanguageModelConfig&>(config) = hyperparams.architecture;
-        }
+        config.max_cached_seq_len = startup_config.max_seq_len;
+        config.max_tokens_per_batch = config.max_cached_seq_len;
 
         config.computeDerivedValues();  // Compute head_dim = d_model / num_heads
         
-        g_model = std::make_unique<LanguageModel>(config);
+        g_model = std::make_unique<LanguageModel>(config, startup_config.hyperparameters);
         std::cout << "[GRIM-text] ✓ Model object created\n" << std::flush;
 
         if (!fs::exists(model_path)) {
@@ -315,12 +249,24 @@ int main(int argc, char** argv)
     std::cout << "  Ollama-compatible API\n";
     std::cout << "========================================\n";
 
-    // Try to find ai_config.json from multiple locations
+    std::vector<std::string> positionals;
     std::string config_path = "ai_config.json";
-    if (!std::filesystem::exists(config_path)) {
+    bool explicit_config = false;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--config" && i + 1 < argc) {
+            config_path = argv[++i];
+            explicit_config = true;
+        } else {
+            positionals.push_back(arg);
+        }
+    }
+
+    // Try to find ai_config.json from multiple locations
+    if (!explicit_config && !std::filesystem::exists(config_path)) {
         config_path = "../../../../../../ai_config.json";  // From Release dir
     }
-    if (!std::filesystem::exists(config_path)) {
+    if (!explicit_config && !std::filesystem::exists(config_path)) {
         // Try to find GRIM root and look for ai_config.json there
         std::filesystem::path searchPath = std::filesystem::current_path();
         for (int i = 0; i < 10 && searchPath.has_parent_path(); ++i) {
@@ -339,8 +285,21 @@ int main(int argc, char** argv)
     std::cout << "[GRIM-text] Using config: " << config_path << " (exists: " 
               << (std::filesystem::exists(config_path) ? "yes" : "no") << ")\n";
 
-    if (!loadGenerationDefaultsFromAIConfig(config_path)) {
-        std::cerr << "[GRIM-text] ERROR: Failed to load generation defaults\n";
+    std::vector<std::string> startup_args = {argv[0], "--config", config_path};
+    std::vector<char*> startup_argv;
+    startup_argv.reserve(startup_args.size());
+    for (auto& arg : startup_args) {
+        startup_argv.push_back(arg.data());
+    }
+
+    HyperParameters::StartupConfig startup_config;
+    try {
+        startup_config = HyperParameters::loadStartupConfig(
+            static_cast<int>(startup_argv.size()),
+            startup_argv.data());
+        g_generation_defaults = startup_config.generation;
+    } catch (const std::exception& e) {
+        std::cerr << "[GRIM-text] ERROR: Failed to load startup config: " << e.what() << "\n";
         return 1;
     }
 
@@ -348,25 +307,19 @@ int main(int argc, char** argv)
     std::string model_path = "models/grim_text.bin";
     int port = 11435;
 
-    GRIM::Config::GrimTextPaths grim_paths;
-    if (GRIM::Config::loadGrimTextPaths(grim_paths, config_path)) {
-        std::cout << "[GRIM-text] Config paths loaded successfully\n";
-        if (!grim_paths.vocab.empty()) {
-            vocab_path = grim_paths.vocab;
-            std::cout << "[GRIM-text] Using vocab from config: " << vocab_path << "\n";
-        }
-        if (!grim_paths.model.empty()) {
-            model_path = grim_paths.model;
-            std::cout << "[GRIM-text] Using model from config: " << model_path << "\n";
-        }
-    } else {
-        std::cerr << "[GRIM-text] ERROR: Could not load config paths\n";
-        return 1;
+    std::cout << "[GRIM-text] Config paths loaded successfully\n";
+    if (!startup_config.paths.vocab_path.empty()) {
+        vocab_path = startup_config.paths.vocab_path;
+        std::cout << "[GRIM-text] Using vocab from config: " << vocab_path << "\n";
+    }
+    if (!startup_config.paths.output_model_path.empty()) {
+        model_path = startup_config.paths.output_model_path;
+        std::cout << "[GRIM-text] Using model from config: " << model_path << "\n";
     }
 
-    if (argc >= 2) vocab_path = argv[1];
-    if (argc >= 3) model_path = argv[2];
-    if (argc >= 4) port = std::stoi(argv[3]);
+    if (positionals.size() >= 1) vocab_path = positionals[0];
+    if (positionals.size() >= 2) model_path = positionals[1];
+    if (positionals.size() >= 3) port = std::stoi(positionals[2]);
 
     // Create server (NO CUDA YET)
     httplib::Server svr;
@@ -520,7 +473,7 @@ int main(int argc, char** argv)
     //==================================================//
 
     std::cout << "[GRIM-text] Loading model (this may take 30+ seconds)...\n";
-    if (!initializeModel(model_path, vocab_path)) {
+    if (!initializeModel(startup_config, model_path, vocab_path)) {
         std::cerr << "[GRIM-text] ERROR: Model initialization failed\n";
         return 1;
     }

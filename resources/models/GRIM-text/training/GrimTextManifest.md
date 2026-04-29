@@ -301,16 +301,13 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ---
 
-### 2.1b Batch Composition & Dynamic Sequences
+### 2.1b Batch Composition
 
 - [] **Shared/Batching/Batching_GPU.cu**
   - Dynamic batch composition: GREEDY, BEST_FIT_DECREASING, SIMILARITY_GROUPED packing
   - Token budget management, overflow handling, gradient accumulation grouping
+  - Sequence lengths are supplied directly by Phase1 data loading; no separate catalog layer
   - BatchPayload.cu: Excellent Rule 20 compliance — thorough cross-check validation
-
-- [] **Shared/DynaSeqs/DynaSeq_GPU.cu**
-
-- `Catalog` class: lightweight sequence metadata store, used by Batching and Phase1/2/3
 ---
 
 ### 2.1c Activation Quantization (Int8/FP16)

@@ -151,7 +151,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         std::to_string(num_epochs) + ")");
 
     ctx.fixed_train_schedule = GRIM::Batching::buildEpochBatches(
-        ctx.data.train_catalog,
+        ctx.data.train_seq_lengths,
         ctx.run_capacity.max_tokens_per_batch,
         ctx.run_capacity.batch_rows,
         /*global_step=*/0,
@@ -194,7 +194,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         val_policy.bucket_step = 256;
 
         ctx.fixed_val_schedule = GRIM::Batching::buildBatches(
-            ctx.data.val_catalog,
+            ctx.data.val_seq_lengths,
             ctx.run_capacity.max_tokens_per_batch,
             ctx.run_capacity.batch_rows,
             val_policy);

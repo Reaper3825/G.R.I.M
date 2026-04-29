@@ -273,7 +273,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.cu
     ../../Shared/Execution/DecodeTimeNumPolicy.cu
     ../../Layers/Quantization/Quantization_GPU.cu
-    ../../Shared/DynaSeqs/DynaSeq_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchPayload.cu
     ../../Shared/Batching/EpochBatching.cu
