@@ -505,7 +505,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     // hidden: [1, d_model]
 
     // ── Step 2: PBM validation ──
-    if (!ts.pbm_spec.valid || !ts.pbm_spec.rope_inv_freq || !ts.pbm_spec.alibi_slopes) {
+    const PBM::PBMSpec& pbm_spec = getPBMSpec();
+    if (!pbm_spec.valid || !pbm_spec.rope_inv_freq || !pbm_spec.alibi_slopes) {
         throw std::runtime_error("executeDecodeForward_: PBM (RoPE/ALiBi) not initialized");
     }
 
@@ -567,9 +568,9 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         // 3d. RoPE rotation with position offset
         // For S=1, Q is [1,nh,1,hd] and K is [1,nkv,1,hd]
         PBM::launchRoPERotationGQA(
-            Q.data, K.data, ts.pbm_spec.rope_inv_freq,
+            Q.data, K.data, pbm_spec.rope_inv_freq,
             1, num_heads, num_kv_heads, 1, head_dim,
-            ts.pbm_spec.rotary_dim, stream, token_pos);
+            pbm_spec.rotary_dim, stream, token_pos);
 
         // 3e. Convert K,V to BF16 and write to KV cache at position token_pos
         // For S=1: BHSD [1,H,1,D] = BSHD [1,1,H,D] — same contiguous layout [H*D]
@@ -600,7 +601,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             v_cache,
             attn_out_bf16,
             ts.kv_cache_softmax_lse,
-            ts.pbm_spec.alibi_slopes,
+            pbm_spec.alibi_slopes,
             1,              // batch=1
             1,              // seqlen_q=1
             seqlen_k,       // cached tokens including current

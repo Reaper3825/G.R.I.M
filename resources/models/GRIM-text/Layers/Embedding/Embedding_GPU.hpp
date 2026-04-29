@@ -36,8 +36,6 @@ namespace GRIM {
 struct EmbeddingLayerConfig {
     int vocab_size = 0;        // Token vocabulary size (MUST be populated)
     int d_model = 0;           // Hidden dimension (MUST be populated)
-    int max_seq_len = 0;       // Maximum sequence length (MUST be populated)
-    float embedding_scale = 1.0f;  // Issue #140: No scaling (1.0f) for ALiBi/RoPE
     bool requires_grad = true;     // false for inference-only (skip grad allocation)
 };
 

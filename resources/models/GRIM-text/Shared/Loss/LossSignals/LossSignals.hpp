@@ -36,7 +36,7 @@ struct LossSignalConfig {
 
     // SmoothedSpike (per-step, statistical): smoothed_loss > mean + sigma*std,
     //   with a minimum-samples guard so the band isn't garbage at startup.
-    //   Used by DynamicLR to cut LR.
+    //   Published for consumers that need loss-spike state.
     float smoothed_ema_alpha   = 0.10f;
     float smoothed_sigma       = 3.0f;
     float smoothed_floor       = 0.0f;

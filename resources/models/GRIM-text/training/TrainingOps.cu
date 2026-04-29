@@ -139,18 +139,18 @@ void LanguageModel::initGPU() {
         //
         //  Hyperparameters come from `cfg` (LanguageModelConfig, the single
         //  source of truth in HyperParameters_GPU.hpp). Runtime device
-        //  handles — PBM, stream, cuBLAS, init seed — come from
+        //  handles — positional encoding, stream, cuBLAS, init seed — come from
         //  EncoderRuntimeBindings. No intermediate EncoderConfig: there's
         //  nothing to copy because there's no second config.
         //======================================================//
-        if (!training_state_.pbm_initialized) {
+        if (!isPBMInitialized()) {
             throw std::runtime_error(
                 "[initGPU] FATAL: PBM not initialized before encoder construction! "
                 "Call initPBM() BEFORE createGPUEncoder()");
         }
 
         EncoderRuntimeBindings enc_bindings;
-        enc_bindings.pos_encoding = &training_state_.pbm_spec;
+        enc_bindings.pos_encoding = &getPBMSpec();
         enc_bindings.stream = primary_stream;
         enc_bindings.cublas_handle = training_state_.cublas_handle;
         enc_bindings.weight_seed = training_state_.weight_init_seed;
@@ -200,8 +200,6 @@ void LanguageModel::initGPU() {
             EmbeddingLayerConfig emb_config;
             emb_config.vocab_size = cfg.vocab_size;
             emb_config.d_model = cfg.d_model;
-            emb_config.max_seq_len = cfg.max_seq_len;
-            emb_config.embedding_scale = 1.0f;  // Issue #140: No scaling for ALiBi/RoPE
 
             // Seed convention: embedding uses weight_init_seed + 0
             const uint64_t emb_seed = training_state_.weight_init_seed;

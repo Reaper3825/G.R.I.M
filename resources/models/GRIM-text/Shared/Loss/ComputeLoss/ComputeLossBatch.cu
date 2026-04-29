@@ -191,6 +191,7 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	// reader-facing view of the device pointers for this step.
 	training_state_.cached_batch_size = static_cast<int>(batch_size);
 	training_state_.cached_seq_len    = static_cast<int>(seq_len);
+	training_state_.cached_valid_tokens = payload.lm_valid_tokens;
 	training_state_.cached_num_layers = cfg.num_layers;
 
 	GRIM::Batching::BatchDeviceBindings bindings;

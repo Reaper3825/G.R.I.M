@@ -339,13 +339,6 @@ BatchResult processBatch(
             " — scheduler produced batch_size=0; fix the upstream filter");
     }
 
-    // Token stats already in payload; per-batch seq_len from payload, not config.
-
-    const auto& token_stats = payload.token_stats;
-    const int long_seq_threshold = payload.max_seq_len;
-    const auto clip_selection = GRIM::TNC::computeClipSelection(
-        hp.grad_clip_norm, token_stats, 1.0f, long_seq_threshold);
-
     // beginBatch() must run EVERY batch to clear previous entries; otherwise
     // micro-batches 1+ inherit stale entries.
     GRIM::GradStats::beginBatch();
@@ -460,10 +453,8 @@ BatchResult processBatch(
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));
     }
 
-    // Publish this batch's loss to the central detector BEFORE any consumer
-    // diagnostic reads it. Consumers (LossSpikeDiagnostic / DynamicLR / ...)
-    // will be migrated to read state.loss_signals->latest() in subsequent
-    // refactor tasks; today they still own their own detection.
+    // Publish this batch's loss to the central detector before consumers read
+    // the canonical loss-signal state.
     state.loss_signals->recordTrainStep(
         static_cast<int64_t>(ctx.global_step), result.loss);
     
@@ -504,8 +495,9 @@ BatchResult processBatch(
     // Issue #135: gradient clipping is DEFERRED to post-accumulation (inside
     // should_step block). Clipping ONCE on the averaged gradients matches
     // PyTorch; the old per-micro-batch clipping crushed text gradients M×.
-    const float effective_per_token_limit = clip_selection.per_token_limit;
-    const bool clipping_enabled = (hp.grad_clip_norm > 0.0f);
+    const auto clipping_hp = ::GRIM::HyperParameters::gradientClippingHP(hp);
+    const float effective_per_token_limit = clipping_hp.effective_per_token_limit;
+    const bool clipping_enabled = clipping_hp.enabled;
 
     // LR: index by optimizer step (NOT global_step). global_step is per-micro-batch;
     // using it advances warmup/decay accum_steps times too fast.
@@ -701,7 +693,7 @@ BatchResult processBatch(
     }
     
     result.sequences_processed = payload.batch_size;
-    result.tokens_processed = clip_selection.stats.total_tokens;
+    result.tokens_processed = static_cast<int>(payload.token_stats.total_tokens);
 
     // Flush device logs on the diagnostic sync interval.
     if (sync_diag) {

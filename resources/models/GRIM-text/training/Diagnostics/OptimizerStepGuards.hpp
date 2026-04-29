@@ -29,8 +29,8 @@ namespace GRIM::Diagnostics {
 void zeroNonTrainableTokenGrads(
     GRIMText::Training::TrainingContext& ctx);
 
-// per_token_limit comes from clip_selection.per_token_limit and is the
-// effective max RMS per token. Caller checks `clipping_enabled` first.
+// per_token_limit comes from HyperParameters::gradientClippingHP() and is the
+// effective max RMS per token. Caller checks clipping is enabled first.
 void clipPostAccumulationGradients(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::BatchResult& result,

@@ -47,7 +47,6 @@
 #include "../../Shared/DataLoader/DataLoader.hpp"
 #include "../../Shared/Batching/Batching_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
-#include "../../Shared/Dynamic_LR/DynamicLR.hpp"
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"
 #include "../../Shared/SoftRestart/SoftRestart.hpp"
 #include "../../Shared/Loss/LossContext/LossContext.hpp"
@@ -114,7 +113,6 @@ struct SequenceData {
  */
 struct OptimizerContext {
     GRIM::OptimizerState optimizer_state;
-    GRIM::DynamicLR::DynamicLRController dynamic_lr_controller;
     GRIM::SoftRestart::SoftRestartController soft_restart_controller;
     int current_micro_step = 0;  // Tracks position within accumulation window [0, accum_steps)
 };

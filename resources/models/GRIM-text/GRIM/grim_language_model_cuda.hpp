@@ -376,6 +376,8 @@ public:
     // Training state access (for debugging/diagnostics)
     const TrainingState& getTrainingState() const { return training_state_; }
     TrainingState& getTrainingState() { return training_state_; }
+    const PBM::PBMSpec& getPBMSpec() const;
+    bool isPBMInitialized() const;
     
     // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
     const std::vector<ParameterGroup>& parameterGroups() const { return parameter_groups_; }
@@ -509,6 +511,8 @@ private:
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
     uint32_t backward_call_count_ = 0;              // Tracks backward() calls for deterministic diagnostics
     LossContext::LossOptions loss_options_{};
+    PBM::PBMSpec pbm_spec_{};                       // Non-owning view into GrimEmbeddingStack PBM state
+    bool pbm_spec_initialized_ = false;
     
     // ScratchBlock reasoning layer (togglable)
     std::unique_ptr<ScratchBlockLayer> scratch_block_layer_;

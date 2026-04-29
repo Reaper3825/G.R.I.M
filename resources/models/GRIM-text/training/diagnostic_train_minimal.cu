@@ -523,25 +523,25 @@ int main(int argc, char** argv) {
     
     // PBM DIAGNOSTIC: Verify PBM is initialized
     {
-        auto& ts = model.getTrainingState();
+        const GRIM::PBM::PBMSpec& pbm_spec = model.getPBMSpec();
         std::cout << "\n  [PBM] State Check:" << std::endl;
-        std::cout << "    pbm_initialized: " << (ts.pbm_initialized ? "YES ✓" : "NO ✗") << std::endl;
-        std::cout << "    pbm_spec.valid: " << (ts.pbm_spec.valid ? "YES ✓" : "NO ✗") << std::endl;
-        std::cout << "    rope_inv_freq: " << (ts.pbm_spec.rope_inv_freq ? "VALID ✓" : "NULL ✗") << std::endl;
-        std::cout << "    alibi_slopes: " << (ts.pbm_spec.alibi_slopes ? "VALID ✓" : "NULL ✗") << std::endl;
-        std::cout << "    rotary_dim: " << ts.pbm_spec.rotary_dim << std::endl;
-        std::cout << "    num_heads: " << ts.pbm_spec.num_heads << std::endl;
-        
-        if (!ts.pbm_initialized || !ts.pbm_spec.valid) {
+        std::cout << "    pbm_initialized: " << (model.isPBMInitialized() ? "YES ✓" : "NO ✗") << std::endl;
+        std::cout << "    pbm_spec.valid: " << (pbm_spec.valid ? "YES ✓" : "NO ✗") << std::endl;
+        std::cout << "    rope_inv_freq: " << (pbm_spec.rope_inv_freq ? "VALID ✓" : "NULL ✗") << std::endl;
+        std::cout << "    alibi_slopes: " << (pbm_spec.alibi_slopes ? "VALID ✓" : "NULL ✗") << std::endl;
+        std::cout << "    rotary_dim: " << pbm_spec.rotary_dim << std::endl;
+        std::cout << "    num_heads: " << pbm_spec.num_heads << std::endl;
+
+        if (!model.isPBMInitialized() || !pbm_spec.valid) {
             std::cerr << "\n  ✗ FATAL ERROR: PBM not initialized!" << std::endl;
-            std::cerr << "  pbm_initialized: " << ts.pbm_initialized << std::endl;
-            std::cerr << "  pbm_spec.valid: " << ts.pbm_spec.valid << std::endl;
-            std::cerr << "  rope_inv_freq: " << (void*)ts.pbm_spec.rope_inv_freq << std::endl;
+            std::cerr << "  pbm_initialized: " << model.isPBMInitialized() << std::endl;
+            std::cerr << "  pbm_spec.valid: " << pbm_spec.valid << std::endl;
+            std::cerr << "  rope_inv_freq: " << (void*)pbm_spec.rope_inv_freq << std::endl;
             throw std::runtime_error("PBM not initialized! Attention REQUIRES positional encoding. Fix initPBM().");
         }
     }
     
-    // STEP 4: Initialize GPU encoder (uses PBM from TrainingState)
+    // STEP 4: Initialize GPU encoder (uses model-owned PBM spec)
     model.initGPU();
     std::cout << "  ✓ GPU encoder initialized" << std::endl;
     

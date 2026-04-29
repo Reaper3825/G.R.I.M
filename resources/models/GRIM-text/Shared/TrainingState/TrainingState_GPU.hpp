@@ -23,7 +23,6 @@
 #include "../ScratchBlock/ScratchBlockPool_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
-#include "../PBM/PositionalBiasMethod.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 
 // Forward declaration for autograd tensor system
@@ -167,12 +166,6 @@ struct TrainingState {
     int sequence_weight_count = 0;
     int sequence_weight_capacity = 0;
 
-    //======================================================//
-    //  AUTOGRAD STATE
-    //======================================================//
-    float cached_loss_value = 0.0f;
-    float cached_text_loss = 0.0f;
-
     // MTP diagnostics (filled by computeAutogradLoss when MTP enabled; logged by Phase2)
     struct MTPDiagnostics {
         std::vector<float> head_loss;
@@ -236,13 +229,6 @@ struct TrainingState {
     StreamController stream_ctrl;
     GradNorm::GradNormScratch* grad_norm_scratch = nullptr;  // Allocated in Phase1, freed in ~TrainingState
     cublasHandle_t cublas_handle = nullptr;
-
-    //======================================================//
-    //  POSITIONAL ENCODING STATE
-    //======================================================//
-    PBM::PBMState pbm_state;
-    PBM::PBMSpec pbm_spec;
-    bool pbm_initialized = false;
 
     // Scratch block pool
     ScratchBlock::ScratchBlockPool* scratch_pool = nullptr;

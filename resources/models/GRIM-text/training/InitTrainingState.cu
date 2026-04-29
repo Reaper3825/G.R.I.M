@@ -16,7 +16,6 @@
 #include <cuda_bf16.h>
 
 #include "../GRIM/grim_language_model_cuda.hpp"
-// NOTE: Encoding_GPU.hpp include DELETED — was only needed for requiredWorkspaceBytes() (now deleted)
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
@@ -63,46 +62,49 @@ void LanguageModel::initCuBLASHandle() {
 //  Unified PBM (ALiBi+RoPE Hybrid) Initialization
 //  Call this BEFORE initGPU() to ensure encoder gets both position encodings
 //======================================================//
+bool LanguageModel::isPBMInitialized() const {
+    return pbm_spec_initialized_ && pbm_spec_.valid &&
+           pbm_spec_.rope_inv_freq != nullptr &&
+           pbm_spec_.alibi_slopes != nullptr;
+}
+
+const PBM::PBMSpec& LanguageModel::getPBMSpec() const {
+    if (!isPBMInitialized()) {
+        throw std::runtime_error("LanguageModel::getPBMSpec: PBM is not initialized");
+    }
+    return pbm_spec_;
+}
+
 void LanguageModel::initPBM() {
-    if (training_state_.pbm_initialized) {
+    if (isPBMInitialized()) {
         std::cout << "✓ PBM (ALiBi+RoPE) already initialized" << std::endl;
         return;
     }
-    
-    if (!training_state_.stream_ctrl.isInitialized()) {
-        std::cerr << "FATAL: StreamController must be initialized before PBM" << std::endl;
-        throw std::runtime_error("StreamController not initialized");
+
+    if (!embedder_) {
+        throw std::runtime_error("LanguageModel::initPBM: embedder is NULL");
     }
-    
+
     const auto& cfg = getConfig();
-    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
-    
-    PBM::PBMConfig pbm_config{};  // Uses HyperParameters defaults
-    pbm_config.num_heads = cfg.num_heads;
-    pbm_config.num_kv_heads = cfg.num_kv_heads;
-    pbm_config.max_seq_len = cfg.max_seq_len;  // CRITICAL: Set from model config for context-aware scaling
-    // alibi_slope_exponent uses default from HyperParameters::ALIBI_SLOPE_EXPONENT
-    // rope_theta/rope_scaling use defaults from HyperParameters (NTK scaling auto-applies if max_seq_len > 2048)
-    pbm_config.head_dim = head_dim;
-    pbm_config.rotary_dim = head_dim;  // Full rotation
-    pbm_config.verbose = true;
-    cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
-    StreamController::fatalIfDefaultStream(primary_stream, "LanguageModel::initPBM");
-    pbm_config.stream = primary_stream;
-    
-    if (!PBM::initializePBM(pbm_config, training_state_.pbm_state)) {
-        std::cerr << "FATAL: Failed to initialize PBM (ALiBi+RoPE)" << std::endl;
-        throw std::runtime_error("PBM initialization failed");
+
+    const auto* alibi_bias = embedder_->getALiBiBias();
+    if (!alibi_bias || !alibi_bias->isInitialized()) {
+        throw std::runtime_error(
+            "LanguageModel::initPBM: positional bias is not initialized on GrimEmbeddingStack");
     }
-    
-    // Build the spec that encoder layers will use
-    training_state_.pbm_spec = PBM::getPBMSpec(training_state_.pbm_state);
-    
-    training_state_.pbm_initialized = true;
+
+    // Non-owning view into GrimEmbeddingStack::ALiBiPositionalBias PBM buffers.
+    PBM::PBMSpec pbm_spec = PBM::getPBMSpec(alibi_bias->getPBMState());
+    if (!pbm_spec.valid || !pbm_spec.rope_inv_freq || !pbm_spec.alibi_slopes) {
+        throw std::runtime_error("LanguageModel::initPBM: PBM spec is invalid");
+    }
+    pbm_spec_ = pbm_spec;
+    pbm_spec_initialized_ = true;
+
     std::cout << "✓ PBM (Hybrid ALiBi+RoPE) initialized:" << std::endl;
     std::cout << "    ALiBi: " << cfg.num_heads << " heads with slopes" << std::endl;
-    std::cout << "    RoPE:  head_dim=" << head_dim 
-              << ", rotary_dim=" << training_state_.pbm_spec.rotary_dim
+    std::cout << "    RoPE:  head_dim=" << cfg.head_dim
+              << ", rotary_dim=" << pbm_spec_.rotary_dim
               << ", theta=10000" << std::endl;
 }
 
@@ -148,7 +150,7 @@ void LanguageModel::initTrainingState() {
     //  RULE 20: PBM MUST be initialized by initPBM() before this point.
     //  NO silent fallback — if PBM is missing, it's a bug in the call order.
     // ═══════════════════════════════════════════════════════════════════════
-    if (!training_state_.pbm_initialized) {
+    if (!isPBMInitialized()) {
         throw std::runtime_error("[initTrainingState] PBM not initialized! "
             "Call initPBM() before initTrainingState() — Rule 20: no silent fallbacks");
     }

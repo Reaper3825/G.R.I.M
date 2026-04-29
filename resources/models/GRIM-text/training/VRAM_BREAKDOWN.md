@@ -103,7 +103,7 @@ max_logit_tokens = 8192, vocab_size = 2512. One logits buffer: 8192 × 2512 × 4
 
 **This run:** Log line: `[GuessCache][INFO] Guess cache disabled (guess_aux.enabled=false)`. No GRIM-TS buffers are allocated; **0 bytes** GPU VRAM.
 
-**When enabled** (guess_aux.enabled=true): `allocateGuessCacheBuffers` is called from `GuessCacheScope` with capacity = `kDefaultGuessCacheCapacity` = 16,384 (Phase2_TrainingLoop.hpp), diversity_bloom_bits = 65,536, pinned_buffer_size = 8,192. Sizes from TrainingStateGPU.cu (GUESS_RECORD_SIZE=96, GUESS_METADATA_SIZE=32):
+**When enabled** (guess_aux.enabled=true): `allocateGuessCacheBuffers` is called from `GuessCacheScope` with capacity = `kDefaultGuessCacheCapacity` = 16,384 (Phase2_TrainingLoop.hpp), diversity_bloom_bits = 65,536, pinned_buffer_size = 8,192. Sizes from GuessCacheBuffers_GPU.cu (GUESS_RECORD_SIZE=96, GUESS_METADATA_SIZE=32):
 
 | Buffer | Formula | Bytes |
 |--------|--------|--------|
@@ -148,7 +148,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 - **Phase1_Startup.cu** (~972–985): `max_cached_batch = config.hyperparameters.batch_size`, `max_cached_seq_len = model_config.max_seq_len`, `max_tokens_per_batch = actual_batch_size × seq_cap`.
 - **InitTrainingState.cu** (261–271): `max_tokens = max_batch_size × max_seq_len_cache`, `max_logit_tokens = min(max_tokens, max_tokens_per_batch)`.
 - **memoryusestartup.txt**: "Cache allocation: batch=8, seq_len=1024, tokens=8192"; "total_params=107798346"; "Allocated cached_logits [8192 x 2512]"; "centering scratch tensor (96 MB)"; "[GuessCache][INFO] Guess cache disabled (guess_aux.enabled=false)".
-- **GRIM-TS:** TrainingStateGPU.cu `allocateGuessCacheBuffers` (capacity, GUESS_RECORD_SIZE=96, GUESS_METADATA_SIZE=32); Phase2_TrainingLoop.cu GuessCacheScope uses kDefaultGuessCacheCapacity=16384, diversity_bloom_bits=65536, pinned_buffer_size=8192. GRIM-TS.hpp static_assert(sizeof(GuessRecord)==96).
+- **GRIM-TS:** GuessCacheBuffers_GPU.cu `allocateGuessCacheBuffers` (capacity, GUESS_RECORD_SIZE=96, GUESS_METADATA_SIZE=32); Phase2_TrainingLoop.cu GuessCacheScope uses kDefaultGuessCacheCapacity=16384, diversity_bloom_bits=65536, pinned_buffer_size=8192. GRIM-TS.hpp static_assert(sizeof(GuessRecord)==96).
 - **Telemetry:** TelemetryLattice_GPU.cu constructor: levels_ = num_levels × num_streams × sizeof(LatticeLevelState); observations_ = Tensor::zeros({num_streams}); scratch_vectors_ = Tensor::zeros({num_streams, 10}); d_error_flag_ = 4 bytes. TelemetryState_GPU.hpp LatticeLevelState = TelemetryState + stride + last_update (96 bytes). Log: "8 levels, 5 streams". TelemetryControl_GPU.cu initGPU: d_config_, d_state_ (64), d_decision_ (48), d_input_ (32).
 
 ---
@@ -160,7 +160,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Params, grads, optimizer m/v** | Tensor / vector members of TrainingState; freed in ~TrainingState when members destruct. |
 | **Pre-allocated caches & grad tensors** (cached_encoder_output, cached_logits, grad_*, centering_scratch, cached_targets, token caches, sequence_weights, d_loss_scratch) | Tensor members; Tensor::~Tensor() → release() → cudaFree(data). |
 | **d_class_weights** | ~TrainingState: `cudaFree(d_class_weights)`. |
-| **PBM (alibi_slopes, rope_inv_freq)** | ~TrainingState: `GRIM::PBM::releasePBM(pbm_state)` (added so PBM GPU buffers are freed explicitly). |
+| **PBM (alibi_slopes, rope_inv_freq)** | `GrimEmbeddingStack::ALiBiPositionalBias` owns PBM buffers; `ALiBiPositionalBias::cleanup()` releases them. |
 | **TeacherLogits / reference_logits** | ~TrainingState: `TeacherLogits::release(teacher_logits)` and `reference_logits`. |
 | **Optimizer states** | ~TrainingState: `freeOptimizerStates()` (clears vector of Tensors). |
 | **Guess cache (GRIM-TS)** | ~TrainingState: `freeGuessCacheBuffers()`. |
@@ -172,7 +172,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Telemetry (lattice, control)** | Owned by TrainingContext (ctx.telemetry); when ctx is destroyed, unique_ptrs destruct; TelemetryLattice_GPU and TelemetryControl_GPU destructors cudaFree their buffers. |
 | **StreamController / cublas_handle** | ~TrainingState: `cublasDestroy(cublas_handle)`; streams owned by StreamController. |
 
-Shutdown order: Phase3 `releaseResources()` → clear autograd_intermediates → ctx.model.reset() → ~LanguageModel → ~TrainingState (PBM release, TeacherLogits, optimizer, guess cache, debug grads, d_class_weights, scratch_pool, GradNorm, cublas) → Tensor members destruct (all caches and grad buffers). Telemetry is released when TrainingContext is destroyed after Phase3.
+Shutdown order: Phase3 `releaseResources()` → clear autograd_intermediates → ctx.model.reset() → ~LanguageModel (PBM released by GrimEmbeddingStack/ALiBiPositionalBias) → ~TrainingState (TeacherLogits, optimizer, guess cache, debug grads, d_class_weights, scratch_pool, GradNorm, cublas) → Tensor members destruct (all caches and grad buffers). Telemetry is released when TrainingContext is destroyed after Phase3.
 
 ---
 

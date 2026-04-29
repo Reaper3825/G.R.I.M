@@ -28,7 +28,6 @@
 #include "Phase1_Startup.hpp"
 #include "../TrainingEvents.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
-#include "../../Shared/TNC/Token-normalized_clipping.hpp"
 #include "../../Layers/GRIMTS/GRIM-TS.hpp"
 #include "../../Shared/Loss/LossSignals/LossSignals.hpp"
 
@@ -130,8 +129,8 @@ struct TrainingLoopState {
     // Central loss-signal detector. Owns ALL loss-spike detection state
     // (initial_loss baseline, EWMA mean/var, prev_step_loss,
     // last_validation_loss, plateau / high-loss patience counters) so that
-    // LossSpikeDiagnostic, DynamicLR, SoftRestart, and Phase3 epoch
-    // finalization share a single canonical definition. Constructed in executePhase2
+    // LossSpikeDiagnostic, SoftRestart, and Phase3 epoch finalization share a
+    // single canonical definition. Constructed in executePhase2
     // from TrainingContext::config.hyperparameters.loss_signals; never null
     // after Phase2 enters the loop.
     std::unique_ptr<GRIM::Loss::LossSignalBus> loss_signals;

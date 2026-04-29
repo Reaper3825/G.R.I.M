@@ -81,7 +81,6 @@ constexpr float EPSILON_SAFE_DIV = 1e-8f;         // Division safety (AdamW, etc
 constexpr float EPSILON_LOG_PROB = 1e-7f;         // Log probability clamping (loss)
 constexpr float EPSILON_VARIANCE = 1e-4f;         // Variance computation (GRIM-TS)
 constexpr float EPSILON_TEMPERATURE = 1e-6f;      // Temperature comparison threshold
-constexpr float EPSILON_DYNAMIC_LR = 1e-12f;      // Dynamic LR controller precision
 constexpr float EPSILON_RMSNORM = 1e-5f;          // RMSNorm numerical stability
 constexpr float EPSILON_GRADIENT_CLIP = 1e-6f;    // Gradient clipping minimum threshold
 constexpr float LOG_CLAMP_MIN = -100.0f;          // Minimum log value (prevents -inf)

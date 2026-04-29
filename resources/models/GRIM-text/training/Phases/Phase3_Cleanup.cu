@@ -441,7 +441,7 @@ void releaseResources(TrainingContext& ctx) {
     }
 #endif
 
-    // Release model (TrainingState destructor frees all Tensor buffers, PBM, TeacherLogits, etc.)
+    // Release model (LanguageModel subobjects free PBM; TrainingState frees Tensor buffers, TeacherLogits, etc.)
     if (ctx.model) {
         // GuessCacheScope owns GRIMTS shutdown/free calls against TrainingState,
         // so it must be released before the model/TrainingState disappears.

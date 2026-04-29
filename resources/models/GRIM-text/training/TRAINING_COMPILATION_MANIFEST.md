@@ -1246,10 +1246,10 @@ For each encoding layer (Layer 0 → Layer 11):
   - **Batch Strategy Cleanup**: Removed SIMILARITY_GROUPED/RANDOM/WEIGHTED_RANDOM options, forced GREEDY (highest-loss tokens first) for consistent training
   - Files modified: Phase2_TrainingLoop.cu (clipping section ~lines 1650-1720, diagnostic ~lines 1800-1950)
 
-- [x] **Shared/TNC/Token-normalized_clipping.cu** ✅ VERIFIED (called by Phase2)
-  - Token-normalized gradient clipping (divides by sqrt(valid_tokens) for per-token scaling)
-  - Adaptive clipping enabled via config
-  - Pattern verified: Uses token normalization, not just global norm
+- [x] **Shared/TNC/Token-normalized_clipping.cu** REMOVED
+  - Batch token stats are now owned by `BatchPayload` and authored during Phase1 planned-batch construction
+  - Phase2 reads `HyperParameters::gradientClippingHP()` before calling `GradClip::clipGradientNorms`
+  - Removed the unused clip-selection wrapper and dead `computeBatchTokenStats` recomputation path
 
 ---
 
@@ -1283,19 +1283,11 @@ For each encoding layer (Layer 0 → Layer 11):
 - [ ] **Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu**
   - Applies AdamW update: `param -= lr * m_hat / (sqrt(v_hat) + eps) + weight_decay_term`
   - Pattern to check: Verify decoupled weight decay formula
-  - Pattern to check: Verify uses correct learning rate (dynamically adjusted if enabled)
+  - Pattern to check: Verify uses the scheduled learning rate provided by Phase2
 
 ---
 
-### 5.4 Dynamic Learning Rate
-
-- [ ] **Shared/Dynamic_LR/DynamicLR.cu**
-  - Adjusts learning rate based on training signals
-  - Pattern to check: Verify uses loss/gradient trends (not just epoch number)
-
----
-
-### 5.5 Soft Restart Mechanism
+### 5.4 Soft Restart Mechanism
 
 - [ ] **Shared/SoftRestart/SoftRestart.cu**
   - Resets optimizer state on plateau detection

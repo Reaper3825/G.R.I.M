@@ -249,7 +249,7 @@ if (fast_loss.r_out > 0.5 && medium_loss.r_out < 0.1) {
    - Reads `loss_tel.delta_mu`, `loss_tel.r_out`, `loss_tel.p`
    - `δμ > 0.3` + `r_out > 0.4` → reduce LR by 0.5x
    - `δμ < -0.1` + `v_σ < 0.5` + `p < -0.5` → increase LR by 1.2x
-   - Applied AFTER DynamicLRController as safety layer
+   - Applied as a safety layer over the scheduled learning rate
 
 3. **Telemetry-based soft restart** (Phase2_TrainingLoop.cu)
    - Reads `loss_tel.r_out`, `loss_tel.ell_out`, `loss_tel_l2.r_out`

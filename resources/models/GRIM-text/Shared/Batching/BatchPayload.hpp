@@ -25,7 +25,6 @@
 #include <stdexcept>
 #include <numeric>
 
-#include "../TNC/Token-normalized_clipping.hpp"
 #include "../Execution/ExecutionMetadata.hpp"
 
 // Forward declarations
@@ -48,6 +47,12 @@ namespace Batching {
 // TeacherStep is now defined in Execution/ExecutionMetadata.hpp as GRIM::Execution::TeacherStep.
 // This alias preserves call-site compatibility during the cutover.
 using TeacherStep = GRIM::Execution::TeacherStep;
+
+struct BatchTokenStats {
+    std::int64_t total_tokens = 0;
+    int max_sequence_length = 0;
+    int batch_size = 0;
+};
 
 // =============================================================================
 // BatchPayload — immutable batch datum
@@ -168,7 +173,7 @@ struct BatchPayload {
     // ═══════════════════════════════════════════════════════════════════════════
     // TOKEN STATS (for gradient clipping — computed ONCE)
     // ═══════════════════════════════════════════════════════════════════════════
-    TNC::BatchTokenStats token_stats;
+    BatchTokenStats token_stats;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CACHE FIT (computed ONCE against model limits)
@@ -201,6 +206,12 @@ struct BatchPayload {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.valid_tokens=" +
                 std::to_string(valid_tokens) + " (must be > 0 — batch has no trainable targets)");
+        }
+        if (lm_valid_tokens <= 0) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.lm_valid_tokens=" +
+                std::to_string(lm_valid_tokens) +
+                " (must be > 0 after execution-slot target masking)");
         }
         if (vocab_size <= 0) {
             throw std::runtime_error(

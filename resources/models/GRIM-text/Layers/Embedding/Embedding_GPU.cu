@@ -39,9 +39,6 @@ EmbeddingLayer::EmbeddingLayer(const EmbeddingLayerConfig& config,
     if (config_.d_model <= 0) {
         throw std::runtime_error("EmbeddingLayer: d_model must be positive, got " + std::to_string(config_.d_model));
     }
-    if (config_.max_seq_len <= 0) {
-        throw std::runtime_error("EmbeddingLayer: max_seq_len must be positive, got " + std::to_string(config_.max_seq_len));
-    }
     if (!stream) {
         throw std::runtime_error("EmbeddingLayer: stream is NULL — CUDA stream required for allocation");
     }

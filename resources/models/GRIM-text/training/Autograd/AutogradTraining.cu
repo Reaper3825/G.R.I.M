@@ -70,118 +70,9 @@ constexpr int kBlockSize = 256;
 // Tensor& accessors (enc->attnWqkv().grad_data() etc.).
 // See buildParameterGroups() in LanguageModel_Training.cu.
 
-//======================================================================
-// Context Initialization
-//======================================================================
+// Context initialization lives in AutogradContext.cu so this file can focus on
+// the autograd math path: forward, loss, backward, and the training-step bridge.
 
-// Training overload — derives batch geometry from BatchPayload.
-// `bindings` must describe the same batch (geometry-checked) and must already
-// have been populated by uploadBatchToDevice(payload) at the H2D sync slice.
-AutogradContext initAutogradContext(
-    const LanguageModelConfig* config,
-    TrainingState* training_state,
-    GPUGrimEncoder* gpu_encoder,
-    EmbeddingLayer* embedding_layer,
-    LMHeadLayer* lm_head,
-    ScratchBlockLayer* scratch_block,
-    ReasoningHeadLayer* reasoning_head,
-    ExecutionBlockLayer* execution_block,
-    cublasHandle_t cublas_handle,
-    cudaStream_t stream,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    float grad_scale,
-    uint64_t step,
-    bool is_training
-) {
-    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error(
-            "initAutogradContext(payload): BatchDeviceBindings geometry (" +
-            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
-            ") does not match payload (" +
-            std::to_string(payload.batch_size) + "x" + std::to_string(payload.max_seq_len) +
-            ")");
-    }
-    if (!bindings.d_token_to_slot_map) {
-        throw std::runtime_error(
-            "initAutogradContext(payload): bindings.d_token_to_slot_map is NULL — "
-            "caller must call uploadBatchToDevice() before initAutogradContext");
-    }
-
-    AutogradContext ctx{};
-    ctx.config = config;
-    ctx.training_state = training_state;
-    ctx.gpu_encoder = gpu_encoder;
-    ctx.embedding_layer = embedding_layer;
-    ctx.lm_head = lm_head;
-    ctx.scratch_block = scratch_block;
-    ctx.reasoning_head = reasoning_head;
-    ctx.execution_block = execution_block;
-    ctx.cublas_handle = cublas_handle;
-    ctx.stream = stream;
-    ctx.payload = &payload;
-    ctx.device_bindings = &bindings;
-    ctx.batch_size = payload.batch_size;
-    ctx.seq_len = payload.max_seq_len;
-    ctx.grad_scale = grad_scale;
-    ctx.step = step;
-    ctx.is_training = is_training;
-
-    // Rule 20: Fail loud on invalid context
-    ctx.validate("initAutogradContext(payload)");
-
-    return ctx;
-}
-
-// Inference overload — builds a geometry-only BatchPayload so ctx.payload is never null
-AutogradContext initAutogradContext(
-    const LanguageModelConfig* config,
-    TrainingState* training_state,
-    GPUGrimEncoder* gpu_encoder,
-    EmbeddingLayer* embedding_layer,
-    LMHeadLayer* lm_head,
-    ScratchBlockLayer* scratch_block,
-    ReasoningHeadLayer* reasoning_head,
-    ExecutionBlockLayer* execution_block,
-    cublasHandle_t cublas_handle,
-    cudaStream_t stream,
-    int batch_size,
-    int seq_len,
-    float grad_scale,
-    uint64_t step,
-    bool is_training
-) {
-    AutogradContext ctx{};
-    ctx.config = config;
-    ctx.training_state = training_state;
-    ctx.gpu_encoder = gpu_encoder;
-    ctx.embedding_layer = embedding_layer;
-    ctx.lm_head = lm_head;
-    ctx.scratch_block = scratch_block;
-    ctx.reasoning_head = reasoning_head;
-    ctx.execution_block = execution_block;
-    ctx.cublas_handle = cublas_handle;
-    ctx.stream = stream;
-    ctx.batch_size = batch_size;
-    ctx.seq_len = seq_len;
-    ctx.grad_scale = grad_scale;
-    ctx.step = step;
-    ctx.is_training = is_training;
-
-    // Build geometry-only inference payload (vectors stay empty)
-    ctx.inference_payload_.batch_size   = batch_size;
-    ctx.inference_payload_.max_seq_len  = seq_len;
-    ctx.inference_payload_.total_tokens = batch_size * seq_len;
-    ctx.inference_payload_.actual_tokens = batch_size * seq_len;
-    // NOTE: payload pointer is set by fixupInferencePayload() after return-by-value,
-    // because NRVO/move invalidates self-pointers. See executeAutogradForward.
-    
-    // Rule 20: Fail loud on invalid context
-    ctx.validate("initAutogradContext(inference)");
-    
-    return ctx;
-}
-  
 //======================================================================
 // Autograd Forward Pass
 // PRODUCTION-READY: Runs entire model with autograd graph intact
@@ -231,12 +122,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     const auto* cfg = ctx.config;
     auto& intermediates = ts->autograd_intermediates;  // All intermediate tensors go HERE
     
-    const int total_tokens = ctx.batch_size * ctx.seq_len;
+    const auto& payload = *ctx.payload;
+    const int total_tokens = payload.total_tokens;
     result.total_tokens = total_tokens;
-    result.vocab_size = cfg->vocab_size;
+    result.vocab_size = payload.vocab_size;
 
     AG_INFO("Autograd Forward: batch=" << ctx.batch_size << " seq=" << ctx.seq_len 
-            << " tokens=" << total_tokens << " vocab=" << cfg->vocab_size);
+            << " tokens=" << total_tokens << " vocab=" << payload.vocab_size);
     
     // Set autograd cuBLAS handle for all matmul operations
     autograd::set_autograd_cublas_handle(ctx.cublas_handle);
@@ -349,129 +241,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         AG_INFO("Step 1.5: ScratchBlock complete");
     }
     
-    // ═══════════════════════════════════════════════════════════════════════════
-    // ISSUE #91 DIAGNOSTIC: Dump embedding stats AFTER ScratchBlock, BEFORE encoder
-    // (GUARDED: set ENABLE_EXPENSIVE_DIAGNOSTICS=true in VerboseLogging.hpp to enable)
-    // ═══════════════════════════════════════════════════════════════════════════
-    if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
-        // This copies ~22MB to host - expensive!
-        const int full_size = total_tokens * cfg->d_model;
-        std::vector<float> h_emb(full_size);
-        cudaMemcpy(h_emb.data(), intermediates.embedding_tensor.data, full_size * sizeof(float), cudaMemcpyDeviceToHost);
-        
-        float emb_min = h_emb[0], emb_max = h_emb[0];
-        double emb_sum = 0.0, emb_sum_sq = 0.0;
-        for (int i = 0; i < full_size; i++) {
-            emb_min = std::min(emb_min, h_emb[i]);
-            emb_max = std::max(emb_max, h_emb[i]);
-            emb_sum += h_emb[i];
-            emb_sum_sq += h_emb[i] * h_emb[i];
-        }
-        float emb_mean = emb_sum / full_size;
-        float emb_rms = sqrtf(emb_sum_sq / full_size);
-        
-        fprintf(stderr, "[Issue91-EMB-AFTER-SB] tokens=%d d_model=%d: min=%.10f max=%.10f mean=%.10f rms=%.10f\n",
-                total_tokens, cfg->d_model, emb_min, emb_max, emb_mean, emb_rms);
-        
-        // ═══════════════════════════════════════════════════════════════════════
-        // RULE 21 DIAGNOSTIC: Embedding Cosine Similarity (BEFORE encoder layers)
-        // 
-        // This measures how correlated token representations are BEFORE any
-        // transformer layers process them. Without additive position embeddings
-        // (Issue #103), same tokens at different positions have IDENTICAL
-        // embeddings, causing avg_cos to approach 1.0 as token repetition increases.
-        //
-        // EQUATION: cosine(h_i, h_j) = (h_i · h_j) / (h_rms_i * h_rms_j * d_model)
-        // EXPECTED: avg_cos ≈ 1/sqrt(d_model) ≈ 0.036 for random orthogonal vectors
-        // ANOMALY: avg_cos > 0.5 indicates high correlation (representational collapse)
-        // ═══════════════════════════════════════════════════════════════════════
-        {
-            const int d_model = cfg->d_model;
-            const int sample_pairs = std::min(50, total_tokens / 2);  // Sample pairs for efficiency
-            
-            if (sample_pairs >= 2) {
-                // Compute RMS for each position
-                std::vector<float> row_rms(total_tokens);
-                for (int t = 0; t < total_tokens; t++) {
-                    double norm_sq = 0.0;
-                    for (int d = 0; d < d_model; d++) {
-                        float v = h_emb[t * d_model + d];
-                        norm_sq += v * v;
-                    }
-                    row_rms[t] = sqrtf(norm_sq / d_model);
-                }
-                
-                // Compute pairwise cosine similarity for sampled pairs
-                double cos_sum = 0.0;
-                double cos_min = 2.0, cos_max = -2.0;
-                int num_pairs = 0;
-                int identical_token_pairs = 0;
-                double identical_cos_sum = 0.0;
-                
-                // Sample evenly-spaced pairs throughout the sequence
-                const int stride = std::max(1, total_tokens / sample_pairs);
-                for (int i = 0; i < total_tokens && num_pairs < sample_pairs; i += stride) {
-                    int j = (i + total_tokens / 2) % total_tokens;  // Pair with distant position
-                    if (i == j || row_rms[i] < 1e-8f || row_rms[j] < 1e-8f) continue;
-                    
-                    // Compute dot product h_i · h_j
-                    double dot = 0.0;
-                    for (int d = 0; d < d_model; d++) {
-                        dot += h_emb[i * d_model + d] * h_emb[j * d_model + d];
-                    }
-                    
-                    double cosine = dot / (static_cast<double>(row_rms[i]) * row_rms[j] * d_model);
-                    cos_sum += cosine;
-                    cos_min = std::min(cos_min, cosine);
-                    cos_max = std::max(cos_max, cosine);
-                    num_pairs++;
-                    
-                    // Track identical token pairs (from cached_token_ids_tensor if available)
-                    if (ts->cached_token_ids_tensor.data) {
-                        std::vector<int> h_tok_ids(total_tokens);
-                        cudaMemcpy(h_tok_ids.data(), ts->cached_token_ids_tensor.data, 
-                                   total_tokens * sizeof(int), cudaMemcpyDeviceToHost);
-                        if (h_tok_ids[i] == h_tok_ids[j]) {
-                            identical_token_pairs++;
-                            identical_cos_sum += cosine;
-                        }
-                    }
-                }
-                
-                const double avg_cos = (num_pairs > 0) ? cos_sum / num_pairs : 0.0;
-                const double expected_cos = 1.0 / sqrt(static_cast<double>(d_model));  // ~0.036 for d=768
-                
-                fprintf(stderr, "[EMBED_COSINE_EQUATION] BEFORE_ENCODER: cosine(h_i, h_j) = (h_i · h_j) / (h_rms_i * h_rms_j * d_model)\n");
-                fprintf(stderr, "  INPUT h (embeddings): shape=[%d, %d] row_rms_range=[%.6f, %.6f]\n",
-                        total_tokens, d_model, 
-                        *std::min_element(row_rms.begin(), row_rms.end()),
-                        *std::max_element(row_rms.begin(), row_rms.end()));
-                fprintf(stderr, "  PARAMETERS: sample_pairs=%d, stride=%d\n", num_pairs, stride);
-                fprintf(stderr, "  EXPECTED avg_cos = 1/sqrt(d_model)\n");
-                fprintf(stderr, "                    = 1/sqrt(%d)\n", d_model);
-                fprintf(stderr, "                    = %.6f (for random orthogonal vectors)\n", expected_cos);
-                fprintf(stderr, "  ACTUAL avg_cos=%.6f min=%.6f max=%.6f\n", avg_cos, cos_min, cos_max);
-                
-                if (identical_token_pairs > 0) {
-                    double avg_identical_cos = identical_cos_sum / identical_token_pairs;
-                    fprintf(stderr, "  IDENTICAL_TOKEN_PAIRS: %d/%d pairs, avg_cos=%.6f\n",
-                            identical_token_pairs, num_pairs, avg_identical_cos);
-                    if (avg_identical_cos > 0.99) {
-                        fprintf(stderr, "  [ANOMALY] Same tokens have cosine≈1.0 - NO position differentiation!\n");
-                        fprintf(stderr, "  [ANOMALY] Without additive position embeddings, same tokens are IDENTICAL\n");
-                    }
-                }
-                
-                if (avg_cos > 0.5) {
-                    fprintf(stderr, "  [ANOMALY] avg_cos=%.6f >> expected=%.6f (%.1fx larger!)\n",
-                            avg_cos, expected_cos, avg_cos / expected_cos);
-                    fprintf(stderr, "  [ANOMALY] High embedding correlation BEFORE encoder = representational collapse!\n");
-                    fprintf(stderr, "  [ANOMALY] Root cause: Without additive pos_emb, same tokens have IDENTICAL representations\n");
-                }
-            }
-        }
-    }  // end ENABLE_EXPENSIVE_DIAGNOSTICS guard (Issue #91 embedding stats)
-
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP 2: Encoder Layers (transformer blocks)
     //  Encoder layer outputs stored in intermediates to keep autograd graph alive.
@@ -1113,26 +882,20 @@ LossResult computeAutogradLoss(
         throw std::runtime_error("computeAutogradLoss: Logits tensor not initialized - call executeAutogradForward() first");
     }
     
-    // GPU-side targets are already in training_state (copied before forward pass)
-    const int* targets = reinterpret_cast<const int*>(ts->cached_targets_tensor.data);
-    if (!targets) {
-        throw std::runtime_error("computeAutogradLoss: cached_targets_tensor.data is NULL - GPU copies must run before loss");
+    // BatchPayload owns target semantics; TrainingState holds the uploaded device mirror.
+    const int* d_targets = reinterpret_cast<const int*>(ts->cached_targets_tensor.data);
+    if (!d_targets) {
+        throw std::runtime_error(
+            "computeAutogradLoss: cached_targets_tensor.data is NULL - "
+            "caller must upload the Phase1-authored BatchPayload before loss");
     }
     
-    const int total_tokens = ctx.batch_size * ctx.seq_len;
-    const int vocab_size = cfg->vocab_size;
-    // Use payload.lm_valid_tokens — the post atom-target masking count set by
-    // copyBatchToDevice (training path) or computeLossBatch (eval path).
-    const int valid_tokens = payload.lm_valid_tokens;
-    if (valid_tokens <= 0) {
-        throw std::runtime_error("computeAutogradLoss: payload.lm_valid_tokens=" +
-            std::to_string(valid_tokens) + " — must be > 0 (set after atom-target masking)");
-    }
-    // Publish to TrainingState so Phase2 logging can read it.
-    ts->cached_valid_tokens = valid_tokens;
+    const int total_tokens = payload.total_tokens;
+    const int vocab_size = payload.vocab_size;
+    const int lm_valid_tokens = payload.lm_valid_tokens;
     
     AG_INFO("Computing loss: tokens=" << total_tokens << " vocab=" << vocab_size
-            << " valid=" << valid_tokens);
+            << " lm_valid=" << lm_valid_tokens);
     
     // ═══════════════════════════════════════════════════════════════════════════
     // 1. TEXT CROSS-ENTROPY LOSS (autograd::unified_loss)
@@ -1146,17 +909,12 @@ LossResult computeAutogradLoss(
         ts->grad_logits_tensor.data
     );
     
-    // CRITICAL: Release old loss tensor BEFORE unified_loss() allocates new one.
-    // unified_loss() allocates ~4 GB (log_probs + grad_buffer + LogSoftmaxGradFn saved data).
-    // Without releasing first, both old and new coexist → OOM on 12 GB GPU.
-    intermediates.loss_tensor.release();
-    
     // Compute text CE - returns scalar Tensor with NLLLossGradFn → LogSoftmaxGradFn chain
     Tensor loss_tensor = autograd::unified_loss(
         intermediates.logits_tensor,
-        targets,
-        payload.total_tokens,
-        payload.vocab_size,
+        d_targets,
+        total_tokens,
+        vocab_size,
         ctx.loss_config,
         ctx.stream
     );
@@ -1192,11 +950,7 @@ LossResult computeAutogradLoss(
     }
 
     result.text_loss = text_loss;
-    result.valid_tokens = valid_tokens;
-    // NOTE: cached_loss_value is set AFTER all losses are accumulated (see below).
-    // text_loss here is ONLY text CE + MTP — execution/selector losses come later.
-    ts->cached_text_loss = text_loss;
-    // cached_valid_tokens published from payload.lm_valid_tokens above.
+    result.valid_tokens = lm_valid_tokens;
 
     constexpr float numeric_loss = 0.0f;
 
@@ -1516,7 +1270,6 @@ LossResult computeAutogradLoss(
     result.loss_value = actual_loss;
     result.aux_loss = actual_loss - text_loss;  // All non-text auxiliary loss (exec block + selector + etc.)
     result.weight_text = 1.0f;
-    ts->cached_loss_value = actual_loss;
     
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (actual_tensor=" 
@@ -1529,7 +1282,7 @@ LossResult computeAutogradLoss(
             << " exec_ce=" << exec_structured_ce
             << " exec_entropy_aux=" << exec_entropy_loss
             << " selector=" << selector_supervision_loss
-            << " valid_tokens=" << valid_tokens);
+            << " lm_valid=" << lm_valid_tokens);
     
     result.success = true;
     return result;
@@ -1750,8 +1503,6 @@ BackwardResult executeAutogradBackward(
 //======================================================================
 
 bool verifyGradientsAreConnected(AutogradContext& ctx) {
-    (void)ctx.training_state;
-    (void)ctx.config;
     bool ok = true;
     
     // The autograd system stores gradients in Tensor.grad_ fields (shared_ptr<Tensor>)
@@ -1974,20 +1725,6 @@ LossResult autogradTrainingStep(
 ) {
     payload.validate("autogradTrainingStep");
 
-    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error(
-            "autogradTrainingStep: BatchDeviceBindings geometry (" +
-            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
-            ") does not match payload (" +
-            std::to_string(payload.batch_size) + "x" + std::to_string(payload.max_seq_len) +
-            "). Caller must pass the bindings returned by uploadBatchToDevice(payload).");
-    }
-    if (!bindings.d_input_ids || !bindings.d_target_ids || !bindings.d_token_to_slot_map) {
-        throw std::runtime_error(
-            "autogradTrainingStep: BatchDeviceBindings has NULL device pointers — "
-            "caller must invoke model.uploadBatchToDevice(payload) before this step.");
-    }
-
     const auto& cfg = model.getConfig();
 
     // Execution payload validation (WS4: single shared validator)
@@ -2027,9 +1764,8 @@ LossResult autogradTrainingStep(
 
     // ═══════════════════════════════════════════════════════════════════════════
     // GPU COPIES: handled upstream by LanguageModel::uploadBatchToDevice(payload).
-    // The returned BatchDeviceBindings is the single source of truth for device
-    // pointers in this step. autogradTrainingStep no longer issues any H2D copy
-    // for the payload (Rule: BatchPayload host-only, BatchDeviceBindings device-only).
+    // initAutogradContext is the single sync-boundary validator for the returned
+    // BatchDeviceBindings; this step never authors payload geometry or H2D copies.
     // ═══════════════════════════════════════════════════════════════════════════
 
     // Logit buffer capacity is still enforced here so a mis-sized payload trips

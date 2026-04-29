@@ -32,6 +32,12 @@ struct LearningRateScheduleInputs {
     bool cosine_warm_restarts = false;
 };
 
+struct GradientClippingHP {
+    bool enabled = false;
+    float configured_clip_norm = 0.0f;
+    float effective_per_token_limit = EPSILON_GRADIENT_CLIP;
+};
+
 inline CoreRunHP coreRunHP(const StartupConfig& config) {
     const auto& hp = config.hyperparameters;
     CoreRunHP view;
@@ -68,6 +74,17 @@ inline LearningRateScheduleInputs learningRateScheduleInputs(
     inputs.cosine_decay_enabled = hp.cosine_decay_enabled;
     inputs.cosine_warm_restarts = hp.cosine_warm_restarts;
     return inputs;
+}
+
+inline GradientClippingHP gradientClippingHP(
+    const ::GRIM::Config::TrainingHyperparameters& hp)
+{
+    GradientClippingHP view;
+    view.configured_clip_norm = hp.grad_clip_norm;
+    view.enabled = hp.grad_clip_norm > 0.0f;
+    view.effective_per_token_limit = std::max(
+        hp.grad_clip_norm, EPSILON_GRADIENT_CLIP);
+    return view;
 }
 
 inline ::GRIM::LR::LRScheduleConfig makeLRScheduleConfig(

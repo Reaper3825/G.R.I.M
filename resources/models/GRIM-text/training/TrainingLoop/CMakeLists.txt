@@ -259,9 +259,12 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../TrainingOps.cu
     ../../Shared/Loss/ComputeLoss/ComputeLossBatch.cu
     ../../Shared/TrainingState/TrainingStateGPU.cu
+    ../../Shared/TrainingState/Optimizer/OptimizerState_GPU.cu
+    ../../Shared/TrainingState/GuessCache/GuessCacheBuffers_GPU.cu
     ../../Shared/TeacherLogits/TeacherLogits_GPU.cu
     ../LanguageModel_Training.cu
     ../../Shared/Gradients/GradStatsCollector.cu
+    ../Autograd/AutogradContext.cu
     ../Autograd/AutogradTraining.cu
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
@@ -450,10 +453,8 @@ add_executable(train_gpu
     ../training_data_loader.hpp
     ../metrics_collector.hpp
     ../TrainingEvents.hpp
-    ../../Shared/Dynamic_LR/DynamicLR.cu
     ../../Shared/DataLoader/DataLoader.cu
     ../../Shared/DataLoader/ConceptExecutionSequenceBuilder.cu
-    ../../Shared/TNC/Token-normalized_clipping.cu
     ../../Shared/SoftRestart/SoftRestart.cu
     ../../Layers/GRIMTS/GRIM-TS.cu
     ../../Layers/GRIMTS/GuessCacheTraining.cu

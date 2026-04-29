@@ -5,7 +5,7 @@
 //  Merges logic from:
 //    - Phase2_TrainingLoop.cu::processBatch() sequence extraction (lines 2700-2730)
 //    - ComputeLossBatch.cu::prepareLossBatchInputs() padding/masking (lines 52-193)
-//    - Token-normalized_clipping.cu::computeBatchTokenStats()
+//    - legacy token-stat recomputation for gradient clipping
 //
 //  All metadata computed ONCE here. No downstream recomputation.
 //  Rule 20: No fallbacks, crash on any inconsistency.
@@ -81,7 +81,7 @@ BatchPayload buildBatchPayload(
     payload.max_seq_len = 0;
     payload.actual_tokens = 0;
 
-    // Token stats (replaces computeBatchTokenStats)
+    // Token stats are Phase1-authored metadata consumed by Phase2 diagnostics/clipping.
     payload.token_stats.batch_size = payload.batch_size;
     payload.token_stats.total_tokens = 0;
     payload.token_stats.max_sequence_length = 0;

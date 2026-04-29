@@ -190,9 +190,8 @@ Total: 6/6 passed
 [Diag] batch=N loss=X.XX preclip_grad=Y.YY preclip_norm=Z.ZZ
 ```
 
-### Dynamic LR Events
+### Soft Restart Events
 ```log
-[DynamicLR] forced_floor lr=0.000028 reason=grad_spike
 [SoftRestart] triggered at batch N
 ```
 
@@ -330,10 +329,7 @@ python training/trace_single_gradient.py gradient_trace_step_0.bin
     "config": {
       "log_interval": 10,          // Steps between log lines
       "grad_check_enabled": true,  // [GradCheck] lines
-      "flash_debug": true,         // [FlashBwd] lines
-      "dynamic_lr": {
-        "enabled": true            // [DynamicLR] lines
-      }
+      "flash_debug": true          // [FlashBwd] lines
     }
   }
 }
