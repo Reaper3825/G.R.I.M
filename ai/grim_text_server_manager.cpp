@@ -4,7 +4,7 @@
 
 #include "grim_text_server_manager.hpp"
 #include "../logger.hpp"
-#include "../control/ai_config_paths.hpp"  // ✅ For reading paths from ai_config.json
+#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"  // For reading paths from ai_config.json
 #include <cpr/cpr.h>
 #include <httplib.h>
 #include <nlohmann/json.hpp>

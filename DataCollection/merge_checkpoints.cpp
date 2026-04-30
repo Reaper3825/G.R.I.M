@@ -12,7 +12,7 @@
 #include "data_preprocessor.hpp"
 #include "data_splitter.hpp"
 #include "../resources/models/GRIM-text/Shared/UnigramByte/UniByte.hpp"
-#include "../../../control/ai_config_paths.hpp"
+#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 using namespace GRIM::Training;
 namespace fs = std::filesystem;

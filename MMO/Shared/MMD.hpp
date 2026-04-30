@@ -117,6 +117,19 @@ struct VisionModelDescriptor {
     // ENCODER ONNX; the decoder ONNX is a SECOND file. input_width /
     // input_height (above) are the encoder spatial dims (SAM 2 default 1024).
     std::string instance_seg_decoder_onnx_path;
+    std::string instance_seg_encoder_input_name;
+    std::string instance_seg_encoder_output_image_embed_name;
+    std::string instance_seg_encoder_output_high_res_feats_0_name;
+    std::string instance_seg_encoder_output_high_res_feats_1_name;
+    std::string instance_seg_decoder_input_image_embed_name;
+    std::string instance_seg_decoder_input_high_res_feats_0_name;
+    std::string instance_seg_decoder_input_high_res_feats_1_name;
+    std::string instance_seg_decoder_input_point_coords_name;
+    std::string instance_seg_decoder_input_point_labels_name;
+    std::string instance_seg_decoder_input_mask_input_name;
+    std::string instance_seg_decoder_input_has_mask_input_name;
+    std::string instance_seg_decoder_output_masks_name;
+    std::string instance_seg_decoder_output_iou_predictions_name;
     int         instance_seg_max_prompts_per_frame = 0;   // 0 ⇒ operator default
     float       instance_seg_min_prompt_confidence = 0.0f; // 0 ⇒ operator default
 };

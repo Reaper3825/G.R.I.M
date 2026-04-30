@@ -31,7 +31,10 @@
 #include "../perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "../perception/physical/PhysicalMonocularDepthEstimator.hpp"
 
+#include <cstdlib>
 #include <filesystem>
+#include <sstream>
+#include <vector>
 #include <whisper.h>
 
 // Global resource layer (replaces old g_systemInfo)
@@ -54,6 +57,144 @@ void stopMMOIdleTick() {
 }
 
 namespace fs = std::filesystem;
+
+static std::string ResolveConfigPathAgainstGrimRoot(const std::string& path) {
+    if (path.empty()) {
+        return {};
+    }
+    fs::path p(path);
+    if (p.is_absolute()) {
+        return p.lexically_normal().string();
+    }
+    fs::path resolved = fs::path(getGrimRootDir()) / p;
+    return resolved.lexically_normal().string();
+}
+
+struct RequiredPhysicalVisionPath {
+    std::string label;
+    fs::path    path;
+};
+
+static void AddRequiredPhysicalVisionPath(
+    std::vector<RequiredPhysicalVisionPath>& out,
+    const std::string& label,
+    const std::string& config_path)
+{
+    if (config_path.empty()) {
+        return;
+    }
+    out.push_back({ label, fs::path(ResolveConfigPathAgainstGrimRoot(config_path)) });
+}
+
+static std::vector<RequiredPhysicalVisionPath> CollectRequiredPhysicalVisionPaths(
+    GRIM::MMO::ModelRegistry& registry)
+{
+    std::vector<RequiredPhysicalVisionPath> out;
+    for (const auto* vm : registry.getVisionSubModels()) {
+        if (!vm) {
+            throw std::runtime_error(
+                "CollectRequiredPhysicalVisionPaths: registry returned NULL vision model");
+        }
+
+        const std::string prefix = vm->id + ": ";
+        AddRequiredPhysicalVisionPath(out, prefix + "model_path", vm->model_path);
+        AddRequiredPhysicalVisionPath(out, prefix + "class_names_path", vm->vision.class_names_path);
+        AddRequiredPhysicalVisionPath(out, prefix + "text_embeddings_path", vm->vision.text_embeddings_path);
+        AddRequiredPhysicalVisionPath(out, prefix + "recogniser_onnx_path", vm->vision.recogniser_onnx_path);
+        AddRequiredPhysicalVisionPath(out, prefix + "recogniser_charset_path", vm->vision.recogniser_charset_path);
+        AddRequiredPhysicalVisionPath(out, prefix + "expression_classifier_onnx_path", vm->vision.expression_classifier_onnx_path);
+        AddRequiredPhysicalVisionPath(out, prefix + "expression_classifier_class_names_path", vm->vision.expression_classifier_class_names_path);
+        AddRequiredPhysicalVisionPath(out, prefix + "instance_seg_decoder_onnx_path", vm->vision.instance_seg_decoder_onnx_path);
+    }
+    return out;
+}
+
+static std::vector<RequiredPhysicalVisionPath> FindMissingPhysicalVisionPaths(
+    const std::vector<RequiredPhysicalVisionPath>& required)
+{
+    std::vector<RequiredPhysicalVisionPath> missing;
+    for (const auto& item : required) {
+        std::error_code ec;
+        if (!fs::exists(item.path, ec) || !fs::is_regular_file(item.path, ec) || fs::file_size(item.path, ec) == 0) {
+            missing.push_back(item);
+        }
+    }
+    return missing;
+}
+
+static std::string FormatMissingPhysicalVisionPaths(
+    const std::vector<RequiredPhysicalVisionPath>& missing)
+{
+    std::ostringstream oss;
+    for (const auto& item : missing) {
+        oss << "\n  - " << item.label << " -> " << item.path.string();
+    }
+    return oss.str();
+}
+
+#ifdef _WIN32
+static std::string QuoteWindowsCommandArg(const fs::path& path) {
+    std::string s = path.string();
+    std::string quoted;
+    quoted.reserve(s.size() + 2);
+    quoted.push_back('"');
+    for (char ch : s) {
+        if (ch == '"') {
+            quoted += "\\\"";
+        } else {
+            quoted.push_back(ch);
+        }
+    }
+    quoted.push_back('"');
+    return quoted;
+}
+#endif
+
+static void EnsurePhysicalVisionModelsAvailable(GRIM::MMO::ModelRegistry& registry) {
+    const auto required = CollectRequiredPhysicalVisionPaths(registry);
+    auto missing = FindMissingPhysicalVisionPaths(required);
+    if (missing.empty()) {
+        LOG_DEBUG("Bootstrap", "Physical vision model assets present");
+        LOG_PHASE("Physical vision model assets", true);
+        return;
+    }
+
+    LOG_ERROR("Bootstrap", "Physical vision model assets missing:" + FormatMissingPhysicalVisionPaths(missing));
+
+#ifdef _WIN32
+    const fs::path setup_script = fs::path(getGrimRootDir()) / "scripts" / "setup_windows_physical_vision.ps1";
+    if (!fs::exists(setup_script)) {
+        throw std::runtime_error(
+            "EnsurePhysicalVisionModelsAvailable: setup script missing: " + setup_script.string());
+    }
+
+    LOG_DEBUG("Bootstrap", "Running Windows physical vision setup script: " + setup_script.string());
+    LOG_PHASE("Physical vision model auto-setup start", true);
+
+    const std::string command =
+        "powershell -NoProfile -ExecutionPolicy Bypass -File "
+        + QuoteWindowsCommandArg(setup_script);
+    const int rc = std::system(command.c_str());
+    if (rc != 0) {
+        throw std::runtime_error(
+            "EnsurePhysicalVisionModelsAvailable: setup script failed with exit code "
+            + std::to_string(rc) + ": " + setup_script.string());
+    }
+
+    missing = FindMissingPhysicalVisionPaths(required);
+    if (!missing.empty()) {
+        throw std::runtime_error(
+            "EnsurePhysicalVisionModelsAvailable: setup script completed but required files are still missing:"
+            + FormatMissingPhysicalVisionPaths(missing));
+    }
+
+    LOG_PHASE("Physical vision model auto-setup complete", true);
+#else
+    throw std::runtime_error(
+        "EnsurePhysicalVisionModelsAvailable: physical vision model assets are missing and automatic startup download is only wired for Windows:"
+        + FormatMissingPhysicalVisionPaths(missing));
+#endif
+}
 
 // ================================================================
 // Phase 1: Config and static data bootstrap
@@ -223,6 +364,7 @@ static void bootstrapMMOLayer() {
     auto& registry = GRIM::MMO::ModelRegistry::instance();
     registry.loadFromConfig(aiConfig);
     LOG_PHASE("MMO model registry loaded", true);
+    EnsurePhysicalVisionModelsAvailable(registry);
 
     {
         LOG_DEBUG("Bootstrap", "MMO layer init (mode=" + registry.mode() + ", enabled=" + std::string(registry.isEnabled() ? "true" : "false") + ")");
@@ -306,8 +448,8 @@ static void bootstrapMMOLayer() {
                 switch (vm->vision.operator_kind) {
                 case Op::ObjectDetector: {
                     PE::PhysicalObjectDetectorConfig c;
-                    c.onnx_model_path  = vm->model_path;
-                    c.class_names_path = vm->vision.class_names_path;
+                    c.onnx_model_path  = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    c.class_names_path = ResolveConfigPathAgainstGrimRoot(vm->vision.class_names_path);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     if (vm->vision.confidence_threshold > 0.0f)
@@ -325,8 +467,8 @@ static void bootstrapMMOLayer() {
                 }
                 case Op::SemanticSegmenter: {
                     PE::PhysicalSemanticSegmenterConfig c;
-                    c.onnx_model_path  = vm->model_path;
-                    c.class_names_path = vm->vision.class_names_path;
+                    c.onnx_model_path  = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    c.class_names_path = ResolveConfigPathAgainstGrimRoot(vm->vision.class_names_path);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     // Semantic segmentation is dense + expensive. Hard cap
@@ -338,9 +480,9 @@ static void bootstrapMMOLayer() {
                 }
                 case Op::ImageClassifier: {
                     PE::PhysicalImageClassifierConfig c;
-                    c.onnx_model_path      = vm->model_path;
-                    c.class_names_path     = vm->vision.class_names_path;
-                    c.text_embeddings_path = vm->vision.text_embeddings_path;
+                    c.onnx_model_path      = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    c.class_names_path     = ResolveConfigPathAgainstGrimRoot(vm->vision.class_names_path);
+                    c.text_embeddings_path = ResolveConfigPathAgainstGrimRoot(vm->vision.text_embeddings_path);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     if (vm->vision.top_k > 0) c.top_k = vm->vision.top_k;
@@ -353,8 +495,8 @@ static void bootstrapMMOLayer() {
                 }
                 case Op::PoseEstimator: {
                     PE::PhysicalPoseKeypointEstimatorConfig c;
-                    c.onnx_model_path  = vm->model_path;
-                    c.joint_names_path = vm->vision.class_names_path;
+                    c.onnx_model_path  = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    c.joint_names_path = ResolveConfigPathAgainstGrimRoot(vm->vision.class_names_path);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     if (vm->vision.min_keypoint_confidence > 0.0f)
@@ -385,9 +527,9 @@ static void bootstrapMMOLayer() {
                 }
                 case Op::SceneTextReader: {
                     PE::PhysicalSceneTextReaderConfig c;
-                    c.detector_onnx_path        = vm->model_path;
-                    c.recogniser_onnx_path      = vm->vision.recogniser_onnx_path;
-                    c.recogniser_charset_path   = vm->vision.recogniser_charset_path;
+                    c.detector_onnx_path        = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    c.recogniser_onnx_path      = ResolveConfigPathAgainstGrimRoot(vm->vision.recogniser_onnx_path);
+                    c.recogniser_charset_path   = ResolveConfigPathAgainstGrimRoot(vm->vision.recogniser_charset_path);
                     c.recogniser_input_grayscale = vm->vision.recogniser_input_grayscale;
                     if (vm->vision.input_width  > 0) c.detector_input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.detector_input_height = vm->vision.input_height;
@@ -400,9 +542,9 @@ static void bootstrapMMOLayer() {
                 }
                 case Op::FacialExpressionDetector: {
                     PE::PhysicalFacialExpressionDetectorConfig c;
-                    c.detector_onnx_path        = vm->model_path;
-                    c.classifier_onnx_path      = vm->vision.expression_classifier_onnx_path;
-                    c.classifier_class_names_path = vm->vision.expression_classifier_class_names_path;
+                    c.detector_onnx_path        = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    c.classifier_onnx_path      = ResolveConfigPathAgainstGrimRoot(vm->vision.expression_classifier_onnx_path);
+                    c.classifier_class_names_path = ResolveConfigPathAgainstGrimRoot(vm->vision.expression_classifier_class_names_path);
                     if (vm->vision.input_width  > 0) c.detector_input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.detector_input_height = vm->vision.input_height;
                     if (vm->vision.confidence_threshold > 0.0f)
@@ -426,7 +568,7 @@ static void bootstrapMMOLayer() {
                 }
                 case Op::MonocularDepthEstimator: {
                     PE::PhysicalMonocularDepthEstimatorConfig c;
-                    c.onnx_model_path = vm->model_path;
+                    c.onnx_model_path = ResolveConfigPathAgainstGrimRoot(vm->model_path);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     c.input_scale = static_cast<float>(vm->vision.depth_input_scale);
@@ -450,8 +592,34 @@ static void bootstrapMMOLayer() {
                 }
                 case Op::InstanceSegmenter: {
                     PE::PhysicalInstanceSegmenterConfig c;
-                    c.encoder_onnx_path = vm->model_path;
-                    c.decoder_onnx_path = vm->vision.instance_seg_decoder_onnx_path;
+                    c.encoder_onnx_path = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    c.decoder_onnx_path = ResolveConfigPathAgainstGrimRoot(vm->vision.instance_seg_decoder_onnx_path);
+                    if (!vm->vision.instance_seg_encoder_input_name.empty())
+                        c.encoder_input_name = vm->vision.instance_seg_encoder_input_name;
+                    if (!vm->vision.instance_seg_encoder_output_image_embed_name.empty())
+                        c.encoder_output_image_embed_name = vm->vision.instance_seg_encoder_output_image_embed_name;
+                    if (!vm->vision.instance_seg_encoder_output_high_res_feats_0_name.empty())
+                        c.encoder_output_high_res_feats_0_name = vm->vision.instance_seg_encoder_output_high_res_feats_0_name;
+                    if (!vm->vision.instance_seg_encoder_output_high_res_feats_1_name.empty())
+                        c.encoder_output_high_res_feats_1_name = vm->vision.instance_seg_encoder_output_high_res_feats_1_name;
+                    if (!vm->vision.instance_seg_decoder_input_image_embed_name.empty())
+                        c.decoder_input_image_embed_name = vm->vision.instance_seg_decoder_input_image_embed_name;
+                    if (!vm->vision.instance_seg_decoder_input_high_res_feats_0_name.empty())
+                        c.decoder_input_high_res_feats_0_name = vm->vision.instance_seg_decoder_input_high_res_feats_0_name;
+                    if (!vm->vision.instance_seg_decoder_input_high_res_feats_1_name.empty())
+                        c.decoder_input_high_res_feats_1_name = vm->vision.instance_seg_decoder_input_high_res_feats_1_name;
+                    if (!vm->vision.instance_seg_decoder_input_point_coords_name.empty())
+                        c.decoder_input_point_coords_name = vm->vision.instance_seg_decoder_input_point_coords_name;
+                    if (!vm->vision.instance_seg_decoder_input_point_labels_name.empty())
+                        c.decoder_input_point_labels_name = vm->vision.instance_seg_decoder_input_point_labels_name;
+                    if (!vm->vision.instance_seg_decoder_input_mask_input_name.empty())
+                        c.decoder_input_mask_input_name = vm->vision.instance_seg_decoder_input_mask_input_name;
+                    if (!vm->vision.instance_seg_decoder_input_has_mask_input_name.empty())
+                        c.decoder_input_has_mask_input_name = vm->vision.instance_seg_decoder_input_has_mask_input_name;
+                    if (!vm->vision.instance_seg_decoder_output_masks_name.empty())
+                        c.decoder_output_masks_name = vm->vision.instance_seg_decoder_output_masks_name;
+                    if (!vm->vision.instance_seg_decoder_output_iou_predictions_name.empty())
+                        c.decoder_output_iou_predictions_name = vm->vision.instance_seg_decoder_output_iou_predictions_name;
                     if (vm->vision.input_width  > 0) c.encoder_input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.encoder_input_height = vm->vision.input_height;
                     if (vm->vision.instance_seg_max_prompts_per_frame > 0)

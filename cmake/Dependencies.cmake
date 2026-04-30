@@ -18,7 +18,7 @@ else()
 endif()
 
 if (NOT DEFINED VCPKG_INSTALLED_DIR)
-    set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
+    set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed")
 endif()
 
 set(_dll_dir_vcpkg "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
@@ -160,7 +160,7 @@ if(GRIM_USE_PERCEPTION)
     endif()
     
     # ONNX Runtime DLLs (library already linked in Config.cmake)
-    if(EXISTS "${VCPKG_INSTALLED_DIR}/x64-windows/bin/onnxruntime.dll")
+    if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/onnxruntime.dll")
         grim_copy_dlls("${_dll_dir_vcpkg}"
             onnxruntime.dll
             onnxruntime_providers_shared.dll

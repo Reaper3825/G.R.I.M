@@ -1,0 +1,320 @@
+// FlatBuffer schema for GRIM-text training logs and metrics
+namespace GRIM.Training;
+
+// GPU metrics for a single step
+table GPUMetrics {
+    device_id: uint;
+    device_name: string;
+    utilization_percent: float;
+    memory_used_mb: ulong;
+    memory_total_mb: ulong;
+    memory_allocated_mb: ulong;
+    memory_reserved_mb: ulong;
+    temperature_celsius: float;
+    power_usage_watts: float;
+    sm_clock_mhz: uint;
+    memory_clock_mhz: uint;
+}
+
+// Gradient statistics
+table GradientStats {
+    grad_norm_l2: float;
+    grad_norm_inf: float;
+    grad_mean: float;
+    grad_std: float;
+    grad_min: float;
+    grad_max: float;
+    num_nan: uint;
+    num_inf: uint;
+    clipped: bool;
+}
+
+// Loss breakdown
+table LossBreakdown {
+    total_loss: float;
+    token_loss: float;          // Cross-entropy on tokens
+    perplexity: float;
+    accuracy: float;            // Token prediction accuracy
+    top5_accuracy: float;
+    
+    // Optional regularization terms
+    weight_decay_loss: float;
+    kl_divergence: float;
+    entropy: float;
+}
+
+// Batch statistics
+table BatchStats {
+    batch_size: uint;
+    seq_length_mean: float;
+    seq_length_std: float;
+    seq_length_min: uint;
+    seq_length_max: uint;
+    num_tokens: ulong;
+    num_padding_tokens: ulong;
+    padding_ratio: float;
+}
+
+// Learning rate schedule state
+table LRScheduleState {
+    current_lr: float;
+    warmup_progress: float;     // 0.0 to 1.0
+    cosine_progress: float;     // 0.0 to 1.0
+    num_warmup_steps: uint;
+    total_steps: uint;
+}
+
+// Optimizer state snapshot
+table OptimizerState {
+    step: uint;
+    beta1_power: float;
+    beta2_power: float;
+    weight_update_norm: float;
+    momentum_norm: float;
+    variance_norm: float;
+    effective_lr: float;
+}
+
+// Training step metrics (comprehensive)
+table TrainingStepLog {
+    step: uint;
+    epoch: uint;
+    batch_idx: uint;
+    global_batch_idx: ulong;
+    
+    // Loss and accuracy
+    loss_breakdown: LossBreakdown;
+    
+    // Gradients
+    gradient_stats: GradientStats;
+    
+    // Batch info
+    batch_stats: BatchStats;
+    
+    // Learning rate
+    lr_schedule: LRScheduleState;
+    
+    // Optimizer
+    optimizer_state: OptimizerState;
+    
+    // Performance
+    tokens_per_sec: float;
+    samples_per_sec: float;
+    step_time_ms: float;
+    forward_time_ms: float;
+    backward_time_ms: float;
+    optimizer_time_ms: float;
+    
+    // GPU metrics
+    gpu_metrics: [GPUMetrics];
+    
+    // System
+    cpu_percent: float;
+    ram_used_mb: ulong;
+    ram_total_mb: ulong;
+    
+    // Timestamps
+    timestamp_ms: ulong;
+    wall_time_sec: float;
+}
+
+// Epoch summary
+table EpochSummary {
+    epoch: uint;
+    
+    // Train metrics
+    train_loss: float;
+    train_perplexity: float;
+    train_accuracy: float;
+    train_top5_accuracy: float;
+    
+    // Validation metrics
+    val_loss: float;
+    val_perplexity: float;
+    val_accuracy: float;
+    val_top5_accuracy: float;
+    
+    // Best metrics so far
+    is_best_loss: bool;
+    is_best_perplexity: bool;
+    best_val_loss: float;
+    best_val_perplexity: float;
+    
+    // Performance
+    epoch_time_sec: float;
+    total_tokens: ulong;
+    avg_tokens_per_sec: float;
+    
+    // Learning rate
+    final_lr: float;
+    avg_lr: float;
+    
+    // System
+    peak_gpu_memory_mb: ulong;
+    avg_gpu_utilization: float;
+    
+    // Gradient health
+    avg_grad_norm: float;
+    max_grad_norm: float;
+    num_grad_clips: uint;
+    num_nan_grads: uint;
+    
+    // Timestamps
+    timestamp_ms: ulong;
+    wall_time_sec: float;
+}
+
+// Validation metrics (detailed)
+table ValidationMetrics {
+    step: uint;
+    epoch: uint;
+    
+    // Overall metrics
+    loss: float;
+    perplexity: float;
+    accuracy: float;
+    top5_accuracy: float;
+    
+    // Per-token-position accuracy
+    position_accuracies: [float];
+    
+    // Confidence calibration
+    avg_confidence: float;
+    confidence_std: float;
+    calibration_error: float;
+    
+    // Sample predictions
+    sample_inputs: [string];
+    sample_predictions: [string];
+    sample_targets: [string];
+    sample_losses: [float];
+    
+    // Performance
+    num_samples: uint;
+    num_tokens: ulong;
+    inference_time_ms: float;
+    tokens_per_sec: float;
+    
+    timestamp_ms: ulong;
+}
+
+// Model checkpoint metadata
+table CheckpointMetadata {
+    step: uint;
+    epoch: uint;
+    loss: float;
+    val_loss: float;
+    timestamp_ms: ulong;
+    model_path: string;
+    optimizer_path: string;
+    config_hash: string;
+}
+
+// Training configuration
+table TrainingConfig {
+    // Model architecture
+    vocab_size: uint;
+    d_model: uint;
+    num_layers: uint;
+    num_heads: uint;
+    d_ff: uint;
+    max_seq_len: uint;
+    dropout: float;
+    
+    // Training hyperparameters
+    batch_size: uint;
+    learning_rate: float;
+    weight_decay: float;
+    gradient_clip_norm: float;
+    gradient_accumulation_steps: uint;
+    num_epochs: uint;
+    
+    // Optimizer
+    optimizer_type: string;
+    beta1: float;
+    beta2: float;
+    epsilon: float;
+    
+    // Learning rate schedule
+    lr_schedule: string;
+    warmup_steps: uint;
+    min_lr: float;
+    
+    // Mixed precision
+    use_mixed_precision: bool;
+    loss_scale: float;
+    
+    // Validation
+    validation_split: float;
+    validation_interval: uint;
+    
+    // Checkpointing
+    save_checkpoints: bool;
+    checkpoint_interval: uint;
+    checkpoint_dir: string;
+    
+    // Paths
+    train_data_path: string;
+    vocab_path: string;
+    output_model_path: string;
+}
+
+// Full training session log
+table TrainingSession {
+    session_id: string;
+    start_time_ms: ulong;
+    end_time_ms: ulong;
+    
+    // Configuration
+    config: TrainingConfig;
+    
+    // Detailed logs
+    step_logs: [TrainingStepLog];
+    epoch_summaries: [EpochSummary];
+    validation_logs: [ValidationMetrics];
+    checkpoints: [CheckpointMetadata];
+    
+    // Final results
+    final_loss: float;
+    final_perplexity: float;
+    final_accuracy: float;
+    best_val_loss: float;
+    best_val_perplexity: float;
+    best_checkpoint_step: uint;
+    
+    // Training summary
+    total_training_time_sec: float;
+    total_steps: uint;
+    total_tokens_processed: ulong;
+    avg_tokens_per_sec: float;
+    
+    // System info
+    gpu_name: string;
+    gpu_count: uint;
+    cuda_version: string;
+    cudnn_version: string;
+    driver_version: string;
+    cpu_model: string;
+    ram_total_gb: float;
+    
+    // Resource usage
+    peak_gpu_memory_mb: ulong;
+    avg_gpu_utilization: float;
+    peak_ram_mb: ulong;
+    total_gpu_time_sec: float;
+    
+    // Training health
+    num_grad_clips: uint;
+    num_nan_losses: uint;
+    num_inf_losses: uint;
+    num_restarts: uint;
+    early_stopped: bool;
+    early_stop_reason: string;
+    
+    // Git info (for reproducibility)
+    git_commit: string;
+    git_branch: string;
+    git_dirty: bool;
+}
+
+root_type TrainingSession;

@@ -49,7 +49,7 @@ using json = nlohmann::json;
 #include "html_extractor.hpp"
 
 // AI Config for paths
-#include "../../control/ai_config_paths.hpp"
+#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 // Persistent state tracking for deduplication
 #include "collection_state.hpp"

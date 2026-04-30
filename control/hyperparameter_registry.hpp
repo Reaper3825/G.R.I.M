@@ -19,7 +19,7 @@
 #include <vector>
 #include <algorithm>
 #include <set>
-#include "ai_config_paths.hpp"
+#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 namespace GRIM {
 namespace Config {
@@ -268,19 +268,6 @@ public:
         addInt   (params.architecture.selector_d_selector,                        "selector_d_selector",                        "Selector d_selector",      "Execution Block");
         addFloat (params.architecture.selector_selection_margin,                  "selector_selection_margin",                  "Selection Margin",         "Execution Block");
         addFloat (params.architecture.selector_supervision_weight,                "selector_supervision_weight",                "Supervision Weight",       "Execution Block");
-
-        // ── Activation Quantization ──
-        addBool  (params.activation_quantization_enabled,                  "activation_quantization_enabled",                  "Enabled",              "Activation Quant");
-        addBool  (params.activation_quantization_apply_to_embeddings,      "activation_quantization_apply_to_embeddings",      "Apply to Embeddings",  "Activation Quant");
-        addBool  (params.activation_quantization_apply_to_encoder_outputs, "activation_quantization_apply_to_encoder_outputs", "Apply to Encoder Out", "Activation Quant");
-        addBool  (params.activation_quantization_apply_to_layer_caches,    "activation_quantization_apply_to_layer_caches",    "Apply to Layer Cache", "Activation Quant");
-        addBool  (params.activation_quantization_apply_to_qkv_cache,       "activation_quantization_apply_to_qkv_cache",       "Apply to QKV Cache",   "Activation Quant");
-        addBool  (params.activation_quantization_apply_to_logits,          "activation_quantization_apply_to_logits",          "Apply to Logits",      "Activation Quant");
-        addFloat (params.activation_quantization_scale,                    "activation_quantization_scale",                    "Scale",                "Activation Quant");
-        addFloat (params.activation_quantization_clip_min,                 "activation_quantization_clip_min",                 "Clip Min",             "Activation Quant");
-        addFloat (params.activation_quantization_clip_max,                 "activation_quantization_clip_max",                 "Clip Max",             "Activation Quant");
-        addInt   (params.activation_quantization_zero_point,               "activation_quantization_zero_point",               "Zero Point",           "Activation Quant");
-        addBool  (params.activation_quantization_symmetric,                "activation_quantization_symmetric",                "Symmetric",            "Activation Quant");
 
         // ── CUDA ──
         addBool  (params.single_stream_mode,         "single_stream_mode",         "Single Stream Mode",     "CUDA");

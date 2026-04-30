@@ -34,7 +34,7 @@
 #include "../MMO/Core/ResourceSignal.hpp"
 #include "ai/training_server_manager.hpp"
 #include "resources.hpp"
-#include "control/ai_config_paths.hpp"
+#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "DataCollection/dataset_target.hpp"
 
 using namespace GRIMText;
@@ -2937,8 +2937,12 @@ static std::string makeRelativeToGrimRoot(const std::string& pathStr) {
     }
     try {
         fs::path relativePath = fs::relative(path, grimRoot);
-        if (!relativePath.empty() && !relativePath.string().starts_with(".."))
-            return relativePath.string();
+        if (!relativePath.empty()) {
+            const std::string relative = relativePath.string();
+            if (relative.size() < 2 || relative.compare(0, 2, "..") != 0) {
+                return relative;
+            }
+        }
     } catch (...) {}
     return pathStr;
 }

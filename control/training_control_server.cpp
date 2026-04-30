@@ -39,7 +39,7 @@
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include "training_paths.hpp"
-#include "ai_config_paths.hpp"
+#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 #ifdef _WIN32
 #include "core/grim_platform.h"

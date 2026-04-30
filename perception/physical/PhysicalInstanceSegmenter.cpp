@@ -381,10 +381,19 @@ void PhysicalInstanceSegmenter::LoadOnnxModelsIntoPhysicalInstanceSegmenter(
         // claim CoreML when the symbol is unavailable.
         const char* ep_label = "CPU";
 
+#ifdef _WIN32
+        std::wstring encoder_onnx_path_w(cfg.encoder_onnx_path.begin(), cfg.encoder_onnx_path.end());
+        std::wstring decoder_onnx_path_w(cfg.decoder_onnx_path.begin(), cfg.decoder_onnx_path.end());
+        impl->encoder_session = std::make_unique<Ort::Session>(
+            impl->env, encoder_onnx_path_w.c_str(), opts);
+        impl->decoder_session = std::make_unique<Ort::Session>(
+            impl->env, decoder_onnx_path_w.c_str(), opts);
+#else
         impl->encoder_session = std::make_unique<Ort::Session>(
             impl->env, cfg.encoder_onnx_path.c_str(), opts);
         impl->decoder_session = std::make_unique<Ort::Session>(
             impl->env, cfg.decoder_onnx_path.c_str(), opts);
+#endif
 
         // Cache I/O names in the order the per-frame Run() calls expect.
         CacheSessionIoNames(

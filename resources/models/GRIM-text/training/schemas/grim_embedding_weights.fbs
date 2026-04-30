@@ -1,0 +1,113 @@
+// FlatBuffers schema for GRIM Embedding System
+// Efficient zero-copy serialization for embedding weights and metadata
+namespace GRIMEmbedding;
+
+// Compression type enum
+enum CompressionType : byte {
+  None = 0,
+  Zlib = 1,
+  Zstd = 2,
+  LZ4 = 3
+}
+
+// Quantization type enum
+enum QuantizationType : byte {
+  None = 0,
+  INT8 = 1,
+  INT16 = 2,
+  FP16 = 3
+}
+
+// Training metadata
+table TrainingMetadata {
+  optimizer: string;              // e.g., "AdamW", "SGD"
+  learning_rate: float;
+  batch_size: uint32;
+  training_steps: uint64;
+  final_loss: float;
+  gradient_norm: float;
+  timestamp: uint64;              // Unix timestamp
+  training_duration_seconds: uint64;
+}
+
+// Model architecture configuration
+table ModelConfig {
+  vocab_size: uint32;
+  embedding_dim: uint32;
+  max_sequence_length: uint32;
+  pad_token_id: uint32;
+  unk_token_id: uint32;
+  use_layer_norm: bool = false;
+  use_positional_encoding: bool = false;
+}
+
+// Statistics about the embedding data
+table EmbeddingStats {
+  min_value: float;
+  max_value: float;
+  mean_value: float;
+  std_dev: float;
+  l2_norm_mean: float;
+  sparsity_ratio: float;          // Percentage of near-zero weights
+}
+
+// Embedding weights data (can be compressed or quantized)
+table EmbeddingWeights {
+  data: [float] (required);       // Raw float32 weights (vocab_size * embedding_dim)
+  compressed_data: [ubyte];       // Compressed representation (if compression enabled)
+  quantized_data: [byte];         // Quantized representation (if quantization enabled)
+  compression_type: CompressionType = None;
+  quantization_type: QuantizationType = None;
+  uncompressed_size: uint64;      // Size before compression
+  scale: float;                   // Quantization scale factor
+  zero_point: int32;              // Quantization zero point
+}
+
+// Positional encoding weights (optional)
+table PositionalWeights {
+  data: [float] (required);       // Positional encoding matrix
+  max_positions: uint32;
+}
+
+// Layer normalization parameters (optional)
+table LayerNormParams {
+  gamma: [float] (required);      // Scale parameters
+  beta: [float] (required);       // Shift parameters
+  epsilon: float = 1e-5;
+}
+
+// Vocabulary metadata
+table VocabMetadata {
+  token_strings: [string];        // Optional: actual token strings for debugging
+  token_frequencies: [uint64];    // Optional: token frequencies from training
+  special_tokens: [uint32];       // Indices of special tokens (PAD, UNK, CLS, SEP, etc.)
+}
+
+// Checksum data for integrity verification
+table ChecksumData {
+  crc32: uint32;                  // CRC32 checksum
+  xxhash64: uint64;               // xxHash64 for fast validation
+  sha256: [ubyte];                // SHA-256 for strong validation (32 bytes)
+}
+
+// Complete embedding model
+table EmbeddingModel {
+  version: uint32;                // Schema version (currently 1)
+  model_name: string;             // e.g., "GRIM-text-v3"
+  model_config: ModelConfig;
+  embedding_weights: EmbeddingWeights;
+  positional_weights: PositionalWeights;
+  layer_norm_params: LayerNormParams;
+  vocab_metadata: VocabMetadata;
+  training_metadata: TrainingMetadata;
+  stats: EmbeddingStats;
+  checksum: ChecksumData;
+  creation_timestamp: uint64;     // Unix timestamp
+  custom_metadata: [ubyte];       // Flexible extension field
+}
+
+root_type EmbeddingModel;
+
+// File identifier for .grim files
+file_identifier "GREM";
+file_extension "grem";

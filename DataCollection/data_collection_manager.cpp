@@ -1,6 +1,6 @@
 #include "data_collection_manager.hpp"
 #include "collection_state.hpp"
-#include "control/ai_config_paths.hpp"
+#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "nlohmann/json.hpp"
 #include <filesystem>
 #include <fstream>

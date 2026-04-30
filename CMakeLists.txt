@@ -5,6 +5,25 @@ cmake_minimum_required(VERSION 3.20)
 
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+set(GRIM_VCPKG_ROOT "")
+if(EXISTS "${CMAKE_SOURCE_DIR}/external/vcpkg/scripts/buildsystems/vcpkg.cmake")
+  set(GRIM_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/external/vcpkg")
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
+  set(GRIM_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg")
+endif()
+
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  if(GRIM_VCPKG_ROOT)
+    set(CMAKE_TOOLCHAIN_FILE
+        "${GRIM_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        CACHE FILEPATH "GRIM vcpkg toolchain")
+  else()
+    message(FATAL_ERROR
+      "[GRIM] vcpkg toolchain not found. Expected ${CMAKE_SOURCE_DIR}/external/vcpkg or ${CMAKE_SOURCE_DIR}/vcpkg. "
+      "Clone/bootstrap vcpkg there, or pass -DCMAKE_TOOLCHAIN_FILE=<path-to-vcpkg.cmake>.")
+  endif()
+endif()
+
 # Platform-specific vcpkg triplet (user can override with -DVCPKG_TARGET_TRIPLET=...)
 # On Apple Silicon, default to arm64-osx; vcpkg may otherwise pick x64-osx from host.
 if(NOT DEFINED VCPKG_TARGET_TRIPLET)
@@ -25,8 +44,20 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
 endif()
 message(STATUS "[GRIM] Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
 
+if(NOT DEFINED VCPKG_MANIFEST_DIR AND EXISTS "${CMAKE_SOURCE_DIR}/vcpkg.json")
+  set(VCPKG_MANIFEST_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH "GRIM vcpkg manifest directory")
+endif()
+
+if(NOT DEFINED VCPKG_INSTALLED_DIR)
+  set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed" CACHE PATH "vcpkg installed directory")
+endif()
+
 set(VCPKG_FEATURE_FLAGS "manifests,versions" CACHE STRING "")
-set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed")
+set(GRIM_VCPKG_TRIPLET_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+message(STATUS "[GRIM] Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
+message(STATUS "[GRIM] Using vcpkg manifest: ${VCPKG_MANIFEST_DIR}")
+message(STATUS "[GRIM] Using vcpkg install root: ${GRIM_VCPKG_TRIPLET_DIR}")
+
 include_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
 # OpenCV include (layout may vary per triplet)
 if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/opencv4")

@@ -3,17 +3,49 @@
 # 3.20: Anvil (Purdue RCAC) default module; 3.18+ needed for CUDA_ARCHITECTURES / CUDAToolkit.
 cmake_minimum_required(VERSION 3.20)
 
-# vcpkg manifest mode (vcpkg.json at repo root). vcpkg install produces vcpkg_installed/<triplet>.
-# We set CMAKE_PREFIX_PATH to that dir when present (relative to repo root).
-# Repo root from here: ../../../../../ = resources/models/GRIM-text/training/TrainingLoop -> repo root
-if(NOT DEFINED CMAKE_PREFIX_PATH)
-    set(VCPKG_INSTALLED "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vcpkg_installed")
-    if(EXISTS "${VCPKG_INSTALLED}/x64-windows")
-        set(CMAKE_PREFIX_PATH "${VCPKG_INSTALLED}/x64-windows" CACHE PATH "vcpkg manifest (Windows)")
-    elseif(EXISTS "${VCPKG_INSTALLED}/x64-linux")
-        set(CMAKE_PREFIX_PATH "${VCPKG_INSTALLED}/x64-linux" CACHE PATH "vcpkg manifest (Linux)")
+# TrainingLoop uses its own minimal vcpkg manifest. Wire that manifest and the vendored toolchain
+# before project()/enable_language() so find_package() works on Windows and Linux without manual prefix setup.
+get_filename_component(GRIM_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../" ABSOLUTE)
+get_filename_component(GRIM_TRAINING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+set(GRIM_VCPKG_ROOT "${GRIM_REPO_ROOT}/external/vcpkg")
+set(GRIM_VCPKG_TOOLCHAIN "${GRIM_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+
+if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+    if(WIN32)
+        set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "vcpkg target triplet for GRIM-text training")
+    elseif(APPLE)
+        set(VCPKG_TARGET_TRIPLET "arm64-osx" CACHE STRING "vcpkg target triplet for GRIM-text training")
+    else()
+        set(VCPKG_TARGET_TRIPLET "x64-linux" CACHE STRING "vcpkg target triplet for GRIM-text training")
     endif()
 endif()
+
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${GRIM_VCPKG_TOOLCHAIN}")
+    set(CMAKE_TOOLCHAIN_FILE "${GRIM_VCPKG_TOOLCHAIN}" CACHE FILEPATH "vendored vcpkg toolchain")
+    message(STATUS "Using vendored vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
+endif()
+
+if(NOT DEFINED VCPKG_MANIFEST_DIR AND EXISTS "${GRIM_TRAINING_ROOT}/vcpkg.json")
+    set(VCPKG_MANIFEST_DIR "${GRIM_TRAINING_ROOT}" CACHE PATH "GRIM-text training vcpkg manifest")
+endif()
+
+if(NOT DEFINED VCPKG_INSTALLED_DIR)
+    set(VCPKG_INSTALLED_DIR "${GRIM_REPO_ROOT}/vcpkg_installed" CACHE PATH "vcpkg installed directory")
+endif()
+
+set(GRIM_VCPKG_TRIPLET_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+if(EXISTS "${GRIM_VCPKG_TRIPLET_DIR}")
+    list(PREPEND CMAKE_PREFIX_PATH
+        "${GRIM_VCPKG_TRIPLET_DIR}"
+        "${GRIM_VCPKG_TRIPLET_DIR}/share"
+    )
+    list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
+    set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}" CACHE STRING "Package search path" FORCE)
+endif()
+
+message(STATUS "TrainingLoop vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
+message(STATUS "TrainingLoop manifest: ${VCPKG_MANIFEST_DIR}")
+message(STATUS "TrainingLoop installed dir: ${GRIM_VCPKG_TRIPLET_DIR}")
 
 # Use CUDAToolkit_ROOT (or GRIM_CUDA_ROOT) before enabling CUDA so CMake picks that nvcc, not one from PATH.
 # Needed on clusters (e.g. Anvil) where default module is CUDA 11 but project has CUDA 12 in project space.
@@ -36,8 +68,6 @@ foreach(_root CUDAToolkit_ROOT GRIM_CUDA_ROOT)
   endif()
 endforeach()
 
-# Enable CUDA (required for training loop)
-enable_language(CUDA)
 project(GRIM_TrainingLoop LANGUAGES CXX CUDA)
 set(CUDA_ENABLED ON)
 message(STATUS "CUDA enabled for training loop")

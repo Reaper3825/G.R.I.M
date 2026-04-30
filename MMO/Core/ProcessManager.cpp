@@ -4,7 +4,7 @@
 
 #include "ProcessManager.hpp"
 #include "../../logger.hpp"
-#include "../../control/ai_config_paths.hpp"
+#include "../../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
@@ -27,6 +27,12 @@ extern char **environ;
 namespace fs = std::filesystem;
 
 namespace GRIM::MMO {
+
+static bool hasSuffix(const std::string& value, const char* suffix) {
+    const size_t suffix_len = std::char_traits<char>::length(suffix);
+    return value.size() >= suffix_len &&
+           value.compare(value.size() - suffix_len, suffix_len, suffix) == 0;
+}
 
 // =========================================================
 // Helpers
@@ -222,7 +228,7 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     fs::path server_exe;
     if (!model.model_path.empty() && fs::exists(model.model_path)) {
         // If model_path points to the exe itself (unlikely but supported)
-        if (model.model_path.ends_with(".exe")) {
+        if (hasSuffix(model.model_path, ".exe")) {
             server_exe = fs::absolute(model.model_path);
         } else {
             // Default exe location

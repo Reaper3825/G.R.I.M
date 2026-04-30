@@ -1,0 +1,250 @@
+// FlatBuffers schema for GRIM web-collected training data
+// Stores verified, collected text data with metadata
+namespace GRIMWebTraining;
+
+//======================================================//
+//  Source Information
+//======================================================//
+
+enum SourceType : byte {
+    UNKNOWN = 0,
+    NEWS_API = 1,
+    GITHUB = 2,
+    TECH_DOCS = 3,
+    WIKIPEDIA = 4,
+    ARXIV = 5,
+    STACKOVERFLOW = 6,
+    REDDIT = 7,
+    CUSTOM = 8
+}
+
+table SourceInfo {
+    url: string (required);                  // Original source URL
+    source_type: SourceType = UNKNOWN;       // Type of source
+    domain: string;                          // e.g., "github.com"
+    author: string;                          // Author/creator if available
+    title: string;                           // Article/page title
+    publish_date: uint64;                    // Unix timestamp (0 if unknown)
+    fetch_date: uint64;                      // When we collected it
+    api_key_used: bool = false;              // Whether API auth was required
+}
+
+//======================================================//
+//  Verification Information
+//======================================================//
+
+enum VerificationStatus : byte {
+    UNVERIFIED = 0,
+    VERIFIED = 1,
+    FAILED = 2,
+    PENDING = 3,
+    CROSS_REFERENCED = 4
+}
+
+table VerificationInfo {
+    status: VerificationStatus = UNVERIFIED;
+    reliability_score: float = 0.0;          // 0.0 - 1.0
+    num_cross_refs: uint32 = 0;              // Number of corroborating sources
+    cross_ref_urls: [string];                // URLs of corroborating sources
+    verification_date: uint64;               // When verification completed
+    verification_method: string;             // e.g., "domain_whitelist", "cross_check"
+    
+    // Quality metrics
+    content_quality_score: float = 0.0;      // Grammar, coherence, etc.
+    factual_consistency: float = 0.0;        // Cross-reference consistency
+    
+    // Flags
+    is_duplicate: bool = false;
+    is_malformed: bool = false;
+    passed_filters: bool = true;
+}
+
+//======================================================//
+//  Content Metadata
+//======================================================//
+
+table ContentMetadata {
+    // Text statistics
+    char_count: uint32;
+    word_count: uint32;
+    sentence_count: uint32;
+    paragraph_count: uint32;
+    
+    // Language
+    language: string;                        // ISO 639-1 code
+    language_confidence: float = 1.0;
+    
+    // Topics/categories (extracted)
+    topics: [string];
+    keywords: [string];
+    named_entities: [string];
+    
+    // Content type
+    content_category: string;                // e.g., "technical", "news", "tutorial"
+    
+    // Quality indicators
+    has_code_blocks: bool = false;
+    has_markdown: bool = false;
+    has_math: bool = false;
+    readability_score: float = 0.0;          // e.g., Flesch-Kincaid
+}
+
+//======================================================//
+//  Parsed Training Example
+//======================================================//
+
+table TrainingExample {
+    // Raw content
+    raw_text: string (required);             // Original text
+    cleaned_text: string;                    // Cleaned/normalized text
+    
+    // Tokenized (if available)
+    token_ids: [uint32];                     // Pre-tokenized IDs
+    token_count: uint32;
+    
+    // Source and verification
+    source: SourceInfo (required);
+    verification: VerificationInfo (required);
+    metadata: ContentMetadata;
+    
+    // Training format
+    input_text: string;                      // For supervised training
+    target_text: string;                     // Expected output
+    
+    // Additional context
+    context: string;                         // Surrounding context if any
+    prompt: string;                          // Instruction/prompt if applicable
+    
+    // Unique identifier
+    example_id: string (required);           // Hash or UUID
+    
+    // Processing info
+    processed_date: uint64;
+    parser_version: string;
+}
+
+//======================================================//
+//  Training Batch
+//======================================================//
+
+table TrainingBatch {
+    examples: [TrainingExample] (required);
+    batch_id: string (required);
+    created_date: uint64;
+    
+    // Batch statistics
+    total_tokens: uint64;
+    avg_tokens_per_example: float;
+    min_tokens: uint32;
+    max_tokens: uint32;
+}
+
+//======================================================//
+//  Collection Session
+//======================================================//
+
+table CollectionSession {
+    session_id: string (required);
+    start_time: uint64;
+    end_time: uint64;
+    
+    // Sources used
+    source_urls: [string];
+    num_sources: uint32;
+    
+    // Collection statistics
+    total_fetched: uint32;
+    successful: uint32;
+    failed: uint32;
+    
+    // Verification statistics
+    total_verified: uint32;
+    verification_passed: uint32;
+    verification_failed: uint32;
+    avg_reliability_score: float;
+    
+    // Configuration used
+    config_json: string;                     // JSON of config used
+    
+    // Errors/warnings
+    errors: [string];
+    warnings: [string];
+}
+
+//======================================================//
+//  Complete Dataset
+//======================================================//
+
+table WebTrainingDataset {
+    // Metadata
+    dataset_id: string (required);
+    dataset_name: string;
+    version: uint32 = 1;
+    created_date: uint64;
+    
+    // Examples
+    examples: [TrainingExample] (required);
+    
+    // Sessions (collection history)
+    sessions: [CollectionSession];
+    
+    // Dataset-level statistics
+    total_examples: uint64;
+    total_tokens: uint64;
+    total_sources: uint32;
+    avg_reliability_score: float;
+    
+    // Source type distribution
+    source_type_counts: [uint32];            // Count per SourceType enum
+    
+    // Quality distribution
+    high_quality_count: uint32;              // reliability >= 0.9
+    medium_quality_count: uint32;            // reliability >= 0.7
+    low_quality_count: uint32;               // reliability < 0.7
+    
+    // Language distribution
+    language_counts: [LanguageCount];
+    
+    // Split information
+    split_type: string;                      // "train", "val", "test", "all"
+    train_ratio: float = 0.8;
+    val_ratio: float = 0.1;
+    test_ratio: float = 0.1;
+    
+    // Model compatibility
+    vocab_size: uint32;
+    max_seq_length: uint32;
+    tokenizer_version: string;
+}
+
+table LanguageCount {
+    language_code: string (required);
+    count: uint32;
+}
+
+//======================================================//
+//  Index for Fast Lookup
+//======================================================//
+
+table ExampleIndex {
+    example_id: string (required);
+    offset: uint64;                          // Byte offset in data file
+    size: uint32;                            // Size in bytes
+    source_type: SourceType;
+    reliability_score: float;
+    token_count: uint32;
+}
+
+table DatasetIndex {
+    dataset_id: string (required);
+    indices: [ExampleIndex] (required);
+    
+    // Sorted indices for binary search
+    sorted_by_reliability: [uint32];         // Indices into 'indices' array
+    sorted_by_token_count: [uint32];
+    sorted_by_source_type: [uint32];
+}
+
+root_type WebTrainingDataset;
+file_identifier "GWBT";  // GRIM Web-Based Training
+file_extension "gwbt";

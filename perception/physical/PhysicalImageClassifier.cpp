@@ -188,8 +188,14 @@ void PhysicalImageClassifier::LoadOnnxModelIntoPhysicalImageClassifier(
         Ort::SessionOptions opts;
         opts.SetIntraOpNumThreads(1);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    #ifdef _WIN32
+            std::wstring onnx_model_path_w(cfg.onnx_model_path.begin(), cfg.onnx_model_path.end());
+            impl->session = std::make_unique<Ort::Session>(
+                impl->env, onnx_model_path_w.c_str(), opts);
+    #else
         impl->session = std::make_unique<Ort::Session>(
             impl->env, cfg.onnx_model_path.c_str(), opts);
+    #endif
 
         // Resolve and cache I/O names. MobileCLIP exporter emits a single
         // input ('image') and single output ('embedding').

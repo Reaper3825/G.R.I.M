@@ -4,7 +4,7 @@
 #include "DataCollection/io/dataset_io_json.hpp"
 #include "DataCollection/collection_state.hpp"
 #include "DataCollection/training_paths.hpp"
-#include "control/ai_config_paths.hpp"
+#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 #include <nlohmann/json.hpp>
 #include <chrono>

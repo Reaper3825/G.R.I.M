@@ -420,6 +420,27 @@ Every stage has a dedicated log tag header:
 Use these tags so the runtime log filter can isolate one stage at a
 time during debugging.
 
+### Windows ONNX model setup
+
+The Stage-2/Stage-3 vision operators load the ONNX paths declared in
+`ai_config.json` under `mmo.sub_models`. On Windows, startup checks the
+configured model files before wiring the operators. If any required file
+is missing or empty, GRIM runs `scripts/setup_windows_physical_vision.ps1`
+automatically, then re-validates the paths before continuing. The script
+populates `resources/models/vision` with the detector, segmenter, OCR,
+face, emotion, SAM2, MobileCLIP, and Depth-Anything files expected by the
+runtime config.
+
+You can still run `scripts/setup_windows_physical_vision.ps1` manually
+from the repo root to pre-warm a fresh checkout or refresh corrupted
+files with `-Force`.
+
+The C++ bootstrap resolves these config paths against `getGrimRootDir()`
+before handing them to OpenCV or ONNX Runtime. That keeps the models
+loadable when `GRIM.exe` is launched from Visual Studio, PowerShell, or a
+build output directory instead of relying on the process working
+directory.
+
 ---
 
 ## 10. Adding a New Operator (Recipe)

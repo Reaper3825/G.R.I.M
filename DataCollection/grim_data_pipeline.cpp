@@ -30,7 +30,7 @@
 #include "collection_state.hpp"  // Persistent state tracking
 #include "data_structurer.hpp"   // LLM-powered data structuring (Q/A generation)
 #include "control/training_control_generated.h"
-#include "control/ai_config_paths.hpp"  // For loading paths from ai_config.json
+#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"  // For loading paths from ai_config.json
 #include "checkpoint_data_generated.h"  // FlatBuffers checkpoint schema
 #include <flatbuffers/flatbuffers.h>
 #include <system_error>

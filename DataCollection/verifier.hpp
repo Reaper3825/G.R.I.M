@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <memory>
 #include <iostream>
-#include "../../../control/ai_config_paths.hpp"
+#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 struct UnverifiedEntry {
     std::string content;

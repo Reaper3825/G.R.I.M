@@ -291,6 +291,19 @@ nlohmann::json ModelRegistry::serializeModelToJson(const ModelInfo& model) {
         v["expression_classifier_input_height"]     = model.vision.expression_classifier_input_height;
         v["expression_classifier_input_grayscale"]  = model.vision.expression_classifier_input_grayscale;
         v["instance_seg_decoder_onnx_path"]     = model.vision.instance_seg_decoder_onnx_path;
+        v["instance_seg_encoder_input_name"]     = model.vision.instance_seg_encoder_input_name;
+        v["instance_seg_encoder_output_image_embed_name"]      = model.vision.instance_seg_encoder_output_image_embed_name;
+        v["instance_seg_encoder_output_high_res_feats_0_name"] = model.vision.instance_seg_encoder_output_high_res_feats_0_name;
+        v["instance_seg_encoder_output_high_res_feats_1_name"] = model.vision.instance_seg_encoder_output_high_res_feats_1_name;
+        v["instance_seg_decoder_input_image_embed_name"]       = model.vision.instance_seg_decoder_input_image_embed_name;
+        v["instance_seg_decoder_input_high_res_feats_0_name"]  = model.vision.instance_seg_decoder_input_high_res_feats_0_name;
+        v["instance_seg_decoder_input_high_res_feats_1_name"]  = model.vision.instance_seg_decoder_input_high_res_feats_1_name;
+        v["instance_seg_decoder_input_point_coords_name"]      = model.vision.instance_seg_decoder_input_point_coords_name;
+        v["instance_seg_decoder_input_point_labels_name"]      = model.vision.instance_seg_decoder_input_point_labels_name;
+        v["instance_seg_decoder_input_mask_input_name"]        = model.vision.instance_seg_decoder_input_mask_input_name;
+        v["instance_seg_decoder_input_has_mask_input_name"]    = model.vision.instance_seg_decoder_input_has_mask_input_name;
+        v["instance_seg_decoder_output_masks_name"]            = model.vision.instance_seg_decoder_output_masks_name;
+        v["instance_seg_decoder_output_iou_predictions_name"]  = model.vision.instance_seg_decoder_output_iou_predictions_name;
         v["instance_seg_max_prompts_per_frame"] = model.vision.instance_seg_max_prompts_per_frame;
         v["instance_seg_min_prompt_confidence"] = model.vision.instance_seg_min_prompt_confidence;
         j["vision"] = std::move(v);
@@ -407,6 +420,19 @@ ModelInfo ModelRegistry::parseModelInfo(const nlohmann::json& entry) {
 
         // Instance-segmenter (Stage-2 SAM 2)
         m.vision.instance_seg_decoder_onnx_path     = v.value("instance_seg_decoder_onnx_path", "");
+        m.vision.instance_seg_encoder_input_name     = v.value("instance_seg_encoder_input_name", "");
+        m.vision.instance_seg_encoder_output_image_embed_name      = v.value("instance_seg_encoder_output_image_embed_name", "");
+        m.vision.instance_seg_encoder_output_high_res_feats_0_name = v.value("instance_seg_encoder_output_high_res_feats_0_name", "");
+        m.vision.instance_seg_encoder_output_high_res_feats_1_name = v.value("instance_seg_encoder_output_high_res_feats_1_name", "");
+        m.vision.instance_seg_decoder_input_image_embed_name       = v.value("instance_seg_decoder_input_image_embed_name", "");
+        m.vision.instance_seg_decoder_input_high_res_feats_0_name  = v.value("instance_seg_decoder_input_high_res_feats_0_name", "");
+        m.vision.instance_seg_decoder_input_high_res_feats_1_name  = v.value("instance_seg_decoder_input_high_res_feats_1_name", "");
+        m.vision.instance_seg_decoder_input_point_coords_name      = v.value("instance_seg_decoder_input_point_coords_name", "");
+        m.vision.instance_seg_decoder_input_point_labels_name      = v.value("instance_seg_decoder_input_point_labels_name", "");
+        m.vision.instance_seg_decoder_input_mask_input_name        = v.value("instance_seg_decoder_input_mask_input_name", "");
+        m.vision.instance_seg_decoder_input_has_mask_input_name    = v.value("instance_seg_decoder_input_has_mask_input_name", "");
+        m.vision.instance_seg_decoder_output_masks_name            = v.value("instance_seg_decoder_output_masks_name", "");
+        m.vision.instance_seg_decoder_output_iou_predictions_name  = v.value("instance_seg_decoder_output_iou_predictions_name", "");
         m.vision.instance_seg_max_prompts_per_frame = v.value("instance_seg_max_prompts_per_frame", 0);
         m.vision.instance_seg_min_prompt_confidence = v.value("instance_seg_min_prompt_confidence", 0.0f);
     }

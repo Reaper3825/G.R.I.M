@@ -8,7 +8,7 @@
 #include "ui_draw_helpers.hpp"
 #include "logger.hpp"
 #include "resources.hpp"
-#include "control/ai_config_paths.hpp"
+#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "core/input_parser.hpp"
 #include "MMO/Core/ModelRegistry.hpp"
 
