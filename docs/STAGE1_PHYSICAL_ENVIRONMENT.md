@@ -26,7 +26,7 @@ single UI surface.
 | Layer | File | Responsibility |
 |---|---|---|
 | Enumeration | `perception/physical/PhysicalCameraDirectory.cpp` | Scan local NICs, local device indices, and hub-registered devices. Produce a list of candidates with explicit `status_reason` for Disabled entries. |
-| Platform NIC scan | `perception/physical/platform/scan_nics_macos.mm` / `_win32.cpp` / `_linux.cpp` | OS-specific IPv4 address enumeration. |
+| Platform NIC scan | `perception/physical/PhysicalNicScan_macos.mm` / `_win32.cpp` / `_linux.cpp` | OS-specific IPv4 address enumeration. |
 | Capture worker | `perception/physical/PhysicalCameraStream.cpp` | One worker thread per active source. Owns a `cv::VideoCapture`. Publishes `latest_frame_` under a mutex. |
 | Frame bus | `perception/physical/PhysicalFrameBus.cpp` | Single global publish point. `PublishPhysicalFrameToBus()` + `PullLatestFrameView()`. Monotonic counter. |
 | Tick orchestrator | `perception/physical/PhysicalEnvironmentLoop.cpp` | `TickPhysicalEnvironment()` called once per main-loop iteration. Drains the active stream into the bus. |
@@ -43,7 +43,24 @@ The `source_url` string is the universal identifier inside the subsystem.
 | Scheme | Meaning | Open path |
 |---|---|---|
 | `device:N` | Local device index N | `cap.open(N, <platform backend list> → CAP_ANY)` |
+| `device:N?backend=M` | Local device index N pinned to OpenCV backend M | `cap.open(N, M)` |
 | `rtsp://…` / `http://…` | Network stream | `cap.open(url, CAP_FFMPEG)` then fall back to `CAP_ANY` |
+
+Local-device query parameters:
+
+| Key | Meaning |
+|---|---|
+| `backend` | OpenCV backend ID, usually supplied by enumeration. |
+| `width`, `height` | Requested capture geometry. Defaults to `640x480`. |
+| `fps` | Requested capture FPS. Defaults to `60`. |
+| `fourcc` | Requested pixel transport, e.g. `MJPG` or `YUY2`. Defaults to `MJPG`. |
+| `auto_exposure` | Raw OpenCV `CAP_PROP_AUTO_EXPOSURE` value. Backend-specific. |
+| `exposure` | Raw OpenCV `CAP_PROP_EXPOSURE` value. Backend-specific. |
+
+The worker tries to pass `fourcc,width,height,fps,buffersize` directly into
+`VideoCapture::open(...)` first, because some backends only commit high-FPS
+modes during open-time negotiation. It then explicitly sets the same properties
+again after open and logs the final backend-reported values.
 
 **Candidates with no `url_template`** are flagged `Disabled` and MUST carry a
 populated `status_reason` explaining why (Rule 20 — fail loud, no silent
@@ -53,8 +70,12 @@ fallbacks). The UI shows `status_reason` as amber text beneath the URL field.
 
 ## 4. Enumeration Order (`RefreshPhysicalCameraDirectory`)
 
-1. **LocalDevice** (indices 0..3) — probed with `cv::VideoCapture::open(i, CAP_*)`
-   via the platform's native backend first, then `CAP_ANY`.
+1. **LocalDevice** (indices 0..15) — every index is probed with
+  `cv::VideoCapture::open(i, CAP_*)` via the platform's native backend first,
+  then `CAP_ANY`. Gaps are tolerated because virtual cameras and USB cameras
+  can create non-contiguous Windows indices. Ready rows use backend-pinned
+  `device:N?backend=M` URLs so selecting a row opens the same backend that
+  enumeration verified.
 2. **LocalNic** — every IPv4 interface emits a `Disabled` candidate with
    `status_reason = "no URL template; type one manually"`. We never auto-dial
    our own IPs (see "Self-dial trap" below).
@@ -80,13 +101,13 @@ On macOS, index-0 failure also includes TCC (camera permission) guidance in
 
 ```
 cv::VideoCapture (backend)
-    ↓  cap.read(cv::Mat)             [worker thread]
+  ↓  cap.grab()+retrieve(cv::Mat)  [worker thread]
 PhysicalCameraStream::latest_frame_
     ↓  PullLatestFrameInto()         [main thread, inside Tick]
 PhysicalEnvironmentLoop::pull_scratch
     ↓  PublishPhysicalFrameToBus()
-PhysicalFrameBus::latest_image_
-    ↓  PullLatestFrameView()         [UI panel]
+PhysicalFrameBus::latest_packet_
+  ↓  PullLatestFrameView()         [UI panel, shallow cv::Mat headers]
 UIPhysicalEnvironmentPanel::last_view_.image
     ↓  cv::resize() → manual per-pixel blit
 OverlayRenderer pixel buffer (ARGB 32-bit)
@@ -211,7 +232,42 @@ false and spams the log every tick.
 
 ---
 
-## 12. Consumption Contract
+## 12. Local-Device FPS Landmine (Fixed)
+
+RTSP/HTTP streams use a backlog-drain pattern: `grab()` repeatedly while calls
+return quickly, then `retrieve()` only the freshest decoded frame. That keeps
+network cameras low-latency when FFMPEG has queued old frames.
+
+That same drain pattern MUST NOT run on local `device:N` cameras. On UVC,
+DirectShow, MediaFoundation, and AVFoundation devices, the second `grab()` is
+not draining a backlog — it blocks for the next live frame. If the worker then
+retrieves only after that second grab, it consumes two camera frames for every
+one published frame. A 60 FPS capture mode appears capped at ~29-30 FPS on both
+Windows and macOS.
+
+Current contract:
+
+- `device:N...` local cameras use exactly one `grab()+retrieve()` per worker
+  iteration.
+- RTSP/HTTP streams keep the FFMPEG drain loop.
+- If measured local FPS remains near 30 after this fix, inspect the negotiated
+  capture mode log first. If the log says `requested fourcc=MJPG` but
+  `delivering fourcc=YUY2`, the backend ignored compressed transport; try a
+  different backend row or an explicit URL. Many UVC devices only sustain 60+
+  FPS at `640x480` when MJPG is actually delivered.
+- When the worker logs `local FPS mismatch`, interpret the timings this way:
+  - `avg_grab_ms ≈ 33ms`: camera/backend is delivering 30Hz despite reporting
+    a 60Hz mode. This is usually driver mode, exposure, USB bandwidth, or
+    hardware limitation.
+  - `avg_retrieve_ms` high: decode/color-conversion cost.
+  - `avg_store_ms` high: memory-copy/lock contention in the worker publish slot.
+- Low light can force webcams to use longer exposure times and effectively
+  halve frame rate. Try brighter lighting or explicit backend-specific exposure
+  values, for example `device:0?width=640&height=480&fps=60&fourcc=MJPG&auto_exposure=0.25&exposure=-6` on some Windows DirectShow cameras.
+
+---
+
+## 13. Consumption Contract
 
 Downstream stages pull via:
 
@@ -219,7 +275,9 @@ Downstream stages pull via:
 GRIM::Perception::Physical::PhysicalFrameBus::FrameView view;
 uint64_t seen = 0;
 if (PhysicalFrameBus::Instance().PullLatestFrameView(view, seen)) {
-    // view.image is CV_8UC3 in OpenCV-backend-native byte order.
+  // view.image is a read-only shallow cv::Mat view pinned by view.packet.
+  // Clone locally before any in-place OpenCV mutation.
+  // view.image is CV_8UC3 in OpenCV-backend-native byte order.
     // IMPORTANT: consumers doing inference should cvtColor to the exact order
     // their model expects. Do NOT assume BGR on macOS — see §7.
     // view.frame_counter, view.published_at, view.source_url, view.source_label
@@ -231,7 +289,7 @@ maintains its own `last_seen_counter`).
 
 ---
 
-## 13. Build Notes
+## 14. Build Notes
 
 - `cmake/Dependencies.cmake` and `cmake/Config.cmake` include `videoio` and
   `imgcodecs` in the `find_package(OpenCV … COMPONENTS …)` list. Omitting
@@ -243,18 +301,18 @@ maintains its own `last_seen_counter`).
 
 ---
 
-## 14. Known Non-Issues
+## 15. Known Non-Issues
 
 - **Warm/pink indoor tint:** That's real-world lighting plus the MacBook
   camera's auto-white-balance. Not a pipeline bug.
-- **Status=STREAMING with 29.9 fps instead of 30:** Normal — `measured_fps_`
-  is computed over 1-second windows, jitter of ±0.1 is expected.
+- **Requested 30 FPS showing 29.9 FPS:** Normal — `measured_fps_` is computed
+  over 1-second windows, jitter of ±0.1 is expected.
 - **Local device 0 "not present" on first macOS run:** TCC permission
   dialog. Accept, relaunch GRIM.
 
 ---
 
-## 15. Future-Proofing Checklist
+## 16. Future-Proofing Checklist
 
 When adding a new capture backend or platform:
 

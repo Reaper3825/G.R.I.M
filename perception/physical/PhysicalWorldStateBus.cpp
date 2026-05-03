@@ -3,6 +3,7 @@
 #include "PhysicalWorldStateLogTag.hpp"
 #include "logger.hpp"
 
+#include <chrono>
 #include <stdexcept>
 
 namespace GRIM { namespace Perception { namespace Physical {
@@ -15,6 +16,7 @@ PhysicalWorldStateBus& PhysicalWorldStateBus::Instance() {
 void PhysicalWorldStateBus::PublishPhysicalWorldStateSnapshotToBus(
     const PhysicalWorldStateSnapshot& snapshot)
 {
+    const auto t0 = std::chrono::steady_clock::now();
     if (snapshot.source_frame_counter == 0) {
         const std::string reason =
             "PublishPhysicalWorldStateSnapshotToBus: source_frame_counter==0 (uninitialised)";
@@ -23,6 +25,9 @@ void PhysicalWorldStateBus::PublishPhysicalWorldStateSnapshotToBus(
     }
     std::lock_guard<std::mutex> lk(mutex_);
     latest_snapshot_ = snapshot;
+    latest_snapshot_.publish_bus_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
     latest_time_     = std::chrono::steady_clock::now();
     ever_published_  = true;
 }

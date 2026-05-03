@@ -114,6 +114,15 @@ void DrainActiveStreamLocked(PhysicalEnvironmentState& s) {
                 .GetPhysicalSignalConditioningStatusSnapshot()
                 .last_applied_exposure_gain;
             md.scene_stability       = cond_result.scene_stability;
+            md.conditioning_total_ms           = cond_result.total_ms;
+            md.conditioning_quality_gate_ms    = cond_result.quality_gate_ms;
+            md.conditioning_stabilization_ms   = cond_result.stabilization_ms;
+            md.conditioning_denoise_ms         = cond_result.denoise_ms;
+            md.conditioning_exposure_ms        = cond_result.exposure_ms;
+            md.conditioning_deblur_ms          = cond_result.deblur_ms;
+            md.conditioning_resize_ms          = cond_result.resize_ms;
+            md.conditioning_color_convert_ms   = cond_result.color_convert_ms;
+            md.conditioning_scene_stability_ms = cond_result.scene_stability_ms;
 
             PhysicalFrameBus::Instance().PublishPhysicalFrameToBus(
                 s.pull_scratch,

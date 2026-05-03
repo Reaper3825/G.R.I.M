@@ -6,6 +6,7 @@
 #include "PhysicalWorldStateLogTag.hpp"
 #include "logger.hpp"
 
+#include <chrono>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -13,6 +14,11 @@
 namespace GRIM { namespace Perception { namespace Physical {
 
 namespace {
+
+double PhysicalWorldElapsedMsSince(const std::chrono::steady_clock::time_point& start) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+}
 
 struct PhysicalWorldStateState {
     std::mutex                                          mutex;
@@ -66,16 +72,21 @@ void LazyInitLocked(PhysicalWorldStateState& s) {
 } // anonymous namespace
 
 void TickPhysicalWorldState() {
+    const auto tick_start = std::chrono::steady_clock::now();
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     if (s.shutting_down) return;
     LazyInitLocked(s);
     ++s.tick_count;
 
+    const auto perc_pull_start = std::chrono::steady_clock::now();
     const bool perc_advanced = PhysicalPerceptionPrimitiveBus::Instance()
         .PullLatestPhysicalPerceptionResultsView(s.perc_view, s.last_seen_perc_ctr);
+    const double perc_pull_ms = PhysicalWorldElapsedMsSince(perc_pull_start);
+    const auto ground_pull_start = std::chrono::steady_clock::now();
     const bool ground_advanced = PhysicalSpatialGroundingBus::Instance()
         .PullLatestPhysicalSpatialGroundingResultsView(s.ground_view, s.last_seen_ground_ctr);
+    const double ground_pull_ms = PhysicalWorldElapsedMsSince(ground_pull_start);
 
     if (!perc_advanced && !ground_advanced) return;
 
@@ -97,12 +108,16 @@ void TickPhysicalWorldState() {
 
     PhysicalWorldStateSnapshot snapshot;
     try {
+        const auto build_start = std::chrono::steady_clock::now();
         BuildPhysicalWorldStateSnapshot(
             s.perc_view.results,
             (ground_ctr == perc_ctr) ? s.ground_view.results
                                      : PhysicalSpatialGroundingResults{},
             s.cfg,
             snapshot);
+        snapshot.build_wall_ms = PhysicalWorldElapsedMsSince(build_start);
+        snapshot.perception_bus_pull_ms = perc_pull_ms;
+        snapshot.grounding_bus_pull_ms = ground_pull_ms;
     } catch (const std::exception& e) {
         s.last_error_reason = std::string("BuildPhysicalWorldStateSnapshot threw: ") + e.what();
         LOG_ERROR(PHYSICAL_WORLD_STATE_LOG_TAG, s.last_error_reason);
@@ -119,6 +134,7 @@ void TickPhysicalWorldState() {
         LOG_ERROR(PHYSICAL_WORLD_STATE_LOG_TAG, reason);
         return;
     }
+    snapshot.tick_total_ms = PhysicalWorldElapsedMsSince(tick_start);
 
     try {
         PhysicalWorldStateBus::Instance().PublishPhysicalWorldStateSnapshotToBus(snapshot);

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ui_panel.hpp"
-#include "ui_button.hpp"
-#include "ui_dropdown.hpp"
-#include "ui_inputbox.hpp"
+#include "primitives/ui_panel.hpp"
+#include "primitives/ui_button.hpp"
+#include "primitives/ui_dropdown.hpp"
+#include "primitives/ui_inputbox.hpp"
 #include "perception/physical/PhysicalCameraSource.hpp"
 #include "perception/physical/PhysicalCameraCalibrator.hpp"
 #include "perception/physical/PhysicalFrameConditioner.hpp"

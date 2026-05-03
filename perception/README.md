@@ -419,7 +419,33 @@ LOG_DEBUG("PerceptionContext", "...");
 [DEBUG][PerceptionContext] Context analysis complete: Screen: 1920x1080 | Scene: IDE/Code Editor...
 ```
 
+### Physical Perception Telemetry
+
+The physical perception pipeline now carries timing telemetry in the same
+snapshots that move through the buses, so UI/debug consumers can profile
+without parsing logs:
+
+- `PhysicalFrameMetadata` reports frame-conditioning stage timings plus
+    `frame_bus_publish_copy_ms` and per-consumer `frame_bus_pull_copy_ms`.
+    After the shared-packet frame bus refactor, pull timing measures mutex +
+    shallow `cv::Mat` header handoff overhead, not per-consumer pixel copies.
+- `PhysicalPerceptionPrimitiveResults::telemetry` reports Stage-2 tick time,
+    frame-pull time, per-operator wall time, cache-hit count, fresh inference
+    count, and no-signal forced refreshes.
+- `PhysicalSpatialGroundingResults` reports Stage-3 pull/depth/grounder/publish
+    timing.
+- `PhysicalWorldStateSnapshot` reports Stage-4 pull/build/publish timing.
+
+Operator envelopes still carry model-specific timings such as
+`last_inference_ms`, SAM encoder/decoder timing, tracker route time, and class
+policy apply time. Use the loop telemetry for integration overhead and the
+operator envelope timings for model hot spots.
+
 ## Contributing
+
+Physical-camera files use the ownership taxonomy in
+[`physical/README.md`](physical/README.md). Update that file whenever adding,
+moving, or splitting a `perception/physical/Physical*` file.
 
 When extending perception:
 1. Add new analysis to `PerceptionContextManager::captureAndAnalyze()`

@@ -1,7 +1,7 @@
 #include "ui_progress_bar.hpp"
-#include "ui_theme.hpp"
-#include "overlay_renderer.hpp"
-#include "input_parser.hpp"
+#include "../ui_theme.hpp"
+#include "../overlay_renderer.hpp"
+#include "../../core/input_parser.hpp"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>

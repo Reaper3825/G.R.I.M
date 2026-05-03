@@ -4,7 +4,7 @@
 #include "overlay_renderer.hpp"
 #include "ui_theme.hpp"
 #include "ui_root.hpp" 
-#include "ui_slider.hpp"  // For checking if slider is editing
+#include "primitives/ui_slider.hpp"  // For checking if slider is editing
 #include "commands/commands_core.hpp"
 #include "helpers/key.hpp"
 #include "core/grim_platform.h"

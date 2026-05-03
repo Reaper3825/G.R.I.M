@@ -8,6 +8,12 @@ cat scripts/run_train_on_anvil.sh
 
 That script is the one that runs the job and starts the training loop on Anvil.
 
+If you are setting up Windows SSH or VS Code Remote-SSH for Anvil, see:
+
+```text
+scripts/README_ANVIL_WINDOWS_VSCODE.md
+```
+
 ## Run command (what actually runs the job and the loop)
 
 From the repo root:

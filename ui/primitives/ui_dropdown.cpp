@@ -1,7 +1,7 @@
 #include "ui_dropdown.hpp"
-#include "ui_theme.hpp"
-#include "overlay_renderer.hpp"
-#include "input_parser.hpp"
+#include "../ui_theme.hpp"
+#include "../overlay_renderer.hpp"
+#include "../../core/input_parser.hpp"
 #include "helpers/mouse.hpp"
 #include "logger.hpp"  // ? ADD: For debugging
 #include <algorithm>
@@ -67,7 +67,10 @@ void UIDropdown::update(const InputState& input, float dt) {
                         m.y >= dropdownPos.y && m.y <= dropdownPos.y + dropdownSize.y);
     hovered = overDropdown;
     
-    bool leftPressed = Mouse::wasPressed(MouseButton::Left);
+    // Some panel paths feed clicks through InputState before the static Mouse
+    // helper observes the edge. Treat either source as authoritative so a
+    // dropdown cannot appear visually alive but ignore the click edge.
+    bool leftPressed = input.mousePressed[0] || Mouse::wasPressed(MouseButton::Left);
     
     // Calculate expanded list bounds for scrolling
     int visibleItems = std::min(maxVisibleItems, static_cast<int>(options.size()));

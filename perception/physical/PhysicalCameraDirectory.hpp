@@ -17,14 +17,17 @@ namespace GRIM { namespace Perception { namespace Physical {
 std::vector<PhysicalCameraSource> EnumerateLocalCameraCandidates();
 
 // Probe cameras directly attached to this host (USB webcams, builtin
-// FaceTime/iSight camera, etc.) via OpenCV's default VideoCapture backend.
-// Probes device indices 0..max_probe-1, emitting Ready entries with
-// url_template = "device:<N>" for indices that open successfully.
+// FaceTime/iSight camera, virtual cameras, etc.) via OpenCV backends.
+// Probes every device index in 0..max_probe-1, emitting Ready entries with
+// backend-pinned url_template values ("device:<N>?backend=<CAP_ID>") for
+// indices that open successfully. Gaps are tolerated because Windows camera
+// index assignment is not guaranteed to be contiguous across virtual + USB
+// devices.
 //
 // This uses a short-lived cv::VideoCapture open/close on each index — there
 // is no cheaper "list attached cameras" API that works across macOS/Linux/
 // Windows without adding AVFoundation/MediaFoundation/v4l2 directly.
-std::vector<PhysicalCameraSource> EnumerateLocalDeviceCameras(int max_probe = 4);
+std::vector<PhysicalCameraSource> EnumerateLocalDeviceCameras(int max_probe = 16);
 
 // Build the candidate list from devices currently registered with the local
 // hub (DeviceCommServer). Only includes devices whose `allowed_actions`

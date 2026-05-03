@@ -1,7 +1,7 @@
 #include "ui_scrollbox.hpp"
-#include "ui_theme.hpp"
-#include "overlay_renderer.hpp"
-#include "input_parser.hpp"
+#include "../ui_theme.hpp"
+#include "../overlay_renderer.hpp"
+#include "../../core/input_parser.hpp"
 #include "ui_dropdown.hpp"  // For checking if child is a dropdown
 #include "helpers/mouse.hpp"
 #include "logger.hpp"

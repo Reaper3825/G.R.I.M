@@ -3,6 +3,7 @@
 #include "PhysicalSpatialGroundingLogTag.hpp"
 #include "logger.hpp"
 
+#include <chrono>
 #include <stdexcept>
 
 namespace GRIM { namespace Perception { namespace Physical {
@@ -15,6 +16,7 @@ PhysicalSpatialGroundingBus& PhysicalSpatialGroundingBus::Instance() {
 void PhysicalSpatialGroundingBus::PublishPhysicalSpatialGroundingResultsToBus(
     const PhysicalSpatialGroundingResults& results)
 {
+    const auto t0 = std::chrono::steady_clock::now();
     if (results.source_frame_counter == 0) {
         // Rule 20: counters start at 1. Zero means uninitialised data slipped
         // through the loop — refuse to publish so consumers do not see a
@@ -26,6 +28,9 @@ void PhysicalSpatialGroundingBus::PublishPhysicalSpatialGroundingResultsToBus(
     }
     std::lock_guard<std::mutex> lk(mutex_);
     latest_results_ = results;
+    latest_results_.publish_bus_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
     latest_time_    = std::chrono::steady_clock::now();
     ever_published_ = true;
 }

@@ -35,6 +35,7 @@
 #include <filesystem>
 #include <sstream>
 #include <vector>
+#include <opencv2/dnn.hpp>
 #include <whisper.h>
 
 // Global resource layer (replaces old g_systemInfo)
@@ -70,6 +71,52 @@ static std::string ResolveConfigPathAgainstGrimRoot(const std::string& path) {
     return resolved.lexically_normal().string();
 }
 
+static int ParsePhysicalDnnBackendId(const std::string& model_id, const std::string& value) {
+    if (value == "opencv") {
+        return cv::dnn::DNN_BACKEND_OPENCV;
+    }
+    if (value == "cuda") {
+        return cv::dnn::DNN_BACKEND_CUDA;
+    }
+    if (value == "default") {
+        return cv::dnn::DNN_BACKEND_DEFAULT;
+    }
+    throw std::runtime_error(
+        "vision sub-model '" + model_id + "': invalid dnn_backend='" + value
+        + "' (expected 'opencv', 'cuda', or 'default')");
+}
+
+static int ParsePhysicalDnnTargetId(const std::string& model_id, const std::string& value) {
+    if (value == "cpu") {
+        return cv::dnn::DNN_TARGET_CPU;
+    }
+    if (value == "opencl") {
+        return cv::dnn::DNN_TARGET_OPENCL;
+    }
+    if (value == "opencl_fp16") {
+        return cv::dnn::DNN_TARGET_OPENCL_FP16;
+    }
+    if (value == "cuda") {
+        return cv::dnn::DNN_TARGET_CUDA;
+    }
+    if (value == "cuda_fp16") {
+        return cv::dnn::DNN_TARGET_CUDA_FP16;
+    }
+    throw std::runtime_error(
+        "vision sub-model '" + model_id + "': invalid dnn_target='" + value
+        + "' (expected 'cpu', 'opencl', 'opencl_fp16', 'cuda', or 'cuda_fp16')");
+}
+
+template <typename Config>
+static void ApplyPhysicalDnnExecutionPolicy(Config& cfg, const GRIM::MMO::ModelInfo& model) {
+    if (!model.vision.dnn_backend.empty()) {
+        cfg.dnn_backend_id = ParsePhysicalDnnBackendId(model.id, model.vision.dnn_backend);
+    }
+    if (!model.vision.dnn_target.empty()) {
+        cfg.dnn_target_id = ParsePhysicalDnnTargetId(model.id, model.vision.dnn_target);
+    }
+}
+
 struct RequiredPhysicalVisionPath {
     std::string label;
     fs::path    path;
@@ -94,6 +141,9 @@ static std::vector<RequiredPhysicalVisionPath> CollectRequiredPhysicalVisionPath
         if (!vm) {
             throw std::runtime_error(
                 "CollectRequiredPhysicalVisionPaths: registry returned NULL vision model");
+        }
+        if (!vm->enabled) {
+            continue;
         }
 
         const std::string prefix = vm->id + ": ";
@@ -443,6 +493,11 @@ static void bootstrapMMOLayer() {
         // ----------------------------------------------------------------
         namespace PE = GRIM::Perception::Physical;
         for (const auto& vm : registry.getVisionSubModels()) {
+            if (!vm->enabled) {
+                LOG_PHASE(std::string("MMO vision sub-model skipped: ") + vm->id
+                          + " (enabled=false)", true);
+                continue;
+            }
             try {
                 using Op = GRIM::MMO::VisionOperatorKind;
                 switch (vm->vision.operator_kind) {
@@ -450,6 +505,7 @@ static void bootstrapMMOLayer() {
                     PE::PhysicalObjectDetectorConfig c;
                     c.onnx_model_path  = ResolveConfigPathAgainstGrimRoot(vm->model_path);
                     c.class_names_path = ResolveConfigPathAgainstGrimRoot(vm->vision.class_names_path);
+                    ApplyPhysicalDnnExecutionPolicy(c, *vm);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     if (vm->vision.confidence_threshold > 0.0f)
@@ -469,6 +525,7 @@ static void bootstrapMMOLayer() {
                     PE::PhysicalSemanticSegmenterConfig c;
                     c.onnx_model_path  = ResolveConfigPathAgainstGrimRoot(vm->model_path);
                     c.class_names_path = ResolveConfigPathAgainstGrimRoot(vm->vision.class_names_path);
+                    ApplyPhysicalDnnExecutionPolicy(c, *vm);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     // Semantic segmentation is dense + expensive. Hard cap
@@ -497,6 +554,7 @@ static void bootstrapMMOLayer() {
                     PE::PhysicalPoseKeypointEstimatorConfig c;
                     c.onnx_model_path  = ResolveConfigPathAgainstGrimRoot(vm->model_path);
                     c.joint_names_path = ResolveConfigPathAgainstGrimRoot(vm->vision.class_names_path);
+                    ApplyPhysicalDnnExecutionPolicy(c, *vm);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     if (vm->vision.min_keypoint_confidence > 0.0f)
@@ -531,6 +589,7 @@ static void bootstrapMMOLayer() {
                     c.recogniser_onnx_path      = ResolveConfigPathAgainstGrimRoot(vm->vision.recogniser_onnx_path);
                     c.recogniser_charset_path   = ResolveConfigPathAgainstGrimRoot(vm->vision.recogniser_charset_path);
                     c.recogniser_input_grayscale = vm->vision.recogniser_input_grayscale;
+                    ApplyPhysicalDnnExecutionPolicy(c, *vm);
                     if (vm->vision.input_width  > 0) c.detector_input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.detector_input_height = vm->vision.input_height;
                     // Scene text is among the slowest-changing signals in
@@ -545,6 +604,7 @@ static void bootstrapMMOLayer() {
                     c.detector_onnx_path        = ResolveConfigPathAgainstGrimRoot(vm->model_path);
                     c.classifier_onnx_path      = ResolveConfigPathAgainstGrimRoot(vm->vision.expression_classifier_onnx_path);
                     c.classifier_class_names_path = ResolveConfigPathAgainstGrimRoot(vm->vision.expression_classifier_class_names_path);
+                    ApplyPhysicalDnnExecutionPolicy(c, *vm);
                     if (vm->vision.input_width  > 0) c.detector_input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.detector_input_height = vm->vision.input_height;
                     if (vm->vision.confidence_threshold > 0.0f)
@@ -569,6 +629,7 @@ static void bootstrapMMOLayer() {
                 case Op::MonocularDepthEstimator: {
                     PE::PhysicalMonocularDepthEstimatorConfig c;
                     c.onnx_model_path = ResolveConfigPathAgainstGrimRoot(vm->model_path);
+                    ApplyPhysicalDnnExecutionPolicy(c, *vm);
                     if (vm->vision.input_width  > 0) c.input_width  = vm->vision.input_width;
                     if (vm->vision.input_height > 0) c.input_height = vm->vision.input_height;
                     c.input_scale = static_cast<float>(vm->vision.depth_input_scale);

@@ -1,5 +1,6 @@
 #include "PhysicalPerceptionPrimitiveBus.hpp"
 
+#include <chrono>
 #include <stdexcept>
 
 namespace GRIM { namespace Perception { namespace Physical {
@@ -12,6 +13,7 @@ PhysicalPerceptionPrimitiveBus& PhysicalPerceptionPrimitiveBus::Instance() {
 void PhysicalPerceptionPrimitiveBus::PublishPhysicalPerceptionResultsToBus(
     const PhysicalPerceptionPrimitiveResults& results)
 {
+    const auto t0 = std::chrono::steady_clock::now();
     if (results.source_frame_counter == 0) {
         throw std::runtime_error(
             "PhysicalPerceptionPrimitiveBus::PublishPhysicalPerceptionResultsToBus: "
@@ -25,6 +27,9 @@ void PhysicalPerceptionPrimitiveBus::PublishPhysicalPerceptionResultsToBus(
     }
     std::lock_guard<std::mutex> lk(mutex_);
     latest_results_ = results;
+    latest_results_.telemetry.publish_bus_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
     latest_time_    = std::chrono::steady_clock::now();
     ever_published_ = true;
 }

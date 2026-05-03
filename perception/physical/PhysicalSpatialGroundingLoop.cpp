@@ -16,6 +16,11 @@ namespace GRIM { namespace Perception { namespace Physical {
 
 namespace {
 
+double PhysicalSpatialElapsedMsSince(const std::chrono::steady_clock::time_point& start) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+}
+
 // All process-wide Stage-3 state lives here. Encapsulated in an anonymous
 // namespace so no other TU can reach in.
 struct PhysicalSpatialGroundingState {
@@ -107,6 +112,7 @@ void LazyInitLocked(PhysicalSpatialGroundingState& s) {
 } // anonymous namespace
 
 void TickPhysicalSpatialGrounding() {
+    const auto tick_start = std::chrono::steady_clock::now();
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     if (s.shutting_down) return;
@@ -117,10 +123,14 @@ void TickPhysicalSpatialGrounding() {
     // tracker output (for fusion). Either advancing on its own is not
     // enough — we wait for both, then verify they share a frame counter so
     // the fused result is coherent.
+    const auto frame_pull_start = std::chrono::steady_clock::now();
     const bool frame_advanced = PhysicalFrameBus::Instance().PullLatestFrameView(
         s.frame_view, s.last_seen_frame_ctr);
+    const double frame_pull_ms = PhysicalSpatialElapsedMsSince(frame_pull_start);
+    const auto perc_pull_start = std::chrono::steady_clock::now();
     const bool perc_advanced  = PhysicalPerceptionPrimitiveBus::Instance()
         .PullLatestPhysicalPerceptionResultsView(s.perc_view, s.last_seen_perc_ctr);
+    const double perc_pull_ms = PhysicalSpatialElapsedMsSince(perc_pull_start);
 
     if (!frame_advanced && !perc_advanced) return;
 
@@ -142,6 +152,8 @@ void TickPhysicalSpatialGrounding() {
     results.raw_image_width                   = s.frame_view.metadata.raw_width;
     results.raw_image_height                  = s.frame_view.metadata.raw_height;
     results.raw_to_model                      = s.frame_view.metadata.raw_to_model;
+    results.frame_bus_pull_ms                 = frame_pull_ms;
+    results.perception_bus_pull_ms            = perc_pull_ms;
     if (results.model_image_width  <= 0) results.model_image_width  = s.frame_view.model_image.cols;
     if (results.model_image_height <= 0) results.model_image_height = s.frame_view.model_image.rows;
     if (results.raw_image_width    <= 0) results.raw_image_width    = s.frame_view.raw_image.cols;
@@ -149,6 +161,7 @@ void TickPhysicalSpatialGrounding() {
 
     // ── Depth estimation (cadence-gated) ──────────────────────
     if (s.enable_flags.depth_estimator && s.depth_estimator) {
+        const auto depth_start = std::chrono::steady_clock::now();
         const PhysicalSceneStability& scene = s.frame_view.metadata.scene_stability;
         const uint64_t now_steady_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -220,6 +233,7 @@ void TickPhysicalSpatialGrounding() {
                     : 0u;
             results.depth_cache_status.cache_reason     = cache_reason;
         }
+        results.depth_wall_ms = PhysicalSpatialElapsedMsSince(depth_start);
     } else {
         results.depth_estimator_state      = PhysicalImageOperatorState::NoModelConfigured;
         results.depth_estimator_last_error = "depth_estimator disabled by enable_flags";
@@ -227,6 +241,7 @@ void TickPhysicalSpatialGrounding() {
 
     // ── Spatial grounding ──────────────────────────────────────────────
     if (s.enable_flags.spatial_grounder && s.spatial_grounder) {
+        const auto grounder_start = std::chrono::steady_clock::now();
         s.spatial_grounder->RouteDepthAndTracksToPhysicalSpatialGrounder(
             results.depth_map,
             s.perc_view.results.entity_tracker,
@@ -237,10 +252,12 @@ void TickPhysicalSpatialGrounding() {
             results.grounder_last_error,
             results.last_grounding_ms);
         results.grounding_count = s.spatial_grounder->GetPhysicalSpatialGrounderRunCount();
+        results.grounder_wall_ms = PhysicalSpatialElapsedMsSince(grounder_start);
     } else {
         results.grounder_state      = PhysicalImageOperatorState::NoModelConfigured;
         results.grounder_last_error = "spatial_grounder disabled by enable_flags";
     }
+    results.tick_total_ms = PhysicalSpatialElapsedMsSince(tick_start);
 
     try {
         PhysicalSpatialGroundingBus::Instance()

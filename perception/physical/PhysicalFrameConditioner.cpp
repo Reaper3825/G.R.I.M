@@ -9,6 +9,7 @@
 #include <opencv2/video/tracking.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
@@ -299,6 +300,12 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     const cv::Mat& raw_bgr,
     uint64_t       frame_counter,
     cv::Mat&       out_model_bgr) {
+    const auto pass_start = std::chrono::steady_clock::now();
+    auto elapsed_ms_since = [](const auto& start) -> double {
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+    };
+
     if (raw_bgr.empty()) {
         throw std::runtime_error(
             "ProcessRawFrameToModelSignal: raw_bgr is empty");
@@ -325,10 +332,22 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     status_.stabilization_active       = config_.enable_stabilization;
     status_.last_quality_gate_passed   = true;
     status_.last_quality_gate_reason.clear();
+    status_.last_total_ms             = 0.0;
+    status_.last_quality_gate_ms      = 0.0;
+    status_.last_stabilization_ms     = 0.0;
+    status_.last_denoise_ms           = 0.0;
+    status_.last_exposure_ms          = 0.0;
+    status_.last_deblur_ms            = 0.0;
+    status_.last_resize_ms            = 0.0;
+    status_.last_color_convert_ms     = 0.0;
+    status_.last_scene_stability_ms   = 0.0;
 
     // ---- Quality gate (computed on RAW input — drop before wasting work) ----
+    auto stage_start = std::chrono::steady_clock::now();
     const double clipped_ratio = ComputeClippedPixelRatio(raw_bgr);
     const double lap_var       = ComputeLaplacianVarianceFromBgr(raw_bgr);
+    result.quality_gate_ms = elapsed_ms_since(stage_start);
+    status_.last_quality_gate_ms = result.quality_gate_ms;
     status_.last_clipped_pixel_ratio = clipped_ratio;
     status_.last_laplacian_variance  = lap_var;
 
@@ -357,6 +376,8 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
                           + std::to_string(frame_counter) + ": " + reason);
             result.accepted    = false;
             result.drop_reason = reason;
+            result.total_ms = elapsed_ms_since(pass_start);
+            status_.last_total_ms = result.total_ms;
             return result;
         }
     }
@@ -365,6 +386,7 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     std::ostringstream pipeline;
 
     if (config_.enable_stabilization) {
+        stage_start = std::chrono::steady_clock::now();
         cv::Mat curr_gray;
         cv::cvtColor(working, curr_gray, cv::COLOR_BGR2GRAY);
         status_.last_flow_dx = 0.0;
@@ -431,11 +453,14 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
         }
         previous_gray_for_flow_ = curr_gray;
         pipeline << "stabilize ";
+        result.stabilization_ms = elapsed_ms_since(stage_start);
+        status_.last_stabilization_ms = result.stabilization_ms;
     } else {
         previous_gray_for_flow_.release();
     }
 
     if (config_.enable_denoise && config_.denoise_strength > 0) {
+        stage_start = std::chrono::steady_clock::now();
         cv::Mat denoised;
         cv::fastNlMeansDenoisingColored(working,
                                         denoised,
@@ -445,9 +470,12 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
                                         21);
         working = denoised;
         pipeline << "denoise ";
+        result.denoise_ms = elapsed_ms_since(stage_start);
+        status_.last_denoise_ms = result.denoise_ms;
     }
 
     if (config_.enable_exposure_correction) {
+        stage_start = std::chrono::steady_clock::now();
         const double observed_luma = ComputeMeanLumaFromBgr(working);
         double gain = config_.manual_exposure_gain;
         if (config_.exposure_auto) {
@@ -460,9 +488,12 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
         working = corrected;
         status_.last_applied_exposure_gain = gain;
         pipeline << "exposure(g=" << gain << ") ";
+        result.exposure_ms = elapsed_ms_since(stage_start);
+        status_.last_exposure_ms = result.exposure_ms;
     }
 
     if (config_.enable_deblur && config_.deblur_amount > 0.0) {
+        stage_start = std::chrono::steady_clock::now();
         cv::Mat blurred;
         cv::GaussianBlur(working, blurred, cv::Size(0, 0), 1.2, 1.2);
         cv::Mat sharpened;
@@ -474,11 +505,14 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
                         sharpened);
         working = sharpened;
         pipeline << "deblur(a=" << config_.deblur_amount << ") ";
+        result.deblur_ms = elapsed_ms_since(stage_start);
+        status_.last_deblur_ms = result.deblur_ms;
     }
 
     // ---- Resize stage. Track the raw->model transform regardless of mode. ----
     PhysicalSignalRawToModelTransform raw_to_model;
     if (config_.enable_resize) {
+        stage_start = std::chrono::steady_clock::now();
         if (config_.resize_mode == PhysicalSignalResizeMode::Letterbox) {
             cv::Mat resized;
             raw_to_model = LetterboxResize(working,
@@ -508,6 +542,8 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
             pipeline << "resize(" << config_.output_width << "x"
                      << config_.output_height << ") ";
         }
+        result.resize_ms = elapsed_ms_since(stage_start);
+        status_.last_resize_ms = result.resize_ms;
     } else {
         raw_to_model.scale_x  = 1.0;
         raw_to_model.scale_y  = 1.0;
@@ -516,12 +552,15 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     }
 
     if (config_.color_mode == PhysicalSignalColorMode::Gray) {
+        stage_start = std::chrono::steady_clock::now();
         cv::Mat gray;
         cv::cvtColor(working, gray, cv::COLOR_BGR2GRAY);
         cv::Mat gray_bgr;
         cv::cvtColor(gray, gray_bgr, cv::COLOR_GRAY2BGR);
         working = gray_bgr;
         pipeline << "gray ";
+        result.color_convert_ms = elapsed_ms_since(stage_start);
+        status_.last_color_convert_ms = result.color_convert_ms;
     } else {
         pipeline << "bgr ";
     }
@@ -546,6 +585,7 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     PhysicalSceneStability stability{};
     const auto& sc = config_.scene_stability;
     if (sc.enable) {
+        stage_start = std::chrono::steady_clock::now();
         if (sc.thumbnail_width < 8 || sc.thumbnail_height < 8) {
             throw std::runtime_error(
                 "ProcessRawFrameToModelSignal: scene_stability thumbnail must be"
@@ -621,13 +661,18 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
         previous_scene_thumbnail_gray_ = thumb_gray;  // shallow share is fine; we own it
         previous_scene_hash_64_        = curr_hash;
         previous_scene_hash_valid_     = true;
+        result.scene_stability_ms = elapsed_ms_since(stage_start);
+        status_.last_scene_stability_ms = result.scene_stability_ms;
     } else {
         // Disabled by config. Drop temporal state so re-enabling starts fresh.
+        stage_start = std::chrono::steady_clock::now();
         previous_scene_thumbnail_gray_.release();
         previous_scene_hash_valid_ = false;
         scene_stable_streak_       = 0;
         stability.valid            = false;
         stability.change_reason    = "disabled";
+        result.scene_stability_ms = elapsed_ms_since(stage_start);
+        status_.last_scene_stability_ms = result.scene_stability_ms;
     }
 
     status_.last_scene_stability = stability;
@@ -641,6 +686,8 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
     result.model_width       = out_model_bgr.cols;
     result.model_height      = out_model_bgr.rows;
     result.scene_stability   = stability;
+    result.total_ms          = elapsed_ms_since(pass_start);
+    status_.last_total_ms    = result.total_ms;
     return result;
 }
 

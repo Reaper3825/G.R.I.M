@@ -20,17 +20,17 @@
 #include <string>
 #include <vector>
 
-#include "ui_panel.hpp"
-#include "ui_button.hpp"
-#include "ui_dropdown.hpp"
-#include "ui_inputbox.hpp"
-#include "ui_layout_box.hpp"
-#include "ui_progress_bar.hpp"
-#include "ui_scrollbox.hpp"
-#include "ui_slider.hpp"
-#include "ui_textarea.hpp"
-#include "ui_toggle.hpp"
-#include "ui_action_menu.hpp"
+#include "primitives/ui_panel.hpp"
+#include "primitives/ui_button.hpp"
+#include "primitives/ui_dropdown.hpp"
+#include "primitives/ui_inputbox.hpp"
+#include "primitives/ui_layout_box.hpp"
+#include "primitives/ui_progress_bar.hpp"
+#include "primitives/ui_scrollbox.hpp"
+#include "primitives/ui_slider.hpp"
+#include "primitives/ui_textarea.hpp"
+#include "primitives/ui_toggle.hpp"
+#include "primitives/ui_action_menu.hpp"
 
 #include "DataCollection/pipeline/pipeline_orchestrator.hpp"
 #include "DataCollection/huggingface_webhook.hpp"

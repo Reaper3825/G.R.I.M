@@ -107,6 +107,19 @@ struct PhysicalSignalConditioningStatus {
     // metadata at publish time; also surfaced here for diagnostics panels.
     PhysicalSceneStability  last_scene_stability{};
 
+    // Per-frame timing telemetry, in milliseconds. These are populated for
+    // the last processed raw frame, including rejected frames where only the
+    // pre-drop stages ran. A value of 0 means the stage did not run.
+    double   last_total_ms             = 0.0;
+    double   last_quality_gate_ms      = 0.0;
+    double   last_stabilization_ms     = 0.0;
+    double   last_denoise_ms           = 0.0;
+    double   last_exposure_ms          = 0.0;
+    double   last_deblur_ms            = 0.0;
+    double   last_resize_ms            = 0.0;
+    double   last_color_convert_ms     = 0.0;
+    double   last_scene_stability_ms   = 0.0;
+
     std::string last_pipeline_summary;
     std::string last_failure_reason;
 };
@@ -128,6 +141,17 @@ struct PhysicalSignalConditioningResult {
     // is true. Producer (PhysicalEnvironmentLoop) attaches this to the
     // FrameMetadata published on PhysicalFrameBus.
     PhysicalSceneStability            scene_stability{};
+
+    // Timing telemetry for THIS conditioning pass, in milliseconds.
+    double                            total_ms             = 0.0;
+    double                            quality_gate_ms      = 0.0;
+    double                            stabilization_ms     = 0.0;
+    double                            denoise_ms           = 0.0;
+    double                            exposure_ms          = 0.0;
+    double                            deblur_ms            = 0.0;
+    double                            resize_ms            = 0.0;
+    double                            color_convert_ms     = 0.0;
+    double                            scene_stability_ms   = 0.0;
 };
 
 class PhysicalFrameConditioner {

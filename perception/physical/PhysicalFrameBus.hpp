@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -33,6 +34,39 @@ struct PhysicalFrameMetadata {
     // Consumed by every cache-aware operator gate so the test runs exactly
     // once per frame (not once per operator).
     PhysicalSceneStability            scene_stability{};
+
+    // Producer/bus timing telemetry, in milliseconds. `conditioning_*` is
+    // copied from PhysicalFrameConditioner. `frame_bus_publish_copy_ms` is
+    // stamped by PublishPhysicalFrameToBus after cloning into the immutable
+    // latest-frame packet; `frame_bus_pull_copy_ms` is stamped per consumer
+    // pull and should stay near-zero because the pull path shares cv::Mat
+    // headers instead of copying pixel buffers.
+    double                            conditioning_total_ms           = 0.0;
+    double                            conditioning_quality_gate_ms    = 0.0;
+    double                            conditioning_stabilization_ms   = 0.0;
+    double                            conditioning_denoise_ms         = 0.0;
+    double                            conditioning_exposure_ms        = 0.0;
+    double                            conditioning_deblur_ms          = 0.0;
+    double                            conditioning_resize_ms          = 0.0;
+    double                            conditioning_color_convert_ms   = 0.0;
+    double                            conditioning_scene_stability_ms = 0.0;
+    double                            frame_bus_publish_copy_ms       = 0.0;
+    double                            frame_bus_pull_copy_ms          = 0.0;
+};
+
+// Immutable latest-frame packet owned by the bus and shared by consumers.
+// The cv::Mat headers in FrameView are shallow views into this packet; keeping
+// `packet` alive inside FrameView pins the underlying pixel buffers until the
+// consumer moves to a newer frame. Consumers MUST treat raw_image/model_image
+// as read-only; clone locally before mutation.
+struct PhysicalFramePacket {
+    cv::Mat                              raw_image;
+    cv::Mat                              model_image;
+    uint64_t                             frame_counter = 0;
+    std::chrono::steady_clock::time_point published_at{};
+    std::string                          source_url;
+    std::string                          source_label;
+    PhysicalFrameMetadata                metadata{};
 };
 
 // Latest-frame slot. Single producer (PhysicalEnvironmentLoop), multiple
@@ -44,8 +78,9 @@ struct PhysicalFrameMetadata {
 class PhysicalFrameBus {
 public:
     struct FrameView {
-        cv::Mat                              raw_image;        // BGR8 copy from camera
-        cv::Mat                              model_image;      // BGR8 copy after conditioning
+        std::shared_ptr<const PhysicalFramePacket> packet;           // pins shared pixel buffers
+        cv::Mat                              raw_image;        // BGR8 shared view from camera
+        cv::Mat                              model_image;      // BGR8 shared view after conditioning
         cv::Mat                              image;            // alias of model_image for existing consumers
         uint64_t                             frame_counter = 0;
         std::chrono::steady_clock::time_point published_at{};
@@ -80,13 +115,7 @@ private:
     PhysicalFrameBus& operator=(const PhysicalFrameBus&) = delete;
 
     mutable std::mutex                            mutex_;
-    cv::Mat                                       latest_raw_image_;
-    cv::Mat                                       latest_model_image_;
-    uint64_t                                      latest_counter_ = 0;
-    std::chrono::steady_clock::time_point         latest_time_{};
-    std::string                                   latest_url_;
-    std::string                                   latest_label_;
-    PhysicalFrameMetadata                         latest_metadata_{};
+    std::shared_ptr<const PhysicalFramePacket>    latest_packet_;
     bool                                          ever_published_ = false;
 };
 

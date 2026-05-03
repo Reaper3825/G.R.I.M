@@ -8,6 +8,7 @@
     "backend": "ollama",
     "blur": {
         "enabled": true,
+        "intensity": 1,
         "opacity": 1.0
     },
     "conversation_history_size": 10,
@@ -57,7 +58,7 @@
         },
         "router": {
             "backend_type": "grim_text_server",
-            "description": "GRIM-text router \u2014 the core reasoning engine. Decides which sub-models (text or vision) to leverage and synthesizes their outputs into the final response.",
+            "description": "GRIM-text router — the core reasoning engine. Decides which sub-models (text or vision) to leverage and synthesizes their outputs into the final response.",
             "estimated_ram_mb": 0,
             "estimated_vram_mb": 0,
             "hard_copy_path": "",
@@ -79,151 +80,151 @@
         },
         "sub_models": [
             {
-                "id": "vision-object-detector",
-                "name": "YOLOv8n Object Detector",
-                "version": "8.0",
-                "subject": "vision",
-                "description": "COCO-class axis-aligned object detection (80 classes). Hosted in-process by PhysicalPerceptionPrimitivesLoop via OpenCV cv::dnn.",
                 "backend_type": "in_process_vision",
+                "description": "COCO-class axis-aligned object detection (80 classes). Hosted in-process by PhysicalPerceptionPrimitivesLoop via OpenCV cv::dnn.",
+                "estimated_ram_mb": 64,
+                "estimated_vram_mb": 0,
+                "id": "vision-object-detector",
                 "kind": "vision",
                 "model_path": "resources/models/vision/yolov8n.onnx",
-                "url": "",
+                "name": "YOLOv8n Object Detector",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "object_detection",
                     "perception_primitive"
                 ],
+                "url": "",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 64,
-                "estimated_vram_mb": 0,
+                "version": "8.0",
                 "vision": {
-                    "operator": "object_detector",
                     "class_names_path": "resources/models/vision/coco.names",
-                    "input_width": 640,
-                    "input_height": 640,
                     "confidence_threshold": 0.25,
-                    "iou_threshold": 0.45
+                    "input_height": 640,
+                    "input_width": 640,
+                    "iou_threshold": 0.45,
+                    "operator": "object_detector"
                 }
             },
             {
-                "id": "vision-semantic-segmenter",
-                "name": "PPHumanSeg (Person Segmentation)",
-                "version": "2023mar",
-                "subject": "vision",
-                "description": "Binary person/background semantic segmentation (192x192). Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
                 "backend_type": "in_process_vision",
+                "description": "Binary person/background semantic segmentation (192x192). Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
+                "estimated_ram_mb": 32,
+                "estimated_vram_mb": 0,
+                "id": "vision-semantic-segmenter",
                 "kind": "vision",
                 "model_path": "resources/models/vision/pphumanseg.onnx",
-                "url": "",
+                "name": "PPHumanSeg (Person Segmentation)",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "semantic_segmentation",
                     "perception_primitive"
                 ],
+                "url": "",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 32,
-                "estimated_vram_mb": 0,
+                "version": "2023mar",
                 "vision": {
-                    "operator": "semantic_segmenter",
                     "class_names_path": "resources/models/vision/pphumanseg.names",
+                    "input_height": 192,
                     "input_width": 192,
-                    "input_height": 192
+                    "operator": "semantic_segmenter"
                 }
             },
             {
-                "id": "vision-image-classifier",
-                "name": "MobileCLIP-S0 (zero-shot)",
-                "version": "2024",
-                "subject": "vision",
-                "description": "Apple MobileCLIP-S0 image encoder + precomputed prompt embeddings. Zero-shot scene/activity classification — labels come from resources/models/vision/mobileclip_prompts.txt. Run scripts/setup_mobileclip.py to download the model and bake embeddings.",
                 "backend_type": "in_process_vision",
+                "description": "Apple MobileCLIP-S0 image encoder + precomputed prompt embeddings. Zero-shot scene/activity classification — labels come from resources/models/vision/mobileclip_prompts.txt. Run scripts/setup_mobileclip.py to download the model and bake embeddings.",
+                "estimated_ram_mb": 80,
+                "estimated_vram_mb": 0,
+                "id": "vision-image-classifier",
                 "kind": "vision",
                 "model_path": "resources/models/vision/mobileclip_s0_image.onnx",
-                "url": "",
+                "name": "MobileCLIP-S0 (zero-shot)",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "image_classification",
                     "perception_primitive"
                 ],
+                "url": "",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 80,
-                "estimated_vram_mb": 0,
+                "version": "2024",
                 "vision": {
-                    "operator": "image_classifier",
                     "class_names_path": "resources/models/vision/mobileclip_prompts.txt",
-                    "text_embeddings_path": "resources/models/vision/mobileclip_text_embeddings.bin",
-                    "input_width": 256,
                     "input_height": 256,
+                    "input_width": 256,
+                    "operator": "image_classifier",
+                    "text_embeddings_path": "resources/models/vision/mobileclip_text_embeddings.bin",
                     "top_k": 5
                 }
             },
             {
-                "id": "vision-pose-estimator",
-                "name": "YOLOv8n-Pose",
-                "version": "8.0",
-                "subject": "vision",
-                "description": "Multi-person 17-keypoint pose estimation (COCO-Pose, 640x640). Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
                 "backend_type": "in_process_vision",
+                "description": "Multi-person 17-keypoint pose estimation (COCO-Pose, 640x640). Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
+                "estimated_ram_mb": 64,
+                "estimated_vram_mb": 0,
+                "id": "vision-pose-estimator",
                 "kind": "vision",
                 "model_path": "resources/models/vision/yolov8n_pose.onnx",
-                "url": "",
+                "name": "YOLOv8n-Pose",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "pose_estimation",
                     "perception_primitive"
                 ],
+                "url": "",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 64,
-                "estimated_vram_mb": 0,
+                "version": "8.0",
                 "vision": {
-                    "operator": "pose_estimator",
                     "class_names_path": "resources/models/vision/coco_pose.names",
-                    "input_width": 640,
-                    "input_height": 640,
-                    "min_keypoint_confidence": 0.30,
-                    "pose_output_format": "yolo_anchor",
-                    "num_keypoints": 17,
                     "confidence_threshold": 0.25,
-                    "iou_threshold": 0.45
+                    "input_height": 640,
+                    "input_width": 640,
+                    "iou_threshold": 0.45,
+                    "min_keypoint_confidence": 0.3,
+                    "num_keypoints": 17,
+                    "operator": "pose_estimator",
+                    "pose_output_format": "yolo_anchor"
                 }
             },
             {
-                "id": "vision-scene-text-reader",
-                "name": "PPOCRv3-EN + CRNN Scene Text",
-                "version": "2023may",
-                "subject": "vision",
-                "description": "PaddleOCR v3 English text detector + CRNN-EN recogniser. Hosted in-process by PhysicalPerceptionPrimitivesLoop via cv::dnn::TextDetectionModel_DB / TextRecognitionModel.",
                 "backend_type": "in_process_vision",
+                "description": "PaddleOCR v3 English text detector + CRNN-EN recogniser. Hosted in-process by PhysicalPerceptionPrimitivesLoop via cv::dnn::TextDetectionModel_DB / TextRecognitionModel.",
+                "estimated_ram_mb": 64,
+                "estimated_vram_mb": 0,
+                "id": "vision-scene-text-reader",
                 "kind": "vision",
                 "model_path": "resources/models/vision/ppocrv3_en_det.onnx",
-                "url": "",
+                "name": "PPOCRv3-EN + CRNN Scene Text",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "scene_text",
                     "ocr",
                     "perception_primitive"
                 ],
+                "url": "",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 64,
-                "estimated_vram_mb": 0,
+                "version": "2023may",
                 "vision": {
-                    "operator": "scene_text_reader",
-                    "input_width": 736,
                     "input_height": 736,
-                    "recogniser_onnx_path": "resources/models/vision/crnn_en.onnx",
-                    "recogniser_charset_path": "resources/models/vision/crnn_charset_en.txt"
+                    "input_width": 736,
+                    "operator": "scene_text_reader",
+                    "recogniser_charset_path": "resources/models/vision/crnn_charset_en.txt",
+                    "recogniser_onnx_path": "resources/models/vision/crnn_en.onnx"
                 }
             },
             {
-                "id": "vision-facial-expression-detector",
-                "name": "YuNet Face + FER+ Emotion",
-                "version": "2023mar+8",
-                "subject": "vision",
-                "description": "YuNet face detector (cv::FaceDetectorYN) + FER+ 8-class emotion classifier. Hosted in-process by PhysicalPerceptionPrimitivesLoop. Per detected face: bbox + softmax over {neutral, happiness, surprise, sadness, anger, disgust, fear, contempt}.",
                 "backend_type": "in_process_vision",
+                "description": "YuNet face detector (cv::FaceDetectorYN) + FER+ 8-class emotion classifier. Hosted in-process by PhysicalPerceptionPrimitivesLoop. Per detected face: bbox + softmax over {neutral, happiness, surprise, sadness, anger, disgust, fear, contempt}.",
+                "estimated_ram_mb": 80,
+                "estimated_vram_mb": 0,
+                "id": "vision-facial-expression-detector",
                 "kind": "vision",
                 "model_path": "resources/models/vision/yunet_face_detector.onnx",
-                "url": "",
+                "name": "YuNet Face + FER+ Emotion",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "face",
@@ -231,32 +232,32 @@
                     "emotion",
                     "perception_primitive"
                 ],
+                "url": "",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 80,
-                "estimated_vram_mb": 0,
+                "version": "2023mar+8",
                 "vision": {
-                    "operator": "facial_expression_detector",
-                    "input_width": 320,
-                    "input_height": 320,
-                    "confidence_threshold": 0.60,
-                    "iou_threshold": 0.30,
-                    "expression_classifier_onnx_path": "resources/models/vision/ferplus_emotion.onnx",
+                    "confidence_threshold": 0.6,
                     "expression_classifier_class_names_path": "resources/models/vision/ferplus_emotions.names",
-                    "expression_classifier_input_width": 64,
+                    "expression_classifier_input_grayscale": true,
                     "expression_classifier_input_height": 64,
-                    "expression_classifier_input_grayscale": true
+                    "expression_classifier_input_width": 64,
+                    "expression_classifier_onnx_path": "resources/models/vision/ferplus_emotion.onnx",
+                    "input_height": 320,
+                    "input_width": 320,
+                    "iou_threshold": 0.3,
+                    "operator": "facial_expression_detector"
                 }
             },
             {
-                "id": "midas_v21_small_256",
-                "name": "MiDaS v2.1 Small (256)",
-                "version": "2.1",
-                "subject": "vision",
-                "description": "MiDaS v2.1 Small monocular relative-depth estimator (EfficientNet-Lite3 backbone). Best accuracy/latency balance for OpenCV cv::dnn CPU backend on Apple Silicon: 256x256 input, ~30+ FPS, ImageNet normalisation, output is inverse depth (closer = larger). Hosted in-process by PhysicalSpatialGroundingLoop and consumed by PhysicalSpatialGrounder for range/support-surface/path-block/motion fusion.",
                 "backend_type": "in_process_vision",
+                "description": "MiDaS v2.1 Small monocular relative-depth estimator (EfficientNet-Lite3 backbone). Best accuracy/latency balance for OpenCV cv::dnn CPU backend on Apple Silicon: 256x256 input, ~30+ FPS, ImageNet normalisation, output is inverse depth (closer = larger). Hosted in-process by PhysicalSpatialGroundingLoop and consumed by PhysicalSpatialGrounder for range/support-surface/path-block/motion fusion.",
+                "estimated_ram_mb": 220,
+                "estimated_vram_mb": 0,
+                "id": "midas_v21_small_256",
                 "kind": "vision",
                 "model_path": "resources/models/vision/midas_v21_small_256.onnx",
-                "url": "",
+                "name": "MiDaS v2.1 Small (256)",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "depth",
@@ -264,36 +265,37 @@
                     "spatial_grounding",
                     "stage3"
                 ],
+                "url": "",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 220,
-                "estimated_vram_mb": 0,
+                "version": "2.1",
                 "vision": {
-                    "operator": "monocular_depth_estimator",
-                    "input_width": 256,
-                    "input_height": 256,
-                    "depth_swap_rb": true,
-                    "depth_input_scale": 0.00392156862745098,
-                    "depth_input_mean_r": 123.675,
-                    "depth_input_mean_g": 116.28,
                     "depth_input_mean_b": 103.53,
-                    "depth_input_std_r": 58.395,
-                    "depth_input_std_g": 57.12,
+                    "depth_input_mean_g": 116.28,
+                    "depth_input_mean_r": 123.675,
+                    "depth_input_scale": 0.00392156862745098,
                     "depth_input_std_b": 57.375,
-                    "depth_output_is_disparity": true,
+                    "depth_input_std_g": 57.12,
+                    "depth_input_std_r": 58.395,
+                    "depth_metric_epsilon": 0.001,
                     "depth_metric_scale_meters": 0.0,
-                    "depth_metric_epsilon": 0.001
+                    "depth_output_is_disparity": true,
+                    "depth_swap_rb": true,
+                    "input_height": 256,
+                    "input_width": 256,
+                    "operator": "monocular_depth_estimator"
                 }
             },
             {
-                "id": "depth_anything_v2_metric_indoor_small_518",
-                "name": "Depth-Anything-V2-Metric Indoor Small (518)",
-                "version": "2.0",
-                "subject": "vision",
-                "description": "Depth-Anything-V2-Metric Small (Indoor / Hypersim fine-tune, ViT-S DINOv2 backbone). Outputs DEPTH IN METRES directly (not disparity), max ~20m, optimised for indoor / room-scale scenes. 518x518 input (must be a multiple of 14 — DINOv2 ViT requirement), ImageNet normalisation, RGB. Replaces MiDaS as the active depth model in PhysicalSpatialGroundingLoop because the vision sub-model loop registers in order and the last entry wins for the monocular_depth_estimator slot. With DepthUnits::Meters populated, PhysicalLocalizationLoop's depth-fusion path will promote pose_scale_state to ScaledByDepthMap and the occupancy grid mapper will start writing metric free-space.",
                 "backend_type": "in_process_vision",
+                "description": "Depth-Anything-V2-Metric Small (Indoor / Hypersim fine-tune, ViT-S DINOv2 backbone). Outputs DEPTH IN METRES directly (not disparity), max ~20m, optimised for indoor / room-scale scenes. 518x518 input (must be a multiple of 14 — DINOv2 ViT requirement), ImageNet normalisation, RGB. Disabled for the OpenCV cv::dnn Stage-3 path because OpenCV 4.11 fails this ONNX export at /base/backbone/embeddings/Resize. MiDaS v2.1 Small remains the active OpenCV-compatible monocular_depth_estimator.",
+                "enabled": false,
+                "estimated_ram_mb": 380,
+                "estimated_vram_mb": 0,
+                "id": "depth_anything_v2_metric_indoor_small_518",
                 "kind": "vision",
                 "model_path": "resources/models/vision/depth_anything_v2_metric_indoor_small.onnx",
-                "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
+                "name": "Depth-Anything-V2-Metric Indoor Small (518)",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "depth",
@@ -303,65 +305,65 @@
                     "stage3",
                     "stage5"
                 ],
+                "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 380,
-                "estimated_vram_mb": 0,
+                "version": "2.0",
                 "vision": {
-                    "operator": "monocular_depth_estimator",
-                    "input_width": 518,
-                    "input_height": 518,
-                    "depth_swap_rb": true,
-                    "depth_input_scale": 0.00392156862745098,
-                    "depth_input_mean_r": 123.675,
-                    "depth_input_mean_g": 116.28,
                     "depth_input_mean_b": 103.53,
-                    "depth_input_std_r": 58.395,
-                    "depth_input_std_g": 57.12,
+                    "depth_input_mean_g": 116.28,
+                    "depth_input_mean_r": 123.675,
+                    "depth_input_scale": 0.00392156862745098,
                     "depth_input_std_b": 57.375,
-                    "depth_output_is_disparity": false,
+                    "depth_input_std_g": 57.12,
+                    "depth_input_std_r": 58.395,
+                    "depth_metric_epsilon": 0.001,
                     "depth_metric_scale_meters": 1.0,
-                    "depth_metric_epsilon": 0.001
+                    "depth_output_is_disparity": false,
+                    "depth_swap_rb": true,
+                    "input_height": 518,
+                    "input_width": 518,
+                    "operator": "monocular_depth_estimator"
                 }
             },
             {
-                "id": "vision-instance-segmenter",
-                "name": "SAM 2 Hiera Tiny (Prompted Instance Segmentation)",
-                "version": "2024jul",
-                "subject": "vision",
-                "description": "Meta SAM 2 Hiera-Tiny prompted instance segmentation. Encoder runs once per frame (1024x1024); decoder runs once per object detector box (TL+BR point prompts) producing a per-instance binary mask at MODEL resolution. Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
                 "backend_type": "in_process_vision",
+                "description": "Meta SAM 2 Hiera-Tiny prompted instance segmentation. Encoder runs once per frame (1024x1024); decoder runs once per object detector box (TL+BR point prompts) producing a per-instance binary mask at MODEL resolution. Hosted in-process by PhysicalPerceptionPrimitivesLoop.",
+                "estimated_ram_mb": 320,
+                "estimated_vram_mb": 0,
+                "id": "vision-instance-segmenter",
                 "kind": "vision",
                 "model_path": "resources/models/vision/sam2_hiera_tiny_encoder.onnx",
-                "url": "",
+                "name": "SAM 2 Hiera Tiny (Prompted Instance Segmentation)",
+                "subject": "vision",
                 "subject_tags": [
                     "vision",
                     "instance_segmentation",
                     "sam2",
                     "perception_primitive"
                 ],
+                "url": "",
                 "usage_weight": 1.0,
-                "estimated_ram_mb": 320,
-                "estimated_vram_mb": 0,
+                "version": "2024jul",
                 "vision": {
-                    "operator": "instance_segmenter",
-                    "input_width": 1024,
                     "input_height": 1024,
-                    "instance_seg_decoder_onnx_path": "resources/models/vision/sam2_hiera_tiny_decoder.onnx",
-                    "instance_seg_encoder_input_name": "pixel_values",
-                    "instance_seg_encoder_output_image_embed_name": "image_embeddings",
-                    "instance_seg_encoder_output_high_res_feats_0_name": "high_res_feats_0",
-                    "instance_seg_encoder_output_high_res_feats_1_name": "high_res_feats_1",
-                    "instance_seg_decoder_input_image_embed_name": "image_embeddings",
+                    "input_width": 1024,
+                    "instance_seg_decoder_input_has_mask_input_name": "has_input_masks",
                     "instance_seg_decoder_input_high_res_feats_0_name": "high_res_feats_0",
                     "instance_seg_decoder_input_high_res_feats_1_name": "high_res_feats_1",
+                    "instance_seg_decoder_input_image_embed_name": "image_embeddings",
+                    "instance_seg_decoder_input_mask_input_name": "input_masks",
                     "instance_seg_decoder_input_point_coords_name": "input_points",
                     "instance_seg_decoder_input_point_labels_name": "input_labels",
-                    "instance_seg_decoder_input_mask_input_name": "input_masks",
-                    "instance_seg_decoder_input_has_mask_input_name": "has_input_masks",
-                    "instance_seg_decoder_output_masks_name": "pred_masks",
+                    "instance_seg_decoder_onnx_path": "resources/models/vision/sam2_hiera_tiny_decoder.onnx",
                     "instance_seg_decoder_output_iou_predictions_name": "iou_scores",
+                    "instance_seg_decoder_output_masks_name": "pred_masks",
+                    "instance_seg_encoder_input_name": "pixel_values",
+                    "instance_seg_encoder_output_high_res_feats_0_name": "high_res_feats_0",
+                    "instance_seg_encoder_output_high_res_feats_1_name": "high_res_feats_1",
+                    "instance_seg_encoder_output_image_embed_name": "image_embeddings",
                     "instance_seg_max_prompts_per_frame": 16,
-                    "instance_seg_min_prompt_confidence": 0.30
+                    "instance_seg_min_prompt_confidence": 0.3,
+                    "operator": "instance_segmenter"
                 }
             }
         ]
@@ -403,6 +405,12 @@
     },
     "silence_threshold": 0.02,
     "silence_timeout_ms": 4000,
+    "subprocess": {
+        "tokenizer": {
+            "_doc": "When only_mode=true, train_gpu spawns the train_tokenizer subprocess, waits for completion, and exits without entering Phases 1-3. When false, the tokenizer runs as a normal pre-Phase-1 step and training continues.",
+            "only_mode": false
+        }
+    },
     "tokenizer": {
         "add_bos": true,
         "add_eos": true,
@@ -426,12 +434,6 @@
         "subword_mining_workers": 0,
         "vocab_score_multiplier": 0.1,
         "vocab_size": 10000
-    },
-    "subprocess": {
-        "tokenizer": {
-            "_doc": "When only_mode=true, train_gpu spawns the train_tokenizer subprocess, waits for completion, and exits without entering Phases 1-3. When false, the tokenizer runs as a normal pre-Phase-1 step and training continues.",
-            "only_mode": false
-        }
     },
     "training": {
         "config": {
@@ -461,12 +463,6 @@
                 "enabled": false
             },
             "epochs": 3,
-            "optimizer": {
-                "kind": "radamw",
-                "beta1": 0.9,
-                "beta2": 0.999,
-                "epsilon": 1e-8
-            },
             "execution_block": {
                 "d_type": 16,
                 "enabled": true,
@@ -519,14 +515,6 @@
                 "project_out_pc1": true
             },
             "log_interval": 25,
-            "logging": {
-                "default_level": "Info",
-                "equation_csv_enabled": true,
-                "stderr_enabled": true,
-                "initial_capacity": 2048,
-                "group_overrides": {
-                }
-            },
             "log_recorder": {
                 "default_level": "Info",
                 "enabled": true,
@@ -558,6 +546,13 @@
                     "TrainingOrchestrator": "Info",
                     "Validation": "Info"
                 }
+            },
+            "logging": {
+                "default_level": "Info",
+                "equation_csv_enabled": true,
+                "group_overrides": {},
+                "initial_capacity": 2048,
+                "stderr_enabled": true
             },
             "logit_update_trace": {
                 "enabled": false
@@ -593,6 +588,12 @@
             "num_heads": 12,
             "num_kv_heads": 4,
             "num_layers": 12,
+            "optimizer": {
+                "beta1": 0.9,
+                "beta2": 0.999,
+                "epsilon": 1e-08,
+                "kind": "radamw"
+            },
             "per_token_grad_scale": true,
             "positional_encoding": {
                 "use_alibi": true,

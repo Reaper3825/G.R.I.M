@@ -1,8 +1,8 @@
 #pragma once
-#include "ui_panel.hpp"
-#include "ui_button.hpp"
-#include "ui_inputbox.hpp"
-#include "ui_layout_box.hpp"
+#include "primitives/ui_panel.hpp"
+#include "primitives/ui_button.hpp"
+#include "primitives/ui_inputbox.hpp"
+#include "primitives/ui_layout_box.hpp"
 #include "console_history.hpp"
 #include "commands/commands_core.hpp"
 #include <string>

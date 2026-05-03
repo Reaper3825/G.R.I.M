@@ -1,6 +1,10 @@
 {
   "code-runner.runInTerminal": true,
   "code-runner.cwd": "${workspaceFolder}",
+  "remote.SSH.remotePlatform": {
+    "anvil": "linux"
+  },
+  "remote.SSH.showLoginTerminal": true,
   "code-runner.executorMap": {
     "shellscript": "cd ${workspaceFolder} && bash"
   },

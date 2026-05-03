@@ -6,7 +6,7 @@
 //======================================================//
 #pragma once
 
-#include "ui_panel.hpp"
+#include "primitives/ui_panel.hpp"
 #include "../MMO/UI/UISurfaceSpec.hpp"
 
 class OverlayRenderer;

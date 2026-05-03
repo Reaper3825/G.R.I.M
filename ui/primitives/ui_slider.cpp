@@ -1,11 +1,11 @@
 #include "ui_slider.hpp"
-#include "ui_theme.hpp"
-#include "overlay_renderer.hpp"
-#include "input_parser.hpp"
+#include "../ui_theme.hpp"
+#include "../overlay_renderer.hpp"
+#include "../../core/input_parser.hpp"
 #include "helpers/mouse.hpp"
 #include "helpers/key.hpp"
 #include "logger.hpp"
-#include "ui_focus_manager.hpp"
+#include "../ui_focus_manager.hpp"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>

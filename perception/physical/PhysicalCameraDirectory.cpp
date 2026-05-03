@@ -10,8 +10,42 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 
 namespace GRIM { namespace Perception { namespace Physical {
+
+namespace {
+
+std::string BackendLabel(int backend) {
+    switch (backend) {
+    case cv::CAP_ANY: return "CAP_ANY";
+#if defined(__APPLE__)
+    case cv::CAP_AVFOUNDATION: return "AVFOUNDATION";
+#elif defined(_WIN32)
+    case cv::CAP_DSHOW: return "DSHOW";
+    case cv::CAP_MSMF:  return "MSMF";
+#else
+    case cv::CAP_V4L2: return "V4L2";
+#endif
+    }
+    return "CAP_" + std::to_string(backend);
+}
+
+std::vector<int> LocalDeviceBackendsToTry() {
+    return {
+#if defined(__APPLE__)
+    cv::CAP_AVFOUNDATION,
+#elif defined(_WIN32)
+    cv::CAP_DSHOW,
+    cv::CAP_MSMF,
+#else
+    cv::CAP_V4L2,
+#endif
+    cv::CAP_ANY
+    };
+}
+
+} // anonymous namespace
 
 std::vector<PhysicalCameraSource> EnumerateLocalCameraCandidates() {
     std::vector<PhysicalCameraSource> out;
@@ -103,21 +137,11 @@ std::vector<PhysicalCameraSource> EnumerateLocalDeviceCameras(int max_probe) {
             "EnumerateLocalDeviceCameras: max_probe must be > 0, got "
             + std::to_string(max_probe));
     }
-    // On macOS CAP_ANY often picks an unsuitable backend for the FaceTime
-    // camera. Try AVFoundation first, then fall back. On Linux CAP_V4L2 is
-    // the native path; on Windows CAP_DSHOW or CAP_MSMF. We try the platform-
-    // native backend first, then CAP_ANY.
-    const std::vector<int> backends_to_try = {
-#if defined(__APPLE__)
-        cv::CAP_AVFOUNDATION,
-#elif defined(_WIN32)
-        cv::CAP_DSHOW,
-        cv::CAP_MSMF,
-#else
-        cv::CAP_V4L2,
-#endif
-        cv::CAP_ANY
-    };
+        // On macOS CAP_ANY often picks an unsuitable backend for the FaceTime
+        // camera. Try AVFoundation first, then fall back. On Linux CAP_V4L2 is
+        // the native path; on Windows CAP_DSHOW or CAP_MSMF. We try the platform-
+        // native backend first, then CAP_ANY.
+        const std::vector<int> backends_to_try = LocalDeviceBackendsToTry();
 
     for (int i = 0; i < max_probe; ++i) {
         cv::VideoCapture cap;
@@ -142,29 +166,26 @@ std::vector<PhysicalCameraSource> EnumerateLocalDeviceCameras(int max_probe) {
             PhysicalCameraSource src;
             src.origin       = PhysicalCameraOrigin::LocalDevice;
             src.status       = PhysicalCameraCandidateStatus::Ready;
-            src.label        = "Local device " + std::to_string(i)
-                             + " (backend=" + std::to_string(used_backend) + ")";
-            src.url_template = "device:" + std::to_string(i);
+            src.label        = "Local device index " + std::to_string(i)
+                             + " [" + BackendLabel(used_backend) + "]";
+            src.host         = std::to_string(i);
+            src.url_template = "device:" + std::to_string(i)
+                             + "?backend=" + std::to_string(used_backend);
             out.push_back(std::move(src));
             cap.release();
-        } else if (i == 0) {
-            PhysicalCameraSource src;
-            src.origin        = PhysicalCameraOrigin::LocalDevice;
-            src.label         = "Local device 0 (not present)";
-            src.status        = PhysicalCameraCandidateStatus::Disabled;
-            src.status_reason =
-                last_throw.empty()
-                ? std::string("cv::VideoCapture::open(0) returned false on every backend "
-                              "(CAP_ANY + platform-native) — no attached camera, or macOS "
-                              "camera permission (TCC) has not been granted to this binary yet. "
-                              "Grant camera access in System Settings → Privacy & Security → Camera.")
-                : std::string("cv::VideoCapture::open(0) threw on every backend; last what(): ")
-                      + last_throw;
-            out.push_back(std::move(src));
-            break;
-        } else {
-            break;
         }
+    }
+    if (out.empty()) {
+        PhysicalCameraSource src;
+        src.origin        = PhysicalCameraOrigin::LocalDevice;
+        src.label         = "Local device cameras (none opened)";
+        src.status        = PhysicalCameraCandidateStatus::Disabled;
+        src.status_reason =
+            "cv::VideoCapture could not open any local camera index in 0.."
+            + std::to_string(max_probe - 1)
+            + " on any configured backend — no attached camera, camera busy, "
+              "or OS privacy permission has not been granted to this binary";
+        out.push_back(std::move(src));
     }
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
               "EnumerateLocalDeviceCameras: produced " + std::to_string(out.size())

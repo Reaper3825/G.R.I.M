@@ -17,6 +17,8 @@ void UIRoot::init(HWND hwnd, uint32_t width, uint32_t height)
     m_width = width;
     m_height = height;
     m_uiThreadId = std::this_thread::get_id();
+    m_lastBlurRects.clear();
+    m_blurMaskInitialized = false;
     
     // Initialize the overlay renderer
     m_renderer.init(hwnd, width, height);
@@ -53,6 +55,8 @@ void UIRoot::shutdown()
     m_hwnd = nullptr;
     m_width = 0;
     m_height = 0;
+    m_lastBlurRects.clear();
+    m_blurMaskInitialized = false;
     
     LOG_PHASE("UIRoot shutdown complete", true);
 }
@@ -180,12 +184,16 @@ void UIRoot::draw()
             blurRects.push_back(cr);
         }
 
-        if (!blurRects.empty()) {
-            PlatformWindow::setOverlayBlurMask(m_hwnd,
-                                                blurRects.data(),
-                                                static_cast<int>(blurRects.size() / 5));
-        } else {
-            PlatformWindow::setOverlayBlurMask(m_hwnd, nullptr, 0);
+        if (!m_blurMaskInitialized || blurRects != m_lastBlurRects) {
+            if (!blurRects.empty()) {
+                PlatformWindow::setOverlayBlurMask(m_hwnd,
+                                                    blurRects.data(),
+                                                    static_cast<int>(blurRects.size() / 5));
+            } else {
+                PlatformWindow::setOverlayBlurMask(m_hwnd, nullptr, 0);
+            }
+            m_lastBlurRects = std::move(blurRects);
+            m_blurMaskInitialized = true;
         }
     }
 #endif

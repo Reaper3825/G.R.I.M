@@ -22,8 +22,8 @@
 #include "core/input_parser.hpp"
 #include <filesystem>
 #include "ui_training_panel.hpp"
-#include "ui_slider.hpp"
-#include "ui_graph.hpp"
+#include "primitives/ui_slider.hpp"
+#include "primitives/ui_graph.hpp"
 #include "overlay_renderer.hpp"
 #include "ui_theme.hpp"
 #include "ui_draw_helpers.hpp"

@@ -5,15 +5,120 @@
 #include "PhysicalPerceptionPrimitivesLogTag.hpp"
 #include "logger.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace GRIM { namespace Perception { namespace Physical {
 
 namespace {
+
+double PhysicalElapsedMsSince(const std::chrono::steady_clock::time_point& start) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+}
+
+void HashPhysicalBytes(uint64_t& h, const void* data, size_t n) {
+    if (!data && n != 0) {
+        throw std::runtime_error("HashPhysicalBytes: data is null while n is non-zero");
+    }
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < n; ++i) {
+        h ^= static_cast<uint64_t>(bytes[i]);
+        h *= 1099511628211ULL;
+    }
+}
+
+template <typename T>
+void HashPhysicalValue(uint64_t& h, const T& v) {
+    HashPhysicalBytes(h, &v, sizeof(T));
+}
+
+void HashPhysicalString(uint64_t& h, const std::string& s) {
+    const uint64_t len = static_cast<uint64_t>(s.size());
+    HashPhysicalValue(h, len);
+    HashPhysicalBytes(h, s.data(), s.size());
+}
+
+int32_t QuantizePhysicalPromptCoord(float v) {
+    return static_cast<int32_t>(std::llround(static_cast<double>(v) * 4.0));
+}
+
+struct PhysicalInstancePromptKey {
+    int32_t     class_id = -1;
+    std::string class_label;
+    int32_t     x = 0;
+    int32_t     y = 0;
+    int32_t     w = 0;
+    int32_t     h = 0;
+};
+
+bool operator<(const PhysicalInstancePromptKey& a,
+               const PhysicalInstancePromptKey& b)
+{
+    if (a.class_id != b.class_id) return a.class_id < b.class_id;
+    if (a.class_label != b.class_label) return a.class_label < b.class_label;
+    if (a.x != b.x) return a.x < b.x;
+    if (a.y != b.y) return a.y < b.y;
+    if (a.w != b.w) return a.w < b.w;
+    return a.h < b.h;
+}
+
+uint64_t ComputePhysicalInstancePromptSignature(
+    const std::vector<PhysicalObjectDetection>& detections)
+{
+    std::vector<PhysicalInstancePromptKey> keys;
+    keys.reserve(detections.size());
+    for (const auto& d : detections) {
+        PhysicalInstancePromptKey k;
+        k.class_id     = d.class_id;
+        k.class_label  = d.class_label;
+        k.x            = QuantizePhysicalPromptCoord(d.model_box.x);
+        k.y            = QuantizePhysicalPromptCoord(d.model_box.y);
+        k.w            = QuantizePhysicalPromptCoord(d.model_box.width);
+        k.h            = QuantizePhysicalPromptCoord(d.model_box.height);
+        keys.push_back(std::move(k));
+    }
+    std::sort(keys.begin(), keys.end());
+
+    uint64_t h = 1469598103934665603ULL;
+    const uint64_t n = static_cast<uint64_t>(keys.size());
+    HashPhysicalValue(h, n);
+    for (const auto& k : keys) {
+        HashPhysicalValue(h, k.class_id);
+        HashPhysicalString(h, k.class_label);
+        HashPhysicalValue(h, k.x);
+        HashPhysicalValue(h, k.y);
+        HashPhysicalValue(h, k.w);
+        HashPhysicalValue(h, k.h);
+    }
+    return h;
+}
+
+void AccumulatePhysicalCacheTelemetry(
+    const PhysicalCacheStatus& status,
+    PhysicalPerceptionPrimitiveTelemetry& telemetry,
+    PhysicalImageOperatorState state)
+{
+    if (status.cache_hit) {
+        telemetry.cache_hit_count += 1;
+        return;
+    }
+    if (status.cache_reason == "no_signal") {
+        telemetry.no_signal_forced_count += 1;
+    }
+    if (state == PhysicalImageOperatorState::ModelLoaded) {
+        telemetry.fresh_inference_count += 1;
+    }
+}
 
 // All process-wide state for the Stage-2 subsystem lives here. Encapsulated
 // in an anonymous namespace so no other TU can reach in.
@@ -81,6 +186,8 @@ struct PhysicalPerceptionPrimitivesState {
     PhysicalInstanceSegmenterOutput  cached_inst_seg_output{};
     uint64_t last_inst_seg_run_steady_ns       = 0;
     uint64_t last_inst_seg_fresh_frame_counter = 0;
+    uint64_t last_inst_seg_prompt_signature    = 0;
+    bool     has_inst_seg_prompt_signature     = false;
 
     PhysicalOperatorCadenceConfig  cached_cls_cadence{};
     PhysicalImageClassifierOutput  cached_cls_output{};
@@ -184,6 +291,21 @@ void StampPhysicalCacheStatus(PhysicalCacheStatus& status,
     status.cache_reason = DescribePhysicalCadenceDecision(decision);
 }
 
+void StampPhysicalNamedCacheHit(PhysicalCacheStatus& status,
+                                const char* reason,
+                                uint64_t current_frame_counter,
+                                uint64_t last_fresh_frame_counter)
+{
+    if (!reason || reason[0] == '\0') {
+        throw std::runtime_error("StampPhysicalNamedCacheHit: reason is required");
+    }
+    status.cache_hit = true;
+    status.cache_age_frames = current_frame_counter > last_fresh_frame_counter
+        ? static_cast<uint32_t>(current_frame_counter - last_fresh_frame_counter)
+        : 0u;
+    status.cache_reason = reason;
+}
+
 void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
     if (s.initialized) return;
     LOG_DEBUG(PHYSICAL_PERC_PRIM_LOG_TAG,
@@ -273,6 +395,7 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
 } // anonymous namespace
 
 void TickPhysicalPerceptionPrimitives() {
+    const auto tick_start = std::chrono::steady_clock::now();
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     if (s.shutting_down) return;
@@ -280,9 +403,11 @@ void TickPhysicalPerceptionPrimitives() {
     ++s.tick_count;
 
     // Pull the latest frame from Stage-1's bus. If nothing new, return.
+    const auto frame_pull_start = std::chrono::steady_clock::now();
     if (!PhysicalFrameBus::Instance().PullLatestFrameView(s.frame_view, s.last_seen_frame_ctr)) {
         return;
     }
+    const double frame_pull_ms = PhysicalElapsedMsSince(frame_pull_start);
     if (s.frame_view.model_image.empty()) {
         s.last_error_reason = "TickPhysicalPerceptionPrimitives: pulled frame has empty model_image";
         LOG_ERROR(PHYSICAL_PERC_PRIM_LOG_TAG, s.last_error_reason);
@@ -296,6 +421,7 @@ void TickPhysicalPerceptionPrimitives() {
     results.raw_image_width      = s.frame_view.metadata.raw_width;
     results.raw_image_height     = s.frame_view.metadata.raw_height;
     results.raw_to_model         = s.frame_view.metadata.raw_to_model;
+    results.telemetry.frame_bus_pull_ms = frame_pull_ms;
 
     // Belt-and-braces — frame metadata SHOULD have these, but guarantee
     // non-zero before we hand them to the bus (which will throw on zero).
@@ -311,11 +437,13 @@ void TickPhysicalPerceptionPrimitives() {
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
     const uint64_t frame_ctr = results.source_frame_counter;
+    const auto operator_wall_start = std::chrono::steady_clock::now();
 
     // Each operator runs only if its enable flag is on; the operator itself
     // gates on its state, so calling RouteFrameTo* when NoModelConfigured
     // is cheap and just fills the output envelope with state info.
     if (s.enable_flags.object_detector && s.object_detector) {
+        const auto op_start = std::chrono::steady_clock::now();
         const bool has_cached =
             s.cached_obj_output.state == PhysicalImageOperatorState::ModelLoaded &&
             s.last_obj_fresh_frame_counter != 0;
@@ -344,8 +472,14 @@ void TickPhysicalPerceptionPrimitives() {
                                      decision, frame_ctr,
                                      s.last_obj_fresh_frame_counter);
         }
+        results.telemetry.object_detector_wall_ms = PhysicalElapsedMsSince(op_start);
+        AccumulatePhysicalCacheTelemetry(
+            results.object_detector.cache_status,
+            results.telemetry,
+            results.object_detector.state);
     }
     if (s.enable_flags.semantic_segmenter && s.semantic_segmenter) {
+        const auto op_start = std::chrono::steady_clock::now();
         const bool has_cached =
             s.cached_seg_output.state == PhysicalImageOperatorState::ModelLoaded &&
             s.last_seg_fresh_frame_counter != 0;
@@ -371,8 +505,14 @@ void TickPhysicalPerceptionPrimitives() {
                                      decision, frame_ctr,
                                      s.last_seg_fresh_frame_counter);
         }
+        results.telemetry.semantic_segmenter_wall_ms = PhysicalElapsedMsSince(op_start);
+        AccumulatePhysicalCacheTelemetry(
+            results.semantic_segmenter.cache_status,
+            results.telemetry,
+            results.semantic_segmenter.state);
     }
     if (s.enable_flags.image_classifier && s.image_classifier) {
+        const auto op_start = std::chrono::steady_clock::now();
         const bool has_cached =
             s.cached_cls_output.state == PhysicalImageOperatorState::ModelLoaded &&
             s.last_cls_fresh_frame_counter != 0;
@@ -403,8 +543,14 @@ void TickPhysicalPerceptionPrimitives() {
                                      decision, frame_ctr,
                                      s.last_cls_fresh_frame_counter);
         }
+        results.telemetry.image_classifier_wall_ms = PhysicalElapsedMsSince(op_start);
+        AccumulatePhysicalCacheTelemetry(
+            results.image_classifier.cache_status,
+            results.telemetry,
+            results.image_classifier.state);
     }
     if (s.enable_flags.pose_estimator && s.pose_estimator) {
+        const auto op_start = std::chrono::steady_clock::now();
         const bool has_cached =
             s.cached_pose_output.state == PhysicalImageOperatorState::ModelLoaded &&
             s.last_pose_fresh_frame_counter != 0;
@@ -433,8 +579,14 @@ void TickPhysicalPerceptionPrimitives() {
                                      decision, frame_ctr,
                                      s.last_pose_fresh_frame_counter);
         }
+        results.telemetry.pose_estimator_wall_ms = PhysicalElapsedMsSince(op_start);
+        AccumulatePhysicalCacheTelemetry(
+            results.pose_estimator.cache_status,
+            results.telemetry,
+            results.pose_estimator.state);
     }
     if (s.enable_flags.scene_text_reader && s.scene_text_reader) {
+        const auto op_start = std::chrono::steady_clock::now();
         const bool has_cached =
             s.cached_text_output.state == PhysicalImageOperatorState::ModelLoaded &&
             s.last_text_fresh_frame_counter != 0;
@@ -463,8 +615,14 @@ void TickPhysicalPerceptionPrimitives() {
                                      decision, frame_ctr,
                                      s.last_text_fresh_frame_counter);
         }
+        results.telemetry.scene_text_reader_wall_ms = PhysicalElapsedMsSince(op_start);
+        AccumulatePhysicalCacheTelemetry(
+            results.scene_text_reader.cache_status,
+            results.telemetry,
+            results.scene_text_reader.state);
     }
     if (s.enable_flags.facial_expression_detector && s.facial_expression_detector) {
+        const auto op_start = std::chrono::steady_clock::now();
         const bool has_cached =
             s.cached_face_output.state == PhysicalImageOperatorState::ModelLoaded &&
             s.last_face_fresh_frame_counter != 0;
@@ -493,6 +651,11 @@ void TickPhysicalPerceptionPrimitives() {
                                      decision, frame_ctr,
                                      s.last_face_fresh_frame_counter);
         }
+        results.telemetry.facial_expression_wall_ms = PhysicalElapsedMsSince(op_start);
+        AccumulatePhysicalCacheTelemetry(
+            results.facial_expression_detector.cache_status,
+            results.telemetry,
+            results.facial_expression_detector.state);
     }
 
     // Entity tracker runs LAST among the operators because it consumes
@@ -502,6 +665,7 @@ void TickPhysicalPerceptionPrimitives() {
     // cadence-gated — it is cheap and downstream consumers expect it to
     // smooth/extrapolate every frame.
     if (s.enable_flags.entity_tracker && s.entity_tracker) {
+        const auto op_start = std::chrono::steady_clock::now();
         s.entity_tracker->RouteDetectionsToPhysicalEntityTracker(
             results.object_detector.detections,
             results.raw_to_model,
@@ -509,6 +673,7 @@ void TickPhysicalPerceptionPrimitives() {
             results.raw_image_height,
             frame_ctr,
             results.entity_tracker);
+        results.telemetry.entity_tracker_wall_ms = PhysicalElapsedMsSince(op_start);
     }
 
     // Instance segmenter (SAM 2) consumes the object detector's boxes as
@@ -517,14 +682,28 @@ void TickPhysicalPerceptionPrimitives() {
     // independent (no shared mutable state) but we keep the segmenter last
     // because its encoder pass is the most expensive operator on the bus.
     if (s.enable_flags.instance_segmenter && s.instance_segmenter) {
+        const auto op_start = std::chrono::steady_clock::now();
         const bool has_cached =
             s.cached_inst_seg_output.state == PhysicalImageOperatorState::ModelLoaded &&
             s.last_inst_seg_fresh_frame_counter != 0;
+        const uint64_t prompt_signature =
+            ComputePhysicalInstancePromptSignature(results.object_detector.detections);
         const auto decision = DecidePhysicalCadence(
             s.cached_inst_seg_cadence, scene, has_cached,
             s.last_inst_seg_run_steady_ns, now_steady_ns);
-        if (decision == PhysicalCadenceDecision::Run ||
-            decision == PhysicalCadenceDecision::NoSignal) {
+        const bool detector_reused_prompts =
+            results.object_detector.cache_status.cache_hit &&
+            has_cached &&
+            s.has_inst_seg_prompt_signature &&
+            prompt_signature == s.last_inst_seg_prompt_signature;
+        if (detector_reused_prompts) {
+            results.instance_segmenter = s.cached_inst_seg_output;
+            StampPhysicalNamedCacheHit(results.instance_segmenter.cache_status,
+                                       "detector_prompt_cache",
+                                       frame_ctr,
+                                       s.last_inst_seg_fresh_frame_counter);
+        } else if (decision == PhysicalCadenceDecision::Run ||
+                   decision == PhysicalCadenceDecision::NoSignal) {
             s.instance_segmenter->RouteFrameAndDetectionsToPhysicalInstanceSegmenter(
                 s.frame_view.model_image,
                 results.object_detector.detections,
@@ -536,6 +715,8 @@ void TickPhysicalPerceptionPrimitives() {
                 s.cached_inst_seg_output            = results.instance_segmenter;
                 s.last_inst_seg_run_steady_ns       = now_steady_ns;
                 s.last_inst_seg_fresh_frame_counter = frame_ctr;
+                s.last_inst_seg_prompt_signature    = prompt_signature;
+                s.has_inst_seg_prompt_signature     = true;
             }
         } else {
             results.instance_segmenter = s.cached_inst_seg_output;
@@ -543,6 +724,11 @@ void TickPhysicalPerceptionPrimitives() {
                                      decision, frame_ctr,
                                      s.last_inst_seg_fresh_frame_counter);
         }
+        results.telemetry.instance_segmenter_wall_ms = PhysicalElapsedMsSince(op_start);
+        AccumulatePhysicalCacheTelemetry(
+            results.instance_segmenter.cache_status,
+            results.telemetry,
+            results.instance_segmenter.state);
     }
 
     // Class policy runs LAST. It mutates results.object_detector.detections,
@@ -553,9 +739,13 @@ void TickPhysicalPerceptionPrimitives() {
     // Apply* call is the integration point Stage-2 exposes to whatever
     // builds the model context matrix downstream.
     if (s.enable_flags.class_policy && s.class_policy) {
+        const auto op_start = std::chrono::steady_clock::now();
         s.class_policy->ApplyPhysicalClassPolicyToPerceptionResults(
             results, results.class_policy);
+        results.telemetry.class_policy_wall_ms = PhysicalElapsedMsSince(op_start);
     }
+    results.telemetry.operator_wall_ms = PhysicalElapsedMsSince(operator_wall_start);
+    results.telemetry.tick_total_ms = PhysicalElapsedMsSince(tick_start);
 
     try {
         PhysicalPerceptionPrimitiveBus::Instance().PublishPhysicalPerceptionResultsToBus(results);
@@ -614,6 +804,8 @@ void ShutdownPhysicalPerceptionPrimitives() {
     s.last_obj_run_steady_ns = s.last_obj_fresh_frame_counter = 0;
     s.last_seg_run_steady_ns = s.last_seg_fresh_frame_counter = 0;
     s.last_inst_seg_run_steady_ns = s.last_inst_seg_fresh_frame_counter = 0;
+    s.last_inst_seg_prompt_signature = 0;
+    s.has_inst_seg_prompt_signature  = false;
     s.last_cls_run_steady_ns = s.last_cls_fresh_frame_counter = 0;
     s.last_pose_run_steady_ns = s.last_pose_fresh_frame_counter = 0;
     s.last_text_run_steady_ns = s.last_text_fresh_frame_counter = 0;
@@ -778,6 +970,11 @@ void RequestConfigurePhysicalInstanceSegmenter(const PhysicalInstanceSegmenterCo
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     s.cached_inst_seg_cadence = cfg.cadence;
+    s.cached_inst_seg_output = {};
+    s.last_inst_seg_run_steady_ns = 0;
+    s.last_inst_seg_fresh_frame_counter = 0;
+    s.last_inst_seg_prompt_signature = 0;
+    s.has_inst_seg_prompt_signature = false;
     if (!s.initialized) {
         s.pending_inst_seg_cfg = std::make_unique<PhysicalInstanceSegmenterConfig>(cfg);
         return;

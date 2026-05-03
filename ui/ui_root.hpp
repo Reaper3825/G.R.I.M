@@ -9,7 +9,7 @@
 #include <thread>
 #include <atomic>
 #include "overlay_renderer.hpp"
-#include "ui_panel.hpp"
+#include "primitives/ui_panel.hpp"
 #include "logger.hpp"
 #include "core/grim_platform.h"
 
@@ -98,6 +98,11 @@ private:
     std::mutex m_taskMutex;
     std::vector<std::function<void()>> m_pendingTasks;
     std::atomic_flag m_drawGuard = ATOMIC_FLAG_INIT;
+
+    // Native blur mask cache: avoid rebuilding platform blur regions every frame
+    // when panel geometry has not changed.
+    std::vector<float> m_lastBlurRects;
+    bool m_blurMaskInitialized = false;
 
     // Cached hit-test data: updated once per frame on main thread,
     // read lock-free from WM_NCHITTEST (called per mouse message).

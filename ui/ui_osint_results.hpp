@@ -1,5 +1,5 @@
 #pragma once
-#include "ui_panel.hpp"
+#include "primitives/ui_panel.hpp"
 #include <vector>
 #include <string>
 

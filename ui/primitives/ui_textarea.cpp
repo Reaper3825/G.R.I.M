@@ -1,12 +1,12 @@
 #include "ui_textarea.hpp"
-#include "ui_theme.hpp"
-#include "overlay_renderer.hpp"
-#include "input_parser.hpp"
+#include "../ui_theme.hpp"
+#include "../overlay_renderer.hpp"
+#include "../../core/input_parser.hpp"
 #include "helpers/mouse.hpp"
 #include "helpers/key.hpp"
 #include "core/grim_platform.h"
 #include "core/platform_clipboard.hpp"
-#include "ui_root.hpp"
+#include "../ui_root.hpp"
 #include "logger.hpp"
 #include <algorithm>
 #include <chrono>

@@ -1,12 +1,12 @@
 #include "ui_panel.hpp"
-#include "ui_theme.hpp"
-#include "overlay_renderer.hpp"
-#include "input_parser.hpp"
+#include "../ui_theme.hpp"
+#include "../overlay_renderer.hpp"
+#include "../../core/input_parser.hpp"
 #include "helpers/mouse.hpp"
 #include "core/platform_window.hpp"
 #include "logger.hpp"
-#include "ui_focus_manager.hpp"
-#include "ui_root.hpp"
+#include "../ui_focus_manager.hpp"
+#include "../ui_root.hpp"
 #include <algorithm>
 
 Vec2 UIPanel::s_canvasSize{1920.0f, 1080.0f};
@@ -228,7 +228,8 @@ bool UIPanel::drawOverlay(OverlayRenderer& renderer) {
                             Colors::GlassHighlight,
                             Colors::BlurRadius,
                             4.0f,
-                            reinterpret_cast<uintptr_t>(this));
+                            reinterpret_cast<uintptr_t>(this),
+                            dragging || resizing);
 
     // Chrome buttons — macOS traffic light dots (left side: close, minimize, maximize)
     // slot 0 = close (leftmost), 1 = minimize, 2 = maximize

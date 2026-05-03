@@ -6,7 +6,12 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cctype>
+#include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace GRIM { namespace Perception { namespace Physical {
 
@@ -34,6 +39,220 @@ namespace {
 constexpr const char* kFfmpegLowLatencyOpts =
     "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|"
     "max_delay;100000|reorder_queue_size;0";
+
+struct LocalDeviceOpenRequest {
+    int device_index = -1;
+    int backend      = -1;
+    int width        = 640;
+    int height       = 480;
+    int fps          = 60;
+    std::string fourcc = "MJPG";
+    double auto_exposure = std::numeric_limits<double>::quiet_NaN();
+    double exposure      = std::numeric_limits<double>::quiet_NaN();
+};
+
+int ParseStrictNonNegativeInt(const std::string& text, const std::string& field_name) {
+    if (text.empty()) {
+        throw std::runtime_error(field_name + " is empty");
+    }
+    size_t consumed = 0;
+    const int value = std::stoi(text, &consumed);
+    if (consumed != text.size()) {
+        throw std::runtime_error(
+            field_name + " must be a plain integer, got '" + text + "'");
+    }
+    if (value < 0) {
+        throw std::runtime_error(
+            field_name + " must be >= 0, got " + std::to_string(value));
+    }
+    return value;
+}
+
+int ParseStrictPositiveInt(const std::string& text, const std::string& field_name) {
+    const int value = ParseStrictNonNegativeInt(text, field_name);
+    if (value <= 0) {
+        throw std::runtime_error(
+            field_name + " must be > 0, got " + std::to_string(value));
+    }
+    return value;
+}
+
+double ParseStrictFiniteDouble(const std::string& text, const std::string& field_name) {
+    if (text.empty()) {
+        throw std::runtime_error(field_name + " is empty");
+    }
+    size_t consumed = 0;
+    const double value = std::stod(text, &consumed);
+    if (consumed != text.size()) {
+        throw std::runtime_error(
+            field_name + " must be a plain number, got '" + text + "'");
+    }
+    if (!std::isfinite(value)) {
+        throw std::runtime_error(
+            field_name + " must be finite, got '" + text + "'");
+    }
+    return value;
+}
+
+std::string ToLowerAscii(std::string s) {
+    for (char& c : s) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+bool IsLocalDeviceUrl(const std::string& source_url) {
+    return source_url.rfind("device:", 0) == 0;
+}
+
+void ApplyLocalDeviceQueryParam(LocalDeviceOpenRequest& req,
+                                const std::string& key,
+                                const std::string& value)
+{
+    if (key.empty()) {
+        throw std::runtime_error("device URL query contains an empty key");
+    }
+    const std::string k = ToLowerAscii(key);
+    if (k == "backend") {
+        req.backend = ParseStrictNonNegativeInt(value, "device backend");
+    } else if (k == "width") {
+        req.width = ParseStrictPositiveInt(value, "capture width");
+    } else if (k == "height") {
+        req.height = ParseStrictPositiveInt(value, "capture height");
+    } else if (k == "fps") {
+        req.fps = ParseStrictPositiveInt(value, "capture fps");
+    } else if (k == "fourcc") {
+        if (value.size() != 4) {
+            throw std::runtime_error(
+                "capture fourcc must be exactly 4 ASCII characters, got '" + value + "'");
+        }
+        req.fourcc = value;
+    } else if (k == "auto_exposure") {
+        req.auto_exposure = ParseStrictFiniteDouble(value, "capture auto_exposure");
+    } else if (k == "exposure") {
+        req.exposure = ParseStrictFiniteDouble(value, "capture exposure");
+    } else {
+        throw std::runtime_error(
+            "device URL query key '" + key + "' is unsupported; supported keys are "
+            "backend,width,height,fps,fourcc,auto_exposure,exposure");
+    }
+}
+
+LocalDeviceOpenRequest ParseLocalDeviceOpenRequest(const std::string& source_url) {
+    if (source_url.rfind("device:", 0) != 0) {
+        throw std::runtime_error(
+            "ParseLocalDeviceOpenRequest: source_url does not start with device:");
+    }
+    const std::string body = source_url.substr(7);
+    const size_t query_pos = body.find('?');
+    LocalDeviceOpenRequest req;
+    req.device_index = ParseStrictNonNegativeInt(
+        query_pos == std::string::npos ? body : body.substr(0, query_pos),
+        "device index");
+    if (query_pos == std::string::npos) {
+        return req;
+    }
+    const std::string query = body.substr(query_pos + 1);
+    size_t start = 0;
+    while (start < query.size()) {
+        const size_t amp = query.find('&', start);
+        const std::string item = query.substr(
+            start,
+            amp == std::string::npos ? std::string::npos : amp - start);
+        const size_t eq = item.find('=');
+        if (eq == std::string::npos) {
+            throw std::runtime_error(
+                "device URL query item must be key=value, got '" + item + "'");
+        }
+        ApplyLocalDeviceQueryParam(req, item.substr(0, eq), item.substr(eq + 1));
+        if (amp == std::string::npos) break;
+        start = amp + 1;
+    }
+    return req;
+}
+
+int MakeFourcc(const std::string& fourcc) {
+    if (fourcc.size() != 4) {
+        throw std::runtime_error("MakeFourcc: fourcc must be exactly 4 characters");
+    }
+    return cv::VideoWriter::fourcc(fourcc[0], fourcc[1], fourcc[2], fourcc[3]);
+}
+
+std::string FourccToString(int fourcc) {
+    std::string text;
+    text.push_back(static_cast<char>( fourcc        & 0xFF));
+    text.push_back(static_cast<char>((fourcc >>  8) & 0xFF));
+    text.push_back(static_cast<char>((fourcc >> 16) & 0xFF));
+    text.push_back(static_cast<char>((fourcc >> 24) & 0xFF));
+    return text;
+}
+
+void SetLocalCaptureProperty(cv::VideoCapture& cap,
+                             int prop_id,
+                             double value,
+                             const std::string& label)
+{
+    const bool accepted = cap.set(prop_id, value);
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+              "PhysicalCameraStream worker: request " + label + "="
+              + std::to_string(value) + (accepted ? " accepted" : " rejected"));
+}
+
+std::vector<int> BuildLocalOpenParams(const LocalDeviceOpenRequest& req) {
+    return {
+        cv::CAP_PROP_FOURCC, MakeFourcc(req.fourcc),
+        cv::CAP_PROP_FRAME_WIDTH, req.width,
+        cv::CAP_PROP_FRAME_HEIGHT, req.height,
+        cv::CAP_PROP_FPS, req.fps,
+        cv::CAP_PROP_BUFFERSIZE, 1
+    };
+}
+
+bool OpenLocalDeviceWithRequestedMode(cv::VideoCapture& cap,
+                                      const LocalDeviceOpenRequest& req,
+                                      int backend)
+{
+    const std::vector<int> params = BuildLocalOpenParams(req);
+    try {
+        if (cap.open(req.device_index, backend, params)) {
+            LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                      "PhysicalCameraStream worker: local open accepted mode params "
+                      "device=" + std::to_string(req.device_index)
+                      + " backend=" + std::to_string(backend)
+                      + " " + std::to_string(req.width) + "x" + std::to_string(req.height)
+                      + " @ " + std::to_string(req.fps) + " fps fourcc=" + req.fourcc);
+            return true;
+        }
+    } catch (const std::exception& e) {
+        LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                  "PhysicalCameraStream worker: local open with mode params threw backend="
+                  + std::to_string(backend) + " what=" + e.what()
+                  + " — trying explicit post-open property negotiation next");
+    }
+    cap.release();
+    if (!cap.open(req.device_index, backend)) {
+        return false;
+    }
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+              "PhysicalCameraStream worker: local open used post-open property negotiation "
+              "device=" + std::to_string(req.device_index)
+              + " backend=" + std::to_string(backend));
+    return true;
+}
+
+std::vector<int> LocalDeviceBackendsToTry() {
+    return {
+#if defined(__APPLE__)
+        cv::CAP_AVFOUNDATION,
+#elif defined(_WIN32)
+        cv::CAP_DSHOW,
+        cv::CAP_MSMF,
+#else
+        cv::CAP_V4L2,
+#endif
+        cv::CAP_ANY
+    };
+}
 
 void EnsureFfmpegLowLatencyEnv() {
     if (const char* existing = std::getenv("OPENCV_FFMPEG_CAPTURE_OPTIONS")) {
@@ -143,37 +362,30 @@ void PhysicalCameraStream::RunCaptureWorker() {
     EnsureFfmpegLowLatencyEnv();
 
     cv::VideoCapture cap;
+    const bool is_local_device = IsLocalDeviceUrl(source_url_);
 
     // Prefer FFMPEG backend for RTSP/HTTP URLs. If OpenCV was built without
     // FFMPEG, fall back to the default backend — but we surface that fact
     // in the error reason if open fails so the user knows immediately.
     //
     // Special case: url of the form "device:N" opens the Nth locally-attached
-    // camera (USB/builtin) via the OS-default VideoCapture backend. This is
-    // how physical cameras directly plugged into the host machine are used.
+    // camera (USB/builtin), while "device:N?backend=M" pins the same OpenCV
+    // backend that enumeration verified. Backend pinning matters on Windows:
+    // DirectShow and MediaFoundation can expose virtual + USB cameras in
+    // different orders, so a source row must open the same backend it probed.
     bool opened = false;
     try {
-        if (source_url_.rfind("device:", 0) == 0) {
-            const std::string idx_str = source_url_.substr(7);
-            if (idx_str.empty()) {
-                throw std::runtime_error(
-                    "device URL has empty index — expected 'device:<N>'");
+        if (is_local_device) {
+            const LocalDeviceOpenRequest req = ParseLocalDeviceOpenRequest(source_url_);
+            if (req.backend >= 0) {
+                opened = OpenLocalDeviceWithRequestedMode(cap, req, req.backend);
+            } else {
+                for (int backend : LocalDeviceBackendsToTry()) {
+                    opened = OpenLocalDeviceWithRequestedMode(cap, req, backend);
+                    if (opened) break;
+                    cap.release();
+                }
             }
-            const int device_index = std::stoi(idx_str);
-            if (device_index < 0) {
-                throw std::runtime_error(
-                    "device index must be >= 0, got " + std::to_string(device_index));
-            }
-            // Explicit AVFoundation backend on macOS — CAP_ANY can pick a
-            // slower fallback path on some OpenCV builds. On non-mac POSIX
-            // (Linux V4L2) this falls through to CAP_ANY since
-            // CAP_AVFOUNDATION is a no-op there.
-#if defined(__APPLE__)
-            opened = cap.open(device_index, cv::CAP_AVFOUNDATION);
-            if (!opened) opened = cap.open(device_index, cv::CAP_ANY);
-#else
-            opened = cap.open(device_index, cv::CAP_ANY);
-#endif
         } else {
             opened = cap.open(source_url_, cv::CAP_FFMPEG);
             if (!opened) {
@@ -214,30 +426,64 @@ void PhysicalCameraStream::RunCaptureWorker() {
                   "CAP_PROP_BUFFERSIZE=1 — relying on drain pattern only");
     }
 
-    // For local OS camera devices, ask the backend for 30 fps at 640x480.
-    // AVFoundation on macOS picks an arbitrary default activeFormat that
-    // often lands on 15 fps for the builtin FaceTime cam at 1080p/720p.
-    // 640x480 is almost always available at 30+ fps on every builtin and
-    // USB webcam, AND it cuts OpenCV's per-frame BGRA→BGR copy cost by 4x
-    // on the worker thread — that copy is the real CPU bottleneck for the
-    // OpenCV AVF backend on Apple Silicon, not the camera or memory bandwidth.
-    // Network sources (RTSP/HTTP) ignore these properties — set() returns
-    // false silently and we move on.
-    if (source_url_.rfind("device:", 0) == 0) {
-        cap.set(cv::CAP_PROP_FRAME_WIDTH,  640);
-        cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
-        cap.set(cv::CAP_PROP_FPS,          30);
+    // For local OS camera devices, request a high-FPS, low-resolution capture
+    // mode. The previous hard-coded 30 fps request capped every capable USB
+    // camera at ~29.97 fps before perception/inference ever got a vote.
+    // MJPG is requested before geometry/FPS because many Windows UVC devices
+    // only expose 60 fps at 640x480 when using compressed transport; YUY2 is
+    // commonly limited to 30 fps by USB bandwidth.
+    //
+    // Override per source with:
+    //   device:N?backend=M&width=640&height=480&fps=120&fourcc=MJPG
+    // Backend refusal is logged along with negotiated values; hardware/driver
+    // capabilities still decide the final FPS.
+    if (is_local_device) {
+        const LocalDeviceOpenRequest req = ParseLocalDeviceOpenRequest(source_url_);
+        SetLocalCaptureProperty(cap,
+                                cv::CAP_PROP_FOURCC,
+                                static_cast<double>(MakeFourcc(req.fourcc)),
+                                "fourcc(" + req.fourcc + ")");
+        SetLocalCaptureProperty(cap, cv::CAP_PROP_FRAME_WIDTH,
+                                static_cast<double>(req.width), "width");
+        SetLocalCaptureProperty(cap, cv::CAP_PROP_FRAME_HEIGHT,
+                                static_cast<double>(req.height), "height");
+        SetLocalCaptureProperty(cap, cv::CAP_PROP_FPS,
+                                static_cast<double>(req.fps), "fps");
+        if (std::isfinite(req.auto_exposure)) {
+            SetLocalCaptureProperty(cap, cv::CAP_PROP_AUTO_EXPOSURE,
+                                    req.auto_exposure, "auto_exposure");
+        }
+        if (std::isfinite(req.exposure)) {
+            SetLocalCaptureProperty(cap, cv::CAP_PROP_EXPOSURE,
+                                    req.exposure, "exposure");
+        }
         const double negotiated_fps = cap.get(cv::CAP_PROP_FPS);
         const double negotiated_w   = cap.get(cv::CAP_PROP_FRAME_WIDTH);
         const double negotiated_h   = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+        const int negotiated_fourcc = static_cast<int>(cap.get(cv::CAP_PROP_FOURCC));
+        const std::string negotiated_fourcc_text = FourccToString(negotiated_fourcc);
+        const double negotiated_auto_exposure = cap.get(cv::CAP_PROP_AUTO_EXPOSURE);
+        const double negotiated_exposure      = cap.get(cv::CAP_PROP_EXPOSURE);
         LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
-                  "PhysicalCameraStream worker: device negotiated "
+                  "PhysicalCameraStream worker: device requested "
+                  + std::to_string(req.width) + "x" + std::to_string(req.height)
+                  + " @ " + std::to_string(req.fps) + " fps fourcc=" + req.fourcc
+                  + "; negotiated "
                   + std::to_string(static_cast<int>(negotiated_w)) + "x"
                   + std::to_string(static_cast<int>(negotiated_h))
-                  + " @ " + std::to_string(negotiated_fps) + " fps "
-                  + "(if fps < 30 in good light, AVFoundation chose a "
-                  + "lower-fps activeFormat; in low light, auto-exposure "
-                  + "is lengthening shutter past 1/30s — brighten the room)");
+                  + " @ " + std::to_string(negotiated_fps) + " fps fourcc="
+                  + negotiated_fourcc_text
+                  + " auto_exposure=" + std::to_string(negotiated_auto_exposure)
+                  + " exposure=" + std::to_string(negotiated_exposure)
+                  + " (if measured FPS remains near 30, the selected camera/backend "
+                  + "may be throttling via actual pixel format, exposure, or driver timing)");
+        if (negotiated_fourcc_text != req.fourcc) {
+            LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                      "PhysicalCameraStream worker: requested fourcc=" + req.fourcc
+                      + " but backend is delivering fourcc=" + negotiated_fourcc_text
+                      + " — try another backend or explicit device URL; YUY2 often reports "
+                      + "high FPS while the driver still clocks frames near 30");
+        }
     }
 
     state_ = PhysicalCameraStreamState::Streaming;
@@ -246,6 +492,9 @@ void PhysicalCameraStream::RunCaptureWorker() {
 
     auto fps_window_start = std::chrono::steady_clock::now();
     uint64_t fps_window_frames = 0;
+    double fps_window_grab_ms = 0.0;
+    double fps_window_retrieve_ms = 0.0;
+    double fps_window_store_ms = 0.0;
 
     // ── Drain pattern ──
     // Live RTSP/HTTP capture latency is a queue-depth problem, not a
@@ -264,11 +513,18 @@ void PhysicalCameraStream::RunCaptureWorker() {
     //   2. we have drained kMaxDrainPerIter frames (defensive cap to avoid
     //      starving the rest of the loop on a misbehaving stream).
     // Then retrieve() decodes only that final, freshest frame.
+    //
+    // IMPORTANT: local `device:N` cameras are NOT drained this way. On UVC /
+    // AVFoundation devices, the extra grab() blocks for the next live frame;
+    // retrieving only after that second grab drops every other frame and turns
+    // a real 60 FPS capture mode into ~29-30 FPS. Local devices use one
+    // grab()+retrieve() per worker iteration; network streams keep the drain.
     constexpr int  kMaxDrainPerIter        = 64;
     constexpr auto kFastGrabThresholdMicros = std::chrono::microseconds(8000); // 8ms
     cv::Mat scratch;
     while (!stop_requested_.load()) {
         // First grab: must succeed; this blocks for the next available frame.
+        const auto grab_start = std::chrono::steady_clock::now();
         if (!cap.grab()) {
             std::lock_guard<std::mutex> lk(error_mutex_);
             last_error_reason_ =
@@ -281,24 +537,29 @@ void PhysicalCameraStream::RunCaptureWorker() {
             cap.release();
             return;
         }
+        fps_window_grab_ms += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - grab_start).count();
 
-        // Drain any additional already-buffered frames. As long as grab()
-        // returns "fast", there was a frame waiting in the FIFO. The first
-        // grab() call that takes ~one inter-frame interval indicates an
-        // empty FIFO — we abort it via the time check (we cannot truly
-        // cancel mid-grab, so the cost of the final slow grab is bounded
-        // by one frame interval and absorbed into next iteration's freshness).
-        for (int drained = 0; drained < kMaxDrainPerIter; ++drained) {
-            const auto t0 = std::chrono::steady_clock::now();
-            if (!cap.grab()) break;
-            const auto dt = std::chrono::steady_clock::now() - t0;
-            if (dt > kFastGrabThresholdMicros) {
-                // That last grab() actually waited — we just consumed the
-                // newest live frame. Fall through to retrieve it.
-                break;
+        if (!is_local_device) {
+            // Drain any additional already-buffered frames. As long as grab()
+            // returns "fast", there was a frame waiting in the FIFO. The first
+            // grab() call that takes ~one inter-frame interval indicates an
+            // empty FIFO — we abort it via the time check (we cannot truly
+            // cancel mid-grab, so the cost of the final slow grab is bounded
+            // by one frame interval and absorbed into next iteration's freshness).
+            for (int drained = 0; drained < kMaxDrainPerIter; ++drained) {
+                const auto t0 = std::chrono::steady_clock::now();
+                if (!cap.grab()) break;
+                const auto dt = std::chrono::steady_clock::now() - t0;
+                if (dt > kFastGrabThresholdMicros) {
+                    // That last grab() actually waited — we just consumed the
+                    // newest live frame. Fall through to retrieve it.
+                    break;
+                }
             }
         }
 
+        const auto retrieve_start = std::chrono::steady_clock::now();
         if (!cap.retrieve(scratch) || scratch.empty()) {
             std::lock_guard<std::mutex> lk(error_mutex_);
             last_error_reason_ =
@@ -311,11 +572,16 @@ void PhysicalCameraStream::RunCaptureWorker() {
             cap.release();
             return;
         }
+        fps_window_retrieve_ms += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - retrieve_start).count();
 
+        const auto store_start = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lk(frame_mutex_);
             scratch.copyTo(latest_frame_);
         }
+        fps_window_store_ms += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - store_start).count();
         ++frame_counter_;
         ++fps_window_frames;
 
@@ -323,10 +589,38 @@ void PhysicalCameraStream::RunCaptureWorker() {
         auto window_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                              now - fps_window_start).count();
         if (window_ms >= 1000) {
-            measured_fps_.store(static_cast<double>(fps_window_frames)
-                                * 1000.0 / static_cast<double>(window_ms));
+            const double actual_fps = static_cast<double>(fps_window_frames)
+                                      * 1000.0 / static_cast<double>(window_ms);
+            measured_fps_.store(actual_fps);
+            if (is_local_device && fps_window_frames > 0) {
+                const double avg_grab_ms = fps_window_grab_ms
+                                           / static_cast<double>(fps_window_frames);
+                const double avg_retrieve_ms = fps_window_retrieve_ms
+                                               / static_cast<double>(fps_window_frames);
+                const double avg_store_ms = fps_window_store_ms
+                                            / static_cast<double>(fps_window_frames);
+                const double current_negotiated_fps = cap.get(cv::CAP_PROP_FPS);
+                if (current_negotiated_fps >= 50.0 && actual_fps < current_negotiated_fps * 0.75) {
+                    const int current_fourcc = static_cast<int>(cap.get(cv::CAP_PROP_FOURCC));
+                    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                              "PhysicalCameraStream worker: local FPS mismatch "
+                              "negotiated=" + std::to_string(current_negotiated_fps)
+                              + " measured=" + std::to_string(actual_fps)
+                              + " avg_grab_ms=" + std::to_string(avg_grab_ms)
+                              + " avg_retrieve_ms=" + std::to_string(avg_retrieve_ms)
+                              + " avg_store_ms=" + std::to_string(avg_store_ms)
+                              + " fourcc=" + FourccToString(current_fourcc)
+                              + " auto_exposure=" + std::to_string(cap.get(cv::CAP_PROP_AUTO_EXPOSURE))
+                              + " exposure=" + std::to_string(cap.get(cv::CAP_PROP_EXPOSURE))
+                              + " — if avg_grab_ms is ~33ms, the backend/driver/camera "
+                              + "is delivering 30Hz despite reporting a 60Hz mode");
+                }
+            }
             fps_window_start = now;
             fps_window_frames = 0;
+            fps_window_grab_ms = 0.0;
+            fps_window_retrieve_ms = 0.0;
+            fps_window_store_ms = 0.0;
         }
     }
 

@@ -1,6 +1,7 @@
 # Physical Perception Subsystem
 
-> Location: [perception/physical/](../perception/physical)
+> Location: [perception/physical/](../perception/physical)  
+> File taxonomy: [perception/physical/README.md](../perception/physical/README.md)
 > Namespace: `GRIM::Perception::Physical`
 > Mainloop integration: [main.cpp](../main.cpp) lines ~593–614
 
@@ -123,6 +124,22 @@ calculations. Wall clock is recorded only for human-readable display.
 * Operators are **not** internally thread-safe; the loops own them and
   hold a mutex around every call.
 
+### 2.6 File taxonomy
+
+`perception/physical/README.md` is the local ownership map for this folder.
+When adding or moving a physical-perception file, assign it to exactly one
+taxonomy row there and update the row in the same change. This prevents the
+flat `Physical*.{hpp,cpp}` namespace from turning into a junk drawer with a
+camera attached — delightful image, bad architecture.
+
+### 2.7 Frame packet ownership
+
+`PhysicalFrameBus::FrameView` now pins an immutable `PhysicalFramePacket`.
+Its `raw_image`, `model_image`, and `image` fields are shallow `cv::Mat`
+headers into the packet, not per-consumer pixel copies. Consumers MUST treat
+them as read-only and `clone()` into local scratch before any in-place OpenCV
+mutation.
+
 ---
 
 ## 3. Stage 1 — `PhysicalEnvironmentLoop`
@@ -137,7 +154,7 @@ BGR frames on `PhysicalFrameBus`.
 | Class                                     | Job                                                                                                  |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `PhysicalNicScan` (per-OS .cpp/.mm)       | Enumerate IPv4 NICs (loopback + link-local marked `Disabled`).                                       |
-| `PhysicalCameraDirectory`                 | Combine local NICs + local USB/builtin cameras + hub devices (DeviceCommServer) into a candidate list. |
+| `PhysicalCameraDirectory`                 | Combine local NICs + local USB/builtin/virtual cameras + hub devices (DeviceCommServer) into a candidate list; local rows are backend-pinned so multiple cameras on one host are selectable. |
 | `PhysicalCameraSource`                    | One row in the directory: origin, status, label, `url_template`.                                     |
 | `PhysicalCameraStream`                    | OpenCV `VideoCapture` worker; reports state Idle / Connecting / Streaming / Failed.                  |
 | `PhysicalFrameConditioner`                | Resize (Stretch or Letterbox), denoise (median blur), exposure correction, optional deblur/stabilization, color-space, **quality gate**, and per-frame `PhysicalSceneStability` thumbnail diff. |
@@ -222,8 +239,10 @@ optional and the UI surfaces the state explicitly.
 1. `PullLatestFrameView`. Skip if counter has not advanced.
 2. For each enabled, model-loaded operator: `RouteFrameTo<Operator>()`.
 3. Run the tracker on the (possibly-empty) detector output.
-4. Run the instance segmenter prompted by detector boxes (skipped if no
-   boxes — cheap no-op).
+4. Run the instance segmenter prompted by detector boxes. The Stage-2 loop
+   reuses the cached SAM mask bundle when the detector itself reused cached
+   detections and the quantized prompt signature is unchanged
+   (`cache_reason=detector_prompt_cache`); zero prompts remain a cheap no-op.
 5. Apply class policy in place.
 6. Publish the whole bundle to `PhysicalPerceptionPrimitiveBus` once.
 
@@ -431,6 +450,12 @@ populates `resources/models/vision` with the detector, segmenter, OCR,
 face, emotion, SAM2, MobileCLIP, and Depth-Anything files expected by the
 runtime config.
 
+Model entries may set `enabled=false` to keep downloaded weights in the
+registry without wiring them into the live OpenCV operators. This is used
+for `depth_anything_v2_metric_indoor_small_518`: OpenCV 4.11 rejects that
+ONNX export at the backbone `Resize` node, so Stage 3 keeps the
+OpenCV-compatible `midas_v21_small_256` entry active instead.
+
 You can still run `scripts/setup_windows_physical_vision.ps1` manually
 from the repo root to pre-warm a fresh checkout or refresh corrupted
 files with `-Force`.
@@ -465,20 +490,10 @@ directory.
 
 ## 11. Quick Reference — File Map
 
-| Concern                | Files                                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| Camera I/O             | `PhysicalNicScan*`, `PhysicalCameraDirectory`, `PhysicalCameraSource`, `PhysicalCameraStream`          |
-| Frame conditioning     | `PhysicalFrameConditioner`, `PhysicalSceneStability`                                                    |
-| Stage 1 bus + loop     | `PhysicalFrameBus`, `PhysicalEnvironmentLoop`                                                           |
-| Calibration            | `PhysicalCameraCalibrator`, `PhysicalCalibrationPattern`, `PhysicalCalibrationStore`                    |
-| Stage 2 operators      | `PhysicalObjectDetector`, `PhysicalSemanticSegmenter`, `PhysicalInstanceSegmenter`, `PhysicalImageClassifier`, `PhysicalPoseKeypointEstimator`, `PhysicalSceneTextReader`, `PhysicalFacialExpressionDetector`, `PhysicalEntityTracker`, `PhysicalClassPolicy` |
-| Stage 2 bus + loop     | `PhysicalPerceptionPrimitiveBus`, `PhysicalPerceptionPrimitivesLoop`, `PhysicalPerceptionPrimitiveResult`, `PhysicalImageOperatorState` |
-| Stage 3 components     | `PhysicalDepthMap`, `PhysicalMonocularDepthEstimator`, `PhysicalSpatialGrounder`, `PhysicalVisualScaleFromDepth` |
-| Stage 3 bus + loop     | `PhysicalSpatialGroundingBus`, `PhysicalSpatialGroundingLoop`, `PhysicalSpatialGroundingResult`         |
-| Stage 5 components     | `PhysicalVisualOdometer`, `PhysicalOccupancyGridMapper`                                                 |
-| Stage 5 bus + loop     | `PhysicalLocalizationBus`, `PhysicalLocalizationLoop`, `PhysicalLocalizationResult`                     |
-| Stage 4 components     | `PhysicalWorldStateBuilder`                                                                             |
-| Stage 4 bus + loop     | `PhysicalWorldStateBus`, `PhysicalWorldStateLoop`, `PhysicalWorldStateResult`                           |
+The authoritative per-file taxonomy lives in
+[`perception/physical/README.md`](../perception/physical/README.md). Use that
+file for ownership decisions; this architecture doc describes behavior and
+stage contracts.
 
 ---
 

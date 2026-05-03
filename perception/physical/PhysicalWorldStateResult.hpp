@@ -185,6 +185,13 @@ struct PhysicalWorldStateSnapshot {
 
     // Sorted by object_id ASC for stable diffing.
     std::vector<PhysicalWorldEntity>  entities;
+
+    // Stage-4 loop-level timing telemetry, in milliseconds.
+    double                            tick_total_ms          = 0.0;
+    double                            perception_bus_pull_ms = 0.0;
+    double                            grounding_bus_pull_ms  = 0.0;
+    double                            build_wall_ms          = 0.0;
+    double                            publish_bus_ms         = 0.0;
 };
 
 }}} // namespace GRIM::Perception::Physical

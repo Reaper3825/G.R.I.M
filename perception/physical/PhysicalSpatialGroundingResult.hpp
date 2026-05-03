@@ -139,6 +139,14 @@ struct PhysicalSpatialGroundingResults {
 
     PhysicalDepthMap                    depth_map;
     std::vector<PhysicalGroundedEntity> grounded_entities;
+
+    // Stage-3 loop-level timing telemetry, in milliseconds.
+    double                              tick_total_ms          = 0.0;
+    double                              frame_bus_pull_ms      = 0.0;
+    double                              perception_bus_pull_ms = 0.0;
+    double                              depth_wall_ms          = 0.0;
+    double                              grounder_wall_ms       = 0.0;
+    double                              publish_bus_ms         = 0.0;
 };
 
 }}} // namespace GRIM::Perception::Physical

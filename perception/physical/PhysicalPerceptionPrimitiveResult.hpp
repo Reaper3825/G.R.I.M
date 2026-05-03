@@ -357,6 +357,28 @@ struct PhysicalClassPolicyOutput {
     std::vector<PhysicalClassPolicyClassSummary> ranked_classes;
 };
 
+// Stage-2 loop-level timing and cache telemetry for one published primitive
+// result. Operator envelopes already carry their inference timings; this
+// struct captures integration overhead and cache decisions around them.
+struct PhysicalPerceptionPrimitiveTelemetry {
+    double   tick_total_ms          = 0.0;
+    double   frame_bus_pull_ms      = 0.0;
+    double   publish_bus_ms         = 0.0;
+    double   operator_wall_ms       = 0.0;
+    double   object_detector_wall_ms = 0.0;
+    double   semantic_segmenter_wall_ms = 0.0;
+    double   image_classifier_wall_ms = 0.0;
+    double   pose_estimator_wall_ms = 0.0;
+    double   scene_text_reader_wall_ms = 0.0;
+    double   facial_expression_wall_ms = 0.0;
+    double   entity_tracker_wall_ms = 0.0;
+    double   instance_segmenter_wall_ms = 0.0;
+    double   class_policy_wall_ms   = 0.0;
+    uint32_t cache_hit_count        = 0;
+    uint32_t fresh_inference_count  = 0;
+    uint32_t no_signal_forced_count = 0;
+};
+
 // Aggregate snapshot — one frame's worth of results from all operators
 // PLUS the class-policy summary that downstream model-context builders
 // will read first.
@@ -378,6 +400,7 @@ struct PhysicalPerceptionPrimitiveResults {
     PhysicalFacialExpressionDetectorOutput facial_expression_detector;
     PhysicalEntityTrackerOutput            entity_tracker;
     PhysicalClassPolicyOutput              class_policy;
+    PhysicalPerceptionPrimitiveTelemetry    telemetry{};
 };
 
 }}} // namespace GRIM::Perception::Physical

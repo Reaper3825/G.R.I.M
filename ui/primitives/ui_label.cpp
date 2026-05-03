@@ -1,5 +1,5 @@
 #include "ui_label.hpp"
-#include "ui_renderer.hpp"
+#include "../ui_renderer.hpp"
 
 UILabel::UILabel(const std::string& t, uint32_t c)
     : text(t), color(c) {}

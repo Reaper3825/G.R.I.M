@@ -1,8 +1,8 @@
 #include "ui_button.hpp"
-#include "ui_theme.hpp"
-#include "ui_renderer.hpp"
-#include "overlay_renderer.hpp"
-#include "input_parser.hpp"
+#include "../ui_theme.hpp"
+#include "../ui_renderer.hpp"
+#include "../overlay_renderer.hpp"
+#include "../../core/input_parser.hpp"
 #include "helpers/mouse.hpp"
 #include "logger.hpp"
 

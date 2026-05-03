@@ -257,6 +257,7 @@ nlohmann::json ModelRegistry::serializeModelToJson(const ModelInfo& model) {
     j["id"]          = model.id;
     j["name"]        = model.name;
     j["version"]     = model.version;
+    j["enabled"]     = model.enabled;
     j["subject"]     = model.subject;
     j["description"] = model.description;
     j["model_path"]  = model.model_path;
@@ -276,6 +277,8 @@ nlohmann::json ModelRegistry::serializeModelToJson(const ModelInfo& model) {
         v["text_embeddings_path"]     = model.vision.text_embeddings_path;
         v["input_width"]              = model.vision.input_width;
         v["input_height"]             = model.vision.input_height;
+        v["dnn_backend"]              = model.vision.dnn_backend;
+        v["dnn_target"]               = model.vision.dnn_target;
         v["confidence_threshold"]     = model.vision.confidence_threshold;
         v["iou_threshold"]            = model.vision.iou_threshold;
         v["top_k"]                    = model.vision.top_k;
@@ -350,6 +353,7 @@ ModelInfo ModelRegistry::parseModelInfo(const nlohmann::json& entry) {
     m.id          = entry.value("id", "");
     m.name        = entry.value("name", "");
     m.version     = entry.value("version", "");
+    m.enabled     = entry.value("enabled", true);
     m.subject     = entry.value("subject", "");
     m.description = entry.value("description", "");
     m.model_path  = entry.value("model_path", "");
@@ -390,6 +394,8 @@ ModelInfo ModelRegistry::parseModelInfo(const nlohmann::json& entry) {
         m.vision.text_embeddings_path    = v.value("text_embeddings_path", "");
         m.vision.input_width             = v.value("input_width", 0);
         m.vision.input_height            = v.value("input_height", 0);
+        m.vision.dnn_backend             = v.value("dnn_backend", "");
+        m.vision.dnn_target              = v.value("dnn_target", "");
         m.vision.confidence_threshold    = v.value("confidence_threshold", 0.0f);
         m.vision.iou_threshold           = v.value("iou_threshold", 0.0f);
         m.vision.top_k                   = v.value("top_k", 0);

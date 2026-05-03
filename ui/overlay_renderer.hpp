@@ -33,7 +33,7 @@ public:
     void drawGlassPanel(const Vec2& pos, const Vec2& size, float radius,
                         uint32_t bgColor, uint32_t borderColor, uint32_t glowColor,
                         int blurRadius = 100, float shadowOffset = 4.0f,
-                        uintptr_t panelId = 0);
+                        uintptr_t panelId = 0, bool deferGlassRefresh = false);
     void drawSoftGlow(const Vec2& pos, const Vec2& size, float radius,
                       uint32_t color, float spread);
     void drawText(const Vec2& pos, const std::string& text, uint32_t color);
@@ -76,12 +76,13 @@ private:
     void* m_pixels = nullptr;
     bool m_ownsPixels = false;
 
-    // When enabled, we rely on OS-level blur-backdrop (vibrancy / DWM acrylic)
-    // and skip the synthetic "blur the noise we drew" pipeline.
+    // When enabled, native OS-backed panel blur owns the backdrop.
+    // Windows keeps this false and uses software desktop capture per panel.
     bool m_usePlatformBlur = false;
 
     // Animated grain seed (changes per frame) for glass noise.
     uint32_t m_grainSeed = 0xA53C9E17u;
+    uint64_t m_frameIndex = 0;
 
     // Dirty region tracking: only memset/blit the area that was drawn to
     int m_dirtyX1 = 0, m_dirtyY1 = 0, m_dirtyX2 = 0, m_dirtyY2 = 0;
@@ -103,11 +104,13 @@ private:
     // Gaussian kernel for per-pixel blur (1D, half window)
     std::vector<float> m_gaussianKernel;
 
-    // Dirty detection: cache distorted+blurred result per panel; only update when content changes
+    // Last known-good distorted+blurred result per panel. Reused between refreshes,
+    // while panels move, and if desktop capture temporarily fails.
     struct PanelGlassCache {
-        uint64_t contentHash = 0;
         int rectX = 0, rectY = 0, rectW = 0, rectH = 0;
+        uint64_t lastRefreshFrame = 0;
         std::vector<uint32_t> pixels;
+        std::vector<uint32_t> sourceSamples;
     };
     std::unordered_map<uintptr_t, PanelGlassCache> m_glassCache;
 

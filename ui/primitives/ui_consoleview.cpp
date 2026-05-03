@@ -1,7 +1,7 @@
 #include "pch.hpp"
 #include "ui_consoleview.hpp"
-#include "ui_renderer.hpp"
-#include "input_parser.hpp"
+#include "../ui_renderer.hpp"
+#include "../../core/input_parser.hpp"
 #include <algorithm>
 #include "core/grim_platform.h"
 

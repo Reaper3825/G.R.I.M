@@ -95,7 +95,7 @@ constexpr float kTabBarPad    = 8.0f;
 UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
     : UIPanel("Physical Environment", true)
 {
-    position = { 200, 200 };
+    position = { 200, 500 };
     size     = { 880, 680 };
     setBackground(UITheme::Colors::PanelBg);
     setBorder(UITheme::Colors::DividerLine);
@@ -204,6 +204,8 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
                     if (url_inputbox_) url_inputbox_->setText(url_buffer_);
                     selection_info_.clear();
                 } else {
+                    url_buffer_.clear();
+                    if (url_inputbox_) url_inputbox_->clear();
                     selection_info_ = "Selected '" + src.label + "' — "
                                     + (src.status_reason.empty()
                                          ? std::string("no URL available for this candidate")

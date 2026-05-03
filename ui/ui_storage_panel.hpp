@@ -20,10 +20,10 @@
 #include <string>
 #include <vector>
 
-#include "ui_panel.hpp"
-#include "ui_button.hpp"
-#include "ui_inputbox.hpp"
-#include "ui_scrollbox.hpp"
+#include "primitives/ui_panel.hpp"
+#include "primitives/ui_button.hpp"
+#include "primitives/ui_inputbox.hpp"
+#include "primitives/ui_scrollbox.hpp"
 
 // Forward declarations — avoid pulling device headers into UI
 namespace GRIM {

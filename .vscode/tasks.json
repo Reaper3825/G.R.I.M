@@ -2,6 +2,30 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "Anvil: Windows SSH setup",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/setup_anvil_windows.ps1"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "Anvil: Install public key",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/install_anvil_public_key.ps1"
+            ],
+            "problemMatcher": []
+        },
+        {
             "label": "CMake: Configure",
             "type": "shell",
             "command": "cmake",

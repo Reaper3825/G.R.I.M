@@ -1,5 +1,5 @@
 #include "ui_graph.hpp"
-#include "overlay_renderer.hpp"
+#include "../overlay_renderer.hpp"
 #include "core/input_parser.hpp"
 #include "helpers/mouse.hpp"
 #include "logger.hpp"

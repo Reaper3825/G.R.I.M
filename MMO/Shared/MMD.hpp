@@ -59,6 +59,12 @@ struct VisionModelDescriptor {
     int   input_width   = 0;
     int   input_height  = 0;
 
+    // OpenCV DNN execution policy for in-process vision operators. Empty
+    // strings leave the operator's compiled defaults intact. Supported values
+    // are parsed in bootstrap and fail loudly on invalid names.
+    std::string dnn_backend;
+    std::string dnn_target;
+
     // Image classifier (zero-shot CLIP path) — precomputed text
     // embeddings produced by scripts/setup_mobileclip.py. Pair with
     // class_names_path which holds the matching prompt list (one
@@ -144,6 +150,7 @@ struct ModelInfo {
     std::string id;
     std::string name;
     std::string version;
+    bool        enabled = true;
     std::string subject;
     std::string description;
     std::string model_path;         // weights file or directory
