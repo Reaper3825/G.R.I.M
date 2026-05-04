@@ -90,8 +90,7 @@ MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync
 void runOptimizerMomentDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     int batch_idx,
-    int micro_step_for_log,
-    int accum_steps_for_log,
+    int accumulation_window_micro_batches,
     bool sync_diag)
 {
     namespace Internal = ::GRIMText::Training::Internal;
@@ -99,8 +98,7 @@ void runOptimizerMomentDiagnostic(
     if (moment_sample.valid) {
         ctx.logging.logger->log("[OptState] batch=" + std::to_string(batch_idx + 1) +
                                 " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
-                                " micro_step=" + std::to_string(micro_step_for_log) +
-                                "/" + std::to_string(accum_steps_for_log) +
+                                " accum_window=" + std::to_string(accumulation_window_micro_batches) +
                                 " m_rms=" + Internal::formatScalar(moment_sample.m_rms, 10) +
                                 " v_rms=" + Internal::formatScalar(moment_sample.v_rms, 10) +
                                 " groups=" + std::to_string(moment_sample.groups) +

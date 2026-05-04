@@ -245,12 +245,17 @@ std::vector<int> LocalDeviceBackendsToTry() {
 #if defined(__APPLE__)
         cv::CAP_AVFOUNDATION,
 #elif defined(_WIN32)
-        cv::CAP_DSHOW,
-        cv::CAP_MSMF,
+    // See PhysicalCameraDirectory.cpp: DSHOW/MSMF by-index opens are not
+    // safe on this OpenCV 4.11 Windows path. Use CAP_ANY for automatic
+    // local-device opens; backend-specific URLs should be validated before
+    // reintroducing them.
+    cv::CAP_ANY,
 #else
         cv::CAP_V4L2,
 #endif
+#if !defined(_WIN32)
         cv::CAP_ANY
+#endif
     };
 }
 

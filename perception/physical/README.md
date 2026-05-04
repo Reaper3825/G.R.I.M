@@ -86,6 +86,17 @@ not part of the Stage-2 inference path.
 | `PhysicalFacialExpressionDetector.*` | Face boxes + expression labels. |
 | `PhysicalEntityTracker.*` | Pure-C++ track IDs and temporal smoothing. |
 
+The default object detector asset is
+`resources/models/vision/yolov8n_opencv_static.onnx`, a static 640x640 YOLOv8n
+export simplified for OpenCV 4.11. The dynamic `yolov8n.onnx` export is kept for
+provenance but is not the active Stage-2 model because OpenCV rejects its
+`/model.12/Concat` node during import.
+
+On Windows, local camera enumeration and automatic local-device opens use
+`CAP_ANY` only. `CAP_DSHOW` / `CAP_MSMF` by-index probes are deliberately skipped
+because this OpenCV 4.11 build can warn that those backends cannot capture by
+index and has crashed during repeated startup probing.
+
 Stage-2 operators receive `const cv::Mat&` model-space frames. They must not
 store frame-bus `cv::Mat` headers beyond the route call.
 

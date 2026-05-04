@@ -114,7 +114,7 @@ struct SequenceData {
 struct OptimizerContext {
     GRIM::OptimizerState optimizer_state;
     GRIM::SoftRestart::SoftRestartController soft_restart_controller;
-    int current_micro_step = 0;  // Tracks position within accumulation window [0, accum_steps)
+    int accumulation_position = 0;  // Tracks position within accumulation window [0, accum_steps)
 };
 
 /**

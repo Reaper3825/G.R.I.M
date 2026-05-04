@@ -10,7 +10,7 @@
 //   2. clipPostAccumulationGradients
 //        Global gradient clipping on the accumulated + scaled gradients.
 //        Mutates result.grad_rms /
-//        result.normalized_grad_rms / result.gradient_clipped.
+//        result.grad_rms / result.gradient_clipped.
 //
 //   3. checkPostOptimizerWeightsFinite (Rule 20)
 //        After the optimizer step, sample one weight from

@@ -103,7 +103,6 @@ void clipPostAccumulationGradients(
         clip_ts.grad_norm_scratch, clip_cfg, clip_stream);
 
     result.grad_rms = clip.global_rms_post;
-    result.normalized_grad_rms = clip.global_rms_post;
     result.gradient_clipped = clip.any_clipped();
 
     ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +

@@ -227,6 +227,18 @@ latest `FrameBus` frame and publish the **coherent** result set.
 | `PhysicalEntityTracker`             | Pure C++ (no model)                  | Identity-keyed `PhysicalEntityTrack[]`; greedy IoU + class-gated assignment, exponential smoothing in MODEL space, monotonic never-reused track IDs. |
 | `PhysicalClassPolicy`               | Pure C++                             | Applies merge map + priority cutoff to per-operator results in place; emits ranked summary. |
 
+`PhysicalObjectDetector` is wired to `resources/models/vision/yolov8n_opencv_static.onnx`.
+That file is a static `1x3x640x640` simplified export of YOLOv8n. Do **not**
+replace it with the dynamic opset-22 `yolov8n.onnx` export unless OpenCV import
+is re-validated first; OpenCV 4.11 rejects that graph at `/model.12/Concat`.
+
+On Windows, local camera directory probing uses `CAP_ANY` rather than probing
+`CAP_DSHOW` / `CAP_MSMF` by numeric index. This is intentional: OpenCV 4.11 can
+report those backends as available and then reject by-index capture with native
+warnings, and repeated startup probes have caused access violations. The Stage-1
+lazy init also reuses any directory already loaded by the UI instead of probing
+the same cameras twice during startup.
+
 ### Operator state machine (`PhysicalImageOperatorState`)
 
 `NoModelConfigured → ModelLoading → ModelLoaded → InferenceFailed`.

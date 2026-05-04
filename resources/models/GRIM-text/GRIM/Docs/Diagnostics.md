@@ -20,6 +20,9 @@ Loss backward already applies `1/N`. Do **not** add another `1/tokens` scaling i
 ## TelemetryLattice
 Hierarchical streaming statistics: 8 levels, 5 metric streams. Stream 38 (`rho_raw_rms_spread`) is the canonical hidden-state health signal — see [LMHead.md](LMHead.md).
 
+## Accumulation-window logging
+`ctx.optimizer.optimizer_state.step` is the zero-based optimizer step index supplied to AdamW/RAdamW and LR scheduling. `ctx.optimizer.accumulation_position` is the private in-progress index inside the accumulation window, not a second optimizer step. Diagnostics that fire at the optimizer boundary must consume only the single configured accumulation window size and format it as `accum_window=N`; do not pass separate completed/required log values or derive a parallel step path. Telemetry must receive the same zero-based `optimizer_step` used by the optimizer kernel, even though `completeOptimizerStep()` increments the stored step before telemetry is emitted.
+
 ## External references
 - [docs/LOG_FILE_CONVENTION.md](../../../../../docs/LOG_FILE_CONVENTION.md) — verify which log file before making claims.
 - [docs/PLATEAU_BUG_INVESTIGATION.md](../../../../../docs/PLATEAU_BUG_INVESTIGATION.md) — active training investigation notes.

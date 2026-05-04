@@ -111,18 +111,27 @@ private:
         uint64_t lastRefreshFrame = 0;
         std::vector<uint32_t> pixels;
         std::vector<uint32_t> sourceSamples;
+        int maskW = 0, maskH = 0;
+        float maskRadius = -1.0f;
+        std::vector<uint8_t> roundedMask;
+        std::vector<uint8_t> edgeAlpha;
+        int distortionW = 0, distortionH = 0, distortionBlurRadius = 0;
+        std::vector<int32_t> distortedSourceIndex;
     };
     std::unordered_map<uintptr_t, PanelGlassCache> m_glassCache;
+    PanelGlassCache m_transientGlassCache;
 
+    void ensureGlassMask(PanelGlassCache& cache, int width, int height, float radius);
+    void ensureGlassDistortionOffsets(PanelGlassCache& cache, int width, int height, int blurRadius);
     void blitCachedToPanel(int rx, int ry, int capW, int capH,
                           const std::vector<uint32_t>& cachedPixels,
-                          const Vec2& pos, const Vec2& size, float radius);
+                          const PanelGlassCache& shapeCache);
 
     void drawRoundedRectToBuffer(uint32_t* buf, int bufW, int bufH,
                                   const Vec2& pos, const Vec2& size, uint32_t color, float radius);
 
     // Subtle grain/noise overlay for glass (visual refraction cue).
-    void applyGlassGrain(const Vec2& pos, const Vec2& size, float radius, float strength);
+    void applyGlassGrain(const Vec2& pos, const Vec2& size, const PanelGlassCache& shapeCache, float strength);
 
     // stb_truetype font state
     std::vector<uint8_t> m_fontFileData;

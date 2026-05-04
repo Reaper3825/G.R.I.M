@@ -108,53 +108,75 @@ namespace {
     return core;
 }
 
-struct AccumulationAdvance {
-    bool should_step = false;
-    int micro_step_for_log = 0;
-    int accum_steps_for_log = 0;
-};
-
-void validateMicroStepBeforeBackward(
+void validateAccumulationPositionBeforeBackward(
     const OptimizerContext& optimizer,
     int accum_steps,
     int batch_idx,
     int global_step)
 {
-    if (optimizer.current_micro_step >= accum_steps) {
-        fprintf(stderr, "\n[Phase2] FATAL: Training step attempted with micro_step=%d >= accum_steps=%d\n",
-                optimizer.current_micro_step, accum_steps);
+    if (optimizer.accumulation_position >= accum_steps) {
+        fprintf(stderr, "\n[Phase2] FATAL: Training step attempted with accumulation_position=%d >= accum_steps=%d\n",
+                optimizer.accumulation_position, accum_steps);
         fprintf(stderr, "[Phase2] batch=%d global_step=%d\n", batch_idx + 1, global_step);
-        fprintf(stderr, "[Phase2] This indicates current_micro_step was not reset after optimizer step.\n");
+        fprintf(stderr, "[Phase2] This indicates accumulation_position was not reset after optimizer step.\n");
         std::abort();
     }
 }
 
 bool shouldAccumulateGradients(const OptimizerContext& optimizer) {
-    return optimizer.current_micro_step > 0;
+    return optimizer.accumulation_position > 0;
 }
 
-AccumulationAdvance advanceAccumulationOrThrow(
+bool advanceAccumulationOrThrow(
     OptimizerContext& optimizer,
     int accum_steps)
 {
     if (accum_steps <= 0) {
         throw std::runtime_error("FATAL: accum_steps must be > 0 when advancing accumulation");
     }
-    if (optimizer.current_micro_step < 0 || optimizer.current_micro_step >= accum_steps) {
-        throw std::runtime_error("FATAL: current_micro_step out of range before accumulation advance");
+    if (optimizer.accumulation_position < 0 || optimizer.accumulation_position >= accum_steps) {
+        throw std::runtime_error("FATAL: accumulation_position out of range before accumulation advance");
     }
 
-    optimizer.current_micro_step++;
-    return AccumulationAdvance{
-        optimizer.current_micro_step >= accum_steps,
-        optimizer.current_micro_step,
-        accum_steps
-    };
+    optimizer.accumulation_position++;
+    return optimizer.accumulation_position >= accum_steps;
 }
 
 void completeOptimizerStep(OptimizerContext& optimizer) {
-    optimizer.current_micro_step = 0;
+    optimizer.accumulation_position = 0;
     optimizer.optimizer_state.step++;
+}
+
+void ensureTrainingLoopGradNormScratch(TrainingContext& ctx, int batch_idx) {
+    auto& training_state = ctx.model->getTrainingState();
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+    const auto& groups = ctx.model->parameterGroups();
+    if (groups.empty()) {
+        throw std::runtime_error("[FATAL] Cannot allocate grad_norm_scratch with zero parameter groups at batch " +
+                                 std::to_string(batch_idx + 1));
+    }
+
+    const size_t required_groups = groups.size();
+    if (!training_state.grad_norm_scratch) {
+        training_state.grad_norm_scratch = GRIM::GradNorm::allocateGradNormScratch(
+            required_groups, stream);
+        if (!training_state.grad_norm_scratch) {
+            throw std::runtime_error("[FATAL] Phase2 failed to allocate grad_norm_scratch at batch " +
+                                     std::to_string(batch_idx + 1));
+        }
+    }
+
+    const auto* scratch = training_state.grad_norm_scratch;
+    if (!scratch->d_partial_sums || !scratch->h_partial_sums || !scratch->h_metrics) {
+        throw std::runtime_error("[FATAL] grad_norm_scratch buffer set is incomplete at batch " +
+                                 std::to_string(batch_idx + 1));
+    }
+    if (scratch->max_groups != required_groups) {
+        throw std::runtime_error("[FATAL] grad_norm_scratch group-count mismatch at batch " +
+                                 std::to_string(batch_idx + 1) +
+                                 " required=" + std::to_string(required_groups) +
+                                 " scratch_max_groups=" + std::to_string(scratch->max_groups));
+    }
 }
 
 } // namespace
@@ -355,7 +377,7 @@ BatchResult processBatch(
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] forward_call_count=%d, building target distribution...\n", forward_call_count);
     GRIM::Diagnostics::runTargetDistributionLog(ctx, payload, batch_idx);
 
-    validateMicroStepBeforeBackward(ctx.optimizer, accum_steps, batch_idx, ctx.global_step);
+    validateAccumulationPositionBeforeBackward(ctx.optimizer, accum_steps, batch_idx, ctx.global_step);
 
     // Issue #22: first micro-batch overwrites (accumulate=false), rest accumulate.
     const bool should_accumulate = shouldAccumulateGradients(ctx.optimizer);
@@ -483,13 +505,14 @@ BatchResult processBatch(
     GRIM::Diagnostics::runSpecialTokenDiagnostic(ctx, payload, batch_idx);
 
     // Issue #23: sync grad-norm measurement EVERY batch for accurate diagnostics.
-    // Norm here is for diagnostics/spike detection only — clipping later
-    // (Issue #135) recomputes its own norm on accumulation-scaled gradients.
-    // Mutates result.grad_rms / normalized_grad_rms; throws on NaN/Inf.
+    // Phase2 owns the TrainingState scratch and BatchResult mutation; the
+    // diagnostic only reads metrics/logs and throws on hard validation failures.
+    ensureTrainingLoopGradNormScratch(ctx, batch_idx);
     const auto grad_norm_snap = GRIM::Diagnostics::runGradientNormDiagnostic(
-        ctx, state, result, batch_idx);
+        ctx, state, batch_idx);
     const float preclip_grad_rms = grad_norm_snap.preclip_grad_rms;
     const float enc_rms_pre = grad_norm_snap.enc_rms_pre;
+    result.grad_rms = grad_norm_snap.grad_rms;
 
     // Issue #135: gradient clipping is DEFERRED to post-accumulation (inside
     // should_step block). Clipping ONCE on the averaged gradients matches
@@ -548,12 +571,15 @@ BatchResult processBatch(
         }
     }
     
-    const auto accumulation = advanceAccumulationOrThrow(ctx.optimizer, accum_steps);
-    const bool should_step = accumulation.should_step;
+    const bool should_step = advanceAccumulationOrThrow(ctx.optimizer, accum_steps);
 
     if (should_step) {
-        const int micro_step_for_log = accumulation.micro_step_for_log;
-        const int accum_steps_for_log = accumulation.accum_steps_for_log;
+        if (ctx.optimizer.accumulation_position != accum_steps) {
+            throw std::runtime_error(
+                "FATAL: optimizer step requested before accumulation window completed (completed=" +
+                std::to_string(ctx.optimizer.accumulation_position) + " required=" +
+                std::to_string(accum_steps) + ")");
+        }
         
         // Global clipping on accumulated + 1/M-scaled gradients.
         // Norm measurement, global aggregation, and gradient scaling all happen
@@ -563,10 +589,7 @@ BatchResult processBatch(
             cudaStream_t clip_stream = clip_ts.stream_ctrl.getPrimaryStream();
             auto& clip_groups = ctx.model->parameterGroups();
 
-            if (!clip_ts.grad_norm_scratch) {
-                throw std::runtime_error("[FATAL] grad_norm_scratch is NULL at clipping stage - "
-                                         "diagnostic norm should have allocated it");
-            }
+            ensureTrainingLoopGradNormScratch(ctx, batch_idx);
 
             GRIM::GradClip::ClipConfig clip_cfg;
             clip_cfg.max_rms = effective_per_token_limit;
@@ -576,7 +599,6 @@ BatchResult processBatch(
                 clip_ts.grad_norm_scratch, clip_cfg, clip_stream);
 
             result.grad_rms = clip.global_rms_post;
-            result.normalized_grad_rms = clip.global_rms_post;
             result.gradient_clipped = clip.any_clipped();
         }
         
@@ -628,7 +650,7 @@ BatchResult processBatch(
 
         // Tape flush at end of processBatch is the safety flush.
         GRIM::Diagnostics::runOptimizerMomentDiagnostic(
-            ctx, batch_idx, micro_step_for_log, accum_steps_for_log, sync_diag);
+            ctx, batch_idx, accum_steps, sync_diag);
 
         // Post-optimizer LM-head sample, GradTrace POST log, [UpdateMag],
         // and per-component Adam update_rms trace (Issue #150).
@@ -665,7 +687,7 @@ BatchResult processBatch(
         tel_input.learning_rate     = result.learning_rate;
         tel_input.total_tokens      = payload.token_stats.total_tokens;
         tel_input.enc_rms_pre       = enc_rms_pre;
-        tel_input.optimizer_step    = static_cast<int>(ctx.optimizer.optimizer_state.step);
+        tel_input.optimizer_step    = optimizer_step;
         tel_input.should_step       = should_step;
         tel_input.total_loss_value  = loss_result.loss_value;
         tel_input.aux_loss          = loss_result.aux_loss;

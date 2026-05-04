@@ -4,9 +4,119 @@
 #include <cmath>
 #include <cstring>
 
+void OverlayRenderer::ensureGlassMask(PanelGlassCache& cache, int width, int height, float radius)
+{
+    const size_t needed = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (cache.maskW == width && cache.maskH == height && cache.maskRadius == radius &&
+        cache.roundedMask.size() >= needed && cache.edgeAlpha.size() >= needed)
+        return;
+
+    cache.maskW = width;
+    cache.maskH = height;
+    cache.maskRadius = radius;
+    cache.roundedMask.assign(needed, 0);
+    cache.edgeAlpha.assign(needed, 0);
+
+    const float maxR = std::min(static_cast<float>(width), static_cast<float>(height)) * 0.5f;
+    const float r = std::min(radius, maxR);
+    const float cx = static_cast<float>(width) * 0.5f;
+    const float cy = static_cast<float>(height) * 0.5f;
+    const float hx = static_cast<float>(width) * 0.5f - r;
+    const float hy = static_cast<float>(height) * 0.5f - r;
+
+    for (int y = 0; y < height; ++y) {
+        const float py = static_cast<float>(y) + 0.5f;
+        for (int x = 0; x < width; ++x) {
+            const float px = static_cast<float>(x) + 0.5f;
+            const float qx = std::abs(px - cx) - hx;
+            const float qy = std::abs(py - cy) - hy;
+            const float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
+                                         std::max(qy, 0.0f) * std::max(qy, 0.0f))
+                             + std::min(std::max(qx, qy), 0.0f) - r;
+            if (dist > 0.0f)
+                continue;
+
+            const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+            cache.roundedMask[idx] = 1;
+            cache.edgeAlpha[idx] = static_cast<uint8_t>(std::round(std::min(1.0f, -dist) * 255.0f));
+        }
+    }
+}
+
+void OverlayRenderer::ensureGlassDistortionOffsets(PanelGlassCache& cache, int width, int height, int blurRadius)
+{
+    const size_t needed = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (cache.distortionW == width && cache.distortionH == height &&
+        cache.distortionBlurRadius == blurRadius && cache.distortedSourceIndex.size() >= needed)
+        return;
+
+    cache.distortionW = width;
+    cache.distortionH = height;
+    cache.distortionBlurRadius = blurRadius;
+    cache.distortedSourceIndex.assign(needed, 0);
+
+    const float distortPx = static_cast<float>(blurRadius) / 10.0f;
+    constexpr uint32_t kDistortionSeed = 0xA53C9E17u;
+
+    auto hash01 = [](uint32_t v) -> float {
+        v ^= (v >> 16);
+        v *= 0x7feb352du;
+        v ^= (v >> 15);
+        v *= 0x846ca68bu;
+        v ^= (v >> 16);
+        return (v & 0x00FFFFFFu) / 16777215.0f;
+    };
+    auto gridNoise = [&](int gx, int gy) -> float {
+        uint32_t v = static_cast<uint32_t>(gx) * 374761393u ^
+                     static_cast<uint32_t>(gy) * 668265263u ^ kDistortionSeed;
+        return hash01(v);
+    };
+    auto smoothstep = [](float t) -> float { return t * t * (3.0f - 2.0f * t); };
+    auto sampleNoise = [&](float u, float v) -> float {
+        constexpr float scale = 1.0f / 46.0f;
+        float xg = u * scale;
+        float yg = v * scale;
+        int x0 = static_cast<int>(std::floor(xg));
+        int y0 = static_cast<int>(std::floor(yg));
+        float tx = xg - static_cast<float>(x0);
+        float ty = yg - static_cast<float>(y0);
+        float sx = smoothstep(tx);
+        float sy = smoothstep(ty);
+        float n00 = gridNoise(x0,     y0);
+        float n10 = gridNoise(x0 + 1, y0);
+        float n01 = gridNoise(x0,     y0 + 1);
+        float n11 = gridNoise(x0 + 1, y0 + 1);
+        float nx0 = n00 + (n10 - n00) * sx;
+        float nx1 = n01 + (n11 - n01) * sx;
+        return nx0 + (nx1 - nx0) * sy;
+    };
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const float u = static_cast<float>(x);
+            const float v = static_cast<float>(y);
+            constexpr float eps = 1.35f;
+            const float nL = sampleNoise(u - eps, v);
+            const float nR = sampleNoise(u + eps, v);
+            const float nU = sampleNoise(u, v - eps);
+            const float nD = sampleNoise(u, v + eps);
+            const float gx = nR - nL;
+            const float gy = nD - nU;
+
+            const float ox = std::max(-1.0f, std::min(1.0f, gx * 2.0f)) * distortPx;
+            const float oy = std::max(-1.0f, std::min(1.0f, gy * 2.0f)) * distortPx;
+
+            const int sx = std::clamp(static_cast<int>(static_cast<float>(x) + ox), 0, width - 1);
+            const int sy = std::clamp(static_cast<int>(static_cast<float>(y) + oy), 0, height - 1);
+            cache.distortedSourceIndex[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)] =
+                sy * width + sx;
+        }
+    }
+}
+
 void OverlayRenderer::blitCachedToPanel(int rx, int ry, int capW, int capH,
                                         const std::vector<uint32_t>& cachedPixels,
-                                        const Vec2& pos, const Vec2& size, float radius)
+                                        const PanelGlassCache& shapeCache)
 {
     if (!m_pixels || cachedPixels.size() < static_cast<size_t>(capW * capH))
         return;
@@ -15,34 +125,18 @@ void OverlayRenderer::blitCachedToPanel(int rx, int ry, int capW, int capH,
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
     ClipRect clip = activeClip();
 
-    float maxR = std::min(size.x, size.y) * 0.5f;
-    float r = std::min(radius, maxR);
-    float cx = pos.x + size.x * 0.5f;
-    float cy = pos.y + size.y * 0.5f;
-    float hx = size.x * 0.5f - r;
-    float hy = size.y * 0.5f - r;
-
     int ix1 = std::max(clip.x1, rx);
     int iy1 = std::max(clip.y1, ry);
     int ix2 = std::min(clip.x2, rx + capW);
     int iy2 = std::min(clip.y2, ry + capH);
 
     for (int y = iy1; y < iy2; ++y) {
-        float py = y + 0.5f;
         int sy0 = y - ry;
         for (int x = ix1; x < ix2; ++x) {
-            float px = x + 0.5f;
-
-            float qx = std::abs(px - cx) - hx;
-            float qy = std::abs(py - cy) - hy;
-            float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
-                                   std::max(qy, 0.0f) * std::max(qy, 0.0f))
-                         + std::min(std::max(qx, qy), 0.0f) - r;
-            if (dist > 0.0f) continue;
-
             int sx = x - rx;
             int sy = sy0;
-            if (sx >= 0 && sx < capW && sy >= 0 && sy < capH)
+            const size_t maskIndex = static_cast<size_t>(sy) * static_cast<size_t>(capW) + static_cast<size_t>(sx);
+            if (shapeCache.roundedMask[maskIndex] != 0)
                 pixels[y * m_width + x] = cachedPixels[sy * capW + sx];
         }
     }
@@ -103,6 +197,11 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
 #endif
 
     const bool useDesktopCapture = haveOverlayHandle && !m_usePlatformBlur;
+    PanelGlassCache* activeGlassCache = nullptr;
+    if (!useDesktopCapture && rw > 0 && rh > 0) {
+        ensureGlassMask(m_transientGlassCache, std::max(1, rw), std::max(1, rh), radius);
+        activeGlassCache = &m_transientGlassCache;
+    }
 
     if (useDesktopCapture) {
         constexpr uint64_t kGlassRefreshFrames = 6;
@@ -128,13 +227,18 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
         bool shouldRefreshGlass = !hasPanelCache ||
                                   (m_frameIndex - lastRefreshFrame) >= kGlassRefreshFrames;
 
+        PanelGlassCache& shapeCache = (panelId != 0) ? m_glassCache[panelId] : m_transientGlassCache;
+        ensureGlassMask(shapeCache, capW, capH, radius);
+        ensureGlassDistortionOffsets(shapeCache, capW, capH, blurRadius);
+        activeGlassCache = &shapeCache;
+
         if (!shouldRefreshGlass && hasCachedPanel && panelId != 0) {
             auto it = m_glassCache.find(panelId);
-            blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, pos, size, radius);
+            blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, it->second);
         } else if (deferGlassRefresh) {
             if (hasCachedPanel && panelId != 0) {
                 auto it = m_glassCache.find(panelId);
-                blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, pos, size, radius);
+                blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, it->second);
             }
         } else {
             if (m_captureTemp.size() < needed) m_captureTemp.resize(needed);
@@ -152,7 +256,7 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
                 float delta = averageBackdropSampleDelta(m_captureTemp, needed, it->second.sourceSamples);
                 if (delta < kBackdropDeltaThreshold) {
                     it->second.lastRefreshFrame = m_frameIndex;
-                    blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, pos, size, radius);
+                    blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, it->second);
                     ok = false;
                 }
             }
@@ -163,82 +267,21 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
                     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
                     ClipRect clip = activeClip();
 
-                    float maxR = std::min(size.x, size.y) * 0.5f;
-                    float r = std::min(radius, maxR);
-                    float cx = pos.x + size.x * 0.5f;
-                    float cy = pos.y + size.y * 0.5f;
-                    float hx = size.x * 0.5f - r;
-                    float hy = size.y * 0.5f - r;
-
                     int ix1 = std::max(clip.x1, rx);
                     int iy1 = std::max(clip.y1, ry);
                     int ix2 = std::min(clip.x2, rx + capW);
                     int iy2 = std::min(clip.y2, ry + capH);
 
-                    const float distortPx = float(blurRadius) / 10.0f;
-
-                    auto hash01 = [](uint32_t v) -> float {
-                        v ^= (v >> 16);
-                        v *= 0x7feb352du;
-                        v ^= (v >> 15);
-                        v *= 0x846ca68bu;
-                        v ^= (v >> 16);
-                        return (v & 0x00FFFFFFu) / 16777215.0f;
-                    };
-                    auto gridNoise = [&](int gx, int gy) -> float {
-                        uint32_t v = (uint32_t)gx * 374761393u ^ (uint32_t)gy * 668265263u ^ m_grainSeed;
-                        return hash01(v);
-                    };
-                    auto smoothstep = [](float t) -> float { return t * t * (3.0f - 2.0f * t); };
-                    auto sampleNoise = [&](float u, float v) -> float {
-                        const float scale = 1.0f / 46.0f;
-                        float xg = u * scale;
-                        float yg = v * scale;
-                        int x0 = (int)std::floor(xg);
-                        int y0 = (int)std::floor(yg);
-                        float tx = xg - x0;
-                        float ty = yg - y0;
-                        float sx = smoothstep(tx);
-                        float sy = smoothstep(ty);
-                        float n00 = gridNoise(x0,     y0);
-                        float n10 = gridNoise(x0 + 1, y0);
-                        float n01 = gridNoise(x0,     y0 + 1);
-                        float n11 = gridNoise(x0 + 1, y0 + 1);
-                        float nx0 = n00 + (n10 - n00) * sx;
-                        float nx1 = n01 + (n11 - n01) * sx;
-                        return nx0 + (nx1 - nx0) * sy;
-                    };
-
                     for (int y = iy1; y < iy2; ++y) {
-                        float py = y + 0.5f;
                         int sy0 = y - ry;
                         for (int x = ix1; x < ix2; ++x) {
-                            float px = x + 0.5f;
+                            const int lx = x - rx;
+                            const int ly = sy0;
+                            const size_t localIndex = static_cast<size_t>(ly) * static_cast<size_t>(capW) + static_cast<size_t>(lx);
+                            if (shapeCache.roundedMask[localIndex] == 0)
+                                continue;
 
-                            float qx = std::abs(px - cx) - hx;
-                            float qy = std::abs(py - cy) - hy;
-                            float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
-                                                   std::max(qy, 0.0f) * std::max(qy, 0.0f))
-                                         + std::min(std::max(qx, qy), 0.0f) - r;
-                            if (dist > 0.0f) continue;
-
-                            float u = (float)(x - rx);
-                            float v = (float)(y - ry);
-                            const float eps = 1.35f;
-                            float nL = sampleNoise(u - eps, v);
-                            float nR = sampleNoise(u + eps, v);
-                            float nU = sampleNoise(u, v - eps);
-                            float nD = sampleNoise(u, v + eps);
-                            float gx = (nR - nL);
-                            float gy = (nD - nU);
-
-                            float ox = std::max(-1.0f, std::min(1.0f, gx * 2.0f)) * distortPx;
-                            float oy = std::max(-1.0f, std::min(1.0f, gy * 2.0f)) * distortPx;
-
-                            int sx = std::clamp((int)((x - rx) + ox), 0, capW - 1);
-                            int sy = std::clamp((int)(sy0 + oy), 0, capH - 1);
-
-                            pixels[y * m_width + x] = m_captureTemp[sy * capW + sx];
+                            pixels[y * m_width + x] = m_captureTemp[static_cast<size_t>(shapeCache.distortedSourceIndex[localIndex])];
                         }
                     }
                 }
@@ -275,7 +318,7 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
                 }
             } else if (hasCachedPanel && panelId != 0) {
                 auto it = m_glassCache.find(panelId);
-                blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, pos, size, radius);
+                blitCachedToPanel(rx, ry, capW, capH, it->second.pixels, it->second);
             }
         }
     }
@@ -288,52 +331,41 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
     uint32_t glassTint = (bgColor & 0x00FFFFFF) | ((uint32_t)(ba * 40 / 100) << 24);
     drawRoundedRect(pos, size, glassTint, radius);
 
-    if (useDesktopCapture) {
-        applyGlassGrain(pos, size, radius, 0.28f);
+    if (useDesktopCapture && activeGlassCache) {
+        applyGlassGrain(pos, size, *activeGlassCache, 0.28f);
     }
 
     if (glowColor != 0) {
         std::lock_guard<std::mutex> lock(m_renderMutex);
-        if (m_pixels) {
+        if (m_pixels && activeGlassCache) {
             uint8_t ga = (glowColor >> 24) & 0xFF;
             uint8_t gr = (glowColor >> 16) & 0xFF;
             uint8_t gg = (glowColor >> 8) & 0xFF;
             uint8_t gb = glowColor & 0xFF;
 
             float gradientHeight = size.y * 0.25f;
-            float maxR = std::min(size.x, size.y) * 0.5f;
-            float r = std::min(radius, maxR);
 
             ClipRect clip = activeClip();
             uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
 
-            float cx = pos.x + size.x * 0.5f;
-            float cy = pos.y + size.y * 0.5f;
-            float hx = size.x * 0.5f - r;
-            float hy = size.y * 0.5f - r;
-
-            int ix1 = std::max(clip.x1, (int)pos.x);
-            int iy1 = std::max(clip.y1, (int)pos.y);
-            int ix2 = std::min(clip.x2, (int)(pos.x + size.x));
-            int iy2 = std::min(clip.y2, (int)(pos.y + gradientHeight));
+            const int gx = (int)pos.x;
+            const int gy = (int)pos.y;
+            int ix1 = std::max(clip.x1, gx);
+            int iy1 = std::max(clip.y1, gy);
+            int ix2 = std::min(clip.x2, gx + activeGlassCache->maskW);
+            int iy2 = std::min(clip.y2, std::min(gy + activeGlassCache->maskH, (int)(pos.y + gradientHeight)));
 
             for (int y = iy1; y < iy2; ++y) {
-                float py = y + 0.5f;
-                float vt = (py - pos.y) / gradientHeight;
+                float vt = ((float)y + 0.5f - pos.y) / gradientHeight;
                 float vFade = (1.0f - vt) * (1.0f - vt) * (1.0f - vt);
 
                 for (int x = ix1; x < ix2; ++x) {
-                    float px = x + 0.5f;
-
-                    float qx = std::abs(px - cx) - hx;
-                    float qy = std::abs(py - cy) - hy;
-                    float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
-                                           std::max(qy, 0.0f) * std::max(qy, 0.0f))
-                                 + std::min(std::max(qx, qy), 0.0f) - r;
-
-                    if (dist > 0.0f) continue;
-
-                    float edgeFade = std::min(1.0f, -dist);
+                    const int lx = x - gx;
+                    const int ly = y - gy;
+                    const size_t localIndex = static_cast<size_t>(ly) * static_cast<size_t>(activeGlassCache->maskW) + static_cast<size_t>(lx);
+                    if (activeGlassCache->roundedMask[localIndex] == 0)
+                        continue;
+                    float edgeFade = static_cast<float>(activeGlassCache->edgeAlpha[localIndex]) / 255.0f;
                     uint8_t pixelAlpha = (uint8_t)(ga * vFade * edgeFade);
                     if (pixelAlpha == 0) continue;
 
@@ -363,7 +395,8 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
     drawRoundedBorder(pos, size, borderColor, radius, 1.0f);
 }
 
-void OverlayRenderer::applyGlassGrain(const Vec2& pos, const Vec2& size, float radius, float strength)
+void OverlayRenderer::applyGlassGrain(const Vec2& pos, const Vec2& size,
+                                      const PanelGlassCache& shapeCache, float strength)
 {
     std::lock_guard<std::mutex> lock(m_renderMutex);
     if (!m_pixels || strength <= 0.0f || size.x <= 0 || size.y <= 0)
@@ -374,17 +407,12 @@ void OverlayRenderer::applyGlassGrain(const Vec2& pos, const Vec2& size, float r
     ClipRect clip = activeClip();
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
 
-    float maxR = std::min(size.x, size.y) * 0.5f;
-    float r = std::min(radius, maxR);
-    float cx = pos.x + size.x * 0.5f;
-    float cy = pos.y + size.y * 0.5f;
-    float hx = size.x * 0.5f - r;
-    float hy = size.y * 0.5f - r;
-
-    int ix1 = std::max(clip.x1, (int)pos.x);
-    int iy1 = std::max(clip.y1, (int)pos.y);
-    int ix2 = std::min(clip.x2, (int)(pos.x + size.x));
-    int iy2 = std::min(clip.y2, (int)(pos.y + size.y));
+    const int gx = (int)pos.x;
+    const int gy = (int)pos.y;
+    int ix1 = std::max(clip.x1, gx);
+    int iy1 = std::max(clip.y1, gy);
+    int ix2 = std::min(clip.x2, gx + shapeCache.maskW);
+    int iy2 = std::min(clip.y2, gy + shapeCache.maskH);
 
     auto clamp8 = [](int v) -> uint8_t { return (uint8_t)std::min(255, std::max(0, v)); };
 
@@ -392,19 +420,14 @@ void OverlayRenderer::applyGlassGrain(const Vec2& pos, const Vec2& size, float r
     if (amp < 1) amp = 1;
 
     for (int y = iy1; y < iy2; ++y) {
-        float py = y + 0.5f;
         for (int x = ix1; x < ix2; ++x) {
-            float px = x + 0.5f;
-
-            float qx = std::abs(px - cx) - hx;
-            float qy = std::abs(py - cy) - hy;
-            float dist = std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) +
-                                   std::max(qy, 0.0f) * std::max(qy, 0.0f))
-                         + std::min(std::max(qx, qy), 0.0f) - r;
-            if (dist > 0.0f)
+            const int lx = x - gx;
+            const int ly = y - gy;
+            const size_t localIndex = static_cast<size_t>(ly) * static_cast<size_t>(shapeCache.maskW) + static_cast<size_t>(lx);
+            if (shapeCache.roundedMask[localIndex] == 0)
                 continue;
 
-            float edge = std::min(1.0f, -dist);
+            float edge = static_cast<float>(shapeCache.edgeAlpha[localIndex]) / 255.0f;
             float edgeFade = 0.35f + 0.65f * std::min(1.0f, edge * 2.0f);
 
             uint32_t h = (uint32_t)(x * 374761393u) ^ (uint32_t)(y * 668265263u) ^ m_grainSeed;

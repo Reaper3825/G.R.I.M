@@ -61,7 +61,6 @@ struct BatchResult {
     int batch_idx = 0;
     float loss = 0.0f;
     float grad_rms = 0.0f;
-    float normalized_grad_rms = 0.0f;
     float learning_rate = 0.0f;
     int sequences_processed = 0;
     int tokens_processed = 0;
@@ -122,6 +121,11 @@ struct TrainingLoopState {
     
     // Last gradient RMS for growth detection
     float last_grad_rms = 0.0f;
+
+    // Embedding-spike diagnostic state. Updated only when the expensive
+    // diagnostic actually runs; never advanced by skipped diagnostic batches.
+    float prev_emb_rms_for_spike_diag = 0.0f;
+    bool has_prev_emb_rms_for_spike_diag = false;
 
     // Last optimizer step that emitted a sample
     int last_sample_step = -1;

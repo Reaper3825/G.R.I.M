@@ -463,7 +463,7 @@ void releaseResources(TrainingContext& ctx) {
     ctx.data.val_seq_lengths.clear();
     EmitModuleInfo(ModuleId::Training, "✓ Training data released", ctx.global_step);
     
-    // Note: Gradient accumulation now tracked via current_micro_step counter in OptimizerContext
+    // Note: Gradient accumulation is tracked by OptimizerContext::accumulation_position.
     // No separate grad_controller to release
     EmitModuleInfo(ModuleId::Training, "✓ Gradient state released", ctx.global_step);
     

@@ -24,6 +24,31 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 0.9033151865005493,
+      "context": "monitor",
+      "id": 7839645297171050720,
+      "importance": 0.9033151865005493,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\", \"1\"]",
+      "parent_id": 4782712853066859193,
+      "raw": "person#1 labelled [\"a\", \"1\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "system.hw",
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1777828246,
+      "type": "fact"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 0.8688662648200989,
       "context": "monitor",
       "id": 6117601512482540215,
@@ -121,41 +146,16 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.800000011920929,
+      "confidence": 0.8160203695297241,
       "context": "monitor",
-      "id": 16345830255049333101,
-      "importance": 1.0,
-      "intent": "inform",
-      "intent_name": "",
-      "modality": "text",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Sources.cmake - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\n08 er SH5Oeae-\n\ncoe\n\nTasks do 8@\nEvaluate learning signal quality Ww\nImprove Unigram tokenizer dedup 2e\nReview training manifest section 22 ae\nView all (50)\n\nAsk Codex anything, @ to add files, / for co...\n\n+ orssoday Ov % @\n\nBy ov\n\nAe\n\n«>|\n\nQ GRIM\n\n|G sie)\n\nM CMakeliststxt 1M Sources.cmake MX © intent_gatecpp 1M\n\nemake > = Sourcescmake\n94 set(GRIM_HEADERS.\n\nsie D{WARE_REALEND j\nat ${nlp_HEADERS}\n\n12 ${ui_HEADERS}\n\n113 ${bootstrap_HEADERS}\n\na... (2175 total chars)\n",
-      "parent_id": 0,
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Sources.cmake - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\n08 er SH5Oeae-\n\ncoe\n\nTasks do 8@\nEvaluate learning signal quality Ww\nImprove Unigram tokenizer dedup 2e\nReview training manifest section 22 ae\nView all (50)\n\nAsk Codex anything, @ to add files, / for co...\n\n+ orssoday Ov % @\n\nBy ov\n\nAe\n\n«>|\n\nQ GRIM\n\n|G sie)\n\nM CMakeliststxt 1M Sources.cmake MX © intent_gatecpp 1M\n\nemake > = Sourcescmake\n94 set(GRIM_HEADERS.\n\nsie D{WARE_REALEND j\nat ${nlp_HEADERS}\n\n12 ${ui_HEADERS}\n\n113 ${bootstrap_HEADERS}\n\na... (2175 total chars)\n",
-      "recency_weight": 1.0,
-      "related_ids": [],
-      "source": "grim.internal",
-      "tags": [
-        "visual-context",
-        "screen-capture",
-        "IDE/Code Editor",
-        "Code.exe",
-        "monitor-3"
-      ],
-      "timestamp": 1772909252,
-      "type": "event"
-    },
-    {
-      "comm_type": "unknown",
-      "confidence": 0.6960439085960388,
-      "context": "monitor",
-      "id": 12671202232339465495,
-      "importance": 0.6960439085960388,
+      "id": 12968353429912711637,
+      "importance": 0.8160203695297241,
       "intent": "inform",
       "intent_name": "",
       "modality": "vision",
-      "normalized": "person#8 labelled [\"to\"]",
-      "parent_id": 5732563858019944405,
-      "raw": "person#8 labelled [\"to\"]",
+      "normalized": "person#1 labelled [\"bd\"]",
+      "parent_id": 7225202196510746112,
+      "raw": "person#1 labelled [\"bd\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "source": "system.hw",
@@ -164,9 +164,9 @@
         "perception",
         "ocr",
         "class:person",
-        "object:8"
+        "object:1"
       ],
-      "timestamp": 1777064748,
+      "timestamp": 1777064463,
       "type": "fact"
     },
     {
@@ -196,16 +196,16 @@
     },
     {
       "comm_type": "unknown",
-      "confidence": 0.8160203695297241,
+      "confidence": 0.6960439085960388,
       "context": "monitor",
-      "id": 12968353429912711637,
-      "importance": 0.8160203695297241,
+      "id": 12671202232339465495,
+      "importance": 0.6960439085960388,
       "intent": "inform",
       "intent_name": "",
       "modality": "vision",
-      "normalized": "person#1 labelled [\"bd\"]",
-      "parent_id": 7225202196510746112,
-      "raw": "person#1 labelled [\"bd\"]",
+      "normalized": "person#8 labelled [\"to\"]",
+      "parent_id": 5732563858019944405,
+      "raw": "person#8 labelled [\"to\"]",
       "recency_weight": 1.0,
       "related_ids": [],
       "source": "system.hw",
@@ -214,10 +214,35 @@
         "perception",
         "ocr",
         "class:person",
-        "object:1"
+        "object:8"
       ],
-      "timestamp": 1777064463,
+      "timestamp": 1777064748,
       "type": "fact"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.800000011920929,
+      "context": "monitor",
+      "id": 16345830255049333101,
+      "importance": 1.0,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "text",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Sources.cmake - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\n08 er SH5Oeae-\n\ncoe\n\nTasks do 8@\nEvaluate learning signal quality Ww\nImprove Unigram tokenizer dedup 2e\nReview training manifest section 22 ae\nView all (50)\n\nAsk Codex anything, @ to add files, / for co...\n\n+ orssoday Ov % @\n\nBy ov\n\nAe\n\n«>|\n\nQ GRIM\n\n|G sie)\n\nM CMakeliststxt 1M Sources.cmake MX © intent_gatecpp 1M\n\nemake > = Sourcescmake\n94 set(GRIM_HEADERS.\n\nsie D{WARE_REALEND j\nat ${nlp_HEADERS}\n\n12 ${ui_HEADERS}\n\n113 ${bootstrap_HEADERS}\n\na... (2175 total chars)\n",
+      "parent_id": 0,
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Sources.cmake - G.R.I.M - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help\n\n08 er SH5Oeae-\n\ncoe\n\nTasks do 8@\nEvaluate learning signal quality Ww\nImprove Unigram tokenizer dedup 2e\nReview training manifest section 22 ae\nView all (50)\n\nAsk Codex anything, @ to add files, / for co...\n\n+ orssoday Ov % @\n\nBy ov\n\nAe\n\n«>|\n\nQ GRIM\n\n|G sie)\n\nM CMakeliststxt 1M Sources.cmake MX © intent_gatecpp 1M\n\nemake > = Sourcescmake\n94 set(GRIM_HEADERS.\n\nsie D{WARE_REALEND j\nat ${nlp_HEADERS}\n\n12 ${ui_HEADERS}\n\n113 ${bootstrap_HEADERS}\n\na... (2175 total chars)\n",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "grim.internal",
+      "tags": [
+        "visual-context",
+        "screen-capture",
+        "IDE/Code Editor",
+        "Code.exe",
+        "monitor-3"
+      ],
+      "timestamp": 1772909252,
+      "type": "event"
     },
     {
       "comm_type": "unknown",
@@ -1165,6 +1190,31 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 0.9104011058807373,
+      "context": "monitor",
+      "id": 3700461272100725561,
+      "importance": 0.9104011058807373,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\", \"o\"]",
+      "parent_id": 9570062928167028331,
+      "raw": "person#1 labelled [\"a\", \"o\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "system.hw",
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1777831122,
+      "type": "fact"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 0.800000011920929,
       "context": "monitor",
       "id": 10365439284973610746,
@@ -1793,6 +1843,31 @@
         "object:1"
       ],
       "timestamp": 1777064466,
+      "type": "fact"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.8971527218818665,
+      "context": "monitor",
+      "id": 5573841280765728586,
+      "importance": 0.8971527218818665,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"o\", \"1\"]",
+      "parent_id": 4782712853066859193,
+      "raw": "person#1 labelled [\"o\", \"1\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "system.hw",
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1777828253,
       "type": "fact"
     },
     {
@@ -3045,6 +3120,56 @@
       ],
       "timestamp": 1777689229,
       "type": "command"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.9381347894668579,
+      "context": "monitor",
+      "id": 3076279329586890334,
+      "importance": 0.9381347894668579,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"a\"]",
+      "parent_id": 9570062928167028331,
+      "raw": "person#1 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "system.hw",
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1777830392,
+      "type": "fact"
+    },
+    {
+      "comm_type": "unknown",
+      "confidence": 0.917512059211731,
+      "context": "monitor",
+      "id": 12005549497849799051,
+      "importance": 0.917512059211731,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "vision",
+      "normalized": "person#1 labelled [\"on\"]",
+      "parent_id": 9570062928167028331,
+      "raw": "person#1 labelled [\"on\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "system.hw",
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:1"
+      ],
+      "timestamp": 1777830788,
+      "type": "fact"
     }
   ]
 }

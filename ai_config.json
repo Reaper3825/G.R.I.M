@@ -81,13 +81,13 @@
         "sub_models": [
             {
                 "backend_type": "in_process_vision",
-                "description": "COCO-class axis-aligned object detection (80 classes). Hosted in-process by PhysicalPerceptionPrimitivesLoop via OpenCV cv::dnn.",
+                "description": "COCO-class axis-aligned object detection (80 classes). Hosted in-process by PhysicalPerceptionPrimitivesLoop via OpenCV cv::dnn. Uses a static 1x3x640x640 YOLOv8n ONNX simplified for OpenCV 4.11; the dynamic opset-22 export fails OpenCV import at /model.12/Concat.",
                 "estimated_ram_mb": 64,
                 "estimated_vram_mb": 0,
                 "id": "vision-object-detector",
                 "kind": "vision",
-                "model_path": "resources/models/vision/yolov8n.onnx",
-                "name": "YOLOv8n Object Detector",
+                "model_path": "resources/models/vision/yolov8n_opencv_static.onnx",
+                "name": "YOLOv8n Object Detector (OpenCV static)",
                 "subject": "vision",
                 "subject_tags": [
                     "vision",
@@ -96,7 +96,7 @@
                 ],
                 "url": "",
                 "usage_weight": 1.0,
-                "version": "8.0",
+                "version": "8.0-opencv-static",
                 "vision": {
                     "class_names_path": "resources/models/vision/coco.names",
                     "confidence_threshold": 0.25,

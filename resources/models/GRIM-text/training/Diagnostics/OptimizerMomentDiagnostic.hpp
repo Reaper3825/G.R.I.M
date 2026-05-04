@@ -31,8 +31,7 @@ MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync
 void runOptimizerMomentDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     int batch_idx,
-    int micro_step_for_log,
-    int accum_steps_for_log,
+    int accumulation_window_micro_batches,
     bool sync_diag);
 
 } // namespace GRIM::Diagnostics

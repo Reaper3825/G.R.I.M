@@ -45,12 +45,18 @@ void LazyInitLocked(PhysicalEnvironmentState& s) {
     if (s.initialized) return;
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
               "TickPhysicalEnvironment: first call — running lazy init");
-    try {
-        s.directory = RefreshPhysicalCameraDirectory(s.device_server);
-    } catch (const std::exception& e) {
-        s.last_error_reason = std::string("lazy directory refresh failed: ") + e.what();
-        LOG_ERROR(PHYSICAL_ENV_LOG_TAG, s.last_error_reason);
-        // Initialization continues — the UI can re-request a refresh.
+    if (s.directory.empty()) {
+        try {
+            s.directory = RefreshPhysicalCameraDirectory(s.device_server);
+        } catch (const std::exception& e) {
+            s.last_error_reason = std::string("lazy directory refresh failed: ") + e.what();
+            LOG_ERROR(PHYSICAL_ENV_LOG_TAG, s.last_error_reason);
+            // Initialization continues — the UI can re-request a refresh.
+        }
+    } else {
+        LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+                  "TickPhysicalEnvironment: lazy init reusing preloaded camera directory ("
+                  + std::to_string(s.directory.size()) + " entries)");
     }
     s.initialized = true;
 }

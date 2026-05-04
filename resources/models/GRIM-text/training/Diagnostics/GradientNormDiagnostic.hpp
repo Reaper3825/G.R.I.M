@@ -2,8 +2,9 @@
 //  GradientNormDiagnostic.hpp
 //  Synced post-backward gradient-norm measurement plus
 //  the [EMB_GRAD_EQUATION] embedding-spike diagnostic
-//  (Issue #138, #139, #141, #150). Lifted verbatim from
-//  Phase2_TrainingLoop.cu processBatch.
+//  (Issue #138, #139, #141, #150). The diagnostic reads
+//  gradients/metrics and may throw, but result ownership
+//  remains in Phase2_TrainingLoop.
 //======================================================//
 
 #pragma once
@@ -32,21 +33,18 @@ struct GradNormSnapshot {
     GRIM::GradNorm::GradMetrics metrics{};  // raw per-component sums for telemetry
 };
 
-// Runs the full grad-norm sync block:
-//   1. PRE-MEASURE [GRAD_DIAG] sample (LM head pointer match check)
-//   2. lazy-allocate grad_norm_scratch
-//   3. measureGradientNormsLaunch + Finalize (with CUDA event timing)
-//   4. derive per-component RMS values
-//   5. throw on NaN/Inf (Rule 20)
-//   6. emit [GradTrace] COMPONENTS / POST-GRADNORM logs
-//   7. run [EMB_GRAD_EQUATION] diagnostic on diag interval
+// Runs the grad-norm sync block:
+//   1. validate caller-owned grad_norm_scratch and all registered grad buffers
+//   2. measureGradientNormsLaunch + one required stream sync + Finalize
+//   3. derive RMS from the same registered groups consumed by clipping
+//   4. throw on empty/non-finite gradients (Rule 20)
+//   5. emit gated [GradTrace] logs
+//   6. run [EMB_GRAD_EQUATION] diagnostic on the shared sync interval
 //
-// Side effects on result: sets result.grad_rms and result.normalized_grad_rms.
 // Reads state.last_grad_rms only for the PRE-GRADNORM log line.
 GradNormSnapshot runGradientNormDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
-    const GRIMText::Training::TrainingLoopState& state,
-    GRIMText::Training::BatchResult& result,
+    GRIMText::Training::TrainingLoopState& state,
     int batch_idx);
 
 } // namespace GRIM::Diagnostics

@@ -16,7 +16,7 @@ struct ResumeState {
     int global_step = 0;
     float best_val_loss = 0.0f;
     int epochs_completed = 0;
-    int micro_step = 0;
+    int accumulation_position = 0;
 };
 
 ResumeState captureResumeState(const TrainingContext& ctx);

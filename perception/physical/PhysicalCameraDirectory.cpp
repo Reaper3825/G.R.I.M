@@ -36,12 +36,20 @@ std::vector<int> LocalDeviceBackendsToTry() {
 #if defined(__APPLE__)
     cv::CAP_AVFOUNDATION,
 #elif defined(_WIN32)
-    cv::CAP_DSHOW,
-    cv::CAP_MSMF,
+    // OpenCV 4.11 on this Windows build reports DSHOW/MSMF as available, then
+    // emits "backend ... can't be used to capture by index" when probed with
+    // cap.open(index, backend). Repeated by-index probes happen during startup
+    // directory refresh and have produced native access violations before C++
+    // can catch anything. Directory enumeration therefore uses CAP_ANY only;
+    // manual URLs can still be added later if a backend-specific path is proven
+    // safe on a host.
+    cv::CAP_ANY,
 #else
     cv::CAP_V4L2,
 #endif
+#if !defined(_WIN32)
     cv::CAP_ANY
+#endif
     };
 }
 

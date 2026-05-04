@@ -48,7 +48,7 @@ struct OptFileHeader {
     int32_t  global_step;
     float    best_val_loss;
     int32_t  current_epoch;
-    int32_t  micro_step;
+    int32_t  accumulation_position;
     uint8_t  reserved[RESERVED_BYTES];
 };
 #pragma pack(pop)
@@ -110,7 +110,7 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
     header.global_step    = ctx.global_step;
     header.best_val_loss  = ctx.best_val_loss;
     header.current_epoch  = ctx.epochs_completed;
-    header.micro_step     = ctx.optimizer.current_micro_step;
+    header.accumulation_position = ctx.optimizer.accumulation_position;
     std::memset(header.reserved, 0, RESERVED_BYTES);
 
     // Open file
@@ -361,7 +361,7 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
     ctx.global_step                    = header.global_step;
     ctx.best_val_loss                  = header.best_val_loss;
     ctx.epochs_completed               = header.current_epoch;
-    ctx.optimizer.current_micro_step   = header.micro_step;
+    ctx.optimizer.accumulation_position = header.accumulation_position;
 
     EmitModuleInfo(ModuleId::Checkpoint,
         "✓ Optimizer state restored from " + sidecar_path +
@@ -369,7 +369,7 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
         ", global_step=" + std::to_string(header.global_step) +
         ", best_val_loss=" + std::to_string(header.best_val_loss) +
         ", epoch=" + std::to_string(header.current_epoch) +
-        ", micro_step=" + std::to_string(header.micro_step) +
+        ", accumulation_position=" + std::to_string(header.accumulation_position) +
         ", groups=" + std::to_string(header.num_groups) + ")",
         ctx.global_step);
 
