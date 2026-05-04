@@ -44,7 +44,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 - [x] **Phase1_Startup.cu / Phase1_Startup.hpp** ✅ AUDITED
   - Configuration loading from ai_config.json
   - Path validation (model, data, checkpoint dirs)
-  - **Issue #106**: Reseeding W_qkv with 1/sqrt(d_model) scaling - ✅ Applied (xavier_seed passed to initializeAutogradTensors)
+  - **Issue #106**: Reseeding W_qkv with 1/sqrt(d_model) scaling - ✅ Applied (`ctx.rng.init_seed` passes directly into `LanguageModel::initGPU(weight_init_seed)`)
   - **Issue #107**: Fixed LCG PRNG correlation with splitmix64 - ✅ Applied (Tensor::xavier_uniform_() with Philox PRNG)
   - **Issue #110**: PCGrad buffer allocation for tied embeddings - ✅ Applied (allocatePCGradBuffer + g_skip_embedding_backward=false)
   - **Rule 20**: max_seq_len defaults changed from 512 → 0 - ✅ Verified (defaults=0, throws if still 0)
@@ -164,9 +164,9 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Shared/TrainingState/TrainingStateGPU.cu** ✅ AUDITED & FIXED (4 passes)
   - Allocates GPU buffers, cuBLAS handle, CUDA streams
-  - Allocates: gradient buffers, optimizer state (m, v), intermediate tensors
+  - Allocates: optimizer state (m, v), cache/workspace tensors
   - **Audit Summary (8 prior findings, all fixed):**
-    - Removed silent `catch(...)` in `zeroIntermediateGrads()` — if unallocated tensors occur, that's now a real error, not swallowed.
+    - Deleted `zeroIntermediateGrads()` and the dead TrainingState-owned activation/logits gradient buffers. TensorContract owns activation/intermediate gradient lifecycle through `Tensor.grad_` and `GradFn` scratch.
     - Removed hardcoded `d_model=768` fallback in `logGradientAttribution()` — now throws if embedding shape is invalid.
     - Fixed Rule 20 violation in `kernel_pcgrad_combine()` — replaced ternary `norm_sq > 1e-12f ?... : 0` with `assert()` to fail loud if LM gradient is near-zero (masking/backward bug detection).
     - Removed wrong comment "DEPRECATED - always nullptr" from `tensors_` — it's actively used by `initializeAutogradTensors()`.

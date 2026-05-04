@@ -1,15 +1,16 @@
 //======================================================//
 //  GradientNormDiagnostic.hpp
-//  Synced post-backward gradient-norm measurement plus
+//  Post-clipping gradient-norm logging plus
 //  the [EMB_GRAD_EQUATION] embedding-spike diagnostic
-//  (Issue #138, #139, #141, #150). The diagnostic reads
-//  gradients/metrics and may throw, but result ownership
-//  remains in Phase2_TrainingLoop.
+//  (Issue #138, #139, #141, #150). The diagnostic consumes
+//  the clipping path's already-measured ClipResult. It never
+//  launches GradNorm kernels. The embedding equation branch is
+//  explicitly sync-safe only under the gated diagnostic interval.
 //======================================================//
 
 #pragma once
 
-#include "../../Shared/GradNorm/GradNormGPU.hpp"
+#include "../../Shared/Gradients/GradientCC_GPU.hpp"
 
 namespace GRIM::Batching { struct BatchPayload; }
 namespace GRIMText { namespace Training {
@@ -20,31 +21,16 @@ namespace GRIMText { namespace Training {
 
 namespace GRIM::Diagnostics {
 
-// Snapshot of the per-component RMS values produced by
-// measureGradientNorms. Returned to the caller so that the
-// telemetry input struct can read preclip_grad_rms / enc_rms_pre
-// without needing access to the raw GradMetrics buffer.
-struct GradNormSnapshot {
-    float grad_rms = 0.0f;          // total RMS across all parameter groups
-    float preclip_grad_rms = 0.0f;  // alias of grad_rms (pre-clipping)
-    float emb_rms_pre = 0.0f;
-    float enc_rms_pre = 0.0f;
-    float sb_rms_pre = 0.0f;
-    GRIM::GradNorm::GradMetrics metrics{};  // raw per-component sums for telemetry
-};
-
-// Runs the grad-norm sync block:
-//   1. validate caller-owned grad_norm_scratch and all registered grad buffers
-//   2. measureGradientNormsLaunch + one required stream sync + Finalize
-//   3. derive RMS from the same registered groups consumed by clipping
-//   4. throw on empty/non-finite gradients (Rule 20)
-//   5. emit gated [GradTrace] logs
-//   6. run [EMB_GRAD_EQUATION] diagnostic on the shared sync interval
-//
-// Reads state.last_grad_rms only for the PRE-GRADNORM log line.
-GradNormSnapshot runGradientNormDiagnostic(
+// Logs gradient norm diagnostics from the ClipResult produced by the global
+// clipping owner. This function only formats/validates/logs. It does not
+// measure gradients, allocate scratch, or mutate BatchResult. The optional
+// embedding equation path performs blocking host inspection only when
+// shouldSyncDiagnostics() is true.
+void runGradientNormClipDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::TrainingLoopState& state,
+    const GRIM::Batching::BatchPayload& payload,
+    const GRIM::GradClip::ClipResult& clip,
     int batch_idx);
 
 } // namespace GRIM::Diagnostics

@@ -14,15 +14,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
+#include <memory>
 #include <string>
+
+#include "../GradNorm/GradNormGPU.hpp"
 
 // Forward declarations — avoid pulling full headers into every translation unit
 namespace GRIM {
     struct ParameterGroup;
     enum class ParamGroupType : uint8_t;
-    namespace GradNorm {
-        struct GradNormScratch;
-    }
 }
 
 //======================================================//
@@ -62,8 +62,12 @@ struct ClipConfig {
 
 /// Result of a clipGradientNorms() call — all values valid immediately on return
 struct ClipResult {
+    size_t measured_group_count = 0;  ///< Number of groups measured by clipGradientNorms()
     float global_rms_pre = 0.0f;
     float global_rms_post = 0.0f;
+    float encoder_rms_pre = 0.0f;
+    float scratchblock_rms_pre = 0.0f;
+    GradNorm::GradMetrics metrics{};
 
     bool clipped = false;
     bool any_clipped() const { return clipped; }
@@ -80,17 +84,17 @@ struct ClipResult {
  *
  * @param groups     ParameterGroup array (from model->parameterGroups())
  * @param num_groups Number of groups in the array
- * @param scratch    Pre-allocated GradNormScratch (from allocateGradNormScratch)
+ * @param scratch    TrainingState-owned GradNormScratch pointer; allocated here if null
  * @param config     Clip threshold
  * @param stream     CUDA stream for all GPU work
- * @return           Pre/post clip metrics
+ * @return           Pre/post clip metrics plus the clipping input group count
  *
  * @throws std::runtime_error on GradNorm measurement failure
  */
 ClipResult clipGradientNorms(
     ParameterGroup* groups,
     size_t num_groups,
-    GradNorm::GradNormScratch* scratch,
+    std::unique_ptr<GradNorm::GradNormScratch>& scratch,
     const ClipConfig& config,
     cudaStream_t stream
 );

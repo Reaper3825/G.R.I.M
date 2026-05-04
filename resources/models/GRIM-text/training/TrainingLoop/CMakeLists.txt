@@ -288,6 +288,8 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../InitTrainingState.cu
     ../TrainingOps.cu
     ../../Shared/Loss/ComputeLoss/ComputeLossBatch.cu
+    ../../Shared/TrainingState/CublasHandleOwner_GPU.cu
+    ../../Shared/TrainingState/DeviceAllocation_GPU.cu
     ../../Shared/TrainingState/TrainingStateGPU.cu
     ../../Shared/TrainingState/Optimizer/OptimizerState_GPU.cu
     ../../Shared/TrainingState/GuessCache/GuessCacheBuffers_GPU.cu

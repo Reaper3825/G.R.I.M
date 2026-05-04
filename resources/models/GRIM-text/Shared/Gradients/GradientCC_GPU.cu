@@ -14,6 +14,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -64,6 +66,54 @@ inline bool validatePointers(const float* gradients, int n)
 inline dim3 computeGrid(int n)
 {
 	return dim3((n + kBlockSize - 1) / kBlockSize);
+}
+
+void ensureGradNormScratchForClip(
+	std::unique_ptr<GRIM::GradNorm::GradNormScratch>& scratch,
+	size_t required_groups,
+	cudaStream_t stream)
+{
+	if (required_groups == 0) {
+		throw std::runtime_error("[GradClip] cannot allocate GradNormScratch for zero parameter groups");
+	}
+
+	if (!scratch) {
+		scratch.reset(GRIM::GradNorm::allocateGradNormScratch(required_groups, stream));
+		if (!scratch) {
+			throw std::runtime_error("[GradClip] allocateGradNormScratch returned NULL");
+		}
+	}
+
+	if (!scratch->d_partial_sums || !scratch->h_partial_sums || !scratch->h_metrics) {
+		throw std::runtime_error("[GradClip] GradNormScratch buffer set is incomplete");
+	}
+	if (scratch->max_groups < required_groups) {
+		throw std::runtime_error("[GradClip] GradNormScratch capacity mismatch required_groups=" +
+								 std::to_string(required_groups) +
+								 " scratch_max_groups=" + std::to_string(scratch->max_groups));
+	}
+}
+
+float rmsOrThrow(double sum_sq, uint64_t count, const char* label) {
+    if (count == 0) {
+		throw std::runtime_error(std::string("[GradClip] ") + label + " count is zero");
+	}
+	if (!std::isfinite(sum_sq)) {
+		throw std::runtime_error(std::string("[GradClip] ") + label + " sum_sq is non-finite");
+	}
+	return static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count)));
+}
+
+float encoderTelemetryRms(const GRIM::GradNorm::GradMetrics& gm) {
+	const double sum_sq = gm.attention_sum_sq + gm.ffn_sum_sq + gm.rmsnorm_sum_sq +
+		gm.scratchblock_sum_sq + gm.reasoning_head_sum_sq + gm.execution_block_sum_sq;
+	const uint64_t count = gm.attention_count + gm.ffn_count +
+		gm.rmsnorm_count + gm.scratchblock_count + gm.reasoning_head_count +
+		gm.execution_block_count;
+	if (count == 0) {
+		return std::numeric_limits<float>::quiet_NaN();
+	}
+	return rmsOrThrow(sum_sq, count, "encoder gradient");
 }
 
 } // namespace
@@ -124,48 +174,65 @@ namespace GRIM::GradClip {
 ClipResult clipGradientNorms(
     ParameterGroup* groups,
     size_t num_groups,
-    GradNorm::GradNormScratch* scratch,
+	std::unique_ptr<GradNorm::GradNormScratch>& scratch,
     const ClipConfig& config,
     cudaStream_t stream
 ) {
     if (!groups || num_groups == 0) {
         throw std::runtime_error("[GradClip] clipGradientNorms called with null/empty parameter groups");
     }
-    if (!scratch) {
-        throw std::runtime_error("[GradClip] clipGradientNorms called with null GradNormScratch");
-    }
     if (config.max_rms <= 0.0f) {
         throw std::runtime_error("[GradClip] max_rms must be > 0, got " + std::to_string(config.max_rms));
     }
 
+	ensureGradNormScratchForClip(scratch, num_groups, stream);
+
     // Step 1: Measure gradient norms through the tensor registry
-    auto status = GradNorm::measureGradientNorms(groups, num_groups, scratch, stream);
+	auto status = GradNorm::measureGradientNorms(groups, num_groups, scratch.get(), stream);
     if (status != GradNorm::GradNormStatus::SUCCESS) {
         throw std::runtime_error("[GradClip] measureGradientNorms failed: " +
                                  std::string(GradNorm::statusToString(status)));
     }
     // measureGradientNorms syncs internally — h_partial_sums is valid.
+	if (!scratch->h_metrics) {
+		throw std::runtime_error("[GradClip] h_metrics is NULL after measureGradientNorms");
+	}
+	const auto& measured_metrics = *scratch->h_metrics;
+	if (measured_metrics.groups_processed != num_groups) {
+		throw std::runtime_error("[GradClip] GradNorm processed group count mismatch expected=" +
+								 std::to_string(num_groups) +
+								 " actual=" + std::to_string(measured_metrics.groups_processed));
+	}
+	if (measured_metrics.has_nan || measured_metrics.has_inf) {
+		throw std::runtime_error("[GradClip] NaN/Inf detected in gradients first_nan_group=" +
+								 std::to_string(measured_metrics.first_nan_group) +
+								 " first_inf_group=" + std::to_string(measured_metrics.first_inf_group));
+	}
 
     // Step 2: Aggregate all finite per-group sums into one global RMS. Use the
     // per-group scratch directly so every registered group type participates.
-    float global_sum_sq = 0.0f;
-    int64_t global_count = 0;
+	double global_sum_sq = 0.0;
+	uint64_t global_count = 0;
     for (size_t i = 0; i < num_groups; ++i) {
         if (!groups[i].grads() || groups[i].size() == 0) continue;
 
         const float sq = scratch->h_partial_sums[i];
         if (!std::isfinite(sq)) continue;
 
-        global_sum_sq += sq;
-        global_count += static_cast<int64_t>(groups[i].size());
+		global_sum_sq += static_cast<double>(sq);
+		global_count += static_cast<uint64_t>(groups[i].size());
     }
 
-    const float global_rms = (global_count > 0)
-        ? std::sqrt(global_sum_sq / static_cast<float>(global_count))
-        : 0.0f;
+	const float global_rms = rmsOrThrow(global_sum_sq, global_count, "registered global gradient");
 
     ClipResult result;
+	result.measured_group_count = num_groups;
     result.global_rms_pre = global_rms;
+	result.encoder_rms_pre = encoderTelemetryRms(measured_metrics);
+	result.scratchblock_rms_pre = (measured_metrics.scratchblock_count > 0)
+		? static_cast<float>(std::sqrt(measured_metrics.scratchblock_sum_sq / static_cast<double>(measured_metrics.scratchblock_count)))
+		: std::numeric_limits<float>::quiet_NaN();
+	result.metrics = measured_metrics;
 
     // Step 3: Clip all registered gradients with one global coefficient
     if (global_rms > config.max_rms) {

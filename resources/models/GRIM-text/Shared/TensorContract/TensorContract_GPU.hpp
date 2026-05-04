@@ -989,20 +989,6 @@ struct Tensor {
         grad_ = other.grad_;  // shared_ptr copy = shared ownership
     }
     
-    /// Set gradient from an externally-owned buffer (non-owning view).
-    /// The caller MUST keep external_grad alive for the lifetime of this Tensor's grad.
-    void set_grad_from_buffer(float* external_grad) {
-        if (!external_grad) {
-            throw std::runtime_error("set_grad_from_buffer: external_grad is NULL - caller MUST provide valid pointer");
-        }
-        grad_ = std::make_shared<Tensor>();
-        grad_->data = external_grad;
-        grad_->shape = shape;
-        grad_->owns_data = false;  // Always non-owning. Caller manages lifetime.
-        grad_->requires_grad = false;
-        grad_->is_leaf = true;
-    }
-    
     /// Zero gradient buffer (async on stream)
     void zero_grad(cudaStream_t stream = nullptr);
     

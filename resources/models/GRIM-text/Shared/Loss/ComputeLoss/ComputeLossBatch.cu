@@ -85,9 +85,11 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	const size_t seq_len      = static_cast<size_t>(payload.max_seq_len);
 	const size_t total_tokens = static_cast<size_t>(payload.total_tokens);
 
-	const size_t logit_limit = training_state_.max_logit_tokens > 0
-		? training_state_.max_logit_tokens
-		: training_state_.max_cached_tokens;
+	const auto& logits_shape = training_state_.cached_logits_tensor.shape.require("uploadBatchToDevice cached_logits_tensor");
+	if (!logits_shape.is_2d_layout()) {
+		throw std::runtime_error("uploadBatchToDevice: cached_logits_tensor must be a 2D LOGITS buffer");
+	}
+	const size_t logit_limit = static_cast<size_t>(logits_shape.as_2d().rows);
 	if (total_tokens > logit_limit) {
 		throw std::runtime_error(
 			"uploadBatchToDevice: total_tokens=" + std::to_string(total_tokens) +
@@ -96,7 +98,7 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 
 	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
-	auto* scratch_pool = training_state_.scratch_pool;
+	auto* scratch_pool = training_state_.scratch_pool.get();
 	if (!scratch_pool || !scratch_pool->isInitialized()) {
 		throw std::runtime_error("uploadBatchToDevice: scratch_pool not initialized — "
 			"pinned memory staging is REQUIRED for batch transfers");
@@ -186,12 +188,10 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 		fprintf(stderr, "[VOCAB_TIMING] uploadBatchToDevice complete (pinned staging): %.2f ms\n", copy_ms);
 	}
 
-	// Store dimensions in TrainingState for downstream consumers (diagnostics
-	// and bookkeeping). The bindings struct returned below is the canonical
-	// reader-facing view of the device pointers for this step.
-	training_state_.cached_batch_size = static_cast<int>(batch_size);
-	training_state_.cached_seq_len    = static_cast<int>(seq_len);
-	training_state_.cached_valid_tokens = payload.lm_valid_tokens;
+	// The bindings struct returned below is the canonical reader-facing device
+	// view for this step. Batch geometry and valid-token counts stay on the
+	// Phase1-authored BatchPayload; TrainingState must not mirror per-step
+	// semantics as a hidden global mailbox.
 	training_state_.cached_num_layers = cfg.num_layers;
 
 	GRIM::Batching::BatchDeviceBindings bindings;
@@ -338,8 +338,8 @@ float LanguageModel::computeLossBatch(
 		is_training
 	);
 	
-	// ScratchBlock side-channel data is now accessed directly from BatchPayload
-	// inside scratch_block_inject() — no manual wiring needed.
+	// ScratchBlock side-channel device data is accessed through BatchDeviceBindings
+	// inside executeAutogradForward(); BatchPayload remains host-only.
 
 	orderLog("computeLossBatch.forward_start",
 		batch_size, seq_len, total_tokens, 0);

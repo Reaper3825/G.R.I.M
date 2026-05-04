@@ -46,6 +46,7 @@
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
+#include "../Shared/InferenceState/GenerationState_GPU.hpp"
 #include "../Shared/Loss/LossContext/LossContext.hpp"
 #endif
 
@@ -400,7 +401,7 @@ public:
     const Config::TrainingHyperparameters& requireTrainingHyperparameters(const char* caller) const;
     
     // GPU methods
-    void initGPU();
+    void initGPU(uint64_t weight_init_seed);
     Vector forwardGPU(const std::vector<int>& token_ids,
                       const std::vector<float>& token_numeric_values,
                       const std::vector<uint8_t>& token_atom_mask,
@@ -508,6 +509,7 @@ private:
 
 #ifdef USE_CUDA
     TrainingState training_state_;
+    GenerationState generation_state_;
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
     uint32_t backward_call_count_ = 0;              // Tracks backward() calls for deterministic diagnostics
     LossContext::LossOptions loss_options_{};

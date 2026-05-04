@@ -10,7 +10,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [TrainingArchitecture.md](TrainingArchitecture.md) | Three-phase training entry/orchestration |
 | [TrainingState.md](TrainingState.md) | Centralized GPU resource ownership |
 | [Autograd.md](Autograd.md) | TensorContract, GradFn, intermediates lifetime |
-| [Loss.md](Loss.md) | Unified loss, per-component gradient clipping |
+| [Loss.md](Loss.md) | Unified loss, registered global gradient clipping |
 | [GQA.md](GQA.md) | Grouped Query Attention shapes & backward scaling |
 | [FlashAttention.md](FlashAttention.md) | FA2 kernel ordering, GQA backward buffers |
 | [LMHead.md](LMHead.md) | Tied embeddings, γ_final, hidden-state centering |

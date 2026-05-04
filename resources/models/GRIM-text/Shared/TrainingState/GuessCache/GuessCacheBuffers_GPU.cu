@@ -17,6 +17,30 @@ namespace GRIM {
 //  Guess Cache Buffer Management (GRIM-TS Rule 22)
 //======================================================//
 
+TrainingState::GuessCacheBuffers::~GuessCacheBuffers() {
+	release();
+}
+
+void TrainingState::GuessCacheBuffers::release() {
+	if (records) { cudaFree(records); records = nullptr; }
+	if (keys) { cudaFree(keys); keys = nullptr; }
+	if (size) { cudaFree(size); size = nullptr; }
+	if (evict_cursor) { cudaFree(evict_cursor); evict_cursor = nullptr; }
+	if (diversity_bloom) { cudaFree(diversity_bloom); diversity_bloom = nullptr; }
+	if (calibration_offset) { cudaFree(calibration_offset); calibration_offset = nullptr; }
+	if (single_meta_buffer) { cudaFree(single_meta_buffer); single_meta_buffer = nullptr; }
+	if (single_reward_buffer) { cudaFree(single_reward_buffer); single_reward_buffer = nullptr; }
+
+	// Pinned memory uses cudaFreeHost
+	if (pinned_meta) { cudaFreeHost(pinned_meta); pinned_meta = nullptr; }
+	if (pinned_rewards) { cudaFreeHost(pinned_rewards); pinned_rewards = nullptr; }
+
+	capacity = 0;
+	bloom_words = 0;
+	pinned_capacity = 0;
+	allocated = false;
+}
+
 void TrainingState::allocateGuessCacheBuffers(
 	size_t capacity,
 	bool enable_diversity,
@@ -149,23 +173,7 @@ void TrainingState::allocateGuessCacheBuffers(
 }
 
 void TrainingState::freeGuessCacheBuffers() {
-	if (guess_cache_buffers.records) { cudaFree(guess_cache_buffers.records); guess_cache_buffers.records = nullptr; }
-	if (guess_cache_buffers.keys) { cudaFree(guess_cache_buffers.keys); guess_cache_buffers.keys = nullptr; }
-	if (guess_cache_buffers.size) { cudaFree(guess_cache_buffers.size); guess_cache_buffers.size = nullptr; }
-	if (guess_cache_buffers.evict_cursor) { cudaFree(guess_cache_buffers.evict_cursor); guess_cache_buffers.evict_cursor = nullptr; }
-	if (guess_cache_buffers.diversity_bloom) { cudaFree(guess_cache_buffers.diversity_bloom); guess_cache_buffers.diversity_bloom = nullptr; }
-	if (guess_cache_buffers.calibration_offset) { cudaFree(guess_cache_buffers.calibration_offset); guess_cache_buffers.calibration_offset = nullptr; }
-	if (guess_cache_buffers.single_meta_buffer) { cudaFree(guess_cache_buffers.single_meta_buffer); guess_cache_buffers.single_meta_buffer = nullptr; }
-	if (guess_cache_buffers.single_reward_buffer) { cudaFree(guess_cache_buffers.single_reward_buffer); guess_cache_buffers.single_reward_buffer = nullptr; }
-
-	// Pinned memory uses cudaFreeHost
-	if (guess_cache_buffers.pinned_meta) { cudaFreeHost(guess_cache_buffers.pinned_meta); guess_cache_buffers.pinned_meta = nullptr; }
-	if (guess_cache_buffers.pinned_rewards) { cudaFreeHost(guess_cache_buffers.pinned_rewards); guess_cache_buffers.pinned_rewards = nullptr; }
-
-	guess_cache_buffers.capacity = 0;
-	guess_cache_buffers.bloom_words = 0;
-	guess_cache_buffers.pinned_capacity = 0;
-	guess_cache_buffers.allocated = false;
+	guess_cache_buffers.release();
 }
 
 } // namespace GRIM

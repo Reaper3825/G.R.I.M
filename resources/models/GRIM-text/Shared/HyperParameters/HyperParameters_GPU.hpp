@@ -348,7 +348,8 @@ constexpr float DEFAULT_LOSS_CLASS_BALANCED_BETA = 0.5f;  // sqrt inverse freque
 
 //======================================================//
 // Scratch Block Configuration (ScratchBlock Reasoning Layer)
-// Pool block size is computed from max_cached_tokens in InitTrainingState
+// Pool block size is computed from the RunCapacity-authored max token rectangle
+// in InitTrainingState.
 //======================================================//
 constexpr bool DEFAULT_SCRATCH_BLOCKS_ENABLED = true;
 constexpr size_t DEFAULT_SCRATCH_NUM_BLOCKS = 2;  // Double buffer for pinned memory staging

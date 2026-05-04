@@ -12,14 +12,11 @@ $$L = \alpha (1 - p_t)^\gamma \cdot \mathrm{CE}_{\text{smooth}} + \lambda \cdot 
 ## Config
 `ai_config.json → training.config.loss`
 
-## Per-component gradient clipping
-Three **independent** clips:
+## Gradient clipping
 
-1. **emb** — LM_HEAD (+ EMBEDDING if untied)
-2. **enc** — ATTENTION + FFN + RMSNORM + SCRATCHBLOCK
-3. **num** — NUMERIC_HEAD
+The active training loop uses `GRIM::GradClip::clipGradientNorms()` with one **registered global RMS** over every clipping-owned `ParameterGroup` and one global scale coefficient when the configured limit is exceeded. `clipGradientNorms()` owns the `TrainingState.grad_norm_scratch` allocation/validation contract and returns a `ClipResult` containing the measured global/component metrics plus `measured_group_count` for validating the clipping topology actually used.
 
-Never clip them jointly when one component dominates the L2 norm — it crushes the smaller ones.
+Gradient diagnostics must report `preclip_grad_rms` from that same `ClipResult`. Component-level RMS values are telemetry/diagnostic signals only; they are not clipping buckets unless `clipGradientNorms()` is changed to clip by those buckets. Diagnostics must not perform a second grad-norm measurement or add an extra stream sync.
 
 ## Footgun: double mean reduction
 Loss backward already applies `1/N`. Do **not** add another `1/tokens` scaling in parameter gradient kernels (RMSNorm γ, etc.).

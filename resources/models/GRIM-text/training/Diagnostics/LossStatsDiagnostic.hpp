@@ -11,11 +11,13 @@ namespace GRIMText { namespace Training {
     struct TrainingContext;
     struct BatchResult;
 } }
+namespace GRIM::Batching { struct BatchPayload; }
 
 namespace GRIM::Diagnostics {
 
 void runLossStatsDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
+    const GRIM::Batching::BatchPayload& payload,
     const GRIMText::Training::BatchResult& result,
     int batch_idx);
 

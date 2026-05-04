@@ -76,7 +76,7 @@ struct AutogradIntermediates {
     // NOTE (Rule 20 — Ownership Taxonomy): The cross-attention read-gate
     // accumulator (Category 3 workspace) and its host snapshot (Category 2
     // telemetry) live on TrainingState, NOT here. This struct is Category 1
-    // (graph-owned, transient). See TrainingState::d_read_gate_accum /
+    // (graph-owned, transient). See TrainingState::read_gate_accum_tensor /
     // h_read_gate_mean.
 
     // ═══════════════════════════════════════════════════════════════════════════

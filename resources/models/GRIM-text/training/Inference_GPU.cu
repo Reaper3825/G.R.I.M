@@ -11,6 +11,7 @@
 //======================================================//
 
 #include <vector>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <cuda_runtime.h>
@@ -178,10 +179,6 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
-    // Store dimensions for downstream consumers
-    training_state_.cached_batch_size = 1;
-    training_state_.cached_seq_len = seq_len;
-
     // Initialize autograd context (is_training=false disables dropout)
     Autograd::AutogradContext ctx = Autograd::initAutogradContext(
         &config_,
@@ -230,11 +227,12 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
 
     // Populate KV cache from autograd intermediates (prefill mode).
     // Must happen BEFORE clear() which destroys the intermediate tensors.
-    if (populate_kv_cache && training_state_.kv_cache_k.empty()) {
+    auto& gen = generation_state_;
+    if (populate_kv_cache && gen.kv_cache.k.empty()) {
         throw std::runtime_error("executeInferenceForward_: populate_kv_cache=true but KV cache not allocated — "
                                  "call ensureKVCacheAllocated() before generation");
     }
-    if (populate_kv_cache && !training_state_.kv_cache_k.empty()) {
+    if (populate_kv_cache && !gen.kv_cache.k.empty()) {
         const int num_kv_heads = training_state_.num_kv_heads;
         const int head_dim = config_.d_model / config_.num_heads;
         const auto& layers = training_state_.autograd_intermediates.layer_intermediates.layers;
@@ -251,11 +249,11 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
             // Convert to BSHD BF16 → [1, seq_len, nkv, hd] in cache
             TensorConversion::convert_BHSD_to_BSHD_bf16(
                 layer_ints.K_bhsd.data,
-                static_cast<__nv_bfloat16*>(training_state_.kv_cache_k[i]),
+                gen.kv_cache.k[i].as<__nv_bfloat16>(),
                 1, num_kv_heads, seq_len, head_dim, stream);
             TensorConversion::convert_BHSD_to_BSHD_bf16(
                 layer_ints.V_bhsd.data,
-                static_cast<__nv_bfloat16*>(training_state_.kv_cache_v[i]),
+                gen.kv_cache.v[i].as<__nv_bfloat16>(),
                 1, num_kv_heads, seq_len, head_dim, stream);
         }
     }
@@ -334,7 +332,7 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     // Commit kv_cache_len AFTER success — if forward throws, the cache
     // must not claim it holds tokens that never completed the forward path.
     Vector logits = executeInferenceForward_(seq_len, /*populate_kv_cache=*/true);
-    training_state_.kv_cache_len = seq_len;
+    generation_state_.kv_cache_len = seq_len;
 
     // ── Initialize trace structures for subsequent decode steps ──
     // resetKVCache() clears these, and executeInferenceForward_ (autograd path)
@@ -413,17 +411,17 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
     if (!training_state_.initialized) {
         throw std::runtime_error("forwardStep: training state not initialized");
     }
-    if (training_state_.kv_cache_len == 0) {
+    if (generation_state_.kv_cache_len == 0) {
         throw std::runtime_error("forwardStep: call forwardInit first");
     }
 
-    const int token_pos = training_state_.kv_cache_len;
+    const int token_pos = generation_state_.kv_cache_len;
     const int new_seq_len = token_pos + 1;
     
     if (new_seq_len > config_.max_seq_len) {
         throw std::runtime_error("forwardStep: sequence exceeds max_seq_len");
     }
-    if (training_state_.kv_cache_k.empty()) {
+    if (!generation_state_.kvReady()) {
         throw std::runtime_error("forwardStep: KV cache not allocated — call initInferenceState first");
     }
 
@@ -455,7 +453,7 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
     // Commit kv_cache_len AFTER success — if decode throws, the cache
     // must not claim it holds a token that never completed the forward path.
     Vector logits = executeDecodeForward_(token_pos);
-    training_state_.kv_cache_len = new_seq_len;
+    generation_state_.kv_cache_len = new_seq_len;
     return logits;
 }
 
@@ -468,7 +466,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     if (!training_state_.initialized) {
         throw std::runtime_error("executeDecodeForward_: training state not initialized");
     }
-    if (training_state_.kv_cache_k.empty()) {
+    if (!generation_state_.kvReady()) {
         throw std::runtime_error("executeDecodeForward_: KV cache not allocated");
     }
 
@@ -478,6 +476,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
     const auto& cfg = config_;
     auto& ts = training_state_;
+    auto& gen = generation_state_;
 
     const int d_model = cfg.d_model;
     const int num_heads = cfg.num_heads;
@@ -575,8 +574,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         // For S=1: BHSD [1,H,1,D] = BSHD [1,1,H,D] — same contiguous layout [H*D]
         // Cache layout: [kv_capacity, nkv, hd] BSHD
         const size_t kv_slot_offset = static_cast<size_t>(token_pos) * num_kv_heads * head_dim;
-        auto* k_cache = static_cast<__nv_bfloat16*>(ts.kv_cache_k[layer_idx]);
-        auto* v_cache = static_cast<__nv_bfloat16*>(ts.kv_cache_v[layer_idx]);
+        auto* k_cache = gen.kv_cache.k[layer_idx].as<__nv_bfloat16>();
+        auto* v_cache = gen.kv_cache.v[layer_idx].as<__nv_bfloat16>();
 
         TensorConversion::convert_BHSD_to_BSHD_bf16(
             K.data, k_cache + kv_slot_offset,
@@ -586,20 +585,20 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             1, num_kv_heads, 1, head_dim, stream);
 
         // 3f. Convert Q to BF16 for flash attention
-        auto* q_bf16 = static_cast<__nv_bfloat16*>(ts.decode_q_bf16);
+        auto* q_bf16 = gen.decode_scratch.q_bf16.as<__nv_bfloat16>();
         TensorConversion::convert_BHSD_to_BSHD_bf16(
             Q.data, q_bf16, 1, num_heads, 1, head_dim, stream);
 
         // 3g. Flash attention with KV cache
         // Q: [1, 1, nh, hd] BSHD BF16 (seqlen_q=1)
         // K cache: [1, kv_capacity, nkv, hd] BSHD BF16 (seqlen_k=token_pos+1)
-        auto* attn_out_bf16 = static_cast<__nv_bfloat16*>(ts.decode_attn_out_bf16);
+        auto* attn_out_bf16 = gen.decode_scratch.attn_out_bf16.as<__nv_bfloat16>();
         flash_attn_fwd_kvcache(
             q_bf16,
             k_cache,
             v_cache,
             attn_out_bf16,
-            ts.kv_cache_softmax_lse,
+            gen.kv_cache.softmax_lse.as<float>(),
             pbm_spec.alibi_slopes,
             1,              // batch=1
             1,              // seqlen_q=1
@@ -614,12 +613,12 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         // 3h. Convert attention output BF16 → FP32
         // [1,1,nh,hd] BSHD → [1,nh,1,hd] BHSD (same memory for S=1)
         TensorConversion::convert_BSHD_bf16_to_BHSD(
-            attn_out_bf16, ts.decode_attn_out_fp32,
+            attn_out_bf16, gen.decode_scratch.attn_out_fp32.as<float>(),
             1, 1, num_heads, head_dim, stream);
 
         // 3i. Wrap attention output as non-owning Tensor [1, d_model]
         Tensor attn_flat;
-        attn_flat.data = ts.decode_attn_out_fp32;
+        attn_flat.data = gen.decode_scratch.attn_out_fp32.as<float>();
         attn_flat.shape = TensorShape::make_BSM(1, d_model);
         attn_flat.requires_grad = false;
         attn_flat.owns_data = false;
@@ -782,10 +781,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
 //  buffers if they haven't been allocated yet.
 //
 //  During pure inference, initInferenceState() handles this.
-//  During training, initTrainingState() sets kv_cache_capacity
-//  but does NOT allocate the actual BF16 KV buffers or decode
-//  scratch.  This helper fills that gap so training-time
-//  sample generation (logInferenceSample) can use forwardStep.
+//  During training-time sample generation, callers must explicitly request
+//  generation state allocation through this helper before forwardInit/forwardStep.
 //
 //  Safe to call repeatedly — early-returns if already allocated.
 //  Cleanup is already handled by TrainingState::cleanup().
@@ -796,7 +793,8 @@ void LanguageModel::ensureKVCacheAllocated() {
     }
 
     // Already allocated? Nothing to do.
-    if (!training_state_.kv_cache_k.empty()) {
+    auto& gen = generation_state_;
+    if (gen.kvReady()) {
         return;
     }
 
@@ -806,11 +804,10 @@ void LanguageModel::ensureKVCacheAllocated() {
         : ((cfg.num_kv_heads > 0) ? cfg.num_kv_heads : cfg.num_heads);
     const int head_dim = cfg.d_model / cfg.num_heads;
     const int n_layers = cfg.num_layers;
-    const int kv_cap = training_state_.kv_cache_capacity;
+    const int kv_cap = std::min(cfg.max_seq_len, cfg.max_cached_seq_len);
 
     if (kv_cap <= 0) {
-        throw std::runtime_error("ensureKVCacheAllocated: kv_cache_capacity is 0 — "
-                                 "initTrainingState or initInferenceState must set it first");
+        throw std::runtime_error("ensureKVCacheAllocated: config provides no positive generation KV capacity");
     }
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
@@ -819,29 +816,31 @@ void LanguageModel::ensureKVCacheAllocated() {
     const size_t kv_elems_per_layer = static_cast<size_t>(num_kv_heads) * kv_cap * head_dim;
     const size_t kv_bytes_per_layer = kv_elems_per_layer * sizeof(__nv_bfloat16);
 
-    training_state_.kv_cache_k.resize(n_layers, nullptr);
-    training_state_.kv_cache_v.resize(n_layers, nullptr);
+    gen.kv_cache.shape.num_layers = n_layers;
+    gen.kv_cache.shape.num_kv_heads = num_kv_heads;
+    gen.kv_cache.shape.head_dim = head_dim;
+    gen.kv_cache.shape.capacity_tokens = kv_cap;
+    gen.kv_cache.k.resize(n_layers);
+    gen.kv_cache.v.resize(n_layers);
 
     for (int l = 0; l < n_layers; ++l) {
-        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_k[l]), kv_bytes_per_layer, "kv_cache_k");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_v[l]), kv_bytes_per_layer, "kv_cache_v");
-        cudaMemsetAsync(training_state_.kv_cache_k[l], 0, kv_bytes_per_layer, stream);
-        cudaMemsetAsync(training_state_.kv_cache_v[l], 0, kv_bytes_per_layer, stream);
+        gen.kv_cache.k[l].allocate(kv_bytes_per_layer, "kv_cache_k");
+        gen.kv_cache.v[l].allocate(kv_bytes_per_layer, "kv_cache_v");
+        cudaMemsetAsync(gen.kv_cache.k[l], 0, kv_bytes_per_layer, stream);
+        cudaMemsetAsync(gen.kv_cache.v[l], 0, kv_bytes_per_layer, stream);
     }
 
-    // ---- Softmax LSE scratch: [num_heads, kv_cache_capacity_rounded] ----
+    // ---- Softmax LSE scratch: [num_heads, generation KV capacity rounded] ----
     const int kv_cap_rounded = ((kv_cap + 127) / 128) * 128;
     const size_t lse_bytes = static_cast<size_t>(cfg.num_heads) * kv_cap_rounded * sizeof(float);
-    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.kv_cache_softmax_lse), lse_bytes, "kv_cache_lse");
-    cudaMemsetAsync(training_state_.kv_cache_softmax_lse, 0, lse_bytes, stream);
+    gen.kv_cache.softmax_lse.allocate(lse_bytes, "kv_cache_lse");
+    cudaMemsetAsync(gen.kv_cache.softmax_lse, 0, lse_bytes, stream);
 
     // ---- Decode scratch buffers (tiny, reused per layer per decode step) ----
     const size_t q_bf16_bytes = static_cast<size_t>(cfg.num_heads) * head_dim * sizeof(__nv_bfloat16);
-    const size_t kv_bf16_bytes = static_cast<size_t>(num_kv_heads) * head_dim * sizeof(__nv_bfloat16);
-    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_q_bf16), q_bf16_bytes, "decode_q_bf16");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_kv_bf16), kv_bf16_bytes, "decode_kv_bf16");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_attn_out_bf16), q_bf16_bytes, "decode_attn_out_bf16");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&training_state_.decode_attn_out_fp32), static_cast<size_t>(cfg.d_model) * sizeof(float), "decode_attn_out_fp32");
+    gen.decode_scratch.q_bf16.allocate(q_bf16_bytes, "decode_q_bf16");
+    gen.decode_scratch.attn_out_bf16.allocate(q_bf16_bytes, "decode_attn_out_bf16");
+    gen.decode_scratch.attn_out_fp32.allocate(static_cast<size_t>(cfg.d_model) * sizeof(float), "decode_attn_out_fp32");
 
     // ---- Single-token buffers for incremental generation ----
     using TC = TensorContract::TensorShape;
@@ -865,26 +864,23 @@ void LanguageModel::ensureKVCacheAllocated() {
 
 void LanguageModel::resetKVCache() {
     if (training_state_.initialized) {
-        training_state_.kv_cache_len = 0;
+        auto& gen = generation_state_;
+        gen.resetSession();
         training_state_.has_inference_exec_memory = false;
 
         // Clear execution trace state (persisted across decode steps)
         training_state_.execution_trace_by_row.clear();
         training_state_.trace_state_by_row.clear();
 
-        // Zero BF16 KV cache buffers
-        const auto& cfg = getConfig();
-        const int num_kv_heads = training_state_.num_kv_heads;
-        const int head_dim = cfg.d_model / cfg.num_heads;
-        const size_t kv_bytes_per_layer = static_cast<size_t>(num_kv_heads) *
-            training_state_.kv_cache_capacity * head_dim * sizeof(__nv_bfloat16);
+        // Zero BF16 KV cache buffers using GenerationState's shaped owner.
+        const size_t kv_bytes_per_layer = gen.kv_cache.bytesPerLayer();
         cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
-        for (size_t l = 0; l < training_state_.kv_cache_k.size(); ++l) {
-            if (training_state_.kv_cache_k[l])
-                cudaMemsetAsync(training_state_.kv_cache_k[l], 0, kv_bytes_per_layer, stream);
-            if (training_state_.kv_cache_v[l])
-                cudaMemsetAsync(training_state_.kv_cache_v[l], 0, kv_bytes_per_layer, stream);
+        for (size_t l = 0; l < gen.kv_cache.k.size(); ++l) {
+            if (gen.kv_cache.k[l])
+                cudaMemsetAsync(gen.kv_cache.k[l], 0, kv_bytes_per_layer, stream);
+            if (gen.kv_cache.v[l])
+                cudaMemsetAsync(gen.kv_cache.v[l], 0, kv_bytes_per_layer, stream);
         }
     }
 }
@@ -893,7 +889,7 @@ void LanguageModel::resetKVCache() {
 //  getKVCacheLength - Query current sequence length
 //======================================================//
 int LanguageModel::getKVCacheLength() const {
-    return training_state_.kv_cache_len;
+    return generation_state_.kv_cache_len;
 }
 
 } // namespace GRIM

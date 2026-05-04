@@ -11,6 +11,14 @@ namespace GRIM::TeacherLogits {
 struct Buffer {
     float* device = nullptr;
     std::size_t capacity = 0;  // number of floats allocated
+
+    Buffer() = default;
+    ~Buffer();
+
+    Buffer(const Buffer&) = delete;
+    Buffer& operator=(const Buffer&) = delete;
+    Buffer(Buffer&& other) noexcept;
+    Buffer& operator=(Buffer&& other) noexcept;
 };
 
 // Ensure device buffer can hold batch_size * seq_len * vocab floats.

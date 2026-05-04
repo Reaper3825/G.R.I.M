@@ -330,7 +330,7 @@ void LanguageModel::buildParameterGroups() {
     fprintf(stderr, "[buildParameterGroups] DIAG-G: all bindings done\n"); fflush(stderr);
     
     // Note: Gradient norm measurement uses free functions in GradNormGPU.{cu,hpp}
-    // Phase2_TrainingLoop.cu calls measureGradientNorms() directly via TrainingState::grad_norm_scratch
+    // GradClip measures gradient norms through TrainingState::grad_norm_scratch on optimizer-step boundaries.
 
     BWD_INFO("[buildParameterGroups] Built " << parameter_groups_.size() << " parameter groups");
     

@@ -115,6 +115,14 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     auto* ts = ctx.training_state;
     const auto* cfg = ctx.config;
     auto& intermediates = ts->autograd_intermediates;  // All intermediate tensors go HERE
+    const auto* bindings = ctx.device_bindings;
+    const bool use_inference_cache_fallback =
+        !bindings && !ctx.is_training && ctx.inference_payload_.batch_size > 0;
+    if (!bindings && !use_inference_cache_fallback) {
+        throw std::runtime_error(
+            "executeAutogradForward: BatchDeviceBindings is NULL outside inference fallback — "
+            "training/eval must pass the uploadBatchToDevice() bindings");
+    }
     
     const auto& payload = *ctx.payload;
     const int total_tokens = payload.total_tokens;
@@ -135,11 +143,15 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     //  Uses autograd::embedding() for gradient tracking
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // RULE 20: Fail loud - validate required buffers
-    // NOTE: cached_token_ids_tensor stores int32 data in float* buffer - cast when accessing
-    int* token_ids = reinterpret_cast<int*>(ts->cached_token_ids_tensor.data);
+    // RULE 20: Fail loud - validate required buffers.
+    // Training/eval use BatchDeviceBindings (explicit per-step device view).
+    // Inference has no BatchDeviceBindings and uses TrainingState's cached
+    // single-sequence buffers as the upload owner/fallback.
+    int* token_ids = bindings
+        ? bindings->d_input_ids
+        : reinterpret_cast<int*>(ts->cached_token_ids_tensor.data);
     if (!token_ids) {
-        throw std::runtime_error("AutogradForward: cached_token_ids_tensor.data is NULL");
+        throw std::runtime_error("AutogradForward: input token device pointer is NULL");
     }
     
     // Embedding weights tensor (owned by EmbeddingLayer — Pattern B)
@@ -216,12 +228,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         intermediates.embedding_tensor = autograd::scratch_block_inject(
             intermediates.embedding_tensor,
             *ctx.scratch_block,
-            reinterpret_cast<const int*>(ts->cached_token_ids_tensor.data),
-            ts->cached_token_numeric_values.data,
-            reinterpret_cast<const uint16_t*>(ts->cached_token_text_features.data),
-            reinterpret_cast<const uint8_t*>(ts->cached_token_atom_mask.data),
-            reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
-            reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data),
+            token_ids,
+            bindings ? bindings->d_numeric_values : ts->cached_token_numeric_values.data,
+            bindings ? bindings->d_text_features : reinterpret_cast<const uint16_t*>(ts->cached_token_text_features.data),
+            bindings ? bindings->d_atom_mask : reinterpret_cast<const uint8_t*>(ts->cached_token_atom_mask.data),
+            bindings ? bindings->d_atom_flags : reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
+            bindings ? bindings->d_token_to_slot_map : reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data),
             total_tokens,
             ctx.stream,
             exec_first_type_only);
@@ -412,7 +424,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     // WS7: Execution-active rows MUST have bootstrap data.
                     // Throw instead of silently entering executeStep with empty memory.
                     if (!ctx.device_bindings || !ctx.device_bindings->d_token_to_slot_map
-                        || !ts->cached_token_numeric_values.data) {
+                        || !ctx.device_bindings->d_numeric_values) {
                         throw std::runtime_error(
                             "AutogradTraining: execution-active row " + std::to_string(b)
                             + " has no slot map or numeric values for bootstrap — "
@@ -420,7 +432,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     }
                     ctx.execution_block->bootstrapMemoryFromSlotMap(
                         M_b,
-                        ts->cached_token_numeric_values.data + tok_off,
+                        ctx.device_bindings->d_numeric_values + tok_off,
                         ctx.device_bindings->d_token_to_slot_map + tok_off,
                         sl, ctx.stream);
 
@@ -529,7 +541,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         layer_output, intermediates.exec_memories[b],
                         total_tokens, ctx.stream,
                         b * sl, sl,
-                        ts->d_read_gate_accum);
+                        ts->read_gate_accum_tensor.data);
                     Tensor padded = autograd::zero_pad(row_delta, b * sl, total_tokens, ctx.stream);
                     layer_output = autograd::add(layer_output, padded, ctx.stream);
                 }
@@ -599,7 +611,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     }
     // else: no_grad path already set intermediates.encoder_output_tensor and cleared grad_fn
 
-    // Update persistent LM head with current stream/cublas (may differ between train/inference)
+    // Update persistent LM head with current stream/cublas
     ctx.lm_head->setStream(ctx.stream);
     ctx.lm_head->setCublasHandle(ctx.cublas_handle);
 
@@ -876,11 +888,17 @@ LossResult computeAutogradLoss(
         throw std::runtime_error("computeAutogradLoss: Logits tensor not initialized - call executeAutogradForward() first");
     }
     
-    // BatchPayload owns target semantics; TrainingState holds the uploaded device mirror.
-    const int* d_targets = reinterpret_cast<const int*>(ts->cached_targets_tensor.data);
+    // BatchPayload owns target semantics; BatchDeviceBindings is the explicit
+    // per-step device view of the uploaded target mirror.
+    if (!ctx.device_bindings || !ctx.device_bindings->d_target_ids) {
+        throw std::runtime_error(
+            "computeAutogradLoss: BatchDeviceBindings target pointer is NULL - "
+            "caller must upload the Phase1-authored BatchPayload before loss");
+    }
+    const int* d_targets = ctx.device_bindings->d_target_ids;
     if (!d_targets) {
         throw std::runtime_error(
-            "computeAutogradLoss: cached_targets_tensor.data is NULL - "
+            "computeAutogradLoss: d_target_ids is NULL - "
             "caller must upload the Phase1-authored BatchPayload before loss");
     }
     
@@ -894,14 +912,6 @@ LossResult computeAutogradLoss(
     // ═══════════════════════════════════════════════════════════════════════════
     // 1. TEXT CROSS-ENTROPY LOSS (autograd::unified_loss)
     // ═══════════════════════════════════════════════════════════════════════════
-    
-    // Setup gradient buffer for logits (reuse pre-allocated buffer from TrainingState)
-    if (!ts->grad_logits_tensor.data) {
-        throw std::runtime_error("computeAutogradLoss: grad_logits_tensor.data not allocated - initTrainingState() must run first");
-    }
-    intermediates.logits_tensor.set_grad_from_buffer(
-        ts->grad_logits_tensor.data
-    );
     
     // Compute text CE - returns scalar Tensor with NLLLossGradFn → LogSoftmaxGradFn chain
     Tensor loss_tensor = autograd::unified_loss(
@@ -1538,25 +1548,11 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // DO NOT copy grad_logits back to TrainingState buffer!
+    // Logits gradients are TensorContract-owned.
     // ═══════════════════════════════════════════════════════════════════════════
-    // CRITICAL FIX (Issue #136): The grad_logits_tensor.data IS THE STARTING GRADIENT BUFFER.
-    // It's set via set_grad_from_buffer() at ComputeLossBatch.cu:882.
-    // During backward, LogSoftmaxGradFn writes CE gradients directly to this buffer.
-    // Then CenterRowsGradFn reads from it and produces its own centered output buffer.
-    // If we copy intermediates.logits_tensor.grad_data() back to ts->grad_logits_tensor.data,
-    // we OVERWRITE the CE gradients with centered versions from CenterRowsGradFn!
-    // Result: Phase2 diagnostic reads CENTERED (negative) gradients instead of CE (positive) gradients.
-    // 
-    // Solution: SKIP THE COPY. The grad_logits_tensor.data is already correct from LogSoftmaxGradFn.
-    // The autograd intermediates keep CenterRowsGradFn's output in their own buffer, which is fine.
-    // Phase2 diagnostics read directly from ts->grad_logits_tensor.data (the CE gradients).
-    //
-    // DO NOT DO THIS:
-    //   if (intermediates.logits_tensor.has_grad()) {
-    //       cudaMemcpyAsync(ts->grad_logits_tensor.data, intermediates.logits_tensor.grad_data(), ...);
-    //   }
-    // This would CORRUPT the CE gradients with centered versions!
+    // LMHead returns non-leaf logits, so LogSoftmaxGradFn allocates its own
+    // non-leaf input_grad buffer and passes that view directly to the upstream
+    // logits grad_fn. TrainingState must not mirror or copy logits gradients.
     
     // NOTE: Encoder gradients are in encoder's internal Tensors, not TrainingState.
     // The optimizer accesses them via Tensor& accessors (enc->attnWqkv() etc.).
@@ -1764,9 +1760,11 @@ LossResult autogradTrainingStep(
 
     // Logit buffer capacity is still enforced here so a mis-sized payload trips
     // immediately, before any forward kernel is launched.
-    const size_t logit_limit = training_state.max_logit_tokens > 0
-        ? training_state.max_logit_tokens
-        : training_state.max_cached_tokens;
+    const auto& logits_shape = training_state.cached_logits_tensor.shape.require("autogradTrainingStep cached_logits_tensor");
+    if (!logits_shape.is_2d_layout()) {
+        throw std::runtime_error("autogradTrainingStep: cached_logits_tensor must be a 2D LOGITS buffer");
+    }
+    const size_t logit_limit = static_cast<size_t>(logits_shape.as_2d().rows);
     if (static_cast<size_t>(total_tokens) > logit_limit) {
         throw std::runtime_error(
             "autogradTrainingStep: total_tokens=" + std::to_string(total_tokens) +
@@ -1806,7 +1804,7 @@ LossResult autogradTrainingStep(
         step,
         true
     );
-    ctx.loss_config = buildLossConfig(model.getLossOptions(), training_state.d_class_weights);
+    ctx.loss_config = buildLossConfig(model.getLossOptions(), training_state.class_weights_tensor.data);
     ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on accumulation micro-batches
     ctx.model = &model;  // For MTP head access in computeAutogradLoss
 
@@ -1815,12 +1813,12 @@ LossResult autogradTrainingStep(
     // ═══════════════════════════════════════════════════════════════════════════
 
     // Allocate read-gate accumulator once (Category 3 workspace on TrainingState)
-    if (!training_state.d_read_gate_accum && cfg.execution_block_enabled) {
-        CUDA_CHECK(cudaMalloc(&training_state.d_read_gate_accum, 2 * sizeof(float)));
+    if (!training_state.read_gate_accum_tensor.data && cfg.execution_block_enabled) {
+        training_state.read_gate_accum_tensor = Tensor::zeros({2}, stream, "read_gate_accum");
     }
     // Zero the accumulator before forward (sum=0, count=0)
-    if (training_state.d_read_gate_accum) {
-        CUDA_CHECK(cudaMemsetAsync(training_state.d_read_gate_accum, 0, 2 * sizeof(float), stream));
+    if (training_state.read_gate_accum_tensor.data) {
+        CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
     }
     
     ForwardResult fwd_result = executeAutogradForward(ctx);
@@ -1831,9 +1829,9 @@ LossResult autogradTrainingStep(
     // Read back the cross-attention read gate accumulator (sum/count on device)
     // Snapshot Category 3 workspace into Category 2 telemetry scalar BEFORE the
     // autograd boundary (Rule 20).
-    if (training_state.d_read_gate_accum) {
+    if (training_state.read_gate_accum_tensor.data) {
         float h_accum[2] = {0.0f, 0.0f};
-        CUDA_CHECK(cudaMemcpyAsync(h_accum, training_state.d_read_gate_accum,
+        CUDA_CHECK(cudaMemcpyAsync(h_accum, training_state.read_gate_accum_tensor.data,
                                    2 * sizeof(float), cudaMemcpyDeviceToHost, stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
         training_state.h_read_gate_mean = (h_accum[1] > 0.0f)

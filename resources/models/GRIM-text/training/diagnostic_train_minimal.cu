@@ -434,6 +434,7 @@ int main(int argc, char** argv) {
     // Hardcode simple hyperparameters for manual mode
     const float learning_rate = 0.0001f;  // 1e-4
     const int max_seq_len = 2048;
+    const uint64_t weight_init_seed = 1001;
     
     std::cout << "  Config: " << snapshot->config_path << std::endl;
     std::cout << "  lr=" << learning_rate << " max_seq_len=" << max_seq_len << std::endl;
@@ -542,7 +543,7 @@ int main(int argc, char** argv) {
     }
     
     // STEP 4: Initialize GPU encoder (uses model-owned PBM spec)
-    model.initGPU();
+    model.initGPU(weight_init_seed);
     std::cout << "  ✓ GPU encoder initialized" << std::endl;
     
     // STEP 5: Initialize TrainingState (grad buffers) - needs GPU embedder from initGPU

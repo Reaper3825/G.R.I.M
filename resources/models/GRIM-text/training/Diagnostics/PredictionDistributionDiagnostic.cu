@@ -88,8 +88,8 @@ void runPredictionDistributionAndLogitTrace(
     if (shouldSyncDiagnostics(ctx, batch_idx)) {
         const auto& ts = ctx.model->getTrainingState();
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-        if (ts.cached_logits_tensor.data && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
-            const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
+        if (ts.cached_logits_tensor.data && payload.batch_size > 0 && payload.max_seq_len > 0) {
+            const int total_tokens = payload.total_tokens;
             const int vocab_size = ctx.config.actual_vocab_size;
             const int sample_positions = total_tokens;
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
@@ -135,8 +135,8 @@ void runPredictionDistributionAndLogitTrace(
                 int debug_t = -1;
                 int target_token = -1;
                 for (int pos = 0; pos < sample_positions; ++pos) {
-                    const int b = pos / ts.cached_seq_len;
-                    const int t = pos % ts.cached_seq_len;
+                    const int b = pos / payload.max_seq_len;
+                    const int t = pos % payload.max_seq_len;
                     if (b < payload.batch_size &&
                         t < payload.seq_lengths[b]) {
                         const int candidate = payload.target_ids[b * payload.max_seq_len + t];

@@ -85,7 +85,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
 //  GPU Initialization in Constructor
 //======================================================//
 
-void LanguageModel::initGPU() {
+void LanguageModel::initGPU(uint64_t weight_init_seed) {
     const auto& cfg = getConfig();
 
     std::cout << "[initGPU] Entry, use_gpu=" << (cfg.use_gpu ? "true" : "false") << std::endl;
@@ -153,7 +153,7 @@ void LanguageModel::initGPU() {
         enc_bindings.pos_encoding = &getPBMSpec();
         enc_bindings.stream = primary_stream;
         enc_bindings.cublas_handle = training_state_.cublas_handle;
-        enc_bindings.weight_seed = training_state_.weight_init_seed;
+        enc_bindings.weight_seed = weight_init_seed;
         // Issue #142: 1/sqrt(2*num_layers) for residual projection init
         enc_bindings.residual_scale =
             1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
@@ -169,14 +169,6 @@ void LanguageModel::initGPU() {
 
         auto* encoder_ptr = new GPUGrimEncoder(cfg, enc_bindings);
         gpu_encoder_.reset(encoder_ptr);
-
-        //======================================================//
-        //  5) Verify self-allocated encoder layers are ready
-        //======================================================//
-        if (!training_state_.seed_initialized_) {
-            throw std::runtime_error("[initGPU] FATAL: autograd seed not initialized - Phase1_Startup must call "
-                                     "initializeAutogradSeed() BEFORE initGPU()");
-        }
 
         // Layers self-allocated their own weights in the constructor. Verify all are ready.
         for (int layer = 0; layer < cfg.num_layers; ++layer) {
@@ -202,7 +194,7 @@ void LanguageModel::initGPU() {
             emb_config.d_model = cfg.d_model;
 
             // Seed convention: embedding uses weight_init_seed + 0
-            const uint64_t emb_seed = training_state_.weight_init_seed;
+            const uint64_t emb_seed = weight_init_seed;
 
             embedding_layer_ = std::make_unique<EmbeddingLayer>(emb_config, emb_seed, primary_stream);
 
@@ -237,7 +229,7 @@ void LanguageModel::initGPU() {
             lm_config.cublas_handle = training_state_.cublas_handle;
 
             // Seed convention: lm_head uses weight_init_seed + 1
-            const uint64_t lm_head_seed = training_state_.weight_init_seed + 1;
+            const uint64_t lm_head_seed = weight_init_seed + 1;
 
             // For tied weights, pass pointer to embedding token weights (owned by EmbeddingLayer)
             Tensor* tied_emb = cfg.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
@@ -258,7 +250,7 @@ void LanguageModel::initGPU() {
             rh_config.d_model = cfg.d_model;
             rh_config.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
             rh_config.num_ops = cfg.reasoning_num_ops;
-            const uint64_t rh_seed = training_state_.weight_init_seed + 10;
+            const uint64_t rh_seed = weight_init_seed + 10;
             reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(rh_config, rh_seed, primary_stream);
             std::cout << "✓ ReasoningHead layer created (d_total="
                       << rh_config.d_total() << ", num_ops=" << rh_config.num_ops << ")\n";
@@ -283,7 +275,7 @@ void LanguageModel::initGPU() {
             eb_config.arg_reinforce_weight = cfg.arg_reinforce_weight;
             eb_config.arg_reinforce_baseline_decay = cfg.arg_reinforce_baseline_decay;
 
-            const uint64_t eb_seed = training_state_.weight_init_seed + 20;
+            const uint64_t eb_seed = weight_init_seed + 20;
             execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_config, eb_seed, primary_stream);
             std::cout << "✓ ExecutionBlock layer created (V=" << eb_config.num_slots
                       << ", K=" << eb_config.num_exec_steps
@@ -297,7 +289,7 @@ void LanguageModel::initGPU() {
                 sel_config.d_slot_features = kSlotFeatureDim;
                 sel_config.cublas_handle = training_state_.cublas_handle;
 
-                const uint64_t sel_seed = training_state_.weight_init_seed + 30;
+                const uint64_t sel_seed = weight_init_seed + 30;
                 decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
                     sel_config, sel_seed, primary_stream);
 
@@ -322,7 +314,7 @@ void LanguageModel::initGPU() {
                 head.weight = Tensor::zeros({cfg.vocab_size, cfg.d_model}, primary_stream, w_name.c_str());
                 head.weight.requires_grad_();
                 head.weight.ensure_grad();
-                const uint64_t mtp_seed = training_state_.weight_init_seed + 3 + static_cast<uint64_t>(k);
+                const uint64_t mtp_seed = weight_init_seed + 3 + static_cast<uint64_t>(k);
                 Tensor::xavier_uniform_(head.weight, mtp_seed, primary_stream);
                 head.bias = Tensor::zeros({cfg.vocab_size}, primary_stream, b_name.c_str());
                 head.bias.requires_grad_();

@@ -9,13 +9,11 @@ All sizes use `max_cached_batch * max_cached_seq_len` = 10 * 1024 = **10,240 tok
 | Buffer | Size Formula | Est. MB |
 |--------|--------------|---------|
 | cached_encoder_output | 10240 x 1024 x 4 | 40 |
-| cached_logits / grad_logits | 10240 x vocab x 4 | **390** (vocab=10k) |
-| grad_encoder, grad_ffn_input, etc. | 10240 x 1024 x 4 | 40 each |
-| grad_ffn_hidden | 10240 x **d_ff** x 4 | 40 (d_ff=1024) or **160** (d_ff=4096) |
-| grad_q, grad_k, grad_v, grad_qkv_* | 10240 x 1024 x 4 | 40 each |
-| centering_scratch | 10240 x max(d_model,d_ff) | 40 |
+| cached_logits | 10240 x vocab x 4 | **390** (vocab=10k) |
 
-**Logits dominate** -- if `actual_vocab_size` > 10k, these scale linearly. At vocab=50k: ~2 GB for logits+grad_logits alone.
+Historical note: the old TrainingState-owned `grad_encoder`, `grad_ffn_*`, `grad_q/k/v`, `grad_qkv_*`, `grad_logits_tensor`, and centering scratch buffers were deleted. TensorContract owns activation/intermediate gradient lifecycle through `Tensor.grad_` and GradFn scratch.
+
+**Logits dominate** -- if `actual_vocab_size` > 10k, this scales linearly. At vocab=50k: ~2 GB for cached logits alone.
 
 ---
 
@@ -63,7 +61,7 @@ If vocab from tokenizer/GRMT is 20k-50k, this becomes 800 MB-2 GB for those two 
 
 ### 2. **d_ff mismatch**
 Config shows `d_ff: 1024` (same as d_model). Typical is `4 x d_model`.
-If some path uses `DEFAULT_D_FF = 3072` or `4*1024`, grad_ffn_hidden and other d_ff-sized buffers grow.
+If some path uses `DEFAULT_D_FF = 3072` or `4*1024`, per-layer ForwardIntermediates and TensorContract GradFn scratch grow.
 Verify `arch.d_ff` matches intent.
 
 ### 3. **cuBLAS / library workspace**

@@ -3,7 +3,7 @@
 // kMaxCachedBatch / kMaxCachedSeqLen were DEAD CODE (zero callers).
 // Actual cache limits flow through:
 //   LanguageModelConfig.max_cached_batch / max_cached_seq_len
-//     → TrainingState.max_cached_batch / max_cached_seq_len / max_cached_tokens
+//     → TrainingState Tensor allocation shapes
 //     → BatchPayload.validate() enforces cache fit at batch construction time
 //
 // Per-batch seq_len: single source of truth is GRIM::Batching::BatchPayload

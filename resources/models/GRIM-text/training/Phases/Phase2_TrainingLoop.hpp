@@ -61,6 +61,7 @@ struct BatchResult {
     int batch_idx = 0;
     float loss = 0.0f;
     float grad_rms = 0.0f;
+    bool grad_rms_valid = false;
     float learning_rate = 0.0f;
     int sequences_processed = 0;
     int tokens_processed = 0;
@@ -104,6 +105,13 @@ struct EpochResult {
  * @brief State that persists across batches and epochs
  */
 struct TrainingLoopState {
+    struct DiagnosticsState {
+        // Embedding-spike diagnostic history. Updated only by
+        // runGradientNormClipDiagnostic() when it emits the gated trace.
+        float prev_emb_rms = 0.0f;
+        bool has_prev_emb_rms = false;
+    };
+
     // Loss baseline tracking
     float initial_loss = 0.0f;
     float min_observed_loss = std::numeric_limits<float>::infinity();
@@ -119,16 +127,12 @@ struct TrainingLoopState {
     // Prediction comparison counter
     int prediction_comparison_good_batch_counter = 0;
     
-    // Last gradient RMS for growth detection
-    float last_grad_rms = 0.0f;
-
-    // Embedding-spike diagnostic state. Updated only when the expensive
-    // diagnostic actually runs; never advanced by skipped diagnostic batches.
-    float prev_emb_rms_for_spike_diag = 0.0f;
-    bool has_prev_emb_rms_for_spike_diag = false;
-
     // Last optimizer step that emitted a sample
     int last_sample_step = -1;
+
+    // Diagnostic-owned persistent state. Phase2 carries it across steps but
+    // does not interpret or mutate individual diagnostic fields directly.
+    DiagnosticsState diagnostics;
 
     // Central loss-signal detector. Owns ALL loss-spike detection state
     // (initial_loss baseline, EWMA mean/var, prev_step_loss,

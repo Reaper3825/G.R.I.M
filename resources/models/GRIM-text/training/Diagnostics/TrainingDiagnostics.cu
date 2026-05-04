@@ -99,6 +99,9 @@ EmbGradEquationDiag computeEmbGradEquation(
     float curr_emb_rms,
     cudaStream_t stream
 ) {
+    // SYNC DIAGNOSTIC CONTRACT: the cudaMemcpy calls below are blocking D2H
+    // copies by design. This routine is only valid on the gated diagnostics
+    // path after the caller has accepted sync-diagnostic cost.
     EmbGradEquationDiag diag{};
     diag.total_vocab = vocab_size;
     diag.prev_emb_rms = prev_emb_rms;

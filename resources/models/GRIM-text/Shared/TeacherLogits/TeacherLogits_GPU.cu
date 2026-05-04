@@ -3,6 +3,28 @@
 #include <sstream>
 
 namespace GRIM::TeacherLogits {
+
+Buffer::~Buffer() {
+    release(*this);
+}
+
+Buffer::Buffer(Buffer&& other) noexcept
+    : device(other.device), capacity(other.capacity) {
+    other.device = nullptr;
+    other.capacity = 0;
+}
+
+Buffer& Buffer::operator=(Buffer&& other) noexcept {
+    if (this != &other) {
+        release(*this);
+        device = other.device;
+        capacity = other.capacity;
+        other.device = nullptr;
+        other.capacity = 0;
+    }
+    return *this;
+}
+
 namespace {
 constexpr auto kModule = "TeacherLogits";
 
@@ -15,7 +37,7 @@ bool allocate(Buffer& buf, std::size_t elements) {
     }
     release(buf);
     const std::size_t bytes = elements * sizeof(float);
-    cudaError_t err = cudaMalloc(&buf.device, bytes);
+    cudaError_t err = cudaMalloc(reinterpret_cast<void**>(&buf.device), bytes);
     if (err != cudaSuccess) {
         std::ostringstream oss;
         oss << "[TeacherLogits] cudaMalloc(" << bytes << ") failed: "

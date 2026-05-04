@@ -26,7 +26,7 @@
  *
  * FAIL LOUD:
  * ==========
- * NaN/Inf flags written to GradMetrics (caller must check + crash).
+ * NaN/Inf flags written to GradMetrics and returned as hard status codes.
  * Kernel launch failures return error status codes.
  */
 
@@ -61,27 +61,30 @@ const char* statusToString(GradNormStatus status);
 //=============================================================================
 
 struct alignas(64) GradMetrics {
-    // Per-type gradient sum-of-squares (indices match ParamGroupType enum)
-    float embedding_sum_sq = 0.0f;      // EMBEDDING = 0
-    float lm_head_sum_sq = 0.0f;        // LM_HEAD = 1
-    float attention_sum_sq = 0.0f;      // ATTENTION = 2
-    float ffn_sum_sq = 0.0f;            // FFN = 3
-    float rmsnorm_sum_sq = 0.0f;        // RMSNORM = 4
-    float scratchblock_sum_sq = 0.0f;   // SCRATCHBLOCK = 5
-    float mtp_sum_sq = 0.0f;            // MTP = 6
-    float reasoning_head_sum_sq = 0.0f; // REASONING_HEAD = 7
-    float execution_block_sum_sq = 0.0f; // EXECUTION_BLOCK = 8
+    // Per-type gradient sum-of-squares. Do not index these by enum ordinal;
+    // GradNorm finalization maps ParamGroupType explicitly with a switch.
+    double embedding_sum_sq = 0.0;
+    double lm_head_sum_sq = 0.0;
+    double attention_sum_sq = 0.0;
+    double ffn_sum_sq = 0.0;
+    double rmsnorm_sum_sq = 0.0;
+    double scratchblock_sum_sq = 0.0;
+    double mtp_sum_sq = 0.0;
+    double reasoning_head_sum_sq = 0.0;
+    double execution_block_sum_sq = 0.0;
+    double slot_selector_sum_sq = 0.0;
 
     // Per-type element counts (for RMS computation)
-    int embedding_count = 0;
-    int lm_head_count = 0;
-    int attention_count = 0;
-    int ffn_count = 0;
-    int rmsnorm_count = 0;
-    int scratchblock_count = 0;
-    int mtp_count = 0;
-    int reasoning_head_count = 0;
-    int execution_block_count = 0;
+    uint64_t embedding_count = 0;
+    uint64_t lm_head_count = 0;
+    uint64_t attention_count = 0;
+    uint64_t ffn_count = 0;
+    uint64_t rmsnorm_count = 0;
+    uint64_t scratchblock_count = 0;
+    uint64_t mtp_count = 0;
+    uint64_t reasoning_head_count = 0;
+    uint64_t execution_block_count = 0;
+    uint64_t slot_selector_count = 0;
     
     uint32_t has_nan = 0;
     uint32_t has_inf = 0;
@@ -96,8 +99,8 @@ struct alignas(64) GradMetrics {
     // --- Accessor helpers ---
     
     /// RMS for a type: sqrt(sum_sq / count)
-    static float rms(float sum_sq, int count) {
-        return count > 0 ? std::sqrt(sum_sq / static_cast<float>(count)) : 0.0f;
+    static float rms(double sum_sq, uint64_t count) {
+        return count > 0 ? static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count))) : 0.0f;
     }
 };
 
@@ -109,7 +112,16 @@ struct GradNormScratch {
     float* d_partial_sums = nullptr;     // [max_groups] GPU: per-group sum-of-squares accumulator
     float* h_partial_sums = nullptr;     // [max_groups] pinned host: D2H of per-group sum-of-squares
     GradMetrics* h_metrics = nullptr;    // pinned host metrics (valid after measureGradientNorms returns)
+    cudaEvent_t d2h_complete_event = nullptr; // recorded after async D2H; finalize waits on it
     size_t max_groups = 0;
+    bool d2h_event_recorded = false;
+
+    GradNormScratch() = default;
+    ~GradNormScratch();
+    GradNormScratch(const GradNormScratch&) = delete;
+    GradNormScratch& operator=(const GradNormScratch&) = delete;
+    GradNormScratch(GradNormScratch&&) = delete;
+    GradNormScratch& operator=(GradNormScratch&&) = delete;
 };
 
 //=============================================================================
@@ -124,7 +136,7 @@ GradNormScratch* allocateGradNormScratch(size_t max_groups, cudaStream_t stream)
 
 /**
  * Launch gradient norm kernels and async D2H copy (no sync).
- * Caller must cudaStreamSynchronize(stream) then measureGradientNormsFinalize() before reading h_metrics.
+ * Records scratch->d2h_complete_event after the async D2H copy.
  * Use this to overlap CPU work (e.g. logging) with GPU work.
  */
 GradNormStatus measureGradientNormsLaunch(
@@ -135,7 +147,8 @@ GradNormStatus measureGradientNormsLaunch(
 );
 
 /**
- * Finalize metrics on CPU after D2H has completed (call after sync).
+ * Finalize metrics on CPU after D2H has completed. This waits on the recorded
+ * D2H event, so callers cannot accidentally read stale pinned host data.
  * Reads scratch->h_partial_sums, writes scratch->h_metrics.
  */
 GradNormStatus measureGradientNormsFinalize(

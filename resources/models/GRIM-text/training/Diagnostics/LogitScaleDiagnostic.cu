@@ -42,8 +42,8 @@ void runLogitScaleDiagnostic(
     // ========================================================================
     {
         const auto& ts = ctx.model->getTrainingState();
-        if (ts.cached_logits_tensor.data && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
-            const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
+        if (ts.cached_logits_tensor.data && payload.batch_size > 0 && payload.max_seq_len > 0) {
+            const int total_tokens = payload.total_tokens;
             const int vocab_size = ctx.config.actual_vocab_size;
             const int d_model = ctx.model->getConfig().d_model;
             
@@ -459,8 +459,8 @@ void runLogitScaleDiagnostic(
                         std::map<int, int> tok_counts;
                         std::vector<int> pos_to_tok(sample_positions, -1);
                         for (int pos = 0; pos < sample_positions; ++pos) {
-                            const int b = pos / ts.cached_seq_len;
-                            const int t = pos % ts.cached_seq_len;
+                            const int b = pos / payload.max_seq_len;
+                            const int t = pos % payload.max_seq_len;
                             if (b >= payload.batch_size) continue;
                             if (t >= payload.seq_lengths[b]) continue;
                             const int tok = payload.input_ids[b * payload.max_seq_len + t];

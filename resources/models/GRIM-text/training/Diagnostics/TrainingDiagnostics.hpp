@@ -69,6 +69,10 @@ struct EmbGradEquationDiag {
     float emb_rms_delta = 0.0f;       // curr - prev (positive = growing spike)
 };
 
+// SYNC DIAGNOSTIC CONTRACT: performs blocking device-to-host copies for token
+// IDs and the embedding gradient buffer so host code can compute frequency and
+// row-RMS statistics. Call only from a path already gated by
+// shouldSyncDiagnostics(); do not call from the ordinary async hot path.
 EmbGradEquationDiag computeEmbGradEquation(
     const GRIM::EmbeddingLayer* embedding_layer,
     const int* d_token_ids,     // GPU-resident batch token IDs [total_tokens]

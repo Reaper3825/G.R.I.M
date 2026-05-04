@@ -18,7 +18,7 @@
  * After D2H of per-group sum-of-squares, CPU loop computes:
  *   - Per-type sum_sq and element count aggregation
  *   - NaN/Inf detection with first-offender tracking
- * No GPU kernel needed — data is ~100 floats, trivial on CPU.
+ * No GPU kernel needed — data is small, trivial on CPU.
  */
 
 #include "GradNormGPU.hpp"
@@ -56,6 +56,16 @@ namespace {
 
 constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 constexpr int kMaxBlocksPerGroup = HyperParameters::CUDA_REDUCTION_MAX_BLOCKS;
+constexpr int kExpectedParamGroupTypes = 10;
+
+constexpr bool isPowerOfTwo(int value) {
+    return value > 0 && (value & (value - 1)) == 0;
+}
+
+static_assert(static_cast<int>(GRIM::ParamGroupType::COUNT) == kExpectedParamGroupTypes,
+              "GradNorm metrics assume exactly 10 ParamGroupType entries");
+static_assert(kBlockSize >= 64, "GradNorm reduction requires kBlockSize >= 64");
+static_assert(isPowerOfTwo(kBlockSize), "GradNorm reduction requires power-of-two kBlockSize");
 
 /**
  * sumSquaresBlockKernel - Sum of squares reduction for one gradient buffer
@@ -94,20 +104,71 @@ __global__ void sumSquaresBlockKernel(
         __syncthreads();
     }
     
-    // Warp reduction (no sync needed within warp)
+    // Warp reduction with explicit shuffle sync.
     if (tid < 32) {
-        volatile float* vshared = shared;
-        vshared[tid] += vshared[tid + 32];
-        vshared[tid] += vshared[tid + 16];
-        vshared[tid] += vshared[tid + 8];
-        vshared[tid] += vshared[tid + 4];
-        vshared[tid] += vshared[tid + 2];
-        vshared[tid] += vshared[tid + 1];
+        local_sum = shared[tid] + shared[tid + 32];
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+        }
     }
     
     // Thread 0 does atomic add to output
     if (tid == 0) {
-        atomicAdd(partial_sum, shared[0]);
+        atomicAdd(partial_sum, local_sum);
+    }
+}
+
+GradNormStatus accumulateGroupMetrics(
+    GradMetrics& m,
+    GRIM::ParamGroupType type,
+    double sum_sq,
+    uint64_t count
+) {
+    switch (type) {
+        case GRIM::ParamGroupType::EMBEDDING:
+            m.embedding_sum_sq += sum_sq;
+            m.embedding_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::LM_HEAD:
+            m.lm_head_sum_sq += sum_sq;
+            m.lm_head_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::ATTENTION:
+            m.attention_sum_sq += sum_sq;
+            m.attention_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::FFN:
+            m.ffn_sum_sq += sum_sq;
+            m.ffn_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::RMSNORM:
+            m.rmsnorm_sum_sq += sum_sq;
+            m.rmsnorm_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::SCRATCHBLOCK:
+            m.scratchblock_sum_sq += sum_sq;
+            m.scratchblock_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::MTP:
+            m.mtp_sum_sq += sum_sq;
+            m.mtp_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::REASONING_HEAD:
+            m.reasoning_head_sum_sq += sum_sq;
+            m.reasoning_head_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::EXECUTION_BLOCK:
+            m.execution_block_sum_sq += sum_sq;
+            m.execution_block_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::SLOT_SELECTOR:
+            m.slot_selector_sum_sq += sum_sq;
+            m.slot_selector_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::COUNT:
+            return GradNormStatus::INVALID_PARAM;
+        default:
+            return GradNormStatus::INVALID_PARAM;
     }
 }
 
@@ -116,6 +177,15 @@ __global__ void sumSquaresBlockKernel(
 //=============================================================================
 // FREE FUNCTION IMPLEMENTATIONS
 //=============================================================================
+
+GradNormScratch::~GradNormScratch() {
+    if (d2h_complete_event) { cudaEventDestroy(d2h_complete_event); d2h_complete_event = nullptr; }
+    if (d_partial_sums) { cudaFree(d_partial_sums); d_partial_sums = nullptr; }
+    if (h_partial_sums) { cudaFreeHost(h_partial_sums); h_partial_sums = nullptr; }
+    if (h_metrics) { cudaFreeHost(h_metrics); h_metrics = nullptr; }
+    max_groups = 0;
+    d2h_event_recorded = false;
+}
 
 GradNormScratch* allocateGradNormScratch(size_t max_groups, cudaStream_t stream) {
     if (max_groups == 0) {
@@ -139,14 +209,20 @@ GradNormScratch* allocateGradNormScratch(size_t max_groups, cudaStream_t stream)
     err = cudaMallocHost(&s->h_partial_sums, max_groups * sizeof(float));
     if (err != cudaSuccess) {
         fprintf(stderr, "[GradNorm] FATAL: cudaMallocHost h_partial_sums failed: %s\n", cudaGetErrorString(err));
-        cudaFree(s->d_partial_sums); delete s; return nullptr;
+        delete s; return nullptr;
     }
 
     // Pinned host: finalized metrics (written by CPU after D2H)
     err = cudaMallocHost(&s->h_metrics, sizeof(GradMetrics));
     if (err != cudaSuccess) {
         fprintf(stderr, "[GradNorm] FATAL: cudaMallocHost h_metrics failed: %s\n", cudaGetErrorString(err));
-        cudaFree(s->d_partial_sums); cudaFreeHost(s->h_partial_sums); delete s; return nullptr;
+        delete s; return nullptr;
+    }
+
+    err = cudaEventCreateWithFlags(&s->d2h_complete_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[GradNorm] FATAL: cudaEventCreateWithFlags d2h_complete_event failed: %s\n", cudaGetErrorString(err));
+        delete s; return nullptr;
     }
 
     *s->h_metrics = GradMetrics{};
@@ -159,7 +235,11 @@ GradNormStatus measureGradientNormsLaunch(
     GradNormScratch* scratch,
     cudaStream_t stream
 ) {
+    StreamController::fatalIfDefaultStream(stream, "measureGradientNormsLaunch");
     if (!scratch || scratch->max_groups == 0) {
+        return GradNormStatus::NOT_INITIALIZED;
+    }
+    if (!scratch->d_partial_sums || !scratch->h_partial_sums || !scratch->h_metrics || !scratch->d2h_complete_event) {
         return GradNormStatus::NOT_INITIALIZED;
     }
     if (!groups || num_groups == 0) {
@@ -172,6 +252,7 @@ GradNormStatus measureGradientNormsLaunch(
     }
 
     cudaError_t err;
+    scratch->d2h_event_recorded = false;
 
     // Phase 0: Zero per-group accumulators
     err = cudaMemsetAsync(scratch->d_partial_sums, 0, num_groups * sizeof(float), stream);
@@ -187,7 +268,7 @@ GradNormStatus measureGradientNormsLaunch(
         if (!grads || sz == 0) continue;
 
         int blocks = static_cast<int>((sz + kBlockSize - 1) / kBlockSize);
-        blocks = min(blocks, kMaxBlocksPerGroup);
+        blocks = std::min(blocks, kMaxBlocksPerGroup);
 
         sumSquaresBlockKernel<<<blocks, kBlockSize, 0, stream>>>(
             grads, sz, &scratch->d_partial_sums[g]
@@ -207,6 +288,13 @@ GradNormStatus measureGradientNormsLaunch(
         return GradNormStatus::CUDA_ERROR;
     }
 
+    err = cudaEventRecord(scratch->d2h_complete_event, stream);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[GradNorm] FATAL: cudaEventRecord d2h_complete_event failed: %s\n", cudaGetErrorString(err));
+        return GradNormStatus::CUDA_ERROR;
+    }
+    scratch->d2h_event_recorded = true;
+
     return GradNormStatus::SUCCESS;
 }
 
@@ -215,26 +303,30 @@ GradNormStatus measureGradientNormsFinalize(
     size_t num_groups,
     GradNormScratch* scratch
 ) {
-    if (!scratch || !scratch->h_partial_sums || !scratch->h_metrics) {
+    if (!scratch || !scratch->h_partial_sums || !scratch->h_metrics || !scratch->d2h_complete_event) {
         return GradNormStatus::NOT_INITIALIZED;
     }
     if (!groups || num_groups == 0) {
         return GradNormStatus::INVALID_PARAM;
+    }
+    if (!scratch->d2h_event_recorded) {
+        fprintf(stderr, "[GradNorm] ERROR: finalize called before a D2H completion event was recorded\n");
+        return GradNormStatus::INVALID_PARAM;
+    }
+
+    cudaError_t err = cudaEventSynchronize(scratch->d2h_complete_event);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[GradNorm] FATAL: cudaEventSynchronize d2h_complete_event failed: %s\n", cudaGetErrorString(err));
+        return GradNormStatus::CUDA_ERROR;
     }
 
     // Phase 4: CPU finalization — per-type aggregation, NaN/Inf detection
     GradMetrics& m = *scratch->h_metrics;
     m = GradMetrics{};  // Zero everything
 
-    // Per-type accumulators (indexed by ParamGroupType enum: 0..6)
-    constexpr int kNumGroups = static_cast<int>(GRIM::ParamGroupType::COUNT);
-    float type_sum_sq[kNumGroups] = {};
-    int type_count[kNumGroups] = {};
-
     for (size_t g = 0; g < num_groups; ++g) {
         float sq = scratch->h_partial_sums[g];
         size_t sz = groups[g].size();
-        int type_idx = static_cast<int>(groups[g].type);
 
         // NaN/Inf detection
         if (std::isnan(sq)) {
@@ -254,30 +346,23 @@ GradNormStatus measureGradientNormsFinalize(
             continue;  // Don't accumulate Inf into totals
         }
 
-        // Skip empty groups
-        if (sz == 0) continue;
-
-        // Accumulate per-type
-        if (type_idx >= 0 && type_idx < kNumGroups) {
-            type_sum_sq[type_idx] += sq;
-            type_count[type_idx] += static_cast<int>(sz);
+        const GradNormStatus type_status = accumulateGroupMetrics(
+            m,
+            groups[g].type,
+            static_cast<double>(sq),
+            static_cast<uint64_t>(sz));
+        if (type_status != GradNormStatus::SUCCESS) {
+            fprintf(stderr, "[GradNorm] ERROR: invalid ParamGroupType=%d at group=%zu\n",
+                    static_cast<int>(groups[g].type), g);
+            return type_status;
         }
     }
-
-    // Write per-type metrics
-    m.embedding_sum_sq = type_sum_sq[0];      m.embedding_count = type_count[0];
-    m.lm_head_sum_sq = type_sum_sq[1];        m.lm_head_count = type_count[1];
-    m.attention_sum_sq = type_sum_sq[2];       m.attention_count = type_count[2];
-    m.ffn_sum_sq = type_sum_sq[3];            m.ffn_count = type_count[3];
-    m.rmsnorm_sum_sq = type_sum_sq[4];        m.rmsnorm_count = type_count[4];
-    m.scratchblock_sum_sq = type_sum_sq[5];   m.scratchblock_count = type_count[5];
-    m.mtp_sum_sq = type_sum_sq[6];            m.mtp_count = type_count[6];
-    m.reasoning_head_sum_sq = type_sum_sq[7]; m.reasoning_head_count = type_count[7];
-    m.execution_block_sum_sq = type_sum_sq[8]; m.execution_block_count = type_count[8];
 
     // Aggregate metrics
     m.groups_processed = static_cast<uint32_t>(num_groups);
 
+    if (m.has_nan) return GradNormStatus::NAN_DETECTED;
+    if (m.has_inf) return GradNormStatus::INF_DETECTED;
     return GradNormStatus::SUCCESS;
 }
 
@@ -301,9 +386,6 @@ GradNormStatus measureGradientNorms(
 
 void freeGradNormScratch(GradNormScratch*& scratch) {
     if (!scratch) return;
-    if (scratch->d_partial_sums) cudaFree(scratch->d_partial_sums);
-    if (scratch->h_partial_sums) cudaFreeHost(scratch->h_partial_sums);
-    if (scratch->h_metrics) cudaFreeHost(scratch->h_metrics);
     delete scratch;
     scratch = nullptr;
 }

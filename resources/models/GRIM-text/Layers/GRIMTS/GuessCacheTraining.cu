@@ -235,8 +235,7 @@ void updateGuessCacheFromBatch(
     }
 
     if (!training_state.cached_logits_tensor.data ||
-        training_state.cached_batch_size != static_cast<int>(guess_count) ||
-        training_state.cached_seq_len <= 0) {
+        payload.max_seq_len <= 0) {
         EmitModuleWarning(ModuleId::GuessCache,
                           "Guess cache skipped: cached logits not ready for prediction-based pass",
                           global_step);
@@ -246,7 +245,7 @@ void updateGuessCacheFromBatch(
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     const int batch_size     = static_cast<int>(guess_count);
     const int vocab_size     = payload.vocab_size;
-    const int cached_seq_len = training_state.cached_seq_len;
+    const int payload_seq_len = payload.max_seq_len;
 
     // --- Find last valid target position per sequence ---
     std::vector<int> guess_positions(batch_size, -1);
@@ -258,7 +257,7 @@ void updateGuessCacheFromBatch(
         while (pos >= 0 && payload.target_ids[flat_start + pos] < 0) {
             --pos;
         }
-        if (pos >= 0 && pos < cached_seq_len) {
+        if (pos >= 0 && pos < payload_seq_len) {
             guess_positions[i] = pos;
         }
     }
@@ -270,7 +269,7 @@ void updateGuessCacheFromBatch(
         const int pos = guess_positions[i];
         if (pos < 0) continue;
         const std::size_t offset =
-            (static_cast<std::size_t>(i) * cached_seq_len + pos) * vocab_size;
+            (static_cast<std::size_t>(i) * payload_seq_len + pos) * vocab_size;
         err = cudaMemcpyAsync(
             pred_logits.data() + static_cast<std::size_t>(i) * vocab_size,
             training_state.cached_logits_tensor.data + offset,

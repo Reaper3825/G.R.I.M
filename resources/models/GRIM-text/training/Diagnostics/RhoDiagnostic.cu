@@ -34,25 +34,21 @@ void computeRhoDiagnostic(
     const auto& ai = ts.autograd_intermediates;
     const int num_layers = static_cast<int>(ai.encoder_layer_outputs.size());
     const int d_model = ctx.model->getConfig().d_model;
-    const int max_seq_len = ts.cached_seq_len;
-    const int rect_positions = ts.cached_batch_size * max_seq_len;
+    const int max_seq_len = payload.max_seq_len;
+    const int rect_positions = payload.total_tokens;
 
     if (num_layers <= 0 || rect_positions < 2) return;
 
     // ── Geometry invariant guards ──
-    // The hidden-state rectangular buffer is [cached_batch_size * cached_seq_len, d_model].
-    // payload dimensions must fit inside that allocation or we index past the copy.
-    if (payload.batch_size > ts.cached_batch_size) {
+    // Hidden-state snapshots are laid out using the Phase1-authored payload rectangle:
+    // [payload.batch_size * payload.max_seq_len, d_model]. Do not rediscover
+    // current-step geometry from TrainingState.
+    if (payload.total_tokens != payload.batch_size * payload.max_seq_len) {
         throw std::runtime_error(
-            "[RhoDiagnostic] payload.batch_size (" + std::to_string(payload.batch_size) +
-            ") > ts.cached_batch_size (" + std::to_string(ts.cached_batch_size) +
+            "[RhoDiagnostic] payload.total_tokens (" + std::to_string(payload.total_tokens) +
+            ") != payload.batch_size * payload.max_seq_len (" +
+            std::to_string(payload.batch_size * payload.max_seq_len) +
             ") at " + __FILE__ + ":" + std::to_string(__LINE__));
-    }
-    if (payload.max_seq_len != max_seq_len) {
-        throw std::runtime_error(
-            "[RhoDiagnostic] payload.max_seq_len (" + std::to_string(payload.max_seq_len) +
-            ") != ts.cached_seq_len (" + std::to_string(max_seq_len) +
-            ") — layout mismatch, at " + __FILE__ + ":" + std::to_string(__LINE__));
     }
     for (int s = 0; s < payload.batch_size; ++s) {
         if (payload.seq_lengths[s] > max_seq_len) {
@@ -225,6 +221,16 @@ void computeRhoDiagnostic(
     // cached_encoder_output is overwritten with centered data after LM head forward.
     // Using layer_id = num_layers to distinguish from raw encoder layers.
     if (ts.cached_encoder_output.data) {
+        const auto& cached_shape = ts.cached_encoder_output.shape.require("RhoDiagnostic cached_encoder_output");
+        if (!cached_shape.is_2d_layout()) {
+            throw std::runtime_error("[RhoDiagnostic] cached_encoder_output must be a 2D buffer");
+        }
+        if (payload.total_tokens > cached_shape.as_2d().rows) {
+            throw std::runtime_error(
+                "[RhoDiagnostic] payload.total_tokens (" + std::to_string(payload.total_tokens) +
+                ") exceeds cached_encoder_output rows (" + std::to_string(cached_shape.as_2d().rows) +
+                ") at " + __FILE__ + ":" + std::to_string(__LINE__));
+        }
         auto raw = compute_rho(ts.cached_encoder_output.data);
         float delta = 0.0f;
         int vs_id = -2;

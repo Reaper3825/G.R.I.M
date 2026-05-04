@@ -8,9 +8,9 @@
 #include "LossStatsDiagnostic.hpp"
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/LogRecorder/LogTypes.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
-#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -39,6 +39,7 @@ std::string formatScalar(float value, int precision = 4) {
 
 void runLossStatsDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
+    const GRIM::Batching::BatchPayload& payload,
     const GRIMText::Training::BatchResult& result,
     int batch_idx)
 {
@@ -46,8 +47,7 @@ void runLossStatsDiagnostic(
     // EQUATION LOGGING: Per-batch loss computation trace (Issue #120 debug)
     // ========================================================================
     {
-        const auto& ts_eq = ctx.model->getTrainingState();
-        const int valid_tokens_eq = ts_eq.cached_valid_tokens;
+        const int valid_tokens_eq = payload.lm_valid_tokens;
         const float expected_random_loss = std::log(static_cast<float>(ctx.config.actual_vocab_size));
 
         std::ostringstream eq;
@@ -59,9 +59,8 @@ void runLossStatsDiagnostic(
     }
 
     {
-        const auto& ts = ctx.model->getTrainingState();
-        const int valid_tokens = ts.cached_valid_tokens;
-        const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
+        const int valid_tokens = payload.lm_valid_tokens;
+        const int total_tokens = payload.total_tokens;
         const int masked_tokens = std::max(total_tokens - valid_tokens, 0);
         const float loss_sum = (valid_tokens > 0)
             ? result.loss * static_cast<float>(valid_tokens)

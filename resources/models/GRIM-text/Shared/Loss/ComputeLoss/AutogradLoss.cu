@@ -967,7 +967,7 @@ struct NLLLossGradFn : public GradFn {
     bool entropy_reg_enabled;
     
     // Class-balanced loss: per-token weight = 1/freq(target)^β
-    const float* class_weights;     // NOT OWNED — points to TrainingState::d_class_weights
+    const float* class_weights;     // NOT OWNED — points to TrainingState::class_weights_tensor.data
     float weight_sum;               // Sum of per-token class weights for this batch
     
     // Upstream gradient chain

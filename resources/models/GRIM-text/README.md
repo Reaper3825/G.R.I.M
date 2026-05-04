@@ -409,7 +409,7 @@ FlatBufferEmbeddingSerializer::load("embeddings.grem", embedder);
 #include "grim_language_model.hpp"
 
 GRIM::LanguageModel model("config.json");
-model.initGPU();  // Enable CUDA acceleration
+model.initGPU(/*weight_init_seed=*/1001);  // Enable CUDA acceleration
 
 auto output = model.generate("Your prompt here", 100);
 ```
@@ -665,7 +665,7 @@ auto output = model.generate("Your prompt here", 100);
 **Text Generation:**
 ```cpp
 GRIM::LanguageModel model("config.json");
-model.initGPU();  // Enable GPU acceleration
+model.initGPU(/*weight_init_seed=*/1001);  // Enable GPU acceleration
 
 std::string prompt = "The future of AI is";
 auto generated = model.generate(prompt, 100);  // Generate 100 tokens
@@ -825,7 +825,7 @@ int main() {
     GRIM::LanguageModel model("config.json");
     
     // Enable GPU acceleration
-    model.initGPU();
+    model.initGPU(/*weight_init_seed=*/1001);
     std::cout << "GPU initialized" << std::endl;
     
     // Generate text

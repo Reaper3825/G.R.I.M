@@ -8,13 +8,12 @@
 
 #include "ClassBalancedWeights.hpp"
 
-#include "../../../Shared/CudaAllocUtils.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -78,11 +77,18 @@ void computeAndUploadClassBalancedWeights(
         }
     }
 
-    // Upload to GPU
+    if (vocab_size > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error("[class_balanced] vocab_size exceeds Tensor shape int capacity");
+    }
+
+    // Upload to Tensor-owned GPU storage
     const std::size_t weights_bytes = static_cast<std::size_t>(vocab_size) * sizeof(float);
-    GRIM::CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&ts.d_class_weights),
-                                       weights_bytes, "phase1_class_weights");
-    cudaMemcpyAsync(ts.d_class_weights, h_class_weights.data(), weights_bytes,
+    ts.class_weights_tensor = GRIM::Tensor::empty(
+        TensorContract::TensorShape::make_BSM(1, static_cast<int>(vocab_size)),
+        false,
+        stream,
+        "phase1_class_weights");
+    cudaMemcpyAsync(ts.class_weights_tensor.data, h_class_weights.data(), weights_bytes,
                      cudaMemcpyHostToDevice, stream);
     ts.class_weights_vocab_size = static_cast<int>(vocab_size);
     cudaStreamSynchronize(stream);

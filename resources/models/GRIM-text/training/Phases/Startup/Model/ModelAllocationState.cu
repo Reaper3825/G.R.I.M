@@ -28,13 +28,13 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const StartupConfig& config,
     const RunCapacity& run_capacity,
     uint32_t vocab_size,
-    uint64_t xavier_seed,
+    uint64_t weight_init_seed,
     TrainingLogger& logger,
     std::string& loaded_checkpoint_path)
 {
     loaded_checkpoint_path.clear();
 
-    logger.log("Initializing model with xavier_seed=" + std::to_string(xavier_seed) + "...");
+    logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
 
     const auto& arch = config.hyperparameters.architecture;
 
@@ -118,14 +118,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->initPBM();
     logger.log("✓ RoPE initialized");
 
-    {
-        logger.log("Storing autograd weight init seed...");
-        model->getTrainingState().initializeAutogradSeed(xavier_seed);
-        logger.log("✓ Autograd seed stored (weight_init_seed=" + std::to_string(xavier_seed) + ")");
-    }
-
-    logger.log("Initializing GPU encoder...");
-    model->initGPU();
+    logger.log("Initializing GPU encoder with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
+    model->initGPU(weight_init_seed);
     logger.log("✓ GPU encoder fully initialized");
 
     logger.log("Initializing TrainingState (grad buffers, activation caches)...");
@@ -232,9 +226,6 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
     allocation.model_max_cached_batch = model_cfg.max_cached_batch;
     allocation.model_max_cached_seq_len = model_cfg.max_cached_seq_len;
     allocation.model_max_tokens_per_batch = model_cfg.max_tokens_per_batch;
-    allocation.training_state_max_cached_batch = state.max_cached_batch;
-    allocation.training_state_max_cached_seq_len = static_cast<std::uint32_t>(state.max_cached_seq_len);
-    allocation.training_state_max_tokens_per_batch = static_cast<int>(state.max_logit_tokens);
 
     if (allocation.model_max_cached_batch != static_cast<int>(cap.batch_rows)) {
         throw std::runtime_error("FATAL: model max_cached_batch does not match RunCapacity (model=" +
@@ -252,19 +243,22 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
                                  " stem=" + std::to_string(cap.max_tokens_per_batch) + ")");
     }
 
-    if (allocation.training_state_max_cached_batch != static_cast<int>(cap.batch_rows)) {
-        throw std::runtime_error("FATAL: TrainingState max_cached_batch does not match RunCapacity (state=" +
-                                 std::to_string(allocation.training_state_max_cached_batch) +
-                                 " stem=" + std::to_string(cap.batch_rows) + ")");
+    const auto& token_shape = state.cached_token_ids_tensor.shape.require("ModelAllocated cached_token_ids_tensor");
+    if (!token_shape.is_2d_layout()) {
+        throw std::runtime_error("FATAL: cached_token_ids_tensor must be a 2D token buffer");
     }
-    if (allocation.training_state_max_cached_seq_len != cap.seq_cap) {
-        throw std::runtime_error("FATAL: TrainingState max_seq_len_cache does not match RunCapacity (state=" +
-                                 std::to_string(allocation.training_state_max_cached_seq_len) +
-                                 " stem=" + std::to_string(cap.seq_cap) + ")");
+    const auto& logits_shape = state.cached_logits_tensor.shape.require("ModelAllocated cached_logits_tensor");
+    if (!logits_shape.is_2d_layout()) {
+        throw std::runtime_error("FATAL: cached_logits_tensor must be a 2D logits buffer");
     }
-    if (allocation.training_state_max_tokens_per_batch != static_cast<int>(cap.max_tokens_per_batch)) {
-        throw std::runtime_error("FATAL: TrainingState max_logit_tokens does not match RunCapacity (state=" +
-                                 std::to_string(allocation.training_state_max_tokens_per_batch) +
+    if (token_shape.as_2d().cols != static_cast<int>(cap.max_tokens_per_batch)) {
+        throw std::runtime_error("FATAL: cached_token_ids_tensor capacity does not match RunCapacity (tensor=" +
+                                 std::to_string(token_shape.as_2d().cols) +
+                                 " stem=" + std::to_string(cap.max_tokens_per_batch) + ")");
+    }
+    if (logits_shape.as_2d().rows != static_cast<int>(cap.max_tokens_per_batch)) {
+        throw std::runtime_error("FATAL: cached_logits_tensor row capacity does not match RunCapacity (tensor=" +
+                                 std::to_string(logits_shape.as_2d().rows) +
                                  " stem=" + std::to_string(cap.max_tokens_per_batch) + ")");
     }
 

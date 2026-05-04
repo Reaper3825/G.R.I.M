@@ -10,10 +10,6 @@ struct ModelAllocationState {
     int model_max_cached_batch = 0;
     std::uint32_t model_max_cached_seq_len = 0;
     int model_max_tokens_per_batch = 0;
-
-    int training_state_max_cached_batch = 0;
-    std::uint32_t training_state_max_cached_seq_len = 0;
-    int training_state_max_tokens_per_batch = 0;
 };
 
 ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingContext& ctx);

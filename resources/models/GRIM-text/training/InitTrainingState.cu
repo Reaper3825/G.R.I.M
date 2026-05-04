@@ -46,7 +46,7 @@ void LanguageModel::initCuBLASHandle() {
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     StreamController::fatalIfDefaultStream(primary_stream, "LanguageModel::initCuBLASHandle");
 
-    cublasStatus_t cublas_err = cublasCreate(&training_state_.cublas_handle);
+    cublasStatus_t cublas_err = cublasCreate(training_state_.cublas_handle.outParam());
     if (cublas_err != CUBLAS_STATUS_SUCCESS) {
         std::cerr << "Failed to create cuBLAS handle: " << cublas_err << std::endl;
         throw std::runtime_error("cuBLAS handle creation failed");
@@ -159,7 +159,7 @@ void LanguageModel::initTrainingState() {
      training_state_.cached_num_layers = cfg.num_layers;
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     
-    std::cout << "[DEBUG-INIT-2] After PBM, before autograd check." << std::endl << std::flush;
+    std::cout << "[DEBUG-INIT-2] After PBM, checking layer pointers." << std::endl << std::flush;
     
     // ═══════════════════════════════════════════════════════════════
     // PARAMETER TENSORS: Preallocate once, reuse throughout training
@@ -170,20 +170,8 @@ void LanguageModel::initTrainingState() {
     
     using TC = TensorContract::TensorShape;
     
-    // ═══════════════════════════════════════════════════════════════
-    // RULE 20: autograd MUST be initialized (seed stored)
-    // ═══════════════════════════════════════════════════════════════
-    // Phase1_Startup step 2.75 calls initializeAutogradSeed() which stores
-    // the weight init seed. If not set, it's a bug - fail loud!
-    
-    if (!training_state_.seed_initialized_) {
-        throw std::runtime_error(
-            "[InitTrainingState] FATAL: Autograd seed not initialized!\n"
-            "Phase1_Startup must call initializeAutogradSeed() in step 2.75 before initTrainingState().");
-    }
-    
     // All weights are owned by Pattern B layers (EmbeddingLayer, LMHeadLayer, EncodingLayer, ScratchBlockLayer)
-    std::cout << "[DEBUG-INIT-4] autograd initialized, checking layer pointers..." << std::endl << std::flush;
+    std::cout << "[DEBUG-INIT-4] checking Pattern B layer pointers..." << std::endl << std::flush;
     
     // CRASH DEBUG: Step-by-step pointer access to find exact crash point
     // ISSUE #59: Use grad_data() accessor
@@ -289,20 +277,14 @@ void LanguageModel::initTrainingState() {
                                  std::to_string(max_seq_len_cache) + ")");
     }
 
-    const size_t max_logit_tokens = max_tokens;
-
-    training_state_.max_cached_batch = static_cast<int>(max_batch_size);
-    training_state_.max_cached_seq_len = static_cast<int>(max_seq_len_cache);
-    training_state_.max_cached_tokens = max_tokens;
-    training_state_.max_logit_tokens = max_logit_tokens;
+    const size_t logit_token_capacity = max_tokens;
     
     // DELETED: batch_prep_* lazy allocation (Rule 20) — replaced by BatchPayload struct
     
-    // BUG FIX: Set kv_cache_capacity for inference sampling during training
-    // Previously missing - caused forwardInit() to fail with capacity=0
-    training_state_.kv_cache_capacity = static_cast<int>(max_seq_len_cache);
-    training_state_.kv_cache_len = 0;  // Start with empty cache
-    
+    // Generation/KV-cache state is intentionally NOT initialized here.
+    // Training-time sampling must explicitly call ensureKVCacheAllocated(),
+    // which creates GenerationState from the authored config capacity.
+
     // NOTE: single_token_hidden/logits/embedding are inference-only buffers.
     // Allocated in InitInferenceState.cu when inference is initialized.
     // NOT needed during training — removed dead allocations (Finding 3).
@@ -319,17 +301,14 @@ void LanguageModel::initTrainingState() {
     
     // Allocate logits cache with LOGITS layout tracking (TensorContract integration)
     training_state_.cached_logits_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_LOGITS(max_logit_tokens, cfg.vocab_size), false, primary_stream, "cached_logits");
-    std::cout << "✓ Allocated cached_logits [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
+        TensorContract::TensorShape::make_LOGITS(logit_token_capacity, cfg.vocab_size), false, primary_stream, "cached_logits");
+    std::cout << "✓ Allocated cached_logits [" << logit_token_capacity << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
     training_state_.cached_targets_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "cached_targets");
-
-    if (cfg.mtp_enabled && cfg.mtp_k > 0) {
-        training_state_.mtp_shifted_targets_tensor = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "mtp_shifted_targets");
-        std::cout << "✓ Allocated MTP shifted targets buffer [" << max_logit_tokens << "]" << std::endl;
-    }
+        TensorContract::TensorShape::make_BSM(logit_token_capacity, 1), false, primary_stream, "cached_targets");
+    // MTP shifted targets are intentionally NOT TrainingState-owned: each MTP
+    // head needs a distinct target tensor in AutogradIntermediates because
+    // NLLLossGradFn stores raw target pointers through backward.
     
     // NOTE: Using empty() not zeros() - ComputeLossBatch fully overwrites this buffer
     // via cudaMemcpyAsync before every forward pass. No need to waste bandwidth zero-filling.
@@ -342,7 +321,7 @@ void LanguageModel::initTrainingState() {
     std::cout << "✓ Allocated token IDs cache (Tensor API) [" << max_tokens << "]" << std::endl;
     
     // BUG FIX: Numeric buffers must be sized by max_tokens (full cache capacity)
-    // not max_logit_tokens (training optimization). Inference sampling requires
+    // not the logits-only capacity. Inference sampling requires
     // the full buffer for sequences up to max_cached_seq_len.
     // BUG FIX: Always allocate numeric/text buffers even when ScratchBlock is disabled
     // because buildBatchPayload() always populates these fields from tokenizer
@@ -399,81 +378,6 @@ void LanguageModel::initTrainingState() {
     training_state_.sequence_weight_capacity = static_cast<int>(max_batch_size);
     training_state_.sequence_weight_count = 0;
     
-    // ═══════════════════════════════════════════════════════════════
-    //  INTERMEDIATE GRADIENT TENSORS (Issue #45 FIX: Proper autograd)
-    // ═══════════════════════════════════════════════════════════════
-    // Using Tensor::zeros() instead of raw cudaMalloc for proper lifecycle management.
-    // Tensors own their memory and provide zero_grad(stream) for gradient zeroing.
-    
-    cudaStream_t grad_stream = training_state_.stream_ctrl.getPrimaryStream();
-    
-    // grad_logits: [max_logit_tokens, vocab_size] LOGITS layout
-    training_state_.grad_logits_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_LOGITS(static_cast<int>(max_logit_tokens), cfg.vocab_size),
-        false, grad_stream, "grad_logits");
-    std::cout << "✓ Allocated grad_logits_tensor [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
-
-    // grad_encoder: [max_tokens, d_model]
-    training_state_.grad_encoder_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
-        false, grad_stream, "grad_encoder_out");
-
-    // ═══════════════════════════════════════════════════════════════
-    //  ENCODER BACKWARD TEMPORARIES (Issue #45 FIX: Tensor allocation)
-    // ═══════════════════════════════════════════════════════════════
-    const int max_tokens_int = static_cast<int>(max_tokens);
-    
-    // FFN backward temporaries
-    training_state_.grad_ffn_input_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_ffn_input");
-    
-    training_state_.grad_ffn_hidden_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_ff),
-        false, grad_stream, "grad_ffn_hidden");
-    
-    // Attention backward temporaries (model-width)
-    training_state_.grad_attn_input_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_attn_input");
-    
-    training_state_.grad_attn_out_proj_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_attn_out_before_proj");
-    
-    training_state_.grad_attn_out_bhsd_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_attn_out_reshaped");
-    
-    // QKV gradients (need 4D shape for attention, but stored flat for now)
-    // Full shape: [batch, heads, seq, head_dim] - using BSM as [tokens, d_model]
-    training_state_.grad_q_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_Q");
-    
-    training_state_.grad_k_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_K");
-    
-    training_state_.grad_v_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_V");
-    
-    // QKV fused [tokens, 3*d_model]
-    training_state_.grad_qkv_concat_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_QKV_FUSED(max_tokens_int, 3 * cfg.d_model),
-        false, grad_stream, "grad_qkv_concat");
-    
-    training_state_.grad_qkv_input_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_qkv_input");
-    
-    // DEDICATED scratch buffer for attention output BSM conversion (W_o gradient computation)
-    // CRITICAL: Do NOT reuse grad_qkv_input - prevents temporal aliasing bugs
-    training_state_.grad_attn_bsm_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream, "grad_attn_bsm_scratch");
-    
     // Rule 20: NO BACKWARDS COMPATIBILITY - callers must use tensor.data directly
     // Removed raw pointer alias assignments
     // centering_scratch_tensor DELETED — cached_encoder_output is now overwritten
@@ -482,21 +386,13 @@ void LanguageModel::initTrainingState() {
     // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages
     // (was ~56MB dead GPU allocation). Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
     
-    // Loss scratch buffers using Tensor API (Rule 20: no raw cudaMalloc)
-    training_state_.d_loss_scratch = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(max_logit_tokens), 1),
-        false, primary_stream, "d_loss_scratch");
-    training_state_.d_loss_sum_scratch = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, 1),  // Scalar
-        false, primary_stream, "d_loss_sum_scratch");
-
     // Initialize scratch block pool for pinned memory batch transfers
-    // Block size derived from max_cached_tokens — the largest per-batch transfer is
+    // Block size derived from max_tokens — the largest per-batch transfer is
     // text_features at max_tokens * kTextFeatureDim * sizeof(uint16_t).
     training_state_.scratch_enabled = true;
     
     // kTextFeatureDim already declared above from BatchPayload::kTextFeatureDim
-    const size_t max_transfer_bytes = training_state_.max_cached_tokens
+    const size_t max_transfer_bytes = max_tokens
                                     * static_cast<size_t>(kTextFeatureDim) * sizeof(uint16_t);
     const size_t tokens_per_block = (max_transfer_bytes + sizeof(int) - 1) / sizeof(int);
     if (tokens_per_block == 0) {
@@ -510,7 +406,7 @@ void LanguageModel::initTrainingState() {
         scratch_config.num_blocks = 2;  // Double buffer
         scratch_config.use_write_combined = false;
         
-        training_state_.scratch_pool = new ScratchBlock::ScratchBlockPool(scratch_config);
+        training_state_.scratch_pool = std::make_unique<ScratchBlock::ScratchBlockPool>(scratch_config);
         
         if (!training_state_.scratch_pool || !training_state_.scratch_pool->isInitialized()) {
             throw std::runtime_error("InitTrainingState: Scratch block pool initialization failed");
@@ -553,14 +449,14 @@ void LanguageModel::initTrainingState() {
     //  STEP FINAL: Confirm initialization complete
     // ═══════════════════════════════════════════════════════════════════════════
     
-    std::cout << "✓ Verified: Autograd seed initialized (from Phase1_Startup)" << std::endl;
+    std::cout << "✓ Verified: Pattern B layers initialized by initGPU()" << std::endl;
     
     training_state_.initialized = true;
     std::cout << "✓ Training state initialized with full gradient buffers" << std::endl;
-    std::cout << "[InitTrainingState] max_cached_batch=" << training_state_.max_cached_batch
-              << " max_cached_seq_len=" << training_state_.max_cached_seq_len
-              << " max_cached_tokens=" << training_state_.max_cached_tokens
-              << " max_logit_tokens=" << training_state_.max_logit_tokens << std::endl;
+    std::cout << "[InitTrainingState] max_cached_batch=" << max_batch_size
+              << " max_cached_seq_len=" << max_seq_len_cache
+              << " token_capacity=" << max_tokens
+              << " logit_token_capacity=" << logit_token_capacity << std::endl;
 }
 
 #endif // USE_CUDA

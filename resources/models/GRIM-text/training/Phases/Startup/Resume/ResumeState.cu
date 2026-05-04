@@ -33,7 +33,7 @@ void initializeOptimizer(TrainingContext& ctx) {
     for (int layer = 0; layer < model.getConfig().num_layers; ++layer) {
         if (!gpu_encoder->getLayer(layer)) {
             throw std::runtime_error("Encoder layer " + std::to_string(layer) + " not initialized - "
-                                     "ensure model.initGPU() completes all layers before training");
+                                     "ensure model.initGPU(weight_init_seed) completes all layers before training");
         }
     }
 

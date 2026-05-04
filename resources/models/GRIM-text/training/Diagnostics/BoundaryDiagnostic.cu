@@ -87,25 +87,35 @@ void runBoundaryDiagnostic(
             
             // Training state checks - TRAINING cache info (not inference KV cache)
             const auto& ts = ctx.model->getTrainingState();
-            diag << "[BOUNDARY_DIAGNOSTIC] TRAINING STATE:\n";
-            diag << "  cached_batch_size=" << ts.cached_batch_size << "\n";
-            diag << "  cached_seq_len=" << ts.cached_seq_len << "\n";
-            diag << "  cached_valid_tokens=" << ts.cached_valid_tokens << "\n";
+            diag << "[BOUNDARY_DIAGNOSTIC] PAYLOAD GEOMETRY:\n";
+            diag << "  payload.batch_size=" << payload.batch_size << "\n";
+            diag << "  payload.max_seq_len=" << payload.max_seq_len << "\n";
+            diag << "  payload.total_tokens=" << payload.total_tokens << "\n";
+            diag << "  payload.lm_valid_tokens=" << payload.lm_valid_tokens << "\n";
             
-            // Training cache allocation check (the correct fields!)
-            diag << "  max_cached_batch=" << ts.max_cached_batch << "\n";
-            diag << "  max_cached_seq_len=" << ts.max_cached_seq_len << "\n";
-            diag << "  max_cached_tokens=" << ts.max_cached_tokens << "\n";
+            // Training cache allocation check. Authored capacity comes from
+            // LanguageModelConfig; actual allocation capacity comes from Tensor shapes.
+            const auto& token_shape = ts.cached_token_ids_tensor.shape.require("BoundaryDiagnostic cached_token_ids_tensor");
+            const auto& logits_shape = ts.cached_logits_tensor.shape.require("BoundaryDiagnostic cached_logits_tensor");
+            const size_t token_capacity = static_cast<size_t>(token_shape.as_2d().cols);
+            const size_t logit_token_capacity = static_cast<size_t>(logits_shape.as_2d().rows);
+            diag << "[BOUNDARY_DIAGNOSTIC] AUTHORED CAPACITY:\n";
+            diag << "  model.max_cached_batch=" << model_cfg_bd.max_cached_batch << "\n";
+            diag << "  model.max_cached_seq_len=" << model_cfg_bd.max_cached_seq_len << "\n";
+            diag << "  model.max_tokens_per_batch=" << model_cfg_bd.max_tokens_per_batch << "\n";
+            diag << "[BOUNDARY_DIAGNOSTIC] ALLOCATED CACHE CAPACITY:\n";
+            diag << "  cached_token_ids_tensor.cols=" << token_capacity << "\n";
+            diag << "  cached_logits_tensor.rows=" << logit_token_capacity << "\n";
             
             // Check if sequence fits in TRAINING cache — use payload.total_tokens (already batch*max_seq)
             diag << "  Required tokens for this batch: " << payload.total_tokens << "\n";
-            if (static_cast<size_t>(payload.total_tokens) > ts.max_cached_tokens) {
+            if (static_cast<size_t>(payload.total_tokens) > token_capacity) {
                 diag << "  *** WARNING: Batch exceeds training cache capacity! ***\n";
-                diag << "  *** Need " << payload.total_tokens << " but have " << ts.max_cached_tokens << " ***\n";
+                diag << "  *** Need " << payload.total_tokens << " but have " << token_capacity << " ***\n";
             }
-            if (max_seq_len > static_cast<size_t>(ts.max_cached_seq_len)) {
+            if (max_seq_len > static_cast<size_t>(model_cfg_bd.max_cached_seq_len)) {
                 diag << "  *** WARNING: Sequence exceeds max_cached_seq_len! ***\n";
-                diag << "  *** max_seq_len=" << max_seq_len << " > max_cached=" << ts.max_cached_seq_len << " ***\n";
+                diag << "  *** max_seq_len=" << max_seq_len << " > max_cached=" << model_cfg_bd.max_cached_seq_len << " ***\n";
             }
             
             // NOTE: FlashAttention v2 uses O(N) tiled attention, NOT O(N²) buffers.

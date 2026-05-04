@@ -630,11 +630,11 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
             throw std::runtime_error("getNextTokenLogitsGPU: state initialization failed");
         }
     }
-    if (training_state_.max_cached_seq_len > 0 &&
-        seq_len > training_state_.max_cached_seq_len) {
+    const auto& token_cache_shape = training_state_.cached_token_ids_tensor.shape.require("getNextTokenLogitsGPU cached_token_ids_tensor");
+    if (seq_len > token_cache_shape.as_2d().cols) {
         throw std::runtime_error("getNextTokenLogitsGPU: context length " +
-                                 std::to_string(seq_len) + " exceeds max_cached_seq_len " +
-                                 std::to_string(training_state_.max_cached_seq_len));
+                                 std::to_string(seq_len) + " exceeds cached token capacity " +
+                                 std::to_string(token_cache_shape.as_2d().cols));
     }
     if (!training_state_.stream_ctrl.isInitialized()) {
         throw std::runtime_error("getNextTokenLogitsGPU: StreamController not initialized");

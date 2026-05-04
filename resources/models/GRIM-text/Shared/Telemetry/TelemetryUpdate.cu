@@ -127,7 +127,7 @@ void populateExecBlockHealthStreams(
     float exec_active_ratio = 0.0f;
 
     if (gm.execution_block_count > 0) {
-        exec_grad_norm = std::sqrt(gm.execution_block_sum_sq / static_cast<float>(gm.execution_block_count));
+        exec_grad_norm = static_cast<float>(std::sqrt(gm.execution_block_sum_sq / static_cast<double>(gm.execution_block_count)));
         if (enc_rms_pre > 1e-12f) {
             exec_grad_ratio = exec_grad_norm / enc_rms_pre;
         }

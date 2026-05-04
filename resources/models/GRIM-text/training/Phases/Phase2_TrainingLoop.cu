@@ -13,7 +13,6 @@
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"       // GradClip::clipGradientNorms (registry-level clipping)
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"          // GRIM::LR::LRSchedule (exposed LR curve)
-#include "../../Shared/GradNorm/GradNormGPU.hpp"           // GradNorm::measureGradientNorms, GradMetrics
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/Telemetry/TelemetryUpdate.hpp"
@@ -32,6 +31,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -145,38 +145,6 @@ bool advanceAccumulationOrThrow(
 void completeOptimizerStep(OptimizerContext& optimizer) {
     optimizer.accumulation_position = 0;
     optimizer.optimizer_state.step++;
-}
-
-void ensureTrainingLoopGradNormScratch(TrainingContext& ctx, int batch_idx) {
-    auto& training_state = ctx.model->getTrainingState();
-    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
-    const auto& groups = ctx.model->parameterGroups();
-    if (groups.empty()) {
-        throw std::runtime_error("[FATAL] Cannot allocate grad_norm_scratch with zero parameter groups at batch " +
-                                 std::to_string(batch_idx + 1));
-    }
-
-    const size_t required_groups = groups.size();
-    if (!training_state.grad_norm_scratch) {
-        training_state.grad_norm_scratch = GRIM::GradNorm::allocateGradNormScratch(
-            required_groups, stream);
-        if (!training_state.grad_norm_scratch) {
-            throw std::runtime_error("[FATAL] Phase2 failed to allocate grad_norm_scratch at batch " +
-                                     std::to_string(batch_idx + 1));
-        }
-    }
-
-    const auto* scratch = training_state.grad_norm_scratch;
-    if (!scratch->d_partial_sums || !scratch->h_partial_sums || !scratch->h_metrics) {
-        throw std::runtime_error("[FATAL] grad_norm_scratch buffer set is incomplete at batch " +
-                                 std::to_string(batch_idx + 1));
-    }
-    if (scratch->max_groups != required_groups) {
-        throw std::runtime_error("[FATAL] grad_norm_scratch group-count mismatch at batch " +
-                                 std::to_string(batch_idx + 1) +
-                                 " required=" + std::to_string(required_groups) +
-                                 " scratch_max_groups=" + std::to_string(scratch->max_groups));
-    }
 }
 
 } // namespace
@@ -462,7 +430,7 @@ BatchResult processBatch(
     // BATCH_LOSS equation log + LossStats summary line
     // (extracted to Diagnostics/LossStatsDiagnostic.cu)
     // ========================================================================
-    GRIM::Diagnostics::runLossStatsDiagnostic(ctx, result, batch_idx);
+    GRIM::Diagnostics::runLossStatsDiagnostic(ctx, payload, result, batch_idx);
 
     // ========================================================================
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
@@ -504,15 +472,10 @@ BatchResult processBatch(
     // Issue #142: special-token weight & gradient verification
     GRIM::Diagnostics::runSpecialTokenDiagnostic(ctx, payload, batch_idx);
 
-    // Issue #23: sync grad-norm measurement EVERY batch for accurate diagnostics.
-    // Phase2 owns the TrainingState scratch and BatchResult mutation; the
-    // diagnostic only reads metrics/logs and throws on hard validation failures.
-    ensureTrainingLoopGradNormScratch(ctx, batch_idx);
-    const auto grad_norm_snap = GRIM::Diagnostics::runGradientNormDiagnostic(
-        ctx, state, batch_idx);
-    const float preclip_grad_rms = grad_norm_snap.preclip_grad_rms;
-    const float enc_rms_pre = grad_norm_snap.enc_rms_pre;
-    result.grad_rms = grad_norm_snap.grad_rms;
+    const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
+
+    bool has_clip_metrics = false;
+    GRIM::GradClip::ClipResult clip_metrics{};
 
     // Issue #135: gradient clipping is DEFERRED to post-accumulation (inside
     // should_step block). Clipping ONCE on the averaged gradients matches
@@ -533,7 +496,6 @@ BatchResult processBatch(
         ctx.config.hyperparameters.stability_overrides_enabled);
 
     // Optimizer step
-    const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
     GRIM::Diagnostics::WeightSample pre_sample{};
     if (sync_diag) {
         pre_sample = GRIM::Diagnostics::sampleWeightStats(ctx.model->getLmHeadLayer(), ctx.model->getTrainingState(), true);
@@ -589,8 +551,6 @@ BatchResult processBatch(
             cudaStream_t clip_stream = clip_ts.stream_ctrl.getPrimaryStream();
             auto& clip_groups = ctx.model->parameterGroups();
 
-            ensureTrainingLoopGradNormScratch(ctx, batch_idx);
-
             GRIM::GradClip::ClipConfig clip_cfg;
             clip_cfg.max_rms = effective_per_token_limit;
 
@@ -599,7 +559,12 @@ BatchResult processBatch(
                 clip_ts.grad_norm_scratch, clip_cfg, clip_stream);
 
             result.grad_rms = clip.global_rms_post;
+            result.grad_rms_valid = true;
             result.gradient_clipped = clip.any_clipped();
+            clip_metrics = clip;
+            has_clip_metrics = true;
+
+            GRIM::Diagnostics::runGradientNormClipDiagnostic(ctx, state, payload, clip, batch_idx);
         }
         
         // ════════════════════════════════════════════════════════════════════
@@ -645,8 +610,26 @@ BatchResult processBatch(
                                   emb_freeze_step);
         }
 
-        // Rule 20: post-optimizer weight NaN spot check.
-        GRIM::Diagnostics::checkPostOptimizerWeightsFinite(ctx, result, batch_idx);
+        // Rule 20: post-optimizer weight NaN spot check. Stream ownership stays
+        // in Phase2; the guard only inspects optimizer parameter groups.
+        {
+            auto& post_step_state = ctx.model->getTrainingState();
+            cudaError_t post_step_sync = cudaStreamSynchronize(
+                post_step_state.stream_ctrl.getPrimaryStream());
+            if (post_step_sync != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("[FATAL] Failed to synchronize stream before post-optimizer finite check: ") +
+                    cudaGetErrorString(post_step_sync));
+            }
+
+            const auto& post_step_groups = ctx.model->parameterGroups();
+            GRIM::Diagnostics::checkPostOptimizerWeightsFinite(
+                post_step_groups.data(),
+                post_step_groups.size(),
+                ctx.optimizer.optimizer_state.step,
+                result.learning_rate,
+                batch_idx);
+        }
 
         // Tape flush at end of processBatch is the safety flush.
         GRIM::Diagnostics::runOptimizerMomentDiagnostic(
@@ -679,14 +662,16 @@ BatchResult processBatch(
         GRIM::Logging::FlushDeviceLogs();
     }
 
-    // Update telemetry lattice — metric computation lives in TelemetryUpdate.cu.
-    {
+    // Update telemetry lattice from the clipping-owned grad measurement only.
+    // Phase2 does not launch diagnostic grad-norm measurement or manufacture
+    // placeholder gradient values for telemetry.
+    if (has_clip_metrics) {
         GRIM::Telemetry::TelemetryBatchInput tel_input;
         tel_input.loss              = result.loss;
-        tel_input.preclip_grad_rms  = preclip_grad_rms;
+        tel_input.preclip_grad_rms  = clip_metrics.global_rms_pre;
         tel_input.learning_rate     = result.learning_rate;
         tel_input.total_tokens      = payload.token_stats.total_tokens;
-        tel_input.enc_rms_pre       = enc_rms_pre;
+        tel_input.enc_rms_pre       = clip_metrics.encoder_rms_pre;
         tel_input.optimizer_step    = optimizer_step;
         tel_input.should_step       = should_step;
         tel_input.total_loss_value  = loss_result.loss_value;
@@ -697,7 +682,7 @@ BatchResult processBatch(
         tel_input.actual_vocab_size = ctx.config.actual_vocab_size;
         tel_input.d_model           = ctx.model->getConfig().d_model;
 
-        GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, grad_norm_snap.metrics, &payload);
+        GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, clip_metrics.metrics, &payload);
     }
     
     // First-batch CUDA check (runs even if telemetry disabled): last point before step++
@@ -713,8 +698,6 @@ BatchResult processBatch(
     }
     
     ctx.global_step++;
-    state.last_grad_rms = result.grad_rms;
-
     // Rule 20 single-owner clear: AutogradStepScope at processBatch entry owns
     // the clear; the tape flush below does not touch autograd intermediates.
     if (ctx.logging.tape) {

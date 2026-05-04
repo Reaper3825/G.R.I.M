@@ -2,9 +2,12 @@
 //  TrainingState_GPU.hpp
 //  Standalone TrainingState declaration for GPU training
 //  
-//  Rule 20 MIGRATION: All raw float* converted to GRIM::Tensor
-//  - Tensor provides: shape info, automatic cleanup, autograd support
-//  - Access raw pointer via tensor.data when needed for CUDA kernels
+//  Rule 20 MIGRATION: Training tensors use GRIM::Tensor ownership.
+//  - Tensor members provide shape info, automatic cleanup, autograd support.
+//  - Access raw pointer via tensor.data when needed for CUDA kernels.
+//  - Non-Tensor resources remain explicit TrainingState-owned fields when
+//    they are typed buffers, BF16 caches, pinned host pools, helper-owned
+//    buffers, or external library handles.
 //======================================================//
 
 #pragma once
@@ -16,9 +19,9 @@
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
-#include <cublas_v2.h>
 #include <cuda_bf16.h>
 
+#include "CublasHandleOwner_GPU.hpp"
 #include "../TeacherLogits/TeacherLogits_GPU.hpp"
 #include "../ScratchBlock/ScratchBlockPool_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
@@ -59,24 +62,37 @@ struct TrainingState {
     //   - ScratchBlock: ScratchBlockLayer self-allocates in constructor
     //
     // Session 7: TrainingTensors deleted — zero weight parameters remain in god object.
-    // weight_init_seed stored directly on TrainingState for Pattern B layer construction.
-    uint64_t weight_init_seed = 0;
+    // Weight init seed is passed directly from Phase1 RNG into LanguageModel::initGPU().
     
     // GQA configuration (stored for cache sizing)
     int num_heads = 0;           // Q heads
     int num_kv_heads = 0;        // K,V heads (GQA: num_kv_heads < num_heads)
 
     //======================================================//
-    //  SCRATCH BUFFERS (pre-allocated GPU memory for forward/backward)
-    //  NOTE: Autograd Tensors (with grad_fn) live in autograd_intermediates.
-    //  These are just raw pre-allocated buffers that autograd wraps via from_ptr.
+    //  STEP DEVICE WORKSPACES / SNAPSHOTS (Category 3)
     //======================================================//
-    Tensor cached_encoder_output;       // [max_tokens, d_model] Pre-allocated scratch
-    Tensor cached_logits_tensor;        // [max_tokens, vocab_size] Pre-allocated scratch
+    // Capacity is authored upstream by RunCapacity -> LanguageModelConfig.
+    // Allocated Tensor shapes are the only TrainingState-local capacity record.
+    // BatchPayload remains the host-side source of truth for batch geometry
+    // and token semantics.
+    //
+    // Training/eval upload copies BatchPayload host arrays into these reusable
+    // device buffers and returns BatchDeviceBindings as the canonical per-step
+    // device view. Forward/loss code should consume BatchDeviceBindings, not
+    // rediscover the "current batch" by reading these fields directly.
+    //
+    // Autograd Tensors with grad_fn live in autograd_intermediates, not here.
+    // Output snapshots written by executeAutogradForward(). They are NOT graph
+    // owners; they preserve reduced step outputs for diagnostics/inference after
+    // AutogradIntermediates is cleared at the forward/backward boundary.
+    Tensor cached_encoder_output;       // [max_tokens, d_model] LM-head input snapshot for diagnostics/inference selector
+    Tensor cached_logits_tensor;        // [max_tokens, vocab_size] logits snapshot for diagnostics/inference return
     
-    // Target/input ID caches (int typed)
+    // Device mirrors of BatchPayload arrays. uploadBatchToDevice() is the only
+    // writer for training/eval and returns BatchDeviceBindings as the only
+    // forward/loss reader-facing view. Inference writes these as its single-row
+    // decode/prefill cache because there is no host BatchPayload upload step.
     Tensor cached_targets_tensor;       // [max_tokens] int32
-    Tensor mtp_shifted_targets_tensor;   // [max_logit_tokens] int32 — MTP shifted targets (one buffer, reused per head)
     Tensor cached_token_ids_tensor;     // [max_tokens] int32
     Tensor cached_token_numeric_values; // [max_tokens] float
     
@@ -86,35 +102,12 @@ struct TrainingState {
     Tensor cached_token_atom_flags;     // [max_tokens] uint32 (type-specific metadata from AtomTable)
     Tensor cached_token_to_slot_map;    // [max_tokens] int32  (-1 = non-state-bearing; >=0 = valid slot_id)
     
-    int cached_batch_size = 0;
-    int cached_seq_len = 0;
-    int cached_valid_tokens = 0;
-
     // Authoritative training step counter for autograd forward passes.
     // Sourced from TrainingContext::global_step (checkpointed); set by
     // autogradTrainingStep ONLY on train calls. Eval never mutates this.
     // Controls: dropout PRNG seeds, MTP alpha warmup schedule.
     uint64_t autograd_step = 0;
     
-    //======================================================//
-    //  INCREMENTAL KV CACHE STATE (autoregressive generation)
-    //======================================================//
-    int kv_cache_len = 0;           // Number of tokens with valid K,V in cache
-    int kv_cache_capacity = 0;      // Maximum tokens the cache can hold
-
-    // Per-layer KV cache tensors (BF16, BSHD layout for FlashAttention)
-    // Shape per entry: [1, num_kv_heads, kv_cache_capacity, head_dim]
-    // Allocated in initInferenceState, sized by num_layers.
-    std::vector<void*> kv_cache_k;    // BF16 device pointers, one per encoder layer
-    std::vector<void*> kv_cache_v;    // BF16 device pointers, one per encoder layer
-    float* kv_cache_softmax_lse = nullptr;  // [num_layers, num_heads, kv_cache_capacity] FP32
-
-    // Decode scratch buffers (tiny, pre-allocated for single-token KV cache decode)
-    void* decode_q_bf16 = nullptr;        // [num_heads * head_dim] BF16
-    void* decode_kv_bf16 = nullptr;       // [num_kv_heads * head_dim] BF16 (reused for K then V)
-    void* decode_attn_out_bf16 = nullptr; // [num_heads * head_dim] BF16
-    float* decode_attn_out_fp32 = nullptr;// [num_heads * head_dim] FP32 (= [d_model])
-
     //======================================================//
     //  PERSISTENT EXECUTION TRACE (per-forward lifecycle)
     //  Reset at the start of every forward that runs ExecutionBlock.
@@ -156,10 +149,6 @@ struct TrainingState {
     
     int cached_num_layers = 0;
     
-    int max_cached_batch = 0;
-    int max_cached_seq_len = 0;
-    size_t max_cached_tokens = 0;
-    size_t max_logit_tokens = 0;
     TeacherLogits::Buffer teacher_logits;
     TeacherLogits::Buffer reference_logits;
     Tensor sequence_weights_tensor;    // [max_sequences]
@@ -184,42 +173,14 @@ struct TrainingState {
     //======================================================//
     //  CROSS-ATTENTION READ-GATE TELEMETRY (Rule 20 ownership taxonomy)
     //======================================================//
-    // d_read_gate_accum: Category 3 (workspace). [2] device buffer
+    // read_gate_accum_tensor: Category 3 (workspace). [2] device buffer
     //   = [sum_of_gate_values, total_token_count]. Reusable across batches;
     //   contents are stale across the autograd boundary — must be re-zeroed
     //   before each forward and snapshotted before backward consumes the tape.
     // h_read_gate_mean: Category 2 (durable telemetry scalar). Survives the
     //   autograd boundary by design — consumed by TelemetryUpdate after clear().
-    float* d_read_gate_accum = nullptr;
+    Tensor read_gate_accum_tensor;
     float  h_read_gate_mean  = 0.0f;
-
-    //======================================================//
-    //  INTERMEDIATE GRADIENT TENSORS (Issue #45 FIX)
-    //======================================================//
-    Tensor grad_logits_tensor;            // [max_logit_tokens, vocab_size]
-    Tensor grad_encoder_tensor;           // [max_tokens, d_model]
-    Tensor grad_ffn_input_tensor;         // [max_tokens, d_model]
-    Tensor grad_ffn_hidden_tensor;        // [max_tokens, d_ff]
-    Tensor grad_attn_input_tensor;        // [max_tokens, d_model]
-    Tensor grad_attn_out_proj_tensor;     // [max_tokens, d_model]
-    Tensor grad_attn_out_bhsd_tensor;     // [max_tokens, d_model]
-    Tensor grad_q_tensor;                 // [batch, heads, seq, head_dim]
-    Tensor grad_k_tensor;                 // [batch, kv_heads, seq, head_dim]
-    Tensor grad_v_tensor;                 // [batch, kv_heads, seq, head_dim]
-    Tensor grad_qkv_concat_tensor;        // [max_tokens, total_qkv_dim]
-    Tensor grad_qkv_input_tensor;         // [max_tokens, d_model]
-    Tensor grad_attn_bsm_tensor;          // [max_tokens, d_model]
-    
-    /// Zero all intermediate gradient tensors
-    void zeroIntermediateGrads(cudaStream_t stream);
-
-    
-    //======================================================//
-    //  LOSS COMPUTATION SCRATCH
-    //======================================================//
-    Tensor d_loss_scratch;         // Per-token losses
-    Tensor d_loss_sum_scratch;     // Reduced loss sum (scalar)
-    
     // NOTE: encoder_workspace DELETED (Rule 20/26)
     // Autograd forward creates its own intermediate Tensors — nothing consumed the workspace.
 
@@ -227,23 +188,12 @@ struct TrainingState {
     //  STREAM & GRADIENT MANAGEMENT
     //======================================================//
     StreamController stream_ctrl;
-    GradNorm::GradNormScratch* grad_norm_scratch = nullptr;  // Allocated in Phase1, freed in ~TrainingState
-    cublasHandle_t cublas_handle = nullptr;
+    std::unique_ptr<GradNorm::GradNormScratch> grad_norm_scratch;  // Owned by TrainingState; allocated/validated by GradClip
+    CublasHandleOwner cublas_handle;
 
     // Scratch block pool
-    ScratchBlock::ScratchBlockPool* scratch_pool = nullptr;
+    std::unique_ptr<ScratchBlock::ScratchBlockPool> scratch_pool;
     bool scratch_enabled = true;
-
-    //======================================================//
-    //  AUTOGRAD SYSTEM STATE
-    //======================================================//
-    // Sentinel: initializeAutogradSeed() must be called before initGPU().
-    // Guards against initialization order bugs (Rule 20).
-    bool seed_initialized_ = false;
-    
-    /// Store the weight init seed and mark autograd as initialized.
-    /// Called by Phase1_Startup step 2.75 before initGPU().
-    void initializeAutogradSeed(uint64_t seed);
 
     //======================================================//
     //  OPTIMIZER STATE BUFFERS
@@ -258,9 +208,9 @@ struct TrainingState {
     bool initialized = false;
 
     //======================================================//
-    //  CLASS-BALANCED LOSS WEIGHTS (owned GPU buffer)
+    //  CLASS-BALANCED LOSS WEIGHTS (Tensor-owned GPU buffer)
     //======================================================//
-    float* d_class_weights = nullptr;     // [vocab_size] on GPU, w_v = 1/freq(v)^β
+    Tensor class_weights_tensor;          // [1, vocab_size] on GPU, w_v = 1/freq(v)^β
     int class_weights_vocab_size = 0;     // For validation
 
     //======================================================//
@@ -285,6 +235,15 @@ struct TrainingState {
         size_t capacity = 0;
         size_t bloom_words = 0;
         bool allocated = false;
+
+        GuessCacheBuffers() = default;
+        ~GuessCacheBuffers();
+        GuessCacheBuffers(const GuessCacheBuffers&) = delete;
+        GuessCacheBuffers& operator=(const GuessCacheBuffers&) = delete;
+        GuessCacheBuffers(GuessCacheBuffers&&) = delete;
+        GuessCacheBuffers& operator=(GuessCacheBuffers&&) = delete;
+
+        void release();
     };
     GuessCacheBuffers guess_cache_buffers;
     

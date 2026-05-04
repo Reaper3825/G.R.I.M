@@ -140,8 +140,8 @@ void computeMTPAuxiliaryLosses(
 
     // Each MTP head needs its own GPU target buffer that persists through backward.
     // NLLLossGradFn stores a raw pointer to targets — if all heads share a single
-    // buffer (ts.mtp_shifted_targets_tensor), backward reads the LAST head's targets
-    // for ALL heads. Allocate per-head and store in intermediates for lifetime.
+    // reusable buffer, backward reads the LAST head's targets for ALL heads.
+    // Allocate per-head and store in intermediates for lifetime.
     intermediates.mtp_shifted_targets_gpu.clear();
     intermediates.mtp_shifted_targets_gpu.reserve(K);
 
