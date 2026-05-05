@@ -208,7 +208,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: Rule 20 input guards in `launchAdamWKernel()` — validates `learning_rate` finite and `>= 0`, `weight_decay` finite and `>= 0`, `step >= 0`, and non-null CUDA stream
   - **FIXED**: Bias-correction denominator validation added before inversion (prevents divide-by-zero/NaN propagation on invalid optimizer state)
   - **FIXED**: Added immediate CUDA kernel launch error check (`cudaGetLastError`) with group name in exception
-  - Optimizer states (`m_states`, `v_states`) are allocated centrally in `TrainingState::allocateOptimizerStates()` and bound to parameter groups in `LanguageModel::buildParameterGroups()` ✅
+  - Optimizer states (`m_states`, `v_states`) are allocated centrally in `OptimizerState::allocate()` and bound to parameter groups in `LanguageModel::buildParameterGroups()` ✅
 
 ---
 
@@ -651,16 +651,11 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 2.4 Shared/ScratchBlock (Pinned Memory Pool)
 
-- [] **Shared/ScratchBlock/ScratchBlockPool_GPU.cu**  & FIXED
-  - NOT an alternative ScratchBlock — this is a **pinned memory pool** for CPU→GPU batch data staging (double-buffered)
-  - Used by `ComputeLossBatch.cu` for async `cudaMemcpyAsync` transfers (input_ids, targets, numeric, text_features)
-  - **BUG FIX (Memory Leak)**: `TrainingState::~TrainingState()` NEVER called `delete scratch_pool` — leaked ScratchBlockPool object + all pinned memory blocks. Added `delete scratch_pool; scratch_pool = nullptr;` to destructor.
-  - **BUG FIX (Rule 20)**: `initializeBlocks()` silently returned `false` on `cudaMallocHost` failure. Now throws `std::runtime_error` with block index, byte count, and CUDA error string.
-  - **DELETED**: `ScratchBlockGuard` RAII class (47 lines) — zero callers, `ComputeLossBatch.cu` does manual acquire/release
-  - **DELETED**: `findAvailableBlock()` private method — dead code, `acquire()` has own inline search
-  - **DELETED**: `isAvailable(uint32_t block_id)` — zero production callers
-  - Stats system KEPT (diagnostic telemetry for pool utilization)
-  - Files modified: `ScratchBlockPool_GPU.cu`, `ScratchBlockPool_GPU.hpp`, `TrainingStateGPU.cu`
+- [x] **Shared/ScratchBlock/ScratchBlockPool_GPU.{hpp,cu}** DELETED
+  - The pool was not ScratchBlock reasoning state; it was a pinned CPU→GPU batch-upload staging workaround.
+  - Its only live consumer was `uploadBatchToDevice()`, so the subsystem was removed instead of preserving a TrainingState catch-all field.
+  - Batch upload now copies `BatchPayload` host vectors directly into TrainingState device cache tensors.
+  - Deleted associated TrainingState members and LanguageModel scratch-pool toggles.
 
 ---
 

@@ -33,6 +33,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <utility>
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #endif
@@ -144,7 +145,7 @@ bool advanceAccumulationOrThrow(
 
 void completeOptimizerStep(OptimizerContext& optimizer) {
     optimizer.accumulation_position = 0;
-    optimizer.optimizer_state.step++;
+    optimizer.optimizer_step.step++;
 }
 
 } // namespace
@@ -318,7 +319,7 @@ BatchResult processBatch(
     // Step counter convention:
     //   batch_number = batch_idx + 1                     (every batch)
     //   ctx.global_step                                  (every batch, token counter)
-    //   ctx.optimizer.optimizer_state.step               (every accum_steps)
+    //   ctx.optimizer.optimizer_step.step                (every accum_steps)
     // Log batch_number during fwd/bwd, optimizer_step at the optimizer step.
 
     if (payload.batch_size == 0) {
@@ -380,9 +381,10 @@ BatchResult processBatch(
         train_bindings,
         should_accumulate,
         grad_scale,
-        static_cast<uint64_t>(ctx.optimizer.optimizer_state.step)
+        static_cast<uint64_t>(ctx.optimizer.optimizer_step.step)
     );
     result.loss = loss_result.loss_value;
+    result.mtp_diagnostics = std::move(loss_result.mtp_diagnostics);
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] autogradTrainingStep returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
 
@@ -486,7 +488,7 @@ BatchResult processBatch(
 
     // LR: index by optimizer step (NOT global_step). global_step is per-micro-batch;
     // using it advances warmup/decay accum_steps times too fast.
-    const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_state.step);
+    const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
     if (!ctx.lr_schedule) {
         throw std::runtime_error("lr_schedule is not initialized at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
@@ -576,7 +578,7 @@ BatchResult processBatch(
         const int emb_freeze_step = ctx.config.hyperparameters.embedding_freeze_enabled
             ? ctx.config.hyperparameters.embedding_freeze_after_step : -1;
 
-        if (emb_freeze_step > 0 && ctx.optimizer.optimizer_state.step == emb_freeze_step) {
+        if (emb_freeze_step > 0 && ctx.optimizer.optimizer_step.step == emb_freeze_step) {
             if (ctx.config.hyperparameters.architecture.tie_embeddings) {
                 ctx.logging.logger->log("[EmbeddingFreeze] WARNING: tie_embeddings=true — "
                     "embedding and LM head share weights. Set tie_embeddings=false to freeze "
@@ -595,7 +597,7 @@ BatchResult processBatch(
             GRIM::launchRAdamWStep(ctx.model->parameterGroups(),
                                    result.learning_rate,
                                    opt_hp.weight_decay,
-                                   ctx.optimizer.optimizer_state.step,
+                                   ctx.optimizer.optimizer_step.step,
                                    opt_hp.optimizer_beta1,
                                    opt_hp.optimizer_beta2,
                                    opt_hp.optimizer_epsilon,
@@ -605,7 +607,7 @@ BatchResult processBatch(
             GRIM::launchAdamWStep(ctx.model->parameterGroups(),
                                   result.learning_rate,
                                   opt_hp.weight_decay,
-                                  ctx.optimizer.optimizer_state.step,
+                                  ctx.optimizer.optimizer_step.step,
                                   ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
                                   emb_freeze_step);
         }
@@ -626,7 +628,7 @@ BatchResult processBatch(
             GRIM::Diagnostics::checkPostOptimizerWeightsFinite(
                 post_step_groups.data(),
                 post_step_groups.size(),
-                ctx.optimizer.optimizer_state.step,
+                ctx.optimizer.optimizer_step.step,
                 result.learning_rate,
                 batch_idx);
         }

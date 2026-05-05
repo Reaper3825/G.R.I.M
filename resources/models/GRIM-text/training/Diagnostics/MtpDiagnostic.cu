@@ -24,20 +24,20 @@ void runMtpDiagnostic(
     namespace Internal = ::GRIMText::Training::Internal;
     const auto& hp = ctx.config.hyperparameters;
 
-    auto& ts = ctx.model->getTrainingState();
-    if (ts.mtp_diagnostics.valid && !ts.mtp_diagnostics.head_loss.empty()) {
-        const float L0 = ts.mtp_diagnostics.L0_main > 0.0f ? ts.mtp_diagnostics.L0_main : batch_result.loss;
+    const auto& mtp = batch_result.mtp_diagnostics;
+    if (mtp.valid && !mtp.head_loss.empty()) {
+        const float L0 = mtp.L0_main > 0.0f ? mtp.L0_main : batch_result.loss;
         std::ostringstream mtp_log;
-        for (size_t i = 0; i < ts.mtp_diagnostics.head_loss.size(); ++i) {
-            const float Lk = ts.mtp_diagnostics.head_loss[i];
-            const float acc = i < ts.mtp_diagnostics.head_acc.size() ? ts.mtp_diagnostics.head_acc[i] : 0.0f;
+        for (size_t i = 0; i < mtp.head_loss.size(); ++i) {
+            const float Lk = mtp.head_loss[i];
+            const float acc = i < mtp.head_acc.size() ? mtp.head_acc[i] : 0.0f;
             const float ratio = (L0 > 0.0f) ? (Lk / L0) : 0.0f;
             mtp_log << "[MTP_EQUATION] head_k=" << (i + 1) << ": loss=" << Internal::formatScalar(Lk, 4)
                     << " acc=" << Internal::formatScalar(acc, 2) << "%"
                     << " loss_ratio=" << Internal::formatScalar(ratio, 4) << " ";
         }
-        mtp_log << "alpha_effective=" << Internal::formatScalar(ts.mtp_diagnostics.alpha_effective, 4)
-                << " L_total=" << Internal::formatScalar(ts.mtp_diagnostics.L_total, 4);
+        mtp_log << "alpha_effective=" << Internal::formatScalar(mtp.alpha_effective, 4)
+                << " L_total=" << Internal::formatScalar(mtp.L_total, 4);
         ctx.logging.logger->log(mtp_log.str());
         // MTP Monitor: Lk/L0 with healthy-range indication (configurable via log_ratio_monitor)
         if (hp.mtp_log_ratio_monitor) {
@@ -45,8 +45,8 @@ void runMtpDiagnostic(
             static const float kHealthyHigh[] = { 1.3f, 1.6f, 2.0f, 2.2f };
             std::ostringstream mon;
             mon << "[MTP_Monitor]";
-            for (size_t i = 0; i < ts.mtp_diagnostics.head_loss.size(); ++i) {
-                const float ratio = (L0 > 0.0f) ? (ts.mtp_diagnostics.head_loss[i] / L0) : 0.0f;
+            for (size_t i = 0; i < mtp.head_loss.size(); ++i) {
+                const float ratio = (L0 > 0.0f) ? (mtp.head_loss[i] / L0) : 0.0f;
                 const int k = static_cast<int>(i) + 1;
                 const size_t idx = std::min(static_cast<size_t>(k - 1), static_cast<size_t>(4));
                 const float lo = kHealthyLow[idx];

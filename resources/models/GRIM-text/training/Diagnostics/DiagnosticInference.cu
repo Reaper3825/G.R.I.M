@@ -119,7 +119,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         return;
     }
 
-    const int optimizer_step = ctx.optimizer.optimizer_state.step;
+    const int optimizer_step = ctx.optimizer.optimizer_step.step;
     if (optimizer_step <= 0 || optimizer_step % interval != 0 || optimizer_step == state.last_sample_step) {
         return;
     }

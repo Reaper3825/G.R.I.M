@@ -11,6 +11,7 @@
 #include <cstddef>
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../../Shared/Optimizers/OptimizerState_GPU.hpp"
 
 namespace GRIMText { namespace Training { struct TrainingContext; } }
 
@@ -26,7 +27,9 @@ struct MomentSample {
     std::size_t samples = 0;
 };
 
-MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync_for_host = false);
+MomentSample sampleOptimizerMomentStats(const GRIM::OptimizerState& optimizer_state,
+                                        cudaStream_t stream,
+                                        bool sync_for_host = false);
 
 void runOptimizerMomentDiagnostic(
     GRIMText::Training::TrainingContext& ctx,

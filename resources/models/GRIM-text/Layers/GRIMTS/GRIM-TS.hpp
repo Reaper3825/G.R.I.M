@@ -110,9 +110,9 @@ struct GuessRecord {
     GuessRewardStats stats;
 };
 
-// Enforce size assumptions used by GuessCacheBuffers_GPU.cu::allocateGuessCacheBuffers()
-static_assert(sizeof(GuessMetadata) == 32, "GuessMetadata size changed — update GUESS_METADATA_SIZE in GuessCacheBuffers_GPU.cu");
-static_assert(sizeof(GuessRecord) == 96, "GuessRecord size changed — update GUESS_RECORD_SIZE in GuessCacheBuffers_GPU.cu");
+// Enforce size assumptions used by GuessCacheScope::OwnedBuffers allocation.
+static_assert(sizeof(GuessMetadata) == 32, "GuessMetadata size changed — update GuessCacheScope::OwnedBuffers allocation");
+static_assert(sizeof(GuessRecord) == 96, "GuessRecord size changed — update GuessCacheScope::OwnedBuffers allocation");
 
 //------------------------------------------------------------------------------
 // Device-Side State (accessed by CUDA kernels)
@@ -219,12 +219,12 @@ struct AsyncOperationHandle {
 };
 
 //------------------------------------------------------------------------------
-// Pre-Allocated Buffer Injection (Rule 22 Compliant)
-// TrainingState owns all GPU memory, GRIM-TS uses pointers
+// Pre-Allocated Buffer Injection (Rule 20 ownership boundary)
+// GuessCacheScope owns cache buffers, GRIM-TS borrows pointers while initialized.
 //------------------------------------------------------------------------------
 
 struct GuessCacheBuffers {
-    // Main cache structures (all allocated by TrainingState)
+    // Main cache structures (all allocated by GuessCacheScope)
     void* records = nullptr;               // GuessRecord array [capacity]
     uint64_t* keys = nullptr;              // Hash keys [capacity]
     unsigned int* size = nullptr;          // Entry count (single value)
@@ -258,7 +258,7 @@ struct GuessCacheBuffers {
 // Core API
 //------------------------------------------------------------------------------
 
-// Lifecycle - RULE 22: Buffers must be pre-allocated by TrainingState
+// Lifecycle - buffers must be pre-allocated by GuessCacheScope
 // FAILS LOUD if buffers are nullptr or capacity is 0
 bool InitializeGuessCache(const CacheConfig& config, 
                           const GuessCacheBuffers& buffers,

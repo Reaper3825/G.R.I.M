@@ -43,7 +43,7 @@ void SoftRestartController::markRestart(int64_t global_step) {
     state_.last_restart_step = global_step;
 }
 
-void zeroOptimizerMoments(LanguageModel* model, OptimizerState* optimizer) {
+void zeroOptimizerMoments(LanguageModel* model, GRIM::OptimizerStep* optimizer) {
     if (!model) {
         std::cerr << "[SoftRestart] Warning: model pointer is null, cannot zero moments." << std::endl;
         return;
@@ -53,8 +53,8 @@ void zeroOptimizerMoments(LanguageModel* model, OptimizerState* optimizer) {
     GRIM::resetAdamWMoments(model->parameterGroups(),
                             model->getTrainingState().stream_ctrl.getPrimaryStream());
 
-    // OptimizerState only tracks step count - no moment buffers to clear
-    // ParameterGroup owns m_state/v_state, which are zeroed by resetAdamWMoments()
+    // OptimizerStep only tracks step count - moment buffers live in OptimizerState.
+    // ParameterGroup borrows m_state/v_state, which are zeroed by resetAdamWMoments().
     if (optimizer) {
         optimizer->step = 0;  // Reset bias correction step counter
     }

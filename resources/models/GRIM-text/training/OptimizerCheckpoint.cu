@@ -77,6 +77,7 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
 #ifdef USE_CUDA
     const auto& groups = ctx.model->parameterGroups();
     const auto& ts     = ctx.model->getTrainingState();
+    const auto& opt_state = ctx.optimizer.optimizer_state;
 
     if (groups.empty()) {
         EmitModuleWarning(ModuleId::Checkpoint,
@@ -85,7 +86,7 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
         return false;
     }
 
-    if (!ts.optimizer_states_allocated) {
+    if (!opt_state.allocated) {
         throw std::runtime_error(
             "[saveOptimizerState] Optimizer states not allocated — "
             "buildParameterGroups() must be called before saving");
@@ -106,7 +107,7 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
     header.magic          = OPT_MAGIC;
     header.version        = OPT_VERSION;
     header.num_groups     = static_cast<uint32_t>(groups.size());
-    header.optimizer_step = ctx.optimizer.optimizer_state.step;
+    header.optimizer_step = ctx.optimizer.optimizer_step.step;
     header.global_step    = ctx.global_step;
     header.best_val_loss  = ctx.best_val_loss;
     header.current_epoch  = ctx.epochs_completed;
@@ -145,8 +146,8 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
         std::vector<float> host_buf(numel);
 
         // m state
-        if (i < ts.optimizer_m_states.size() && ts.optimizer_m_states[i].data) {
-            cudaError_t err = cudaMemcpy(host_buf.data(), ts.optimizer_m_states[i].data,
+        if (i < opt_state.m_states.size() && opt_state.m_states[i].data) {
+            cudaError_t err = cudaMemcpy(host_buf.data(), opt_state.m_states[i].data,
                                           bytes, cudaMemcpyDeviceToHost);
             if (err != cudaSuccess) {
                 throw std::runtime_error(
@@ -159,8 +160,8 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
         out.write(reinterpret_cast<const char*>(host_buf.data()), bytes);
 
         // v state
-        if (i < ts.optimizer_v_states.size() && ts.optimizer_v_states[i].data) {
-            cudaError_t err = cudaMemcpy(host_buf.data(), ts.optimizer_v_states[i].data,
+        if (i < opt_state.v_states.size() && opt_state.v_states[i].data) {
+            cudaError_t err = cudaMemcpy(host_buf.data(), opt_state.v_states[i].data,
                                           bytes, cudaMemcpyDeviceToHost);
             if (err != cudaSuccess) {
                 throw std::runtime_error(
@@ -210,8 +211,9 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
 
     const auto& groups = ctx.model->parameterGroups();
     auto& ts = ctx.model->getTrainingState();
+    auto& opt_state = ctx.optimizer.optimizer_state;
 
-    if (!ts.optimizer_states_allocated) {
+    if (!opt_state.allocated) {
         throw std::runtime_error(
             "[loadOptimizerState] Optimizer states not allocated — "
             "buildParameterGroups() must be called before loading");
@@ -321,8 +323,8 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
             throw std::runtime_error(
                 "[loadOptimizerState] Truncated m_state data at group " + std::to_string(i));
         }
-        if (i < ts.optimizer_m_states.size() && ts.optimizer_m_states[i].data) {
-            cudaError_t err = cudaMemcpyAsync(ts.optimizer_m_states[i].data, host_buf.data(),
+        if (i < opt_state.m_states.size() && opt_state.m_states[i].data) {
+            cudaError_t err = cudaMemcpyAsync(opt_state.m_states[i].data, host_buf.data(),
                                                bytes, cudaMemcpyHostToDevice, stream);
             if (err != cudaSuccess) {
                 throw std::runtime_error(
@@ -337,8 +339,8 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
             throw std::runtime_error(
                 "[loadOptimizerState] Truncated v_state data at group " + std::to_string(i));
         }
-        if (i < ts.optimizer_v_states.size() && ts.optimizer_v_states[i].data) {
-            cudaError_t err = cudaMemcpyAsync(ts.optimizer_v_states[i].data, host_buf.data(),
+        if (i < opt_state.v_states.size() && opt_state.v_states[i].data) {
+            cudaError_t err = cudaMemcpyAsync(opt_state.v_states[i].data, host_buf.data(),
                                                bytes, cudaMemcpyHostToDevice, stream);
             if (err != cudaSuccess) {
                 throw std::runtime_error(
@@ -357,7 +359,7 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
     }
 
     // Restore metadata into TrainingContext
-    ctx.optimizer.optimizer_state.step = header.optimizer_step;
+    ctx.optimizer.optimizer_step.step = header.optimizer_step;
     ctx.global_step                    = header.global_step;
     ctx.best_val_loss                  = header.best_val_loss;
     ctx.epochs_completed               = header.current_epoch;

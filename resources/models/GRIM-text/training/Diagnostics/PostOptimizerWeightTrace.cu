@@ -40,8 +40,8 @@ void runPostOptimizerWeightTrace(
     }
     ctx.logging.logger->log("[GradTrace] POST-OPTIMIZER batch=" + std::to_string(batch_idx + 1) +
                             " lr=" + Internal::formatScalar(result.learning_rate, 8) +
-                            " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
-                            " t=" + std::to_string(ctx.optimizer.optimizer_state.step) +
+                            " step=" + std::to_string(ctx.optimizer.optimizer_step.step) +
+                            " t=" + std::to_string(ctx.optimizer.optimizer_step.step) +
                             " " + post_weights);
 
     if (pre_sample.valid && post_sample.valid) {
@@ -60,7 +60,7 @@ void runPostOptimizerWeightTrace(
         const auto update_trace = computePerComponentUpdateTrace(
             ctx.model->parameterGroups(),
             result.learning_rate,
-            ctx.optimizer.optimizer_state.step + 1,  // 1-based iteration count (matches AdamW bias correction)
+            ctx.optimizer.optimizer_step.step + 1,  // 1-based iteration count (matches AdamW bias correction)
             ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()
         );
         if (update_trace.valid) {

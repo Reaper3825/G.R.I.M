@@ -172,7 +172,7 @@ Use this checklist to systematically audit each file in the order it's used duri
     - Removed wrong comment "DEPRECATED - always nullptr" from `tensors_` — it's actively used by `initializeAutogradTensors()`.
     - Deleted dead token weighting members (`token_weights_tensor`, `token_weights_count`) marked DEPRECATED.
     - Deleted dead method declarations (`allocateActivationCaches()`, `allocateFlashAttentionBuffers()`) — never defined, never called.
-    - Changed `allocateGuessCacheBuffers()` return type from `bool→void` (always throws or returns, never returns false), removed dead caller check in Phase2_TrainingLoop.cu.
+    - Deleted TrainingState-owned `allocateGuessCacheBuffers()` path; `GuessCacheScope::OwnedBuffers` now owns GRIM-TS cache buffers directly.
     - **Noted**: `1e-12f` threshold in PCGrad is now an assert — tokens reaching it with zero LM norm will crash with clear message.
   - **Re-audit findings (5 more, all fixed):**
     - Fixed `GUESS_RECORD_SIZE = 128` → `96` (was 33% too large, wasting GPU memory). `sizeof(GuessRecord)` = 96. Added `static_assert` in GRIM-TS.hpp to enforce at compile time.
@@ -185,7 +185,7 @@ Use this checklist to systematically audit each file in the order it's used duri
     - **FINDING 2 — `TrainingTensors::zeroGrad()` was DEAD CODE** ✅ FIXED: Deleted from TrainingTensors.cu and .hpp. `LanguageModel::zeroGrad()` handles all gradient zeroing.
     - **FINDING 3 — `single_token_{logits,hidden}` dead allocations** ✅ FIXED: Removed from InitTrainingState.cu. Leftover from planned incremental KV cache never implemented.
     - **FINDING 4 — `layer_scale_init` misleading default** ✅ FIXED: Changed default from `0.1f` to `1.0f` in TrainingState_GPU.hpp to match production config (Issue #129).
-    - **FINDING 5 — `allocateOptimizerStates` debug fprintf** ✅ FIXED: Removed `[allocateOptimizerStates] ENTER:` and `EXIT:` fprintf lines from TrainingStateGPU.cu.
+    - **FINDING 5 — optimizer-state allocation debug fprintf** ✅ FIXED: Removed allocation ENTER/EXIT fprintf lines from the optimizer-state owner implementation.
     - **FINDING 6 — `batch_prep_*` vectors NOT dead**: ✅ RESOLVED (original claim was WRONG). The 7 `batch_prep_*` vectors (`batch_prep_input_ids`, `batch_prep_target_ids`, `batch_prep_numeric_values`, `batch_prep_numeric_mask`, `batch_prep_text_features`, `batch_prep_text_mask`, `batch_prep_valid_target_counts`) ARE actively used by `ComputeLossBatch.cu::prepareLossBatchInputs()` for assembling padded batch data. `DEBUG_BATCH_PREP_CORRUPTION` flag was already deleted (Phase1 audit). The vectors use lazy allocation (`batch_prep_capacity=0`, `.assign()` on first use) as a workaround for a memory corruption bug where `batch_prep_target_ids.capacity()` contained garbage before `initTrainingState()`. No action required — vectors are production code.
     - **FINDING 7 — `stream ? stream : stream_ctrl.getPrimaryStream()` x3**: Lines 63, 400, 438. Functions accept `stream = nullptr` default and fallback to centralized controller. Rule 22 compliant (fallback IS to centralized controller, which throws if uninitialized). Low priority — pedantic Rule 20 says make parameter required. DEFERRED.
   - **Rule 22**: All GPU resources managed via `TrainingState.stream_ctrl.getPrimaryStream()` (no raw streams).
@@ -269,7 +269,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED (Pass 3)**: Removed silent API behavior in `getTokenBufferView()` and `markDevicePromptReady()` when `use_gpu=false` — now throws (GPU-only module).
   - **FIXED (Pass 3)**: `markDevicePromptReady()` now rejects negative `token_count`.
   - **FIXED (Pass 3)**: Numeric prediction host copy in generation now checks `cudaMemcpyAsync` + stream sync result and throws on failure (previously ignored sync result).
-  - **FIXED (Pass 3)**: Scratch toggles hardened — enabling ScratchBlock or scratch pool now throws if backing objects are uninitialized; only disable-without-init is treated as no-op.
+  - **FIXED (Pass 3)**: ScratchBlock toggles hardened — enabling ScratchBlock now throws if backing objects are uninitialized; only disable-without-init is treated as no-op.
 
 - [x] **GRIM/grim_language_model_cuda.hpp** ✅ AUDITED & CLEANED (2 passes)
   - **DELETED**: `parameterGroupsStale()` declaration — unimplemented method, zero callers, no valid purpose (intended arch-hash check was never coded)
@@ -299,7 +299,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: Rule 20 input guards in `launchAdamWKernel()` — validates `learning_rate` finite and `>= 0`, `weight_decay` finite and `>= 0`, `step >= 0`, and non-null CUDA stream
   - **FIXED**: Bias-correction denominator validation added before inversion (prevents divide-by-zero/NaN propagation on invalid optimizer state)
   - **FIXED**: Added immediate CUDA kernel launch error check (`cudaGetLastError`) with group name in exception
-  - Optimizer states (`m_states`, `v_states`) are allocated centrally in `TrainingState::allocateOptimizerStates()` and bound to parameter groups in `LanguageModel::buildParameterGroups()` ✅
+  - Optimizer states (`m_states`, `v_states`) are allocated centrally in `OptimizerState::allocate()` and bound to parameter groups in `LanguageModel::buildParameterGroups()` ✅
 
 ---
 
@@ -782,16 +782,11 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 2.4 Shared/ScratchBlock (Pinned Memory Pool)
 
-- [x] **Shared/ScratchBlock/ScratchBlockPool_GPU.cu** ✅ AUDITED & FIXED
-  - NOT an alternative ScratchBlock — this is a **pinned memory pool** for CPU→GPU batch data staging (double-buffered)
-  - Used by `ComputeLossBatch.cu` for async `cudaMemcpyAsync` transfers (input_ids, targets, numeric, text_features)
-  - **BUG FIX (Memory Leak)**: `TrainingState::~TrainingState()` NEVER called `delete scratch_pool` — leaked ScratchBlockPool object + all pinned memory blocks. Added `delete scratch_pool; scratch_pool = nullptr;` to destructor.
-  - **BUG FIX (Rule 20)**: `initializeBlocks()` silently returned `false` on `cudaMallocHost` failure. Now throws `std::runtime_error` with block index, byte count, and CUDA error string.
-  - **DELETED**: `ScratchBlockGuard` RAII class (47 lines) — zero callers, `ComputeLossBatch.cu` does manual acquire/release
-  - **DELETED**: `findAvailableBlock()` private method — dead code, `acquire()` has own inline search
-  - **DELETED**: `isAvailable(uint32_t block_id)` — zero production callers
-  - Stats system KEPT (diagnostic telemetry for pool utilization)
-  - Files modified: `ScratchBlockPool_GPU.cu`, `ScratchBlockPool_GPU.hpp`, `TrainingStateGPU.cu`
+- [x] **Shared/ScratchBlock/ScratchBlockPool_GPU.{hpp,cu}** ✅ DELETED
+  - The pool was not ScratchBlock reasoning state; it was a pinned CPU→GPU batch-upload staging workaround.
+  - Its only live consumer was `uploadBatchToDevice()`, so the whole subsystem was removed instead of preserving a TrainingState catch-all field.
+  - Batch upload now copies `BatchPayload` host vectors directly into TrainingState device cache tensors.
+  - Deleted associated TrainingState members and LanguageModel scratch-pool toggles.
 
 ---
 

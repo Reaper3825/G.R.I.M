@@ -1,11 +1,10 @@
 //======================================================//
-//  OptimizerState.hpp
+//  OptimizerStep.hpp
 //  Step counter for AdamW / RAdamW bias correction.
 //
 //  This is the single source of truth for the runtime
-//  optimizer step count. The actual moment buffers (m, v)
-//  live on each ParameterGroup (see TensorContract_GPU.hpp);
-//  AdamW hyperparameters live in HyperParameters_GPU.hpp.
+//  optimizer step count. The actual GPU optimizer state
+//  (Adam/RAdam moment tensors) lives in OptimizerState_GPU.hpp.
 //======================================================//
 
 #pragma once
@@ -16,7 +15,7 @@ namespace GRIM {
 ///
 /// Used by launchAdamWStep() / launchRAdamWStep() for bias correction.
 /// Incremented once per applied optimizer step (after gradient accumulation).
-struct OptimizerState {
+struct OptimizerStep {
     int step = 0;
 };
 

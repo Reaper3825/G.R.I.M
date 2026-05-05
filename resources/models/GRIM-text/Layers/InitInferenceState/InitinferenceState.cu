@@ -91,8 +91,6 @@ void LanguageModel::initInferenceState() {
                                  std::to_string(cfg.num_heads) + " num_kv_heads=" +
                                  std::to_string(cfg.num_kv_heads));
     }
-    training_state_.num_heads = cfg.num_heads;
-    training_state_.num_kv_heads = cfg.num_kv_heads;
     const int num_kv_heads = cfg.num_kv_heads;  // local alias for downstream sizing math
     
     // TensorContract shape helpers
@@ -340,7 +338,6 @@ void LanguageModel::initInferenceState() {
         try {
             // ScratchBlock layer owns its own buffers now (no external caches needed).
             // ScratchBlockLayer constructor handles weight allocation + initialization.
-            // scratch_pool remains nullptr for inference (only allocated in InitTrainingState).
             
             if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
                 std::cout << "  ✓ ScratchBlock reasoning layer enabled (d_model="

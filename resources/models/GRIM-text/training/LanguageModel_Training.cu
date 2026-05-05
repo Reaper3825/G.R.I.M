@@ -41,6 +41,7 @@
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../Shared/Optimizers/OptimizerState_GPU.hpp"
 
 namespace GRIM {
 
@@ -77,7 +78,7 @@ void LanguageModel::buildParameterGroups() {
     parameter_groups_.clear();
     
     const auto& cfg = config_;
-    const int num_kv_heads = training_state_.num_kv_heads;
+    const int num_kv_heads = cfg.num_kv_heads;
     fprintf(stderr, "[buildParameterGroups] cfg: num_layers=%d num_heads=%d head_dim=%d num_kv_heads=%d d_model=%d vocab=%u tie=%d\n",
             cfg.num_layers, cfg.num_heads, cfg.head_dim, num_kv_heads, cfg.d_model, cfg.vocab_size, (int)cfg.tie_embeddings); fflush(stderr);
     
@@ -309,25 +310,12 @@ void LanguageModel::buildParameterGroups() {
         fflush(stderr);
     }
 
-    fprintf(stderr, "[buildParameterGroups] DIAG-E: %zu groups registered, allocating optimizer states\n", parameter_groups_.size()); fflush(stderr);
-    // Collect sizes for centralized optimizer state allocation
-    std::vector<size_t> sizes;
-    sizes.reserve(parameter_groups_.size());
-    for (const auto& group : parameter_groups_) {
-        sizes.push_back(group.size());
+    fprintf(stderr, "[buildParameterGroups] DIAG-E: %zu groups registered; optimizer state binding deferred\n",
+            parameter_groups_.size()); fflush(stderr);
+    for (auto& group : parameter_groups_) {
+        group.m_tensor = nullptr;
+        group.v_tensor = nullptr;
     }
-    
-    // Allocate optimizer states via TrainingState (centralized ownership)
-    training_state_.allocateOptimizerStates(sizes);
-    
-    fprintf(stderr, "[buildParameterGroups] DIAG-F: optimizer states allocated (m=%zu v=%zu), binding tensors\n",
-            training_state_.optimizer_m_states.size(), training_state_.optimizer_v_states.size()); fflush(stderr);
-    // Bind optimizer Tensors to parameter groups (groups hold pointers, NOT ownership)
-    for (size_t i = 0; i < parameter_groups_.size(); ++i) {
-        parameter_groups_[i].m_tensor = &training_state_.optimizer_m_states[i];
-        parameter_groups_[i].v_tensor = &training_state_.optimizer_v_states[i];
-    }
-    fprintf(stderr, "[buildParameterGroups] DIAG-G: all bindings done\n"); fflush(stderr);
     
     // Note: Gradient norm measurement uses free functions in GradNormGPU.{cu,hpp}
     // GradClip measures gradient norms through TrainingState::grad_norm_scratch on optimizer-step boundaries.
@@ -347,6 +335,31 @@ void LanguageModel::buildParameterGroups() {
     }
     fprintf(stderr, "[buildParameterGroups] TOTAL: %zu groups (emb=%d, attn=%d, ffn=%d, rms=%d, other=%d)\n",
             parameter_groups_.size(), emb_count, attn_count, ffn_count, rms_count, other_count);
+}
+
+void LanguageModel::bindOptimizerState(OptimizerState& optimizer_state, cudaStream_t stream) {
+    if (parameter_groups_.empty()) {
+        throw std::runtime_error("[bindOptimizerState] parameter groups are empty - caller MUST call buildParameterGroups() first");
+    }
+    if (stream == nullptr) {
+        throw std::runtime_error("[bindOptimizerState] stream is NULL - caller MUST provide valid CUDA stream");
+    }
+
+    std::vector<size_t> sizes;
+    sizes.reserve(parameter_groups_.size());
+    for (const auto& group : parameter_groups_) {
+        sizes.push_back(group.size());
+    }
+
+    optimizer_state.allocate(sizes, stream);
+
+    fprintf(stderr, "[bindOptimizerState] optimizer states allocated (m=%zu v=%zu), binding tensors\n",
+            optimizer_state.m_states.size(), optimizer_state.v_states.size()); fflush(stderr);
+    for (size_t i = 0; i < parameter_groups_.size(); ++i) {
+        parameter_groups_[i].m_tensor = &optimizer_state.m_states[i];
+        parameter_groups_[i].v_tensor = &optimizer_state.v_states[i];
+    }
+    fprintf(stderr, "[bindOptimizerState] all bindings done\n"); fflush(stderr);
 }
 
 #endif // USE_CUDA

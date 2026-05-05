@@ -233,8 +233,10 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
                                  "call ensureKVCacheAllocated() before generation");
     }
     if (populate_kv_cache && !gen.kv_cache.k.empty()) {
-        const int num_kv_heads = training_state_.num_kv_heads;
-        const int head_dim = config_.d_model / config_.num_heads;
+        const auto& kv_shape = gen.kv_cache.shape;
+        kv_shape.requireValid("executeInferenceForward_ KV cache population");
+        const int num_kv_heads = kv_shape.num_kv_heads;
+        const int head_dim = kv_shape.head_dim;
         const auto& layers = training_state_.autograd_intermediates.layer_intermediates.layers;
         const int num_layers = static_cast<int>(layers.size());
 
@@ -480,8 +482,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
 
     const int d_model = cfg.d_model;
     const int num_heads = cfg.num_heads;
-    const int num_kv_heads = ts.num_kv_heads;
-    const int head_dim = d_model / num_heads;
+    const int num_kv_heads = cfg.num_kv_heads;
+    const int head_dim = cfg.head_dim;
     const int num_layers = cfg.num_layers;
     const float rms_eps = cfg.rms_epsilon;
     const int seqlen_k = token_pos + 1;  // K cache has [0..token_pos] inclusive
@@ -799,10 +801,15 @@ void LanguageModel::ensureKVCacheAllocated() {
     }
 
     const auto& cfg = getConfig();
-    const int num_kv_heads = (training_state_.num_kv_heads > 0)
-        ? training_state_.num_kv_heads
-        : ((cfg.num_kv_heads > 0) ? cfg.num_kv_heads : cfg.num_heads);
-    const int head_dim = cfg.d_model / cfg.num_heads;
+    if (cfg.num_kv_heads <= 0) {
+        throw std::runtime_error("ensureKVCacheAllocated: cfg.num_kv_heads must be > 0");
+    }
+    if (!HyperParameters::isValidGQAConfig(cfg.num_heads, cfg.num_kv_heads)) {
+        throw std::runtime_error("ensureKVCacheAllocated: invalid GQA config num_heads=" +
+            std::to_string(cfg.num_heads) + " num_kv_heads=" + std::to_string(cfg.num_kv_heads));
+    }
+    const int num_kv_heads = cfg.num_kv_heads;
+    const int head_dim = cfg.head_dim;
     const int n_layers = cfg.num_layers;
     const int kv_cap = std::min(cfg.max_seq_len, cfg.max_cached_seq_len);
 

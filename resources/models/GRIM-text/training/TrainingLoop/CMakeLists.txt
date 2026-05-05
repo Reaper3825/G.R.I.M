@@ -291,8 +291,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/TrainingState/CublasHandleOwner_GPU.cu
     ../../Shared/TrainingState/DeviceAllocation_GPU.cu
     ../../Shared/TrainingState/TrainingStateGPU.cu
-    ../../Shared/TrainingState/Optimizer/OptimizerState_GPU.cu
-    ../../Shared/TrainingState/GuessCache/GuessCacheBuffers_GPU.cu
+    ../../Shared/Optimizers/OptimizerState_GPU.cu
     ../../Shared/TeacherLogits/TeacherLogits_GPU.cu
     ../LanguageModel_Training.cu
     ../../Shared/Gradients/GradStatsCollector.cu
@@ -314,7 +313,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
-    ../../Shared/ScratchBlock/ScratchBlockPool_GPU.cu
     ../../Shared/Sampling/Sampling.cu
     ../../Layers/InitInferenceState/InitinferenceState.cu
     ../../Shared/TensorConversion/TensorConversion.cu

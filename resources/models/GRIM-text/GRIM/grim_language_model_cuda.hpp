@@ -221,8 +221,8 @@ struct GeneratedSequence {
     float getNormalizedScore(float length_penalty) const;
 };
 
-// OptimizerState (AdamW/RAdamW step counter) lives in
-// Shared/Optimizers/OptimizerState.hpp — it's optimizer state, not model state.
+// OptimizerStep (AdamW/RAdamW step counter) lives in
+// Shared/Optimizers/OptimizerStep.hpp — it is step bookkeeping, not model state.
 // Consumers should include that header directly.
 
 //======================================================//
@@ -232,6 +232,7 @@ struct GeneratedSequence {
 class EncoderLayer;
 class TextGenerator;
 struct TrainingState;  // Forward declare for methods that return references
+struct OptimizerState;
 
 // Forward declare LossContext namespace and nested struct
 namespace LossContext {
@@ -385,6 +386,7 @@ public:
     std::vector<ParameterGroup>& parameterGroups() { return parameter_groups_; }
     // Build parameter groups for optimizer (must be called during init so Phase2 grad-norm has max_groups > 0)
     void buildParameterGroups();
+    void bindOptimizerState(OptimizerState& optimizer_state, cudaStream_t stream);
 #endif
 
     // Utilities
@@ -461,9 +463,6 @@ public:
     MTPHead* getMtpHead(int k);
     const MTPHead* getMtpHead(int k) const;
     
-    // Scratch pool configuration (pinned memory transfers)
-    void configureScratchPool(bool enabled);
-    bool isScratchPoolInitialized() const;
 #endif
     
     GeneratedSequence generateSequenceGPU(const std::vector<int>& prompt_tokens,

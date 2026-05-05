@@ -11,7 +11,7 @@
 
 #include "../TensorContract/TensorContract_GPU.hpp"
 #include "../Loss/ComputeLoss/AutogradLoss.hpp"
-#include "../TrainingState/TrainingState_GPU.hpp"
+#include "MTPDiagnostics.hpp"
 #include "../../training/Autograd/AutogradIntermediates.hpp"
 #include "../../training/Autograd/AutogradTraining.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
@@ -52,7 +52,7 @@ void launchMTPAccuracyKernel(
  * This function:
  *  1. Resolves mtp_input (same representation as LM head — A1 fix)
  *  2. For each head k: allocate per-head GPU target buffer, matmul, bias, unified_loss, scale, add
- *  3. Fills ts.mtp_diagnostics (head_loss, head_acc, alpha_effective)
+ *  3. Fills diagnostics (head_loss, head_acc, alpha_effective)
  *
  * Reads shifted targets from payload.mtp_shifted_targets[k] (computed by
  * buildBatchPayload) and uploads to per-head GPU buffers stored in
@@ -61,12 +61,12 @@ void launchMTPAccuracyKernel(
  *
  * @param ctx           AutogradContext with model, config, stream, step, payload
  * @param intermediates AutogradIntermediates owning encoder_output, centered output, loss_tensor, per-head target buffers
- * @param ts            TrainingState for mtp_diagnostics
+ * @param diagnostics   Host-side per-step MTP telemetry payload
  */
 void computeMTPAuxiliaryLosses(
     Autograd::AutogradContext& ctx,
     Autograd::AutogradIntermediates& intermediates,
-    TrainingState& ts
+    MTPDiagnostics& diagnostics
 );
 
 /**

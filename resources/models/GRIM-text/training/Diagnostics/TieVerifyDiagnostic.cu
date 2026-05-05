@@ -41,7 +41,7 @@ void runTieVerifyDiagnostic(
     if (inconsistent || (batch_idx % 10 == 0)) {
         std::ostringstream oss;
         oss << "[TIE_VERIFY] B=" << (batch_idx + 1)
-            << " step=" << ctx.optimizer.optimizer_state.step
+            << " step=" << ctx.optimizer.optimizer_step.step
             << " cfg_tied=" << (cfg_tied ? "yes" : "no")
             << " w_ptrs=" << (w_same ? "SAME" : "DIFF")
             << " g_ptrs=" << (g_same ? "SAME" : "DIFF")

@@ -23,7 +23,6 @@
 
 #include "CublasHandleOwner_GPU.hpp"
 #include "../TeacherLogits/TeacherLogits_GPU.hpp"
-#include "../ScratchBlock/ScratchBlockPool_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
@@ -64,10 +63,6 @@ struct TrainingState {
     // Session 7: TrainingTensors deleted — zero weight parameters remain in god object.
     // Weight init seed is passed directly from Phase1 RNG into LanguageModel::initGPU().
     
-    // GQA configuration (stored for cache sizing)
-    int num_heads = 0;           // Q heads
-    int num_kv_heads = 0;        // K,V heads (GQA: num_kv_heads < num_heads)
-
     //======================================================//
     //  STEP DEVICE WORKSPACES / SNAPSHOTS (Category 3)
     //======================================================//
@@ -155,17 +150,6 @@ struct TrainingState {
     int sequence_weight_count = 0;
     int sequence_weight_capacity = 0;
 
-    // MTP diagnostics (filled by computeAutogradLoss when MTP enabled; logged by Phase2)
-    struct MTPDiagnostics {
-        std::vector<float> head_loss;
-        std::vector<float> head_acc;
-        float L0_main = 0.0f;       // Main (next-token) loss before adding MTP terms
-        float alpha_effective = 0.0f;
-        float L_total = 0.0f;
-        bool valid = false;
-    };
-    MTPDiagnostics mtp_diagnostics;
-    
     // Owns ALL intermediate tensors during forward→backward cycle
     // Replaces old autograd_ctx (which mixed input args with tensor storage)
     Autograd::AutogradIntermediates autograd_intermediates;
@@ -191,20 +175,6 @@ struct TrainingState {
     std::unique_ptr<GradNorm::GradNormScratch> grad_norm_scratch;  // Owned by TrainingState; allocated/validated by GradClip
     CublasHandleOwner cublas_handle;
 
-    // Scratch block pool
-    std::unique_ptr<ScratchBlock::ScratchBlockPool> scratch_pool;
-    bool scratch_enabled = true;
-
-    //======================================================//
-    //  OPTIMIZER STATE BUFFERS
-    //======================================================//
-    std::vector<Tensor> optimizer_m_states;  // First moment per param group
-    std::vector<Tensor> optimizer_v_states;  // Second moment per param group
-    bool optimizer_states_allocated = false;
-    
-    void allocateOptimizerStates(const std::vector<size_t>& sizes, cudaStream_t stream = nullptr);
-    void freeOptimizerStates();
-
     bool initialized = false;
 
     //======================================================//
@@ -213,44 +183,6 @@ struct TrainingState {
     Tensor class_weights_tensor;          // [1, vocab_size] on GPU, w_v = 1/freq(v)^β
     int class_weights_vocab_size = 0;     // For validation
 
-    //======================================================//
-    //  GUESS CACHE BUFFERS (GRIM-TS - typed buffers, NOT Tensors)
-    //======================================================//
-    struct GuessCacheBuffers {
-        // These are typed buffers - NOT float Tensors, so stay as raw pointers
-        void* records = nullptr;            // GuessRecord array
-        uint64_t* keys = nullptr;           // Hash keys
-        unsigned int* size = nullptr;       // Current size counter
-        unsigned int* evict_cursor = nullptr;
-        uint32_t* diversity_bloom = nullptr;
-        float* calibration_offset = nullptr;
-        void* single_meta_buffer = nullptr;
-        float* single_reward_buffer = nullptr;
-        
-        // Pinned host memory (host side - not GPU Tensor)
-        void* pinned_meta = nullptr;
-        float* pinned_rewards = nullptr;
-        size_t pinned_capacity = 0;
-        
-        size_t capacity = 0;
-        size_t bloom_words = 0;
-        bool allocated = false;
-
-        GuessCacheBuffers() = default;
-        ~GuessCacheBuffers();
-        GuessCacheBuffers(const GuessCacheBuffers&) = delete;
-        GuessCacheBuffers& operator=(const GuessCacheBuffers&) = delete;
-        GuessCacheBuffers(GuessCacheBuffers&&) = delete;
-        GuessCacheBuffers& operator=(GuessCacheBuffers&&) = delete;
-
-        void release();
-    };
-    GuessCacheBuffers guess_cache_buffers;
-    
-    void allocateGuessCacheBuffers(size_t capacity, bool enable_diversity, 
-                                   size_t diversity_bloom_bits, size_t pinned_buffer_size);
-    void freeGuessCacheBuffers();
-    
     // DELETED: batch_prep_* vectors (Rule 20) — replaced by BatchPayload struct
     
 };

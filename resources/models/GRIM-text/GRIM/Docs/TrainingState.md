@@ -1,24 +1,31 @@
 # TrainingState — Training GPU Resource Controller
 
-Training-owned GPU resources MUST go through `TrainingState`. Generation-owned GPU resources live in `GenerationState` (`Shared/InferenceState/GenerationState_GPU.hpp`) and are owned directly by `LanguageModel`, not smuggled through TrainingState.
+Training-owned GPU resources MUST go through `TrainingState`. Generation-owned GPU resources live in `GenerationState` (`Shared/InferenceState/GenerationState_GPU.hpp`) and are owned directly by `LanguageModel`, not smuggled through TrainingState. GRIM-TS guess-cache buffers are owned by `GRIMTS::Training::GuessCacheScope`, not `TrainingState`; that scope only borrows `TrainingState.stream_ctrl` for the primary stream.
 
 `TrainingState` owns two different resource classes:
 
 - **Tensor members** (`Tensor cached_*`, optimizer states, `class_weights_tensor`, `read_gate_accum_tensor`) release themselves through `Tensor::~Tensor()`. Never call `cudaFree` on `Tensor::data` from the destructor.
-- **RAII non-Tensor members** release themselves through their own destructors: `TeacherLogits::Buffer`, `GuessCacheBuffers`, `std::unique_ptr<ScratchBlockPool>`, `std::unique_ptr<GradNormScratch>`, and `CublasHandleOwner`.
+- **RAII non-Tensor members** release themselves through their own destructors: `TeacherLogits::Buffer`, `std::unique_ptr<GradNormScratch>`, and `CublasHandleOwner`.
 
 `TrainingState::~TrainingState()` is defaulted. Do not add a central destructor cleanup list; resource ownership must live on the field type itself.
 
 RAII helper modules:
 - `Shared/TrainingState/CublasHandleOwner_GPU.{hpp,cu}` owns `cublasDestroy` for `TrainingState::cublas_handle`.
 - `Shared/TrainingState/DeviceAllocation_GPU.{hpp,cu}` owns raw CUDA device allocations used by typed runtime owners, including `GenerationState` KV/decode buffers.
+- `Layers/GRIMTS/GuessCacheTraining.{hpp,cu}` owns GRIM-TS guess-cache records, keys, bloom, calibration, and pinned async-transfer buffers through `GuessCacheScope::OwnedBuffers`.
+
+`ScratchBlockPool` was deleted. Batch upload copies `BatchPayload` host vectors directly into the TrainingState device cache tensors, and ScratchBlock reasoning owns its own layer buffers.
+
+`TrainingState` does not own GQA architecture dimensions. Use `LanguageModelConfig` / `ModelArchitecture` for authored `num_heads`, `num_kv_heads`, and `head_dim`; pass `TensorContract::GQADims` at kernel/layer boundaries; use `GenerationState::KVCacheShape` for allocated generation-cache geometry.
+
+`TrainingState` does not own MTP diagnostics. `Shared/MTP/MTPDiagnostics.hpp` defines the host-side payload, `Autograd::LossResult` carries the producer snapshot, and `Training::BatchResult` carries the log-interval snapshot consumed by `Diagnostics::runMtpDiagnostic()`.
 
 | Resource | Access |
 |----------|--------|
 | CUDA streams | `training_state.stream_ctrl.getPrimaryStream()` |
 | cuBLAS handle | `training_state.cublas_handle` (`CublasHandleOwner`, borrowed as raw `cublasHandle_t`) |
 | Parameter gradients | `Tensor.grad_` via `ctx.model->zeroGradients()` / `ctx.model->backward()` |
-| Optimizer states | `training_state.optimizer_m_states` / `optimizer_v_states` |
+| Optimizer states | Not TrainingState-owned; `Training::OptimizerContext::optimizer_state` owns Adam/RAdam moment tensors and `LanguageModel::bindOptimizerState()` binds them to parameter groups. |
 
 Generation state is a separate owner:
 

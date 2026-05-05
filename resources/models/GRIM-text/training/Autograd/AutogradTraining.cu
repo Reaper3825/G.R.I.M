@@ -930,7 +930,7 @@ LossResult computeAutogradLoss(
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
     // Delegated to MTP_GPU module (see Shared/MTP/MTP_GPU.cu)
     // ═══════════════════════════════════════════════════════════════════════════
-    GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, *ts);
+    GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, result.mtp_diagnostics);
     
     // Issue both loss D2H copies before a single sync (batch sync for text + numeric)
     float text_loss = 0.0f;
@@ -939,16 +939,16 @@ LossResult computeAutogradLoss(
 
     cudaStreamSynchronize(ctx.stream);
 
-    if (ts->mtp_diagnostics.valid) {
-        ts->mtp_diagnostics.L_total = text_loss;
+    if (result.mtp_diagnostics.valid) {
+        result.mtp_diagnostics.L_total = text_loss;
     }
 
     if (!std::isfinite(text_loss)) {
         std::string msg = "computeAutogradLoss: text_loss is non-finite (" + std::to_string(text_loss) + ")";
-        if (ts->mtp_diagnostics.valid) {
-            msg += " L0_main=" + std::to_string(ts->mtp_diagnostics.L0_main);
-            for (size_t i = 0; i < ts->mtp_diagnostics.head_loss.size(); ++i)
-                msg += " head_loss[" + std::to_string(i) + "]=" + std::to_string(ts->mtp_diagnostics.head_loss[i]);
+        if (result.mtp_diagnostics.valid) {
+            msg += " L0_main=" + std::to_string(result.mtp_diagnostics.L0_main);
+            for (size_t i = 0; i < result.mtp_diagnostics.head_loss.size(); ++i)
+                msg += " head_loss[" + std::to_string(i) + "]=" + std::to_string(result.mtp_diagnostics.head_loss[i]);
         }
         throw std::runtime_error(msg);
     }

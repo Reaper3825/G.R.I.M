@@ -21,7 +21,9 @@ void initializeOptimizer(TrainingContext& ctx) {
     const auto& hp = ctx.config.hyperparameters;
 
     logger.log("Initializing optimizer state...");
-    opt.optimizer_state.step = 0;
+    opt.optimizer_step.step = 0;
+    model.bindOptimizerState(opt.optimizer_state,
+                             model.getTrainingState().stream_ctrl.getPrimaryStream());
 
     GRIM::SoftRestart::SoftRestartConfig sr_cfg;
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
@@ -68,7 +70,7 @@ ResumeState captureResumeState(const TrainingContext& ctx) {
         st.optimizer_sidecar_path = optimizerSidecarPath(ctx.loaded_checkpoint_path);
     }
 
-    st.optimizer_step = ctx.optimizer.optimizer_state.step;
+    st.optimizer_step = ctx.optimizer.optimizer_step.step;
     st.global_step = ctx.global_step;
     st.best_val_loss = ctx.best_val_loss;
     st.epochs_completed = ctx.epochs_completed;

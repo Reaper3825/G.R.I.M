@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
-#include <cstring>
 #include <iostream>
 #include <numeric>
 #include <stdexcept>
@@ -56,9 +55,8 @@ void orderLog(const char* stage,
 //
 // Performs the H2D copies for a single BatchPayload into TrainingState's
 // reusable cache buffers and returns a BatchDeviceBindings naming the resulting
-// device pointers. Uses the pinned ScratchBlockPool double-buffered staging
-// path (no pageable copies). Synchronizes before returning so callers may
-// consume the bindings immediately.
+// device pointers. Synchronizes before returning so callers may consume the
+// bindings immediately.
 //
 // This is the SINGLE H2D sync slice for a step. Both eval (computeLossBatch)
 // and training (autogradTrainingStep) paths route through this helper so there
@@ -98,12 +96,6 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 
 	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
-	auto* scratch_pool = training_state_.scratch_pool.get();
-	if (!scratch_pool || !scratch_pool->isInitialized()) {
-		throw std::runtime_error("uploadBatchToDevice: scratch_pool not initialized — "
-			"pinned memory staging is REQUIRED for batch transfers");
-	}
-
 	int* cached_token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
 	if (!cached_token_ids_ptr) {
 		throw std::runtime_error("uploadBatchToDevice: cached_token_ids_tensor.data is NULL");
@@ -139,53 +131,43 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 
 	auto copy_start = std::chrono::high_resolution_clock::now();
 
-	ScratchBlock::ScratchBlockGuard handleA(*scratch_pool, std::max({input_ids_bytes, numeric_val_bytes, text_feat_bytes, slot_map_bytes}));
-	ScratchBlock::ScratchBlockGuard handleB(*scratch_pool, std::max({target_ids_bytes, atom_mask_bytes, atom_flag_bytes}));
-
-	// Round 1: input_ids (A) + target_ids (B). Targets arrive pre-masked from
+	// Round 1: input_ids + target_ids. Targets arrive pre-masked from
 	// buildBatchPayload Phase 4b; payload.lm_valid_tokens already accounts for
 	// the post-masking LM-supervised count.
-	std::memcpy(handleA.data(), payload.input_ids.data(), input_ids_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, handleA.data(),
+	CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, payload.input_ids.data(),
 		input_ids_bytes, cudaMemcpyHostToDevice, stream));
-	std::memcpy(handleB.data(), payload.target_ids.data(), target_ids_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, handleB.data(),
+	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, payload.target_ids.data(),
 		target_ids_bytes, cudaMemcpyHostToDevice, stream));
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 
-	// Round 2: numeric_values (A) + atom_mask (B).
-	std::memcpy(handleA.data(), payload.numeric_values.data(), numeric_val_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, handleA.data(),
+	// Round 2: numeric_values + atom_mask.
+	CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, payload.numeric_values.data(),
 		numeric_val_bytes, cudaMemcpyHostToDevice, stream));
-	std::memcpy(handleB.data(), payload.atom_mask.data(), atom_mask_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), handleB.data(),
+	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), payload.atom_mask.data(),
 		atom_mask_bytes, cudaMemcpyHostToDevice, stream));
 
-	// Round 3: text_features (A) + atom_flags (B).
+	// Round 3: text_features + atom_flags.
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 	if (has_text_features) {
-		std::memcpy(handleA.data(), payload.text_features.data(), text_feat_bytes);
-		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), handleA.data(),
+		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), payload.text_features.data(),
 			text_feat_bytes, cudaMemcpyHostToDevice, stream));
 	}
 	if (training_state_.cached_token_atom_flags.data) {
-		std::memcpy(handleB.data(), payload.atom_flags.data(), atom_flag_bytes);
 		CUDA_CHECK(cudaMemcpyAsync(
-			reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data), handleB.data(),
+			reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data), payload.atom_flags.data(),
 			atom_flag_bytes, cudaMemcpyHostToDevice, stream));
 	}
 
-	// Round 4: token_to_slot_map (reuse A; pool is only double-buffered).
+	// Round 4: token_to_slot_map.
 	CUDA_CHECK(cudaStreamSynchronize(stream));
-	std::memcpy(handleA.data(), payload.token_to_slot_map.data(), slot_map_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(cached_slot_map_ptr, handleA.data(),
+	CUDA_CHECK(cudaMemcpyAsync(cached_slot_map_ptr, payload.token_to_slot_map.data(),
 		slot_map_bytes, cudaMemcpyHostToDevice, stream));
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 
 	auto copy_end = std::chrono::high_resolution_clock::now();
 	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
 	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
-		fprintf(stderr, "[VOCAB_TIMING] uploadBatchToDevice complete (pinned staging): %.2f ms\n", copy_ms);
+		fprintf(stderr, "[VOCAB_TIMING] uploadBatchToDevice complete: %.2f ms\n", copy_ms);
 	}
 
 	// The bindings struct returned below is the canonical reader-facing device

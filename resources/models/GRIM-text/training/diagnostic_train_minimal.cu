@@ -46,7 +46,7 @@
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "Autograd/AutogradTraining.hpp"
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
-#include "../Shared/Optimizers/OptimizerState.hpp"
+#include "../Shared/Optimizers/OptimizerStep.hpp"
 
 // Tokenizer  
 #include "../Shared/UnigramByte/UniByte.hpp"
@@ -590,7 +590,7 @@ int main(int argc, char** argv) {
     int auto_remaining = 0;  // For auto-mode
     bool quit_requested = false;
     
-    GRIM::OptimizerState manual_optimizer_state;
+    GRIM::OptimizerStep manual_optimizer_step;
     auto training_start = std::chrono::steady_clock::now();
     
     // Process sequences one at a time
@@ -739,7 +739,7 @@ int main(int argc, char** argv) {
                     const auto bindings = model.uploadBatchToDevice(payload);
                     auto loss_result = GRIM::Autograd::autogradTrainingStep(
                         model, model.getTrainingState(), payload, bindings,
-                        /*accumulate=*/false, /*grad_scale=*/1.0f, manual_optimizer_state.step);
+                        /*accumulate=*/false, /*grad_scale=*/1.0f, manual_optimizer_step.step);
                     if (!loss_result.success) {
                         std::cout << "  → autogradTrainingStep FAILED: " << loss_result.error_message << std::endl;
                         break;
@@ -755,11 +755,11 @@ int main(int argc, char** argv) {
                     GRIM::launchAdamWStep(model.parameterGroups(),
                                           learning_rate,
                                           GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
-                                          manual_optimizer_state.step,
+                                          manual_optimizer_step.step,
                                           stream);
                     CUDA_CHECK(cudaStreamSynchronize(stream));
                     
-                    manual_optimizer_state.step++;
+                    manual_optimizer_step.step++;
                     break;
                 }
                     
@@ -798,7 +798,7 @@ int main(int argc, char** argv) {
               << "%)" << std::endl;
     std::cout << "  Trained tokens:      " << trained_tokens << std::endl;
     std::cout << "  Skipped tokens:      " << skipped_tokens << std::endl;
-    std::cout << "  Optimizer steps:     " << manual_optimizer_state.step << std::endl;
+    std::cout << "  Optimizer steps:     " << manual_optimizer_step.step << std::endl;
     std::cout << "  Duration:            " << std::setprecision(1) << elapsed << " seconds" << std::endl;
     
     std::cout << "\n✓ Manual training session complete" << std::endl;

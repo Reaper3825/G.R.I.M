@@ -22,7 +22,7 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
-#include "../Shared/Optimizers/OptimizerState.hpp"
+#include "../Shared/Optimizers/OptimizerStep.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -384,13 +384,12 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     // 4. One optimizer step with LARGE learning rate to see effect
     float test_lr = 0.1f;  // Large LR for visible effect
     
-    // Create temporary optimizer state
-    GRIM::OptimizerState opt_state;
-    opt_state.initialized = false;  // Will be initialized by updateWeights
+    // Create temporary optimizer step counter
+    GRIM::OptimizerStep opt_step;
     
     GRIM::launchAdamWStep(model->parameterGroups(), test_lr,
                           GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
-                          opt_state.step,
+                          opt_step.step,
                           model->getTrainingState().stream_ctrl.getPrimaryStream());
     
     // 5. Get logits AFTER training
@@ -535,9 +534,8 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
     token_str += "]";
     PROOF_LOG(token_str);
     
-    // Create optimizer state
-    GRIM::OptimizerState opt_state;
-    opt_state.initialized = false;
+    // Create optimizer step counter
+    GRIM::OptimizerStep opt_step;
     
     float lr = 0.01f;
     int num_steps = 100;
@@ -561,7 +559,7 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
         // Update
         GRIM::launchAdamWStep(model->parameterGroups(), lr,
                               GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
-                              opt_state.step,
+                              opt_step.step,
                               model->getTrainingState().stream_ctrl.getPrimaryStream());
         
         if ((step + 1) % 20 == 0) {

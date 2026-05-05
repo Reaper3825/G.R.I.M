@@ -22,6 +22,7 @@
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/Batching/BatchDeviceBindings.hpp"
+#include "../../Shared/MTP/MTPDiagnostics.hpp"
 // MUST include full definitions for types used in AutogradContext
 #include "../../GRIM/grim_language_model_cuda.hpp"
 // ScratchBlock for autograd forward path
@@ -68,6 +69,7 @@ struct LossResult {
     float aux_loss = 0.0f;           // loss_value - text_loss (all non-text auxiliary terms)
     float weight_text = 1.0f;
     int valid_tokens = 0;
+    GRIM::MTP::MTPDiagnostics mtp_diagnostics;
     bool success = false;
     std::string error_message;
 };

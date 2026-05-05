@@ -11,7 +11,7 @@
 #include <string_view>
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
-#include "../Optimizers/OptimizerState.hpp"
+#include "../Optimizers/OptimizerStep.hpp"
 
 namespace GRIM::Loss { struct LossSignals; }
 
@@ -51,7 +51,7 @@ private:
 };
 
 // Zero-out the optimizer momentum/variance buffers without touching weights.
-void zeroOptimizerMoments(LanguageModel* model, OptimizerState* optimizer);
+void zeroOptimizerMoments(LanguageModel* model, OptimizerStep* optimizer);
 void scaleOptimizerMoments(LanguageModel* model, float scale);
 
 //======================================================//

@@ -128,10 +128,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
     model->buildParameterGroups();
 
-    if (model->isScratchPoolInitialized()) {
-        model->configureScratchPool(hp.scratch_blocks_enabled);
-    }
-
     GRIM::LossContext::LossOptions loss_opts{};
     {
         loss_opts.label_smoothing_enabled    = hp.loss_label_smoothing_enabled;

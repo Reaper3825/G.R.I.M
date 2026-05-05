@@ -10,11 +10,11 @@
 #include "OptimizerMomentDiagnostic.hpp"
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
-#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -22,13 +22,18 @@
 
 namespace GRIM::Diagnostics {
 
-MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync_for_host) {
+MomentSample sampleOptimizerMomentStats(const GRIM::OptimizerState& optimizer_state,
+                                        cudaStream_t stream,
+                                        bool sync_for_host) {
     MomentSample sample{};
     if (!sync_for_host) {
         return sample;
     }
-    const std::size_t group_count = std::min(ts.optimizer_m_states.size(),
-                                             ts.optimizer_v_states.size());
+    if (stream == nullptr) {
+        throw std::runtime_error("[sampleOptimizerMomentStats] stream is NULL - caller MUST provide valid CUDA stream");
+    }
+    const std::size_t group_count = std::min(optimizer_state.m_states.size(),
+                                             optimizer_state.v_states.size());
     if (group_count == 0) {
         return sample;
     }
@@ -37,12 +42,11 @@ MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync
     std::vector<float> v_host(group_count * kMomentSamplePerGroup, 0.0f);
     std::vector<std::size_t> counts(group_count, 0);
 
-    cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
     bool has_copy = false;
     for (std::size_t i = 0; i < group_count; ++i) {
-        const float* m_ptr = ts.optimizer_m_states[i].data;
-        const float* v_ptr = ts.optimizer_v_states[i].data;
-        const std::size_t size = ts.optimizer_m_states[i].numel();
+        const float* m_ptr = optimizer_state.m_states[i].data;
+        const float* v_ptr = optimizer_state.v_states[i].data;
+        const std::size_t size = optimizer_state.m_states[i].numel();
         const std::size_t count = std::min<std::size_t>(kMomentSamplePerGroup, size);
         if (!m_ptr || !v_ptr || count == 0) {
             continue;
@@ -94,10 +98,13 @@ void runOptimizerMomentDiagnostic(
     bool sync_diag)
 {
     namespace Internal = ::GRIMText::Training::Internal;
-    const auto moment_sample = sampleOptimizerMomentStats(ctx.model->getTrainingState(), sync_diag);
+    const auto& ts = ctx.model->getTrainingState();
+    const auto moment_sample = sampleOptimizerMomentStats(ctx.optimizer.optimizer_state,
+                                                         ts.stream_ctrl.getPrimaryStream(),
+                                                         sync_diag);
     if (moment_sample.valid) {
         ctx.logging.logger->log("[OptState] batch=" + std::to_string(batch_idx + 1) +
-                                " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
+                                " step=" + std::to_string(ctx.optimizer.optimizer_step.step) +
                                 " accum_window=" + std::to_string(accumulation_window_micro_batches) +
                                 " m_rms=" + Internal::formatScalar(moment_sample.m_rms, 10) +
                                 " v_rms=" + Internal::formatScalar(moment_sample.v_rms, 10) +

@@ -40,7 +40,8 @@
 // transitively (and in the correct order) by HyperParameters_GPU.hpp below.
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
-#include "../../Shared/Optimizers/OptimizerState.hpp"
+#include "../../Shared/Optimizers/OptimizerState_GPU.hpp"
+#include "../../Shared/Optimizers/OptimizerStep.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/GRIMTS/GuessCacheTraining.hpp"
@@ -112,6 +113,7 @@ struct SequenceData {
  * @brief Optimizer and controller state
  */
 struct OptimizerContext {
+    GRIM::OptimizerStep optimizer_step;
     GRIM::OptimizerState optimizer_state;
     GRIM::SoftRestart::SoftRestartController soft_restart_controller;
     int accumulation_position = 0;  // Tracks position within accumulation window [0, accum_steps)

@@ -1088,24 +1088,5 @@ bool LanguageModel::isScratchBlockEnabled() const {
     return scratch_block_layer_ && scratch_block_layer_->isEnabled();
 }
 
-void LanguageModel::configureScratchPool(bool enabled) {
-    if (!training_state_.scratch_pool) {
-        if (enabled) {
-            throw std::runtime_error("configureScratchPool: scratch_pool is not initialized");
-        }
-        training_state_.scratch_enabled = false;
-        return;
-    }
-    training_state_.scratch_enabled = enabled;
-    training_state_.scratch_pool->setEnabled(enabled);
-}
-
-bool LanguageModel::isScratchPoolInitialized() const {
-    return training_state_.scratch_pool != nullptr && training_state_.scratch_pool->isInitialized();
-}
-
-
-
-
 } // namespace GRIM
 

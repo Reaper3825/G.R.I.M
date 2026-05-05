@@ -25,22 +25,111 @@ using GRIM::Logging::EmitModuleError;
 namespace GRIMTS::Training {
 
 //======================================================//
-//  GuessCacheScope RAII (Rule 22 Compliant)
+//  GuessCacheScope RAII (Rule 20 ownership boundary)
 //======================================================//
+
+GuessCacheScope::OwnedBuffers::~OwnedBuffers() {
+    release();
+}
+
+void GuessCacheScope::OwnedBuffers::release() {
+    if (buffers.records) { cudaFree(buffers.records); buffers.records = nullptr; }
+    if (buffers.keys) { cudaFree(buffers.keys); buffers.keys = nullptr; }
+    if (buffers.size) { cudaFree(buffers.size); buffers.size = nullptr; }
+    if (buffers.evict_cursor) { cudaFree(buffers.evict_cursor); buffers.evict_cursor = nullptr; }
+    if (buffers.diversity_bloom) { cudaFree(buffers.diversity_bloom); buffers.diversity_bloom = nullptr; }
+    if (buffers.calibration_offset) { cudaFree(buffers.calibration_offset); buffers.calibration_offset = nullptr; }
+    if (buffers.slot_locks) { cudaFree(buffers.slot_locks); buffers.slot_locks = nullptr; }
+    if (buffers.single_meta_buffer) { cudaFree(buffers.single_meta_buffer); buffers.single_meta_buffer = nullptr; }
+    if (buffers.single_reward_buffer) { cudaFree(buffers.single_reward_buffer); buffers.single_reward_buffer = nullptr; }
+    if (buffers.pinned_meta) { cudaFreeHost(buffers.pinned_meta); buffers.pinned_meta = nullptr; }
+    if (buffers.pinned_rewards) { cudaFreeHost(buffers.pinned_rewards); buffers.pinned_rewards = nullptr; }
+
+    buffers.bloom_words = 0;
+    buffers.pinned_capacity = 0;
+    buffers.capacity = 0;
+    buffers.allocated = false;
+}
+
+void GuessCacheScope::OwnedBuffers::allocate(
+    std::size_t capacity,
+    bool enable_diversity,
+    std::size_t diversity_bloom_bits,
+    std::size_t pinned_buffer_size,
+    cudaStream_t primary_stream) {
+
+    if (buffers.allocated) {
+        throw std::runtime_error("[GuessCacheScope::OwnedBuffers::allocate] buffers already allocated");
+    }
+    if (capacity == 0) {
+        throw std::runtime_error("[GuessCacheScope::OwnedBuffers::allocate] capacity cannot be zero");
+    }
+    if (!primary_stream) {
+        throw std::runtime_error("[GuessCacheScope::OwnedBuffers::allocate] primary_stream is nullptr");
+    }
+
+    cudaMallocOrThrow(&buffers.records, capacity * sizeof(GRIMTS::GuessRecord), "guess_cache_records");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buffers.keys), capacity * sizeof(std::uint64_t), "guess_cache_keys");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buffers.size), sizeof(unsigned int), "guess_cache_size");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buffers.evict_cursor), sizeof(unsigned int), "guess_cache_evict_cursor");
+
+    if (enable_diversity && diversity_bloom_bits > 0) {
+        buffers.bloom_words = (diversity_bloom_bits + 31) / 32;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&buffers.diversity_bloom),
+                          buffers.bloom_words * sizeof(std::uint32_t),
+                          "guess_cache_diversity_bloom");
+    }
+
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buffers.calibration_offset), sizeof(float), "guess_cache_calibration_offset");
+    cudaMallocOrThrow(&buffers.single_meta_buffer, sizeof(GRIMTS::GuessMetadata), "guess_cache_single_meta");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&buffers.single_reward_buffer), sizeof(float), "guess_cache_single_reward");
+
+    if (pinned_buffer_size > 0) {
+        cudaError_t err = cudaMallocHost(&buffers.pinned_meta, pinned_buffer_size * sizeof(GRIMTS::GuessMetadata));
+        if (err != cudaSuccess) {
+            release();
+            throw std::runtime_error(std::string("[GuessCacheScope::OwnedBuffers::allocate] cudaMallocHost pinned_meta failed: ") +
+                                     cudaGetErrorString(err));
+        }
+
+        err = cudaMallocHost(&buffers.pinned_rewards, pinned_buffer_size * sizeof(float));
+        if (err != cudaSuccess) {
+            release();
+            throw std::runtime_error(std::string("[GuessCacheScope::OwnedBuffers::allocate] cudaMallocHost pinned_rewards failed: ") +
+                                     cudaGetErrorString(err));
+        }
+        buffers.pinned_capacity = pinned_buffer_size;
+    }
+
+    cudaMemsetAsync(buffers.size, 0, sizeof(unsigned int), primary_stream);
+    cudaMemsetAsync(buffers.keys, 0xFF, capacity * sizeof(std::uint64_t), primary_stream);
+    cudaMemsetAsync(buffers.records, 0, capacity * sizeof(GRIMTS::GuessRecord), primary_stream);
+    cudaMemsetAsync(buffers.evict_cursor, 0, sizeof(unsigned int), primary_stream);
+    if (buffers.diversity_bloom) {
+        cudaMemsetAsync(buffers.diversity_bloom, 0, buffers.bloom_words * sizeof(std::uint32_t), primary_stream);
+    }
+    float zero_cal = 0.0f;
+    cudaMemcpyAsync(buffers.calibration_offset, &zero_cal, sizeof(float), cudaMemcpyHostToDevice, primary_stream);
+
+    buffers.capacity = capacity;
+    buffers.allocated = true;
+
+    fprintf(stdout, "[INFO] GuessCacheScope: buffers allocated. capacity=%zu, diversity=%s, bloom_bits=%zu, pinned=%zu\n",
+            capacity, enable_diversity ? "ON" : "OFF", diversity_bloom_bits, pinned_buffer_size);
+}
 
 GuessCacheScope::GuessCacheScope(::GRIM::TrainingState& training_state,
                                  std::size_t capacity,
                                  bool enable_async)
-    : training_state_(training_state), active_(false), buffers_allocated_(false) {
+    : training_state_(training_state), active_(false) {
 
-    // RULE 22: Allocate buffers through TrainingState
     const bool enable_diversity = true;
     const std::size_t diversity_bloom_bits = 65536;
     const std::size_t pinned_buffer_size = enable_async ? 8192 : 0;
 
-    training_state_.allocateGuessCacheBuffers(
-            capacity, enable_diversity, diversity_bloom_bits, pinned_buffer_size);
-    buffers_allocated_ = true;
+    // getPrimaryStream() throws if not initialized (Rule 20)
+    cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
+    buffers_.allocate(capacity, enable_diversity, diversity_bloom_bits, pinned_buffer_size, primary_stream);
 
     // Build GRIMTS config
     GRIMTS::CacheConfig config{};
@@ -55,27 +144,6 @@ GuessCacheScope::GuessCacheScope(::GRIM::TrainingState& training_state,
     config.enable_async_transfers = enable_async;
     config.pinned_buffer_size = pinned_buffer_size;
     config.enable_histograms = false;
-
-    // RULE 22: Get stream from centralized controller
-    // getPrimaryStream() throws if not initialized (Rule 20)
-    cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
-
-    // Convert TrainingState::GuessCacheBuffers to GRIMTS::GuessCacheBuffers
-    GRIMTS::GuessCacheBuffers grimts_buffers{};
-    grimts_buffers.records            = training_state_.guess_cache_buffers.records;
-    grimts_buffers.keys               = training_state_.guess_cache_buffers.keys;
-    grimts_buffers.size               = training_state_.guess_cache_buffers.size;
-    grimts_buffers.evict_cursor       = training_state_.guess_cache_buffers.evict_cursor;
-    grimts_buffers.diversity_bloom    = training_state_.guess_cache_buffers.diversity_bloom;
-    grimts_buffers.bloom_words        = training_state_.guess_cache_buffers.bloom_words;
-    grimts_buffers.calibration_offset = training_state_.guess_cache_buffers.calibration_offset;
-    grimts_buffers.single_meta_buffer = training_state_.guess_cache_buffers.single_meta_buffer;
-    grimts_buffers.single_reward_buffer = training_state_.guess_cache_buffers.single_reward_buffer;
-    grimts_buffers.pinned_meta        = training_state_.guess_cache_buffers.pinned_meta;
-    grimts_buffers.pinned_rewards     = training_state_.guess_cache_buffers.pinned_rewards;
-    grimts_buffers.pinned_capacity    = training_state_.guess_cache_buffers.pinned_capacity;
-    grimts_buffers.capacity           = training_state_.guess_cache_buffers.capacity;
-    grimts_buffers.allocated          = training_state_.guess_cache_buffers.allocated;
 
     // Wire up GRIMTS logging to training log system
     GRIMTS::Logging::RegisterLogCallback([](GRIMTS::Logging::LogLevel level, std::string_view message) {
@@ -94,14 +162,13 @@ GuessCacheScope::GuessCacheScope(::GRIM::TrainingState& training_state,
         }
     });
 
-    // Initialize GRIM-TS with pre-allocated buffers
-    active_ = GRIMTS::InitializeGuessCache(config, grimts_buffers, primary_stream);
+    // Initialize GRIM-TS with scope-owned buffers
+    active_ = GRIMTS::InitializeGuessCache(config, buffers_.buffers, primary_stream);
     if (active_) {
         GRIMTS::ResetGuessCache(primary_stream);
     } else {
         fprintf(stderr, "[ERROR] GuessCacheScope: GRIMTS::InitializeGuessCache failed!\n");
-        training_state_.freeGuessCacheBuffers();
-        buffers_allocated_ = false;
+        buffers_.release();
     }
 }
 
@@ -112,11 +179,7 @@ GuessCacheScope::~GuessCacheScope() {
     }
     // Clear logging callbacks to avoid dangling references
     GRIMTS::Logging::ClearLogCallbacks();
-    // RULE 22: TrainingState owns the buffers, we allocated them so we free them
-    if (buffers_allocated_) {
-        training_state_.freeGuessCacheBuffers();
-        buffers_allocated_ = false;
-    }
+    buffers_.release();
 }
 
 //======================================================//

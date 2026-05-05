@@ -223,10 +223,6 @@ void LanguageModel::initTrainingState() {
                                  + " num_kv_heads=" + std::to_string(num_kv_heads));
     }
     
-    // Store GQA config in training state
-    training_state_.num_heads = cfg.num_heads;
-    training_state_.num_kv_heads = num_kv_heads;
-    
     std::cout << "GQA Configuration: num_heads=" << cfg.num_heads 
               << " num_kv_heads=" << num_kv_heads 
               << " (heads_per_kv_group=" << (cfg.num_heads / num_kv_heads) << ")" << std::endl;
@@ -385,41 +381,6 @@ void LanguageModel::initTrainingState() {
 
     // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages
     // (was ~56MB dead GPU allocation). Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
-    
-    // Initialize scratch block pool for pinned memory batch transfers
-    // Block size derived from max_tokens — the largest per-batch transfer is
-    // text_features at max_tokens * kTextFeatureDim * sizeof(uint16_t).
-    training_state_.scratch_enabled = true;
-    
-    // kTextFeatureDim already declared above from BatchPayload::kTextFeatureDim
-    const size_t max_transfer_bytes = max_tokens
-                                    * static_cast<size_t>(kTextFeatureDim) * sizeof(uint16_t);
-    const size_t tokens_per_block = (max_transfer_bytes + sizeof(int) - 1) / sizeof(int);
-    if (tokens_per_block == 0) {
-        throw std::runtime_error("InitTrainingState: scratch pool tokens_per_block computed as 0");
-    }
-    
-    {
-        ScratchBlock::ScratchBlockConfig scratch_config;
-        scratch_config.enabled = true;
-        scratch_config.max_tokens_per_block = tokens_per_block;
-        scratch_config.num_blocks = 2;  // Double buffer
-        scratch_config.use_write_combined = false;
-        
-        training_state_.scratch_pool = std::make_unique<ScratchBlock::ScratchBlockPool>(scratch_config);
-        
-        if (!training_state_.scratch_pool || !training_state_.scratch_pool->isInitialized()) {
-            throw std::runtime_error("InitTrainingState: Scratch block pool initialization failed");
-        }
-        
-        size_t total_bytes = training_state_.scratch_pool->getTotalPinnedMemoryBytes();
-        double mb = total_bytes / (1024.0 * 1024.0);
-        std::cout << "✓ Scratch block pool initialized ("
-                  << scratch_config.num_blocks << " blocks × "
-                  << max_transfer_bytes << " bytes (" << tokens_per_block << " tokens) = "
-                  << std::fixed << std::setprecision(2) << mb
-                  << " MB pinned memory)" << std::endl;
-    }
     
     // Initialize ScratchBlock reasoning layer
     if (cfg.use_scratch_block) {

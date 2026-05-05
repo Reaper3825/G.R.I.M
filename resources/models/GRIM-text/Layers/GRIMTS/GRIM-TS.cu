@@ -799,13 +799,13 @@ static void SyncKernelConfig() {
 }
 
 //==============================================================================
-// Pinned Buffer Management (Uses TrainingState-owned pinned memory)
+// Pinned Buffer Management (Uses GuessCacheScope-owned pinned memory)
 //==============================================================================
 
 static void SetupPinnedBuffers(const GuessCacheBuffers& buffers) {
     if (g_pinned.initialized) return;
     
-    // RULE 22: Pinned memory is allocated by TrainingState, we just use pointers
+    // Pinned memory is allocated by GuessCacheScope; GRIM-TS only borrows pointers.
     if (buffers.pinned_meta && buffers.pinned_rewards && buffers.pinned_capacity > 0) {
         g_pinned.pinned_meta = static_cast<GuessMetadata*>(buffers.pinned_meta);
         g_pinned.pinned_rewards = buffers.pinned_rewards;
@@ -815,8 +815,7 @@ static void SetupPinnedBuffers(const GuessCacheBuffers& buffers) {
 }
 
 static void ClearPinnedBufferRefs() {
-    // RULE 22: We don't own these, just clear our pointers
-    // TrainingState handles actual deallocation
+    // GuessCacheScope owns these, so just clear borrowed pointers.
     g_pinned.pinned_meta = nullptr;
     g_pinned.pinned_rewards = nullptr;
     g_pinned.capacity = 0;
@@ -824,7 +823,7 @@ static void ClearPinnedBufferRefs() {
 }
 
 //==============================================================================
-// Primary Initialization (Rule 22 Compliant - No Allocations)
+// Primary Initialization (borrows externally owned cache buffers)
 //==============================================================================
 
 bool InitializeGuessCache(const CacheConfig& config, 
@@ -836,7 +835,7 @@ bool InitializeGuessCache(const CacheConfig& config,
                 "Call ShutdownGuessCache() first.");
     }
     
-    // FAIL LOUD: Null stream (Rule 22 - must come from StreamController)
+    // FAIL LOUD: Null stream — must come from TrainingState.stream_ctrl.
     if (!primary_stream) {
         throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: primary_stream is nullptr! "
                 "Stream must be obtained from TrainingState.stream_ctrl.getPrimaryStream().");
@@ -846,7 +845,7 @@ bool InitializeGuessCache(const CacheConfig& config,
     // FAIL LOUD: Buffers not allocated
     if (!buffers.allocated) {
         throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.allocated is false! "
-                "Call TrainingState::allocateGuessCacheBuffers() first.");
+                "Construct GuessCacheScope with allocated buffers first.");
     }
     
     // FAIL LOUD: Null required buffer pointers
@@ -884,7 +883,7 @@ bool InitializeGuessCache(const CacheConfig& config,
         g_config = config;
     }
     
-    // Store single-item buffer pointers (owned by TrainingState)
+    // Store single-item buffer pointers (owned by GuessCacheScope)
     g_single_meta_buffer = static_cast<GuessMetadata*>(buffers.single_meta_buffer);
     g_single_reward_buffer = buffers.single_reward_buffer;
     
@@ -949,7 +948,7 @@ bool InitializeGuessCache(const CacheConfig& config,
 }
 
 //==============================================================================
-// Shutdown (Rule 22 Compliant - No Deallocations)
+// Shutdown (clears borrowed cache-buffer references; no cache-buffer deallocation)
 //==============================================================================
 
 void ShutdownGuessCache() {
@@ -968,11 +967,10 @@ void ShutdownGuessCache() {
     }
     fprintf(stderr, "[DEBUG] ShutdownGuessCache - stream synced\n");
     
-    // RULE 22: Clear our references to TrainingState-owned pinned memory
+    // Clear borrowed references to GuessCacheScope-owned pinned memory.
     ClearPinnedBufferRefs();
     
-    // RULE 22: We do NOT free GPU memory - TrainingState owns it
-    // Just clear our pointers
+    // We do NOT free cache memory here; GuessCacheScope owns it.
     g_single_meta_buffer = nullptr;
     g_single_reward_buffer = nullptr;
     
@@ -1093,24 +1091,19 @@ float GetCurrentFillRatio() {
 }
 
 //==============================================================================
-// Capacity Management (Rule 22 Compliant)
+// Capacity Management
 //==============================================================================
 
 bool ResizeCache(std::size_t new_capacity, cudaStream_t stream) {
-    // RULE 22: Dynamic resize requires TrainingState to provide new buffers
-    // This function cannot allocate GPU memory directly
-    // Issue 8 FIX: Throw instead of return false per Rule 20 (fail loud)
+    // Dynamic resize requires the owning GuessCacheScope to be recreated with
+    // the requested capacity. This function cannot allocate GPU memory directly.
     throw std::runtime_error(
         "[FATAL] GRIMTS::ResizeCache: Cannot resize dynamically! "
-        "Rule 22: GPU allocations must come from TrainingState. "
-        "To resize: 1) ShutdownGuessCache(), 2) TrainingState::freeGuessCacheBuffers(), "
-        "3) TrainingState::allocateGuessCacheBuffers(new_capacity, ...), "
-        "4) InitializeGuessCache(config, buffers, stream)");
+        "Recreate GRIMTS::Training::GuessCacheScope with the new capacity.");
 }
 
 bool TryAutoResize(cudaStream_t stream) {
-    // RULE 22: Auto-resize disabled - requires TrainingState buffer reallocation
-    // Just return false, no resize possible without external reallocation
+    // Auto-resize disabled: scope-owned cache buffers require explicit scope recreation.
     return false;
 }
 

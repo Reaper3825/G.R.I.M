@@ -30,6 +30,7 @@
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Layers/GRIMTS/GRIM-TS.hpp"
 #include "../../Shared/Loss/LossSignals/LossSignals.hpp"
+#include "../../Shared/MTP/MTPDiagnostics.hpp"
 
 #include <functional>
 #include <memory>
@@ -66,6 +67,7 @@ struct BatchResult {
     int sequences_processed = 0;
     int tokens_processed = 0;
     bool gradient_clipped = false;
+    GRIM::MTP::MTPDiagnostics mtp_diagnostics;
     // NOTE: `skipped` / `skip_reason` were removed. Per Rule 20 a batch either
     // completes a real step or the trainer crashes — there is no third "silent
     // skip" outcome for callers to handle.

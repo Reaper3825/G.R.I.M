@@ -39,10 +39,10 @@ constexpr std::size_t kDefaultGuessCacheCapacity = 16384;
 constexpr float       kGuessRewardMomentum       = 0.85f;
 
 //----------------------------------------------------------------------
-// GuessCacheScope — RAII lifecycle (Rule 22 Compliant)
+// GuessCacheScope — RAII lifecycle (Rule 20 ownership boundary)
 //----------------------------------------------------------------------
-// TrainingState owns all GPU memory.
-// GuessCacheScope manages initialization / shutdown only.
+// GuessCacheScope owns the long-lived GRIM-TS cache buffers. TrainingState is
+// borrowed only for the primary stream and model snapshots consumed by updates.
 
 class GuessCacheScope {
 public:
@@ -57,9 +57,27 @@ public:
     bool active() const { return active_; }
 
 private:
+    struct OwnedBuffers {
+        GRIMTS::GuessCacheBuffers buffers{};
+
+        OwnedBuffers() = default;
+        ~OwnedBuffers();
+        OwnedBuffers(const OwnedBuffers&) = delete;
+        OwnedBuffers& operator=(const OwnedBuffers&) = delete;
+        OwnedBuffers(OwnedBuffers&&) = delete;
+        OwnedBuffers& operator=(OwnedBuffers&&) = delete;
+
+        void allocate(std::size_t capacity,
+                      bool enable_diversity,
+                      std::size_t diversity_bloom_bits,
+                      std::size_t pinned_buffer_size,
+                      cudaStream_t primary_stream);
+        void release();
+    };
+
     ::GRIM::TrainingState& training_state_;
+    OwnedBuffers buffers_;
     bool active_ = false;
-    bool buffers_allocated_ = false;
 };
 
 //----------------------------------------------------------------------

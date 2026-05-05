@@ -71,10 +71,10 @@ void launchMTPAccuracyKernel(
 void computeMTPAuxiliaryLosses(
     Autograd::AutogradContext& ctx,
     Autograd::AutogradIntermediates& intermediates,
-    TrainingState& ts
+    MTPDiagnostics& diagnostics
 ) {
     const auto* cfg = ctx.config;
-    ts.mtp_diagnostics.valid = false;
+    diagnostics.clear();
 
     if (!ctx.payload) {
         throw std::runtime_error("computeMTPAuxiliaryLosses: ctx.payload is NULL — caller MUST provide valid BatchPayload");
@@ -104,7 +104,7 @@ void computeMTPAuxiliaryLosses(
     float L0_main = 0.0f;
     cudaMemcpyAsync(&L0_main, intermediates.loss_tensor.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
     cudaStreamSynchronize(ctx.stream);
-    ts.mtp_diagnostics.L0_main = L0_main;
+    diagnostics.L0_main = L0_main;
     if (!std::isfinite(L0_main)) {
         throw std::runtime_error("computeMTPAuxiliaryLosses: main CE loss (L0_main) is non-finite (" + std::to_string(L0_main) +
             ") — unified_loss failed before MTP. num_tokens=" + std::to_string(total_tokens) + " vocab=" + std::to_string(vocab_size));
@@ -114,9 +114,9 @@ void computeMTPAuxiliaryLosses(
         static_cast<float>(ctx.step) / static_cast<float>(cfg->mtp_alpha_warmup_steps > 0 ? cfg->mtp_alpha_warmup_steps : 1));
     const float scale = (K > 0 && alpha_effective > 0.0f) ? (alpha_effective / static_cast<float>(K)) : 0.0f;
     intermediates.mtp_logits_tensors.clear();
-    ts.mtp_diagnostics.head_loss.clear();
-    ts.mtp_diagnostics.head_acc.clear();
-    ts.mtp_diagnostics.alpha_effective = alpha_effective;
+    diagnostics.head_loss.clear();
+    diagnostics.head_acc.clear();
+    diagnostics.alpha_effective = alpha_effective;
 
     // Resolve mtp_input: same representation as LM head matmul input (A1 fix)
     // MTP IS an auxiliary training objective — gradients flow through encoder.
@@ -155,8 +155,8 @@ void computeMTPAuxiliaryLosses(
         // loss and receives no gradient; we still emit zero diagnostics so the
         // head_loss / head_acc vectors stay aligned with K.
         if (payload.mtp_valid_counts[k] == 0) {
-            ts.mtp_diagnostics.head_loss.push_back(0.0f);
-            ts.mtp_diagnostics.head_acc.push_back(0.0f);
+            diagnostics.head_loss.push_back(0.0f);
+            diagnostics.head_acc.push_back(0.0f);
             continue;
         }
 
@@ -220,7 +220,7 @@ void computeMTPAuxiliaryLosses(
             throw std::runtime_error("computeMTPAuxiliaryLosses: MTP head k=" + std::to_string(k) +
                 " loss is non-finite (" + std::to_string(h_loss_k) + ") — shift=" + std::to_string(k + 1));
         }
-        ts.mtp_diagnostics.head_loss.push_back(h_loss_k * scale);  // Report ACTUAL contribution to total loss
+        diagnostics.head_loss.push_back(h_loss_k * scale);  // Report ACTUAL contribution to total loss
         int h_correct = 0, h_valid = 0;
         cudaMemcpy(&h_correct, d_correct, sizeof(int), cudaMemcpyDeviceToHost);
         cudaMemcpy(&h_valid, d_valid, sizeof(int), cudaMemcpyDeviceToHost);
@@ -237,11 +237,11 @@ void computeMTPAuxiliaryLosses(
                 " — buildBatchPayload and accuracy kernel disagree on masking");
         }
         float acc_k = (h_valid > 0) ? (static_cast<float>(h_correct) / static_cast<float>(h_valid)) * 100.0f : 0.0f;
-        ts.mtp_diagnostics.head_acc.push_back(acc_k);
+        diagnostics.head_acc.push_back(acc_k);
         Tensor scaled_k = autograd::scale_scalar(loss_k, scale, ctx.stream);
         intermediates.loss_tensor = autograd::add(intermediates.loss_tensor, scaled_k, ctx.stream);
     }
-    ts.mtp_diagnostics.valid = !ts.mtp_diagnostics.head_loss.empty();
+    diagnostics.valid = !diagnostics.head_loss.empty();
 }
 
 //========================================================================
