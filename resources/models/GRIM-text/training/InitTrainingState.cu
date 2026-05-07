@@ -281,9 +281,9 @@ void LanguageModel::initTrainingState() {
     // Training-time sampling must explicitly call ensureKVCacheAllocated(),
     // which creates GenerationState from the authored config capacity.
 
-    // NOTE: single_token_hidden/logits/embedding are inference-only buffers.
-    // Allocated in InitInferenceState.cu when inference is initialized.
-    // NOT needed during training — removed dead allocations (Finding 3).
+    // NOTE: single-token decode scratch is generation-owned.
+    // Allocated in GenerationState by InitInferenceState.cu or ensureKVCacheAllocated().
+    // NOT needed by the training state cache rectangle.
     
     std::cout << "📊 Allocating activation caches for max_tokens=" << max_tokens
               << " (batch=" << max_batch_size << ", seq_len=" << max_seq_len_cache << ")" << std::endl;

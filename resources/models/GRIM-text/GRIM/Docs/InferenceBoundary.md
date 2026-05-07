@@ -45,18 +45,19 @@ Exit criteria:
 
 ## Phase 3 — Move generation runtime buffers
 
-Status: not started.
+Status: in progress.
 
 Move inference/session-owned state from `TrainingState` into `GenerationState` or typed inference owners:
 
-- token id cache
-- numeric side-channel cache
-- atom mask / flags / text features
-- token-to-slot map
-- inference encoder/logit snapshots if only generation consumes them
-- persistent inference execution memory
-- decode-time selector result
-- decode trace state if it is session state
+- [ ] token id cache
+- [ ] numeric side-channel cache
+- [ ] atom mask / flags / text features
+- [ ] token-to-slot map
+- [ ] inference encoder/logit snapshots if only generation consumes them
+- [x] persistent inference execution memory
+- [x] decode-time selector result
+- [x] decode trace state if it is session state
+- [x] single-token scratch tensors
 
 Exit criteria:
 

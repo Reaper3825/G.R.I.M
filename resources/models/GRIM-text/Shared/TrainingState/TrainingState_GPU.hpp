@@ -104,43 +104,12 @@ struct TrainingState {
     uint64_t autograd_step = 0;
     
     //======================================================//
-    //  PERSISTENT EXECUTION TRACE (per-forward lifecycle)
-    //  Reset at the start of every forward that runs ExecutionBlock.
-    //  execution_trace_by_row: host-side record log per batch row.
-    //  trace_state_by_row:    device [1, d_model] running sum of
-    //                         step_emb per row — autograd Tensor,
-    //                         updated via autograd::add in executeStep.
-    //  Do NOT recompute trace_state from execution_trace_by_row.
+    //  TRAINING EXECUTION TRACE (per-forward lifecycle)
+    //  Reset at the start of every training/eval forward that runs ExecutionBlock.
+    //  Inference/session trace state lives in GenerationState.
     //======================================================//
     std::vector<std::vector<ExecutionRecord>> execution_trace_by_row;
     std::vector<Tensor> trace_state_by_row;
-
-    //======================================================//
-    //  PERSISTENT EXECUTION MEMORY (generation)
-    //  Survives across forwardStep calls during autoregressive decode.
-    //  Reset only on resetKVCache (session boundary).
-    //  Preserved so decode-time ExecutionBlock state can continue across
-    //  autoregressive steps. Decode-time <NUM> selection is NOT inferred
-    //  from this state; that requires an explicit selector workstream.
-    //======================================================//
-    ExecutionMemory inference_exec_memory;
-    bool has_inference_exec_memory = false;
-
-    //======================================================//
-    //  DECODE-TIME SLOT SELECTOR RESULT
-    //  Written by executeDecodeForward_ when selector is active.
-    //  Consumed by generateSequenceGPU to decide <NUM> admissibility.
-    //  Reset to invalid each step; valid only after executeDecodeForward_.
-    //======================================================//
-    bool decode_selector_valid = false;
-    int32_t decode_selected_slot = -1;       // Real slot index when Selected
-    float decode_selected_value = 0.0f;      // Numeric value from selected slot
-    uint8_t decode_selector_status = 0;      // Cast of SlotSelectionStatus
-    
-    // Single-token buffers for incremental generation
-    Tensor single_token_logits;      // [vocab_size]
-    Tensor single_token_hidden;      // [d_model]
-    Tensor single_token_embedding;   // [d_model]
     
     int cached_num_layers = 0;
     

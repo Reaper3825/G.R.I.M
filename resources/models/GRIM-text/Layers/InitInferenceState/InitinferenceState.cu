@@ -265,21 +265,21 @@ void LanguageModel::initInferenceState() {
 
     
     // 4. Allocate single-token buffers for incremental generation (KV cache)
-    training_state_.single_token_embedding = Tensor::zeros(
+    generation_state_.single_token_embedding = Tensor::zeros(
         TC::make_BSM(1, cfg.d_model),
         false,  // no grad for inference
         primary_stream,
         "single_token_embedding_inf"
     );
     
-    training_state_.single_token_hidden = Tensor::zeros(
+    generation_state_.single_token_hidden = Tensor::zeros(
         TC::make_BSM(1, cfg.d_model),
         false,  // no grad for inference
         primary_stream,
         "single_token_hidden_inf"
     );
     
-    training_state_.single_token_logits = Tensor::zeros(
+    generation_state_.single_token_logits = Tensor::zeros(
         TC::make_BSM(1, cfg.vocab_size),
         false,  // no grad for inference
         primary_stream,

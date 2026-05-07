@@ -268,9 +268,9 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
     // Persist ExecutionMemory so decode-time execution state survives across
     // autoregressive forwardStep calls.
     if (!training_state_.autograd_intermediates.exec_memories.empty()) {
-        training_state_.inference_exec_memory =
+        generation_state_.exec_memory =
             std::move(training_state_.autograd_intermediates.exec_memories[0]);
-        training_state_.has_inference_exec_memory = true;
+        generation_state_.has_exec_memory = true;
     }
 
     // Populate KV cache from autograd intermediates (prefill mode).
@@ -392,29 +392,29 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     generation_state_.kv_cache_len = seq_len;
 
     // ── Initialize trace structures for subsequent decode steps ──
-    // resetKVCache() clears these, and executeInferenceForward_ (autograd path)
+    // resetKVCache() clears these, and executeInferenceForward_ (shared prefill)
     // doesn't recreate them.  executeDecodeForward_ needs them for exec block
     // stepping + selector gating, so bootstrap them here.
     cudaStream_t post_stream = training_state_.stream_ctrl.getPrimaryStream();
-    if (training_state_.has_inference_exec_memory
-        && training_state_.trace_state_by_row.empty()) {
-        training_state_.trace_state_by_row.resize(1);
-        training_state_.trace_state_by_row[0] = Tensor::zeros(
+    if (generation_state_.has_exec_memory
+        && generation_state_.trace_state_by_row.empty()) {
+        generation_state_.trace_state_by_row.resize(1);
+        generation_state_.trace_state_by_row[0] = Tensor::zeros(
             {1, config_.d_model}, post_stream, "trace_state_decode");
         // Inference — no gradient tracking
-        training_state_.trace_state_by_row[0].requires_grad = false;
+        generation_state_.trace_state_by_row[0].requires_grad = false;
     }
-    if (training_state_.has_inference_exec_memory
-        && training_state_.execution_trace_by_row.empty()) {
-        training_state_.execution_trace_by_row.resize(1);
-        training_state_.execution_trace_by_row[0].clear();
+    if (generation_state_.has_exec_memory
+        && generation_state_.execution_trace_by_row.empty()) {
+        generation_state_.execution_trace_by_row.resize(1);
+        generation_state_.execution_trace_by_row[0].clear();
     }
 
     // ── Run decode-time slot selector on prefill's last-token hidden state ──
     // executeDecodeForward_ runs this on every decode step, but prefill
-    // (executeInferenceForward_) skips it because the autograd forward path
-    // has no selector hook.  Without this, decode_selector_valid is false for
-    // step 0, and <NUM> admissibility cannot be evaluated — a real gap, not
+    // (executeInferenceForward_) skips it because prefill has no decode-step
+    // selector hook. Without this, generation_state_.decode_selector.valid is
+    // false for step 0, and <NUM> admissibility cannot be evaluated — a real gap, not
     // something to mask around.
     //
     // The selector needs: selector/policy layers + exec_memory data.
@@ -427,7 +427,7 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
             && getExecutionBlockLayer() != nullptr
             && getScratchBlockLayer() != nullptr
             && getScratchBlockLayer()->isEnabled()
-            && training_state_.has_inference_exec_memory;
+            && generation_state_.has_exec_memory;
 
         // Last token's hidden state lives at the tail of cached_encoder_output
         const float* last_hidden = training_state_.cached_encoder_output.data
@@ -446,15 +446,15 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
             getDecodeTimeNumPolicy(),
             config_.selector_enabled,
             selector_can_run,
-            training_state_.has_inference_exec_memory,
-            training_state_.inference_exec_memory,
+            generation_state_.has_exec_memory,
+            generation_state_.exec_memory,
             last_hidden,
             post_stream);
 
-        training_state_.decode_selector_valid  = sel.valid;
-        training_state_.decode_selector_status = static_cast<uint8_t>(sel.status);
-        training_state_.decode_selected_slot   = sel.selected_slot;
-        training_state_.decode_selected_value  = sel.selected_value;
+        generation_state_.decode_selector.valid          = sel.valid;
+        generation_state_.decode_selector.status         = static_cast<uint8_t>(sel.status);
+        generation_state_.decode_selector.selected_slot  = sel.selected_slot;
+        generation_state_.decode_selector.selected_value = sel.selected_value;
     }
 
     return logits;
@@ -577,9 +577,9 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         && exec_block != nullptr
         && scratch_block != nullptr
         && scratch_block->isEnabled()
-        && ts.has_inference_exec_memory
-        && !ts.trace_state_by_row.empty()
-        && !ts.execution_trace_by_row.empty();
+        && gen.has_exec_memory
+        && !gen.trace_state_by_row.empty()
+        && !gen.execution_trace_by_row.empty();
 
     int exec_layer = -1;
     int exec_K = 0;
@@ -739,7 +739,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                     "are missing for bootstrap at token_pos " + std::to_string(token_pos));
             }
             exec_block->bootstrapMemoryFromSlotMap(
-                ts.inference_exec_memory,
+                gen.exec_memory,
                 ts.cached_token_numeric_values.data + token_pos,
                 slot_ptr,
                 1, stream);
@@ -767,15 +767,15 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             for (int step = 0; step < exec_K; ++step) {
                 ExecutionBlockStepOutput step_diag;
                 exec_block->executeStep(
-                    hidden, ts.inference_exec_memory,
+                    hidden, gen.exec_memory,
                     reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
                     row_atom_view.num_atoms,
                     decode_payload, decode_bindings, 0,
                     step, T, stream,
                     &step_diag,
-                    ts.trace_state_by_row[0],
-                    ts.execution_trace_by_row[0]);
-                ts.execution_trace_by_row[0].push_back(step_diag.record);
+                    gen.trace_state_by_row[0],
+                    gen.execution_trace_by_row[0]);
+                gen.execution_trace_by_row[0].push_back(step_diag.record);
                 if (step == exec_K - 1) {
                     last_step_diag = std::move(step_diag);
                 }
@@ -786,7 +786,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         // ── ExecutionBlock: cross-attention read at layers >= exec_layer ──
         if (exec_block_active && layer_idx >= exec_layer) {
             exec_block->crossAttentionRead(
-                hidden, ts.inference_exec_memory,
+                hidden, gen.exec_memory,
                 1, stream, 0, 1);
         }
     }
@@ -798,14 +798,14 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             getDecodeTimeNumPolicy(),
             cfg.selector_enabled,
             exec_block_active,
-            ts.has_inference_exec_memory,
-            ts.inference_exec_memory,
+            gen.has_exec_memory,
+            gen.exec_memory,
             hidden.data,
             stream);
-        ts.decode_selector_valid  = sel.valid;
-        ts.decode_selector_status = static_cast<uint8_t>(sel.status);
-        ts.decode_selected_slot   = sel.selected_slot;
-        ts.decode_selected_value  = sel.selected_value;
+        gen.decode_selector.valid          = sel.valid;
+        gen.decode_selector.status         = static_cast<uint8_t>(sel.status);
+        gen.decode_selector.selected_slot  = sel.selected_slot;
+        gen.decode_selector.selected_value = sel.selected_value;
     }
 
     // ── Step 4: LM Head (RMSNorm → optional centering → W @ hidden^T) ──
@@ -906,16 +906,16 @@ void LanguageModel::ensureKVCacheAllocated() {
 
     // ---- Single-token buffers for incremental generation ----
     using TC = TensorContract::TensorShape;
-    if (!training_state_.single_token_embedding.data) {
-        training_state_.single_token_embedding = Tensor::zeros(
+    if (!gen.single_token_embedding.data) {
+        gen.single_token_embedding = Tensor::zeros(
             TC::make_BSM(1, cfg.d_model), false, stream, "single_token_embedding_kv");
     }
-    if (!training_state_.single_token_hidden.data) {
-        training_state_.single_token_hidden = Tensor::zeros(
+    if (!gen.single_token_hidden.data) {
+        gen.single_token_hidden = Tensor::zeros(
             TC::make_BSM(1, cfg.d_model), false, stream, "single_token_hidden_kv");
     }
-    if (!training_state_.single_token_logits.data) {
-        training_state_.single_token_logits = Tensor::zeros(
+    if (!gen.single_token_logits.data) {
+        gen.single_token_logits = Tensor::zeros(
             TC::make_BSM(1, cfg.vocab_size), false, stream, "single_token_logits_kv");
     }
 
@@ -928,11 +928,6 @@ void LanguageModel::resetKVCache() {
     if (training_state_.initialized) {
         auto& gen = generation_state_;
         gen.resetSession();
-        training_state_.has_inference_exec_memory = false;
-
-        // Clear execution trace state (persisted across decode steps)
-        training_state_.execution_trace_by_row.clear();
-        training_state_.trace_state_by_row.clear();
 
         // Zero BF16 KV cache buffers using GenerationState's shaped owner.
         const size_t kv_bytes_per_layer = gen.kv_cache.bytesPerLayer();

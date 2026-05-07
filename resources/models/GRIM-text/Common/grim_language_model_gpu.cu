@@ -895,7 +895,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         && config_.execution_block_enabled
         && getScratchBlockLayer() != nullptr
         && isScratchBlockEnabled()
-        && training_state_.has_inference_exec_memory;
+        && generation_state_.has_exec_memory;
     if (!selector_active) {
         // No selector → hard-mask numeric atom tokens when scratchblock generation is active
         const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
@@ -955,11 +955,11 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         // Selector-aware <NUM> masking (per step)
         // When selector is active, both forwardInit (prefill) and
         // forwardStep (decode) evaluate the selector, so
-        // decode_selector_valid MUST be true by this point.
+        // generation_state_.decode_selector.valid MUST be true by this point.
         // Allow <NUM> only when status == Selected; otherwise mask it.
         // =====================================================================
         if (selector_active) {
-            if (!training_state_.decode_selector_valid) {
+            if (!generation_state_.decode_selector.valid) {
                 std::fprintf(stderr,
                     "[Selector Debug] step=%d  selector_enabled=%d  selectorLayer=%d  numPolicy=%d"
                     "  exec_block_enabled=%d  scratchLayer=%d  scratchEnabled=%d  has_exec_mem=%d"
@@ -971,8 +971,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                     (int)config_.execution_block_enabled,
                     (int)(getScratchBlockLayer() != nullptr),
                     (int)isScratchBlockEnabled(),
-                    (int)training_state_.has_inference_exec_memory,
-                    (int)training_state_.decode_selector_valid);
+                    (int)generation_state_.has_exec_memory,
+                    (int)generation_state_.decode_selector.valid);
                 throw std::runtime_error(
                     "generateSequenceGPU: selector_active but decode_selector_valid is false at step "
                     + std::to_string(step) + " — selector was not evaluated after "
@@ -980,7 +980,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             }
             const int int_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_INT);
             const int float_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_FLOAT);
-            if (training_state_.decode_selector_status
+                if (generation_state_.decode_selector.status
                    != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
                 logits_vec.data[int_tid] = -1e30f;
                 logits_vec.data[float_tid] = -1e30f;
@@ -1012,15 +1012,15 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             if (GRIM::Tokenizer::isNumericAtom(
                     GRIM::Tokenizer::tokenIdToAtomType(sample.token_id))) {
                 // Numeric atom was sampled — selector MUST have resolved a slot
-                if (!selector_active || !training_state_.decode_selector_valid
-                    || training_state_.decode_selector_status
+                if (!selector_active || !generation_state_.decode_selector.valid
+                    || generation_state_.decode_selector.status
                        != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
                     throw std::runtime_error(
                         "generateSequenceGPU: sampled numeric atom but selector did not resolve a slot "
-                        "(status=" + std::to_string(training_state_.decode_selector_status) + ")");
+                        "(status=" + std::to_string(generation_state_.decode_selector.status) + ")");
                 }
-                new_token_slot_id = training_state_.decode_selected_slot;
-                token_numeric_value = training_state_.decode_selected_value;
+                new_token_slot_id = generation_state_.decode_selector.selected_slot;
+                token_numeric_value = generation_state_.decode_selector.selected_value;
             }
         }
         
