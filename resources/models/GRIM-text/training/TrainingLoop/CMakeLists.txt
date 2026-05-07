@@ -296,6 +296,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../LanguageModel_Training.cu
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/InferenceForward_GPU.cu
+    ../../Shared/Forward/ModelForward_GPU.cu
     ../Autograd/AutogradContext.cu
     ../Autograd/AutogradSelectorSupervisionLoss.cu
     ../Autograd/AutogradTraining.cu

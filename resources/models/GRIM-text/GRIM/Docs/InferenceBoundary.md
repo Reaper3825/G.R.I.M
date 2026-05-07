@@ -28,17 +28,18 @@ Exit criteria:
 
 ## Phase 2 — Shared full-forward primitive
 
-Status: not started.
+Status: Phase 2a implemented; inference-prefill routing remains on the explicit Phase-1 seam.
 
-- Extract the common forward math from `AutogradTraining.cu` into `Shared/Forward/ModelForward_GPU.cu`.
-- Make training call it through a training adapter that supplies autograd workspace and graph mode.
-- Make eval/inference call it through non-training request structs.
-- Keep loss/backward code in `training/Autograd`.
+- [x] Extract the training/eval full-forward math from `AutogradTraining.cu` into `Shared/Forward/ModelForward_GPU.cu`.
+- [x] Make `Autograd::executeAutogradForward()` a training/eval adapter that supplies autograd workspace and graph mode.
+- [ ] Route inference prefill through the mode-explicit shared primitive once the request/output surface can replace `InferenceForwardRequest` without regressing KV-cache population.
+- [x] Keep loss/backward code in `training/Autograd`.
 
 Exit criteria:
 
-- `AutogradTraining.cu` contains orchestration only: context validation, loss, backward, training-step bridge.
-- Shared forward code takes a mode-explicit request, not `AutogradContext`.
+- `AutogradTraining.cu` contains orchestration only: context validation, forward adapter, loss, backward, training-step bridge.
+- Shared training/eval forward code takes a mode-explicit request, not `AutogradContext`.
+- Remaining work: collapse `InferenceForward_GPU.cu` into `ModelForward_GPU.cu` or deliberately keep it as a smaller inference-prefill primitive with documented ownership.
 
 ## Phase 3 — Move generation runtime buffers
 
