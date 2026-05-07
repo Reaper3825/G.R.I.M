@@ -19,7 +19,7 @@
 #include <stdexcept>
 
 #include "../GRIM/grim_language_model_cuda.hpp"
-#include "Autograd/AutogradTraining.hpp"
+#include "../Shared/Forward/InferenceForward_GPU.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/TensorConversion/TensorConversion.hpp"
@@ -159,6 +159,29 @@ ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
     return view;
 }
 
+Batching::BatchDeviceBindings buildInferencePrefillBindings(TrainingState& ts, int seq_len) {
+    if (seq_len <= 0) {
+        throw std::runtime_error("buildInferencePrefillBindings: seq_len <= 0");
+    }
+    Batching::BatchDeviceBindings bindings;
+    bindings.batch_size = 1;
+    bindings.max_seq_len = seq_len;
+    bindings.d_input_ids = reinterpret_cast<int*>(ts.cached_token_ids_tensor.data);
+    bindings.d_numeric_values = ts.cached_token_numeric_values.data;
+    bindings.d_text_features = reinterpret_cast<uint16_t*>(ts.cached_token_text_features.data);
+    bindings.d_atom_mask = reinterpret_cast<uint8_t*>(ts.cached_token_atom_mask.data);
+    bindings.d_atom_flags = reinterpret_cast<uint32_t*>(ts.cached_token_atom_flags.data);
+    bindings.d_token_to_slot_map = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
+
+    if (!bindings.d_input_ids) {
+        throw std::runtime_error("buildInferencePrefillBindings: cached_token_ids_tensor.data is NULL");
+    }
+    if (!bindings.d_token_to_slot_map) {
+        throw std::runtime_error("buildInferencePrefillBindings: cached_token_to_slot_map.data is NULL");
+    }
+    return bindings;
+}
+
 }  // namespace
 
 //======================================================//
@@ -179,27 +202,24 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
-    // Initialize autograd context (is_training=false disables dropout)
-    Autograd::AutogradContext ctx = Autograd::initAutogradContext(
-        &config_,
-        &training_state_,
-        &getGpuEncoder(),
-        getEmbeddingLayer(),
-        getLmHeadLayer(),
-        getScratchBlockLayer(),
-        getReasoningHeadLayer(),
-        getExecutionBlockLayer(),
-        training_state_.cublas_handle,
-        stream,
-        1,          // batch_size = 1 for inference
-        seq_len,
-        1.0f,       // grad_scale (unused for inference)
-        0,          // step
-        false       // is_training (disable dropout)
-    );
+    Batching::BatchDeviceBindings bindings = buildInferencePrefillBindings(training_state_, seq_len);
+    Forward::InferenceForwardRequest request{};
+    request.config = &config_;
+    request.runtime_state = &training_state_;
+    request.gpu_encoder = &getGpuEncoder();
+    request.embedding_layer = getEmbeddingLayer();
+    request.lm_head = getLmHeadLayer();
+    request.scratch_block = getScratchBlockLayer();
+    request.reasoning_head = getReasoningHeadLayer();
+    request.execution_block = getExecutionBlockLayer();
+    request.cublas_handle = training_state_.cublas_handle;
+    request.stream = stream;
+    request.bindings = &bindings;
+    request.batch_size = 1;
+    request.seq_len = seq_len;
+    request.step = 0;
 
-    // Run autograd forward
-    Autograd::ForwardResult result = Autograd::executeAutogradForward(ctx);
+    Forward::InferenceForwardResult result = Forward::executeInferencePrefillForward(request);
     if (!result.success) {
         throw std::runtime_error("executeInferenceForward_: forward failed - " + result.error_message);
     }

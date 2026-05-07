@@ -1,8 +1,12 @@
 # Unified Loss
 
-Implementation: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/AutogradLoss.cu`.
+Public autograd entry point: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/AutogradLoss.cu`.
 
-`autograd::unified_loss()` is the **only** loss path. `cross_entropy_loss()` is a wrapper that calls it with plain-CE config.
+Cross-entropy / NLL implementation: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/CrossEntropyNLL.cu` via `computeCrossEntropyForwardFromLogProbs()` and `computeCrossEntropyBackwardToLogProbs()`.
+
+Primary text CE now enters as `autograd::unified_loss(logits, BatchPayload, BatchDeviceBindings, LossConfig, stream)`. Auxiliary shifted-target heads (MTP) use `autograd::unified_loss_from_target_buffer(...)` so they cannot masquerade as the payload's primary target mirror.
+
+`autograd::unified_loss()` is the **primary text loss path**. `cross_entropy_loss()` is deleted; callers use real model loss config.
 
 ## Formula
 $$L = \alpha (1 - p_t)^\gamma \cdot \mathrm{CE}_{\text{smooth}} + \lambda \cdot H(p)$$

@@ -67,10 +67,16 @@ struct AutogradIntermediates {
     // ExecutionBlock — per-row memory and per-(row,step) outputs
     std::vector<ExecutionMemory> exec_memories;               // [batch_size] per-row isolation
     std::vector<ExecutionBlockOutput> exec_outputs_per_row;   // [batch_size][K steps]
+    std::vector<Tensor> exec_expected_target_tensors;         // owned [1,1] teacher scalar tensors used while building ExecutionBlock grad nodes
 
     // Selector supervision — SelectorForwardResult owns intermediate Tensors
     // (q, slot_keys) whose .data is cached by MatMulGradFn nodes. MUST stay
     // alive from computeAutogradLoss() through executeAutogradBackward().
+    // The selector input tensors below own copies of h_t and slot_features;
+    // selector grad fns need those buffers for W_q/W_k gradients, so borrowed
+    // views into ExecutionMemory/DecodeTimeNumPolicy are forbidden here.
+    std::vector<Tensor> selector_h_t_inputs;
+    std::vector<Tensor> selector_slot_feature_inputs;
     std::vector<SelectorForwardResult> selector_fwd_results;
 
     // NOTE (Rule 20 — Ownership Taxonomy): The cross-attention read-gate
@@ -99,6 +105,9 @@ struct AutogradIntermediates {
         reasoning_output = ReasoningHeadOutput{};
         exec_memories.clear();
         exec_outputs_per_row.clear();
+        exec_expected_target_tensors.clear();
+        selector_h_t_inputs.clear();
+        selector_slot_feature_inputs.clear();
         selector_fwd_results.clear();
         // Rule 20 ownership taxonomy: this struct holds ONLY Category 1
         // (graph-owned, transient) state. There are no exception fields.

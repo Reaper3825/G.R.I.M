@@ -24,7 +24,7 @@ This file is intentionally concise and focused on training and engineering decis
 - Performance primitives: Flash Attention 2, fused kernels, cuBLAS GEMM
 - Training: AdamW optimizer, mixed precision (FP16 compute, FP32 masters)
 - Regularization: focal loss + label smoothing
-- Stability and control: Telemetry control decision logic, GradAccumulationController, centralized resource controllers
+- Stability and control: Telemetry control decision logic, OptimizerContext accumulation-slot ownership, centralized resource controllers
 - Tokenization & structure: ScratchBlock reasoning, AtomTable lookup, Aho-Corasick structural matching
 - Memory & performance: pre-allocated reusable GPU buffers, GRIMTS guess cache, zero-copy FlatBuffers where applicable
 
@@ -59,7 +59,7 @@ This file is intentionally concise and focused on training and engineering decis
   - AtomTable maps structural atoms to dedicated atom token IDs (token id base offset), enabling structured reasoning in tokenization.
 
 - Central control pattern (controllers)
-  - StreamController, GradAccumulationController, Memory/BufferController, and LogRecorder centralize resource allocation and synchronization.
+  - StreamController, `OptimizerContext` accumulation-slot ownership, Memory/BufferController, and LogRecorder centralize resource allocation and synchronization.
   - Controllers own allocations and lifecycles (no ad-hoc cudaMalloc/cudaFree outside controllers).
 
 - GRIMTS guess cache
@@ -89,7 +89,7 @@ GRIM-text training is organized into three clear phases to make builds, tests an
 
 2. Phase 2 — Training loop
    - Data loading and packing (supports packing strategies including random and similarity-grouped).
-   - Micro-batching and gradient accumulation managed by GradAccumulationController (supports accumulate=true behavior across micro-steps).
+    - Gradient accumulation is tracked by `OptimizerContext` accumulation slots: one slot is one `BatchPayload` upload → forward → loss → backward pass; the optimizer runs after the configured window completes.
    - Forward pass: fused QKV projection, attention (Flash or cuBLAS path), FFN fused GELU, residual adds.
    - Loss: unified loss computes focal + smoothed CE in a single numerically-stable kernel; gradients produced and optionally scaled by Telemetry decision.
    - Backward pass: attention backward respects GQA scaling; gradients merged into centralized gradient buffers.
@@ -106,7 +106,7 @@ GRIM-text training is organized into three clear phases to make builds, tests an
   - This prevents dangling allocations and ensures deterministic teardown and reproducible profiling.
 
 - Gradient accumulation
-  - GradAccumulationController ensures the correct use of beta (accumulate ? 1.0f : 0.0f) in GEMM operations so micro-batches add rather than overwrite gradients.
+  - `OptimizerContext` owns the accumulation-slot cursor. Slot 0 overwrites gradients; later slots accumulate into the same parameter `.grad` buffers until the optimizer boundary.
 
 - Telemetry-driven safety
   - TelemetryControl uses hierarchical metrics (loss, pre-clip grad norm, update magnitude) to decide safe interventions.
@@ -193,7 +193,7 @@ This file is intentionally concise and focused on training and engineering decis
 - Performance primitives: Flash Attention 2, fused kernels, cuBLAS GEMM
 - Training: AdamW optimizer, mixed precision (FP16 compute, FP32 masters)
 - Regularization: focal loss + label smoothing
-- Stability and control: Telemetry control decision logic, GradAccumulationController, centralized resource controllers
+- Stability and control: Telemetry control decision logic, OptimizerContext accumulation-slot ownership, centralized resource controllers
 - Tokenization & structure: ScratchBlock reasoning, AtomTable lookup, Aho-Corasick structural matching
 - Memory & performance: pre-allocated reusable GPU buffers, GRIMTS guess cache, zero-copy FlatBuffers where applicable
 
@@ -228,7 +228,7 @@ This file is intentionally concise and focused on training and engineering decis
   - AtomTable maps structural atoms to dedicated atom token IDs (token id base offset), enabling structured reasoning in tokenization.
 
 - Central control pattern (controllers)
-  - StreamController, GradAccumulationController, Memory/BufferController, and LogRecorder centralize resource allocation and synchronization.
+  - StreamController, `OptimizerContext` accumulation-slot ownership, Memory/BufferController, and LogRecorder centralize resource allocation and synchronization.
   - Controllers own allocations and lifecycles (no ad-hoc cudaMalloc/cudaFree outside controllers).
 
 - GRIMTS guess cache
@@ -258,7 +258,7 @@ GRIM-text training is organized into three clear phases to make builds, tests an
 
 2. Phase 2 — Training loop
    - Data loading and packing (supports packing strategies including random and similarity-grouped).
-   - Micro-batching and gradient accumulation managed by GradAccumulationController (supports accumulate=true behavior across micro-steps).
+    - Gradient accumulation is tracked by `OptimizerContext` accumulation slots: one slot is one `BatchPayload` upload → forward → loss → backward pass; the optimizer runs after the configured window completes.
    - Forward pass: fused QKV projection, attention (Flash or cuBLAS path), FFN fused GELU, residual adds.
    - Loss: unified loss computes focal + smoothed CE in a single numerically-stable kernel; gradients produced and optionally scaled by Telemetry decision.
    - Backward pass: attention backward respects GQA scaling; gradients merged into centralized gradient buffers.
@@ -275,7 +275,7 @@ GRIM-text training is organized into three clear phases to make builds, tests an
   - This prevents dangling allocations and ensures deterministic teardown and reproducible profiling.
 
 - Gradient accumulation
-  - GradAccumulationController ensures the correct use of beta (accumulate ? 1.0f : 0.0f) in GEMM operations so micro-batches add rather than overwrite gradients.
+  - `OptimizerContext` owns the accumulation-slot cursor. Slot 0 overwrites gradients; later slots accumulate into the same parameter `.grad` buffers until the optimizer boundary.
 
 - Telemetry-driven safety
   - TelemetryControl uses hierarchical metrics (loss, pre-clip grad norm, update magnitude) to decide safe interventions.

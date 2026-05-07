@@ -29,7 +29,7 @@ __global__ void kernelMTPAccuracy(
 ) {
     const int t = blockIdx.x * blockDim.x + threadIdx.x;
     int my_correct = 0, my_valid = 0;
-    // Masking: target == -1 means masked/padding — must match kernelNLLLossForward exactly
+    // Masking: target == -1 means masked/padding — must match CrossEntropyNLL exactly
     if (t < total_tokens && targets[t] != -1) {
         my_valid = 1;
         const float* row = logits + t * static_cast<size_t>(vocab_size);
@@ -192,7 +192,7 @@ void computeMTPAuxiliaryLosses(
         );
         logits_k = autograd::broadcast_add(logits_k, head->bias, ctx.stream);
         intermediates.mtp_logits_tensors.push_back(std::move(logits_k));
-        Tensor loss_k = autograd::unified_loss(
+        Tensor loss_k = autograd::unified_loss_from_target_buffer(
             intermediates.mtp_logits_tensors.back(),
             d_targets_k,
             total_tokens,

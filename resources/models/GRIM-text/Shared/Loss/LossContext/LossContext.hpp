@@ -4,8 +4,9 @@
 //  User-friendly loss configuration options.
 //
 //  Rule 26: TensorViews DELETED — dead code. The production loss path
-//  uses autograd::unified_loss() with raw parameters derived from
-//  AutogradContext.payload (BatchPayload). No intermediate struct needed.
+//  uses autograd::unified_loss() with AutogradContext.payload
+//  (BatchPayload) and AutogradContext.device_bindings. No intermediate
+//  tensor view struct needed.
 //
 //  Rule 20: #include "../Loss.hpp" REMOVED — LossOptions does not depend
 //  on any type in Loss.hpp. The old Loss.hpp structs (LossContext,

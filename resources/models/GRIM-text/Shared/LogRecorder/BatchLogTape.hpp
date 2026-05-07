@@ -200,9 +200,9 @@ public:
     size_t entryCount() const { return entries_.size(); }
     const TapeConfig& config() const { return config_; }
 
-    /// Skip flag for gradient-accumulation micro-batches.
+    /// Skip flag for non-initial accumulation slots.
     /// When true, expensive D2H equation diagnostics are suppressed
-    /// (same weights → duplicate output on micro-batches 1..N-1).
+    /// (same weights → duplicate output on accumulation slots 1..N-1).
     bool skipThisPass() const { return skip_this_pass_; }
     void setSkipThisPass(bool skip) { skip_this_pass_ = skip; }
 

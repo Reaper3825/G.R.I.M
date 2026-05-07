@@ -52,16 +52,16 @@ inline EpochPlan finalizeEpochPlanOrThrow(
         plan.total_batches = preflight.total_batches;
     }
 
-    const int64_t total_micro_batches =
+    const int64_t total_accumulation_slots =
         static_cast<int64_t>(num_epochs) * static_cast<int64_t>(plan.total_batches);
-    if (total_micro_batches > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+    if (total_accumulation_slots > static_cast<int64_t>(std::numeric_limits<int>::max())) {
         throw std::runtime_error("FATAL: estimated_total_steps input overflow during startup (epochs=" +
                                  std::to_string(num_epochs) + " batches=" +
                                  std::to_string(plan.total_batches) + " product=" +
-                                 std::to_string(total_micro_batches) + ")");
+                                 std::to_string(total_accumulation_slots) + ")");
     }
 
-    plan.estimated_total_steps = static_cast<int>(total_micro_batches / accum);
+    plan.estimated_total_steps = static_cast<int>(total_accumulation_slots / accum);
     if (plan.estimated_total_steps <= 0) {
         throw std::runtime_error("FATAL: estimated_total_steps computed as <= 0 during startup (epochs=" +
                                  std::to_string(num_epochs) + " batches=" +

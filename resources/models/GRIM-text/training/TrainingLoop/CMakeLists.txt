@@ -295,7 +295,9 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/TeacherLogits/TeacherLogits_GPU.cu
     ../LanguageModel_Training.cu
     ../../Shared/Gradients/GradStatsCollector.cu
+    ../../Shared/Forward/InferenceForward_GPU.cu
     ../Autograd/AutogradContext.cu
+    ../Autograd/AutogradSelectorSupervisionLoss.cu
     ../Autograd/AutogradTraining.cu
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
@@ -321,6 +323,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
+    ../../Shared/Loss/ComputeLoss/CrossEntropyNLL.cu
     ../../Shared/Loss/LossSignals/LossSignals.cu
     ../../Shared/MTP/MTP_GPU.cu
 )

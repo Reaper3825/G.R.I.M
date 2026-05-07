@@ -63,10 +63,12 @@ struct ForwardResult {
  */
 struct LossResult {
     float loss_value = 0.0f;         // Ground-truth: D2H read of loss_tensor AFTER all autograd::add()
-    float text_loss = 0.0f;          // Text CE + MTP only (snapshot before exec/selector additions)
-    float numeric_loss = 0.0f;       // Reserved (legacy); always 0 — no value head
+    float text_loss = 0.0f;          // Pure next-token CE, before MTP/exec/selector additions
+    float mtp_loss = 0.0f;           // Sum of weighted MTP auxiliary contributions
+    float numeric_loss = 0.0f;       // Execution/numeric auxiliary contribution (transition/structured CE/div/REINFORCE)
     float selector_loss = 0.0f;      // Decode-time selector supervision loss (host scalar)
-    float aux_loss = 0.0f;           // loss_value - text_loss (all non-text auxiliary terms)
+    float entropy_monitor = 0.0f;    // Execution entropy monitoring scalar; not added to loss_tensor
+    float aux_loss = 0.0f;           // loss_value - text_loss (MTP + execution/numeric + selector)
     float weight_text = 1.0f;
     int valid_tokens = 0;
     GRIM::MTP::MTPDiagnostics mtp_diagnostics;
@@ -120,16 +122,15 @@ struct AutogradContext {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PARAMETERS
-    // Training: payload points to the caller-owned BatchPayload (single source of truth).
-    // Inference: payload points to inference_payload_ below (geometry-only, vectors empty).
-    // payload is NEVER null after initAutogradContext.
+    // Training/eval only: payload points to the caller-owned BatchPayload
+    // (single source of truth). Inference MUST NOT enter AutogradContext;
+    // use Shared/Forward/InferenceForward_GPU.hpp instead.
+    // payload is NEVER null after the training/eval initAutogradContext overload.
     //
     // device_bindings carries the device pointers for THIS step (slot map,
     // atom mask, etc.). Replaces the old `mutable d_*` fields on BatchPayload.
-    // - Training/eval path: filled by LanguageModel::uploadBatchToDevice() and
-    //   passed to initAutogradContext; non-null.
-    // - Inference geometry-only path: null (decode constructs its own row-local
-    //   bindings at the call site).
+    // - Training/eval path: filled by LanguageModel::uploadBatchToDevice().
+    // Always non-null before executeAutogradForward() reads device pointers.
     // ═══════════════════════════════════════════════════════════════════════════
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* device_bindings = nullptr;
@@ -138,12 +139,8 @@ struct AutogradContext {
     float grad_scale = 1.0f;
     uint64_t step = 0;
     bool is_training = true;
-    /** When true, encoder layers skip QKV_EQUATION D2H + fprintf (gradient accumulation micro-batches) */
+    /** When true, skip duplicate equation logging on non-initial accumulation slots. */
     bool skip_equation_logging = false;
-
-    // FOR INFERENCE ONLY — geometry-only BatchPayload (vectors empty).
-    // payload points here when initialized via the inference overload.
-    Batching::BatchPayload inference_payload_;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LOSS CONFIGURATION
@@ -187,28 +184,6 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    float grad_scale,
-    uint64_t step,
-    bool is_training = true
-);
-
-/**
- * Initialize autograd context for INFERENCE (geometry-only payload, vectors empty).
- * payload pointer re-seated to inference_payload_ by executeAutogradForward.
- */
-AutogradContext initAutogradContext(
-    const LanguageModelConfig* config,
-    TrainingState* training_state,
-    GPUGrimEncoder* gpu_encoder,
-    EmbeddingLayer* embedding_layer,
-    LMHeadLayer* lm_head,
-    ScratchBlockLayer* scratch_block,
-    ReasoningHeadLayer* reasoning_head,
-    ExecutionBlockLayer* execution_block,
-    cublasHandle_t cublas_handle,
-    cudaStream_t stream,
-    int batch_size,
-    int seq_len,
     float grad_scale,
     uint64_t step,
     bool is_training = true
@@ -279,7 +254,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
  * @param training_state TrainingState (GPU buffers, optimizer state)
  * @param payload        BatchPayload (host-only single source of truth)
  * @param bindings       BatchDeviceBindings produced by uploadBatchToDevice(payload)
- * @param accumulate     Whether to accumulate gradients (true for micro-batches > 0)
+ * @param accumulate     Whether to accumulate gradients (true for accumulation slots > 0)
  * @param grad_scale     Gradient scaling factor
  * @param step           Global training step counter
  * @return LossResult with decomposed loss components and success/error status.

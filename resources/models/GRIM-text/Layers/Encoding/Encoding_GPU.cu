@@ -556,7 +556,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     // ========================================================================
     // [QKV_EQUATION] DIAGNOSTIC (Rule 21) - Equation-based logging
     // Formula: qkv_out = ln1_out @ W_qkv^T + b_qkv
-    // Skipped on gradient-accumulation micro-batches (same weights → duplicate output)
+    // Skipped on non-initial accumulation slots (same weights → duplicate output)
     // ========================================================================
     if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
         const int qkv_dim_local = config_.d_model + 2 * config_.kvDim();
@@ -1062,7 +1062,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     // Interpretation:
     //   |avg_cos| → 1.0 = mode collapse (all vectors aligned) = BAD
     //   |avg_cos| near 0 = diverse representations = generally healthy
-    // Skipped on gradient-accumulation micro-batches (same weights → duplicate output)
+    // Skipped on non-initial accumulation slots (same weights → duplicate output)
     // ═══════════════════════════════════════════════════════════════════════════
     // Log ALL layers so per-layer ρ trajectory is visible.
     // NOTE: intermediates.output is the PRE-centering output — the post-layer center_columns

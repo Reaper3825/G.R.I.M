@@ -29,7 +29,7 @@ void initializeOptimizer(TrainingContext& ctx) {
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
     opt.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
 
-    opt.accumulation_position = 0;
+    opt.resetAccumulationWindow();
 
     auto* gpu_encoder = &model.getGpuEncoder();
     for (int layer = 0; layer < model.getConfig().num_layers; ++layer) {
@@ -74,7 +74,7 @@ ResumeState captureResumeState(const TrainingContext& ctx) {
     st.global_step = ctx.global_step;
     st.best_val_loss = ctx.best_val_loss;
     st.epochs_completed = ctx.epochs_completed;
-    st.accumulation_position = ctx.optimizer.accumulation_position;
+    st.accumulation_slot = ctx.optimizer.accumulationSlot();
     return st;
 }
 

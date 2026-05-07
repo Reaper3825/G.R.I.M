@@ -34,6 +34,7 @@
 #include <random>
 #include <filesystem>
 #include <chrono>
+#include <stdexcept>
 
 // Core includes
 // NOTE: ai_config_paths.hpp must NOT be included directly. It is pulled in
@@ -116,7 +117,55 @@ struct OptimizerContext {
     GRIM::OptimizerStep optimizer_step;
     GRIM::OptimizerState optimizer_state;
     GRIM::SoftRestart::SoftRestartController soft_restart_controller;
-    int accumulation_position = 0;  // Tracks position within accumulation window [0, accum_steps)
+
+    int accumulationSlot() const { return accumulation_slot_; }
+
+    bool shouldAccumulateGradients() const {
+        return accumulation_slot_ > 0;
+    }
+
+    void validateBeforeAccumulationSlot(int accumulation_window_slots) const {
+        if (accumulation_window_slots <= 0) {
+            throw std::runtime_error("FATAL: accumulation_window_slots must be > 0");
+        }
+        if (accumulation_slot_ < 0 || accumulation_slot_ >= accumulation_window_slots) {
+            throw std::runtime_error("FATAL: accumulation slot cursor out of range before autograd pass");
+        }
+    }
+
+    bool completeAccumulationSlot(int accumulation_window_slots) {
+        validateBeforeAccumulationSlot(accumulation_window_slots);
+        accumulation_slot_++;
+        return accumulation_slot_ >= accumulation_window_slots;
+    }
+
+    void completeOptimizerStepAfterFullAccumulationWindow(int accumulation_window_slots) {
+        if (accumulation_slot_ != accumulation_window_slots) {
+            throw std::runtime_error(
+                "FATAL: optimizer step requested before accumulation window completed (completed=" +
+                std::to_string(accumulation_slot_) + " required=" +
+                std::to_string(accumulation_window_slots) + ")");
+        }
+        accumulation_slot_ = 0;
+        optimizer_step.step++;
+    }
+
+    void resetAccumulationWindow() {
+        accumulation_slot_ = 0;
+    }
+
+    void restoreAccumulationSlotFromCheckpoint(int accumulation_slot) {
+        if (accumulation_slot < 0) {
+            throw std::runtime_error("FATAL: checkpoint accumulation_slot is negative");
+        }
+        accumulation_slot_ = accumulation_slot;
+    }
+
+private:
+    // Single authoritative in-window cursor. One accumulation slot is exactly
+    // one BatchPayload upload → forward → loss → backward pass. There is no
+    // separate secondary counter/lifecycle.
+    int accumulation_slot_ = 0;
 };
 
 /**

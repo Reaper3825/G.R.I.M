@@ -2,13 +2,15 @@
 //  AutogradLoss.hpp
 //  Unified autograd-enabled loss: Focal + Label Smoothing + Cross Entropy + Entropy Reg
 //
-//  This is the ONLY loss computation path. 
-//  UnifiedLoss_GPU.cu and ComputeLoss_GPU.cu are deprecated.
+//  This is the ONLY public loss computation path.
+//  Cross-entropy / NLL internals live in CrossEntropyNLL.hpp/.cu.
 //======================================================//
 
 #pragma once
 
 #include "../../TensorContract/TensorContract_GPU.hpp"
+#include "../../Batching/BatchPayload.hpp"
+#include "../../Batching/BatchDeviceBindings.hpp"
 #include <cuda_runtime.h>
 #include <cstdint>
 
@@ -69,14 +71,27 @@ struct LossConfig {
  *   (focal_alpha is ONLY applied when focal_enabled=true)
  * 
  * @param logits      [num_tokens, vocab_size] - raw logits from LM head
- * @param targets     [num_tokens] - target token IDs (on GPU), -1 = masked
- * @param num_tokens  Number of token positions in the logits/targets buffers
- * @param vocab_size  Vocabulary size (second dimension of logits)
+ * @param payload     Host-side batch metadata: geometry, vocab, valid-token counts
+ * @param bindings    Device-side batch view containing uploaded d_target_ids
  * @param config      Loss configuration (focal, label smoothing, entropy reg)
  * @param stream      CUDA stream
  * @return Scalar loss tensor with grad_fn attached (if logits.requires_grad)
  */
 Tensor unified_loss(
+    Tensor& logits,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const LossConfig& config,
+    cudaStream_t stream
+);
+
+/**
+ * Compute unified loss from an already-uploaded target buffer.
+ *
+ * This is for auxiliary heads whose targets are derived from BatchPayload but
+ * are not the payload's primary d_target_ids buffer, e.g. MTP shifted targets.
+ */
+Tensor unified_loss_from_target_buffer(
     Tensor& logits,
     const int* targets,
     int num_tokens,
@@ -85,65 +100,9 @@ Tensor unified_loss(
     cudaStream_t stream
 );
 
-//=============================================================================
-// KERNEL LAUNCH FUNCTIONS (internal — operate on log_probs, NOT raw logits)
-//=============================================================================
-
-/**
- * NLL loss forward on log-probabilities (output of log_softmax)
- * @param log_probs [num_tokens, vocab_size] — log-probabilities from log_softmax()
- * @param focal_enabled True if focal loss should be applied (rules out checking focal_gamma > 0)
- * @param smoothing_enabled True if label smoothing should be applied (rules out checking smoothing_epsilon > 0)
- * @param entropy_reg_enabled True if entropy regularization should be applied (rules out checking entropy_reg_lambda > 0)
- */
-void launchUnifiedLossForward(
-    const float* log_probs,
-    const int* targets,
-    float* per_token_loss,
-    float* loss_sum,
-    int* valid_count,
-    float* weight_sum,
-    int num_tokens,
-    int vocab_size,
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    bool smoothing_enabled,
-    float entropy_reg_lambda,
-    bool entropy_reg_enabled,
-    const float* class_weights,
-    cudaStream_t stream
-);
-
-/**
- * NLL loss backward — gradient w.r.t. log-probabilities
- * @param log_probs      [num_tokens, vocab_size] — saved log-probabilities
- * @param grad_log_probs [num_tokens, vocab_size] — OUTPUT: gradient w.r.t. log_probs
- * @param grad_output_scale  Upstream scalar gradient for chain rule (1.0 when terminal loss)
- * @param focal_enabled True if focal loss should be applied (rules out checking focal_gamma > 0)
- * @param smoothing_enabled True if label smoothing should be applied (rules out checking smoothing_epsilon > 0)
- * @param entropy_reg_enabled True if entropy regularization should be applied (rules out checking entropy_reg_lambda > 0)
- */
-void launchUnifiedLossBackward(
-    const float* log_probs,
-    const int* targets,
-    float* grad_log_probs,
-    int num_tokens,
-    int vocab_size,
-    int valid_count,
-    float weight_sum,
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    bool smoothing_enabled,
-    float entropy_reg_lambda,
-    bool entropy_reg_enabled,
-    const float* class_weights,
-    float grad_output_scale,
-    cudaStream_t stream
-);
+// Cross-entropy / NLL implementation details live in CrossEntropyNLL.hpp/.cu.
+// AutogradLoss.hpp exposes the payload/bindings unified_loss() entry point and
+// the explicit shifted-target-buffer helper for auxiliary heads.
 
 //=============================================================================
 // TOKEN 277 DIAGNOSTIC LOGGING (Rule 21 Equation-Based)
@@ -176,8 +135,9 @@ void launchToken277DiagnosticActual(
  */
 
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
-// Was a thin wrapper calling unified_loss() with hardcoded plain CE config.
-// All callers now use unified_loss() directly with real config from model.
+// Was a thin wrapper calling the loss path with hardcoded plain CE config.
+// Production callers use unified_loss() with BatchPayload + BatchDeviceBindings
+// and real config from the model.
 
 }  // namespace autograd
 }  // namespace GRIM

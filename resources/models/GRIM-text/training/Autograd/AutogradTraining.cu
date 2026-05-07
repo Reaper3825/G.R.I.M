@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "AutogradTraining.hpp"
+#include "AutogradSelectorSupervisionLoss.hpp"
 
 // MUST include full definition of GPUGrimEncoder for method calls
 #include "../../GRIM/grim_language_model_cuda.hpp"
@@ -24,13 +25,12 @@
 
 #include <iostream>
 #include <cmath>
+#include <vector>
 #include <algorithm>  // std::clamp, std::min, std::max (+ std::min_element/max_element in diagnostics)
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <stdexcept>
 #include "../../Shared/VerboseLogging.hpp"
-
-using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 // Issue #142: DELETED kernelMaskNonContentLogits / launchMaskNonContentLogits.
 // Setting special token logits to -inf is NON-STANDARD and was a workaround for
@@ -72,10 +72,10 @@ namespace Autograd {
 // PRODUCTION-READY: Runs entire model with autograd graph intact
 //======================================================================
 
-// Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on accumulation
-// micro-batches. Scope MUST cover the full autograd step (forward + loss +
+// Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on non-initial
+// accumulation slots. Scope MUST cover the full autograd step (forward + loss +
 // backward) — sealing only forward leaves loss/backward to log identical output
-// per micro-batch, defeating the optimization and producing duplicate logs.
+// per slot, defeating the optimization and producing duplicate logs.
 namespace {
 struct TapeSkipScope {
     GRIM::Logging::BatchLogTape* tape;
@@ -89,24 +89,61 @@ struct TapeSkipScope {
     TapeSkipScope(const TapeSkipScope&) = delete;
     TapeSkipScope& operator=(const TapeSkipScope&) = delete;
 };
+
+struct GradientSignalProbe {
+    bool allocated = false;
+    bool finite = true;
+    bool nonzero = false;
+    float rms = 0.0f;
+    size_t sampled = 0;
+};
+
+GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
+    GradientSignalProbe probe{};
+    if (!tensor.data || !tensor.has_grad() || !tensor.grad_data()) {
+        return probe;
+    }
+    probe.allocated = true;
+    const size_t count = static_cast<size_t>(tensor.numel());
+    probe.sampled = std::min<size_t>(count, 4096);
+    if (probe.sampled == 0) {
+        probe.finite = false;
+        return probe;
+    }
+
+    std::vector<float> h_grad(probe.sampled);
+    CUDA_CHECK(cudaMemcpyAsync(h_grad.data(), tensor.grad_data(),
+                               probe.sampled * sizeof(float),
+                               cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    double sum_sq = 0.0;
+    for (float v : h_grad) {
+        if (!std::isfinite(v)) {
+            probe.finite = false;
+        }
+        if (v != 0.0f) {
+            probe.nonzero = true;
+        }
+        sum_sq += static_cast<double>(v) * static_cast<double>(v);
+    }
+    probe.rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(probe.sampled)));
+    if (!std::isfinite(probe.rms)) {
+        probe.finite = false;
+    }
+    return probe;
+}
 }  // namespace
 
 ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ForwardResult result{};
     result.success = false;
 
-    // Inference path: re-seat payload pointer to OUR inference_payload_ member.
-    // initAutogradContext returns by value, so the self-pointer set during init
-    // would dangle. Training path already has an external pointer — skip.
-    if (!ctx.payload && ctx.inference_payload_.batch_size > 0) {
-        ctx.payload = &ctx.inference_payload_;
-    }
-
-    // Skip QKV_EQUATION D2H + fprintf on gradient-accumulation micro-batches.
+    // Skip QKV_EQUATION D2H + fprintf on non-initial accumulation slots.
     // Rule 20 ownership taxonomy: tape skip is now scoped at autogradTrainingStep
     // so forward + loss + backward all observe the same skip flag. The local
     // scope here was a Rule 20 violation — forward sealed early, leaving loss
-    // and backward to log on accumulation micro-batches anyway.
+    // and backward to log on non-initial accumulation slots anyway.
     (void)0;
 
     // Rule 20: Fail loud
@@ -116,12 +153,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     const auto* cfg = ctx.config;
     auto& intermediates = ts->autograd_intermediates;  // All intermediate tensors go HERE
     const auto* bindings = ctx.device_bindings;
-    const bool use_inference_cache_fallback =
-        !bindings && !ctx.is_training && ctx.inference_payload_.batch_size > 0;
-    if (!bindings && !use_inference_cache_fallback) {
+    if (!bindings) {
         throw std::runtime_error(
-            "executeAutogradForward: BatchDeviceBindings is NULL outside inference fallback — "
-            "training/eval must pass the uploadBatchToDevice() bindings");
+            "executeAutogradForward: BatchDeviceBindings is NULL — caller must provide an explicit device view");
     }
     
     const auto& payload = *ctx.payload;
@@ -143,13 +177,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     //  Uses autograd::embedding() for gradient tracking
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // RULE 20: Fail loud - validate required buffers.
-    // Training/eval use BatchDeviceBindings (explicit per-step device view).
-    // Inference has no BatchDeviceBindings and uses TrainingState's cached
-    // single-sequence buffers as the upload owner/fallback.
-    int* token_ids = bindings
-        ? bindings->d_input_ids
-        : reinterpret_cast<int*>(ts->cached_token_ids_tensor.data);
+    // RULE 20: Fail loud - validate required buffers. All paths use the explicit
+    // BatchDeviceBindings for this step; forward does not read TrainingState
+    // cache fields as an alternate source.
+    int* token_ids = bindings->d_input_ids;
     if (!token_ids) {
         throw std::runtime_error("AutogradForward: input token device pointer is NULL");
     }
@@ -217,6 +248,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         // Drain stale error from embedding/dropout so we only report ScratchBlock failures
         (void)cudaGetLastError();
 
+        if (!bindings->d_numeric_values) {
+            throw std::runtime_error("executeAutogradForward: ScratchBlock requires BatchDeviceBindings.d_numeric_values");
+        }
+        if (!bindings->d_token_to_slot_map) {
+            throw std::runtime_error("executeAutogradForward: ScratchBlock requires BatchDeviceBindings.d_token_to_slot_map");
+        }
+
         const bool exec_first_type_only =
             cfg->execution_block_enabled && cfg->scratch_block_execution_first_type_only;
         if (cfg->execution_block_enabled && !exec_first_type_only) {
@@ -229,11 +267,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             intermediates.embedding_tensor,
             *ctx.scratch_block,
             token_ids,
-            bindings ? bindings->d_numeric_values : ts->cached_token_numeric_values.data,
-            bindings ? bindings->d_text_features : reinterpret_cast<const uint16_t*>(ts->cached_token_text_features.data),
-            bindings ? bindings->d_atom_mask : reinterpret_cast<const uint8_t*>(ts->cached_token_atom_mask.data),
-            bindings ? bindings->d_atom_flags : reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
-            bindings ? bindings->d_token_to_slot_map : reinterpret_cast<const int32_t*>(ts->cached_token_to_slot_map.data),
+            bindings->d_numeric_values,
+            bindings->d_text_features,
+            bindings->d_atom_mask,
+            bindings->d_atom_flags,
+            bindings->d_token_to_slot_map,
             total_tokens,
             ctx.stream,
             exec_first_type_only);
@@ -400,8 +438,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 const bool have_exec_teacher = (ctx.payload && !ctx.payload->teacher_steps.empty());
                 const int B_teacher = have_exec_teacher
                     ? static_cast<int>(ctx.payload->teacher_steps.size()) : 0;
-                float* d_expected_target_buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&d_expected_target_buf), sizeof(float), "exec_expected_target_buf");
+                intermediates.exec_expected_target_tensors.clear();
+                intermediates.exec_expected_target_tensors.reserve(
+                    static_cast<size_t>(B) * static_cast<size_t>(std::max(0, exec_K)));
 
                 for (int b = 0; b < B; ++b) {
                     // WS7: Only allocate and execute for rows with active compiled payload.
@@ -449,9 +488,15 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                             if (step < static_cast<int>(teacher_row.size())) {
                                 const auto& ts_k = teacher_row[step];
                                 float h_val = ts_k.expected_value;
-                                cudaMemcpyAsync(d_expected_target_buf, &h_val,
+                                Tensor expected_target_tensor = Tensor::empty(
+                                    TensorContract::TensorShape::make_BSM(1, 1),
+                                    false,
+                                    ctx.stream,
+                                    "exec_expected_target_owned");
+                                cudaMemcpyAsync(expected_target_tensor.data, &h_val,
                                                 sizeof(float), cudaMemcpyHostToDevice, ctx.stream);
-                                d_expected_target = d_expected_target_buf;
+                                d_expected_target = expected_target_tensor.data;
+                                intermediates.exec_expected_target_tensors.push_back(std::move(expected_target_tensor));
 
                                 // Build selection targets for autograd CE if enabled.
                                 // Teacher emits absolute slot indices with base_slot=0.
@@ -521,7 +566,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         intermediates.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
                     }
                 }
-                cudaFreeAsync(d_expected_target_buf, ctx.stream);
             }
 
             // ExecutionBlock: gated cross-attention read at every layer >= exec_layer (per-row)
@@ -895,12 +939,6 @@ LossResult computeAutogradLoss(
             "computeAutogradLoss: BatchDeviceBindings target pointer is NULL - "
             "caller must upload the Phase1-authored BatchPayload before loss");
     }
-    const int* d_targets = ctx.device_bindings->d_target_ids;
-    if (!d_targets) {
-        throw std::runtime_error(
-            "computeAutogradLoss: d_target_ids is NULL - "
-            "caller must upload the Phase1-authored BatchPayload before loss");
-    }
     
     const int total_tokens = payload.total_tokens;
     const int vocab_size = payload.vocab_size;
@@ -916,9 +954,8 @@ LossResult computeAutogradLoss(
     // Compute text CE - returns scalar Tensor with NLLLossGradFn → LogSoftmaxGradFn chain
     Tensor loss_tensor = autograd::unified_loss(
         intermediates.logits_tensor,
-        d_targets,
-        total_tokens,
-        vocab_size,
+        payload,
+        *ctx.device_bindings,
         ctx.loss_config,
         ctx.stream
     );
@@ -926,25 +963,36 @@ LossResult computeAutogradLoss(
     // Move loss tensor to intermediates (TrainingState owns it during backward)
     intermediates.loss_tensor = std::move(loss_tensor);
 
+    float text_ce_loss = 0.0f;
+    cudaMemcpyAsync(&text_ce_loss, intermediates.loss_tensor.data, sizeof(float),
+                    cudaMemcpyDeviceToHost, ctx.stream);
+    cudaStreamSynchronize(ctx.stream);
+    if (!std::isfinite(text_ce_loss)) {
+        throw std::runtime_error("computeAutogradLoss: pure text CE is non-finite (" +
+                                 std::to_string(text_ce_loss) + ")");
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
     // Delegated to MTP_GPU module (see Shared/MTP/MTP_GPU.cu)
     // ═══════════════════════════════════════════════════════════════════════════
     GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, result.mtp_diagnostics);
-    
-    // Issue both loss D2H copies before a single sync (batch sync for text + numeric)
-    float text_loss = 0.0f;
-    cudaMemcpyAsync(&text_loss, intermediates.loss_tensor.data, sizeof(float),
-                    cudaMemcpyDeviceToHost, ctx.stream);
 
-    cudaStreamSynchronize(ctx.stream);
-
+    float mtp_loss = 0.0f;
     if (result.mtp_diagnostics.valid) {
-        result.mtp_diagnostics.L_total = text_loss;
+        for (float head_contribution : result.mtp_diagnostics.head_loss) {
+            mtp_loss += head_contribution;
+        }
+        result.mtp_diagnostics.L_total = text_ce_loss + mtp_loss;
     }
 
-    if (!std::isfinite(text_loss)) {
-        std::string msg = "computeAutogradLoss: text_loss is non-finite (" + std::to_string(text_loss) + ")";
+    float text_plus_mtp_loss = 0.0f;
+    cudaMemcpyAsync(&text_plus_mtp_loss, intermediates.loss_tensor.data, sizeof(float),
+                    cudaMemcpyDeviceToHost, ctx.stream);
+    cudaStreamSynchronize(ctx.stream);
+
+    if (!std::isfinite(text_plus_mtp_loss)) {
+        std::string msg = "computeAutogradLoss: text+MTP loss is non-finite (" + std::to_string(text_plus_mtp_loss) + ")";
         if (result.mtp_diagnostics.valid) {
             msg += " L0_main=" + std::to_string(result.mtp_diagnostics.L0_main);
             for (size_t i = 0; i < result.mtp_diagnostics.head_loss.size(); ++i)
@@ -953,10 +1001,9 @@ LossResult computeAutogradLoss(
         throw std::runtime_error(msg);
     }
 
-    result.text_loss = text_loss;
+    result.text_loss = text_ce_loss;
+    result.mtp_loss = mtp_loss;
     result.valid_tokens = lm_valid_tokens;
-
-    constexpr float numeric_loss = 0.0f;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // EXECUTION BLOCK LOSS — autograd-connected CE + transition loss
@@ -967,11 +1014,11 @@ LossResult computeAutogradLoss(
     //      (computed inside executeStep via autograd::cross_entropy_logits)
     //
     // Monitoring-only (host scalars, no gradients):
-    //   - exec_entropy_loss — distribution collapse detection
+    //   - exec_entropy_monitor — distribution collapse detection
     //   - exec_structured_ce — scalar readback of device CE for logging parity
     // ═══════════════════════════════════════════════════════════════════════════
     float exec_structured_ce = 0.0f;
-    float exec_entropy_loss = 0.0f;
+    float exec_entropy_monitor = 0.0f;
 
     if (cfg->execution_block_enabled && ctx.execution_block
         && !intermediates.exec_outputs_per_row.empty()) {
@@ -1070,7 +1117,7 @@ LossResult computeAutogradLoss(
             exec_structured_ce = ce_scalar_sum / static_cast<float>(ce_tensor_count);
         }
 
-        // Optional entropy auxiliary (non-differentiable monitoring term)
+        // Optional entropy monitor (non-differentiable; not added to loss_tensor)
         if (cfg->entropy_aux_weight > 0.0f) {
             for (int b = 0; b < ctx.batch_size; ++b) {
                 const auto& all_steps = intermediates.exec_outputs_per_row[b].steps;
@@ -1095,170 +1142,27 @@ LossResult computeAutogradLoss(
                 float h_ent = 0.0f;
                 cudaStreamSynchronize(ctx.stream);
                 cudaMemcpy(&h_ent, ent.data, sizeof(float), cudaMemcpyDeviceToHost);
-                exec_entropy_loss += h_ent;
+                exec_entropy_monitor += h_ent;
             }
             if (ctx.batch_size > 0)
-                exec_entropy_loss /= static_cast<float>(ctx.batch_size);
+                exec_entropy_monitor /= static_cast<float>(ctx.batch_size);
         }
     }
-
-    result.numeric_loss = numeric_loss;
+    result.entropy_monitor = exec_entropy_monitor;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SELECTOR SUPERVISION LOSS — autograd CE through TensorContract
-    // For each supervised decode position (kind != Ignore), runs selector forward
-    // (autograd::matmul/concat chain), computes CE via autograd::cross_entropy_logits,
-    // and accumulates into loss_tensor for automatic backward.
+    // Selector supervision is FINAL-STATE selector-only supervision: each row may
+    // provide at most one non-Ignore target, and it MUST be attached to the last
+    // decode position because the available ExecutionMemory is the row's final
+    // post-execution state. Per-token non-Ignore targets would require a
+    // timestep-aligned ExecutionMemory snapshot and are rejected loudly.
+    // The hidden input is copied into an owned detached Tensor. Gradients train
+    // DecodeTimeSlotSelector parameters only; they do not slice back into the
+    // encoder hidden tensor because TensorContract has no parent slice/view op.
     // Weighted by cfg->selector_supervision_weight (0 = disabled).
     // ═══════════════════════════════════════════════════════════════════════════
-    float selector_supervision_loss = 0.0f;
-    // Keep SelectorForwardResult objects alive until backward completes — stored in
-    // autograd_intermediates so they survive past computeAutogradLoss() return.
-    auto& selector_fwd_results = intermediates.selector_fwd_results;
-    selector_fwd_results.clear();  // Reset from any prior batch
-    if (cfg->selector_enabled && cfg->selector_supervision_weight > 0.0f
-        && cfg->execution_block_enabled && ctx.model
-        && ctx.payload && !ctx.payload->slot_selection_targets.empty()
-        && !intermediates.exec_memories.empty()) {
-
-        auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
-        auto* policy   = ctx.model->getDecodeTimeNumPolicy();
-
-        if (selector && policy) {
-            const int d_model = cfg->d_model;
-            const int seq_len = ctx.seq_len;
-            const float* d_hidden = intermediates.centered_encoder_output.data
-                                  ? intermediates.centered_encoder_output.data
-                                  : intermediates.encoder_output_tensor.data;
-            if (!d_hidden) {
-                throw std::runtime_error("computeAutogradLoss: encoder output tensor is NULL for selector supervision");
-            }
-
-            int ce_count = 0;
-
-            // First pass: count supervised positions for loss_scale denominator
-            for (int b = 0; b < ctx.batch_size; ++b) {
-                if (!ctx.payload->execution_active.empty()
-                    && !ctx.payload->execution_active[b])
-                    continue;
-                if (b >= static_cast<int>(ctx.payload->slot_selection_targets.size()))
-                    continue;
-                const auto& row_targets = ctx.payload->slot_selection_targets[b];
-                if (row_targets.empty()) continue;
-                if (b >= static_cast<int>(intermediates.exec_memories.size()))
-                    continue;
-                const auto& mem = intermediates.exec_memories[b];
-                if (!mem.valid_mask.data) continue;
-                const int row_len = std::min(seq_len, static_cast<int>(row_targets.size()));
-                for (int t = 0; t < row_len; ++t) {
-                    if (row_targets[t].kind != Execution::SlotSelectionTargetKind::Ignore)
-                        ce_count++;
-                }
-            }
-
-            if (ce_count > 0) {
-                // weight per position = supervision_weight / count
-                const float per_pos_weight = cfg->selector_supervision_weight
-                                           / static_cast<float>(ce_count);
-
-                selector_fwd_results.reserve(static_cast<size_t>(ce_count));
-
-                // Second pass: autograd forward + CE for each supervised position
-                for (int b = 0; b < ctx.batch_size; ++b) {
-                    if (!ctx.payload->execution_active.empty()
-                        && !ctx.payload->execution_active[b])
-                        continue;
-                    if (b >= static_cast<int>(ctx.payload->slot_selection_targets.size()))
-                        continue;
-                    const auto& row_targets = ctx.payload->slot_selection_targets[b];
-                    if (row_targets.empty()) continue;
-                    if (b >= static_cast<int>(intermediates.exec_memories.size()))
-                        continue;
-                    const auto& mem = intermediates.exec_memories[b];
-                    if (!mem.valid_mask.data) continue;
-
-                    // Build candidate set for this row's memory state
-                    policy->buildCandidateSet(
-                        mem.valid_mask.data,
-                        mem.values.data,
-                        mem.recent_write_mask.data,
-                        mem.usage.data,
-                        policy->config().num_slots,
-                        policy->config().scratch_slots,
-                        ctx.stream);
-                    const auto& cands = policy->candidates();
-
-                    const int row_len = std::min(seq_len, static_cast<int>(row_targets.size()));
-                    for (int t = 0; t < row_len; ++t) {
-                        const auto& tgt = row_targets[t];
-                        if (tgt.kind == Execution::SlotSelectionTargetKind::Ignore)
-                            continue;
-
-                        // Hidden state for this position — non-owning Tensor view
-                        float* h_t_ptr = const_cast<float*>(d_hidden + (static_cast<size_t>(b) * seq_len + t) * d_model);
-                        Tensor h_t_view = Tensor::from_ptr(h_t_ptr,
-                            TensorContract::TensorShape::make_BSM(1, d_model),
-                            /*takes_ownership=*/false, /*requires_grad=*/false,
-                            "selector_h_t_view");
-
-                        // Slot features — non-owning Tensor view
-                        Tensor slot_feat_view;
-                        int num_live = cands.num_live_slots > 0 ? cands.num_live_slots : 0;
-                        if (num_live > 0 && cands.d_slot_features) {
-                            slot_feat_view = Tensor::from_ptr(
-                                const_cast<float*>(cands.d_slot_features),
-                                TensorContract::TensorShape::make_BSM(num_live, kSlotFeatureDim),
-                                /*takes_ownership=*/false, /*requires_grad=*/false,
-                                "selector_slot_feat_view");
-                        }
-
-                        // Determine target index: 0 = NULL, 1+candidate_offset = Slot
-                        int target_idx = -1;
-                        if (tgt.kind == Execution::SlotSelectionTargetKind::Null) {
-                            target_idx = 0;
-                        } else if (tgt.kind == Execution::SlotSelectionTargetKind::Slot) {
-                            for (int c = 0; c < cands.num_live_slots; ++c) {
-                                if (cands.live_slot_ids[c] == tgt.slot_id) {
-                                    target_idx = 1 + c;
-                                    break;
-                                }
-                            }
-                            if (target_idx < 0) continue;  // Target slot not in candidate set
-                        }
-
-                        if (num_live <= 0 && target_idx > 0)
-                            continue;
-                        if (target_idx == 0 && num_live == 0)
-                            continue;  // NULL with no candidates: trivially correct
-
-                        // Autograd forward: builds grad_fn chain
-                        SelectorForwardResult fwd = selector->forward(
-                            h_t_view, slot_feat_view, num_live, ctx.stream);
-
-                        // CE loss from logits → scalar [1,1] in autograd graph
-                        Tensor ce = autograd::cross_entropy_logits(
-                            fwd.scores, target_idx, ctx.stream);
-
-                        // Scale by per-position weight
-                        Tensor ce_scaled = autograd::scale_scalar(ce, per_pos_weight, ctx.stream);
-
-                        // Accumulate into total loss tensor
-                        intermediates.loss_tensor = autograd::add(
-                            intermediates.loss_tensor, ce_scaled, ctx.stream);
-
-                        // Read CE for reporting (synchronous — host needs the value now)
-                        float ce_val = 0.0f;
-                        cudaMemcpy(&ce_val, ce.data, sizeof(float),
-                                   cudaMemcpyDeviceToHost);
-                        selector_supervision_loss += per_pos_weight * ce_val;
-
-                        // Keep forward result alive for backward
-                        selector_fwd_results.push_back(std::move(fwd));
-                    }
-                }
-            }
-        }
-    }
+    float selector_supervision_loss = addSelectorSupervisionLoss(ctx, intermediates);
     result.selector_loss = selector_supervision_loss;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1272,19 +1176,23 @@ LossResult computeAutogradLoss(
     cudaStreamSynchronize(ctx.stream);
 
     result.loss_value = actual_loss;
-    result.aux_loss = actual_loss - text_loss;  // All non-text auxiliary loss (exec block + selector + etc.)
+    result.numeric_loss = actual_loss - text_ce_loss - mtp_loss - selector_supervision_loss;
+    result.aux_loss = actual_loss - text_ce_loss;  // MTP + execution/numeric + selector
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (actual_tensor=" 
-            + std::to_string(actual_loss) + " text=" + std::to_string(text_loss)
+            + std::to_string(actual_loss) + " text_ce=" + std::to_string(text_ce_loss)
+            + " mtp=" + std::to_string(mtp_loss)
             + " exec_ce=" + std::to_string(exec_structured_ce)
             + " selector=" + std::to_string(selector_supervision_loss) + ")");
     }
     
-    AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_loss
+    AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_ce_loss
+            << " mtp=" << mtp_loss
+            << " numeric_exec=" << result.numeric_loss
             << " exec_ce=" << exec_structured_ce
-            << " exec_entropy_aux=" << exec_entropy_loss
+            << " exec_entropy_monitor=" << exec_entropy_monitor
             << " selector=" << selector_supervision_loss
             << " lm_valid=" << lm_valid_tokens);
     
@@ -1508,6 +1416,63 @@ BackwardResult executeAutogradBackward(
 
 bool verifyGradientsAreConnected(AutogradContext& ctx) {
     bool ok = true;
+    const bool text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
+    const bool selector_loss_active = ctx.training_state
+        && !ctx.training_state->autograd_intermediates.selector_fwd_results.empty();
+    bool exec_selection_loss_active = false;
+    bool exec_write_selection_ce_active = false;
+    const bool reasoning_loss_active = false;  // ReasoningHead forward is diagnostic-only until a real reasoning loss path is assembled.
+    if (ctx.training_state) {
+        const auto& rows = ctx.training_state->autograd_intermediates.exec_outputs_per_row;
+        for (const auto& row : rows) {
+            for (const auto& step : row.steps) {
+                if (step.has_selection_ce) {
+                    exec_selection_loss_active = true;
+                    exec_write_selection_ce_active = true;
+                }
+                if ((step.transition_loss.data && step.transition_loss.grad_fn)
+                    || (step.arg_reinforce_loss.data && step.arg_reinforce_loss.grad_fn)) {
+                    exec_selection_loss_active = true;
+                }
+            }
+            if (exec_selection_loss_active && exec_write_selection_ce_active) break;
+        }
+    }
+
+    auto requireAllocatedFinite = [&](Tensor& t, const std::string& label) {
+        if (!t.data) return;
+        if (!t.has_grad()) {
+            AG_WARN(label << ".grad is NULL - allocated parameter did not expose optimizer gradient storage");
+            ok = false;
+            return;
+        }
+        GradientSignalProbe probe = probeGradientSignal(t, ctx.stream);
+        if (!probe.allocated) {
+            AG_WARN(label << ".grad_data is NULL despite has_grad=true");
+            ok = false;
+            return;
+        }
+        if (!probe.finite) {
+            AG_WARN(label << ".grad contains non-finite values in sampled window (sampled="
+                    << probe.sampled << ", rms=" << probe.rms << ")");
+            ok = false;
+        } else {
+            AG_INFO(label << ".grad allocated; sampled=" << probe.sampled
+                    << " rms=" << probe.rms
+                    << " received_nonzero=" << (probe.nonzero ? "yes" : "no"));
+        }
+    };
+
+    auto requireReceivedGradient = [&](Tensor& t, const std::string& label) {
+        requireAllocatedFinite(t, label);
+        if (!t.data || !t.has_grad() || !t.grad_data()) return;
+        GradientSignalProbe probe = probeGradientSignal(t, ctx.stream);
+        if (!probe.nonzero || probe.rms == 0.0f) {
+            AG_WARN(label << ".grad is allocated but sampled RMS is zero after this backward "
+                    << "(sampled=" << probe.sampled << ") — gradient path did not deliver signal");
+            ok = false;
+        }
+    };
     
     // The autograd system stores gradients in Tensor.grad_ fields (shared_ptr<Tensor>)
     // The optimizer accesses them directly via Tensor.grad_data() pointers.
@@ -1521,12 +1486,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
     // ═══════════════════════════════════════════════════════════════════════════
     // ISSUE #59: Use has_grad() accessor
     if (ctx.embedding_layer->tokenWeights().data) {
-        if (!ctx.embedding_layer->tokenWeights().has_grad()) {
-            AG_WARN("embedding token_weights.grad is NULL - gradients NOT flowing to optimizer!");
-            ok = false;
-        } else {
-            AG_INFO("Embedding gradients ready: " << ctx.embedding_layer->tokenWeights().numel() << " elements at " << ctx.embedding_layer->tokenWeights().grad_data());
-        }
+        requireAllocatedFinite(ctx.embedding_layer->tokenWeights(), "embedding token_weights");
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1543,6 +1503,11 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
                 AG_INFO("LM head gradients TIED to embedding: " << ctx.lm_head->weights().numel() << " elements");
             } else {
                 AG_INFO("LM head gradients SEPARATE: " << ctx.lm_head->weights().numel() << " elements at " << ctx.lm_head->weights().grad_data());
+            }
+            if (text_loss_active) {
+                requireReceivedGradient(ctx.lm_head->weights(), "lm_head weights");
+            } else {
+                requireAllocatedFinite(ctx.lm_head->weights(), "lm_head weights");
             }
         }
     }
@@ -1567,11 +1532,16 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         && !ctx.lm_head->finalRmsGamma().has_grad()) {
         AG_WARN("final_rms_gamma.grad is NULL - gradients NOT flowing!");
         ok = false;
+    } else if (ctx.lm_head->finalRmsGamma().data && ctx.lm_head->finalRmsGamma().requires_grad) {
+        requireAllocatedFinite(ctx.lm_head->finalRmsGammaMutable_UnfrozenOnly("verifyGradientsAreConnected"),
+                               "final_rms_gamma");
     }
 
     if (ctx.lm_head->bias().data && !ctx.lm_head->bias().has_grad()) {
         AG_WARN("lm_head_bias.grad is NULL - gradients NOT flowing!");
         ok = false;
+    } else if (ctx.lm_head->bias().data) {
+        requireAllocatedFinite(ctx.lm_head->bias(), "lm_head_bias");
     }
 
     if (ctx.gpu_encoder) {
@@ -1584,10 +1554,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
                 continue;
             }
             auto check = [&](Tensor& t, const char* name) {
-                if (t.data && !t.has_grad()) {
-                    AG_WARN("layer " << layer << " " << name << ".grad is NULL");
-                    ok = false;
-                }
+                if (t.data) requireAllocatedFinite(t, "layer " + std::to_string(layer) + " " + std::string(name));
             };
             check(enc->rms1Gamma(), "rms1Gamma");
             check(enc->rms2Gamma(), "rms2Gamma");
@@ -1603,14 +1570,17 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             check(enc->layerScale1(), "layerScale1");
             check(enc->layerScale2(), "layerScale2");
         }
+        if (text_loss_active && num_layers > 0) {
+            auto* enc0 = ctx.gpu_encoder->getLayer(0);
+            if (enc0) {
+                requireReceivedGradient(enc0->attnWqkv(), "layer 0 attnWqkv");
+            }
+        }
     }
 
     if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
         auto checkScratch = [&](Tensor& t, const char* name) {
-            if (t.data && !t.has_grad()) {
-                AG_WARN("scratch block " << name << ".grad is NULL");
-                ok = false;
-            }
+            if (t.data) requireAllocatedFinite(t, "scratch block " + std::string(name));
         };
         checkScratch(ctx.scratch_block->atomTypeEmbeddings(), "atomTypeEmbeddings");
         checkScratch(ctx.scratch_block->atomProjection(), "atomProjection");
@@ -1623,10 +1593,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
     // ExecutionBlock parameters
     if (ctx.execution_block && ctx.config->execution_block_enabled) {
         auto checkEB = [&](Tensor& t, const char* name) {
-            if (t.data && !t.has_grad()) {
-                AG_WARN("exec block " << name << ".grad is NULL");
-                ok = false;
-            }
+            if (t.data) requireAllocatedFinite(t, "exec block " + std::string(name));
         };
         auto& eb = *ctx.execution_block;
         checkEB(eb.w_decode_1(), "w_decode_1");
@@ -1659,6 +1626,13 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         checkEB(eb.b_trace(), "b_trace");
         checkEB(eb.W_reason_gate(), "W_reason_gate");
         checkEB(eb.W_trace_gate(), "W_trace_gate");
+        if (exec_selection_loss_active) {
+            requireReceivedGradient(eb.W_op_select(), "exec block W_op_select");
+            requireReceivedGradient(eb.w_arg1_select(), "exec block w_arg1_select");
+        }
+        if (exec_write_selection_ce_active) {
+            requireReceivedGradient(eb.W_write_query(), "exec block W_write_query");
+        }
     }
 
     // DecodeTimeSlotSelector parameters
@@ -1666,30 +1640,35 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
         if (selector) {
             auto checkSel = [&](Tensor& t, const char* name) {
-                if (t.data && !t.has_grad()) {
-                    AG_WARN("selector " << name << ".grad is NULL");
-                    ok = false;
-                }
+                if (t.data) requireAllocatedFinite(t, "selector " + std::string(name));
             };
             checkSel(selector->W_q_select(), "W_q_select");
             checkSel(selector->W_k_select(), "W_k_select");
             checkSel(selector->null_key_select(), "null_key_select");
             checkSel(selector->null_logit_bias(), "null_logit_bias");
+            if (selector_loss_active) {
+                requireReceivedGradient(selector->W_q_select(), "selector W_q_select");
+                requireReceivedGradient(selector->W_k_select(), "selector W_k_select");
+                requireReceivedGradient(selector->null_logit_bias(), "selector null_logit_bias");
+            }
         }
     }
 
-    // ReasoningHead parameters
-    if (ctx.reasoning_head) {
+    // ReasoningHead parameters: executeAutogradForward currently invokes the
+    // head for structured diagnostics only. No reasoning loss is assembled into
+    // intermediates.loss_tensor, so verifying these params for received gradient
+    // would falsely claim training connectivity. Re-enable only alongside a real
+    // reasoning loss path.
+    if (ctx.reasoning_head && reasoning_loss_active) {
         auto checkRH = [&](Tensor& t, const char* name) {
-            if (t.data && !t.has_grad()) {
-                AG_WARN("reasoning head " << name << ".grad is NULL");
-                ok = false;
-            }
+            if (t.data) requireAllocatedFinite(t, "reasoning head " + std::string(name));
         };
         checkRH(ctx.reasoning_head->W_op(), "W_op");
         checkRH(ctx.reasoning_head->b_op(), "b_op");
         checkRH(ctx.reasoning_head->w_arg1(), "w_arg1");
         checkRH(ctx.reasoning_head->w_arg2(), "w_arg2");
+    } else if (ctx.reasoning_head) {
+        AG_INFO("ReasoningHead gradient verification skipped: no reasoning loss path is connected to loss_tensor");
     }
     
     return ok;
@@ -1764,11 +1743,25 @@ LossResult autogradTrainingStep(
     if (!logits_shape.is_2d_layout()) {
         throw std::runtime_error("autogradTrainingStep: cached_logits_tensor must be a 2D LOGITS buffer");
     }
-    const size_t logit_limit = static_cast<size_t>(logits_shape.as_2d().rows);
+    const auto logits_dims = logits_shape.as_2d();
+    const size_t logit_limit = static_cast<size_t>(logits_dims.rows);
     if (static_cast<size_t>(total_tokens) > logit_limit) {
         throw std::runtime_error(
             "autogradTrainingStep: total_tokens=" + std::to_string(total_tokens) +
             " exceeds logit buffer capacity=" + std::to_string(logit_limit));
+    }
+    if (payload.vocab_size != cfg.vocab_size) {
+        throw std::runtime_error(
+            "autogradTrainingStep: payload.vocab_size=" + std::to_string(payload.vocab_size) +
+            " != cfg.vocab_size=" + std::to_string(cfg.vocab_size) +
+            " — logits buffer width cannot be validated against conflicting vocabularies");
+    }
+    if (logits_dims.cols != payload.vocab_size) {
+        throw std::runtime_error(
+            "autogradTrainingStep: cached_logits_tensor cols=" + std::to_string(logits_dims.cols) +
+            " != payload/cfg vocab_size=" + std::to_string(payload.vocab_size) +
+            " (rows=" + std::to_string(logits_dims.rows) +
+            ", total_tokens=" + std::to_string(total_tokens) + ")");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1779,10 +1772,10 @@ LossResult autogradTrainingStep(
     // This is the ONLY mutation site — eval paths (computeLossBatch) read but never write.
     training_state.autograd_step = step;
 
-    // Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on accumulation
-    // micro-batches across the ENTIRE step (forward + loss + backward). Sealing
+    // Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on non-initial
+    // accumulation slots across the ENTIRE step (forward + loss + backward). Sealing
     // only forward (the previous behavior) was a Rule 20 violation: loss and
-    // backward kept logging duplicated tape entries on every micro-batch.
+    // backward kept logging duplicated tape entries on every slot.
     TapeSkipScope tape_skip_scope(accumulate);
 
     ExecutionBlockLayer* execution_block = model.getExecutionBlockLayer();
@@ -1805,7 +1798,7 @@ LossResult autogradTrainingStep(
         true
     );
     ctx.loss_config = buildLossConfig(model.getLossOptions(), training_state.class_weights_tensor.data);
-    ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on accumulation micro-batches
+    ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on non-initial accumulation slots
     ctx.model = &model;  // For MTP head access in computeAutogradLoss
 
     // ═══════════════════════════════════════════════════════════════════════════

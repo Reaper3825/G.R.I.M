@@ -7,8 +7,9 @@
 //======================================================//
 
 #include "AutogradLoss.hpp"
+#include "CrossEntropyNLL.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
-// BatchPayload include removed — unified_loss takes explicit (num_tokens, vocab_size)
+// BatchPayload + BatchDeviceBindings are part of the public unified_loss boundary.
 #include "../../LogRecorder/BatchLogTape.hpp"
 #include "../../VerboseLogging.hpp"  // Compile-time diagnostic guards (Issue #151)
 #include "../../CudaAllocUtils.hpp"
@@ -40,432 +41,10 @@ namespace GRIM {
 namespace autograd {
 
 //========================================================================
-// CUDA Kernels — NLL Loss on log-probabilities
-// These kernels receive log_probs = log_softmax(logits), NOT raw logits.
-// Softmax is computed ONCE in autograd::log_softmax() and saved for backward.
+// Cross-entropy / NLL kernels live in CrossEntropyNLL.cu.
+// AutogradLoss.cu owns the autograd graph node and delegates CE math through
+// computeCrossEntropyForwardFromLogProbs() / computeCrossEntropyBackwardToLogProbs().
 //========================================================================
-
-/**
- * NLL Loss Forward kernel — one block per token
- *
- * log_probs already contains log(softmax(logits)), computed by log_softmax.
- * We just pick -log_probs[target] and add focal/smoothing/entropy.
- *
- * Computes:
- *   When focal_enabled:  L = α * (1 - p_t)^γ * CE_smooth + λ * neg_entropy
- *   When focal disabled: L = CE_smooth + λ * neg_entropy
- *   (focal_alpha/gamma are ONLY applied when focal_enabled=true)
- *
- * Where:
- *   p_t  = exp(log_probs[target])          — ONE exp, not 50K
- *   CE_smooth = -(1-ε)*log_probs[target] - ε/(V-1)*Σ_{i≠t} log_probs[i]
- *   neg_entropy = Σ exp(log_probs[i]) * log_probs[i]
- */
-__global__ void kernelNLLLossForward(
-    const float* __restrict__ log_probs,    // [num_tokens, vocab_size] — log-probabilities
-    const int* __restrict__ targets,
-    float* __restrict__ per_token_loss,
-    float* __restrict__ loss_sum,
-    int* __restrict__ valid_count,
-    float* __restrict__ weight_sum,             // Accumulated class weights (nullable if no class_balanced)
-    int num_tokens,
-    int vocab_size,
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    bool smoothing_enabled,
-    float entropy_reg_lambda,
-    bool entropy_reg_enabled,
-    const float* __restrict__ class_weights     // [vocab_size] per-class weights (nullable = all 1.0)
-) {
-    const int token_idx = blockIdx.x;
-    if (token_idx >= num_tokens) return;
-
-    const int target = targets[token_idx];
-
-    // Skip masked/padding positions (target == -1)
-    if (target == -1) {
-        per_token_loss[token_idx] = 0.0f;
-        return;
-    }
-
-    const float* row = log_probs + static_cast<size_t>(token_idx) * vocab_size;
-
-    // p_t = exp(log_probs[target]) — just ONE exp call
-    const float log_p_t = row[target];
-    const float p_t = expf(log_p_t);
-
-    // ── Entropy: Σ p_i * log(p_i) = Σ exp(lp_i) * lp_i ──
-    __shared__ float s_neg_entropy;
-    __shared__ float s_sum_log_off;
-    if (threadIdx.x == 0) {
-        s_neg_entropy = 0.0f;
-        s_sum_log_off = 0.0f;
-    }
-    __syncthreads();
-
-    float local_neg_entropy = 0.0f;
-    float local_sum_log_off = 0.0f;
-
-    for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
-        if (entropy_reg_enabled) {
-            const float p_v = expf(row[v]);
-            if (p_v > 0.0f) {
-                local_neg_entropy += p_v * row[v];  // p * log(p)
-            }
-        }
-        if (smoothing_enabled && v != target) {
-            local_sum_log_off += row[v];  // log(p_v) — already in log space!
-        }
-    }
-
-    // Warp + cross-warp reduction
-    for (int off = warpSize / 2; off > 0; off /= 2) {
-        local_neg_entropy += __shfl_down_sync(0xffffffff, local_neg_entropy, off);
-        local_sum_log_off += __shfl_down_sync(0xffffffff, local_sum_log_off, off);
-    }
-    if (threadIdx.x % warpSize == 0) {
-        atomicAdd(&s_neg_entropy, local_neg_entropy);
-        atomicAdd(&s_sum_log_off, local_sum_log_off);
-    }
-    __syncthreads();
-
-    // ── Thread 0: assemble loss ──
-    if (threadIdx.x == 0) {
-        // Label-smoothed cross entropy
-        float ce_smooth;
-        if (smoothing_enabled && vocab_size > 1) {
-            const float q_on  = 1.0f - smoothing_epsilon;
-            const float q_off = smoothing_epsilon / static_cast<float>(vocab_size - 1);
-            ce_smooth = -q_on * log_p_t - q_off * s_sum_log_off;
-        } else {
-            ce_smooth = -log_p_t;  // Standard CE: -log(p_target)
-        }
-
-        // Focal loss weight
-        float focal_weight = 1.0f;
-        if (focal_enabled) {
-            focal_weight = powf(fmaxf(1.0f - p_t, 0.0f), focal_gamma);
-        }
-
-        // When focal is disabled, focal_alpha MUST NOT scale the CE term.
-        // Otherwise flipping focal_enabled=false silently changes the CE:entropy
-        // ratio via a parameter whose name says "focal" — a quality footgun.
-        const float ce_loss      = focal_enabled
-            ? (focal_alpha * focal_weight * ce_smooth)
-            : ce_smooth;
-        const float entropy_loss = entropy_reg_enabled ? (entropy_reg_lambda * s_neg_entropy) : 0.0f;
-        const float total_loss   = ce_loss + entropy_loss;
-
-        // Class-balanced weighting: w_{y_t} scales the ENTIRE loss for this position
-        // This weights the whole gradient row grad_logits[t, :] = w * (p - q) / W
-        const float cw = (class_weights != nullptr) ? class_weights[target] : 1.0f;
-        const float weighted_loss = cw * total_loss;
-
-        per_token_loss[token_idx] = weighted_loss;
-        atomicAdd(loss_sum, weighted_loss);
-        atomicAdd(valid_count, 1);
-        if (weight_sum != nullptr) {
-            atomicAdd(weight_sum, cw);
-        }
-    }
-}
-
-/**
- * NLL Loss Backward kernel — gradient w.r.t. LOG-PROBABILITIES
- *
- * For plain CE:  ∂L/∂(log_p_i) = (1/N) * (δ_{i≠t} ? 0 : -1)
- *   But we actually want d/d(log_p) of the full loss, so:
- *
- *   ∂(-log_p_t)/∂(log_p_i) = -δ_{i=t}
- *
- * With label smoothing:
- *   ∂CE_smooth/∂(log_p_i) = -q_i  where q_t = 1-ε, q_i = ε/(V-1) for i≠t
- *
- * With focal:
- *   ∂[α*(1-p_t)^γ * CE_smooth]/∂(log_p_i)
- *     = α * [focal_weight * (-q_i) + (1-p_t)^γ's derivative via p_t = exp(log_p_t)]
- *
- * With entropy reg:
- *   ∂[λ * Σ p_j*log(p_j)]/∂(log_p_i) = λ * p_i * (log(p_i) + 1 - neg_entropy)  [Issue #124 centering]
- *   But NOTE: p_j = exp(log_p_j), so dp_j/d(log_p_i) = p_j * (δ_{ij} - p_i)  [via softmax Jacobian]
- *   HOWEVER: d(p_j*log_p_j)/d(log_p_i) = dp_j/d(log_p_i)*(log_p_j+1)
- *   This Jacobian chain belongs in LogSoftmaxGradFn (the upstream), NOT here.
- *
- * KEY INSIGHT: Since we're differentiating w.r.t. log_probs (not logits),
- * and log_probs are INDEPENDENT variables from NLL's perspective
- * (the coupling happens in LogSoftmaxGradFn), the NLL gradient is simple:
- *
- *   Base CE: grad[i] = -q_i  (only non-zero for smoothed targets)
- *            grad[target] = -(1-ε)   or  -1 if no smoothing
- *
- * With focal:
- *   The focal weight (1-p_t)^γ depends on log_p_t = log_probs[target].
- *   p_t = exp(log_p_t), so dp_t/d(log_p_i) = p_t if i=t, else 0
- *   focal_weight = (1-p_t)^γ
- *   d(focal_weight)/d(log_p_t) = -γ*(1-p_t)^(γ-1)*p_t
- *   Only affects the target position.
- *
- * With entropy reg:
- *   H(p) = Σ p_j * log_p_j where p_j = exp(log_p_j)
- *   ∂H/∂(log_p_i) = ∂(p_i * log_p_i)/∂(log_p_i) = p_i * (log_p_i + 1)
- *   BUT the coupling terms (dp_j/d(log_p_i) for j≠i) are handled by LogSoftmaxGradFn.
- *   So NLL's local gradient for entropy is just: λ * p_i * (log_p_i + 1)
- *   With Issue #124 centering: λ * p_i * (log_p_i + 1 - (H+1)) = λ * p_i * (log_p_i - H)
- *
- * WAIT — this is wrong. log_probs are NOT independent variables. They're
- * constrained by logsumexp normalization. The LogSoftmaxGradFn accounts for
- * this constraint. But the NLL gradient w.r.t. each log_p[i] treats them as
- * if they were independent — the Jacobian correction happens upstream.
- *
- * FINAL GRADIENT (same as PyTorch F.nll_loss):
- *   For plain CE:  grad_log_p[i] = -δ_{i=t} / N
- *   For smoothed:  grad_log_p[i] = -q_i / N
- *
- * When this flows into LogSoftmaxGradFn:
- *   grad_logits[j] = grad_log_p[j] - p_j * Σ_i grad_log_p[i]
- *                  = -q_j/N - p_j * (-1/N)     [since Σ q_i = 1]
- *                  = (p_j - q_j) / N
- * Which is EXACTLY the standard CE gradient! ✓
- */
-__global__ void kernelNLLLossBackward(
-    const float* __restrict__ log_probs,    // [num_tokens, vocab_size]
-    const int* __restrict__ targets,
-    float* __restrict__ grad_log_probs,     // [num_tokens, vocab_size] — OUTPUT
-    int num_tokens,
-    int vocab_size,
-    float inv_valid_count,  // 1/N or 1/W (weight_sum) when class_balanced
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    bool smoothing_enabled,
-    float entropy_reg_lambda,
-    bool entropy_reg_enabled,
-    const float* __restrict__ class_weights     // [vocab_size] per-class weights (nullable = all 1.0)
-) {
-    const int token_idx = blockIdx.x;
-    if (token_idx >= num_tokens) return;
-
-    const float* row = log_probs + static_cast<size_t>(token_idx) * vocab_size;
-    float* grad_row = grad_log_probs + static_cast<size_t>(token_idx) * vocab_size;
-    const int target = targets[token_idx];
-
-    // Skip masked/padding positions (target == -1)
-    if (target == -1) {
-        for (int v = threadIdx.x; v < vocab_size; v += blockDim.x)
-            grad_row[v] = 0.0f;
-        return;
-    }
-
-    // Label smoothing targets
-    const float q_on  = (smoothing_enabled && vocab_size > 1)
-                        ? (1.0f - smoothing_epsilon) : 1.0f;
-    const float q_off = (smoothing_enabled && vocab_size > 1)
-                        ? (smoothing_epsilon / static_cast<float>(vocab_size - 1)) : 0.0f;
-
-    // Focal precomputation
-    const float p_t = expf(row[target]);
-    float focal_weight = 1.0f;
-    float focal_deriv_factor = 0.0f;
-    if (focal_enabled) {
-        const float one_minus_pt = fmaxf(1.0f - p_t, 0.0f);
-        if (one_minus_pt > 0.0f) {
-            focal_weight = powf(one_minus_pt, focal_gamma);
-            focal_deriv_factor = focal_gamma * powf(one_minus_pt, focal_gamma - 1.0f);
-        } else {
-            focal_weight = 0.0f;
-            focal_deriv_factor = 0.0f;
-        }
-    }
-
-    // Entropy centering term (Issue #124)
-    // Need neg_entropy = Σ p_v * log_p_v for centering
-    // NOTE: Recomputed here in backward (also computed in forward).
-    //       Recomputation is acceptable since entropy is deterministic given log_probs.
-    //       We compute it locally to avoid blocking inter-kernel transfers from forward.
-    __shared__ float s_neg_entropy;
-    if (threadIdx.x == 0) s_neg_entropy = 0.0f;
-    __syncthreads();
-
-    float local_ne = 0.0f;
-    if (entropy_reg_enabled) {
-        for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
-            const float p_v = expf(row[v]);
-            if (p_v > 0.0f) local_ne += p_v * row[v];
-        }
-        for (int off = warpSize / 2; off > 0; off /= 2)
-            local_ne += __shfl_down_sync(0xffffffff, local_ne, off);
-        if (threadIdx.x % warpSize == 0) atomicAdd(&s_neg_entropy, local_ne);
-    }
-    __syncthreads();
-    const float neg_entropy = s_neg_entropy;
-
-    // ── Compute gradient ──
-    // NLL gradient w.r.t. log_probs (LogSoftmaxGradFn does the Jacobian correction)
-    
-    // Precompute sum_log_off if needed for focal derivative with smoothing
-    // FIX: Must use shared memory + atomicAdd for cross-warp reduction (256 threads = 8 warps).
-    // Previous code only did intra-warp shuffle, giving each warp 1/8 of the correct value.
-    // The forward kernel (kernelNLLLossForward) already uses the correct pattern.
-    __shared__ float s_sum_log_off;
-    if (threadIdx.x == 0) s_sum_log_off = 0.0f;
-    __syncthreads();
-    
-    if (focal_enabled && smoothing_enabled) {
-        float local_sum_log_off = 0.0f;
-        for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
-            if (v != target) {
-                local_sum_log_off += row[v];
-            }
-        }
-        // Warp reduction
-        for (int off = warpSize / 2; off > 0; off /= 2)
-            local_sum_log_off += __shfl_down_sync(0xffffffff, local_sum_log_off, off);
-        // Cross-warp reduction via shared memory (matching forward kernel pattern)
-        if (threadIdx.x % warpSize == 0) atomicAdd(&s_sum_log_off, local_sum_log_off);
-    }
-    __syncthreads();
-    const float sum_log_off = s_sum_log_off;
-    
-    for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
-        const float q_v = (v == target) ? q_on : q_off;
-
-        // Base: -q_v (plain NLL loss gradient w.r.t. log_probs)
-        // When focal is disabled, focal_alpha MUST NOT scale the gradient.
-        // Otherwise focal_enabled=false silently changes the CE:entropy ratio.
-        float grad_v = focal_enabled
-            ? (focal_alpha * focal_weight * (-q_v))
-            : (-q_v);
-
-        // Focal derivative: only affects gradient through p_t = exp(log_p_t)
-        if (focal_enabled) {
-            // CE_smooth for focal deriv: full formula including off-target smoothing terms
-            const float ce_smooth = (smoothing_enabled) 
-                ? -(q_on * row[target] + q_off * sum_log_off)  // Full smoothed CE gradient
-                : -row[target];
-            // d(focal_weight)/d(log_p_v) = -γ*(1-p_t)^(γ-1) * p_t  if v==target, else 0
-            if (v == target) {
-                grad_v += focal_alpha * (-focal_deriv_factor) * p_t * ce_smooth;
-            }
-        }
-
-        // Entropy regularization gradient w.r.t. log_probs (OPTION A: Centered here)
-        // NLL's local derivative: λ * p_v * (log_p_v - neg_entropy)
-        // Centering happens HERE (not in LogSoftmaxGradFn).
-        // LogSoftmaxGradFn applies standard logsoftmax Jacobian only, not entropy-specific centering.
-        // The cross-term Jacobian (dp_j/d(log_p_i) for j≠i) is handled by LogSoftmaxGradFn upstream.
-        if (entropy_reg_enabled) {
-            const float p_v = expf(row[v]);
-            if (p_v > 0.0f) {
-                grad_v += entropy_reg_lambda * p_v * (row[v] - neg_entropy);
-            }
-        }
-
-        // Apply mean reduction with class-balanced weighting and upstream grad scaling.
-        // When class_balanced: grad_row[v] = grad_output * w_{y_t} * grad_v / W  (W = weight_sum)
-        // When unweighted:     grad_row[v] = grad_output * grad_v / N            (N = valid_count)
-        // inv_valid_count already has grad_output_scale folded in by the launcher.
-        const float cw = (class_weights != nullptr) ? class_weights[target] : 1.0f;
-        grad_row[v] = grad_v * cw * inv_valid_count;
-    }
-}
-
-// OLD kernelUnifiedLossBackward DELETED (Rule 20) — replaced by kernelNLLLossBackward above.
-// The old kernel recomputed softmax INDEPENDENTLY from the forward kernel (non-deterministic atomicAdd),
-// causing forward/backward probability inconsistency. The new architecture:
-//   logits → autograd::log_softmax() → log_probs → kernelNLLLossForward/Backward
-// ensures forward and backward use IDENTICAL probability values.
-// Gradient centering (Issue #124 GRAD_CENTER_EQUATION) is now automatic:
-//   After LogSoftmaxGradFn: grad_logits[v] = grad_log_p[v] - p_v * Σ grad_log_p[v]
-//                         = (p_v - q_v) / N → Σ_v = 0  ✓
-
-// ── Kept: kernelFiniteDiffGradVerify (Rule 21 diagnostic) operates on raw logits ──
-// ── It's a standalone verification tool, not part of the training gradient path. ──
-
-
-
-//========================================================================
-// Launch Functions — NLL Loss (operates on log_probs, not raw logits)
-//========================================================================
-
-void launchUnifiedLossForward(
-    const float* log_probs,     // [num_tokens, vocab_size] — output of log_softmax
-    const int* targets,
-    float* per_token_loss,
-    float* loss_sum,
-    int* valid_count,
-    float* weight_sum,          // Accumulated class weights (nullable if no class_balanced)
-    int num_tokens,
-    int vocab_size,
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    bool smoothing_enabled,
-    float entropy_reg_lambda,
-    bool entropy_reg_enabled,
-    const float* class_weights, // [vocab_size] per-class weights (nullable = all 1.0)
-    cudaStream_t stream
-) {
-    cudaMemsetAsync(loss_sum, 0, sizeof(float), stream);
-    cudaMemsetAsync(valid_count, 0, sizeof(int), stream);
-    if (weight_sum) cudaMemsetAsync(weight_sum, 0, sizeof(float), stream);
-    
-    const int block_size = 256;
-    kernelNLLLossForward<<<num_tokens, block_size, 0, stream>>>(
-        log_probs, targets,
-        per_token_loss, loss_sum, valid_count, weight_sum,
-        num_tokens, vocab_size,
-        focal_alpha, focal_gamma, focal_enabled,
-        smoothing_epsilon, smoothing_enabled,
-        entropy_reg_lambda, entropy_reg_enabled,
-        class_weights
-    );
-}
-
-void launchUnifiedLossBackward(
-    const float* log_probs,     // [num_tokens, vocab_size] — output of log_softmax
-    const int* targets,
-    float* grad_log_probs,      // [num_tokens, vocab_size] — OUTPUT gradient w.r.t. log_probs
-    int num_tokens,
-    int vocab_size,
-    int valid_count,
-    float weight_sum,           // Sum of class weights (0 = use valid_count instead)
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    bool smoothing_enabled,
-    float entropy_reg_lambda,
-    bool entropy_reg_enabled,
-    const float* class_weights, // [vocab_size] per-class weights (nullable = all 1.0)
-    float grad_output_scale,    // Upstream scalar gradient for chain rule (typically 1.0)
-    cudaStream_t stream
-) {
-    // Mean reduction denominator: weight_sum if class_balanced, valid_count otherwise
-    if (valid_count <= 0) {
-        throw std::runtime_error("[launchUnifiedLossBackward] valid_count=" + std::to_string(valid_count) 
-            + " — no valid tokens, caller MUST ensure valid_count > 0");
-    }
-    const float normalization = (class_weights != nullptr && weight_sum > 0.0f)
-        ? weight_sum
-        : static_cast<float>(valid_count);
-    // Fold upstream grad_output_scale into inv_valid_count so the kernel
-    // automatically applies chain rule scaling without an extra pass.
-    const float inv_valid_count = grad_output_scale / normalization;
-    
-    const int block_size = 256;
-    kernelNLLLossBackward<<<num_tokens, block_size, 0, stream>>>(
-        log_probs, targets, grad_log_probs,
-        num_tokens, vocab_size, inv_valid_count,
-        focal_alpha, focal_gamma, focal_enabled,
-        smoothing_epsilon, smoothing_enabled,
-        entropy_reg_lambda, entropy_reg_enabled,
-        class_weights
-    );
-}
 
 //========================================================================
 // [FD_GRAD_VERIFY_EQUATION] Finite Difference Gradient Verification Kernel
@@ -720,7 +299,7 @@ __global__ void kernelFiniteDiffGradVerify(
 
 /**
  * DIAGNOSTIC: Launches finite difference gradient verification
- * This should be called AFTER launchUnifiedLossBackward to verify the gradients
+ * This should be called after computeCrossEntropyBackwardToLogProbs() to verify the gradients
  * 
  * @param logits          Input logits [num_tokens, vocab_size]
  * @param targets         Target token IDs [num_tokens]
@@ -938,7 +517,7 @@ void launchToken277DiagnosticActual(
  *   New: uses SAME log_probs from forward pass (saved), exact forward/backward consistency
  *
  * Gradient chain:
- *   1. kernelNLLLossBackward computes ∂L/∂(log_p_v) = -q_v * inv_N  (+ focal/entropy terms)
+ *   1. computeCrossEntropyBackwardToLogProbs() computes ∂L/∂(log_p_v) = -q_v * inv_N  (+ focal/entropy terms)
  *   2. LogSoftmaxGradFn computes ∂(log_p)/∂(logits) = δ_{ij} - p_j  (softmax Jacobian)
  *   3. Composition:  grad_logits[j] = (p_j - q_j) / N  ← standard CE gradient ✓
  *
@@ -1054,16 +633,23 @@ struct NLLLossGradFn : public GradFn {
             cudaMallocOrThrow(reinterpret_cast<void**>(&grad_log_probs_buffer), grad_bytes, "NLLLossGradFn_grad_log_probs");
         }
         
-        // ── Step 1: Compute NLL backward → gradient w.r.t. log_probs ──
-        // grad_scale is folded into inv_valid_count inside the launch function.
-        launchUnifiedLossBackward(
+        // ── Step 1: Compute CE/NLL backward → gradient w.r.t. log_probs ──
+        // grad_scale is folded into the mean-reduction denominator in the CE module.
+        LossConfig loss_config;
+        loss_config.focal_alpha = focal_alpha;
+        loss_config.focal_gamma = focal_gamma;
+        loss_config.focal_enabled = focal_enabled;
+        loss_config.smoothing_epsilon = smoothing_epsilon;
+        loss_config.smoothing_enabled = smoothing_enabled;
+        loss_config.entropy_reg_lambda = entropy_reg_lambda;
+        loss_config.entropy_reg_enabled = entropy_reg_enabled;
+        loss_config.d_class_weights = class_weights;
+        loss_config.class_balanced_enabled = (class_weights != nullptr);
+        computeCrossEntropyBackwardToLogProbs(
             log_probs_data, targets, grad_log_probs_buffer,
             num_tokens, vocab_size, valid_count,
             weight_sum,
-            focal_alpha, focal_gamma, focal_enabled,
-            smoothing_epsilon, smoothing_enabled,
-            entropy_reg_lambda, entropy_reg_enabled,
-            class_weights,
+            loss_config,
             grad_scale,
             stream
         );
@@ -1162,6 +748,36 @@ struct NLLLossGradFn : public GradFn {
 
 __host__ Tensor unified_loss(
     Tensor& logits,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const LossConfig& config,
+    cudaStream_t stream
+) {
+    payload.validate("unified_loss");
+    if (!bindings.d_target_ids) {
+        throw std::runtime_error("[unified_loss] BatchDeviceBindings.d_target_ids is NULL — caller MUST upload BatchPayload before loss");
+    }
+    if (bindings.batch_size != payload.batch_size) {
+        throw std::runtime_error("[unified_loss] bindings.batch_size=" + std::to_string(bindings.batch_size) +
+            " != payload.batch_size=" + std::to_string(payload.batch_size));
+    }
+    if (bindings.max_seq_len != payload.max_seq_len) {
+        throw std::runtime_error("[unified_loss] bindings.max_seq_len=" + std::to_string(bindings.max_seq_len) +
+            " != payload.max_seq_len=" + std::to_string(payload.max_seq_len));
+    }
+
+    return unified_loss_from_target_buffer(
+        logits,
+        bindings.d_target_ids,
+        payload.total_tokens,
+        payload.vocab_size,
+        config,
+        stream
+    );
+}
+
+__host__ Tensor unified_loss_from_target_buffer(
+    Tensor& logits,
     const int* targets,
     int num_tokens,
     int vocab_size,
@@ -1213,78 +829,21 @@ __host__ Tensor unified_loss(
     //   NLLLossGradFn::~DTOR() → deletes LogSoftmaxGradFn (doesn't free shared data) → frees log_probs_data
     Tensor log_probs = autograd::log_softmax(logits, stream, false);
     
-    // ── Step 2: NLL loss forward on log_probs ──
-    float* per_token_loss = nullptr;
-    float* d_loss_sum = nullptr;
-    int* d_valid_count = nullptr;
-    float* d_weight_sum = nullptr;  // Class-balanced: accumulates per-token weights
-    
-    cudaMallocOrThrow(reinterpret_cast<void**>(&per_token_loss), num_tokens * sizeof(float), "unified_loss_per_token_loss");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_loss_sum), sizeof(float), "unified_loss_d_loss_sum");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_valid_count), sizeof(int), "unified_loss_d_valid_count");
-    if (config.d_class_weights) {
-        cudaMallocOrThrow(reinterpret_cast<void**>(&d_weight_sum), sizeof(float), "unified_loss_d_weight_sum");
-    }
-    
-    launchUnifiedLossForward(
+    // ── Step 2: CE/NLL loss forward on log_probs ──
+    const CrossEntropyForwardResult ce_result = computeCrossEntropyForwardFromLogProbs(
         log_probs.data,
         targets,
-        per_token_loss,
-        d_loss_sum,
-        d_valid_count,
-        d_weight_sum,
         num_tokens,
         vocab_size,
-        config.focal_alpha,
-        config.focal_gamma,
-        config.focal_enabled,
-        config.smoothing_epsilon,
-        config.smoothing_enabled,
-        config.entropy_reg_lambda,
-        config.entropy_reg_enabled,
-        config.d_class_weights,
+        config,
         stream
     );
+    const float mean_loss = ce_result.mean_loss;
+    const int h_valid_count = ce_result.valid_count;
+    const float h_weight_sum = ce_result.weight_sum;
     
-    // ── Step 3: Copy results to host ──
-    float h_loss_sum = 0.0f;
-    int h_valid_count = 0;
-    float h_weight_sum = 0.0f;
-    cudaMemcpyAsync(&h_loss_sum, d_loss_sum, sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaMemcpyAsync(&h_valid_count, d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
-    if (d_weight_sum) {
-        cudaMemcpyAsync(&h_weight_sum, d_weight_sum, sizeof(float), cudaMemcpyDeviceToHost, stream);
-    }
-    cudaStreamSynchronize(stream);
-    
-    if (h_valid_count <= 0) {
-        throw std::runtime_error("[unified_loss] valid_count=0 — no valid tokens in batch. "
-            "Check targets for corruption (all -1?).");
-    }
-    
-    if (!std::isfinite(h_loss_sum)) {
-        throw std::runtime_error("[unified_loss] h_loss_sum is non-finite (" + std::to_string(h_loss_sum) +
-            ") — NLL kernel produced NaN/Inf. valid_count=" + std::to_string(h_valid_count) +
-            " weight_sum=" + std::to_string(h_weight_sum) + " focal=" + std::to_string(config.focal_gamma) +
-            " smoothing=" + std::to_string(config.smoothing_epsilon) + " entropy_lambda=" + std::to_string(config.entropy_reg_lambda));
-    }
-    
-    // Mean loss: weighted_loss_sum / weight_sum (class-balanced) or loss_sum / valid_count (standard)
-    const float normalization = (config.d_class_weights && h_weight_sum > 0.0f)
-        ? h_weight_sum
-        : static_cast<float>(h_valid_count);
-    if (normalization <= 0.0f || !std::isfinite(normalization)) {
-        throw std::runtime_error("[unified_loss] normalization invalid (" + std::to_string(normalization) +
-            ") — valid_count=" + std::to_string(h_valid_count) + " weight_sum=" + std::to_string(h_weight_sum));
-    }
-    const float mean_loss = h_loss_sum / normalization;
-    if (!std::isfinite(mean_loss)) {
-        throw std::runtime_error("[unified_loss] mean_loss is non-finite (" + std::to_string(mean_loss) +
-            ") after h_loss_sum=" + std::to_string(h_loss_sum) + " / norm=" + std::to_string(normalization));
-    }
-    
-    AG_TRACE("[unified_loss] loss_sum=%.6f valid_count=%d mean_loss=%.6f\n",
-             h_loss_sum, h_valid_count, mean_loss);
+    AG_TRACE("[unified_loss] valid_count=%d mean_loss=%.6f\n",
+             h_valid_count, mean_loss);
     if (config.d_class_weights) {
         AG_TRACE("[unified_loss] class_balanced: weight_sum=%.2f effective_N=%.2f (vs raw N=%d)\n",
                  h_weight_sum, h_weight_sum, h_valid_count);
@@ -1325,12 +884,6 @@ __host__ Tensor unified_loss(
         
         loss.grad_fn = grad_fn;
     }
-    
-    // ── Step 6: Cleanup temporary buffers ──
-    cudaFree(per_token_loss);
-    cudaFree(d_loss_sum);
-    cudaFree(d_valid_count);
-    if (d_weight_sum) cudaFree(d_weight_sum);
     
     return loss;
     // log_probs goes out of scope: data NOT freed (transferred), grad_fn NOT deleted (transferred)

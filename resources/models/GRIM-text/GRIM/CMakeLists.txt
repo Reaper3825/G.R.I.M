@@ -68,6 +68,7 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Forward_GPU.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/InitTrainingState.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/TrainingOps.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Autograd/AutogradSelectorSupervisionLoss.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Autograd/AutogradTraining.cu
 )
 

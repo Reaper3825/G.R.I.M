@@ -105,44 +105,5 @@ AutogradContext initAutogradContext(
     return ctx;
 }
 
-// Inference overload — builds a geometry-only BatchPayload so ctx.payload is never null.
-AutogradContext initAutogradContext(
-    const LanguageModelConfig* config,
-    TrainingState* training_state,
-    GPUGrimEncoder* gpu_encoder,
-    EmbeddingLayer* embedding_layer,
-    LMHeadLayer* lm_head,
-    ScratchBlockLayer* scratch_block,
-    ReasoningHeadLayer* reasoning_head,
-    ExecutionBlockLayer* execution_block,
-    cublasHandle_t cublas_handle,
-    cudaStream_t stream,
-    int batch_size,
-    int seq_len,
-    float grad_scale,
-    uint64_t step,
-    bool is_training
-) {
-    AutogradContext ctx{};
-    populateCommonContext(
-        ctx, config, training_state, gpu_encoder, embedding_layer, lm_head,
-        scratch_block, reasoning_head, execution_block, cublas_handle, stream,
-        grad_scale, step, is_training);
-
-    ctx.batch_size = batch_size;
-    ctx.seq_len = seq_len;
-
-    // Build geometry-only inference payload (vectors stay empty).
-    ctx.inference_payload_.batch_size   = batch_size;
-    ctx.inference_payload_.max_seq_len  = seq_len;
-    ctx.inference_payload_.total_tokens = batch_size * seq_len;
-    ctx.inference_payload_.actual_tokens = batch_size * seq_len;
-    // NOTE: payload pointer is set by executeAutogradForward() after return-by-value,
-    // because NRVO/move invalidates self-pointers.
-
-    ctx.validate("initAutogradContext(inference)");
-    return ctx;
-}
-
 }  // namespace Autograd
 }  // namespace GRIM

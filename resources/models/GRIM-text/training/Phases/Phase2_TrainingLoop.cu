@@ -31,6 +31,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -115,37 +116,26 @@ void validateAccumulationPositionBeforeBackward(
     int batch_idx,
     int global_step)
 {
-    if (optimizer.accumulation_position >= accum_steps) {
-        fprintf(stderr, "\n[Phase2] FATAL: Training step attempted with accumulation_position=%d >= accum_steps=%d\n",
-                optimizer.accumulation_position, accum_steps);
+    try {
+        optimizer.validateBeforeAccumulationSlot(accum_steps);
+    } catch (const std::exception& e) {
+        fprintf(stderr, "\n[Phase2] FATAL: Training step attempted with accumulation_slot=%d outside accum_steps=%d\n",
+                optimizer.accumulationSlot(), accum_steps);
         fprintf(stderr, "[Phase2] batch=%d global_step=%d\n", batch_idx + 1, global_step);
-        fprintf(stderr, "[Phase2] This indicates accumulation_position was not reset after optimizer step.\n");
+        fprintf(stderr, "[Phase2] %s\n", e.what());
         std::abort();
     }
 }
 
 bool shouldAccumulateGradients(const OptimizerContext& optimizer) {
-    return optimizer.accumulation_position > 0;
+    return optimizer.shouldAccumulateGradients();
 }
 
 bool advanceAccumulationOrThrow(
     OptimizerContext& optimizer,
     int accum_steps)
 {
-    if (accum_steps <= 0) {
-        throw std::runtime_error("FATAL: accum_steps must be > 0 when advancing accumulation");
-    }
-    if (optimizer.accumulation_position < 0 || optimizer.accumulation_position >= accum_steps) {
-        throw std::runtime_error("FATAL: accumulation_position out of range before accumulation advance");
-    }
-
-    optimizer.accumulation_position++;
-    return optimizer.accumulation_position >= accum_steps;
-}
-
-void completeOptimizerStep(OptimizerContext& optimizer) {
-    optimizer.accumulation_position = 0;
-    optimizer.optimizer_step.step++;
+    return optimizer.completeAccumulationSlot(accum_steps);
 }
 
 } // namespace
@@ -329,8 +319,8 @@ BatchResult processBatch(
             " — scheduler produced batch_size=0; fix the upstream filter");
     }
 
-    // beginBatch() must run EVERY batch to clear previous entries; otherwise
-    // micro-batches 1+ inherit stale entries.
+    // beginBatch() must run EVERY BatchPayload pass to clear previous entries;
+    // otherwise accumulation slots 1+ inherit stale entries.
     GRIM::GradStats::beginBatch();
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After BATCH_INFO log, checking shouldLogAtomStats...\n");
@@ -348,7 +338,7 @@ BatchResult processBatch(
 
     validateAccumulationPositionBeforeBackward(ctx.optimizer, accum_steps, batch_idx, ctx.global_step);
 
-    // Issue #22: first micro-batch overwrites (accumulate=false), rest accumulate.
+    // Issue #22: first accumulation slot overwrites (accumulate=false), rest accumulate.
     const bool should_accumulate = shouldAccumulateGradients(ctx.optimizer);
 
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call autogradTrainingStep...\n");
@@ -481,12 +471,12 @@ BatchResult processBatch(
 
     // Issue #135: gradient clipping is DEFERRED to post-accumulation (inside
     // should_step block). Clipping ONCE on the averaged gradients matches
-    // PyTorch; the old per-micro-batch clipping crushed text gradients M×.
+    // PyTorch; the old per-slot clipping crushed text gradients M×.
     const auto clipping_hp = ::GRIM::HyperParameters::gradientClippingHP(hp);
     const float effective_per_token_limit = clipping_hp.effective_per_token_limit;
     const bool clipping_enabled = clipping_hp.enabled;
 
-    // LR: index by optimizer step (NOT global_step). global_step is per-micro-batch;
+    // LR: index by optimizer step (NOT global_step). global_step is per BatchPayload pass;
     // using it advances warmup/decay accum_steps times too fast.
     const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
     if (!ctx.lr_schedule) {
@@ -538,13 +528,6 @@ BatchResult processBatch(
     const bool should_step = advanceAccumulationOrThrow(ctx.optimizer, accum_steps);
 
     if (should_step) {
-        if (ctx.optimizer.accumulation_position != accum_steps) {
-            throw std::runtime_error(
-                "FATAL: optimizer step requested before accumulation window completed (completed=" +
-                std::to_string(ctx.optimizer.accumulation_position) + " required=" +
-                std::to_string(accum_steps) + ")");
-        }
-        
         // Global clipping on accumulated + 1/M-scaled gradients.
         // Norm measurement, global aggregation, and gradient scaling all happen
         // inside GradientCC against the registered ParameterGroup tensors.
@@ -642,7 +625,7 @@ BatchResult processBatch(
         GRIM::Diagnostics::runPostOptimizerWeightTrace(
             ctx, result, pre_sample, batch_idx, sync_diag);
 
-        completeOptimizerStep(ctx.optimizer);
+        ctx.optimizer.completeOptimizerStepAfterFullAccumulationWindow(accum_steps);
     }
     
     // Rule 20: an async CUDA error here means a kernel launch faulted earlier

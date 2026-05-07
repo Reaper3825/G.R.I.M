@@ -24,7 +24,7 @@
 //    global_step:    int32   = training batch counter
 //    best_val_loss:  float32 = best validation loss seen
 //    current_epoch:  int32   = epochs completed so far
-//    accumulation_position: int32 = gradient accumulation position
+//    accumulation_slot: int32 = accumulation-slot cursor
 //    reserved:       uint8[32] = zero (future expansion)
 //
 //  [Per-group directory] (num_groups entries)
@@ -77,7 +77,7 @@ std::string optimizerSidecarPath(const std::string& checkpoint_path);
  * @brief Save optimizer state to a binary sidecar file.
  *
  * Writes AdamW moment buffers (m, v), step counter, global_step,
- * best_val_loss, epochs_completed, and accumulation_position.
+ * best_val_loss, epochs_completed, and the accumulation-slot cursor.
  *
  * GPU tensors are downloaded to host via cudaMemcpy before writing.
  *
@@ -91,7 +91,7 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
  * @brief Load optimizer state from a binary sidecar file.
  *
  * Restores AdamW moment buffers (m, v), step counter, global_step,
- * best_val_loss, epochs_completed, and accumulation_position.
+ * best_val_loss, epochs_completed, and the accumulation-slot cursor.
  *
  * Validates that the sidecar matches the current model parameter groups
  * (count, names, sizes). Mismatches throw std::runtime_error.
