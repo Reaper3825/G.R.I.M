@@ -37,6 +37,19 @@ namespace Forward {
     } \
 } while(0)
 
+namespace {
+
+const char* modeName(ModelForwardMode mode) {
+    switch (mode) {
+    case ModelForwardMode::TrainingGraph: return "training_graph";
+    case ModelForwardMode::EvalNoGrad: return "eval_no_grad";
+    case ModelForwardMode::InferencePrefill: return "inference_prefill";
+    }
+    throw std::runtime_error("ModelForward: unknown ModelForwardMode");
+}
+
+}  // namespace
+
 void ModelForwardRequest::validate(const char* caller) const {
     if (!config) throw std::runtime_error(std::string(caller) + ": config is NULL");
     if (!runtime_state) throw std::runtime_error(std::string(caller) + ": runtime_state is NULL");
@@ -77,6 +90,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     const auto* bindings = request.bindings;
     const auto& payload = *request.payload;
     const bool is_training = request.trainingGraph();
+    const bool preserve_layer_intermediates = request.preservesLayerIntermediates();
 
     const int total_tokens = payload.total_tokens;
     result.total_tokens = total_tokens;
@@ -84,7 +98,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
 
     MFWD_INFO("forward: batch=" << request.batch_size << " seq=" << request.seq_len
               << " tokens=" << total_tokens << " vocab=" << payload.vocab_size
-              << " mode=" << (is_training ? "training_graph" : "eval_no_grad"));
+              << " mode=" << modeName(request.mode));
 
     autograd::set_autograd_cublas_handle(request.cublas_handle);
 
@@ -187,6 +201,9 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     if (!is_training) {
         ForwardIntermediates no_grad_layer_storage;
         Tensor running;
+        if (preserve_layer_intermediates) {
+            intermediates.layer_intermediates.layers.reserve(num_layers);
+        }
         MFWD_INFO("Step 2: Running " << num_layers << " encoder layers (no_grad)...");
 
         for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
@@ -201,13 +218,22 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                         std::to_string(layer_idx - 1) + ": " + cudaGetErrorString(sync_err));
                 }
             }
-            no_grad_layer_storage.clear();
-            Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
-            running = enc_layer->forward(layer_input, payload, request.stream, no_grad_layer_storage, request.step, layer_idx);
 
-            Tensor owned = Tensor::empty(running.shape, false, request.stream, "no_grad_layer_output");
-            const size_t bytes = static_cast<size_t>(running.shape.total_elements()) * sizeof(float);
-            cudaError_t cp_err = cudaMemcpyAsync(owned.data, running.data, bytes, cudaMemcpyDeviceToDevice, request.stream);
+            ForwardIntermediates* layer_storage = nullptr;
+            if (preserve_layer_intermediates) {
+                intermediates.layer_intermediates.layers.emplace_back();
+                layer_storage = &intermediates.layer_intermediates.layers.back();
+            } else {
+                no_grad_layer_storage.clear();
+                layer_storage = &no_grad_layer_storage;
+            }
+
+            Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
+            Tensor layer_output_view = enc_layer->forward(layer_input, payload, request.stream, *layer_storage, request.step, layer_idx);
+
+            Tensor owned = Tensor::empty(layer_output_view.shape, false, request.stream, "no_grad_layer_output");
+            const size_t bytes = static_cast<size_t>(layer_output_view.shape.total_elements()) * sizeof(float);
+            cudaError_t cp_err = cudaMemcpyAsync(owned.data, layer_output_view.data, bytes, cudaMemcpyDeviceToDevice, request.stream);
             if (cp_err != cudaSuccess) {
                 throw std::runtime_error("ModelForward(no_grad): copy layer output failed: " +
                     std::string(cudaGetErrorString(cp_err)));

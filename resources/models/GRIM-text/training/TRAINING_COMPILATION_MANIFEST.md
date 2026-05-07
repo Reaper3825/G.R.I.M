@@ -387,9 +387,9 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `FWD_ERROR` macro — only 2 usages, both replaced by the throw
   - No stale code, no dead functions. All 4 public methods have callers ✅
 
-- [x] **Inference_GPU.cu** ✅ AUDITED & FIXED (269→259 lines)
-  - Inference-mode forward pass via autograd (not legacy kernels)
-  - `executeInferenceForward()` (static): creates AutogradContext, calls `executeAutogradForward`, returns last-token logits
+- [x] **Inference_GPU.cu** ✅ AUDITED & FIXED (phase-2 boundary split)
+  - Inference-mode prefill enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardMode::InferencePrefill`; it no longer creates `AutogradContext` or calls `executeAutogradForward()`.
+  - `executeInferenceForward_()`: builds explicit `BatchDeviceBindings` + geometry-only `BatchPayload`, runs shared forward, returns last-token logits, and copies preserved per-layer K/V tensors into `GenerationState` KV cache before clearing intermediates.
   - `forwardInit()`: Prefill phase — copies prompt tokens to device, runs full forward
   - `forwardStep()`: Decode phase — appends token, recomputes FULL sequence (O(n²), no KV cache optimization)
   - `forwardWithCache()`: Full sequence forward, returns last-token hidden states (encoder output)

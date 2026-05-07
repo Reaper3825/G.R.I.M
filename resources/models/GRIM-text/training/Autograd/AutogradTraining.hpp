@@ -124,7 +124,7 @@ struct AutogradContext {
     // BATCH PARAMETERS
     // Training/eval only: payload points to the caller-owned BatchPayload
     // (single source of truth). Inference MUST NOT enter AutogradContext;
-    // use Shared/Forward/InferenceForward_GPU.hpp instead.
+    // use Shared/Forward/ModelForward_GPU.hpp with ModelForwardMode::InferencePrefill instead.
     // payload is NEVER null after the training/eval initAutogradContext overload.
     //
     // device_bindings carries the device pointers for THIS step (slot map,

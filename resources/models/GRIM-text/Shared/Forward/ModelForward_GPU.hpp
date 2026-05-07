@@ -2,7 +2,7 @@
 //  ModelForward_GPU.hpp
 //  Shared full-model forward primitive
 //
-//  Phase 2a of the inference/training split:
+//  Phase 2 of the inference/training split:
 //  - Shared forward code takes a mode-explicit request.
 //  - Training/autograd owns AutogradContext, loss, backward, optimizer.
 //  - This boundary consumes explicit BatchDeviceBindings; it never
@@ -40,7 +40,8 @@ namespace Forward {
 
 enum class ModelForwardMode {
     TrainingGraph,
-    EvalNoGrad
+    EvalNoGrad,
+    InferencePrefill
 };
 
 struct ModelForwardResult {
@@ -72,6 +73,7 @@ struct ModelForwardRequest {
     ModelForwardMode mode = ModelForwardMode::TrainingGraph;
 
     bool trainingGraph() const { return mode == ModelForwardMode::TrainingGraph; }
+    bool preservesLayerIntermediates() const { return mode == ModelForwardMode::InferencePrefill; }
     void validate(const char* caller) const;
 };
 

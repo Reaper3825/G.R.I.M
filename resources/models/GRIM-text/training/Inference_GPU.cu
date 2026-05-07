@@ -1,6 +1,6 @@
 //======================================================//
 //  Inference_GPU.cu
-//  Inference using autograd forward pass
+//  Inference using the shared mode-explicit forward primitive
 //  
 //  Single inference entry point: executeInferenceForward_()
 //  All public inference methods copy data to cached_* tensors
@@ -19,7 +19,7 @@
 #include <stdexcept>
 
 #include "../GRIM/grim_language_model_cuda.hpp"
-#include "../Shared/Forward/InferenceForward_GPU.hpp"
+#include "../Shared/Forward/ModelForward_GPU.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/TensorConversion/TensorConversion.hpp"
@@ -182,12 +182,36 @@ Batching::BatchDeviceBindings buildInferencePrefillBindings(TrainingState& ts, i
     return bindings;
 }
 
+Batching::BatchPayload buildInferenceGeometryPayload(
+    const HyperParameters::LanguageModelConfig& cfg,
+    int seq_len) {
+    if (seq_len <= 0) {
+        throw std::runtime_error("buildInferenceGeometryPayload: seq_len <= 0");
+    }
+
+    Batching::BatchPayload payload;
+    payload.batch_size = 1;
+    payload.max_seq_len = seq_len;
+    payload.total_tokens = seq_len;
+    payload.actual_tokens = seq_len;
+    payload.padding_tokens = 0;
+    payload.valid_tokens = seq_len;
+    payload.lm_valid_tokens = seq_len;
+    payload.vocab_size = cfg.vocab_size;
+    payload.seq_lengths.assign(1, seq_len);
+    payload.valid_target_counts.assign(1, seq_len);
+    payload.min_seq_len = seq_len;
+    payload.packing_efficiency = 1.0f;
+    payload.fits_in_cache = true;
+    return payload;
+}
+
 }  // namespace
 
 //======================================================//
 //  executeInferenceForward_ - THE single inference forward path
 //  Assumes all data already in cached_* tensors.
-//  Creates autograd context, runs forward, returns last-token logits.
+//  Builds an explicit inference prefill request, runs forward, returns last-token logits.
 //  When populate_kv_cache=true, extracts per-layer K,V from autograd
 //  intermediates and converts to BF16 BSHD format in KV cache buffers.
 //======================================================//
@@ -203,7 +227,9 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
     Batching::BatchDeviceBindings bindings = buildInferencePrefillBindings(training_state_, seq_len);
-    Forward::InferenceForwardRequest request{};
+    Batching::BatchPayload payload = buildInferenceGeometryPayload(config_, seq_len);
+
+    Forward::ModelForwardRequest request{};
     request.config = &config_;
     request.runtime_state = &training_state_;
     request.gpu_encoder = &getGpuEncoder();
@@ -214,12 +240,14 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
     request.execution_block = getExecutionBlockLayer();
     request.cublas_handle = training_state_.cublas_handle;
     request.stream = stream;
+    request.payload = &payload;
     request.bindings = &bindings;
     request.batch_size = 1;
     request.seq_len = seq_len;
     request.step = 0;
+    request.mode = Forward::ModelForwardMode::InferencePrefill;
 
-    Forward::InferenceForwardResult result = Forward::executeInferencePrefillForward(request);
+    Forward::ModelForwardResult result = Forward::executeModelForward(request);
     if (!result.success) {
         throw std::runtime_error("executeInferenceForward_: forward failed - " + result.error_message);
     }
@@ -259,6 +287,13 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
         const int head_dim = kv_shape.head_dim;
         const auto& layers = training_state_.autograd_intermediates.layer_intermediates.layers;
         const int num_layers = static_cast<int>(layers.size());
+
+        if (num_layers != kv_shape.num_layers) {
+            throw std::runtime_error(
+                "executeInferenceForward_: KV prefill expected " + std::to_string(kv_shape.num_layers) +
+                " layer intermediate snapshots but ModelForward produced " + std::to_string(num_layers) +
+                " — InferencePrefill mode MUST preserve per-layer K/V tensors until KV copy completes");
+        }
 
         for (int i = 0; i < num_layers; ++i) {
             const auto& layer_ints = layers[i];
