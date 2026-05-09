@@ -25,6 +25,7 @@ constexpr auto kRegistrationModule = GRIM::Logging::ModuleId::Training;
 
 using GRIM::LanguageModel;
 using GRIM::ParameterGroup;
+using GRIM::ParamStatsBucket;
 using GRIM::ParamGroupType;
 using GRIM::Tensor;
 using GRIM::HyperParameters::ParameterRegistrationHP;
@@ -63,11 +64,16 @@ public:
     void addTensor(const std::string& name,
                    Tensor& tensor,
                    ParamGroupType type,
+                   ParamStatsBucket stats_bucket,
                    int layer = -1,
                    float wd_mult = 1.0f,
                    float lr_mult = 1.0f) {
         if (!tensor.data || !tensor.has_grad() || tensor.numel() == 0) {
             throwUntrainableTensor(name, tensor, layer);
+        }
+        if (stats_bucket == ParamStatsBucket::COUNT) {
+            throw std::runtime_error("[buildParameterGroups] " + name +
+                                     " has invalid ParamStatsBucket::COUNT");
         }
         const void* data_ptr = static_cast<const void*>(tensor.data);
         if (!registered_data_.insert(data_ptr).second) {
@@ -82,6 +88,7 @@ public:
         group.m_tensor = nullptr;
         group.v_tensor = nullptr;
         group.type = type;
+        group.stats_bucket = stats_bucket;
         group.layer_index = layer;
         group.weight_decay_multiplier = wd_mult;
         group.lr_multiplier = lr_mult;
@@ -96,18 +103,20 @@ public:
     void addNonDecayTensor(const std::string& name,
                            Tensor& tensor,
                            ParamGroupType type,
+                           ParamStatsBucket stats_bucket,
                            int layer = -1) {
-        addTensor(name, tensor, type, layer, 0.0f);
+        addTensor(name, tensor, type, stats_bucket, layer, 0.0f);
     }
 
     void addConfigGatedNonDecayTensor(const std::string& name,
                                       Tensor& tensor,
                                       ParamGroupType type,
+                                      ParamStatsBucket stats_bucket,
                                       int layer,
                                       bool enabled,
                                       const char* disabled_reason) {
         if (enabled) {
-            addNonDecayTensor(name, tensor, type, layer);
+            addNonDecayTensor(name, tensor, type, stats_bucket, layer);
             return;
         }
 
@@ -151,14 +160,25 @@ void registerTopLevelParameters(LanguageModel& model,
     validateEmbeddingLmHeadAliasing(embedding.tokenWeights(), lm_head.weights(), hp);
 
     if (hp.register_untied_embedding) {
-        registrar.addTensor("embedding", embedding.tokenWeights(), ParamGroupType::EMBEDDING);
-    }
+        registrar.addTensor("embedding",
+                            embedding.tokenWeights(),
+                            ParamGroupType::EMBEDDING,
+                            ParamStatsBucket::EMBEDDING);
 
-    const std::string lm_name = hp.register_untied_embedding ? "lm_head_weight" : "embedding_lm_head_tied";
-    registrar.addTensor(lm_name, lm_head.weights(), ParamGroupType::LM_HEAD);
+        registrar.addTensor("lm_head_weight",
+                            lm_head.weights(),
+                            ParamGroupType::LM_HEAD,
+                            ParamStatsBucket::LM_HEAD);
+    } else {
+        registrar.addTensor("embedding_lm_head_tied",
+                            lm_head.weights(),
+                            ParamGroupType::LM_HEAD,
+                            ParamStatsBucket::EMBEDDING);
+    }
     registrar.addConfigGatedNonDecayTensor("lm_head_bias",
                                            lm_head.bias(),
                                            ParamGroupType::LM_HEAD,
+                                           ParamStatsBucket::LM_HEAD,
                                            -1,
                                            hp.register_lm_head_bias,
                                            "config.use_bias=false");
@@ -178,43 +198,76 @@ void registerEncoderParameters(LanguageModel& model,
 
         const std::string prefix = "layer" + std::to_string(layer);
 
-        registrar.addTensor(prefix + "_qkv_weight", enc->attnWqkv(), ParamGroupType::ATTENTION, layer);
+        registrar.addTensor(prefix + "_qkv_weight",
+                    enc->attnWqkv(),
+                    ParamGroupType::ATTENTION,
+                    ParamStatsBucket::ENCODER,
+                    layer);
         registrar.addConfigGatedNonDecayTensor(prefix + "_qkv_bias",
                                                enc->attnBqkv(),
                                                ParamGroupType::ATTENTION,
+                               ParamStatsBucket::ENCODER,
                                                layer,
                                                hp.register_encoder_biases,
                                                "config.use_bias=false");
-        registrar.addTensor(prefix + "_wo_weight", enc->attnWo(), ParamGroupType::ATTENTION, layer);
+        registrar.addTensor(prefix + "_wo_weight",
+                    enc->attnWo(),
+                    ParamGroupType::ATTENTION,
+                    ParamStatsBucket::ENCODER,
+                    layer);
         registrar.addConfigGatedNonDecayTensor(prefix + "_wo_bias",
                                                enc->attnBo(),
                                                ParamGroupType::ATTENTION,
+                               ParamStatsBucket::ENCODER,
                                                layer,
                                                hp.register_encoder_biases,
                                                "config.use_bias=false");
 
-        registrar.addTensor(prefix + "_ffn_w_gate", enc->ffnWGate(), ParamGroupType::FFN, layer);
-        registrar.addTensor(prefix + "_ffn_w1", enc->ffnW1(), ParamGroupType::FFN, layer);
-        registrar.addTensor(prefix + "_ffn_w2", enc->ffnW2(), ParamGroupType::FFN, layer);
+        registrar.addTensor(prefix + "_ffn_w_gate",
+                    enc->ffnWGate(),
+                    ParamGroupType::FFN,
+                    ParamStatsBucket::ENCODER,
+                    layer);
+        registrar.addTensor(prefix + "_ffn_w1",
+                    enc->ffnW1(),
+                    ParamGroupType::FFN,
+                    ParamStatsBucket::ENCODER,
+                    layer);
+        registrar.addTensor(prefix + "_ffn_w2",
+                    enc->ffnW2(),
+                    ParamGroupType::FFN,
+                    ParamStatsBucket::ENCODER,
+                    layer);
         registrar.addConfigGatedNonDecayTensor(prefix + "_ffn_b2",
                                                enc->ffnB2(),
                                                ParamGroupType::FFN,
+                               ParamStatsBucket::ENCODER,
                                                layer,
                                                hp.register_encoder_biases,
                                                "config.use_bias=false");
 
-        registrar.addNonDecayTensor(prefix + "_rms1_gamma", enc->rms1Gamma(), ParamGroupType::RMSNORM, layer);
-        registrar.addNonDecayTensor(prefix + "_rms2_gamma", enc->rms2Gamma(), ParamGroupType::RMSNORM, layer);
+        registrar.addNonDecayTensor(prefix + "_rms1_gamma",
+                        enc->rms1Gamma(),
+                        ParamGroupType::RMSNORM,
+                        ParamStatsBucket::ENCODER,
+                        layer);
+        registrar.addNonDecayTensor(prefix + "_rms2_gamma",
+                        enc->rms2Gamma(),
+                        ParamGroupType::RMSNORM,
+                        ParamStatsBucket::ENCODER,
+                        layer);
 
         registrar.addConfigGatedNonDecayTensor(prefix + "_layer_scale1",
                                                enc->layerScale1(),
                                                ParamGroupType::RMSNORM,
+                               ParamStatsBucket::ENCODER,
                                                layer,
                                                hp.register_layer_scale,
                                                "config.use_layer_scale=false");
         registrar.addConfigGatedNonDecayTensor(prefix + "_layer_scale2",
                                                enc->layerScale2(),
                                                ParamGroupType::RMSNORM,
+                               ParamStatsBucket::ENCODER,
                                                layer,
                                                hp.register_layer_scale,
                                                "config.use_layer_scale=false");
@@ -243,12 +296,14 @@ void registerScratchBlockParameters(LanguageModel& model,
     auto& atom_type_embeddings = scratch_block->atomTypeEmbeddings();
     registrar.addTensor("scratch_block_atom_type_embeddings",
                         atom_type_embeddings,
-                        ParamGroupType::SCRATCHBLOCK);
+                        ParamGroupType::SCRATCHBLOCK,
+                        ParamStatsBucket::ENCODER);
 
     auto& atom_projection = scratch_block->atomProjection();
     registrar.addTensor("scratch_block_atom_projection",
                         atom_projection,
-                        ParamGroupType::SCRATCHBLOCK);
+                        ParamGroupType::SCRATCHBLOCK,
+                        ParamStatsBucket::ENCODER);
 }
 
 void registerReasoningHeadParameters(LanguageModel& model,
@@ -264,10 +319,10 @@ void registerReasoningHeadParameters(LanguageModel& model,
     }
 
     auto& head = requireLayer(reasoning_head, "ReasoningHeadLayer", "registerReasoningHeadParameters");
-    registrar.addTensor("reasoning_head_w_op", head.W_op(), ParamGroupType::REASONING_HEAD);
-    registrar.addNonDecayTensor("reasoning_head_b_op", head.b_op(), ParamGroupType::REASONING_HEAD);
-    registrar.addTensor("reasoning_head_w_arg1", head.w_arg1(), ParamGroupType::REASONING_HEAD);
-    registrar.addTensor("reasoning_head_w_arg2", head.w_arg2(), ParamGroupType::REASONING_HEAD);
+    registrar.addTensor("reasoning_head_w_op", head.W_op(), ParamGroupType::REASONING_HEAD, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("reasoning_head_b_op", head.b_op(), ParamGroupType::REASONING_HEAD, ParamStatsBucket::ENCODER);
+    registrar.addTensor("reasoning_head_w_arg1", head.w_arg1(), ParamGroupType::REASONING_HEAD, ParamStatsBucket::ENCODER);
+    registrar.addTensor("reasoning_head_w_arg2", head.w_arg2(), ParamGroupType::REASONING_HEAD, ParamStatsBucket::ENCODER);
 }
 
 void registerExecutionBlockParameters(LanguageModel& model,
@@ -287,36 +342,36 @@ void registerExecutionBlockParameters(LanguageModel& model,
     }
 
     auto& block = requireLayer(execution_block, "ExecutionBlockLayer", "registerExecutionBlockParameters");
-    registrar.addTensor("exec_block_w_decode_1", block.w_decode_1(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addNonDecayTensor("exec_block_b_decode_1", block.b_decode_1(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_w_decode_2", block.w_decode_2(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_w_arg1_select", block.w_arg1_select(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_w_arg2_select", block.w_arg2_select(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_op_select", block.W_op_select(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_key_proj", block.W_key_proj(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_write_query", block.W_write_query(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_write_key", block.W_write_key(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addNonDecayTensor("exec_block_alpha", block.alpha(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addNonDecayTensor("exec_block_beta", block.beta(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_step_embeddings", block.step_embeddings(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_type_num_embed", block.type_num_embed(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_value_to_emb", block.W_value_to_emb(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addNonDecayTensor("exec_block_b_value_to_emb", block.b_value_to_emb(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_w_inject_gate", block.w_inject_gate(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_Q_read", block.W_Q_read(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_K_read", block.W_K_read(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_V_read", block.W_V_read(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_O_read", block.W_O_read(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_gate_read", block.W_gate_read(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addNonDecayTensor("exec_block_tau", block.tau(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_E_slot", block.E_slot(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_E_op", block.E_op(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_scal", block.W_scal(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addNonDecayTensor("exec_block_b_scal", block.b_scal(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_trace", block.W_trace(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addNonDecayTensor("exec_block_b_trace", block.b_trace(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_reason_gate", block.W_reason_gate(), ParamGroupType::EXECUTION_BLOCK);
-    registrar.addTensor("exec_block_W_trace_gate", block.W_trace_gate(), ParamGroupType::EXECUTION_BLOCK);
+    registrar.addTensor("exec_block_w_decode_1", block.w_decode_1(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("exec_block_b_decode_1", block.b_decode_1(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_w_decode_2", block.w_decode_2(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_w_arg1_select", block.w_arg1_select(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_w_arg2_select", block.w_arg2_select(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_op_select", block.W_op_select(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_key_proj", block.W_key_proj(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_write_query", block.W_write_query(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_write_key", block.W_write_key(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("exec_block_alpha", block.alpha(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("exec_block_beta", block.beta(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_step_embeddings", block.step_embeddings(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_type_num_embed", block.type_num_embed(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_value_to_emb", block.W_value_to_emb(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("exec_block_b_value_to_emb", block.b_value_to_emb(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_w_inject_gate", block.w_inject_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_Q_read", block.W_Q_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_K_read", block.W_K_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_V_read", block.W_V_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_O_read", block.W_O_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_gate_read", block.W_gate_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("exec_block_tau", block.tau(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_E_slot", block.E_slot(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_E_op", block.E_op(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_scal", block.W_scal(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("exec_block_b_scal", block.b_scal(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_trace", block.W_trace(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("exec_block_b_trace", block.b_trace(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_reason_gate", block.W_reason_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    registrar.addTensor("exec_block_W_trace_gate", block.W_trace_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
 
     if (!hp.register_slot_selector) {
         if (slot_selector) {
@@ -326,10 +381,10 @@ void registerExecutionBlockParameters(LanguageModel& model,
     }
 
     auto& selector = requireLayer(slot_selector, "DecodeTimeSlotSelectorLayer", "registerExecutionBlockParameters");
-    registrar.addTensor("selector_W_q_select", selector.W_q_select(), ParamGroupType::SLOT_SELECTOR);
-    registrar.addTensor("selector_W_k_select", selector.W_k_select(), ParamGroupType::SLOT_SELECTOR);
-    registrar.addTensor("selector_null_key_select", selector.null_key_select(), ParamGroupType::SLOT_SELECTOR);
-    registrar.addNonDecayTensor("selector_null_logit_bias", selector.null_logit_bias(), ParamGroupType::SLOT_SELECTOR);
+    registrar.addTensor("selector_W_q_select", selector.W_q_select(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
+    registrar.addTensor("selector_W_k_select", selector.W_k_select(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
+    registrar.addTensor("selector_null_key_select", selector.null_key_select(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
+    registrar.addNonDecayTensor("selector_null_logit_bias", selector.null_logit_bias(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
 }
 
 void registerMtpParameters(LanguageModel& model,
@@ -354,10 +409,12 @@ void registerMtpParameters(LanguageModel& model,
         }
         registrar.addTensor("mtp_head_" + std::to_string(k) + "_weight",
                             head->weight,
-                            ParamGroupType::MTP);
+                    ParamGroupType::MTP,
+                    ParamStatsBucket::ENCODER);
         registrar.addNonDecayTensor("mtp_head_" + std::to_string(k) + "_bias",
                                     head->bias,
-                                    ParamGroupType::MTP);
+                        ParamGroupType::MTP,
+                        ParamStatsBucket::ENCODER);
     }
 
     if (model.getMtpHead(hp.mtp_k)) {
@@ -382,6 +439,7 @@ void registerFinalRmsGamma(LanguageModel& model,
     registrar.addTensor("final_rms_gamma",
                         lm_head.finalRmsGammaMutable_UnfrozenOnly("ParameterGroupRegistration::buildParameterGroups"),
                         ParamGroupType::RMSNORM,
+                        ParamStatsBucket::LM_HEAD,
                         -1,
                         1.0f,
                         0.1f);

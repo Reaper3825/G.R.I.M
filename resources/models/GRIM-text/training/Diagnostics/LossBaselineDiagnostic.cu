@@ -2,7 +2,7 @@
 //  LossBaselineDiagnostic.cu
 //  Adaptive loss baseline tracking + invalid-token
 //  validation. Originally inline in Phase2_TrainingLoop.cu
-//  processBatch (after runLossSpikeDiagnostic).
+//  processBatch.
 //======================================================//
 
 #include "LossBaselineDiagnostic.hpp"
@@ -103,11 +103,9 @@ void runLossBaselineAndTokenValidation(
             ") — fix data pipeline at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
 
-    // High-loss detection for this batch is owned solely by
-    // runLossSpikeDiagnostic (Diagnostics/LossSpikeDiagnostic.cu), which emits
-    // the per-sequence breakdown. Do NOT add a second [LossMonitor] HIGH_LOSS
-    // log line here — it was redundant with the spike diagnostic and triggered
-    // on the same condition (loss > initial * multiplier).
+    // Train-loss spike detection is owned by TelemetryLattice. Do NOT add a
+    // second [LossMonitor] HIGH_LOSS log line here — duplicate scalar spike
+    // paths drift from the telemetry-owned definition.
     (void)loss;
 }
 

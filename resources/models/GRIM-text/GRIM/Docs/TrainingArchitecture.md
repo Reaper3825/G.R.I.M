@@ -11,3 +11,5 @@ Entry point: `train_gpu.cu` → `executePhase1()` → `executePhase2()` → `exe
 **Edit the phase file**, never `train_gpu.cu`, when modifying training logic.
 
 Startup model tensor registration lives in `training/Phases/Startup/Model/ParameterGroupRegistration.{hpp,cu}`. `LanguageModel` still owns the durable `parameter_groups_` vector and parameter tensors; the startup module only discovers trainable tensors, records non-owning `ParameterGroup` metadata, and binds optimizer moment tensors owned by `OptimizerState`.
+
+`LanguageModel::getModelStats()` lives in `Common/ModelStats.cu`. It reads the model-owned `parameter_groups_` inventory after startup registration and must classify counts from explicit `ParamStatsBucket` metadata written by `ParameterGroupRegistration`. It must not estimate parameter counts from config formulas, compare raw tensor pointers, or re-slice hyperparameters.

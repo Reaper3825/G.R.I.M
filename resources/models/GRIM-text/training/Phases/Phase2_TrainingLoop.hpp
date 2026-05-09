@@ -123,7 +123,7 @@ struct TrainingLoopState {
     bool shuffle_window_exhausted_notified = false;
     
     // Auto-stop tracking. Plateau is local (best-so-far improvement gap);
-    // high-loss patience is owned by GRIM::Loss::LossSignalBus.
+    // validation high-loss patience is owned by GRIM::Loss::LossSignalBus.
     int plateau_epochs_without_improvement = 0;
     
     // Prediction comparison counter
@@ -136,13 +136,9 @@ struct TrainingLoopState {
     // does not interpret or mutate individual diagnostic fields directly.
     DiagnosticsState diagnostics;
 
-    // Central loss-signal detector. Owns ALL loss-spike detection state
-    // (initial_loss baseline, EWMA mean/var, prev_step_loss,
-    // last_validation_loss, plateau / high-loss patience counters) so that
-    // LossSpikeDiagnostic, SoftRestart, and Phase3 epoch finalization share a
-    // single canonical definition. Constructed in executePhase2
-    // from TrainingContext::config.hyperparameters.loss_signals; never null
-    // after Phase2 enters the loop.
+    // Validation high-loss patience detector. Train-loss spike/EWMA
+    // measurement is owned by TelemetryLattice. Constructed in executePhase2;
+    // never null after Phase2 enters the loop.
     std::unique_ptr<GRIM::Loss::LossSignalBus> loss_signals;
 
     ~TrainingLoopState();

@@ -719,6 +719,13 @@ enum class ParamGroupType : uint8_t {
     COUNT = 10          ///< Number of parameter group types
 };
 
+enum class ParamStatsBucket : uint8_t {
+    EMBEDDING = 0,  ///< Counts under LanguageModel::ModelStats::embedding_params
+    ENCODER = 1,    ///< Counts under LanguageModel::ModelStats::encoder_params
+    LM_HEAD = 2,    ///< Counts under LanguageModel::ModelStats::lm_head_params
+    COUNT = 3       ///< Invalid sentinel; registration must never leave this value
+};
+
 //======================================================//
 //  Parameter Group (Weights + Gradients + Optimizer State)
 //======================================================//
@@ -747,6 +754,7 @@ struct ParameterGroup {
     Tensor* m_tensor = nullptr;  ///< Adam first moment Tensor (nullptr until optimizer init)
     Tensor* v_tensor = nullptr;  ///< Adam second moment Tensor (nullptr until optimizer init)
     ParamGroupType type;     ///< Category for optimizer and analysis
+    ParamStatsBucket stats_bucket = ParamStatsBucket::COUNT;  ///< Explicit ModelStats accounting bucket
     int layer_index = -1;    ///< Encoder layer index (0-based), -1 for non-layer params
     float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
     float weight_decay_multiplier = 1.0f;  ///< 0.0 for biases/norms (no weight decay), 1.0 for weights

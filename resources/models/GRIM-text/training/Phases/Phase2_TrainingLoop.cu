@@ -431,19 +431,6 @@ BatchResult processBatch(
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));
     }
 
-    // Publish this batch's loss to the central detector before consumers read
-    // the canonical loss-signal state.
-    state.loss_signals->recordTrainStep(
-        static_cast<int64_t>(ctx.global_step), result.loss);
-    
-    // ========================================================================
-    // DIAGNOSTIC: Per-sequence breakdown when batch loss spikes far above
-    // the captured baseline (initial) loss.
-    // (extracted to Diagnostics/LossSpikeDiagnostic.cu)
-    // ========================================================================
-    GRIM::Diagnostics::runLossSpikeDiagnostic(ctx, payload, result.loss, batch_idx,
-                                              *state.loss_signals);
-
     // ========================================================================
     // Adaptive loss baseline tracking + invalid-token validation
     // (extracted to Diagnostics/LossBaselineDiagnostic.cu)
@@ -813,10 +800,8 @@ bool executePhase2(TrainingContext& ctx) {
     // Initialize loop state
     TrainingLoopState state;
 
-    // Construct the central loss-signal detector. Phase3 epoch finalization
-    // owns validation high-loss policy reads.
-    // Other thresholds stay defaulted; task 7 plumbs the full ai_config.json
-    // "loss_signals" block through HyperParameters.
+    // Construct the validation high-loss policy detector. Train-loss
+    // spike/EWMA tracking is owned by TelemetryLattice.
     {
         GRIM::Loss::LossSignalConfig sig_cfg{};
         sig_cfg.validation_high_threshold = hp.auto_stop_high_loss_threshold;

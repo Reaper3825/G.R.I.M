@@ -281,6 +281,7 @@ target_link_libraries(grim_cuda_kernels PUBLIC
 # Language model GPU implementation object library
 add_library(grim_language_model_gpu_impl OBJECT
     ../../Common/grim_language_model_gpu.cu
+    ../../Common/ModelStats.cu
     ../../Common/ScaleBuffer.cu
     ../../Layers/Attention/QKV_Projector.cu  # Moved from grim_cuda_kernels — depends on TensorConversion (this library)
     ../Inference_GPU.cu
@@ -449,8 +450,6 @@ add_executable(train_gpu
     ../Diagnostics/SpecialTokenDiagnostic.hpp
     ../Diagnostics/AtomStatsDiagnostic.cu
     ../Diagnostics/AtomStatsDiagnostic.hpp
-    ../Diagnostics/LossSpikeDiagnostic.cu
-    ../Diagnostics/LossSpikeDiagnostic.hpp
     ../Diagnostics/LossBaselineDiagnostic.cu
     ../Diagnostics/LossBaselineDiagnostic.hpp
     ../Diagnostics/LossStatsDiagnostic.cu

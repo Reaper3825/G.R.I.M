@@ -185,13 +185,9 @@ void launchAdamWStep(std::vector<ParameterGroup>& groups,
 
     for (size_t i = 0; i < groups.size(); ++i) {
         auto& group = groups[i];
-        if (!group.weights() || !group.grads() || group.size() == 0) continue;
+		if (!group.weights() || !group.grads() || group.size() == 0) continue;
 
-        // When tie_embeddings=true, no EMBEDDING group exists; the tied buffer is LM_HEAD named "embedding_lm_head_tied"
-        if (embedding_frozen && group.type == ParamGroupType::EMBEDDING) {
-            continue;
-        }
-        if (embedding_frozen && group.type == ParamGroupType::LM_HEAD && group.name == "embedding_lm_head_tied") {
+		if (embedding_frozen && group.stats_bucket == ParamStatsBucket::EMBEDDING) {
             continue;
         }
 

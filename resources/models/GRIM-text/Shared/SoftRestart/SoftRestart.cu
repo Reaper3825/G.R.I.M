@@ -1,6 +1,6 @@
 //======================================================//
 //  SoftRestart.cu
-//  Validation-spike detection and optimizer reset helpers
+//  Optimizer momentum reset helpers
 //======================================================//
 
 
@@ -10,7 +10,6 @@
 #include <sstream>
 #include <vector>
 #include "SoftRestart.hpp"
-#include "../Loss/LossSignals/LossSignals.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 namespace GRIM {
@@ -24,20 +23,6 @@ std::vector<Logging::LogCallback> g_sr_log_callbacks;
 
 SoftRestartController::SoftRestartController(const SoftRestartConfig& config)
     : config_(config) {}
-
-bool SoftRestartController::shouldTrigger(const GRIM::Loss::LossSignals& signals,
-                                          int64_t global_step) {
-    if (global_step < 0) {
-        return false;
-    }
-    if (!signals.validation_delta_spike) {
-        return false;
-    }
-    const int64_t since_restart = (state_.last_restart_step < 0)
-        ? std::numeric_limits<int64_t>::max()
-        : global_step - state_.last_restart_step;
-    return since_restart >= config_.cooldown_steps;
-}
 
 void SoftRestartController::markRestart(int64_t global_step) {
     state_.last_restart_step = global_step;
@@ -108,14 +93,6 @@ void EmitLog(LogLevel level, std::string_view message) {
             cb(level, message);
         }
     }
-}
-
-void LogSpikeDetected(float loss_delta, int steps_since_last, bool momentum_reset) {
-    std::ostringstream msg;
-    msg << "[SoftRestart] spike loss_delta=" << FormatFloat(loss_delta)
-        << " steps_since_last=" << steps_since_last
-        << " momentum_reset=" << (momentum_reset ? "1" : "0");
-    EmitLog(LogLevel::Warning, msg.str());
 }
 
 void LogRestartTriggered(int64_t global_step, float val_loss) {

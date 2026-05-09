@@ -60,7 +60,7 @@ file(GLOB_RECURSE LAYERS_CU_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../Layers/**/*.cu
 file(GLOB_RECURSE SHARED_CU_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../Shared/**/*.cu")
 
 # Common folder
-file(GLOB COMMON_CU_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../Common/*.cu")
+file(GLOB COMMON_CU_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../Common/*.cu")
 
 # Training folder (only specific files needed for inference)
 set(TRAINING_CU_FILES

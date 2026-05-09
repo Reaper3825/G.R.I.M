@@ -22,9 +22,8 @@ namespace GRIM::Diagnostics {
 //   - scans payload.input_ids and payload.target_ids for IDs outside
 //     the vocab range; THROWS std::runtime_error on corruption (Rule 20)
 //
-// High-loss detection is owned exclusively by runLossSpikeDiagnostic
-// (Diagnostics/LossSpikeDiagnostic.{hpp,cu}); this function does NOT
-// emit a separate HIGH_LOSS log line.
+// Train-loss spike detection is owned by TelemetryLattice. This function does
+// not emit a separate HIGH_LOSS log line.
 //
 // Mutates: state.initial_loss, state.min_observed_loss, state.warmup_batches.
 void runLossBaselineAndTokenValidation(
