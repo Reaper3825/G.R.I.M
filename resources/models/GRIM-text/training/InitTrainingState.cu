@@ -315,6 +315,14 @@ void LanguageModel::initTrainingState() {
         "cached_token_ids"
     );
     std::cout << "✓ Allocated token IDs cache (Tensor API) [" << max_tokens << "]" << std::endl;
+
+    training_state_.cached_seq_lengths_tensor = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_batch_size)),
+        false,  // no grad for batch geometry metadata
+        primary_stream,
+        "cached_seq_lengths"
+    );
+    std::cout << "✓ Allocated sequence-length cache (Tensor API) [" << max_batch_size << "]" << std::endl;
     
     // BUG FIX: Numeric buffers must be sized by max_tokens (full cache capacity)
     // not the logits-only capacity. Inference sampling requires

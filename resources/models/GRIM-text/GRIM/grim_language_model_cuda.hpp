@@ -58,6 +58,7 @@ namespace GRIM {
 
 // GPUGrimEncoder is defined later in this file but used by LanguageModel class
 class GPUGrimEncoder;
+namespace HyperParameters { struct EncoderLayerConstructionHP; }
 
 //======================================================//
 //  Core Data Structures - Minimal Declarations
@@ -564,12 +565,12 @@ using GPUEncoderLayer = EncodingLayer;
 // Forward pass logic is in ForwardPhase2_Encoder.cu::runFullEncoder().
 // This class only owns layers and provides access to them.
 //
-// Constructor takes the hyperparameter config (LanguageModelConfig — single
-// source of truth for architecture + feature toggles) and the runtime
-// bindings (live device handles). NO intermediate config struct.
+// Constructor takes the grouped encoder hyperparameter view and the runtime
+// bindings (live device handles). Grouping lives in HyperparameterGroupings.hpp;
+// runtime handles stay out of config ownership.
 class GPUGrimEncoder {
 public:
-    GPUGrimEncoder(const HyperParameters::LanguageModelConfig& config,
+    GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& config,
                    const EncoderRuntimeBindings& bindings);
 
     GPUEncoderLayer* getLayer(int index);

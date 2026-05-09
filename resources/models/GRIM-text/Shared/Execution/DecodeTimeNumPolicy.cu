@@ -32,7 +32,7 @@ namespace GRIM {
 
 // ─── Constructor ─────────────────────────────────────
 
-DecodeTimeNumPolicy::DecodeTimeNumPolicy(const NumPolicyConfig& config)
+DecodeTimeNumPolicy::DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelectorConstructionHP& config)
     : config_(config)
 {
     if (config_.selection_margin < 0.0f) {

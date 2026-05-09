@@ -104,6 +104,10 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	if (!cached_targets_ptr) {
 		throw std::runtime_error("uploadBatchToDevice: cached_targets_tensor.data is NULL");
 	}
+	int* cached_seq_lengths_ptr = reinterpret_cast<int*>(training_state_.cached_seq_lengths_tensor.data);
+	if (!cached_seq_lengths_ptr) {
+		throw std::runtime_error("uploadBatchToDevice: cached_seq_lengths_tensor.data is NULL");
+	}
 	float* cached_numeric_values_ptr = training_state_.cached_token_numeric_values.data;
 	if (!cached_numeric_values_ptr) {
 		throw std::runtime_error("uploadBatchToDevice: cached_token_numeric_values.data is NULL");
@@ -120,6 +124,7 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 
 	const size_t input_ids_bytes   = payload.inputIdBytes();
 	const size_t target_ids_bytes  = payload.targetIdBytes();
+	const size_t seq_lengths_bytes = payload.seq_lengths.size() * sizeof(int);
 	const size_t numeric_val_bytes = payload.numericValueBytes();
 	const size_t atom_mask_bytes   = payload.atomMaskBytes();
 	const size_t atom_flag_bytes   = payload.atomFlagBytes();
@@ -138,6 +143,8 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 		input_ids_bytes, cudaMemcpyHostToDevice, stream));
 	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, payload.target_ids.data(),
 		target_ids_bytes, cudaMemcpyHostToDevice, stream));
+	CUDA_CHECK(cudaMemcpyAsync(cached_seq_lengths_ptr, payload.seq_lengths.data(),
+		seq_lengths_bytes, cudaMemcpyHostToDevice, stream));
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 
 	// Round 2: numeric_values + atom_mask.
@@ -179,6 +186,7 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	GRIM::Batching::BatchDeviceBindings bindings;
 	bindings.d_input_ids        = cached_token_ids_ptr;
 	bindings.d_target_ids       = cached_targets_ptr;
+	bindings.d_seq_lengths      = cached_seq_lengths_ptr;
 	bindings.d_numeric_values   = cached_numeric_values_ptr;
 	bindings.d_text_features    = has_text_features
 		? reinterpret_cast<uint16_t*>(cached_text_features_ptr) : nullptr;

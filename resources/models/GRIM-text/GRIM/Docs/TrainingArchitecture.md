@@ -9,3 +9,5 @@ Entry point: `train_gpu.cu` → `executePhase1()` → `executePhase2()` → `exe
 | 3 — Cleanup | `training/Phases/Phase3_Cleanup.cu` | Final checkpoint, summary, resource release |
 
 **Edit the phase file**, never `train_gpu.cu`, when modifying training logic.
+
+Startup model tensor registration lives in `training/Phases/Startup/Model/ParameterGroupRegistration.{hpp,cu}`. `LanguageModel` still owns the durable `parameter_groups_` vector and parameter tensors; the startup module only discovers trainable tensors, records non-owning `ParameterGroup` metadata, and binds optimizer moment tensors owned by `OptimizerState`.

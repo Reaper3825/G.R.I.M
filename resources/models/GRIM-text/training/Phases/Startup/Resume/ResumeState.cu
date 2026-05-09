@@ -1,6 +1,7 @@
 #include "ResumeState.hpp"
 
 #include "../ClassBalancedWeights.hpp"
+#include "../Model/ParameterGroupRegistration.hpp"
 #include "../../Phase1_Startup.hpp"
 #include "../../../OptimizerCheckpoint.hpp"
 
@@ -22,8 +23,10 @@ void initializeOptimizer(TrainingContext& ctx) {
 
     logger.log("Initializing optimizer state...");
     opt.optimizer_step.step = 0;
-    model.bindOptimizerState(opt.optimizer_state,
-                             model.getTrainingState().stream_ctrl.getPrimaryStream());
+    GRIMText::Training::Startup::ModelRegistration::bindOptimizerState(
+        model,
+        opt.optimizer_state,
+        model.getTrainingState().stream_ctrl.getPrimaryStream());
 
     GRIM::SoftRestart::SoftRestartConfig sr_cfg;
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;

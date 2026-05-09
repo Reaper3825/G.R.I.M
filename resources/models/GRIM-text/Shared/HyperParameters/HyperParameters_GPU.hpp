@@ -364,6 +364,17 @@ constexpr bool DEFAULT_SCRATCH_WRITE_COMBINED = false;
 // are defined ONLY here (Single Source of Truth). The encoder consumes
 // LanguageModelConfig directly; there is no intermediate EncoderConfig.
 //======================================================//
+constexpr int DECODE_TIME_SLOT_FEATURE_DIM = 5;
+constexpr int EXECUTION_BLOCK_NUM_SCRATCH_SLOTS = 0;
+constexpr int EXECUTION_BLOCK_VALUE_DECODE_INPUT_DIM = 24;
+constexpr int EXECUTION_BLOCK_VALUE_DECODE_HIDDEN_DIM = 16;
+constexpr float EXECUTION_BLOCK_INJECT_GATE_TEMP = 0.5f;
+constexpr int EXECUTION_BLOCK_RESULT_SLOT_MODE = 0;
+constexpr int EXECUTION_BLOCK_RESULT_SLOT_INDEX = -1;
+constexpr bool EXECUTION_BLOCK_DEBUG_MODE = true;
+constexpr float EXECUTION_BLOCK_ENTROPY_COLLAPSE_THRESHOLD = 0.01f;
+constexpr float EXECUTION_BLOCK_WRITE_COLLAPSE_THRESHOLD = 0.98f;
+constexpr float EXECUTION_BLOCK_MAGNITUDE_LIMIT = 1e6f;
 
 //======================================================//
 // Model Architecture Validation & Computation

@@ -23,21 +23,29 @@ namespace {
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
 
-__global__ void kernel_center_columns(
+__global__ void kernel_center_columns_grouped(
     const float* __restrict__ input,
     float* __restrict__ output,
     int num_cols,
-    int num_rows
+    int num_rows,
+    int rows_per_group
 ) {
     const int col_idx = blockIdx.x;
     if (col_idx >= num_cols) return;
+
+    const int group_idx = blockIdx.y;
+    const int group_count = num_rows / rows_per_group;
+    if (group_idx >= group_count) return;
+
+    const int row_start = group_idx * rows_per_group;
 
     __shared__ float s_sum;
     if (threadIdx.x == 0) s_sum = 0.0f;
     __syncthreads();
 
     float local_sum = 0.0f;
-    for (int row = threadIdx.x; row < num_rows; row += blockDim.x) {
+    for (int local_row = threadIdx.x; local_row < rows_per_group; local_row += blockDim.x) {
+        const int row = row_start + local_row;
         local_sum += input[static_cast<size_t>(row) * num_cols + col_idx];
     }
 
@@ -50,11 +58,145 @@ __global__ void kernel_center_columns(
     }
     __syncthreads();
 
-    const float mean = s_sum / static_cast<float>(num_rows);
+    const float mean = s_sum / static_cast<float>(rows_per_group);
 
-    for (int row = threadIdx.x; row < num_rows; row += blockDim.x) {
+    for (int local_row = threadIdx.x; local_row < rows_per_group; local_row += blockDim.x) {
+        const int row = row_start + local_row;
         const size_t idx = static_cast<size_t>(row) * num_cols + col_idx;
         output[idx] = input[idx] - mean;
+    }
+}
+
+__global__ void kernel_center_columns_grouped_lengths(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    const int* __restrict__ sequence_lengths,
+    int num_cols,
+    int num_rows,
+    int rows_per_group,
+    int group_count
+) {
+    const int col_idx = blockIdx.x;
+    if (col_idx >= num_cols) return;
+
+    const int group_idx = blockIdx.y;
+    if (group_idx >= group_count) return;
+
+    const int valid_rows = sequence_lengths[group_idx];
+    if (valid_rows <= 1 || valid_rows > rows_per_group) {
+        printf("[center_columns_by_sequence_lengths] invalid seq_lengths[%d]=%d rows_per_group=%d\n",
+               group_idx, valid_rows, rows_per_group);
+        asm("trap;");
+    }
+
+    const int row_start = group_idx * rows_per_group;
+    if (row_start + rows_per_group > num_rows) {
+        printf("[center_columns_by_sequence_lengths] invalid group span group=%d row_start=%d rows_per_group=%d num_rows=%d\n",
+               group_idx, row_start, rows_per_group, num_rows);
+        asm("trap;");
+    }
+
+    __shared__ float s_sum;
+    if (threadIdx.x == 0) s_sum = 0.0f;
+    __syncthreads();
+
+    float local_sum = 0.0f;
+    for (int local_row = threadIdx.x; local_row < valid_rows; local_row += blockDim.x) {
+        const int row = row_start + local_row;
+        local_sum += input[static_cast<size_t>(row) * num_cols + col_idx];
+    }
+
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+
+    if ((threadIdx.x & (warpSize - 1)) == 0) {
+        atomicAdd(&s_sum, local_sum);
+    }
+    __syncthreads();
+
+    const float mean = s_sum / static_cast<float>(valid_rows);
+
+    for (int local_row = threadIdx.x; local_row < rows_per_group; local_row += blockDim.x) {
+        const int row = row_start + local_row;
+        const size_t idx = static_cast<size_t>(row) * num_cols + col_idx;
+        output[idx] = (local_row < valid_rows) ? (input[idx] - mean) : 0.0f;
+    }
+}
+
+void require_center_columns_group_shape(
+    const GRIM::Tensor& x,
+    int group_rows,
+    const char* caller,
+    int& num_rows,
+    int& num_cols
+) {
+    if (!x.data) {
+        throw std::runtime_error(std::string(caller) + ": input tensor data is NULL");
+    }
+    if (!x.shape.is_2d_layout()) {
+        throw std::runtime_error(std::string(caller) + ": expected 2D (flat) tensor, got 4D");
+    }
+
+    num_rows = x.shape.as_2d().rows;
+    num_cols = x.shape.as_2d().cols;
+    if (num_rows <= 0 || num_cols <= 0) {
+        throw std::runtime_error(std::string(caller) + ": invalid flat shape rows=" +
+                                 std::to_string(num_rows) + " cols=" + std::to_string(num_cols));
+    }
+    if (group_rows <= 0) {
+        throw std::runtime_error(std::string(caller) + ": rows_per_group must be > 0, got " +
+                                 std::to_string(group_rows));
+    }
+    if (group_rows > num_rows) {
+        throw std::runtime_error(std::string(caller) + ": rows_per_group=" +
+                                 std::to_string(group_rows) + " exceeds tensor rows=" +
+                                 std::to_string(num_rows));
+    }
+    if (num_rows % group_rows != 0) {
+        throw std::runtime_error(std::string(caller) + ": tensor rows=" +
+                                 std::to_string(num_rows) + " is not divisible by rows_per_group=" +
+                                 std::to_string(group_rows));
+    }
+}
+
+void require_center_columns_length_shape(
+    const GRIM::Tensor& x,
+    const int* d_sequence_lengths,
+    int batch_size,
+    int group_rows,
+    const char* caller,
+    int& num_rows,
+    int& num_cols
+) {
+    require_center_columns_group_shape(x, group_rows, caller, num_rows, num_cols);
+    if (!d_sequence_lengths) {
+        throw std::runtime_error(std::string(caller) + ": d_sequence_lengths is NULL - caller MUST provide BatchDeviceBindings.d_seq_lengths");
+    }
+    if (batch_size <= 0) {
+        throw std::runtime_error(std::string(caller) + ": batch_size must be > 0, got " +
+                                 std::to_string(batch_size));
+    }
+    const int expected_rows = batch_size * group_rows;
+    if (num_rows != expected_rows) {
+        throw std::runtime_error(std::string(caller) + ": tensor rows=" +
+                                 std::to_string(num_rows) + " does not match batch_size * rows_per_group=" +
+                                 std::to_string(batch_size) + " * " + std::to_string(group_rows) +
+                                 " = " + std::to_string(expected_rows));
+    }
+}
+
+void check_center_columns_kernel_launch(const char* caller, cudaStream_t stream) {
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(caller) + " launch failed: " +
+                                 std::string(cudaGetErrorString(err)));
+    }
+
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(caller) + " stream synchronization failed: " +
+                                 std::string(cudaGetErrorString(err)));
     }
 }
 
@@ -70,14 +212,41 @@ CenterColumnsGradFn::CenterColumnsGradFn() {
     op_name = "center_columns";
 }
 
-void CenterColumnsGradFn::capture_input(Tensor& input, int cols, int rows, cudaStream_t stream) {
+void CenterColumnsGradFn::capture_input(Tensor& input, int cols, int rows, int group_rows,
+                                        const int* d_sequence_lengths, int groups,
+                                        cudaStream_t stream) {
     input_requires_grad = input.requires_grad;
     if (!input.requires_grad) return;
+    if (group_rows <= 0 || rows <= 0 || cols <= 0 || rows % group_rows != 0) {
+        throw std::runtime_error("CenterColumnsGradFn::capture_input: invalid grouped shape rows=" +
+                                 std::to_string(rows) + " cols=" + std::to_string(cols) +
+                                 " rows_per_group=" + std::to_string(group_rows));
+    }
 
     input_shape = input.shape;
     element_count = input.numel();
     num_cols = cols;
     num_rows = rows;
+    rows_per_group = group_rows;
+    group_count = rows / group_rows;
+    use_sequence_lengths = (d_sequence_lengths != nullptr);
+    if (use_sequence_lengths) {
+        if (groups <= 0 || groups != group_count) {
+            throw std::runtime_error("CenterColumnsGradFn::capture_input: invalid sequence length group count groups=" +
+                                     std::to_string(groups) + " expected=" + std::to_string(group_count));
+        }
+        int* length_buf = nullptr;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&length_buf),
+                          static_cast<size_t>(group_count) * sizeof(int),
+                          "CenterColumnsGradFn_sequence_lengths");
+        cudaMemcpyAsync(length_buf,
+                        d_sequence_lengths,
+                        static_cast<size_t>(group_count) * sizeof(int),
+                        cudaMemcpyDeviceToDevice,
+                        stream);
+        owned_sequence_lengths.reset(length_buf, [](int* p) { queueForDeferredCleanup(p); });
+        sequence_lengths = owned_sequence_lengths.get();
+    }
     input_grad_fn = input.grad_fn;
 
     input.ensure_grad();
@@ -98,8 +267,18 @@ void CenterColumnsGradFn::apply(const Tensor& grad_output, cudaStream_t stream) 
     if (!grad_output.data) throw std::runtime_error("CenterColumnsGradFn::apply: grad_output.data is NULL - backward called with null gradient");
     applied = true;
 
-    kernel_center_columns<<<num_cols, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, input_grad, num_cols, num_rows);
+    if (use_sequence_lengths) {
+        if (!sequence_lengths) {
+            throw std::runtime_error("CenterColumnsGradFn::apply: sequence_lengths is NULL for length-aware centering");
+        }
+        kernel_center_columns_grouped_lengths<<<dim3(num_cols, group_count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, input_grad, sequence_lengths, num_cols, num_rows, rows_per_group, group_count);
+        check_center_columns_kernel_launch("CenterColumnsGradFn::apply(length-aware)", stream);
+    } else {
+        kernel_center_columns_grouped<<<dim3(num_cols, group_count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, input_grad, num_cols, num_rows, rows_per_group);
+        check_center_columns_kernel_launch("CenterColumnsGradFn::apply(grouped)", stream);
+    }
 
     if (input_grad_fn) {
         Tensor input_grad_tensor;
@@ -113,29 +292,79 @@ void CenterColumnsGradFn::apply(const Tensor& grad_output, cudaStream_t stream) 
 
 void CenterColumnsGradFn::release_saved() {
     owned_input_grad.reset();
+    owned_sequence_lengths.reset();
+    sequence_lengths = nullptr;
 }
 
 Tensor center_columns(const Tensor& x, cudaStream_t stream) {
-    if (!x.data) {
-        throw std::runtime_error("center_columns: input tensor data is NULL");
-    }
-    if (!x.shape.is_2d_layout()) {
-        throw std::runtime_error("center_columns: expected 2D (flat) tensor, got 4D");
-    }
-
-    const int num_rows = x.shape.as_2d().rows;
-    const int num_cols = x.shape.as_2d().cols;
+    int num_rows = 0;
+    int num_cols = 0;
+    require_center_columns_group_shape(x, x.shape.is_2d_layout() ? x.shape.as_2d().rows : 0,
+                                       "center_columns", num_rows, num_cols);
 
     const bool track_grad = x.requires_grad;
     Tensor result = Tensor::empty(x.shape, track_grad, stream, "center_columns_result");
 
-    kernel_center_columns<<<num_cols, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        x.data, result.data, num_cols, num_rows);
+    kernel_center_columns_grouped<<<dim3(num_cols, 1), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, num_cols, num_rows, num_rows);
+    check_center_columns_kernel_launch("center_columns", stream);
 
     if (track_grad) {
         result.is_leaf = false;
         auto grad_fn = std::make_shared<CenterColumnsGradFn>();
-        grad_fn->capture_input(const_cast<Tensor&>(x), num_cols, num_rows, stream);
+        grad_fn->capture_input(const_cast<Tensor&>(x), num_cols, num_rows, num_rows, nullptr, 1, stream);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+Tensor center_columns_by_sequence(const Tensor& x, int rows_per_sequence, cudaStream_t stream) {
+    int num_rows = 0;
+    int num_cols = 0;
+    require_center_columns_group_shape(x, rows_per_sequence,
+                                       "center_columns_by_sequence", num_rows, num_cols);
+
+    const bool track_grad = x.requires_grad;
+    Tensor result = Tensor::empty(x.shape, track_grad, stream, "center_columns_by_sequence_result");
+
+    const int sequence_count = num_rows / rows_per_sequence;
+    kernel_center_columns_grouped<<<dim3(num_cols, sequence_count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, num_cols, num_rows, rows_per_sequence);
+    check_center_columns_kernel_launch("center_columns_by_sequence", stream);
+
+    if (track_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<CenterColumnsGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), num_cols, num_rows, rows_per_sequence, nullptr, sequence_count, stream);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+Tensor center_columns_by_sequence_lengths(const Tensor& x,
+                                          const int* d_sequence_lengths,
+                                          int batch_size,
+                                          int rows_per_sequence,
+                                          cudaStream_t stream) {
+    int num_rows = 0;
+    int num_cols = 0;
+    require_center_columns_length_shape(x, d_sequence_lengths, batch_size, rows_per_sequence,
+                                        "center_columns_by_sequence_lengths", num_rows, num_cols);
+
+    const bool track_grad = x.requires_grad;
+    Tensor result = Tensor::empty(x.shape, track_grad, stream, "center_columns_by_sequence_lengths_result");
+
+    kernel_center_columns_grouped_lengths<<<dim3(num_cols, batch_size), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, d_sequence_lengths, num_cols, num_rows, rows_per_sequence, batch_size);
+    check_center_columns_kernel_launch("center_columns_by_sequence_lengths", stream);
+
+    if (track_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<CenterColumnsGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), num_cols, num_rows, rows_per_sequence,
+                               d_sequence_lengths, batch_size, stream);
         result.grad_fn = grad_fn;
     }
 

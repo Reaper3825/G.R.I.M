@@ -68,7 +68,9 @@ struct EncodingConfig {
     float layer_scale_init = 1.0f;  // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
     
     // Per-layer residual centering
-    // When true: output = center_columns(input + branch) — prevents mode collapse but 24 gradient projections
+    // When true: output = center_columns_by_sequence_lengths(input + branch, d_seq_lengths, payload.max_seq_len)
+    // NEVER center the full [batch_size * seq_len, d_model] matrix: that couples samples.
+    // NEVER include padded rows in the mean: PAD activations are real vectors until explicitly masked.
     // When false: output = input + branch — standard pre-norm, better gradient flow
     bool center_encoder_residuals = false;
     
@@ -202,16 +204,20 @@ public:
      * destroyed when this function returns, causing use-after-free in backward.
      * 
      * @param input [total_tokens, d_model] - encoder input (from embedding or prev layer)
-     * @param seq_len sequence length (for attention masking)
+    * @param payload Host-side batch geometry and sequence lengths
+    * @param d_sequence_lengths Device [batch_size] real lengths for padding-aware centering
      * @param stream CUDA stream for execution
      * @param intermediates Storage for this layer's intermediate tensors (REQUIRED for autograd)
-     * @param training_step Current training step for per-step dropout seed generation (0 = no dropout)
+    * @param training_step Current training/forward seed step for deterministic dropout masks
+    * @param dropout_enabled Explicit mode gate for dropout; training_step never controls mode
      * @param layer_idx Layer index within encoder stack (for equation logging and dropout seed)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
-    Tensor forward(const Tensor& input, const BatchPayload& payload, cudaStream_t stream,
+    Tensor forward(const Tensor& input, const BatchPayload& payload,
+                   const int* d_sequence_lengths, cudaStream_t stream,
                    struct ForwardIntermediates& intermediates,
                    uint64_t training_step = 0,
+                bool dropout_enabled = false,
                    int layer_idx = 0);
     
     //--------------------------------------------------

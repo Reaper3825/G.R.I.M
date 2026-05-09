@@ -30,7 +30,6 @@
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Batching/BatchDeviceBindings.hpp"
 
-using GRIM::CudaAlloc::cudaMallocOrThrow;
 using GRIM::HyperParameters::ModelExecutionMode;
 
 namespace GRIM {
@@ -167,6 +166,7 @@ Batching::BatchDeviceBindings buildInferencePrefillBindings(TrainingState& ts, i
     bindings.batch_size = 1;
     bindings.max_seq_len = seq_len;
     bindings.d_input_ids = reinterpret_cast<int*>(ts.cached_token_ids_tensor.data);
+    bindings.d_seq_lengths = reinterpret_cast<int*>(ts.cached_seq_lengths_tensor.data);
     bindings.d_numeric_values = ts.cached_token_numeric_values.data;
     bindings.d_text_features = reinterpret_cast<uint16_t*>(ts.cached_token_text_features.data);
     bindings.d_atom_mask = reinterpret_cast<uint8_t*>(ts.cached_token_atom_mask.data);
@@ -175,6 +175,9 @@ Batching::BatchDeviceBindings buildInferencePrefillBindings(TrainingState& ts, i
 
     if (!bindings.d_input_ids) {
         throw std::runtime_error("buildInferencePrefillBindings: cached_token_ids_tensor.data is NULL");
+    }
+    if (!bindings.d_seq_lengths) {
+        throw std::runtime_error("buildInferencePrefillBindings: cached_seq_lengths_tensor.data is NULL");
     }
     if (!bindings.d_token_to_slot_map) {
         throw std::runtime_error("buildInferencePrefillBindings: cached_token_to_slot_map.data is NULL");
@@ -225,6 +228,20 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
     }
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+
+    if (!training_state_.cached_seq_lengths_tensor.data) {
+        throw std::runtime_error("executeInferenceForward_: cached_seq_lengths_tensor.data is NULL");
+    }
+    int h_seq_len = seq_len;
+    cudaError_t len_cp = cudaMemcpyAsync(training_state_.cached_seq_lengths_tensor.data,
+                                         &h_seq_len,
+                                         sizeof(int),
+                                         cudaMemcpyHostToDevice,
+                                         stream);
+    if (len_cp != cudaSuccess) {
+        throw std::runtime_error("executeInferenceForward_: cudaMemcpyAsync(seq_len) failed: " +
+                                 std::string(cudaGetErrorString(len_cp)));
+    }
 
     Batching::BatchDeviceBindings bindings = buildInferencePrefillBindings(training_state_, seq_len);
     Batching::BatchPayload payload = buildInferenceGeometryPayload(config_, seq_len);
@@ -757,6 +774,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             GRIM::Batching::BatchDeviceBindings decode_bindings;
             decode_bindings.batch_size  = 1;
             decode_bindings.max_seq_len = 1;
+            decode_bindings.d_seq_lengths = reinterpret_cast<int*>(ts.cached_seq_lengths_tensor.data);
             decode_bindings.d_token_to_slot_map = const_cast<int32_t*>(slot_ptr);
             decode_bindings.d_atom_mask =
                 ts.cached_token_atom_mask.data
@@ -816,8 +834,27 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     lm_head->setStream(stream);
     lm_head->setCublasHandle(ts.cublas_handle);
 
+    if (!ts.cached_seq_lengths_tensor.data) {
+        throw std::runtime_error("executeDecodeForward_: cached_seq_lengths_tensor.data is NULL");
+    }
+    const int decode_seq_len = 1;
+    cudaError_t len_cp = cudaMemcpyAsync(ts.cached_seq_lengths_tensor.data,
+                                         &decode_seq_len,
+                                         sizeof(int),
+                                         cudaMemcpyHostToDevice,
+                                         stream);
+    if (len_cp != cudaSuccess) {
+        throw std::runtime_error("executeDecodeForward_: cudaMemcpyAsync(seq_len) failed: " +
+                                 std::string(cudaGetErrorString(len_cp)));
+    }
+
     Tensor centered_hidden;
-    Tensor logits_tensor = lm_head->forward(hidden, centered_hidden);
+    Tensor logits_tensor = lm_head->forward(
+        hidden,
+        centered_hidden,
+        reinterpret_cast<int*>(ts.cached_seq_lengths_tensor.data),
+        1,
+        1);
 
     // ── Step 5: Extract logits to host ──
     Vector logits(cfg.vocab_size);

@@ -27,9 +27,7 @@ void TelemetryReady(TrainingContext& ctx) {
         GRIM::Telemetry::makeLatticeConfigFromHyperparameters(
             ctx.config.hyperparameters,
             ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()));
-    const auto& lattice_cfg = ctx.telemetry.lattice->config();
-    ctx.logging.logger->log("✓ Telemetry lattice: " + std::to_string(lattice_cfg.num_levels) +
-                            " levels, " + std::to_string(lattice_cfg.num_streams) + " streams, GPU-resident");
+    ctx.logging.logger->log("✓ Telemetry lattice initialized (GPU-resident); exact config values are listed by ConfigDump.");
 
     const std::string csv_path = ctx.config.paths.log_dir + "/telemetry_" + ctx.logging.session_id + ".csv";
     ctx.telemetry.csv_logger = std::make_unique<GRIM::Telemetry::TelemetryCsvLogger>(

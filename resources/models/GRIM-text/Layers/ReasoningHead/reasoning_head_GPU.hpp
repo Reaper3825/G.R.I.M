@@ -28,6 +28,7 @@
 #include <memory>
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
 
@@ -38,19 +39,6 @@ struct ReasoningHeadOutput {
     Tensor op_logits;     // [1, num_ops]
     Tensor arg1_logits;   // [1, num_atoms]
     Tensor arg2_logits;   // [1, num_atoms]
-};
-
-//======================================================//
-//  ReasoningHeadConfig
-//======================================================//
-struct ReasoningHeadConfig {
-    int d_model = 0;
-    int atom_embedding_dim = 0;
-    int num_ops = 8;
-    cudaStream_t stream = nullptr;
-    cublasHandle_t cublas_handle = nullptr;
-
-    int d_total() const { return d_model + atom_embedding_dim; }
 };
 
 //======================================================//
@@ -100,7 +88,7 @@ class ReasoningHeadLayer {
 public:
     ReasoningHeadLayer() = delete;
 
-    explicit ReasoningHeadLayer(const ReasoningHeadConfig& config,
+    explicit ReasoningHeadLayer(const HyperParameters::ReasoningHeadConstructionHP& config,
                                 uint64_t seed,
                                 cudaStream_t init_stream);
 
@@ -136,16 +124,18 @@ public:
     const Tensor& w_arg1() const { return w_arg1_; }
     const Tensor& w_arg2() const { return w_arg2_; }
 
-    void setStream(cudaStream_t s) { config_.stream = s; }
-    void setCublasHandle(cublasHandle_t h) { config_.cublas_handle = h; }
+    void setStream(cudaStream_t s) { stream_ = s; }
+    void setCublasHandle(cublasHandle_t h) { cublas_handle_ = h; }
 
     int d_model() const { return config_.d_model; }
     int atom_embedding_dim() const { return config_.atom_embedding_dim; }
     int num_ops() const { return config_.num_ops; }
-    int d_total() const { return config_.d_total(); }
+    int d_total() const { return config_.d_model + config_.atom_embedding_dim; }
 
 private:
-    ReasoningHeadConfig config_;
+    HyperParameters::ReasoningHeadConstructionHP config_;
+    cudaStream_t stream_ = nullptr;
+    cublasHandle_t cublas_handle_ = nullptr;
     Tensor w_op_;    // [num_ops, d_total]
     Tensor b_op_;    // [num_ops]
     Tensor w_arg1_;  // [1, d_total]

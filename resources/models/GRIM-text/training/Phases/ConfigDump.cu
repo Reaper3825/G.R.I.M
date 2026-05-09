@@ -14,9 +14,12 @@
 // control/ai_config_paths.hpp in the correct order.
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <iomanip>
+#include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,12 +33,33 @@ std::string fmt(bool v)              { return v ? "true" : "false"; }
 std::string fmt(int v)               { return std::to_string(v); }
 std::string fmt(int64_t v)           { return std::to_string(v); }
 std::string fmt(unsigned long v)     { return std::to_string(v); }
+#if defined(_WIN64)
+std::string fmt(std::size_t v)       { return std::to_string(v); }
+#endif
 std::string fmt(float v) {
     std::ostringstream oss;
     oss << std::setprecision(8) << v;
     return oss.str();
 }
 std::string fmt(const std::string& v) { return v; }
+std::string fmt(::GRIM::HyperParameters::PositionalEncodingType v) {
+    using PET = ::GRIM::HyperParameters::PositionalEncodingType;
+    switch (v) {
+        case PET::NONE:       return "NONE";
+        case PET::ALIBI:      return "ALIBI";
+        case PET::ROPE:       return "ROPE";
+        case PET::ALIBI_ROPE: return "ALIBI_ROPE";
+    }
+    throw std::runtime_error("fmt(PositionalEncodingType): unknown enum value");
+}
+std::string fmt(::GRIM::HyperParameters::ModelExecutionMode v) {
+    using MEM = ::GRIM::HyperParameters::ModelExecutionMode;
+    switch (v) {
+        case MEM::TRAINING:  return "TRAINING";
+        case MEM::INFERENCE: return "INFERENCE";
+    }
+    throw std::runtime_error("fmt(ModelExecutionMode): unknown enum value");
+}
 std::string fmt(::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern v) {
     using HCP = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern;
     switch (v) {
@@ -47,6 +71,23 @@ std::string fmt(::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern v
         case HCP::ZERO_MEAN_SINE:    return "ZERO_MEAN_SINE";
     }
     throw std::runtime_error("fmt(HardcodedPattern): unknown enum value");
+}
+
+std::string fmtStringMap(const std::map<std::string, std::string>& values) {
+    if (values.empty()) {
+        return "{}";
+    }
+
+    std::ostringstream oss;
+    bool first = true;
+    for (const auto& kv : values) {
+        if (!first) {
+            oss << ", ";
+        }
+        oss << kv.first << "=" << kv.second;
+        first = false;
+    }
+    return oss.str();
 }
 
 } // namespace
@@ -61,15 +102,60 @@ void dumpAllHyperparameters(
     if (!log_fn) return;
 
     std::vector<std::pair<std::string, std::string>> rows;
-    rows.reserve(256);
+    rows.reserve(320);
 
 #define DUMP(field) rows.emplace_back(#field, fmt(hp.field))
 #define DUMP_ARCH(field) rows.emplace_back("architecture." #field, fmt(hp.architecture.field))
+#define DUMP_LOG_RECORDER(field) rows.emplace_back("log_recorder." #field, fmt(hp.log_recorder.field))
+#define DUMP_LOG_RECORDER_LAYER(field) rows.emplace_back("log_recorder.layers." #field, fmt(hp.log_recorder.layers.field))
+#define DUMP_TAPE_LOGGING(field) rows.emplace_back("tape_logging." #field, fmt(hp.tape_logging.field))
 #define SECTION(label) rows.emplace_back(std::string("---"), std::string(label))
 
     SECTION("Run selectors");
     DUMP(current_model_training);
     DUMP(current_curriculum);
+
+    SECTION("Logging");
+    DUMP_LOG_RECORDER(enabled);
+    DUMP_LOG_RECORDER(default_level);
+    rows.emplace_back("log_recorder.modules", fmtStringMap(hp.log_recorder.modules));
+    DUMP_LOG_RECORDER_LAYER(embedding);
+    DUMP_LOG_RECORDER_LAYER(rms_norm);
+    DUMP_LOG_RECORDER_LAYER(attention);
+    DUMP_LOG_RECORDER_LAYER(feed_forward);
+    DUMP_LOG_RECORDER_LAYER(residual);
+    DUMP_LOG_RECORDER_LAYER(encoding);
+    DUMP_LOG_RECORDER_LAYER(serialization);
+    DUMP_LOG_RECORDER_LAYER(execution_block);
+    DUMP_TAPE_LOGGING(default_level);
+    DUMP_TAPE_LOGGING(equation_csv_enabled);
+    DUMP_TAPE_LOGGING(stderr_enabled);
+    rows.emplace_back("tape_logging.initial_capacity", std::to_string(hp.tape_logging.initial_capacity));
+    rows.emplace_back("tape_logging.group_overrides", fmtStringMap(hp.tape_logging.group_overrides));
+
+    SECTION("Model architecture");
+    DUMP_ARCH(d_model);
+    DUMP_ARCH(num_layers);
+    DUMP_ARCH(num_heads);
+    DUMP_ARCH(num_kv_heads);
+    DUMP_ARCH(head_dim);
+    DUMP_ARCH(d_ff);
+    DUMP_ARCH(max_seq_len);
+    DUMP_ARCH(dropout_rate);
+    DUMP_ARCH(attention_dropout);
+    DUMP_ARCH(tie_embeddings);
+    DUMP_ARCH(positional_encoding);
+    DUMP_ARCH(use_gpu);
+    DUMP_ARCH(use_flash_attention);
+    DUMP_ARCH(min_seq_len_for_flash);
+    DUMP_ARCH(rms_epsilon);
+    DUMP_ARCH(causal_mask);
+    DUMP_ARCH(use_pre_norm);
+    DUMP_ARCH(fuse_qkv);
+    DUMP_ARCH(use_simd);
+    DUMP_ARCH(num_threads);
+    DUMP_ARCH(use_bias);
+    DUMP_ARCH(execution_mode);
 
     SECTION("Core training");
     DUMP(epochs);
@@ -88,16 +174,12 @@ void dumpAllHyperparameters(
     DUMP(cosine_decay_enabled);
     DUMP(cosine_warm_restarts);
     DUMP(cosine_decay_min_lr);
-    DUMP_ARCH(max_seq_len);
     DUMP(min_seq_valid_tokens);
     DUMP(log_interval);
     DUMP(atom_stats_interval);
     DUMP(atom_stats_max_seqs);
     DUMP(validation_interval);
     DUMP(checkpoint_interval);
-    DUMP_ARCH(use_gpu);
-    DUMP_ARCH(use_flash_attention);
-    DUMP_ARCH(min_seq_len_for_flash);
 
     SECTION("Soft restart");
     DUMP(soft_restart_enabled);
@@ -234,6 +316,10 @@ void dumpAllHyperparameters(
     DUMP_ARCH(scratch_block_max_atoms);
     DUMP_ARCH(scratch_block_atom_scale);
 
+    SECTION("ReasoningHead");
+    DUMP_ARCH(reasoning_head_enabled);
+    DUMP_ARCH(reasoning_num_ops);
+
     SECTION("ExecutionBlock");
     DUMP_ARCH(execution_block_enabled);
     DUMP_ARCH(scratch_block_execution_first_type_only);
@@ -314,6 +400,10 @@ void dumpAllHyperparameters(
     }
 
 #undef DUMP
+#undef DUMP_ARCH
+#undef DUMP_LOG_RECORDER
+#undef DUMP_LOG_RECORDER_LAYER
+#undef DUMP_TAPE_LOGGING
 #undef SECTION
 
     //==================================================//

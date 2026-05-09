@@ -63,7 +63,7 @@ namespace Autograd {
 // NOTE: linkEncoderWeightsToTrainingState was removed.
 // Encoder owns its weights internally; optimizer accesses gradients via
 // Tensor& accessors (enc->attnWqkv().grad_data() etc.).
-// See buildParameterGroups() in LanguageModel_Training.cu.
+// See Startup/Model/ParameterGroupRegistration.{hpp,cu}.
 
 // Context initialization lives in AutogradContext.cu so this file can focus on
 // the autograd math path: forward, loss, backward, and the training-step bridge.

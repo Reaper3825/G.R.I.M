@@ -943,7 +943,7 @@ For each encoding layer (Layer 0 → Layer 11):
     3. FFN activation (post-GELU): `Feed_Forward_GPU.cu` (seed: step*2654435761+300+layer)
     4. Post-FFN output: `Encoding_GPU.cu` step 9b (seed: step*2654435761+200+layer)
     5. Attention dropout (inside FlashAttention): Philox PRNG, separate `attention_dropout` config
-  - All sublayer dropouts gated by `dropout_rate > 0.0f && training_step > 0`
+  - All sublayer dropouts are mode-gated explicitly by `dropout_enabled`; `training_step` is seed material only and must not decide training/eval mode.
 
 ---
 

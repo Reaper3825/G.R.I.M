@@ -128,27 +128,6 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
 {
     if (!file_.is_open()) return;
 
-    // Stream names (matches MetricStream enum order, indices 0-46)
-    static const char* stream_names[] = {
-        "loss", "grad_norm_mean", "grad_norm_max", "learning_rate", "tokens_per_batch",
-        "rho_final", "rho_growth", "rho_worst_delta", "h_rms_growth",
-        "adam_bc2_v_convergence", "adam_signal_dominance", "adam_cumulative_disp",
-        "adam_disruption_emb", "adam_inv_bc2_amp",
-        "exec_grad_norm", "exec_grad_ratio", "exec_selection_entropy",
-        "exec_op_entropy", "exec_div_clamp_rate", "exec_max_p_write", "exec_active_ratio",
-        "eb_inject_gate", "eb_read_gate_mean", "eb_inject_weight_norm",
-        "eb_read_weight_norm", "eb_loss_frac", "sb_atom_embed_rms",
-        "pbm_alibi_slope_rms", "pbm_alibi_eff_bias_max", "pbm_rope_inv_freq_rms", "pbm_batch_max_seq_len",
-        "rho_raw_avg_abs_dot", "rho_raw_avg_norm_prod", "rho_raw_h_rms_min", "rho_raw_h_rms_max",
-        "rms_gamma_pre_attn_rms", "rms_gamma_pre_ffn_rms", "rms_gamma_final_rms",
-        "rho_raw_rms_spread",
-        "hw_cos_rms", "hw_cos_signed_mean", "hw_cos_abs_max",
-        "hw_hbar_wbar_cos", "hw_h_dc_mean", "hw_h_dc_abs_max",
-        "unigram_dir_cos_abs_mean", "unigram_dir_cos_signed_mean",
-        "lm_head_w_rms_rms"
-    };
-    static constexpr int num_named_streams = sizeof(stream_names) / sizeof(stream_names[0]);
-
     for (int level = 0; level < num_levels_; ++level) {
         const uint32_t stride = 1u << level;
 
@@ -163,7 +142,12 @@ void TelemetryCsvLogger::log(const TelemetryLattice& lattice,
             if (err != TelemetryError::OK) continue;
             if (state.initialized == 0) continue;
 
-            const char* name = (s < num_named_streams) ? stream_names[s] : "unknown";
+            const char* name = getMetricStreamName(static_cast<MetricStream>(s));
+            if (std::string(name) == "unknown") {
+                throw std::runtime_error(
+                    "[TelemetryCsvLogger] FATAL: stream index " + std::to_string(s) +
+                    " has no MetricStream name");
+            }
             const float obs = (raw_obs && s < num_streams_) ? raw_obs[s] : 0.0f;
 
             // Use fixed-precision for stability; scientific for very

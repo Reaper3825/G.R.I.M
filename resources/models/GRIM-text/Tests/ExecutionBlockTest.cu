@@ -226,25 +226,25 @@ bool testExecutionMemoryClear(std::string& message) {
 }
 
 //======================================================//
-//  6. ExecutionBlockConfig defaults
+//  6. ExecutionBlockConstructionHP defaults
 //======================================================//
 
-bool testExecutionBlockConfigDefaults(std::string& message) {
-    ExecutionBlockConfig cfg;
+bool testExecutionBlockConstructionHPDefaults(std::string& message) {
+    HyperParameters::ExecutionBlockConstructionHP cfg;
 
     EB_ASSERT_EQ(cfg.d_model, 0, "d_model default 0");
     EB_ASSERT_EQ(cfg.atom_embedding_dim, 0, "atom_embedding_dim default 0");
-    EB_ASSERT_EQ(cfg.num_ops, 4, "num_ops default 4");
-    EB_ASSERT_EQ(cfg.num_slots, 4, "num_slots default 4");
+    EB_ASSERT_EQ(cfg.num_ops, 0, "num_ops default 0");
+    EB_ASSERT_EQ(cfg.num_slots, 0, "num_slots default 0");
     EB_ASSERT_EQ(cfg.num_scratch_slots, 0, "num_scratch_slots default 0");
-    EB_ASSERT_EQ(cfg.num_exec_steps, 2, "num_exec_steps default 2");
+    EB_ASSERT_EQ(cfg.num_exec_steps, 0, "num_exec_steps default 0");
     EB_ASSERT_EQ(cfg.value_decode_input_dim, 24, "value_decode_input_dim default 24");
     EB_ASSERT_EQ(cfg.value_decode_hidden_dim, 16, "value_decode_hidden_dim default 16");
-    EB_ASSERT_EQ(cfg.d_key, 64, "d_key default 64");
-    EB_ASSERT_EQ(cfg.d_type, 8, "d_type default 8");
-    EB_ASSERT_EQ(cfg.cross_attn_head_dim, 64, "cross_attn_head_dim default 64");
-    EB_ASSERT_EQ(cfg.cross_attn_topk, 1, "cross_attn_topk default 1");
-    EB_ASSERT_NEAR(cfg.usage_decay, 0.9f, 1e-6f, "usage_decay default");
+    EB_ASSERT_EQ(cfg.d_key, 0, "d_key default 0");
+    EB_ASSERT_EQ(cfg.d_type, 0, "d_type default 0");
+    EB_ASSERT_EQ(cfg.cross_attn_head_dim, 0, "cross_attn_head_dim default 0");
+    EB_ASSERT_EQ(cfg.cross_attn_topk, 0, "cross_attn_topk default 0");
+    EB_ASSERT_NEAR(cfg.usage_decay, 0.0f, 1e-6f, "usage_decay default");
     // [DELETED] empty_slot_bonus, diversity_kappa checks — fields removed per Fix #4.
     EB_ASSERT_NEAR(cfg.inject_gate_temp, 0.5f, 1e-6f, "inject_gate_temp default");
     EB_ASSERT_EQ(cfg.result_slot_mode, 0, "result_slot_mode default 0");
@@ -396,7 +396,7 @@ bool testExecutionBlockOutputMultiStep(std::string& message) {
 //======================================================//
 
 bool testScratchSlotConstraint(std::string& message) {
-    ExecutionBlockConfig cfg;
+    HyperParameters::ExecutionBlockConstructionHP cfg;
     cfg.num_slots = 4;
     cfg.num_scratch_slots = 4;
 
@@ -430,7 +430,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Memory: allocate shapes", testExecutionMemoryAllocateShapes);
     suite.addTest("Memory: allocate rejects invalid dims", testExecutionMemoryAllocateRejectsInvalid);
     suite.addTest("Memory: clear zeros state", testExecutionMemoryClear);
-    suite.addTest("Config: ExecutionBlock defaults", testExecutionBlockConfigDefaults);
+    suite.addTest("Config: ExecutionBlockConstructionHP defaults", testExecutionBlockConstructionHPDefaults);
     suite.addTest("Record: ExecutionRecord defaults", testExecutionRecordDefaults);
     suite.addTest("Metrics: ExecStepMetrics defaults", testExecStepMetricsDefaults);
     suite.addTest("Arithmetic: four-op semantics", testFourOpsSemantics);

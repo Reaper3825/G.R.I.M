@@ -25,19 +25,9 @@
 #include <string>
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
-
-//======================================================//
-//  Configuration
-//======================================================//
-
-struct EmbeddingLayerConfig {
-    int vocab_size = 0;        // Token vocabulary size (MUST be populated)
-    int d_model = 0;           // Hidden dimension (MUST be populated)
-    bool requires_grad = true;     // false for inference-only (skip grad allocation)
-};
 
 //======================================================//
 //  EmbeddingLayer - Self-Allocating (Pattern B: Layer Ownership)
@@ -58,12 +48,14 @@ public:
     ///
     /// Allocates token embedding weights [vocab_size, d_model] with Xavier init.
     ///
-    /// @param config     Layer configuration
+    /// @param config     Grouped construction hyperparameters
     /// @param seed       Xavier init seed
     /// @param stream     CUDA stream for allocation
-    explicit EmbeddingLayer(const EmbeddingLayerConfig& config,
+    /// @param requires_grad false for inference-only allocation
+    explicit EmbeddingLayer(const HyperParameters::EmbeddingLayerConstructionHP& config,
                             uint64_t seed,
-                            cudaStream_t stream);
+                            cudaStream_t stream,
+                            bool requires_grad);
 
     ~EmbeddingLayer() = default;
 
@@ -87,10 +79,10 @@ public:
     //--------------------------------------------------
     // Configuration
     //--------------------------------------------------
-    const EmbeddingLayerConfig& config() const noexcept { return config_; }
+    const HyperParameters::EmbeddingLayerConstructionHP& config() const noexcept { return config_; }
 
 private:
-    EmbeddingLayerConfig config_{};
+    HyperParameters::EmbeddingLayerConstructionHP config_{};
 
     // Weight Tensors with autograd (requires_grad=true)
     Tensor token_weights_;       // [vocab_size, d_model] — always owned

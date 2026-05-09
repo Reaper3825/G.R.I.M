@@ -27,7 +27,7 @@ Until the explicit decode-time slot selector exists, generation masks `<NUM>` in
 
 | File | Owns |
 |---|---|
-| `execution_block_GPU.hpp` | Public config, memory structs, diagnostics structs, `ExecutionBlockLayer` declaration |
+| `execution_block_GPU.hpp` | Public memory structs, diagnostics structs, `ExecutionBlockLayer` declaration |
 | `execution_block_GPU.cu` | Validation helpers, construction/destruction, thin public wrappers |
 | `execution_block_internal.hpp` | Private stage IDs, macros, `LayerAccess`, `StepWorkingSet` |
 | `execution_block_memory_stream_GPU.hpp/.cu` | `ExecutionMemory` allocation/clear, bootstrap, slot reads/writes, recent-write bookkeeping, cross-attention read |
@@ -57,15 +57,15 @@ Public methods:
 - `allocate(int V, int atom_dim, int d_model, int d_key, int d_type, cudaStream_t stream)`
 - `clear(cudaStream_t stream)`
 
-### `ExecutionBlockConfig`
+### `HyperParameters::ExecutionBlockConstructionHP`
 
-`ExecutionBlockConfig` now contains **layer-owned behavior only**.
-It does **not** carry orchestration-owned knobs such as execution-layer placement, temperature schedule, entropy schedule, stream ownership, or cuBLAS ownership.
+`ExecutionBlockLayer` consumes `HyperParameters::ExecutionBlockConstructionHP` directly.
+There is no layer-local compatibility config wrapper. Runtime handles such as CUDA stream and cuBLAS ownership remain explicit constructor / setter parameters, not hyperparameters.
 
-Surviving fields:
+Grouped fields consumed by the layer:
 
 - dimensions: `d_model`, `atom_embedding_dim`, `num_ops`, `num_slots`, `num_scratch_slots`, `num_exec_steps`, `value_decode_input_dim`, `value_decode_hidden_dim`, `d_key`, `d_type`, `cross_attn_head_dim`
-- read/write behavior: `cross_attn_topk`, `usage_decay`, `empty_slot_bonus`, `diversity_kappa`, `inject_gate_temp`
+- read/write behavior: `cross_attn_topk`, `usage_decay`, `inject_gate_temp`
 - result placement: `result_slot_mode`, `result_slot_index`
 - validation/debug gates: `debug_mode`, `entropy_collapse_threshold`, `write_collapse_threshold`, `magnitude_limit`, `transition_hard_threshold`
 

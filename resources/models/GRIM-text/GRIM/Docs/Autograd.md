@@ -32,5 +32,8 @@ Always explicitly `return output;` from any autograd forward function. A missing
 ## Atomic kernel ordering
 When kernel B reads data written by kernel A via `atomicAdd`, you MUST `cudaStreamSynchronize` between them — even on the same stream.
 
+## Fail-hard CenterColumns kernels
+`center_columns*` autograd wrappers launch kernels that may deliberately `trap` on invalid sequence lengths. Every forward/backward CenterColumns launch must immediately check `cudaGetLastError()` and then `cudaStreamSynchronize(stream)` so launch failures and device-side traps surface at the centering call site, not several kernels later.
+
 ## Gradient norm sync
 `cudaStreamSynchronize` inside `computeGradNorm` drains the entire backward pipeline. Pass `sync_for_host_read=false` for non-logging steps; only sync when logging gradient components.

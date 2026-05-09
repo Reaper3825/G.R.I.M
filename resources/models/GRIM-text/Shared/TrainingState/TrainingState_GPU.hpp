@@ -89,6 +89,7 @@ struct TrainingState {
     // decode/prefill cache because there is no host BatchPayload upload step.
     Tensor cached_targets_tensor;       // [max_tokens] int32
     Tensor cached_token_ids_tensor;     // [max_tokens] int32
+    Tensor cached_seq_lengths_tensor;   // [max_sequences] int32 real token count per padded row
     Tensor cached_token_numeric_values; // [max_tokens] float
     
     // Unified atom side-channel

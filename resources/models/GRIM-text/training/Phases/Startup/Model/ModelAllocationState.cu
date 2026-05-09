@@ -1,8 +1,11 @@
 #include "ModelAllocationState.hpp"
 
+#include "ParameterGroupRegistration.hpp"
+
 #include "../InitFacts.hpp"
 #include "../../Phase1_Startup.hpp"
 
+#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 
 #include <algorithm>
@@ -36,39 +39,18 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
     logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
 
-    const auto& arch = config.hyperparameters.architecture;
-
-    GRIM::HyperParameters::LanguageModelConfig model_config;
-    model_config = arch;
-    model_config.max_seq_len = config.max_seq_len;
-    model_config.vocab_size = vocab_size;
-    model_config.vocab_path = config.paths.vocab_path;
-    model_config.infer_vocab_from_file = true;
-    model_config.causal_mask = true;
-    model_config.use_pre_norm = true;
-    model_config.fuse_qkv = true;
-    model_config.use_bias = true;
-    model_config.computeDerivedValues();
-
-    if (model_config.structured_ce_enabled && model_config.structured_ce_weight <= 0.0f) {
-        throw std::runtime_error("structured_ce_enabled=true but structured_ce_weight=" +
-                                 std::to_string(model_config.structured_ce_weight) + " (must be > 0)");
-    }
-
-    if (model_config.mtp_enabled && (model_config.mtp_k <= 0 || model_config.mtp_alpha <= 0.0f)) {
-        throw std::runtime_error("multi_token_prediction: when enabled, k and alpha must be > 0 (k=" +
-            std::to_string(model_config.mtp_k) + " alpha=" + std::to_string(model_config.mtp_alpha) + ")");
-    }
+    const GRIM::HyperParameters::StartupModelCapacityHP model_capacity{
+        static_cast<int>(run_capacity.batch_rows),
+        static_cast<int>(run_capacity.seq_cap),
+        static_cast<int>(run_capacity.max_tokens_per_batch)
+    };
+    GRIM::HyperParameters::LanguageModelConfig model_config =
+        GRIM::HyperParameters::startupLanguageModelConfig(config, vocab_size, model_capacity);
 
     if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED) {
-        logger.log("⚠️  HARDCODED HIDDEN STATES DIAGNOSTIC ENABLED: pattern=" + std::to_string(static_cast<int>(model_config.hardcoded_hidden_pattern)) +
-                  ", log_every_n=" + std::to_string(model_config.hardcoded_log_every_n_batches));
+        logger.log("⚠️  Hardcoded hidden-state diagnostic mode is active; exact config values are listed by ConfigDump.");
         logger.log("⚠️  Encoder output will be REPLACED with synthetic patterns - this is a DIAGNOSTIC MODE ONLY!");
     }
-
-    model_config.max_cached_batch = static_cast<int>(run_capacity.batch_rows);
-    model_config.max_cached_seq_len = run_capacity.seq_cap;
-    model_config.max_tokens_per_batch = static_cast<int>(run_capacity.max_tokens_per_batch);
 
     {
         logger.log("Initializing CUDA device context...");
@@ -126,7 +108,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
 
-    model->buildParameterGroups();
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model);
 
     GRIM::LossContext::LossOptions loss_opts{};
     {
@@ -159,7 +141,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                 throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after initGPU");
             }
         }
-        logger.log("✓ All " + std::to_string(cfg.num_layers) + " encoder layers verified");
+        logger.log("✓ Encoder layers verified");
     }
 #endif
 

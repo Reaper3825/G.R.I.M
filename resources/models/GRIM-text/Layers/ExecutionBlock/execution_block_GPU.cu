@@ -115,7 +115,7 @@ ExecutionBlockLayer::~ExecutionBlockLayer() {
     if (d_reinforce_baseline_) cudaFree(d_reinforce_baseline_);
 }
 
-ExecutionBlockLayer::ExecutionBlockLayer(const ExecutionBlockConfig& config,
+ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& config,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
     : config_(config)

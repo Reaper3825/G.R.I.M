@@ -108,12 +108,13 @@ public:
      * 
      * @param input [total_tokens, d_model] - MUST have requires_grad if training
      * @param intermediates Storage for intermediate tensors (REQUIRED for autograd)
-     * @param training_step Current training step (0 = inference, no dropout)
+    * @param training_step Current training/forward seed step for deterministic dropout masks
+    * @param dropout_enabled Explicit mode gate for dropout; training_step never controls mode
      * @param layer_idx Encoder layer index (for unique dropout seed per layer)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
     Tensor forward(const Tensor& input, ForwardIntermediates& intermediates,
-                   uint64_t training_step = 0, int layer_idx = 0);
+                uint64_t training_step = 0, bool dropout_enabled = false, int layer_idx = 0);
 
     //--------------------------------------------------
     // NOTE: Backward Pass handled by autograd

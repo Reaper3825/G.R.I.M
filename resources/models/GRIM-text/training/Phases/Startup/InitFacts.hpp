@@ -23,7 +23,7 @@
 //  parameter groups against the tied buffer become hard
 //  std::runtime_error throws (Rule 20: fail loud, never log-and-continue).
 //
-//  Must be called AFTER model->buildParameterGroups(); reads
+//  Must be called AFTER Startup/Model parameter-group registration; reads
 //  pointer-equality + group counts from the live model.
 //======================================================//
 
@@ -44,7 +44,7 @@ namespace GRIMText::Training {
 //         separately from lm buffer (would double-step the tied weights)
 //
 // Pre-conditions:
-//   - ctx.model is fully constructed and buildParameterGroups() has run
+//   - ctx.model is fully constructed and parameter-group registration has run
 //   - ctx.logging.session_id is set
 //   - ctx.config.paths.log_dir exists (created in earlier Phase1 step)
 void verifyAndDumpInitFacts(TrainingContext& ctx);

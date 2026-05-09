@@ -18,6 +18,7 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
 
@@ -86,10 +87,11 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
 //======================================================//
 
 void LanguageModel::initGPU(uint64_t weight_init_seed) {
-    const auto& cfg = getConfig();
+    const auto& model_cfg = getConfig();
+    const auto init_hp = HyperParameters::gpuModelInitializationHP(model_cfg);
 
-    std::cout << "[initGPU] Entry, use_gpu=" << (cfg.use_gpu ? "true" : "false") << std::endl;
-    if (!cfg.use_gpu) {
+    std::cout << "[initGPU] Entry, use_gpu=" << (init_hp.use_gpu ? "true" : "false") << std::endl;
+    if (!init_hp.use_gpu) {
         throw std::runtime_error("[initGPU] use_gpu=false but GRIM-text REQUIRES GPU - fix ai_config.json");
     }
 
@@ -137,11 +139,11 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         //======================================================//
         //  3) Build GPU encoder
         //
-        //  Hyperparameters come from `cfg` (LanguageModelConfig, the single
-        //  source of truth in HyperParameters_GPU.hpp). Runtime device
+        //  Hyperparameters come from EncoderLayerConstructionHP, the grouped
+        //  read view owned by HyperparameterGroupings.hpp. Runtime device
         //  handles — positional encoding, stream, cuBLAS, init seed — come from
-        //  EncoderRuntimeBindings. No intermediate EncoderConfig: there's
-        //  nothing to copy because there's no second config.
+        //  EncoderRuntimeBindings. Runtime and hyperparameter ownership stay
+        //  separate; no caller-local cfg slicing.
         //======================================================//
         if (!isPBMInitialized()) {
             throw std::runtime_error(
@@ -149,14 +151,14 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
                 "Call initPBM() BEFORE createGPUEncoder()");
         }
 
+        const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(model_cfg);
         EncoderRuntimeBindings enc_bindings;
         enc_bindings.pos_encoding = &getPBMSpec();
         enc_bindings.stream = primary_stream;
         enc_bindings.cublas_handle = training_state_.cublas_handle;
         enc_bindings.weight_seed = weight_init_seed;
         // Issue #142: 1/sqrt(2*num_layers) for residual projection init
-        enc_bindings.residual_scale =
-            1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
+        enc_bindings.residual_scale = init_hp.residual_scale;
 
         fprintf(stdout, "[initGPU] Layers will self-allocate weights "
                 "(seed=%llu, residual_scale=%.6f)\n",
@@ -167,18 +169,18 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
                   << training_state_.cublas_handle
                   << ", stream=" << primary_stream << ")\n";
 
-        auto* encoder_ptr = new GPUGrimEncoder(cfg, enc_bindings);
+        auto* encoder_ptr = new GPUGrimEncoder(encoder_hp, enc_bindings);
         gpu_encoder_.reset(encoder_ptr);
 
         // Layers self-allocated their own weights in the constructor. Verify all are ready.
-        for (int layer = 0; layer < cfg.num_layers; ++layer) {
+        for (int layer = 0; layer < init_hp.num_layers; ++layer) {
             auto* gpu_layer = encoder_ptr->getLayer(layer);
             if (!gpu_layer || !gpu_layer->weightsReady()) {
                 throw std::runtime_error("[initGPU] FATAL: Encoder layer " + std::to_string(layer) +
                                          " not ready after self-allocation!");
             }
         }
-        std::cout << "✓ " << cfg.num_layers << " encoder layers self-allocated weights\n";
+        std::cout << "✓ " << init_hp.num_layers << " encoder layers self-allocated weights\n";
 
         //======================================================//
         //  6a) Build persistent Embedding layer (Pattern B)
@@ -189,20 +191,17 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         //  Must be created BEFORE LMHeadLayer (LM head aliases embedding for tied config).
         //======================================================//
         {
-            EmbeddingLayerConfig emb_config;
-            emb_config.vocab_size = cfg.vocab_size;
-            emb_config.d_model = cfg.d_model;
-
+            const auto emb_hp = HyperParameters::embeddingLayerConstructionHP(model_cfg);
             // Seed convention: embedding uses weight_init_seed + 0
             const uint64_t emb_seed = weight_init_seed;
 
-            embedding_layer_ = std::make_unique<EmbeddingLayer>(emb_config, emb_seed, primary_stream);
+            embedding_layer_ = std::make_unique<EmbeddingLayer>(emb_hp, emb_seed, primary_stream, true);
 
             if (!embedding_layer_->weightsReady()) {
                 throw std::runtime_error("[initGPU] FATAL: EmbeddingLayer not ready after construction!");
             }
-            std::cout << "✓ Embedding layer created (vocab=" << cfg.vocab_size
-                      << ", d_model=" << cfg.d_model
+            std::cout << "✓ Embedding layer created (vocab=" << emb_hp.vocab_size
+                      << ", d_model=" << emb_hp.d_model
                       << ")\n";
         }
 
@@ -214,125 +213,87 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         //  weights for tying) and AFTER encoder (needs stream/cublas).
         //======================================================//
         {
-            LMHeadLayerConfig lm_config;
-            lm_config.d_model = cfg.d_model;
-            lm_config.vocab_size = cfg.vocab_size;
-            lm_config.use_bias = cfg.use_bias;
-            lm_config.center_hidden_states = cfg.lm_head_center_hidden_states;
-            lm_config.project_out_pc1 = cfg.project_out_pc1;
-            lm_config.pc1_power_iters = cfg.pc1_power_iters;
-            lm_config.center_logits = cfg.center_logits;
-            lm_config.has_final_rms_norm = true;
-            lm_config.freeze_final_rms_gamma = cfg.lm_head_freeze_final_rms_gamma;
-            lm_config.rms_epsilon = cfg.rms_epsilon;
-            lm_config.stream = primary_stream;
-            lm_config.cublas_handle = training_state_.cublas_handle;
-
+            const auto lm_hp = HyperParameters::lmHeadLayerConstructionHP(model_cfg);
             // Seed convention: lm_head uses weight_init_seed + 1
             const uint64_t lm_head_seed = weight_init_seed + 1;
 
             // For tied weights, pass pointer to embedding token weights (owned by EmbeddingLayer)
-            Tensor* tied_emb = cfg.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
+            Tensor* tied_emb = lm_hp.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
 
-            lm_head_layer_ = std::make_unique<LMHeadLayer>(lm_config, lm_head_seed, primary_stream, tied_emb);
+            lm_head_layer_ = std::make_unique<LMHeadLayer>(
+                lm_hp, lm_head_seed, primary_stream, training_state_.cublas_handle, tied_emb);
 
             if (!lm_head_layer_->weightsReady()) {
                 throw std::runtime_error("[initGPU] FATAL: LMHeadLayer not ready after construction!");
             }
             std::cout << "✓ LM Head layer created ("
-                      << (cfg.tie_embeddings ? "tied to embedding" : "separate weights")
-                      << ", final_rms_gamma owned, bias=" << (cfg.use_bias ? "yes" : "no") << ")\n";
+                      << (lm_hp.tie_embeddings ? "tied to embedding" : "separate weights")
+                      << ", final_rms_gamma owned, bias=" << (lm_hp.use_bias ? "yes" : "no") << ")\n";
         }
 
         // ReasoningHead layer
-        if (cfg.reasoning_head_enabled) {
-            ReasoningHeadConfig rh_config;
-            rh_config.d_model = cfg.d_model;
-            rh_config.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
-            rh_config.num_ops = cfg.reasoning_num_ops;
+        const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(model_cfg);
+        if (reasoning_hp.enabled) {
             const uint64_t rh_seed = weight_init_seed + 10;
-            reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(rh_config, rh_seed, primary_stream);
+            reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(reasoning_hp, rh_seed, primary_stream);
             std::cout << "✓ ReasoningHead layer created (d_total="
-                      << rh_config.d_total() << ", num_ops=" << rh_config.num_ops << ")\n";
+                      << (reasoning_hp.d_model + reasoning_hp.atom_embedding_dim)
+                      << ", num_ops=" << reasoning_hp.num_ops << ")\n";
         }
 
         // ExecutionBlock layer (differentiable register machine)
-        if (cfg.execution_block_enabled) {
-            ExecutionBlockConfig eb_config;
-            eb_config.d_model = cfg.d_model;
-            eb_config.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
-            eb_config.num_ops = cfg.execution_block_num_ops;
-            eb_config.num_slots = cfg.execution_block_num_slots;
-            eb_config.num_exec_steps = cfg.execution_block_num_steps;
-            eb_config.d_key = cfg.execution_block_d_key;
-            eb_config.d_type = cfg.execution_block_d_type;
-            eb_config.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
-            eb_config.cross_attn_topk = cfg.execution_block_cross_attn_topk;
-            eb_config.usage_decay = cfg.execution_block_usage_decay;
-            eb_config.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
-            eb_config.div_invalid_penalty_weight = cfg.div_invalid_penalty_weight;
-            eb_config.div_magnitude_penalty_weight = cfg.div_magnitude_penalty_weight;
-            eb_config.arg_reinforce_weight = cfg.arg_reinforce_weight;
-            eb_config.arg_reinforce_baseline_decay = cfg.arg_reinforce_baseline_decay;
-
+        const auto execution_hp = HyperParameters::executionBlockConstructionHP(model_cfg);
+        if (execution_hp.enabled) {
             const uint64_t eb_seed = weight_init_seed + 20;
-            execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_config, eb_seed, primary_stream);
-            std::cout << "✓ ExecutionBlock layer created (V=" << eb_config.num_slots
-                      << ", K=" << eb_config.num_exec_steps
-                      << ", ops=" << eb_config.num_ops << ")\n";
+            execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(execution_hp, eb_seed, primary_stream);
+            std::cout << "✓ ExecutionBlock layer created (V=" << execution_hp.num_slots
+                      << ", K=" << execution_hp.num_exec_steps
+                      << ", ops=" << execution_hp.num_ops << ")\n";
 
             // Decode-time slot selector (pointer-selector baseline)
-            if (cfg.selector_enabled) {
-                DecodeTimeSlotSelectorConfig sel_config;
-                sel_config.d_model = cfg.d_model;
-                sel_config.d_selector = cfg.selector_d_selector;
-                sel_config.d_slot_features = kSlotFeatureDim;
-                sel_config.cublas_handle = training_state_.cublas_handle;
-
+            const auto selector_hp = HyperParameters::decodeTimeSelectorConstructionHP(model_cfg);
+            if (selector_hp.enabled) {
                 const uint64_t sel_seed = weight_init_seed + 30;
                 decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
-                    sel_config, sel_seed, primary_stream);
+                    selector_hp, sel_seed, primary_stream, training_state_.cublas_handle);
 
-                NumPolicyConfig pol_config;
-                pol_config.selection_margin = cfg.selector_selection_margin;
-                pol_config.num_slots = cfg.execution_block_num_slots;
-                pol_config.scratch_slots = 0; // num_scratch_slots defaults to 0
-                decode_time_num_policy_ = std::make_unique<DecodeTimeNumPolicy>(pol_config);
+                decode_time_num_policy_ = std::make_unique<DecodeTimeNumPolicy>(selector_hp);
 
-                std::cout << "✓ DecodeTimeSlotSelector created (d_selector=" << sel_config.d_selector
-                          << ", margin=" << pol_config.selection_margin << ")\n";
+                std::cout << "✓ DecodeTimeSlotSelector created (d_selector=" << selector_hp.d_selector
+                          << ", margin=" << selector_hp.selection_margin << ")\n";
             }
         }
 
         // Multi-token prediction (MTP) auxiliary heads: K independent linear heads (not tied to embedding)
-        if (cfg.mtp_enabled && cfg.mtp_k > 0) {
-            mtp_heads_.resize(static_cast<size_t>(cfg.mtp_k));
-            for (int k = 0; k < cfg.mtp_k; ++k) {
+        const auto mtp_hp = HyperParameters::mtpConstructionHP(model_cfg);
+        if (mtp_hp.enabled) {
+            mtp_heads_.resize(static_cast<size_t>(mtp_hp.k));
+            for (int k = 0; k < mtp_hp.k; ++k) {
                 auto& head = mtp_heads_[static_cast<size_t>(k)];
                 const std::string w_name = "mtp_head_" + std::to_string(k) + ".weight";
                 const std::string b_name = "mtp_head_" + std::to_string(k) + ".bias";
-                head.weight = Tensor::zeros({cfg.vocab_size, cfg.d_model}, primary_stream, w_name.c_str());
+                head.weight = Tensor::zeros({mtp_hp.vocab_size, mtp_hp.d_model}, primary_stream, w_name.c_str());
                 head.weight.requires_grad_();
                 head.weight.ensure_grad();
                 const uint64_t mtp_seed = weight_init_seed + 3 + static_cast<uint64_t>(k);
                 Tensor::xavier_uniform_(head.weight, mtp_seed, primary_stream);
-                head.bias = Tensor::zeros({cfg.vocab_size}, primary_stream, b_name.c_str());
+                head.bias = Tensor::zeros({mtp_hp.vocab_size}, primary_stream, b_name.c_str());
                 head.bias.requires_grad_();
                 head.bias.ensure_grad();
             }
-            std::cout << "✓ MTP " << cfg.mtp_k << " auxiliary heads created (alpha=" << cfg.mtp_alpha
-                      << ", warmup_steps=" << cfg.mtp_alpha_warmup_steps << ")\n";
+            std::cout << "✓ MTP " << mtp_hp.k << " auxiliary heads created (alpha=" << mtp_hp.alpha
+                      << ", warmup_steps=" << mtp_hp.alpha_warmup_steps << ")\n";
         }
 
-        std::cout << "✓ GPU encoder initialized with " << cfg.num_layers << " layers\n";
+        std::cout << "✓ GPU encoder initialized with " << init_hp.num_layers << " layers\n";
         std::cout << "  - Attention: GPU-accelerated\n";
         std::cout << "  - FFN: GPU-accelerated with fused GELU\n";
         std::cout << "  - Layer Norm: GPU-accelerated\n";
 
-        if (cfg.use_flash_attention) {
+        if (init_hp.use_flash_attention) {
             std::cout << "⚡ Enabling Flash Attention 2...\n";
-            encoder_ptr->setFlashAttention(true, cfg.min_seq_len_for_flash);
-            std::cout << "✓ Flash Attention enabled (min_seq_len=" << cfg.min_seq_len_for_flash << ")\n";
+            encoder_ptr->setFlashAttention(true, init_hp.min_seq_len_for_flash);
+            std::cout << "✓ Flash Attention enabled (min_seq_len=" << init_hp.min_seq_len_for_flash << ")\n";
         }
 
     } catch (const std::exception& e) {

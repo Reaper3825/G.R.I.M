@@ -5,6 +5,7 @@ import sys
 import glob
 import os
 import csv
+import math
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,6 +21,74 @@ TELEMETRY_COLUMN_ALIASES = {
     "observation": "raw_observation",
     "raw observation": "raw_observation",
 }
+TELEMETRY_STREAM_NAMES_BY_INDEX = {
+    0: "loss",
+    1: "grad_norm_mean",
+    2: "grad_norm_max",
+    3: "learning_rate",
+    4: "tokens_per_batch",
+    5: "rho_final",
+    6: "rho_growth",
+    7: "rho_worst_delta",
+    8: "h_rms_growth",
+    9: "adam_bc2_v_convergence",
+    10: "adam_signal_dominance",
+    11: "adam_cumulative_disp",
+    12: "adam_disruption_emb",
+    13: "adam_inv_bc2_amp",
+    14: "exec_grad_norm",
+    15: "exec_grad_ratio",
+    16: "exec_selection_entropy",
+    17: "exec_op_entropy",
+    18: "exec_div_clamp_rate",
+    19: "exec_max_p_write",
+    20: "exec_active_ratio",
+    21: "eb_inject_gate",
+    22: "eb_read_gate_mean",
+    23: "eb_inject_weight_norm",
+    24: "eb_read_weight_norm",
+    25: "eb_loss_frac",
+    26: "sb_atom_embed_rms",
+    27: "pbm_alibi_slope_rms",
+    28: "pbm_alibi_eff_bias_max",
+    29: "pbm_rope_inv_freq_rms",
+    30: "pbm_batch_max_seq_len",
+    31: "rho_raw_avg_abs_dot",
+    32: "rho_raw_avg_norm_prod",
+    33: "rho_raw_h_rms_min",
+    34: "rho_raw_h_rms_max",
+    35: "rms_gamma_pre_attn_rms",
+    36: "rms_gamma_pre_ffn_rms",
+    37: "rms_gamma_final_rms",
+    38: "rho_raw_rms_spread",
+    39: "hw_cos_rms",
+    40: "hw_cos_signed_mean",
+    41: "hw_cos_abs_max",
+    42: "hw_hbar_wbar_cos",
+    43: "hw_h_dc_mean",
+    44: "hw_h_dc_abs_max",
+    45: "unigram_dir_cos_abs_mean",
+    46: "unigram_dir_cos_signed_mean",
+    47: "lm_head_w_rms_rms",
+    48: "init_tie_cfg",
+    49: "init_tie_ptrs_same",
+    50: "init_tie_grads_same",
+    51: "init_lm_owns_weights",
+    52: "init_opt_groups_total",
+    53: "init_opt_groups_emb",
+    54: "init_opt_groups_lm",
+}
+
+
+def d_model_for_baseline():
+    raw_value = os.environ.get("GRIM_TEXT_D_MODEL", "768")
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError("GRIM_TEXT_D_MODEL must be an integer") from exc
+    if value <= 0:
+        raise ValueError("GRIM_TEXT_D_MODEL must be positive")
+    return value
 
 
 def find_default_telemetry_csv():
@@ -28,6 +97,7 @@ def find_default_telemetry_csv():
                            "resources", "models", "GRIM-text", "training", "logs")
 
     candidates = [
+        os.path.join(log_dir, "latest_run.csv"),
         os.path.join(log_dir, "telemetary_latest.csv"),
         os.path.join(log_dir, "telemetry_latest.csv"),
         os.path.join(log_dir, "telemetry_*.csv"),
@@ -94,11 +164,49 @@ def canonicalize_telemetry_columns(df):
     return df
 
 
+def stream_index_to_name(value):
+    if pd.isna(value):
+        return None
+    numeric = float(value)
+    if not numeric.is_integer():
+        raise ValueError(f"Telemetry stream_idx is not an integer: {value}")
+    stream_idx = int(numeric)
+    return TELEMETRY_STREAM_NAMES_BY_INDEX.get(stream_idx)
+
+
+def repair_telemetry_stream_names(df):
+    """Fill new/legacy CSV stream names from stream_idx when logger wrote unknown."""
+    if "stream_idx" not in df.columns:
+        return df
+
+    repaired = df.copy()
+    indices = pd.to_numeric(repaired["stream_idx"], errors="coerce")
+    indexed_names = indices.map(stream_index_to_name)
+    current_names = repaired["stream_name"].astype(str).str.strip()
+    lower_names = current_names.str.lower()
+
+    missing_names = indexed_names.notna() & ((current_names == "") | (lower_names == "unknown"))
+    repaired.loc[missing_names, "stream_name"] = indexed_names[missing_names]
+
+    mismatched_names = indexed_names.notna() & ~missing_names & (current_names != indexed_names)
+    if mismatched_names.any():
+        examples = repaired.loc[mismatched_names, ["stream_idx", "stream_name"]].head(8)
+        expected = indexed_names[mismatched_names].head(8).tolist()
+        details = "; ".join(
+            f"idx {row.stream_idx}: csv='{row.stream_name}', expected='{expected[i]}'"
+            for i, row in enumerate(examples.itertuples(index=False))
+        )
+        raise ValueError(f"Telemetry CSV stream_idx/name mismatch: {details}")
+
+    return repaired
+
+
 def read_telemetry_csv(path):
     if os.path.getsize(path) <= 0:
         raise ValueError(f"Telemetry CSV is empty: {path}")
     df = pd.read_csv(path)
-    return canonicalize_telemetry_columns(df)
+    df = canonicalize_telemetry_columns(df)
+    return repair_telemetry_stream_names(df)
 
 
 def load_telemetry(path):
@@ -442,7 +550,6 @@ def main():
         gs5 = GridSpec(3, 2, figure=fig5)
 
         # ln(V) reference for loss plots
-        import math
         # Detect vocab size from loss data if available
         ln_v = math.log(10000)  # ln(vocab_size)
 
@@ -1000,12 +1107,8 @@ def main():
     if has_hw:
         # Infer d_model from random-cosine baseline: this is the data-independent
         # reference line we plot. Default d=768; override via env var if needed.
-        import math
-        try:
-            d_model_for_baseline = int(os.environ.get("GRIM_TEXT_D_MODEL", "768"))
-        except ValueError:
-            d_model_for_baseline = 768
-        cos_random_baseline = 1.0 / math.sqrt(float(d_model_for_baseline))
+        d_model_baseline = d_model_for_baseline()
+        cos_random_baseline = 1.0 / math.sqrt(float(d_model_baseline))
 
         fig11 = plt.figure(figsize=(16, 14), constrained_layout=True)
         fig11.suptitle("GRIM-text Telemetry — h↔W Alignment (LM-head Leak Channel)",
@@ -1090,7 +1193,7 @@ def main():
         ax = fig11.add_subplot(gs11[2, 1])
         if hw_cos_rms is not None:
             cos_vals = hw_cos_rms["raw_observation"].astype(float).values
-            d_f = float(d_model_for_baseline)
+            d_f = float(d_model_baseline)
             inflation = np.sqrt(np.maximum(0.0, 1.0 + d_f * (cos_vals * cos_vals)))
             ax.plot(hw_cos_rms.index, inflation,
                     alpha=0.3, linewidth=0.5, color="tab:orange")
@@ -1102,7 +1205,7 @@ def main():
         ax.axhline(2.0, color="tab:red", linewidth=0.8, linestyle="--",
                    alpha=0.7, label="2× inflation (alarm)")
         ax.set_ylabel("Predicted logit_std / expected")
-        ax.set_title(f"Predicted Logit-Std Inflation from Alignment (d={d_model_for_baseline})")
+        ax.set_title(f"Predicted Logit-Std Inflation from Alignment (d={d_model_baseline})")
         ax.legend(fontsize=8, loc="upper left")
         ax.grid(True, alpha=0.3)
 
@@ -1110,6 +1213,137 @@ def main():
         print(f"Saved: {os.path.splitext(path)[0]}_hw_alignment.png")
     else:
         print("h↔W alignment figure skipped: no hw_cos_* streams in CSV")
+
+    # --- Figure 12: Unigram direction, LM-head scale, and init invariants ---
+    unigram_abs = streams.get("unigram_dir_cos_abs_mean")
+    unigram_signed = streams.get("unigram_dir_cos_signed_mean")
+    lm_head_w_rms = streams.get("lm_head_w_rms_rms")
+    init_tie_cfg = streams.get("init_tie_cfg")
+    init_tie_ptrs_same = streams.get("init_tie_ptrs_same")
+    init_tie_grads_same = streams.get("init_tie_grads_same")
+    init_lm_owns_weights = streams.get("init_lm_owns_weights")
+    init_opt_groups_total = streams.get("init_opt_groups_total")
+    init_opt_groups_emb = streams.get("init_opt_groups_emb")
+    init_opt_groups_lm = streams.get("init_opt_groups_lm")
+
+    init_bool_streams = [
+        ("tie cfg", init_tie_cfg, "tab:blue"),
+        ("weight ptrs same", init_tie_ptrs_same, "tab:green"),
+        ("grad ptrs same", init_tie_grads_same, "tab:purple"),
+        ("LM owns weights", init_lm_owns_weights, "tab:red"),
+    ]
+    init_count_streams = [
+        ("groups total", init_opt_groups_total, "tab:blue"),
+        ("embedding groups", init_opt_groups_emb, "tab:green"),
+        ("LM groups", init_opt_groups_lm, "tab:red"),
+    ]
+    has_unigram_lm_init = any(s is not None for s in [
+        unigram_abs, unigram_signed, lm_head_w_rms,
+        init_tie_cfg, init_tie_ptrs_same, init_tie_grads_same, init_lm_owns_weights,
+        init_opt_groups_total, init_opt_groups_emb, init_opt_groups_lm,
+    ])
+    if has_unigram_lm_init:
+        d_model_baseline = d_model_for_baseline()
+        unigram_random_abs = math.sqrt(2.0 / (math.pi * float(d_model_baseline)))
+        cos_random_baseline = 1.0 / math.sqrt(float(d_model_baseline))
+
+        fig12 = plt.figure(figsize=(16, 14), constrained_layout=True)
+        fig12.suptitle("GRIM-text Telemetry — Unigram Direction & Init Invariants",
+                       fontsize=14, fontweight="bold")
+        gs12 = GridSpec(3, 2, figure=fig12)
+
+        # 12-1a) Unigram-frequency direction absolute alignment.
+        ax = fig12.add_subplot(gs12[0, 0])
+        if unigram_abs is not None:
+            ax.plot(unigram_abs.index, unigram_abs["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:orange")
+            ax.plot(unigram_abs.index, smooth(unigram_abs["raw_observation"]),
+                    linewidth=1.5, color="tab:orange", label="mean |cos(h, e_uf)|")
+        ax.axhline(unigram_random_abs, color="gray", linewidth=1, linestyle="--",
+                   alpha=0.7, label=f"random |cos|≈{unigram_random_abs:.4f}")
+        ax.axhline(2.0 * unigram_random_abs, color="tab:red", linewidth=0.8,
+                   linestyle=":", alpha=0.7, label="2× random (warning)")
+        ax.set_ylabel("Mean absolute cosine")
+        ax.set_title("Unigram-Frequency Direction Alignment")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 12-1b) Signed unigram direction alignment.
+        ax = fig12.add_subplot(gs12[0, 1])
+        if unigram_signed is not None:
+            ax.plot(unigram_signed.index, unigram_signed["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:purple")
+            ax.plot(unigram_signed.index, smooth(unigram_signed["raw_observation"]),
+                    linewidth=1.5, color="tab:purple", label="mean cos(h, e_uf)")
+        ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+        ax.axhline(unigram_random_abs, color="gray", linewidth=0.8, linestyle=":",
+                   alpha=0.5, label="±random |cos|")
+        ax.axhline(-unigram_random_abs, color="gray", linewidth=0.8, linestyle=":",
+                   alpha=0.5)
+        ax.set_ylabel("Signed mean cosine")
+        ax.set_title("Signed Unigram Direction Bias (should hover near 0)")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 12-2a) Raw LM-head W RMS term from logit-scale equation.
+        ax = fig12.add_subplot(gs12[1, 0])
+        if lm_head_w_rms is not None:
+            ax.plot(lm_head_w_rms.index, lm_head_w_rms["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:green")
+            ax.plot(lm_head_w_rms.index, smooth(lm_head_w_rms["raw_observation"]),
+                    linewidth=1.5, color="tab:green", label="W_rms_rms")
+            initial_w_rms = float(lm_head_w_rms["raw_observation"].iloc[0])
+            ax.axhline(initial_w_rms, color="gray", linewidth=0.8, linestyle="--",
+                       alpha=0.6, label=f"initial={initial_w_rms:.6f}")
+        ax.set_ylabel("W_rms_rms")
+        ax.set_title("LM-Head Weight RMS Term: logit_std ≈ √d · h_rms · W_rms_rms")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 12-2b) Alignment comparison: h↔W vs unigram direction.
+        ax = fig12.add_subplot(gs12[1, 1])
+        if hw_cos_rms is not None:
+            ax.plot(hw_cos_rms.index, smooth(hw_cos_rms["raw_observation"]),
+                    linewidth=1.4, color="tab:red", label="RMS cos(h, W_v)")
+        if unigram_abs is not None:
+            ax.plot(unigram_abs.index, smooth(unigram_abs["raw_observation"]),
+                    linewidth=1.4, color="tab:orange", label="mean |cos(h, e_uf)|")
+        ax.axhline(cos_random_baseline, color="tab:red", linewidth=0.8, linestyle="--",
+                   alpha=0.5, label=f"RMS random={cos_random_baseline:.4f}")
+        ax.axhline(unigram_random_abs, color="tab:orange", linewidth=0.8, linestyle=":",
+                   alpha=0.7, label=f"abs random={unigram_random_abs:.4f}")
+        ax.set_ylabel("Cosine magnitude")
+        ax.set_title("Competing Collapse Channels")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 12-3a) Init-time boolean invariants repaired from stream_idx 48-51.
+        ax = fig12.add_subplot(gs12[2, 0])
+        for name, s, color in init_bool_streams:
+            if s is not None:
+                ax.step(s.index, s["raw_observation"], where="post",
+                        linewidth=1.4, color=color, label=name)
+        ax.set_ylabel("0 / 1")
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_title("Init Invariants: Tied Embedding / LM-Head Ownership")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 12-3b) Init-time optimizer group counts repaired from stream_idx 52-54.
+        ax = fig12.add_subplot(gs12[2, 1])
+        for name, s, color in init_count_streams:
+            if s is not None:
+                ax.step(s.index, s["raw_observation"], where="post",
+                        linewidth=1.4, color=color, label=name)
+        ax.set_ylabel("Count")
+        ax.set_title("Init Invariants: Optimizer Group Counts")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        fig12.savefig(os.path.splitext(path)[0] + "_unigram_lm_init.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_unigram_lm_init.png")
+    else:
+        print("Unigram/LM-head/init figure skipped: no streams in CSV")
 
     plt.show()
 

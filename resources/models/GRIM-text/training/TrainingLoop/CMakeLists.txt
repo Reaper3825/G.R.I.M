@@ -293,7 +293,8 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/TrainingState/TrainingStateGPU.cu
     ../../Shared/Optimizers/OptimizerState_GPU.cu
     ../../Shared/TeacherLogits/TeacherLogits_GPU.cu
-    ../LanguageModel_Training.cu
+    ../Phases/Startup/Model/ParameterGroupRegistration.cu
+    ../Phases/Startup/Model/ParameterGroupRegistration.hpp
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
     ../Autograd/AutogradContext.cu

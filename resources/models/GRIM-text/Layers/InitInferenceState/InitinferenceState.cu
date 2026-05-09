@@ -27,11 +27,10 @@
 #include "../Encoding/Encoding_GPU.hpp"
 #include "../ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
-
-using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 using GRIM::Tensor;
 
@@ -48,7 +47,8 @@ void LanguageModel::initInferenceState() {
             "This is a call-order bug.");
     }
     
-    const auto& cfg = getConfig();
+    const auto& model_cfg = getConfig();
+    const auto cache_hp = HyperParameters::inferenceCacheConstructionHP(model_cfg);
     std::cout << "[InitInferenceState] Initializing INFERENCE-ONLY state..." << std::endl;
     std::cout << "  → Skipping gradient buffers" << std::endl;
     std::cout << "  → Skipping optimizer state" << std::endl;
@@ -76,35 +76,18 @@ void LanguageModel::initInferenceState() {
     cublasSetStream(training_state_.cublas_handle, primary_stream);
     std::cout << "  ✓ Created cuBLAS handle with Tensor Core acceleration" << std::endl;
     
-    training_state_.cached_num_layers = cfg.num_layers;
-
-    // RULE 20: require an explicit num_kv_heads in config — no silent fallback to num_heads.
-    // Inference must use the same GQA topology as training; if config is missing/invalid,
-    // crash here instead of silently running as full multi-head attention.
-    if (cfg.num_kv_heads <= 0) {
-        throw std::runtime_error("[InitInferenceState] Invalid GQA config: cfg.num_kv_heads=" +
-                                 std::to_string(cfg.num_kv_heads) +
-                                 " (must be > 0; set explicitly in ai_config.json)");
-    }
-    if (!HyperParameters::isValidGQAConfig(cfg.num_heads, cfg.num_kv_heads)) {
-        throw std::runtime_error("[InitInferenceState] Invalid GQA config: num_heads=" +
-                                 std::to_string(cfg.num_heads) + " num_kv_heads=" +
-                                 std::to_string(cfg.num_kv_heads));
-    }
-    const int num_kv_heads = cfg.num_kv_heads;  // local alias for downstream sizing math
+    training_state_.cached_num_layers = cache_hp.num_layers;
+    const int num_kv_heads = cache_hp.num_kv_heads;
     
     // TensorContract shape helpers
     using TC = TensorContract::TensorShape;
     
     // 2. Create EmbeddingLayer (Pattern B: self-allocating, inference mode)
     {
-        EmbeddingLayerConfig emb_cfg{};
-        emb_cfg.vocab_size = cfg.vocab_size;
-        emb_cfg.d_model = cfg.d_model;
-        emb_cfg.requires_grad = false;   // Inference only — no gradients
+        const auto emb_hp = HyperParameters::embeddingLayerConstructionHP(model_cfg);
 
         embedding_layer_ = std::make_unique<EmbeddingLayer>(
-            emb_cfg, /*seed=*/0, primary_stream
+            emb_hp, /*seed=*/0, primary_stream, false
         );
         std::cout << "  ✓ EmbeddingLayer initialized (inference, Pattern B)" << std::endl;
     }
@@ -113,91 +96,64 @@ void LanguageModel::initInferenceState() {
     // LMHeadLayer owns weights, bias, and final_rms_gamma.
     // Weight tying is handled by passing tied embedding pointer to constructor.
     {
-        LMHeadLayerConfig lm_cfg{};
-        lm_cfg.d_model = cfg.d_model;
-        lm_cfg.vocab_size = cfg.vocab_size;
-        lm_cfg.use_bias = cfg.use_bias;
-        lm_cfg.has_final_rms_norm = true;
-        lm_cfg.stream = primary_stream;
-        lm_cfg.cublas_handle = training_state_.cublas_handle;
+        const auto lm_hp = HyperParameters::lmHeadLayerConstructionHP(model_cfg);
         
-        Tensor* tied_ptr = cfg.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
+        Tensor* tied_ptr = lm_hp.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
         
         lm_head_layer_ = std::make_unique<LMHeadLayer>(
-            lm_cfg, /*seed=*/0, primary_stream, tied_ptr
+            lm_hp, /*seed=*/0, primary_stream, training_state_.cublas_handle, tied_ptr
         );
         std::cout << "  ✓ LMHeadLayer initialized (inference, tie=" 
-                  << (cfg.tie_embeddings ? "true" : "false") << ")" << std::endl;
+                  << (lm_hp.tie_embeddings ? "true" : "false") << ")" << std::endl;
     }
 
     // ReasoningHead layer (inference — loaded from checkpoint if present)
-    if (cfg.reasoning_head_enabled) {
-        ReasoningHeadConfig rh_cfg;
-        rh_cfg.d_model = cfg.d_model;
-        rh_cfg.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
-        rh_cfg.num_ops = cfg.reasoning_num_ops;
+    const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(model_cfg);
+    if (reasoning_hp.enabled) {
 
-        reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(rh_cfg, /*seed=*/0, primary_stream);
+        reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(reasoning_hp, /*seed=*/0, primary_stream);
         std::cout << "  ✓ ReasoningHeadLayer initialized (inference, d_total="
-                  << rh_cfg.d_total() << ", num_ops=" << rh_cfg.num_ops << ")" << std::endl;
+                  << (reasoning_hp.d_model + reasoning_hp.atom_embedding_dim)
+                  << ", num_ops=" << reasoning_hp.num_ops << ")" << std::endl;
     }
 
     // ExecutionBlock layer (inference — loaded from checkpoint if present)
-    if (cfg.execution_block_enabled) {
-        ExecutionBlockConfig eb_cfg;
-        eb_cfg.d_model = cfg.d_model;
-        eb_cfg.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
-        eb_cfg.num_ops = cfg.execution_block_num_ops;
-        eb_cfg.num_slots = cfg.execution_block_num_slots;
-        eb_cfg.num_exec_steps = cfg.execution_block_num_steps;
-        eb_cfg.d_key = cfg.execution_block_d_key;
-        eb_cfg.d_type = cfg.execution_block_d_type;
-        eb_cfg.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
-        eb_cfg.cross_attn_topk = cfg.execution_block_cross_attn_topk;
-        eb_cfg.usage_decay = cfg.execution_block_usage_decay;
-        eb_cfg.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
-
-        execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(eb_cfg, /*seed=*/0, primary_stream);
+    const auto execution_hp = HyperParameters::executionBlockConstructionHP(model_cfg);
+    if (execution_hp.enabled) {
+        execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(execution_hp, /*seed=*/0, primary_stream);
         std::cout << "  ✓ ExecutionBlockLayer initialized (inference, V="
-                  << eb_cfg.num_slots << ", K=" << eb_cfg.num_exec_steps << ")" << std::endl;
+                  << execution_hp.num_slots << ", K=" << execution_hp.num_exec_steps << ")" << std::endl;
 
         // Decode-time slot selector (inference — loaded from checkpoint)
-        if (cfg.selector_enabled) {
-            DecodeTimeSlotSelectorConfig sel_cfg;
-            sel_cfg.d_model = cfg.d_model;
-            sel_cfg.d_selector = cfg.selector_d_selector;
-            sel_cfg.d_slot_features = kSlotFeatureDim;
-            sel_cfg.cublas_handle = training_state_.cublas_handle;
+        const auto selector_hp = HyperParameters::decodeTimeSelectorConstructionHP(model_cfg);
+        if (selector_hp.enabled) {
 
             decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
-                sel_cfg, /*seed=*/0, primary_stream);
+                selector_hp, /*seed=*/0, primary_stream, training_state_.cublas_handle);
 
-            NumPolicyConfig pol_cfg;
-            pol_cfg.selection_margin = cfg.selector_selection_margin;
-            pol_cfg.num_slots = cfg.execution_block_num_slots;
-            pol_cfg.scratch_slots = 0;
-            decode_time_num_policy_ = std::make_unique<DecodeTimeNumPolicy>(pol_cfg);
+            decode_time_num_policy_ = std::make_unique<DecodeTimeNumPolicy>(selector_hp);
 
             std::cout << "  ✓ DecodeTimeSlotSelector initialized (inference, d_selector="
-                      << sel_cfg.d_selector << ")" << std::endl;
+                      << selector_hp.d_selector << ")" << std::endl;
         }
     }
 
     // MTP heads (inference: allocate so load() can fill from .mtp sidecar; not used in forward)
-    if (cfg.mtp_enabled && cfg.mtp_k > 0) {
-        mtp_heads_.resize(static_cast<size_t>(cfg.mtp_k));
-        for (int k = 0; k < cfg.mtp_k; ++k) {
+    const auto mtp_hp = HyperParameters::mtpConstructionHP(model_cfg);
+    if (mtp_hp.enabled) {
+        mtp_heads_.resize(static_cast<size_t>(mtp_hp.k));
+        for (int k = 0; k < mtp_hp.k; ++k) {
             auto& head = mtp_heads_[static_cast<size_t>(k)];
-            head.weight = Tensor::zeros({cfg.vocab_size, cfg.d_model}, primary_stream, ("mtp_inf_" + std::to_string(k) + "_w").c_str());
-            head.bias = Tensor::zeros({cfg.vocab_size}, primary_stream, ("mtp_inf_" + std::to_string(k) + "_b").c_str());
+            head.weight = Tensor::zeros({mtp_hp.vocab_size, mtp_hp.d_model}, primary_stream, ("mtp_inf_" + std::to_string(k) + "_w").c_str());
+            head.bias = Tensor::zeros({mtp_hp.vocab_size}, primary_stream, ("mtp_inf_" + std::to_string(k) + "_b").c_str());
         }
-        std::cout << "  ✓ MTP " << cfg.mtp_k << " heads allocated (weights loaded from .mtp if present)" << std::endl;
+        std::cout << "  ✓ MTP " << mtp_hp.k << " heads allocated (weights loaded from .mtp if present)" << std::endl;
     }
 
     // 3b. Allocate minimal activation caches
-    const size_t max_batch_size = static_cast<size_t>(std::max(1, cfg.max_cached_batch));
-    const size_t max_seq_len_cache = static_cast<size_t>(std::max(1, std::min(cfg.max_seq_len, cfg.max_cached_seq_len)));
-    size_t max_tokens = max_batch_size * max_seq_len_cache;
+    const size_t max_batch_size = cache_hp.max_batch_size;
+    const size_t max_seq_len_cache = cache_hp.max_seq_len_cache;
+    size_t max_tokens = cache_hp.max_tokens;
     
     std::cout << "  ℹ Allocating activation caches: batch=" << max_batch_size
               << ", seq_len=" << max_seq_len_cache 
@@ -247,7 +203,7 @@ void LanguageModel::initInferenceState() {
     
     // Encoder outputs cache - use Tensor API
     training_state_.cached_encoder_output = Tensor::zeros(
-        TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
+        TC::make_BSM(static_cast<int>(max_tokens), cache_hp.d_model),
         false,  // no grad for inference
         primary_stream,
         "cached_encoder_output_inf"
@@ -256,7 +212,7 @@ void LanguageModel::initInferenceState() {
     
     // Logits cache - use Tensor API
     training_state_.cached_logits_tensor = Tensor::zeros(
-        TC::make_BSM(static_cast<int>(max_tokens), cfg.vocab_size),
+        TC::make_BSM(static_cast<int>(max_tokens), cache_hp.vocab_size),
         false,  // no grad for inference
         primary_stream,
         "cached_logits_tensor_inf"
@@ -266,21 +222,21 @@ void LanguageModel::initInferenceState() {
     
     // 4. Allocate single-token buffers for incremental generation (KV cache)
     generation_state_.single_token_embedding = Tensor::zeros(
-        TC::make_BSM(1, cfg.d_model),
+        TC::make_BSM(1, cache_hp.d_model),
         false,  // no grad for inference
         primary_stream,
         "single_token_embedding_inf"
     );
     
     generation_state_.single_token_hidden = Tensor::zeros(
-        TC::make_BSM(1, cfg.d_model),
+        TC::make_BSM(1, cache_hp.d_model),
         false,  // no grad for inference
         primary_stream,
         "single_token_hidden_inf"
     );
     
     generation_state_.single_token_logits = Tensor::zeros(
-        TC::make_BSM(1, cfg.vocab_size),
+        TC::make_BSM(1, cache_hp.vocab_size),
         false,  // no grad for inference
         primary_stream,
         "single_token_logits_inf"
@@ -292,8 +248,8 @@ void LanguageModel::initInferenceState() {
 
     // 5. Allocate per-layer KV cache (BF16, BSHD layout for FlashAttention direct use)
     {
-        const int head_dim = cfg.d_model / cfg.num_heads;
-        const int n_layers = cfg.num_layers;
+        const int head_dim = cache_hp.head_dim;
+        const int n_layers = cache_hp.num_layers;
         const size_t kv_elems_per_layer = static_cast<size_t>(num_kv_heads) * max_seq_len_cache * head_dim;
         const size_t kv_bytes_per_layer = kv_elems_per_layer * sizeof(__nv_bfloat16);
 
@@ -313,7 +269,7 @@ void LanguageModel::initInferenceState() {
 
         // Shared softmax LSE scratch for decode: [num_heads, generation KV capacity rounded]
         const int kv_cap_rounded = ((static_cast<int>(max_seq_len_cache) + 127) / 128) * 128;
-        const size_t lse_bytes = static_cast<size_t>(cfg.num_heads) * kv_cap_rounded * sizeof(float);
+        const size_t lse_bytes = static_cast<size_t>(cache_hp.num_heads) * kv_cap_rounded * sizeof(float);
         generation_state_.kv_cache.softmax_lse.allocate(lse_bytes, "kv_cache_lse");
         cudaMemsetAsync(generation_state_.kv_cache.softmax_lse, 0, lse_bytes, primary_stream);
 
@@ -323,26 +279,26 @@ void LanguageModel::initInferenceState() {
                   << (total_kv_bytes / 1024.0 / 1024.0) << " MB total (BF16)" << std::endl;
 
         // Decode scratch buffers (tiny, reused per layer per decode step)
-        const size_t q_bf16_bytes = static_cast<size_t>(cfg.num_heads) * head_dim * sizeof(__nv_bfloat16);
+          const size_t q_bf16_bytes = static_cast<size_t>(cache_hp.num_heads) * head_dim * sizeof(__nv_bfloat16);
         generation_state_.decode_scratch.q_bf16.allocate(q_bf16_bytes, "decode_q_bf16");
         generation_state_.decode_scratch.attn_out_bf16.allocate(q_bf16_bytes, "decode_attn_out_bf16");
-        generation_state_.decode_scratch.attn_out_fp32.allocate(static_cast<size_t>(cfg.d_model) * sizeof(float), "decode_attn_out_fp32");
+          generation_state_.decode_scratch.attn_out_fp32.allocate(static_cast<size_t>(cache_hp.d_model) * sizeof(float), "decode_attn_out_fp32");
         std::cout << "  ✓ Allocated decode scratch buffers ("
-              << ((q_bf16_bytes * 2 + cfg.d_model * sizeof(float)) / 1024.0) << " KB)" << std::endl;
+              << ((q_bf16_bytes * 2 + cache_hp.d_model * sizeof(float)) / 1024.0) << " KB)" << std::endl;
     }
     
     // NOTE: encoder_workspace DELETED (Rule 20/26) — autograd forward creates its own Tensors.
 
     // 6. Initialize ScratchBlock reasoning layer (if enabled)
-    if (cfg.use_scratch_block) {
+    if (cache_hp.use_scratch_block) {
         try {
             // ScratchBlock layer owns its own buffers now (no external caches needed).
             // ScratchBlockLayer constructor handles weight allocation + initialization.
             
             if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
                 std::cout << "  ✓ ScratchBlock reasoning layer enabled (d_model="
-                          << cfg.d_model << ", atom_dim=" << cfg.scratch_block_atom_embedding_dim
-                          << ", max_atoms=" << cfg.scratch_block_max_atoms << ")" << std::endl;
+                          << cache_hp.d_model << ", atom_dim=" << cache_hp.scratch_block_atom_embedding_dim
+                          << ", max_atoms=" << cache_hp.scratch_block_max_atoms << ")" << std::endl;
             }
         } catch (const std::exception& e) {
             throw std::runtime_error("[InitInferenceState] ScratchBlock init failed (config says use_scratch_block=true): "
@@ -358,10 +314,10 @@ void LanguageModel::initInferenceState() {
     
     // Compute actual allocated activation buffer sizes (weights excluded — loaded separately)
     const size_t token_cache_bytes = max_tokens * sizeof(float) * 3;  // token_ids + numeric_values + numeric_mask (all float Tensors)
-    const size_t encoder_out_bytes = max_tokens * cfg.d_model * sizeof(float);
-    const size_t logits_bytes = max_tokens * cfg.vocab_size * sizeof(float);
-    const size_t single_token_bytes = (2 * cfg.d_model + cfg.vocab_size) * sizeof(float);  // embedding + hidden + logits
-    const size_t workspace_bytes = static_cast<size_t>(cfg.d_ff) * max_seq_len_cache * 4 * sizeof(float);
+    const size_t encoder_out_bytes = max_tokens * cache_hp.d_model * sizeof(float);
+    const size_t logits_bytes = max_tokens * cache_hp.vocab_size * sizeof(float);
+    const size_t single_token_bytes = (2 * cache_hp.d_model + cache_hp.vocab_size) * sizeof(float);  // embedding + hidden + logits
+    const size_t workspace_bytes = static_cast<size_t>(cache_hp.d_ff) * max_seq_len_cache * 4 * sizeof(float);
     
     const size_t total_bytes = token_cache_bytes + encoder_out_bytes + logits_bytes +
                                single_token_bytes + workspace_bytes;

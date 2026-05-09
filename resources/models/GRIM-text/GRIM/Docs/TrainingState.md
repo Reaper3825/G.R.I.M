@@ -25,7 +25,7 @@ RAII helper modules:
 | CUDA streams | `training_state.stream_ctrl.getPrimaryStream()` |
 | cuBLAS handle | `training_state.cublas_handle` (`CublasHandleOwner`, borrowed as raw `cublasHandle_t`) |
 | Parameter gradients | `Tensor.grad_` via `ctx.model->zeroGradients()` / `ctx.model->backward()` |
-| Optimizer states | Not TrainingState-owned; `Training::OptimizerContext::optimizer_state` owns Adam/RAdam moment tensors and `LanguageModel::bindOptimizerState()` binds them to parameter groups. |
+| Optimizer states | Not TrainingState-owned; `Training::OptimizerContext::optimizer_state` owns Adam/RAdam moment tensors and `Startup/Model/ParameterGroupRegistration` binds them to `LanguageModel` parameter groups. |
 
 Generation state is a separate owner:
 
@@ -45,7 +45,7 @@ Training-time sampling must call `LanguageModel::ensureKVCacheAllocated()` expli
 
 `TrainingState` does **not** own activation/intermediate gradient lifecycle. TensorContract owns those through `Tensor.grad_` and `GradFn` scratch buffers inside the autograd boundary. LM-head logits are non-leaf tensors; `LogSoftmaxGradFn` allocates its non-leaf input-gradient workspace and passes that view directly to the upstream logits `GradFn`. Do not add TrainingState mirrors for logits gradients.
 
-The `cached_token_*` / `cached_targets_tensor` fields are reusable device storage only. `BatchPayload` owns host-side batch semantics and geometry; `LanguageModel::uploadBatchToDevice()` copies that payload into TrainingState-owned device buffers and returns `BatchDeviceBindings`, which is the canonical per-step device view consumed by forward/loss. Training/eval code must not infer the current batch by directly reading these cache fields. Phase-3 inference still writes its single-sequence token/side-channel data into the same reusable storage as temporary backing, but `LanguageModel::executeInferenceForward_()` builds an explicit per-call `BatchDeviceBindings` view plus a geometry-only `BatchPayload`, then calls `Shared/Forward/ModelForward_GPU.hpp` with `ModelForwardMode::InferencePrefill`; inference must not enter `AutogradContext` or `executeAutogradForward()`.
+The `cached_token_*` / `cached_targets_tensor` / `cached_seq_lengths_tensor` fields are reusable device storage only. `BatchPayload` owns host-side batch semantics and geometry; `LanguageModel::uploadBatchToDevice()` copies that payload into TrainingState-owned device buffers and returns `BatchDeviceBindings`, which is the canonical per-step device view consumed by forward/loss. `BatchDeviceBindings.d_seq_lengths` is required for padding-aware residual and LM-head hidden centering; target masking in loss is not an activation mask. Training/eval code must not infer the current batch by directly reading these cache fields. Phase-3 inference still writes its single-sequence token/side-channel data into the same reusable storage as temporary backing, but `LanguageModel::executeInferenceForward_()` builds an explicit per-call `BatchDeviceBindings` view plus a geometry-only `BatchPayload`, then calls `Shared/Forward/ModelForward_GPU.hpp` with `ModelForwardMode::InferencePrefill`; inference must not enter `AutogradContext` or `executeAutogradForward()`.
 
 Inference session state is **not** `TrainingState`: persistent execution memory, decode trace vectors, decode-time selector result, KV cursor/cache, decode scratch, and single-token scratch are `GenerationState` fields. Training's `execution_trace_by_row` / `trace_state_by_row` are training/eval forward diagnostics only.
 

@@ -25,31 +25,9 @@
 #include <cstdint>
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
-
-//======================================================//
-//  Configuration
-//======================================================//
-
-struct LMHeadLayerConfig {
-    int d_model = 0;           // Hidden dimension (MUST be populated)
-    int vocab_size = 0;        // Output vocabulary size (MUST be populated)
-    bool use_bias = false;     // Add learnable bias to logits
-    bool center_hidden_states = false;  // Apply column+row centering before projection (Issue #125/#132)
-    bool project_out_pc1 = false;       // Project out dominant PC1 direction before projection (Issue #149)
-    int  pc1_power_iters = 5;           // Number of power iteration steps for PC1 estimation
-    bool center_logits = false;         // Row-center logits after projection (numerical stability)
-    bool has_final_rms_norm = true;     // Apply RMSNorm before projection (pre-LM-head norm)
-    bool freeze_final_rms_gamma = false; // If true, γ_final is held at 1.0 (no requires_grad, no param group).
-                                         // Use when γ_final exhibits monotonic logit-temperature inflation
-                                         // (1.0 → 1.3+ over 20k steps) that the wd_mult/lr_mult brake cannot
-                                         // counter. Mathematically equivalent to no learnable scale on the
-                                         // final norm (GPT-2 style); the LM head W absorbs any needed scale.
-    float rms_epsilon = 1e-5f;          // RMSNorm epsilon
-    cudaStream_t stream = nullptr;
-    cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle
-};
 
 //======================================================//
 //  LMHeadLayer - Self-Allocating (Pattern B: Layer Ownership)
@@ -73,13 +51,15 @@ public:
     /// When null, weights are independently allocated with Xavier init.
     /// final_rms_gamma is ALWAYS self-allocated (initialized to 1.0).
     ///
-    /// @param config               Layer configuration (d_model, vocab_size, etc.)
+    /// @param hp                   Grouped construction hyperparameters
     /// @param seed                  Xavier init seed for independent weights
     /// @param init_stream           CUDA stream for allocation
+    /// @param cublas_handle         Rule 22: MUST be training_state.cublas_handle
     /// @param tied_embedding_weights If non-null, weights alias this tensor (from_ptr + share_grad)
-    explicit LMHeadLayer(const LMHeadLayerConfig& config,
+    explicit LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
                          uint64_t seed,
                          cudaStream_t init_stream,
+                         cublasHandle_t cublas_handle,
                          Tensor* tied_embedding_weights = nullptr);
 
     ~LMHeadLayer() = default;
@@ -95,7 +75,7 @@ public:
     //--------------------------------------------------
     // Configuration
     //--------------------------------------------------
-    const LMHeadLayerConfig& config() const noexcept { return config_; }
+    const HyperParameters::LMHeadLayerConstructionHP& config() const noexcept { return hp_; }
 
     //--------------------------------------------------
     // Weight Accessors (for training/serialization)
@@ -110,13 +90,13 @@ public:
     // The WRITE accessor THROWS if the gamma is configured frozen.
     // Only four legitimate writers exist:
     //   1. LMHeadLayer ctor (uses the private member directly)
-    //   2. LanguageModel_Training::buildParameterGroups (registerTensor)
+    //   2. Startup/Model/ParameterGroupRegistration (register final_rms_gamma)
     //   3. AutogradTraining (zero_grad before backward)
     //   4. grim_model_serialization::load (assignWrite to .data)
     // Any other path that obtains a mutable reference will trip the throw and
     // produce a stack trace pinpointing the leak.
     Tensor& finalRmsGammaMutable_UnfrozenOnly(const char* caller) {
-        if (config_.freeze_final_rms_gamma) {
+        if (hp_.freeze_final_rms_gamma) {
             throw std::runtime_error(
                 std::string("[FROZEN-GAMMA-LEAK] mutable access to final_rms_gamma while "
                             "freeze_final_rms_gamma=true. caller=") +
@@ -137,15 +117,15 @@ public:
     //--------------------------------------------------
     // Runtime Configuration (update before forward)
     //--------------------------------------------------
-    void setStream(cudaStream_t s) { config_.stream = s; }
-    void setCublasHandle(cublasHandle_t h) { config_.cublas_handle = h; }
+    void setStream(cudaStream_t s) { stream_ = s; }
+    void setCublasHandle(cublasHandle_t h) { cublas_handle_ = h; }
 
     //--------------------------------------------------
     // Forward Pass - Autograd
     //--------------------------------------------------
     /// LM head forward with autograd tracking:
     ///   0. Optional: RMSNorm(input, final_rms_gamma_frozen_or_trained_) — pre-LM-head normalization
-    ///   1. Optional: center_columns + center_rows on normalized input (Issue #125/#132)
+    ///   1. Optional: center_columns_by_sequence_lengths + center_rows on normalized input (Issue #125/#132)
     ///   2. logits = input @ weights^T  (autograd::matmul, transpose_b=true)
     ///   3. Optional: center_rows on logits (numerical stability)
     ///   4. Optional: logits += bias  (autograd::broadcast_add)
@@ -154,13 +134,22 @@ public:
     ///
     /// @param input                    [total_tokens, d_model] - encoder output (MUST have grad_fn if training)
     /// @param out_centered_hidden      Output: centered hidden states (valid only if centering enabled, for diagnostics)
+    /// @param d_sequence_lengths       Device [batch_size] real lengths for padding-aware hidden centering
+    /// @param batch_size               Number of flattened sequences/samples
+    /// @param rows_per_sequence        Padded contiguous rows per sequence/sample in the flattened input
     /// @return logits [total_tokens, vocab_size] with grad_fn attached
-    Tensor forward(const Tensor& input, Tensor& out_centered_hidden);
+    Tensor forward(const Tensor& input, Tensor& out_centered_hidden,
+                   const int* d_sequence_lengths, int batch_size, int rows_per_sequence);
 
 
 
 private:
-    LMHeadLayerConfig config_{};
+    // Immutable grouped read view from HyperparameterGroupings.hpp. This is not
+    // a second authored config owner; it is the layer's durable construction HP
+    // snapshot needed after startup-local grouping objects go out of scope.
+    HyperParameters::LMHeadLayerConstructionHP hp_{};
+    cudaStream_t stream_ = nullptr;
+    cublasHandle_t cublas_handle_ = nullptr;
 
     // Weight Tensors with autograd (requires_grad=true)
     Tensor weights_;          // [vocab_size, d_model] — owned or aliased from embedding

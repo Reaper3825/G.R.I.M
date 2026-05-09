@@ -27,9 +27,10 @@ namespace GRIM {
 //  Self-Allocating Constructor (Pattern B)
 //======================================================//
 
-EmbeddingLayer::EmbeddingLayer(const EmbeddingLayerConfig& config,
+EmbeddingLayer::EmbeddingLayer(const HyperParameters::EmbeddingLayerConstructionHP& config,
                                uint64_t seed,
-                               cudaStream_t stream)
+                               cudaStream_t stream,
+                               bool requires_grad)
     : config_(config)
 {
     // Rule 20: Fail loud on invalid configuration
@@ -47,7 +48,7 @@ EmbeddingLayer::EmbeddingLayer(const EmbeddingLayerConfig& config,
     //  TOKEN EMBEDDINGS: Always allocated [vocab_size, d_model]
     // ══════════════════════════════════════════════════════════════
     token_weights_ = Tensor::zeros({config_.vocab_size, config_.d_model}, stream, "embedding.token_weights");
-    if (config_.requires_grad) {
+    if (requires_grad) {
         token_weights_.requires_grad_();
         token_weights_.ensure_grad();  // Allocate grad NOW so share_grad() works for LM head tying
     }

@@ -431,6 +431,8 @@ void EncodingLayer::freeWeights() {
     b_qkv_ = Tensor();
     W_o_ = Tensor();
     b_o_ = Tensor();
+    layer_scale1_ = Tensor();
+    layer_scale2_ = Tensor();
     ffn_.reset();
     weights_ready_ = false;
 }
@@ -463,9 +465,11 @@ void EncodingLayer::validateReady(const char* context) const {
 //  Forward Pass - Autograd Implementation with ForwardIntermediates (Issue #56 Fix)
 //======================================================//
 
-Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, cudaStream_t stream,
+Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
+                               const int* d_sequence_lengths, cudaStream_t stream,
                                ForwardIntermediates& intermediates,
                                uint64_t training_step,
+                               bool dropout_enabled,
                                int layer_idx) {
     const int seq_len = payload.max_seq_len;
     if constexpr (kEnableEncoderStepLogs) {
@@ -504,6 +508,24 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     }
     
     const int batch_size = payload.batch_size;
+    if (config_.center_encoder_residuals) {
+        if (!d_sequence_lengths) {
+            throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires non-null d_sequence_lengths");
+        }
+        if (static_cast<int>(payload.seq_lengths.size()) != batch_size) {
+            throw std::runtime_error("EncodingLayer::forward: payload.seq_lengths size (" +
+                                     std::to_string(payload.seq_lengths.size()) +
+                                     ") != batch_size (" + std::to_string(batch_size) + ")");
+        }
+        for (int b = 0; b < batch_size; ++b) {
+            const int row_len = payload.seq_lengths[static_cast<size_t>(b)];
+            if (row_len <= 1 || row_len > seq_len) {
+                throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals invalid seq_lengths[" +
+                                         std::to_string(b) + "]=" + std::to_string(row_len) +
+                                         " for padded seq_len=" + std::to_string(seq_len));
+            }
+        }
+    }
     const int num_heads = config_.num_heads;
     const int num_kv_heads = config_.effectiveKVHeads();
     const int head_dim = config_.headDim();
@@ -883,16 +905,17 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     }
     
     // Issue #56: Store attention output in intermediates
-    // Compute per-step per-layer dropout seed using Knuth multiplicative hash
-    // training_step=0 + attention_dropout=0.0 means no dropout (inference mode)
+    // Compute per-step per-layer dropout seed using Knuth multiplicative hash.
+    // Dropout mode is explicit: training_step is seed material only, never a mode gate.
     const int layer_idx_for_seed = layer_idx;
-    const uint64_t attn_dropout_seed = (training_step > 0 && config_.attention_dropout > 0.0f)
+    const float attention_dropout_p = dropout_enabled ? config_.attention_dropout : 0.0f;
+    const uint64_t attn_dropout_seed = (attention_dropout_p > 0.0f)
         ? (training_step * 2654435761ULL + 42 + 1000 * static_cast<uint64_t>(layer_idx_for_seed))
         : 0;
     intermediates.attn_out_bhsd = autograd::scaled_dot_product_attention(
         intermediates.Q_bhsd, intermediates.K_bhsd, intermediates.V_bhsd, 
         config_.pos_encoding->alibi_slopes, 0.0f, stream, true,
-        config_.attention_dropout, attn_dropout_seed);
+        attention_dropout_p, attn_dropout_seed);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 4: Flash Attention DONE\n");
     if (qkv_debug > 0) {
         const bool always_log = (qkv_debug >= 2);
@@ -934,7 +957,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     //     Standard transformer: residual = input + dropout(sublayer(norm(input)))
     //     Dropout applied BEFORE LayerScale and residual add.
     //--------------------------------------------------
-    if (config_.dropout_rate > 0.0f && training_step > 0) {
+    if (config_.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t attn_proj_dropout_seed = training_step * 2654435761ULL + 100 + layer_idx;
         intermediates.proj_out = autograd::dropout(intermediates.proj_out, config_.dropout_rate,
                                                    attn_proj_dropout_seed, true, stream);
@@ -979,16 +1002,23 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     //   shared direction through layers: ρ grows +0.01-0.04 per layer.
     //   Over 12 layers: ρ(emb)=0.05 → ρ(final)=0.44 → mode collapse.
     //
-    // WHAT: center_columns subtracts the cross-position mean for each feature:
-    //   h[t,d] -= mean_t(h[t,d])   for each feature d
-    //   This removes the rank-1 shared direction at each layer.
+    // WHAT: center_columns_by_sequence_lengths subtracts the cross-position mean
+    //   over VALID (unpadded) tokens for each feature WITHIN EACH BATCH ROW:
+    //   h[b,t,d] -= mean_{u < seq_lengths[b]}(h[b,u,d])   for valid t
+    //   h[b,t,d] = 0                                      for padded t
+    //   This removes the rank-1 shared direction at each layer without making
+    //   sample A's hidden state depend on sample B's hidden state or on PAD rows.
     //
     // GRADIENT COST: The centering projection P = I - 11^T/n has backward
-    //   grad_input = P * grad_output. Per-layer attenuation = (1 - 1/n_tokens).
-    //   For n_tokens ≈ 6000: (1 - 1/6000)^24 ≈ 0.996. Negligible.
+    //   grad_input = P * grad_output within each sequence. Only the per-sequence
+    //   constant mode is projected out; non-constant token modes are preserved.
     // ========================================================================
     if (config_.center_encoder_residuals) {
-        intermediates.residual1 = autograd::center_columns(intermediates.residual1, stream);
+        if (seq_len <= 1) {
+            throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
+        }
+        intermediates.residual1 = autograd::center_columns_by_sequence_lengths(
+            intermediates.residual1, d_sequence_lengths, batch_size, seq_len, stream);
     }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 (pre-norm, no sandwich) DONE\n");
     
@@ -1007,7 +1037,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     // (ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out are written by SwiGLU forward)
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
-    intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates, training_step, layer_idx);
+    intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates,
+                                          training_step, dropout_enabled, layer_idx);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
     //--------------------------------------------------
@@ -1015,7 +1046,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload, 
     //     Standard transformer: residual = input + dropout(sublayer(norm(input)))
     //     Dropout applied BEFORE LayerScale and residual add.
     //--------------------------------------------------
-    if (config_.dropout_rate > 0.0f && training_step > 0) {
+    if (config_.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t ffn_dropout_seed = training_step * 2654435761ULL + 200 + layer_idx;
         intermediates.ffn_out = autograd::dropout(intermediates.ffn_out, config_.dropout_rate,
                                                   ffn_dropout_seed, true, stream);

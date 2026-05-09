@@ -9,9 +9,13 @@ LM head backward and embedding backward write to the **same buffer** via PyTorch
 
 `embedding_grads` and `lm_head_weight_grads` are the **same pointer**. Never zero both separately, register both in param groups, or free both.
 
+`LMHeadLayer` consumes `HyperParameters::LMHeadLayerConstructionHP` directly. It stores that grouped construction-HP snapshot as `hp_` only because startup grouping temporaries go out of scope before forward/backward; it is **not** a second authored config owner. Runtime tying ownership must match the grouping: `tie_embeddings=true` requires a non-null embedding weight pointer, and `tie_embeddings=false` requires `nullptr`.
+
 ## Hidden-state centering
-- Column-center `h` (`Σ_t h[t,d] = 0`) before LM head.
+- Column-center `h` per sequence over real tokens only (`Σ_{t < seq_lengths[b]} h[b,t,d] = 0`) before LM head via `autograd::center_columns_by_sequence_lengths`. Never center over the full `[batch_size * seq_len, d_model]` matrix; that leaks batch-row information. Never center over the padded row stride without lengths; PAD activations are real vectors and would steer the mean.
+- The length-aware centering op zeros padded rows in forward and zeros their gradients in backward. `BatchDeviceBindings.d_seq_lengths` is the required device-side source of truth for this mask.
 - Row-center the LM head **weight** matrix (`Σ_d W[v,d] = 0`) via `autograd::center_rows(weights_)` inside `LMHeadLayer::forward` — equivalent invariance to row-centering `h`, but preserves per-position energy and enforces `Σ_d grad_h[t,d] = 0` in the backward pass.
+- Single-token decode cannot apply hidden-state column centering because `Σ_t` has one row and would erase the hidden signal. `LMHeadLayer::forward` throws if `center_hidden_states=true` with `rows_per_sequence <= 1`.
 - Telemetry stream 38 (`rho_raw_rms_spread`): healthy 1.0–1.5×, >2× warn, >4× anomaly.
 
 ## γ_final (final RMSNorm gamma)

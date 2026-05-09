@@ -91,7 +91,7 @@ struct BatchPayload {
     // ═══════════════════════════════════════════════════════════════════════════
     static constexpr int kTextFeatureDim = 16;
 
-    std::vector<int> input_ids;              // [total_tokens] padded with 0
+    std::vector<int> input_ids;              // [total_tokens] padded with Tokenizer::PAD_TOKEN_ID
     std::vector<int> target_ids;             // [total_tokens] padded with -1
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
     std::vector<uint16_t> text_features;     // [total_tokens * kTextFeatureDim] padded with 0

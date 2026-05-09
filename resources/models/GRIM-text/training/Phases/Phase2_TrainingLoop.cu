@@ -8,9 +8,7 @@
 #include "Phase3_Cleanup.hpp"
 #include "../Diagnostics/Diagnostics.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
-#include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
-using GRIM::CudaAlloc::cudaMallocOrThrow;
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"       // GradClip::clipGradientNorms (registry-level clipping)
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"          // GRIM::LR::LRSchedule (exposed LR curve)
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -42,7 +40,6 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 // Module logging aliases
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
-using GRIM::Logging::EmitModuleWarning;
 using GRIM::Logging::EmitModuleError;
 
 namespace GRIMText::Training {
@@ -563,9 +560,8 @@ BatchResult processBatch(
 
         if (emb_freeze_step > 0 && ctx.optimizer.optimizer_step.step == emb_freeze_step) {
             if (ctx.config.hyperparameters.architecture.tie_embeddings) {
-                ctx.logging.logger->log("[EmbeddingFreeze] WARNING: tie_embeddings=true — "
-                    "embedding and LM head share weights. Set tie_embeddings=false to freeze "
-                    "embedding independently. Freeze has no effect on tied weights.");
+                ctx.logging.logger->log("[EmbeddingFreeze] WARNING: embedding and LM head share weights. "
+                    "Exact config values are listed by ConfigDump. Freeze has no effect on tied weights.");
             } else {
                 ctx.logging.logger->log("[EmbeddingFreeze] Embedding weights FROZEN at step "
                     + std::to_string(emb_freeze_step) + " — no further embedding updates");

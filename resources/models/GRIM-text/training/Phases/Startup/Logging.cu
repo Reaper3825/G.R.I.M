@@ -124,7 +124,7 @@ void setupBatchLogTape(LoggingContext& logging, const StartupConfig& config) {
     // Set global tape pointer for layer-level code
     GRIM::Logging::setGlobalTape(logging.tape.get());
 
-    logging.logger->log("BatchLogTape initialized: " + GRIM::Logging::dumpTapeConfig(tc));
+    logging.logger->log("BatchLogTape initialized; exact logging config values are listed by ConfigDump.");
 }
 
 } // namespace Internal

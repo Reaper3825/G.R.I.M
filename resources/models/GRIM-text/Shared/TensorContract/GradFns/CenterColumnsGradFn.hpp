@@ -19,6 +19,11 @@ struct CenterColumnsGradFn : public GradFn {
     std::size_t element_count = 0;
     int num_cols = 0;
     int num_rows = 0;
+    int rows_per_group = 0;
+    int group_count = 0;
+    bool use_sequence_lengths = false;
+    int* sequence_lengths = nullptr;
+    std::shared_ptr<int> owned_sequence_lengths;
 
     float* input_grad = nullptr;
     std::shared_ptr<GradFn> input_grad_fn;
@@ -26,7 +31,9 @@ struct CenterColumnsGradFn : public GradFn {
 
     CenterColumnsGradFn();
 
-    void capture_input(Tensor& input, int cols, int rows, cudaStream_t stream);
+    void capture_input(Tensor& input, int cols, int rows, int group_rows,
+                       const int* d_sequence_lengths, int groups,
+                       cudaStream_t stream);
     void apply(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };

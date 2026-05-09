@@ -1240,6 +1240,48 @@ Tensor center_rows(const Tensor& x, cudaStream_t stream = nullptr);
  */
 Tensor center_columns(const Tensor& x, cudaStream_t stream = nullptr);
 
+/**
+ * Per-sequence column centering for flattened batch tensors.
+ *
+ * Forward:  y[b,t,d] = x[b,t,d] - mean_t(x[b,:,d])
+ * Backward: grad_x[b,t,d] = grad_y[b,t,d] - mean_t(grad_y[b,:,d])
+ *
+ * This preserves sequence/sample isolation when the tensor is flattened as
+ * [batch_size * rows_per_sequence, d_model]. Calling center_columns() on the
+ * full flat matrix intentionally couples batch rows; use this function for
+ * residual stream and LM-head hidden-state interventions.
+ *
+ * @param x Input tensor [B * rows_per_sequence, D]
+ * @param rows_per_sequence Number of contiguous rows per sequence/sample
+ * @param stream CUDA stream
+ * @return Centered tensor with per-sequence column means ≈ 0
+ */
+Tensor center_columns_by_sequence(const Tensor& x, int rows_per_sequence, cudaStream_t stream = nullptr);
+
+/**
+ * Padding-aware per-sequence column centering for flattened batch tensors.
+ *
+ * Forward valid rows:
+ *   y[b,t,d] = x[b,t,d] - mean_{u < seq_lengths[b]}(x[b,u,d])
+ * Forward padded rows:
+ *   y[b,t,d] = 0 for t >= seq_lengths[b]
+ * Backward applies the same projection over valid rows and zeros padded-row
+ * gradients. This prevents PAD embeddings/activations from contaminating the
+ * centering mean while keeping each sample independent.
+ *
+ * @param x Input tensor [batch_size * rows_per_sequence, D]
+ * @param d_sequence_lengths Device int32 array [batch_size]
+ * @param batch_size Number of sequences/samples in the flattened tensor
+ * @param rows_per_sequence Padded row stride per sequence/sample
+ * @param stream CUDA stream
+ * @return Centered tensor; valid rows are centered, padded rows are zeroed
+ */
+Tensor center_columns_by_sequence_lengths(const Tensor& x,
+                                          const int* d_sequence_lengths,
+                                          int batch_size,
+                                          int rows_per_sequence,
+                                          cudaStream_t stream = nullptr);
+
     // Issue #149: project out dominant PC1 direction to prevent mode collapse
     // g = PC1(H) via n_power_iters steps of power iteration (stop-gradient)
     // Forward:  h̃[t] = h[t] - (h[t]·g)*g

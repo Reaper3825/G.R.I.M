@@ -2,7 +2,7 @@
 //  execution_block_GPU.hpp
 //  Differentiable Register Machine — GPU
 //
-//  Declares: ExecutionMemory, ExecutionBlockConfig,
+//  Declares: ExecutionMemory,
 //  ExecutionBlockStepOutput, ExecutionBlockOutput,
 //  ExecutionBlockLayer.
 //
@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
 
@@ -47,49 +48,6 @@ struct ExecutionMemory {
 
     void clear(cudaStream_t stream);
     void allocate(int V, int atom_dim, int d_model, int d_key, int d_type, cudaStream_t stream);
-};
-
-//======================================================//
-//  ExecutionBlockConfig
-//======================================================//
-struct ExecutionBlockConfig {
-    int d_model              = 0;
-    int atom_embedding_dim   = 0;   // from ScratchBlock (default 64)
-    int num_ops              = 4;   // +, -, *, /
-    int num_slots            = 4;   // V — max memory slots
-    int num_scratch_slots    = 0;   // S — scratch-only slots [0..S-1]; value slots are [S..V-1]
-    int num_exec_steps       = 2;   // K — execution steps per forward
-    int value_decode_input_dim  = 24;
-    int value_decode_hidden_dim = 16;
-    int d_key                = 64;
-    int d_type               = 8;
-    int cross_attn_head_dim  = 64;
-    int cross_attn_topk      = 1;
-    float usage_decay        = 0.9f;
-    // [DELETED] empty_slot_bonus, diversity_kappa — removed per Fix #4.
-    // kernelComputeWriteBias was non-differentiable; write slot is now pure CE.
-    float inject_gate_temp   = 0.5f;
-    int   result_slot_mode   = 0;     // 0 = last token, 1 = fixed index
-    int   result_slot_index  = -1;    // used when result_slot_mode == 1
-    bool  debug_mode         = true;  // extra diagnostics only; does not relax validation
-    float entropy_collapse_threshold = 0.01f;
-    float write_collapse_threshold   = 0.98f;
-    float magnitude_limit            = 1e6f;
-
-    // Causal state loss (plan: persistantExecutionMemory)
-    float transition_hard_threshold  = 0.0f;  // Fix 1: hard gate threshold (0 = disabled)
-
-    // Fix #6: Division invalid penalty — penalize selecting ÷ when |v2| < eps
-    float div_invalid_penalty_weight = 0.0f;  // 0 = disabled
-
-    // Fix #8: Division magnitude penalty — penalize large |v_out| after clamped division
-    float div_magnitude_penalty_weight = 0.0f;  // 0 = disabled
-
-    // Fix #7: Arg REINFORCE — use transition_err as reward for arg selection.
-    // REINFORCE loss = weight * detached(|v_out-target|) * (-log p_arg[k]).
-    // Gradient: ONLY into arg logits. No soft weighting. No gradient into p_op/v_out.
-    float arg_reinforce_weight = 0.0f;  // 0 = disabled
-    float arg_reinforce_baseline_decay = 0.99f;  // EMA decay for variance-reduction baseline
 };
 
 //======================================================//
@@ -193,7 +151,7 @@ class ExecutionBlockLayer {
 public:
     ExecutionBlockLayer() = delete;
 
-    explicit ExecutionBlockLayer(const ExecutionBlockConfig& config,
+    explicit ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& config,
                                 uint64_t seed,
                                 cudaStream_t init_stream);
 
@@ -353,12 +311,12 @@ public:
     const Tensor& W_reason_gate() const { return W_reason_gate_; }
     const Tensor& W_trace_gate()  const { return W_trace_gate_; }
 
-    const ExecutionBlockConfig& config() const { return config_; }
+    const HyperParameters::ExecutionBlockConstructionHP& config() const { return config_; }
 
 private:
     friend struct ExecutionBlockInternal::LayerAccess;
 
-    ExecutionBlockConfig config_;
+    HyperParameters::ExecutionBlockConstructionHP config_;
 
     // Production hardening: persistent device-side error tracking
     int* d_numeric_error_flag_ = nullptr;  // atomicMax stage-id: numeric, softmax, collapse

@@ -48,6 +48,33 @@ const char* modeName(ModelForwardMode mode) {
     throw std::runtime_error("ModelForward: unknown ModelForwardMode");
 }
 
+void requireCenteringSequenceLengths(const Batching::BatchPayload& payload,
+                                     const Batching::BatchDeviceBindings& bindings,
+                                     const char* caller) {
+    if (!bindings.d_seq_lengths) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_seq_lengths is NULL");
+    }
+    if (payload.batch_size <= 0 || payload.max_seq_len <= 0) {
+        throw std::runtime_error(std::string(caller) + ": invalid payload geometry batch=" +
+                                 std::to_string(payload.batch_size) + " seq=" +
+                                 std::to_string(payload.max_seq_len));
+    }
+    if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
+        throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
+                                 std::to_string(payload.seq_lengths.size()) +
+                                 ") != batch_size (" + std::to_string(payload.batch_size) + ")");
+    }
+    for (int b = 0; b < payload.batch_size; ++b) {
+        const int row_len = payload.seq_lengths[static_cast<size_t>(b)];
+        if (row_len <= 1 || row_len > payload.max_seq_len) {
+            throw std::runtime_error(std::string(caller) + ": invalid seq_lengths[" +
+                                     std::to_string(b) + "]=" + std::to_string(row_len) +
+                                     " for padding-aware centering over max_seq_len=" +
+                                     std::to_string(payload.max_seq_len));
+        }
+    }
+}
+
 }  // namespace
 
 void ModelForwardRequest::validate(const char* caller) const {
@@ -76,6 +103,22 @@ void ModelForwardRequest::validate(const char* caller) const {
             ") does not match request (" + std::to_string(batch_size) + "x" +
             std::to_string(seq_len) + ")");
     }
+    if (!bindings->d_seq_lengths) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_seq_lengths is NULL");
+    }
+    if (static_cast<int>(payload->seq_lengths.size()) != batch_size) {
+        throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
+                                 std::to_string(payload->seq_lengths.size()) +
+                                 ") != batch_size (" + std::to_string(batch_size) + ")");
+    }
+    for (int b = 0; b < batch_size; ++b) {
+        const int row_len = payload->seq_lengths[static_cast<size_t>(b)];
+        if (row_len <= 0 || row_len > seq_len) {
+            throw std::runtime_error(std::string(caller) + ": invalid seq_lengths[" +
+                                     std::to_string(b) + "]=" + std::to_string(row_len) +
+                                     " for seq_len=" + std::to_string(seq_len));
+        }
+    }
 }
 
 ModelForwardResult executeModelForward(ModelForwardRequest& request) {
@@ -91,6 +134,10 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     const auto& payload = *request.payload;
     const bool is_training = request.trainingGraph();
     const bool preserve_layer_intermediates = request.preservesLayerIntermediates();
+
+    if (cfg->center_encoder_residuals || cfg->lm_head_center_hidden_states) {
+        requireCenteringSequenceLengths(payload, *bindings, "ModelForward");
+    }
 
     const int total_tokens = payload.total_tokens;
     result.total_tokens = total_tokens;
@@ -229,7 +276,9 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
             }
 
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
-            Tensor layer_output_view = enc_layer->forward(layer_input, payload, request.stream, *layer_storage, request.step, layer_idx);
+            Tensor layer_output_view = enc_layer->forward(
+                layer_input, payload, bindings->d_seq_lengths, request.stream, *layer_storage,
+                request.step, false, layer_idx);
 
             Tensor owned = Tensor::empty(layer_output_view.shape, false, request.stream, "no_grad_layer_output");
             const size_t bytes = static_cast<size_t>(layer_output_view.shape.total_elements()) * sizeof(float);
@@ -289,7 +338,9 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                 ? intermediates.embedding_tensor
                 : intermediates.encoder_layer_outputs.back();
 
-            Tensor layer_output = enc_layer->forward(layer_input, payload, request.stream, layer_storage, request.step, layer_idx);
+            Tensor layer_output = enc_layer->forward(
+                layer_input, payload, bindings->d_seq_lengths, request.stream, layer_storage,
+                request.step, is_training, layer_idx);
 
             if (layer_idx == exec_layer && request.execution_block) {
                 const int ae = cfg->scratch_block_atom_embedding_dim;
@@ -460,7 +511,11 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
             }
 
             if (cfg->center_encoder_residuals) {
-                layer_output = autograd::center_columns(layer_output, request.stream);
+                if (request.seq_len <= 1) {
+                    throw std::runtime_error("ModelForward: center_encoder_residuals requires request.seq_len > 1; single-row column centering would erase the residual stream");
+                }
+                layer_output = autograd::center_columns_by_sequence_lengths(
+                    layer_output, bindings->d_seq_lengths, request.batch_size, request.seq_len, request.stream);
             }
 
             intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
@@ -502,7 +557,10 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
 
     Tensor logits_tensor = request.lm_head->forward(
         intermediates.encoder_output_tensor,
-        intermediates.centered_encoder_output);
+        intermediates.centered_encoder_output,
+        bindings->d_seq_lengths,
+        request.batch_size,
+        request.seq_len);
 
     if (cfg->lm_head_center_hidden_states && ts->cached_encoder_output.data && intermediates.centered_encoder_output.data) {
         cudaMemcpyAsync(ts->cached_encoder_output.data, intermediates.centered_encoder_output.data,

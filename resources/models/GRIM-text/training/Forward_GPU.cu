@@ -8,6 +8,7 @@
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
 
@@ -17,17 +18,17 @@ namespace GRIM {
 // GPUGrimEncoder::Impl - Layer Container
 // Owns the encoder layers; forward pass uses autograd in AutogradTraining.cu
 //
-// Hyperparameters come from LanguageModelConfig (single source of truth in
-// HyperParameters_GPU.hpp). Runtime device handles (PBM, stream, cuBLAS,
-// init seed) come from EncoderRuntimeBindings. There is no intermediate
-// EncoderConfig struct — config and runtime are not the same thing.
+// Hyperparameters come from EncoderLayerConstructionHP, the grouped read view
+// owned by HyperparameterGroupings.hpp. Runtime device handles (PBM, stream,
+// cuBLAS, init seed) come from EncoderRuntimeBindings; config and runtime are
+// still deliberately separate ownership lanes.
 //======================================================//
 struct GPUGrimEncoder::Impl {
-    HyperParameters::LanguageModelConfig config_;
+    HyperParameters::EncoderLayerConstructionHP config_;
     EncoderRuntimeBindings bindings_;
     std::vector<std::unique_ptr<GPUEncoderLayer>> gpu_layers_;
 
-    Impl(const HyperParameters::LanguageModelConfig& config,
+    Impl(const HyperParameters::EncoderLayerConstructionHP& config,
          const EncoderRuntimeBindings& bindings)
         : config_(config), bindings_(bindings)
     {
@@ -66,7 +67,7 @@ struct GPUGrimEncoder::Impl {
     }
 };
 
-GPUGrimEncoder::GPUGrimEncoder(const HyperParameters::LanguageModelConfig& config,
+GPUGrimEncoder::GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& config,
                                const EncoderRuntimeBindings& bindings)
     : pImpl(new Impl(config, bindings))
 {

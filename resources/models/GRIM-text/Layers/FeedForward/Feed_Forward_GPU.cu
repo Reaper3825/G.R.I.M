@@ -139,7 +139,7 @@ void FeedForwardLayer::setConfig(const FeedForwardConfig& cfg) {
 //======================================================//
 
 Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& intermediates,
-                                 uint64_t training_step, int layer_idx) {
+                                 uint64_t training_step, bool dropout_enabled, int layer_idx) {
     // Rule 20: Crash on invalid weights
     if (!W_gate_.data || !W1_.data || !W2_.data) {
         throw std::runtime_error("FeedForwardLayer::forward: weights not set (W_gate/W1/W2)");
@@ -213,7 +213,7 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
         intermediates.ffn_silu_out, intermediates.ffn_linear1_out, stream);
 
     // Activation dropout: applied after SwiGLU gating, before W2 projection
-    if (config_.dropout_rate > 0.0f && training_step > 0) {
+    if (config_.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t ffn_act_dropout_seed = training_step * 2654435761ULL + 300 + layer_idx;
         intermediates.ffn_swiglu_out = autograd::dropout(intermediates.ffn_swiglu_out, config_.dropout_rate,
                                                           ffn_act_dropout_seed, true, stream);

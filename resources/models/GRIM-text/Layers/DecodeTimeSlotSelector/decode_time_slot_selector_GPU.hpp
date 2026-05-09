@@ -25,20 +25,16 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #else
-using cudaStream_t = void*;
-using cublasHandle_t = void*;
+struct CUstream_st;
+using cudaStream_t = CUstream_st*;
+struct cublasContext;
+using cublasHandle_t = cublasContext*;
 #endif
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
-
-struct DecodeTimeSlotSelectorConfig {
-    int d_model = 0;         // Hidden state dimension (query source)
-    int d_selector = 0;      // Selector key/query projection dimension
-    int d_slot_features = 0; // Fixed slot feature vector size from policy
-    cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle
-};
 
 // Forward result: autograd-tracked score tensor + keep-alive intermediates
 struct SelectorForwardResult {
@@ -53,9 +49,10 @@ struct SelectorForwardResult {
 
 class DecodeTimeSlotSelectorLayer {
 public:
-    DecodeTimeSlotSelectorLayer(const DecodeTimeSlotSelectorConfig& config,
+    DecodeTimeSlotSelectorLayer(const HyperParameters::DecodeTimeSelectorConstructionHP& config,
                                 uint64_t seed,
-                                cudaStream_t init_stream);
+                                cudaStream_t init_stream,
+                                cublasHandle_t cublas_handle);
     ~DecodeTimeSlotSelectorLayer();
 
     DecodeTimeSlotSelectorLayer(DecodeTimeSlotSelectorLayer&& other) noexcept;
@@ -78,7 +75,7 @@ public:
                                   int num_live_slots,
                                   cudaStream_t stream);
 
-    const DecodeTimeSlotSelectorConfig& config() const { return config_; }
+    const HyperParameters::DecodeTimeSelectorConstructionHP& config() const { return config_; }
 
     // ── Tensor accessors (const + non-const) ──
     Tensor& W_q_select()             { return W_q_select_; }
@@ -94,7 +91,8 @@ public:
     const Tensor& null_logit_bias() const { return null_logit_bias_; }
 
 private:
-    DecodeTimeSlotSelectorConfig config_;
+    HyperParameters::DecodeTimeSelectorConstructionHP config_;
+    cublasHandle_t cublas_handle_ = nullptr;
 
     // Required baseline trainable tensors
     Tensor W_q_select_;       // [d_model, d_selector]

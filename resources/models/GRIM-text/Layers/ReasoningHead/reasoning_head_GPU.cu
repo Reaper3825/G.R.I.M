@@ -186,10 +186,10 @@ __global__ void kernelMeanPoolBackward(
 //======================================================//
 //  Constructor
 //======================================================//
-ReasoningHeadLayer::ReasoningHeadLayer(const ReasoningHeadConfig& config,
+ReasoningHeadLayer::ReasoningHeadLayer(const HyperParameters::ReasoningHeadConstructionHP& config,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
-    : config_(config)
+    : config_(config), stream_(init_stream)
 {
     if (config_.d_model <= 0)
         throw std::runtime_error("ReasoningHeadLayer: d_model must be positive");
@@ -200,7 +200,7 @@ ReasoningHeadLayer::ReasoningHeadLayer(const ReasoningHeadConfig& config,
     if (!init_stream)
         throw std::runtime_error("ReasoningHeadLayer: init_stream is NULL");
 
-    const int dt = config_.d_total();
+    const int dt = d_total();
 
     // W_op: [num_ops, d_total]
     w_op_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(config_.num_ops, dt),
@@ -238,22 +238,28 @@ ReasoningHeadLayer::ReasoningHeadLayer(const ReasoningHeadConfig& config,
 //======================================================//
 ReasoningHeadLayer::ReasoningHeadLayer(ReasoningHeadLayer&& other) noexcept
     : config_(other.config_)
+    , stream_(other.stream_)
+    , cublas_handle_(other.cublas_handle_)
     , w_op_(std::move(other.w_op_))
     , b_op_(std::move(other.b_op_))
     , w_arg1_(std::move(other.w_arg1_))
     , w_arg2_(std::move(other.w_arg2_))
 {
-    other.config_.cublas_handle = nullptr;
+    other.stream_ = nullptr;
+    other.cublas_handle_ = nullptr;
 }
 
 ReasoningHeadLayer& ReasoningHeadLayer::operator=(ReasoningHeadLayer&& other) noexcept {
     if (this != &other) {
         config_ = other.config_;
+        stream_ = other.stream_;
+        cublas_handle_ = other.cublas_handle_;
         w_op_ = std::move(other.w_op_);
         b_op_ = std::move(other.b_op_);
         w_arg1_ = std::move(other.w_arg1_);
         w_arg2_ = std::move(other.w_arg2_);
-        other.config_.cublas_handle = nullptr;
+        other.stream_ = nullptr;
+        other.cublas_handle_ = nullptr;
     }
     return *this;
 }
@@ -274,7 +280,7 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     // ════════════════════════════════════════════════════
     if (!stream)
         throw std::runtime_error("ReasoningHeadLayer::forward: stream is NULL");
-    if (!config_.cublas_handle)
+    if (!cublas_handle_)
         throw std::runtime_error("ReasoningHeadLayer::forward: cublas_handle is NULL");
     if (!encoder_output.data)
         throw std::runtime_error("ReasoningHeadLayer::forward: encoder_output.data is NULL");
@@ -310,7 +316,7 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     }
 
     // Weight shape validation
-    const int dt = config_.d_total();
+    const int dt = d_total();
     {
         const auto& ws = w_op_.shape.as_2d();
         if (ws.rows != config_.num_ops || ws.cols != dt)

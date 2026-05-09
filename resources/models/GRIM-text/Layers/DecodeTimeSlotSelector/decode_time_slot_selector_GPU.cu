@@ -35,10 +35,11 @@ namespace GRIM {
 // ─── Constructor ─────────────────────────────────────
 
 DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(
-    const DecodeTimeSlotSelectorConfig& config,
+    const HyperParameters::DecodeTimeSelectorConstructionHP& config,
     uint64_t seed,
-    cudaStream_t init_stream)
-    : config_(config)
+    cudaStream_t init_stream,
+    cublasHandle_t cublas_handle)
+    : config_(config), cublas_handle_(cublas_handle)
 {
     if (config_.d_model <= 0) {
         throw std::runtime_error("DecodeTimeSlotSelectorLayer: d_model must be positive, got " +
@@ -54,6 +55,9 @@ DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(
     }
     if (!init_stream) {
         throw std::runtime_error("DecodeTimeSlotSelectorLayer: init_stream is NULL");
+    }
+    if (!cublas_handle_) {
+        throw std::runtime_error("DecodeTimeSlotSelectorLayer: cublas_handle is NULL");
     }
 
     const int dm = config_.d_model;
@@ -84,9 +88,7 @@ DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(
     null_logit_bias_.requires_grad_();
     null_logit_bias_.ensure_grad();
 
-    if (config_.cublas_handle) {
-        autograd::set_autograd_cublas_handle(config_.cublas_handle);
-    }
+    autograd::set_autograd_cublas_handle(cublas_handle_);
 
     std::fprintf(stderr, "[DecodeTimeSlotSelectorLayer] Autograd self-allocated: "
                  "W_q=[%d,%d], W_k=[%d,%d], null_key=[1,%d], bias=[1,1]\n",
@@ -103,22 +105,24 @@ DecodeTimeSlotSelectorLayer::~DecodeTimeSlotSelectorLayer() {
 
 DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(DecodeTimeSlotSelectorLayer&& other) noexcept
     : config_(other.config_),
+    cublas_handle_(other.cublas_handle_),
       W_q_select_(std::move(other.W_q_select_)),
       W_k_select_(std::move(other.W_k_select_)),
       null_key_select_(std::move(other.null_key_select_)),
       null_logit_bias_(std::move(other.null_logit_bias_))
 {
-    other.config_.cublas_handle = nullptr;
+    other.cublas_handle_ = nullptr;
 }
 
 DecodeTimeSlotSelectorLayer& DecodeTimeSlotSelectorLayer::operator=(DecodeTimeSlotSelectorLayer&& other) noexcept {
     if (this != &other) {
         config_ = other.config_;
+        cublas_handle_ = other.cublas_handle_;
         W_q_select_ = std::move(other.W_q_select_);
         W_k_select_ = std::move(other.W_k_select_);
         null_key_select_ = std::move(other.null_key_select_);
         null_logit_bias_ = std::move(other.null_logit_bias_);
-        other.config_.cublas_handle = nullptr;
+        other.cublas_handle_ = nullptr;
     }
     return *this;
 }
@@ -170,9 +174,10 @@ SelectorForwardResult DecodeTimeSlotSelectorLayer::forward(
     }
 
     // Set cuBLAS handle for autograd matmul
-    if (config_.cublas_handle) {
-        autograd::set_autograd_cublas_handle(config_.cublas_handle);
+    if (!cublas_handle_) {
+        throw std::runtime_error("DecodeTimeSlotSelectorLayer::forward: cublas_handle is NULL");
     }
+    autograd::set_autograd_cublas_handle(cublas_handle_);
 
     SelectorForwardResult result;
     result.num_live_slots = num_live_slots;

@@ -21,10 +21,12 @@
 #ifdef __CUDACC__
 #include <cuda_runtime.h>
 #else
-using cudaStream_t = void*;
+struct CUstream_st;
+using cudaStream_t = CUstream_st*;
 #endif
 
 #include <cstdint>
+#include "../HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
 
@@ -56,7 +58,7 @@ struct SlotSelectionResult {
 // [2] valid_bit       (from ExecutionMemory::valid_mask)
 // [3] recent_write    (from ExecutionMemory::recent_write_mask)
 // [4] usage_scalar    (from ExecutionMemory::usage)
-static constexpr int kSlotFeatureDim = 5;
+static constexpr int kSlotFeatureDim = HyperParameters::DECODE_TIME_SLOT_FEATURE_DIM;
 
 // Maximum supported live slots (matches DecodeTimeSlotSelectorLayer::kMaxSlots)
 static constexpr int kPolicyMaxSlots = 16;
@@ -73,22 +75,12 @@ struct PolicyCandidateSet {
 };
 
 //──────────────────────────────────────────────────────
-// Policy configuration
-//──────────────────────────────────────────────────────
-
-struct NumPolicyConfig {
-    float selection_margin;  // top1 - top2 >= margin → Selected; else Ambiguous
-    int num_slots;           // V — total memory slots in ExecutionMemory
-    int scratch_slots;       // S — scratch-only slots [0..S-1]
-};
-
-//──────────────────────────────────────────────────────
 // DecodeTimeNumPolicy
 //──────────────────────────────────────────────────────
 
 class DecodeTimeNumPolicy {
 public:
-    explicit DecodeTimeNumPolicy(const NumPolicyConfig& config);
+    explicit DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelectorConstructionHP& config);
     ~DecodeTimeNumPolicy();
 
     DecodeTimeNumPolicy(DecodeTimeNumPolicy&& other) noexcept;
@@ -131,10 +123,10 @@ public:
     // Access candidate set after buildCandidateSet()
     const PolicyCandidateSet& candidates() const { return candidates_; }
 
-    const NumPolicyConfig& config() const { return config_; }
+    const HyperParameters::DecodeTimeSelectorConstructionHP& config() const { return config_; }
 
 private:
-    NumPolicyConfig config_;
+    HyperParameters::DecodeTimeSelectorConstructionHP config_;
     PolicyCandidateSet candidates_;
 
     // Host staging buffers for H2D reads during candidate construction
