@@ -319,7 +319,7 @@ float LanguageModel::computeLossBatch(
 		scratch_block,
 		getReasoningHeadLayer(),
 		getExecutionBlockLayer(),
-		training_state_.cublas_handle,
+		training_state_.cublas_handle.get(),
 		stream,
 		payload,
 		bindings,

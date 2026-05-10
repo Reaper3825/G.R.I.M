@@ -26,21 +26,9 @@
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/TensorContract/ForwardIntermediates.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
-
-//======================================================//
-//  Configuration
-//======================================================//
-
-struct FeedForwardConfig {
-    int d_model = 0;           // Input/output dimension debug was 768
-    int d_ff = 0;             // Hidden (intermediate) dimension debug was 3072
-    float dropout_rate = 0.1f;   // Dropout probability
-    bool use_bias = true;        // When false, skip bias addition (b2)
-    cudaStream_t stream = nullptr;
-    cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle
-};
 
 //======================================================//
 //  FeedForwardLayer - Autograd Implementation
@@ -48,16 +36,18 @@ struct FeedForwardConfig {
 
 class FeedForwardLayer {
 public:
-    // Rule 20: Default constructor deleted - config with valid cublas_handle REQUIRED
+    // Rule 20: Default constructor deleted - grouped construction HP + init stream REQUIRED
     FeedForwardLayer() = delete;
     
     /// Self-allocating constructor (Pattern B: layer self-management)
     /// Allocates and Xavier-initializes W_gate, W1, W2, b2 on GPU.
     /// Layer OWNS the memory (owns_data=true). Registers with autograd via ensure_grad().
-    /// @param config Layer configuration (d_model, d_ff, cublas_handle, stream REQUIRED)
+    /// @param hp     Grouped FFN construction HP snapshot
     /// @param seed   Xavier initialization seed
+    /// @param init_stream CUDA stream for self-allocation during startup/model assembly
     /// @param residual_scale Issue #142: Scale W2 by 1/sqrt(2*num_layers) after Xavier init
-    explicit FeedForwardLayer(const FeedForwardConfig& config, uint64_t seed, float residual_scale = 1.0f);
+    explicit FeedForwardLayer(const HyperParameters::FeedForwardLayerConstructionHP& hp, uint64_t seed,
+                              cudaStream_t init_stream, float residual_scale);
     
     ~FeedForwardLayer();
 
@@ -70,10 +60,9 @@ public:
     FeedForwardLayer& operator=(FeedForwardLayer&& other) noexcept;
 
     //--------------------------------------------------
-    // Configuration
+    // Grouped HP snapshot
     //--------------------------------------------------
-    void setConfig(const FeedForwardConfig& cfg);
-    const FeedForwardConfig& config() const noexcept { return config_; }
+    const HyperParameters::FeedForwardLayerConstructionHP& hp() const noexcept { return hp_; }
 
     //--------------------------------------------------
     // Weight Management (Pattern B: self-allocated)
@@ -108,12 +97,15 @@ public:
      * 
      * @param input [total_tokens, d_model] - MUST have requires_grad if training
      * @param intermediates Storage for intermediate tensors (REQUIRED for autograd)
+    * @param stream CUDA stream from the caller's forward payload/request
+    * @param cublas_handle cuBLAS handle from the caller's forward payload/request
     * @param training_step Current training/forward seed step for deterministic dropout masks
     * @param dropout_enabled Explicit mode gate for dropout; training_step never controls mode
      * @param layer_idx Encoder layer index (for unique dropout seed per layer)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
     Tensor forward(const Tensor& input, ForwardIntermediates& intermediates,
+                cudaStream_t stream, cublasHandle_t cublas_handle,
                 uint64_t training_step = 0, bool dropout_enabled = false, int layer_idx = 0);
 
     //--------------------------------------------------
@@ -122,7 +114,7 @@ public:
     //--------------------------------------------------
 
 private:
-    FeedForwardConfig config_{};
+    HyperParameters::FeedForwardLayerConstructionHP hp_{};
 
     // Weight Tensors with autograd (requires_grad=true)
     // SwiGLU uses three projections: gate, up, down

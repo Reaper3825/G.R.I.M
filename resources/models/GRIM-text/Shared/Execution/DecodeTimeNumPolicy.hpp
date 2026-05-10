@@ -20,9 +20,12 @@
 
 #ifdef __CUDACC__
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #else
 struct CUstream_st;
 using cudaStream_t = CUstream_st*;
+struct cublasContext;
+using cublasHandle_t = cublasContext*;
 #endif
 
 #include <cstdint>
@@ -179,6 +182,7 @@ struct DecodeTimeResolveResult {
 /// @param exec_memory       Current ExecutionMemory state (read-only)
 /// @param d_hidden_state    Device pointer to hidden state [1, d_model]
 /// @param stream            CUDA stream
+/// @param cublas_handle     cuBLAS handle from the caller's runtime payload
 ///
 /// @return DecodeTimeResolveResult with valid/status/selected_slot/selected_value
 DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
@@ -189,6 +193,7 @@ DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
     bool has_exec_memory,
     const ExecutionMemory& exec_memory,
     const float* d_hidden_state,
-    cudaStream_t stream);
+    cudaStream_t stream,
+    cublasHandle_t cublas_handle);
 
 } // namespace GRIM

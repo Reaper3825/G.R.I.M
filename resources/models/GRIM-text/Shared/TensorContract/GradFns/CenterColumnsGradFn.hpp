@@ -28,6 +28,8 @@ struct CenterColumnsGradFn : public GradFn {
     float* input_grad = nullptr;
     std::shared_ptr<GradFn> input_grad_fn;
     std::shared_ptr<float> owned_input_grad;
+    bool input_is_leaf = false;
+    float* leaf_grad_buf = nullptr;
 
     CenterColumnsGradFn();
 

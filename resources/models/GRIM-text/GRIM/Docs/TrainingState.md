@@ -11,6 +11,7 @@ Training-owned GPU resources MUST go through `TrainingState`. Generation-owned G
 
 RAII helper modules:
 - `Shared/TrainingState/CublasHandleOwner_GPU.{hpp,cu}` owns `cublasDestroy` for `TrainingState::cublas_handle`.
+- `CublasHandleOwner` keeps the raw handle private. Use `outParam()` only at `cublasCreate` sites and `.get()` at every raw `cublasHandle_t` borrow site; do not pass the owner object itself across runtime payload boundaries.
 - `Shared/TrainingState/DeviceAllocation_GPU.{hpp,cu}` owns raw CUDA device allocations used by typed runtime owners, including `GenerationState` KV/decode buffers.
 - `Layers/GRIMTS/GuessCacheTraining.{hpp,cu}` owns GRIM-TS guess-cache records, keys, bloom, calibration, and pinned async-transfer buffers through `GuessCacheScope::OwnedBuffers`.
 
@@ -23,7 +24,7 @@ RAII helper modules:
 | Resource | Access |
 |----------|--------|
 | CUDA streams | `training_state.stream_ctrl.getPrimaryStream()` |
-| cuBLAS handle | `training_state.cublas_handle` (`CublasHandleOwner`, borrowed as raw `cublasHandle_t`) |
+| cuBLAS handle | `training_state.cublas_handle` (`CublasHandleOwner`; create with `outParam()`, borrow as raw `cublasHandle_t` through `.get()`) |
 | Parameter gradients | `Tensor.grad_` via `ctx.model->zeroGradients()` / `ctx.model->backward()` |
 | Optimizer states | Not TrainingState-owned; `Training::OptimizerContext::optimizer_state` owns Adam/RAdam moment tensors and `Startup/Model/ParameterGroupRegistration` binds them to `LanguageModel` parameter groups. |
 
@@ -46,6 +47,8 @@ Training-time sampling must call `LanguageModel::ensureKVCacheAllocated()` expli
 `TrainingState` does **not** own activation/intermediate gradient lifecycle. TensorContract owns those through `Tensor.grad_` and `GradFn` scratch buffers inside the autograd boundary. LM-head logits are non-leaf tensors; `LogSoftmaxGradFn` allocates its non-leaf input-gradient workspace and passes that view directly to the upstream logits `GradFn`. Do not add TrainingState mirrors for logits gradients.
 
 The `cached_token_*` / `cached_targets_tensor` / `cached_seq_lengths_tensor` fields are reusable device storage only. `BatchPayload` owns host-side batch semantics and geometry; `LanguageModel::uploadBatchToDevice()` copies that payload into TrainingState-owned device buffers and returns `BatchDeviceBindings`, which is the canonical per-step device view consumed by forward/loss. `BatchDeviceBindings.d_seq_lengths` is required for padding-aware residual and LM-head hidden centering; target masking in loss is not an activation mask. Training/eval code must not infer the current batch by directly reading these cache fields. Phase-3 inference still writes its single-sequence token/side-channel data into the same reusable storage as temporary backing, but `LanguageModel::executeInferenceForward_()` builds an explicit per-call `BatchDeviceBindings` view plus a geometry-only `BatchPayload`, then calls `Shared/Forward/ModelForward_GPU.hpp` with `ModelForwardMode::InferencePrefill`; inference must not enter `AutogradContext` or `executeAutogradForward()`.
+
+Streams and cuBLAS are borrowed into per-call runtime payloads (`AutogradContext`, `Forward::ModelForwardRequest`, decode policy calls). Layers must not keep forward-time copies of those handles in config/member state; startup construction may use a clearly named init stream only for allocation/initialization.
 
 Inference session state is **not** `TrainingState`: persistent execution memory, decode trace vectors, decode-time selector result, KV cursor/cache, decode scratch, and single-token scratch are `GenerationState` fields. Training's `execution_trace_by_row` / `trace_state_by_row` are training/eval forward diagnostics only.
 

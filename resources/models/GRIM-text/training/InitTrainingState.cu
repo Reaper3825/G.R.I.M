@@ -38,7 +38,7 @@ void LanguageModel::initCuBLASHandle() {
         throw std::runtime_error("StreamController not initialized");
     }
     
-    if (training_state_.cublas_handle != nullptr) {
+    if (training_state_.cublas_handle.get() != nullptr) {
         std::cout << "✓ cuBLAS handle already initialized" << std::endl;
         return;  // Already created
     }
@@ -53,8 +53,8 @@ void LanguageModel::initCuBLASHandle() {
     }
     
     // Enable Tensor Core acceleration for Ampere+ GPUs (RTX 30xx, 40xx)
-    cublasSetMathMode(training_state_.cublas_handle, CUBLAS_TF32_TENSOR_OP_MATH);
-    cublasSetStream(training_state_.cublas_handle, primary_stream);
+    cublasSetMathMode(training_state_.cublas_handle.get(), CUBLAS_TF32_TENSOR_OP_MATH);
+    cublasSetStream(training_state_.cublas_handle.get(), primary_stream);
     std::cout << "✓ cuBLAS handle bound to Primary stream with Tensor Core acceleration" << std::endl;
 }
 
@@ -137,7 +137,7 @@ void LanguageModel::initTrainingState() {
     // ═══════════════════════════════════════════════════════════════════════
     //  STEP 2: cuBLAS handle (should already be initialized by initCuBLASHandle)
     // ═══════════════════════════════════════════════════════════════════════
-    if (training_state_.cublas_handle == nullptr) {
+    if (training_state_.cublas_handle.get() == nullptr) {
         std::cerr << "FATAL: cuBLAS handle not initialized. Call initCuBLASHandle() first!" << std::endl;
         throw std::runtime_error("cuBLAS handle not initialized");
     }

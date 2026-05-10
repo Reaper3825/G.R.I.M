@@ -68,7 +68,7 @@ __global__ void kernel_silu_forward(
     }
 }
 
-// SiLU backward: grad_x = grad_y * sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+// SiLU backward: grad_x += grad_y * sigmoid(x) * (1 + x * (1 - sigmoid(x)))
 __global__ void kernel_silu_backward(
     const float* grad_output,
     const float* input,
@@ -81,7 +81,7 @@ __global__ void kernel_silu_backward(
         const float x = input[idx];
         const float sig = 1.0f / (1.0f + expf(-x));
         const float dsilu = sig * (1.0f + x * (1.0f - sig));
-        grad_input[idx] = grad_output[idx] * dsilu;
+        grad_input[idx] += grad_output[idx] * dsilu;
     }
 }
 

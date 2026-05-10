@@ -1193,16 +1193,20 @@ Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream = nullptr)
 // autograd::scale() DELETED — dead code from reverted Issue #98 (Rule 20)
 
 /**
- * LayerScale: Scale tensor by a learned scalar parameter (tensor of shape [1])
- * Forward:  y[i,j] = x[i,j] * scale_param[0]
- * Backward: grad_x = grad_y * scale_param
- *           grad_scale = sum(grad_y * x)
+ * LayerScale: Scale tensor by a learned per-channel gamma vector [1, D]
+ * Forward:  y[t,d] = x[t,d] * scale_param[0,d]
+ * Backward: grad_x[t,d] = grad_y[t,d] * scale_param[0,d]
+ *           grad_scale[0,d] = sum_t(grad_y[t,d] * x[t,d])
+ *
+ * Parameter GradFns in TensorContract locally sum reductions; the CE/root
+ * backward seed has already mean-scaled grad_y. Do not divide grad_scale by
+ * rows/tokens inside LayerScale.
  *
  * ISSUE #109: LayerScale from CaiT paper - learnable residual connection scaling
  * to reduce high input row correlation in deeper transformer layers.
  *
  * @param x Input tensor [N, D]
- * @param scale_param Learnable scalar tensor [1]
+ * @param scale_param Learnable per-channel tensor [1, D]
  * @param stream CUDA stream
  * @return Scaled tensor with autograd tracking for both input and scale_param
  */

@@ -5,7 +5,7 @@
 //  Owns: weights [vocab_size, d_model], bias [vocab_size] (optional),
 //        final_rms_gamma [d_model] (pre-LM-head normalization).
 //
-//  Architecture: logits = centered(RMSNorm(encoder_output)) @ W^T + bias
+//  Architecture: logits = projected(centered(RMSNorm(encoder_output))) @ W^T + bias
 //  Where W is either tied to embedding weights or independently allocated.
 //
 //  Backward is handled automatically by the autograd tape system:
@@ -36,7 +36,7 @@ namespace GRIM {
 //  embedding weights when tie_embeddings=true (Issue #60).
 //  Also owns final_rms_gamma for pre-LM-head normalization.
 //
-//  forward() applies: RMSNorm → centering → matmul → bias
+//  forward() applies: RMSNorm → optional centering → optional PC1 projection → matmul → bias
 //  backward() handled by autograd chain (RMSNormGradFn → MatMulGradFn etc.)
 //======================================================//
 
@@ -54,12 +54,10 @@ public:
     /// @param hp                   Grouped construction hyperparameters
     /// @param seed                  Xavier init seed for independent weights
     /// @param init_stream           CUDA stream for allocation
-    /// @param cublas_handle         Rule 22: MUST be training_state.cublas_handle
     /// @param tied_embedding_weights If non-null, weights alias this tensor (from_ptr + share_grad)
     explicit LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
                          uint64_t seed,
                          cudaStream_t init_stream,
-                         cublasHandle_t cublas_handle,
                          Tensor* tied_embedding_weights = nullptr);
 
     ~LMHeadLayer() = default;
@@ -115,20 +113,15 @@ public:
     bool weightsReady() const { return weights_.data != nullptr; }
 
     //--------------------------------------------------
-    // Runtime Configuration (update before forward)
-    //--------------------------------------------------
-    void setStream(cudaStream_t s) { stream_ = s; }
-    void setCublasHandle(cublasHandle_t h) { cublas_handle_ = h; }
-
-    //--------------------------------------------------
     // Forward Pass - Autograd
     //--------------------------------------------------
     /// LM head forward with autograd tracking:
     ///   0. Optional: RMSNorm(input, final_rms_gamma_frozen_or_trained_) — pre-LM-head normalization
-    ///   1. Optional: center_columns_by_sequence_lengths + center_rows on normalized input (Issue #125/#132)
-    ///   2. logits = input @ weights^T  (autograd::matmul, transpose_b=true)
-    ///   3. Optional: center_rows on logits (numerical stability)
-    ///   4. Optional: logits += bias  (autograd::broadcast_add)
+    ///   1. Optional: center_columns_by_sequence_lengths on normalized input (Issue #125/#132)
+    ///   2. Optional: project_out_pc1 on the current LM input (composes after centering when both are enabled)
+    ///   3. logits = input @ weights^T  (autograd::matmul, transpose_b=true)
+    ///   4. Optional: center_rows on logits (numerical stability)
+    ///   5. Optional: logits += bias  (autograd::broadcast_add)
     ///
     /// Builds compute graph for automatic backward().
     ///
@@ -137,9 +130,12 @@ public:
     /// @param d_sequence_lengths       Device [batch_size] real lengths for padding-aware hidden centering
     /// @param batch_size               Number of flattened sequences/samples
     /// @param rows_per_sequence        Padded contiguous rows per sequence/sample in the flattened input
+    /// @param stream                   CUDA stream from the caller's forward payload/request
+    /// @param cublas_handle            cuBLAS handle from the caller's forward payload/request
     /// @return logits [total_tokens, vocab_size] with grad_fn attached
     Tensor forward(const Tensor& input, Tensor& out_centered_hidden,
-                   const int* d_sequence_lengths, int batch_size, int rows_per_sequence);
+                   const int* d_sequence_lengths, int batch_size, int rows_per_sequence,
+                   cudaStream_t stream, cublasHandle_t cublas_handle);
 
 
 
@@ -148,8 +144,6 @@ private:
     // a second authored config owner; it is the layer's durable construction HP
     // snapshot needed after startup-local grouping objects go out of scope.
     HyperParameters::LMHeadLayerConstructionHP hp_{};
-    cudaStream_t stream_ = nullptr;
-    cublasHandle_t cublas_handle_ = nullptr;
 
     // Weight Tensors with autograd (requires_grad=true)
     Tensor weights_;          // [vocab_size, d_model] — owned or aliased from embedding

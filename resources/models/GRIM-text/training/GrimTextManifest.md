@@ -290,7 +290,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [] **Forward_GPU.cu**  & FIXED (103→97 lines)
   - NOT a forward pass orchestrator — is `GPUGrimEncoder::Impl` layer container only
-  - Creates `GPUEncoderLayer` instances, stores in `gpu_layers_` vector, exposes `getLayer()`/`setFlashAttention()`
+  - Creates `GPUEncoderLayer` instances from `EncoderLayerConstructionHP`, stores in `gpu_layers_` vector, exposes `getLayer()`
   - Actual forward orchestration lives in `AutogradTraining.cu` (section 4.1)
   - **FIXED**: `FWD_ERROR + std::abort()` → `throw std::runtime_error()` (Rule 20), validation moved before config copy
   - **DELETED**: `FWD_ERROR` macro — only 2 usages, both replaced by the throw
@@ -715,7 +715,7 @@ For each encoding layer (Layer 0 → Layer 11):
 #### 2.5g Residual + LayerScale
 
 - [ ] **Layers/Encoding/Encoding_GPU.cu**
-  - Adds `λ * attention_output` to input (LayerScale residual)
+  - Adds `gamma_attn[d] * attention_output[t,d]` to input (per-channel LayerScale residual)
   - **Issue #129**: LayerScale init_value changed from 0.1 → 1.0 - VERIFY in config
   - Pattern to check: Verify `ai_config.json` has `layer_scale.init_value = 1.0`
   - Pattern to check: If init_value=0.1, gradients vanish (10x attenuation)
@@ -746,8 +746,10 @@ For each encoding layer (Layer 0 → Layer 11):
 #### 2.5k Residual + LayerScale
 
 - [ ] **Layers/Encoding/Encoding_GPU.cu**
-  - Adds `λ * ffn_output` to input (same LayerScale scalar)
-  - Same as 2.5g - verify consistent λ value
+  - Adds per-channel LayerScale vectors before residual adds:
+    - `residual1[t,d] = input[t,d] + gamma_attn[d] * attn_output[t,d]`
+    - `output[t,d] = residual1[t,d] + gamma_ffn[d] * ffn_output[t,d]`
+  - Verify `gamma_attn`/`gamma_ffn` have shape `[1, d_model]`, not scalar `[1]`
 
 ---
 
@@ -998,8 +1000,9 @@ For each encoding layer (Layer 0 → Layer 11):
 #### 4.5d LayerScale + Residual Backward
 
 - [ ] **Layers/Encoding/Encoding_GPU.cu**
-  - Residual addition backward: `grad_input += λ * grad_residual`
-  - Pattern to check: Verify scales gradient by layer scalar
+  - Residual addition backward: `grad_input[t,d] += gamma[d] * grad_residual[t,d]`
+  - Gamma backward: `grad_gamma[d] += sum_t(grad_residual[t,d] * sublayer_output[t,d])`
+  - Pattern to check: Verify gamma grad is summed locally; CE/root backward already applies mean scaling
 
 #### 4.5e RMSNorm Backward (Pre-FFN)
 

@@ -98,6 +98,13 @@ struct EncoderLayerConstructionHP {
     bool qk_norm_enabled = false;
 };
 
+struct FeedForwardLayerConstructionHP {
+    int d_model = 0;
+    int d_ff = 0;
+    bool use_bias = false;
+    float dropout_rate = 0.0f;
+};
+
 struct EmbeddingLayerConstructionHP {
     int vocab_size = 0;
     int d_model = 0;
@@ -194,6 +201,16 @@ inline void requirePositiveGroupingValue(int value,
     if (value <= 0) {
         throw std::runtime_error(std::string(caller) + ": " + field +
                                  " must be > 0, got " + std::to_string(value));
+    }
+}
+
+inline void requireDropoutProbability(float value,
+                                      const char* field,
+                                      const char* caller)
+{
+    if (value < 0.0f || value >= 1.0f) {
+        throw std::runtime_error(std::string(caller) + ": " + field +
+                                 " must be in [0, 1), got " + std::to_string(value));
     }
 }
 
@@ -384,6 +401,8 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     requireValidGQAGrouping(cfg, "encoderLayerConstructionHP");
     requirePositiveGroupingValue(cfg.num_layers, "num_layers", "encoderLayerConstructionHP");
     requirePositiveGroupingValue(cfg.d_ff, "d_ff", "encoderLayerConstructionHP");
+    requireDropoutProbability(cfg.dropout_rate, "dropout_rate", "encoderLayerConstructionHP");
+    requireDropoutProbability(cfg.attention_dropout, "attention_dropout", "encoderLayerConstructionHP");
     if (cfg.use_flash_attention) {
         requirePositiveGroupingValue(cfg.min_seq_len_for_flash,
                                      "min_seq_len_for_flash",
@@ -405,6 +424,20 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.dropout_rate = cfg.dropout_rate;
     view.attention_dropout = cfg.attention_dropout;
     view.qk_norm_enabled = cfg.qk_norm_enabled;
+    return view;
+}
+
+inline FeedForwardLayerConstructionHP feedForwardLayerConstructionHP(
+    const EncoderLayerConstructionHP& encoder_hp)
+{
+    FeedForwardLayerConstructionHP view;
+    requirePositiveGroupingValue(encoder_hp.d_model, "d_model", "feedForwardLayerConstructionHP");
+    requirePositiveGroupingValue(encoder_hp.d_ff, "d_ff", "feedForwardLayerConstructionHP");
+    requireDropoutProbability(encoder_hp.dropout_rate, "dropout_rate", "feedForwardLayerConstructionHP");
+    view.d_model = encoder_hp.d_model;
+    view.d_ff = encoder_hp.d_ff;
+    view.use_bias = encoder_hp.use_bias;
+    view.dropout_rate = encoder_hp.dropout_rate;
     return view;
 }
 

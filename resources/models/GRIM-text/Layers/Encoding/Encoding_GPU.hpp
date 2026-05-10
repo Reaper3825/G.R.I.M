@@ -33,7 +33,7 @@
 #include "../LayernNorm/RMSNorm_GPU.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
-#include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/TensorContract/ForwardIntermediates.hpp"
@@ -48,86 +48,50 @@ using Batching::BatchPayload;
 //======================================================//
 
 struct EncodingConfig {
-    // Model dimensions - ALL REQUIRED (no defaults that could hide bugs)
-    int d_model = 0;          // Hidden dimension (MUST be > 0)
-    int num_heads = 0;        // Number of Q heads (MUST be > 0)
-    int num_kv_heads = 0;     // Number of KV heads for GQA (0 = use num_heads for MHA)
-    int d_ff = 0;             // FFN hidden dimension (MUST be > 0)
-    
-    // Flash Attention
-    bool use_flash_attention = true;   // Use Flash Attention 2 for memory efficiency
-    int min_seq_len_for_flash = 0;     // REQUIRED - set from hyperparameters (no defaults)
-    
-    // Normalization
-    float rms_epsilon = 1e-5f;
-    
-    // LayerScale (Issue #109 fix for input row correlation)
-    // When enabled, residuals become: residual = input + layer_scale * sublayer_output
-    // This reduces the correlation buildup through layers by dampening sublayer contributions
-    bool use_layer_scale = true;
-    float layer_scale_init = 1.0f;  // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
-    
-    // Per-layer residual centering
-    // When true: output = center_columns_by_sequence_lengths(input + branch, d_seq_lengths, payload.max_seq_len)
-    // NEVER center the full [batch_size * seq_len, d_model] matrix: that couples samples.
-    // NEVER include padded rows in the mean: PAD activations are real vectors until explicitly masked.
-    // When false: output = input + branch — standard pre-norm, better gradient flow
-    bool center_encoder_residuals = false;
-    
-    // Bias control - when false, skip bias addition in attention projections (b_qkv, b_o)
-    bool use_bias = true;
-    
-    // Attention
-    bool causal_mask = true;
-    float softmax_temperature = 1.0f;
-    float dropout_rate = 0.0f;        // Sublayer dropout DROP rate (0.0 = disabled). Applied after attention projection and FFN output.
-    float attention_dropout = 0.0f;   // Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% dropped)
-
-    // QK-Norm: RMSNorm applied to Q and K projections before attention scoring
-    bool qk_norm_enabled = false;
+    // Grouped construction HP from HyperparameterGroupings.hpp. This owns all
+    // architecture/dropout/layer toggles for the encoder layer snapshot.
+    HyperParameters::EncoderLayerConstructionHP hp{};
     
     // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state
     // WARNING: If nullptr, attention sees no positional info - all positions equivalent!
     const PBM::PBMSpec* pos_encoding = nullptr;
     
-    // Execution (Rule 22: Use centralized handles from TrainingState)
-    cudaStream_t stream = nullptr;
-    cublasHandle_t cublas_handle = nullptr;  // MUST be training_state.cublas_handle
-    
     // Validation helper - throws if invalid
     void validate(const char* context) const {
-        if (d_model <= 0) {
+        if (hp.d_model <= 0) {
             throw std::invalid_argument(std::string(context) + 
-                ": d_model MUST be > 0, got " + std::to_string(d_model));
+            ": d_model MUST be > 0, got " + std::to_string(hp.d_model));
         }
-        if (num_heads <= 0) {
+        if (hp.num_heads <= 0) {
             throw std::invalid_argument(std::string(context) + 
-                ": num_heads MUST be > 0, got " + std::to_string(num_heads));
+            ": num_heads MUST be > 0, got " + std::to_string(hp.num_heads));
         }
-        if (d_ff <= 0) {
+        if (hp.d_ff <= 0) {
             throw std::invalid_argument(std::string(context) + 
-                ": d_ff MUST be > 0, got " + std::to_string(d_ff));
+            ": d_ff MUST be > 0, got " + std::to_string(hp.d_ff));
         }
-        if (d_model % num_heads != 0) {
+        if (hp.d_model % hp.num_heads != 0) {
             throw std::invalid_argument(std::string(context) + 
-                ": d_model (" + std::to_string(d_model) + 
-                ") must be divisible by num_heads (" + std::to_string(num_heads) + ")");
+            ": d_model (" + std::to_string(hp.d_model) + 
+            ") must be divisible by num_heads (" + std::to_string(hp.num_heads) + ")");
         }
+        HyperParameters::requireDropoutProbability(hp.dropout_rate, "dropout_rate", context);
+        HyperParameters::requireDropoutProbability(hp.attention_dropout, "attention_dropout", context);
         
         // GQA validation
-        const int effective_kv_heads = (num_kv_heads > 0) ? num_kv_heads : num_heads;
-        if (num_heads % effective_kv_heads != 0) {
+        const int effective_kv_heads = (hp.num_kv_heads > 0) ? hp.num_kv_heads : hp.num_heads;
+        if (hp.num_heads % effective_kv_heads != 0) {
             throw std::invalid_argument(std::string(context) + 
-                ": num_heads (" + std::to_string(num_heads) + 
+            ": num_heads (" + std::to_string(hp.num_heads) + 
                 ") must be divisible by num_kv_heads (" + std::to_string(effective_kv_heads) + ")");
         }
     }
     
     // Computed properties
-    int headDim() const { return (num_heads > 0) ? (d_model / num_heads) : 0; }
-    int effectiveKVHeads() const { return (num_kv_heads > 0) ? num_kv_heads : num_heads; }
+        int headDim() const { return (hp.num_heads > 0) ? (hp.d_model / hp.num_heads) : 0; }
+        int effectiveKVHeads() const { return (hp.num_kv_heads > 0) ? hp.num_kv_heads : hp.num_heads; }
     int kvDim() const { return effectiveKVHeads() * headDim(); }
-    bool isGQA() const { return num_kv_heads > 0 && num_kv_heads < num_heads; }
+        bool isGQA() const { return hp.num_kv_heads > 0 && hp.num_kv_heads < hp.num_heads; }
 };
 
 //======================================================//
@@ -163,11 +127,12 @@ public:
     /// Self-allocating constructor — layer owns its weights
     /// @param cfg       Fully-populated EncodingConfig (d_model, d_ff, num_heads, etc.)
     /// @param seed      Base PRNG seed.  Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
+    /// @param init_stream CUDA stream for self-allocation during startup/model assembly
     /// @param residual_scale  Issue #142: GPT-2 init scaling for W_o (1/sqrt(2*num_layers))
     /// @param layer_scale_init Issue #109/#129: LayerScale initial value. Use 1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
-    EncodingLayer(const EncodingConfig& cfg, uint64_t seed,
-                  float residual_scale = 1.0f,
-                  float layer_scale_init = 1.0f);
+    EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream,
+                  float residual_scale,
+                  float layer_scale_init);
     
     ~EncodingLayer();
     
@@ -180,9 +145,8 @@ public:
     EncodingLayer& operator=(EncodingLayer&& other) noexcept;
     
     //--------------------------------------------------
-    // Configuration
+    // Configuration snapshot
     //--------------------------------------------------
-    void setConfig(const EncodingConfig& cfg);
     const EncodingConfig& config() const noexcept { return config_; }
     
     //--------------------------------------------------
@@ -206,7 +170,8 @@ public:
      * @param input [total_tokens, d_model] - encoder input (from embedding or prev layer)
     * @param payload Host-side batch geometry and sequence lengths
     * @param d_sequence_lengths Device [batch_size] real lengths for padding-aware centering
-     * @param stream CUDA stream for execution
+    * @param stream CUDA stream from the caller's forward payload/request
+    * @param cublas_handle cuBLAS handle from the caller's forward payload/request
      * @param intermediates Storage for this layer's intermediate tensors (REQUIRED for autograd)
     * @param training_step Current training/forward seed step for deterministic dropout masks
     * @param dropout_enabled Explicit mode gate for dropout; training_step never controls mode
@@ -214,7 +179,7 @@ public:
      * @return output [total_tokens, d_model] with grad_fn attached
      */
     Tensor forward(const Tensor& input, const BatchPayload& payload,
-                   const int* d_sequence_lengths, cudaStream_t stream,
+                         const int* d_sequence_lengths, cudaStream_t stream, cublasHandle_t cublas_handle,
                    struct ForwardIntermediates& intermediates,
                    uint64_t training_step = 0,
                 bool dropout_enabled = false,
@@ -257,17 +222,6 @@ public:
     Tensor& layerScale2() { return layer_scale2_; }
     
     //--------------------------------------------------
-    // Flash Attention Control
-    //--------------------------------------------------
-    void setFlashAttention(bool enable, int min_seq_len) {
-        if (min_seq_len <= 0) {
-            throw std::runtime_error("setFlashAttention: min_seq_len must be > 0 (configured from hyperparameters)");
-        }
-        config_.use_flash_attention = enable;
-        config_.min_seq_len_for_flash = min_seq_len;
-    }
-    
-    //--------------------------------------------------
     // Workspace Budget — DELETED (Rule 20/26)
     // The autograd forward creates its own Tensors; encoder_workspace was never consumed.
     //--------------------------------------------------
@@ -281,12 +235,10 @@ private:
     void validateReady(const char* context) const;
     
     /// Pattern B: self-allocate and Xavier-init all weights + create FFN
-    void allocateWeights(uint64_t seed, float residual_scale, float layer_scale_init);
+    void allocateWeights(uint64_t seed, cudaStream_t init_stream, float residual_scale, float layer_scale_init);
     
     EncodingConfig config_{};
     bool weights_ready_ = false;  // Set by allocateWeights()
-    
-    // NOTE: cuBLAS handle is in config_.cublas_handle (NOT owned - Rule 22)
     
     // RMSNorm weights (Tensor with requires_grad=true)
     Tensor rms1_gamma_;    // [d_model] - pre-attention norm
@@ -306,11 +258,11 @@ private:
     std::unique_ptr<FeedForwardLayer> ffn_;
     
     // LayerScale parameters (Issue #109: reduces correlation buildup)
-    // These are learnable scalars applied to sublayer outputs before residual addition:
-    //   residual1 = input + layer_scale1 * attn_output
-    //   residual2 = residual1 + layer_scale2 * ffn_output
-    Tensor layer_scale1_;  // [1] scalar for attention
-    Tensor layer_scale2_;  // [1] scalar for FFN
+    // These are learnable per-channel gamma vectors applied before residual addition:
+    //   residual1[t,d] = input[t,d] + layer_scale1[d] * attn_output[t,d]
+    //   residual2[t,d] = residual1[t,d] + layer_scale2[d] * ffn_output[t,d]
+    Tensor layer_scale1_;  // [1, d_model] per-channel gamma for attention
+    Tensor layer_scale2_;  // [1, d_model] per-channel gamma for FFN
 };
 
 } // namespace GRIM

@@ -5,6 +5,8 @@ Implementation: `resources/models/GRIM-text/Shared/TensorContract_GPU.cu` (all `
 ## Prepared payload boundary
 Phase1/Phase1Startup owns semantic batch construction. By the time Phase2 calls autograd, `BatchPayload` is already complete: token IDs, targets, masks, MTP shifted targets, execution teacher steps, selector targets, numeric values, and slot maps are Phase1-authored data. Autograd code must consume this prepared payload and matching `BatchDeviceBindings`; it must not rebuild, infer, repair, or silently synthesize missing supervision.
 
+Forward runtime handles are sibling payload data, not layer state: `AutogradContext` carries the `cudaStream_t` and `cublasHandle_t` borrowed from `TrainingState`, and `Forward::ModelForwardRequest` passes them through to encoder, FFN, LM head, reasoning head, and selector forwards. Do not patch those handles into layer configs or mutate layers with late setter calls.
+
 ## Primitive extraction rule
 Do not add new catch-all executors around `AutogradTraining.cu`. Extract narrow primitives first:
 - A primitive has one reason to exist and one mutation target.
@@ -37,3 +39,8 @@ When kernel B reads data written by kernel A via `atomicAdd`, you MUST `cudaStre
 
 ## Gradient norm sync
 `cudaStreamSynchronize` inside `computeGradNorm` drains the entire backward pipeline. Pass `sync_for_host_read=false` for non-logging steps; only sync when logging gradient components.
+
+## GradFn accumulation contract
+GradFns must never overwrite a persistent leaf gradient buffer during backward. If a backward kernel writes directly into `tensor.grad_data()`, it must use additive writes (`+=` or `atomicAdd`) because `ensure_grad()` only allocates/zeroes the buffer once; step/microbatch zeroing owns the accumulation window.
+
+For non-leaf inputs, a GradFn may write its local Jacobian result into an owned temporary buffer, but that buffer must be zeroed before use and additive writes are still preferred so the same kernel is safe for both owned and leaf buffers. If a GradFn must use a shared forward kernel that assigns into its output (for example centering kernels), keep the owned temporary buffer and explicitly accumulate that temporary into the leaf grad buffer before continuing the chain.

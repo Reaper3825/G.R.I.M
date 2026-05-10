@@ -1,7 +1,9 @@
 #ifndef USE_CUDA
 #define USE_CUDA
 #endif
+#include <cmath>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -19,56 +21,43 @@ namespace GRIM {
 // Owns the encoder layers; forward pass uses autograd in AutogradTraining.cu
 //
 // Hyperparameters come from EncoderLayerConstructionHP, the grouped read view
-// owned by HyperparameterGroupings.hpp. Runtime device handles (PBM, stream,
-// cuBLAS, init seed) come from EncoderRuntimeBindings; config and runtime are
-// still deliberately separate ownership lanes.
+// owned by HyperparameterGroupings.hpp. Startup model-assembly inputs (PBM,
+// init stream, init seed) come from EncoderConstructionBindings; forward-time
+// stream/cuBLAS handles come from ModelForwardRequest/AutogradContext.
 //======================================================//
 struct GPUGrimEncoder::Impl {
     HyperParameters::EncoderLayerConstructionHP config_;
-    EncoderRuntimeBindings bindings_;
     std::vector<std::unique_ptr<GPUEncoderLayer>> gpu_layers_;
 
     Impl(const HyperParameters::EncoderLayerConstructionHP& config,
-         const EncoderRuntimeBindings& bindings)
-        : config_(config), bindings_(bindings)
+         const EncoderConstructionBindings& bindings)
+        : config_(config)
     {
         if (!bindings.pos_encoding) {
             throw std::runtime_error("[GPUGrimEncoder] pos_encoding is NULL — "
                                      "PBM must be initialized BEFORE encoder construction");
         }
+        if (!std::isfinite(bindings.residual_scale) || bindings.residual_scale <= 0.0f) {
+            throw std::runtime_error("[GPUGrimEncoder] residual_scale must be a positive finite value from gpuModelInitializationHP");
+        }
 
         EncodingConfig enc_cfg{};
-        enc_cfg.d_model = config.d_model;
-        enc_cfg.num_heads = config.num_heads;
-        enc_cfg.num_kv_heads = config.num_kv_heads;  // GQA support
-        enc_cfg.d_ff = config.d_ff;
-        enc_cfg.rms_epsilon = config.rms_epsilon;
-        enc_cfg.causal_mask = config.causal_mask;
-        enc_cfg.use_flash_attention = config.use_flash_attention;
-        enc_cfg.min_seq_len_for_flash = config.min_seq_len_for_flash;
-        enc_cfg.stream = bindings.stream;
-        enc_cfg.cublas_handle = bindings.cublas_handle;
+        enc_cfg.hp = config;
         enc_cfg.pos_encoding = bindings.pos_encoding;
-        enc_cfg.use_layer_scale = config.use_layer_scale;
-        enc_cfg.layer_scale_init = config.layer_scale_init;
-        enc_cfg.center_encoder_residuals = config.center_encoder_residuals;
-        enc_cfg.use_bias = config.use_bias;
-        enc_cfg.dropout_rate = config.dropout_rate;
-        enc_cfg.attention_dropout = config.attention_dropout;
-        enc_cfg.qk_norm_enabled = config.qk_norm_enabled;
 
         for (int i = 0; i < config.num_layers; ++i) {
             // Pattern B: Layer self-allocates and Xavier-inits its own weights.
             // Seed offsets per layer: base + 2 + layer*10
             const uint64_t layer_seed = bindings.weight_seed + 2 + i * 10;
             gpu_layers_.emplace_back(std::make_unique<GPUEncoderLayer>(
-                enc_cfg, layer_seed, bindings.residual_scale, config.layer_scale_init));
+                enc_cfg, layer_seed, bindings.init_stream,
+                bindings.residual_scale, config.layer_scale_init));
         }
     }
 };
 
 GPUGrimEncoder::GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& config,
-                               const EncoderRuntimeBindings& bindings)
+                               const EncoderConstructionBindings& bindings)
     : pImpl(new Impl(config, bindings))
 {
 }
@@ -89,20 +78,6 @@ const GPUEncoderLayer* GPUGrimEncoder::getLayer(int index) const {
 
 int GPUGrimEncoder::getNumLayers() const {
     return static_cast<int>(pImpl->gpu_layers_.size());
-}
-
-void GPUGrimEncoder::setFlashAttention(bool enable, int min_seq_len) {
-    if (!pImpl) {
-        throw std::runtime_error("GPUGrimEncoder::setFlashAttention called before initialization");
-    }
-    if (min_seq_len <= 0) {
-        throw std::runtime_error("GPUGrimEncoder::setFlashAttention: min_seq_len must be > 0 (configured from hyperparameters)");
-    }
-    for (auto& layer : pImpl->gpu_layers_) {
-        if (layer) {
-            layer->setFlashAttention(enable, min_seq_len);
-        }
-    }
 }
 
 #endif // USE_CUDA

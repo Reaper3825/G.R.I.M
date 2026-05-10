@@ -1071,7 +1071,7 @@ LossResult autogradTrainingStep(
         scratch_block,
         reasoning_head,
         execution_block,
-        training_state.cublas_handle,
+        training_state.cublas_handle.get(),
         stream,
         payload,
         bindings,

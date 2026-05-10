@@ -11,8 +11,10 @@
 namespace GRIM {
 
 struct CublasHandleOwner {
+private:
 	cublasHandle_t handle = nullptr;
 
+public:
 	CublasHandleOwner() = default;
 	~CublasHandleOwner();
 
@@ -24,7 +26,6 @@ struct CublasHandleOwner {
 	cublasHandle_t get() const { return handle; }
 	cublasHandle_t* outParam() { return &handle; }
 	explicit operator bool() const { return handle != nullptr; }
-	operator cublasHandle_t() const { return handle; }
 };
 
 } // namespace GRIM

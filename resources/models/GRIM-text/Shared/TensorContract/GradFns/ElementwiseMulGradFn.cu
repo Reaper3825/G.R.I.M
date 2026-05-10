@@ -4,8 +4,8 @@
 //
 //  Forward:  y[i] = a[i] * b[i]
 //  Backward:
-//    grad_a[i] = grad_y[i] * b[i]
-//    grad_b[i] = grad_y[i] * a[i]
+//    grad_a[i] += grad_y[i] * b[i]
+//    grad_b[i] += grad_y[i] * a[i]
 //
 //  Backward uses non-owning cached references to a/b — see header.
 //======================================================//
@@ -75,7 +75,7 @@ __global__ void kernel_elementwise_mul_forward(
 }
 
 // Element-wise multiply backward (used for both grad_a and grad_b):
-//   grad_self[i] = grad_output[i] * other[i]
+//   grad_self[i] += grad_output[i] * other[i]
 __global__ void kernel_elementwise_mul_backward(
     const float* grad_output,
     const float* other,
@@ -85,7 +85,7 @@ __global__ void kernel_elementwise_mul_backward(
     const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
     const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
-        grad_self[idx] = grad_output[idx] * other[idx];
+        grad_self[idx] += grad_output[idx] * other[idx];
     }
 }
 

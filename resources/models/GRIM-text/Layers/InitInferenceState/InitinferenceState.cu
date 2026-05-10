@@ -72,8 +72,8 @@ void LanguageModel::initInferenceState() {
                                  std::to_string(static_cast<int>(cublas_err)));
     }
     // Enable Tensor Core acceleration for Ampere+ GPUs
-    cublasSetMathMode(training_state_.cublas_handle, CUBLAS_TF32_TENSOR_OP_MATH);
-    cublasSetStream(training_state_.cublas_handle, primary_stream);
+    cublasSetMathMode(training_state_.cublas_handle.get(), CUBLAS_TF32_TENSOR_OP_MATH);
+    cublasSetStream(training_state_.cublas_handle.get(), primary_stream);
     std::cout << "  ✓ Created cuBLAS handle with Tensor Core acceleration" << std::endl;
     
     training_state_.cached_num_layers = cache_hp.num_layers;
@@ -101,7 +101,7 @@ void LanguageModel::initInferenceState() {
         Tensor* tied_ptr = lm_hp.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
         
         lm_head_layer_ = std::make_unique<LMHeadLayer>(
-            lm_hp, /*seed=*/0, primary_stream, training_state_.cublas_handle, tied_ptr
+            lm_hp, /*seed=*/0, primary_stream, tied_ptr
         );
         std::cout << "  ✓ LMHeadLayer initialized (inference, tie=" 
                   << (lm_hp.tie_embeddings ? "true" : "false") << ")" << std::endl;
@@ -129,7 +129,7 @@ void LanguageModel::initInferenceState() {
         if (selector_hp.enabled) {
 
             decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
-                selector_hp, /*seed=*/0, primary_stream, training_state_.cublas_handle);
+                selector_hp, /*seed=*/0, primary_stream);
 
             decode_time_num_policy_ = std::make_unique<DecodeTimeNumPolicy>(selector_hp);
 

@@ -16,7 +16,9 @@ namespace GRIM {
 //   v7: Added final_rms_gamma for Issue #33 (encoder output normalization)
 //   v8: Added LayerScale weights (Issue #109), QK-norm alpha scales, learned loss weighting
 //   v9: Align checkpoint version with GRMT data v9 (single <NUM> atom, current schema)
-inline constexpr std::uint32_t GRIM_MODEL_VERSION = 10;
+//   v10: Current GRIM-text checkpoint contract before per-channel LayerScale
+//   v11: LayerScale weights are per-channel gamma vectors [d_model], not one scalar
+inline constexpr std::uint32_t GRIM_MODEL_VERSION = 11;
 
 // GRMT training tensor stream may advance without bumping checkpoint MODEL_VERSION.
 // v10: After per-token atom length-prefixed strings, append int32 token_exec_slots[len]

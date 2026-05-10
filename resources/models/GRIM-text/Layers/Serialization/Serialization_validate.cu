@@ -148,22 +148,30 @@ bool validate_checkpoint_capabilities(
             Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: RMSNorm gamma size error in layer ", i));
             return false;
         }
-        // LayerScale: if model destination exists, checkpoint must provide it
+        // LayerScale: if model destination exists, checkpoint must provide the full
+        // per-channel gamma vector. The checkpoint contract is d_model elements,
+        // not "whatever the caller's view count says".
         if (i < static_cast<int>(load_req.encoder_layers.size())) {
             const auto& lv = load_req.encoder_layers[i];
             if (lv.layer_scale1.ptr) {
-                if (!fl->layer_scale1() || fl->layer_scale1()->size() == 0) {
+                if (!cross_check_view(lv.layer_scale1, d_model, "layer_scale1")) {
+                    return false;
+                }
+                if (!check_fb_vec_size(fl->layer_scale1(), d_model, "layer_scale1")) {
                     Logging::EmitModuleError(kLogModule,
-                        Msg("[load] FATAL: layer_scale1 required for layer ", i,
-                            " but missing in checkpoint"));
+                        Msg("[load] FATAL: layer_scale1 vector error in layer ", i,
+                            " — standard LayerScale requires d_model channels"));
                     return false;
                 }
             }
             if (lv.layer_scale2.ptr) {
-                if (!fl->layer_scale2() || fl->layer_scale2()->size() == 0) {
+                if (!cross_check_view(lv.layer_scale2, d_model, "layer_scale2")) {
+                    return false;
+                }
+                if (!check_fb_vec_size(fl->layer_scale2(), d_model, "layer_scale2")) {
                     Logging::EmitModuleError(kLogModule,
-                        Msg("[load] FATAL: layer_scale2 required for layer ", i,
-                            " but missing in checkpoint"));
+                        Msg("[load] FATAL: layer_scale2 vector error in layer ", i,
+                            " — standard LayerScale requires d_model channels"));
                     return false;
                 }
             }

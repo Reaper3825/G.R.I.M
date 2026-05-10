@@ -207,6 +207,13 @@ static __global__ void kernel_encoding_fill_ones(float* data, int count) {
     }
 }
 
+static __global__ void kernel_encoding_fill_value(float* data, int count, float value) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        data[idx] = value;
+    }
+}
+
 // Issue #142: scale tensor data in-place (for W_o residual scaling)
 static __global__ void kernel_encoding_scale_inplace(float* data, size_t count, float scale) {
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -233,24 +240,35 @@ static __global__ void kernel_encoding_scale_inplace(float* data, size_t count, 
 //  Layer allocates and Xavier-inits its own weights.
 //  Optimizer sees them via the existing public accessors (rms1Gamma(), attnWqkv(), etc.)
 // ═══════════════════════════════════════════════════════════════════════════
-EncodingLayer::EncodingLayer(const EncodingConfig& cfg, uint64_t seed,
-                             float residual_scale, float layer_scale_init) {
-    setConfig(cfg);
-    allocateWeights(seed, residual_scale, layer_scale_init);
+EncodingLayer::EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream,
+                             float residual_scale, float layer_scale_init)
+    : config_(cfg) {
+    config_.validate("EncodingLayer::EncodingLayer");
+    allocateWeights(seed, init_stream, residual_scale, layer_scale_init);
 }
 
-void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float layer_scale_init) {
+void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream, float residual_scale, float layer_scale_init) {
     if (weights_ready_) {
         throw std::runtime_error("EncodingLayer::allocateWeights: weights already initialized! "
                                  "Cannot allocate twice.");
     }
+    if (!init_stream) {
+        throw std::runtime_error("EncodingLayer::allocateWeights: init_stream is NULL");
+    }
+    if (!std::isfinite(residual_scale) || residual_scale <= 0.0f) {
+        throw std::runtime_error("EncodingLayer::allocateWeights: residual_scale must be a positive finite value from gpuModelInitializationHP");
+    }
     config_.validate("EncodingLayer::allocateWeights");
     
-    const int d_model   = config_.d_model;
+    const auto& hp = config_.hp;
+    const int d_model   = hp.d_model;
     const int kv_dim    = config_.kvDim();
-    const int d_ff      = config_.d_ff;
+    const int d_ff      = hp.d_ff;
     const int qkv_out_dim = d_model + 2 * kv_dim;
-    cudaStream_t stream = config_.stream;
+    cudaStream_t stream = init_stream;
+    if (hp.use_layer_scale && (!std::isfinite(layer_scale_init) || layer_scale_init <= 0.0f)) {
+        throw std::runtime_error("EncodingLayer::allocateWeights: layer_scale_init must be a positive finite value when LayerScale is enabled");
+    }
     
     // ── Helper: fill a gamma tensor with 1.0 ──
     auto fillOnes = [stream](Tensor& t) {
@@ -264,10 +282,21 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
                                      + std::string(cudaGetErrorString(err)));
         }
     };
+
+    auto fillValue = [stream](Tensor& t, float value, const char* context) {
+        const int count = static_cast<int>(t.numel());
+        const int threads = 256;
+        const int blocks = (count + threads - 1) / threads;
+        kernel_encoding_fill_value<<<blocks, threads, 0, stream>>>(t.data, count, value);
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string(context) + ": CUDA error: "
+                                     + std::string(cudaGetErrorString(err)));
+        }
+    };
     
     // ── Helper: in-place scale for Issue #142 residual projection init ──
     auto scaleInplace = [stream](Tensor& t, float scale) {
-        if (std::abs(scale - 1.0f) < 1e-8f) return;  // Skip if scale≈1
         const size_t count = t.numel();
         const int threads = 256;
         const int blocks = static_cast<int>((count + threads - 1) / threads);
@@ -304,7 +333,7 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
     W_qkv_.ensure_grad();
     Tensor::xavier_uniform_(W_qkv_, seed + 0, stream);
 
-    if (config_.use_bias) {
+    if (hp.use_bias) {
         b_qkv_ = Tensor::zeros({qkv_out_dim}, stream, "enc_b_qkv_own");
         b_qkv_.requires_grad_();
         b_qkv_.ensure_grad();
@@ -321,7 +350,7 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
     Tensor::xavier_uniform_(W_o_, seed + 1, stream);
     scaleInplace(W_o_, residual_scale);
     
-    if (config_.use_bias) {
+    if (hp.use_bias) {
         b_o_ = Tensor::zeros({d_model}, stream, "enc_b_o_own");
         b_o_.requires_grad_();
         b_o_.ensure_grad();
@@ -332,33 +361,26 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
     //  Seed offsets +2/+3 for W1/W2 (matches layer convention)
     //==================================================//
     {
-        FeedForwardConfig ffn_cfg;
-        ffn_cfg.d_model        = d_model;
-        ffn_cfg.d_ff           = d_ff;
-        ffn_cfg.stream         = stream;
-        ffn_cfg.cublas_handle  = config_.cublas_handle;
-        ffn_cfg.use_bias       = config_.use_bias;
-        ffn_cfg.dropout_rate   = config_.dropout_rate;
+        const HyperParameters::FeedForwardLayerConstructionHP ffn_hp =
+            HyperParameters::feedForwardLayerConstructionHP(hp);
         
         // seed+2 is base for FFN (W1 gets seed+2, W2 gets seed+3 inside FFN ctor)
-        ffn_ = std::make_unique<FeedForwardLayer>(ffn_cfg, seed + 2, residual_scale);
+        ffn_ = std::make_unique<FeedForwardLayer>(ffn_hp, seed + 2, stream, residual_scale);
     }
     
     //==================================================//
-    //  LayerScale (Issue #109) — learnable [1] scalars
+    //  LayerScale (Issue #109) — learnable per-channel gamma vectors [1, d_model]
     //==================================================//
-    if (config_.use_layer_scale) {
-        layer_scale1_ = Tensor::zeros({1}, stream, "enc_layer_scale1_own");
+    if (hp.use_layer_scale) {
+        layer_scale1_ = Tensor::zeros({d_model}, stream, "enc_layer_scale1_own");
         layer_scale1_.requires_grad_();
         layer_scale1_.ensure_grad();
-        cudaMemcpyAsync(layer_scale1_.data, &layer_scale_init, sizeof(float),
-                        cudaMemcpyHostToDevice, stream);
+        fillValue(layer_scale1_, layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale1");
         
-        layer_scale2_ = Tensor::zeros({1}, stream, "enc_layer_scale2_own");
+        layer_scale2_ = Tensor::zeros({d_model}, stream, "enc_layer_scale2_own");
         layer_scale2_.requires_grad_();
         layer_scale2_.ensure_grad();
-        cudaMemcpyAsync(layer_scale2_.data, &layer_scale_init, sizeof(float),
-                        cudaMemcpyHostToDevice, stream);
+        fillValue(layer_scale2_, layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale2");
     }
     
     weights_ready_ = true;
@@ -367,13 +389,11 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
             "qkv=[%d,%d] W_o=[%d,%d] FFN=[%d,%d→%d,%d] residual_scale=%.6f%s\n",
             qkv_out_dim, d_model, d_model, d_model,
             d_model, d_ff, d_ff, d_model, residual_scale,
-            config_.use_layer_scale ? " +LayerScale" : "");
+            hp.use_layer_scale ? " +LayerScale" : "");
 }
 
 EncodingLayer::~EncodingLayer() {
     freeWeights();
-    // NOTE: config_.cublas_handle is NOT owned by EncodingLayer (Rule 22)
-    // TrainingState owns it - do NOT destroy!
 }
 
 EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
@@ -390,18 +410,15 @@ EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     , layer_scale2_(std::move(other.layer_scale2_))
 {
     // Null out the moved-from object
-    other.config_.cublas_handle = nullptr;
     other.weights_ready_ = false;
 }
 
 EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
     if (this != &other) {
         freeWeights();
-        // NOTE: config_.cublas_handle is NOT owned - do NOT destroy (Rule 22)
         
         config_ = other.config_;
         weights_ready_ = other.weights_ready_;
-        config_.cublas_handle = other.config_.cublas_handle;
         rms1_gamma_ = std::move(other.rms1_gamma_);
         rms2_gamma_ = std::move(other.rms2_gamma_);
         W_qkv_ = std::move(other.W_qkv_);
@@ -412,15 +429,9 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         layer_scale1_ = std::move(other.layer_scale1_);
         layer_scale2_ = std::move(other.layer_scale2_);
         
-        other.config_.cublas_handle = nullptr;
         other.weights_ready_ = false;
     }
     return *this;
-}
-
-void EncodingLayer::setConfig(const EncodingConfig& cfg) {
-    cfg.validate("EncodingLayer::setConfig");
-    config_ = cfg;
 }
 
 void EncodingLayer::freeWeights() {
@@ -442,15 +453,11 @@ void EncodingLayer::validateReady(const char* context) const {
         throw std::runtime_error(std::string(context) +
             ": weights not initialized! Call allocateWeights() first.");
     }
-    if (!config_.cublas_handle) {
-        throw std::runtime_error(std::string(context) +
-            ": cuBLAS handle not initialized in config!");
-    }
     if (!ffn_) {
         throw std::runtime_error(std::string(context) +
             ": FFN sublayer not initialized! Call allocateWeights() first.");
     }
-    if (config_.d_model % config_.num_heads != 0) {
+    if (config_.hp.d_model % config_.hp.num_heads != 0) {
         throw std::runtime_error(std::string(context) +
             ": d_model must be divisible by num_heads (head_dim must be integral)");
     }
@@ -466,7 +473,7 @@ void EncodingLayer::validateReady(const char* context) const {
 //======================================================//
 
 Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
-                               const int* d_sequence_lengths, cudaStream_t stream,
+                               const int* d_sequence_lengths, cudaStream_t stream, cublasHandle_t cublas_handle,
                                ForwardIntermediates& intermediates,
                                uint64_t training_step,
                                bool dropout_enabled,
@@ -477,13 +484,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                 input.shape.flat.rows, seq_len);
     }
     validateReady("EncodingLayer::forward");
-    
-    // CRITICAL: Set autograd cuBLAS handle before any autograd::matmul calls
-    // The handle must be set per-call since it's thread_local
-    autograd::set_autograd_cublas_handle(config_.cublas_handle);
-    if constexpr (kEnableEncoderStepLogs) {
-        fprintf(stderr, "[EncoderFwd] autograd cuBLAS handle set: %p\n", (void*)config_.cublas_handle);
-    }
+    const auto& hp = config_.hp;
     
     // Validate input
     if (!input.data) {
@@ -492,9 +493,19 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if (!stream) {
         throw std::runtime_error("EncodingLayer::forward: stream is NULL");
     }
+    if (!cublas_handle) {
+        throw std::runtime_error("EncodingLayer::forward: cublas_handle is NULL");
+    }
+    
+    // CRITICAL: Set autograd cuBLAS handle before any autograd::matmul calls.
+    // The handle is supplied by the caller's forward payload/request and is thread_local.
+    autograd::set_autograd_cublas_handle(cublas_handle);
+    if constexpr (kEnableEncoderStepLogs) {
+        fprintf(stderr, "[EncoderFwd] autograd cuBLAS handle set: %p\n", (void*)cublas_handle);
+    }
     
     const int total_tokens = input.shape.flat.rows;
-    const int d_model = config_.d_model;
+    const int d_model = hp.d_model;
     
     if (input.shape.flat.cols != d_model) {
         throw std::runtime_error("EncodingLayer::forward: input d_model mismatch. "
@@ -508,7 +519,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     }
     
     const int batch_size = payload.batch_size;
-    if (config_.center_encoder_residuals) {
+    if (hp.center_encoder_residuals) {
         if (!d_sequence_lengths) {
             throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires non-null d_sequence_lengths");
         }
@@ -526,7 +537,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
             }
         }
     }
-    const int num_heads = config_.num_heads;
+    const int num_heads = hp.num_heads;
     const int num_kv_heads = config_.effectiveKVHeads();
     const int head_dim = config_.headDim();
     const TensorContract::GQADims gqa{num_heads, num_kv_heads, head_dim};
@@ -540,7 +551,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // 1. RMSNorm1: input -> ln1_out
     // Issue #56: Store in intermediates to keep autograd graph alive
     //--------------------------------------------------
-    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, config_.rms_epsilon, stream);
+    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
     
@@ -581,10 +592,10 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Skipped on non-initial accumulation slots (same weights → duplicate output)
     // ========================================================================
     if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
-        const int qkv_dim_local = config_.d_model + 2 * config_.kvDim();
-        const int d_model_local = config_.d_model;
-        const int num_heads_local = config_.num_heads;
-        const int head_dim_local = d_model_local / config_.num_heads;
+        const int qkv_dim_local = hp.d_model + 2 * config_.kvDim();
+        const int d_model_local = hp.d_model;
+        const int num_heads_local = hp.num_heads;
+        const int head_dim_local = d_model_local / hp.num_heads;
         
         // Sample first N tokens for statistics (to avoid huge GPU->CPU transfers)
         const int n_sample = std::min(64, total_tokens);
@@ -787,7 +798,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking
     // Previously: launchFFNBiasAdd bypassed autograd, so b_qkv never received gradients
     // Now: autograd::broadcast_add creates BiasAddGradFn which computes grad_bias = sum(grad_output)
-    if (config_.use_bias && b_qkv_.data) {
+    if (hp.use_bias && b_qkv_.data) {
         intermediates.qkv_out = autograd::broadcast_add(intermediates.qkv_out, b_qkv_, stream);
     }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV bias DONE\n");
@@ -908,7 +919,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Compute per-step per-layer dropout seed using Knuth multiplicative hash.
     // Dropout mode is explicit: training_step is seed material only, never a mode gate.
     const int layer_idx_for_seed = layer_idx;
-    const float attention_dropout_p = dropout_enabled ? config_.attention_dropout : 0.0f;
+    const float attention_dropout_p = dropout_enabled ? hp.attention_dropout : 0.0f;
     const uint64_t attn_dropout_seed = (attention_dropout_p > 0.0f)
         ? (training_step * 2654435761ULL + 42 + 1000 * static_cast<uint64_t>(layer_idx_for_seed))
         : 0;
@@ -947,7 +958,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     intermediates.proj_out = autograd::matmul(intermediates.attn_out, W_o_, stream,
                                               intermediates.attn_out.data, nullptr, true);
     // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking on b_o
-    if (config_.use_bias && b_o_.data) {
+    if (hp.use_bias && b_o_.data) {
         intermediates.proj_out = autograd::broadcast_add(intermediates.proj_out, b_o_, stream);
     }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection DONE\n");
@@ -957,9 +968,9 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //     Standard transformer: residual = input + dropout(sublayer(norm(input)))
     //     Dropout applied BEFORE LayerScale and residual add.
     //--------------------------------------------------
-    if (config_.dropout_rate > 0.0f && dropout_enabled) {
+    if (hp.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t attn_proj_dropout_seed = training_step * 2654435761ULL + 100 + layer_idx;
-        intermediates.proj_out = autograd::dropout(intermediates.proj_out, config_.dropout_rate,
+        intermediates.proj_out = autograd::dropout(intermediates.proj_out, hp.dropout_rate,
                                                    attn_proj_dropout_seed, true, stream);
     }
     
@@ -973,9 +984,24 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     
     // Issue #109: LayerScale gating for attention sublayer
     Tensor scaled_proj;
-    const Tensor& proj_for_residual = (config_.use_layer_scale && layer_scale1_.data)
-        ? (scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream), scaled_proj)
-        : intermediates.proj_out;
+    const Tensor* proj_for_residual = &intermediates.proj_out;
+    if (hp.use_layer_scale) {
+        if (!layer_scale1_.data) {
+            throw std::runtime_error("EncodingLayer::forward: use_layer_scale=true but layer_scale1_ is NULL");
+        }
+        layer_scale1_.shape.require("EncodingLayer::forward layer_scale1_");
+        if (!layer_scale1_.shape.is_2d_layout()) {
+            throw std::runtime_error("EncodingLayer::forward: layer_scale1_ must be a 2D [1,d_model] gamma vector");
+        }
+        const auto ls1_dims = layer_scale1_.shape.as_2d();
+        if (ls1_dims.rows != 1 || ls1_dims.cols != d_model) {
+            throw std::runtime_error("EncodingLayer::forward: layer_scale1_ must have shape [1,d_model]. expected=[1," +
+                                     std::to_string(d_model) + "] got=[" + std::to_string(ls1_dims.rows) + "," +
+                                     std::to_string(ls1_dims.cols) + "]");
+        }
+        scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream);
+        proj_for_residual = &scaled_proj;
+    }
     
     // ========================================================================
     // STANDARD PRE-NORM RESIDUAL (Issue #148: Sandwich Norm REMOVED)
@@ -992,7 +1018,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //   3. Initial rho(0)=0.21 (vs PyTorch 0.05-0.08) → started halfway to collapse
     //   4. Combined with causal attention prefix averaging → mode collapse by batch 3
     // ========================================================================
-    intermediates.residual1 = autograd::add(input, proj_for_residual, stream);
+    intermediates.residual1 = autograd::add(input, *proj_for_residual, stream);
     
     // ========================================================================
     // RESIDUAL CENTERING (Issue #118 / Mode Collapse Fix)
@@ -1013,7 +1039,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //   grad_input = P * grad_output within each sequence. Only the per-sequence
     //   constant mode is projected out; non-constant token modes are preserved.
     // ========================================================================
-    if (config_.center_encoder_residuals) {
+    if (hp.center_encoder_residuals) {
         if (seq_len <= 1) {
             throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
         }
@@ -1028,7 +1054,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #56: Store in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2...\n");
-    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma_, config_.rms_epsilon, stream);
+    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma_, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2 DONE\n");
     
     //--------------------------------------------------
@@ -1038,6 +1064,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
     intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates,
+                                          stream, cublas_handle,
                                           training_step, dropout_enabled, layer_idx);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
@@ -1046,9 +1073,9 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //     Standard transformer: residual = input + dropout(sublayer(norm(input)))
     //     Dropout applied BEFORE LayerScale and residual add.
     //--------------------------------------------------
-    if (config_.dropout_rate > 0.0f && dropout_enabled) {
+    if (hp.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t ffn_dropout_seed = training_step * 2654435761ULL + 200 + layer_idx;
-        intermediates.ffn_out = autograd::dropout(intermediates.ffn_out, config_.dropout_rate,
+        intermediates.ffn_out = autograd::dropout(intermediates.ffn_out, hp.dropout_rate,
                                                   ffn_dropout_seed, true, stream);
     }
     
@@ -1063,9 +1090,24 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     
     // Issue #109: LayerScale gating for FFN sublayer
     Tensor scaled_ffn;
-    const Tensor& ffn_for_residual = (config_.use_layer_scale && layer_scale2_.data)
-        ? (scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream), scaled_ffn)
-        : intermediates.ffn_out;
+    const Tensor* ffn_for_residual = &intermediates.ffn_out;
+    if (hp.use_layer_scale) {
+        if (!layer_scale2_.data) {
+            throw std::runtime_error("EncodingLayer::forward: use_layer_scale=true but layer_scale2_ is NULL");
+        }
+        layer_scale2_.shape.require("EncodingLayer::forward layer_scale2_");
+        if (!layer_scale2_.shape.is_2d_layout()) {
+            throw std::runtime_error("EncodingLayer::forward: layer_scale2_ must be a 2D [1,d_model] gamma vector");
+        }
+        const auto ls2_dims = layer_scale2_.shape.as_2d();
+        if (ls2_dims.rows != 1 || ls2_dims.cols != d_model) {
+            throw std::runtime_error("EncodingLayer::forward: layer_scale2_ must have shape [1,d_model]. expected=[1," +
+                                     std::to_string(d_model) + "] got=[" + std::to_string(ls2_dims.rows) + "," +
+                                     std::to_string(ls2_dims.cols) + "]");
+        }
+        scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream);
+        ffn_for_residual = &scaled_ffn;
+    }
     
     // ========================================================================
     // STANDARD PRE-NORM RESIDUAL (Issue #148: Sandwich Norm REMOVED)
@@ -1074,7 +1116,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //
     // No post-residual normalization. Matches standard PyTorch GPT pre-norm.
     // ========================================================================
-    intermediates.output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
+    intermediates.output = autograd::add(intermediates.residual1, *ffn_for_residual, stream);
     
     // Issue #155: Post-FFN centering REMOVED from here — moved to AutogradTraining.cu
     // so it happens AFTER all layer-output modifications (including crossAttentionRead).
@@ -1140,21 +1182,65 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         const float rms_min = *std::min_element(row_rms.begin(), row_rms.end());
         const float rms_max = *std::max_element(row_rms.begin(), row_rms.end());
         
-        // Log LayerScale values if available
-        float ls1_val = 0.0f, ls2_val = 0.0f;
-        if (config_.use_layer_scale && layer_scale1_.data) {
-            cudaMemcpy(&ls1_val, layer_scale1_.data, sizeof(float), cudaMemcpyDeviceToHost);
-        }
-        if (config_.use_layer_scale && layer_scale2_.data) {
-            cudaMemcpy(&ls2_val, layer_scale2_.data, sizeof(float), cudaMemcpyDeviceToHost);
+        struct LayerScaleDiagStats {
+            float min = 0.0f;
+            float max = 0.0f;
+            float mean = 0.0f;
+            float rms = 0.0f;
+        };
+        auto layerScaleStats = [d_model](Tensor& gamma, const char* name) -> LayerScaleDiagStats {
+            if (!gamma.data) {
+                throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " is NULL while LayerScale is enabled");
+            }
+            const std::string shape_context = std::string("EncodingLayer::forward diagnostics ") + name;
+            gamma.shape.require(shape_context.c_str());
+            if (!gamma.shape.is_2d_layout()) {
+                throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " must be a 2D [1,d_model] gamma vector");
+            }
+            const auto gamma_dims = gamma.shape.as_2d();
+            if (gamma_dims.rows != 1 || gamma_dims.cols != d_model) {
+                throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " must have shape [1,d_model]. expected=[1," +
+                                         std::to_string(d_model) + "] got=[" + std::to_string(gamma_dims.rows) + "," +
+                                         std::to_string(gamma_dims.cols) + "]");
+            }
+            std::vector<float> h_gamma(static_cast<size_t>(d_model));
+            cudaMemcpy(h_gamma.data(), gamma.data, h_gamma.size() * sizeof(float), cudaMemcpyDeviceToHost);
+            LayerScaleDiagStats stats{};
+            stats.min = FLT_MAX;
+            stats.max = -FLT_MAX;
+            double sum = 0.0;
+            double sum_sq = 0.0;
+            for (float v : h_gamma) {
+                stats.min = fminf(stats.min, v);
+                stats.max = fmaxf(stats.max, v);
+                sum += v;
+                sum_sq += static_cast<double>(v) * static_cast<double>(v);
+            }
+            stats.mean = static_cast<float>(sum / d_model);
+            stats.rms = sqrtf(static_cast<float>(sum_sq / d_model));
+            return stats;
+        };
+        LayerScaleDiagStats ls1_stats{};
+        LayerScaleDiagStats ls2_stats{};
+        if (hp.use_layer_scale) {
+            ls1_stats = layerScaleStats(layer_scale1_, "layer_scale1_");
+            ls2_stats = layerScaleStats(layer_scale2_, "layer_scale2_");
         }
         
         std::ostringstream eq;
         eq << "[LAYER_COSINE_EQUATION] layer=" << layer_idx 
-           << ": output = RMSNorm(RMSNorm(input + LS1*attn) + LS2*ffn)\n";
+           << ": residual1[t,d] = input[t,d] + gamma1[d] * attn[t,d]; output[t,d] = residual1[t,d] + gamma2[d] * ffn[t,d]\n";
         eq << "  OUTPUT h_L" << layer_idx << ": shape=[" << total_tokens << ", " << d_model 
            << "] row_rms_range=[" << rms_min << ", " << rms_max << "]\n";
-        eq << "  LAYERSCALE: LS1=" << ls1_val << " LS2=" << ls2_val << "\n";
+        if (hp.use_layer_scale) {
+            eq << "  LAYERSCALE gamma vectors: shape=[1," << d_model << "]"
+               << " LS1[min=" << ls1_stats.min << " max=" << ls1_stats.max
+               << " mean=" << ls1_stats.mean << " rms=" << ls1_stats.rms << "]"
+               << " LS2[min=" << ls2_stats.min << " max=" << ls2_stats.max
+               << " mean=" << ls2_stats.mean << " rms=" << ls2_stats.rms << "]\n";
+        } else {
+            eq << "  LAYERSCALE: disabled\n";
+        }
         eq << "  ACTUAL avg_cos=" << avg_cos << " (pairs=" << num_pairs 
            << ") [|avg_cos|->1 = collapse, near 0 = diverse]\n";
         if (fabs(avg_cos) > 0.8) {

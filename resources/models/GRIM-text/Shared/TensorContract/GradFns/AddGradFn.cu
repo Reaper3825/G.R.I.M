@@ -161,25 +161,6 @@ void AddGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     }
     applied = true;
 
-    // DIAGNOSTIC: Log incoming gradient to Add backward (GUARDED - expensive!)
-#if 0
-    static int s_add_bwd_call = 0;
-    const int add_call_idx = ++s_add_bwd_call;
-    {
-        cudaStreamSynchronize(stream);
-        const size_t grad_elems = grad_output.numel();
-        std::vector<float> samp(std::min(grad_elems, static_cast<size_t>(10000)));
-        cudaMemcpy(samp.data(), grad_output.data, samp.size() * sizeof(float), cudaMemcpyDeviceToHost);
-        float mx = 0.0f; double sq = 0.0;
-        for (auto& v : samp) { if (!std::isnan(v) && !std::isinf(v)) { mx = std::max(mx, std::abs(v)); sq += v*v; } }
-        float rms = std::sqrt(static_cast<float>(sq / samp.size()));
-        const char* a_op = a_grad_fn && a_grad_fn->op_name ? a_grad_fn->op_name : "leaf";
-        const char* b_op = b_grad_fn && b_grad_fn->op_name ? b_grad_fn->op_name : "leaf";
-        fprintf(stderr, "[ADD-BWD-IN] call=%d | grad: numel=%zu max=%.6f rms=%.10f | a->%s b->%s\n",
-                add_call_idx, grad_elems, mx, rms, a_op, b_op);
-    }
-#endif
-
     if (!grad_output.data) {
         throw std::runtime_error("AddGradFn::apply: grad_output.data is NULL - backward called with null gradient");
     }

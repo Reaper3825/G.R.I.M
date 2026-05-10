@@ -98,7 +98,7 @@ __global__ void kernel_dropout_backward(
     const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
     const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
-        grad_input[idx] = grad_output[idx] * (mask[idx] ? scale : 0.0f);
+        grad_input[idx] += grad_output[idx] * (mask[idx] ? scale : 0.0f);
     }
 }
 
@@ -124,10 +124,16 @@ void DropoutGradFn::capture_input(Tensor& x) {
     input_grad_fn = x.grad_fn;
 
     if (input_requires_grad) {
-        const size_t grad_size = x.numel();
-        cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "DropoutGradFn_input_grad");
-        cudaMemset(input_grad, 0, grad_size * sizeof(float));
-        owns_input_grad = true;
+        if (x.is_leaf) {
+            x.ensure_grad();
+            input_grad = x.grad_data();
+            owns_input_grad = false;
+        } else {
+            const size_t grad_size = x.numel();
+            cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "DropoutGradFn_input_grad");
+            cudaMemset(input_grad, 0, grad_size * sizeof(float));
+            owns_input_grad = true;
+        }
     }
 }
 

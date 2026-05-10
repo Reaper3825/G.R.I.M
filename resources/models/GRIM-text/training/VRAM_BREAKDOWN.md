@@ -196,7 +196,7 @@ Every GPU allocation site that can run during training, with source and size for
 | | ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out | Encoding | `[tokens, d_ff]×4` |
 | **GradNorm** | d_partial_sums | GradNormGPU.cu | `max_groups × 4` (GPU); h_partial_sums / h_metrics are host |
 | **TeacherLogits / ReferenceLogits** | Buffer | TeacherLogits_GPU.hpp ensureCapacity | When used: `tokens × vocab_size × 4` per buffer |
-| **Autograd (ephemeral)** | LayerScaleGradFn input_grad / input_data | TensorContract_GPU.cu | Non-leaf only: `element_count × 4` (freed after backward) |
+| **Autograd (ephemeral)** | LayerScaleGradFn input_grad / input_data | GradFns/LayerScaleGradFn.cu | Non-leaf only: `element_count × 4`; gamma vectors are `[1, d_model]` (freed after backward) |
 | **FlashAttentionLayer** | ensureScratch (fwd bf16, softmax_lse) | FlashAttention layer | Fwd-only scratch; backward uses GradFn buffers above |
 | **Telemetry** | Lattice / control | TelemetryLattice_GPU.cu, TelemetryControl_GPU.cu | ~4 KiB + control if enabled |
 | **ScratchBlock** | Backward temps (e.g. atom caches) | ScratchBlockReasoning_GPU.cu | Per-call temporary; not pre-allocated pool |

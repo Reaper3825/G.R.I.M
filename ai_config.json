@@ -503,16 +503,17 @@
                 "enabled": false
             },
             "layer_scale": {
-                "enabled": false
+                "enabled": false,
+                "init_value": 1.0
             },
-            "learning_rate": 0.0006000000284984708,
+            "learning_rate": 0.0006,
             "lm_head_centering": {
                 "center_encoder_residuals": true,
                 "center_hidden_states": true,
                 "center_logits": true,
                 "enabled": true,
-                "freeze_final_rms_gamma": true,
-                "project_out_pc1": true
+                "freeze_final_rms_gamma": false,
+                "project_out_pc1": false
             },
             "log_interval": 25,
             "log_recorder": {

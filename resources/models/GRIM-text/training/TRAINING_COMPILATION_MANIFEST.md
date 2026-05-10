@@ -184,7 +184,7 @@ Use this checklist to systematically audit each file in the order it's used duri
     - **FINDING 1 — OWNERSHIP REFACTOR: TrainingTensors owns ALL parameter Tensors** ✅ FIXED: The 4 auxiliary tensors (`lm_head_bias`, `numeric_head_weights`, `numeric_head_bias`, `final_rms_gamma`) were previously double-allocated — once in `TrainingTensors::initializeParams()` (unused) and again in `InitTrainingState.cu`. Resolution: Removed duplicate allocations from `InitTrainingState.cu`, kept sole ownership in `TrainingTensors::initializeParams()`. Removed the 4 member declarations from `TrainingState_GPU.hpp` entirely — they are now accessed exclusively via `tensors_->X`. Updated ALL access sites across 7 files (AutogradTraining.cu, LanguageModel_Training.cu, grim_model_serialization.cu, Phase2_TrainingLoop.cu, InitInferenceState.cu, TrainingStateGPU.cu, Phase1_Startup.cu). Added `numeric_head_enabled` parameter through the init chain so TrainingTensors can conditionally allocate numeric head tensors. Also fixed InitInferenceState.cu which was missing `final_rms_gamma` allocation entirely — inference would have crashed loading checkpoints with rms_gamma.
     - **FINDING 2 — `TrainingTensors::zeroGrad()` was DEAD CODE** ✅ FIXED: Deleted from TrainingTensors.cu and .hpp. `LanguageModel::zeroGrad()` handles all gradient zeroing.
     - **FINDING 3 — `single_token_{logits,hidden}` dead allocations** ✅ FIXED: Removed from InitTrainingState.cu. Leftover from planned incremental KV cache never implemented.
-    - **FINDING 4 — `layer_scale_init` misleading default** ✅ FIXED: Changed default from `0.1f` to `1.0f` in TrainingState_GPU.hpp to match production config (Issue #129).
+    - **FINDING 4 — `layer_scale_init` misleading default** ✅ FIXED: Changed default from `0.1f` to `1.0f` in `HyperParameters_GPU.hpp` and the `ai_config.json` parser to match production config (Issue #129).
     - **FINDING 5 — optimizer-state allocation debug fprintf** ✅ FIXED: Removed allocation ENTER/EXIT fprintf lines from the optimizer-state owner implementation.
     - **FINDING 6 — `batch_prep_*` vectors NOT dead**: ✅ RESOLVED (original claim was WRONG). The 7 `batch_prep_*` vectors (`batch_prep_input_ids`, `batch_prep_target_ids`, `batch_prep_numeric_values`, `batch_prep_numeric_mask`, `batch_prep_text_features`, `batch_prep_text_mask`, `batch_prep_valid_target_counts`) ARE actively used by `ComputeLossBatch.cu::prepareLossBatchInputs()` for assembling padded batch data. `DEBUG_BATCH_PREP_CORRUPTION` flag was already deleted (Phase1 audit). The vectors use lazy allocation (`batch_prep_capacity=0`, `.assign()` on first use) as a workaround for a memory corruption bug where `batch_prep_target_ids.capacity()` contained garbage before `initTrainingState()`. No action required — vectors are production code.
     - **FINDING 7 — `stream ? stream : stream_ctrl.getPrimaryStream()` x3**: Lines 63, 400, 438. Functions accept `stream = nullptr` default and fallback to centralized controller. Rule 22 compliant (fallback IS to centralized controller, which throws if uninitialized). Low priority — pedantic Rule 20 says make parameter required. DEFERRED.
@@ -381,7 +381,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Forward_GPU.cu** ✅ AUDITED & FIXED (103→97 lines)
   - NOT a forward pass orchestrator — is `GPUGrimEncoder::Impl` layer container only
-  - Creates `GPUEncoderLayer` instances, stores in `gpu_layers_` vector, exposes `getLayer()`/`setFlashAttention()`
+  - Creates `GPUEncoderLayer` instances from `EncoderLayerConstructionHP`, stores in `gpu_layers_` vector, exposes `getLayer()`
   - Actual forward orchestration lives in `AutogradTraining.cu` (section 4.1)
   - **FIXED**: `FWD_ERROR + std::abort()` → `throw std::runtime_error()` (Rule 20), validation moved before config copy
   - **DELETED**: `FWD_ERROR` macro — only 2 usages, both replaced by the throw
@@ -889,7 +889,7 @@ For each encoding layer (Layer 0 → Layer 11):
 #### 2.5k Residual + LayerScale
 
 - [x] **Covered by 2.5b** (Encoding_GPU.cu cleanup)
-  - Same LayerScale mechanism as 2.5g, consistent λ value ✓
+  - Same per-channel LayerScale mechanism as 2.5g; gamma vectors are `[1, d_model]` ✓
 
 ---
 
@@ -933,8 +933,8 @@ For each encoding layer (Layer 0 → Layer 11):
   - **ADDED**: `dropout_rate` field to `EncodingConfig`, propagated from `EncoderConfig` via `Forward_GPU.cu`
   - **ADDED**: Post-attention-projection sublayer dropout in `Encoding_GPU.cu` (seed offset: 100+layer_idx)
   - **ADDED**: Post-FFN sublayer dropout in `Encoding_GPU.cu` (seed offset: 200+layer_idx)
-  - **ADDED**: FFN activation dropout after GELU in `Feed_Forward_GPU.cu` (seed offset: 300+layer_idx)
-  - **FIXED**: `FeedForwardConfig.dropout_rate` now propagated from `EncodingConfig.dropout_rate` in `useExternalWeights()`
+  - **ADDED**: FFN activation dropout after SwiGLU gating in `Feed_Forward_GPU.cu` (seed offset: 300+layer_idx)
+  - **FIXED**: FFN dropout now comes from `LanguageModelConfig` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`; `FeedForwardLayer` stores the grouped HP directly as `hp_` (no `FeedForwardConfig` wrapper)
   - **REMOVED**: Redundant post-encoder-layer dropout from `AutogradTraining.cu` (was double-regularizing with sublayer dropout)
   - **Removed from CMakeLists.txt**: `Shared/Dropout/Dropout_GPU.cu` build reference
   - **Dropout sites (production)**:
@@ -1152,8 +1152,9 @@ For each encoding layer (Layer 0 → Layer 11):
 #### 4.5d LayerScale + Residual Backward
 
 - [ ] **Layers/Encoding/Encoding_GPU.cu**
-  - Residual addition backward: `grad_input += λ * grad_residual`
-  - Pattern to check: Verify scales gradient by layer scalar
+  - Residual addition backward: `grad_input[t,d] += gamma[d] * grad_residual[t,d]`
+  - Gamma backward: `grad_gamma[d] += sum_t(grad_residual[t,d] * sublayer_output[t,d])`
+  - Pattern to check: Verify gamma grad is summed locally; CE/root backward already applies mean scaling
 
 #### 4.5e RMSNorm Backward (Pre-FFN)
 

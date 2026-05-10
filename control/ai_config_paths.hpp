@@ -970,14 +970,14 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.architecture.pc1_power_iters = lmc.value("pc1_power_iters", 5);
     }
     
-    // Issue #109: LayerScale (learnable residual scaling from CaiT paper)
-    // Reduces correlation buildup between layers by gating sublayer outputs
+    // Issue #109: LayerScale (per-channel learnable residual scaling)
+    // Reduces correlation buildup while allowing each hidden feature channel to learn its own gate.
     params.architecture.use_layer_scale = false;   // Default: disabled (standard residual connections)
-    params.architecture.layer_scale_init = 0.1f;   // CaiT paper recommends 0.1 for deeper networks
+    params.architecture.layer_scale_init = 1.0f;   // Issue #129: 0.1 caused gradient attenuation in GRIM-text
     if (auto it = trainConfig.find("layer_scale"); it != trainConfig.end() && it->is_object()) {
         const auto& ls = *it;
         params.architecture.use_layer_scale = ls.value("enabled", false);
-        params.architecture.layer_scale_init = ls.value("init_value", 0.1f);
+        params.architecture.layer_scale_init = ls.value("init_value", 1.0f);
     }
     
     // QK-norm: Per-head RMSNorm applied to Q and K after QKV projection, before RoPE.

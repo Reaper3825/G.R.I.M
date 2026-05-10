@@ -168,6 +168,21 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         return !host.empty() || view.count == 0;
     };
 
+    auto check_layer_scale_read_view = [&cfg](const DeviceReadView& view,
+                                              const char* label,
+                                              int layer_idx) -> bool {
+        if (!view.ptr) return true;
+        const std::size_t expected = static_cast<std::size_t>(cfg.d_model);
+        if (view.count != expected) {
+            Logging::EmitModuleError(kLogModule,
+                Msg("[save] FATAL: ", label, " view count mismatch in layer ", layer_idx,
+                    ": view=", view.count, " expected=d_model=", expected,
+                    " — LayerScale checkpoint fields are per-channel gamma vectors"));
+            return false;
+        }
+        return true;
+    };
+
     for (int layer_idx = 0; layer_idx < cfg.num_layers; ++layer_idx) {
         if (layer_idx % 6 == 0 || layer_idx == cfg.num_layers - 1)
             Logging::EmitModuleInfo(kLogModule, Msg("[save] Downloading encoder layer ", layer_idx + 1, "/", cfg.num_layers));
@@ -220,11 +235,13 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         flatbuffers::Offset<flatbuffers::Vector<float>> fb_ls1 = 0;
         flatbuffers::Offset<flatbuffers::Vector<float>> fb_ls2 = 0;
         if (layer_view.layer_scale1.ptr) {
+            if (!check_layer_scale_read_view(layer_view.layer_scale1, "layer_scale1", layer_idx)) return false;
             std::vector<float> h_ls1;
             if (!download_into(h_ls1, layer_view.layer_scale1, "layer_scale1")) return false;
             fb_ls1 = builder.CreateVector(h_ls1);
         }
         if (layer_view.layer_scale2.ptr) {
+            if (!check_layer_scale_read_view(layer_view.layer_scale2, "layer_scale2", layer_idx)) return false;
             std::vector<float> h_ls2;
             if (!download_into(h_ls2, layer_view.layer_scale2, "layer_scale2")) return false;
             fb_ls2 = builder.CreateVector(h_ls2);

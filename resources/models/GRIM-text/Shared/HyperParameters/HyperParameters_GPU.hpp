@@ -556,7 +556,7 @@ struct LanguageModelConfig : public ModelArchitecture {
     bool use_bias = true;
     bool qk_norm_enabled = false;  // QK-Norm: RMSNorm applied to Q and K before attention scoring
 
-    // Issue #109: LayerScale - learnable residual scaling from CaiT paper
+    // Issue #109: LayerScale - per-channel learnable residual scaling vectors [1, d_model]
     bool use_layer_scale = false;
     float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1)
 

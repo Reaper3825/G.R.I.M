@@ -22,6 +22,45 @@
 namespace {
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
+constexpr int kMaxGridBlocks1DFallback = 65534;
+constexpr int kMaxGridDimY = 65535;
+
+inline int getMaxGridBlocks1D() {
+    static int cached = -1;
+    if (cached < 0) {
+        int device = 0;
+        if (cudaGetDevice(&device) != cudaSuccess) {
+            cached = kMaxGridBlocks1DFallback;
+        } else {
+            int max_x = 0;
+            if (cudaDeviceGetAttribute(&max_x, cudaDevAttrMaxGridDimX, device) != cudaSuccess) {
+                cached = kMaxGridBlocks1DFallback;
+            } else {
+                cached = (max_x > 65534) ? 65534 : max_x;
+            }
+        }
+    }
+    return cached;
+}
+
+inline dim3 gridForCount(size_t count) {
+    if (count == 0) return dim3(1, 1, 1);
+    const int blocks = static_cast<int>((count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE);
+    const int max1d = getMaxGridBlocks1D();
+    if (blocks <= max1d) return dim3(blocks, 1, 1);
+    int gy = (blocks + max1d - 1) / max1d;
+    if (gy <= kMaxGridDimY) return dim3(max1d, gy, 1);
+    int gx = (blocks + kMaxGridDimY - 1) / kMaxGridDimY;
+    return dim3(gx, kMaxGridDimY, 1);
+}
+
+__global__ void kernel_accumulate_grad(float* dst, const float* src, size_t count, float scale) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        dst[idx] += src[idx] * scale;
+    }
+}
 
 __global__ void kernel_center_columns_grouped(
     const float* __restrict__ input,
@@ -250,6 +289,15 @@ void CenterColumnsGradFn::capture_input(Tensor& input, int cols, int rows, int g
     input_grad_fn = input.grad_fn;
 
     input.ensure_grad();
+    input_is_leaf = input.is_leaf;
+    if (input_is_leaf) {
+        leaf_grad_buf = input.grad_data();
+        if (!leaf_grad_buf) {
+            throw std::runtime_error(
+                "CenterColumnsGradFn::capture_input: leaf input has requires_grad but "
+                "grad_data() is NULL after ensure_grad() at " __FILE__);
+        }
+    }
 
     float* buf = nullptr;
     cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "CenterColumnsGradFn_input_grad");
@@ -280,6 +328,14 @@ void CenterColumnsGradFn::apply(const Tensor& grad_output, cudaStream_t stream) 
         check_center_columns_kernel_launch("CenterColumnsGradFn::apply(grouped)", stream);
     }
 
+    if (input_is_leaf) {
+        if (!leaf_grad_buf) {
+            throw std::runtime_error("CenterColumnsGradFn::apply: leaf_grad_buf is NULL for leaf input at " __FILE__);
+        }
+        kernel_accumulate_grad<<<gridForCount(element_count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            leaf_grad_buf, input_grad, element_count, 1.0f);
+    }
+
     if (input_grad_fn) {
         Tensor input_grad_tensor;
         input_grad_tensor.data = input_grad;
@@ -294,6 +350,10 @@ void CenterColumnsGradFn::release_saved() {
     owned_input_grad.reset();
     owned_sequence_lengths.reset();
     sequence_lengths = nullptr;
+    input_grad = nullptr;
+    leaf_grad_buf = nullptr;
+    input_is_leaf = false;
+    input_grad_fn.reset();
 }
 
 Tensor center_columns(const Tensor& x, cudaStream_t stream) {

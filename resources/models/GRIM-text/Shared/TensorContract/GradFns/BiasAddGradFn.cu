@@ -8,7 +8,7 @@
 //
 //  Backward:
 //    grad_input = grad_output               (pass-through accumulate)
-//    grad_bias[j] = sum_i(grad_output[i,j]) (block-reduction per feature)
+//    grad_bias[j] += sum_i(grad_output[i,j]) (block-reduction per feature)
 //
 //  The bias kernels and their launch wrappers used to live inside
 //  TensorContract_GPU.cu; they are owned by the autograd layer (not
@@ -226,7 +226,7 @@ void BiasAddGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
             grad_input, grad_output.data, count, 1.0f);
     }
 
-    // Backward for bias: grad_bias[j] = sum_i(grad_output[i,j])
+    // Backward for bias: grad_bias[j] += sum_i(grad_output[i,j])
     if (bias_requires_grad && grad_bias) {
         launchBiasBackward(grad_output.data, grad_bias,
                            static_cast<int>(total_tokens), static_cast<int>(features), stream);

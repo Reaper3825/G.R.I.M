@@ -86,7 +86,7 @@ __global__ void kernel_gelu_forward(
     }
 }
 
-// GELU backward: grad_x = grad_y * gelu'(x)
+// GELU backward: grad_x += grad_y * gelu'(x)
 // gelu'(x) = 0.5 * (1 + tanh) + 0.5 * x * sech^2 * c * (1 + 3*k*x^2)
 __global__ void kernel_gelu_backward(
     const float* grad_output,
@@ -109,7 +109,7 @@ __global__ void kernel_gelu_backward(
         const float dgelu = 0.5f * (1.0f + tanh_inner) +
                            0.5f * x * sech2 * c * (1.0f + 3.0f * k * x * x);
 
-        grad_input[idx] = grad_output[idx] * dgelu;
+        grad_input[idx] += grad_output[idx] * dgelu;
     }
 }
 

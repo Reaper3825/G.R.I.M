@@ -112,7 +112,8 @@ public:
         int* atom_positions,
         int num_atoms,
         int total_tokens,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        cublasHandle_t cublas_handle);
 
     // Parameter access
     Tensor& W_op()    { return w_op_; }
@@ -124,9 +125,6 @@ public:
     const Tensor& w_arg1() const { return w_arg1_; }
     const Tensor& w_arg2() const { return w_arg2_; }
 
-    void setStream(cudaStream_t s) { stream_ = s; }
-    void setCublasHandle(cublasHandle_t h) { cublas_handle_ = h; }
-
     int d_model() const { return config_.d_model; }
     int atom_embedding_dim() const { return config_.atom_embedding_dim; }
     int num_ops() const { return config_.num_ops; }
@@ -134,8 +132,6 @@ public:
 
 private:
     HyperParameters::ReasoningHeadConstructionHP config_;
-    cudaStream_t stream_ = nullptr;
-    cublasHandle_t cublas_handle_ = nullptr;
     Tensor w_op_;    // [num_ops, d_total]
     Tensor b_op_;    // [num_ops]
     Tensor w_arg1_;  // [1, d_total]

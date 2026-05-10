@@ -277,7 +277,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
 
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
             Tensor layer_output_view = enc_layer->forward(
-                layer_input, payload, bindings->d_seq_lengths, request.stream, *layer_storage,
+                layer_input, payload, bindings->d_seq_lengths, request.stream, request.cublas_handle, *layer_storage,
                 request.step, false, layer_idx);
 
             Tensor owned = Tensor::empty(layer_output_view.shape, false, request.stream, "no_grad_layer_output");
@@ -339,7 +339,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                 : intermediates.encoder_layer_outputs.back();
 
             Tensor layer_output = enc_layer->forward(
-                layer_input, payload, bindings->d_seq_lengths, request.stream, layer_storage,
+                layer_input, payload, bindings->d_seq_lengths, request.stream, request.cublas_handle, layer_storage,
                 request.step, is_training, layer_idx);
 
             if (layer_idx == exec_layer && request.execution_block) {
@@ -547,9 +547,6 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         intermediates.encoder_output_tensor = std::move(encoder_output_tensor);
     }
 
-    request.lm_head->setStream(request.stream);
-    request.lm_head->setCublasHandle(request.cublas_handle);
-
     float* logits_output = ts->cached_logits_tensor.data;
     if (!logits_output) {
         throw std::runtime_error("ModelForward: cached_logits_tensor buffer is NULL - TrainingState MUST allocate logits buffer for forward snapshots");
@@ -560,7 +557,9 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         intermediates.centered_encoder_output,
         bindings->d_seq_lengths,
         request.batch_size,
-        request.seq_len);
+        request.seq_len,
+        request.stream,
+        request.cublas_handle);
 
     if (cfg->lm_head_center_hidden_states && ts->cached_encoder_output.data && intermediates.centered_encoder_output.data) {
         cudaMemcpyAsync(ts->cached_encoder_output.data, intermediates.centered_encoder_output.data,
@@ -693,16 +692,14 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                 cudaMemcpyDeviceToDevice,
                 request.stream);
 
-            request.reasoning_head->setStream(request.stream);
-            request.reasoning_head->setCublasHandle(request.cublas_handle);
-
             ReasoningHeadOutput rh_out = request.reasoning_head->forward(
                 intermediates.encoder_output_tensor,
                 intermediates.scratch_atom_embeddings,
                 request.scratch_block->atomPositionsBuffer(),
                 num_atoms,
                 total_tokens,
-                request.stream);
+                request.stream,
+                request.cublas_handle);
             intermediates.reasoning_output = std::move(rh_out);
         }
     }

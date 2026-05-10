@@ -106,34 +106,31 @@ public:
 //    - ModelExecutionMode       (TRAINING vs INFERENCE)
 //
 //  This header MUST NOT redeclare any of those fields. The encoder
-//  consumes LanguageModelConfig directly; the only thing genuinely
-//  owned here is the runtime-binding struct below — pointers to live
-//  device state that are created at initGPU() time and have no place
-//  in a config object.
+//  consumes grouped construction views derived from LanguageModelConfig;
+//  the only thing genuinely owned here is the construction-binding struct below —
+//  startup model-assembly inputs that are created at initGPU() time and have
+//  no place in a config object or per-forward request.
 //======================================================//
 
 #ifdef USE_CUDA
-/// Runtime device bindings for GPUGrimEncoder construction.
+/// Startup device bindings for GPUGrimEncoder construction.
 ///
-/// These are NOT hyperparameters — they're live runtime handles created
-/// during initGPU(). Hyperparameter fields (architecture, layer scale,
-/// QK-norm, biases, dropout, etc.) come from LanguageModelConfig directly.
-struct EncoderRuntimeBindings {
+/// These are NOT hyperparameters. They are startup/model-assembly inputs.
+/// Forward-time stream/cuBLAS handles are carried by the forward payload/request
+/// (`AutogradContext` / `Forward::ModelForwardRequest`), never stored on layers.
+struct EncoderConstructionBindings {
     /// Shared positional-bias state (ALiBi/RoPE), owned by TrainingState.
     /// REQUIRED: encoder construction throws if null.
     const PBM::PBMSpec* pos_encoding = nullptr;
 
-    /// CUDA stream for async kernel launches.
-    cudaStream_t stream = nullptr;
-
-    /// Centralized cuBLAS handle (Rule 22 — single handle per process).
-    cublasHandle_t cublas_handle = nullptr;
+    /// CUDA stream for startup self-allocation only.
+    cudaStream_t init_stream = nullptr;
 
     /// Base seed for layer self-allocation Xavier init (per-layer offset = seed + 2 + i*10).
     uint64_t weight_seed = 0;
 
-    /// Residual projection init scaling (Issue #142: 1/sqrt(2 * num_layers)).
-    float residual_scale = 1.0f;
+    /// Residual projection init scaling (Issue #142: 1/sqrt(2 * num_layers)). REQUIRED.
+    float residual_scale = 0.0f;
 };
 #endif
 
@@ -565,19 +562,16 @@ using GPUEncoderLayer = EncodingLayer;
 // Forward pass logic is in ForwardPhase2_Encoder.cu::runFullEncoder().
 // This class only owns layers and provides access to them.
 //
-// Constructor takes the grouped encoder hyperparameter view and the runtime
-// bindings (live device handles). Grouping lives in HyperparameterGroupings.hpp;
-// runtime handles stay out of config ownership.
+// Constructor takes the grouped encoder hyperparameter view and startup model-
+// assembly bindings. Forward pass runtime handles live on the forward request.
 class GPUGrimEncoder {
 public:
     GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& config,
-                   const EncoderRuntimeBindings& bindings);
+                   const EncoderConstructionBindings& bindings);
 
     GPUEncoderLayer* getLayer(int index);
     const GPUEncoderLayer* getLayer(int index) const;
     int getNumLayers() const;
-
-    void setFlashAttention(bool enable, int min_seq_len);
 
 private:
     struct Impl;

@@ -154,7 +154,7 @@ __global__ void kernel_rmsnorm_backward(
     const float dgamma_x_sum = s_dgamma_x;
     const float scale = dgamma_x_sum / (d_model * rms_sq);
     for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        dx[i] = (dy[i] * gamma[i] - x[i] * scale) * inv_rms;
+        dx[i] += (dy[i] * gamma[i] - x[i] * scale) * inv_rms;
 
         if (grad_gamma) {
             atomicAdd(&grad_gamma[i], dy[i] * x[i] * inv_rms);
@@ -187,12 +187,17 @@ void RMSNormGradFn::capture_inputs(Tensor& x, Tensor& gamma_tensor, cudaStream_t
     gamma_data = gamma_tensor.data;
 
     if (input_requires_grad) {
-        const size_t grad_size = x.shape.total_elements();
-        float* buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&buf), grad_size * sizeof(float), "RMSNormGradFn_input_grad");
-        cudaMemsetAsync(buf, 0, grad_size * sizeof(float), stream);
-        owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
-        input_grad = owned_input_grad.get();
+        if (x.is_leaf) {
+            x.ensure_grad();
+            input_grad = x.grad_data();
+        } else {
+            const size_t grad_size = x.shape.total_elements();
+            float* buf = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), grad_size * sizeof(float), "RMSNormGradFn_input_grad");
+            cudaMemsetAsync(buf, 0, grad_size * sizeof(float), stream);
+            owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+            input_grad = owned_input_grad.get();
+        }
     }
 
     if (gamma_requires_grad) {

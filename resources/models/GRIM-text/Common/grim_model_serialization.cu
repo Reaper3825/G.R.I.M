@@ -107,6 +107,29 @@ void assignWrite(DeviceWriteView& view, float* ptr, std::size_t count) {
     view.count = count;
 }
 
+void requireLayerScaleVector(const Tensor& gamma,
+                             std::size_t d_model,
+                             const char* field_name,
+                             int layer_idx) {
+    if (!gamma.data) return;
+    const std::string context = std::string("LanguageModel checkpoint ") + field_name;
+    gamma.shape.require(context.c_str());
+    if (!gamma.shape.is_2d_layout()) {
+        throw std::runtime_error("LanguageModel checkpoint: " + std::string(field_name) +
+                                 " in layer " + std::to_string(layer_idx) +
+                                 " must be a 2D [1,d_model] gamma vector");
+    }
+    const auto dims = gamma.shape.as_2d();
+    if (dims.rows != 1 || static_cast<std::size_t>(dims.cols) != d_model) {
+        throw std::runtime_error("LanguageModel checkpoint: " + std::string(field_name) +
+                                 " in layer " + std::to_string(layer_idx) +
+                                 " must have shape [1,d_model]. expected=[1," +
+                                 std::to_string(d_model) + "] got=[" +
+                                 std::to_string(dims.rows) + "," +
+                                 std::to_string(dims.cols) + "]");
+    }
+}
+
 } // namespace (anonymous)
 
 bool LanguageModel::save(const std::string& path) {
@@ -194,9 +217,11 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(view.rms2_gamma, enc->rms2Gamma().data, d_model);
         // Issue #148: Sandwich norm gammas REMOVED — not saved to checkpoint
         // Old checkpoints may contain rms_post_attn/rms_post_ffn but they're ignored on load
-        // LayerScale (Issue #109) — single scalar per sublayer
-        if (enc->layerScale1().data) assignRead(view.layer_scale1, enc->layerScale1().data, 1);
-        if (enc->layerScale2().data) assignRead(view.layer_scale2, enc->layerScale2().data, 1);
+        // LayerScale (Issue #109) — per-channel gamma vector per sublayer
+        requireLayerScaleVector(enc->layerScale1(), d_model, "layer_scale1", layer_idx);
+        requireLayerScaleVector(enc->layerScale2(), d_model, "layer_scale2", layer_idx);
+        if (enc->layerScale1().data) assignRead(view.layer_scale1, enc->layerScale1().data, d_model);
+        if (enc->layerScale2().data) assignRead(view.layer_scale2, enc->layerScale2().data, d_model);
     }
 
     if (!lm_head_layer_) throw std::runtime_error("LMHeadLayer is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
@@ -425,9 +450,11 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
         // Issue #148: Sandwich norm gammas REMOVED — not loaded from checkpoint
-        // LayerScale (Issue #109) — single scalar per sublayer
-        if (enc->layerScale1().data) assignWrite(view.layer_scale1, enc->layerScale1().data, 1);
-        if (enc->layerScale2().data) assignWrite(view.layer_scale2, enc->layerScale2().data, 1);
+        // LayerScale (Issue #109) — per-channel gamma vector per sublayer
+        requireLayerScaleVector(enc->layerScale1(), d_model, "layer_scale1", layer_idx);
+        requireLayerScaleVector(enc->layerScale2(), d_model, "layer_scale2", layer_idx);
+        if (enc->layerScale1().data) assignWrite(view.layer_scale1, enc->layerScale1().data, d_model);
+        if (enc->layerScale2().data) assignWrite(view.layer_scale2, enc->layerScale2().data, d_model);
     }
 
     if (!training_state_.initialized) {

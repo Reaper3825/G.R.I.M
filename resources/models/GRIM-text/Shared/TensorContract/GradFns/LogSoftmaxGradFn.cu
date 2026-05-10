@@ -127,7 +127,7 @@ __global__ void kernel_log_softmax_backward(
     const float sum_dy = s_sum;
 
     for (int i = threadIdx.x; i < dim; i += blockDim.x)
-        dx[i] = dy[i] - expf(log_p[i]) * sum_dy;
+        dx[i] += dy[i] - expf(log_p[i]) * sum_dy;
 }
 
 }  // anonymous namespace

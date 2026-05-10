@@ -255,7 +255,7 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
     request.scratch_block = getScratchBlockLayer();
     request.reasoning_head = getReasoningHeadLayer();
     request.execution_block = getExecutionBlockLayer();
-    request.cublas_handle = training_state_.cublas_handle;
+    request.cublas_handle = training_state_.cublas_handle.get();
     request.stream = stream;
     request.payload = &payload;
     request.bindings = &bindings;
@@ -466,7 +466,8 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
             generation_state_.has_exec_memory,
             generation_state_.exec_memory,
             last_hidden,
-            post_stream);
+            post_stream,
+            training_state_.cublas_handle.get());
 
         generation_state_.decode_selector.valid          = sel.valid;
         generation_state_.decode_selector.status         = static_cast<uint8_t>(sel.status);
@@ -561,7 +562,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     const int seqlen_k = token_pos + 1;  // K cache has [0..token_pos] inclusive
 
     // Set cuBLAS handle for autograd matmul calls
-    ag::set_autograd_cublas_handle(ts.cublas_handle);
+    ag::set_autograd_cublas_handle(ts.cublas_handle.get());
 
     // ── Step 1: Embedding lookup for the single new token ──
     EmbeddingLayer* emb_layer = getEmbeddingLayer();
@@ -708,8 +709,25 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         }
 
         // 3k. LayerScale + residual
-        if (enc->layerScale1().data) {
-            Tensor ls1_view = enc->layerScale1().detach(stream);
+        if (cfg.use_layer_scale) {
+            Tensor& gamma1 = enc->layerScale1();
+            if (!gamma1.data) {
+                throw std::runtime_error("executeDecodeForward_: use_layer_scale=true but layerScale1 is NULL at layer " +
+                                         std::to_string(layer_idx));
+            }
+            gamma1.shape.require("executeDecodeForward_ layerScale1");
+            if (!gamma1.shape.is_2d_layout()) {
+                throw std::runtime_error("executeDecodeForward_: layerScale1 must be a 2D [1,d_model] gamma vector at layer " +
+                                         std::to_string(layer_idx));
+            }
+            const auto gamma1_dims = gamma1.shape.as_2d();
+            if (gamma1_dims.rows != 1 || gamma1_dims.cols != d_model) {
+                throw std::runtime_error("executeDecodeForward_: layerScale1 must have shape [1,d_model] at layer " +
+                                         std::to_string(layer_idx) + ". expected=[1," + std::to_string(d_model) +
+                                         "] got=[" + std::to_string(gamma1_dims.rows) + "," +
+                                         std::to_string(gamma1_dims.cols) + "]");
+            }
+            Tensor ls1_view = gamma1.detach(stream);
             proj = ag::layer_scale(proj, ls1_view, stream);
         }
         hidden = ag::add(hidden, proj, stream);
@@ -726,11 +744,30 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             throw std::runtime_error("executeDecodeForward_: FFN layer is NULL at layer " +
                                      std::to_string(layer_idx));
         }
-        Tensor ffn_out = ffn_layer->forward(ln2_out, ffn_ints, 0, layer_idx);
+        Tensor ffn_out = ffn_layer->forward(ln2_out, ffn_ints,
+                            stream, ts.cublas_handle.get(),
+                            0, false, layer_idx);
 
         // 3n. LayerScale + residual
-        if (enc->layerScale2().data) {
-            Tensor ls2_view = enc->layerScale2().detach(stream);
+        if (cfg.use_layer_scale) {
+            Tensor& gamma2 = enc->layerScale2();
+            if (!gamma2.data) {
+                throw std::runtime_error("executeDecodeForward_: use_layer_scale=true but layerScale2 is NULL at layer " +
+                                         std::to_string(layer_idx));
+            }
+            gamma2.shape.require("executeDecodeForward_ layerScale2");
+            if (!gamma2.shape.is_2d_layout()) {
+                throw std::runtime_error("executeDecodeForward_: layerScale2 must be a 2D [1,d_model] gamma vector at layer " +
+                                         std::to_string(layer_idx));
+            }
+            const auto gamma2_dims = gamma2.shape.as_2d();
+            if (gamma2_dims.rows != 1 || gamma2_dims.cols != d_model) {
+                throw std::runtime_error("executeDecodeForward_: layerScale2 must have shape [1,d_model] at layer " +
+                                         std::to_string(layer_idx) + ". expected=[1," + std::to_string(d_model) +
+                                         "] got=[" + std::to_string(gamma2_dims.rows) + "," +
+                                         std::to_string(gamma2_dims.cols) + "]");
+            }
+            Tensor ls2_view = gamma2.detach(stream);
             ffn_out = ag::layer_scale(ffn_out, ls2_view, stream);
         }
         hidden = ag::add(hidden, ffn_out, stream);
@@ -819,7 +856,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             gen.has_exec_memory,
             gen.exec_memory,
             hidden.data,
-            stream);
+            stream,
+            ts.cublas_handle.get());
         gen.decode_selector.valid          = sel.valid;
         gen.decode_selector.status         = static_cast<uint8_t>(sel.status);
         gen.decode_selector.selected_slot  = sel.selected_slot;
@@ -831,9 +869,6 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     if (!lm_head) {
         throw std::runtime_error("executeDecodeForward_: LM head is NULL");
     }
-    lm_head->setStream(stream);
-    lm_head->setCublasHandle(ts.cublas_handle);
-
     if (!ts.cached_seq_lengths_tensor.data) {
         throw std::runtime_error("executeDecodeForward_: cached_seq_lengths_tensor.data is NULL");
     }
@@ -854,7 +889,9 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         centered_hidden,
         reinterpret_cast<int*>(ts.cached_seq_lengths_tensor.data),
         1,
-        1);
+        1,
+        stream,
+        ts.cublas_handle.get());
 
     // ── Step 5: Extract logits to host ──
     Vector logits(cfg.vocab_size);

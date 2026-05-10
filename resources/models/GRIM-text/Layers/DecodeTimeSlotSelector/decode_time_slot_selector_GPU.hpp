@@ -51,8 +51,7 @@ class DecodeTimeSlotSelectorLayer {
 public:
     DecodeTimeSlotSelectorLayer(const HyperParameters::DecodeTimeSelectorConstructionHP& config,
                                 uint64_t seed,
-                                cudaStream_t init_stream,
-                                cublasHandle_t cublas_handle);
+                                cudaStream_t init_stream);
     ~DecodeTimeSlotSelectorLayer();
 
     DecodeTimeSlotSelectorLayer(DecodeTimeSlotSelectorLayer&& other) noexcept;
@@ -73,7 +72,8 @@ public:
     SelectorForwardResult forward(const Tensor& h_t,
                                   const Tensor& slot_features,
                                   int num_live_slots,
-                                  cudaStream_t stream);
+                                  cudaStream_t stream,
+                                  cublasHandle_t cublas_handle);
 
     const HyperParameters::DecodeTimeSelectorConstructionHP& config() const { return config_; }
 
@@ -92,7 +92,6 @@ public:
 
 private:
     HyperParameters::DecodeTimeSelectorConstructionHP config_;
-    cublasHandle_t cublas_handle_ = nullptr;
 
     // Required baseline trainable tensors
     Tensor W_q_select_;       // [d_model, d_selector]

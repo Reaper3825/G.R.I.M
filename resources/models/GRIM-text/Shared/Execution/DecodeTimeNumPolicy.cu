@@ -284,7 +284,8 @@ DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
     bool has_exec_memory,
     const ExecutionMemory& exec_memory,
     const float* d_hidden_state,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    cublasHandle_t cublas_handle)
 {
     DecodeTimeResolveResult out;
 
@@ -320,7 +321,7 @@ DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
         }
         SelectorForwardResult fwd = selector->forward(
             h_t_view, slot_feat_view,
-            cands.num_live_slots, stream);
+            cands.num_live_slots, stream, cublas_handle);
         SlotSelectionResult result = policy->evaluateScores(
             fwd.scores.data, fwd.num_live_slots, stream);
         out.status = result.status;

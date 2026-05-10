@@ -60,18 +60,18 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             );
         }
 
-        if (!training_state_.cublas_handle) {
-            throw std::runtime_error("FATAL: cuBLAS handle not initialized (training_state_.cublas_handle == NULL)");
+        if (!training_state_.cublas_handle.get()) {
+            throw std::runtime_error("FATAL: cuBLAS handle not initialized (training_state_.cublas_handle.get() == NULL)");
         }
 
         //======================================================//
         //  3) Build GPU encoder
         //
         //  Hyperparameters come from EncoderLayerConstructionHP, the grouped
-        //  read view owned by HyperparameterGroupings.hpp. Runtime device
-        //  handles — positional encoding, stream, cuBLAS, init seed — come from
-        //  EncoderRuntimeBindings. Runtime and hyperparameter ownership stay
-        //  separate; no caller-local cfg slicing.
+        //  read view owned by HyperparameterGroupings.hpp. Construction inputs
+        //  — positional encoding, startup init stream, init seed — come from
+        //  EncoderConstructionBindings. Forward stream/cuBLAS live on the
+        //  forward payload/request, not on layer configs.
         //======================================================//
         if (!isPBMInitialized()) {
             throw std::runtime_error(
@@ -80,18 +80,17 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         }
 
         const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(model_cfg);
-        EncoderRuntimeBindings enc_bindings;
+        EncoderConstructionBindings enc_bindings;
         enc_bindings.pos_encoding = &getPBMSpec();
-        enc_bindings.stream = training_state_.stream_ctrl.getPrimaryStream();
-        StreamController::fatalIfDefaultStream(enc_bindings.stream, "LanguageModel::initGPU");
-        enc_bindings.cublas_handle = training_state_.cublas_handle;
+        enc_bindings.init_stream = training_state_.stream_ctrl.getPrimaryStream();
+        StreamController::fatalIfDefaultStream(enc_bindings.init_stream, "LanguageModel::initGPU");
         enc_bindings.weight_seed = weight_init_seed;
         // Issue #142: 1/sqrt(2*num_layers) for residual projection init
         enc_bindings.residual_scale = init_hp.residual_scale;
 
-        std::cout << "[initGPU] Encoder runtime bindings prepared" << std::endl;
+        std::cout << "[initGPU] Encoder construction bindings prepared" << std::endl;
 
-        std::cout << "✓ Encoder using TrainingState runtime bindings\n";
+        std::cout << "✓ Encoder using TrainingState construction bindings\n";
 
         auto* encoder_ptr = new GPUGrimEncoder(encoder_hp, enc_bindings);
         gpu_encoder_.reset(encoder_ptr);
@@ -119,7 +118,7 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             // Seed convention: embedding uses weight_init_seed + 0
             const uint64_t emb_seed = weight_init_seed;
 
-            embedding_layer_ = std::make_unique<EmbeddingLayer>(emb_hp, emb_seed, enc_bindings.stream, true);
+            embedding_layer_ = std::make_unique<EmbeddingLayer>(emb_hp, emb_seed, enc_bindings.init_stream, true);
 
             if (!embedding_layer_->weightsReady()) {
                 throw std::runtime_error("[initGPU] FATAL: EmbeddingLayer not ready after construction!");
@@ -143,7 +142,7 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             Tensor* tied_emb = lm_hp.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
 
             lm_head_layer_ = std::make_unique<LMHeadLayer>(
-                lm_hp, lm_head_seed, enc_bindings.stream, enc_bindings.cublas_handle, tied_emb);
+                lm_hp, lm_head_seed, enc_bindings.init_stream, tied_emb);
 
             if (!lm_head_layer_->weightsReady()) {
                 throw std::runtime_error("[initGPU] FATAL: LMHeadLayer not ready after construction!");
@@ -155,7 +154,7 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(model_cfg);
         if (reasoning_hp.enabled) {
             const uint64_t rh_seed = weight_init_seed + 10;
-            reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(reasoning_hp, rh_seed, enc_bindings.stream);
+            reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(reasoning_hp, rh_seed, enc_bindings.init_stream);
             std::cout << "✓ ReasoningHead layer created\n";
         }
 
@@ -163,7 +162,7 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         const auto execution_hp = HyperParameters::executionBlockConstructionHP(model_cfg);
         if (execution_hp.enabled) {
             const uint64_t eb_seed = weight_init_seed + 20;
-            execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(execution_hp, eb_seed, enc_bindings.stream);
+            execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(execution_hp, eb_seed, enc_bindings.init_stream);
             std::cout << "✓ ExecutionBlock layer created\n";
 
             // Decode-time slot selector (pointer-selector baseline)
@@ -171,7 +170,7 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             if (selector_hp.enabled) {
                 const uint64_t sel_seed = weight_init_seed + 30;
                 decode_time_slot_selector_layer_ = std::make_unique<DecodeTimeSlotSelectorLayer>(
-                    selector_hp, sel_seed, enc_bindings.stream, enc_bindings.cublas_handle);
+                    selector_hp, sel_seed, enc_bindings.init_stream);
 
                 decode_time_num_policy_ = std::make_unique<DecodeTimeNumPolicy>(selector_hp);
 
@@ -187,12 +186,12 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
                 auto& head = mtp_heads_[static_cast<size_t>(k)];
                 const std::string w_name = "mtp_head_" + std::to_string(k) + ".weight";
                 const std::string b_name = "mtp_head_" + std::to_string(k) + ".bias";
-                head.weight = Tensor::zeros({mtp_hp.vocab_size, mtp_hp.d_model}, enc_bindings.stream, w_name.c_str());
+                head.weight = Tensor::zeros({mtp_hp.vocab_size, mtp_hp.d_model}, enc_bindings.init_stream, w_name.c_str());
                 head.weight.requires_grad_();
                 head.weight.ensure_grad();
                 const uint64_t mtp_seed = weight_init_seed + 3 + static_cast<uint64_t>(k);
-                Tensor::xavier_uniform_(head.weight, mtp_seed, enc_bindings.stream);
-                head.bias = Tensor::zeros({mtp_hp.vocab_size}, enc_bindings.stream, b_name.c_str());
+                Tensor::xavier_uniform_(head.weight, mtp_seed, enc_bindings.init_stream);
+                head.bias = Tensor::zeros({mtp_hp.vocab_size}, enc_bindings.init_stream, b_name.c_str());
                 head.bias.requires_grad_();
                 head.bias.ensure_grad();
             }
@@ -205,9 +204,7 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         std::cout << "  - Layer Norm: GPU-accelerated\n";
 
         if (init_hp.use_flash_attention) {
-            std::cout << "⚡ Enabling Flash Attention 2...\n";
-            encoder_ptr->setFlashAttention(true, init_hp.min_seq_len_for_flash);
-            std::cout << "✓ Flash Attention enabled\n";
+            std::cout << "✓ Flash Attention configured from grouped encoder HP\n";
         }
 
     } catch (const std::exception& e) {

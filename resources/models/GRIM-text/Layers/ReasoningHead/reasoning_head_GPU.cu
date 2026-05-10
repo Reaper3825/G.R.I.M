@@ -189,7 +189,7 @@ __global__ void kernelMeanPoolBackward(
 ReasoningHeadLayer::ReasoningHeadLayer(const HyperParameters::ReasoningHeadConstructionHP& config,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
-    : config_(config), stream_(init_stream)
+    : config_(config)
 {
     if (config_.d_model <= 0)
         throw std::runtime_error("ReasoningHeadLayer: d_model must be positive");
@@ -238,28 +238,20 @@ ReasoningHeadLayer::ReasoningHeadLayer(const HyperParameters::ReasoningHeadConst
 //======================================================//
 ReasoningHeadLayer::ReasoningHeadLayer(ReasoningHeadLayer&& other) noexcept
     : config_(other.config_)
-    , stream_(other.stream_)
-    , cublas_handle_(other.cublas_handle_)
     , w_op_(std::move(other.w_op_))
     , b_op_(std::move(other.b_op_))
     , w_arg1_(std::move(other.w_arg1_))
     , w_arg2_(std::move(other.w_arg2_))
 {
-    other.stream_ = nullptr;
-    other.cublas_handle_ = nullptr;
 }
 
 ReasoningHeadLayer& ReasoningHeadLayer::operator=(ReasoningHeadLayer&& other) noexcept {
     if (this != &other) {
         config_ = other.config_;
-        stream_ = other.stream_;
-        cublas_handle_ = other.cublas_handle_;
         w_op_ = std::move(other.w_op_);
         b_op_ = std::move(other.b_op_);
         w_arg1_ = std::move(other.w_arg1_);
         w_arg2_ = std::move(other.w_arg2_);
-        other.stream_ = nullptr;
-        other.cublas_handle_ = nullptr;
     }
     return *this;
 }
@@ -273,15 +265,17 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     int* atom_positions,
     int num_atoms,
     int total_tokens,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    cublasHandle_t cublas_handle)
 {
     // ════════════════════════════════════════════════════
     // Hard-fail validation (Rule 20)
     // ════════════════════════════════════════════════════
     if (!stream)
         throw std::runtime_error("ReasoningHeadLayer::forward: stream is NULL");
-    if (!cublas_handle_)
+    if (!cublas_handle)
         throw std::runtime_error("ReasoningHeadLayer::forward: cublas_handle is NULL");
+    autograd::set_autograd_cublas_handle(cublas_handle);
     if (!encoder_output.data)
         throw std::runtime_error("ReasoningHeadLayer::forward: encoder_output.data is NULL");
     if (num_atoms < 0)

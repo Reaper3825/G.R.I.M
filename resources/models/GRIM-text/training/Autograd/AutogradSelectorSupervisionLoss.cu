@@ -254,7 +254,7 @@ float addSelectorSupervisionLoss(
             }
 
             SelectorForwardResult fwd = selector->forward(
-                h_t_input, slot_feat_input, num_live, ctx.stream);
+                h_t_input, slot_feat_input, num_live, ctx.stream, ctx.cublas_handle);
 
             Tensor ce = autograd::cross_entropy_logits(
                 fwd.scores, target_idx, ctx.stream);

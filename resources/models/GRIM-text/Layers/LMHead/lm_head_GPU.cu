@@ -6,7 +6,7 @@
 //  Owns: weights [vocab_size, d_model] (or aliased from embedding),
 //        bias [vocab_size] (optional), final_rms_gamma [d_model].
 //
-//  Forward: RMSNorm → centering → logits = input @ W^T → bias
+//  Forward: RMSNorm → optional centering → optional PC1 projection → logits = input @ W^T → bias
 //
 //  ISSUE #56 pattern: Intermediate tensors kept alive via caller-owned
 //  storage so autograd graph survives until backward().
@@ -38,9 +38,8 @@ namespace GRIM {
 LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
                          uint64_t seed,
                          cudaStream_t init_stream,
-                         cublasHandle_t cublas_handle,
                          Tensor* tied_embedding_weights)
-    : hp_(hp), stream_(init_stream), cublas_handle_(cublas_handle), owns_weights_(!tied_embedding_weights)
+    : hp_(hp), owns_weights_(!tied_embedding_weights)
 {
     // Rule 20: Fail loud on invalid configuration
     if (hp_.d_model <= 0) {
@@ -51,9 +50,6 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
     }
     if (!init_stream) {
         throw std::runtime_error("LMHeadLayer: init_stream is NULL — CUDA stream required for allocation");
-    }
-    if (!cublas_handle_) {
-        throw std::runtime_error("LMHeadLayer: cublas_handle is NULL — Rule 22 requires training_state.cublas_handle");
     }
     if (hp_.tie_embeddings != (tied_embedding_weights != nullptr)) {
         throw std::runtime_error(
@@ -139,9 +135,6 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
             hp_.freeze_final_rms_gamma ? "true" : "false");
     }
 
-    // Set cuBLAS handle for autograd (if available at init time)
-    autograd::set_autograd_cublas_handle(cublas_handle_);
-
     fprintf(stdout, "[LMHeadLayer] Initialized: owns_weights=%s, has_bias=%s, has_rms_norm=true\n",
             owns_weights_ ? "true" : "false",
             hp_.use_bias ? "true" : "false");
@@ -149,28 +142,20 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
 
 LMHeadLayer::LMHeadLayer(LMHeadLayer&& other) noexcept
     : hp_(other.hp_)
-    , stream_(other.stream_)
-    , cublas_handle_(other.cublas_handle_)
     , weights_(std::move(other.weights_))
     , bias_(std::move(other.bias_))
     , final_rms_gamma_frozen_or_trained_(std::move(other.final_rms_gamma_frozen_or_trained_))
     , owns_weights_(other.owns_weights_) {
-    other.stream_ = nullptr;
-    other.cublas_handle_ = nullptr;
     other.owns_weights_ = false;
 }
 
 LMHeadLayer& LMHeadLayer::operator=(LMHeadLayer&& other) noexcept {
     if (this != &other) {
         hp_ = other.hp_;
-        stream_ = other.stream_;
-        cublas_handle_ = other.cublas_handle_;
         weights_ = std::move(other.weights_);
         bias_ = std::move(other.bias_);
         final_rms_gamma_frozen_or_trained_ = std::move(other.final_rms_gamma_frozen_or_trained_);
         owns_weights_ = other.owns_weights_;
-        other.stream_ = nullptr;
-        other.cublas_handle_ = nullptr;
         other.owns_weights_ = false;
     }
     return *this;
@@ -181,19 +166,21 @@ LMHeadLayer& LMHeadLayer::operator=(LMHeadLayer&& other) noexcept {
 //======================================================//
 
 Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
-                            const int* d_sequence_lengths, int batch_size, int rows_per_sequence) {
+                            const int* d_sequence_lengths, int batch_size, int rows_per_sequence,
+                            cudaStream_t stream, cublasHandle_t cublas_handle) {
     // Rule 20: Crash on invalid state
     if (!weights_.data) {
         throw std::runtime_error("LMHeadLayer::forward: weights not initialized");
     }
-    if (!stream_) {
-        throw std::runtime_error("LMHeadLayer::forward: stream is NULL — call setStream() before forward");
+    if (!stream) {
+        throw std::runtime_error("LMHeadLayer::forward: stream is NULL");
     }
-    if (!cublas_handle_) {
-        throw std::runtime_error("LMHeadLayer::forward: cublas_handle is NULL — call setCublasHandle() before forward");
+    if (!cublas_handle) {
+        throw std::runtime_error("LMHeadLayer::forward: cublas_handle is NULL");
     }
 
-    const cudaStream_t stream = stream_;
+    autograd::set_autograd_cublas_handle(cublas_handle);
+
     const int total_tokens = input.shape.as_2d().rows;
     const int d_model = input.shape.as_2d().cols;
 
@@ -243,7 +230,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // STEP 1: Optional hidden state centering (Issue #125 / reformulated #132, April 2026)
+    // STEP 1: Optional hidden-state geometry projection chain
     //
     //   Column centering h: Σ_t h[t,d] = 0 for each feature d   (Issue #125)
     //     Removes shared direction across positions → reduces cos(h_i, h_j).
@@ -263,6 +250,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     // ════════════════════════════════════════════════════════════════════
 
     const Tensor* matmul_input = current_input;
+    Tensor centered_hidden_for_pc1;
 
     if (hp_.center_hidden_states) {
         if (rows_per_sequence <= 1) {
@@ -275,19 +263,26 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         // valid positions without coupling samples inside the batch or including
         // PAD activations in the mean (Issue #125).
         // Row-centering moved to W at STEP 2 (April 2026 reformulation).
-        Tensor col_centered = autograd::center_columns_by_sequence_lengths(
+        centered_hidden_for_pc1 = autograd::center_columns_by_sequence_lengths(
             *current_input, d_sequence_lengths, batch_size, rows_per_sequence, stream);
-        // Store in out_centered_hidden so it survives this scope (Issue #127)
-        // and so cached_encoder_output reflects the actual matmul input for diagnostics.
-        out_centered_hidden = std::move(col_centered);
-        matmul_input = &out_centered_hidden;
-    } else if (hp_.project_out_pc1) {
+        matmul_input = &centered_hidden_for_pc1;
+    }
+
+    if (hp_.project_out_pc1) {
         // Issue #149: project out dominant PC1 direction via power iteration.
         // g is RMS-normalized (g·g = D), so the projection coefficient is (h·g)/D:
         //   h̃[t] = h[t] - (h[t]·g / D) * g     where g = PC1(H), stop-gradient
         // Backward: grad_h += (I - gg^T/D) * grad_h̃  (accumulates into input grad)
+        // If center_hidden_states is also enabled, PC1 is computed on the
+        // length-aware centered hidden tensor. The previous if/else-if shape
+        // silently shadowed project_out_pc1 whenever centering was enabled.
         // Returns owning tensor with separate output buffer — input is not mutated.
-        out_centered_hidden = autograd::project_out_pc1(*current_input, hp_.pc1_power_iters, stream);
+        out_centered_hidden = autograd::project_out_pc1(*matmul_input, hp_.pc1_power_iters, stream);
+        matmul_input = &out_centered_hidden;
+    } else if (hp_.center_hidden_states) {
+        // Store in out_centered_hidden so it survives this scope (Issue #127)
+        // and so cached_encoder_output reflects the actual matmul input for diagnostics.
+        out_centered_hidden = std::move(centered_hidden_for_pc1);
         matmul_input = &out_centered_hidden;
     } else {
         if (current_input == &normalized) {
