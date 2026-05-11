@@ -5,7 +5,7 @@ Implementation: `resources/models/GRIM-text/Shared/TensorContract_GPU.cu` (all `
 ## Prepared payload boundary
 Phase1/Phase1Startup owns semantic batch construction. By the time Phase2 calls autograd, `BatchPayload` is already complete: token IDs, targets, masks, MTP shifted targets, execution teacher steps, selector targets, numeric values, and slot maps are Phase1-authored data. Autograd code must consume this prepared payload and matching `BatchDeviceBindings`; it must not rebuild, infer, repair, or silently synthesize missing supervision.
 
-`AutogradContext` must not mirror `batch_size`, `seq_len`/`max_seq_len`, or backward `grad_scale`. Batch geometry is read directly from the caller-owned `BatchPayload` (validated against `BatchDeviceBindings`), and `grad_scale` is an explicit `executeAutogradBackward(..., grad_scale)` argument for the current accumulation slot.
+`AutogradContext` and `Forward::ModelForwardRequest` must not mirror `batch_size`, `seq_len`/`max_seq_len`, or backward `grad_scale`. Batch geometry is read directly from the caller-owned `BatchPayload` (validated against `BatchDeviceBindings`), and `grad_scale` is an explicit `executeAutogradBackward(..., grad_scale)` argument for the current accumulation slot.
 
 Forward runtime handles are sibling payload data, not layer state: `AutogradContext` carries the `cudaStream_t` and `cublasHandle_t` borrowed from `TrainingState`, and `Forward::ModelForwardRequest` passes them through to encoder, FFN, LM head, reasoning head, and selector forwards. Do not patch those handles into layer configs or mutate layers with late setter calls.
 
@@ -44,6 +44,15 @@ When kernel B reads data written by kernel A via `atomicAdd`, you MUST `cudaStre
 
 ## Gradient connectivity verification
 `verifyGradientsAreConnected()` scans each checked gradient tensor in full when computing finite/nonzero/RMS diagnostics. Do not reintroduce prefix sampling caps: a zero prefix (for example the first rows of `attnWqkv.grad`) is not evidence that the full parameter tensor missed gradient signal.
+
+## QKV attention boundary
+Autograd attention owns the QKV tape boundary. `autograd::split_and_reshape_qkv()` creates the `SplitAndReshapeQKVGradFn` and delegates only raw layout movement to `TensorConversion::split_qkv_gqa()` / `merge_qkv_grads_gqa()`. Encoder code must not call TensorConversion QKV split/merge directly.
+
+QKV projection is `autograd::matmul(ln1_out, W_qkv, transpose_b=true)` and must remain a normal TensorContract tape operation. Do not recreate `Layers/Attention/QKV_Projector.{hpp,cu}`; that stale wrapper no longer projected QKV and its remaining BHSD→BSM reshape was folded into `autograd::reshape_bhsd_to_flat()`.
+
+QKV-specific diagnostics live in `Shared/TensorContract/AutogradQKVDiagnostics.hpp/.cu`, next to `AutogradAttention.cu`. Keep `[QKV_EQUATION]`, `QKV_PROJECTION_EQUATION`, and `GRIM_DEBUG_QKV` NaN/Inf scans there so diagnostics observe the autograd path instead of creating an encoder-local parallel path.
+
+`ScaledDotProductAttentionGradFn` owns the `Tensor::grad_` shared-pointer owners for captured Q/K/V gradient buffers, not only raw `q_grad` / `k_grad` / `v_grad` pointers. This is required so attention-internal Q/K/V tensors can be scoped locally without leaving SDPA backward with dangling pointers into destroyed non-leaf gradient tensors. Do not revert SDPA capture to raw grad pointers only.
 
 ## GradFn accumulation contract
 GradFns must never overwrite a persistent leaf gradient buffer during backward. If a backward kernel writes directly into `tensor.grad_data()`, it must use additive writes (`+=` or `atomicAdd`) because `ensure_grad()` only allocates/zeroes the buffer once; step/microbatch zeroing owns the accumulation window.

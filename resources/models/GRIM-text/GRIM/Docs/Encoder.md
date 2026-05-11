@@ -1,6 +1,6 @@
 # Encoder Layer (Attention + FFN)
 
-Implementation: `resources/models/GRIM-text/Layers/Encoding/Encoding_GPU.cu`, `resources/models/GRIM-text/Layers/FeedForward/Feed_Forward_GPU.cu`.
+Implementation: `resources/models/GRIM-text/Layers/Encoding/Encoding_GPU.cu`, `resources/models/GRIM-text/Layers/FeedForward/Feed_Forward_GPU.cu`. QKV autograd operations and QKV diagnostics live under `resources/models/GRIM-text/Shared/TensorContract/` beside `AutogradAttention.cu`.
 
 ## Pre-norm only
 Standard pre-norm: `output = input + LayerScale(sublayer_output)`. Sandwich norm was deleted (Issue #148) — post-residual RMSNorm constrained hidden norms to a hypersphere → mode collapse.
@@ -30,6 +30,20 @@ Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `Enco
 
 ## Encoder dimension HP ownership
 Encoder GQA/QKV derived dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) are computed and validated in `HyperparameterGroupings.hpp` from `HyperParameters_GPU.hpp` helpers. `Encoding_GPU.cu` must consume those `EncoderLayerConstructionHP` fields directly; do not recompute them in `EncodingConfig` or layer methods.
+
+Encoder-facing autograd calls (`split_and_reshape_qkv`, `rope_rotation`, `reshape_bhsd_to_flat`) take the `EncoderLayerConstructionHP` snapshot directly. Do not construct a local `TensorContract::GQADims` in encoder files; TensorContract may keep GQA payload structs only for lower-level tensor/view APIs.
+
+`Encoding_GPU.cu` must call `autograd::split_and_reshape_qkv()` only. That wrapper owns the tape node and delegates the raw layout split/merge to `TensorConversion::split_qkv_gqa()` / `merge_qkv_grads_gqa()` internally. Calling `TensorConversion` directly from encoder forward bypasses `SplitAndReshapeQKVGradFn` and disconnects `Q/K/V` from the `qkv_out -> W_qkv / b_qkv` gradient path.
+
+There is no live `QKV_Projector` module. QKV projection is the `autograd::matmul(ln1_out, W_qkv, transpose_b=true)` call because it must be a tape node. The deleted `Layers/Attention/QKV_Projector.{hpp,cu}` wrapper had stopped projecting QKV and only forwarded BHSD→BSM reshape to TensorConversion, so it was removed to avoid a false second ownership path.
+
+## QKV diagnostics ownership
+QKV-specific diagnostic code belongs next to the autograd attention implementation, not inside `Encoding_GPU.cu`. Use `Shared/TensorContract/AutogradQKVDiagnostics.hpp/.cu` for:
+- `GRIM_DEBUG_QKV` NaN/Inf tensor scans around QKV/SDPA tensors.
+- `[QKV_EQUATION]` and `QKV_PROJECTION_EQUATION` Rule 21 logging.
+- QKV projection shape/bias validation used by those diagnostics.
+
+`Encoding_GPU.cu` may call the diagnostic API at the attention boundary, but it must not own QKV sampling buffers, QKV non-finite scan kernels, or duplicated QKV equation logic. This keeps the visible path as: encoder orchestration → TensorContract/autograd attention API → raw TensorConversion layout kernels.
 
 ## FFN post-GELU cache
 `EncodingLayer::forward()` MUST `cudaMemcpyAsync` post-GELU activations into `args.cache_ffn_output` after `ffn_->forward()`. Forgetting this leaves the cache as garbage → corrupted W2 gradients.

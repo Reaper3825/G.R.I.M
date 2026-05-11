@@ -77,6 +77,7 @@ extern bool g_autograd_verbose;
 #include <tuple>      // for std::tuple (ISSUE #61: split_and_reshape_qkv return type)
 #include <atomic>     // for tensor lifecycle counters
 #include "../Batching/BatchPayload.hpp"
+#include "../HyperParameters/HyperparameterGroupings.hpp"
 
 //======================================================//
 //  Tensor Lifecycle Counters
@@ -1430,13 +1431,13 @@ Tensor scaled_dot_product_attention(
 std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor& qkv_out,
     const Batching::BatchPayload& payload,
-    const ::TensorContract::GQADims& gqa,
+    const ::GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     cudaStream_t stream = nullptr);
 
 /**
  * Reshape attention output from BHSD to flat layout with autograd tracking.
  * 
- * ISSUE #62 FIX: This replaces Tensor::empty() + launchReshapeFromBHSD()
+ * ISSUE #62 FIX: This replaces Tensor::empty() + raw BHSD->BSM conversion
  * that broke the autograd chain (output had no grad_fn, causing W_o and 
  * downstream gradients to not flow through attention backward).
  * 
@@ -1451,7 +1452,7 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
 Tensor reshape_bhsd_to_flat(
     Tensor& bhsd_input,
     const Batching::BatchPayload& payload,
-    const ::TensorContract::GQADims& gqa,
+    const ::GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     cudaStream_t stream = nullptr);
 
 /**
@@ -1482,7 +1483,7 @@ std::pair<Tensor, Tensor> rope_rotation(
     const Tensor& Q, const Tensor& K,
     const float* inv_freq,
     const Batching::BatchPayload& payload,
-    const ::TensorContract::GQADims& gqa,
+    const ::GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     int rotary_dim,
     cudaStream_t stream = nullptr,
     int pos_offset = 0);

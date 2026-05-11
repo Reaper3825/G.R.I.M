@@ -138,7 +138,6 @@ GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
 
 ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ctx.validate("executeAutogradForward");
-    const auto& payload = *ctx.payload;
 
     Forward::ModelForwardRequest request{};
     request.config = ctx.config;
@@ -153,8 +152,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     request.execution_block = ctx.execution_block;
     request.payload = ctx.payload;
     request.bindings = ctx.device_bindings;
-    request.batch_size = payload.batch_size;
-    request.seq_len = payload.max_seq_len;
     request.step = ctx.step;
     request.mode = ctx.is_training
         ? Forward::ModelForwardMode::TrainingGraph

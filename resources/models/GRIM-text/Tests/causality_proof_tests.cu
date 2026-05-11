@@ -2,9 +2,8 @@
 //  causality_proof_tests.cu
 //  
 //  ⚠️ NOT BUILT — Not in CMakeLists.txt.
-//  ⚠️ BROKEN — Uses deleted LanguageModel::backward()/zeroGrad(),
-//     forwardGPU() inference path (no autograd graph), and
-//     deleted LanguageModel::gradientMetrics().
+//  ⚠️ BROKEN — Uses deleted LanguageModel::backward()/zeroGrad()
+//     and deleted LanguageModel::gradientMetrics().
 //  ⚠️ NEEDS FULL REWRITE to use autogradTrainingStep() + BatchPayload
 //     + GradNorm::measureGradientNorms() for gradient metrics.
 //  
@@ -20,6 +19,7 @@
 //======================================================//
 
 #include "../GRIM/grim_language_model_cuda.hpp"
+#include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 #include "../Shared/Optimizers/OptimizerStep.hpp"
@@ -47,6 +47,39 @@ NumericSideChannel makeNumericSideChannel(size_t count) {
     channel.values.assign(count, 0.0f);
     channel.mask.assign(count, 0);
     return channel;
+}
+
+GRIM::Vector runInferencePrefill(GRIM::LanguageModel* model,
+                                 const std::vector<int>& tokens,
+                                 const NumericSideChannel& numeric) {
+    if (!model) {
+        throw std::runtime_error("runInferencePrefill: model is NULL");
+    }
+    if (numeric.values.size() != tokens.size() || numeric.mask.size() != tokens.size()) {
+        throw std::runtime_error("runInferencePrefill: numeric side-channel length mismatch");
+    }
+
+    const auto& cfg = model->getConfig();
+    std::vector<uint16_t> text_features(
+        tokens.size() * GRIM::Batching::BatchPayload::kTextFeatureDim, 0);
+    std::vector<uint32_t> atom_flags(tokens.size(), 0);
+    std::vector<uint32_t> atom_entry_ids(tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
+    std::vector<int32_t> token_to_slot_map(tokens.size(), -1);
+
+    GRIM::Batching::BatchPayload payload = GRIM::Batching::buildInferenceBatchPayload(
+        tokens,
+        numeric.values,
+        text_features,
+        numeric.mask,
+        atom_flags,
+        nullptr,
+        atom_entry_ids,
+        token_to_slot_map,
+        cfg.vocab_size,
+        static_cast<size_t>(cfg.max_cached_batch),
+        static_cast<size_t>(cfg.max_cached_seq_len),
+        cfg.execution_block_num_slots);
+    return model->getNextTokenLogits(payload);
 }
 
 //======================================================//
@@ -116,7 +149,7 @@ TestResult level1_single_token_causality(GRIM::LanguageModel* model, GRIM::Token
     // 2. Run forward pass
     std::vector<int> input_tokens(tokens.begin(), tokens.begin() + t + 1);
     auto numeric = makeNumericSideChannel(input_tokens.size());
-    GRIM::Vector logits = model->forwardGPU(input_tokens, numeric.values, numeric.mask);
+    GRIM::Vector logits = runInferencePrefill(model, input_tokens, numeric);
     
     PROOF_ASSERT(logits.data.size() == static_cast<size_t>(vocab_size), 
                  "Logits shape mismatch: expected " + std::to_string(vocab_size) + 
@@ -210,12 +243,12 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     
     // Test 1: Run forward with full sequence
     auto full_numeric = makeNumericSideChannel(tokens.size());
-    GRIM::Vector logits_full = model->forwardGPU(tokens, full_numeric.values, full_numeric.mask);
+    GRIM::Vector logits_full = runInferencePrefill(model, tokens, full_numeric);
     
     // Test 2: Run forward with truncated sequence (only up to position t)
     std::vector<int> truncated_tokens(tokens.begin(), tokens.begin() + test_pos + 1);
     auto truncated_numeric = makeNumericSideChannel(truncated_tokens.size());
-    GRIM::Vector logits_truncated = model->forwardGPU(truncated_tokens, truncated_numeric.values, truncated_numeric.mask);
+    GRIM::Vector logits_truncated = runInferencePrefill(model, truncated_tokens, truncated_numeric);
     
     // If causal mask works, logits for position t should be IDENTICAL
     // regardless of whether future tokens exist
@@ -232,7 +265,7 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     // Get prediction at position 0 (should be based on nothing but BOS)
     std::vector<int> single_token = {tokens[0]};
     auto single_numeric = makeNumericSideChannel(single_token.size());
-    GRIM::Vector logits_pos0 = model->forwardGPU(single_token, single_numeric.values, single_numeric.mask);
+    GRIM::Vector logits_pos0 = runInferencePrefill(model, single_token, single_numeric);
     
     // The predicted token should NOT be exactly token[0] with probability 1
     // (unless the model has memorized, which is fine)
@@ -242,7 +275,7 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     if (modified_token[0] >= cfg.vocab_size) modified_token[0] = 0;
     
     auto modified_numeric = makeNumericSideChannel(modified_token.size());
-    GRIM::Vector logits_modified = model->forwardGPU(modified_token, modified_numeric.values, modified_numeric.mask);
+    GRIM::Vector logits_modified = runInferencePrefill(model, modified_token, modified_numeric);
     
     // Logits should be different
     float diff_rms = 0.0f;
@@ -295,7 +328,7 @@ TestResult level3_gradient_reaches_embeddings(GRIM::LanguageModel* model, GRIM::
     
     // Forward pass
     auto numeric = makeNumericSideChannel(tokens.size());
-    GRIM::Vector logits = model->forwardGPU(tokens, numeric.values, numeric.mask);
+    GRIM::Vector logits = runInferencePrefill(model, tokens, numeric);
     
     // Compute loss (using token[1] as target for predicting from token[0])
     float loss = 1.0f;  // Placeholder - actual loss computed in backward
@@ -354,7 +387,7 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     
     // 1. Get logits BEFORE training
     auto before_numeric = makeNumericSideChannel(input_tokens.size());
-    GRIM::Vector logits_before = model->forwardGPU(input_tokens, before_numeric.values, before_numeric.mask);
+    GRIM::Vector logits_before = runInferencePrefill(model, input_tokens, before_numeric);
     float logit_y_before = logits_before.data[target_y];
     
     PROOF_LOG("logit[y] BEFORE = " + std::to_string(logit_y_before));
@@ -365,7 +398,7 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     // 3. Forward + backward (compute gradients)
     // We need to run the full training sequence
     auto train_numeric = makeNumericSideChannel(tokens.size());
-    model->forwardGPU(tokens, train_numeric.values, train_numeric.mask);  // Full sequence for training
+    runInferencePrefill(model, tokens, train_numeric);  // Full sequence for training
     
     // Compute actual cross-entropy loss for logging
     float max_logit = *std::max_element(logits_before.data.begin(), logits_before.data.end());
@@ -394,7 +427,7 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     
     // 5. Get logits AFTER training
     auto after_numeric = makeNumericSideChannel(input_tokens.size());
-    GRIM::Vector logits_after = model->forwardGPU(input_tokens, after_numeric.values, after_numeric.mask);
+    GRIM::Vector logits_after = runInferencePrefill(model, input_tokens, after_numeric);
     float logit_y_after = logits_after.data[target_y];
     
     PROOF_LOG("logit[y] AFTER  = " + std::to_string(logit_y_after));
@@ -461,7 +494,7 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
     // Test 3: Forward + backward
     if (tokens.size() >= 2) {
         auto numeric = makeNumericSideChannel(tokens.size());
-        model->forwardGPU(tokens, numeric.values, numeric.mask);
+        runInferencePrefill(model, tokens, numeric);
         model->backward(1.0f, false, 1.0f);
         
         // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
@@ -485,7 +518,7 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
     
     if (number_tokens.size() >= 2) {
         auto numeric = makeNumericSideChannel(number_tokens.size());
-        model->forwardGPU(number_tokens, numeric.values, numeric.mask);
+        runInferencePrefill(model, number_tokens, numeric);
         model->backward(1.0f, false, 1.0f);
         
         // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
@@ -548,7 +581,7 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
         
         // Forward pass
         auto numeric = makeNumericSideChannel(tokens.size());
-        model->forwardGPU(tokens, numeric.values, numeric.mask);
+        runInferencePrefill(model, tokens, numeric);
         
         // Compute approximate loss (we'd need full loss computation here)
         float loss = 1.0f;  // Placeholder
@@ -579,7 +612,7 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
     
     for (int i = 0; i < max_gen; ++i) {
         auto numeric = makeNumericSideChannel(generated.size());
-        GRIM::Vector logits = model->forwardGPU(generated, numeric.values, numeric.mask);
+        GRIM::Vector logits = runInferencePrefill(model, generated, numeric);
         
         // Greedy decode: pick argmax
         int next_token = 0;

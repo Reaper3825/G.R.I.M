@@ -160,7 +160,7 @@ void LanguageModel::initInferenceState() {
               << ", total_tokens=" << max_tokens << std::endl;
     
     // NOTE: Tensor::zeros sets all bytes to 0 = UNK_TOKEN_ID when read as int32.
-    // Harmless: forwardInit() writes prompt tokens, forwardStep() appends one at a time.
+    // Harmless: BatchPayload upload writes prompt tokens, forwardStep() appends one at a time.
     // Only positions [0..generation_state_.kv_cache_len-1] are ever read. If a fill kernel is added, use PAD=1.
     training_state_.cached_token_ids_tensor = Tensor::zeros(
         TC::make_BSM(1, static_cast<int>(max_tokens)),
@@ -178,6 +178,22 @@ void LanguageModel::initInferenceState() {
         "cached_token_numeric_values_inf"
     );
     std::cout << "  ✓ Allocated numeric values cache (Tensor API)" << std::endl;
+
+    training_state_.cached_seq_lengths_tensor = Tensor::zeros(
+        TC::make_BSM(1, static_cast<int>(max_batch_size)),
+        false,  // no grad for inference
+        primary_stream,
+        "cached_seq_lengths_tensor_inf"
+    );
+    std::cout << "  ✓ Allocated sequence lengths cache (Tensor API)" << std::endl;
+
+    training_state_.cached_token_text_features = Tensor::zeros(
+        TC::make_BSM(1, static_cast<int>(max_tokens * Batching::BatchPayload::kTextFeatureDim)),
+        false,  // no grad for inference
+        primary_stream,
+        "cached_token_text_features_inf"
+    );
+    std::cout << "  ✓ Allocated text feature cache (Tensor API)" << std::endl;
     
     training_state_.cached_token_atom_mask = Tensor::zeros(
         TC::make_BSM(1, static_cast<int>(max_tokens)),
@@ -194,6 +210,14 @@ void LanguageModel::initInferenceState() {
         "cached_token_to_slot_map_inf"
     );
     std::cout << "  ✓ Allocated token-to-slot map cache (Tensor API)" << std::endl;
+
+    training_state_.cached_token_atom_flags = Tensor::zeros(
+        TC::make_BSM(1, static_cast<int>(max_tokens)),
+        false,  // no grad for inference
+        primary_stream,
+        "cached_token_atom_flags_inf"
+    );
+    std::cout << "  ✓ Allocated atom flags cache (Tensor API)" << std::endl;
     
     // DELETED: cached_embeddings_tensor - not used in inference (encoder output computed on-the-fly)
     // DELETED: encoder_layer_caches - intermediate tensor caching moved to AutogradIntermediates

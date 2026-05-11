@@ -47,7 +47,6 @@ namespace GRIM {
 using GRIM::HyperParameters::GenerationConfig;
 using GRIM::HyperParameters::SamplingStrategy;
 using GRIM::HyperParameters::GenerationStreamCallback;
-using GRIM::HyperParameters::ModelExecutionMode;
 
 //======================================================//
 //  GPU Runtime Accessors (StreamController pattern)
@@ -513,311 +512,113 @@ const Config::TrainingHyperparameters& LanguageModel::requireTrainingHyperparame
 }
 
 //======================================================//
-//  Helper methods - moved from header
+//  BatchPayload-only inference/generation APIs
 //======================================================//
 
-Vector LanguageModel::forward(const std::vector<int>& token_ids,
-                              const std::vector<float>& token_numeric_values,
-                              const std::vector<uint8_t>& token_atom_mask,
-                              const std::vector<int32_t>& token_to_slot_map) {
-#ifdef USE_CUDA
-    // Use GPU if available
-    if (config_.use_gpu && gpu_encoder_) {
-        return forwardGPU(token_ids, token_numeric_values, token_atom_mask, token_to_slot_map);
+Vector LanguageModel::getNextTokenLogits(const Batching::BatchPayload& context_payload) {
+    context_payload.validate("LanguageModel::getNextTokenLogits(BatchPayload)");
+    if (!context_payload.isInferencePrefill()) {
+        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): payload must be InferencePrefill");
     }
-#endif
-    throw std::runtime_error("LanguageModel::forward requires GPU initialization");
-}
-
-Vector LanguageModel::getNextTokenLogits(const std::vector<int>& context_tokens,
-                                         const std::vector<float>& context_numeric_values,
-                                         const std::vector<uint8_t>& context_atom_mask,
-                                         const std::vector<int32_t>& token_to_slot_map) {
-#ifdef USE_CUDA
-    // Use GPU if available
-    if (config_.use_gpu && gpu_encoder_) {
-        return getNextTokenLogitsGPU(context_tokens,
-                                     context_numeric_values,
-                                     context_atom_mask,
-                                     token_to_slot_map);
+    if (context_payload.batch_size != 1) {
+        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): batch_size must be 1");
     }
-#endif
-    throw std::runtime_error("LanguageModel::getNextTokenLogits requires GPU initialization");
-}
-
-
-namespace {
-
-// Copy per-token slot assignment map from host to device (inference path).
-//
-//   prompt_map semantics:
-//     - Empty vector → all tokens mapped to -1 (non-state-bearing).
-//     - Entry == -1  → this token is non-state-bearing (no slot selected).
-//     - Entry in [0, num_slots) → token is bound to that execution slot.
-//
-//   At decode time, <NUM> can only be generated when the selector
-//   resolves to a single live slot (Selected). Otherwise <NUM> is
-//   masked out of the vocabulary and cannot be sampled.
-void copyTokenSlotMapH2D_Inference(TrainingState& ts, cudaStream_t stream, int seq_len,
-                                    const std::vector<int32_t>& prompt_map,
-                                    int num_slots) {
-    if (!ts.cached_token_to_slot_map.data || seq_len <= 0)
-        return;
-    auto* dst = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
-    if (prompt_map.empty()) {
-        // Empty prompt map → all tokens are non-state-bearing (slot_id = -1)
-        std::vector<int32_t> neg(static_cast<size_t>(seq_len), -1);
-        cudaError_t err = cudaMemcpyAsync(dst, neg.data(),
-            static_cast<size_t>(seq_len) * sizeof(int32_t),
-            cudaMemcpyHostToDevice, stream);
-        if (err != cudaSuccess) {
-            throw std::runtime_error(std::string("copyTokenSlotMapH2D_Inference (sentinel): ") +
-                                     cudaGetErrorString(err));
-        }
-        return;
-    }
-    if (static_cast<int>(prompt_map.size()) != seq_len) {
-        throw std::runtime_error(
-            "token_to_slot_map size must match sequence length (or pass empty for all -1)");
-    }
-    // Validate slot-range: each entry must be -1 (non-state-bearing) or in [0, num_slots)
-    for (int i = 0; i < seq_len; ++i) {
-        int32_t sid = prompt_map[i];
-        if (sid != -1 && (sid < 0 || sid >= num_slots)) {
-            throw std::runtime_error(
-                "copyTokenSlotMapH2D_Inference: slot_id=" + std::to_string(sid) +
-                " at position " + std::to_string(i) + " out of range [0, " +
-                std::to_string(num_slots) + ") — must be -1 or valid slot index");
-        }
-    }
-    cudaError_t err = cudaMemcpyAsync(dst, prompt_map.data(),
-        static_cast<size_t>(seq_len) * sizeof(int32_t),
-        cudaMemcpyHostToDevice, stream);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("copyTokenSlotMapH2D_Inference: ") + cudaGetErrorString(err));
-    }
-}
-
-}  // namespace
-
-Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_tokens,
-                                            const std::vector<float>& context_numeric_values,
-                                            const std::vector<uint8_t>& context_atom_mask,
-                                            const std::vector<int32_t>& token_to_slot_map) {
     if (!config_.use_gpu || !gpu_encoder_) {
-        throw std::runtime_error("getNextTokenLogitsGPU requires initialized GPU encoder");
+        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload) requires initialized GPU encoder");
     }
-    if (context_tokens.empty()) {
-        throw std::runtime_error("getNextTokenLogitsGPU requires non-empty context_tokens");
-    }
-    if (context_numeric_values.size() != context_tokens.size() ||
-        context_atom_mask.size() != context_tokens.size()) {
-        throw std::runtime_error("getNextTokenLogitsGPU: side-channel length mismatch");
-    }
-    const int seq_len = static_cast<int>(context_tokens.size());
-    if (seq_len > config_.max_seq_len) {
-        throw std::runtime_error("getNextTokenLogitsGPU: context length " +
-                                 std::to_string(seq_len) + " exceeds max_seq_len " +
-                                 std::to_string(config_.max_seq_len));
-    }
-    if (!training_state_.initialized) {
-        if (config_.execution_mode == ModelExecutionMode::TRAINING) {
-            initTrainingState();
-        } else {
-            initInferenceState();
-        }
-        if (!training_state_.initialized) {
-            throw std::runtime_error("getNextTokenLogitsGPU: state initialization failed");
-        }
-    }
-    const auto& token_cache_shape = training_state_.cached_token_ids_tensor.shape.require("getNextTokenLogitsGPU cached_token_ids_tensor");
-    if (seq_len > token_cache_shape.as_2d().cols) {
-        throw std::runtime_error("getNextTokenLogitsGPU: context length " +
-                                 std::to_string(seq_len) + " exceeds cached token capacity " +
-                                 std::to_string(token_cache_shape.as_2d().cols));
-    }
-    if (!training_state_.stream_ctrl.isInitialized()) {
-        throw std::runtime_error("getNextTokenLogitsGPU: StreamController not initialized");
-    }
-    
-    // Copy host data to cached GPU tensors
-    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-    cudaMemcpyAsync(reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data),
-                    context_tokens.data(),
-                    seq_len * sizeof(int),
-                    cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(training_state_.cached_token_numeric_values.data,
-                    context_numeric_values.data(),
-                    seq_len * sizeof(float),
-                    cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data),
-                    context_atom_mask.data(),
-                    seq_len * sizeof(uint8_t),
-                    cudaMemcpyHostToDevice, stream);
 
-    copyTokenSlotMapH2D_Inference(training_state_, stream, seq_len, token_to_slot_map,
-                                   config_.execution_block_num_slots);
-    
-    // Single inference forward path
-    return executeInferenceForward_(seq_len);
-}
-
-Vector LanguageModel::forwardGPU(const std::vector<int>& token_ids,
-                                 const std::vector<float>& token_numeric_values,
-                                 const std::vector<uint8_t>& token_atom_mask,
-                                 const std::vector<int32_t>& token_to_slot_map) {
-    return getNextTokenLogitsGPU(token_ids, token_numeric_values, token_atom_mask, token_to_slot_map);
-}
-
-TokenBufferView LanguageModel::getTokenBufferView() {
-    TokenBufferView view{};
-    if (!config_.use_gpu) {
-        throw std::runtime_error("getTokenBufferView: config.use_gpu=false in GPU-only build");
-    }
-    if (!training_state_.initialized) {
-        if (config_.execution_mode == ModelExecutionMode::TRAINING) {
-            initTrainingState();
-        } else {
-            initInferenceState();
-        }
-        if (!training_state_.initialized) {
-            throw std::runtime_error("getTokenBufferView: state initialization failed");
-        }
-    }
-    if (!training_state_.cached_token_ids_tensor.data ||
-        !training_state_.cached_token_numeric_values.data ||
-        !training_state_.cached_token_atom_mask.data) {
-        throw std::runtime_error("getTokenBufferView: token buffers are not allocated");
-    }
-    view.device_token_ids = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
-    view.device_token_numeric_values = training_state_.cached_token_numeric_values.data;
-    view.device_token_atom_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data);
-    view.device_token_to_slot_map = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data);
-    view.max_tokens = config_.max_seq_len;
-    view.stream = training_state_.stream_ctrl.getPrimaryStream();
-    return view;
-}
-
-void LanguageModel::markDevicePromptReady(int token_count) {
-    if (!config_.use_gpu) {
-        throw std::runtime_error("markDevicePromptReady: config.use_gpu=false in GPU-only build");
-    }
-    if (token_count < 0) {
-        throw std::runtime_error("markDevicePromptReady: token_count must be >= 0");
-    }
-    if (!training_state_.initialized) {
-        if (config_.execution_mode == ModelExecutionMode::TRAINING) {
-            initTrainingState();
-        } else {
-            initInferenceState();
-        }
-        if (!training_state_.initialized) {
-            throw std::runtime_error("markDevicePromptReady: state initialization failed");
-        }
-    }
-    staged_prompt_ready_ = true;
-    staged_prompt_len_ = std::min(token_count, config_.max_seq_len);
+    const auto bindings = uploadBatchToDevice(context_payload);
+    return executeInferenceForward_(context_payload, bindings, /*populate_kv_cache=*/false);
 }
 
 std::vector<GeneratedSequence> LanguageModel::generate(
-    const std::vector<int>& prompt_tokens,
-    const std::vector<float>& prompt_numeric_values,
-    const std::vector<uint8_t>& prompt_atom_mask,
-    const GenerationConfig* gen_config,
-    std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
-    const std::vector<uint32_t>& prompt_atom_entry_ids,
-    const std::vector<int32_t>& prompt_token_to_slot_map)
+    const Batching::BatchPayload& prompt_payload,
+    const GenerationConfig* gen_config)
 {
 #ifdef USE_CUDA
+    prompt_payload.validate("LanguageModel::generate(BatchPayload)");
+    if (!prompt_payload.isInferencePrefill()) {
+        throw std::runtime_error("LanguageModel::generate(BatchPayload): payload must be InferencePrefill");
+    }
+    if (prompt_payload.batch_size != 1) {
+        throw std::runtime_error("LanguageModel::generate(BatchPayload): batch_size must be 1");
+    }
     if (config_.use_gpu && gpu_encoder_) {
         GenerationConfig cfg = gen_config ? *gen_config : config_.generation;
         if (cfg.num_return_sequences <= 0) {
-            throw std::runtime_error("LanguageModel::generate: num_return_sequences must be > 0");
+            throw std::runtime_error("LanguageModel::generate(BatchPayload): num_return_sequences must be > 0");
         }
-        const int sequences = cfg.num_return_sequences;
         std::vector<GeneratedSequence> outputs;
-        outputs.reserve(sequences);
-        for (int i = 0; i < sequences; ++i) {
+        outputs.reserve(static_cast<size_t>(cfg.num_return_sequences));
+        for (int i = 0; i < cfg.num_return_sequences; ++i) {
             GenerationConfig seq_cfg = cfg;
             if (seq_cfg.seed != 0) seq_cfg.seed += i;
-            outputs.push_back(generateSequenceGPU(prompt_tokens,
-                                                  prompt_numeric_values,
-                                                  prompt_atom_mask,
-                                                  seq_cfg,
-                                                  nullptr,
-                                                  prompt_atom_table,
-                                                  prompt_atom_entry_ids,
-                                                  prompt_token_to_slot_map));
+            outputs.push_back(generateSequenceGPU(prompt_payload, seq_cfg, nullptr));
         }
         return outputs;
     }
 #endif
-    throw std::runtime_error("LanguageModel::generate requires GPU initialization");
+    throw std::runtime_error("LanguageModel::generate(BatchPayload) requires GPU initialization");
 }
 
 GeneratedSequence LanguageModel::generateStream(
-    const std::vector<int>& prompt_tokens,
-    const std::vector<float>& prompt_numeric_values,
-    const std::vector<uint8_t>& prompt_atom_mask,
+    const Batching::BatchPayload& prompt_payload,
     GenerationStreamCallback callback,
-    const GenerationConfig* gen_config,
-    std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
-    const std::vector<uint32_t>& prompt_atom_entry_ids,
-    const std::vector<int32_t>& prompt_token_to_slot_map)
+    const GenerationConfig* gen_config)
 {
 #ifdef USE_CUDA
+    prompt_payload.validate("LanguageModel::generateStream(BatchPayload)");
+    if (!prompt_payload.isInferencePrefill()) {
+        throw std::runtime_error("LanguageModel::generateStream(BatchPayload): payload must be InferencePrefill");
+    }
+    if (prompt_payload.batch_size != 1) {
+        throw std::runtime_error("LanguageModel::generateStream(BatchPayload): batch_size must be 1");
+    }
     if (config_.use_gpu && gpu_encoder_) {
         GenerationConfig cfg = gen_config ? *gen_config : config_.generation;
-        return generateSequenceGPU(prompt_tokens,
-                                   prompt_numeric_values,
-                                   prompt_atom_mask,
-                                   cfg,
-                                   &callback,
-                                   prompt_atom_table,
-                                   prompt_atom_entry_ids,
-                                   prompt_token_to_slot_map);
+        return generateSequenceGPU(prompt_payload, cfg, &callback);
     }
 #endif
-    throw std::runtime_error("LanguageModel::generateStream requires GPU initialization");
+    throw std::runtime_error("LanguageModel::generateStream(BatchPayload) requires GPU initialization");
 }
 
 
 // Generate a token sequence from prompt, applying autoregressive decoding.
-//
-//   prompt_token_to_slot_map semantics:
-//     - Empty vector → all prompt tokens treated as non-state-bearing (-1).
-//     - Entry == -1  → non-state-bearing token (no execution slot selected).
-//     - Entry in [0, num_slots) → this token is bound to that execution slot.
-//
-//   During generation, the decode-time <NUM> token is only bindable when
-//   the slot selector resolves status == Selected for exactly one live slot.
-//   Otherwise <NUM> is masked and cannot be generated at that step.
-GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& prompt_tokens,
-                                                     const std::vector<float>& prompt_numeric_values,
-                                                     const std::vector<uint8_t>& prompt_atom_mask,
-                                                     const GenerationConfig& cfg,
-                                                     GenerationStreamCallback* stream_callback,
-                                                     std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
-                                                     const std::vector<uint32_t>& prompt_atom_entry_ids,
-                                                     const std::vector<int32_t>& prompt_token_to_slot_map) {
+GeneratedSequence LanguageModel::generateSequenceGPU(
+    const Batching::BatchPayload& prompt_payload,
+    const GenerationConfig& cfg,
+    GenerationStreamCallback* stream_callback) {
+    prompt_payload.validate("generateSequenceGPU(BatchPayload)");
+    if (!prompt_payload.isInferencePrefill()) {
+        throw std::runtime_error("generateSequenceGPU(BatchPayload): payload must be InferencePrefill");
+    }
+    if (prompt_payload.batch_size != 1) {
+        throw std::runtime_error("generateSequenceGPU(BatchPayload): batch_size must be 1");
+    }
+    if (prompt_payload.seq_atom_tables.empty()) {
+        throw std::runtime_error("generateSequenceGPU(BatchPayload): seq_atom_tables is empty");
+    }
+
+    const auto& prompt_tokens = prompt_payload.input_ids;
+    const auto& prompt_numeric_values = prompt_payload.numeric_values;
+    const auto& prompt_atom_mask = prompt_payload.atom_mask;
+    const auto& prompt_token_to_slot_map = prompt_payload.token_to_slot_map;
+    const auto& prompt_atom_entry_ids = prompt_payload.atom_entry_ids;
+    const auto& prompt_atom_table = prompt_payload.seq_atom_tables[0];
+
     GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
     sequence.token_numeric_values = prompt_numeric_values;
     sequence.token_atom_mask = prompt_atom_mask;
     sequence.context_atom_table = prompt_atom_table;
-    if (!prompt_token_to_slot_map.empty()) {
-        if (prompt_token_to_slot_map.size() != prompt_tokens.size()) {
-            throw std::runtime_error("generateSequenceGPU: prompt_token_to_slot_map length mismatch");
-        }
-        sequence.token_to_slot_map = prompt_token_to_slot_map;
-    } else {
-        sequence.token_to_slot_map.assign(prompt_tokens.size(), -1);
+    if (prompt_token_to_slot_map.size() != prompt_tokens.size()) {
+        throw std::runtime_error("generateSequenceGPU(BatchPayload): token_to_slot_map length mismatch");
     }
-    if (!prompt_atom_entry_ids.empty() && prompt_atom_entry_ids.size() == prompt_tokens.size()) {
-        sequence.atom_entry_ids = prompt_atom_entry_ids;
-    } else {
-        sequence.atom_entry_ids.assign(prompt_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
+    sequence.token_to_slot_map = prompt_token_to_slot_map;
+    if (prompt_atom_entry_ids.size() != prompt_tokens.size()) {
+        throw std::runtime_error("generateSequenceGPU(BatchPayload): atom_entry_ids length mismatch");
     }
+    sequence.atom_entry_ids = prompt_atom_entry_ids;
     
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("generateSequenceGPU requires initialized GPU encoder");
@@ -937,10 +738,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
     resetKVCache();
     
     // Process prompt and get logits for first new token
-    Vector logits_vec = forwardInit(prompt_tokens,
-                                    prompt_numeric_values,
-                                    prompt_atom_mask,
-                                    sequence.token_to_slot_map);
+    Vector logits_vec;
+    logits_vec = forwardInit(prompt_payload);
     if (logits_vec.data.empty()) {
         throw std::runtime_error("generateSequenceGPU: forwardInit returned first empty new token logit 0");
     }

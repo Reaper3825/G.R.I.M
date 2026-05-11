@@ -156,7 +156,7 @@ add_library(grim_training_kernels STATIC
     ../../Shared/Telemetry/TelemetryUpdate.cu
     # Rule 20: Xavier.cu DELETED - Tensor::xavier_uniform_ (TensorContract) is the single source of truth
     ../../Shared/PBM/PositionalBiasMethod.cu
-    # Rule 20: Old PBM modules DELETED - no backwards compatibility
+    # Rule 20: Old PBM modules DELETED - current PBM path only
 )
 set_target_properties(grim_training_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
@@ -248,14 +248,14 @@ target_link_libraries(grim_flash_attention PUBLIC
 
 # GPU transformer kernels object library
 add_library(grim_cuda_kernels OBJECT
-    # QKV_Projector.cu MOVED to grim_language_model_gpu_impl — depends on TensorConversion (same library)
+    # QKV projector wrappers deleted; autograd attention calls TensorConversion directly.
     # Old Embedding_GPU.cu (dead code) removed. New Embedding_GPU.cu in grim_training_kernels (Pattern B layer).
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
     ../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.cu
     ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)
 )
 set_target_properties(grim_cuda_kernels PROPERTIES
-    CUDA_SEPARABLE_COMPILATION OFF  # OFF: QKV_Projector only CALLS TensorConversion (doesn't export device symbols)
+    CUDA_SEPARABLE_COMPILATION OFF
     CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     POSITION_INDEPENDENT_CODE ON
 )
@@ -283,7 +283,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Common/grim_language_model_gpu.cu
     ../../Common/ModelStats.cu
     ../../Common/ScaleBuffer.cu
-    ../../Layers/Attention/QKV_Projector.cu  # Moved from grim_cuda_kernels — depends on TensorConversion (this library)
     ../Inference_GPU.cu
     ../Forward_GPU.cu
     ../InitTrainingState.cu
@@ -316,6 +315,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Batching/EpochBatching.cu
     ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Layers/Encoding/Encoding_GPU.cu
+    ../../Layers/FlashAttention/EncoderSelfAttention_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
     ../../Shared/Sampling/Sampling.cu
     ../../Layers/InitInferenceState/InitinferenceState.cu
@@ -787,7 +787,6 @@ target_include_directories(flash_attention_test PRIVATE
 add_executable(gradient_verification_test
     ../../Tests/gradient_verification_test.cu
     ../../Layers/FeedForward/Feed_Forward_GPU.cu
-    ../../Layers/Attention/QKV_Projector.cu
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/StreamController/StreamController_GPU.cu
@@ -832,7 +831,6 @@ add_executable(execution_block_test
     ../../Layers/ExecutionBlock/execution_block_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_data_stream_GPU.cu
-    ../../Layers/Attention/QKV_Projector.cu
     ../../Shared/Batching/BatchPayload.cu
     ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Shared/PBM/PositionalBiasMethod.cu

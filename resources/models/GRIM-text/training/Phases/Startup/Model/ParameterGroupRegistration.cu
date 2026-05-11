@@ -5,7 +5,6 @@
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../../../Shared/Optimizers/OptimizerState_GPU.hpp"
-#include "../../../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -514,14 +513,6 @@ void buildParameterGroups(LanguageModel& model) {
     groups.clear();
 
     const ParameterRegistrationHP hp = GRIM::HyperParameters::parameterRegistrationHP(model.getConfig());
-
-    TensorContract::GQADims gqa_dims{hp.num_heads, hp.num_kv_heads, hp.head_dim};
-    if (!gqa_dims.is_valid()) {
-        throw std::runtime_error("[buildParameterGroups] TensorContract GQA validation failed: num_heads=" +
-                                 std::to_string(hp.num_heads) +
-                                 " num_kv_heads=" + std::to_string(hp.num_kv_heads) +
-                                 " head_dim=" + std::to_string(hp.head_dim));
-    }
 
     Registrar registrar(groups);
     registerTopLevelParameters(model, registrar, hp);

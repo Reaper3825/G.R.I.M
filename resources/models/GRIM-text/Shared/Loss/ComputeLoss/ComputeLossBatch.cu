@@ -69,15 +69,28 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	// Re-validate (cheap) so any corruption between buildBatchPayload and the
 	// upload site fails loud here instead of inside a kernel.
 	payload.validate("uploadBatchToDevice");
-
-	if (!training_state_.initialized) {
-		initTrainingState();
-		if (!training_state_.initialized) {
-			throw std::runtime_error("uploadBatchToDevice: initTrainingState() completed but flag still false");
-		}
+	if (!payload.ownsHostInputData()) {
+		throw std::runtime_error(
+			std::string("uploadBatchToDevice: ") + payload.modeName() +
+			" payload has no host input arrays to upload");
 	}
 
 	const auto& cfg = getConfig();
+	if (payload.isTraining() && cfg.execution_mode == HyperParameters::ModelExecutionMode::INFERENCE) {
+		throw std::runtime_error(
+			"uploadBatchToDevice: training BatchPayload cannot be uploaded by an inference-mode LanguageModel");
+	}
+
+	if (!training_state_.initialized) {
+		if (cfg.execution_mode == HyperParameters::ModelExecutionMode::TRAINING) {
+			initTrainingState();
+		} else {
+			initInferenceState();
+		}
+		if (!training_state_.initialized) {
+			throw std::runtime_error("uploadBatchToDevice: state initialization completed but flag still false");
+		}
+	}
 
 	const size_t batch_size   = static_cast<size_t>(payload.batch_size);
 	const size_t seq_len      = static_cast<size_t>(payload.max_seq_len);
@@ -100,9 +113,12 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	if (!cached_token_ids_ptr) {
 		throw std::runtime_error("uploadBatchToDevice: cached_token_ids_tensor.data is NULL");
 	}
-	int* cached_targets_ptr = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
-	if (!cached_targets_ptr) {
-		throw std::runtime_error("uploadBatchToDevice: cached_targets_tensor.data is NULL");
+	int* cached_targets_ptr = nullptr;
+	if (payload.hasTrainingTargets()) {
+		cached_targets_ptr = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
+		if (!cached_targets_ptr) {
+			throw std::runtime_error("uploadBatchToDevice: cached_targets_tensor.data is NULL for training payload");
+		}
 	}
 	int* cached_seq_lengths_ptr = reinterpret_cast<int*>(training_state_.cached_seq_lengths_tensor.data);
 	if (!cached_seq_lengths_ptr) {
@@ -131,6 +147,12 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 
 	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
 	const bool has_text_features = (cached_text_features_ptr != nullptr);
+	if (!has_text_features && !payload.text_features.empty()) {
+		throw std::runtime_error("uploadBatchToDevice: cached_token_text_features.data is NULL but payload.text_features is populated");
+	}
+	if (!training_state_.cached_token_atom_flags.data && !payload.atom_flags.empty()) {
+		throw std::runtime_error("uploadBatchToDevice: cached_token_atom_flags.data is NULL but payload.atom_flags is populated");
+	}
 	const size_t text_feat_bytes = payload.textFeatureBytes();
 	const size_t slot_map_bytes  = payload.slotMapBytes();
 
@@ -141,8 +163,10 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	// the post-masking LM-supervised count.
 	CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, payload.input_ids.data(),
 		input_ids_bytes, cudaMemcpyHostToDevice, stream));
-	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, payload.target_ids.data(),
-		target_ids_bytes, cudaMemcpyHostToDevice, stream));
+	if (payload.hasTrainingTargets()) {
+		CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, payload.target_ids.data(),
+			target_ids_bytes, cudaMemcpyHostToDevice, stream));
+	}
 	CUDA_CHECK(cudaMemcpyAsync(cached_seq_lengths_ptr, payload.seq_lengths.data(),
 		seq_lengths_bytes, cudaMemcpyHostToDevice, stream));
 	CUDA_CHECK(cudaStreamSynchronize(stream));

@@ -48,6 +48,13 @@ namespace Batching {
 // This alias preserves call-site compatibility during the cutover.
 using TeacherStep = GRIM::Execution::TeacherStep;
 
+enum class BatchPayloadMode {
+    Training,
+    InferencePrefill,
+    InferenceStaged,
+    InferenceDecode
+};
+
 struct BatchTokenStats {
     std::int64_t total_tokens = 0;
     int max_sequence_length = 0;
@@ -58,6 +65,8 @@ struct BatchTokenStats {
 // BatchPayload — immutable batch datum
 // =============================================================================
 struct BatchPayload {
+    BatchPayloadMode mode = BatchPayloadMode::Training;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // IDENTITY (from BatchAssignment — carried through, not recomputed)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -183,6 +192,26 @@ struct BatchPayload {
     // ═══════════════════════════════════════════════════════════════════════════
     // VALIDATION (Rule 20: Crash with detailed error)
     // ═══════════════════════════════════════════════════════════════════════════
+    bool isTraining() const { return mode == BatchPayloadMode::Training; }
+    bool isInference() const { return mode != BatchPayloadMode::Training; }
+    bool isInferencePrefill() const { return mode == BatchPayloadMode::InferencePrefill; }
+    bool isInferenceStaged() const { return mode == BatchPayloadMode::InferenceStaged; }
+    bool isInferenceDecode() const { return mode == BatchPayloadMode::InferenceDecode; }
+    bool ownsHostInputData() const {
+        return mode == BatchPayloadMode::Training || mode == BatchPayloadMode::InferencePrefill;
+    }
+    bool hasTrainingTargets() const { return mode == BatchPayloadMode::Training; }
+
+    const char* modeName() const {
+        switch (mode) {
+            case BatchPayloadMode::Training: return "training";
+            case BatchPayloadMode::InferencePrefill: return "inference_prefill";
+            case BatchPayloadMode::InferenceStaged: return "inference_staged";
+            case BatchPayloadMode::InferenceDecode: return "inference_decode";
+        }
+        throw std::runtime_error("BatchPayload.mode contains an unknown value");
+    }
+
     void validate(const char* caller) const {
         if (batch_size <= 0) {
             throw std::runtime_error(
@@ -202,16 +231,26 @@ struct BatchPayload {
                 std::to_string(max_seq_len) + ")=" +
                 std::to_string(batch_size * max_seq_len));
         }
-        if (valid_tokens <= 0) {
+        if (isTraining() && valid_tokens <= 0) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.valid_tokens=" +
                 std::to_string(valid_tokens) + " (must be > 0 — batch has no trainable targets)");
         }
-        if (lm_valid_tokens <= 0) {
+        if (isTraining() && lm_valid_tokens <= 0) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.lm_valid_tokens=" +
                 std::to_string(lm_valid_tokens) +
                 " (must be > 0 after execution-slot target masking)");
+        }
+        if (isInference() && valid_tokens != 0) {
+            throw std::runtime_error(
+                std::string(caller) + ": inference BatchPayload.valid_tokens=" +
+                std::to_string(valid_tokens) + " (must be 0; inference carries no training targets)");
+        }
+        if (isInference() && lm_valid_tokens != 0) {
+            throw std::runtime_error(
+                std::string(caller) + ": inference BatchPayload.lm_valid_tokens=" +
+                std::to_string(lm_valid_tokens) + " (must be 0; inference carries no LM loss targets)");
         }
         if (vocab_size <= 0) {
             throw std::runtime_error(
@@ -224,32 +263,66 @@ struct BatchPayload {
                 std::to_string(seq_lengths.size()) + " != batch_size=" +
                 std::to_string(batch_size));
         }
-        if (static_cast<int>(valid_target_counts.size()) != batch_size) {
+        if (isTraining() && static_cast<int>(valid_target_counts.size()) != batch_size) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.valid_target_counts.size()=" +
                 std::to_string(valid_target_counts.size()) + " != batch_size=" +
                 std::to_string(batch_size));
         }
-        if (static_cast<int>(input_ids.size()) != total_tokens) {
+        if (isInference() && !valid_target_counts.empty()) {
+            if (static_cast<int>(valid_target_counts.size()) != batch_size) {
+                throw std::runtime_error(
+                    std::string(caller) + ": inference BatchPayload.valid_target_counts.size()=" +
+                    std::to_string(valid_target_counts.size()) + " != batch_size=" +
+                    std::to_string(batch_size));
+            }
+            for (int b = 0; b < batch_size; ++b) {
+                if (valid_target_counts[b] != 0) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": inference BatchPayload.valid_target_counts[" +
+                        std::to_string(b) + "]=" + std::to_string(valid_target_counts[b]) +
+                        " (must be 0; inference carries no training targets)");
+                }
+            }
+        }
+        if (ownsHostInputData() && static_cast<int>(input_ids.size()) != total_tokens) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.input_ids.size()=" +
                 std::to_string(input_ids.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
-        if (static_cast<int>(target_ids.size()) != total_tokens) {
+        if (hasTrainingTargets() && static_cast<int>(target_ids.size()) != total_tokens) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.target_ids.size()=" +
                 std::to_string(target_ids.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
+        if (isInference() && !target_ids.empty()) {
+            if (static_cast<int>(target_ids.size()) != total_tokens) {
+                throw std::runtime_error(
+                    std::string(caller) + ": inference BatchPayload.target_ids.size()=" +
+                    std::to_string(target_ids.size()) + " != total_tokens=" +
+                    std::to_string(total_tokens));
+            }
+            for (int i = 0; i < total_tokens; ++i) {
+                if (target_ids[i] != -1) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": inference BatchPayload.target_ids[" +
+                        std::to_string(i) + "]=" + std::to_string(target_ids[i]) +
+                        " (must be -1; inference must not smuggle supervision)");
+                }
+            }
+        }
         // Cross-check: sum of valid_target_counts must equal valid_tokens
-        const int vtc_sum = std::accumulate(
-            valid_target_counts.begin(), valid_target_counts.end(), 0);
-        if (vtc_sum != valid_tokens) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.valid_tokens=" +
-                std::to_string(valid_tokens) + " != sum(valid_target_counts)=" +
-                std::to_string(vtc_sum));
+        if (isTraining()) {
+            const int vtc_sum = std::accumulate(
+                valid_target_counts.begin(), valid_target_counts.end(), 0);
+            if (vtc_sum != valid_tokens) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.valid_tokens=" +
+                    std::to_string(valid_tokens) + " != sum(valid_target_counts)=" +
+                    std::to_string(vtc_sum));
+            }
         }
         // Cross-check: sum of seq_lengths must equal actual_tokens
         const int sl_sum = std::accumulate(
@@ -266,32 +339,32 @@ struct BatchPayload {
         }
 
         // Cross-check: numeric and text feature arrays match total_tokens
-        if (static_cast<int>(numeric_values.size()) != total_tokens) {
+        if (ownsHostInputData() && static_cast<int>(numeric_values.size()) != total_tokens) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.numeric_values.size()=" +
                 std::to_string(numeric_values.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
-        if (static_cast<int>(atom_mask.size()) != total_tokens) {
+        if (ownsHostInputData() && static_cast<int>(atom_mask.size()) != total_tokens) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.atom_mask.size()=" +
                 std::to_string(atom_mask.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
-        if (static_cast<int>(atom_flags.size()) != total_tokens) {
+        if (ownsHostInputData() && static_cast<int>(atom_flags.size()) != total_tokens) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.atom_flags.size()=" +
                 std::to_string(atom_flags.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
-        if (static_cast<int>(token_to_slot_map.size()) != total_tokens) {
+        if (ownsHostInputData() && static_cast<int>(token_to_slot_map.size()) != total_tokens) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.token_to_slot_map.size()=" +
                 std::to_string(token_to_slot_map.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
         const int expected_text_feat = total_tokens * kTextFeatureDim;
-        if (static_cast<int>(text_features.size()) != expected_text_feat) {
+        if (ownsHostInputData() && static_cast<int>(text_features.size()) != expected_text_feat) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.text_features.size()=" +
                 std::to_string(text_features.size()) + " != total_tokens*kTextFeatureDim=" +
@@ -429,6 +502,40 @@ BatchPayload buildBatchPayload(
     int execution_num_ops,
     int execution_num_steps,
     int mtp_k);
+
+/**
+ * Build a validated single-row inference prefill payload from tokenizer-authored
+ * metadata. This is the inference data-ingestion boundary: callers provide all
+ * per-token side channels explicitly, and downstream CUDA code consumes the
+ * resulting BatchPayload + BatchDeviceBindings pair.
+ */
+BatchPayload buildInferenceBatchPayload(
+    const std::vector<int>& token_ids,
+    const std::vector<float>& numeric_values,
+    const std::vector<uint16_t>& text_features,
+    const std::vector<uint8_t>& atom_mask,
+    const std::vector<uint32_t>& atom_flags,
+    std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
+    const std::vector<uint32_t>& atom_entry_ids,
+    const std::vector<int32_t>& token_to_slot_map,
+    int vocab_size,
+    size_t max_cached_batch,
+    size_t max_cached_seq_len,
+    int execution_num_slots);
+
+/**
+ * Build an inference payload for data that is already staged in device cache
+ * tensors. This preserves explicit geometry without pretending host arrays own
+ * the current device contents.
+ */
+BatchPayload buildInferenceStagedPayload(
+    int seq_len,
+    int vocab_size,
+    size_t max_cached_seq_len,
+    bool execution_active);
+
+/** Build a single-token inference decode geometry payload. */
+BatchPayload buildInferenceDecodePayload(int vocab_size);
 
 }  // namespace Batching
 }  // namespace GRIM

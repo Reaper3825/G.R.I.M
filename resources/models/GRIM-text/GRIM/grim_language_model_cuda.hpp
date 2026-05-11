@@ -21,6 +21,9 @@
 // HyperParameters - Single source of truth for model configuration
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 
+// Hyperparameter groupings - construction/read views derived from LanguageModelConfig
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
+
 // TensorContract - Autograd system (includes ParamGroupType, ParameterGroup, Tensor)
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
 
@@ -58,7 +61,6 @@ namespace GRIM {
 
 // GPUGrimEncoder is defined later in this file but used by LanguageModel class
 class GPUGrimEncoder;
-namespace HyperParameters { struct EncoderLayerConstructionHP; }
 
 //======================================================//
 //  Core Data Structures - Minimal Declarations
@@ -238,20 +240,6 @@ namespace LossContext {
 // ParamGroupType and ParameterGroup are now part of the
 // unified autograd system in TensorContract_GPU.hpp
 
-// Forward declare TokenBufferView for method signatures
-struct TokenBufferView;
-
-#ifdef USE_CUDA
-struct TokenBufferView {
-    int* device_token_ids = nullptr;
-    float* device_token_numeric_values = nullptr;
-    uint8_t* device_token_atom_mask = nullptr;
-    int32_t* device_token_to_slot_map = nullptr;
-    int max_tokens = 0;
-    cudaStream_t stream = nullptr;
-};
-#endif
-
 //======================================================//
 //  LanguageModel Class Declaration
 //======================================================//
@@ -273,30 +261,13 @@ public:
                   const Config::TrainingHyperparameters& training_hyperparameters);
     ~LanguageModel();
     
-    // Main API
-    Vector forward(const std::vector<int>& token_ids,
-                   const std::vector<float>& token_numeric_values,
-                   const std::vector<uint8_t>& token_atom_mask,
-                   const std::vector<int32_t>& token_to_slot_map = {});
-    Vector getNextTokenLogits(const std::vector<int>& context_tokens,
-                              const std::vector<float>& context_numeric_values,
-                              const std::vector<uint8_t>& context_atom_mask,
-                              const std::vector<int32_t>& token_to_slot_map = {});
-    std::vector<GeneratedSequence> generate(const std::vector<int>& prompt_tokens,
-                                            const std::vector<float>& prompt_numeric_values,
-                                            const std::vector<uint8_t>& prompt_atom_mask,
-                                            const HyperParameters::GenerationConfig* gen_config = nullptr,
-                                            std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
-                                            const std::vector<uint32_t>& prompt_atom_entry_ids = {},
-                                            const std::vector<int32_t>& prompt_token_to_slot_map = {});
-    GeneratedSequence generateStream(const std::vector<int>& prompt_tokens,
-                                     const std::vector<float>& prompt_numeric_values,
-                                     const std::vector<uint8_t>& prompt_atom_mask,
+    // Main inference API: callers must build BatchPayload through Shared/Batching.
+    Vector getNextTokenLogits(const GRIM::Batching::BatchPayload& context_payload);
+    std::vector<GeneratedSequence> generate(const GRIM::Batching::BatchPayload& prompt_payload,
+                                            const HyperParameters::GenerationConfig* gen_config = nullptr);
+    GeneratedSequence generateStream(const GRIM::Batching::BatchPayload& prompt_payload,
                                      HyperParameters::GenerationStreamCallback callback,
-                                     const HyperParameters::GenerationConfig* gen_config = nullptr,
-                                     std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
-                                     const std::vector<uint32_t>& prompt_atom_entry_ids = {},
-                                     const std::vector<int32_t>& prompt_token_to_slot_map = {});
+                                     const HyperParameters::GenerationConfig* gen_config = nullptr);
     
     // Training / Eval
     //
@@ -320,7 +291,7 @@ public:
     // AUTOREGRESSIVE GENERATION API
     // =========================================================================
     // Use these for token-by-token generation:
-    //   1. Call forwardInit() once with the prompt tokens.
+    //   1. Build an InferencePrefill BatchPayload and call forwardInit().
     //   2. Call forwardStep() for each sampled token.
     //      - Sequence-local configs use KV-cached single-token decode.
     //      - Sequence-coupled geometry (encoder residual centering, LM-head
@@ -329,12 +300,9 @@ public:
     //   3. Call resetKVCache() before starting a new generation session.
     // =========================================================================
     
-    // Initialize KV cache with prompt tokens (prefill phase)
+    // Initialize KV cache with prompt payload (prefill phase)
     // Returns logits for the last prompt token (ready for first sampling)
-    Vector forwardInit(const std::vector<int>& prompt_tokens,
-                       const std::vector<float>& prompt_numeric_values,
-                       const std::vector<uint8_t>& prompt_atom_mask,
-                       const std::vector<int32_t>& prompt_token_to_slot_map = {});
+    Vector forwardInit(const GRIM::Batching::BatchPayload& prompt_payload);
     
     // Process one sampled token and return logits for the next sampling step.
     // Uses KV decode only when the active config has no sequence-coupled geometry;
@@ -401,16 +369,6 @@ public:
     
     // GPU methods
     void initGPU(uint64_t weight_init_seed);
-    Vector forwardGPU(const std::vector<int>& token_ids,
-                      const std::vector<float>& token_numeric_values,
-                      const std::vector<uint8_t>& token_atom_mask,
-                      const std::vector<int32_t>& token_to_slot_map = {});
-    Vector getNextTokenLogitsGPU(const std::vector<int>& context_tokens,
-                                 const std::vector<float>& context_numeric_values,
-                                 const std::vector<uint8_t>& context_atom_mask,
-                                 const std::vector<int32_t>& token_to_slot_map = {});
-    TokenBufferView getTokenBufferView();
-    void markDevicePromptReady(int token_count);
     
     // Helper accessors for GPU implementation
     GrimEmbeddingStack* getEmbedderPtr() { return embedder_.get(); }
@@ -462,14 +420,9 @@ public:
     
 #endif
     
-    GeneratedSequence generateSequenceGPU(const std::vector<int>& prompt_tokens,
-                                          const std::vector<float>& prompt_numeric_values,
-                                          const std::vector<uint8_t>& prompt_atom_mask,
+    GeneratedSequence generateSequenceGPU(const GRIM::Batching::BatchPayload& prompt_payload,
                                           const HyperParameters::GenerationConfig& cfg,
-                                          HyperParameters::GenerationStreamCallback* stream_callback = nullptr,
-                                          std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
-                                          const std::vector<uint32_t>& prompt_atom_entry_ids = {},
-                                          const std::vector<int32_t>& prompt_token_to_slot_map = {});
+                                          HyperParameters::GenerationStreamCallback* stream_callback = nullptr);
     
 private:
     LanguageModel(const HyperParameters::LanguageModelConfig& config,
@@ -482,6 +435,9 @@ private:
     // When populate_kv_cache=true, extracts K,V from autograd intermediates
     // into BF16 KV cache buffers before clearing intermediates.
     Vector executeInferenceForward_(int seq_len, bool populate_kv_cache = false);
+    Vector executeInferenceForward_(const GRIM::Batching::BatchPayload& payload,
+                                    const GRIM::Batching::BatchDeviceBindings& bindings,
+                                    bool populate_kv_cache = false);
 
     // KV-cached decode: processes a single token at position token_pos
     // through all encoder layers using cached K,V from prior tokens.
@@ -500,9 +456,6 @@ private:
     std::unique_ptr<GPUGrimEncoder> gpu_encoder_;
 #endif
     
-    bool staged_prompt_ready_ = false;
-    int staged_prompt_len_ = 0;
-
 #ifdef USE_CUDA
     TrainingState training_state_;
     GenerationState generation_state_;

@@ -140,7 +140,9 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
         auto encoded = g_tokenizer->encodeWithMetadata(prompt);
         auto tokens = std::move(encoded.token_ids);
         auto numeric_values = std::move(encoded.token_numeric_values);
+        auto text_features = std::move(encoded.token_text_features);
         auto atom_mask = std::move(encoded.token_atom_mask);
+        auto atom_flags = std::move(encoded.token_atom_flags);
         auto prompt_atom_table = encoded.atom_table;
         auto atom_entry_ids = std::move(encoded.atom_entry_ids);
         auto end_encode = std::chrono::high_resolution_clock::now();
@@ -150,15 +152,26 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
         int eos_id = g_tokenizer->eosId();
         if (!tokens.empty() && tokens.back() == eos_id) {
             tokens.pop_back();
-            if (!numeric_values.empty()) {
-                numeric_values.pop_back();
+            if (numeric_values.empty()) {
+                throw std::runtime_error("generateResponse: numeric_values empty while removing EOS");
             }
-            if (!atom_mask.empty()) {
-                atom_mask.pop_back();
+            numeric_values.pop_back();
+            if (text_features.size() < GRIM::Batching::BatchPayload::kTextFeatureDim) {
+                throw std::runtime_error("generateResponse: text_features too short while removing EOS");
             }
-            if (!atom_entry_ids.empty()) {
-                atom_entry_ids.pop_back();
+            text_features.resize(text_features.size() - GRIM::Batching::BatchPayload::kTextFeatureDim);
+            if (atom_mask.empty()) {
+                throw std::runtime_error("generateResponse: atom_mask empty while removing EOS");
             }
+            atom_mask.pop_back();
+            if (atom_flags.empty()) {
+                throw std::runtime_error("generateResponse: atom_flags empty while removing EOS");
+            }
+            atom_flags.pop_back();
+            if (atom_entry_ids.empty()) {
+                throw std::runtime_error("generateResponse: atom_entry_ids empty while removing EOS");
+            }
+            atom_entry_ids.pop_back();
             std::cout << "[Generate] Removed EOS from prompt, now " << tokens.size() << " tokens" << std::endl;
         }
 
@@ -171,8 +184,22 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
                   << ", PAD token ID: " << gen_config.pad_token_id << std::endl;
         std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
         auto start_gen = std::chrono::high_resolution_clock::now();
-        auto results = g_model->generate(tokens, numeric_values, atom_mask, &gen_config,
-                                         prompt_atom_table, atom_entry_ids);
+        const auto& model_cfg = g_model->getConfig();
+        const std::vector<int32_t> prompt_token_to_slot_map;
+        auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
+            tokens,
+            numeric_values,
+            text_features,
+            atom_mask,
+            atom_flags,
+            prompt_atom_table,
+            atom_entry_ids,
+            prompt_token_to_slot_map,
+            model_cfg.vocab_size,
+            static_cast<size_t>(model_cfg.max_cached_batch),
+            static_cast<size_t>(model_cfg.max_cached_seq_len),
+            model_cfg.execution_block_num_slots);
+        auto results = g_model->generate(prompt_payload, &gen_config);
         auto end_gen = std::chrono::high_resolution_clock::now();
         auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
 

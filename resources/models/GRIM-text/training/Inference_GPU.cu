@@ -6,7 +6,7 @@
 //  All public inference methods copy data to cached_* tensors
 //  then call this private method.
 //
-//  Rule 20: No backwards compatibility - uses autograd only
+//  Rule 20: Payload-authored inference only - uses autograd forward only
 //  Rule 26: One inference path, not two
 //======================================================//
 
@@ -30,63 +30,11 @@
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Batching/BatchDeviceBindings.hpp"
 
-using GRIM::HyperParameters::ModelExecutionMode;
-
 namespace GRIM {
 
 namespace {
 
 constexpr int kScratchTextFeatureDim = 16;
-
-// Copy per-token slot assignment map from host to device.
-//
-//   prompt_map semantics:
-//     - Empty vector → all tokens mapped to -1 (non-state-bearing).
-//     - Entry == -1  → this token is non-state-bearing (no slot selected).
-//     - Entry in [0, num_slots) → token is bound to that execution slot.
-//
-//   At decode time, <NUM> can only be generated when the selector
-//   resolves to a single live slot (Selected). Otherwise <NUM> is
-//   masked out of the vocabulary and cannot be sampled.
-void copyTokenSlotMapH2D(TrainingState& ts, cudaStream_t stream, int seq_len,
-                         const std::vector<int32_t>& prompt_map,
-                         int num_slots) {
-    if (!ts.cached_token_to_slot_map.data || seq_len <= 0)
-        return;
-    auto* dst = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
-    if (prompt_map.empty()) {
-        // Empty prompt map → all tokens are non-state-bearing (slot_id = -1)
-        std::vector<int32_t> neg(static_cast<size_t>(seq_len), -1);
-        cudaError_t err = cudaMemcpyAsync(dst, neg.data(),
-            static_cast<size_t>(seq_len) * sizeof(int32_t),
-            cudaMemcpyHostToDevice, stream);
-        if (err != cudaSuccess) {
-            throw std::runtime_error(std::string("copyTokenSlotMapH2D (sentinel): ") +
-                                     cudaGetErrorString(err));
-        }
-        return;
-    }
-    if (static_cast<int>(prompt_map.size()) != seq_len) {
-        throw std::runtime_error(
-            "token_to_slot_map size must match sequence length (or pass empty for all -1)");
-    }
-    // Validate slot-range: each entry must be -1 (non-state-bearing) or in [0, num_slots)
-    for (int i = 0; i < seq_len; ++i) {
-        int32_t sid = prompt_map[i];
-        if (sid != -1 && (sid < 0 || sid >= num_slots)) {
-            throw std::runtime_error(
-                "copyTokenSlotMapH2D: slot_id=" + std::to_string(sid) +
-                " at position " + std::to_string(i) + " out of range [0, " +
-                std::to_string(num_slots) + ") — must be -1 or valid slot index");
-        }
-    }
-    cudaError_t err = cudaMemcpyAsync(dst, prompt_map.data(),
-        static_cast<size_t>(seq_len) * sizeof(int32_t),
-        cudaMemcpyHostToDevice, stream);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("copyTokenSlotMapH2D: ") + cudaGetErrorString(err));
-    }
-}
 
 ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
     ScratchBlockLayer& scratch_block,
@@ -185,30 +133,6 @@ Batching::BatchDeviceBindings buildInferencePrefillBindings(TrainingState& ts, i
     return bindings;
 }
 
-Batching::BatchPayload buildInferenceGeometryPayload(
-    const HyperParameters::LanguageModelConfig& cfg,
-    int seq_len) {
-    if (seq_len <= 0) {
-        throw std::runtime_error("buildInferenceGeometryPayload: seq_len <= 0");
-    }
-
-    Batching::BatchPayload payload;
-    payload.batch_size = 1;
-    payload.max_seq_len = seq_len;
-    payload.total_tokens = seq_len;
-    payload.actual_tokens = seq_len;
-    payload.padding_tokens = 0;
-    payload.valid_tokens = seq_len;
-    payload.lm_valid_tokens = seq_len;
-    payload.vocab_size = cfg.vocab_size;
-    payload.seq_lengths.assign(1, seq_len);
-    payload.valid_target_counts.assign(1, seq_len);
-    payload.min_seq_len = seq_len;
-    payload.packing_efficiency = 1.0f;
-    payload.fits_in_cache = true;
-    return payload;
-}
-
 bool sequenceCoupledGeometryRequiresFullPrefill(
     const HyperParameters::LanguageModelConfig& cfg) {
     return cfg.center_encoder_residuals ||
@@ -299,7 +223,40 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
     }
 
     Batching::BatchDeviceBindings bindings = buildInferencePrefillBindings(training_state_, seq_len);
-    Batching::BatchPayload payload = buildInferenceGeometryPayload(config_, seq_len);
+    Batching::BatchPayload payload = Batching::buildInferenceStagedPayload(
+        seq_len, config_.vocab_size, static_cast<size_t>(config_.max_cached_seq_len),
+        generation_state_.has_exec_memory);
+
+    return executeInferenceForward_(payload, bindings, populate_kv_cache);
+}
+
+Vector LanguageModel::executeInferenceForward_(
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    bool populate_kv_cache) {
+    if (!training_state_.initialized) {
+        throw std::runtime_error("executeInferenceForward_: training state not initialized");
+    }
+    payload.validate("executeInferenceForward_");
+    if (!payload.isInference()) {
+        throw std::runtime_error("executeInferenceForward_: payload mode is training; inference forward requires an inference payload");
+    }
+    if (payload.batch_size != 1) {
+        throw std::runtime_error("executeInferenceForward_: inference payload batch_size must be 1");
+    }
+    if (payload.max_seq_len <= 0 || payload.max_seq_len > config_.max_seq_len) {
+        throw std::runtime_error("executeInferenceForward_: payload max_seq_len=" + std::to_string(payload.max_seq_len) +
+                                 " out of range [1, " + std::to_string(config_.max_seq_len) + "]");
+    }
+    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
+        throw std::runtime_error(
+            "executeInferenceForward_: BatchDeviceBindings geometry (" +
+            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
+            ") does not match payload (" + std::to_string(payload.batch_size) + "x" +
+            std::to_string(payload.max_seq_len) + ")");
+    }
+
+    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
     Forward::ModelForwardRequest request{};
     request.config = &config_;
@@ -314,8 +271,6 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
     request.stream = stream;
     request.payload = &payload;
     request.bindings = &bindings;
-    request.batch_size = 1;
-    request.seq_len = seq_len;
     request.step = 0;
     request.mode = Forward::ModelForwardMode::InferencePrefill;
 
@@ -329,7 +284,7 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
         throw std::runtime_error("executeInferenceForward_: cached_logits_tensor not initialized");
     }
     Vector logits(config_.vocab_size);
-    const size_t last_token_offset = static_cast<size_t>(seq_len - 1) * config_.vocab_size;
+    const size_t last_token_offset = static_cast<size_t>(payload.max_seq_len - 1) * config_.vocab_size;
     cudaMemcpyAsync(logits.data.data(),
                     training_state_.cached_logits_tensor.data + last_token_offset,
                     config_.vocab_size * sizeof(float),
@@ -379,11 +334,11 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
             TensorConversion::convert_BHSD_to_BSHD_bf16(
                 layer_ints.K_bhsd.data,
                 gen.kv_cache.k[i].as<__nv_bfloat16>(),
-                1, num_kv_heads, seq_len, head_dim, stream);
+                1, num_kv_heads, payload.max_seq_len, head_dim, stream);
             TensorConversion::convert_BHSD_to_BSHD_bf16(
                 layer_ints.V_bhsd.data,
                 gen.kv_cache.v[i].as<__nv_bfloat16>(),
-                1, num_kv_heads, seq_len, head_dim, stream);
+                1, num_kv_heads, payload.max_seq_len, head_dim, stream);
         }
     }
 
@@ -394,86 +349,36 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
     return logits;
 }
 
-//======================================================//
-//  forwardInit - Prefill phase: copy prompt to device, run forward
-//
-//  prompt_token_to_slot_map:
-//    - Empty vector → all tokens are non-state-bearing (slot_id = -1).
-//    - Entry == -1  → non-state-bearing token (no execution slot).
-//    - Entry in [0, num_slots) → token bound to that execution slot.
-//
-//  During subsequent decode steps, <NUM> can only be generated when the
-//  selector resolves exactly one live slot. Otherwise <NUM> is masked.
-//======================================================//
-Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
-                                  const std::vector<float>& prompt_numeric_values,
-                                  const std::vector<uint8_t>& prompt_atom_mask,
-                                  const std::vector<int32_t>& prompt_token_to_slot_map) {
-    const int seq_len = static_cast<int>(prompt_tokens.size());
-    
-    if (!training_state_.initialized) {
-        if (config_.execution_mode == ModelExecutionMode::TRAINING) {
-            initTrainingState();
-        } else {
-            initInferenceState();
-        }
+Vector LanguageModel::forwardInit(const Batching::BatchPayload& prompt_payload) {
+    prompt_payload.validate("forwardInit(BatchPayload)");
+    if (!prompt_payload.isInferencePrefill()) {
+        throw std::runtime_error("forwardInit(BatchPayload): payload must be InferencePrefill");
     }
-
+    if (prompt_payload.batch_size != 1) {
+        throw std::runtime_error("forwardInit(BatchPayload): batch_size must be 1");
+    }
+    const int seq_len = prompt_payload.max_seq_len;
     if (seq_len <= 0) {
-        throw std::runtime_error("forwardInit: seq_len <= 0");
+        throw std::runtime_error("forwardInit(BatchPayload): seq_len <= 0");
     }
     if (seq_len > config_.max_seq_len) {
-        throw std::runtime_error("forwardInit: seq_len exceeds max_seq_len");
+        throw std::runtime_error("forwardInit(BatchPayload): seq_len exceeds max_seq_len");
     }
 
-    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-    
-    // Copy tokens to device
-    cudaMemcpyAsync(reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data),
-                    prompt_tokens.data(),
-                    seq_len * sizeof(int),
-                    cudaMemcpyHostToDevice, stream);
-    
-    // Copy numeric side-channel (zero when empty to prevent stale bleed)
-    if (!prompt_numeric_values.empty()) {
-        cudaMemcpyAsync(training_state_.cached_token_numeric_values.data,
-                        prompt_numeric_values.data(),
-                        seq_len * sizeof(float),
-                        cudaMemcpyHostToDevice, stream);
-    } else {
-        cudaMemsetAsync(training_state_.cached_token_numeric_values.data,
-                        0, static_cast<size_t>(seq_len) * sizeof(float), stream);
-    }
-    if (!prompt_atom_mask.empty()) {
-        cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data),
-                        prompt_atom_mask.data(),
-                        seq_len * sizeof(uint8_t),
-                        cudaMemcpyHostToDevice, stream);
-    } else {
-        cudaMemsetAsync(training_state_.cached_token_atom_mask.data,
-                        0, static_cast<size_t>(seq_len) * sizeof(uint8_t), stream);
-    }
+    const auto bindings = uploadBatchToDevice(prompt_payload);
 
-    copyTokenSlotMapH2D(training_state_, stream, seq_len, prompt_token_to_slot_map,
-                        config_.execution_block_num_slots);
-    
     // Prefill: populate KV cache from autograd intermediates.
     // Commit kv_cache_len AFTER success — if forward throws, the cache
     // must not claim it holds tokens that never completed the forward path.
-    Vector logits = executeInferenceForward_(seq_len, /*populate_kv_cache=*/true);
+    Vector logits = executeInferenceForward_(prompt_payload, bindings, /*populate_kv_cache=*/true);
     generation_state_.kv_cache_len = seq_len;
 
-    // ── Initialize trace structures for subsequent decode steps ──
-    // resetKVCache() clears these, and executeInferenceForward_ (shared prefill)
-    // doesn't recreate them.  executeDecodeForward_ needs them for exec block
-    // stepping + selector gating, so bootstrap them here.
     cudaStream_t post_stream = training_state_.stream_ctrl.getPrimaryStream();
     if (generation_state_.has_exec_memory
         && generation_state_.trace_state_by_row.empty()) {
         generation_state_.trace_state_by_row.resize(1);
         generation_state_.trace_state_by_row[0] = Tensor::zeros(
             {1, config_.d_model}, post_stream, "trace_state_decode");
-        // Inference — no gradient tracking
         generation_state_.trace_state_by_row[0].requires_grad = false;
     }
     if (generation_state_.has_exec_memory
@@ -482,12 +387,8 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
         generation_state_.execution_trace_by_row[0].clear();
     }
 
-    // ── Run decode-time slot selector on prefill's last-token hidden state ──
-    // executeDecodeForward_ runs this on every KV decode step. Full prefill
-    // needs the same selector refresh so step-0 sampling and full-context
-    // generation remain governed by the same <NUM> admissibility contract.
     updateDecodeSelectorAfterPrefill(*this, config_, training_state_, generation_state_,
-                                     post_stream, seq_len, "forwardInit");
+                                     post_stream, seq_len, "forwardInit(BatchPayload)");
 
     return logits;
 }
@@ -530,6 +431,23 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
                     cudaMemcpyHostToDevice, stream);
     cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data) + token_pos,
                     &atom_mask, sizeof(uint8_t),
+                    cudaMemcpyHostToDevice, stream);
+
+    if (!training_state_.cached_token_text_features.data) {
+        throw std::runtime_error("forwardStep: cached_token_text_features.data is NULL");
+    }
+    cudaMemsetAsync(reinterpret_cast<uint16_t*>(training_state_.cached_token_text_features.data) +
+                    static_cast<size_t>(token_pos) * Batching::BatchPayload::kTextFeatureDim,
+                    0,
+                    static_cast<size_t>(Batching::BatchPayload::kTextFeatureDim) * sizeof(uint16_t),
+                    stream);
+
+    if (!training_state_.cached_token_atom_flags.data) {
+        throw std::runtime_error("forwardStep: cached_token_atom_flags.data is NULL");
+    }
+    uint32_t zero_atom_flags = 0;
+    cudaMemcpyAsync(reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data) + token_pos,
+                    &zero_atom_flags, sizeof(uint32_t),
                     cudaMemcpyHostToDevice, stream);
 
     if (training_state_.cached_token_to_slot_map.data) {
@@ -591,6 +509,10 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     const int num_layers = cfg.num_layers;
     const float rms_eps = cfg.rms_epsilon;
     const int seqlen_k = token_pos + 1;  // K cache has [0..token_pos] inclusive
+    const HyperParameters::EncoderLayerConstructionHP encoder_hp =
+        HyperParameters::encoderLayerConstructionHP(cfg);
+    const HyperParameters::EncoderSelfAttentionHP attention_hp =
+        HyperParameters::encoderSelfAttentionHP(encoder_hp);
 
     // Set cuBLAS handle for autograd matmul calls
     ag::set_autograd_cublas_handle(ts.cublas_handle.get());
@@ -662,12 +584,9 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         }
 
         // 3c. Split QKV → Q [1,nh,1,hd], K [1,nkv,1,hd], V [1,nkv,1,hd]
-        Batching::BatchPayload inf_payload;
-        inf_payload.batch_size = 1;
-        inf_payload.max_seq_len = 1;
-        TensorContract::GQADims inf_gqa{num_heads, num_kv_heads, head_dim};
+        Batching::BatchPayload inf_payload = Batching::buildInferenceDecodePayload(cfg.vocab_size);
         auto [Q, K, V] = ag::split_and_reshape_qkv(
-            qkv, inf_payload, inf_gqa, stream);
+            qkv, inf_payload, attention_hp, stream);
 
         // 3d. RoPE rotation with position offset
         // For S=1, Q is [1,nh,1,hd] and K is [1,nkv,1,hd]
@@ -829,15 +748,13 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
                 slot_ptr,
                 1, stream);
 
-            // Construct a minimal host BatchPayload (geometry-only) plus a
+            // Construct the shared single-token inference decode payload plus a
             // single-token BatchDeviceBindings for decode-time execution.
             // Decode is NOT a full training step — there is no host-side payload
             // upload, just the row-local slot map / atom mask already living in
             // TrainingState's cached buffers.
-            GRIM::Batching::BatchPayload decode_payload;
-            decode_payload.batch_size = 1;
-            decode_payload.max_seq_len = 1;
-            decode_payload.total_tokens = 1;
+            GRIM::Batching::BatchPayload decode_payload =
+                GRIM::Batching::buildInferenceDecodePayload(cfg.vocab_size);
 
             GRIM::Batching::BatchDeviceBindings decode_bindings;
             decode_bindings.batch_size  = 1;

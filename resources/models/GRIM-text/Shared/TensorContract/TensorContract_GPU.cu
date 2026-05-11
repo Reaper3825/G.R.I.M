@@ -10,7 +10,6 @@
 #include "../TensorConversion/TensorConversion.hpp"  // Layout conversions - single source of truth
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
-#include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
 #include <cuda_runtime.h>
 #include <cublas_v2.h>

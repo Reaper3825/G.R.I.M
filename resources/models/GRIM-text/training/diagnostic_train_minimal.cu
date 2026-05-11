@@ -651,12 +651,55 @@ int main(int argc, char** argv) {
                                               seq.token_numeric_values.begin() + context_len);
             std::vector<uint8_t> atom_mask(seq.token_atom_mask.begin(),
                                            seq.token_atom_mask.begin() + context_len);
+            const size_t text_feature_count = static_cast<size_t>(context_len) *
+                GRIM::Batching::BatchPayload::kTextFeatureDim;
+            if (seq.token_text_features.size() < text_feature_count) {
+                throw std::runtime_error("diagnostic_train_minimal: token_text_features shorter than context span");
+            }
+            std::vector<uint16_t> text_features(
+                seq.token_text_features.begin(),
+                seq.token_text_features.begin() + text_feature_count);
+            if (seq.token_atom_flags.size() < static_cast<size_t>(context_len)) {
+                throw std::runtime_error("diagnostic_train_minimal: token_atom_flags shorter than context span");
+            }
+            std::vector<uint32_t> atom_flags(
+                seq.token_atom_flags.begin(),
+                seq.token_atom_flags.begin() + context_len);
+            if (seq.atom_entry_ids.size() < static_cast<size_t>(context_len)) {
+                throw std::runtime_error("diagnostic_train_minimal: atom_entry_ids shorter than context span");
+            }
+            std::vector<uint32_t> atom_entry_ids(
+                seq.atom_entry_ids.begin(),
+                seq.atom_entry_ids.begin() + context_len);
+            std::vector<int32_t> token_to_slot_map;
+            if (!seq.token_exec_slots.empty()) {
+                if (seq.token_exec_slots.size() < static_cast<size_t>(context_len)) {
+                    throw std::runtime_error("diagnostic_train_minimal: token_exec_slots shorter than context span");
+                }
+                token_to_slot_map.assign(
+                    seq.token_exec_slots.begin(),
+                    seq.token_exec_slots.begin() + context_len);
+            }
             
             //--------------------------------------------------
             // 6a. FORWARD PASS (get logits for prediction)
             //--------------------------------------------------
-            // Use getNextTokenLogits to get logits for the next token position
-            GRIM::Vector logits_vec = model.getNextTokenLogits(context_ids, numeric_values, atom_mask);
+            // Use a BatchPayload-authored inference prefill to get logits for the next token position.
+            const auto& model_cfg = model.getConfig();
+            GRIM::Batching::BatchPayload context_payload = GRIM::Batching::buildInferenceBatchPayload(
+                context_ids,
+                numeric_values,
+                text_features,
+                atom_mask,
+                atom_flags,
+                seq.atom_table,
+                atom_entry_ids,
+                token_to_slot_map,
+                model_cfg.vocab_size,
+                static_cast<size_t>(model_cfg.max_cached_batch),
+                static_cast<size_t>(model_cfg.max_cached_seq_len),
+                model_cfg.execution_block_num_slots);
+            GRIM::Vector logits_vec = model.getNextTokenLogits(context_payload);
             CUDA_CHECK(cudaStreamSynchronize(stream));
             
             // Copy logits to a GPU buffer for getTopKPredictions

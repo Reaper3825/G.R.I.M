@@ -87,36 +87,29 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!stream) throw std::runtime_error(std::string(caller) + ": stream is NULL");
     if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
-    if (batch_size <= 0) throw std::runtime_error(std::string(caller) + ": batch_size <= 0");
-    if (seq_len <= 0) throw std::runtime_error(std::string(caller) + ": seq_len <= 0");
-    if (payload->batch_size != batch_size || payload->max_seq_len != seq_len) {
-        throw std::runtime_error(
-            std::string(caller) + ": BatchPayload geometry (" +
-            std::to_string(payload->batch_size) + "x" + std::to_string(payload->max_seq_len) +
-            ") does not match request (" + std::to_string(batch_size) + "x" +
-            std::to_string(seq_len) + ")");
-    }
-    if (bindings->batch_size != batch_size || bindings->max_seq_len != seq_len) {
+    if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
+    if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
+    if (bindings->batch_size != payload->batch_size || bindings->max_seq_len != payload->max_seq_len) {
         throw std::runtime_error(
             std::string(caller) + ": BatchDeviceBindings geometry (" +
             std::to_string(bindings->batch_size) + "x" + std::to_string(bindings->max_seq_len) +
-            ") does not match request (" + std::to_string(batch_size) + "x" +
-            std::to_string(seq_len) + ")");
+            ") does not match BatchPayload geometry (" + std::to_string(payload->batch_size) + "x" +
+            std::to_string(payload->max_seq_len) + ")");
     }
     if (!bindings->d_seq_lengths) {
         throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_seq_lengths is NULL");
     }
-    if (static_cast<int>(payload->seq_lengths.size()) != batch_size) {
+    if (static_cast<int>(payload->seq_lengths.size()) != payload->batch_size) {
         throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
                                  std::to_string(payload->seq_lengths.size()) +
-                                 ") != batch_size (" + std::to_string(batch_size) + ")");
+                                 ") != payload.batch_size (" + std::to_string(payload->batch_size) + ")");
     }
-    for (int b = 0; b < batch_size; ++b) {
+    for (int b = 0; b < payload->batch_size; ++b) {
         const int row_len = payload->seq_lengths[static_cast<size_t>(b)];
-        if (row_len <= 0 || row_len > seq_len) {
+        if (row_len <= 0 || row_len > payload->max_seq_len) {
             throw std::runtime_error(std::string(caller) + ": invalid seq_lengths[" +
                                      std::to_string(b) + "]=" + std::to_string(row_len) +
-                                     " for seq_len=" + std::to_string(seq_len));
+                                     " for payload.max_seq_len=" + std::to_string(payload->max_seq_len));
         }
     }
 }
@@ -143,7 +136,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     result.total_tokens = total_tokens;
     result.vocab_size = payload.vocab_size;
 
-    MFWD_INFO("forward: batch=" << request.batch_size << " seq=" << request.seq_len
+    MFWD_INFO("forward: batch=" << payload.batch_size << " seq=" << payload.max_seq_len
               << " tokens=" << total_tokens << " vocab=" << payload.vocab_size
               << " mode=" << modeName(request.mode));
 
@@ -350,17 +343,15 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                 const int nop = cfg->execution_block_num_ops;
                 const int dk = cfg->execution_block_d_key;
                 const int dt = cfg->execution_block_d_type;
-                const int B  = request.batch_size;
-                const int sl = request.seq_len;
 
-                intermediates.exec_memories.resize(B);
-                intermediates.exec_outputs_per_row.resize(B);
+                intermediates.exec_memories.resize(payload.batch_size);
+                intermediates.exec_outputs_per_row.resize(payload.batch_size);
 
                 float T = cfg->execution_block_temp_start;
 
-                ts->execution_trace_by_row.resize(B);
-                ts->trace_state_by_row.resize(B);
-                for (int b = 0; b < B; ++b) {
+                ts->execution_trace_by_row.resize(payload.batch_size);
+                ts->trace_state_by_row.resize(payload.batch_size);
+                for (int b = 0; b < payload.batch_size; ++b) {
                     ts->execution_trace_by_row[b].clear();
                     const bool row_active = !payload.execution_active.empty()
                         && payload.execution_active[b];
@@ -376,9 +367,9 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                     ? static_cast<int>(payload.teacher_steps.size()) : 0;
                 intermediates.exec_expected_target_tensors.clear();
                 intermediates.exec_expected_target_tensors.reserve(
-                    static_cast<size_t>(B) * static_cast<size_t>(std::max(0, exec_K)));
+                    static_cast<size_t>(payload.batch_size) * static_cast<size_t>(std::max(0, exec_K)));
 
-                for (int b = 0; b < B; ++b) {
+                for (int b = 0; b < payload.batch_size; ++b) {
                     const bool row_exec_active = !payload.execution_active.empty()
                         && payload.execution_active[b];
 
@@ -390,10 +381,10 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                     M_b.allocate(V, ae, cfg->d_model, dk, dt, request.stream);
                     M_b.clear(request.stream);
 
-                    const int tok_off = b * sl;
+                    const int tok_off = b * payload.max_seq_len;
 
                     auto row_atom_view = request.scratch_block->extractRowLocalAtomView(
-                        tok_off, sl, request.stream);
+                        tok_off, payload.max_seq_len, request.stream);
 
                     if (!request.bindings || !request.bindings->d_token_to_slot_map
                         || !request.bindings->d_numeric_values) {
@@ -406,7 +397,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                         M_b,
                         request.bindings->d_numeric_values + tok_off,
                         request.bindings->d_token_to_slot_map + tok_off,
-                        sl, request.stream);
+                        payload.max_seq_len, request.stream);
 
                     for (int step = 0; step < exec_K; ++step) {
                         ExecutionBlockStepOutput step_diag;
@@ -496,28 +487,26 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
             if (exec_layer >= 0 && layer_idx >= exec_layer
                 && request.execution_block
                 && !intermediates.exec_memories.empty()) {
-                const int B  = request.batch_size;
-                const int sl = request.seq_len;
-                for (int b = 0; b < B; ++b) {
+                for (int b = 0; b < payload.batch_size; ++b) {
                     const bool row_exec_active = !payload.execution_active.empty()
                         && payload.execution_active[b];
                     if (!row_exec_active) continue;
                     Tensor row_delta = request.execution_block->crossAttentionRead(
                         layer_output, intermediates.exec_memories[b],
                         total_tokens, request.stream,
-                        b * sl, sl,
+                        b * payload.max_seq_len, payload.max_seq_len,
                         ts->read_gate_accum_tensor.data);
-                    Tensor padded = autograd::zero_pad(row_delta, b * sl, total_tokens, request.stream);
+                    Tensor padded = autograd::zero_pad(row_delta, b * payload.max_seq_len, total_tokens, request.stream);
                     layer_output = autograd::add(layer_output, padded, request.stream);
                 }
             }
 
             if (cfg->center_encoder_residuals) {
-                if (request.seq_len <= 1) {
-                    throw std::runtime_error("ModelForward: center_encoder_residuals requires request.seq_len > 1; single-row column centering would erase the residual stream");
+                if (payload.max_seq_len <= 1) {
+                    throw std::runtime_error("ModelForward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
                 }
                 layer_output = autograd::center_columns_by_sequence_lengths(
-                    layer_output, bindings->d_seq_lengths, request.batch_size, request.seq_len, request.stream);
+                    layer_output, bindings->d_seq_lengths, payload.batch_size, payload.max_seq_len, request.stream);
             }
 
             intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
@@ -558,8 +547,8 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         intermediates.encoder_output_tensor,
         intermediates.centered_encoder_output,
         bindings->d_seq_lengths,
-        request.batch_size,
-        request.seq_len,
+        payload.batch_size,
+        payload.max_seq_len,
         request.stream,
         request.cublas_handle);
 

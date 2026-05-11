@@ -32,7 +32,6 @@
 
 #include "../grim_layer_gpu.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
-#include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -157,7 +156,7 @@ public:
      */
     Tensor forward(const Tensor& input, const BatchPayload& payload,
                          const int* d_sequence_lengths, cudaStream_t stream, cublasHandle_t cublas_handle,
-                   struct ForwardIntermediates& intermediates,
+                         ForwardIntermediates& intermediates,
                    uint64_t training_step = 0,
                 bool dropout_enabled = false,
                    int layer_idx = 0);

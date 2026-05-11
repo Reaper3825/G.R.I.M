@@ -17,6 +17,7 @@ Status: implemented.
 - [x] Add a shared inference-prefill forward primitive outside `training/Autograd`.
 - [x] Route `LanguageModel::executeInferenceForward_()` through that primitive.
 - [x] Build a per-call `BatchDeviceBindings` view in inference code from the currently staged generation buffers.
+- [x] Build inference prompt ingestion through `Batching::buildInferenceBatchPayload()` and `LanguageModel::forwardInit(const BatchPayload&)` instead of server/vector-authored CUDA copies.
 - [x] Keep existing `TrainingState` cache tensors as temporary backing storage only.
 - [x] Keep training on `Autograd::executeAutogradForward()` for now.
 

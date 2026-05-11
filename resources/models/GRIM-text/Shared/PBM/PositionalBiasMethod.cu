@@ -75,7 +75,7 @@ bool computeAlibiSlopes(const PBMConfig& config, std::vector<float>& out_slopes)
     d_min = std::max(16, std::min(d_min, d_max));  // Clamp to [16, d_max]
     
     // target_bias controls overall penalty strength (standard ALiBi uses 8.0)
-    // Derived from alibi_slope_exponent for backwards compatibility
+    // Derived from the canonical alibi_slope_exponent value
     const float target_bias = std::abs(config.alibi_slope_exponent);
     
     // Safety check: target_bias==0 would generate all-zero slopes (useless)
@@ -601,7 +601,7 @@ __global__ void ropeRotationGQABackwardKernel(
 
 } // namespace
 
-// NOTE: Non-GQA launchRoPERotation() was REMOVED (Rule 20: no backwards compatibility).
+// NOTE: Non-GQA launchRoPERotation() was REMOVED (Rule 20: current GQA path only).
 // It was broken for GQA (assumed Q and K have same head count, causing memory corruption).
 // Use launchRoPERotationGQA() for ALL cases - set num_q_heads == num_kv_heads.
 

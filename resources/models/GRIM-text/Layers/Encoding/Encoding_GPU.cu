@@ -12,14 +12,12 @@
 
 #include "Encoding_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../FlashAttention/Flash_Attention_Kernal.hpp"
+#include "../FlashAttention/EncoderSelfAttention_GPU.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
-#include "../../Shared/TensorConversion/TensorConversion.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"  // Centralized equation logging (Rule 21)
 #include <cuda_runtime.h>
-#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -29,9 +27,6 @@
 #include <algorithm>  // Rule 21 diagnostic: std::min_element, std::max_element
 #include <cfloat>     // FLT_MAX
 #include <cstdio>     // fprintf, snprintf
-#include "../../Shared/CudaAllocUtils.hpp"
-
-using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 
 namespace {
@@ -44,131 +39,6 @@ namespace {
     }
     
 
-    // QKV debug logging (GRIM_DEBUG_QKV).
-    int qkvDebugLevel() {
-        static int level = []() {
-            const char* raw = std::getenv("GRIM_DEBUG_QKV");
-            return (raw && *raw) ? std::atoi(raw) : 0;
-        }();
-        return level;
-    }
-
-    struct NonFiniteStats {
-        int nan_count;
-        int inf_count;
-        int first_nan_idx;
-        int first_inf_idx;
-        float first_nan_val;
-        float first_inf_val;
-    };
-
-    __global__ void scanNonFiniteKernel(const float* data, int count, NonFiniteStats* stats) {
-        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= count) {
-            return;
-        }
-        const float v = data[idx];
-        if (isnan(v)) {
-            atomicAdd(&stats->nan_count, 1);
-            const int old = atomicCAS(&stats->first_nan_idx, -1, idx);
-            if (old == -1) {
-                stats->first_nan_val = v;
-            }
-        } else if (isinf(v)) {
-            atomicAdd(&stats->inf_count, 1);
-            const int old = atomicCAS(&stats->first_inf_idx, -1, idx);
-            if (old == -1) {
-                stats->first_inf_val = v;
-            }
-        }
-    }
-
-    void logNonFiniteStats(const char* tag,
-                           const float* data,
-                           int count,
-                           cudaStream_t stream,
-                           bool always_log) {
-        if (!data || count <= 0) {
-            fprintf(stderr, "[QKV_DEBUG] %s invalid (ptr=%p count=%d)\n",
-                    tag ? tag : "<null>", static_cast<const void*>(data), count);
-            return;
-        }
-
-        NonFiniteStats init{};
-        init.first_nan_idx = -1;
-        init.first_inf_idx = -1;
-
-        NonFiniteStats* d_stats = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&d_stats), sizeof(NonFiniteStats), "QKV_debug_stats");
-
-        cudaError_t err = cudaMemcpyAsync(d_stats, &init, sizeof(init), cudaMemcpyHostToDevice, stream);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[QKV_DEBUG] %s cudaMemcpyAsync H2D failed: %s\n",
-                    tag ? tag : "<null>", cudaGetErrorString(err));
-            cudaFree(d_stats);
-            return;
-        }
-
-        constexpr int kThreads = 256;
-        const int blocks = (count + kThreads - 1) / kThreads;
-        scanNonFiniteKernel<<<blocks, kThreads, 0, stream>>>(data, count, d_stats);
-        err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[QKV_DEBUG] %s scanNonFiniteKernel launch failed: %s\n",
-                    tag ? tag : "<null>", cudaGetErrorString(err));
-            cudaFree(d_stats);
-            return;
-        }
-
-        NonFiniteStats out{};
-        err = cudaMemcpyAsync(&out, d_stats, sizeof(out), cudaMemcpyDeviceToHost, stream);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[QKV_DEBUG] %s cudaMemcpyAsync D2H failed: %s\n",
-                    tag ? tag : "<null>", cudaGetErrorString(err));
-            cudaFree(d_stats);
-            return;
-        }
-
-        err = cudaStreamSynchronize(stream);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[QKV_DEBUG] %s cudaStreamSynchronize failed: %s\n",
-                    tag ? tag : "<null>", cudaGetErrorString(err));
-            cudaFree(d_stats);
-            return;
-        }
-
-        cudaFree(d_stats);
-
-        if (!always_log && out.nan_count == 0 && out.inf_count == 0) {
-            return;
-        }
-
-        fprintf(stderr, "[QKV_DEBUG] %s n=%d nan=%d inf=%d",
-                tag ? tag : "<null>", count, out.nan_count, out.inf_count);
-        if (out.nan_count > 0) {
-            fprintf(stderr, " first_nan_idx=%d first_nan_val=%g",
-                    out.first_nan_idx, out.first_nan_val);
-        }
-        if (out.inf_count > 0) {
-            fprintf(stderr, " first_inf_idx=%d first_inf_val=%g",
-                    out.first_inf_idx, out.first_inf_val);
-        }
-        fprintf(stderr, "\n");
-    }
-
-    void logTensorNonFinite(const char* tag,
-                            const GRIM::Tensor& tensor,
-                            cudaStream_t stream,
-                            bool always_log) {
-        if (!tensor.data) {
-            fprintf(stderr, "[QKV_DEBUG] %s invalid (ptr=%p)\n",
-                    tag ? tag : "<null>", static_cast<const void*>(tensor.data));
-            return;
-        }
-        const int count = static_cast<int>(tensor.numel());
-        logNonFiniteStats(tag, tensor.data, count, stream, always_log);
-    }
-    
 }
 //======================================================// 
 
@@ -437,11 +307,6 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                                uint64_t training_step,
                                bool dropout_enabled,
                                int layer_idx) {
-    const int seq_len = payload.max_seq_len;
-    if constexpr (kEnableEncoderStepLogs) {
-        fprintf(stderr, "[EncoderFwd] START total_tokens=%d seq_len=%d\n", 
-                input.shape.flat.rows, seq_len);
-    }
     validateReady("EncodingLayer::forward");
     const auto& hp = config_.hp;
     
@@ -455,6 +320,15 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if (!cublas_handle) {
         throw std::runtime_error("EncodingLayer::forward: cublas_handle is NULL");
     }
+    input.shape.require("EncodingLayer::forward input");
+    if (!input.shape.is_2d_layout()) {
+        throw std::runtime_error("EncodingLayer::forward: input must be a 2D [total_tokens,d_model] tensor");
+    }
+    const auto& input_shape = input.shape.as_2d();
+    if constexpr (kEnableEncoderStepLogs) {
+        fprintf(stderr, "[EncoderFwd] START total_tokens=%d seq_len=%d\n", 
+                input_shape.rows, payload.max_seq_len);
+    }
     
     // CRITICAL: Set autograd cuBLAS handle before any autograd::matmul calls.
     // The handle is supplied by the caller's forward payload/request and is thread_local.
@@ -463,47 +337,37 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         fprintf(stderr, "[EncoderFwd] autograd cuBLAS handle set: %p\n", (void*)cublas_handle);
     }
     
-    const int total_tokens = input.shape.flat.rows;
-    const int d_model = hp.d_model;
-    
-    if (input.shape.flat.cols != d_model) {
+    if (input_shape.cols != hp.d_model) {
         throw std::runtime_error("EncodingLayer::forward: input d_model mismatch. "
-                                 "Expected " + std::to_string(d_model) + 
-                                 ", got " + std::to_string(input.shape.flat.cols));
+                                 "Expected " + std::to_string(hp.d_model) + 
+                                 ", got " + std::to_string(input_shape.cols));
     }
-    if (total_tokens != payload.batch_size * seq_len) {
-        throw std::runtime_error("EncodingLayer::forward: total_tokens (" + std::to_string(total_tokens) +
-                                 ") != payload.batch_size * seq_len (" + std::to_string(payload.batch_size) +
-                                 " * " + std::to_string(seq_len) + ")");
+    if (input_shape.rows != payload.total_tokens) {
+        throw std::runtime_error("EncodingLayer::forward: input rows (" + std::to_string(input_shape.rows) +
+                                 ") != BatchPayload.total_tokens (" + std::to_string(payload.total_tokens) + ")");
     }
     
-    const int batch_size = payload.batch_size;
     if (hp.center_encoder_residuals) {
         if (!d_sequence_lengths) {
             throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires non-null d_sequence_lengths");
         }
-        if (static_cast<int>(payload.seq_lengths.size()) != batch_size) {
+        if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
             throw std::runtime_error("EncodingLayer::forward: payload.seq_lengths size (" +
                                      std::to_string(payload.seq_lengths.size()) +
-                                     ") != batch_size (" + std::to_string(batch_size) + ")");
+                                     ") != payload.batch_size (" + std::to_string(payload.batch_size) + ")");
         }
-        for (int b = 0; b < batch_size; ++b) {
+        for (int b = 0; b < payload.batch_size; ++b) {
             const int row_len = payload.seq_lengths[static_cast<size_t>(b)];
-            if (row_len <= 1 || row_len > seq_len) {
+            if (row_len <= 1 || row_len > payload.max_seq_len) {
                 throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals invalid seq_lengths[" +
                                          std::to_string(b) + "]=" + std::to_string(row_len) +
-                                         " for padded seq_len=" + std::to_string(seq_len));
+                                         " for payload.max_seq_len=" + std::to_string(payload.max_seq_len));
             }
         }
     }
-    const int num_heads = hp.num_heads;
-    const int num_kv_heads = hp.num_kv_heads;
-    const int head_dim = hp.head_dim;
-    const TensorContract::GQADims gqa{num_heads, num_kv_heads, head_dim};
-    const int qkv_debug = qkvDebugLevel();
     if constexpr (kEnableEncoderStepLogs) {
         fprintf(stderr, "[EncoderFwd] validated: batch=%d heads=%d kv_heads=%d head_dim=%d\n", 
-                batch_size, num_heads, num_kv_heads, head_dim);
+                payload.batch_size, hp.num_heads, hp.num_kv_heads, hp.head_dim);
     }
     
     //--------------------------------------------------
@@ -513,414 +377,42 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
-    
-    if (qkv_debug >= 3) {
-        const bool always_log = (qkv_debug >= 2);
-        logTensorNonFinite("AutogradQKV:ln1_out", intermediates.ln1_out, stream, always_log);
-        logTensorNonFinite("AutogradQKV:W_qkv", W_qkv_, stream, always_log);
-        logTensorNonFinite("AutogradQKV:b_qkv", b_qkv_, stream, always_log);
-    }
-    
     //--------------------------------------------------
-    // 2. QKV Projection: ln1_out @ W_qkv^T + b_qkv
-    //    W_qkv is [total_qkv_dim, d_model] so we compute ln1_out @ W_qkv^T
-    // Issue #56: Store in intermediates to keep autograd graph alive
+    // 2. Attention sublayer: ln1_out -> proj_out
+    // Attention owns QKV projection, RoPE/ALiBi, SDPA, diagnostics, dropout seed,
+    // BHSD flattening, and output projection. Encoder only supplies the PBM spec.
     //--------------------------------------------------
-    if constexpr (kEnableEncoderStepLogs) {
-        fprintf(stderr, "[EncoderFwd] Step 2: QKV matmul...\n");
-        fprintf(stderr, "[EncoderFwd] Step 2: ln1_out.data=%p shape=[%d,%d] W_qkv.data=%p shape=[%d,%d]\n",
-                (void*)intermediates.ln1_out.data, intermediates.ln1_out.shape.flat.rows, intermediates.ln1_out.shape.flat.cols,
-                (void*)W_qkv_.data, W_qkv_.shape.flat.rows, W_qkv_.shape.flat.cols);
-        fflush(stderr);
-    }
-    // Use transpose_b=true since W_qkv is [qkv_dim, d_model] and we need [tokens, d_model] @ [d_model, qkv_dim]
-    // Contract: pass explicit A cache for grad_B (W_qkv) path.
-    if (!intermediates.ln1_out.data) {
-        throw std::runtime_error("EncodingLayer::forward: ln1_out.data is NULL before QKV matmul (cannot supply required a_cache for W_qkv grad)");
-    }
-    intermediates.qkv_out = autograd::matmul(intermediates.ln1_out, W_qkv_, stream,
-                                            intermediates.ln1_out.data, nullptr, true);
-    if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        logTensorNonFinite("AutogradQKV:qkv_out_prebias", intermediates.qkv_out, stream, always_log);
-    }
-    
-    // ========================================================================
-    // [QKV_EQUATION] DIAGNOSTIC (Rule 21) - Equation-based logging
-    // Formula: qkv_out = ln1_out @ W_qkv^T + b_qkv
-    // Skipped on non-initial accumulation slots (same weights → duplicate output)
-    // ========================================================================
-    if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
-        const int qkv_dim_local = hp.qkv_dim;
-        const int d_model_local = hp.d_model;
-        const int num_heads_local = hp.num_heads;
-        const int head_dim_local = hp.head_dim;
-        
-        // Sample first N tokens for statistics (to avoid huge GPU->CPU transfers)
-        const int n_sample = std::min(64, total_tokens);
-        
-        // Allocate host buffers
-        std::vector<float> h_ln1_sample(static_cast<size_t>(n_sample) * d_model_local);
-        const int w_sample_cols = std::min(64, d_model_local);
-        std::vector<float> h_wqkv_sample(static_cast<size_t>(qkv_dim_local) * w_sample_cols);  // First N cols per row
-        std::vector<float> h_qkv_sample(static_cast<size_t>(n_sample) * qkv_dim_local);
-        std::vector<float> h_bias_sample(qkv_dim_local);
-        
-        // Copy data from GPU  
-        cudaMemcpyAsync(h_ln1_sample.data(), intermediates.ln1_out.data,
-                        h_ln1_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        // Copy first `w_sample_cols` columns for EVERY W_qkv row (2D copy, row-major [qkv_dim, d_model]).
-        cudaMemcpy2DAsync(
-            h_wqkv_sample.data(),                                   // dst
-            static_cast<size_t>(w_sample_cols) * sizeof(float),     // dst pitch
-            W_qkv_.data,                                            // src
-            static_cast<size_t>(d_model_local) * sizeof(float),     // src pitch
-            static_cast<size_t>(w_sample_cols) * sizeof(float),     // row bytes
-            qkv_dim_local,                                          // rows
-            cudaMemcpyDeviceToHost,
-            stream);
-        cudaMemcpyAsync(h_qkv_sample.data(), intermediates.qkv_out.data,
-                        h_qkv_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        if (b_qkv_.data) {
-            cudaMemcpyAsync(h_bias_sample.data(), b_qkv_.data,
-                            h_bias_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        }
-        cudaStreamSynchronize(stream);
-        
-        // Compute ln1_out statistics
-        float ln1_min = FLT_MAX, ln1_max = -FLT_MAX;
-        double ln1_sum_sq = 0.0;
-        double ln1_row_rms_sum = 0.0;
-        for (int t = 0; t < n_sample; ++t) {
-            double row_sum_sq = 0.0;
-            for (int d = 0; d < d_model_local; ++d) {
-                float v = h_ln1_sample[t * d_model_local + d];
-                ln1_min = fminf(ln1_min, v);
-                ln1_max = fmaxf(ln1_max, v);
-                ln1_sum_sq += v * v;
-                row_sum_sq += v * v;
-            }
-            ln1_row_rms_sum += sqrtf(static_cast<float>(row_sum_sq / d_model_local));
-        }
-        float ln1_rms = sqrtf(static_cast<float>(ln1_sum_sq / (n_sample * d_model_local)));
-        float ln1_row_rms_mean = static_cast<float>(ln1_row_rms_sum / n_sample);
-        
-        // Compute W_qkv statistics (first 64 columns)
-        float wqkv_min = FLT_MAX, wqkv_max = -FLT_MAX;
-        double wqkv_sum_sq = 0.0;
-        double wqkv_row_rms_sum = 0.0;
-        double wq_row_rms_sum = 0.0;
-        for (int row = 0; row < qkv_dim_local; ++row) {
-            double row_sum_sq = 0.0;
-            for (int col = 0; col < w_sample_cols; ++col) {
-                float v = h_wqkv_sample[row * w_sample_cols + col];
-                wqkv_min = fminf(wqkv_min, v);
-                wqkv_max = fmaxf(wqkv_max, v);
-                wqkv_sum_sq += v * v;
-                row_sum_sq += v * v;
-            }
-            // Scale row RMS to full d_model (assuming similar variance)
-            // RMS of full row = sqrt(sum_sq_full / d_model) = sqrt(row_sum_sq * d_model / w_sample_cols / d_model) = sqrt(row_sum_sq / w_sample_cols)
-            const float row_rms_scaled = sqrtf(static_cast<float>(row_sum_sq / w_sample_cols));
-            wqkv_row_rms_sum += row_rms_scaled;
-            if (row < d_model_local) {
-                // Q rows occupy [0, d_model) in unified W_qkv layout.
-                wq_row_rms_sum += row_rms_scaled;
-            }
-        }
-        float wqkv_rms = sqrtf(static_cast<float>(wqkv_sum_sq / (qkv_dim_local * w_sample_cols)));
-        float wqkv_row_rms_mean = static_cast<float>(wqkv_row_rms_sum / qkv_dim_local);
-        float wq_row_rms_mean = static_cast<float>(wq_row_rms_sum / d_model_local);
-        
-        // Compute qkv_out statistics (Q portion only - first d_model columns)
-        float qkv_min = FLT_MAX, qkv_max = -FLT_MAX;
-        double qkv_sum_sq = 0.0;
-        double qkv_row_rms_sum = 0.0;
-        double qkv_head_row_rms_sum = 0.0;
-        for (int t = 0; t < n_sample; ++t) {
-            double row_sum_sq = 0.0;
-            for (int d = 0; d < d_model_local; ++d) {  // Q portion only
-                float v = h_qkv_sample[t * qkv_dim_local + d];
-                qkv_min = fminf(qkv_min, v);
-                qkv_max = fmaxf(qkv_max, v);
-                qkv_sum_sq += v * v;
-                row_sum_sq += v * v;
-            }
-            qkv_row_rms_sum += sqrtf(static_cast<float>(row_sum_sq / d_model_local));
-            // Measure true per-head Q RMS directly (no balanced-head assumption).
-            for (int h = 0; h < num_heads_local; ++h) {
-                double head_sum_sq = 0.0;
-                const int head_base = t * qkv_dim_local + h * head_dim_local;
-                for (int d = 0; d < head_dim_local; ++d) {
-                    const float v = h_qkv_sample[head_base + d];
-                    head_sum_sq += v * v;
-                }
-                qkv_head_row_rms_sum += sqrtf(static_cast<float>(head_sum_sq / head_dim_local));
-            }
-        }
-        float qkv_rms = sqrtf(static_cast<float>(qkv_sum_sq / (n_sample * d_model_local)));
-        float qkv_row_rms_mean = static_cast<float>(qkv_row_rms_sum / n_sample);
-        float qkv_head_row_rms_mean = static_cast<float>(qkv_head_row_rms_sum / (n_sample * num_heads_local));
-        
-        // Compute bias statistics
-        float bias_min = 0.0f, bias_max = 0.0f, bias_rms = 0.0f;
-        if (b_qkv_.data) {
-            double bias_sum_sq = 0.0;
-            for (int i = 0; i < qkv_dim_local; ++i) {
-                float v = h_bias_sample[i];
-                bias_min = fminf(bias_min, v);
-                bias_max = fmaxf(bias_max, v);
-                bias_sum_sq += v * v;
-            }
-            bias_rms = sqrtf(static_cast<float>(bias_sum_sq / qkv_dim_local));
-        }
-        
-        // Compute EXPECTED Q magnitude in CONSISTENT units.
-        // GEMM: Y = X @ W^T where X is [N, d_model], W is [qkv_dim, d_model]
-        // For iid elements: elem_rms(Y) = sqrt(d_model) * rms(X_row) * rms(W_row)
-        const float expected_q_elem_rms =
-            ln1_row_rms_mean * wq_row_rms_mean * sqrtf(static_cast<float>(d_model_local));
-        // RMS doesn't scale with dimension (unlike L2 norm), so row_rms = elem_rms for iid elements
-        const float expected_q_full_row_rms = expected_q_elem_rms;
-        const float expected_q_head_row_rms = expected_q_elem_rms;
-
-        const float actual_q_full_row_rms = qkv_row_rms_mean;
-        const float actual_q_head_row_rms = qkv_head_row_rms_mean;
-
-        // Healthy-attention targets: for attention scores ~1, Q/K elements should have RMS ~1.0
-        const float target_q_head_row_rms = 1.0f;
-        const float target_q_full_row_rms = 1.0f;
-        
-        const int layer_idx_local = layer_idx;
-        
-        // Print [QKV_EQUATION] diagnostic
-        if (isEquationLoggingEnabled()) {
-            fprintf(stderr, "\n[QKV_EQUATION] ENCODER_LAYER_%d: qkv_out = ln1_out @ W_qkv^T + b_qkv\n", layer_idx_local);
-            fprintf(stderr, "  ln1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
-                    n_sample, n_sample, d_model_local, ln1_min, ln1_max, ln1_rms);
-            fprintf(stderr, "  ln1_out row_rms: mean=%.10f\n", ln1_row_rms_mean);
-            fprintf(stderr, "  W_qkv (sample %d cols): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
-                    w_sample_cols, qkv_dim_local, d_model_local, wqkv_min, wqkv_max, wqkv_rms);
-            fprintf(stderr, "  W_q row_rms (scaled to d_model): mean=%.10f\n", wq_row_rms_mean);
-            fprintf(stderr, "  W_qkv row_rms (all rows, scaled): mean=%.10f\n", wqkv_row_rms_mean);
-            if (b_qkv_.data) {
-                fprintf(stderr, "  b_qkv: shape=[%d] min=%.10f max=%.10f rms=%.10f\n",
-                        qkv_dim_local, bias_min, bias_max, bias_rms);
-            } else {
-                fprintf(stderr, "  b_qkv: [nullptr]\n");
-            }
-            fprintf(stderr, "  EXPECTED qkv_elem_rms = ln1_row_rms * wq_row_rms * sqrt(d_model)\n");
-            fprintf(stderr, "                        = %.4f * %.4f * sqrt(%d) = %.4f\n",
-                    ln1_row_rms_mean, wq_row_rms_mean, d_model_local, expected_q_elem_rms);
-            fprintf(stderr, "  ACTUAL qkv_out (Q portion): min=%.10f max=%.10f rms=%.10f\n",
-                    qkv_min, qkv_max, qkv_rms);
-            fprintf(stderr, "  EXPECTED Q row_rms (full/head): %.4f / %.4f\n",
-                    expected_q_full_row_rms, expected_q_head_row_rms);
-            fprintf(stderr, "  ACTUAL   Q row_rms (full/head): %.4f / %.4f\n",
-                    actual_q_full_row_rms, actual_q_head_row_rms);
-            fprintf(stderr, "  TARGET   Q row_rms (full/head): %.4f / %.4f (healthy attention: elem_rms≈1.0)\n",
-                    target_q_full_row_rms, target_q_head_row_rms);
-            fprintf(stderr, "  INFLATION(full/head): %.4fx / %.4fx\n",
-                    actual_q_full_row_rms / target_q_full_row_rms,
-                    actual_q_head_row_rms / target_q_head_row_rms);
-
-            {
-                std::ostringstream eq;
-                eq << "[QKV_PROJECTION_EQUATION] qkv_out = ln1_out @ W_qkv^T + b_qkv\n";
-                eq << "  INPUT (ln1_out): rms=" << ln1_rms << " row_rms=" << ln1_row_rms_mean << "\n";
-                eq << "  WEIGHT (W_qkv): rms=" << wqkv_rms << " q_row_rms=" << wq_row_rms_mean << "\n";
-                eq << "  EXPECTED qkv_elem_rms = ln1_row_rms * wq_row_rms * sqrt(d_model)\n";
-                eq << "                         = " << ln1_row_rms_mean << " * " << wq_row_rms_mean 
-                   << " * sqrt(" << d_model_local << ")\n";
-                eq << "                         = " << expected_q_elem_rms << "\n";
-                eq << "  ACTUAL Q row_rms (full/head): " << actual_q_full_row_rms << " / " << actual_q_head_row_rms << "\n";
-                eq << "  TARGET Q row_rms (full/head): " << target_q_full_row_rms << " / " << target_q_head_row_rms << "\n";
-                const float inflation_ratio_eq = actual_q_head_row_rms / target_q_head_row_rms;
-                eq << "  INFLATION (full/head): " << (actual_q_full_row_rms / target_q_full_row_rms) 
-                   << "x / " << inflation_ratio_eq << "x\n";
-                if (inflation_ratio_eq > 5.0f) {
-                    eq << "  [ANOMALY] per-head q_row_rms=" << actual_q_head_row_rms 
-                       << " is " << inflation_ratio_eq << "x larger than target=" << target_q_head_row_rms << "\n";
-                }
-                if (ln1_row_rms_mean > 50.0f) {
-                    eq << "  [ANOMALY] ln1_out row_rms=" << ln1_row_rms_mean << " >> expected ~1.0\n";
-                }
-                if (wq_row_rms_mean > 5.0f) {
-                    eq << "  [ANOMALY] W_q row_rms=" << wq_row_rms_mean << " >> expected ~0.036\n";
-                }
-                EQ_LOG(GRIM::Logging::getGlobalTape(), GRIM::Logging::LogGroup::Attention, GRIM::Logging::LogPhase::QKV_PROJECTION, layer_idx_local, "QKV_PROJECTION_EQUATION", eq.str().c_str());
-            }
-        }
-    }
-    
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV matmul DONE, adding bias...\n");
-    // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking
-    // Previously: launchFFNBiasAdd bypassed autograd, so b_qkv never received gradients
-    // Now: autograd::broadcast_add creates BiasAddGradFn which computes grad_bias = sum(grad_output)
-    if (hp.use_bias && b_qkv_.data) {
-        intermediates.qkv_out = autograd::broadcast_add(intermediates.qkv_out, b_qkv_, stream);
-    }
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV bias DONE\n");
-    if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        logTensorNonFinite("AutogradQKV:qkv_out", intermediates.qkv_out, stream, always_log);
-    }
-    
-    //--------------------------------------------------
-    // 3. Split QKV and reshape to BHSD for attention
-    //    qkv_out is [total_tokens, d_model + 2*kv_dim]
-    //    Q: [total_tokens, 0:d_model]
-    //    K: [total_tokens, d_model:d_model+kv_dim]  
-    //    V: [total_tokens, d_model+kv_dim:end]
-     //
-    // ISSUE #61 FIX: Use autograd::split_and_reshape_qkv() to maintain gradient chain
-    // Previous code used Tensor::empty() + cudaMemcpy2D which broke autograd (Q/K/V had no grad_fn)
-    // This caused W_qkv gradients to be ZERO since ScaledDotProductAttentionGradFn couldn't
-    // continue the chain through Q/K/V with null grad_fn.
-    //--------------------------------------------------
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3: Split QKV with autograd tracking...\n");
-    
-    // ISSUE #61: This properly tracks gradients through the split/reshape operation
-    auto [Q_bhsd_tmp, K_bhsd_tmp, V_bhsd_tmp] = autograd::split_and_reshape_qkv(
-        intermediates.qkv_out,
-        payload, gqa,
-        stream);
-    intermediates.Q_bhsd = std::move(Q_bhsd_tmp);
-    intermediates.K_bhsd = std::move(K_bhsd_tmp);
-    intermediates.V_bhsd = std::move(V_bhsd_tmp);
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3: Split QKV DONE (autograd tracked)\n");
-    if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        logTensorNonFinite("AutogradQKV:Q_bhsd", intermediates.Q_bhsd, stream, always_log);
-        logTensorNonFinite("AutogradQKV:K_bhsd", intermediates.K_bhsd, stream, always_log);
-        logTensorNonFinite("AutogradQKV:V_bhsd", intermediates.V_bhsd, stream, always_log);
-    }
-    
-    //--------------------------------------------------
-    // 3b. Apply RoPE rotation to Q and K
-    //--------------------------------------------------
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3c: RoPE rotation...\n");
-    if (config_.pos_encoding && config_.pos_encoding->valid && 
-        config_.pos_encoding->rope_inv_freq != nullptr && config_.pos_encoding->rotary_dim > 0) {
-        // ISSUE #119 FIX: Use autograd::rope_rotation() instead of raw kernel call
-        // The raw PBM::launchRoPERotationGQA() bypassed autograd - dQ/dK gradients
-        // were never inverse-rotated in backward pass, causing gradient corruption.
-        // Returns new tensors — inputs are never mutated.
-        auto [Q_rot, K_rot] = autograd::rope_rotation(
-            intermediates.Q_bhsd, intermediates.K_bhsd,
-            config_.pos_encoding->rope_inv_freq,
-            payload, gqa,
-            config_.pos_encoding->rotary_dim, stream);
-        intermediates.Q_bhsd = std::move(Q_rot);
-        intermediates.K_bhsd = std::move(K_rot);
-    } else {
-        throw std::runtime_error("EncodingLayer::forward: RoPE not initialized");
-    }
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3c: RoPE DONE\n");
-    if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        logTensorNonFinite("AutogradSDPA:Q_rope", intermediates.Q_bhsd, stream, always_log);
-        logTensorNonFinite("AutogradSDPA:K_rope", intermediates.K_bhsd, stream, always_log);
-        logTensorNonFinite("AutogradSDPA:V_rope", intermediates.V_bhsd, stream, always_log);
-    }
-    
-    //--------------------------------------------------
-    // 4. Flash Attention: Q, K, V -> attn_out
-    //--------------------------------------------------
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 4: Flash Attention...\n");
-    
-    // RULE 20: Fail loud if pos_encoding is NULL - GRIM requires hybrid PBM
     if (!config_.pos_encoding) {
-        throw std::runtime_error(
-            "EncodingLayer::forward: config_.pos_encoding is NULL - "
-            "GRIM requires PBM (ALiBi+RoPE) for positional encoding");
+        throw std::runtime_error("EncodingLayer::forward: config_.pos_encoding is NULL before attention call");
     }
-    if (!config_.pos_encoding->alibi_slopes) {
-        throw std::runtime_error(
-            "EncodingLayer::forward: config_.pos_encoding->alibi_slopes is NULL - "
-            "PBM ALiBi slopes not initialized");
-    }
-    
-    // [ROPE_ALIBI_INTERACTION] Log configuration once at first call (no stream blocking)
-    static bool logged_rope_alibi_config = false;
-    if (!logged_rope_alibi_config && config_.pos_encoding->alibi_slopes) {
-        const int to_copy = std::min(num_heads, 12);
-        float slopes_host[12] = {0};
-        cudaError_t copy_err = cudaMemcpy(slopes_host, config_.pos_encoding->alibi_slopes,
-                                          to_copy * sizeof(float), cudaMemcpyDeviceToHost);
-        if (copy_err != cudaSuccess) {
-            fprintf(stderr, "[ROPE_ALIBI_INTERACTION] cudaMemcpy failed: %s\n", cudaGetErrorString(copy_err));
-        } else {
-            fprintf(stderr, "[ROPE_ALIBI_INTERACTION] Hybrid positional encoding active:\n");
-            fprintf(stderr, "  RoPE: rotary_dim=%d (rotates Q/K by position-dependent angle, preserves norm)\n",
-                    config_.pos_encoding->rotary_dim);
-            if (to_copy >= 1) {
-                if (to_copy >= 12) {
-                    fprintf(stderr, "  ALiBi: slopes=[%.6f, %.6f, ... %.6f] (adds distance penalty to attention scores)\n",
-                            slopes_host[0], slopes_host[5], slopes_host[11]);
-                } else if (to_copy >= 6) {
-                    fprintf(stderr, "  ALiBi: slopes=[%.6f, %.6f, ...] (adds distance penalty to attention scores)\n",
-                            slopes_host[0], slopes_host[5]);
-                } else if (to_copy >= 2) {
-                    fprintf(stderr, "  ALiBi: slopes=[%.6f, %.6f, ...] (adds distance penalty to attention scores)\n",
-                            slopes_host[0], slopes_host[1]);
-                } else {
-                    fprintf(stderr, "  ALiBi: slopes=[%.6f] (adds distance penalty to attention scores)\n",
-                            slopes_host[0]);
-                }
-            }
-            fprintf(stderr, "  Combined: RoPE encodes relative position directionally, ALiBi provides distance bias\n");
-        }
-        logged_rope_alibi_config = true;
-    }
-    
-    // Issue #56: Store attention output in intermediates
-    // Compute per-step per-layer dropout seed using Knuth multiplicative hash.
-    // Dropout mode is explicit: training_step is seed material only, never a mode gate.
-    const int layer_idx_for_seed = layer_idx;
-    const float attention_dropout_p = dropout_enabled ? hp.attention_dropout : 0.0f;
-    const uint64_t attn_dropout_seed = (attention_dropout_p > 0.0f)
-        ? (training_step * 2654435761ULL + 42 + 1000 * static_cast<uint64_t>(layer_idx_for_seed))
-        : 0;
-    intermediates.attn_out_bhsd = autograd::scaled_dot_product_attention(
-        intermediates.Q_bhsd, intermediates.K_bhsd, intermediates.V_bhsd, 
-        config_.pos_encoding->alibi_slopes, 0.0f, stream, true,
-        attention_dropout_p, attn_dropout_seed);
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 4: Flash Attention DONE\n");
-    if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        logTensorNonFinite("AutogradSDPA:attn_out_bhsd", intermediates.attn_out_bhsd, stream, always_log);
-    }
-    
-    //--------------------------------------------------
-    // 5. Reshape attention output: BHSD -> [tokens, d_model]
-    // ISSUE #62 FIX: Use autograd::reshape_bhsd_to_flat() to maintain gradient chain
-    // Previous code used Tensor::empty() + launchReshapeFromBHSD which broke autograd
-    // (attn_out had no grad_fn, causing W_o gradients to not flow through attention backward)
-    //--------------------------------------------------
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 5: Reshape from BHSD with autograd tracking...\n");
-    intermediates.attn_out = autograd::reshape_bhsd_to_flat(
-        intermediates.attn_out_bhsd, payload, gqa, stream);
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 5: Reshape DONE (autograd tracked)\n");
-    
-    //--------------------------------------------------
-    // 6. Output projection: attn_out @ W_o^T + b_o
-    // Issue #56: Store in intermediates
-    //--------------------------------------------------
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection...\n");
-    // W_o is [d_model, d_model], so W_o^T is also [d_model, d_model]
-    // Use transpose_b=true to compute attn_out @ W_o^T
-    // Contract: pass explicit A cache for grad_B (W_o) path.
-    if (!intermediates.attn_out.data) {
-        throw std::runtime_error("EncodingLayer::forward: attn_out.data is NULL before output projection matmul (cannot supply required a_cache for W_o grad)");
-    }
-    intermediates.proj_out = autograd::matmul(intermediates.attn_out, W_o_, stream,
-                                              intermediates.attn_out.data, nullptr, true);
-    // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking on b_o
-    if (hp.use_bias && b_o_.data) {
-        intermediates.proj_out = autograd::broadcast_add(intermediates.proj_out, b_o_, stream);
-    }
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection DONE\n");
+    const HyperParameters::EncoderSelfAttentionHP attention_hp =
+        HyperParameters::encoderSelfAttentionHP(hp);
+    Attention::EncoderSelfAttentionWeights attention_weights{W_qkv_, b_qkv_, W_o_, b_o_};
+    Attention::EncoderSelfAttentionIntermediates attention_intermediates{
+        intermediates.qkv_out,
+        intermediates.Q_bhsd,
+        intermediates.K_bhsd,
+        intermediates.V_bhsd,
+        intermediates.attn_out_bhsd,
+        intermediates.attn_out,
+        intermediates.proj_out
+    };
+    Attention::EncoderSelfAttentionForwardRequest attention_request{
+        payload,
+        attention_hp,
+        *config_.pos_encoding,
+        stream,
+        cublas_handle,
+        training_step,
+        dropout_enabled,
+        layer_idx
+    };
+    Attention::encoderSelfAttentionForward(
+        intermediates.ln1_out,
+        attention_weights,
+        attention_intermediates,
+        attention_request);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: Attention facade DONE\n");
     
     //--------------------------------------------------
     // 6b. Post-attention sublayer dropout
@@ -955,9 +447,9 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
             throw std::runtime_error("EncodingLayer::forward: layer_scale1_ must be a 2D [1,d_model] gamma vector");
         }
         const auto ls1_dims = layer_scale1_.shape.as_2d();
-        if (ls1_dims.rows != 1 || ls1_dims.cols != d_model) {
+        if (ls1_dims.rows != 1 || ls1_dims.cols != hp.d_model) {
             throw std::runtime_error("EncodingLayer::forward: layer_scale1_ must have shape [1,d_model]. expected=[1," +
-                                     std::to_string(d_model) + "] got=[" + std::to_string(ls1_dims.rows) + "," +
+                                     std::to_string(hp.d_model) + "] got=[" + std::to_string(ls1_dims.rows) + "," +
                                      std::to_string(ls1_dims.cols) + "]");
         }
         scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream);
@@ -1001,11 +493,11 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //   constant mode is projected out; non-constant token modes are preserved.
     // ========================================================================
     if (hp.center_encoder_residuals) {
-        if (seq_len <= 1) {
+        if (payload.max_seq_len <= 1) {
             throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
         }
         intermediates.residual1 = autograd::center_columns_by_sequence_lengths(
-            intermediates.residual1, d_sequence_lengths, batch_size, seq_len, stream);
+            intermediates.residual1, d_sequence_lengths, payload.batch_size, payload.max_seq_len, stream);
     }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 (pre-norm, no sandwich) DONE\n");
     
@@ -1063,9 +555,9 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
             throw std::runtime_error("EncodingLayer::forward: layer_scale2_ must be a 2D [1,d_model] gamma vector");
         }
         const auto ls2_dims = layer_scale2_.shape.as_2d();
-        if (ls2_dims.rows != 1 || ls2_dims.cols != d_model) {
+        if (ls2_dims.rows != 1 || ls2_dims.cols != hp.d_model) {
             throw std::runtime_error("EncodingLayer::forward: layer_scale2_ must have shape [1,d_model]. expected=[1," +
-                                     std::to_string(d_model) + "] got=[" + std::to_string(ls2_dims.rows) + "," +
+                                     std::to_string(hp.d_model) + "] got=[" + std::to_string(ls2_dims.rows) + "," +
                                      std::to_string(ls2_dims.cols) + "]");
         }
         scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream);
@@ -1108,36 +600,36 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         cudaStreamSynchronize(stream);  // Ensure data is ready
         
         // Copy layer output to host for analysis
-        const int output_size = total_tokens * d_model;
+        const int output_size = payload.total_tokens * hp.d_model;
         std::vector<float> h_output(output_size);
         cudaMemcpy(h_output.data(), intermediates.output.data, output_size * sizeof(float), cudaMemcpyDeviceToHost);
         
         // Compute row RMS
-        std::vector<float> row_rms(total_tokens);
-        for (int t = 0; t < total_tokens; t++) {
+        std::vector<float> row_rms(payload.total_tokens);
+        for (int t = 0; t < payload.total_tokens; t++) {
             double norm_sq = 0.0;
-            for (int d = 0; d < d_model; d++) {
-                float v = h_output[t * d_model + d];
+            for (int d = 0; d < hp.d_model; d++) {
+                float v = h_output[t * hp.d_model + d];
                 norm_sq += v * v;
             }
-            row_rms[t] = sqrtf(norm_sq / d_model);
+            row_rms[t] = sqrtf(norm_sq / hp.d_model);
         }
         
         // Sample pairwise cosine similarity
-        const int sample_pairs = std::min(30, total_tokens / 2);
-        const int stride = std::max(1, total_tokens / sample_pairs);
+        const int sample_pairs = std::min(30, payload.total_tokens / 2);
+        const int stride = std::max(1, payload.total_tokens / sample_pairs);
         double cos_sum = 0.0;
         int num_pairs = 0;
         
-        for (int i = 0; i < total_tokens && num_pairs < sample_pairs; i += stride) {
-            int j = (i + total_tokens / 2) % total_tokens;
+        for (int i = 0; i < payload.total_tokens && num_pairs < sample_pairs; i += stride) {
+            int j = (i + payload.total_tokens / 2) % payload.total_tokens;
             if (i == j || row_rms[i] < 1e-8f || row_rms[j] < 1e-8f) continue;
             
             double dot = 0.0;
-            for (int d = 0; d < d_model; d++) {
-                dot += h_output[i * d_model + d] * h_output[j * d_model + d];
+            for (int d = 0; d < hp.d_model; d++) {
+                dot += h_output[i * hp.d_model + d] * h_output[j * hp.d_model + d];
             }
-            cos_sum += dot / (static_cast<double>(row_rms[i]) * row_rms[j] * d_model);
+            cos_sum += dot / (static_cast<double>(row_rms[i]) * row_rms[j] * hp.d_model);
             num_pairs++;
         }
         
@@ -1151,7 +643,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
             float mean = 0.0f;
             float rms = 0.0f;
         };
-        auto layerScaleStats = [d_model](Tensor& gamma, const char* name) -> LayerScaleDiagStats {
+        auto layerScaleStats = [&hp](Tensor& gamma, const char* name) -> LayerScaleDiagStats {
             if (!gamma.data) {
                 throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " is NULL while LayerScale is enabled");
             }
@@ -1161,12 +653,12 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                 throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " must be a 2D [1,d_model] gamma vector");
             }
             const auto gamma_dims = gamma.shape.as_2d();
-            if (gamma_dims.rows != 1 || gamma_dims.cols != d_model) {
+            if (gamma_dims.rows != 1 || gamma_dims.cols != hp.d_model) {
                 throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " must have shape [1,d_model]. expected=[1," +
-                                         std::to_string(d_model) + "] got=[" + std::to_string(gamma_dims.rows) + "," +
+                                         std::to_string(hp.d_model) + "] got=[" + std::to_string(gamma_dims.rows) + "," +
                                          std::to_string(gamma_dims.cols) + "]");
             }
-            std::vector<float> h_gamma(static_cast<size_t>(d_model));
+            std::vector<float> h_gamma(static_cast<size_t>(hp.d_model));
             cudaMemcpy(h_gamma.data(), gamma.data, h_gamma.size() * sizeof(float), cudaMemcpyDeviceToHost);
             LayerScaleDiagStats stats{};
             stats.min = FLT_MAX;
@@ -1179,8 +671,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                 sum += v;
                 sum_sq += static_cast<double>(v) * static_cast<double>(v);
             }
-            stats.mean = static_cast<float>(sum / d_model);
-            stats.rms = sqrtf(static_cast<float>(sum_sq / d_model));
+            stats.mean = static_cast<float>(sum / hp.d_model);
+            stats.rms = sqrtf(static_cast<float>(sum_sq / hp.d_model));
             return stats;
         };
         LayerScaleDiagStats ls1_stats{};
@@ -1193,10 +685,10 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         std::ostringstream eq;
         eq << "[LAYER_COSINE_EQUATION] layer=" << layer_idx 
            << ": residual1[t,d] = input[t,d] + gamma1[d] * attn[t,d]; output[t,d] = residual1[t,d] + gamma2[d] * ffn[t,d]\n";
-        eq << "  OUTPUT h_L" << layer_idx << ": shape=[" << total_tokens << ", " << d_model 
+        eq << "  OUTPUT h_L" << layer_idx << ": shape=[" << payload.total_tokens << ", " << hp.d_model 
            << "] row_rms_range=[" << rms_min << ", " << rms_max << "]\n";
         if (hp.use_layer_scale) {
-            eq << "  LAYERSCALE gamma vectors: shape=[1," << d_model << "]"
+            eq << "  LAYERSCALE gamma vectors: shape=[1," << hp.d_model << "]"
                << " LS1[min=" << ls1_stats.min << " max=" << ls1_stats.max
                << " mean=" << ls1_stats.mean << " rms=" << ls1_stats.rms << "]"
                << " LS2[min=" << ls2_stats.min << " max=" << ls2_stats.max

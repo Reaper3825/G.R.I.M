@@ -229,7 +229,7 @@ void LanguageModel::initTrainingState() {
     
     // NOTE: Encoder layer weight initialization is handled in TrainingOps.cu::initGPU()
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
-    // DO NOT duplicate Xavier init here per Rule 20 (no backwards compatibility shims).
+    // DO NOT duplicate Xavier init here per Rule 20 (single initialization owner).
     
     // Rule 20: capacity is authored upstream (RunCapacity -> LanguageModelConfig mirrors).
     // This layer must not silently clamp mismatches; it must throw.
@@ -382,7 +382,7 @@ void LanguageModel::initTrainingState() {
     training_state_.sequence_weight_capacity = static_cast<int>(max_batch_size);
     training_state_.sequence_weight_count = 0;
     
-    // Rule 20: NO BACKWARDS COMPATIBILITY - callers must use tensor.data directly
+    // Rule 20: callers must use tensor.data directly
     // Removed raw pointer alias assignments
     // centering_scratch_tensor DELETED — cached_encoder_output is now overwritten
     // with centered data after LM head forward (single source of truth)

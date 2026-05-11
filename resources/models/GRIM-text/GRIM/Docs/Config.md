@@ -11,6 +11,8 @@ Phase/startup code should consume these grouped views instead of hand-copying sc
 
 Grouped construction views also own repeated derived dimensions for their consumers. For encoder construction, `EncoderLayerConstructionHP` carries validated GQA/QKV dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) so layer code does not recompute config geometry locally.
 
+Encoder-facing autograd helpers consume `EncoderLayerConstructionHP` directly. Encoder files must not build local `TensorContract::GQADims` wrappers or store encoder-owned GQA snapshots; the grouped HP snapshot is the source for Q/K/V geometry.
+
 Layer classes may store a durable copy of their grouped construction view when forward/runtime methods need the values after startup-local grouping objects are destroyed. Name those members as HP/grouping snapshots (for example `hp_`), not as authored config owners, and keep borrowed tensor ownership outside the grouping. Forward-time runtime handles (`cudaStream_t`, `cublasHandle_t`) belong to per-call payload/request structs, not layer configs or late mutator methods; startup constructors may take an init stream only for allocation.
 
 RMSNorm shape/epsilon travels through the same grouped construction HP as the owning layer (`EncoderLayerConstructionHP::rms_epsilon`, `LMHeadLayerConstructionHP::rms_epsilon`). Runtime CUDA streams and gamma tensor ownership stay outside the grouping.

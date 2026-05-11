@@ -106,6 +106,23 @@ struct EncoderLayerConstructionHP {
     bool is_gqa = false;
 };
 
+struct EncoderSelfAttentionHP {
+    int d_model = 0;
+    int num_heads = 0;
+    int num_kv_heads = 0;
+    int head_dim = 0;
+    int heads_per_kv_group = 0;
+    int kv_dim = 0;
+    int qkv_dim = 0;
+    bool causal_mask = false;
+    bool use_flash_attention = false;
+    int min_seq_len_for_flash = 0;
+    bool use_bias = false;
+    float attention_dropout = 0.0f;
+    bool qk_norm_enabled = false;
+    bool is_gqa = false;
+};
+
 struct FeedForwardLayerConstructionHP {
     int d_model = 0;
     int d_ff = 0;
@@ -340,6 +357,80 @@ inline void validateEncoderLayerConstructionHP(
     }
 }
 
+inline void validateEncoderSelfAttentionHP(
+    const EncoderSelfAttentionHP& hp,
+    const char* caller)
+{
+    requirePositiveGroupingValue(hp.d_model, "d_model", caller);
+    requirePositiveGroupingValue(hp.num_heads, "num_heads", caller);
+    requirePositiveGroupingValue(hp.num_kv_heads, "num_kv_heads", caller);
+    requirePositiveGroupingValue(hp.head_dim, "head_dim", caller);
+    requirePositiveGroupingValue(hp.heads_per_kv_group, "heads_per_kv_group", caller);
+    requirePositiveGroupingValue(hp.kv_dim, "kv_dim", caller);
+    requirePositiveGroupingValue(hp.qkv_dim, "qkv_dim", caller);
+    requireDropoutProbability(hp.attention_dropout, "attention_dropout", caller);
+
+    if (!isValidGQAConfig(hp.num_heads, hp.num_kv_heads)) {
+        throw std::runtime_error(std::string(caller) + ": invalid GQA config num_heads=" +
+                                 std::to_string(hp.num_heads) + " num_kv_heads=" +
+                                 std::to_string(hp.num_kv_heads));
+    }
+    if (hp.d_model % hp.num_heads != 0) {
+        throw std::runtime_error(std::string(caller) + ": d_model=" +
+                                 std::to_string(hp.d_model) +
+                                 " must be divisible by num_heads=" +
+                                 std::to_string(hp.num_heads));
+    }
+
+    const int expected_head_dim = hp.d_model / hp.num_heads;
+    if (hp.head_dim != expected_head_dim) {
+        throw std::runtime_error(std::string(caller) + ": head_dim=" +
+                                 std::to_string(hp.head_dim) +
+                                 " does not match d_model/num_heads=" +
+                                 std::to_string(expected_head_dim));
+    }
+
+    const int expected_heads_per_kv_group = hp.num_heads / hp.num_kv_heads;
+    if (hp.heads_per_kv_group != expected_heads_per_kv_group) {
+        throw std::runtime_error(std::string(caller) + ": heads_per_kv_group=" +
+                                 std::to_string(hp.heads_per_kv_group) +
+                                 " does not match num_heads/num_kv_heads=" +
+                                 std::to_string(expected_heads_per_kv_group));
+    }
+
+    const int expected_kv_dim = computeKVProjectionSize(
+        hp.d_model, hp.num_heads, hp.num_kv_heads);
+    if (hp.kv_dim != expected_kv_dim) {
+        throw std::runtime_error(std::string(caller) + ": kv_dim=" +
+                                 std::to_string(hp.kv_dim) +
+                                 " does not match num_kv_heads*head_dim=" +
+                                 std::to_string(expected_kv_dim));
+    }
+
+    const int expected_qkv_dim = computeQKVProjectionSize(
+        hp.d_model, hp.num_heads, hp.num_kv_heads);
+    if (hp.qkv_dim != expected_qkv_dim) {
+        throw std::runtime_error(std::string(caller) + ": qkv_dim=" +
+                                 std::to_string(hp.qkv_dim) +
+                                 " does not match d_model+2*kv_dim=" +
+                                 std::to_string(expected_qkv_dim));
+    }
+
+    const bool expected_is_gqa = hp.num_kv_heads < hp.num_heads;
+    if (hp.is_gqa != expected_is_gqa) {
+        throw std::runtime_error(std::string(caller) + ": is_gqa=" +
+                                 std::to_string(static_cast<int>(hp.is_gqa)) +
+                                 " does not match num_kv_heads<num_heads=" +
+                                 std::to_string(static_cast<int>(expected_is_gqa)));
+    }
+
+    if (hp.use_flash_attention) {
+        requirePositiveGroupingValue(hp.min_seq_len_for_flash,
+                                     "min_seq_len_for_flash",
+                                     caller);
+    }
+}
+
 inline CoreRunHP coreRunHP(const StartupConfig& config) {
     const auto& hp = config.hyperparameters;
     CoreRunHP view;
@@ -454,6 +545,10 @@ inline LanguageModelConfig startupLanguageModelConfig(
 inline ParameterRegistrationHP parameterRegistrationHP(
     const LanguageModelConfig& cfg)
 {
+    requireValidGQAGrouping(cfg, "parameterRegistrationHP");
+    requirePositiveGroupingValue(cfg.num_layers, "num_layers", "parameterRegistrationHP");
+    requirePositiveGroupingValue(cfg.vocab_size, "vocab_size", "parameterRegistrationHP");
+
     ParameterRegistrationHP view;
     view.num_layers = cfg.num_layers;
     view.num_heads = cfg.num_heads;
@@ -549,6 +644,30 @@ inline FeedForwardLayerConstructionHP feedForwardLayerConstructionHP(
     view.use_bias = encoder_hp.use_bias;
     view.dropout_rate = encoder_hp.dropout_rate;
     view.residual_projection_init_gain = encoder_hp.residual_projection_init_gain;
+    return view;
+}
+
+inline EncoderSelfAttentionHP encoderSelfAttentionHP(
+    const EncoderLayerConstructionHP& encoder_hp)
+{
+    validateEncoderLayerConstructionHP(encoder_hp, "encoderSelfAttentionHP");
+
+    EncoderSelfAttentionHP view;
+    view.d_model = encoder_hp.d_model;
+    view.num_heads = encoder_hp.num_heads;
+    view.num_kv_heads = encoder_hp.num_kv_heads;
+    view.head_dim = encoder_hp.head_dim;
+    view.heads_per_kv_group = encoder_hp.heads_per_kv_group;
+    view.kv_dim = encoder_hp.kv_dim;
+    view.qkv_dim = encoder_hp.qkv_dim;
+    view.causal_mask = encoder_hp.causal_mask;
+    view.use_flash_attention = encoder_hp.use_flash_attention;
+    view.min_seq_len_for_flash = encoder_hp.min_seq_len_for_flash;
+    view.use_bias = encoder_hp.use_bias;
+    view.attention_dropout = encoder_hp.attention_dropout;
+    view.qk_norm_enabled = encoder_hp.qk_norm_enabled;
+    view.is_gqa = encoder_hp.is_gqa;
+    validateEncoderSelfAttentionHP(view, "encoderSelfAttentionHP");
     return view;
 }
 

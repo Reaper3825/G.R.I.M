@@ -265,9 +265,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED (Pass 3)**: `ALiBiPositionalBias::getSlopes()`/`getRoPEFreqs()` now throw when PBM is uninitialized (removed remaining silent `return nullptr` path).
   - **FIXED (Pass 3)**: Removed stale vocab compatibility fallback in `detectVocabSizeFromBinary()` (`vocab_size==0` no longer falls back to legacy `config_vocab_size`; now fails loud).
   - **FIXED (Pass 3)**: Constructor now validates `num_heads > 0` and `d_model % num_heads == 0` BEFORE computing `d_head` (prevents divide-by-zero/UB during positional init).
-  - **FIXED (Pass 3)**: `getNextTokenLogitsGPU()`/`getTokenBufferView()`/`markDevicePromptReady()` now initialize inference state in inference mode and then assert `training_state_.initialized` (no silent half-init).
-  - **FIXED (Pass 3)**: Removed silent API behavior in `getTokenBufferView()` and `markDevicePromptReady()` when `use_gpu=false` — now throws (GPU-only module).
-  - **FIXED (Pass 3)**: `markDevicePromptReady()` now rejects negative `token_count`.
+  - **DELETED (Payload Inference Cleanup)**: staged prompt APIs were removed; inference callers now build `BatchPayload` and enter through payload-only logits/generation methods.
   - **FIXED (Pass 3)**: Numeric prediction host copy in generation now checks `cudaMemcpyAsync` + stream sync result and throws on failure (previously ignored sync result).
   - **FIXED (Pass 3)**: ScratchBlock toggles hardened — enabling ScratchBlock now throws if backing objects are uninitialized; only disable-without-init is treated as no-op.
 
@@ -327,7 +325,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED (Rule 20)**: Removed `return cudaErrorInvalidValue` from delegate registration (dead code)
   - **DELETED (Rule 26)**: Entire `GRIMTS::Delegates` namespace — 4 delegate types, 4 registration kernels, 4 clear kernels, 8 host-side registration functions (~200 lines). Zero callers ever registered callbacks. `Shared/Delegate/Delegate.hpp` also deleted (zero remaining includers).
   - **DELETED**: `#include <windows.h>` — zero Windows API calls in file
-  - **DELETED (Rule 20)**: `NotifyMutation`/`NotifyEviction` stubs AND all 8 call sites — no-op stubs are backwards compatibility. Eviction telemetry `atomicAdd` inlined at eviction site.
+  - **DELETED (Rule 20)**: `NotifyMutation`/`NotifyEviction` stubs AND all 8 call sites — no-op stubs violate single-owner telemetry. Eviction telemetry `atomicAdd` inlined at eviction site.
   - **DELETED (Rule 26)**: `CacheMutationKind` and `EvictionReason` enums — zero remaining users after Notify* deletion.
   - **KEPT**: 12 global mutable variables in anonymous namespace — properly `{}` initialized, protected by mutexes, with clear lifecycle (init/shutdown). Appropriate pattern for GPU cache state.
   - **KEPT**: Logging namespace (actively used — RegisterLogCallback called from Phase2_TrainingLoop.cu GuessCacheScope)
@@ -825,13 +823,10 @@ For each encoding layer (Layer 0 → Layer 11):
 
 #### 2.5c QKV Projection
 
-- [x] **Layers/Attention/QKV_Projector.cu** — AUDITED Feb 2026
-  - **643 → 45 lines (93% reduction)**
-  - 4 of 5 functions were DEAD (superseded by autograd): `launchQkvProjection`, `launchGQAProjection`, `launchQKVReshapeToBHSD`, `launchReshapeToBHSD` — all deleted (Rule 26)
-  - Anonymous namespace code (addBiasKernel, NonFiniteStats, scanNonFiniteKernel, qkvDebugLevel, logNonFiniteStats, logQkvConfig) — only used by dead functions — all deleted
-  - KEPT: `launchReshapeFromBHSD()` — called by `autograd::reshape_bhsd_to_flat` (TensorContract_GPU.cu:5808)
-  - `QKV_Projector.hpp` cleaned: `QKVProjectionConfig`, `QKVProjectionWeights` structs and 4 dead function declarations removed (118 → 25 lines)
-  - Removed vestigial `#include "../Attention/QKV_Projector.hpp"` from Encoding_GPU.hpp (not needed — Encoding uses autograd)
+- [x] **Layers/Attention/QKV_Projector.{hpp,cu}** — DELETED (Rule 26)
+  - QKV projection kernels were already dead and superseded by `autograd::matmul(ln1_out, W_qkv, transpose_b=true)`.
+  - The last remaining `launchReshapeFromBHSD()` wrapper only forwarded to TensorConversion; `autograd::reshape_bhsd_to_flat()` now calls `TensorConversion::convert_BHSD_to_BSM()` directly.
+  - Do not recreate a QKV projector layer path; TensorContract/autograd owns projection, split/merge, and reshape tape boundaries.
 
 #### 2.5d Positional Bias Application
 

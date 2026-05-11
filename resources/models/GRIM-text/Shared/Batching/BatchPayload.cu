@@ -25,6 +25,83 @@
 namespace GRIM {
 namespace Batching {
 
+namespace {
+
+void requirePositiveVocab(int vocab_size, const char* caller)
+{
+    if (vocab_size <= 0) {
+        throw std::runtime_error(
+            std::string(caller) + ": vocab_size=" + std::to_string(vocab_size) +
+            " (must be > 0)");
+    }
+}
+
+BatchPayload makeInferenceBasePayload(
+    int seq_len,
+    int vocab_size,
+    size_t max_cached_batch,
+    size_t max_cached_seq_len,
+    BatchPayloadMode mode,
+    bool row_execution_active,
+    const char* caller)
+{
+    if (mode == BatchPayloadMode::Training) {
+        throw std::runtime_error(std::string(caller) + ": inference builder received Training mode");
+    }
+    if (seq_len <= 0) {
+        throw std::runtime_error(std::string(caller) + ": seq_len=" + std::to_string(seq_len) +
+                                 " (must be > 0)");
+    }
+    requirePositiveVocab(vocab_size, caller);
+    if (max_cached_batch == 0) {
+        throw std::runtime_error(std::string(caller) + ": max_cached_batch=0");
+    }
+    if (max_cached_seq_len == 0) {
+        throw std::runtime_error(std::string(caller) + ": max_cached_seq_len=0");
+    }
+    if (static_cast<size_t>(seq_len) > max_cached_seq_len) {
+        throw std::runtime_error(
+            std::string(caller) + ": seq_len=" + std::to_string(seq_len) +
+            " exceeds max_cached_seq_len=" + std::to_string(max_cached_seq_len));
+    }
+    if (max_cached_batch < 1) {
+        throw std::runtime_error(std::string(caller) + ": inference requires cache batch capacity >= 1");
+    }
+
+    BatchPayload payload;
+    payload.mode = mode;
+    payload.seq_ids.assign(1, 0);
+    payload.batch_size = 1;
+    payload.max_seq_len = seq_len;
+    payload.total_tokens = seq_len;
+    payload.actual_tokens = seq_len;
+    payload.padding_tokens = 0;
+    payload.valid_tokens = 0;
+    payload.lm_valid_tokens = 0;
+    payload.vocab_size = vocab_size;
+    payload.seq_lengths.assign(1, seq_len);
+    payload.valid_target_counts.assign(1, 0);
+    payload.packing_efficiency = 1.0f;
+    payload.min_seq_len = seq_len;
+    payload.length_variance = 0.0f;
+    payload.overflow = false;
+    payload.fits_in_cache = true;
+
+    payload.token_stats.batch_size = 1;
+    payload.token_stats.total_tokens = seq_len;
+    payload.token_stats.max_sequence_length = seq_len;
+
+    payload.execution_active.assign(1, row_execution_active);
+    payload.compiled_bootstrap_bindings.resize(1);
+    payload.teacher_steps.resize(1);
+    payload.teacher_step_mask.resize(1);
+    payload.slot_selection_targets.resize(1);
+
+    return payload;
+}
+
+}  // namespace
+
 BatchPayload buildBatchPayload(
     const BatchAssignment& assignment,
     const std::vector<TrainingSequence*>& views,
@@ -38,6 +115,7 @@ BatchPayload buildBatchPayload(
     int mtp_k)
 {
     BatchPayload payload;
+    payload.mode = BatchPayloadMode::Training;
 
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 1: Identity — carry forward from assignment
@@ -535,6 +613,140 @@ BatchPayload buildBatchPayload(
         payload, "buildBatchPayload",
         execution_num_slots, execution_num_ops, execution_num_steps);
 
+    return payload;
+}
+
+BatchPayload buildInferenceBatchPayload(
+    const std::vector<int>& token_ids,
+    const std::vector<float>& numeric_values,
+    const std::vector<uint16_t>& text_features,
+    const std::vector<uint8_t>& atom_mask,
+    const std::vector<uint32_t>& atom_flags,
+    std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
+    const std::vector<uint32_t>& atom_entry_ids,
+    const std::vector<int32_t>& token_to_slot_map,
+    int vocab_size,
+    size_t max_cached_batch,
+    size_t max_cached_seq_len,
+    int execution_num_slots)
+{
+    const char* caller = "buildInferenceBatchPayload";
+    const int seq_len = static_cast<int>(token_ids.size());
+    if (seq_len <= 0) {
+        throw std::runtime_error("buildInferenceBatchPayload: token_ids is empty");
+    }
+    if (static_cast<int>(numeric_values.size()) != seq_len) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: numeric_values.size()=" +
+            std::to_string(numeric_values.size()) + " != token_ids.size()=" +
+            std::to_string(seq_len));
+    }
+    const int expected_text_features = seq_len * BatchPayload::kTextFeatureDim;
+    if (static_cast<int>(text_features.size()) != expected_text_features) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: text_features.size()=" +
+            std::to_string(text_features.size()) +
+            " != token_ids.size()*kTextFeatureDim=" +
+            std::to_string(expected_text_features));
+    }
+    if (static_cast<int>(atom_mask.size()) != seq_len) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: atom_mask.size()=" +
+            std::to_string(atom_mask.size()) + " != token_ids.size()=" +
+            std::to_string(seq_len));
+    }
+    if (static_cast<int>(atom_flags.size()) != seq_len) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: atom_flags.size()=" +
+            std::to_string(atom_flags.size()) + " != token_ids.size()=" +
+            std::to_string(seq_len));
+    }
+    if (static_cast<int>(atom_entry_ids.size()) != seq_len) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: atom_entry_ids.size()=" +
+            std::to_string(atom_entry_ids.size()) + " != token_ids.size()=" +
+            std::to_string(seq_len));
+    }
+    if (!token_to_slot_map.empty() && static_cast<int>(token_to_slot_map.size()) != seq_len) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: token_to_slot_map.size()=" +
+            std::to_string(token_to_slot_map.size()) + " != token_ids.size()=" +
+            std::to_string(seq_len));
+    }
+
+    bool row_execution_active = false;
+    if (!token_to_slot_map.empty()) {
+        if (execution_num_slots <= 0) {
+            throw std::runtime_error(
+                "buildInferenceBatchPayload: execution_num_slots must be > 0 when token_to_slot_map is provided");
+        }
+        for (int t = 0; t < seq_len; ++t) {
+            const int32_t slot = token_to_slot_map[static_cast<size_t>(t)];
+            if (slot != -1) {
+                if (slot < 0 || slot >= execution_num_slots) {
+                    throw std::runtime_error(
+                        "buildInferenceBatchPayload: token_to_slot_map[" + std::to_string(t) +
+                        "]=" + std::to_string(slot) + " out of range [0, " +
+                        std::to_string(execution_num_slots) + ") or -1");
+                }
+                row_execution_active = true;
+            }
+        }
+    }
+
+    for (int t = 0; t < seq_len; ++t) {
+        const int token_id = token_ids[static_cast<size_t>(t)];
+        if (token_id < 0 || token_id >= vocab_size) {
+            throw std::runtime_error(
+                "buildInferenceBatchPayload: token_ids[" + std::to_string(t) +
+                "]=" + std::to_string(token_id) + " out of range [0, " +
+                std::to_string(vocab_size) + ")");
+        }
+    }
+
+    BatchPayload payload = makeInferenceBasePayload(
+        seq_len, vocab_size, max_cached_batch, max_cached_seq_len,
+        BatchPayloadMode::InferencePrefill, row_execution_active, caller);
+
+    payload.input_ids = token_ids;
+    payload.target_ids.assign(static_cast<size_t>(seq_len), -1);
+    payload.numeric_values = numeric_values;
+    payload.text_features = text_features;
+    payload.atom_mask = atom_mask;
+    payload.atom_flags = atom_flags;
+    payload.atom_entry_ids = atom_entry_ids;
+    payload.token_to_slot_map.assign(static_cast<size_t>(seq_len), -1);
+    if (!token_to_slot_map.empty()) {
+        payload.token_to_slot_map = token_to_slot_map;
+    }
+    payload.seq_atom_tables.resize(1);
+    payload.seq_atom_tables[0] = atom_table;
+
+    payload.validate(caller);
+    return payload;
+}
+
+BatchPayload buildInferenceStagedPayload(
+    int seq_len,
+    int vocab_size,
+    size_t max_cached_seq_len,
+    bool execution_active)
+{
+    const char* caller = "buildInferenceStagedPayload";
+    BatchPayload payload = makeInferenceBasePayload(
+        seq_len, vocab_size, 1, max_cached_seq_len,
+        BatchPayloadMode::InferenceStaged, execution_active, caller);
+    payload.validate(caller);
+    return payload;
+}
+
+BatchPayload buildInferenceDecodePayload(int vocab_size)
+{
+    const char* caller = "buildInferenceDecodePayload";
+    BatchPayload payload = makeInferenceBasePayload(
+        1, vocab_size, 1, 1,
+        BatchPayloadMode::InferenceDecode, true, caller);
+    payload.validate(caller);
     return payload;
 }
 

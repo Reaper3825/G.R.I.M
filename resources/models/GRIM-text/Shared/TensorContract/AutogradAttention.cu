@@ -10,7 +10,6 @@
 #include "../CudaAllocUtils.hpp"
 #include "../TensorConversion/TensorConversion.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
-#include "../../Layers/Attention/QKV_Projector.hpp"
 #include "../PBM/PositionalBiasMethod.hpp"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -93,8 +92,12 @@ using CudaAlloc::cudaMallocOrThrow;
 
 namespace autograd {
 
-using TensorContract::GQADims;
 using Batching::BatchPayload;
+
+static void requireEncoderAttentionHP(const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
+                                      const char* caller) {
+    GRIM::HyperParameters::validateEncoderSelfAttentionHP(hp, caller);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ISSUE #77 DIAGNOSTIC: Log cached activation (ln1_out) values during backward
@@ -934,6 +937,12 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     float* q_grad = nullptr;
     float* k_grad = nullptr;
     float* v_grad = nullptr;
+    // Own the Tensor::grad_ shared_ptrs behind q_grad/k_grad/v_grad.
+    // This lets attention internals be scoped locally without leaving SDPA
+    // backward with dangling raw pointers into destroyed non-leaf Tensor grads.
+    std::shared_ptr<Tensor> q_grad_owner;
+    std::shared_ptr<Tensor> k_grad_owner;
+    std::shared_ptr<Tensor> v_grad_owner;
     TensorContract::TensorShape q_shape, k_shape, v_shape;
     std::shared_ptr<GradFn> q_grad_fn;
     std::shared_ptr<GradFn> k_grad_fn;
@@ -988,9 +997,30 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         k_grad_fn = k.grad_fn;
         v_grad_fn = v.grad_fn;
         
-        if (q_requires_grad) { q.ensure_grad(); q_grad = q.grad_data(); }  // ISSUE #59: Use accessor
-        if (k_requires_grad) { k.ensure_grad(); k_grad = k.grad_data(); }  // ISSUE #59: Use accessor
-        if (v_requires_grad) { v.ensure_grad(); v_grad = v.grad_data(); }  // ISSUE #59: Use accessor
+        if (q_requires_grad) {
+            q.ensure_grad();
+            q_grad_owner = q.grad_;
+            if (!q_grad_owner || !q_grad_owner->data) {
+                throw std::runtime_error("ScaledDotProductAttentionGradFn::capture_inputs: Q grad owner is NULL after ensure_grad");
+            }
+            q_grad = q_grad_owner->data;
+        }
+        if (k_requires_grad) {
+            k.ensure_grad();
+            k_grad_owner = k.grad_;
+            if (!k_grad_owner || !k_grad_owner->data) {
+                throw std::runtime_error("ScaledDotProductAttentionGradFn::capture_inputs: K grad owner is NULL after ensure_grad");
+            }
+            k_grad = k_grad_owner->data;
+        }
+        if (v_requires_grad) {
+            v.ensure_grad();
+            v_grad_owner = v.grad_;
+            if (!v_grad_owner || !v_grad_owner->data) {
+                throw std::runtime_error("ScaledDotProductAttentionGradFn::capture_inputs: V grad owner is NULL after ensure_grad");
+            }
+            v_grad = v_grad_owner->data;
+        }
     }
     
     void save(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& out,
@@ -1196,6 +1226,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (dv_bf16) { cudaFree(dv_bf16); dv_bf16 = nullptr; }
         if (dout_bf16) { cudaFree(dout_bf16); dout_bf16 = nullptr; }
         q_grad = nullptr; k_grad = nullptr; v_grad = nullptr;
+        q_grad_owner.reset();
+        k_grad_owner.reset();
+        v_grad_owner.reset();
         q_grad_fn.reset();
         k_grad_fn.reset();
         v_grad_fn.reset();
@@ -1371,7 +1404,7 @@ Tensor scaled_dot_product_attention(
 // ReshapeFromBHSDGradFn - ISSUE #62 FIX: Autograd-tracked BHSD->flat reshape
 //
 // ROOT CAUSE OF W_o/QKV GRADIENT BUG:
-// Encoding_GPU.cu step 5 used Tensor::empty() + launchReshapeFromBHSD()
+// Encoding_GPU.cu step 5 used Tensor::empty() + raw BHSD->BSM conversion
 // which broke the autograd chain (attn_out had no grad_fn).
 // When W_o matmul backward called input_grad_fn->apply(), it got nullptr
 // because attn_out.grad_fn was never set.
@@ -1383,8 +1416,8 @@ Tensor scaled_dot_product_attention(
 // 2. Continues chain to input's grad_fn (ScaledDotProductAttentionGradFn)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// CUDA kernel to reshape gradient from [B*S, H*D] flat to [B, H, S, D] BHSD
-// This is the inverse of launchReshapeFromBHSD
+// CUDA kernel to reshape gradient from [B*S, H*D] flat to [B, H, S, D] BHSD.
+// This is the inverse of TensorConversion::convert_BHSD_to_BSM.
 __global__ void kernel_reshape_flat_to_BHSD(
     const float* __restrict__ flat_grad,   // [B*S, H*D] row-major
     float* __restrict__ bhsd_grad,          // [B, H, S, D] row-major
@@ -1490,29 +1523,45 @@ struct ReshapeFromBHSDGradFn : public GradFn {
 /**
  * Reshape BHSD tensor to flat [tokens, d_model] with autograd tracking.
  * 
- * ISSUE #62 FIX: This replaces Tensor::empty() + launchReshapeFromBHSD()
+ * ISSUE #62 FIX: This replaces Tensor::empty() + raw BHSD->BSM conversion
  * that broke the autograd chain (output had no grad_fn).
  */
 Tensor reshape_bhsd_to_flat(
     Tensor& bhsd_input,
     const BatchPayload& payload,
-    const GQADims& gqa,
+    const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     cudaStream_t stream
 ) {
-    gqa.require("reshape_bhsd_to_flat");
+    requireEncoderAttentionHP(hp, "reshape_bhsd_to_flat");
     const int batch_size = payload.batch_size;
     const int seq_len = payload.max_seq_len;
-    const int num_heads = gqa.num_heads;
-    const int head_dim = gqa.head_dim;
+    const int num_heads = hp.num_heads;
+    const int head_dim = hp.head_dim;
     const int tokens = batch_size * seq_len;
-    const int d_model = gqa.d_model();
+    const int d_model = hp.d_model;
+
+    if (!bhsd_input.data) {
+        throw std::runtime_error("reshape_bhsd_to_flat: bhsd_input.data is NULL");
+    }
+    bhsd_input.shape.require("reshape_bhsd_to_flat bhsd_input");
+    if (!bhsd_input.shape.is_4d()) {
+        throw std::runtime_error("reshape_bhsd_to_flat: bhsd_input must be BHSD/4D layout");
+    }
     
     // Allocate output tensor in flat layout
     Tensor result = Tensor::empty(TensorContract::TensorShape::make_BSM(tokens, d_model), bhsd_input.requires_grad, stream, "reshape_bhsd_to_flat_result");
     
-    // Call the existing reshape kernel (declared in Encoding_GPU.hpp)
-    // This reshapes [B, H, S, D] to [B*S, H*D]
-    launchReshapeFromBHSD(bhsd_input.data, result.data, batch_size, seq_len, num_heads, head_dim, stream);
+    // TensorContract owns the autograd wrapper; TensorConversion owns raw layout movement.
+    // Do not route this through Layers/Attention/QKV_Projector (deleted stale wrapper).
+    TensorConversion::convert_BHSD_to_BSM(
+        bhsd_input.data, result.data, batch_size, num_heads, seq_len, head_dim, stream);
+    {
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            throw std::runtime_error("reshape_bhsd_to_flat: convert_BHSD_to_BSM launch failed: " +
+                std::string(cudaGetErrorString(err)));
+        }
+    }
     
     // Set up backward if needed
     if (bhsd_input.requires_grad) {
@@ -1544,84 +1593,11 @@ Tensor reshape_bhsd_to_flat(
 // FIX: This operation takes qkv_out with its grad_fn and produces Q, K, V
 // tensors that have THIS GradFn as their grad_fn. When attention backward
 // calls q_grad_fn->apply(), it calls THIS apply() which:
-// 1. Combines grad_Q, grad_K, grad_V into grad_qkv
-// 2. Calls qkv_out->grad_fn->apply() to continue the chain to W_qkv
+// 1. Combines grad_Q, grad_K, grad_V into an owned grad_qkv scratch buffer
+// 2. Calls qkv_out->grad_fn->apply() to continue the chain to W_qkv / b_qkv
 // ═══════════════════════════════════════════════════════════════════════════
 
-// One kernel: split qkv [tokens, qkv_dim] -> Q_bsm, K_bsm, V_bsm.
-// Uses 1D grid only (blocks_split, 256) so launch is valid on all drivers; 2D grid
-// and 768 threads/block can trigger "invalid argument".
-__global__ void kernel_split_qkv_all(
-    const float* __restrict__ qkv,     // [tokens, qkv_dim]
-    float* __restrict__ Q,              // [tokens, d_model]
-    float* __restrict__ K,              // [tokens, kv_dim]
-    float* __restrict__ V,              // [tokens, kv_dim]
-    int tokens, int d_model, int kv_dim
-) {
-    const int qkv_dim = d_model + 2 * kv_dim;
-    const int max_cols = (d_model > kv_dim) ? d_model : kv_dim;
-    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    const int row = tid / max_cols;
-    const int col = tid % max_cols;
-    if (row >= tokens) return;
-    
-    const float* src = qkv + row * qkv_dim;
-    
-    // Q: first d_model columns
-    if (col < d_model)
-        Q[row * d_model + col] = src[col];
-    
-    // K: next kv_dim columns
-    if (col < kv_dim)
-        K[row * kv_dim + col] = src[d_model + col];
-    
-    // V: last kv_dim columns
-    if (col < kv_dim)
-        V[row * kv_dim + col] = src[d_model + kv_dim + col];
-}
-
-// Fused backward kernel: reads BHSD gradients for Q, K, V and writes flat QKV gradient.
-// No intermediate BSM buffers needed.
-__global__ void kernel_fused_bhsd_to_qkv_grad(
-    float* __restrict__ qkv_grad,           // [tokens, qkv_dim] output
-    const float* __restrict__ grad_Q_bhsd,  // [B, num_heads, S, D]
-    const float* __restrict__ grad_K_bhsd,  // [B, num_kv_heads, S, D]
-    const float* __restrict__ grad_V_bhsd,  // [B, num_kv_heads, S, D]
-    int batch, int seq, int num_heads, int num_kv_heads, int head_dim
-) {
-    const int b = blockIdx.x / seq;
-    const int s = blockIdx.x % seq;
-    const int col = threadIdx.x;
-    
-    const int d_model = num_heads * head_dim;
-    const int kv_dim = num_kv_heads * head_dim;
-    const int qkv_dim = d_model + 2 * kv_dim;
-    
-    float* out_row = qkv_grad + blockIdx.x * qkv_dim;
-    
-    // Q gradient: BHSD[b, h, s, d] → flat[token, h*head_dim + d]
-    if (col < d_model) {
-        const int h = col / head_dim;
-        const int d = col % head_dim;
-        out_row[col] = grad_Q_bhsd[((b * num_heads + h) * seq + s) * head_dim + d];
-    }
-
-    // K gradient: BHSD[b, h_kv, s, d] → flat[token, d_model + h_kv*head_dim + d]
-    if (col < kv_dim) {
-        const int h = col / head_dim;
-        const int d = col % head_dim;
-        out_row[d_model + col] = grad_K_bhsd[((b * num_kv_heads + h) * seq + s) * head_dim + d];
-    }
-
-    // V gradient: BHSD[b, h_kv, s, d] → flat[token, d_model + kv_dim + h_kv*head_dim + d]
-    if (col < kv_dim) {
-        const int h = col / head_dim;
-        const int d = col % head_dim;
-        out_row[d_model + kv_dim + col] = grad_V_bhsd[((b * num_kv_heads + h) * seq + s) * head_dim + d];
-    }
-}
-
-// NOTE: Reshape kernels (BSM<->BHSD) live in TensorConversion.cu - single source of truth
+// NOTE: QKV split/merge kernels live in TensorConversion.cu - single source of truth.
 
 /**
  * GradFn for split_and_reshape_qkv operation
@@ -1639,27 +1615,31 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
     // Shared state for all three outputs (only one instance owns the upstream chain)
     struct SharedState {
         std::shared_ptr<GradFn> qkv_grad_fn;       // Grad fn of qkv_out (the matmul result)
-        Tensor qkv_out_ref;                  // Reference to qkv_out (for grad buffer access)
+        TensorContract::TensorShape qkv_shape;
+        bool qkv_requires_grad = false;
+        bool qkv_input_is_leaf = false;
+        size_t qkv_numel = 0;
+        float* qkv_leaf_grad = nullptr;            // Persistent leaf grad buffer, if qkv_out is a leaf
+        float* merged_qkv_grad = nullptr;          // Owned local Jacobian result [tokens, qkv_dim]
+        std::shared_ptr<float> owned_merged_qkv_grad;
         
         // BHSD gradient pointers from Q, K, V backward passes
-        // Stored directly from grad_output.data — no intermediate BSM buffers needed.
-        // The fused kernel reads these in BHSD layout and writes flat QKV grad.
+        // Stored from owned copies of grad_output.data — no intermediate BSM buffers needed.
+        // TensorConversion reads these in BHSD layout and writes flat QKV grad.
         const float* grad_Q_bhsd = nullptr;  // [batch, num_heads, seq, head_dim]
         const float* grad_K_bhsd = nullptr;  // [batch, num_kv_heads, seq, head_dim]
         const float* grad_V_bhsd = nullptr;  // [batch, num_kv_heads, seq, head_dim]
         
-        // Owned references that keep the gradient buffers alive until the fused
-        // kernel has been submitted.  Without these, an upstream GradFn's
-        // release_saved() can free the buffer before the 3rd apply() fires
-        // the fused kernel that reads all three pointers.
+        // Owned references that keep the gradient buffers alive until the merge
+        // kernel has been submitted. Without these, an upstream GradFn's
+        // release_saved() can free the buffer before the 3rd apply() fires the
+        // merge that reads all three pointers.
         std::shared_ptr<float> owned_grad_Q;
         std::shared_ptr<float> owned_grad_K;
         std::shared_ptr<float> owned_grad_V;
         
         // Dimensions
         int tokens = 0;
-        int d_model = 0;
-        int kv_dim = 0;
         int batch = 0;
         int seq = 0;
         int num_heads = 0;
@@ -1716,28 +1696,58 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
         const int count = state.apply_count.fetch_add(1) + 1;
         
         if (count == 3) {
-            // All three BHSD gradient pointers collected.
-            // Launch ONE fused kernel that reads BHSD directly and writes flat QKV grad.
-            // No intermediate BSM buffers, no race condition, no CPU sync needed.
-            state.qkv_out_ref.ensure_grad();
-            float* qkv_grad = state.qkv_out_ref.grad_data();
-            
-            const int threads = std::max(state.d_model, state.kv_dim);
-            kernel_fused_bhsd_to_qkv_grad<<<state.tokens, threads, 0, stream>>>(
-                qkv_grad,
+            if (!state.qkv_requires_grad) {
+                throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: qkv_out does not require grad but SplitQKV GradFn was invoked");
+            }
+            if (!state.grad_Q_bhsd || !state.grad_K_bhsd || !state.grad_V_bhsd) {
+                throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: missing Q/K/V gradient before merge");
+            }
+            if (!state.merged_qkv_grad) {
+                throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: merged_qkv_grad is NULL - forward capture failed");
+            }
+
+            // All three BHSD gradient pointers collected. Delegate the BHSD -> flat
+            // merge to TensorConversion, the single source of truth for QKV layout.
+            TensorConversion::merge_qkv_grads_gqa(
                 state.grad_Q_bhsd, state.grad_K_bhsd, state.grad_V_bhsd,
-                state.batch, state.seq, state.num_heads, state.num_kv_heads, state.head_dim);
-            
-            // Continue the chain to qkv_out -> W_qkv
-            if (state.qkv_out_ref.requires_grad && state.qkv_grad_fn) {
+                state.merged_qkv_grad,
+                state.batch, state.num_heads, state.num_kv_heads, state.seq, state.head_dim,
+                stream);
+            {
+                cudaError_t err = cudaGetLastError();
+                if (err != cudaSuccess) {
+                    throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: merge_qkv_grads_gqa launch failed: " +
+                        std::string(cudaGetErrorString(err)));
+                }
+            }
+
+            if (state.qkv_input_is_leaf) {
+                if (!state.qkv_leaf_grad) {
+                    throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: qkv_out is leaf but qkv_leaf_grad is NULL");
+                }
+                kernel_accumulate_grad<<<gridForCount(state.qkv_numel), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                    state.qkv_leaf_grad, state.merged_qkv_grad, state.qkv_numel, 1.0f);
+                cudaError_t err = cudaGetLastError();
+                if (err != cudaSuccess) {
+                    throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: leaf qkv gradient accumulation failed: " +
+                        std::string(cudaGetErrorString(err)));
+                }
+                return;
+            }
+
+            // Continue the chain to qkv_out -> W_qkv / b_qkv. Non-leaf qkv_out
+            // gradients are local scratch owned by this GradFn, not qkv_out.grad().
+            if (state.qkv_grad_fn) {
                 Tensor qkv_grad_tensor;
-                qkv_grad_tensor.data = qkv_grad;
-                qkv_grad_tensor.shape = state.qkv_out_ref.shape;
+                qkv_grad_tensor.data = state.merged_qkv_grad;
+                qkv_grad_tensor.shape = state.qkv_shape;
                 qkv_grad_tensor.owns_data = false;
                 qkv_grad_tensor.stream = stream;
                 
                 state.qkv_grad_fn->apply(qkv_grad_tensor, stream);
                 // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
+            } else {
+                throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: non-leaf qkv_out has NULL upstream grad_fn");
             }
         }
     }
@@ -1763,20 +1773,26 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
 std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor& qkv_out,
     const BatchPayload& payload,
-    const GQADims& gqa,
+    const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     cudaStream_t stream
 ) {
-    gqa.require("split_and_reshape_qkv");
+    requireEncoderAttentionHP(hp, "split_and_reshape_qkv");
     const int batch = payload.batch_size;
     const int seq = payload.max_seq_len;
-    const int num_heads = gqa.num_heads;
-    const int num_kv_heads = gqa.num_kv_heads;
-    const int head_dim = gqa.head_dim;
+    const int num_heads = hp.num_heads;
+    const int num_kv_heads = hp.num_kv_heads;
+    const int head_dim = hp.head_dim;
     const int tokens = batch * seq;
-    const int d_model = gqa.d_model();
-    const int kv_dim = gqa.kv_dim();
-    const int qkv_dim = d_model + 2 * kv_dim;
+    const int qkv_dim = hp.qkv_dim;
     
+    if (!qkv_out.data) {
+        throw std::runtime_error("split_and_reshape_qkv: qkv_out.data is NULL");
+    }
+    qkv_out.shape.require("split_and_reshape_qkv qkv_out");
+    if (!qkv_out.shape.is_2d_layout()) {
+        throw std::invalid_argument("split_and_reshape_qkv: qkv_out must be a 2D flat/QKV tensor");
+    }
+
     // Validate input shape
     if (qkv_out.shape.flat.rows != tokens || qkv_out.shape.flat.cols != qkv_dim) {
         throw std::invalid_argument(
@@ -1796,71 +1812,61 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor K_bhsd = Tensor::zeros(k_shape, requires_grad, stream, "qkv_split_K");
     Tensor V_bhsd = Tensor::zeros(v_shape, requires_grad, stream, "qkv_split_V");
     
-    // Intermediate BSM tensors for split (using Tensor for RAII)
-    Tensor Q_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, d_model), false, stream, "qkv_split_Q_bsm");
-    Tensor K_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_K_bsm");
-    Tensor V_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_V_bsm");
-    
     // Inference-only: drain stale CUDA error from earlier in this layer (rms_norm, matmul,
     // broadcast_add) or from no_grad_layer_storage.clear() in the loop. Without this,
     // cudaGetLastError() after the launch reports that stale error and we throw incorrectly.
     (void)cudaGetLastError();
     
-    // Forward: split qkv_out into Q, K, V (BSM layout) — 1D grid only for driver compatibility
-    constexpr int kSplitBlockSize = 256;
-    const int max_cols = std::max(d_model, kv_dim);
-    const int total_threads = tokens * max_cols;
-    const int blocks_split = (total_threads + kSplitBlockSize - 1) / kSplitBlockSize;
-    kernel_split_qkv_all<<<blocks_split, kSplitBlockSize, 0, stream>>>(
-        qkv_out.data, Q_bsm.data, K_bsm.data, V_bsm.data, tokens, d_model, kv_dim);
+    // Forward: split fused qkv_out directly to BHSD using TensorConversion's
+    // canonical GQA-aware split kernel. Do not create a second split/reshape truth here.
+    TensorConversion::split_qkv_gqa(
+        qkv_out.data, Q_bhsd.data, K_bhsd.data, V_bhsd.data,
+        batch, num_heads, num_kv_heads, seq, head_dim, stream);
     {
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            throw std::runtime_error("split_and_reshape_qkv: kernel_split_qkv_all launch failed: " +
-                std::string(cudaGetErrorString(err)) +
-                " (blocks=" + std::to_string(blocks_split) + " block=" + std::to_string(kSplitBlockSize) + ")");
-        }
-    }
-    
-    // Reshape BSM -> BHSD using TensorConversion (handles block sizing internally)
-    TensorConversion::convert_BSM_to_BHSD(Q_bsm.data, Q_bhsd.data, batch, seq, num_heads, head_dim, stream);
-    TensorConversion::convert_BSM_to_BHSD(K_bsm.data, K_bhsd.data, batch, seq, num_kv_heads, head_dim, stream);
-    TensorConversion::convert_BSM_to_BHSD(V_bsm.data, V_bhsd.data, batch, seq, num_kv_heads, head_dim, stream);
-    {
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            throw std::runtime_error("split_and_reshape_qkv: BSM_to_BHSD conversion failed: " +
+            throw std::runtime_error("split_and_reshape_qkv: split_qkv_gqa launch failed: " +
                 std::string(cudaGetErrorString(err)));
         }
     }
-    
-    // Q_bsm, K_bsm, V_bsm will be freed automatically when they go out of scope (RAII)
     
     // Set up backward if needed
     if (requires_grad) {
         // Create shared state for all three outputs
         auto shared = std::make_shared<SplitAndReshapeQKVGradFn::SharedState>();
         shared->tokens = tokens;
-        shared->d_model = d_model;
-        shared->kv_dim = kv_dim;
         shared->batch = batch;
         shared->seq = seq;
         shared->num_heads = num_heads;
         shared->num_kv_heads = num_kv_heads;
         shared->head_dim = head_dim;
+        shared->qkv_shape = qkv_out.shape;
+        shared->qkv_requires_grad = qkv_out.requires_grad;
+        shared->qkv_input_is_leaf = qkv_out.is_leaf;
+        shared->qkv_numel = qkv_out.numel();
         
-        // Ensure qkv_out has gradient buffer allocated before sharing
-        qkv_out.ensure_grad();
-        
-        // Store reference to qkv_out (for grad buffer access via ensure_grad/grad_data)
-        shared->qkv_out_ref = Tensor::from_ptr(
-            qkv_out.data, qkv_out.shape, false, qkv_out.requires_grad, "qkv_out_ref");
-        shared->qkv_out_ref.share_grad(qkv_out);  // Share gradient buffer with original
-        
-        // Copy shared_ptr to upstream grad_fn
-        shared->qkv_grad_fn = qkv_out.grad_fn;
-        
-        // No intermediate BSM buffers needed — fused kernel reads BHSD directly
+        float* merged_qkv_grad = nullptr;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&merged_qkv_grad),
+                          shared->qkv_numel * sizeof(float),
+                          "SplitQKV_merged_qkv_grad");
+        cudaMemsetAsync(merged_qkv_grad, 0, shared->qkv_numel * sizeof(float), stream);
+        shared->owned_merged_qkv_grad.reset(merged_qkv_grad, [](float* p) {
+            queueForDeferredCleanup(p);
+        });
+        shared->merged_qkv_grad = merged_qkv_grad;
+
+        if (qkv_out.is_leaf) {
+            qkv_out.ensure_grad();
+            shared->qkv_leaf_grad = qkv_out.grad_data();
+            if (!shared->qkv_leaf_grad) {
+                throw std::runtime_error("split_and_reshape_qkv: qkv_out leaf grad_data is NULL after ensure_grad");
+            }
+        } else {
+            shared->qkv_grad_fn = qkv_out.grad_fn;
+            if (!shared->qkv_grad_fn) {
+                throw std::runtime_error("split_and_reshape_qkv: qkv_out is non-leaf and requires grad, but qkv_out.grad_fn is NULL");
+            }
+        }
         
         // Create GradFns for each output
         auto q_grad_fn = std::make_shared<SplitAndReshapeQKVGradFn>();
@@ -2053,17 +2059,17 @@ std::pair<Tensor, Tensor> rope_rotation(
     const Tensor& K,
     const float* inv_freq,
     const BatchPayload& payload,
-    const GQADims& gqa,
+    const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     int rotary_dim,
     cudaStream_t stream,
     int pos_offset
 ) {
-    gqa.require("rope_rotation");
+    requireEncoderAttentionHP(hp, "rope_rotation");
     const int batch_size = payload.batch_size;
-    const int num_q_heads = gqa.num_heads;
-    const int num_kv_heads = gqa.num_kv_heads;
+    const int num_q_heads = hp.num_heads;
+    const int num_kv_heads = hp.num_kv_heads;
     const int seq_len = payload.max_seq_len;
-    const int head_dim = gqa.head_dim;
+    const int head_dim = hp.head_dim;
     // RULE 20: Fail loud validation
     if (!Q.data) {
         throw std::runtime_error("rope_rotation: Q.data is NULL");

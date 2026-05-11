@@ -12,7 +12,7 @@
 //  The caller (AutogradTraining.cu) keeps ForwardIntermediates alive
 //  until backward completes, preserving the autograd graph.
 //  
-//  RULE 20: No backwards compatibility - this is the ONLY way to do autograd.
+//  RULE 20: Current autograd path only - this is the ONLY way to do autograd.
 //  The old approach of letting intermediates die was fundamentally broken.
 //======================================================//
 

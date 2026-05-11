@@ -156,7 +156,9 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
     auto prompt_result = ctx.tokenizer.encodeWithMetadata(prompt);
     std::vector<int> prompt_tokens = std::move(prompt_result.token_ids);
     std::vector<float> prompt_numeric_values = std::move(prompt_result.token_numeric_values);
+    std::vector<uint16_t> prompt_text_features = std::move(prompt_result.token_text_features);
     std::vector<uint8_t> prompt_atom_mask = std::move(prompt_result.token_atom_mask);
+    std::vector<uint32_t> prompt_atom_flags = std::move(prompt_result.token_atom_flags);
     auto prompt_atom_table = prompt_result.atom_table;
     std::vector<uint32_t> prompt_atom_entry_ids = std::move(prompt_result.atom_entry_ids);
     if (prompt_tokens.empty()) {
@@ -169,18 +171,32 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         const size_t keep = static_cast<size_t>(max_seq_len - 1);
         const size_t drop = prompt_tokens.size() - keep;
         prompt_tokens.erase(prompt_tokens.begin(), prompt_tokens.begin() + drop);
-        if (prompt_numeric_values.size() >= drop) {
-            prompt_numeric_values.erase(prompt_numeric_values.begin(),
-                                         prompt_numeric_values.begin() + drop);
+        if (prompt_numeric_values.size() < drop) {
+            throw std::runtime_error("DiagnosticInference: prompt_numeric_values shorter than truncated token span");
         }
-        if (prompt_atom_mask.size() >= drop) {
-            prompt_atom_mask.erase(prompt_atom_mask.begin(),
-                                    prompt_atom_mask.begin() + drop);
+        prompt_numeric_values.erase(prompt_numeric_values.begin(),
+                                     prompt_numeric_values.begin() + drop);
+        const size_t feature_drop = drop * GRIM::Batching::BatchPayload::kTextFeatureDim;
+        if (prompt_text_features.size() < feature_drop) {
+            throw std::runtime_error("DiagnosticInference: prompt_text_features shorter than truncated token span");
         }
-        if (prompt_atom_entry_ids.size() >= drop) {
-            prompt_atom_entry_ids.erase(prompt_atom_entry_ids.begin(),
-                                         prompt_atom_entry_ids.begin() + drop);
+        prompt_text_features.erase(prompt_text_features.begin(),
+                                   prompt_text_features.begin() + feature_drop);
+        if (prompt_atom_mask.size() < drop) {
+            throw std::runtime_error("DiagnosticInference: prompt_atom_mask shorter than truncated token span");
         }
+        prompt_atom_mask.erase(prompt_atom_mask.begin(),
+                                prompt_atom_mask.begin() + drop);
+        if (prompt_atom_flags.size() < drop) {
+            throw std::runtime_error("DiagnosticInference: prompt_atom_flags shorter than truncated token span");
+        }
+        prompt_atom_flags.erase(prompt_atom_flags.begin(),
+                                prompt_atom_flags.begin() + drop);
+        if (prompt_atom_entry_ids.size() < drop) {
+            throw std::runtime_error("DiagnosticInference: prompt_atom_entry_ids shorter than truncated token span");
+        }
+        prompt_atom_entry_ids.erase(prompt_atom_entry_ids.begin(),
+                                     prompt_atom_entry_ids.begin() + drop);
     }
 
     // Use generation config from ai_config.json (configurable strategy, penalties, etc.)
@@ -197,13 +213,24 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
 
     try {
         const auto start = std::chrono::steady_clock::now();
-        std::vector<GRIM::GeneratedSequence> outputs = ctx.model->generate(
+        const auto& model_cfg = ctx.model->getConfig();
+        const std::vector<int32_t> prompt_token_to_slot_map;
+        auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
             prompt_tokens,
             prompt_numeric_values,
+            prompt_text_features,
             prompt_atom_mask,
-            &cfg,
+            prompt_atom_flags,
             prompt_atom_table,
-            prompt_atom_entry_ids);
+            prompt_atom_entry_ids,
+            prompt_token_to_slot_map,
+            model_cfg.vocab_size,
+            static_cast<size_t>(model_cfg.max_cached_batch),
+            static_cast<size_t>(model_cfg.max_cached_seq_len),
+            model_cfg.execution_block_num_slots);
+        std::vector<GRIM::GeneratedSequence> outputs = ctx.model->generate(
+            prompt_payload,
+            &cfg);
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 

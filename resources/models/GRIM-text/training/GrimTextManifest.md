@@ -174,9 +174,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED (Pass 3)**: `ALiBiPositionalBias::getSlopes()`/`getRoPEFreqs()` now throw when PBM is uninitialized (removed remaining silent `return nullptr` path).
   - **FIXED (Pass 3)**: Removed stale vocab compatibility fallback in `detectVocabSizeFromBinary()` (`vocab_size==0` no longer falls back to legacy `config_vocab_size`; now fails loud).
   - **FIXED (Pass 3)**: Constructor now validates `num_heads > 0` and `d_model % num_heads == 0` BEFORE computing `d_head` (prevents divide-by-zero/UB during positional init).
-  - **FIXED (Pass 3)**: `getNextTokenLogitsGPU()`/`getTokenBufferView()`/`markDevicePromptReady()` now initialize inference state in inference mode and then assert `training_state_.initialized` (no silent half-init).
-  - **FIXED (Pass 3)**: Removed silent API behavior in `getTokenBufferView()` and `markDevicePromptReady()` when `use_gpu=false` — now throws (GPU-only module).
-  - **FIXED (Pass 3)**: `markDevicePromptReady()` now rejects negative `token_count`.
+  - **DELETED (Payload Inference Cleanup)**: staged prompt APIs were removed; inference callers now build `BatchPayload` and enter through payload-only logits/generation methods.
   - **FIXED (Pass 3)**: Numeric prediction host copy in generation now checks `cudaMemcpyAsync` + stream sync result and throws on failure (previously ignored sync result).
   - **FIXED (Pass 3)**: Scratch toggles hardened — enabling ScratchBlock or scratch pool now throws if backing objects are uninitialized; only disable-without-init is treated as no-op.
 
@@ -236,7 +234,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED (Rule 20)**: Removed `return cudaErrorInvalidValue` from delegate registration (dead code)
   - **DELETED (Rule 26)**: Entire `GRIMTS::Delegates` namespace — 4 delegate types, 4 registration kernels, 4 clear kernels, 8 host-side registration functions (~200 lines). Zero callers ever registered callbacks. `Shared/Delegate/Delegate.hpp` also deleted (zero remaining includers).
   - **DELETED**: `#include <windows.h>` — zero Windows API calls in file
-  - **DELETED (Rule 20)**: `NotifyMutation`/`NotifyEviction` stubs AND all 8 call sites — no-op stubs are backwards compatibility. Eviction telemetry `atomicAdd` inlined at eviction site.
+  - **DELETED (Rule 20)**: `NotifyMutation`/`NotifyEviction` stubs AND all 8 call sites — no-op stubs violate single-owner telemetry. Eviction telemetry `atomicAdd` inlined at eviction site.
   - **DELETED (Rule 26)**: `CacheMutationKind` and `EvictionReason` enums — zero remaining users after Notify* deletion.
   - **KEPT**: 12 global mutable variables in anonymous namespace — properly `{}` initialized, protected by mutexes, with clear lifecycle (init/shutdown). Appropriate pattern for GPU cache state.
   - **KEPT**: Logging namespace (actively used — RegisterLogCallback called from Phase2_TrainingLoop.cu GuessCacheScope)
@@ -680,10 +678,10 @@ For each encoding layer (Layer 0 → Layer 11):
 
 #### 2.5c QKV Projection
 
-- [ ] **Layers/Attention/QKV_Projector.cu**
-  - Projects hidden states to Q, K, V
-  - No known issues
-  - Pattern to check: Verify output passed to Flash Attention
+- [x] **TensorContract/autograd QKV path**
+  - QKV projection is `autograd::matmul(ln1_out, W_qkv, transpose_b=true)` so gradients stay on the tape.
+  - `Layers/Attention/QKV_Projector.{hpp,cu}` is deleted; do not recreate it.
+  - Pattern to check: `qkv_out -> autograd::split_and_reshape_qkv() -> Flash Attention`, with split/merge backed only by TensorConversion raw layout kernels.
 
 #### 2.5d Positional Bias Application
 

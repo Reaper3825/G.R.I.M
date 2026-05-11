@@ -326,7 +326,7 @@ bool PrepareTrainingDataFromCache(
 							uint16_t vocab_version = 0;
 							vocab_file.read(reinterpret_cast<char*>(&vocab_version), 2);
 							
-							// Version 2+ required (Rule 20: no backwards compatibility)
+							// Version 2+ required (Rule 20: current format only)
 							if (vocab_version >= 2) {
 								// Vocab v2 header layout after magic(4) + version(2):
 								//   checksum(4) + config_vocab_size(4) + max_length(4) + 3 bools(3) + actual_vocab_size(4)

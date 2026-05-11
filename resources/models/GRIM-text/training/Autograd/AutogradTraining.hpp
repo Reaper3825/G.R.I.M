@@ -9,7 +9,7 @@
 //  - Fragile clearIntermediates() lifecycle
 //  - 30+ field bloated context struct
 //  
-//  Rule 20: No backwards compatibility. Old AutogradContext
+//  Rule 20: Current autograd path only. Old AutogradContext
 //  with intermediate tensor storage is DELETED.
 //======================================================//
 
