@@ -124,7 +124,7 @@ void computeMTPAuxiliaryLosses(
     const Tensor* mtp_input = nullptr;
     if (intermediates.centered_encoder_output.data) {
         mtp_input = &intermediates.centered_encoder_output;
-    } else if (ctx.lm_head->config().has_final_rms_norm && ctx.lm_head->finalRmsGamma().data) {
+    } else if (ctx.lm_head->finalRmsGamma().data) {
         intermediates.mtp_input_tensor = autograd::rms_norm(
             intermediates.encoder_output_tensor,
             ctx.lm_head->finalRmsGamma(),
