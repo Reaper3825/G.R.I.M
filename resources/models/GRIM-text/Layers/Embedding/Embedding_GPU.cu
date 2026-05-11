@@ -27,18 +27,18 @@ namespace GRIM {
 //  Self-Allocating Constructor (Pattern B)
 //======================================================//
 
-EmbeddingLayer::EmbeddingLayer(const HyperParameters::EmbeddingLayerConstructionHP& config,
+EmbeddingLayer::EmbeddingLayer(const HyperParameters::EmbeddingLayerConstructionHP& hp,
                                uint64_t seed,
                                cudaStream_t stream,
                                bool requires_grad)
-    : config_(config)
+    : hp_(hp)
 {
     // Rule 20: Fail loud on invalid configuration
-    if (config_.vocab_size <= 0) {
-        throw std::runtime_error("EmbeddingLayer: vocab_size must be positive, got " + std::to_string(config_.vocab_size));
+    if (hp_.vocab_size <= 0) {
+        throw std::runtime_error("EmbeddingLayer: vocab_size must be positive, got " + std::to_string(hp_.vocab_size));
     }
-    if (config_.d_model <= 0) {
-        throw std::runtime_error("EmbeddingLayer: d_model must be positive, got " + std::to_string(config_.d_model));
+    if (hp_.d_model <= 0) {
+        throw std::runtime_error("EmbeddingLayer: d_model must be positive, got " + std::to_string(hp_.d_model));
     }
     if (!stream) {
         throw std::runtime_error("EmbeddingLayer: stream is NULL — CUDA stream required for allocation");
@@ -47,7 +47,7 @@ EmbeddingLayer::EmbeddingLayer(const HyperParameters::EmbeddingLayerConstruction
     // ══════════════════════════════════════════════════════════════
     //  TOKEN EMBEDDINGS: Always allocated [vocab_size, d_model]
     // ══════════════════════════════════════════════════════════════
-    token_weights_ = Tensor::zeros({config_.vocab_size, config_.d_model}, stream, "embedding.token_weights");
+    token_weights_ = Tensor::zeros({hp_.vocab_size, hp_.d_model}, stream, "embedding.token_weights");
     if (requires_grad) {
         token_weights_.requires_grad_();
         token_weights_.ensure_grad();  // Allocate grad NOW so share_grad() works for LM head tying
@@ -55,7 +55,7 @@ EmbeddingLayer::EmbeddingLayer(const HyperParameters::EmbeddingLayerConstruction
     Tensor::xavier_uniform_(token_weights_, seed, stream);
 
     fprintf(stdout, "[EmbeddingLayer] Token weights: [%d, %d] Xavier seed=%llu\n",
-            config_.vocab_size, config_.d_model, static_cast<unsigned long long>(seed));
+            hp_.vocab_size, hp_.d_model, static_cast<unsigned long long>(seed));
 }
 
 //======================================================//
@@ -63,14 +63,14 @@ EmbeddingLayer::EmbeddingLayer(const HyperParameters::EmbeddingLayerConstruction
 //======================================================//
 
 EmbeddingLayer::EmbeddingLayer(EmbeddingLayer&& other) noexcept
-    : config_(other.config_)
+    : hp_(other.hp_)
     , token_weights_(std::move(other.token_weights_))
 {
 }
 
 EmbeddingLayer& EmbeddingLayer::operator=(EmbeddingLayer&& other) noexcept {
     if (this != &other) {
-        config_ = other.config_;
+        hp_ = other.hp_;
         token_weights_ = std::move(other.token_weights_);
     }
     return *this;

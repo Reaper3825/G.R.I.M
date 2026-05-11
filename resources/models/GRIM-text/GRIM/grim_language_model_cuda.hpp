@@ -154,19 +154,11 @@ public:
     ALiBiPositionalBias& operator=(ALiBiPositionalBias&& other) noexcept;
     ~ALiBiPositionalBias();
 
-    // num_kv_heads: REQUIRED. Only GQA (grouped-KV) is supported — pass model's num_kv_heads (<= num_heads).
+    void initialize(const HyperParameters::PBMConstructionHP& hp,
+                    PositionalEncodingType type);
 
-    void computeSlopes(
-        int num_heads,
-        int num_kv_heads,
-        int d_head,
-        int max_seq_len,
-        PositionalEncodingType type
-    );
-
-
-    float* getSlopes() const;
-    float* getRoPEFreqs() const;
+    const float* getSlopes() const;
+    const float* getRoPEFreqs() const;
     bool isInitialized() const;
     PositionalEncodingType getType() const { return type; }
     const PBM::PBMState& getPBMState() const { return pbm_state_; }
@@ -179,9 +171,8 @@ class GrimEmbeddingStack {
 public:
     GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_len);
     
-    // num_kv_heads REQUIRED - only GQA is supported
-    void enableALiBi(int num_heads, int num_kv_heads, int max_seq_len);
-    void enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads, int max_seq_len);
+    void enableALiBi(const HyperParameters::PBMConstructionHP& hp);
+    void enableHybridPositionalEncoding(const HyperParameters::PBMConstructionHP& hp);
     const ALiBiPositionalBias* getALiBiBias() const;
     const Matrix& getTokenEmbeddings() const;
     
@@ -518,7 +509,7 @@ using GPUEncoderLayer = EncodingLayer;
 // assembly bindings. Forward pass runtime handles live on the forward request.
 class GPUGrimEncoder {
 public:
-    GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& config,
+    GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& hp,
                    const EncoderConstructionBindings& bindings,
                    uint64_t weight_seed);
 

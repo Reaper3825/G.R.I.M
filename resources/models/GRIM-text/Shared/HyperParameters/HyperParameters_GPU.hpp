@@ -212,7 +212,9 @@ constexpr float SOFTMAX_TEMPERATURE = 1.0f;
 //======================================================//
 constexpr float ROPE_THETA = 10000.0f;        // RoPE base frequency (standard: 10000)
 constexpr float ROPE_SCALING = 1.0f;          // NTK scaling factor (1.0 = no scaling)
+constexpr int ROPE_BASE_SEQ_LEN = 2048;       // Base context length for NTK-aware RoPE scaling
 constexpr float ALIBI_SLOPE_EXPONENT = -8.0f; // Controls ALiBi slope decay across heads
+constexpr int ALIBI_MIN_LOCALITY_DISTANCE = 16; // Minimum locality distance for ALiBi slope calibration
 
 // ISSUE #78: ALiBi bias capping (optional safety net for softmax backward stability)
 // Issue #84 fixed the ROOT CAUSE of dQ/dK explosion (missing FlashAttention preprocessing

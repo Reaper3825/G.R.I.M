@@ -7,11 +7,15 @@ Typed config ownership is split into exactly two code locations:
 - `Shared/HyperParameters/HyperParameters_GPU.hpp` owns authored hyperparameter/config structs, constants, JSON loading, derivation, and validation.
 - `Shared/HyperParameters/HyperparameterGroupings.hpp` owns grouped read views used by phase code. It must not include or call `ai_config_paths.hpp` directly, and it must not own authored defaults/constants; it may only slice/derive from `HyperParameters_GPU.hpp` structs and constants. Startup model construction uses `startupLanguageModelConfig()`, and startup tensor registration uses `parameterRegistrationHP()`.
 
+`startupLanguageModelConfig()` is also the single policy boundary that stamps training startup models with `ModelExecutionMode::TRAINING`. Do not rely on the `LanguageModelConfig` default (`INFERENCE`) in training code; training `BatchPayload` upload is forbidden for inference-mode models.
+
 Phase/startup code should consume these grouped views instead of hand-copying scattered config fields. If a new startup subsystem needs a repeated slice of config, add that view to `HyperparameterGroupings.hpp`; if it needs a new authored field/default/constant, add that to `HyperParameters_GPU.hpp` first. Do not create a third config owner.
 
 Grouped construction views also own repeated derived dimensions for their consumers. For encoder construction, `EncoderLayerConstructionHP` carries validated GQA/QKV dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) so layer code does not recompute config geometry locally.
 
-Encoder-facing autograd helpers consume `EncoderLayerConstructionHP` directly. Encoder files must not build local `TensorContract::GQADims` wrappers or store encoder-owned GQA snapshots; the grouped HP snapshot is the source for Q/K/V geometry.
+PBM positional encoding construction uses `PBMConstructionHP` from `HyperparameterGroupings.hpp`. `Shared/PBM/PositionalBiasMethod.*` consumes that grouped view plus explicit runtime options only; it must not define its own authored defaults or hand-copy `LanguageModelConfig` fields.
+
+Encoder-facing autograd helpers consume grouped attention snapshots sliced from `EncoderLayerConstructionHP` (`EncoderSelfAttentionHP`). Encoder files must not build local `TensorContract::GQADims` wrappers or store encoder-owned GQA snapshots; the grouped HP snapshot is the source for Q/K/V geometry.
 
 Layer classes may store a durable copy of their grouped construction view when forward/runtime methods need the values after startup-local grouping objects are destroyed. Name those members as HP/grouping snapshots (for example `hp_`), not as authored config owners, and keep borrowed tensor ownership outside the grouping. Forward-time runtime handles (`cudaStream_t`, `cublasHandle_t`) belong to per-call payload/request structs, not layer configs or late mutator methods; startup constructors may take an init stream only for allocation.
 

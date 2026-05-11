@@ -402,7 +402,7 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     EXEC_CHECK(row_tokens > 0, "bootstrapMemoryFromSlotMap: row_tokens must be positive");
     validateMemoryOrThrow(M);
 
-    const int V = config_.num_slots;
+    const int V = hp_.num_slots;
 
     // Two-pass bootstrap: resolve race condition when multiple tokens map to same slot.
     // Pass 1: mark valid + find highest-position token per slot (deterministic last-writer-wins).
@@ -423,8 +423,8 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     CUDA_CHECK_KERNEL();
     cudaFreeAsync(d_slot_last_pos, stream);
 
-    const int dm = config_.d_model;
-    const int dk = config_.d_key;
+    const int dm = hp_.d_model;
+    const int dk = hp_.d_key;
     const size_t smem_bytes = dm * sizeof(float);
     kernelBootstrapSlotEmbeddings<<<V, kBlockSize, smem_bytes, stream>>>(
         M.state_embeds.data, M.key_embeds.data,
@@ -434,7 +434,7 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
         V, dm, dk);
     CUDA_CHECK_KERNEL();
 
-    const int dt = config_.d_type;
+    const int dt = hp_.d_type;
     kernelBootstrapTypeEmbed<<<V, kBlockSize, 0, stream>>>(
         M.type_embed.data, M.valid_mask.data,
         type_num_embed_.data, V, dt);
@@ -460,8 +460,8 @@ static void ensureBootstrappedValueSlotsOrThrow(
     const ExecutionMemory& memory,
     cudaStream_t stream
 ) {
-    const int V = layer.config().num_slots;
-    const int S = layer.config().num_scratch_slots;
+    const int V = layer.hp().num_slots;
+    const int S = layer.hp().num_scratch_slots;
     const int V_val = V - S;
     EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
 
@@ -488,7 +488,7 @@ void prepareMemoryStepOrThrow(
 ) {
     ensureBootstrappedValueSlotsOrThrow(layer, memory, stream);
 
-    const int V = layer.config().num_slots;
+    const int V = layer.hp().num_slots;
     if (diag_out) {
         diag_out->state_before_values = Tensor::zeros({V, 1}, stream, "state_before_values");
         diag_out->state_before_valid = Tensor::zeros({1, V}, stream, "state_before_valid");
@@ -506,8 +506,8 @@ void prepareMemoryStepOrThrow(
             memory.valid_mask.data,
             num_atoms,
             row_tokens,
-            layer.config().num_slots,
-            layer.config().num_scratch_slots,
+            layer.hp().num_slots,
+            layer.hp().num_scratch_slots,
             LayerAccess::numericErrorFlag(layer),
             kStageAtomPosInvalid,
             kStageSlotMissing,
@@ -523,9 +523,9 @@ void buildValueSlotCandidates(
     cudaStream_t stream,
     StepWorkingSet& work
 ) {
-    const int dm = layer.config().d_model;
-    const int V_val = layer.config().num_slots - layer.config().num_scratch_slots;
-    const int S = layer.config().num_scratch_slots;
+    const int dm = layer.hp().d_model;
+    const int V_val = layer.hp().num_slots - layer.hp().num_scratch_slots;
+    const int S = layer.hp().num_scratch_slots;
 
     work.cand_hidden = Tensor::zeros({V_val, dm}, stream, "exec_cand_hidden");
     work.cand_hidden.requires_grad = false;
@@ -551,8 +551,8 @@ void materializeSelectedOperands(
     cudaStream_t stream,
     StepWorkingSet& work
 ) {
-    const int V = layer.config().num_slots;
-    const int S = layer.config().num_scratch_slots;
+    const int V = layer.hp().num_slots;
+    const int S = layer.hp().num_scratch_slots;
     const int V_val = V - S;
     int* d_exec_idx = LayerAccess::execIndices(layer);
 
@@ -587,12 +587,12 @@ void applyHardWriteback(
     cudaStream_t stream,
     const StepWorkingSet& work
 ) {
-    const int V = layer.config().num_slots;
-    const int S = layer.config().num_scratch_slots;
-    const int dm = layer.config().d_model;
-    const int dk = layer.config().d_key;
-    const int ae = layer.config().atom_embedding_dim;
-    const int dt = layer.config().d_type;
+    const int V = layer.hp().num_slots;
+    const int S = layer.hp().num_scratch_slots;
+    const int dm = layer.hp().d_model;
+    const int dk = layer.hp().d_key;
+    const int ae = layer.hp().atom_embedding_dim;
+    const int dt = layer.hp().d_type;
     int* d_exec_idx = LayerAccess::execIndices(layer);
 
     kernelArgmax1DInt<<<1, 32, 0, stream>>>(d_exec_idx + 3, work.p_write.data, V);
@@ -626,7 +626,7 @@ void captureStateAfterWriteAndCheckMutations(
 ) {
     if (!diag_out) return;
 
-    const int V = layer.config().num_slots;
+    const int V = layer.hp().num_slots;
     diag_out->state_after_values = Tensor::zeros({V, 1}, stream, "state_after_values");
     diag_out->state_after_valid = Tensor::zeros({1, V}, stream, "state_after_valid");
     CUDA_CHECK(cudaMemcpyAsync(diag_out->state_after_values.data, memory.values.data,
@@ -700,7 +700,7 @@ void finalizeStepOrThrow(
         snprintf(buf, sizeof(buf),
             "ExecutionBlock FATAL: invalid state at step %d — %s (stage id=%d)",
             step, stageIdToName(h_error), h_error);
-        if (layer.config().debug_mode)
+        if (layer.hp().debug_mode)
             GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::ExecutionBlock,
                 std::string("[ExecutionBlock debug] ") + buf);
         throw std::runtime_error(buf);
@@ -718,12 +718,12 @@ Tensor crossAttentionReadImpl(
 ) {
     using namespace autograd;
 
-    const int dm = layer.config().d_model;
-    const int dk = layer.config().d_key;
-    const int hd = layer.config().cross_attn_head_dim;
-    const int V = layer.config().num_slots;
+    const int dm = layer.hp().d_model;
+    const int dk = layer.hp().d_key;
+    const int hd = layer.hp().cross_attn_head_dim;
+    const int V = layer.hp().num_slots;
     const int nv = V;
-    const int topk = layer.config().cross_attn_topk;
+    const int topk = layer.hp().cross_attn_topk;
     const float inv_sqrt_d = 1.0f / sqrtf(static_cast<float>(hd));
 
     // Non-owning view of H[token_offset : token_offset + row_tokens, :].
@@ -792,7 +792,7 @@ Tensor crossAttentionReadImpl(
 
     // Usage update (detached telemetry — no autograd)
     kernelDecayedUsageUpdate<<<(nv + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        memory.usage.data, attn_weights.data, layer.config().usage_decay, row_tokens, nv, V);
+        memory.usage.data, attn_weights.data, layer.hp().usage_decay, row_tokens, nv, V);
     CUDA_CHECK_KERNEL();
 
     return delta;

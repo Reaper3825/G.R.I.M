@@ -258,18 +258,18 @@ ALiBiPositionalBias& ALiBiPositionalBias::operator=(ALiBiPositionalBias&& other)
         // Move unified PBM state
         pbm_state_.alibi_slopes = other.pbm_state_.alibi_slopes;
         pbm_state_.alibi_slopes_host = std::move(other.pbm_state_.alibi_slopes_host);
-        pbm_state_.num_heads = other.pbm_state_.num_heads;
         pbm_state_.rope_inv_freq = other.pbm_state_.rope_inv_freq;
         pbm_state_.rope_inv_freq_host = std::move(other.pbm_state_.rope_inv_freq_host);
-        pbm_state_.head_dim = other.pbm_state_.head_dim;
-        pbm_state_.rotary_dim = other.pbm_state_.rotary_dim;
-        pbm_state_.num_kv_heads = other.pbm_state_.num_kv_heads;
+        pbm_state_.construction_hp = other.pbm_state_.construction_hp;
+        pbm_state_.upload_event = other.pbm_state_.upload_event;
         pbm_state_.initialized = other.pbm_state_.initialized;
         
         // Clear other
         other.pbm_state_.alibi_slopes = nullptr;
         other.pbm_state_.rope_inv_freq = nullptr;
+        other.pbm_state_.upload_event = nullptr;
         other.pbm_state_.initialized = false;
+        other.pbm_state_.construction_hp = HyperParameters::PBMConstructionHP{};
         other.pbm_state_.alibi_slopes_host.clear();
         other.pbm_state_.rope_inv_freq_host.clear();
 #endif
@@ -284,68 +284,44 @@ ALiBiPositionalBias::~ALiBiPositionalBias() {
     cleanup();
 }
 
-void ALiBiPositionalBias::computeSlopes(int num_heads_, int num_kv_heads_, int d_head_, int max_seq_len_, PositionalEncodingType type_) {
-    if (num_heads_ <= 0) {
-        throw std::runtime_error("ALiBiPositionalBias::computeSlopes: num_heads must be > 0");
-    }
-    if (num_kv_heads_ <= 0 || num_kv_heads_ > num_heads_) {
-        throw std::runtime_error("ALiBiPositionalBias::computeSlopes: num_kv_heads must be in (0, num_heads]");
-    }
-    if (d_head_ <= 0) {
-        throw std::runtime_error("ALiBiPositionalBias::computeSlopes: d_head must be > 0");
-    }
+void ALiBiPositionalBias::initialize(const HyperParameters::PBMConstructionHP& hp,
+                                     PositionalEncodingType type_) {
+    HyperParameters::validatePBMConstructionHP(hp, "ALiBiPositionalBias::initialize");
 
-    num_heads = num_heads_;
+    num_heads = hp.num_heads;
     type = type_;
 #ifdef USE_CUDA
     // Use unified PBM - always allocates both ALiBi + RoPE
-    PBM::PBMConfig config{};
-    config.num_heads = num_heads_;
-    config.head_dim = d_head_;
-    config.rotary_dim = config.head_dim;
-    config.num_kv_heads = num_kv_heads_;
-    config.max_seq_len = max_seq_len_; 
-    config.rope_theta = 10000.0f;
-    config.verbose = false;
-    
-    if (!PBM::ensurePBM(config, pbm_state_)) {
-        throw std::runtime_error("ALiBiPositionalBias::computeSlopes: PBM initialization failed");
+    if (!PBM::ensurePBM(hp, pbm_state_)) {
+        throw std::runtime_error("ALiBiPositionalBias::initialize: PBM initialization failed");
     }
     if (!pbm_state_.initialized) {
-        throw std::runtime_error("ALiBiPositionalBias::computeSlopes: PBM state not initialized");
+        throw std::runtime_error("ALiBiPositionalBias::initialize: PBM state not initialized");
     }
 
     initialized = true;
 #else
-    throw std::runtime_error("ALiBiPositionalBias::computeSlopes requires CUDA");
+    throw std::runtime_error("ALiBiPositionalBias::initialize requires CUDA");
 #endif
 }
 
-float* ALiBiPositionalBias::getSlopes() const {
+const float* ALiBiPositionalBias::getSlopes() const {
 #ifdef USE_CUDA
     if (!initialized) {
         throw std::runtime_error("ALiBiPositionalBias::getSlopes: PBM not initialized");
     }
-    if (!pbm_state_.alibi_slopes) {
-        throw std::runtime_error("ALiBiPositionalBias::getSlopes: initialized=true but alibi_slopes is NULL — PBM state corrupted at "
-                                 + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    return pbm_state_.alibi_slopes;
+    return PBM::getAlibiSlopes(pbm_state_);
 #else
     throw std::runtime_error("ALiBiPositionalBias::getSlopes requires CUDA build");
 #endif
 }
 
-float* ALiBiPositionalBias::getRoPEFreqs() const {
+const float* ALiBiPositionalBias::getRoPEFreqs() const {
 #ifdef USE_CUDA
     if (!initialized) {
         throw std::runtime_error("ALiBiPositionalBias::getRoPEFreqs: PBM not initialized");
     }
-    if (!pbm_state_.rope_inv_freq) {
-        throw std::runtime_error("ALiBiPositionalBias::getRoPEFreqs: initialized=true but rope_inv_freq is NULL — PBM state corrupted at "
-                                 + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    return pbm_state_.rope_inv_freq;
+    return PBM::getRoPEInvFreq(pbm_state_);
 #else
     throw std::runtime_error("ALiBiPositionalBias::getRoPEFreqs requires CUDA build");
 #endif
@@ -382,37 +358,22 @@ GrimEmbeddingStack::GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_
     // NOTE: Position embeddings initialized directly on GPU in TrainingOps.cu
 }
 
-void GrimEmbeddingStack::enableALiBi(int num_heads, int num_kv_heads, int max_seq_len) {
-    if (num_heads <= 0) {
-        throw std::runtime_error("GrimEmbeddingStack::enableALiBi: num_heads must be > 0");
+void GrimEmbeddingStack::enableALiBi(const HyperParameters::PBMConstructionHP& hp) {
+    HyperParameters::validatePBMConstructionHP(hp, "GrimEmbeddingStack::enableALiBi");
+    if (d_model_ != hp.num_heads * hp.head_dim) {
+        throw std::runtime_error("GrimEmbeddingStack::enableALiBi: grouped PBM geometry does not match embedding d_model");
     }
-    if (num_kv_heads <= 0 || num_kv_heads > num_heads) {
-        throw std::runtime_error("GrimEmbeddingStack::enableALiBi: num_kv_heads must be in (0, num_heads]");
-    }
-    if (d_model_ % num_heads != 0) {
-        throw std::runtime_error("GrimEmbeddingStack::enableALiBi: d_model not divisible by num_heads");
-    }
-    const int d_head = d_model_ / num_heads;
     alibi_ = std::make_unique<ALiBiPositionalBias>();
-    alibi_->computeSlopes(num_heads, num_kv_heads, d_head, max_seq_len, PositionalEncodingType::ALIBI);
+    alibi_->initialize(hp, PositionalEncodingType::ALIBI);
 }
 
-void GrimEmbeddingStack::enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads, int max_seq_len) {
-    if (num_heads <= 0) {
-        throw std::runtime_error("GrimEmbeddingStack::enableHybridPositionalEncoding: num_heads must be > 0");
-    }
-    if (num_kv_heads <= 0 || num_kv_heads > num_heads) {
-        throw std::runtime_error("GrimEmbeddingStack::enableHybridPositionalEncoding: num_kv_heads must be in (0, num_heads]");
-    }
-    if (d_model_ % num_heads != 0) {
-        throw std::runtime_error("GrimEmbeddingStack::enableHybridPositionalEncoding: d_model not divisible by num_heads");
-    }
-    if (d_head != d_model_ / num_heads) {
-        throw std::runtime_error("GrimEmbeddingStack::enableHybridPositionalEncoding: d_head must match d_model/num_heads");
+void GrimEmbeddingStack::enableHybridPositionalEncoding(const HyperParameters::PBMConstructionHP& hp) {
+    HyperParameters::validatePBMConstructionHP(hp, "GrimEmbeddingStack::enableHybridPositionalEncoding");
+    if (d_model_ != hp.num_heads * hp.head_dim) {
+        throw std::runtime_error("GrimEmbeddingStack::enableHybridPositionalEncoding: grouped PBM geometry does not match embedding d_model");
     }
     alibi_ = std::make_unique<ALiBiPositionalBias>();
-    // Pass through num_kv_heads so PBM and encoder GQA settings match
-    alibi_->computeSlopes(num_heads, num_kv_heads, d_head, max_seq_len, PositionalEncodingType::ALIBI_ROPE);
+    alibi_->initialize(hp, PositionalEncodingType::ALIBI_ROPE);
 }
 
 const ALiBiPositionalBias* GrimEmbeddingStack::getALiBiBias() const {
@@ -470,19 +431,13 @@ LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config,
     // 2. Enable positional encoding if requested
     if (HyperParameters::usesALiBi(config_.positional_encoding) || 
         HyperParameters::usesRoPE(config_.positional_encoding)) {
-        if (config_.num_heads <= 0) {
-            throw std::runtime_error("LanguageModel: num_heads must be > 0 before positional initialization");
-        }
-        if (config_.d_model % config_.num_heads != 0) {
-            throw std::runtime_error("LanguageModel: d_model must be divisible by num_heads before positional initialization");
-        }
-        int d_head = config_.d_model / config_.num_heads;
+        const auto pbm_hp = HyperParameters::pbmConstructionHP(config_);
         
         // Use appropriate initialization based on encoding type
         if (config_.positional_encoding == PositionalEncodingType::ALIBI_ROPE) {
-            embedder_->enableHybridPositionalEncoding(config_.num_heads, d_head, config_.num_kv_heads, config_.max_seq_len);
+            embedder_->enableHybridPositionalEncoding(pbm_hp);
         } else if (config_.positional_encoding == PositionalEncodingType::ALIBI) {
-            embedder_->enableALiBi(config_.num_heads, config_.num_kv_heads, config_.max_seq_len);
+            embedder_->enableALiBi(pbm_hp);
         }
         // Note: Pure RoPE handled differently (integrated into attention)
     }

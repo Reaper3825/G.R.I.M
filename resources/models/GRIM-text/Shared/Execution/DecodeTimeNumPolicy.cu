@@ -32,24 +32,24 @@ namespace GRIM {
 
 // ─── Constructor ─────────────────────────────────────
 
-DecodeTimeNumPolicy::DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelectorConstructionHP& config)
-    : config_(config)
+DecodeTimeNumPolicy::DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelectorConstructionHP& hp)
+    : hp_(hp)
 {
-    if (config_.selection_margin < 0.0f) {
+    if (hp_.selection_margin < 0.0f) {
         throw std::runtime_error("DecodeTimeNumPolicy: selection_margin must be non-negative, got " +
-                                 std::to_string(config_.selection_margin));
+                                 std::to_string(hp_.selection_margin));
     }
-    if (config_.num_slots <= 0) {
+    if (hp_.num_slots <= 0) {
         throw std::runtime_error("DecodeTimeNumPolicy: num_slots must be positive, got " +
-                                 std::to_string(config_.num_slots));
+                                 std::to_string(hp_.num_slots));
     }
-    if (config_.scratch_slots < 0 || config_.scratch_slots >= config_.num_slots) {
+    if (hp_.scratch_slots < 0 || hp_.scratch_slots >= hp_.num_slots) {
         throw std::runtime_error("DecodeTimeNumPolicy: scratch_slots=" +
-                                 std::to_string(config_.scratch_slots) +
-                                 " out of range [0, " + std::to_string(config_.num_slots) + ")");
+                                 std::to_string(hp_.scratch_slots) +
+                                 " out of range [0, " + std::to_string(hp_.num_slots) + ")");
     }
 
-    const int V = config_.num_slots;
+    const int V = hp_.num_slots;
 
     // Allocate host staging buffers
     h_valid_mask_   = new float[V];
@@ -83,7 +83,7 @@ DecodeTimeNumPolicy::~DecodeTimeNumPolicy() {
 // ─── Move semantics ─────────────────────────────────
 
 DecodeTimeNumPolicy::DecodeTimeNumPolicy(DecodeTimeNumPolicy&& other) noexcept
-    : config_(other.config_),
+    : hp_(other.hp_),
       candidates_(other.candidates_),
       h_valid_mask_(other.h_valid_mask_),
       h_values_(other.h_values_),
@@ -108,7 +108,7 @@ DecodeTimeNumPolicy& DecodeTimeNumPolicy::operator=(DecodeTimeNumPolicy&& other)
         delete[] h_scores_;
         if (candidates_.d_slot_features) cudaFree(candidates_.d_slot_features);
 
-        config_ = other.config_;
+        hp_ = other.hp_;
         candidates_ = other.candidates_;
         h_valid_mask_ = other.h_valid_mask_;
         h_values_ = other.h_values_;
@@ -142,9 +142,9 @@ void DecodeTimeNumPolicy::buildCandidateSet(
     if (!d_recent_write) throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: d_recent_write is NULL");
     if (!d_usage)      throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: d_usage is NULL");
     if (!stream)       throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: stream is NULL");
-    if (V != config_.num_slots) {
+    if (V != hp_.num_slots) {
         throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: V=" + std::to_string(V) +
-                                 " != config num_slots=" + std::to_string(config_.num_slots));
+                                 " != hp.num_slots=" + std::to_string(hp_.num_slots));
     }
 
     // Synchronous D2H copy of slot metadata for candidate construction
@@ -249,7 +249,7 @@ SlotSelectionResult DecodeTimeNumPolicy::evaluateScores(
     result.confidence = margin;
 
     // Check margin gate
-    if (margin < config_.selection_margin) {
+    if (margin < hp_.selection_margin) {
         result.status = SlotSelectionStatus::Ambiguous;
         return result;
     }
@@ -299,8 +299,8 @@ DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
         exec_memory.values.data,
         exec_memory.recent_write_mask.data,
         exec_memory.usage.data,
-        policy->config().num_slots,
-        policy->config().scratch_slots,
+        policy->hp().num_slots,
+        policy->hp().scratch_slots,
         stream);
 
     const auto& cands = policy->candidates();
@@ -308,14 +308,14 @@ DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
         // Create non-owning Tensor views for inference forward
         Tensor h_t_view = Tensor::from_ptr(
             const_cast<float*>(d_hidden_state),
-            TensorContract::TensorShape::make_BSM(1, selector->config().d_model),
+            TensorContract::TensorShape::make_BSM(1, selector->hp().d_model),
             /*takes_ownership=*/false, /*requires_grad=*/false,
             "policy_h_t_view");
         Tensor slot_feat_view;
         if (cands.d_slot_features && cands.num_live_slots > 0) {
             slot_feat_view = Tensor::from_ptr(
                 const_cast<float*>(cands.d_slot_features),
-                TensorContract::TensorShape::make_BSM(cands.num_live_slots, selector->config().d_slot_features),
+                TensorContract::TensorShape::make_BSM(cands.num_live_slots, selector->hp().d_slot_features),
                 /*takes_ownership=*/false, /*requires_grad=*/false,
                 "policy_slot_feat_view");
         }

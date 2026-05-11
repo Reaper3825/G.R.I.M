@@ -22,30 +22,30 @@ using namespace ExecutionBlockInternal;
 //  Validation helpers
 //======================================================//
 void ExecutionBlockLayer::validateConfigOrThrow() const {
-    EXEC_CHECK(config_.d_model > 0,            "d_model must be positive");
-    EXEC_CHECK(config_.atom_embedding_dim > 0,  "atom_embedding_dim must be positive");
-    EXEC_CHECK(config_.num_ops > 0,            "num_ops must be positive");
-    EXEC_CHECK(config_.num_slots > 0,          "num_slots must be positive");
-    EXEC_CHECK(config_.num_exec_steps > 0,     "num_exec_steps must be positive");
-    EXEC_CHECK(config_.d_key > 0,              "d_key must be positive");
-    EXEC_CHECK(config_.d_type > 0,             "d_type must be positive");
-    EXEC_CHECK(config_.cross_attn_head_dim > 0,"cross_attn_head_dim must be positive");
-    EXEC_CHECK(config_.value_decode_input_dim > 0,    "value_decode_input_dim must be positive");
-    EXEC_CHECK(config_.value_decode_hidden_dim > 0,   "value_decode_hidden_dim must be positive");
-    EXEC_CHECK(config_.value_decode_input_dim + 16 <= config_.atom_embedding_dim,
+    EXEC_CHECK(hp_.d_model > 0,            "d_model must be positive");
+    EXEC_CHECK(hp_.atom_embedding_dim > 0,  "atom_embedding_dim must be positive");
+    EXEC_CHECK(hp_.num_ops > 0,            "num_ops must be positive");
+    EXEC_CHECK(hp_.num_slots > 0,          "num_slots must be positive");
+    EXEC_CHECK(hp_.num_exec_steps > 0,     "num_exec_steps must be positive");
+    EXEC_CHECK(hp_.d_key > 0,              "d_key must be positive");
+    EXEC_CHECK(hp_.d_type > 0,             "d_type must be positive");
+    EXEC_CHECK(hp_.cross_attn_head_dim > 0,"cross_attn_head_dim must be positive");
+    EXEC_CHECK(hp_.value_decode_input_dim > 0,    "value_decode_input_dim must be positive");
+    EXEC_CHECK(hp_.value_decode_hidden_dim > 0,   "value_decode_hidden_dim must be positive");
+    EXEC_CHECK(hp_.value_decode_input_dim + 16 <= hp_.atom_embedding_dim,
                "value_decode_input_dim + 16 must fit within atom_embedding_dim (decode slice out of bounds)");
-    EXEC_CHECK(config_.d_key <= 64,                    "d_key must be <= 64");
-    EXEC_CHECK(config_.num_scratch_slots >= 0, "num_scratch_slots must be non-negative");
-    EXEC_CHECK(config_.num_scratch_slots < config_.num_slots,
+    EXEC_CHECK(hp_.d_key <= 64,                    "d_key must be <= 64");
+    EXEC_CHECK(hp_.num_scratch_slots >= 0, "num_scratch_slots must be non-negative");
+    EXEC_CHECK(hp_.num_scratch_slots < hp_.num_slots,
                "num_scratch_slots must be < num_slots (need at least one value slot)");
 }
 
 void ExecutionBlockLayer::validateMemoryOrThrow(const ExecutionMemory& M) const {
-    const int V = config_.num_slots;
-    const int ae = config_.atom_embedding_dim;
-    const int dm = config_.d_model;
-    const int dk = config_.d_key;
-    const int dt = config_.d_type;
+    const int V = hp_.num_slots;
+    const int ae = hp_.atom_embedding_dim;
+    const int dm = hp_.d_model;
+    const int dk = hp_.d_key;
+    const int dt = hp_.d_type;
 
     EXEC_CHECK_SHAPE2(M.values,       "M.values",       V, 1);
     EXEC_CHECK_SHAPE2(M.atom_embeds,   "M.atom_embeds",   V, ae);
@@ -65,7 +65,7 @@ void ExecutionBlockLayer::validateExecuteStepInputsOrThrow(
     int batch_row,
     const ExecutionMemory& M, int step) const
 {
-    const int dm = config_.d_model;
+    const int dm = hp_.d_model;
     EXEC_CHECK_SHAPE2(H, "H (executeStep)", payload.total_tokens, dm);
     EXEC_CHECK(atom_positions != nullptr,
                "atom_positions is null - caller MUST provide a row-local atom view (empty buffer allowed)");
@@ -74,7 +74,7 @@ void ExecutionBlockLayer::validateExecuteStepInputsOrThrow(
                "BatchDeviceBindings geometry must match BatchPayload");
     EXEC_CHECK(num_atoms >= 0, "num_atoms must be non-negative");
     EXEC_CHECK(payload.total_tokens > 0, "payload.total_tokens must be positive");
-    EXEC_CHECK(step >= 0 && step < config_.num_exec_steps, "step out of range");
+    EXEC_CHECK(step >= 0 && step < hp_.num_exec_steps, "step out of range");
     EXEC_CHECK(batch_row >= 0, "batch_row must be non-negative");
     EXEC_CHECK(payload.max_seq_len > 0, "payload.max_seq_len must be positive");
     EXEC_CHECK(batch_row * payload.max_seq_len + payload.max_seq_len <= payload.total_tokens,
@@ -85,7 +85,7 @@ void ExecutionBlockLayer::validateExecuteStepInputsOrThrow(
 void ExecutionBlockLayer::validateCrossAttentionInputsOrThrow(
     const Tensor& hidden_states, const ExecutionMemory& M, int total_tokens) const
 {
-    const int dm = config_.d_model;
+    const int dm = hp_.d_model;
     EXEC_CHECK_SHAPE2(hidden_states, "hidden_states (cross-attn)", total_tokens, dm);
     validateMemoryOrThrow(M);
 }
@@ -115,10 +115,10 @@ ExecutionBlockLayer::~ExecutionBlockLayer() {
     if (d_reinforce_baseline_) cudaFree(d_reinforce_baseline_);
 }
 
-ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& config,
+ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
-    : config_(config)
+    : hp_(hp)
 {
     validateConfigOrThrow();
     EXEC_CHECK(init_stream != nullptr, "init_stream is NULL");
@@ -135,15 +135,15 @@ ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockCo
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_reinforce_baseline_), sizeof(float), "exec_reinforce_baseline");
     CUDA_CHECK(cudaMemsetAsync(d_reinforce_baseline_, 0, sizeof(float), init_stream));
 
-    const int dm  = config_.d_model;
-    const int dk  = config_.d_key;
-    const int dt  = config_.d_type;
-    const int hd  = config_.cross_attn_head_dim;
-    const int nop = config_.num_ops;   // 4
-    const int V   = config_.num_slots;
-    const int K   = config_.num_exec_steps;
-    const int vid = config_.value_decode_input_dim;
-    const int vhd = config_.value_decode_hidden_dim;
+    const int dm  = hp_.d_model;
+    const int dk  = hp_.d_key;
+    const int dt  = hp_.d_type;
+    const int hd  = hp_.cross_attn_head_dim;
+    const int nop = hp_.num_ops;   // 4
+    const int V   = hp_.num_slots;
+    const int K   = hp_.num_exec_steps;
+    const int vid = hp_.value_decode_input_dim;
+    const int vhd = hp_.value_decode_hidden_dim;
 
     auto make_param = [&](int rows, int cols, uint64_t s, const char* name) -> Tensor {
         auto t = Tensor::zeros(TensorContract::TensorShape::make_BSM(rows, cols),
@@ -243,7 +243,7 @@ ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockCo
 //  Move semantics
 //======================================================//
 ExecutionBlockLayer::ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept
-    : config_(other.config_),
+    : hp_(other.hp_),
       d_numeric_error_flag_(other.d_numeric_error_flag_),
       d_div_clamp_count_(other.d_div_clamp_count_),
       d_div_invalid_flag_(other.d_div_invalid_flag_),
@@ -300,7 +300,7 @@ ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other)
         if (d_exec_record_i_)     cudaFree(d_exec_record_i_);
         if (d_exec_record_f_)     cudaFree(d_exec_record_f_);
         if (d_reinforce_baseline_) cudaFree(d_reinforce_baseline_);
-        config_ = other.config_;
+        hp_ = other.hp_;
         d_numeric_error_flag_ = other.d_numeric_error_flag_;
         d_div_clamp_count_    = other.d_div_clamp_count_;
         d_div_invalid_flag_   = other.d_div_invalid_flag_;

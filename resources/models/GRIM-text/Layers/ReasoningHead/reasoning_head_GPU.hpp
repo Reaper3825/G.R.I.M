@@ -88,7 +88,7 @@ class ReasoningHeadLayer {
 public:
     ReasoningHeadLayer() = delete;
 
-    explicit ReasoningHeadLayer(const HyperParameters::ReasoningHeadConstructionHP& config,
+    explicit ReasoningHeadLayer(const HyperParameters::ReasoningHeadConstructionHP& hp,
                                 uint64_t seed,
                                 cudaStream_t init_stream);
 
@@ -125,13 +125,13 @@ public:
     const Tensor& w_arg1() const { return w_arg1_; }
     const Tensor& w_arg2() const { return w_arg2_; }
 
-    int d_model() const { return config_.d_model; }
-    int atom_embedding_dim() const { return config_.atom_embedding_dim; }
-    int num_ops() const { return config_.num_ops; }
-    int d_total() const { return config_.d_model + config_.atom_embedding_dim; }
+    int d_model() const { return hp_.d_model; }
+    int atom_embedding_dim() const { return hp_.atom_embedding_dim; }
+    int num_ops() const { return hp_.num_ops; }
+    int d_total() const { return hp_.d_model + hp_.atom_embedding_dim; }
 
 private:
-    HyperParameters::ReasoningHeadConstructionHP config_;
+    HyperParameters::ReasoningHeadConstructionHP hp_;
     Tensor w_op_;    // [num_ops, d_total]
     Tensor b_op_;    // [num_ops]
     Tensor w_arg1_;  // [1, d_total]

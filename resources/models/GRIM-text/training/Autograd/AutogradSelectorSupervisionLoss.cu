@@ -178,8 +178,8 @@ float addSelectorSupervisionLoss(
             mem.values.data,
             mem.recent_write_mask.data,
             mem.usage.data,
-            policy->config().num_slots,
-            policy->config().scratch_slots,
+            policy->hp().num_slots,
+            policy->hp().scratch_slots,
             ctx.stream);
         const auto& cands = policy->candidates();
 

@@ -85,8 +85,6 @@ void LanguageModel::initPBM() {
         throw std::runtime_error("LanguageModel::initPBM: embedder is NULL");
     }
 
-    const auto& cfg = getConfig();
-
     const auto* alibi_bias = embedder_->getALiBiBias();
     if (!alibi_bias || !alibi_bias->isInitialized()) {
         throw std::runtime_error(
@@ -101,11 +99,7 @@ void LanguageModel::initPBM() {
     pbm_spec_ = pbm_spec;
     pbm_spec_initialized_ = true;
 
-    std::cout << "✓ PBM (Hybrid ALiBi+RoPE) initialized:" << std::endl;
-    std::cout << "    ALiBi: " << cfg.num_heads << " heads with slopes" << std::endl;
-    std::cout << "    RoPE:  head_dim=" << cfg.head_dim
-              << ", rotary_dim=" << pbm_spec_.rotary_dim
-              << ", theta=10000" << std::endl;
+    std::cout << "✓ PBM (Hybrid ALiBi+RoPE) initialized" << std::endl;
 }
 
 void LanguageModel::initTrainingState() {

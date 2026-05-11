@@ -102,9 +102,13 @@ static __global__ void kernel_encoding_fill_value(float* data, int count, float 
 //  Layer allocates and Xavier-inits its own weights.
 //  Optimizer sees them via the existing public accessors (rms1Gamma(), attnWqkv(), etc.)
 // ═══════════════════════════════════════════════════════════════════════════
- EncodingLayer::EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream)
-    : config_(cfg) {
-    config_.validate("EncodingLayer::EncodingLayer");
+ EncodingLayer::EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
+                                        const PBM::PBMSpec& pos_encoding,
+                                        uint64_t seed,
+                                        cudaStream_t init_stream)
+     : hp_(hp_snapshot)
+     , pos_encoding_(&pos_encoding) {
+     validateConstructionSnapshot("EncodingLayer::EncodingLayer");
     allocateWeights(seed, init_stream);
 }
 
@@ -116,9 +120,9 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     if (!init_stream) {
         throw std::runtime_error("EncodingLayer::allocateWeights: init_stream is NULL");
     }
-    config_.validate("EncodingLayer::allocateWeights");
+    validateConstructionSnapshot("EncodingLayer::allocateWeights");
     
-    const auto& hp = config_.hp;
+    const auto& hp = hp_;
     const float residual_projection_init_gain = hp.residual_projection_init_gain;
     const int d_model   = hp.d_model;
     const int qkv_out_dim = hp.qkv_dim;
@@ -229,7 +233,8 @@ EncodingLayer::~EncodingLayer() {
 }
 
 EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
-    : config_(other.config_)
+    : hp_(other.hp_)
+    , pos_encoding_(other.pos_encoding_)
     , weights_ready_(other.weights_ready_)
     , rms1_gamma_(std::move(other.rms1_gamma_))
     , rms2_gamma_(std::move(other.rms2_gamma_))
@@ -242,6 +247,7 @@ EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     , layer_scale2_(std::move(other.layer_scale2_))
 {
     // Null out the moved-from object
+    other.pos_encoding_ = nullptr;
     other.weights_ready_ = false;
 }
 
@@ -249,7 +255,8 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
     if (this != &other) {
         freeWeights();
         
-        config_ = other.config_;
+        hp_ = other.hp_;
+        pos_encoding_ = other.pos_encoding_;
         weights_ready_ = other.weights_ready_;
         rms1_gamma_ = std::move(other.rms1_gamma_);
         rms2_gamma_ = std::move(other.rms2_gamma_);
@@ -261,6 +268,7 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         layer_scale1_ = std::move(other.layer_scale1_);
         layer_scale2_ = std::move(other.layer_scale2_);
         
+        other.pos_encoding_ = nullptr;
         other.weights_ready_ = false;
     }
     return *this;
@@ -289,7 +297,15 @@ void EncodingLayer::validateReady(const char* context) const {
         throw std::runtime_error(std::string(context) +
             ": FFN sublayer not initialized! Call allocateWeights() first.");
     }
-    config_.validate(context);
+    validateConstructionSnapshot(context);
+}
+
+void EncodingLayer::validateConstructionSnapshot(const char* context) const {
+    HyperParameters::validateEncoderLayerConstructionHP(hp_, context);
+    if (!pos_encoding_) {
+        throw std::invalid_argument(std::string(context) +
+            ": pos_encoding_ is NULL - PBM must be initialized before encoder construction");
+    }
 }
 
 // NOTE: requiredWorkspaceBytes() DELETED (Rule 20/26)
@@ -308,7 +324,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                                bool dropout_enabled,
                                int layer_idx) {
     validateReady("EncodingLayer::forward");
-    const auto& hp = config_.hp;
+    const auto& hp = hp_;
     
     // Validate input
     if (!input.data) {
@@ -382,8 +398,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Attention owns QKV projection, RoPE/ALiBi, SDPA, diagnostics, dropout seed,
     // BHSD flattening, and output projection. Encoder only supplies the PBM spec.
     //--------------------------------------------------
-    if (!config_.pos_encoding) {
-        throw std::runtime_error("EncodingLayer::forward: config_.pos_encoding is NULL before attention call");
+    if (!pos_encoding_) {
+        throw std::runtime_error("EncodingLayer::forward: pos_encoding_ is NULL before attention call");
     }
     const HyperParameters::EncoderSelfAttentionHP attention_hp =
         HyperParameters::encoderSelfAttentionHP(hp);
@@ -400,7 +416,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     Attention::EncoderSelfAttentionForwardRequest attention_request{
         payload,
         attention_hp,
-        *config_.pos_encoding,
+        *pos_encoding_,
         stream,
         cublas_handle,
         training_step,

@@ -1517,8 +1517,8 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
  * with a properly autograd-tracked operation.
  * 
  * @param qkv_out  Input tensor [tokens, d_model + 2*kv_dim] from matmul(ln1_out, W_qkv)
- * @param payload  Batch geometry (batch_size, max_seq_len)
- * @param gqa      GQA dimensions (num_heads, num_kv_heads, head_dim)
+ * @param payload  BatchPayload source of truth for batch/sequence geometry
+ * @param hp       Grouped attention HP source of truth for GQA/head geometry
  * @param stream   CUDA stream
  * @return Tuple of (Q_bhsd, K_bhsd, V_bhsd) with autograd tracking
  */
@@ -1673,12 +1673,9 @@ struct RoPEGradFn : public GradFn {
         bool k_requires_grad = false;
         
         // RoPE parameters (captured at forward time)
+        const BatchPayload* payload = nullptr;
+        GRIM::HyperParameters::EncoderSelfAttentionHP hp{};
         const float* inv_freq = nullptr;
-        int batch_size = 0;
-        int num_q_heads = 0;
-        int num_kv_heads = 0;
-        int seq_len = 0;
-        int head_dim = 0;
         int rotary_dim = 0;
         int pos_offset = 0;
         
@@ -1719,32 +1716,32 @@ struct RoPEGradFn : public GradFn {
         owned_grad_buf.reset(grad_buf, [](float* p) { queueForDeferredCleanup(p); });
         
         if (output_type == OutputType::Q) {
+            if (!state.payload) {
+                throw std::runtime_error("RoPEGradFn::apply: BatchPayload pointer is NULL");
+            }
             // Inverse-rotate dQ only - K gradients handled by K's GradFn
             PBM::launchRoPERotationGQA_backward(
                 grad_buf,         // dQ copy - modified in-place
                 nullptr,          // dK = nullptr, handle separately
                 state.inv_freq,
-                state.batch_size,
-                state.num_q_heads,
-                state.num_kv_heads,
-                state.seq_len,
-                state.head_dim,
+                *state.payload,
+                state.hp,
                 state.rotary_dim,
                 stream,
                 state.pos_offset
             );
             AG_TRACE("[RoPEGradFn-Q] Inverse RoPE applied to dQ copy\n");
         } else {
+            if (!state.payload) {
+                throw std::runtime_error("RoPEGradFn::apply: BatchPayload pointer is NULL");
+            }
             // Inverse-rotate dK only - Q gradients handled by Q's GradFn
             PBM::launchRoPERotationGQA_backward(
                 nullptr,          // dQ = nullptr, handle separately
                 grad_buf,         // dK copy - modified in-place
                 state.inv_freq,
-                state.batch_size,
-                state.num_q_heads,
-                state.num_kv_heads,
-                state.seq_len,
-                state.head_dim,
+                *state.payload,
+                state.hp,
                 state.rotary_dim,
                 stream,
                 state.pos_offset
@@ -1817,11 +1814,7 @@ std::pair<Tensor, Tensor> rope_rotation(
     int pos_offset
 ) {
     requireEncoderAttentionHP(hp, "rope_rotation");
-    const int batch_size = payload.batch_size;
-    const int num_q_heads = hp.num_heads;
-    const int num_kv_heads = hp.num_kv_heads;
-    const int seq_len = payload.max_seq_len;
-    const int head_dim = hp.head_dim;
+    payload.validate("rope_rotation");
     // RULE 20: Fail loud validation
     if (!Q.data) {
         throw std::runtime_error("rope_rotation: Q.data is NULL");
@@ -1832,13 +1825,13 @@ std::pair<Tensor, Tensor> rope_rotation(
     if (!inv_freq) {
         throw std::runtime_error("rope_rotation: inv_freq is NULL");
     }
-    if (rotary_dim <= 0 || rotary_dim > head_dim) {
+    if (rotary_dim <= 0 || rotary_dim > hp.head_dim) {
         throw std::runtime_error("rope_rotation: invalid rotary_dim=" + std::to_string(rotary_dim) +
-                                 " (head_dim=" + std::to_string(head_dim) + ")");
+                                 " (head_dim=" + std::to_string(hp.head_dim) + ")");
     }
     
     AG_TRACE("[rope_rotation] ENTER Q.data=%p K.data=%p batch=%d seq=%d heads=%d/%d dim=%d rotary=%d\n",
-             Q.data, K.data, batch_size, seq_len, num_q_heads, num_kv_heads, head_dim, rotary_dim);
+             Q.data, K.data, payload.batch_size, payload.max_seq_len, hp.num_heads, hp.num_kv_heads, hp.head_dim, rotary_dim);
     
     // Allocate separate output buffers — input tensors are never mutated.
     const std::size_t q_bytes = Q.numel() * sizeof(float);
@@ -1855,7 +1848,7 @@ std::pair<Tensor, Tensor> rope_rotation(
     // Forward pass: Apply RoPE rotation to the COPIES
     PBM::launchRoPERotationGQA(
         q_rot_data, k_rot_data, inv_freq,
-        batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
+        payload, hp, rotary_dim,
         stream, pos_offset
     );
     
@@ -1897,12 +1890,9 @@ std::pair<Tensor, Tensor> rope_rotation(
         shared->k_requires_grad = K.requires_grad;
         
         // Capture RoPE parameters
+        shared->payload = &payload;
+        shared->hp = hp;
         shared->inv_freq = inv_freq;
-        shared->batch_size = batch_size; 
-        shared->num_q_heads = num_q_heads;
-        shared->num_kv_heads = num_kv_heads;
-        shared->seq_len = seq_len;
-        shared->head_dim = head_dim;
         shared->rotary_dim = rotary_dim;
         shared->pos_offset = pos_offset;
         

@@ -151,7 +151,7 @@ class ExecutionBlockLayer {
 public:
     ExecutionBlockLayer() = delete;
 
-    explicit ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& config,
+    explicit ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
                                 uint64_t seed,
                                 cudaStream_t init_stream);
 
@@ -311,12 +311,12 @@ public:
     const Tensor& W_reason_gate() const { return W_reason_gate_; }
     const Tensor& W_trace_gate()  const { return W_trace_gate_; }
 
-    const HyperParameters::ExecutionBlockConstructionHP& config() const { return config_; }
+    const HyperParameters::ExecutionBlockConstructionHP& hp() const { return hp_; }
 
 private:
     friend struct ExecutionBlockInternal::LayerAccess;
 
-    HyperParameters::ExecutionBlockConstructionHP config_;
+    HyperParameters::ExecutionBlockConstructionHP hp_;
 
     // Production hardening: persistent device-side error tracking
     int* d_numeric_error_flag_ = nullptr;  // atomicMax stage-id: numeric, softmax, collapse

@@ -35,30 +35,30 @@ namespace GRIM {
 // ─── Constructor ─────────────────────────────────────
 
 DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(
-    const HyperParameters::DecodeTimeSelectorConstructionHP& config,
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
     uint64_t seed,
     cudaStream_t init_stream)
-    : config_(config)
+    : hp_(hp)
 {
-    if (config_.d_model <= 0) {
+    if (hp_.d_model <= 0) {
         throw std::runtime_error("DecodeTimeSlotSelectorLayer: d_model must be positive, got " +
-                                 std::to_string(config_.d_model));
+                                 std::to_string(hp_.d_model));
     }
-    if (config_.d_selector <= 0) {
+    if (hp_.d_selector <= 0) {
         throw std::runtime_error("DecodeTimeSlotSelectorLayer: d_selector must be positive, got " +
-                                 std::to_string(config_.d_selector));
+                                 std::to_string(hp_.d_selector));
     }
-    if (config_.d_slot_features <= 0) {
+    if (hp_.d_slot_features <= 0) {
         throw std::runtime_error("DecodeTimeSlotSelectorLayer: d_slot_features must be positive, got " +
-                                 std::to_string(config_.d_slot_features));
+                                 std::to_string(hp_.d_slot_features));
     }
     if (!init_stream) {
         throw std::runtime_error("DecodeTimeSlotSelectorLayer: init_stream is NULL");
     }
 
-    const int dm = config_.d_model;
-    const int ds = config_.d_selector;
-    const int df = config_.d_slot_features;
+    const int dm = hp_.d_model;
+    const int ds = hp_.d_selector;
+    const int df = hp_.d_slot_features;
 
     auto make_param = [&](int rows, int cols, uint64_t s, const char* name) -> Tensor {
         auto t = Tensor::zeros(TensorContract::TensorShape::make_BSM(rows, cols),
@@ -98,7 +98,7 @@ DecodeTimeSlotSelectorLayer::~DecodeTimeSlotSelectorLayer() {
 // ─── Move semantics ──────────────────────────────────
 
 DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(DecodeTimeSlotSelectorLayer&& other) noexcept
-        : config_(other.config_),
+        : hp_(other.hp_),
             W_q_select_(std::move(other.W_q_select_)),
       W_k_select_(std::move(other.W_k_select_)),
       null_key_select_(std::move(other.null_key_select_)),
@@ -108,7 +108,7 @@ DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(DecodeTimeSlotSelectorL
 
 DecodeTimeSlotSelectorLayer& DecodeTimeSlotSelectorLayer::operator=(DecodeTimeSlotSelectorLayer&& other) noexcept {
     if (this != &other) {
-        config_ = other.config_;
+        hp_ = other.hp_;
         W_q_select_ = std::move(other.W_q_select_);
         W_k_select_ = std::move(other.W_k_select_);
         null_key_select_ = std::move(other.null_key_select_);
@@ -156,11 +156,11 @@ SelectorForwardResult DecodeTimeSlotSelectorLayer::forward(
                 std::to_string(sf.rows) + " != num_live_slots=" +
                 std::to_string(num_live_slots));
         }
-        if (sf.cols != config_.d_slot_features) {
+        if (sf.cols != hp_.d_slot_features) {
             throw std::runtime_error(
                 "DecodeTimeSlotSelectorLayer::forward: slot_features.cols=" +
-                std::to_string(sf.cols) + " != config.d_slot_features=" +
-                std::to_string(config_.d_slot_features));
+                std::to_string(sf.cols) + " != hp.d_slot_features=" +
+                std::to_string(hp_.d_slot_features));
         }
     }
 

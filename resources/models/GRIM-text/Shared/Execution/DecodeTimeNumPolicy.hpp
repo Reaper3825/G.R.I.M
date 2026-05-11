@@ -83,7 +83,7 @@ struct PolicyCandidateSet {
 
 class DecodeTimeNumPolicy {
 public:
-    explicit DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelectorConstructionHP& config);
+    explicit DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelectorConstructionHP& hp);
     ~DecodeTimeNumPolicy();
 
     DecodeTimeNumPolicy(DecodeTimeNumPolicy&& other) noexcept;
@@ -126,10 +126,10 @@ public:
     // Access candidate set after buildCandidateSet()
     const PolicyCandidateSet& candidates() const { return candidates_; }
 
-    const HyperParameters::DecodeTimeSelectorConstructionHP& config() const { return config_; }
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp() const { return hp_; }
 
 private:
-    HyperParameters::DecodeTimeSelectorConstructionHP config_;
+    HyperParameters::DecodeTimeSelectorConstructionHP hp_;
     PolicyCandidateSet candidates_;
 
     // Host staging buffers for H2D reads during candidate construction

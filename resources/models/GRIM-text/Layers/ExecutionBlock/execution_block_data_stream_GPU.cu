@@ -1825,7 +1825,7 @@ static void collectStepMetrics(ExecutionBlockLayer& layer,
                                int nop,
                                int V,
                                cudaStream_t stream) {
-    if (!diag_out || !layer.config().debug_mode) return;
+    if (!diag_out || !layer.hp().debug_mode) return;
 
     float d_metrics[7];
     float* d_buf = nullptr;
@@ -1892,15 +1892,15 @@ void executeStepCoordinatorImpl(
     const float* expected_target,
     const TeacherSelectionTargets* selection_targets
 ) {
-    const int dm = layer.config().d_model;
-    const int V = layer.config().num_slots;
-    const int S = layer.config().num_scratch_slots;
+    const int dm = layer.hp().d_model;
+    const int V = layer.hp().num_slots;
+    const int S = layer.hp().num_scratch_slots;
     const int V_val = V - S;
-    const int dk = layer.config().d_key;
-    const int nop = layer.config().num_ops;
-    const int ae = layer.config().atom_embedding_dim;
-    const int vid = layer.config().value_decode_input_dim;
-    const int vhd = layer.config().value_decode_hidden_dim;
+    const int dk = layer.hp().d_key;
+    const int nop = layer.hp().num_ops;
+    const int ae = layer.hp().atom_embedding_dim;
+    const int vid = layer.hp().value_decode_input_dim;
+    const int vhd = layer.hp().value_decode_hidden_dim;
     int* d_exec_idx = LayerAccess::execIndices(layer);
     int* d_exec_record_i = LayerAccess::execRecordI(layer);
     float* d_exec_record_f = LayerAccess::execRecordF(layer);
@@ -1914,7 +1914,7 @@ void executeStepCoordinatorImpl(
     prepareMemoryStepOrThrow(layer, memory, atom_positions, d_slot_map_row, num_atoms, payload.max_seq_len, diag_out, stream);
     buildValueSlotCandidates(layer, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        work.slot_values.data, V_val, LayerAccess::numericErrorFlag(layer), kStageV1, layer.config().magnitude_limit);
+        work.slot_values.data, V_val, LayerAccess::numericErrorFlag(layer), kStageV1, layer.hp().magnitude_limit);
 
     // Row-local device atom mask: used by ReduceMean to exclude atom positions
     // from the decision context, preventing numeric surface leakage into
@@ -1940,7 +1940,7 @@ void executeStepCoordinatorImpl(
         work.context.grad_fn = mean_fn;
     }
 
-    const int K = layer.config().num_exec_steps;
+    const int K = layer.hp().num_exec_steps;
     const int N_prior = static_cast<int>(prior_records.size());
     if (N_prior > 0) {
         std::vector<int> h_slot1(N_prior), h_slot2(N_prior), h_ops(N_prior);
@@ -2042,7 +2042,7 @@ void executeStepCoordinatorImpl(
     work.p_arg1 = autograd::softmax(arg1_logits, temperature, stream);
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStagePArg1);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg1, layer.config().entropy_collapse_threshold);
+        work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg1, layer.hp().entropy_collapse_threshold);
 
     auto query2 = autograd::matmul(decision_input, layer.w_arg2_select(), stream, decision_input.data, nullptr);
     auto arg2_logits = autograd::matmul(query2, work.cand_hidden, stream, nullptr, nullptr, true);
@@ -2058,13 +2058,13 @@ void executeStepCoordinatorImpl(
     work.p_arg2 = autograd::softmax(arg2_logits, temperature, stream);
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg2.data, V_val, LayerAccess::numericErrorFlag(layer), kStagePArg2);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_arg2.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg2, layer.config().entropy_collapse_threshold);
+        work.p_arg2.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg2, layer.hp().entropy_collapse_threshold);
 
     materializeSelectedOperands(layer, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        work.slot_values.data, V_val, LayerAccess::numericErrorFlag(layer), kStageV1, layer.config().magnitude_limit);
-    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v1.data, 1, LayerAccess::numericErrorFlag(layer), kStageV1, layer.config().magnitude_limit);
-    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v2.data, 1, LayerAccess::numericErrorFlag(layer), kStageV2, layer.config().magnitude_limit);
+        work.slot_values.data, V_val, LayerAccess::numericErrorFlag(layer), kStageV1, layer.hp().magnitude_limit);
+    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v1.data, 1, LayerAccess::numericErrorFlag(layer), kStageV1, layer.hp().magnitude_limit);
+    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v2.data, 1, LayerAccess::numericErrorFlag(layer), kStageV2, layer.hp().magnitude_limit);
 
     // v1/v2 are DETACHED from p_arg.  No gradient path from execution
     // value loss back into arg selection.  Only selection CE trains arg selection.
@@ -2087,7 +2087,7 @@ void executeStepCoordinatorImpl(
     work.p_op = autograd::softmax(op_logits, temperature, stream);
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_op.data, nop, LayerAccess::numericErrorFlag(layer), kStagePOp);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_op.data, nop, LayerAccess::numericErrorFlag(layer), kStageEntropyOp, layer.config().entropy_collapse_threshold);
+        work.p_op.data, nop, LayerAccess::numericErrorFlag(layer), kStageEntropyOp, layer.hp().entropy_collapse_threshold);
 
     work.op_results = Tensor::zeros({1, nop}, stream, "exec_op_results");
     // Fix #6: Reset per-step division invalid flag before FourOps
@@ -2109,7 +2109,7 @@ void executeStepCoordinatorImpl(
     work.v_out.is_leaf = false;
     kernelHardPickOpForward<<<1, 1, 0, stream>>>(work.v_out.data, work.op_results.data, d_exec_idx + 2, nop);
     CUDA_CHECK_KERNEL();
-    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v_out.data, 1, LayerAccess::numericErrorFlag(layer), kStageVOut, layer.config().magnitude_limit);
+    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v_out.data, 1, LayerAccess::numericErrorFlag(layer), kStageVOut, layer.hp().magnitude_limit);
 
     {
         auto grad_fn = std::make_shared<FourOpMixGradFn>();
@@ -2121,9 +2121,9 @@ void executeStepCoordinatorImpl(
     // Fix #6: Division invalid penalty — penalize p_op[3] when division was clamped.
     // Gradient: d_p_op[3] = flag * weight * grad_out → softmax → op_logits → W_op_select.
     // This teaches: "don't select ÷ when |v2| < eps."
-    if (diag_out && layer.config().div_invalid_penalty_weight > 0.0f) {
+    if (diag_out && layer.hp().div_invalid_penalty_weight > 0.0f) {
         constexpr int kDivOpIdx = 3;
-        const float penalty_w = layer.config().div_invalid_penalty_weight;
+        const float penalty_w = layer.hp().div_invalid_penalty_weight;
 
         diag_out->div_invalid_penalty = Tensor::zeros({1, 1}, stream, "exec_div_penalty");
         kernelDivInvalidPenalty<<<1, 1, 0, stream>>>(
@@ -2140,8 +2140,8 @@ void executeStepCoordinatorImpl(
     // Fix #8: Division magnitude penalty — penalize large |v_out| after clamped division.
     // Gradient: d_v_out = div_flag * weight * sign(v_out) → FourOpMixGradFn → v1, v2.
     // This teaches: "produce smaller operands so division doesn't blow up."
-    if (diag_out && layer.config().div_magnitude_penalty_weight > 0.0f) {
-        const float mag_w = layer.config().div_magnitude_penalty_weight;
+    if (diag_out && layer.hp().div_magnitude_penalty_weight > 0.0f) {
+        const float mag_w = layer.hp().div_magnitude_penalty_weight;
 
         diag_out->div_magnitude_penalty = Tensor::zeros({1, 1}, stream, "exec_div_mag_penalty");
         kernelDivMagnitudePenalty<<<1, 1, 0, stream>>>(
@@ -2234,11 +2234,11 @@ void executeStepCoordinatorImpl(
     work.result_emb = autograd::matmul(work.v_decoded, layer.W_value_to_emb(), stream, work.v_decoded.data, nullptr);
     work.result_emb = autograd::add(work.result_emb, layer.b_value_to_emb(), stream);
     kernelCheckFinite<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        work.result_emb.data, dm, LayerAccess::numericErrorFlag(layer), kStageResultEmb, layer.config().magnitude_limit);
+        work.result_emb.data, dm, LayerAccess::numericErrorFlag(layer), kStageResultEmb, layer.hp().magnitude_limit);
 
-    if (layer.config().result_slot_mode == 1 && layer.config().result_slot_index >= 0 &&
-        layer.config().result_slot_index < payload.total_tokens) {
-        work.result_slot = layer.config().result_slot_index;
+    if (layer.hp().result_slot_mode == 1 && layer.hp().result_slot_index >= 0 &&
+        layer.hp().result_slot_index < payload.total_tokens) {
+        work.result_slot = layer.hp().result_slot_index;
     } else {
         work.result_slot = batch_row * payload.max_seq_len + payload.max_seq_len - 1;
     }
@@ -2252,11 +2252,11 @@ void executeStepCoordinatorImpl(
     cudaMallocOrThrow(reinterpret_cast<void**>(&save_H_slot_buf), dm * sizeof(float), "datastream_save_H_slot");
     kernelInjectResultSlot<<<1, kBlockSize, 0, stream>>>(
         H.data, work.result_emb.data, layer.w_inject_gate().data,
-        inv_sqrt_d, work.result_slot, dm, layer.config().inject_gate_temp,
+        inv_sqrt_d, work.result_slot, dm, layer.hp().inject_gate_temp,
         save_gate_buf, save_H_slot_buf);
     CUDA_CHECK_KERNEL();
     // Queue async readback of inject gate for telemetry (completes at next sync)
-    if (diag_out && layer.config().debug_mode) {
+    if (diag_out && layer.hp().debug_mode) {
         CUDA_CHECK(cudaMemcpyAsync(&h_inject_gate_value, save_gate_buf, sizeof(float),
                                    cudaMemcpyDeviceToHost, stream));
     }
@@ -2265,7 +2265,7 @@ void executeStepCoordinatorImpl(
         auto inject_fn = std::make_shared<ExecutionBlockInjectGradFn>();
         inject_fn->capture(H, work.result_emb, layer.w_inject_gate(),
                            save_gate_buf, save_H_slot_buf,
-                           inv_sqrt_d, layer.config().inject_gate_temp,
+                           inv_sqrt_d, layer.hp().inject_gate_temp,
                            work.result_slot, payload.total_tokens, dm, stream);
         H.grad_fn = inject_fn;
         H.is_leaf = false;
@@ -2329,7 +2329,7 @@ void executeStepCoordinatorImpl(
     work.p_write = autograd::softmax(write_logits, temperature, stream);
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_write.data, V, LayerAccess::numericErrorFlag(layer), kStagePWrite);
     kernelCheckWriteCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_write.data, V, LayerAccess::numericErrorFlag(layer), kStageWriteCollapse, layer.config().write_collapse_threshold);
+        work.p_write.data, V, LayerAccess::numericErrorFlag(layer), kStageWriteCollapse, layer.hp().write_collapse_threshold);
 
     if (diag_out) {
         // Hard recomputed result: re-evaluate the argmax-selected op from memory values
@@ -2373,7 +2373,7 @@ void executeStepCoordinatorImpl(
         // Baseline is an EMA of transition_err for variance reduction.
         // Op-correctness gate: only train arg selection when op matches teacher target.
         // Wrong op → reward is meaningless for arg credit assignment.
-        if (layer.config().arg_reinforce_weight > 0.0f) {
+        if (layer.hp().arg_reinforce_weight > 0.0f) {
             float op_gate = 1.0f;
             if (selection_targets && selection_targets->valid) {
                 int op_target = selection_targets->op_target;
@@ -2385,8 +2385,8 @@ void executeStepCoordinatorImpl(
             }
 
             int* d_exec_idx_local = LayerAccess::execIndices(layer);
-            const float arf_w = layer.config().arg_reinforce_weight * op_gate;
-            const float bld   = layer.config().arg_reinforce_baseline_decay;
+            const float arf_w = layer.hp().arg_reinforce_weight * op_gate;
+            const float bld   = layer.hp().arg_reinforce_baseline_decay;
 
             auto arf_fn = std::make_shared<ArgReinforceLossGradFn>();
             // Allocate advantage buffer BEFORE kernel launch — kernel writes advantage here
@@ -2413,14 +2413,14 @@ void executeStepCoordinatorImpl(
             diag_out->arg_reinforce_loss.is_leaf = false;
         }
 
-        if (layer.config().transition_hard_threshold > 0.0f) {
+        if (layer.hp().transition_hard_threshold > 0.0f) {
             kernelAbsDiff<<<1, 1, 0, stream>>>(
                 diag_out->transition_error_hard.data,
                 recomputed_result.data,
                 target_ptr,
                 LayerAccess::numericErrorFlag(layer),
                 kStageTransitionInvalid,
-                layer.config().transition_hard_threshold);
+                layer.hp().transition_hard_threshold);
             CUDA_CHECK_KERNEL();
         }
     }
@@ -2437,7 +2437,7 @@ void executeStepCoordinatorImpl(
     captureStateAfterWriteAndCheckMutations(layer, memory, diag_out, stream);
     collectStepMetrics(layer, work, diag_out, V_val, nop, V, stream);
     // collectStepMetrics synced the stream — h_inject_gate_value is now valid
-    if (diag_out && layer.config().debug_mode) {
+    if (diag_out && layer.hp().debug_mode) {
         diag_out->metrics.inject_gate_value = h_inject_gate_value;
     }
     finalizeStepOrThrow(layer, diag_out, step, stream);

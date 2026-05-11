@@ -592,8 +592,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         // For S=1, Q is [1,nh,1,hd] and K is [1,nkv,1,hd]
         PBM::launchRoPERotationGQA(
             Q.data, K.data, pbm_spec.rope_inv_freq,
-            1, num_heads, num_kv_heads, 1, head_dim,
-            pbm_spec.rotary_dim, stream, token_pos);
+            inf_payload, attention_hp, pbm_spec.rotary_dim,
+            stream, token_pos);
 
         // 3e. Convert K,V to BF16 and write to KV cache at position token_pos
         // For S=1: BHSD [1,H,1,D] = BSHD [1,1,H,D] — same contiguous layout [H*D]

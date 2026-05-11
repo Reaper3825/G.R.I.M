@@ -15,43 +15,24 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <cstddef>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
-#include "../HyperParameters/HyperParameters_GPU.hpp"
+#include "../Batching/BatchPayload.hpp"
+#include "../HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM::PBM {
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  Configuration
+//  Runtime options
 // ═══════════════════════════════════════════════════════════════════════════
 
-struct PBMConfig {
-    // ALiBi configuration (defaults from HyperParameters)
-    int num_heads = GRIM::HyperParameters::DEFAULT_NUM_HEADS;
-    float alibi_slope_exponent = GRIM::HyperParameters::ALIBI_SLOPE_EXPONENT;
-    
-    // ISSUE #78 FIX: Maximum ALiBi bias cap (negative value, e.g., -10.0f)
-    // Slopes are capped so that: abs(slope) * max_seq_len <= abs(alibi_max_bias)
-    // Set to 0.0f to disable capping (NOT RECOMMENDED)
-    float alibi_max_bias = GRIM::HyperParameters::ALIBI_MAX_BIAS;
-    
-    // Context length for ALiBi slope calculation (must be set from model config)
-    // This determines the maximum position distance ALiBi is calibrated for
-    int max_seq_len = GRIM::HyperParameters::DEFAULT_MAX_SEQ_LEN;
-    
-    // RoPE configuration
-    // head_dim: MUST be set from LanguageModelConfig.head_dim (= d_model / num_heads)
-    // DO NOT use DEFAULT_HEAD_DIM - it may not match actual model dimensions
-    int head_dim = 0;  // REQUIRED - set from config.head_dim
-    int rotary_dim = 0; // Usually same as head_dim, set from config.head_dim
-    float rope_theta = GRIM::HyperParameters::ROPE_THETA;
-    float rope_scaling = GRIM::HyperParameters::ROPE_SCALING;
-    
-    // GQA support (defaults from HyperParameters)
-    int num_kv_heads = GRIM::HyperParameters::DEFAULT_NUM_KV_HEADS;
-    
-    // Runtime
+using PBMConstructionHP = GRIM::HyperParameters::PBMConstructionHP;
+
+struct PBMRuntimeOptions {
     cudaStream_t stream = nullptr;
     bool verbose = false;
 };
@@ -64,23 +45,15 @@ struct PBMState {
     // ALiBi state
     float* alibi_slopes = nullptr;       // Device: [num_heads] slopes
     std::vector<float> alibi_slopes_host;
-    int num_heads = 0;
     
     // RoPE state
     float* rope_inv_freq = nullptr;      // Device: [rotary_dim/2] inverse frequencies
     std::vector<float> rope_inv_freq_host;
-    int head_dim = 0;
-    int rotary_dim = 0;
-    
-    // GQA
-    int num_kv_heads = 0;
-    
-    // Config values used during initialization (for stale reuse detection)
-    int max_seq_len = 0;
-    float rope_theta = 0.0f;
-    float rope_scaling = 0.0f;
-    float alibi_slope_exponent = 0.0f;
-    float alibi_max_bias = 0.0f;
+
+    // Grouped construction snapshot used for stale reuse detection and specs.
+    // HyperparameterGroupings owns the slice; PBMState only stores the durable
+    // snapshot that produced the allocated buffers.
+    PBMConstructionHP construction_hp{};
     
     // CUDA event recorded after async upload for cross-stream synchronization.
     // Consumers on a DIFFERENT stream must cudaStreamWaitEvent(their_stream, upload_event)
@@ -116,10 +89,14 @@ struct PBMSpec {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Initialize PBM state (allocates GPU buffers, computes slopes/frequencies)
-bool initializePBM(const PBMConfig& config, PBMState& state);
+bool initializePBM(const PBMConstructionHP& hp,
+                   PBMState& state,
+                   PBMRuntimeOptions runtime = {});
 
 // Ensure state matches config (re-initializes if dimensions changed)
-bool ensurePBM(const PBMConfig& config, PBMState& state);
+bool ensurePBM(const PBMConstructionHP& hp,
+               PBMState& state,
+               PBMRuntimeOptions runtime = {});
 
 // Release GPU memory
 void releasePBM(PBMState& state);
@@ -141,11 +118,8 @@ void launchRoPERotationGQA(
     float* Q,                           // Query tensor (in-place)
     float* K,                           // Key tensor (in-place)
     const float* inv_freq,              // Inverse frequencies [rotary_dim/2]
-    int batch_size,
-    int num_q_heads,                    // Q head count (larger in GQA)
-    int num_kv_heads,                   // KV head count (smaller in GQA)
-    int seq_len,
-    int head_dim,
+    const GRIM::Batching::BatchPayload& payload,
+    const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     int rotary_dim,
     cudaStream_t stream = nullptr,
     int pos_offset = 0                  // Position offset for KV cache decode (default 0)
@@ -170,11 +144,8 @@ void launchRoPERotationGQA_backward(
     float* grad_Q,                      // Query gradient tensor (in-place)
     float* grad_K,                      // Key gradient tensor (in-place)
     const float* inv_freq,              // Inverse frequencies [rotary_dim/2]
-    int batch_size,
-    int num_q_heads,                    // Q head count (larger in GQA)
-    int num_kv_heads,                   // KV head count (smaller in GQA)
-    int seq_len,
-    int head_dim,
+    const GRIM::Batching::BatchPayload& payload,
+    const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
     int rotary_dim,
     cudaStream_t stream = nullptr,
     int pos_offset = 0                  // Position offset (MUST match forward pass)
@@ -185,23 +156,45 @@ void launchRoPERotationGQA_backward(
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Returns GPU bytes required for PBM buffers
-inline size_t getPBMDeviceBytes(const PBMConfig& config) {
-    const size_t alibi_bytes = static_cast<size_t>(config.num_heads) * sizeof(float);
-    const size_t rope_bytes = static_cast<size_t>(config.rotary_dim / 2) * sizeof(float);
+inline size_t getPBMDeviceBytes(const PBMConstructionHP& hp) {
+    GRIM::HyperParameters::validatePBMConstructionHP(hp, "PBM::getPBMDeviceBytes");
+    const size_t alibi_bytes = static_cast<size_t>(hp.num_heads) * sizeof(float);
+    const size_t rope_bytes = static_cast<size_t>(hp.rotary_dim / 2) * sizeof(float);
     return alibi_bytes + rope_bytes;
 }
 
 // Convenience accessors
+inline void requirePBMInitialized(const PBMState& state, const char* caller) {
+    if (!state.initialized) {
+        throw std::runtime_error(std::string(caller) + ": PBM state is not initialized");
+    }
+}
+
 inline const float* getAlibiSlopes(const PBMState& state) {
-    return state.initialized ? state.alibi_slopes : nullptr;
+    requirePBMInitialized(state, "PBM::getAlibiSlopes");
+    if (!state.alibi_slopes) {
+        throw std::runtime_error("PBM::getAlibiSlopes: initialized state has NULL alibi_slopes at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    return state.alibi_slopes;
 }
 
 inline const float* getRoPEInvFreq(const PBMState& state) {
-    return state.initialized ? state.rope_inv_freq : nullptr;
+    requirePBMInitialized(state, "PBM::getRoPEInvFreq");
+    if (!state.rope_inv_freq) {
+        throw std::runtime_error("PBM::getRoPEInvFreq: initialized state has NULL rope_inv_freq at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    return state.rope_inv_freq;
 }
 
 inline int getRotaryDimension(const PBMState& state) {
-    return state.initialized ? state.rotary_dim : 0;
+    requirePBMInitialized(state, "PBM::getRotaryDimension");
+    if (state.construction_hp.rotary_dim <= 0) {
+        throw std::runtime_error("PBM::getRotaryDimension: initialized state has invalid rotary_dim=" +
+                                 std::to_string(state.construction_hp.rotary_dim));
+    }
+    return state.construction_hp.rotary_dim;
 }
 
 } // namespace GRIM::PBM

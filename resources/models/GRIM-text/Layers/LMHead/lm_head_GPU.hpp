@@ -71,9 +71,9 @@ public:
     LMHeadLayer& operator=(LMHeadLayer&& other) noexcept;
 
     //--------------------------------------------------
-    // Configuration
+    // Grouped HP snapshot
     //--------------------------------------------------
-    const HyperParameters::LMHeadLayerConstructionHP& config() const noexcept { return hp_; }
+    const HyperParameters::LMHeadLayerConstructionHP& hp() const noexcept { return hp_; }
 
     //--------------------------------------------------
     // Weight Accessors (for training/serialization)

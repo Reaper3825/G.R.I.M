@@ -81,6 +81,20 @@ struct GpuModelInitializationHP {
     int min_seq_len_for_flash = 0;
 };
 
+struct PBMConstructionHP {
+    int num_heads = 0;
+    int num_kv_heads = 0;
+    int head_dim = 0;
+    int rotary_dim = 0;
+    int max_seq_len = 0;
+    int rope_base_seq_len = 0;
+    int alibi_min_locality_distance = 0;
+    float alibi_slope_exponent = 0.0f;
+    float alibi_max_bias = 0.0f;
+    float rope_theta = 0.0f;
+    float rope_scaling = 0.0f;
+};
+
 struct EncoderLayerConstructionHP {
     int num_layers = 0;
     int d_model = 0;
@@ -431,6 +445,45 @@ inline void validateEncoderSelfAttentionHP(
     }
 }
 
+inline void validatePBMConstructionHP(
+    const PBMConstructionHP& hp,
+    const char* caller)
+{
+    requirePositiveGroupingValue(hp.num_heads, "num_heads", caller);
+    requirePositiveGroupingValue(hp.num_kv_heads, "num_kv_heads", caller);
+    requirePositiveGroupingValue(hp.head_dim, "head_dim", caller);
+    requirePositiveGroupingValue(hp.rotary_dim, "rotary_dim", caller);
+    requirePositiveGroupingValue(hp.max_seq_len, "max_seq_len", caller);
+    requirePositiveGroupingValue(hp.rope_base_seq_len, "rope_base_seq_len", caller);
+    requirePositiveGroupingValue(hp.alibi_min_locality_distance,
+                                 "alibi_min_locality_distance",
+                                 caller);
+    requirePositiveFiniteGroupingValue(hp.rope_theta, "rope_theta", caller);
+    requirePositiveFiniteGroupingValue(hp.rope_scaling, "rope_scaling", caller);
+
+    if (!isValidGQAConfig(hp.num_heads, hp.num_kv_heads)) {
+        throw std::runtime_error(std::string(caller) + ": invalid GQA config num_heads=" +
+                                 std::to_string(hp.num_heads) + " num_kv_heads=" +
+                                 std::to_string(hp.num_kv_heads));
+    }
+    if ((hp.rotary_dim & 1) != 0 || hp.rotary_dim > hp.head_dim) {
+        throw std::runtime_error(std::string(caller) + ": rotary_dim=" +
+                                 std::to_string(hp.rotary_dim) +
+                                 " must be even and <= head_dim=" +
+                                 std::to_string(hp.head_dim));
+    }
+    if (!std::isfinite(hp.alibi_slope_exponent) || hp.alibi_slope_exponent == 0.0f) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": alibi_slope_exponent must be finite and non-zero, got " +
+                                 std::to_string(hp.alibi_slope_exponent));
+    }
+    if (!std::isfinite(hp.alibi_max_bias) || hp.alibi_max_bias > 0.0f) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": alibi_max_bias must be finite and <= 0, got " +
+                                 std::to_string(hp.alibi_max_bias));
+    }
+}
+
 inline CoreRunHP coreRunHP(const StartupConfig& config) {
     const auto& hp = config.hyperparameters;
     CoreRunHP view;
@@ -502,6 +555,9 @@ inline void validateStartupLanguageModelConfig(
         throw std::runtime_error("startupLanguageModelConfig: max_tokens_per_batch must be > 0, got " +
                                  std::to_string(cfg.max_tokens_per_batch));
     }
+    if (cfg.execution_mode != ModelExecutionMode::TRAINING) {
+        throw std::runtime_error("startupLanguageModelConfig: training startup produced a non-training execution_mode");
+    }
     if (cfg.structured_ce_enabled && cfg.structured_ce_weight <= 0.0f) {
         throw std::runtime_error("startupLanguageModelConfig: structured_ce_enabled=true but structured_ce_weight=" +
                                  std::to_string(cfg.structured_ce_weight) + " (must be > 0)");
@@ -529,6 +585,7 @@ inline LanguageModelConfig startupLanguageModelConfig(
 
     // GRIM-text training invariants. These are not caller fallbacks; they are
     // the single startup policy for this executable.
+    cfg.execution_mode = ModelExecutionMode::TRAINING;
     cfg.causal_mask = true;
     cfg.use_pre_norm = true;
     cfg.fuse_qkv = true;
@@ -584,6 +641,28 @@ inline GpuModelInitializationHP gpuModelInitializationHP(
     view.num_layers = cfg.num_layers;
     view.use_flash_attention = cfg.use_flash_attention;
     view.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
+    return view;
+}
+
+inline PBMConstructionHP pbmConstructionHP(
+    const LanguageModelConfig& cfg)
+{
+    requireValidGQAGrouping(cfg, "pbmConstructionHP");
+    requirePositiveGroupingValue(cfg.max_seq_len, "max_seq_len", "pbmConstructionHP");
+
+    PBMConstructionHP view;
+    view.num_heads = cfg.num_heads;
+    view.num_kv_heads = cfg.num_kv_heads;
+    view.head_dim = cfg.head_dim;
+    view.rotary_dim = cfg.head_dim;
+    view.max_seq_len = cfg.max_seq_len;
+    view.rope_base_seq_len = ROPE_BASE_SEQ_LEN;
+    view.alibi_min_locality_distance = ALIBI_MIN_LOCALITY_DISTANCE;
+    view.alibi_slope_exponent = ALIBI_SLOPE_EXPONENT;
+    view.alibi_max_bias = ALIBI_MAX_BIAS;
+    view.rope_theta = ROPE_THETA;
+    view.rope_scaling = ROPE_SCALING;
+    validatePBMConstructionHP(view, "pbmConstructionHP");
     return view;
 }
 

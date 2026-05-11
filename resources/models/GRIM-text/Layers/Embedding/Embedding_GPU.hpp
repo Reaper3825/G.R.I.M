@@ -52,7 +52,7 @@ public:
     /// @param seed       Xavier init seed
     /// @param stream     CUDA stream for allocation
     /// @param requires_grad false for inference-only allocation
-    explicit EmbeddingLayer(const HyperParameters::EmbeddingLayerConstructionHP& config,
+    explicit EmbeddingLayer(const HyperParameters::EmbeddingLayerConstructionHP& hp,
                             uint64_t seed,
                             cudaStream_t stream,
                             bool requires_grad);
@@ -79,10 +79,10 @@ public:
     //--------------------------------------------------
     // Configuration
     //--------------------------------------------------
-    const HyperParameters::EmbeddingLayerConstructionHP& config() const noexcept { return config_; }
+    const HyperParameters::EmbeddingLayerConstructionHP& hp() const noexcept { return hp_; }
 
 private:
-    HyperParameters::EmbeddingLayerConstructionHP config_{};
+    HyperParameters::EmbeddingLayerConstructionHP hp_{};
 
     // Weight Tensors with autograd (requires_grad=true)
     Tensor token_weights_;       // [vocab_size, d_model] — always owned

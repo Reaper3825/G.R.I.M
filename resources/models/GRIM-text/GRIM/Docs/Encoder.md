@@ -26,12 +26,12 @@ Layer code must not crack open `Tensor::shape` for matmul/activation compatibili
 Encoder/FFN/LM-head/reasoning/selector layers must not store forward-time `cudaStream_t` or `cublasHandle_t`, and must not expose late `setStream()` / `setCublasHandle()` mutators. Startup may pass an init stream for self-allocation only. Actual forward execution handles come from the caller's payload/request (`AutogradContext` → `Forward::ModelForwardRequest`, or the inference/decode equivalent) and are passed into each forward call.
 
 ## Dropout HP ownership
-Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingConfig` stores the grouped encoder HP snapshot plus PBM pointer; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, or forward-runtime handle fields.
+Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingLayer` stores the grouped encoder HP snapshot directly as `hp_` plus a borrowed PBM spec pointer; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, or forward-runtime handle fields.
 
 ## Encoder dimension HP ownership
-Encoder GQA/QKV derived dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) are computed and validated in `HyperparameterGroupings.hpp` from `HyperParameters_GPU.hpp` helpers. `Encoding_GPU.cu` must consume those `EncoderLayerConstructionHP` fields directly; do not recompute them in `EncodingConfig` or layer methods.
+Encoder GQA/QKV derived dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) are computed and validated in `HyperparameterGroupings.hpp` from `HyperParameters_GPU.hpp` helpers. `Encoding_GPU.cu` must consume those `EncoderLayerConstructionHP` fields directly from `hp_`; do not recompute them in layer methods.
 
-Encoder-facing autograd calls (`split_and_reshape_qkv`, `rope_rotation`, `reshape_bhsd_to_flat`) take the `EncoderLayerConstructionHP` snapshot directly. Do not construct a local `TensorContract::GQADims` in encoder files; TensorContract may keep GQA payload structs only for lower-level tensor/view APIs.
+Encoder-facing autograd calls (`split_and_reshape_qkv`, `rope_rotation`, `reshape_bhsd_to_flat`) take an `EncoderSelfAttentionHP` snapshot sliced from the owning `EncoderLayerConstructionHP`. Do not construct a local `TensorContract::GQADims` in encoder files; TensorContract may keep GQA payload structs only for lower-level tensor/view APIs.
 
 `Encoding_GPU.cu` must call `autograd::split_and_reshape_qkv()` only. That wrapper owns the tape node and delegates the raw layout split/merge to `TensorConversion::split_qkv_gqa()` / `merge_qkv_grads_gqa()` internally. Calling `TensorConversion` directly from encoder forward bypasses `SplitAndReshapeQKVGradFn` and disconnects `Q/K/V` from the `qkv_out -> W_qkv / b_qkv` gradient path.
 

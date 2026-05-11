@@ -557,88 +557,6 @@ void add(const TensorView& a, const TensorView& b, TensorView& dst, cudaStream_t
 void scale(const TensorView& src, float alpha, TensorView& dst, cudaStream_t stream = nullptr);
 
 //======================================================//
-//  GQA-Aware QKV Operations
-//======================================================//
-
-/**
- * QKV dimensions for GQA (Grouped Query Attention)
- * 
- * In GQA:
- *   - Q has full num_heads
- *   - K, V have reduced num_kv_heads
- *   - Each KV head is shared by (num_heads / num_kv_heads) Q heads
- */
-struct GQADims {
-    int num_heads;       // Q heads
-    int num_kv_heads;    // K, V heads (num_kv_heads <= num_heads)
-    int head_dim;        // Dimension per head
-    
-    // Derived dimensions
-    int d_model() const { return num_heads * head_dim; }
-    int q_dim() const { return num_heads * head_dim; }
-    int kv_dim() const { return num_kv_heads * head_dim; }
-    int total_qkv_dim() const { return q_dim() + 2 * kv_dim(); }  // Canonical formula
-    int heads_per_kv_group() const { return num_heads / num_kv_heads; }
-    
-    // Validation
-    bool is_valid() const {
-        return num_heads > 0 && num_kv_heads > 0 && head_dim > 0 &&
-               num_heads >= num_kv_heads && (num_heads % num_kv_heads) == 0;
-    }
-    
-    // RULE 20: Fail loud - throws if dimensions are invalid
-    const GQADims& require(const char* context) const {
-        if (num_heads <= 0 || num_kv_heads <= 0 || head_dim <= 0) {
-            throw std::runtime_error(std::string(context) + ": GQADims has invalid dimensions (num_heads=" +
-                                     std::to_string(num_heads) + ", num_kv_heads=" + std::to_string(num_kv_heads) +
-                                     ", head_dim=" + std::to_string(head_dim) + ")");
-        }
-        if (num_heads < num_kv_heads) {
-            throw std::runtime_error(std::string(context) + ": GQADims num_heads (" + std::to_string(num_heads) +
-                                     ") must be >= num_kv_heads (" + std::to_string(num_kv_heads) + ")");
-        }
-        if (num_heads % num_kv_heads != 0) {
-            throw std::runtime_error(std::string(context) + ": GQADims num_heads (" + std::to_string(num_heads) +
-                                     ") must be divisible by num_kv_heads (" + std::to_string(num_kv_heads) + ")");
-        }
-        return *this;
-    }
-    
-    bool is_mha() const { return num_heads == num_kv_heads; }  // Multi-head attention
-    bool is_gqa() const { return num_heads > num_kv_heads; }   // Grouped query attention
-};
-
-/**
- * Split fused QKV tensor into separate Q, K, V tensors (GQA-aware)
- * 
- * @param qkv_fused Input: [tokens, total_qkv_dim] where total_qkv_dim = q_dim + 2*kv_dim
- * @param Q Output: [tokens, q_dim] or [batch, num_heads, seq, head_dim] (depends on target_layout)
- * @param K Output: [tokens, kv_dim] or [batch, num_kv_heads, seq, head_dim]
- * @param V Output: [tokens, kv_dim] or [batch, num_kv_heads, seq, head_dim]
- * @param gqa GQA dimensions
- * @param target_layout Desired output layout (BSM or BHSD)
- * @param stream CUDA stream
- */
-void split_qkv_gqa(const TensorView& qkv_fused,
-                   TensorView& Q, TensorView& K, TensorView& V,
-                   const GQADims& gqa, Layout target_layout,
-                   cudaStream_t stream = nullptr);
-
-/**
- * Merge separate Q, K, V gradients back into fused format (GQA-aware)
- * 
- * @param grad_Q Input: Q gradients [batch, num_heads, seq, head_dim]
- * @param grad_K Input: K gradients [batch, num_kv_heads, seq, head_dim]
- * @param grad_V Input: V gradients [batch, num_kv_heads, seq, head_dim]
- * @param grad_qkv Output: Fused gradients [tokens, total_qkv_dim]
- * @param gqa GQA dimensions
- * @param stream CUDA stream
- */
-void merge_qkv_grads_gqa(const TensorView& grad_Q, const TensorView& grad_K, const TensorView& grad_V,
-                         TensorView& grad_qkv, const GQADims& gqa,
-                         cudaStream_t stream = nullptr);
-
-//======================================================//
 //  Utility Functions
 //======================================================//
 
@@ -1420,11 +1338,8 @@ Tensor scaled_dot_product_attention(
  * for W_qkv).
  * 
  * @param qkv_out      Input tensor [tokens, d_model + 2*kv_dim] from matmul(ln1_out, W_qkv)
- * @param batch        Batch size
- * @param seq          Sequence length (tokens = batch * seq)
- * @param num_heads    Number of Q heads
- * @param num_kv_heads Number of K/V heads (GQA)
- * @param head_dim     Dimension per head
+ * @param payload      BatchPayload source of truth for batch/sequence geometry
+ * @param hp           Grouped attention HP source of truth for GQA/head geometry
  * @param stream       CUDA stream
  * @return Tuple of (Q_bhsd, K_bhsd, V_bhsd) with properly linked autograd chains
  */
@@ -1442,10 +1357,8 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
  * downstream gradients to not flow through attention backward).
  * 
  * @param bhsd_input   Input tensor [B, H, S, D] from attention output
- * @param batch_size   Batch size
- * @param seq_len      Sequence length
- * @param num_heads    Number of attention heads
- * @param head_dim     Dimension per head
+ * @param payload      BatchPayload source of truth for batch/sequence geometry
+ * @param hp           Grouped attention HP source of truth for GQA/head geometry
  * @param stream       CUDA stream
  * @return Tensor [tokens, d_model] with properly linked autograd chain
  */
@@ -1471,11 +1384,8 @@ Tensor reshape_bhsd_to_flat(
  * @param Q          Q tensor [B, H, S, D] - modified in-place
  * @param K          K tensor [B, Hkv, S, D] - modified in-place  
  * @param inv_freq   Device pointer to inverse frequencies [rotary_dim/2]
- * @param batch_size Batch size (B)
- * @param num_q_heads Number of query heads (H)
- * @param num_kv_heads Number of key/value heads (Hkv) for GQA
- * @param seq_len    Sequence length (S)
- * @param head_dim   Dimension per head (D)
+ * @param payload    BatchPayload source of truth for batch/sequence geometry
+ * @param hp         Grouped attention HP source of truth for GQA/head geometry
  * @param rotary_dim Number of dimensions to rotate (must be <= head_dim, typically 64)
  * @param stream     CUDA stream
  */

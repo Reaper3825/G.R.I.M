@@ -49,7 +49,7 @@ struct SelectorForwardResult {
 
 class DecodeTimeSlotSelectorLayer {
 public:
-    DecodeTimeSlotSelectorLayer(const HyperParameters::DecodeTimeSelectorConstructionHP& config,
+    DecodeTimeSlotSelectorLayer(const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
                                 uint64_t seed,
                                 cudaStream_t init_stream);
     ~DecodeTimeSlotSelectorLayer();
@@ -75,7 +75,7 @@ public:
                                   cudaStream_t stream,
                                   cublasHandle_t cublas_handle);
 
-    const HyperParameters::DecodeTimeSelectorConstructionHP& config() const { return config_; }
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp() const { return hp_; }
 
     // ── Tensor accessors (const + non-const) ──
     Tensor& W_q_select()             { return W_q_select_; }
@@ -91,7 +91,7 @@ public:
     const Tensor& null_logit_bias() const { return null_logit_bias_; }
 
 private:
-    HyperParameters::DecodeTimeSelectorConstructionHP config_;
+    HyperParameters::DecodeTimeSelectorConstructionHP hp_;
 
     // Required baseline trainable tensors
     Tensor W_q_select_;       // [d_model, d_selector]

@@ -186,16 +186,16 @@ __global__ void kernelMeanPoolBackward(
 //======================================================//
 //  Constructor
 //======================================================//
-ReasoningHeadLayer::ReasoningHeadLayer(const HyperParameters::ReasoningHeadConstructionHP& config,
+ReasoningHeadLayer::ReasoningHeadLayer(const HyperParameters::ReasoningHeadConstructionHP& hp,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
-    : config_(config)
+    : hp_(hp)
 {
-    if (config_.d_model <= 0)
+    if (hp_.d_model <= 0)
         throw std::runtime_error("ReasoningHeadLayer: d_model must be positive");
-    if (config_.atom_embedding_dim <= 0)
+    if (hp_.atom_embedding_dim <= 0)
         throw std::runtime_error("ReasoningHeadLayer: atom_embedding_dim must be positive");
-    if (config_.num_ops <= 0)
+    if (hp_.num_ops <= 0)
         throw std::runtime_error("ReasoningHeadLayer: num_ops must be positive");
     if (!init_stream)
         throw std::runtime_error("ReasoningHeadLayer: init_stream is NULL");
@@ -203,14 +203,14 @@ ReasoningHeadLayer::ReasoningHeadLayer(const HyperParameters::ReasoningHeadConst
     const int dt = d_total();
 
     // W_op: [num_ops, d_total]
-    w_op_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(config_.num_ops, dt),
+    w_op_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(hp_.num_ops, dt),
                           true, init_stream, "reasoning_head.W_op");
     w_op_.requires_grad_();
     w_op_.ensure_grad();
     Tensor::xavier_uniform_(w_op_, seed, init_stream);
 
     // b_op: [num_ops]
-    b_op_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(1, config_.num_ops),
+    b_op_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(1, hp_.num_ops),
                           true, init_stream, "reasoning_head.b_op");
     b_op_.requires_grad_();
     b_op_.ensure_grad();
@@ -230,14 +230,14 @@ ReasoningHeadLayer::ReasoningHeadLayer(const HyperParameters::ReasoningHeadConst
     Tensor::xavier_uniform_(w_arg2_, seed + 2, init_stream);
 
     fprintf(stdout, "[ReasoningHeadLayer] Initialized: d_model=%d, atom_dim=%d, d_total=%d, num_ops=%d\n",
-            config_.d_model, config_.atom_embedding_dim, dt, config_.num_ops);
+            hp_.d_model, hp_.atom_embedding_dim, dt, hp_.num_ops);
 }
 
 //======================================================//
 //  Move Operations
 //======================================================//
 ReasoningHeadLayer::ReasoningHeadLayer(ReasoningHeadLayer&& other) noexcept
-    : config_(other.config_)
+    : hp_(other.hp_)
     , w_op_(std::move(other.w_op_))
     , b_op_(std::move(other.b_op_))
     , w_arg1_(std::move(other.w_arg1_))
@@ -247,7 +247,7 @@ ReasoningHeadLayer::ReasoningHeadLayer(ReasoningHeadLayer&& other) noexcept
 
 ReasoningHeadLayer& ReasoningHeadLayer::operator=(ReasoningHeadLayer&& other) noexcept {
     if (this != &other) {
-        config_ = other.config_;
+        hp_ = other.hp_;
         w_op_ = std::move(other.w_op_);
         b_op_ = std::move(other.b_op_);
         w_arg1_ = std::move(other.w_arg1_);
@@ -294,29 +294,29 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     if (!encoder_output.shape.is_2d_layout())
         throw std::runtime_error("ReasoningHeadLayer::forward: encoder_output must be 2D");
     const auto& enc_shape = encoder_output.shape.as_2d();
-    if (enc_shape.rows != total_tokens || enc_shape.cols != config_.d_model)
+    if (enc_shape.rows != total_tokens || enc_shape.cols != hp_.d_model)
         throw std::runtime_error("ReasoningHeadLayer::forward: encoder_output shape mismatch: got [" +
             std::to_string(enc_shape.rows) + ", " + std::to_string(enc_shape.cols) +
-            "], expected [" + std::to_string(total_tokens) + ", " + std::to_string(config_.d_model) + "]");
+            "], expected [" + std::to_string(total_tokens) + ", " + std::to_string(hp_.d_model) + "]");
 
     if (num_atoms > 0) {
         if (!atom_embeddings.shape.is_2d_layout())
             throw std::runtime_error("ReasoningHeadLayer::forward: atom_embeddings must be 2D");
         const auto& emb_shape = atom_embeddings.shape.as_2d();
-        if (emb_shape.rows != num_atoms || emb_shape.cols != config_.atom_embedding_dim)
+        if (emb_shape.rows != num_atoms || emb_shape.cols != hp_.atom_embedding_dim)
             throw std::runtime_error("ReasoningHeadLayer::forward: atom_embeddings shape mismatch: got [" +
                 std::to_string(emb_shape.rows) + ", " + std::to_string(emb_shape.cols) +
-                "], expected [" + std::to_string(num_atoms) + ", " + std::to_string(config_.atom_embedding_dim) + "]");
+                "], expected [" + std::to_string(num_atoms) + ", " + std::to_string(hp_.atom_embedding_dim) + "]");
     }
 
     // Weight shape validation
     const int dt = d_total();
     {
         const auto& ws = w_op_.shape.as_2d();
-        if (ws.rows != config_.num_ops || ws.cols != dt)
+        if (ws.rows != hp_.num_ops || ws.cols != dt)
             throw std::runtime_error("ReasoningHeadLayer::forward: W_op shape mismatch: got [" +
                 std::to_string(ws.rows) + ", " + std::to_string(ws.cols) +
-                "], expected [" + std::to_string(config_.num_ops) + ", " + std::to_string(dt) + "]");
+                "], expected [" + std::to_string(hp_.num_ops) + ", " + std::to_string(dt) + "]");
     }
     {
         const auto& ws = w_arg1_.shape.as_2d();
@@ -344,7 +344,7 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     // Step 1: Gather  H_atoms [num_atoms, d_model]
     // ════════════════════════════════════════════════════
     Tensor h_atoms = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(num_atoms, config_.d_model),
+        TensorContract::TensorShape::make_BSM(num_atoms, hp_.d_model),
         false, stream, "reasoning_head.h_atoms");
 
     kernelGatherAtomHidden<<<num_atoms, kBlockSize, 0, stream>>>(
@@ -352,7 +352,7 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
         encoder_output.data,
         atom_positions,
         num_atoms,
-        config_.d_model,
+        hp_.d_model,
         total_tokens);
 
     // ════════════════════════════════════════════════════
@@ -367,8 +367,8 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
         h_atoms.data,
         atom_embeddings.data,
         num_atoms,
-        config_.d_model,
-        config_.atom_embedding_dim,
+        hp_.d_model,
+        hp_.atom_embedding_dim,
         dt);
 
     // ════════════════════════════════════════════════════
@@ -395,8 +395,8 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
         auto grad_fn = std::make_shared<ReasoningHeadGradFn>();
         grad_fn->num_atoms = num_atoms;
         grad_fn->total_tokens = total_tokens;
-        grad_fn->d_model = config_.d_model;
-        grad_fn->atom_dim = config_.atom_embedding_dim;
+        grad_fn->d_model = hp_.d_model;
+        grad_fn->atom_dim = hp_.atom_embedding_dim;
         grad_fn->d_total = dt;
 
         grad_fn->capture_encoder(encoder_output, stream);
@@ -431,9 +431,9 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
 
     // Add bias
     if (b_op_.data) {
-        const int grid = (config_.num_ops + kBlockSize - 1) / kBlockSize;
+        const int grid = (hp_.num_ops + kBlockSize - 1) / kBlockSize;
         kernelReasoningBias<<<grid, kBlockSize, 0, stream>>>(
-            op_logits.data, b_op_.data, config_.num_ops);
+            op_logits.data, b_op_.data, hp_.num_ops);
     }
 
     // ════════════════════════════════════════════════════

@@ -43,38 +43,6 @@ namespace GRIM {
 using Batching::BatchPayload;
 
 //======================================================//
-//  Configuration - MUST be fully specified
-//======================================================//
-
-struct EncodingConfig {
-    // Grouped construction HP from HyperparameterGroupings.hpp. This owns all
-    // architecture/dropout/layer toggles and derived dimensions for the encoder layer snapshot.
-    HyperParameters::EncoderLayerConstructionHP hp{};
-    
-    // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state
-    // WARNING: If nullptr, attention sees no positional info - all positions equivalent!
-    const PBM::PBMSpec* pos_encoding = nullptr;
-
-    EncodingConfig() = default;
-
-    EncodingConfig(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
-                   const PBM::PBMSpec* pos_encoding_snapshot)
-        : hp(hp_snapshot)
-        , pos_encoding(pos_encoding_snapshot)
-    {
-    }
-    
-    // Validation helper - throws if invalid
-    void validate(const char* context) const {
-        HyperParameters::validateEncoderLayerConstructionHP(hp, context);
-        if (!pos_encoding) {
-            throw std::invalid_argument(std::string(context) +
-                ": pos_encoding is NULL - PBM must be initialized before encoder construction");
-        }
-    }
-};
-
-//======================================================//
 //  NOTE: EncodingForwardArgs DELETED per Rule 20
 //  
 //  Autograd forward takes Tensor directly:
@@ -105,10 +73,14 @@ public:
     EncodingLayer() = default;
     
     /// Self-allocating constructor — layer owns its weights
-    /// @param cfg       Fully-populated EncodingConfig (includes residual_projection_init_gain/layer_scale_init HP)
-    /// @param seed      Base PRNG seed.  Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
+    /// @param hp_snapshot Grouped encoder construction HP from HyperparameterGroupings.hpp
+    /// @param pos_encoding Positional encoding spec initialized before encoder construction
+    /// @param seed Base PRNG seed. Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
     /// @param init_stream CUDA stream for self-allocation during startup/model assembly
-    EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream);
+    EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
+                  const PBM::PBMSpec& pos_encoding,
+                  uint64_t seed,
+                  cudaStream_t init_stream);
     
     ~EncodingLayer();
     
@@ -121,9 +93,9 @@ public:
     EncodingLayer& operator=(EncodingLayer&& other) noexcept;
     
     //--------------------------------------------------
-    // Configuration snapshot
+    // Grouped HP snapshot
     //--------------------------------------------------
-    const EncodingConfig& config() const noexcept { return config_; }
+    const HyperParameters::EncoderLayerConstructionHP& hp() const noexcept { return hp_; }
     
     //--------------------------------------------------
     // Forward Pass - Pure Autograd with ForwardIntermediates
@@ -209,11 +181,13 @@ public:
 private:
     void freeWeights();
     void validateReady(const char* context) const;
+    void validateConstructionSnapshot(const char* context) const;
     
     /// Pattern B: self-allocate and Xavier-init all weights + create FFN
     void allocateWeights(uint64_t seed, cudaStream_t init_stream);
     
-    EncodingConfig config_{};
+    HyperParameters::EncoderLayerConstructionHP hp_{};
+    const PBM::PBMSpec* pos_encoding_ = nullptr;
     bool weights_ready_ = false;  // Set by allocateWeights()
     
     // RMSNorm weights (Tensor with requires_grad=true)

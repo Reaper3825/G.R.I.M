@@ -924,8 +924,8 @@ For each encoding layer (Layer 0 → Layer 11):
 
 - [x] **Dropout System** ✅ AUDITED & FIXED
   - **DELETED**: `Shared/Dropout/Dropout_GPU.cu` and `Dropout_GPU.hpp` — dead code with zero callers. All production dropout uses `autograd::dropout()` in `TensorContract_GPU.cu`
-  - **FIXED**: `EncodingConfig.attention_dropout` default changed from `1.0f` (100% drop!) to `0.0f` (disabled). Value `1.0f` was converted to keep-probability internally but still confusing and wrong as a default.
-  - **ADDED**: `dropout_rate` field to `EncodingConfig`, propagated from `EncoderConfig` via `Forward_GPU.cu`
+  - **FIXED**: Encoder attention dropout now comes from `LanguageModelConfig` → `EncoderLayerConstructionHP`/`EncoderSelfAttentionHP`; the old encoder-local config wrapper is deleted.
+  - **ADDED**: Encoder sublayer `dropout_rate` travels through `EncoderLayerConstructionHP` and is consumed directly from `EncodingLayer::hp_`.
   - **ADDED**: Post-attention-projection sublayer dropout in `Encoding_GPU.cu` (seed offset: 100+layer_idx)
   - **ADDED**: Post-FFN sublayer dropout in `Encoding_GPU.cu` (seed offset: 200+layer_idx)
   - **ADDED**: FFN activation dropout after SwiGLU gating in `Feed_Forward_GPU.cu` (seed offset: 300+layer_idx)
