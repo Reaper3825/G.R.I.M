@@ -286,7 +286,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Inference_GPU.cu
     ../Forward_GPU.cu
     ../InitTrainingState.cu
-    ../TrainingOps.cu
+    ../Phases/Startup/Model/ModelGpuAssembly.cu
     ../../Shared/Loss/ComputeLoss/ComputeLossBatch.cu
     ../../Shared/TrainingState/CublasHandleOwner_GPU.cu
     ../../Shared/TrainingState/DeviceAllocation_GPU.cu

@@ -166,7 +166,7 @@ public:
 };
 
 // GrimEmbeddingStack - minimal interface
-// NOTE: Position embeddings are initialized directly on GPU in TrainingOps.cu
+// NOTE: Durable GPU embedding layers are assembled by the Startup/Model allocation module.
 class GrimEmbeddingStack {
 public:
     GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_len);
@@ -178,7 +178,7 @@ public:
     
     // Public members needed by GPU code
     Matrix token_embed;        // Token embedding matrix [vocab_size x d_model]
-    // NOTE: Position embeddings are GPU-only (initialized in TrainingOps.cu)
+    // NOTE: GPU embedding tensors are owned by EmbeddingLayer after startup model assembly.
     
 private:
     int vocab_size_;

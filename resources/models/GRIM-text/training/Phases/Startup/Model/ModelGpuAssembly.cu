@@ -1,33 +1,48 @@
 #ifndef USE_CUDA
 #define USE_CUDA
 #endif
-#include <algorithm>
-#include <cassert>
-#include <cmath>
+
 #include <cstdint>
 #include <iostream>
-#include <set>
-#include <sstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 
-#include "../GRIM/grim_language_model_cuda.hpp"
-#include "../Layers/Encoding/Encoding_GPU.hpp"
-#include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
-#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
-#include "../Shared/StreamController/StreamController_GPU.hpp"
-#include "../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../../../GRIM/grim_language_model_cuda.hpp"
+#include "../../../../Layers/Encoding/Encoding_GPU.hpp"
+#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../../../Shared/StreamController/StreamController_GPU.hpp"
+#include "../../../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
 
 #ifdef USE_CUDA
 
 //======================================================//
-//  GPU Layer Initialization
+//  Startup Model GPU Assembly
+//
+//  Ownership boundary:
+//    - Phase1/Startup/Model owns deciding WHEN this runs.
+//    - LanguageModel owns the durable layer members being assembled here.
+//
+//  Consumes already-initialized startup prerequisites:
+//    - CUDA context selected by ModelAllocationState.cu
+//    - TrainingState StreamController
+//    - TrainingState cuBLAS handle
+//    - PBM positional-bias spec
+//    - Phase1 RNG weight_init_seed
+//
+//  Creates durable model topology:
+//    - GPU encoder layers
+//    - embedding layer
+//    - LM head
+//    - optional reasoning/execution/decode-time/MTP heads
+//
+//  Does NOT own activation caches, optimizer state, parameter-group
+//  registration, checkpoint loading, forward/backward, or Phase2 training.
 //======================================================//
 
 void LanguageModel::initGPU(uint64_t weight_init_seed) {
@@ -40,23 +55,16 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
     }
 
     try {
-        std::cout << "[initGPU] Initializing GPU layer objects..." << std::endl;
+        std::cout << "[initGPU] Assembling GPU model layer objects..." << std::endl;
 
         //======================================================//
         //  1) Verify startup-owned runtime prerequisites
-        //
-        //  CUDA device/context setup is owned by Phase1 startup. This method
-        //  consumes only already-initialized TrainingState runtime resources
-        //  and grouped construction views.
         //======================================================//
 
-        //======================================================//
-        //  2) Stream + cuBLAS prerequisites
-        //======================================================//
         if (!training_state_.stream_ctrl.isInitialized()) {
             throw std::runtime_error(
                 "FATAL: StreamController not initialized. "
-                "Initialize stream_ctrl before initGPU() (TrainingState owns streams)."
+                "ModelAllocationState must initialize stream_ctrl before initGPU()."
             );
         }
 
@@ -64,8 +72,14 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             throw std::runtime_error("FATAL: cuBLAS handle not initialized (training_state_.cublas_handle.get() == NULL)");
         }
 
+        if (!isPBMInitialized()) {
+            throw std::runtime_error(
+                "[initGPU] FATAL: PBM not initialized before encoder construction. "
+                "ModelAllocationState must call initPBM() before initGPU().");
+        }
+
         //======================================================//
-        //  3) Build GPU encoder
+        //  2) Build GPU encoder
         //
         //  Hyperparameters come from EncoderLayerConstructionHP, the grouped
         //  read view owned by HyperparameterGroupings.hpp. Construction resource
@@ -74,11 +88,6 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         //  input. Forward stream/cuBLAS live on the forward payload/request,
         //  not on layer configs.
         //======================================================//
-        if (!isPBMInitialized()) {
-            throw std::runtime_error(
-                "[initGPU] FATAL: PBM not initialized before encoder construction! "
-                "Call initPBM() BEFORE createGPUEncoder()");
-        }
 
         const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(model_cfg);
         EncoderConstructionBindings enc_bindings;
@@ -87,13 +96,12 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         StreamController::fatalIfDefaultStream(enc_bindings.init_stream, "LanguageModel::initGPU");
 
         std::cout << "[initGPU] Encoder construction bindings prepared" << std::endl;
-
         std::cout << "✓ Encoder using TrainingState construction bindings\n";
 
         auto* encoder_ptr = new GPUGrimEncoder(encoder_hp, enc_bindings, weight_init_seed);
         gpu_encoder_.reset(encoder_ptr);
 
-        // Layers self-allocated their own weights in the constructor. Verify all are ready.
+        // Layers self-allocate their own weights in the constructor. Verify all are ready.
         for (int layer = 0; layer < init_hp.num_layers; ++layer) {
             auto* gpu_layer = encoder_ptr->getLayer(layer);
             if (!gpu_layer || !gpu_layer->weightsReady()) {
@@ -104,7 +112,7 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         std::cout << "✓ Encoder layers self-allocated weights\n";
 
         //======================================================//
-        //  6a) Build persistent Embedding layer (Pattern B)
+        //  3) Build persistent Embedding layer (Pattern B)
         //
         //  Self-allocates token weights [vocab_size, d_model]. Position
         //  information is injected inside attention via ALiBi/RoPE, so no
@@ -113,7 +121,6 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         //======================================================//
         {
             const auto emb_hp = HyperParameters::embeddingLayerConstructionHP(model_cfg);
-            // Seed convention: embedding uses weight_init_seed + 0
             const uint64_t emb_seed = weight_init_seed;
 
             embedding_layer_ = std::make_unique<EmbeddingLayer>(emb_hp, emb_seed, enc_bindings.init_stream, true);
@@ -125,19 +132,23 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         }
 
         //======================================================//
-        //  6b) Build persistent LM Head layer (Pattern B)
-        //  
-        //  Self-allocates weights (or aliases embedding for tied config).
-        //  Owns final_rms_gamma. Created AFTER EmbeddingLayer (needs embedding
-        //  weights for tying) and AFTER encoder (needs stream/cublas).
+        //  4) Build persistent LM Head layer (Pattern B)
+        //
+        //  Self-allocates weights or aliases embedding for tied config.
+        //  Owns final_rms_gamma. Created AFTER EmbeddingLayer because tied
+        //  weights need embedding token storage.
         //======================================================//
         {
             const auto lm_hp = HyperParameters::lmHeadLayerConstructionHP(model_cfg);
-            // Seed convention: lm_head uses weight_init_seed + 1
             const uint64_t lm_head_seed = weight_init_seed + 1;
 
-            // For tied weights, pass pointer to embedding token weights (owned by EmbeddingLayer)
-            Tensor* tied_emb = lm_hp.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
+            Tensor* tied_emb = nullptr;
+            if (lm_hp.tie_embeddings) {
+                tied_emb = &embedding_layer_->tokenWeights();
+                if (!tied_emb->data) {
+                    throw std::runtime_error("[initGPU] FATAL: tied embedding token weights have NULL data");
+                }
+            }
 
             lm_head_layer_ = std::make_unique<LMHeadLayer>(
                 lm_hp, lm_head_seed, enc_bindings.init_stream, tied_emb);
@@ -148,7 +159,9 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             std::cout << "✓ LM Head layer created\n";
         }
 
-        // ReasoningHead layer
+        //======================================================//
+        //  5) Build optional model heads/subsystems
+        //======================================================//
         const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(model_cfg);
         if (reasoning_hp.enabled) {
             const uint64_t rh_seed = weight_init_seed + 10;
@@ -156,14 +169,12 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             std::cout << "✓ ReasoningHead layer created\n";
         }
 
-        // ExecutionBlock layer (differentiable register machine)
         const auto execution_hp = HyperParameters::executionBlockConstructionHP(model_cfg);
         if (execution_hp.enabled) {
             const uint64_t eb_seed = weight_init_seed + 20;
             execution_block_layer_ = std::make_unique<ExecutionBlockLayer>(execution_hp, eb_seed, enc_bindings.init_stream);
             std::cout << "✓ ExecutionBlock layer created\n";
 
-            // Decode-time slot selector (pointer-selector baseline)
             const auto selector_hp = HyperParameters::decodeTimeSelectorConstructionHP(model_cfg);
             if (selector_hp.enabled) {
                 const uint64_t sel_seed = weight_init_seed + 30;
@@ -176,7 +187,6 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             }
         }
 
-        // Multi-token prediction (MTP) auxiliary heads: K independent linear heads (not tied to embedding)
         const auto mtp_hp = HyperParameters::mtpConstructionHP(model_cfg);
         if (mtp_hp.enabled) {
             mtp_heads_.resize(static_cast<size_t>(mtp_hp.k));
@@ -196,7 +206,7 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
             std::cout << "✓ MTP auxiliary heads created\n";
         }
 
-        std::cout << "✓ GPU layer initialization complete\n";
+        std::cout << "✓ GPU model layer assembly complete\n";
         std::cout << "  - Attention: GPU-accelerated\n";
         std::cout << "  - FFN: GPU-accelerated with fused GELU\n";
         std::cout << "  - Layer Norm: GPU-accelerated\n";

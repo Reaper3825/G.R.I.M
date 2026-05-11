@@ -221,7 +221,7 @@ void LanguageModel::initTrainingState() {
               << " num_kv_heads=" << num_kv_heads 
               << " (heads_per_kv_group=" << (cfg.num_heads / num_kv_heads) << ")" << std::endl;
     
-    // NOTE: Encoder layer weight initialization is handled in TrainingOps.cu::initGPU()
+    // NOTE: Encoder layer weight initialization is handled by Startup/Model GPU assembly.
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
     // DO NOT duplicate Xavier init here per Rule 20 (single initialization owner).
     

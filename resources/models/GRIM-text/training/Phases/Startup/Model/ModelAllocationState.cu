@@ -100,9 +100,9 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->initPBM();
     logger.log("✓ RoPE initialized");
 
-    logger.log("Initializing GPU encoder with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
+    logger.log("Assembling GPU model layers with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
     model->initGPU(weight_init_seed);
-    logger.log("✓ GPU encoder fully initialized");
+    logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Initializing TrainingState (grad buffers, activation caches)...");
     model->initTrainingState();
@@ -138,7 +138,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         for (int layer = 0; layer < cfg.num_layers; ++layer) {
             auto* enc = gpu_encoder->getLayer(layer);
             if (!enc) {
-                throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after initGPU");
+                throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after GPU model layer assembly");
             }
         }
         logger.log("✓ Encoder layers verified");

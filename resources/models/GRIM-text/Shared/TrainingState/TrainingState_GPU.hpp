@@ -61,7 +61,7 @@ struct TrainingState {
     //   - ScratchBlock: ScratchBlockLayer self-allocates in constructor
     //
     // Session 7: TrainingTensors deleted — zero weight parameters remain in god object.
-    // Weight init seed is passed directly from Phase1 RNG into LanguageModel::initGPU().
+    // Weight init seed is passed directly from Phase1 RNG into Startup/Model GPU assembly.
     
     //======================================================//
     //  STEP DEVICE WORKSPACES / SNAPSHOTS (Category 3)

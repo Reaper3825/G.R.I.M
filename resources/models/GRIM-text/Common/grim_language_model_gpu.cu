@@ -355,7 +355,7 @@ GrimEmbeddingStack::GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_
       max_seq_len_(max_seq_len)
 {
     token_embed = Matrix(vocab_size, d_model, 0.0f, true);
-    // NOTE: Position embeddings initialized directly on GPU in TrainingOps.cu
+    // NOTE: Durable GPU embedding tensors are assembled by the Startup/Model allocation module.
 }
 
 void GrimEmbeddingStack::enableALiBi(const HyperParameters::PBMConstructionHP& hp) {

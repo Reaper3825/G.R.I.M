@@ -148,16 +148,15 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ---
 
-### 1.11 GPU Layer Initialization & Wiring
+### 1.11 Startup Model GPU Assembly
 
-- [] **TrainingOps.cu** (initGPU method) —
-  - `useExternalWeights()` correctly wires all 14 params (including LayerScale, gated by nullptr)
-  - `enc_config.num_kv_heads = cfg.num_kv_heads` — CORRECT (runtime JSON, not HyperParameters)
-  - `HyperParameters::NUM_ATOM_TYPES` in `getModelStats()` — LEGITIMATE (compile-time tokenizer struct layout)
-  - Rule 20 compliance: throws on use_gpu=false, missing CUDA, missing StreamController/cuBLAS, null tensors
-  - NO EmbeddingRuntime code in this file (manifest checklist items misattributed — EmbeddingRuntime/embedding_scale/apply_rms_norm are in AutogradTraining.cu)
-  - **DELETED**: Dead `launchBiasSumGradient` extern (declared but never called in this file)
-  - **FIXED**: PBM check converted from `fprintf+std::abort()` → `throw std::runtime_error()` (Rule 20)
+- [] **Phases/Startup/Model/ModelGpuAssembly.cu** (`LanguageModel::initGPU`) —
+  - Startup/Model ownership is explicit: this source assembles durable GPU model layers after CUDA, streams, cuBLAS, and PBM are initialized.
+  - Creates GPU encoder layers, EmbeddingLayer, LMHeadLayer, optional ReasoningHead, ExecutionBlock, DecodeTimeSlotSelector, DecodeTimeNumPolicy, and MTP heads.
+  - `cfg.num_kv_heads` remains sourced from runtime JSON via grouped hyperparameter views, not compile-time defaults.
+  - Rule 20 compliance: throws on use_gpu=false, missing StreamController/cuBLAS/PBM, null tied embedding data, or not-ready layer weights.
+  - Does not allocate TrainingState activation caches, optimizer state, parameter groups, checkpoints, forward/backward, or Phase2 training loop state.
+  - **DELETED**: vague root-level `TrainingOps.cu`; active builds now compile the Startup/Model-owned source.
 
 ---
 
