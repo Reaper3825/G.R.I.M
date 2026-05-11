@@ -1,10 +1,9 @@
 //======================================================//
 //  LogitScaleDiagnostic.cu
-//  Lifted verbatim from Phase2_TrainingLoop.cu — the
-//  "TRAINING SIGNAL: Logit Statistics" scope (formerly
-//  inline at lines 1295-1890 of that file).
-//  Behavior: identical. No logic, gating, ordering, or
-//  log-string changes vs. the original inline block.
+//  Per-batch LM-valid logit statistics and logit-scale
+//  equation diagnostics. Originally lifted from
+//  Phase2_TrainingLoop.cu's "TRAINING SIGNAL: Logit
+//  Statistics" scope.
 //======================================================//
 
 #include "LogitScaleDiagnostic.hpp"
@@ -26,10 +25,98 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <cstdint>
 
 #include <cuda_runtime.h>
 
 namespace GRIM::Diagnostics {
+
+namespace {
+
+std::vector<int> buildLmValidPositionsOrThrow(
+    const GRIM::Batching::BatchPayload& payload,
+    const char* caller)
+{
+    payload.validate(caller);
+
+    if (payload.total_tokens != payload.batch_size * payload.max_seq_len) {
+        throw std::runtime_error(
+            std::string(caller) + ": payload.total_tokens (" + std::to_string(payload.total_tokens) +
+            ") != payload.batch_size * payload.max_seq_len (" +
+            std::to_string(payload.batch_size) + " * " + std::to_string(payload.max_seq_len) +
+            ") at " + __FILE__ + ":" + std::to_string(__LINE__));
+    }
+
+    if (static_cast<int>(payload.target_ids.size()) != payload.total_tokens) {
+        throw std::runtime_error(
+            std::string(caller) + ": payload.target_ids.size() (" +
+            std::to_string(payload.target_ids.size()) + ") != payload.total_tokens (" +
+            std::to_string(payload.total_tokens) + ") at " + __FILE__ + ":" +
+            std::to_string(__LINE__));
+    }
+
+    std::vector<int> lm_valid_positions;
+    lm_valid_positions.reserve(static_cast<size_t>(payload.lm_valid_tokens));
+
+    int counted_actual = 0;
+    for (int b = 0; b < payload.batch_size; ++b) {
+        const int len = payload.seq_lengths[static_cast<size_t>(b)];
+        if (len < 0 || len > payload.max_seq_len) {
+            throw std::runtime_error(
+                std::string(caller) + ": seq_lengths[" + std::to_string(b) + "]=" +
+                std::to_string(len) + " outside [0, max_seq_len=" +
+                std::to_string(payload.max_seq_len) + "] at " + __FILE__ + ":" +
+                std::to_string(__LINE__));
+        }
+
+        counted_actual += len;
+        const int flat_start = b * payload.max_seq_len;
+        const int flat_end = flat_start + len;
+        for (int t = 0; t < len; ++t) {
+            const int pos = flat_start + t;
+            if (pos < 0 || pos >= payload.total_tokens) {
+                throw std::runtime_error(
+                    std::string(caller) + ": real position " + std::to_string(pos) +
+                    " outside [0, total_tokens=" + std::to_string(payload.total_tokens) +
+                    ") at " + __FILE__ + ":" + std::to_string(__LINE__));
+            }
+            if (payload.target_ids[static_cast<size_t>(pos)] >= 0) {
+                lm_valid_positions.push_back(pos);
+            }
+        }
+        for (int pos = flat_end; pos < flat_start + payload.max_seq_len; ++pos) {
+            if (payload.target_ids[static_cast<size_t>(pos)] >= 0) {
+                throw std::runtime_error(
+                    std::string(caller) + ": target_ids[" + std::to_string(pos) +
+                    "] is valid inside padding for row " + std::to_string(b) +
+                    " at " + __FILE__ + ":" + std::to_string(__LINE__));
+            }
+        }
+    }
+
+    if (counted_actual != payload.actual_tokens) {
+        throw std::runtime_error(
+            std::string(caller) + ": counted actual tokens " + std::to_string(counted_actual) +
+            " != payload.actual_tokens " + std::to_string(payload.actual_tokens) +
+            " at " + __FILE__ + ":" + std::to_string(__LINE__));
+    }
+    if (static_cast<int>(lm_valid_positions.size()) != payload.lm_valid_tokens) {
+        throw std::runtime_error(
+            std::string(caller) + ": counted LM-valid target positions " +
+            std::to_string(lm_valid_positions.size()) + " != payload.lm_valid_tokens " +
+            std::to_string(payload.lm_valid_tokens) + " at " + __FILE__ + ":" +
+            std::to_string(__LINE__));
+    }
+    if (lm_valid_positions.empty()) {
+        throw std::runtime_error(
+            std::string(caller) + ": no LM-valid target positions in payload at " +
+            __FILE__ + ":" + std::to_string(__LINE__));
+    }
+
+    return lm_valid_positions;
+}
+
+} // namespace
 
 void runLogitScaleDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
@@ -44,31 +131,72 @@ void runLogitScaleDiagnostic(
         const auto& ts = ctx.model->getTrainingState();
         if (ts.cached_logits_tensor.data && payload.batch_size > 0 && payload.max_seq_len > 0) {
             const int total_tokens = payload.total_tokens;
-            const int vocab_size = ctx.config.actual_vocab_size;
+            const int vocab_size = payload.vocab_size;
             const int d_model = ctx.model->getConfig().d_model;
+            const std::vector<int> lm_valid_positions =
+                buildLmValidPositionsOrThrow(payload, "runLogitScaleDiagnostic");
+            const int sample_positions = static_cast<int>(lm_valid_positions.size());
+
+            if (vocab_size != ctx.config.actual_vocab_size) {
+                throw std::runtime_error(
+                    "runLogitScaleDiagnostic: payload.vocab_size (" + std::to_string(vocab_size) +
+                    ") != ctx.config.actual_vocab_size (" +
+                    std::to_string(ctx.config.actual_vocab_size) + ") at " + __FILE__ + ":" +
+                    std::to_string(__LINE__));
+            }
+
+            const auto& logits_shape = ts.cached_logits_tensor.shape.require("runLogitScaleDiagnostic cached_logits_tensor");
+            if (!logits_shape.is_2d_layout()) {
+                throw std::runtime_error("runLogitScaleDiagnostic: cached_logits_tensor must be a 2D LOGITS buffer");
+            }
+            const auto logits_dims = logits_shape.as_2d();
+            if (logits_dims.rows < total_tokens) {
+                throw std::runtime_error(
+                    "runLogitScaleDiagnostic: cached_logits_tensor rows (" +
+                    std::to_string(logits_dims.rows) + ") < payload.total_tokens (" +
+                    std::to_string(total_tokens) + ") at " + __FILE__ + ":" +
+                    std::to_string(__LINE__));
+            }
+            if (logits_dims.cols != vocab_size) {
+                throw std::runtime_error(
+                    "runLogitScaleDiagnostic: cached_logits_tensor cols (" +
+                    std::to_string(logits_dims.cols) + ") != payload.vocab_size (" +
+                    std::to_string(vocab_size) + ") at " + __FILE__ + ":" +
+                    std::to_string(__LINE__));
+            }
             
-            // Use full batch for logit statistics
-            const int sample_positions = total_tokens;
-            const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
-            std::vector<float> logit_sample(sample_positions * vocab_size);
-            cudaMemcpy(logit_sample.data(), ts.cached_logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
+            // Copy the full rectangular logits buffer once, but compute every
+            // statistic below only over BatchPayload LM-valid target positions.
+            // payload.lm_valid_tokens is the invariant count; target_ids[pos] >= 0
+            // gives the concrete row identities needed for non-contiguous batches.
+            const size_t logit_bytes = static_cast<size_t>(total_tokens) * vocab_size * sizeof(float);
+            std::vector<float> logit_sample(static_cast<size_t>(total_tokens) * vocab_size);
+            cudaError_t logits_copy_err = cudaMemcpy(
+                logit_sample.data(), ts.cached_logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
+            if (logits_copy_err != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("runLogitScaleDiagnostic: cudaMemcpy logits failed: ") +
+                    cudaGetErrorString(logits_copy_err) + " at " + __FILE__ + ":" +
+                    std::to_string(__LINE__));
+            }
             
             // Compute argmax predictions and logit statistics
             std::map<int, int> argmax_counts;
             float logit_mean = 0.0f;
+            double logit_sum = 0.0;
             float logit_max = -std::numeric_limits<float>::infinity();
             float logit_min = std::numeric_limits<float>::infinity();
             float max_logit_per_pos_sum = 0.0f;
             float margin_sum = 0.0f;  // Top-2 margin: logit[max] - logit[second]
             
-            for (int pos = 0; pos < sample_positions; ++pos) {
+            for (const int pos : lm_valid_positions) {
                 float pos_max = -std::numeric_limits<float>::infinity();
                 float pos_second = -std::numeric_limits<float>::infinity();
                 int pos_argmax = 0;
                 
                 for (int v = 0; v < vocab_size; ++v) {
-                    float logit = logit_sample[pos * vocab_size + v];
-                    logit_mean += logit;
+                    float logit = logit_sample[static_cast<size_t>(pos) * vocab_size + v];
+                    logit_sum += static_cast<double>(logit);
                     logit_max = std::max(logit_max, logit);
                     logit_min = std::min(logit_min, logit);
                     
@@ -98,7 +226,7 @@ void runLogitScaleDiagnostic(
                 margin_sum += (pos_max - pos_second);  // margin = max - second
             }
             
-            logit_mean /= (sample_positions * vocab_size);
+            logit_mean = static_cast<float>(logit_sum / (static_cast<double>(sample_positions) * vocab_size));
             float avg_max_logit = max_logit_per_pos_sum / sample_positions;
             float avg_margin = margin_sum / sample_positions;  // Average top-2 margin
             
@@ -142,13 +270,14 @@ void runLogitScaleDiagnostic(
             // logit_range = logit_max - logit_min
             // logit_std = sqrt(Var(logits))
             //
-            // EXPECTED: logit_std ≈ sqrt(d_model) × h_rms × W_rms.
+            // EXPECTED: logit_std ≈ sqrt(d_model) × h_rms_rms × W_rms_rms,
+            // over the same LM-valid target rows used by CE loss.
             // Track trends over time in stable metrics (logit_std, max_logit,
             // top2_margin, argmax concentration) rather than a fixed range cutoff.
             //
             // This diagnostic traces:
-            //   1. Logit std/range across sampled positions×vocab
-            //   2. Hidden state norms at LM head input (sampled)
+            //   1. Logit std/range across LM-valid target positions×vocab
+            //   2. Hidden state norms at LM head input for the same rows
             //   3. Weight norms for top-5 + random-10 vocab tokens
             //   4. Expected vs actual logit magnitude
             // ================================================================
@@ -157,10 +286,11 @@ void runLogitScaleDiagnostic(
                 const float logit_range = logit_max - logit_min;
                 // Compute logit variance (already have logit_mean from above)
                 double logit_var_sum = 0.0;
-                for (int pos = 0; pos < sample_positions; ++pos) {
+                for (const int pos : lm_valid_positions) {
                     for (int v = 0; v < vocab_size; ++v) {
-                        const float diff = logit_sample[pos * vocab_size + v] - logit_mean;
-                        logit_var_sum += static_cast<double>(diff) * diff;
+                        const double diff = static_cast<double>(logit_sample[static_cast<size_t>(pos) * vocab_size + v]) -
+                                            static_cast<double>(logit_mean);
+                        logit_var_sum += diff * diff;
                     }
                 }
                 const float logit_std = std::sqrt(static_cast<float>(logit_var_sum / (static_cast<double>(sample_positions) * vocab_size)));
@@ -190,11 +320,11 @@ void runLogitScaleDiagnostic(
                 // --- Per-position logit range ---
                 float per_pos_range_sum = 0.0f;
                 float per_pos_range_max = 0.0f;
-                for (int pos = 0; pos < sample_positions; ++pos) {
+                for (const int pos : lm_valid_positions) {
                     float pos_max = -std::numeric_limits<float>::infinity();
                     float pos_min = std::numeric_limits<float>::infinity();
                     for (int v = 0; v < vocab_size; ++v) {
-                        const float l = logit_sample[pos * vocab_size + v];
+                        const float l = logit_sample[static_cast<size_t>(pos) * vocab_size + v];
                         pos_max = std::max(pos_max, l);
                         pos_min = std::min(pos_min, l);
                     }
@@ -207,39 +337,73 @@ void runLogitScaleDiagnostic(
                 // --- Hidden state norms at LM head input ---
                 // cached_encoder_output contains centered data (overwritten after LM head forward)
                 const float* h_src = ts.cached_encoder_output.data;
-                
+                if (!h_src) {
+                    throw std::runtime_error(
+                        "runLogitScaleDiagnostic: cached_encoder_output.data is NULL; "
+                        "LOGIT_SCALE_EQUATION requires the LM-head input buffer");
+                }
+                const auto& h_shape = ts.cached_encoder_output.shape.require("runLogitScaleDiagnostic cached_encoder_output");
+                if (!h_shape.is_2d_layout()) {
+                    throw std::runtime_error("runLogitScaleDiagnostic: cached_encoder_output must be a 2D hidden-state buffer");
+                }
+                const auto h_dims = h_shape.as_2d();
+                if (h_dims.rows < total_tokens) {
+                    throw std::runtime_error(
+                        "runLogitScaleDiagnostic: cached_encoder_output rows (" +
+                        std::to_string(h_dims.rows) + ") < payload.total_tokens (" +
+                        std::to_string(total_tokens) + ") at " + __FILE__ + ":" +
+                        std::to_string(__LINE__));
+                }
+                if (h_dims.cols != d_model) {
+                    throw std::runtime_error(
+                        "runLogitScaleDiagnostic: cached_encoder_output cols (" +
+                        std::to_string(h_dims.cols) + ") != d_model (" +
+                        std::to_string(d_model) + ") at " + __FILE__ + ":" +
+                        std::to_string(__LINE__));
+                }
+
+                const size_t h_bytes = static_cast<size_t>(total_tokens) * d_model * sizeof(float);
+                std::vector<float> h_sample(static_cast<size_t>(total_tokens) * d_model);
+                cudaError_t h_copy_err = cudaMemcpy(h_sample.data(), h_src, h_bytes, cudaMemcpyDeviceToHost);
+                if (h_copy_err != cudaSuccess) {
+                    throw std::runtime_error(
+                        std::string("runLogitScaleDiagnostic: cudaMemcpy hidden failed: ") +
+                        cudaGetErrorString(h_copy_err) + " at " + __FILE__ + ":" +
+                        std::to_string(__LINE__));
+                }
+
                 float h_rms_max = -std::numeric_limits<float>::infinity();
                 float h_rms_min = std::numeric_limits<float>::infinity();
-                float h_rms_mean = 0.0f;
-                if (h_src) {
-                    const size_t h_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
-                    std::vector<float> h_sample(sample_positions * d_model);
-                    cudaMemcpy(h_sample.data(), h_src, h_bytes, cudaMemcpyDeviceToHost);
-                    
-                    for (int pos = 0; pos < sample_positions; ++pos) {
-                        float sum_sq = 0.0f;
-                        for (int d = 0; d < d_model; ++d) {
-                            const float val = h_sample[pos * d_model + d];
-                            sum_sq += val * val;
-                        }
-                        const float rms = std::sqrt(sum_sq / d_model);
-                        h_rms_mean += rms;
-                        h_rms_max = std::max(h_rms_max, rms);
-                        h_rms_min = std::min(h_rms_min, rms);
+                double h_rms_sum = 0.0;
+                double h_rms_sq_sum = 0.0;
+                for (const int pos : lm_valid_positions) {
+                    double sum_sq = 0.0;
+                    for (int d = 0; d < d_model; ++d) {
+                        const double val = static_cast<double>(h_sample[static_cast<size_t>(pos) * d_model + d]);
+                        sum_sq += val * val;
                     }
-                    h_rms_mean /= sample_positions;
-                    
-                    // Rule 20: Verify hidden state norms are finite (issue #142)
-                    if (!std::isfinite(h_rms_mean) || !std::isfinite(h_rms_max)) {
-                        throw std::runtime_error(
-                            "[HIDDEN_STATE_NORMS] FATAL: Hidden state RMS contain inf/nan at batch " + 
-                            std::to_string(batch_idx + 1) + 
-                            " (h_rms_mean=" + std::to_string(h_rms_mean) + 
-                            ", h_rms_max=" + std::to_string(h_rms_max) + 
-                            "). Encoder output exploded. " +
-                            "Check: (1) attention gradient explosion, (2) FFN activation overflow, (3) RMSNorm inverse explosion."
-                        );
-                    }
+                    const float rms = static_cast<float>(std::sqrt(sum_sq / d_model));
+                    h_rms_sum += rms;
+                    h_rms_sq_sum += static_cast<double>(rms) * rms;
+                    h_rms_max = std::max(h_rms_max, rms);
+                    h_rms_min = std::min(h_rms_min, rms);
+                }
+                const float h_rms_mean = static_cast<float>(h_rms_sum / sample_positions);
+                const float h_rms_rms = static_cast<float>(std::sqrt(h_rms_sq_sum / sample_positions));
+                
+                // Rule 20: Verify hidden state norms are finite (issue #142)
+                if (!std::isfinite(h_rms_mean) || !std::isfinite(h_rms_rms) ||
+                    !std::isfinite(h_rms_max) || !std::isfinite(h_rms_min)) {
+                    throw std::runtime_error(
+                        "[HIDDEN_STATE_NORMS] FATAL: Hidden state RMS contain inf/nan at batch " + 
+                        std::to_string(batch_idx + 1) + 
+                        " (h_rms_mean=" + std::to_string(h_rms_mean) + 
+                        ", h_rms_rms=" + std::to_string(h_rms_rms) + 
+                        ", h_rms_max=" + std::to_string(h_rms_max) + 
+                        ", h_rms_min=" + std::to_string(h_rms_min) + 
+                        "). Encoder output exploded. " +
+                        "Check: (1) attention gradient explosion, (2) FFN activation overflow, (3) RMSNorm inverse explosion."
+                    );
                 }
                 
                 // --- Weight norm statistics (sample random + top tokens) ---
@@ -248,11 +412,16 @@ void runLogitScaleDiagnostic(
                 // when ||W|| distribution is skewed.
                 const float* lm_head_weights = ctx.model->getLmHeadLayer()->weights().data;
                 const float* embedding_weights = ctx.model->getEmbeddingLayer()->tokenWeights().data;
-                if (ctx.model->getConfig().tie_embeddings &&
-                    lm_head_weights &&
-                    embedding_weights &&
-                    lm_head_weights != embedding_weights) {
-                    throw std::runtime_error("Tied embeddings: lm_head_weights and embedding_weights must alias the same buffer.");
+                if (!lm_head_weights) {
+                    throw std::runtime_error("runLogitScaleDiagnostic: LM-head weights are NULL");
+                }
+                if (!embedding_weights) {
+                    throw std::runtime_error("runLogitScaleDiagnostic: embedding weights are NULL");
+                }
+                if (ctx.model->getConfig().tie_embeddings) {
+                    if (lm_head_weights != embedding_weights) {
+                        throw std::runtime_error("Tied embeddings: lm_head_weights and embedding_weights must alias the same buffer.");
+                    }
                 }
 
                 float w_rms_mean = 0.0f, w_rms_sq_mean = 0.0f, w_rms_max = 0.0f;
@@ -263,7 +432,7 @@ void runLogitScaleDiagnostic(
                 // exact over the entire vocab — no sampling miss — and costs
                 // one kernel launch + 16-byte D2H instead of `vocab_sample`
                 // synchronous cudaMemcpys.
-                if (lm_head_weights) {
+                {
                     // SSoT: vocab_size from BatchPayload (validated by payload.validate()),
                     // d_model from ModelArchitecture (validated at config load).
                     cudaStream_t diag_stream = ts.stream_ctrl.getPrimaryStream();
@@ -283,12 +452,13 @@ void runLogitScaleDiagnostic(
                 // Issue #138 FIX: Correct formula for dot product variance.
                 // Var(h·W) = d × Var(h_i) × Var(W_j) = h_rms² × E[||W||²]
                 // Old code used h_rms × E[||W||] which underestimates due to Jensen's inequality.
-                // Correct: logit_std ≈ h_rms × sqrt(E[||W||²]) = h_rms × ||W||_rms
+                // Correct over a row population: logit_std ≈ h_rms_rms × sqrt(E[||W||²])
+                // = sqrt(d_model) × sqrt(E_t[rms(h_t)^2]) × sqrt(E_v[rms(W_v)^2]).
                 const float w_rms_rms = std::sqrt(w_rms_sq_mean);  // sqrt(E[rms²])
-                const float expected_logit_std = std::sqrt(static_cast<float>(d_model)) * h_rms_mean * w_rms_rms;
+                const float expected_logit_std = std::sqrt(static_cast<float>(d_model)) * h_rms_rms * w_rms_rms;
 
                 // Publish raw W_rms to telemetry lattice (stream 47). CSV logger picks it up.
-                // This is the W_rms term that enters logit_std = sqrt(d_model) × h_rms × W_rms_rms.
+                // This is the W_rms term that enters logit_std = sqrt(d_model) × h_rms_rms × W_rms_rms.
                 ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::LM_HEAD_W_RMS_RMS] = w_rms_rms;
                 const float logit_std_ratio = (expected_logit_std > 1e-10f) ? logit_std / expected_logit_std : 0.0f;
 
@@ -322,16 +492,13 @@ void runLogitScaleDiagnostic(
                 // estimator of Σ_v p(v)·E[v].
                 float unigram_dir_cos_abs_mean    = 0.0f;
                 float unigram_dir_cos_signed_mean = 0.0f;
-                if (h_src && lm_head_weights) {
-                    // (1) Re-fetch h_sample (out-of-scope from earlier block).
-                    const size_t h_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
-                    std::vector<float> h_sample(static_cast<size_t>(sample_positions) * d_model);
-                    cudaMemcpy(h_sample.data(), h_src, h_bytes, cudaMemcpyDeviceToHost);
-
-                    // (2) Per-position ||h_t||² and Σ_d h[t,d] (DC component) — double accum.
-                    std::vector<double> h_norm_sq(sample_positions, 0.0);
-                    std::vector<double> h_dc(sample_positions, 0.0);
-                    for (int t = 0; t < sample_positions; ++t) {
+                {
+                    // (1) Per-position ||h_t||² and Σ_d h[t,d] (DC component) — double accum.
+                    // Arrays are rectangular so they can be indexed by payload flat row id;
+                    // only LM-valid positions are populated/consumed.
+                    std::vector<double> h_norm_sq(total_tokens, 0.0);
+                    std::vector<double> h_dc(total_tokens, 0.0);
+                    for (const int t : lm_valid_positions) {
                         const float* row = &h_sample[static_cast<size_t>(t) * d_model];
                         double sum_sq = 0.0;
                         double sum   = 0.0;
@@ -345,7 +512,7 @@ void runLogitScaleDiagnostic(
                     }
                     // h_bar = mean_t h_t (per-dimension), accumulated in double.
                     std::vector<double> h_bar(d_model, 0.0);
-                    for (int t = 0; t < sample_positions; ++t) {
+                    for (const int t : lm_valid_positions) {
                         const float* row = &h_sample[static_cast<size_t>(t) * d_model];
                         for (int d = 0; d < d_model; ++d) {
                             h_bar[d] += static_cast<double>(row[d]);
@@ -357,7 +524,7 @@ void runLogitScaleDiagnostic(
                     // h DC summary stats.
                     double dc_sum = 0.0;
                     double dc_abs_max = 0.0;
-                    for (int t = 0; t < sample_positions; ++t) {
+                    for (const int t : lm_valid_positions) {
                         dc_sum     += h_dc[t];
                         const double a = std::abs(h_dc[t]);
                         if (a > dc_abs_max) dc_abs_max = a;
@@ -383,10 +550,16 @@ void runLogitScaleDiagnostic(
                          tok += hw_stride, ++w_sampled)
                     {
                         const size_t row_offset = static_cast<size_t>(tok) * d_model;
-                        cudaMemcpy(w_row_buf.data(),
-                                   lm_head_weights + row_offset,
-                                   d_model * sizeof(float),
-                                   cudaMemcpyDeviceToHost);
+                        cudaError_t w_copy_err = cudaMemcpy(w_row_buf.data(),
+                                                            lm_head_weights + row_offset,
+                                                            d_model * sizeof(float),
+                                                            cudaMemcpyDeviceToHost);
+                        if (w_copy_err != cudaSuccess) {
+                            throw std::runtime_error(
+                                std::string("[HW_ALIGNMENT] cudaMemcpy W row failed: ") +
+                                cudaGetErrorString(w_copy_err) + " tok=" + std::to_string(tok) +
+                                " at " + __FILE__ + ":" + std::to_string(__LINE__));
+                        }
 
                         // ||W_v||² in double.
                         double w_norm_sq = 0.0;
@@ -398,7 +571,7 @@ void runLogitScaleDiagnostic(
                         if (w_norm_sq <= 0.0 || !std::isfinite(w_norm_sq)) continue;
                         const double inv_w_norm = 1.0 / std::sqrt(w_norm_sq);
 
-                        for (int t = 0; t < sample_positions; ++t) {
+                        for (const int t : lm_valid_positions) {
                             if (h_norm_sq[t] <= 0.0 || !std::isfinite(h_norm_sq[t])) continue;
                             const float* h_row = &h_sample[static_cast<size_t>(t) * d_model];
                             // dot(h_t, W_v) in double.
@@ -446,25 +619,27 @@ void runLogitScaleDiagnostic(
                     // UNIGRAM-FREQUENCY-DIRECTION COLLAPSE DETECTOR (Issue #150)
                     //
                     // Build empirical e_uf_dir = normalize(Σ_t E[input_ids[t]]) using
-                    // ONLY tokens at valid positions (b<batch_size, t<seq_lengths[b]).
+                    // ONLY the LM-valid target positions used by this logit-scale diagnostic.
                     // Then compute mean_t |cos(h_t, e_uf_dir)| and signed mean.
                     //
                     // High |cos| during steps 0–600 confirms hidden states are
                     // collapsing toward the dominant-token direction (representation
                     // bug, not optimizer bug). Random baseline ≈ sqrt(2/(π·d)) ≈ 0.029.
                     // ============================================================
-                    if (embedding_weights && payload.batch_size > 0) {
-                        // (1) Tally unique token counts at valid positions in the
+                    {
+                        // (1) Tally unique token counts at LM-valid positions in the
                         //     same flattened layout as h_sample (pos = b*seq_len + t).
                         std::map<int, int> tok_counts;
-                        std::vector<int> pos_to_tok(sample_positions, -1);
-                        for (int pos = 0; pos < sample_positions; ++pos) {
-                            const int b = pos / payload.max_seq_len;
-                            const int t = pos % payload.max_seq_len;
-                            if (b >= payload.batch_size) continue;
-                            if (t >= payload.seq_lengths[b]) continue;
-                            const int tok = payload.input_ids[b * payload.max_seq_len + t];
-                            if (tok < 0 || tok >= vocab_size) continue;
+                        std::vector<int> pos_to_tok(total_tokens, -1);
+                        for (const int pos : lm_valid_positions) {
+                            const int tok = payload.input_ids[static_cast<size_t>(pos)];
+                            if (tok < 0 || tok >= vocab_size) {
+                                throw std::runtime_error(
+                                    "[UNIGRAM_DIR] FATAL: input token out of vocab at batch " +
+                                    std::to_string(batch_idx + 1) + ", pos=" +
+                                    std::to_string(pos) + ", tok=" + std::to_string(tok) +
+                                    ", vocab_size=" + std::to_string(vocab_size));
+                            }
                             pos_to_tok[pos] = tok;
                             ++tok_counts[tok];
                         }
@@ -477,10 +652,17 @@ void runLogitScaleDiagnostic(
                             for (const auto& kv : tok_counts) {
                                 const int tok = kv.first;
                                 const int cnt = kv.second;
-                                cudaMemcpy(e_row.data(),
-                                           embedding_weights + static_cast<size_t>(tok) * d_model,
-                                           d_model * sizeof(float),
-                                           cudaMemcpyDeviceToHost);
+                                cudaError_t e_copy_err = cudaMemcpy(
+                                    e_row.data(),
+                                    embedding_weights + static_cast<size_t>(tok) * d_model,
+                                    d_model * sizeof(float),
+                                    cudaMemcpyDeviceToHost);
+                                if (e_copy_err != cudaSuccess) {
+                                    throw std::runtime_error(
+                                        std::string("[UNIGRAM_DIR] cudaMemcpy embedding row failed: ") +
+                                        cudaGetErrorString(e_copy_err) + " tok=" + std::to_string(tok) +
+                                        " at " + __FILE__ + ":" + std::to_string(__LINE__));
+                                }
                                 for (int d = 0; d < d_model; ++d) {
                                     e_uf_dir[d] += static_cast<double>(cnt) * static_cast<double>(e_row[d]);
                                 }
@@ -497,7 +679,7 @@ void runLogitScaleDiagnostic(
                                 long double cos_signed_sum  = 0.0L;
                                 long double cos_abs_sum     = 0.0L;
                                 int64_t     cos_count       = 0;
-                                for (int pos = 0; pos < sample_positions; ++pos) {
+                                for (const int pos : lm_valid_positions) {
                                     if (pos_to_tok[pos] < 0) continue;             // skip pad
                                     if (h_norm_sq[pos] <= 0.0 || !std::isfinite(h_norm_sq[pos])) continue;
                                     const float* h_row = &h_sample[static_cast<size_t>(pos) * d_model];
@@ -569,17 +751,21 @@ void runLogitScaleDiagnostic(
                 std::ostringstream scale_eq;
                 scale_eq << std::fixed << std::setprecision(6);
                 scale_eq << "[LOGIT_SCALE_EQUATION] logit[v] = h · W[v]^T, logit_range = max - min\n";
+                scale_eq << "  POPULATION: lm_valid_tokens=" << sample_positions
+                         << " total_tokens=" << total_tokens
+                         << " masked_tokens=" << (total_tokens - sample_positions) << "\n";
                 scale_eq << "  LOGIT STATS: std=" << logit_std << " range=" << logit_range
                          << " avg_per_pos_range=" << avg_per_pos_range
                          << " max_per_pos_range=" << per_pos_range_max << "\n";
                 scale_eq << "  HIDDEN (LM input): h_rms_mean=" << h_rms_mean
+                         << " h_rms_rms=" << h_rms_rms
                          << " h_rms_max=" << h_rms_max << " h_rms_min=" << h_rms_min << "\n";
                 scale_eq << "  WEIGHTS (LM head): W_rms_mean=" << w_rms_mean
                          << " W_rms_rms=" << w_rms_rms
                          << " W_rms_max=" << w_rms_max << " (tok=" << w_rms_max_tok << ")"
                          << " d_model=" << d_model << "\n";
-                scale_eq << "  EXPECTED logit_std = sqrt(d_model) × h_rms × W_rms_rms\n";
-                scale_eq << "                      = sqrt(" << d_model << ") × " << h_rms_mean
+                scale_eq << "  EXPECTED logit_std = sqrt(d_model) × h_rms_rms × W_rms_rms\n";
+                scale_eq << "                      = sqrt(" << d_model << ") × " << h_rms_rms
                          << " × " << w_rms_rms << "\n";
                 scale_eq << "                      = " << expected_logit_std << "\n";
                 scale_eq << "  ACTUAL logit_std = " << logit_std
@@ -608,7 +794,10 @@ void runLogitScaleDiagnostic(
             // LM HEAD DIAGNOSTICS: Row norms ||W[v]|| for top predicted tokens
             // ================================================================
             const float* lm_head_weights_for_norms = ctx.model->getLmHeadLayer()->weights().data;
-            if (lm_head_weights_for_norms) {
+            if (!lm_head_weights_for_norms) {
+                throw std::runtime_error("[LMHeadNorm] LM-head weights are NULL");
+            }
+            {
                 // Copy LM head rows for top-5 predicted tokens
                 std::ostringstream lm_stats;
                 lm_stats << "[LMHeadNorm] batch=" << (batch_idx + 1) << " rms(W[v])=[";
@@ -618,9 +807,16 @@ void runLogitScaleDiagnostic(
                     int tok_id = sorted_argmax[i].first;
                     // Copy row [tok_id, :] from W [vocab_size, d_model]
                     const size_t row_offset = static_cast<size_t>(tok_id) * d_model;
-                    cudaMemcpy(row_buffer.data(), 
-                               lm_head_weights_for_norms + row_offset,
-                               d_model * sizeof(float), cudaMemcpyDeviceToHost);
+                    cudaError_t norm_copy_err = cudaMemcpy(
+                        row_buffer.data(),
+                        lm_head_weights_for_norms + row_offset,
+                        d_model * sizeof(float), cudaMemcpyDeviceToHost);
+                    if (norm_copy_err != cudaSuccess) {
+                        throw std::runtime_error(
+                            std::string("[LMHeadNorm] cudaMemcpy W row failed: ") +
+                            cudaGetErrorString(norm_copy_err) + " tok=" + std::to_string(tok_id) +
+                            " at " + __FILE__ + ":" + std::to_string(__LINE__));
+                    }
                     
                     // Compute RMS of row
                     float sum_sq = 0.0f;

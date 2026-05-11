@@ -11,10 +11,9 @@
 //  This code MUST NEVER modify shared training state
 //  (weight tensors, requires_grad flags, optimizer state).
 //
-//  The decode forward path (executeDecodeForward_) uses
-//  Tensor::detach() views of model weights so that
-//  requires_grad=false is set on local non-owning copies,
-//  not on the model's actual weight tensors.
+//  Generation uses either the KV decode path or the full-context prefill path,
+//  depending on whether the active model geometry is sequence-local. Both paths
+//  keep inference isolated from model weight tensors and optimizer state.
 //
 //  Author: Austin Wadkins
 //  Date: April 2026
@@ -31,8 +30,8 @@ namespace GRIMText::Training {
 /// decodes the output, and logs the result.
 ///
 /// SAFETY: This function does NOT modify any model weight tensors,
-/// gradient buffers, or requires_grad flags.  The underlying decode
-/// path uses detach() views for all weight accesses.
+/// gradient buffers, or optimizer state. Inference paths use no training
+/// backward pass and keep generation state separate from optimizer state.
 void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state);
 
 }  // namespace GRIMText::Training

@@ -8,9 +8,9 @@
 //  during training.  No diagnostic code should modify shared
 //  training state (weight tensors, requires_grad, optimizer).
 //
-//  The underlying model.generate() → executeDecodeForward_()
-//  path uses Tensor::detach() views of weight tensors, so
-//  requires_grad=false is only set on ephemeral local copies.
+//  The underlying model.generate() path chooses KV decode only for sequence-local
+//  geometry. Sequence-coupled centering/projection uses full-context inference.
+//  Both modes keep inference state separate from optimizer-owned training state.
 //
 //  Author: Austin Wadkins
 //  Date: April 2026

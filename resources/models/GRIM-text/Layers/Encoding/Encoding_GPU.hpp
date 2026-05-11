@@ -31,7 +31,6 @@
 #include <memory>
 
 #include "../grim_layer_gpu.hpp"
-#include "../LayernNorm/RMSNorm_GPU.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
@@ -50,53 +49,30 @@ using Batching::BatchPayload;
 
 struct EncodingConfig {
     // Grouped construction HP from HyperparameterGroupings.hpp. This owns all
-    // architecture/dropout/layer toggles for the encoder layer snapshot.
+    // architecture/dropout/layer toggles and derived dimensions for the encoder layer snapshot.
     HyperParameters::EncoderLayerConstructionHP hp{};
     
     // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state
     // WARNING: If nullptr, attention sees no positional info - all positions equivalent!
     const PBM::PBMSpec* pos_encoding = nullptr;
+
+    EncodingConfig() = default;
+
+    EncodingConfig(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
+                   const PBM::PBMSpec* pos_encoding_snapshot)
+        : hp(hp_snapshot)
+        , pos_encoding(pos_encoding_snapshot)
+    {
+    }
     
     // Validation helper - throws if invalid
     void validate(const char* context) const {
-        if (hp.d_model <= 0) {
-            throw std::invalid_argument(std::string(context) + 
-            ": d_model MUST be > 0, got " + std::to_string(hp.d_model));
-        }
-        if (hp.num_heads <= 0) {
-            throw std::invalid_argument(std::string(context) + 
-            ": num_heads MUST be > 0, got " + std::to_string(hp.num_heads));
-        }
-        if (hp.d_ff <= 0) {
-            throw std::invalid_argument(std::string(context) + 
-            ": d_ff MUST be > 0, got " + std::to_string(hp.d_ff));
-        }
-        if (hp.d_model % hp.num_heads != 0) {
-            throw std::invalid_argument(std::string(context) + 
-            ": d_model (" + std::to_string(hp.d_model) + 
-            ") must be divisible by num_heads (" + std::to_string(hp.num_heads) + ")");
-        }
-        HyperParameters::requireDropoutProbability(hp.dropout_rate, "dropout_rate", context);
-        HyperParameters::requireDropoutProbability(hp.attention_dropout, "attention_dropout", context);
-        if (!std::isfinite(hp.residual_scale) || hp.residual_scale <= 0.0f) {
+        HyperParameters::validateEncoderLayerConstructionHP(hp, context);
+        if (!pos_encoding) {
             throw std::invalid_argument(std::string(context) +
-            ": residual_scale MUST be positive finite, got " + std::to_string(hp.residual_scale));
-        }
-        
-        // GQA validation
-        const int effective_kv_heads = (hp.num_kv_heads > 0) ? hp.num_kv_heads : hp.num_heads;
-        if (hp.num_heads % effective_kv_heads != 0) {
-            throw std::invalid_argument(std::string(context) + 
-            ": num_heads (" + std::to_string(hp.num_heads) + 
-                ") must be divisible by num_kv_heads (" + std::to_string(effective_kv_heads) + ")");
+                ": pos_encoding is NULL - PBM must be initialized before encoder construction");
         }
     }
-    
-    // Computed properties
-        int headDim() const { return (hp.num_heads > 0) ? (hp.d_model / hp.num_heads) : 0; }
-        int effectiveKVHeads() const { return (hp.num_kv_heads > 0) ? hp.num_kv_heads : hp.num_heads; }
-    int kvDim() const { return effectiveKVHeads() * headDim(); }
-        bool isGQA() const { return hp.num_kv_heads > 0 && hp.num_kv_heads < hp.num_heads; }
 };
 
 //======================================================//

@@ -391,7 +391,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - Inference-mode prefill enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardMode::InferencePrefill`; it no longer creates `AutogradContext` or calls `executeAutogradForward()`.
   - `executeInferenceForward_()`: builds explicit `BatchDeviceBindings` + geometry-only `BatchPayload`, runs shared forward, returns last-token logits, and copies preserved per-layer K/V tensors into `GenerationState` KV cache before clearing intermediates.
   - `forwardInit()`: Prefill phase — copies prompt tokens to device, runs full forward
-  - `forwardStep()`: Decode phase — appends token, recomputes FULL sequence (O(n²), no KV cache optimization)
+  - `forwardStep()`: Decode phase — appends token, then chooses the valid generation path: KV-cached single-token decode for sequence-local configs, full current-sequence prefill for sequence-coupled geometry (`center_encoder_residuals`, `lm_head_center_hidden_states`, `project_out_pc1`)
   - `forwardWithCache()`: Full sequence forward, returns last-token hidden states (encoder output)
   - **DELETED**: `forwardStepIncremental()` — zero callers, alias to `forwardStep()`, header falsely claimed "O(n)" (Rule 26)
   - **DELETED**: `forwardWithCache()` dead params `token_text_features` and `token_text_mask` — never passed, never used

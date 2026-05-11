@@ -1,12 +1,9 @@
 #pragma once
 //======================================================//
 //  LogitScaleDiagnostic.hpp
-//  Per-batch logit-scale equation, h↔W alignment,
+//  Per-batch LM-valid logit-scale equation, h↔W alignment,
 //  unigram-direction collapse detector, LM-head row-norm
 //  spot check, and the embedded computeRhoDiagnostic() call.
-//
-//  Lifted verbatim from Phase2_TrainingLoop.cu (the
-//  "TRAINING SIGNAL: Logit Statistics" scope).
 //======================================================//
 
 #include "../../Shared/Batching/BatchPayload.hpp"

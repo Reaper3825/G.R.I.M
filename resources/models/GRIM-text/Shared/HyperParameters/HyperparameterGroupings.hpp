@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 #include "HyperParameters_GPU.hpp"
 #include "../Dynamic_LR/LRSchedule.hpp"
@@ -79,11 +81,20 @@ struct GpuModelInitializationHP {
     int min_seq_len_for_flash = 0;
 };
 
+struct RMSNormConstructionHP {
+    int hidden_dim = 0;
+    float epsilon = 0.0f;
+};
+
 struct EncoderLayerConstructionHP {
     int num_layers = 0;
     int d_model = 0;
     int num_heads = 0;
     int num_kv_heads = 0;
+    int head_dim = 0;
+    int heads_per_kv_group = 0;
+    int kv_dim = 0;
+    int qkv_dim = 0;
     int d_ff = 0;
     float rms_epsilon = 0.0f;
     bool causal_mask = false;
@@ -97,6 +108,7 @@ struct EncoderLayerConstructionHP {
     float attention_dropout = 0.0f;
     bool qk_norm_enabled = false;
     float residual_scale = 0.0f;
+    bool is_gqa = false;
 };
 
 struct FeedForwardLayerConstructionHP {
@@ -206,6 +218,17 @@ inline void requirePositiveGroupingValue(int value,
     }
 }
 
+inline void requirePositiveFiniteGroupingValue(float value,
+                                               const char* field,
+                                               const char* caller)
+{
+    if (!std::isfinite(value) || value <= 0.0f) {
+        throw std::runtime_error(std::string(caller) + ": " + field +
+                                 " must be a positive finite value, got " +
+                                 std::to_string(value));
+    }
+}
+
 inline void requireDropoutProbability(float value,
                                       const char* field,
                                       const char* caller)
@@ -239,6 +262,86 @@ inline void requireValidGQAGrouping(const LanguageModelConfig& cfg,
                                  std::to_string(cfg.head_dim) +
                                  " does not match d_model/num_heads=" +
                                  std::to_string(computed_head_dim));
+    }
+}
+
+inline void validateEncoderLayerConstructionHP(
+    const EncoderLayerConstructionHP& hp,
+    const char* caller)
+{
+    requirePositiveGroupingValue(hp.num_layers, "num_layers", caller);
+    requirePositiveGroupingValue(hp.d_model, "d_model", caller);
+    requirePositiveGroupingValue(hp.num_heads, "num_heads", caller);
+    requirePositiveGroupingValue(hp.num_kv_heads, "num_kv_heads", caller);
+    requirePositiveGroupingValue(hp.d_ff, "d_ff", caller);
+    requirePositiveFiniteGroupingValue(hp.rms_epsilon, "rms_epsilon", caller);
+    requireDropoutProbability(hp.dropout_rate, "dropout_rate", caller);
+    requireDropoutProbability(hp.attention_dropout, "attention_dropout", caller);
+    requirePositiveFiniteGroupingValue(hp.residual_scale, "residual_scale", caller);
+
+    if (!isValidGQAConfig(hp.num_heads, hp.num_kv_heads)) {
+        throw std::runtime_error(std::string(caller) + ": invalid GQA config num_heads=" +
+                                 std::to_string(hp.num_heads) + " num_kv_heads=" +
+                                 std::to_string(hp.num_kv_heads));
+    }
+    if (hp.d_model % hp.num_heads != 0) {
+        throw std::runtime_error(std::string(caller) + ": d_model=" +
+                                 std::to_string(hp.d_model) +
+                                 " must be divisible by num_heads=" +
+                                 std::to_string(hp.num_heads));
+    }
+
+    const int expected_head_dim = hp.d_model / hp.num_heads;
+    if (hp.head_dim != expected_head_dim) {
+        throw std::runtime_error(std::string(caller) + ": head_dim=" +
+                                 std::to_string(hp.head_dim) +
+                                 " does not match d_model/num_heads=" +
+                                 std::to_string(expected_head_dim));
+    }
+
+    const int expected_heads_per_kv_group = hp.num_heads / hp.num_kv_heads;
+    if (hp.heads_per_kv_group != expected_heads_per_kv_group) {
+        throw std::runtime_error(std::string(caller) + ": heads_per_kv_group=" +
+                                 std::to_string(hp.heads_per_kv_group) +
+                                 " does not match num_heads/num_kv_heads=" +
+                                 std::to_string(expected_heads_per_kv_group));
+    }
+
+    const int expected_kv_dim = computeKVProjectionSize(
+        hp.d_model, hp.num_heads, hp.num_kv_heads);
+    if (hp.kv_dim != expected_kv_dim) {
+        throw std::runtime_error(std::string(caller) + ": kv_dim=" +
+                                 std::to_string(hp.kv_dim) +
+                                 " does not match num_kv_heads*head_dim=" +
+                                 std::to_string(expected_kv_dim));
+    }
+
+    const int expected_qkv_dim = computeQKVProjectionSize(
+        hp.d_model, hp.num_heads, hp.num_kv_heads);
+    if (hp.qkv_dim != expected_qkv_dim) {
+        throw std::runtime_error(std::string(caller) + ": qkv_dim=" +
+                                 std::to_string(hp.qkv_dim) +
+                                 " does not match d_model+2*kv_dim=" +
+                                 std::to_string(expected_qkv_dim));
+    }
+
+    const bool expected_is_gqa = hp.num_kv_heads < hp.num_heads;
+    if (hp.is_gqa != expected_is_gqa) {
+        throw std::runtime_error(std::string(caller) + ": is_gqa=" +
+                                 std::to_string(static_cast<int>(hp.is_gqa)) +
+                                 " does not match num_kv_heads<num_heads=" +
+                                 std::to_string(static_cast<int>(expected_is_gqa)));
+    }
+
+    if (hp.use_flash_attention) {
+        requirePositiveGroupingValue(hp.min_seq_len_for_flash,
+                                     "min_seq_len_for_flash",
+                                     caller);
+    }
+    if (hp.use_layer_scale) {
+        requirePositiveFiniteGroupingValue(hp.layer_scale_init,
+                                           "layer_scale_init",
+                                           caller);
     }
 }
 
@@ -394,10 +497,25 @@ inline GpuModelInitializationHP gpuModelInitializationHP(
     return view;
 }
 
+inline RMSNormConstructionHP rmsNormConstructionHP(int hidden_dim,
+                                                   float epsilon,
+                                                   const char* caller)
+{
+    requirePositiveGroupingValue(hidden_dim, "hidden_dim", caller);
+    requirePositiveFiniteGroupingValue(epsilon, "epsilon", caller);
+
+    RMSNormConstructionHP view;
+    view.hidden_dim = hidden_dim;
+    view.epsilon = epsilon;
+    return view;
+}
+
 inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     const LanguageModelConfig& cfg)
 {
     EncoderLayerConstructionHP view;
+    const RMSNormConstructionHP rms_hp = rmsNormConstructionHP(
+        cfg.d_model, cfg.rms_epsilon, "encoderLayerConstructionHP");
     requireValidGQAGrouping(cfg, "encoderLayerConstructionHP");
     requirePositiveGroupingValue(cfg.num_layers, "num_layers", "encoderLayerConstructionHP");
     requirePositiveGroupingValue(cfg.d_ff, "d_ff", "encoderLayerConstructionHP");
@@ -409,11 +527,15 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
                                      "encoderLayerConstructionHP");
     }
     view.num_layers = cfg.num_layers;
-    view.d_model = cfg.d_model;
+    view.d_model = rms_hp.hidden_dim;
     view.num_heads = cfg.num_heads;
     view.num_kv_heads = cfg.num_kv_heads;
+    view.head_dim = cfg.head_dim;
+    view.heads_per_kv_group = computeHeadsPerKVGroup(cfg.num_heads, cfg.num_kv_heads);
+    view.kv_dim = computeKVProjectionSize(cfg.d_model, cfg.num_heads, cfg.num_kv_heads);
+    view.qkv_dim = computeQKVProjectionSize(cfg.d_model, cfg.num_heads, cfg.num_kv_heads);
     view.d_ff = cfg.d_ff;
-    view.rms_epsilon = cfg.rms_epsilon;
+    view.rms_epsilon = rms_hp.epsilon;
     view.causal_mask = cfg.causal_mask;
     view.use_flash_attention = cfg.use_flash_attention;
     view.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
@@ -426,6 +548,8 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.qk_norm_enabled = cfg.qk_norm_enabled;
     view.residual_scale =
         1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
+    view.is_gqa = cfg.num_kv_heads < cfg.num_heads;
+    validateEncoderLayerConstructionHP(view, "encoderLayerConstructionHP");
     return view;
 }
 
@@ -462,14 +586,15 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     const LanguageModelConfig& cfg)
 {
     LMHeadLayerConstructionHP view;
+    const RMSNormConstructionHP rms_hp = rmsNormConstructionHP(
+        cfg.d_model, cfg.rms_epsilon, "lmHeadLayerConstructionHP");
     requirePositiveGroupingValue(cfg.vocab_size, "vocab_size", "lmHeadLayerConstructionHP");
-    requirePositiveGroupingValue(cfg.d_model, "d_model", "lmHeadLayerConstructionHP");
     if (cfg.project_out_pc1) {
         requirePositiveGroupingValue(cfg.pc1_power_iters,
                                      "pc1_power_iters",
                                      "lmHeadLayerConstructionHP");
     }
-    view.d_model = cfg.d_model;
+    view.d_model = rms_hp.hidden_dim;
     view.vocab_size = cfg.vocab_size;
     view.use_bias = cfg.use_bias;
     view.tie_embeddings = cfg.tie_embeddings;
@@ -478,8 +603,22 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.pc1_power_iters = cfg.pc1_power_iters;
     view.center_logits = cfg.center_logits;
     view.freeze_final_rms_gamma = cfg.lm_head_freeze_final_rms_gamma;
-    view.rms_epsilon = cfg.rms_epsilon;
+    view.rms_epsilon = rms_hp.epsilon;
     return view;
+}
+
+inline RMSNormConstructionHP encoderRMSNormConstructionHP(
+    const EncoderLayerConstructionHP& encoder_hp)
+{
+    return rmsNormConstructionHP(
+        encoder_hp.d_model, encoder_hp.rms_epsilon, "encoderRMSNormConstructionHP");
+}
+
+inline RMSNormConstructionHP lmHeadRMSNormConstructionHP(
+    const LMHeadLayerConstructionHP& lm_head_hp)
+{
+    return rmsNormConstructionHP(
+        lm_head_hp.d_model, lm_head_hp.rms_epsilon, "lmHeadRMSNormConstructionHP");
 }
 
 inline ReasoningHeadConstructionHP reasoningHeadConstructionHP(

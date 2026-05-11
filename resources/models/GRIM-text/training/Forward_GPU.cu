@@ -1,7 +1,6 @@
 #ifndef USE_CUDA
 #define USE_CUDA
 #endif
-#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -27,25 +26,19 @@ namespace GRIM {
 // ModelForwardRequest/AutogradContext.
 //======================================================//
 struct GPUGrimEncoder::Impl {
-    HyperParameters::EncoderLayerConstructionHP config_;
     std::vector<std::unique_ptr<GPUEncoderLayer>> gpu_layers_;
 
     Impl(const HyperParameters::EncoderLayerConstructionHP& config,
          const EncoderConstructionBindings& bindings,
          uint64_t weight_seed)
-        : config_(config)
     {
+        HyperParameters::validateEncoderLayerConstructionHP(config, "GPUGrimEncoder::Impl");
         if (!bindings.pos_encoding) {
             throw std::runtime_error("[GPUGrimEncoder] pos_encoding is NULL — "
                                      "PBM must be initialized BEFORE encoder construction");
         }
-        if (!std::isfinite(config.residual_scale) || config.residual_scale <= 0.0f) {
-            throw std::runtime_error("[GPUGrimEncoder] residual_scale must be a positive finite value from encoderLayerConstructionHP");
-        }
 
-        EncodingConfig enc_cfg{};
-        enc_cfg.hp = config;
-        enc_cfg.pos_encoding = bindings.pos_encoding;
+        EncodingConfig enc_cfg(config, bindings.pos_encoding);
 
         for (int i = 0; i < config.num_layers; ++i) {
             // Pattern B: Layer self-allocates and Xavier-inits its own weights.

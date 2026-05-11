@@ -209,6 +209,61 @@ Batching::BatchPayload buildInferenceGeometryPayload(
     return payload;
 }
 
+bool sequenceCoupledGeometryRequiresFullPrefill(
+    const HyperParameters::LanguageModelConfig& cfg) {
+    return cfg.center_encoder_residuals ||
+           cfg.lm_head_center_hidden_states ||
+           cfg.project_out_pc1;
+}
+
+void updateDecodeSelectorAfterPrefill(LanguageModel& model,
+                                      const HyperParameters::LanguageModelConfig& cfg,
+                                      TrainingState& ts,
+                                      GenerationState& gen,
+                                      cudaStream_t stream,
+                                      int seq_len,
+                                      const char* caller) {
+    if (seq_len <= 0) {
+        throw std::runtime_error(std::string(caller) + ": seq_len <= 0 while updating decode selector");
+    }
+
+    // For the selector, exec_block_active = "execution block system is
+    // configured and memory is live." Trace structures are irrelevant for a
+    // full prefill pass; decode-step execution traces are used only by the KV
+    // single-token path.
+    const bool selector_can_run = cfg.execution_block_enabled
+        && model.getExecutionBlockLayer() != nullptr
+        && model.getScratchBlockLayer() != nullptr
+        && model.getScratchBlockLayer()->isEnabled()
+        && gen.has_exec_memory;
+
+    const float* last_hidden = ts.cached_encoder_output.data
+        ? ts.cached_encoder_output.data + static_cast<size_t>(seq_len - 1) * cfg.d_model
+        : nullptr;
+
+    if (!last_hidden && cfg.selector_enabled) {
+        throw std::runtime_error(
+            std::string(caller) + ": selector_enabled but cached_encoder_output is NULL "
+            "after prefill — cannot evaluate decode-time slot selector");
+    }
+
+    DecodeTimeResolveResult sel = resolveDecodeTimeNumSlotSelectionOrMask(
+        model.getDecodeTimeSlotSelectorLayer(),
+        model.getDecodeTimeNumPolicy(),
+        cfg.selector_enabled,
+        selector_can_run,
+        gen.has_exec_memory,
+        gen.exec_memory,
+        last_hidden,
+        stream,
+        ts.cublas_handle.get());
+
+    gen.decode_selector.valid          = sel.valid;
+    gen.decode_selector.status         = static_cast<uint8_t>(sel.status);
+    gen.decode_selector.selected_slot  = sel.selected_slot;
+    gen.decode_selector.selected_value = sel.selected_value;
+}
+
 }  // namespace
 
 //======================================================//
@@ -428,58 +483,19 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     }
 
     // ── Run decode-time slot selector on prefill's last-token hidden state ──
-    // executeDecodeForward_ runs this on every decode step, but prefill
-    // (executeInferenceForward_) skips it because prefill has no decode-step
-    // selector hook. Without this, generation_state_.decode_selector.valid is
-    // false for step 0, and <NUM> admissibility cannot be evaluated — a real gap, not
-    // something to mask around.
-    //
-    // The selector needs: selector/policy layers + exec_memory data.
-    // It does NOT need trace_state_by_row or execution_trace_by_row — those
-    // are for exec block stepping, which doesn't happen during prefill.
-    {
-        // For the selector, exec_block_active = "execution block system is
-        // configured and memory is live."  Trace structures are irrelevant.
-        const bool selector_can_run = config_.execution_block_enabled
-            && getExecutionBlockLayer() != nullptr
-            && getScratchBlockLayer() != nullptr
-            && getScratchBlockLayer()->isEnabled()
-            && generation_state_.has_exec_memory;
-
-        // Last token's hidden state lives at the tail of cached_encoder_output
-        const float* last_hidden = training_state_.cached_encoder_output.data
-            ? training_state_.cached_encoder_output.data
-              + static_cast<size_t>(seq_len - 1) * config_.d_model
-            : nullptr;
-
-        if (!last_hidden && config_.selector_enabled) {
-            throw std::runtime_error(
-                "forwardInit: selector_enabled but cached_encoder_output is NULL "
-                "after prefill — cannot evaluate decode-time slot selector");
-        }
-
-        DecodeTimeResolveResult sel = resolveDecodeTimeNumSlotSelectionOrMask(
-            getDecodeTimeSlotSelectorLayer(),
-            getDecodeTimeNumPolicy(),
-            config_.selector_enabled,
-            selector_can_run,
-            generation_state_.has_exec_memory,
-            generation_state_.exec_memory,
-            last_hidden,
-            post_stream,
-            training_state_.cublas_handle.get());
-
-        generation_state_.decode_selector.valid          = sel.valid;
-        generation_state_.decode_selector.status         = static_cast<uint8_t>(sel.status);
-        generation_state_.decode_selector.selected_slot  = sel.selected_slot;
-        generation_state_.decode_selector.selected_value = sel.selected_value;
-    }
+    // executeDecodeForward_ runs this on every KV decode step. Full prefill
+    // needs the same selector refresh so step-0 sampling and full-context
+    // generation remain governed by the same <NUM> admissibility contract.
+    updateDecodeSelectorAfterPrefill(*this, config_, training_state_, generation_state_,
+                                     post_stream, seq_len, "forwardInit");
 
     return logits;
 }
 
 //======================================================//
-//  forwardStep - Decode phase: single token with KV cache
+//  forwardStep - Decode phase for one appended token
+//  Uses KV-cache decode only when the config is sequence-local. Configs with
+//  sequence-coupled centering/projection rerun the full current sequence.
 //======================================================//
 Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
                                   int32_t new_token_slot_id) {
@@ -523,6 +539,21 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
         if (serr != cudaSuccess) {
             throw std::runtime_error(std::string("forwardStep slot map: ") + cudaGetErrorString(serr));
         }
+    }
+
+    // Sequence-coupled geometry cannot be evaluated from a single decoded row:
+    // - encoder residual centering changes the residual stream mean over the
+    //   whole sequence, invalidating KV-only layer updates;
+    // - LM-head hidden centering needs all rows to avoid zeroing the current row;
+    // - PC1 projection needs the sequence matrix, not a single vector.
+    // Re-run the full current sequence for these configs. Plain configs keep the
+    // fast KV path below.
+    if (sequenceCoupledGeometryRequiresFullPrefill(config_)) {
+        Vector logits = executeInferenceForward_(new_seq_len, /*populate_kv_cache=*/false);
+        generation_state_.kv_cache_len = new_seq_len;
+        updateDecodeSelectorAfterPrefill(*this, config_, training_state_, generation_state_,
+                                         stream, new_seq_len, "forwardStep(full-prefill)");
+        return logits;
     }
 
     // Commit kv_cache_len AFTER success — if decode throws, the cache

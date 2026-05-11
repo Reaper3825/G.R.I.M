@@ -17,6 +17,7 @@ LM head backward and embedding backward write to the **same buffer** via PyTorch
 - `project_out_pc1=true` composes after hidden-state centering when both flags are enabled. The LM-head matmul input is therefore `project_out_pc1(center_columns_by_sequence_lengths(RMSNorm(h)))`, not an implicit `center_hidden_states`-wins branch. This keeps the config truth aligned with the executed graph.
 - Row-center the LM head **weight** matrix (`Σ_d W[v,d] = 0`) via `autograd::center_rows(weights_)` inside `LMHeadLayer::forward` — equivalent invariance to row-centering `h`, but preserves per-position energy and enforces `Σ_d grad_h[t,d] = 0` in the backward pass.
 - Single-token decode cannot apply hidden-state column centering because `Σ_t` has one row and would erase the hidden signal. `LMHeadLayer::forward` throws if `center_hidden_states=true` with `rows_per_sequence <= 1`.
+- Generation must use the full-context prefill path, not KV single-token decode, whenever sequence-coupled geometry is enabled (`center_encoder_residuals`, `lm_head_center_hidden_states`, or `project_out_pc1`). KV decode is valid only for sequence-local configs; otherwise the sampler cannot compute sequence means/PC1 and will either throw or produce erased hidden states.
 - Telemetry stream 38 (`rho_raw_rms_spread`): healthy 1.0–1.5×, >2× warn, >4× anomaly.
 
 ## γ_final (final RMSNorm gamma)

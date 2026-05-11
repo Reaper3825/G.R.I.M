@@ -254,6 +254,11 @@ inline int computeKVProjectionSize(int d_model, int num_heads, int num_kv_heads)
     return num_kv_heads * head_dim;  // K and V each have this size
 }
 
+// Compute fused QKV projection size for packed [Q | K | V] output.
+inline int computeQKVProjectionSize(int d_model, int num_heads, int num_kv_heads) {
+    return d_model + 2 * computeKVProjectionSize(d_model, num_heads, num_kv_heads);
+}
+
 // Validate head_dim at compile time or runtime
 inline bool isValidFlashAttentionHeadDim(int head_dim) {
     return head_dim == FLASH_ATTN_HEAD_DIM_32 || head_dim == FLASH_ATTN_HEAD_DIM_64;

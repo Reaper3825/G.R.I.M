@@ -922,10 +922,12 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                      isScratchBlockEnabled();
     
     // =========================================================================
-    // INCREMENTAL GENERATION WITH KV CACHE
-    // Step 0: Process full prompt with forwardInit() - O(n)
-    // Step 1+: Process single token with forwardStep() - O(1) per step
-    // Total: O(n) instead of O(n²)
+    // AUTOREGRESSIVE GENERATION
+    // Step 0: Process full prompt with forwardInit().
+    // Step 1+: forwardStep() chooses the valid path for the active geometry:
+    //   - sequence-local configs: KV-cached single-token decode;
+    //   - sequence-coupled centering/projection configs: full current-sequence
+    //     prefill, because a one-row decode cannot compute sequence means or PC1.
     // =========================================================================
     
     // Ensure KV cache buffers exist (training path skips allocation)
@@ -940,7 +942,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                     prompt_atom_mask,
                                     sequence.token_to_slot_map);
     if (logits_vec.data.empty()) {
-        throw std::runtime_error("generateSequenceGPU: forwardInit returned empty logits");
+        throw std::runtime_error("generateSequenceGPU: forwardInit returned first empty new token logit 0");
     }
 
     for (int step = 0; step < max_steps; ++step) {

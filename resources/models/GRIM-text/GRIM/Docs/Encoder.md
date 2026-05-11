@@ -28,6 +28,9 @@ Encoder/FFN/LM-head/reasoning/selector layers must not store forward-time `cudaS
 ## Dropout HP ownership
 Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingConfig` stores the grouped encoder HP snapshot plus PBM pointer; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, or forward-runtime handle fields.
 
+## Encoder dimension HP ownership
+Encoder GQA/QKV derived dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) are computed and validated in `HyperparameterGroupings.hpp` from `HyperParameters_GPU.hpp` helpers. `Encoding_GPU.cu` must consume those `EncoderLayerConstructionHP` fields directly; do not recompute them in `EncodingConfig` or layer methods.
+
 ## FFN post-GELU cache
 `EncodingLayer::forward()` MUST `cudaMemcpyAsync` post-GELU activations into `args.cache_ffn_output` after `ffn_->forward()`. Forgetting this leaves the cache as garbage → corrupted W2 gradients.
 

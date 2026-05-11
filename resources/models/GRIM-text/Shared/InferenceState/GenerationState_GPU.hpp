@@ -101,7 +101,10 @@ struct GenerationState {
         }
     };
 
-    int kv_cache_len = 0;      // Valid tokens in KV cache for current generation session
+    // Committed token count for the current generation session. For sequence-local
+    // configs it also equals valid KV-cache tokens; sequence-coupled configs use
+    // this as generation length while recomputing full-context prefill steps.
+    int kv_cache_len = 0;
     KVCacheBuffers kv_cache;
     DecodeScratch decode_scratch;
 

@@ -240,7 +240,7 @@ static __global__ void kernel_encoding_scale_inplace(float* data, size_t count, 
 //  Layer allocates and Xavier-inits its own weights.
 //  Optimizer sees them via the existing public accessors (rms1Gamma(), attnWqkv(), etc.)
 // ═══════════════════════════════════════════════════════════════════════════
-EncodingLayer::EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream)
+ EncodingLayer::EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream)
     : config_(cfg) {
     config_.validate("EncodingLayer::EncodingLayer");
     allocateWeights(seed, init_stream);
@@ -258,17 +258,9 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     
     const auto& hp = config_.hp;
     const float residual_scale = hp.residual_scale;
-    if (!std::isfinite(residual_scale) || residual_scale <= 0.0f) {
-        throw std::runtime_error("EncodingLayer::allocateWeights: residual_scale must be a positive finite value from encoderLayerConstructionHP");
-    }
     const int d_model   = hp.d_model;
-    const int kv_dim    = config_.kvDim();
-    const int d_ff      = hp.d_ff;
-    const int qkv_out_dim = d_model + 2 * kv_dim;
+    const int qkv_out_dim = hp.qkv_dim;
     cudaStream_t stream = init_stream;
-    if (hp.use_layer_scale && (!std::isfinite(hp.layer_scale_init) || hp.layer_scale_init <= 0.0f)) {
-        throw std::runtime_error("EncodingLayer::allocateWeights: layer_scale_init must be a positive finite value when LayerScale is enabled");
-    }
     
     // ── Helper: fill a gamma tensor with 1.0 ──
     auto fillOnes = [stream](Tensor& t) {
@@ -320,11 +312,7 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     rms2_gamma_.requires_grad_();
     rms2_gamma_.ensure_grad();
     fillOnes(rms2_gamma_);
-    
-    // Issue #148: Sandwich Norm REMOVED — rms_post_attn_gamma_ and rms_post_ffn_gamma_ 
-    // are no longer allocated. Standard pre-norm architecture does not use post-residual
-    // normalization. This allows hidden state norms to vary freely across tokens.
-    
+
     //==================================================//
     //  Attention QKV projection [total_qkv_dim, d_model]
     //==================================================//
@@ -385,11 +373,7 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     
     weights_ready_ = true;
     
-    fprintf(stderr, "[EncodingLayer] Self-allocated weights (Pattern B): "
-            "qkv=[%d,%d] W_o=[%d,%d] FFN=[%d,%d→%d,%d] residual_scale=%.6f%s\n",
-            qkv_out_dim, d_model, d_model, d_model,
-            d_model, d_ff, d_ff, d_model, residual_scale,
-            hp.use_layer_scale ? " +LayerScale" : "");
+    fprintf(stderr, "[EncodingLayer] Self-allocated weights (Pattern B)\n");
 }
 
 EncodingLayer::~EncodingLayer() {
@@ -457,10 +441,7 @@ void EncodingLayer::validateReady(const char* context) const {
         throw std::runtime_error(std::string(context) +
             ": FFN sublayer not initialized! Call allocateWeights() first.");
     }
-    if (config_.hp.d_model % config_.hp.num_heads != 0) {
-        throw std::runtime_error(std::string(context) +
-            ": d_model must be divisible by num_heads (head_dim must be integral)");
-    }
+    config_.validate(context);
 }
 
 // NOTE: requiredWorkspaceBytes() DELETED (Rule 20/26)
@@ -485,6 +466,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     }
     validateReady("EncodingLayer::forward");
     const auto& hp = config_.hp;
+    const auto rms_hp = HyperParameters::encoderRMSNormConstructionHP(hp);
     
     // Validate input
     if (!input.data) {
@@ -538,8 +520,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         }
     }
     const int num_heads = hp.num_heads;
-    const int num_kv_heads = config_.effectiveKVHeads();
-    const int head_dim = config_.headDim();
+    const int num_kv_heads = hp.num_kv_heads;
+    const int head_dim = hp.head_dim;
     const TensorContract::GQADims gqa{num_heads, num_kv_heads, head_dim};
     const int qkv_debug = qkvDebugLevel();
     if constexpr (kEnableEncoderStepLogs) {
@@ -551,7 +533,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // 1. RMSNorm1: input -> ln1_out
     // Issue #56: Store in intermediates to keep autograd graph alive
     //--------------------------------------------------
-    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, hp.rms_epsilon, stream);
+    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, rms_hp.epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
     
@@ -592,10 +574,10 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Skipped on non-initial accumulation slots (same weights → duplicate output)
     // ========================================================================
     if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
-        const int qkv_dim_local = hp.d_model + 2 * config_.kvDim();
+        const int qkv_dim_local = hp.qkv_dim;
         const int d_model_local = hp.d_model;
         const int num_heads_local = hp.num_heads;
-        const int head_dim_local = d_model_local / hp.num_heads;
+        const int head_dim_local = hp.head_dim;
         
         // Sample first N tokens for statistics (to avoid huge GPU->CPU transfers)
         const int n_sample = std::min(64, total_tokens);
@@ -1056,7 +1038,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #56: Store in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2...\n");
-    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma_, hp.rms_epsilon, stream);
+    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma_, rms_hp.epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2 DONE\n");
     
     //--------------------------------------------------

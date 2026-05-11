@@ -317,13 +317,16 @@ public:
                            bool is_training = true);
     
     // =========================================================================
-    // INCREMENTAL GENERATION API (KV-Cache Autoregressive)
+    // AUTOREGRESSIVE GENERATION API
     // =========================================================================
-    // Use these for efficient token-by-token generation:
-    //   1. Call forwardInit() once with the prompt tokens - caches K,V for all
-    //   2. Call forwardStep() for each new token - computes Q for new token only,
-    //      attends to all cached K,V, appends new K,V to cache
-    //   3. Call resetKVCache() before starting a new generation session
+    // Use these for token-by-token generation:
+    //   1. Call forwardInit() once with the prompt tokens.
+    //   2. Call forwardStep() for each sampled token.
+    //      - Sequence-local configs use KV-cached single-token decode.
+    //      - Sequence-coupled geometry (encoder residual centering, LM-head
+    //        hidden centering, PC1 projection) recomputes the full current
+    //        sequence so sequence-wise means/projections are mathematically valid.
+    //   3. Call resetKVCache() before starting a new generation session.
     // =========================================================================
     
     // Initialize KV cache with prompt tokens (prefill phase)
@@ -333,9 +336,9 @@ public:
                        const std::vector<uint8_t>& prompt_atom_mask,
                        const std::vector<int32_t>& prompt_token_to_slot_map = {});
     
-    // Process a single new token using cached K,V (decode phase)  
-    // Returns logits for this token position (ready for next sampling)
-    // Appends new token to cached sequence and recomputes full forward pass
+    // Process one sampled token and return logits for the next sampling step.
+    // Uses KV decode only when the active config has no sequence-coupled geometry;
+    // otherwise appends the token and reruns the full current sequence.
     Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
                        int32_t new_token_slot_id = -1);
 
@@ -347,7 +350,9 @@ public:
     // Clear KV cache (call before starting new generation)
     void resetKVCache();
     
-    // Get current KV cache length (number of tokens with cached K,V)
+    // Get current generation length. For sequence-local configs this is also
+    // the number of tokens with cached K,V; for full-context configs it is only
+    // the committed sequence length.
     int getKVCacheLength() const;
     
     void initCuBLASHandle();   // Initialize cuBLAS handle only (MUST be called before initGPU)
