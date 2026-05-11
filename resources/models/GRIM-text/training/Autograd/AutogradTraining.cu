@@ -138,6 +138,7 @@ GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
 
 ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ctx.validate("executeAutogradForward");
+    const auto& payload = *ctx.payload;
 
     Forward::ModelForwardRequest request{};
     request.config = ctx.config;
@@ -152,8 +153,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     request.execution_block = ctx.execution_block;
     request.payload = ctx.payload;
     request.bindings = ctx.device_bindings;
-    request.batch_size = ctx.batch_size;
-    request.seq_len = ctx.seq_len;
+    request.batch_size = payload.batch_size;
+    request.seq_len = payload.max_seq_len;
     request.step = ctx.step;
     request.mode = ctx.is_training
         ? Forward::ModelForwardMode::TrainingGraph
@@ -312,7 +313,7 @@ LossResult computeAutogradLoss(
         int ce_tensor_count = 0;
         float ce_scalar_sum = 0.0f;
 
-        for (int b = 0; b < ctx.batch_size; ++b) {
+        for (int b = 0; b < payload.batch_size; ++b) {
             if (!ctx.payload->execution_active.empty()
                 && !ctx.payload->execution_active[b])
                 continue;
@@ -401,7 +402,7 @@ LossResult computeAutogradLoss(
 
         // Optional entropy monitor (non-differentiable; not added to loss_tensor)
         if (cfg->entropy_aux_weight > 0.0f) {
-            for (int b = 0; b < ctx.batch_size; ++b) {
+            for (int b = 0; b < payload.batch_size; ++b) {
                 const auto& all_steps = intermediates.exec_outputs_per_row[b].steps;
                 std::vector<const ExecutionBlockStepOutput*> real_steps;
                 if (have_step_mask
@@ -426,8 +427,8 @@ LossResult computeAutogradLoss(
                 cudaMemcpy(&h_ent, ent.data, sizeof(float), cudaMemcpyDeviceToHost);
                 exec_entropy_monitor += h_ent;
             }
-            if (ctx.batch_size > 0)
-                exec_entropy_monitor /= static_cast<float>(ctx.batch_size);
+            if (payload.batch_size > 0)
+                exec_entropy_monitor /= static_cast<float>(payload.batch_size);
         }
     }
     result.entropy_monitor = exec_entropy_monitor;
@@ -488,13 +489,18 @@ LossResult computeAutogradLoss(
 
 BackwardResult executeAutogradBackward(
     AutogradContext& ctx,
-    bool accumulate
+    bool accumulate,
+    float grad_scale
 ) {
     BackwardResult result{};
     result.success = false;
     result.grad_rms = 0.0f;
     
     ctx.validate("executeAutogradBackward");
+    if (!std::isfinite(grad_scale) || grad_scale <= 0.0f) {
+        throw std::runtime_error("executeAutogradBackward: grad_scale must be finite and > 0, got " +
+                                 std::to_string(grad_scale));
+    }
     
     auto* ts = ctx.training_state;
     const auto* cfg = ctx.config;
@@ -507,7 +513,7 @@ BackwardResult executeAutogradBackward(
         throw std::runtime_error("executeAutogradBackward: Loss tensor has no grad_fn - autograd chain broken");
     }
     
-    AG_INFO("Executing backward pass (accumulate=" << accumulate << ", scale=" << ctx.grad_scale << ")");
+    AG_INFO("Executing backward pass (accumulate=" << accumulate << ", scale=" << grad_scale << ")");
 
     // Zero gradients if not accumulating
     // ISSUE #59: Use has_grad() and grad_data() accessors
@@ -615,9 +621,9 @@ BackwardResult executeAutogradBackward(
     }
     
     // Call backward on the text loss (single loss path)
-    // Starting with ctx.grad_scale (usually 1/accumulation_steps)
-    AG_INFO("Calling loss_tensor.backward(nullptr, " << ctx.grad_scale << ")...");
-    intermediates.loss_tensor.backward(nullptr, ctx.grad_scale);
+    // Starting with grad_scale (usually 1/accumulation_steps)
+    AG_INFO("Calling loss_tensor.backward(nullptr, " << grad_scale << ")...");
+    intermediates.loss_tensor.backward(nullptr, grad_scale);
     AG_INFO("loss_tensor.backward() returned successfully");
 
     // ════════════════════════════════════════════════════════════════════
@@ -663,7 +669,7 @@ BackwardResult executeAutogradBackward(
             "[GRAD_DIAG] POST-BACKWARD accumulate=%d grad_scale=%.4f "
             "lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e rms_gamma_grad[0]=%.10e "
             "lm_ptr=%p\n",
-            static_cast<int>(accumulate), ctx.grad_scale,
+            static_cast<int>(accumulate), grad_scale,
             lm_sample, enc_sample, rms_sample,
             static_cast<void*>(lm_grads));
     }
@@ -1075,7 +1081,6 @@ LossResult autogradTrainingStep(
         stream,
         payload,
         bindings,
-        grad_scale,
         step,
         true
     );
@@ -1130,7 +1135,7 @@ LossResult autogradTrainingStep(
         return loss_result;
     }
     
-    BackwardResult bwd_result = executeAutogradBackward(ctx, accumulate);
+    BackwardResult bwd_result = executeAutogradBackward(ctx, accumulate, grad_scale);
     if (!bwd_result.success) {
         loss_result.success = false;
         loss_result.error_message = "autogradTrainingStep: Backward failed - " + bwd_result.error_message;

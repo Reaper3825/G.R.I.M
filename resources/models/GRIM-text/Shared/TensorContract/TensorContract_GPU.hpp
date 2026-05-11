@@ -1378,11 +1378,15 @@ Tensor log_softmax(const Tensor& x, cudaStream_t stream = nullptr, bool save_out
  * 
  * @param x Input tensor
  * @param p Dropout probability (fraction to drop, e.g., 0.1 = drop 10%)
- * @param seed Random seed for mask generation (use batch_idx * step + layer_offset for reproducibility)
+ * @param seed Base random seed for mask generation (for reproducibility)
  * @param training If false, no dropout is applied (identity function) 
+ * @param mask_stream_id Non-zero deterministic id for this dropout call site/layer.
+ *        It is mixed with seed so equal base seeds do not replay masks across
+ *        distinct dropout sites. Reusing both seed and mask_stream_id deliberately
+ *        reproduces the same mask.
  */
-Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training = true,
-               cudaStream_t stream = nullptr);
+Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training,
+               cudaStream_t stream, uint64_t mask_stream_id);
 
 /**
  * Residual/skip connection add: y = x + residual

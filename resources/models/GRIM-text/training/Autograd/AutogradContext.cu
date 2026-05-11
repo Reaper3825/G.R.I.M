@@ -25,7 +25,6 @@ void populateCommonContext(
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
-    float grad_scale,
     uint64_t step,
     bool is_training)
 {
@@ -39,7 +38,6 @@ void populateCommonContext(
     ctx.execution_block = execution_block;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
-    ctx.grad_scale = grad_scale;
     ctx.step = step;
     ctx.is_training = is_training;
 }
@@ -68,7 +66,7 @@ void validateDeviceBindingsForPayload(
 
 } // namespace
 
-// Training overload — derives batch geometry from BatchPayload.
+// Training overload — borrows batch geometry from BatchPayload.
 // `bindings` must describe the same batch (geometry-checked) and must already
 // have been populated by uploadBatchToDevice(payload) at the H2D sync slice.
 AutogradContext initAutogradContext(
@@ -84,7 +82,6 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    float grad_scale,
     uint64_t step,
     bool is_training
 ) {
@@ -94,12 +91,10 @@ AutogradContext initAutogradContext(
     populateCommonContext(
         ctx, config, training_state, gpu_encoder, embedding_layer, lm_head,
         scratch_block, reasoning_head, execution_block, cublas_handle, stream,
-        grad_scale, step, is_training);
+        step, is_training);
 
     ctx.payload = &payload;
     ctx.device_bindings = &bindings;
-    ctx.batch_size = payload.batch_size;
-    ctx.seq_len = payload.max_seq_len;
 
     ctx.validate("initAutogradContext(payload)");
     return ctx;

@@ -69,6 +69,7 @@ float addSelectorSupervisionLoss(
     if (!ctx.payload) {
         throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but ctx.payload is NULL");
     }
+    const auto& payload = *ctx.payload;
     if (intermediates.exec_memories.empty()) {
         throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but no ExecutionMemory snapshots exist; executeAutogradForward must run ExecutionBlock first");
     }
@@ -87,7 +88,7 @@ float addSelectorSupervisionLoss(
     }
 
     const int d_model = cfg->d_model;
-    const int seq_len = ctx.seq_len;
+    const int seq_len = payload.max_seq_len;
     const float* d_hidden = intermediates.centered_encoder_output.data
                           ? intermediates.centered_encoder_output.data
                           : intermediates.encoder_output_tensor.data;
@@ -100,15 +101,15 @@ float addSelectorSupervisionLoss(
     // First pass: validate final-state supervision contract and count examples
     // that MUST emit CE. Any non-Ignore target that cannot be represented is a
     // data/model contract bug, not a denominator skip.
-    for (int b = 0; b < ctx.batch_size; ++b) {
-        if (!ctx.payload->execution_active.empty()
-            && !ctx.payload->execution_active[b]) {
+    for (int b = 0; b < payload.batch_size; ++b) {
+        if (!payload.execution_active.empty()
+            && !payload.execution_active[b]) {
             continue;
         }
-        if (b >= static_cast<int>(ctx.payload->slot_selection_targets.size())) {
+        if (b >= static_cast<int>(payload.slot_selection_targets.size())) {
             continue;
         }
-        const auto& row_targets = ctx.payload->slot_selection_targets[b];
+        const auto& row_targets = payload.slot_selection_targets[b];
         if (row_targets.empty()) continue;
         if (b >= static_cast<int>(intermediates.exec_memories.size())) {
             continue;
@@ -156,15 +157,15 @@ float addSelectorSupervisionLoss(
     intermediates.selector_slot_feature_inputs.reserve(static_cast<size_t>(ce_count));
 
     // Second pass: autograd forward + CE for each supervised final position.
-    for (int b = 0; b < ctx.batch_size; ++b) {
-        if (!ctx.payload->execution_active.empty()
-            && !ctx.payload->execution_active[b]) {
+    for (int b = 0; b < payload.batch_size; ++b) {
+        if (!payload.execution_active.empty()
+            && !payload.execution_active[b]) {
             continue;
         }
-        if (b >= static_cast<int>(ctx.payload->slot_selection_targets.size())) {
+        if (b >= static_cast<int>(payload.slot_selection_targets.size())) {
             continue;
         }
-        const auto& row_targets = ctx.payload->slot_selection_targets[b];
+        const auto& row_targets = payload.slot_selection_targets[b];
         if (row_targets.empty()) continue;
         if (b >= static_cast<int>(intermediates.exec_memories.size())) {
             continue;

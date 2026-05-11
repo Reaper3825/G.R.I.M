@@ -180,12 +180,14 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     intermediates.embedding_tensor = std::move(emb_output);
     if (cfg->dropout_rate > 0.0f) {
         const uint64_t emb_dropout_seed = request.step * 2654435761ULL + 500;
+        constexpr uint64_t kEmbeddingDropoutMaskStream = 0x0005000000000001ULL;
         intermediates.embedding_tensor = autograd::dropout(
             intermediates.embedding_tensor,
             cfg->dropout_rate,
             emb_dropout_seed,
             is_training,
-            request.stream);
+            request.stream,
+            kEmbeddingDropoutMaskStream);
         MFWD_INFO("Step 1c: Embedding dropout " << (is_training ? "applied" : "skipped (eval mode)")
                   << " (p=" << cfg->dropout_rate << ", step=" << request.step << ")");
     }

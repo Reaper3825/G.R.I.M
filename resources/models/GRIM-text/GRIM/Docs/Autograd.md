@@ -5,6 +5,8 @@ Implementation: `resources/models/GRIM-text/Shared/TensorContract_GPU.cu` (all `
 ## Prepared payload boundary
 Phase1/Phase1Startup owns semantic batch construction. By the time Phase2 calls autograd, `BatchPayload` is already complete: token IDs, targets, masks, MTP shifted targets, execution teacher steps, selector targets, numeric values, and slot maps are Phase1-authored data. Autograd code must consume this prepared payload and matching `BatchDeviceBindings`; it must not rebuild, infer, repair, or silently synthesize missing supervision.
 
+`AutogradContext` must not mirror `batch_size`, `seq_len`/`max_seq_len`, or backward `grad_scale`. Batch geometry is read directly from the caller-owned `BatchPayload` (validated against `BatchDeviceBindings`), and `grad_scale` is an explicit `executeAutogradBackward(..., grad_scale)` argument for the current accumulation slot.
+
 Forward runtime handles are sibling payload data, not layer state: `AutogradContext` carries the `cudaStream_t` and `cublasHandle_t` borrowed from `TrainingState`, and `Forward::ModelForwardRequest` passes them through to encoder, FFN, LM head, reasoning head, and selector forwards. Do not patch those handles into layer configs or mutate layers with late setter calls.
 
 ## Primitive extraction rule

@@ -170,8 +170,10 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     // Activation dropout: applied after SwiGLU gating, before W2 projection
     if (hp_.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t ffn_act_dropout_seed = training_step * 2654435761ULL + 300 + layer_idx;
+        const uint64_t ffn_act_dropout_mask_stream = 0x0003000000000000ULL + static_cast<uint64_t>(layer_idx);
         intermediates.ffn_swiglu_out = autograd::dropout(intermediates.ffn_swiglu_out, hp_.dropout_rate,
-                                                          ffn_act_dropout_seed, true, stream);
+                                                          ffn_act_dropout_seed, true, stream,
+                                                          ffn_act_dropout_mask_stream);
     }
 
     //--------------------------------------------------

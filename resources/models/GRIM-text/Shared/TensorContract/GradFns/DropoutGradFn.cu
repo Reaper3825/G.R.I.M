@@ -58,6 +58,27 @@ inline void throwIfCudaFailed(cudaError_t err, const char* context) {
     }
 }
 
+inline std::uint64_t splitmix64(std::uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+inline std::uint64_t deriveDropoutMaskSeed(std::uint64_t base_seed, std::uint64_t mask_stream_id) {
+    if (mask_stream_id == 0) {
+        throw std::runtime_error("autograd::dropout: mask_stream_id is 0 - caller MUST provide a non-zero call-specific dropout mask stream id");
+    }
+    return splitmix64(base_seed ^ splitmix64(mask_stream_id));
+}
+
+inline bool tensorShapesEqual(const TensorContract::TensorShape& a, const TensorContract::TensorShape& b) {
+    if (a.layout != b.layout) return false;
+    if (a.is_2d_layout() && b.is_2d_layout()) return a.as_2d() == b.as_2d();
+    if (a.is_4d() && b.is_4d()) return a.as_4d() == b.as_4d();
+    return false;
+}
+
 __global__ void kernel_dropout_forward(
     const float* __restrict__ input,
     const std::uint8_t* __restrict__ mask,
@@ -118,7 +139,7 @@ DropoutGradFn::~DropoutGradFn() {
     release_saved();
 }
 
-void DropoutGradFn::capture_input(Tensor& x) {
+void DropoutGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
     input_shape = x.shape;
     input_grad_fn = x.grad_fn;
@@ -131,7 +152,9 @@ void DropoutGradFn::capture_input(Tensor& x) {
         } else {
             const size_t grad_size = x.numel();
             cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "DropoutGradFn_input_grad");
-            cudaMemset(input_grad, 0, grad_size * sizeof(float));
+            throwIfCudaFailed(
+                cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream),
+                "DropoutGradFn::capture_input: cudaMemsetAsync(input_grad) failed");
             owns_input_grad = true;
         }
     }
@@ -151,9 +174,11 @@ void DropoutGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     if (applied) {
         return;
     }
-    applied = true;
 
-    if (!input_requires_grad) return;
+    if (!input_requires_grad) {
+        applied = true;
+        return;
+    }
     if (!saved_mask) {
         throw std::runtime_error("DropoutGradFn::apply: saved_mask is NULL - forward must save dropout mask for backward");
     }
@@ -163,10 +188,23 @@ void DropoutGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     if (!grad_output.data) {
         throw std::runtime_error("DropoutGradFn::apply: grad_output.data is NULL");
     }
+    if (grad_output.numel() != count) {
+        throw std::runtime_error(
+            "DropoutGradFn::apply: grad_output numel mismatch, expected " +
+            std::to_string(count) + " got " + std::to_string(grad_output.numel()));
+    }
+    input_shape.require("DropoutGradFn::apply input_shape");
+    grad_output.shape.require("DropoutGradFn::apply grad_output.shape");
+    if (!tensorShapesEqual(grad_output.shape, input_shape)) {
+        throw std::runtime_error("DropoutGradFn::apply: grad_output shape mismatch with captured input_shape");
+    }
 
     kernel_dropout_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         grad_output.data, saved_mask, input_grad, scale, count);
     trackKernelLaunch("kernel_dropout_backward", stream);
+    throwIfCudaFailed(cudaGetLastError(), "DropoutGradFn::apply: kernel_dropout_backward launch failed");
+
+    applied = true;
 
     if (input_grad_fn) {
         Tensor view;
@@ -190,7 +228,8 @@ void DropoutGradFn::release_saved() {
     input_grad_fn.reset();
 }
 
-Tensor dropout(const Tensor& x, float p, std::uint64_t seed, bool training, cudaStream_t stream) {
+Tensor dropout(const Tensor& x, float p, std::uint64_t seed, bool training, cudaStream_t stream,
+               std::uint64_t mask_stream_id) {
     Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_seeded_result");
 
     if (!training || p == 0.0f) {
@@ -222,6 +261,7 @@ Tensor dropout(const Tensor& x, float p, std::uint64_t seed, bool training, cuda
         return result;
     }
     const float scale = 1.0f / (1.0f - p);
+    const std::uint64_t effective_seed = deriveDropoutMaskSeed(seed, mask_stream_id);
 
     std::uint8_t* mask = nullptr;
     cudaMallocOrThrow(reinterpret_cast<void**>(&mask), count * sizeof(std::uint8_t), "dropout_mask");
@@ -230,7 +270,7 @@ Tensor dropout(const Tensor& x, float p, std::uint64_t seed, bool training, cuda
     }
 
     kernel_generate_dropout_mask<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        mask, count, p, seed);
+        mask, count, p, effective_seed);
     trackKernelLaunch("kernel_generate_dropout_mask", stream);
     throwIfCudaFailed(cudaGetLastError(), "autograd::dropout: kernel_generate_dropout_mask launch failed");
 
@@ -242,7 +282,7 @@ Tensor dropout(const Tensor& x, float p, std::uint64_t seed, bool training, cuda
     if (x.requires_grad) {
         result.is_leaf = false;
         auto grad_fn = std::make_shared<DropoutGradFn>();
-        grad_fn->capture_input(const_cast<Tensor&>(x));
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
         grad_fn->save(mask, p, count, stream);
         result.grad_fn = grad_fn;
     }

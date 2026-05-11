@@ -41,6 +41,32 @@ This file holds **universal coding rules** that apply to every session. Project-
 
 ---
 
+### 🔴 Rule 20 — GradFn Persistent Gradient Discipline
+
+When editing `resources/models/GRIM-text/Shared/TensorContract/GradFns/*`, persistent leaf gradient buffers are Category 2 training state. They MUST be accumulated into, never overwritten.
+
+**Why this is critical:** `Tensor::ensure_grad()` only allocates and zeroes a grad buffer the first time. It does **not** clear existing gradients during a backward pass or microbatch accumulation window. Any GradFn that writes `tensor.grad_data()` with `=` silently erases prior contributions from other branches, loss terms, tied/shared params, or microbatches.
+
+**FORBIDDEN in GradFns:**
+
+❌ `grad_input[idx] = ...` when `grad_input` may point at `x.grad_data()`  
+❌ `dx[i] = ...` when `dx` may point at a leaf grad buffer  
+❌ `a_grad[idx] = ...`, `b_grad[idx] = ...`, `input_grad[idx] = ...` for any pointer sourced from `.grad_data()`  
+❌ Allocating private `input_grad` for a leaf and only calling `input_grad_fn->apply(...)` — leaf tensors usually have no `input_grad_fn`, so the leaf receives no grad  
+❌ Reusing a forward-style kernel that assigns into output without separately accumulating the temporary into the leaf grad buffer
+
+**REQUIRED in GradFns:**
+
+✅ If a grad pointer comes from `.grad_data()`, write with `+=` or `atomicAdd`.  
+✅ Owned non-leaf scratch grad buffers must be zeroed before use; using `+=` is still preferred so kernels are leaf-safe.  
+✅ If a kernel must assign into an owned temporary (e.g. centering kernels), then explicitly accumulate that temporary into the leaf grad buffer before propagating.  
+✅ For leaf-vs-non-leaf capture: leaf → `x.ensure_grad(); ptr = x.grad_data();`; non-leaf → allocate owned zeroed scratch.  
+✅ Before finishing any GradFn edit, grep for assignment-style grad writes: `grad_.*\] =`, `.*_grad.*\] =`, `dx\[.*\] =`, `input_grad\[.*\] =`.
+
+See `resources/models/GRIM-text/GRIM/Docs/Autograd.md` → “GradFn accumulation contract” for the implementation-level checklist.
+
+---
+
 ### 🔴 Rule 20 — OWNERSHIP TAXONOMY (Boundary Discipline)
 
 Every piece of state in the training loop MUST belong to **exactly one** of three categories. Mixing categories in a single struct, or letting one category leak across a boundary into another, is a Rule 20 violation of equal severity to silent fallbacks.

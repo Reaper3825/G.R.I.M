@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <string>
 #include <memory>
+#include <stdexcept>
 
 namespace GRIM {
 
@@ -121,10 +122,11 @@ struct AutogradContext {
     LanguageModel* model = nullptr;
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // BATCH PARAMETERS
+    // BATCH PAYLOAD VIEW
     // Training/eval only: payload points to the caller-owned BatchPayload
-    // (single source of truth). Inference MUST NOT enter AutogradContext;
-    // use Shared/Forward/ModelForward_GPU.hpp with ModelForwardMode::InferencePrefill instead.
+    // (single source of truth for batch geometry and supervision). Inference
+    // MUST NOT enter AutogradContext; use Shared/Forward/ModelForward_GPU.hpp
+    // with ModelForwardMode::InferencePrefill instead.
     // payload is NEVER null after the training/eval initAutogradContext overload.
     //
     // device_bindings carries the device pointers for THIS step (slot map,
@@ -134,9 +136,6 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* device_bindings = nullptr;
-    int batch_size = 0;
-    int seq_len = 0;
-    float grad_scale = 1.0f;
     uint64_t step = 0;
     bool is_training = true;
     /** When true, skip duplicate equation logging on non-initial accumulation slots. */
@@ -161,13 +160,25 @@ struct AutogradContext {
         if (!embedding_layer) throw std::runtime_error(std::string(caller) + ": embedding_layer is NULL");
         if (!lm_head) throw std::runtime_error(std::string(caller) + ": lm_head is NULL");
         if (!cublas_handle) throw std::runtime_error(std::string(caller) + ": cublas_handle is NULL");
-        if (batch_size <= 0) throw std::runtime_error(std::string(caller) + ": batch_size <= 0");
-        if (seq_len <= 0) throw std::runtime_error(std::string(caller) + ": seq_len <= 0");
+        if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
+        if (!device_bindings) throw std::runtime_error(std::string(caller) + ": device_bindings is NULL");
+        payload->validate(caller);
+        if (device_bindings->batch_size != payload->batch_size || device_bindings->max_seq_len != payload->max_seq_len) {
+            throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings geometry (" +
+                                     std::to_string(device_bindings->batch_size) + "x" +
+                                     std::to_string(device_bindings->max_seq_len) +
+                                     ") does not match payload (" +
+                                     std::to_string(payload->batch_size) + "x" +
+                                     std::to_string(payload->max_seq_len) + ")");
+        }
+        if (!device_bindings->d_input_ids || !device_bindings->d_target_ids || !device_bindings->d_token_to_slot_map) {
+            throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
+        }
     }
 };
 
 /**
- * Initialize autograd context for TRAINING (derives batch_size/seq_len from payload).
+ * Initialize autograd context for TRAINING (borrows batch geometry from payload).
  * `bindings` must describe the same batch as `payload` (geometry-checked) and
  * must point at device memory already populated by uploadBatchToDevice().
  */
@@ -184,7 +195,6 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    float grad_scale,
     uint64_t step,
     bool is_training = true
 );
@@ -231,7 +241,8 @@ LossResult computeAutogradLoss(
  */
 BackwardResult executeAutogradBackward(
     AutogradContext& ctx,
-    bool accumulate
+    bool accumulate,
+    float grad_scale
 );
 
 /**

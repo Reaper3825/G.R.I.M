@@ -27,7 +27,7 @@ struct DropoutGradFn : public GradFn {
     DropoutGradFn();
     ~DropoutGradFn() override;
 
-    void capture_input(Tensor& x);
+    void capture_input(Tensor& x, cudaStream_t stream);
     void save(const std::uint8_t* mask, float dropout_prob, std::size_t n, cudaStream_t stream);
     void apply(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;

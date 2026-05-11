@@ -323,7 +323,6 @@ float LanguageModel::computeLossBatch(
 		stream,
 		payload,
 		bindings,
-		1.0f,
 		autograd_forward_step,
 		is_training
 	);
