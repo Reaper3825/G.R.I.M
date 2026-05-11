@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <limits>
 
@@ -76,7 +77,6 @@ struct GpuModelInitializationHP {
     int num_layers = 0;
     bool use_flash_attention = false;
     int min_seq_len_for_flash = 0;
-    float residual_scale = 0.0f;
 };
 
 struct EncoderLayerConstructionHP {
@@ -96,6 +96,7 @@ struct EncoderLayerConstructionHP {
     float dropout_rate = 0.0f;
     float attention_dropout = 0.0f;
     bool qk_norm_enabled = false;
+    float residual_scale = 0.0f;
 };
 
 struct FeedForwardLayerConstructionHP {
@@ -103,6 +104,7 @@ struct FeedForwardLayerConstructionHP {
     int d_ff = 0;
     bool use_bias = false;
     float dropout_rate = 0.0f;
+    float residual_scale = 0.0f;
 };
 
 struct EmbeddingLayerConstructionHP {
@@ -389,8 +391,6 @@ inline GpuModelInitializationHP gpuModelInitializationHP(
     view.num_layers = cfg.num_layers;
     view.use_flash_attention = cfg.use_flash_attention;
     view.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
-    view.residual_scale =
-        1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
     return view;
 }
 
@@ -424,6 +424,8 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.dropout_rate = cfg.dropout_rate;
     view.attention_dropout = cfg.attention_dropout;
     view.qk_norm_enabled = cfg.qk_norm_enabled;
+    view.residual_scale =
+        1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
     return view;
 }
 
@@ -434,10 +436,14 @@ inline FeedForwardLayerConstructionHP feedForwardLayerConstructionHP(
     requirePositiveGroupingValue(encoder_hp.d_model, "d_model", "feedForwardLayerConstructionHP");
     requirePositiveGroupingValue(encoder_hp.d_ff, "d_ff", "feedForwardLayerConstructionHP");
     requireDropoutProbability(encoder_hp.dropout_rate, "dropout_rate", "feedForwardLayerConstructionHP");
+    if (!std::isfinite(encoder_hp.residual_scale) || encoder_hp.residual_scale <= 0.0f) {
+        throw std::runtime_error("feedForwardLayerConstructionHP: residual_scale must be a positive finite value from encoderLayerConstructionHP");
+    }
     view.d_model = encoder_hp.d_model;
     view.d_ff = encoder_hp.d_ff;
     view.use_bias = encoder_hp.use_bias;
     view.dropout_rate = encoder_hp.dropout_rate;
+    view.residual_scale = encoder_hp.residual_scale;
     return view;
 }
 

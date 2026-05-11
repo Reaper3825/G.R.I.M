@@ -43,13 +43,14 @@ namespace GRIM {
 // Follows ScratchBlockLayer pattern: allocate → ensure_grad → Xavier init
 //--------------------------------------------------
 FeedForwardLayer::FeedForwardLayer(const HyperParameters::FeedForwardLayerConstructionHP& hp, uint64_t seed,
-                                   cudaStream_t init_stream, float residual_scale)
+                                   cudaStream_t init_stream)
     : hp_(hp) {
     if (!init_stream) {
         throw std::runtime_error("FeedForwardLayer: init_stream is NULL");
     }
+    const float residual_scale = hp_.residual_scale;
     if (!std::isfinite(residual_scale) || residual_scale <= 0.0f) {
-        throw std::runtime_error("FeedForwardLayer: residual_scale must be a positive finite value from gpuModelInitializationHP");
+        throw std::runtime_error("FeedForwardLayer: residual_scale must be a positive finite value from feedForwardLayerConstructionHP");
     }
     HyperParameters::requirePositiveGroupingValue(hp_.d_model, "d_model", "FeedForwardLayer");
     HyperParameters::requirePositiveGroupingValue(hp_.d_ff, "d_ff", "FeedForwardLayer");
@@ -72,7 +73,7 @@ FeedForwardLayer::FeedForwardLayer(const HyperParameters::FeedForwardLayerConstr
     Tensor::xavier_uniform_(W1_, seed + 1, stream);
     
     // W2: [d_ff, d_model] down projection
-    // Issue #142: Scaled by residual_scale after Xavier init (GPT-2 pattern)
+    // Scaled by residual_scale after Xavier init (GPT-2 pattern)
     W2_ = Tensor::zeros({d_ff, d_model}, stream, "ffn_w2");
     W2_.requires_grad_();
     W2_.ensure_grad();

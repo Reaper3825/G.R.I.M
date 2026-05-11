@@ -23,6 +23,7 @@
 #include <cuda_runtime_api.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -77,6 +78,10 @@ struct EncodingConfig {
         }
         HyperParameters::requireDropoutProbability(hp.dropout_rate, "dropout_rate", context);
         HyperParameters::requireDropoutProbability(hp.attention_dropout, "attention_dropout", context);
+        if (!std::isfinite(hp.residual_scale) || hp.residual_scale <= 0.0f) {
+            throw std::invalid_argument(std::string(context) +
+            ": residual_scale MUST be positive finite, got " + std::to_string(hp.residual_scale));
+        }
         
         // GQA validation
         const int effective_kv_heads = (hp.num_kv_heads > 0) ? hp.num_kv_heads : hp.num_heads;
@@ -125,14 +130,10 @@ public:
     EncodingLayer() = default;
     
     /// Self-allocating constructor — layer owns its weights
-    /// @param cfg       Fully-populated EncodingConfig (d_model, d_ff, num_heads, etc.)
+    /// @param cfg       Fully-populated EncodingConfig (includes residual_scale/layer_scale_init HP)
     /// @param seed      Base PRNG seed.  Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
     /// @param init_stream CUDA stream for self-allocation during startup/model assembly
-    /// @param residual_scale  Issue #142: GPT-2 init scaling for W_o (1/sqrt(2*num_layers))
-    /// @param layer_scale_init Issue #109/#129: LayerScale initial value. Use 1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
-    EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream,
-                  float residual_scale,
-                  float layer_scale_init);
+    EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream);
     
     ~EncodingLayer();
     
@@ -235,7 +236,7 @@ private:
     void validateReady(const char* context) const;
     
     /// Pattern B: self-allocate and Xavier-init all weights + create FFN
-    void allocateWeights(uint64_t seed, cudaStream_t init_stream, float residual_scale, float layer_scale_init);
+    void allocateWeights(uint64_t seed, cudaStream_t init_stream);
     
     EncodingConfig config_{};
     bool weights_ready_ = false;  // Set by allocateWeights()

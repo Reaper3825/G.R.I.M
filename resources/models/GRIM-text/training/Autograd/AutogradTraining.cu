@@ -96,7 +96,7 @@ struct GradientSignalProbe {
     bool finite = true;
     bool nonzero = false;
     float rms = 0.0f;
-    size_t sampled = 0;
+    size_t checked = 0;
 };
 
 GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
@@ -106,15 +106,15 @@ GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
     }
     probe.allocated = true;
     const size_t count = static_cast<size_t>(tensor.numel());
-    probe.sampled = std::min<size_t>(count, 4096);
-    if (probe.sampled == 0) {
+    probe.checked = count;
+    if (probe.checked == 0) {
         probe.finite = false;
         return probe;
     }
 
-    std::vector<float> h_grad(probe.sampled);
+    std::vector<float> h_grad(probe.checked);
     CUDA_CHECK(cudaMemcpyAsync(h_grad.data(), tensor.grad_data(),
-                               probe.sampled * sizeof(float),
+                               probe.checked * sizeof(float),
                                cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -128,7 +128,7 @@ GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
         }
         sum_sq += static_cast<double>(v) * static_cast<double>(v);
     }
-    probe.rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(probe.sampled)));
+    probe.rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(probe.checked)));
     if (!std::isfinite(probe.rms)) {
         probe.finite = false;
     }
@@ -741,11 +741,11 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             return;
         }
         if (!probe.finite) {
-            AG_WARN(label << ".grad contains non-finite values in sampled window (sampled="
-                    << probe.sampled << ", rms=" << probe.rms << ")");
+            AG_WARN(label << ".grad contains non-finite values in full tensor (checked="
+                << probe.checked << ", rms=" << probe.rms << ")");
             ok = false;
         } else {
-            AG_INFO(label << ".grad allocated; sampled=" << probe.sampled
+            AG_INFO(label << ".grad allocated; checked=" << probe.checked
                     << " rms=" << probe.rms
                     << " received_nonzero=" << (probe.nonzero ? "yes" : "no"));
         }
@@ -756,8 +756,8 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         if (!t.data || !t.has_grad() || !t.grad_data()) return;
         GradientSignalProbe probe = probeGradientSignal(t, ctx.stream);
         if (!probe.nonzero || probe.rms == 0.0f) {
-            AG_WARN(label << ".grad is allocated but sampled RMS is zero after this backward "
-                    << "(sampled=" << probe.sampled << ") — gradient path did not deliver signal");
+            AG_WARN(label << ".grad is allocated but full-tensor RMS is zero after this backward "
+                    << "(checked=" << probe.checked << ") — gradient path did not deliver signal");
             ok = false;
         }
     };
@@ -1037,12 +1037,6 @@ LossResult autogradTrainingStep(
         throw std::runtime_error(
             "autogradTrainingStep: total_tokens=" + std::to_string(total_tokens) +
             " exceeds logit buffer capacity=" + std::to_string(logit_limit));
-    }
-    if (payload.vocab_size != cfg.vocab_size) {
-        throw std::runtime_error(
-            "autogradTrainingStep: payload.vocab_size=" + std::to_string(payload.vocab_size) +
-            " != cfg.vocab_size=" + std::to_string(cfg.vocab_size) +
-            " — logits buffer width cannot be validated against conflicting vocabularies");
     }
     if (logits_dims.cols != payload.vocab_size) {
         throw std::runtime_error(

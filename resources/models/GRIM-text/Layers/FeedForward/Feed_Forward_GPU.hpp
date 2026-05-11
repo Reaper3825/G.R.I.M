@@ -42,12 +42,11 @@ public:
     /// Self-allocating constructor (Pattern B: layer self-management)
     /// Allocates and Xavier-initializes W_gate, W1, W2, b2 on GPU.
     /// Layer OWNS the memory (owns_data=true). Registers with autograd via ensure_grad().
-    /// @param hp     Grouped FFN construction HP snapshot
+    /// @param hp     Grouped FFN construction HP snapshot, including residual_scale
     /// @param seed   Xavier initialization seed
     /// @param init_stream CUDA stream for self-allocation during startup/model assembly
-    /// @param residual_scale Issue #142: Scale W2 by 1/sqrt(2*num_layers) after Xavier init
     explicit FeedForwardLayer(const HyperParameters::FeedForwardLayerConstructionHP& hp, uint64_t seed,
-                              cudaStream_t init_stream, float residual_scale);
+                              cudaStream_t init_stream);
     
     ~FeedForwardLayer();
 

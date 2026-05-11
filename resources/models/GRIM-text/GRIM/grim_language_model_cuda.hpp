@@ -108,7 +108,7 @@ public:
 //  This header MUST NOT redeclare any of those fields. The encoder
 //  consumes grouped construction views derived from LanguageModelConfig;
 //  the only thing genuinely owned here is the construction-binding struct below —
-//  startup model-assembly inputs that are created at initGPU() time and have
+//  borrowed startup resources that are created at initGPU() time and have
 //  no place in a config object or per-forward request.
 //======================================================//
 
@@ -125,12 +125,6 @@ struct EncoderConstructionBindings {
 
     /// CUDA stream for startup self-allocation only.
     cudaStream_t init_stream = nullptr;
-
-    /// Base seed for layer self-allocation Xavier init (per-layer offset = seed + 2 + i*10).
-    uint64_t weight_seed = 0;
-
-    /// Residual projection init scaling (Issue #142: 1/sqrt(2 * num_layers)). REQUIRED.
-    float residual_scale = 0.0f;
 };
 #endif
 
@@ -567,7 +561,8 @@ using GPUEncoderLayer = EncodingLayer;
 class GPUGrimEncoder {
 public:
     GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& config,
-                   const EncoderConstructionBindings& bindings);
+                   const EncoderConstructionBindings& bindings,
+                   uint64_t weight_seed);
 
     GPUEncoderLayer* getLayer(int index);
     const GPUEncoderLayer* getLayer(int index) const;

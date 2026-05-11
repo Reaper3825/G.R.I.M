@@ -68,10 +68,11 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         //  3) Build GPU encoder
         //
         //  Hyperparameters come from EncoderLayerConstructionHP, the grouped
-        //  read view owned by HyperparameterGroupings.hpp. Construction inputs
-        //  — positional encoding, startup init stream, init seed — come from
-        //  EncoderConstructionBindings. Forward stream/cuBLAS live on the
-        //  forward payload/request, not on layer configs.
+        //  read view owned by HyperparameterGroupings.hpp. Construction resource
+        //  bindings — positional encoding and startup init stream — come from
+        //  EncoderConstructionBindings. The init seed is an explicit Phase1 RNG
+        //  input. Forward stream/cuBLAS live on the forward payload/request,
+        //  not on layer configs.
         //======================================================//
         if (!isPBMInitialized()) {
             throw std::runtime_error(
@@ -84,15 +85,12 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         enc_bindings.pos_encoding = &getPBMSpec();
         enc_bindings.init_stream = training_state_.stream_ctrl.getPrimaryStream();
         StreamController::fatalIfDefaultStream(enc_bindings.init_stream, "LanguageModel::initGPU");
-        enc_bindings.weight_seed = weight_init_seed;
-        // Issue #142: 1/sqrt(2*num_layers) for residual projection init
-        enc_bindings.residual_scale = init_hp.residual_scale;
 
         std::cout << "[initGPU] Encoder construction bindings prepared" << std::endl;
 
         std::cout << "✓ Encoder using TrainingState construction bindings\n";
 
-        auto* encoder_ptr = new GPUGrimEncoder(encoder_hp, enc_bindings);
+        auto* encoder_ptr = new GPUGrimEncoder(encoder_hp, enc_bindings, weight_init_seed);
         gpu_encoder_.reset(encoder_ptr);
 
         // Layers self-allocated their own weights in the constructor. Verify all are ready.

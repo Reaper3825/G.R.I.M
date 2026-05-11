@@ -240,14 +240,13 @@ static __global__ void kernel_encoding_scale_inplace(float* data, size_t count, 
 //  Layer allocates and Xavier-inits its own weights.
 //  Optimizer sees them via the existing public accessors (rms1Gamma(), attnWqkv(), etc.)
 // ═══════════════════════════════════════════════════════════════════════════
-EncodingLayer::EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream,
-                             float residual_scale, float layer_scale_init)
+EncodingLayer::EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream)
     : config_(cfg) {
     config_.validate("EncodingLayer::EncodingLayer");
-    allocateWeights(seed, init_stream, residual_scale, layer_scale_init);
+    allocateWeights(seed, init_stream);
 }
 
-void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream, float residual_scale, float layer_scale_init) {
+void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     if (weights_ready_) {
         throw std::runtime_error("EncodingLayer::allocateWeights: weights already initialized! "
                                  "Cannot allocate twice.");
@@ -255,18 +254,19 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream, flo
     if (!init_stream) {
         throw std::runtime_error("EncodingLayer::allocateWeights: init_stream is NULL");
     }
-    if (!std::isfinite(residual_scale) || residual_scale <= 0.0f) {
-        throw std::runtime_error("EncodingLayer::allocateWeights: residual_scale must be a positive finite value from gpuModelInitializationHP");
-    }
     config_.validate("EncodingLayer::allocateWeights");
     
     const auto& hp = config_.hp;
+    const float residual_scale = hp.residual_scale;
+    if (!std::isfinite(residual_scale) || residual_scale <= 0.0f) {
+        throw std::runtime_error("EncodingLayer::allocateWeights: residual_scale must be a positive finite value from encoderLayerConstructionHP");
+    }
     const int d_model   = hp.d_model;
     const int kv_dim    = config_.kvDim();
     const int d_ff      = hp.d_ff;
     const int qkv_out_dim = d_model + 2 * kv_dim;
     cudaStream_t stream = init_stream;
-    if (hp.use_layer_scale && (!std::isfinite(layer_scale_init) || layer_scale_init <= 0.0f)) {
+    if (hp.use_layer_scale && (!std::isfinite(hp.layer_scale_init) || hp.layer_scale_init <= 0.0f)) {
         throw std::runtime_error("EncodingLayer::allocateWeights: layer_scale_init must be a positive finite value when LayerScale is enabled");
     }
     
@@ -365,7 +365,7 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream, flo
             HyperParameters::feedForwardLayerConstructionHP(hp);
         
         // seed+2 is base for FFN (W1 gets seed+2, W2 gets seed+3 inside FFN ctor)
-        ffn_ = std::make_unique<FeedForwardLayer>(ffn_hp, seed + 2, stream, residual_scale);
+        ffn_ = std::make_unique<FeedForwardLayer>(ffn_hp, seed + 2, stream);
     }
     
     //==================================================//
@@ -375,12 +375,12 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream, flo
         layer_scale1_ = Tensor::zeros({d_model}, stream, "enc_layer_scale1_own");
         layer_scale1_.requires_grad_();
         layer_scale1_.ensure_grad();
-        fillValue(layer_scale1_, layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale1");
+        fillValue(layer_scale1_, hp.layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale1");
         
         layer_scale2_ = Tensor::zeros({d_model}, stream, "enc_layer_scale2_own");
         layer_scale2_.requires_grad_();
         layer_scale2_.ensure_grad();
-        fillValue(layer_scale2_, layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale2");
+        fillValue(layer_scale2_, hp.layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale2");
     }
     
     weights_ready_ = true;
