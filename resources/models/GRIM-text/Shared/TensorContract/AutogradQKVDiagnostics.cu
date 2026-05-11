@@ -6,6 +6,7 @@
 #include "AutogradQKVDiagnostics.hpp"
 #include "../CudaAllocUtils.hpp"
 #include "../LogRecorder/BatchLogTape.hpp"
+#include "../LogRecorder/LogRecorder.hpp"
 
 #include <algorithm>
 #include <cfloat>
@@ -70,20 +71,37 @@ __global__ void scanNonFiniteKernel(const float* data, int count, NonFiniteStats
     }
 }
 
-void logNonFiniteStats(const char* tag,
-                       const float* data,
-                       int count,
-                       cudaStream_t stream,
-                       bool always_log) {
-    const char* checked_tag = requireTag(tag, "logNonFiniteStats");
+std::string formatNonFiniteError(const char* tag, int count, const NonFiniteStats& out) {
+    const char* checked_tag = requireTag(tag, "formatNonFiniteError");
+    std::ostringstream message;
+    message << "[QKV_NONFINITE] FATAL " << checked_tag
+            << " count=" << count
+            << " nan=" << out.nan_count
+            << " inf=" << out.inf_count;
+    if (out.nan_count > 0) {
+        message << " first_nan_idx=" << out.first_nan_idx
+                << " first_nan_val=" << out.first_nan_val;
+    }
+    if (out.inf_count > 0) {
+        message << " first_inf_idx=" << out.first_inf_idx
+                << " first_inf_val=" << out.first_inf_val;
+    }
+    return message.str();
+}
+
+void checkNonFiniteStats(const char* tag,
+                         const float* data,
+                         int count,
+                         cudaStream_t stream) {
+    const char* checked_tag = requireTag(tag, "checkNonFiniteStats");
     if (!stream) {
-        throw std::runtime_error("logNonFiniteStats: stream is NULL");
+        throw std::runtime_error("checkNonFiniteStats: stream is NULL");
     }
     if (!data) {
-        throw std::runtime_error(std::string("logNonFiniteStats: ") + checked_tag + " data is NULL");
+        throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag + " data is NULL");
     }
     if (count <= 0) {
-        throw std::runtime_error(std::string("logNonFiniteStats: ") + checked_tag +
+        throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " count must be > 0, got " + std::to_string(count));
     }
 
@@ -97,7 +115,7 @@ void logNonFiniteStats(const char* tag,
     cudaError_t err = cudaMemcpyAsync(d_stats, &init, sizeof(init), cudaMemcpyHostToDevice, stream);
     if (err != cudaSuccess) {
         cudaFree(d_stats);
-        throw std::runtime_error(std::string("logNonFiniteStats: ") + checked_tag +
+        throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " cudaMemcpyAsync H2D failed: " + cudaGetErrorString(err));
     }
 
@@ -107,7 +125,7 @@ void logNonFiniteStats(const char* tag,
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         cudaFree(d_stats);
-        throw std::runtime_error(std::string("logNonFiniteStats: ") + checked_tag +
+        throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " scanNonFiniteKernel launch failed: " + cudaGetErrorString(err));
     }
 
@@ -115,34 +133,26 @@ void logNonFiniteStats(const char* tag,
     err = cudaMemcpyAsync(&out, d_stats, sizeof(out), cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
         cudaFree(d_stats);
-        throw std::runtime_error(std::string("logNonFiniteStats: ") + checked_tag +
+        throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " cudaMemcpyAsync D2H failed: " + cudaGetErrorString(err));
     }
 
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
         cudaFree(d_stats);
-        throw std::runtime_error(std::string("logNonFiniteStats: ") + checked_tag +
+        throw std::runtime_error(std::string("checkNonFiniteStats: ") + checked_tag +
                                  " cudaStreamSynchronize failed: " + cudaGetErrorString(err));
     }
 
     cudaFree(d_stats);
 
-    if (!always_log && out.nan_count == 0 && out.inf_count == 0) {
+    if (out.nan_count == 0 && out.inf_count == 0) {
         return;
     }
 
-    fprintf(stderr, "[QKV_DEBUG] %s n=%d nan=%d inf=%d",
-            checked_tag, count, out.nan_count, out.inf_count);
-    if (out.nan_count > 0) {
-        fprintf(stderr, " first_nan_idx=%d first_nan_val=%g",
-                out.first_nan_idx, out.first_nan_val);
-    }
-    if (out.inf_count > 0) {
-        fprintf(stderr, " first_inf_idx=%d first_inf_val=%g",
-                out.first_inf_idx, out.first_inf_val);
-    }
-    fprintf(stderr, "\n");
+    const std::string message = formatNonFiniteError(checked_tag, count, out);
+    GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::Attention, message, 0);
+    throw std::runtime_error(message);
 }
 
 }  // anonymous namespace
@@ -160,16 +170,15 @@ int qkvDebugLevel() {
     return level;
 }
 
-void logQKVTensorNonFinite(const char* tag,
-                           const Tensor& tensor,
-                           cudaStream_t stream,
-                           bool always_log) {
-    const char* checked_tag = requireTag(tag, "logQKVTensorNonFinite");
+void checkQKVTensorFinite(const char* tag,
+                          const Tensor& tensor,
+                          cudaStream_t stream) {
+    const char* checked_tag = requireTag(tag, "checkQKVTensorFinite");
     if (!tensor.data) {
-        throw std::runtime_error(std::string("logQKVTensorNonFinite: ") + checked_tag + " tensor.data is NULL");
+        throw std::runtime_error(std::string("checkQKVTensorFinite: ") + checked_tag + " tensor.data is NULL");
     }
     const int count = static_cast<int>(tensor.numel());
-    logNonFiniteStats(checked_tag, tensor.data, count, stream, always_log);
+    checkNonFiniteStats(checked_tag, tensor.data, count, stream);
 }
 
 void logQKVProjectionEquation(const Tensor& ln1_out,

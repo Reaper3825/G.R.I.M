@@ -3,6 +3,7 @@
 //  CUDA implementation of type-safe tensor operations
 //======================================================//
 #include "TensorContract_GPU.hpp"
+#include "GradientAccumulation.hpp"
 #include "HyperParameters/HyperParameters_GPU.hpp"
 #include "../Batching/BatchPayload.hpp"  // BatchPayload for batch geometry in autograd ops
 #include "../VerboseLogging.hpp"
@@ -704,15 +705,6 @@ __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, ui
     data[idx] = rnd * scale;
 }
 
-// Kernel: Accumulate gradient (dst += src * scale)
-__global__ void kernel_accumulate_grad(float* dst, const float* src, size_t count, float scale) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        dst[idx] += src[idx] * scale;
-    }
-}
-
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
 constexpr int kMaxGridBlocks1DFallback = 65534;  // Fallback when device query fails or reports 65535 (some drivers reject exactly 65535)
 
@@ -1107,7 +1099,7 @@ void Tensor::accumulate_grad(const float* incoming_grad, size_t count, float sca
     }
     
     cudaStream_t s = exec_stream ? exec_stream : stream;
-    kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, incoming_grad, count, scale);
+    autograd::accumulate_grad(grad_->data, incoming_grad, count, scale, s, "Tensor::accumulate_grad");
 }
 
 Tensor Tensor::detach() const {

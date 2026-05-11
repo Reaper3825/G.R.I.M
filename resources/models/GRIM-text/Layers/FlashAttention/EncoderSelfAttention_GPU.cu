@@ -186,11 +186,10 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
     }
 
     if (qkv_debug >= 3) {
-        const bool always_log = (qkv_debug >= 2);
-        autograd::logQKVTensorNonFinite("AutogradQKV:ln1_out", norm_input, request.stream, always_log);
-        autograd::logQKVTensorNonFinite("AutogradQKV:W_qkv", weights.W_qkv, request.stream, always_log);
+        autograd::checkQKVTensorFinite("AutogradQKV:ln1_out", norm_input, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:W_qkv", weights.W_qkv, request.stream);
         if (request.hp.use_bias) {
-            autograd::logQKVTensorNonFinite("AutogradQKV:b_qkv", weights.b_qkv, request.stream, always_log);
+            autograd::checkQKVTensorFinite("AutogradQKV:b_qkv", weights.b_qkv, request.stream);
         }
     }
 
@@ -200,8 +199,7 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
     intermediates.qkv_out = autograd::matmul(norm_input, weights.W_qkv, request.stream,
                                              norm_input.data, nullptr, true);
     if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        autograd::logQKVTensorNonFinite("AutogradQKV:qkv_out_prebias", intermediates.qkv_out, request.stream, always_log);
+        autograd::checkQKVTensorFinite("AutogradQKV:qkv_out_prebias", intermediates.qkv_out, request.stream);
     }
 
     if (request.hp.use_bias) {
@@ -211,8 +209,7 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
         norm_input, weights.W_qkv, weights.b_qkv, intermediates.qkv_out,
         request.payload, request.hp, request.stream, request.layer_idx);
     if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        autograd::logQKVTensorNonFinite("AutogradQKV:qkv_out", intermediates.qkv_out, request.stream, always_log);
+        autograd::checkQKVTensorFinite("AutogradQKV:qkv_out", intermediates.qkv_out, request.stream);
     }
 
     auto [Q_bhsd_tmp, K_bhsd_tmp, V_bhsd_tmp] = autograd::split_and_reshape_qkv(
@@ -223,10 +220,9 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
     intermediates.K_bhsd = std::move(K_bhsd_tmp);
     intermediates.V_bhsd = std::move(V_bhsd_tmp);
     if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        autograd::logQKVTensorNonFinite("AutogradQKV:Q_bhsd", intermediates.Q_bhsd, request.stream, always_log);
-        autograd::logQKVTensorNonFinite("AutogradQKV:K_bhsd", intermediates.K_bhsd, request.stream, always_log);
-        autograd::logQKVTensorNonFinite("AutogradQKV:V_bhsd", intermediates.V_bhsd, request.stream, always_log);
+        autograd::checkQKVTensorFinite("AutogradQKV:Q_bhsd", intermediates.Q_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:K_bhsd", intermediates.K_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:V_bhsd", intermediates.V_bhsd, request.stream);
     }
 
     auto [Q_rot, K_rot] = autograd::rope_rotation(
@@ -237,10 +233,9 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
     intermediates.Q_bhsd = std::move(Q_rot);
     intermediates.K_bhsd = std::move(K_rot);
     if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        autograd::logQKVTensorNonFinite("AutogradSDPA:Q_rope", intermediates.Q_bhsd, request.stream, always_log);
-        autograd::logQKVTensorNonFinite("AutogradSDPA:K_rope", intermediates.K_bhsd, request.stream, always_log);
-        autograd::logQKVTensorNonFinite("AutogradSDPA:V_rope", intermediates.V_bhsd, request.stream, always_log);
+        autograd::checkQKVTensorFinite("AutogradSDPA:Q_rope", intermediates.Q_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradSDPA:K_rope", intermediates.K_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradSDPA:V_rope", intermediates.V_bhsd, request.stream);
     }
 
     logRoPEAlibiConfigOnce(request.pbm, request.hp);
@@ -252,8 +247,7 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
         request.pbm.alibi_slopes, 0.0f, request.stream, request.hp.causal_mask,
         attention_dropout_p, dropout_seed);
     if (qkv_debug > 0) {
-        const bool always_log = (qkv_debug >= 2);
-        autograd::logQKVTensorNonFinite("AutogradSDPA:attn_out_bhsd", intermediates.attn_out_bhsd, request.stream, always_log);
+        autograd::checkQKVTensorFinite("AutogradSDPA:attn_out_bhsd", intermediates.attn_out_bhsd, request.stream);
     }
 
     intermediates.attn_out = autograd::reshape_bhsd_to_flat(

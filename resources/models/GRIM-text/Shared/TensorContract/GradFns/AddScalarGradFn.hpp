@@ -9,8 +9,8 @@
 //    - kernel_add_scalar_forward  (defined in AddScalarGradFn.cu)
 //    - autograd::add_scalar(...)  (forward op; defined in AddScalarGradFn.cu)
 //
-//  Backward path uses the shared kernel_accumulate_grad pattern (also
-//  defined in this TU under internal linkage to keep .cu self-contained).
+//  Backward path uses TensorContract/GradientAccumulation.hpp; do not add
+//  per-TU kernel_accumulate_grad copies here.
 //======================================================//
 
 #include "../TensorContract_GPU.hpp"

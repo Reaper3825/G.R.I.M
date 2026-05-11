@@ -17,6 +17,9 @@ Diagnostics must use the Phase1-authored `BatchPayload` for `batch_size`, `max_s
 ## Kernel timing
 Use CUDA events (`cudaEventRecord` / `cudaEventElapsedTime`) — not `cudaStreamSynchronize` wall-time. Sync timing includes draining prior pipeline work.
 
+## QKV finite scans
+`GRIM_DEBUG_QKV` enables full-tensor finite checks around encoder QKV / SDPA boundaries. Clean tensors are silent; any NaN/Inf emits a `[QKV_NONFINITE] FATAL ...` module error with counts and first offending index/value, then throws immediately. Do not log `nan=0 inf=0` summaries — they hide the real anomaly signal.
+
 ## Gradient norm diagnostics
 `runGradientNormClipDiagnostic()` consumes the `ClipResult` produced by `GRIM::GradClip::clipGradientNorms()`. It does **not** launch grad-norm kernels, allocate scratch, or synchronize the stream. The only grad-norm measurement in the hot loop is the clipping-owned measurement on the optimizer-step boundary; diagnostics and gradient-dependent telemetry may read that measured result but must not create a second measurement path.
 

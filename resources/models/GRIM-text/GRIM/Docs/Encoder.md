@@ -39,7 +39,7 @@ There is no live `QKV_Projector` module. QKV projection is the `autograd::matmul
 
 ## QKV diagnostics ownership
 QKV-specific diagnostic code belongs next to the autograd attention implementation, not inside `Encoding_GPU.cu`. Use `Shared/TensorContract/AutogradQKVDiagnostics.hpp/.cu` for:
-- `GRIM_DEBUG_QKV` NaN/Inf tensor scans around QKV/SDPA tensors.
+- `GRIM_DEBUG_QKV` NaN/Inf tensor scans around QKV/SDPA tensors. These scans are silent on finite tensors and fail loud with `[QKV_NONFINITE] FATAL ...` plus a thrown exception on any non-finite value.
 - `[QKV_EQUATION]` and `QKV_PROJECTION_EQUATION` Rule 21 logging.
 - QKV projection shape/bias validation used by those diagnostics.
 

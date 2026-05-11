@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "AddScalarGradFn.hpp"
+#include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
 #include "../../CudaAllocUtils.hpp"
 
@@ -67,15 +68,6 @@ __global__ void kernel_add_scalar_forward(
     }
 }
 
-// Generic accumulate: dst[i] += src[i] * scale (used for backward pass-through)
-__global__ void kernel_accumulate_grad(float* dst, const float* src, size_t count, float scale) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        dst[idx] += src[idx] * scale;
-    }
-}
-
 }  // anonymous namespace
 
 namespace GRIM {
@@ -127,8 +119,7 @@ void AddScalarGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     if (n != count) {
         throw std::runtime_error("AddScalarGradFn::apply: size mismatch");
     }
-    kernel_accumulate_grad<<<gridForCount(n), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        input_grad, grad_output.data, n, 1.0f);
+    accumulate_grad(input_grad, grad_output.data, n, 1.0f, stream, "AddScalarGradFn::apply input_grad");
     trackKernelLaunch("add_scalar_backward", stream);
 
     if (input_grad_fn) {

@@ -18,10 +18,9 @@ namespace GRIM::autograd {
 
 int qkvDebugLevel();
 
-void logQKVTensorNonFinite(const char* tag,
-                           const Tensor& tensor,
-                           cudaStream_t stream,
-                           bool always_log);
+void checkQKVTensorFinite(const char* tag,
+                          const Tensor& tensor,
+                          cudaStream_t stream);
 
 void logQKVProjectionEquation(const Tensor& ln1_out,
                               const Tensor& W_qkv,

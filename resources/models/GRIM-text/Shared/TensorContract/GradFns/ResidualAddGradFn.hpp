@@ -13,8 +13,8 @@
 //    - struct ResidualAddGradFn      (declared here)
 //    - autograd::residual_add(...)   (forward op; defined in .cu)
 //
-//  Backward uses the shared kernel_accumulate_grad pattern (defined in
-//  the .cu under internal linkage).
+//  Backward uses TensorContract/GradientAccumulation.hpp; do not add
+//  per-TU kernel_accumulate_grad copies here.
 //======================================================//
 
 #include "../TensorContract_GPU.hpp"

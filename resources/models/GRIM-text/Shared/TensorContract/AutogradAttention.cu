@@ -8,6 +8,7 @@
 #include "../Batching/BatchPayload.hpp"
 #include "../VerboseLogging.hpp"
 #include "../CudaAllocUtils.hpp"
+#include "GradientAccumulation.hpp"
 #include "../TensorConversion/TensorConversion.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../PBM/PositionalBiasMethod.hpp"
@@ -17,67 +18,12 @@
 #include <device_launch_parameters.h>
 #include <cstdio>
 #include <cmath>
-#include <cfloat>
 #include <cstdint>
 #include <algorithm>
 #include <atomic>
 
 // Mirror of AG_TRACE from TensorContract_GPU.cu
 #define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Anonymous-namespace utilities (same definitions as TensorContract_GPU.cu)
-// These have internal linkage per-TU, no ODR conflict.
-// ═══════════════════════════════════════════════════════════════════════════
-namespace {
-
-constexpr int AUTOGRAD_BLOCK_SIZE = 256;
-constexpr int kMaxGridBlocks1DFallback = 65534;
-
-inline int getMaxGridBlocks1D() {
-    static int cached = -1;
-    if (cached < 0) {
-        int device = 0;
-        if (cudaGetDevice(&device) != cudaSuccess) {
-            cached = kMaxGridBlocks1DFallback;
-        } else {
-            int max_x = 0;
-            if (cudaDeviceGetAttribute(&max_x, cudaDevAttrMaxGridDimX, device) != cudaSuccess) {
-                cached = kMaxGridBlocks1DFallback;
-            } else {
-                cached = (max_x > 65534) ? 65534 : max_x;
-            }
-        }
-    }
-    return cached;
-}
-
-constexpr int kMaxGridDimY = 65535;
-
-inline dim3 gridForCount(size_t count) {
-    if (count == 0) {
-        return dim3(1, 1, 1);
-    }
-    const int blocks = static_cast<int>((count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE);
-    const int max1d = getMaxGridBlocks1D();
-    if (blocks <= max1d)
-        return dim3(blocks, 1, 1);
-    int gy = (blocks + max1d - 1) / max1d;
-    if (gy <= kMaxGridDimY)
-        return dim3(max1d, gy, 1);
-    int gx = (blocks + kMaxGridDimY - 1) / kMaxGridDimY;
-    return dim3(gx, kMaxGridDimY, 1);
-}
-
-__global__ void kernel_accumulate_grad(float* dst, const float* src, size_t count, float scale) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        dst[idx] += src[idx] * scale;
-    }
-}
-
-}  // anonymous namespace
 
 // ─── Forward declaration: defined in TensorContract_GPU.cu at global scope ───
 void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t stream, cublasStatus_t status);
@@ -98,168 +44,6 @@ static void requireEncoderAttentionHP(const GRIM::HyperParameters::EncoderSelfAt
                                       const char* caller) {
     GRIM::HyperParameters::validateEncoderSelfAttentionHP(hp, caller);
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ISSUE #77 DIAGNOSTIC: Log cached activation (ln1_out) values during backward
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// atomicMin/atomicMax for floats via CAS loop.
-// The naive int-reinterpretation trick (atomicMin on __float_as_int) only works
-// for positive floats — IEEE 754 sign bit inverts integer ordering for negatives.
-__device__ inline void atomicMinFloat(float* addr, float val) {
-    int* addr_as_int = reinterpret_cast<int*>(addr);
-    int old = *addr_as_int, assumed;
-    do {
-        assumed = old;
-        if (__int_as_float(assumed) <= val) break;
-        old = atomicCAS(addr_as_int, assumed, __float_as_int(val));
-    } while (assumed != old);
-}
-
-__device__ inline void atomicMaxFloat(float* addr, float val) {
-    int* addr_as_int = reinterpret_cast<int*>(addr);
-    int old = *addr_as_int, assumed;
-    do {
-        assumed = old;
-        if (__int_as_float(assumed) >= val) break;
-        old = atomicCAS(addr_as_int, assumed, __float_as_int(val));
-    } while (assumed != old);
-}
-
-// Kernel to compute min/max/sum/sum_sq for diagnostics
-__global__ void diagCachedActivationKernel(
-    const float* __restrict__ data,
-    int count,
-    float* __restrict__ out_min,
-    float* __restrict__ out_max,
-    float* __restrict__ out_sum,
-    float* __restrict__ out_sum_sq,
-    int* __restrict__ out_nan_count,
-    int* __restrict__ out_inf_count
-) {
-    __shared__ float s_min, s_max, s_sum, s_sum_sq;
-    __shared__ int s_nan, s_inf;
-    
-    if (threadIdx.x == 0) {
-        s_min = FLT_MAX;
-        s_max = -FLT_MAX;
-        s_sum = 0.0f;
-        s_sum_sq = 0.0f;
-        s_nan = 0;
-        s_inf = 0;
-    }
-    __syncthreads();
-    
-    float local_min = FLT_MAX;
-    float local_max = -FLT_MAX;
-    float local_sum = 0.0f;
-    float local_sum_sq = 0.0f;
-    int local_nan = 0;
-    int local_inf = 0;
-    
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < count; i += blockDim.x * gridDim.x) {
-        float val = data[i];
-        if (isnan(val)) {
-            local_nan++;
-        } else if (isinf(val)) {
-            local_inf++;
-        } else {
-            local_min = fminf(local_min, val);
-            local_max = fmaxf(local_max, val);
-            local_sum += val;
-            local_sum_sq += val * val;
-        }
-    }
-    
-    // Reduce within block using atomics (simple for small diagnostics)
-    atomicMinFloat(&s_min, local_min);
-    atomicMaxFloat(&s_max, local_max);
-    atomicAdd(&s_sum, local_sum);
-    atomicAdd(&s_sum_sq, local_sum_sq);
-    atomicAdd(&s_nan, local_nan);
-    atomicAdd(&s_inf, local_inf);
-    __syncthreads();
-    
-    if (threadIdx.x == 0) {
-        atomicMinFloat(out_min, s_min);
-        atomicMaxFloat(out_max, s_max);
-        atomicAdd(out_sum, s_sum);
-        atomicAdd(out_sum_sq, s_sum_sq);
-        atomicAdd(out_nan_count, s_nan);
-        atomicAdd(out_inf_count, s_inf);
-    }
-}
-
-// Host function to log cached activation statistics
-// ISSUE #77: Call this in MatMulGradFn::apply() to diagnose ln1_out values
-static void logCachedActivationStats(
-    const char* name,
-    const float* data,
-    int count,
-    cudaStream_t stream
-) {
-    // Allocate pinned host memory for results (small, one-time alloc is OK for diagnostics)
-    float h_min = FLT_MAX, h_max = -FLT_MAX, h_sum = 0.0f, h_sum_sq = 0.0f;
-    int h_nan = 0, h_inf = 0;
-    
-    float* d_min, *d_max, *d_sum, *d_sum_sq;
-    int* d_nan, *d_inf;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_min), sizeof(float), "diag_d_min");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_max), sizeof(float), "diag_d_max");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_sum), sizeof(float), "diag_d_sum");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_sum_sq), sizeof(float), "diag_d_sum_sq");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_nan), sizeof(int), "diag_d_nan");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_inf), sizeof(int), "diag_d_inf");
-    
-    // Initialize to identity values
-    float init_min = FLT_MAX, init_max = -FLT_MAX, init_zero = 0.0f;
-    int init_zero_int = 0;
-    cudaMemcpyAsync(d_min, &init_min, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_max, &init_max, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_sum, &init_zero, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_sum_sq, &init_zero, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_nan, &init_zero_int, sizeof(int), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_inf, &init_zero_int, sizeof(int), cudaMemcpyHostToDevice, stream);
-    
-    // Launch kernel
-    int threads = 256;
-    int blocks = std::min((count + threads - 1) / threads, 256);
-    diagCachedActivationKernel<<<blocks, threads, 0, stream>>>(
-        data, count, d_min, d_max, d_sum, d_sum_sq, d_nan, d_inf);
-    
-    // Sync and copy results
-    cudaStreamSynchronize(stream);
-    cudaMemcpy(&h_min, d_min, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_max, d_max, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_sum, d_sum, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_sum_sq, d_sum_sq, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_nan, d_nan, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_inf, d_inf, sizeof(int), cudaMemcpyDeviceToHost);
-    
-    // Compute statistics
-    int valid_count = count - h_nan - h_inf;
-    float mean = (valid_count > 0) ? h_sum / valid_count : 0.0f;
-    float variance = (valid_count > 1) ? (h_sum_sq / valid_count - mean * mean) : 0.0f;
-    float stddev = sqrtf(fmaxf(variance, 0.0f));
-    
-    // Log results
-    fprintf(stderr, "[Issue77-CachedActivation] %s: count=%d min=%.10f max=%.10f mean=%.10f std=%.10f nan=%d inf=%d\n",
-            name, count, h_min, h_max, mean, stddev, h_nan, h_inf);
-    
-    // Cleanup
-    cudaFree(d_min);
-    cudaFree(d_max);
-    cudaFree(d_sum);
-    cudaFree(d_sum_sq);
-    cudaFree(d_nan);
-    cudaFree(d_inf);
-}
-
-// Issue #77 diagnostics: DISABLED. Enable for debugging weight gradient explosions.
-// When enabled, logs cached activation stats for first 24 MatMulGradFn calls.
-// Cost: 6 cudaMalloc/Free + 1 cudaStreamSync per call (144 total for 24 calls).
-static bool g_issue77_diag_enabled = false;
-static int g_issue77_diag_call_count = 0;
 
 // Issue #142: applyLmHeadGradCorrections DELETED.
 // Centering is now INSIDE autograd graph (Issues #125/#132):
@@ -317,7 +101,7 @@ struct MatMulGradFn : public GradFn {
     
     // shared_ptr members destruct automatically
     
-    // ISSUE #48 FIX: Store stable info from tensors during forward, before they go out of scope
+
     // ISSUE #55 FIX: For non-leaf (intermediate) tensors, allocate OWNED grad buffers
     //                because the tensor's grad buffer gets freed when tensor goes out of scope.
     //                For leaf (weight) tensors, use their grad buffer directly since they persist.
@@ -550,31 +334,6 @@ struct MatMulGradFn : public GradFn {
                 throw std::runtime_error("MatMulGradFn::apply: grad_b is NULL - capture_inputs() must be called");
             }
             
-            // ========================================================================
-            // ISSUE #77 DIAGNOSTIC: Log cached_a (ln1_out) values BEFORE the GEMM
-            // This helps diagnose why W_qkv gradients explode despite tiny FA outputs
-            // ========================================================================
-            if (g_issue77_diag_enabled && transpose_b) {
-                g_issue77_diag_call_count++;
-                // Only log first 36 calls (3 per layer * 12 layers) to avoid spam
-                if (g_issue77_diag_call_count <= 36) {
-                    char diag_name[128];
-                    snprintf(diag_name, sizeof(diag_name), "cached_a(ln1_out)_call%d_M%d_K%d", 
-                             g_issue77_diag_call_count, M, K);
-                    logCachedActivationStats(diag_name, cached_a, M * K, stream);
-                    
-                    // Also log grad_output (grad_qkv) values
-                    snprintf(diag_name, sizeof(diag_name), "grad_output(grad_qkv)_call%d_M%d_N%d", 
-                             g_issue77_diag_call_count, M, N);
-                    logCachedActivationStats(diag_name, grad_output.data, M * N, stream);
-                    
-                    // Log grad_b BEFORE the GEMM to see initial state
-                    snprintf(diag_name, sizeof(diag_name), "grad_b_BEFORE_call%d_K%d_N%d", 
-                             g_issue77_diag_call_count, K, N);
-                    logCachedActivationStats(diag_name, grad_b, K * N, stream);
-                }
-            }
-            
             if (transpose_b) {
                 // grad_B = grad_C^T @ A  where A is [M, K], result is [N, K]
                 // This is the gradient w.r.t. B BEFORE the transpose in forward.
@@ -604,14 +363,6 @@ struct MatMulGradFn : public GradFn {
                     grad_b, K             // ldc=K (leading dim of [K,N])
                 );
                 trackCublasCall("cublasSgemm_grad_B_transB", cublas_handle, stream, sgemm_status_3);
-                
-                // ISSUE #77 DIAGNOSTIC: Log grad_b AFTER the GEMM
-                if (g_issue77_diag_enabled && g_issue77_diag_call_count <= 24) {
-                    char diag_name[128];
-                    snprintf(diag_name, sizeof(diag_name), "grad_b_AFTER_call%d_K%d_N%d", 
-                             g_issue77_diag_call_count, K, N);
-                    logCachedActivationStats(diag_name, grad_b, K * N, stream);
-                }
             } else {
                 // grad_B = A^T @ grad_C  where A is [M, K], result is [K, N]
                 // Goal: grad_B[K,N] = A^T[K,M] @ grad_C[M,N]  (row-major)
@@ -1155,8 +906,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
                 dq_bf16, grad_q_fp32, batch_size, seq_len, num_heads, head_dim, stream);
             
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
-            kernel_accumulate_grad<<<gridForCount(q_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                q_grad, grad_q_fp32, q_elems, 1.0f);
+            accumulate_grad(q_grad, grad_q_fp32, q_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply q_grad");
             cudaFreeAsync(grad_q_fp32, stream);
         }
         
@@ -1169,8 +919,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
                 dk_bf16, grad_k_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
-            kernel_accumulate_grad<<<gridForCount(kv_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                k_grad, grad_k_fp32, kv_elems, 1.0f);
+            accumulate_grad(k_grad, grad_k_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply k_grad");
             cudaFreeAsync(grad_k_fp32, stream);
         }
         
@@ -1183,8 +932,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
                 dv_bf16, grad_v_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
             // Scale = 1.0 (no normalization needed)
-            kernel_accumulate_grad<<<gridForCount(kv_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                v_grad, grad_v_fp32, kv_elems, 1.0f);
+            accumulate_grad(v_grad, grad_v_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply v_grad");
             cudaFreeAsync(grad_v_fp32, stream);
         }
         
@@ -1725,8 +1473,12 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
                 if (!state.qkv_leaf_grad) {
                     throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: qkv_out is leaf but qkv_leaf_grad is NULL");
                 }
-                kernel_accumulate_grad<<<gridForCount(state.qkv_numel), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                    state.qkv_leaf_grad, state.merged_qkv_grad, state.qkv_numel, 1.0f);
+                accumulate_grad(state.qkv_leaf_grad,
+                                state.merged_qkv_grad,
+                                state.qkv_numel,
+                                1.0f,
+                                stream,
+                                "SplitAndReshapeQKVGradFn::apply qkv_leaf_grad");
                 cudaError_t err = cudaGetLastError();
                 if (err != cudaSuccess) {
                     throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: leaf qkv gradient accumulation failed: " +

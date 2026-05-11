@@ -12,8 +12,8 @@
 //    - autograd::zero_pad(...)     (forward op; defined in ZeroPadGradFn.cu)
 //
 //  No custom forward kernel — forward uses cudaMemset + cudaMemcpy directly.
-//  Backward uses the shared kernel_accumulate_grad pattern (defined in this
-//  TU under internal linkage).
+//  Backward uses TensorContract/GradientAccumulation.hpp; do not add
+//  per-TU kernel_accumulate_grad copies here.
 //======================================================//
 
 #include "../TensorContract_GPU.hpp"

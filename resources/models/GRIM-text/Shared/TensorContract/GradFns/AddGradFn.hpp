@@ -8,8 +8,8 @@
 //    - struct AddGradFn        (declared here)
 //    - autograd::add(...)      (forward op; defined in AddGradFn.cu)
 //
-//  Backward path uses the shared kernel_accumulate_grad pattern, defined
-//  in this TU under internal linkage to keep the .cu self-contained.
+//  Backward path uses TensorContract/GradientAccumulation.hpp; do not add
+//  per-TU kernel_accumulate_grad copies here.
 //
 //  NOTE: AddGradFn is also reused by autograd::dropout's identity-edge
 //  path (single-input pass-through), via capture_single_input(...).
