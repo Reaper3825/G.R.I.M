@@ -81,11 +81,6 @@ struct GpuModelInitializationHP {
     int min_seq_len_for_flash = 0;
 };
 
-struct RMSNormConstructionHP {
-    int hidden_dim = 0;
-    float epsilon = 0.0f;
-};
-
 struct EncoderLayerConstructionHP {
     int num_layers = 0;
     int d_model = 0;
@@ -107,7 +102,7 @@ struct EncoderLayerConstructionHP {
     float dropout_rate = 0.0f;
     float attention_dropout = 0.0f;
     bool qk_norm_enabled = false;
-    float residual_scale = 0.0f;
+    float residual_projection_init_gain = 0.0f;
     bool is_gqa = false;
 };
 
@@ -116,7 +111,7 @@ struct FeedForwardLayerConstructionHP {
     int d_ff = 0;
     bool use_bias = false;
     float dropout_rate = 0.0f;
-    float residual_scale = 0.0f;
+    float residual_projection_init_gain = 0.0f;
 };
 
 struct EmbeddingLayerConstructionHP {
@@ -277,7 +272,7 @@ inline void validateEncoderLayerConstructionHP(
     requirePositiveFiniteGroupingValue(hp.rms_epsilon, "rms_epsilon", caller);
     requireDropoutProbability(hp.dropout_rate, "dropout_rate", caller);
     requireDropoutProbability(hp.attention_dropout, "attention_dropout", caller);
-    requirePositiveFiniteGroupingValue(hp.residual_scale, "residual_scale", caller);
+    requirePositiveFiniteGroupingValue(hp.residual_projection_init_gain, "residual_projection_init_gain", caller);
 
     if (!isValidGQAConfig(hp.num_heads, hp.num_kv_heads)) {
         throw std::runtime_error(std::string(caller) + ": invalid GQA config num_heads=" +
@@ -497,28 +492,14 @@ inline GpuModelInitializationHP gpuModelInitializationHP(
     return view;
 }
 
-inline RMSNormConstructionHP rmsNormConstructionHP(int hidden_dim,
-                                                   float epsilon,
-                                                   const char* caller)
-{
-    requirePositiveGroupingValue(hidden_dim, "hidden_dim", caller);
-    requirePositiveFiniteGroupingValue(epsilon, "epsilon", caller);
-
-    RMSNormConstructionHP view;
-    view.hidden_dim = hidden_dim;
-    view.epsilon = epsilon;
-    return view;
-}
-
 inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     const LanguageModelConfig& cfg)
 {
     EncoderLayerConstructionHP view;
-    const RMSNormConstructionHP rms_hp = rmsNormConstructionHP(
-        cfg.d_model, cfg.rms_epsilon, "encoderLayerConstructionHP");
     requireValidGQAGrouping(cfg, "encoderLayerConstructionHP");
     requirePositiveGroupingValue(cfg.num_layers, "num_layers", "encoderLayerConstructionHP");
     requirePositiveGroupingValue(cfg.d_ff, "d_ff", "encoderLayerConstructionHP");
+    requirePositiveFiniteGroupingValue(cfg.rms_epsilon, "rms_epsilon", "encoderLayerConstructionHP");
     requireDropoutProbability(cfg.dropout_rate, "dropout_rate", "encoderLayerConstructionHP");
     requireDropoutProbability(cfg.attention_dropout, "attention_dropout", "encoderLayerConstructionHP");
     if (cfg.use_flash_attention) {
@@ -527,7 +508,7 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
                                      "encoderLayerConstructionHP");
     }
     view.num_layers = cfg.num_layers;
-    view.d_model = rms_hp.hidden_dim;
+    view.d_model = cfg.d_model;
     view.num_heads = cfg.num_heads;
     view.num_kv_heads = cfg.num_kv_heads;
     view.head_dim = cfg.head_dim;
@@ -535,7 +516,7 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.kv_dim = computeKVProjectionSize(cfg.d_model, cfg.num_heads, cfg.num_kv_heads);
     view.qkv_dim = computeQKVProjectionSize(cfg.d_model, cfg.num_heads, cfg.num_kv_heads);
     view.d_ff = cfg.d_ff;
-    view.rms_epsilon = rms_hp.epsilon;
+    view.rms_epsilon = cfg.rms_epsilon;
     view.causal_mask = cfg.causal_mask;
     view.use_flash_attention = cfg.use_flash_attention;
     view.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
@@ -546,7 +527,7 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.dropout_rate = cfg.dropout_rate;
     view.attention_dropout = cfg.attention_dropout;
     view.qk_norm_enabled = cfg.qk_norm_enabled;
-    view.residual_scale =
+    view.residual_projection_init_gain =
         1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
     view.is_gqa = cfg.num_kv_heads < cfg.num_heads;
     validateEncoderLayerConstructionHP(view, "encoderLayerConstructionHP");
@@ -560,14 +541,14 @@ inline FeedForwardLayerConstructionHP feedForwardLayerConstructionHP(
     requirePositiveGroupingValue(encoder_hp.d_model, "d_model", "feedForwardLayerConstructionHP");
     requirePositiveGroupingValue(encoder_hp.d_ff, "d_ff", "feedForwardLayerConstructionHP");
     requireDropoutProbability(encoder_hp.dropout_rate, "dropout_rate", "feedForwardLayerConstructionHP");
-    if (!std::isfinite(encoder_hp.residual_scale) || encoder_hp.residual_scale <= 0.0f) {
-        throw std::runtime_error("feedForwardLayerConstructionHP: residual_scale must be a positive finite value from encoderLayerConstructionHP");
+    if (!std::isfinite(encoder_hp.residual_projection_init_gain) || encoder_hp.residual_projection_init_gain <= 0.0f) {
+        throw std::runtime_error("feedForwardLayerConstructionHP: residual_projection_init_gain must be a positive finite value from encoderLayerConstructionHP");
     }
     view.d_model = encoder_hp.d_model;
     view.d_ff = encoder_hp.d_ff;
     view.use_bias = encoder_hp.use_bias;
     view.dropout_rate = encoder_hp.dropout_rate;
-    view.residual_scale = encoder_hp.residual_scale;
+    view.residual_projection_init_gain = encoder_hp.residual_projection_init_gain;
     return view;
 }
 
@@ -586,15 +567,15 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     const LanguageModelConfig& cfg)
 {
     LMHeadLayerConstructionHP view;
-    const RMSNormConstructionHP rms_hp = rmsNormConstructionHP(
-        cfg.d_model, cfg.rms_epsilon, "lmHeadLayerConstructionHP");
+    requirePositiveGroupingValue(cfg.d_model, "d_model", "lmHeadLayerConstructionHP");
+    requirePositiveFiniteGroupingValue(cfg.rms_epsilon, "rms_epsilon", "lmHeadLayerConstructionHP");
     requirePositiveGroupingValue(cfg.vocab_size, "vocab_size", "lmHeadLayerConstructionHP");
     if (cfg.project_out_pc1) {
         requirePositiveGroupingValue(cfg.pc1_power_iters,
                                      "pc1_power_iters",
                                      "lmHeadLayerConstructionHP");
     }
-    view.d_model = rms_hp.hidden_dim;
+    view.d_model = cfg.d_model;
     view.vocab_size = cfg.vocab_size;
     view.use_bias = cfg.use_bias;
     view.tie_embeddings = cfg.tie_embeddings;
@@ -603,22 +584,8 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.pc1_power_iters = cfg.pc1_power_iters;
     view.center_logits = cfg.center_logits;
     view.freeze_final_rms_gamma = cfg.lm_head_freeze_final_rms_gamma;
-    view.rms_epsilon = rms_hp.epsilon;
+    view.rms_epsilon = cfg.rms_epsilon;
     return view;
-}
-
-inline RMSNormConstructionHP encoderRMSNormConstructionHP(
-    const EncoderLayerConstructionHP& encoder_hp)
-{
-    return rmsNormConstructionHP(
-        encoder_hp.d_model, encoder_hp.rms_epsilon, "encoderRMSNormConstructionHP");
-}
-
-inline RMSNormConstructionHP lmHeadRMSNormConstructionHP(
-    const LMHeadLayerConstructionHP& lm_head_hp)
-{
-    return rmsNormConstructionHP(
-        lm_head_hp.d_model, lm_head_hp.rms_epsilon, "lmHeadRMSNormConstructionHP");
 }
 
 inline ReasoningHeadConstructionHP reasoningHeadConstructionHP(

@@ -60,8 +60,6 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
             std::string(tied_embedding_weights ? "non-null" : "NULL"));
     }
 
-            const auto rms_hp = HyperParameters::lmHeadRMSNormConstructionHP(hp_);
-
     // ══════════════════════════════════════════════════════════════
     //  WEIGHTS: Either tied from embedding or independently allocated
     // ══════════════════════════════════════════════════════════════
@@ -117,7 +115,7 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
     //  FINAL RMSNORM GAMMA: Always self-allocated, initialized to 1.0
     // ══════════════════════════════════════════════════════════════
     {
-        final_rms_gamma_frozen_or_trained_ = Tensor::zeros({rms_hp.hidden_dim}, init_stream, "final_rms_gamma");
+        final_rms_gamma_frozen_or_trained_ = Tensor::zeros({hp_.d_model}, init_stream, "final_rms_gamma");
 
         // freeze_final_rms_gamma=true: γ stays at 1.0 forever — do NOT mark as a leaf
         // parameter. autograd will skip producing its gradient and buildParameterGroups
@@ -128,12 +126,12 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
         }
 
         // Initialize gamma to 1.0 (identity normalization at start)
-        std::vector<float> ones(rms_hp.hidden_dim, 1.0f);
+        std::vector<float> ones(hp_.d_model, 1.0f);
         cudaMemcpyAsync(final_rms_gamma_frozen_or_trained_.data, ones.data(),
-            rms_hp.hidden_dim * sizeof(float), cudaMemcpyHostToDevice, init_stream);
+            hp_.d_model * sizeof(float), cudaMemcpyHostToDevice, init_stream);
 
         fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to 1.0 (eps=%.1e) frozen=%s\n",
-            rms_hp.hidden_dim, rms_hp.epsilon,
+            hp_.d_model, hp_.rms_epsilon,
             hp_.freeze_final_rms_gamma ? "true" : "false");
     }
 
@@ -185,7 +183,6 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
 
     const int total_tokens = input.shape.as_2d().rows;
     const int d_model = input.shape.as_2d().cols;
-    const auto rms_hp = HyperParameters::lmHeadRMSNormConstructionHP(hp_);
 
     if (rows_per_sequence <= 0) {
         throw std::runtime_error("LMHeadLayer::forward: rows_per_sequence must be > 0, got " +
@@ -206,10 +203,10 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
                                  " * " + std::to_string(rows_per_sequence) + ")");
     }
 
-    if (d_model != rms_hp.hidden_dim) {
+    if (d_model != hp_.d_model) {
         throw std::runtime_error("LMHeadLayer::forward: input d_model mismatch (" +
                                  std::to_string(d_model) + " vs config " +
-                                 std::to_string(rms_hp.hidden_dim) + ")");
+                                 std::to_string(hp_.d_model) + ")");
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -228,7 +225,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         if (!hp_.freeze_final_rms_gamma) {
             final_rms_gamma_frozen_or_trained_.requires_grad = true;
         }
-        normalized = autograd::rms_norm(input, final_rms_gamma_frozen_or_trained_, rms_hp.epsilon, stream);
+        normalized = autograd::rms_norm(input, final_rms_gamma_frozen_or_trained_, hp_.rms_epsilon, stream);
         current_input = &normalized;
     }
 

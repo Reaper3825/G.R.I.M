@@ -19,7 +19,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [ScratchBlock.md](ScratchBlock.md) | ScratchBlock forward/backward and buffer sync |
 | [PositionEncoding.md](PositionEncoding.md) | ALiBi & RoPE NTK |
 | [Tokenizer.md](Tokenizer.md) | Unigram+byte fallback, AtomTable, sliding window |
-| [Initialization.md](Initialization.md) | Xavier/splitmix64, embedding scale |
+| [Initialization.md](Initialization.md) | Xavier/Philox, residual projection init gain, embedding scale |
 | [Diagnostics.md](Diagnostics.md) | RMSNorm formula, CUDA events, LibTorch baselines |
 | [Config.md](Config.md) | ai_config.json conventions, fail-loud defaults |
 | [CppCudaFootguns.md](CppCudaFootguns.md) | General language/runtime traps |

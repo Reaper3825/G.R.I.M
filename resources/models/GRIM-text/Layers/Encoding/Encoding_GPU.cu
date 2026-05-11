@@ -214,14 +214,6 @@ static __global__ void kernel_encoding_fill_value(float* data, int count, float 
     }
 }
 
-// Issue #142: scale tensor data in-place (for W_o residual scaling)
-static __global__ void kernel_encoding_scale_inplace(float* data, size_t count, float scale) {
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        data[idx] *= scale;
-    }
-}
-
 
 //======================================================//
 //  RMSNorm Forward/Backward (calls into RMSNorm_Kernel_GPU.cu)
@@ -257,7 +249,7 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     config_.validate("EncodingLayer::allocateWeights");
     
     const auto& hp = config_.hp;
-    const float residual_scale = hp.residual_scale;
+    const float residual_projection_init_gain = hp.residual_projection_init_gain;
     const int d_model   = hp.d_model;
     const int qkv_out_dim = hp.qkv_dim;
     cudaStream_t stream = init_stream;
@@ -283,19 +275,6 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             throw std::runtime_error(std::string(context) + ": CUDA error: "
-                                     + std::string(cudaGetErrorString(err)));
-        }
-    };
-    
-    // ── Helper: in-place scale for Issue #142 residual projection init ──
-    auto scaleInplace = [stream](Tensor& t, float scale) {
-        const size_t count = t.numel();
-        const int threads = 256;
-        const int blocks = static_cast<int>((count + threads - 1) / threads);
-        kernel_encoding_scale_inplace<<<blocks, threads, 0, stream>>>(t.data, count, scale);
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            throw std::runtime_error("EncodingLayer::allocateWeights scaleInplace: CUDA error: "
                                      + std::string(cudaGetErrorString(err)));
         }
     };
@@ -330,13 +309,12 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     
     //==================================================//
     //  Attention output projection [d_model, d_model]
-    //  Issue #142: scaled by residual_scale after Xavier
+    //  Residual projection startup init: Xavier with explicit depth gain
     //==================================================//
     W_o_ = Tensor::zeros({d_model, d_model}, stream, "enc_W_o_own");
     W_o_.requires_grad_();
     W_o_.ensure_grad();
-    Tensor::xavier_uniform_(W_o_, seed + 1, stream);
-    scaleInplace(W_o_, residual_scale);
+    Tensor::xavier_uniform_with_gain_(W_o_, seed + 1, residual_projection_init_gain, stream);
     
     if (hp.use_bias) {
         b_o_ = Tensor::zeros({d_model}, stream, "enc_b_o_own");
@@ -466,7 +444,6 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     }
     validateReady("EncodingLayer::forward");
     const auto& hp = config_.hp;
-    const auto rms_hp = HyperParameters::encoderRMSNormConstructionHP(hp);
     
     // Validate input
     if (!input.data) {
@@ -533,7 +510,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // 1. RMSNorm1: input -> ln1_out
     // Issue #56: Store in intermediates to keep autograd graph alive
     //--------------------------------------------------
-    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, rms_hp.epsilon, stream);
+    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
     
@@ -1038,7 +1015,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #56: Store in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2...\n");
-    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma_, rms_hp.epsilon, stream);
+    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma_, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2 DONE\n");
     
     //--------------------------------------------------

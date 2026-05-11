@@ -106,7 +106,7 @@ public:
     EncodingLayer() = default;
     
     /// Self-allocating constructor — layer owns its weights
-    /// @param cfg       Fully-populated EncodingConfig (includes residual_scale/layer_scale_init HP)
+    /// @param cfg       Fully-populated EncodingConfig (includes residual_projection_init_gain/layer_scale_init HP)
     /// @param seed      Base PRNG seed.  Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
     /// @param init_stream CUDA stream for self-allocation during startup/model assembly
     EncodingLayer(const EncodingConfig& cfg, uint64_t seed, cudaStream_t init_stream);

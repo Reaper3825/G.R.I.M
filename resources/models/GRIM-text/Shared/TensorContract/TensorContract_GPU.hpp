@@ -674,14 +674,11 @@ inline bool debug_check_finite(const TensorView&, cudaStream_t = nullptr) { retu
 
 
 //======================================================//
-//======================================================//
 //  GRIM NATIVE AUTOGRAD SYSTEM
-//======================================================//
 //======================================================//
 //
 //  This section provides PyTorch-style automatic differentiation
 //  for GRIM-text training. Key components:
-//
 //  1. ParamGroupType - Categories for parameter groups (for optimizer)
 //  2. ParameterGroup - Weights + gradients + Adam state
 //  3. GradFn - Base class for backward function nodes
@@ -962,6 +959,9 @@ struct Tensor {
     
     /// In-place Xavier uniform initialization
     static void xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream = nullptr);
+
+    /// In-place Xavier uniform initialization with explicit multiplicative gain
+    static void xavier_uniform_with_gain_(Tensor& t, uint64_t seed, float gain, cudaStream_t stream = nullptr);
     
     //--------------------------------------------------//
     // Gradient Management

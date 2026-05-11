@@ -42,7 +42,7 @@ public:
     /// Self-allocating constructor (Pattern B: layer self-management)
     /// Allocates and Xavier-initializes W_gate, W1, W2, b2 on GPU.
     /// Layer OWNS the memory (owns_data=true). Registers with autograd via ensure_grad().
-    /// @param hp     Grouped FFN construction HP snapshot, including residual_scale
+    /// @param hp     Grouped FFN construction HP snapshot, including residual_projection_init_gain
     /// @param seed   Xavier initialization seed
     /// @param init_stream CUDA stream for self-allocation during startup/model assembly
     explicit FeedForwardLayer(const HyperParameters::FeedForwardLayerConstructionHP& hp, uint64_t seed,

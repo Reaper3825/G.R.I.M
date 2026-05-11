@@ -956,6 +956,9 @@ Tensor Tensor::from_ptr(float* ptr, std::initializer_list<int> dims, cudaStream_
 }
 
 Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream, const char* name) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error(std::string("Tensor::xavier_uniform: ") + (name ? name : "unknown") + " stream is NULL - caller MUST provide valid stream");
+    }
     if (!shape.is_valid()) {
         throw std::invalid_argument("Tensor::xavier_uniform: invalid shape");
     }
@@ -985,11 +988,21 @@ Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_g
 }
 
 void Tensor::xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream) {
+    xavier_uniform_with_gain_(t, seed, 1.0f, stream);
+}
+
+void Tensor::xavier_uniform_with_gain_(Tensor& t, uint64_t seed, float gain, cudaStream_t stream) {
     if (!t.data) {
-        throw std::invalid_argument("Tensor::xavier_uniform_: tensor has no data");
+        throw std::invalid_argument("Tensor::xavier_uniform_with_gain_: tensor has no data");
     }
     if (!t.shape.is_valid()) {
-        throw std::invalid_argument("Tensor::xavier_uniform_: tensor has invalid shape");
+        throw std::invalid_argument("Tensor::xavier_uniform_with_gain_: tensor has invalid shape");
+    }
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error(std::string("Tensor::xavier_uniform_with_gain_: ") + (t.name ? t.name : "unnamed") + " stream is NULL - caller MUST provide valid stream");
+    }
+    if (!std::isfinite(gain) || gain <= 0.0f) {
+        throw std::invalid_argument("Tensor::xavier_uniform_with_gain_: gain must be positive finite, got " + std::to_string(gain));
     }
     
     const size_t count = t.shape.total_elements();
@@ -1001,12 +1014,25 @@ void Tensor::xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream) {
         fan_in = static_cast<float>(s.cols);
         fan_out = static_cast<float>(s.rows);
     } else {
-        throw std::invalid_argument("Tensor::xavier_uniform_: only 2D weight matrices are supported. 4D tensors are activations, not weights.");
+        throw std::invalid_argument("Tensor::xavier_uniform_with_gain_: only 2D weight matrices are supported. 4D tensors are activations, not weights.");
     }
     
-    float scale = std::sqrt(6.0f / (fan_in + fan_out));
+    const float denominator = fan_in + fan_out;
+    if (!std::isfinite(denominator) || denominator <= 0.0f) {
+        throw std::invalid_argument("Tensor::xavier_uniform_with_gain_: invalid fan denominator " + std::to_string(denominator));
+    }
+    const float scale = std::sqrt(6.0f / denominator) * gain;
+    if (!std::isfinite(scale) || scale <= 0.0f) {
+        throw std::invalid_argument("Tensor::xavier_uniform_with_gain_: computed scale must be positive finite, got " + std::to_string(scale));
+    }
     
     kernel_xavier_uniform<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, scale, seed);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error("Tensor::xavier_uniform_with_gain_: kernel launch failed for " +
+                                 std::string(t.name ? t.name : "unnamed") + ": " +
+                                 cudaGetErrorString(err));
+    }
     
     t.version++;
 }

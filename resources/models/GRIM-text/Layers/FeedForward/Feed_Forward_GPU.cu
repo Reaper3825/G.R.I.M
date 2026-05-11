@@ -24,14 +24,6 @@
 #include <string>
 #include <cstdio>
 
-// Issue #142: In-place scaling kernel for residual projection init
-static __global__ void kernel_ffn_scale_inplace(float* data, size_t count, float scale) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        data[idx] *= scale;
-    }
-}
-
 namespace GRIM {
 
 //======================================================//
@@ -48,9 +40,9 @@ FeedForwardLayer::FeedForwardLayer(const HyperParameters::FeedForwardLayerConstr
     if (!init_stream) {
         throw std::runtime_error("FeedForwardLayer: init_stream is NULL");
     }
-    const float residual_scale = hp_.residual_scale;
-    if (!std::isfinite(residual_scale) || residual_scale <= 0.0f) {
-        throw std::runtime_error("FeedForwardLayer: residual_scale must be a positive finite value from feedForwardLayerConstructionHP");
+    const float residual_projection_init_gain = hp_.residual_projection_init_gain;
+    if (!std::isfinite(residual_projection_init_gain) || residual_projection_init_gain <= 0.0f) {
+        throw std::runtime_error("FeedForwardLayer: residual_projection_init_gain must be a positive finite value from feedForwardLayerConstructionHP");
     }
     HyperParameters::requirePositiveGroupingValue(hp_.d_model, "d_model", "FeedForwardLayer");
     HyperParameters::requirePositiveGroupingValue(hp_.d_ff, "d_ff", "FeedForwardLayer");
@@ -73,22 +65,11 @@ FeedForwardLayer::FeedForwardLayer(const HyperParameters::FeedForwardLayerConstr
     Tensor::xavier_uniform_(W1_, seed + 1, stream);
     
     // W2: [d_ff, d_model] down projection
-    // Scaled by residual_scale after Xavier init (GPT-2 pattern)
+    // Residual projection startup init: Xavier with explicit depth gain
     W2_ = Tensor::zeros({d_ff, d_model}, stream, "ffn_w2");
     W2_.requires_grad_();
     W2_.ensure_grad();
-    Tensor::xavier_uniform_(W2_, seed + 2, stream);
-    
-    // Apply Issue #142 residual scaling to W2 (down-projection)
-    const size_t count = W2_.numel();
-    const int threads = 256;
-    const int blocks = static_cast<int>((count + threads - 1) / threads);
-    kernel_ffn_scale_inplace<<<blocks, threads, 0, stream>>>(W2_.data, count, residual_scale);
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        throw std::runtime_error("FeedForwardLayer: residual scale kernel failed: " + 
-                                 std::string(cudaGetErrorString(err)));
-    }
+    Tensor::xavier_uniform_with_gain_(W2_, seed + 2, residual_projection_init_gain, stream);
     
     if (hp_.use_bias) {
         b2_ = Tensor::zeros({1, d_model}, stream, "ffn_b2");
@@ -96,8 +77,8 @@ FeedForwardLayer::FeedForwardLayer(const HyperParameters::FeedForwardLayerConstr
         b2_.ensure_grad();
     }
     
-    std::fprintf(stderr, "[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[%d,%d], W1=[%d,%d], W2=[%d,%d], residual_scale=%.6f\n",
-                 d_model, d_ff, d_model, d_ff, d_ff, d_model, residual_scale);
+    std::fprintf(stderr, "[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[%d,%d], W1=[%d,%d], W2=[%d,%d], residual_projection_init_gain=%.6f\n",
+                 d_model, d_ff, d_model, d_ff, d_ff, d_model, residual_projection_init_gain);
 }
 
 FeedForwardLayer::~FeedForwardLayer() {
