@@ -37,7 +37,7 @@
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"   // For ScratchBlock reasoning layer
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
-#include "../Shared/PBM/PositionalBiasMethod.hpp"                 // Unified PBM (ALiBi + RoPE)
+#include "../Shared/PBM/PBMStateOwner.hpp"                        // Unified PBM RAII owner (ALiBi + RoPE)
 #include "../Shared/Sampling/Sampling.hpp"                        // SamplingPipeline
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"            // SlotSelectionStatus
 
@@ -238,113 +238,6 @@ float GeneratedSequence::getNormalizedScore(float length_penalty) const {
 }
 
 //======================================================//
-//======================================================//
-//  ALiBiPositionalBias Implementation (Unified PBM)
-//======================================================//
-
-ALiBiPositionalBias::ALiBiPositionalBias()
-    : num_heads(0),
-      initialized(false),
-      type(PositionalEncodingType::ALIBI_ROPE) {}
-
-ALiBiPositionalBias::ALiBiPositionalBias(ALiBiPositionalBias&& other) noexcept {
-    *this = std::move(other);
-}
-
-ALiBiPositionalBias& ALiBiPositionalBias::operator=(ALiBiPositionalBias&& other) noexcept {
-    if (this != &other) {
-        cleanup();
-#ifdef USE_CUDA
-        // Move unified PBM state
-        pbm_state_.alibi_slopes = other.pbm_state_.alibi_slopes;
-        pbm_state_.alibi_slopes_host = std::move(other.pbm_state_.alibi_slopes_host);
-        pbm_state_.rope_inv_freq = other.pbm_state_.rope_inv_freq;
-        pbm_state_.rope_inv_freq_host = std::move(other.pbm_state_.rope_inv_freq_host);
-        pbm_state_.construction_hp = other.pbm_state_.construction_hp;
-        pbm_state_.upload_event = other.pbm_state_.upload_event;
-        pbm_state_.initialized = other.pbm_state_.initialized;
-        
-        // Clear other
-        other.pbm_state_.alibi_slopes = nullptr;
-        other.pbm_state_.rope_inv_freq = nullptr;
-        other.pbm_state_.upload_event = nullptr;
-        other.pbm_state_.initialized = false;
-        other.pbm_state_.construction_hp = HyperParameters::PBMConstructionHP{};
-        other.pbm_state_.alibi_slopes_host.clear();
-        other.pbm_state_.rope_inv_freq_host.clear();
-#endif
-        num_heads = other.num_heads;
-        initialized = other.initialized;
-        type = other.type;
-    }
-    return *this;
-}
-
-ALiBiPositionalBias::~ALiBiPositionalBias() {
-    cleanup();
-}
-
-void ALiBiPositionalBias::initialize(const HyperParameters::PBMConstructionHP& hp,
-                                     PositionalEncodingType type_) {
-    HyperParameters::validatePBMConstructionHP(hp, "ALiBiPositionalBias::initialize");
-
-    num_heads = hp.num_heads;
-    type = type_;
-#ifdef USE_CUDA
-    // Use unified PBM - always allocates both ALiBi + RoPE
-    if (!PBM::ensurePBM(hp, pbm_state_)) {
-        throw std::runtime_error("ALiBiPositionalBias::initialize: PBM initialization failed");
-    }
-    if (!pbm_state_.initialized) {
-        throw std::runtime_error("ALiBiPositionalBias::initialize: PBM state not initialized");
-    }
-
-    initialized = true;
-#else
-    throw std::runtime_error("ALiBiPositionalBias::initialize requires CUDA");
-#endif
-}
-
-const float* ALiBiPositionalBias::getSlopes() const {
-#ifdef USE_CUDA
-    if (!initialized) {
-        throw std::runtime_error("ALiBiPositionalBias::getSlopes: PBM not initialized");
-    }
-    return PBM::getAlibiSlopes(pbm_state_);
-#else
-    throw std::runtime_error("ALiBiPositionalBias::getSlopes requires CUDA build");
-#endif
-}
-
-const float* ALiBiPositionalBias::getRoPEFreqs() const {
-#ifdef USE_CUDA
-    if (!initialized) {
-        throw std::runtime_error("ALiBiPositionalBias::getRoPEFreqs: PBM not initialized");
-    }
-    return PBM::getRoPEInvFreq(pbm_state_);
-#else
-    throw std::runtime_error("ALiBiPositionalBias::getRoPEFreqs requires CUDA build");
-#endif
-}
-
-bool ALiBiPositionalBias::isInitialized() const {
-#ifdef USE_CUDA
-    return initialized && pbm_state_.initialized;
-#else
-    return false;
-#endif
-}
-
-void ALiBiPositionalBias::cleanup() {
-#ifdef USE_CUDA
-    PBM::releasePBM(pbm_state_);
-#endif
-    initialized = false;
-    type = PositionalEncodingType::ALIBI_ROPE;
-    num_heads = 0;
-}
-
-//======================================================//
 //  Component Implementations with CUDA Kernels
 //======================================================//
 
@@ -356,28 +249,6 @@ GrimEmbeddingStack::GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_
 {
     token_embed = Matrix(vocab_size, d_model, 0.0f, true);
     // NOTE: Durable GPU embedding tensors are assembled by the Startup/Model allocation module.
-}
-
-void GrimEmbeddingStack::enableALiBi(const HyperParameters::PBMConstructionHP& hp) {
-    HyperParameters::validatePBMConstructionHP(hp, "GrimEmbeddingStack::enableALiBi");
-    if (d_model_ != hp.num_heads * hp.head_dim) {
-        throw std::runtime_error("GrimEmbeddingStack::enableALiBi: grouped PBM geometry does not match embedding d_model");
-    }
-    alibi_ = std::make_unique<ALiBiPositionalBias>();
-    alibi_->initialize(hp, PositionalEncodingType::ALIBI);
-}
-
-void GrimEmbeddingStack::enableHybridPositionalEncoding(const HyperParameters::PBMConstructionHP& hp) {
-    HyperParameters::validatePBMConstructionHP(hp, "GrimEmbeddingStack::enableHybridPositionalEncoding");
-    if (d_model_ != hp.num_heads * hp.head_dim) {
-        throw std::runtime_error("GrimEmbeddingStack::enableHybridPositionalEncoding: grouped PBM geometry does not match embedding d_model");
-    }
-    alibi_ = std::make_unique<ALiBiPositionalBias>();
-    alibi_->initialize(hp, PositionalEncodingType::ALIBI_ROPE);
-}
-
-const ALiBiPositionalBias* GrimEmbeddingStack::getALiBiBias() const {
-    return alibi_.get();
 }
 
 const Matrix& GrimEmbeddingStack::getTokenEmbeddings() const {
@@ -428,26 +299,17 @@ LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config,
         config_.max_seq_len
     );
     
-    // 2. Enable positional encoding if requested
-    if (HyperParameters::usesALiBi(config_.positional_encoding) || 
-        HyperParameters::usesRoPE(config_.positional_encoding)) {
-        const auto pbm_hp = HyperParameters::pbmConstructionHP(config_);
-        
-        // Use appropriate initialization based on encoding type
-        if (config_.positional_encoding == PositionalEncodingType::ALIBI_ROPE) {
-            embedder_->enableHybridPositionalEncoding(pbm_hp);
-        } else if (config_.positional_encoding == PositionalEncodingType::ALIBI) {
-            embedder_->enableALiBi(pbm_hp);
-        }
-        // Note: Pure RoPE handled differently (integrated into attention)
-    }
+    // Positional-bias device state is initialized by initPBM() after
+    // StreamController exists. The constructor only creates CPU-side model
+    // topology and must not allocate CUDA PBM resources.
     
     // NOTE: initGPU() is deliberately NOT called here anymore!
     // The initialization order MUST be:
     //   1. CUDA device context (cudaSetDevice)
     //   2. LanguageModel constructor (this)
     //   3. StreamController initialization
-    //   4. initGPU() explicitly called by Phase1
+    //   4. initPBM() with the StreamController primary stream
+    //   5. initGPU() explicitly called by Phase1
     // This ensures StreamController exists before GPU encoder tries to use it.
 #ifdef USE_CUDA
     if (!config_.use_gpu) {

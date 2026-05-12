@@ -27,6 +27,10 @@
 
 namespace GRIM {
 
+namespace HyperParameters {
+struct ScratchBlockConstructionHP;
+}
+
 //======================================================//
 //  ScratchBlock Configuration
 //======================================================//
@@ -115,6 +119,8 @@ public:
 
     ScratchBlockLayer();
     explicit ScratchBlockLayer(const ScratchBlockConfig& config);
+    ScratchBlockLayer(const HyperParameters::ScratchBlockConstructionHP& hp,
+                      cudaStream_t init_stream);
     ~ScratchBlockLayer();
 
     // Disable copy

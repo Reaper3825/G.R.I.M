@@ -48,7 +48,8 @@ void LanguageModel::initInferenceState() {
     }
     
     const auto& model_cfg = getConfig();
-    const auto cache_hp = HyperParameters::inferenceCacheConstructionHP(model_cfg);
+    const HyperParameters::InferenceCacheConstructionHP inference_cache_hp =
+        HyperParameters::inferenceCacheConstructionHP(model_cfg);
     std::cout << "[InitInferenceState] Initializing INFERENCE-ONLY state..." << std::endl;
     std::cout << "  → Skipping gradient buffers" << std::endl;
     std::cout << "  → Skipping optimizer state" << std::endl;
@@ -76,8 +77,8 @@ void LanguageModel::initInferenceState() {
     cublasSetStream(training_state_.cublas_handle.get(), primary_stream);
     std::cout << "  ✓ Created cuBLAS handle with Tensor Core acceleration" << std::endl;
     
-    training_state_.cached_num_layers = cache_hp.num_layers;
-    const int num_kv_heads = cache_hp.num_kv_heads;
+    training_state_.cached_num_layers = inference_cache_hp.num_layers;
+    const int num_kv_heads = inference_cache_hp.num_kv_heads;
     
     // TensorContract shape helpers
     using TC = TensorContract::TensorShape;
@@ -151,98 +152,25 @@ void LanguageModel::initInferenceState() {
     }
 
     // 3b. Allocate minimal activation caches
-    const size_t max_batch_size = cache_hp.max_batch_size;
-    const size_t max_seq_len_cache = cache_hp.max_seq_len_cache;
-    size_t max_tokens = cache_hp.max_tokens;
+    // Inference startup allocates maximum capacity from HyperparameterGroupings.
+    // Prompt/decode geometry still flows through BatchPayload on each request.
+    const size_t max_batch_size = inference_cache_hp.max_batch_size;
+    const size_t max_seq_len_cache = inference_cache_hp.max_seq_len_cache;
+    const size_t max_tokens = inference_cache_hp.max_tokens;
     
     std::cout << "  ℹ Allocating activation caches: batch=" << max_batch_size
               << ", seq_len=" << max_seq_len_cache 
               << ", total_tokens=" << max_tokens << std::endl;
-    
-    // NOTE: Tensor::zeros sets all bytes to 0 = UNK_TOKEN_ID when read as int32.
-    // Harmless: BatchPayload upload writes prompt tokens, forwardStep() appends one at a time.
-    // Only positions [0..generation_state_.kv_cache_len-1] are ever read. If a fill kernel is added, use PAD=1.
-    training_state_.cached_token_ids_tensor = Tensor::zeros(
-        TC::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_token_ids_tensor_inf"
-    );
-    // Mark as int32 type via allocation size (Tensor internally tracks)
-    std::cout << "  ✓ Allocated token ID cache (Tensor API)" << std::endl;
-    
-    training_state_.cached_token_numeric_values = Tensor::zeros(
-        TC::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_token_numeric_values_inf"
-    );
-    std::cout << "  ✓ Allocated numeric values cache (Tensor API)" << std::endl;
 
-    training_state_.cached_seq_lengths_tensor = Tensor::zeros(
-        TC::make_BSM(1, static_cast<int>(max_batch_size)),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_seq_lengths_tensor_inf"
-    );
-    std::cout << "  ✓ Allocated sequence lengths cache (Tensor API)" << std::endl;
-
-    training_state_.cached_token_text_features = Tensor::zeros(
-        TC::make_BSM(1, static_cast<int>(max_tokens * Batching::BatchPayload::kTextFeatureDim)),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_token_text_features_inf"
-    );
-    std::cout << "  ✓ Allocated text feature cache (Tensor API)" << std::endl;
-    
-    training_state_.cached_token_atom_mask = Tensor::zeros(
-        TC::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_token_atom_mask_inf"
-    );
-    std::cout << "  ✓ Allocated atom mask cache (Tensor API)" << std::endl;
-
-    training_state_.cached_token_to_slot_map = Tensor::zeros(
-        TC::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_token_to_slot_map_inf"
-    );
-    std::cout << "  ✓ Allocated token-to-slot map cache (Tensor API)" << std::endl;
-
-    training_state_.cached_token_atom_flags = Tensor::zeros(
-        TC::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_token_atom_flags_inf"
-    );
-    std::cout << "  ✓ Allocated atom flags cache (Tensor API)" << std::endl;
+    const auto training_state_cache_hp = HyperParameters::trainingStateRuntimeCacheHPFromInferenceCache(
+        inference_cache_hp, "LanguageModel::initInferenceState");
+    training_state_.allocateStepDeviceWorkspaces(training_state_cache_hp, primary_stream);
     
     // DELETED: cached_embeddings_tensor - not used in inference (encoder output computed on-the-fly)
     // DELETED: encoder_layer_caches - intermediate tensor caching moved to AutogradIntermediates
     
     // DELETED: FA bf16 buffers — FlashAttentionLayer::ensureScratch() self-manages.
     // Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
-    
-    // Encoder outputs cache - use Tensor API
-    training_state_.cached_encoder_output = Tensor::zeros(
-        TC::make_BSM(static_cast<int>(max_tokens), cache_hp.d_model),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_encoder_output_inf"
-    );
-    std::cout << "  ✓ Allocated encoder output cache (Tensor API)" << std::endl;
-    
-    // Logits cache - use Tensor API
-    training_state_.cached_logits_tensor = Tensor::zeros(
-        TC::make_BSM(static_cast<int>(max_tokens), cache_hp.vocab_size),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_logits_tensor_inf"
-    );
-    std::cout << "  ✓ Allocated logits cache (Tensor API)" << std::endl;
-
     
     // 4. Allocate single-token buffers for incremental generation (KV cache)
     generation_state_.single_token_embedding = Tensor::zeros(
@@ -272,8 +200,8 @@ void LanguageModel::initInferenceState() {
 
     // 5. Allocate per-layer KV cache (BF16, BSHD layout for FlashAttention direct use)
     {
-        const int head_dim = cache_hp.head_dim;
-        const int n_layers = cache_hp.num_layers;
+        const int head_dim = inference_cache_hp.head_dim;
+        const int n_layers = inference_cache_hp.num_layers;
         const size_t kv_elems_per_layer = static_cast<size_t>(num_kv_heads) * max_seq_len_cache * head_dim;
         const size_t kv_bytes_per_layer = kv_elems_per_layer * sizeof(__nv_bfloat16);
 
@@ -293,7 +221,7 @@ void LanguageModel::initInferenceState() {
 
         // Shared softmax LSE scratch for decode: [num_heads, generation KV capacity rounded]
         const int kv_cap_rounded = ((static_cast<int>(max_seq_len_cache) + 127) / 128) * 128;
-        const size_t lse_bytes = static_cast<size_t>(cache_hp.num_heads) * kv_cap_rounded * sizeof(float);
+        const size_t lse_bytes = static_cast<size_t>(inference_cache_hp.num_heads) * kv_cap_rounded * sizeof(float);
         generation_state_.kv_cache.softmax_lse.allocate(lse_bytes, "kv_cache_lse");
         cudaMemsetAsync(generation_state_.kv_cache.softmax_lse, 0, lse_bytes, primary_stream);
 
@@ -303,31 +231,28 @@ void LanguageModel::initInferenceState() {
                   << (total_kv_bytes / 1024.0 / 1024.0) << " MB total (BF16)" << std::endl;
 
         // Decode scratch buffers (tiny, reused per layer per decode step)
-          const size_t q_bf16_bytes = static_cast<size_t>(cache_hp.num_heads) * head_dim * sizeof(__nv_bfloat16);
+                    const size_t q_bf16_bytes = static_cast<size_t>(inference_cache_hp.num_heads) * head_dim * sizeof(__nv_bfloat16);
         generation_state_.decode_scratch.q_bf16.allocate(q_bf16_bytes, "decode_q_bf16");
         generation_state_.decode_scratch.attn_out_bf16.allocate(q_bf16_bytes, "decode_attn_out_bf16");
-          generation_state_.decode_scratch.attn_out_fp32.allocate(static_cast<size_t>(cache_hp.d_model) * sizeof(float), "decode_attn_out_fp32");
+                    generation_state_.decode_scratch.attn_out_fp32.allocate(static_cast<size_t>(inference_cache_hp.d_model) * sizeof(float), "decode_attn_out_fp32");
         std::cout << "  ✓ Allocated decode scratch buffers ("
-              << ((q_bf16_bytes * 2 + cache_hp.d_model * sizeof(float)) / 1024.0) << " KB)" << std::endl;
+                            << ((q_bf16_bytes * 2 + inference_cache_hp.d_model * sizeof(float)) / 1024.0) << " KB)" << std::endl;
     }
     
     // NOTE: encoder_workspace DELETED (Rule 20/26) — autograd forward creates its own Tensors.
 
-    // 6. Initialize ScratchBlock reasoning layer (if enabled)
-    if (cache_hp.use_scratch_block) {
-        try {
-            // ScratchBlock layer owns its own buffers now (no external caches needed).
-            // ScratchBlockLayer constructor handles weight allocation + initialization.
-            
-            if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
-                std::cout << "  ✓ ScratchBlock reasoning layer enabled (d_model="
-                          << cache_hp.d_model << ", atom_dim=" << cache_hp.scratch_block_atom_embedding_dim
-                          << ", max_atoms=" << cache_hp.scratch_block_max_atoms << ")" << std::endl;
-            }
-        } catch (const std::exception& e) {
-            throw std::runtime_error("[InitInferenceState] ScratchBlock init failed (config says use_scratch_block=true): "
-                                     + std::string(e.what()));
+    // 6. Verify ScratchBlock reasoning layer ownership (if enabled)
+    if (inference_cache_hp.use_scratch_block) {
+        if (!scratch_block_layer_ || !scratch_block_layer_->isEnabled()) {
+            throw std::runtime_error(
+                "[InitInferenceState] config.use_scratch_block=true but ScratchBlockLayer was not assembled by initGPU()");
         }
+        std::cout << "  ✓ ScratchBlock reasoning layer already assembled by initGPU() (d_model="
+                  << inference_cache_hp.d_model << ", atom_dim=" << inference_cache_hp.scratch_block_atom_embedding_dim
+                  << ", max_atoms=" << inference_cache_hp.scratch_block_max_atoms << ")" << std::endl;
+    } else if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
+        throw std::runtime_error(
+            "[InitInferenceState] ScratchBlockLayer exists and is enabled while config.use_scratch_block=false");
     }
     
     training_state_.initialized = true;
@@ -338,10 +263,10 @@ void LanguageModel::initInferenceState() {
     
     // Compute actual allocated activation buffer sizes (weights excluded — loaded separately)
     const size_t token_cache_bytes = max_tokens * sizeof(float) * 3;  // token_ids + numeric_values + numeric_mask (all float Tensors)
-    const size_t encoder_out_bytes = max_tokens * cache_hp.d_model * sizeof(float);
-    const size_t logits_bytes = max_tokens * cache_hp.vocab_size * sizeof(float);
-    const size_t single_token_bytes = (2 * cache_hp.d_model + cache_hp.vocab_size) * sizeof(float);  // embedding + hidden + logits
-    const size_t workspace_bytes = static_cast<size_t>(cache_hp.d_ff) * max_seq_len_cache * 4 * sizeof(float);
+    const size_t encoder_out_bytes = max_tokens * inference_cache_hp.d_model * sizeof(float);
+    const size_t logits_bytes = max_tokens * inference_cache_hp.vocab_size * sizeof(float);
+    const size_t single_token_bytes = (2 * inference_cache_hp.d_model + inference_cache_hp.vocab_size) * sizeof(float);  // embedding + hidden + logits
+    const size_t workspace_bytes = static_cast<size_t>(inference_cache_hp.d_ff) * max_seq_len_cache * 4 * sizeof(float);
     
     const size_t total_bytes = token_cache_bytes + encoder_out_bytes + logits_bytes +
                                single_token_bytes + workspace_bytes;

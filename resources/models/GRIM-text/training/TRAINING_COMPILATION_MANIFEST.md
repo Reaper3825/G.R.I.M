@@ -260,8 +260,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: `normalizeProbabilities()` now throws on invalid sum (no silent return)
   - **FIXED**: Removed debug spew in `sampleFromLogits()` and unreachable code after throws
   - **CLEANED**: `GRIM/grim_language_model_cuda.hpp` CPU fallback class blocks removed (EncoderLayer/GrimEncoder/LMHead/TextGenerator), dead accessors and members deleted
-  - **FIXED (Pass 2)**: `ALiBiPositionalBias::getSlopes()`/`getRoPEFreqs()` — removed ternary fallback to nullptr. If `initialized=true` but pointer is NULL, throws (invariant corruption). Non-CUDA `#else` path now throws instead of returning nullptr silently.
-  - **FIXED (Pass 3)**: `ALiBiPositionalBias::getSlopes()`/`getRoPEFreqs()` now throw when PBM is uninitialized (removed remaining silent `return nullptr` path).
+  - **REFACTORED**: `ALiBiPositionalBias` wrapper deleted; PBM access now goes through model-level `PBM::PBMStateOwner` and `LanguageModel::getPBMState()` / `getPBMSpec()`.
   - **FIXED (Pass 3)**: Removed stale vocab compatibility fallback in `detectVocabSizeFromBinary()` (`vocab_size==0` no longer falls back to legacy `config_vocab_size`; now fails loud).
   - **FIXED (Pass 3)**: Constructor now validates `num_heads > 0` and `d_model % num_heads == 0` BEFORE computing `d_head` (prevents divide-by-zero/UB during positional init).
   - **DELETED (Payload Inference Cleanup)**: staged prompt APIs were removed; inference callers now build `BatchPayload` and enter through payload-only logits/generation methods.
@@ -274,7 +273,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `applyActivationQuantization()` declaration — unimplemented method for unimplemented feature, zero callers. Activation quantization config loading stays (Phase1 infrastructure), but no QuantizationLayer is wired to any forward path
   - **DELETED**: `activation_quantizer_` member — `std::unique_ptr<Quantization::QuantizationLayer>` that was never assigned, always nullptr
   - **DELETED**: `#include "Quantization_GPU.hpp"` — no longer needed after activation_quantizer_ removal
-  - **DELETED**: `LanguageModel::alibi_` member — duplicate of `GrimEmbeddingStack::alibi_`, always nullptr. Constructor only populates `embedder_->alibi_` via `enableALiBi()`/`enableHybridPositionalEncoding()`
+  - **DELETED**: `LanguageModel::alibi_` member and `GrimEmbeddingStack::alibi_` wrapper ownership. `LanguageModel::initPBM()` initializes the model-level `PBM::PBMStateOwner` after `StreamController` exists; `PBMSpec` is only a non-owning attention view.
   - **DELETED**: `getAlibiPtr()` accessor — zero callers, returned the dead `alibi_` member above
   - **NOTE (not fixed)**: `HardcodedPattern` enum is duplicated in `LanguageModelConfig` and `HardcodedStates_GPU.hpp` with `static_cast` bridge in Phase1. Fragile but diagnostic-only — defer unification.
 

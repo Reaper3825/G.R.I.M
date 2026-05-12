@@ -2,6 +2,8 @@
 
 Training-owned GPU resources MUST go through `TrainingState`. Generation-owned GPU resources live in `GenerationState` (`Shared/InferenceState/GenerationState_GPU.hpp`) and are owned directly by `LanguageModel`, not smuggled through TrainingState. GRIM-TS guess-cache buffers are owned by `GRIMTS::Training::GuessCacheScope`, not `TrainingState`; that scope only borrows `TrainingState.stream_ctrl` for the primary stream.
 
+`TrainingState` owns runtime allocations only. Static and computed startup values are owned by `HyperParameters_GPU.hpp` and `HyperparameterGroupings.hpp`; `modelCacheCapacityHP()` validates the training cache rectangle and `trainingStateRuntimeCacheHP()` adds the model dimensions needed to size reusable tensors. Inference startup first builds `InferenceCacheConstructionHP`, then converts that grouped view through `trainingStateRuntimeCacheHPFromInferenceCache()`. `LanguageModel::initTrainingState()` and `LanguageModel::initInferenceState()` verify startup order, then pass the grouped HP view plus the primary stream to `TrainingState::allocateStepDeviceWorkspaces()`. `TrainingState` must not re-author capacity, keep config mirrors, or preserve per-batch/prompt geometry.
+
 `TrainingState` owns two different resource classes:
 
 - **Tensor members** (`Tensor cached_*`, optimizer states, `class_weights_tensor`, `read_gate_accum_tensor`) release themselves through `Tensor::~Tensor()`. Never call `cudaFree` on `Tensor::data` from the destructor.
@@ -16,6 +18,10 @@ RAII helper modules:
 - `Layers/GRIMTS/GuessCacheTraining.{hpp,cu}` owns GRIM-TS guess-cache records, keys, bloom, calibration, and pinned async-transfer buffers through `GuessCacheScope::OwnedBuffers`.
 
 `ScratchBlockPool` was deleted. Batch upload copies `BatchPayload` host vectors directly into the TrainingState device cache tensors, and ScratchBlock reasoning owns its own layer buffers.
+
+`ScratchBlockLayer` itself is **not** a TrainingState allocation. It is durable model topology owned by `LanguageModel` and assembled in `LanguageModel::initGPU(weight_init_seed)` from `HyperParameters::scratchBlockConstructionHP()` plus the explicit startup init stream. `initTrainingState()` must not call `std::make_unique<ScratchBlockLayer>()`, hand-copy `ScratchBlockConfig`, or reset `scratch_block_layer_`.
+
+The `cached_encoder_output`, `cached_logits_tensor`, `cached_targets_tensor`, `cached_token_*`, `cached_seq_lengths_tensor`, and `sequence_weights_tensor` allocations live in `Shared/TrainingState/TrainingStateGPU.cu` under `TrainingState::allocateStepDeviceWorkspaces()`. They are TrainingState-owned Category 3 runtime substrate: per-step device staging and post-forward snapshots with stale contents across boundaries. `initTrainingState()` and `initInferenceState()` must not hand-allocate those fields directly; they should only build the grouped HP view and call the TrainingState owner.
 
 `TrainingState` does not own GQA architecture dimensions. Use `LanguageModelConfig` / `ModelArchitecture` for authored dimensions, `HyperparameterGroupings.hpp` grouped views for encoder/startup consumers, and `GenerationState::KVCacheShape` for allocated generation-cache geometry. Encoder files must pass the grouped HP snapshot directly instead of constructing local GQA dimension shadows.
 
@@ -44,7 +50,7 @@ Generation state is a separate owner:
 
 Training-time sampling must call `LanguageModel::ensureKVCacheAllocated()` explicitly. `initTrainingState()` does not seed generation capacity or allocate decode buffers.
 
-`TrainingState` does **not** own activation/intermediate gradient lifecycle. TensorContract owns those through `Tensor.grad_` and `GradFn` scratch buffers inside the autograd boundary. LM-head logits are non-leaf tensors; `LogSoftmaxGradFn` allocates its non-leaf input-gradient workspace and passes that view directly to the upstream logits `GradFn`. Do not add TrainingState mirrors for logits gradients.
+`TrainingState` does **not** own activation/intermediate gradient lifecycle. The tape-based autograd system owns those through `Tensor.grad_` and `GradFn` scratch buffers inside the autograd boundary. LM-head logits are non-leaf tensors; `LogSoftmaxGradFn` allocates its non-leaf input-gradient workspace and passes that view directly to the upstream logits `GradFn`. Do not add TrainingState mirrors for logits gradients.
 
 The `cached_token_*` / `cached_targets_tensor` / `cached_seq_lengths_tensor` fields are reusable device storage only. `BatchPayload` owns host-side batch semantics and geometry; `LanguageModel::uploadBatchToDevice()` copies that payload into TrainingState-owned device buffers and returns `BatchDeviceBindings`, which is the canonical per-step device view consumed by forward/loss. `BatchDeviceBindings.d_seq_lengths` is required for padding-aware residual and LM-head hidden centering; target masking in loss is not an activation mask. Training/eval code must not infer the current batch by directly reading these cache fields. Inference prompt ingestion now enters through `Batching::buildInferenceBatchPayload()` (`BatchPayloadMode::InferencePrefill`) using tokenizer-authored token IDs, numeric values, text features, atom masks/flags, atom entry IDs, and slot maps; `LanguageModel::forwardInit(const BatchPayload&)` uploads that payload through the same explicit sync boundary before calling `Shared/Forward/ModelForward_GPU.hpp` with `ModelForwardMode::InferencePrefill`. Device-staged reruns and single-token decode use `BatchPayloadMode::InferenceStaged` / `InferenceDecode` geometry payloads from `Shared/Batching/BatchPayload.cu`; they are explicit geometry contracts, not hidden TrainingState state. Inference must not enter `AutogradContext` or `executeAutogradForward()`.
 

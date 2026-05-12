@@ -75,32 +75,15 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
         std::cout << "[GRIM-text] EOS token ID: " << g_tokenizer->eosId() << "\n";
         std::cout << "[GRIM-text] PAD token ID: " << g_tokenizer->padId() << "\n";
 
-        // Start from the same Phase1-loaded hyperparameter snapshot as training.
-        // Inference-specific runtime fields are applied after this assignment so
-        // they cannot be overwritten by a late architecture slice.
-        HyperParameters::LanguageModelConfig config = startup_config.hyperparameters.architecture;
-        config.max_seq_len = startup_config.max_seq_len;
-        config.vocab_size = g_tokenizer->totalVocabSize();
-        config.causal_mask = true;
-        config.use_gpu = true;
-        config.vocab_path = vocab_path;
-        config.infer_vocab_from_file = true;
-        config.generation = startup_config.generation;
+        HyperParameters::LanguageModelConfig config =
+            HyperParameters::inferenceLanguageModelConfig(
+                startup_config,
+                static_cast<std::uint32_t>(g_tokenizer->totalVocabSize()),
+                vocab_path);
         
         // CRITICAL: Set correct EOS/PAD tokens from tokenizer
         config.generation.eos_token_id = g_tokenizer->eosId();
         config.generation.pad_token_id = g_tokenizer->padId();
-        
-        // INFERENCE MODE: Use lightweight inference state (~385MB vs ~15GB training state)
-        config.execution_mode = HyperParameters::ModelExecutionMode::INFERENCE;
-        
-        // INFERENCE-ONLY: batch=1, but sequence capacity comes from the same
-        // Phase1-derived max_seq_len so prompt/cache bounds match training config.
-        config.max_cached_batch = 1;
-        config.max_cached_seq_len = startup_config.max_seq_len;
-        config.max_tokens_per_batch = config.max_cached_seq_len;
-
-        config.computeDerivedValues();  // Compute head_dim = d_model / num_heads
         
         g_model = std::make_unique<LanguageModel>(config, startup_config.hyperparameters);
         std::cout << "[GRIM-text] ✓ Model object created\n" << std::flush;

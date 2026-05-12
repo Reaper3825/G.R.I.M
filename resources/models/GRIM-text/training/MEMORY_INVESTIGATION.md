@@ -2,7 +2,9 @@
 
 **Config:** batch_size=10, max_seq_len=1024, d_model=1024, num_layers=12, num_heads=16, num_kv_heads=4, d_ff=1024, vocab~10k
 
-## Preallocated Buffers (InitTrainingState)
+## Preallocated TrainingState Step Workspaces
+
+Allocation owner: `TrainingState::allocateStepDeviceWorkspaces()` in `Shared/TrainingState/TrainingStateGPU.cu`. `InitTrainingState.cu` only passes `HyperParameters::trainingStateRuntimeCacheHP()` plus the primary stream; `InitInferenceState.cu` passes `HyperParameters::trainingStateRuntimeCacheHPFromInferenceCache()` plus the primary stream.
 
 All sizes use `max_cached_batch * max_cached_seq_len` = 10 * 1024 = **10,240 tokens**.
 

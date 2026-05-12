@@ -16,11 +16,11 @@
 #include <cuda_bf16.h>
 
 #include "../GRIM/grim_language_model_cuda.hpp"
-#include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
-#include "../Shared/PBM/PositionalBiasMethod.hpp"
+#include "../Shared/PBM/PBMStateOwner.hpp"
 
 namespace GRIM {
 
@@ -63,7 +63,8 @@ void LanguageModel::initCuBLASHandle() {
 //  Call this BEFORE initGPU() to ensure encoder gets both position encodings
 //======================================================//
 bool LanguageModel::isPBMInitialized() const {
-    return pbm_spec_initialized_ && pbm_spec_.valid &&
+    return pbm_owner_.initialized() &&
+           pbm_spec_initialized_ && pbm_spec_.valid &&
            pbm_spec_.rope_inv_freq != nullptr &&
            pbm_spec_.alibi_slopes != nullptr;
 }
@@ -75,24 +76,46 @@ const PBM::PBMSpec& LanguageModel::getPBMSpec() const {
     return pbm_spec_;
 }
 
+const PBM::PBMState& LanguageModel::getPBMState() const {
+    if (!isPBMInitialized()) {
+        throw std::runtime_error("LanguageModel::getPBMState: PBM is not initialized");
+    }
+    return pbm_owner_.state();
+}
+
 void LanguageModel::initPBM() {
     if (isPBMInitialized()) {
         std::cout << "✓ PBM (ALiBi+RoPE) already initialized" << std::endl;
         return;
     }
 
-    if (!embedder_) {
-        throw std::runtime_error("LanguageModel::initPBM: embedder is NULL");
-    }
-
-    const auto* alibi_bias = embedder_->getALiBiBias();
-    if (!alibi_bias || !alibi_bias->isInitialized()) {
+    if (!training_state_.stream_ctrl.isInitialized()) {
         throw std::runtime_error(
-            "LanguageModel::initPBM: positional bias is not initialized on GrimEmbeddingStack");
+            "LanguageModel::initPBM: StreamController is not initialized - "
+            "ModelAllocationState must initialize stream_ctrl before PBM");
+    }
+    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+    StreamController::fatalIfDefaultStream(stream, "LanguageModel::initPBM");
+
+    const auto pbm_hp = HyperParameters::pbmConstructionHP(config_);
+    if (config_.positional_encoding != HyperParameters::PositionalEncodingType::ALIBI_ROPE &&
+        config_.positional_encoding != HyperParameters::PositionalEncodingType::ALIBI) {
+        throw std::runtime_error(
+            std::string("LanguageModel::initPBM: unified PBM requires ALIBI or ALIBI_ROPE, got ") +
+            HyperParameters::positionalEncodingTypeToString(config_.positional_encoding));
     }
 
-    // Non-owning view into GrimEmbeddingStack::ALiBiPositionalBias PBM buffers.
-    PBM::PBMSpec pbm_spec = PBM::getPBMSpec(alibi_bias->getPBMState());
+    const int expected_d_model = pbm_hp.num_heads * pbm_hp.head_dim;
+    if (config_.d_model != expected_d_model) {
+        throw std::runtime_error(
+            "LanguageModel::initPBM: grouped PBM geometry does not match d_model (d_model=" +
+            std::to_string(config_.d_model) + " expected=" + std::to_string(expected_d_model) + ")");
+    }
+
+    pbm_owner_.initialize(pbm_hp, stream);
+
+    // Non-owning view into the model-level PBMStateOwner buffers.
+    PBM::PBMSpec pbm_spec = pbm_owner_.spec();
     if (!pbm_spec.valid || !pbm_spec.rope_inv_freq || !pbm_spec.alibi_slopes) {
         throw std::runtime_error("LanguageModel::initPBM: PBM spec is invalid");
     }
@@ -162,8 +185,6 @@ void LanguageModel::initTrainingState() {
     // Weight tying: When tie_embeddings=true, lm_head_weights.data points to embedding buffer
     // and lm_head_weights.grad is shared with embedding tokenWeights().grad via share_grad().
     
-    using TC = TensorContract::TensorShape;
-    
     // All weights are owned by Pattern B layers (EmbeddingLayer, LMHeadLayer, EncodingLayer, ScratchBlockLayer)
     std::cout << "[DEBUG-INIT-4] checking Pattern B layer pointers..." << std::endl << std::flush;
     
@@ -208,66 +229,13 @@ void LanguageModel::initTrainingState() {
     //   - enc->rms1Gamma().grad_data(), enc->rms2Gamma().grad_data()
     // Allocated via ensure_grad() in EncodingLayer::allocateWeights().
     
-    // GQA configuration: source from JSON config (NOT compile-time HyperParameters)
-    const int num_kv_heads = cfg.num_kv_heads;
-    
-    // Validate GQA configuration
-    if (!HyperParameters::isValidGQAConfig(cfg.num_heads, num_kv_heads)) {
-        throw std::runtime_error("[initTrainingState] Invalid GQA config: num_heads=" + std::to_string(cfg.num_heads) 
-                                 + " num_kv_heads=" + std::to_string(num_kv_heads));
-    }
-    
-    std::cout << "GQA Configuration: num_heads=" << cfg.num_heads 
-              << " num_kv_heads=" << num_kv_heads 
-              << " (heads_per_kv_group=" << (cfg.num_heads / num_kv_heads) << ")" << std::endl;
-    
     // NOTE: Encoder layer weight initialization is handled by Startup/Model GPU assembly.
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
     // DO NOT duplicate Xavier init here per Rule 20 (single initialization owner).
     
-    // Rule 20: capacity is authored upstream (RunCapacity -> LanguageModelConfig mirrors).
-    // This layer must not silently clamp mismatches; it must throw.
-    if (cfg.max_cached_batch <= 0) {
-        throw std::runtime_error("[initTrainingState] FATAL: cfg.max_cached_batch <= 0 (" +
-                                 std::to_string(cfg.max_cached_batch) + ")");
-    }
-    if (cfg.max_seq_len <= 0 || cfg.max_cached_seq_len <= 0) {
-        throw std::runtime_error("[initTrainingState] FATAL: invalid seq lens (max_seq_len=" +
-                                 std::to_string(cfg.max_seq_len) + " max_cached_seq_len=" +
-                                 std::to_string(cfg.max_cached_seq_len) + ")");
-    }
-    if (cfg.max_seq_len != cfg.max_cached_seq_len) {
-        throw std::runtime_error("[initTrainingState] FATAL: cfg.max_seq_len != cfg.max_cached_seq_len (max_seq_len=" +
-                                 std::to_string(cfg.max_seq_len) + " max_cached_seq_len=" +
-                                 std::to_string(cfg.max_cached_seq_len) + ")");
-    }
-    if (cfg.max_tokens_per_batch <= 0) {
-        throw std::runtime_error("[initTrainingState] FATAL: cfg.max_tokens_per_batch <= 0 (" +
-                                 std::to_string(cfg.max_tokens_per_batch) + ")");
-    }
-
-    const size_t max_batch_size = static_cast<size_t>(cfg.max_cached_batch);
-    const size_t max_seq_len_cache = static_cast<size_t>(cfg.max_cached_seq_len);
-
-    const uint64_t max_tokens_u64 =
-        static_cast<uint64_t>(max_batch_size) * static_cast<uint64_t>(max_seq_len_cache);
-    if (max_tokens_u64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-        throw std::runtime_error("[initTrainingState] FATAL: max_tokens overflow (batch=" +
-                                 std::to_string(max_batch_size) + " seq_len=" +
-                                 std::to_string(max_seq_len_cache) + " product=" +
-                                 std::to_string(max_tokens_u64) + ")");
-    }
-    const size_t max_tokens = static_cast<size_t>(max_tokens_u64);
-
-    if (static_cast<size_t>(cfg.max_tokens_per_batch) != max_tokens) {
-        throw std::runtime_error("[initTrainingState] FATAL: cfg.max_tokens_per_batch does not match cache rectangle (cfg=" +
-                                 std::to_string(cfg.max_tokens_per_batch) + " expected=" +
-                                 std::to_string(max_tokens) + " batch=" +
-                                 std::to_string(max_batch_size) + " seq_len=" +
-                                 std::to_string(max_seq_len_cache) + ")");
-    }
-
-    const size_t logit_token_capacity = max_tokens;
+    const HyperParameters::TrainingStateRuntimeCacheHP training_cache_hp =
+        HyperParameters::trainingStateRuntimeCacheHP(
+        cfg, "LanguageModel::initTrainingState");
     
     // DELETED: batch_prep_* lazy allocation (Rule 20) — replaced by BatchPayload struct
     
@@ -279,102 +247,12 @@ void LanguageModel::initTrainingState() {
     // Allocated in GenerationState by InitInferenceState.cu or ensureKVCacheAllocated().
     // NOT needed by the training state cache rectangle.
     
-    std::cout << "📊 Allocating activation caches for max_tokens=" << max_tokens
-              << " (batch=" << max_batch_size << ", seq_len=" << max_seq_len_cache << ")" << std::endl;
+    // Capacity comes from HyperparameterGroupings. Per-batch geometry/semantics
+    // come from BatchPayload at upload/forward time, never from this init path.
+    std::cout << "📊 Allocating TrainingState step workspaces for max_tokens=" << training_cache_hp.token_capacity
+              << " (batch=" << training_cache_hp.batch_rows << ", seq_len=" << training_cache_hp.seq_cap << ")" << std::endl;
     
-    // Output layer cache - using Tensor API (actively used by inference and Phase2 diagnostics)
-    training_state_.cached_encoder_output = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cached_encoder_output");
-    
-    // DELETED: cached_final_rms_input - DEAD CODE (Rule 20)
-    // Was allocated but never read by any code.
-    
-    // Allocate logits cache with LOGITS layout tracking (TensorContract integration)
-    training_state_.cached_logits_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_LOGITS(logit_token_capacity, cfg.vocab_size), false, primary_stream, "cached_logits");
-    std::cout << "✓ Allocated cached_logits [" << logit_token_capacity << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
-
-    training_state_.cached_targets_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(logit_token_capacity, 1), false, primary_stream, "cached_targets");
-    // MTP shifted targets are intentionally NOT TrainingState-owned: each MTP
-    // head needs a distinct target tensor in AutogradIntermediates because
-    // NLLLossGradFn stores raw target pointers through backward.
-    
-    // NOTE: Using empty() not zeros() - ComputeLossBatch fully overwrites this buffer
-    // via cudaMemcpyAsync before every forward pass. No need to waste bandwidth zero-filling.
-    training_state_.cached_token_ids_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad for token IDs
-        primary_stream,
-        "cached_token_ids"
-    );
-    std::cout << "✓ Allocated token IDs cache (Tensor API) [" << max_tokens << "]" << std::endl;
-
-    training_state_.cached_seq_lengths_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_batch_size)),
-        false,  // no grad for batch geometry metadata
-        primary_stream,
-        "cached_seq_lengths"
-    );
-    std::cout << "✓ Allocated sequence-length cache (Tensor API) [" << max_batch_size << "]" << std::endl;
-    
-    // BUG FIX: Numeric buffers must be sized by max_tokens (full cache capacity)
-    // not the logits-only capacity. Inference sampling requires
-    // the full buffer for sequences up to max_cached_seq_len.
-    // BUG FIX: Always allocate numeric/text buffers even when ScratchBlock is disabled
-    // because buildBatchPayload() always populates these fields from tokenizer
-    // Rule 20: Use Tensor API instead of raw cudaMalloc
-    // NOTE: Using empty() not zeros() - buffers fully overwritten by ComputeLossBatch
-    training_state_.cached_token_numeric_values = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad
-        primary_stream,
-        "cached_token_numeric_values"
-    );
-    std::cout << "✓ Allocated token numeric values cache (Tensor API)" << std::endl;
-    
-    training_state_.cached_token_atom_mask = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad
-        primary_stream,
-        "cached_token_atom_mask"
-    );
-    std::cout << "✓ Allocated token atom mask cache (Tensor API)" << std::endl;
-
-    // Allocate text feature buffers - Rule 20: Tensor API
-    constexpr int kTextFeatureDim = Batching::BatchPayload::kTextFeatureDim;
-    training_state_.cached_token_text_features = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), kTextFeatureDim),
-        false,  // no grad
-        primary_stream,
-        "cached_token_text_features"
-    );
-    std::cout << "✓ Allocated token text features cache (Tensor API)" << std::endl;
-    
-    training_state_.cached_token_atom_flags = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad
-        primary_stream,
-        "cached_token_atom_flags"
-    );
-    std::cout << "✓ Allocated token atom flags cache (Tensor API)" << std::endl;
-
-    training_state_.cached_token_to_slot_map = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad — runtime substrate metadata
-        primary_stream,
-        "cached_token_to_slot_map"
-    );
-    std::cout << "✓ Allocated token-to-slot map cache (Tensor API)" << std::endl;
-    
-    std::cout << "✓ Allocated atom mask + text feature + atom flags buffers (" 
-              << (max_tokens * (sizeof(float) + sizeof(uint8_t) + sizeof(uint32_t) + kTextFeatureDim * sizeof(uint16_t)) / 1024 / 1024) 
-              << " MB)" << std::endl;
-
-    training_state_.sequence_weights_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(max_batch_size), 1), false, primary_stream, "sequence_weights");
-    training_state_.sequence_weight_capacity = static_cast<int>(max_batch_size);
-    training_state_.sequence_weight_count = 0;
+    training_state_.allocateStepDeviceWorkspaces(training_cache_hp, primary_stream);
     
     // Rule 20: callers must use tensor.data directly
     // Removed raw pointer alias assignments
@@ -383,30 +261,9 @@ void LanguageModel::initTrainingState() {
 
     // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages
     // (was ~56MB dead GPU allocation). Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
-    
-    // Initialize ScratchBlock reasoning layer
-    if (cfg.use_scratch_block) {
-        std::cout << "🧠 Initializing ScratchBlock reasoning layer..." << std::endl;
-        
-        ScratchBlockConfig sb_config;
-        sb_config.d_model = cfg.d_model;
-        sb_config.max_atoms = cfg.scratch_block_max_atoms;
-        sb_config.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
-        sb_config.enabled = true;
-        sb_config.atom_scale = cfg.scratch_block_atom_scale;
-        sb_config.atom_token_start = GRIM::Tokenizer::ATOM_TOKEN_OFFSET;
-        sb_config.atom_token_end = GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
-        sb_config.stream = training_state_.stream_ctrl.getPrimaryStream();
-        
-        scratch_block_layer_ = std::make_unique<ScratchBlockLayer>(sb_config);
-        
-        std::cout << "✓ ScratchBlock reasoning layer initialized (d_model="
-                  << cfg.d_model << ", atom_dim=" << cfg.scratch_block_atom_embedding_dim
-                  << ", max_atoms=" << cfg.scratch_block_max_atoms << ")" << std::endl;
-    } else {
-        std::cout << "ℹ ScratchBlock reasoning layer disabled" << std::endl;
-        scratch_block_layer_ = nullptr;
-    }
+    // ScratchBlockLayer is durable model topology and is assembled in initGPU().
+    // initTrainingState() only verifies startup order and asks TrainingState to allocate
+    // its own reusable runtime cache tensors from the grouped startup HP view.
     
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP FINAL: Confirm initialization complete
@@ -416,10 +273,10 @@ void LanguageModel::initTrainingState() {
     
     training_state_.initialized = true;
     std::cout << "✓ Training state initialized with full gradient buffers" << std::endl;
-    std::cout << "[InitTrainingState] max_cached_batch=" << max_batch_size
-              << " max_cached_seq_len=" << max_seq_len_cache
-              << " token_capacity=" << max_tokens
-              << " logit_token_capacity=" << logit_token_capacity << std::endl;
+    std::cout << "[InitTrainingState] max_cached_batch=" << training_cache_hp.batch_rows
+              << " max_cached_seq_len=" << training_cache_hp.seq_cap
+              << " token_capacity=" << training_cache_hp.token_capacity
+              << " logit_token_capacity=" << training_cache_hp.logit_token_capacity << std::endl;
 }
 
 #endif // USE_CUDA

@@ -27,6 +27,10 @@
 #include "../GradNorm/GradNormGPU.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 
+namespace GRIM::HyperParameters {
+    struct TrainingStateRuntimeCacheHP;
+}
+
 // Forward declaration for autograd tensor system
 namespace GRIM {
     class EmbeddingLayer;
@@ -48,6 +52,10 @@ struct TrainingState {
     TrainingState& operator=(const TrainingState&) = delete;
     TrainingState(TrainingState&&) = delete;
     TrainingState& operator=(TrainingState&&) = delete;
+
+    void allocateStepDeviceWorkspaces(
+        const HyperParameters::TrainingStateRuntimeCacheHP& hp,
+        cudaStream_t stream);
 
     //======================================================//
     //  PARAMETER TENSORS (weights + gradients via autograd)

@@ -156,6 +156,7 @@ add_library(grim_training_kernels STATIC
     ../../Shared/Telemetry/TelemetryUpdate.cu
     # Rule 20: Xavier.cu DELETED - Tensor::xavier_uniform_ (TensorContract) is the single source of truth
     ../../Shared/PBM/PositionalBiasMethod.cu
+    ../../Shared/PBM/PBMStateOwner.cu
     # Rule 20: Old PBM modules DELETED - current PBM path only
 )
 set_target_properties(grim_training_kernels PROPERTIES
@@ -792,6 +793,7 @@ add_executable(gradient_verification_test
     ../../Shared/StreamController/StreamController_GPU.cu
     ${GRIM_TENSORCONTRACT_CU}
     ../../Shared/PBM/PositionalBiasMethod.cu
+    ../../Shared/PBM/PBMStateOwner.cu
 )
 
 set_target_properties(gradient_verification_test PROPERTIES
@@ -834,6 +836,7 @@ add_executable(execution_block_test
     ../../Shared/Batching/BatchPayload.cu
     ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Shared/PBM/PositionalBiasMethod.cu
+    ../../Shared/PBM/PBMStateOwner.cu
     ${GRIM_TENSORCONTRACT_CU}
     ../../Shared/TensorConversion/TensorConversion.cu
 )

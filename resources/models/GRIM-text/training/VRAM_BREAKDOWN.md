@@ -1,6 +1,6 @@
 # Training VRAM Breakdown
 
-Facts from config, startup log, and allocation math. Source: `memoryusestartup.txt` and InitTrainingState / Phase1_Startup.
+Facts from config, startup log, and allocation math. Source: `memoryusestartup.txt`, `TrainingState::allocateStepDeviceWorkspaces()`, and Phase1_Startup.
 
 ---
 
@@ -22,7 +22,7 @@ All sizes float32, 4 bytes per element.
 - 107,798,346 × 4 × 4 = 1,724,773,536 bytes ≈ **1.61 GiB**.
 - **Running tally: 1.61 GiB**
 
-**Pre-allocated buffers (InitTrainingState, max_tokens=8192):**
+**Pre-allocated TrainingState step workspaces/snapshots (max_tokens=8192):**
 
 | Buffer | Formula | Bytes |
 |--------|--------|--------|
@@ -134,9 +134,11 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 
 ## Where the numbers come from
 
-- **Phase1_Startup.cu** (~972–985): `max_cached_batch = config.hyperparameters.batch_size`, `max_cached_seq_len = model_config.max_seq_len`, `max_tokens_per_batch = actual_batch_size × seq_cap`.
-- **InitTrainingState.cu** (261–271): `max_tokens = max_batch_size × max_seq_len_cache`, `max_logit_tokens = min(max_tokens, max_tokens_per_batch)`.
-- **memoryusestartup.txt**: "Cache allocation: batch=8, seq_len=1024, tokens=8192"; "total_params=107798346"; "Allocated cached_logits [8192 x 2512]"; "centering scratch tensor (96 MB)"; "[GuessCache][INFO] Guess cache disabled (guess_aux.enabled=false)".
+- **CapacityStem.hpp / RunCapacity:** derives the checked startup cache rectangle from post-policy `StartupConfig` (`batch_rows`, `seq_cap`, `max_tokens_per_batch`). `startupLanguageModelConfig()` mirrors that rectangle into `LanguageModelConfig`.
+- **InitTrainingState.cu:** consumes `HyperParameters::trainingStateRuntimeCacheHP()` and passes that grouped view plus the primary stream to `TrainingState::allocateStepDeviceWorkspaces()`.
+- **InitInferenceState.cu:** consumes `HyperParameters::InferenceCacheConstructionHP`, converts it through `HyperParameters::trainingStateRuntimeCacheHPFromInferenceCache()`, and calls the same TrainingState owner.
+- **TrainingStateGPU.cu:** owns allocation of `cached_encoder_output`, `cached_logits_tensor`, target/token staging tensors, and `sequence_weights_tensor`; logits capacity is the same startup token capacity.
+- **memoryusestartup.txt**: "Cache allocation: batch=8, seq_len=1024, tokens=8192"; "total_params=107798346"; "Allocated cached_logits [8192 x 2512]"; "[GuessCache][INFO] Guess cache disabled (guess_aux.enabled=false)".
 - **GRIM-TS:** `GuessCacheScope::OwnedBuffers::allocate` in GuessCacheTraining.cu (capacity, `sizeof(GRIMTS::GuessRecord)`=96, `sizeof(GRIMTS::GuessMetadata)`=32); GuessCacheScope uses kDefaultGuessCacheCapacity=16384, diversity_bloom_bits=65536, pinned_buffer_size=8192. GRIM-TS.hpp static_assert(sizeof(GuessRecord)==96).
 - **Telemetry:** TelemetryLattice_GPU.cu constructor: levels_ = num_levels × num_streams × sizeof(LatticeLevelState); observations_ = Tensor::zeros({num_streams}); scratch_vectors_ = Tensor::zeros({num_streams, 10}); d_error_flag_ = 4 bytes. TelemetryState_GPU.hpp LatticeLevelState = TelemetryState + stride + last_update (96 bytes). Log: "8 levels, 5 streams". TelemetryControl_GPU.cu initGPU: d_config_, d_state_ (64), d_decision_ (48), d_input_ (32).
 
@@ -149,7 +151,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Params, grads, optimizer m/v** | Tensor / vector members of TrainingState; freed in ~TrainingState when members destruct. |
 | **Pre-allocated caches** (cached_encoder_output, cached_logits, cached_targets, token caches, sequence_weights) | Tensor members; Tensor::~Tensor() → release() → cudaFree(data). |
 | **class_weights_tensor** | Tensor member; `Tensor::~Tensor()` releases class-balanced weights. |
-| **PBM (alibi_slopes, rope_inv_freq)** | `GrimEmbeddingStack::ALiBiPositionalBias` owns PBM buffers; `ALiBiPositionalBias::cleanup()` releases them. |
+| **PBM (alibi_slopes, rope_inv_freq)** | `LanguageModel::pbm_owner_` (`PBM::PBMStateOwner`) RAII releases PBM buffers and upload event; `PBMSpec` is only a non-owning attention view. |
 | **TeacherLogits / reference_logits** | `TeacherLogits::Buffer` RAII destructor releases device storage. |
 | **Optimizer states** | `Training::OptimizerContext::optimizer_state.clear()` clears dedicated optimizer-state owner tensors. |
 | **Guess cache (GRIM-TS)** | `GuessCacheScope::OwnedBuffers` RAII member; released when `ctx.guess_cache_scope.reset()` runs before model teardown. |
@@ -161,7 +163,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **KV/decode BF16/FP32 buffers** | `DeviceAllocation` RAII members/vectors release typed CUDA buffers. |
 | **StreamController / cublas_handle** | streams owned by `StreamController`; cuBLAS owned by `CublasHandleOwner` RAII member. |
 
-Shutdown order: Phase3 `releaseResources()` → clear autograd_intermediates → ctx.model.reset() → ~LanguageModel (PBM released by GrimEmbeddingStack/ALiBiPositionalBias) → defaulted ~TrainingState member teardown (TeacherLogits RAII, DeviceAllocation KV/decode buffers, GradNorm unique_ptr, cuBLAS owner, Tensor members). Telemetry is released when TrainingContext is destroyed after Phase3.
+Shutdown order: Phase3 `releaseResources()` → clear autograd_intermediates → ctx.model.reset() → ~LanguageModel (`LanguageModel::pbm_owner_` releases PBM before TrainingState stream/cuBLAS teardown) → defaulted ~TrainingState member teardown (TeacherLogits RAII, DeviceAllocation KV/decode buffers, GradNorm unique_ptr, cuBLAS owner, Tensor members). Telemetry is released when TrainingContext is destroyed after Phase3.
 
 ---
 
@@ -174,15 +176,15 @@ Every GPU allocation site that can run during training, with source and size for
 | **InitTrainingState** | Params (weights) | Phase1 / model load | `total_params × 4` |
 | | Grads | InitTrainingState / optimizer | `total_params × 4` |
 | | Adam m, Adam v | TrainingStateGPU.cu | `total_params × 4` each |
-| | cached_encoder_output | InitTrainingState.cu | `max_tokens × d_model × 4` |
-| | cached_logits_tensor | InitTrainingState.cu | `max_logit_tokens × vocab_size × 4` |
-| | cached_targets_tensor | InitTrainingState.cu | `max_logit_tokens × 1 × 4` |
-| | cached_token_ids_tensor | InitTrainingState.cu | `1 × max_tokens × 4` (int32) |
-| | cached_token_numeric_values | InitTrainingState.cu | `1 × max_tokens × 4` |
-| | cached_token_atom_mask | InitTrainingState.cu | `1 × max_tokens × 1` (uint8) |
-| | cached_token_text_features | InitTrainingState.cu | `max_tokens × kTextFeatureDim × 2` (uint16) |
-| | cached_token_atom_flags | InitTrainingState.cu | `1 × max_tokens × 4` (uint32) |
-| | sequence_weights_tensor | InitTrainingState.cu | `max_batch_size × 1 × 4` |
+| | cached_encoder_output | TrainingStateGPU.cu | `max_tokens × d_model × 4` |
+| | cached_logits_tensor | TrainingStateGPU.cu | `max_logit_tokens × vocab_size × 4` |
+| | cached_targets_tensor | TrainingStateGPU.cu | `max_logit_tokens × 1 × 4` |
+| | cached_token_ids_tensor | TrainingStateGPU.cu | `1 × max_tokens × 4` (int32) |
+| | cached_token_numeric_values | TrainingStateGPU.cu | `1 × max_tokens × 4` |
+| | cached_token_atom_mask | TrainingStateGPU.cu | `1 × max_tokens × 1` (uint8) |
+| | cached_token_text_features | TrainingStateGPU.cu | `max_tokens × kTextFeatureDim × 2` (uint16) |
+| | cached_token_atom_flags | TrainingStateGPU.cu | `1 × max_tokens × 4` (uint32) |
+| | sequence_weights_tensor | TrainingStateGPU.cu | `max_batch_size × 1 × 4` |
 | **Phase1_Startup** | class_weights_tensor | Phase1_Startup.cu (class_balanced) | `vocab_size × 4` |
 | **TrainingStateGPU** | Guess cache (records, keys, bloom, etc.) | TrainingStateGPU.cu | When enabled: ~1.63 MiB (see GRIM-TS) |
 | | Debug grad norm buffers | TrainingStateGPU.cu | When debug: small per-param |

@@ -4,6 +4,8 @@ Position info is injected **inside attention**, never in the residual stream. No
 
 Construction reads use `HyperParameters::pbmConstructionHP()` / `PBMConstructionHP`; PBM kernels consume that grouped snapshot and runtime-only options, not ad-hoc PBM config defaults. RoPE launch wrappers take `BatchPayload` for per-call batch/sequence geometry and grouped attention HP for head geometry; callers must not unpack `batch_size`, `max_seq_len`, or `head_dim` into scalar PBM calls.
 
+Durable PBM device state is owned at model level by `LanguageModel::pbm_owner_` (`PBM::PBMStateOwner`, implemented in `Shared/PBM/PBMStateOwner.hpp/.cu`). The owner releases ALiBi slopes, RoPE inverse frequencies, host mirrors, and the upload event through RAII. `PBMSpec` is only a non-owning attention view into that owner. `StreamController` supplies the initialization stream but does not own PBM buffers; `GrimEmbeddingStack` owns no PBM state; `BatchPayload` supplies per-call sequence geometry but does not own PBM state; autograd intermediates own transient Q/K/V/tape tensors only.
+
 ## ALiBi
 - Slopes capped via `ALIBI_MAX_BIAS = -10.0f` in `HyperParameters_GPU.hpp`. Ensures `exp(-10) ≈ 4.5e-5` (computable) instead of `exp(-256) ≈ 0` (underflow → gradient explosion).
 - FlashAttention expects **negative** slopes (library uses `+= slope * col_idx`).

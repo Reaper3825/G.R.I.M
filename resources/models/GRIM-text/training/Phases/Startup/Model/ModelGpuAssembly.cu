@@ -160,7 +160,29 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         }
 
         //======================================================//
-        //  5) Build optional model heads/subsystems
+        //  5) Build optional ScratchBlock reasoning layer (Pattern B)
+        //
+        //  HyperparameterGroupings owns the static construction contract;
+        //  startup model assembly supplies only the init stream. TrainingState
+        //  must not allocate or configure this durable model layer.
+        //======================================================//
+        const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(model_cfg);
+        if (scratch_hp.enabled) {
+            scratch_block_layer_ = std::make_unique<ScratchBlockLayer>(
+                scratch_hp, enc_bindings.init_stream);
+
+            if (!scratch_block_layer_->isEnabled()) {
+                throw std::runtime_error("[initGPU] FATAL: ScratchBlockLayer constructed disabled while config.use_scratch_block=true");
+            }
+            if (!scratch_block_layer_->atomTypeEmbeddings().data ||
+                !scratch_block_layer_->atomProjection().data) {
+                throw std::runtime_error("[initGPU] FATAL: ScratchBlockLayer tensors not ready after construction");
+            }
+            std::cout << "✓ ScratchBlock layer created\n";
+        }
+
+        //======================================================//
+        //  6) Build optional model heads/subsystems
         //======================================================//
         const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(model_cfg);
         if (reasoning_hp.enabled) {

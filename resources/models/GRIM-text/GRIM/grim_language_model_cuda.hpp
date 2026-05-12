@@ -47,7 +47,7 @@
 #include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
-#include "../Shared/PBM/PositionalBiasMethod.hpp"
+#include "../Shared/PBM/PBMStateOwner.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../Shared/InferenceState/GenerationState_GPU.hpp"
 #include "../Shared/Loss/LossContext/LossContext.hpp"
@@ -121,7 +121,7 @@ public:
 /// Forward-time stream/cuBLAS handles are carried by the forward payload/request
 /// (`AutogradContext` / `Forward::ModelForwardRequest`), never stored on layers.
 struct EncoderConstructionBindings {
-    /// Shared positional-bias state (ALiBi/RoPE), owned by TrainingState.
+    /// Shared positional-bias state (ALiBi/RoPE), owned by the model PBM RAII owner.
     /// REQUIRED: encoder construction throws if null.
     const PBM::PBMSpec* pos_encoding = nullptr;
 
@@ -130,50 +130,11 @@ struct EncoderConstructionBindings {
 };
 #endif
 
-//======================================================//
-//  Forward Declarations
-//======================================================//
-
-// Positional Encoding Type - re-exported from HyperParameters_GPU.hpp
-using HyperParameters::PositionalEncodingType;
-
-class ALiBiPositionalBias {
-private:
-
-    PBM::PBMState pbm_state_{};   // Unified PBM state (both ALiBi + RoPE)
-    int num_heads;                // Number of attention heads
-    bool initialized;             // Initialization status
-    PositionalEncodingType type;  // Encoding type
-
-public:
-    
-    ALiBiPositionalBias();
-    ALiBiPositionalBias(const ALiBiPositionalBias&) = delete;
-    ALiBiPositionalBias& operator=(const ALiBiPositionalBias&) = delete;
-    ALiBiPositionalBias(ALiBiPositionalBias&& other) noexcept;
-    ALiBiPositionalBias& operator=(ALiBiPositionalBias&& other) noexcept;
-    ~ALiBiPositionalBias();
-
-    void initialize(const HyperParameters::PBMConstructionHP& hp,
-                    PositionalEncodingType type);
-
-    const float* getSlopes() const;
-    const float* getRoPEFreqs() const;
-    bool isInitialized() const;
-    PositionalEncodingType getType() const { return type; }
-    const PBM::PBMState& getPBMState() const { return pbm_state_; }
-    void cleanup();
-};
-
 // GrimEmbeddingStack - minimal interface
 // NOTE: Durable GPU embedding layers are assembled by the Startup/Model allocation module.
 class GrimEmbeddingStack {
 public:
     GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_len);
-    
-    void enableALiBi(const HyperParameters::PBMConstructionHP& hp);
-    void enableHybridPositionalEncoding(const HyperParameters::PBMConstructionHP& hp);
-    const ALiBiPositionalBias* getALiBiBias() const;
     const Matrix& getTokenEmbeddings() const;
     
     // Public members needed by GPU code
@@ -184,7 +145,6 @@ private:
     int vocab_size_;
     int d_model_;
     int max_seq_len_;
-    std::unique_ptr<ALiBiPositionalBias> alibi_;
 };
 
 //======================================================//
@@ -335,6 +295,7 @@ public:
     const TrainingState& getTrainingState() const { return training_state_; }
     TrainingState& getTrainingState() { return training_state_; }
     const PBM::PBMSpec& getPBMSpec() const;
+    const PBM::PBMState& getPBMState() const;
     bool isPBMInitialized() const;
     
     // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
@@ -450,10 +411,11 @@ private:
 #ifdef USE_CUDA
     TrainingState training_state_;
     GenerationState generation_state_;
+    PBM::PBMStateOwner pbm_owner_;                   // Durable model-level ALiBi/RoPE buffers
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
     uint32_t backward_call_count_ = 0;              // Tracks backward() calls for deterministic diagnostics
     LossContext::LossOptions loss_options_{};
-    PBM::PBMSpec pbm_spec_{};                       // Non-owning view into GrimEmbeddingStack PBM state
+    PBM::PBMSpec pbm_spec_{};                       // Non-owning view into pbm_owner_
     bool pbm_spec_initialized_ = false;
     
     // ScratchBlock reasoning layer (togglable)

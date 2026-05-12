@@ -11,6 +11,7 @@
 //======================================================//
 
 #include "ScratchBlockReasoning_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
@@ -35,6 +36,30 @@ static constexpr const char* kScratchBlockModule = "ScratchBlock";
 constexpr int ATOM_TOKEN_START = HyperParameters::ATOM_TOKEN_START;
 constexpr int NUM_ATOM_TYPES   = GRIM::Tokenizer::kAtomTypeCount;
 constexpr int kTextFeatureDim  = 16;
+
+namespace {
+
+ScratchBlockConfig makeScratchBlockConfig(
+    const HyperParameters::ScratchBlockConstructionHP& hp,
+    cudaStream_t init_stream)
+{
+    if (hp.enabled && init_stream == nullptr) {
+        throw std::runtime_error("ScratchBlockLayer: init_stream is NULL — startup model assembly must provide a construction stream");
+    }
+
+    ScratchBlockConfig config;
+    config.d_model = hp.d_model;
+    config.max_atoms = hp.max_atoms;
+    config.atom_embedding_dim = hp.atom_embedding_dim;
+    config.atom_token_start = hp.atom_token_start;
+    config.atom_token_end = hp.atom_token_end;
+    config.enabled = hp.enabled;
+    config.atom_scale = hp.atom_scale;
+    config.stream = init_stream;
+    return config;
+}
+
+} // namespace
 
 __device__ __forceinline__ int ClampNumAtoms(const int* num_atoms, int max_atoms) {
     int n = num_atoms ? *num_atoms : 0;
@@ -612,6 +637,13 @@ ScratchBlockLayer::ScratchBlockLayer(const ScratchBlockConfig& config)
         allocateWeights();
         initializeWeights();
     }
+}
+
+ScratchBlockLayer::ScratchBlockLayer(
+    const HyperParameters::ScratchBlockConstructionHP& hp,
+    cudaStream_t init_stream)
+    : ScratchBlockLayer(makeScratchBlockConfig(hp, init_stream))
+{
 }
 
 ScratchBlockLayer::~ScratchBlockLayer() {

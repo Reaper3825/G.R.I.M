@@ -276,11 +276,7 @@ void populateRmsGammaStreams(float* obs, GRIMText::Training::TrainingContext& ct
 // Streams 27-30: PBM positional encoding diagnostics
 //------------------------------------------------------
 void populatePBMStreams(float* obs, GRIMText::Training::TrainingContext& ctx, int max_seq_len) {
-    const auto* alibi_bias = ctx.model->getEmbedderPtr()->getALiBiBias();
-    if (!alibi_bias || !alibi_bias->isInitialized()) {
-        throw std::runtime_error("PBM telemetry: ALiBi bias not initialized — model MUST have positional encoding");
-    }
-    const auto& pbm = alibi_bias->getPBMState();
+    const auto& pbm = ctx.model->getPBMState();
 
     // Stream 27: PBM_ALIBI_SLOPE_RMS
     obs[27] = vectorRMS(pbm.alibi_slopes_host);

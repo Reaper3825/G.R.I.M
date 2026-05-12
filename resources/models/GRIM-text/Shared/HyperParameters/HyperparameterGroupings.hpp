@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -51,6 +52,27 @@ struct StartupModelCapacityHP {
     int max_cached_batch = 0;
     int max_cached_seq_len = 0;
     int max_tokens_per_batch = 0;
+};
+
+struct ModelCacheCapacityHP {
+    int max_cached_batch = 0;
+    int max_cached_seq_len = 0;
+    int max_tokens_per_batch = 0;
+    std::size_t batch_rows = 0;
+    std::size_t seq_cap = 0;
+    std::size_t token_capacity = 0;
+};
+
+struct TrainingStateRuntimeCacheHP {
+    int d_model = 0;
+    int vocab_size = 0;
+    int max_cached_batch = 0;
+    int max_cached_seq_len = 0;
+    int max_tokens_per_batch = 0;
+    std::size_t batch_rows = 0;
+    std::size_t seq_cap = 0;
+    std::size_t token_capacity = 0;
+    std::size_t logit_token_capacity = 0;
 };
 
 struct ParameterRegistrationHP {
@@ -163,6 +185,16 @@ struct LMHeadLayerConstructionHP {
     float rms_epsilon = 0.0f;
 };
 
+struct ScratchBlockConstructionHP {
+    bool enabled = false;
+    int d_model = 0;
+    int max_atoms = 0;
+    int atom_embedding_dim = 0;
+    int atom_token_start = ATOM_TOKEN_START;
+    int atom_token_end = ATOM_TOKEN_END;
+    float atom_scale = 0.0f;
+};
+
 struct ReasoningHeadConstructionHP {
     bool enabled = false;
     int d_model = 0;
@@ -233,6 +265,12 @@ struct InferenceCacheConstructionHP {
     int scratch_block_atom_embedding_dim = 0;
     int scratch_block_max_atoms = 0;
 };
+
+// Source→target bridge: inference startup owns InferenceCacheConstructionHP,
+// while TrainingState owns reusable token/logit workspace allocation.
+inline TrainingStateRuntimeCacheHP trainingStateRuntimeCacheHPFromInferenceCache(
+    const InferenceCacheConstructionHP& hp,
+    const char* caller = "trainingStateRuntimeCacheHPFromInferenceCache");
 
 inline void requirePositiveGroupingValue(int value,
                                          const char* field,
@@ -533,6 +571,73 @@ inline GradientClippingHP gradientClippingHP(
     return view;
 }
 
+inline ModelCacheCapacityHP modelCacheCapacityHP(
+    const LanguageModelConfig& cfg,
+    const char* caller = "modelCacheCapacityHP")
+{
+    requirePositiveGroupingValue(cfg.max_cached_batch, "max_cached_batch", caller);
+    requirePositiveGroupingValue(cfg.max_seq_len, "max_seq_len", caller);
+    requirePositiveGroupingValue(cfg.max_cached_seq_len, "max_cached_seq_len", caller);
+    requirePositiveGroupingValue(cfg.max_tokens_per_batch, "max_tokens_per_batch", caller);
+
+    if (cfg.max_seq_len != cfg.max_cached_seq_len) {
+        throw std::runtime_error(std::string(caller) + ": max_seq_len=" +
+                                 std::to_string(cfg.max_seq_len) +
+                                 " must equal max_cached_seq_len=" +
+                                 std::to_string(cfg.max_cached_seq_len));
+    }
+
+    const auto batch_rows_u64 = static_cast<std::uint64_t>(cfg.max_cached_batch);
+    const auto seq_cap_u64 = static_cast<std::uint64_t>(cfg.max_cached_seq_len);
+    const auto tokens_u64 = batch_rows_u64 * seq_cap_u64;
+    if (tokens_u64 > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string(caller) + ": cache token capacity overflow: batch=" +
+                                 std::to_string(cfg.max_cached_batch) +
+                                 " seq_len=" + std::to_string(cfg.max_cached_seq_len) +
+                                 " product=" + std::to_string(tokens_u64) +
+                                 " exceeds TensorShape int capacity");
+    }
+
+    if (cfg.max_tokens_per_batch != static_cast<int>(tokens_u64)) {
+        throw std::runtime_error(std::string(caller) + ": max_tokens_per_batch=" +
+                                 std::to_string(cfg.max_tokens_per_batch) +
+                                 " does not match cache rectangle batch*seq=" +
+                                 std::to_string(tokens_u64) + " (batch=" +
+                                 std::to_string(cfg.max_cached_batch) + " seq_len=" +
+                                 std::to_string(cfg.max_cached_seq_len) + ")");
+    }
+
+    ModelCacheCapacityHP view;
+    view.max_cached_batch = cfg.max_cached_batch;
+    view.max_cached_seq_len = cfg.max_cached_seq_len;
+    view.max_tokens_per_batch = cfg.max_tokens_per_batch;
+    view.batch_rows = static_cast<std::size_t>(cfg.max_cached_batch);
+    view.seq_cap = static_cast<std::size_t>(cfg.max_cached_seq_len);
+    view.token_capacity = static_cast<std::size_t>(tokens_u64);
+    return view;
+}
+
+inline TrainingStateRuntimeCacheHP trainingStateRuntimeCacheHP(
+    const LanguageModelConfig& cfg,
+    const char* caller = "trainingStateRuntimeCacheHP")
+{
+    const auto capacity = modelCacheCapacityHP(cfg, caller);
+    requirePositiveGroupingValue(cfg.d_model, "d_model", caller);
+    requirePositiveGroupingValue(cfg.vocab_size, "vocab_size", caller);
+
+    TrainingStateRuntimeCacheHP view;
+    view.d_model = cfg.d_model;
+    view.vocab_size = cfg.vocab_size;
+    view.max_cached_batch = capacity.max_cached_batch;
+    view.max_cached_seq_len = capacity.max_cached_seq_len;
+    view.max_tokens_per_batch = capacity.max_tokens_per_batch;
+    view.batch_rows = capacity.batch_rows;
+    view.seq_cap = capacity.seq_cap;
+    view.token_capacity = capacity.token_capacity;
+    view.logit_token_capacity = capacity.token_capacity;
+    return view;
+}
+
 inline void validateStartupLanguageModelConfig(
     const LanguageModelConfig& cfg)
 {
@@ -543,18 +648,7 @@ inline void validateStartupLanguageModelConfig(
     if (cfg.vocab_path.empty()) {
         throw std::runtime_error("startupLanguageModelConfig: vocab_path is empty");
     }
-    if (cfg.max_cached_batch <= 0) {
-        throw std::runtime_error("startupLanguageModelConfig: max_cached_batch must be > 0, got " +
-                                 std::to_string(cfg.max_cached_batch));
-    }
-    if (cfg.max_cached_seq_len <= 0) {
-        throw std::runtime_error("startupLanguageModelConfig: max_cached_seq_len must be > 0, got " +
-                                 std::to_string(cfg.max_cached_seq_len));
-    }
-    if (cfg.max_tokens_per_batch <= 0) {
-        throw std::runtime_error("startupLanguageModelConfig: max_tokens_per_batch must be > 0, got " +
-                                 std::to_string(cfg.max_tokens_per_batch));
-    }
+    modelCacheCapacityHP(cfg, "startupLanguageModelConfig");
     if (cfg.execution_mode != ModelExecutionMode::TRAINING) {
         throw std::runtime_error("startupLanguageModelConfig: training startup produced a non-training execution_mode");
     }
@@ -567,6 +661,22 @@ inline void validateStartupLanguageModelConfig(
                                  std::to_string(cfg.mtp_k) + " alpha=" +
                                  std::to_string(cfg.mtp_alpha) + ")");
     }
+}
+
+inline void validateInferenceLanguageModelConfig(
+    const LanguageModelConfig& cfg)
+{
+    if (cfg.vocab_size <= 0) {
+        throw std::runtime_error("inferenceLanguageModelConfig: vocab_size must be > 0, got " +
+                                 std::to_string(cfg.vocab_size));
+    }
+    if (cfg.vocab_path.empty()) {
+        throw std::runtime_error("inferenceLanguageModelConfig: vocab_path is empty");
+    }
+    if (cfg.execution_mode != ModelExecutionMode::INFERENCE) {
+        throw std::runtime_error("inferenceLanguageModelConfig: produced a non-inference execution_mode");
+    }
+    modelCacheCapacityHP(cfg, "inferenceLanguageModelConfig");
 }
 
 inline LanguageModelConfig startupLanguageModelConfig(
@@ -596,6 +706,37 @@ inline LanguageModelConfig startupLanguageModelConfig(
 
     cfg.computeDerivedValues();
     validateStartupLanguageModelConfig(cfg);
+    return cfg;
+}
+
+inline LanguageModelConfig inferenceLanguageModelConfig(
+    const StartupConfig& config,
+    std::uint32_t vocab_size,
+    const std::string& vocab_path)
+{
+    requirePositiveGroupingValue(config.max_seq_len,
+                                 "StartupConfig.max_seq_len",
+                                 "inferenceLanguageModelConfig");
+
+    LanguageModelConfig cfg = config.hyperparameters.architecture;
+    cfg.max_seq_len = config.max_seq_len;
+    cfg.vocab_size = static_cast<int>(vocab_size);
+    cfg.vocab_path = vocab_path;
+    cfg.infer_vocab_from_file = true;
+
+    cfg.execution_mode = ModelExecutionMode::INFERENCE;
+    cfg.causal_mask = true;
+    cfg.use_pre_norm = true;
+    cfg.fuse_qkv = true;
+    cfg.use_gpu = true;
+    cfg.generation = config.generation;
+
+    cfg.max_cached_batch = 1;
+    cfg.max_cached_seq_len = config.max_seq_len;
+    cfg.max_tokens_per_batch = config.max_seq_len;
+
+    cfg.computeDerivedValues();
+    validateInferenceLanguageModelConfig(cfg);
     return cfg;
 }
 
@@ -786,6 +927,38 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     return view;
 }
 
+inline ScratchBlockConstructionHP scratchBlockConstructionHP(
+    const LanguageModelConfig& cfg)
+{
+    ScratchBlockConstructionHP view;
+    view.enabled = cfg.use_scratch_block;
+    view.d_model = cfg.d_model;
+    view.max_atoms = cfg.scratch_block_max_atoms;
+    view.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
+    view.atom_token_start = ATOM_TOKEN_START;
+    view.atom_token_end = ATOM_TOKEN_END;
+    view.atom_scale = cfg.scratch_block_atom_scale;
+
+    if (view.enabled) {
+        requirePositiveGroupingValue(view.d_model, "d_model", "scratchBlockConstructionHP");
+        requirePositiveGroupingValue(view.max_atoms,
+                                     "scratch_block_max_atoms",
+                                     "scratchBlockConstructionHP");
+        requirePositiveGroupingValue(view.atom_embedding_dim,
+                                     "scratch_block_atom_embedding_dim",
+                                     "scratchBlockConstructionHP");
+        requirePositiveFiniteGroupingValue(view.atom_scale,
+                                           "scratch_block_atom_scale",
+                                           "scratchBlockConstructionHP");
+        if (view.atom_token_start < 0 || view.atom_token_end <= view.atom_token_start) {
+            throw std::runtime_error("scratchBlockConstructionHP: invalid atom token range start=" +
+                                     std::to_string(view.atom_token_start) + " end=" +
+                                     std::to_string(view.atom_token_end));
+        }
+    }
+    return view;
+}
+
 inline ReasoningHeadConstructionHP reasoningHeadConstructionHP(
     const LanguageModelConfig& cfg)
 {
@@ -961,6 +1134,52 @@ inline InferenceCacheConstructionHP inferenceCacheConstructionHP(
     view.use_scratch_block = cfg.use_scratch_block;
     view.scratch_block_atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
     view.scratch_block_max_atoms = cfg.scratch_block_max_atoms;
+    return view;
+}
+
+inline TrainingStateRuntimeCacheHP trainingStateRuntimeCacheHPFromInferenceCache(
+    const InferenceCacheConstructionHP& hp,
+    const char* caller)
+{
+    requirePositiveGroupingValue(hp.d_model, "d_model", caller);
+    requirePositiveGroupingValue(hp.vocab_size, "vocab_size", caller);
+    if (hp.max_batch_size == 0 ||
+        hp.max_batch_size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string(caller) + ": max_batch_size=" +
+                                 std::to_string(hp.max_batch_size) +
+                                 " is outside TensorShape int capacity");
+    }
+    if (hp.max_seq_len_cache == 0 ||
+        hp.max_seq_len_cache > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string(caller) + ": max_seq_len_cache=" +
+                                 std::to_string(hp.max_seq_len_cache) +
+                                 " is outside TensorShape int capacity");
+    }
+    if (hp.max_tokens == 0 ||
+        hp.max_tokens > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string(caller) + ": max_tokens=" +
+                                 std::to_string(hp.max_tokens) +
+                                 " is outside TensorShape int capacity");
+    }
+
+    const std::size_t expected_tokens = hp.max_batch_size * hp.max_seq_len_cache;
+    if (hp.max_tokens != expected_tokens) {
+        throw std::runtime_error(std::string(caller) + ": max_tokens=" +
+                                 std::to_string(hp.max_tokens) +
+                                 " does not match max_batch_size*max_seq_len_cache=" +
+                                 std::to_string(expected_tokens));
+    }
+
+    TrainingStateRuntimeCacheHP view;
+    view.d_model = hp.d_model;
+    view.vocab_size = hp.vocab_size;
+    view.max_cached_batch = static_cast<int>(hp.max_batch_size);
+    view.max_cached_seq_len = static_cast<int>(hp.max_seq_len_cache);
+    view.max_tokens_per_batch = static_cast<int>(hp.max_tokens);
+    view.batch_rows = hp.max_batch_size;
+    view.seq_cap = hp.max_seq_len_cache;
+    view.token_capacity = hp.max_tokens;
+    view.logit_token_capacity = hp.max_tokens;
     return view;
 }
 
