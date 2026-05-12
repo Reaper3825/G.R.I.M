@@ -16,20 +16,13 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
 
     const auto& model_cfg = ctx.model->getConfig();
 
-    // Rule 20: caches are authored by the capacity stem. Clamp-free: if model
-    // mirrors disagree, that is a startup contract bug, not something Phase2
-    // should hide. (Check moved here from Phase2's per-batch payload builder.)
+    // Rule 20: TrainingState allocation consumes batch/token capacity only.
+    // Sequence capacity remains owned by RunCapacity and the BatchPayload path.
     if (model_cfg.max_cached_batch != static_cast<int>(ctx.run_capacity.batch_rows)) {
         throw std::runtime_error(
             "FATAL: model max_cached_batch does not match RunCapacity (model=" +
             std::to_string(model_cfg.max_cached_batch) +
             " stem=" + std::to_string(ctx.run_capacity.batch_rows) + ")");
-    }
-    if (model_cfg.max_cached_seq_len != static_cast<int>(ctx.run_capacity.seq_cap)) {
-        throw std::runtime_error(
-            "FATAL: model max_cached_seq_len does not match RunCapacity (model=" +
-            std::to_string(model_cfg.max_cached_seq_len) +
-            " stem=" + std::to_string(ctx.run_capacity.seq_cap) + ")");
     }
 
     PayloadBuildInputs inputs;

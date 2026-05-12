@@ -135,8 +135,8 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 ## Where the numbers come from
 
 - **CapacityStem.hpp / RunCapacity:** derives the checked startup cache rectangle from post-policy `StartupConfig` (`batch_rows`, `seq_cap`, `max_tokens_per_batch`). `startupLanguageModelConfig()` mirrors that rectangle into `LanguageModelConfig`.
-- **InitTrainingState.cu:** consumes `HyperParameters::trainingStateRuntimeCacheHP()` and passes that grouped view plus the primary stream to `TrainingState::allocateStepDeviceWorkspaces()`.
-- **InitInferenceState.cu:** consumes `HyperParameters::InferenceCacheConstructionHP`, converts it through `HyperParameters::trainingStateRuntimeCacheHPFromInferenceCache()`, and calls the same TrainingState owner.
+- **InitTrainingState.cu:** passes `LanguageModelConfig` plus the primary stream to `TrainingState::allocateStepDeviceWorkspaces()`.
+- **InitInferenceState.cu:** uses `LanguageModelConfig` fields for inference-owned KV/decode allocation and calls the same TrainingState owner with `LanguageModelConfig` plus the primary stream.
 - **TrainingStateGPU.cu:** owns allocation of `cached_encoder_output`, `cached_logits_tensor`, target/token staging tensors, and `sequence_weights_tensor`; logits capacity is the same startup token capacity.
 - **memoryusestartup.txt**: "Cache allocation: batch=8, seq_len=1024, tokens=8192"; "total_params=107798346"; "Allocated cached_logits [8192 x 2512]"; "[GuessCache][INFO] Guess cache disabled (guess_aux.enabled=false)".
 - **GRIM-TS:** `GuessCacheScope::OwnedBuffers::allocate` in GuessCacheTraining.cu (capacity, `sizeof(GRIMTS::GuessRecord)`=96, `sizeof(GRIMTS::GuessMetadata)`=32); GuessCacheScope uses kDefaultGuessCacheCapacity=16384, diversity_bloom_bits=65536, pinned_buffer_size=8192. GRIM-TS.hpp static_assert(sizeof(GuessRecord)==96).

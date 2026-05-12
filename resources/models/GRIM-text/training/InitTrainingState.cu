@@ -173,7 +173,6 @@ void LanguageModel::initTrainingState() {
     }
     std::cout << "✓ PBM (Hybrid ALiBi+RoPE) pre-initialized" << std::endl;
 
-     training_state_.cached_num_layers = cfg.num_layers;
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     
     std::cout << "[DEBUG-INIT-2] After PBM, checking layer pointers." << std::endl << std::flush;
@@ -233,10 +232,6 @@ void LanguageModel::initTrainingState() {
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
     // DO NOT duplicate Xavier init here per Rule 20 (single initialization owner).
     
-    const HyperParameters::TrainingStateRuntimeCacheHP training_cache_hp =
-        HyperParameters::trainingStateRuntimeCacheHP(
-        cfg, "LanguageModel::initTrainingState");
-    
     // DELETED: batch_prep_* lazy allocation (Rule 20) — replaced by BatchPayload struct
     
     // Generation/KV-cache state is intentionally NOT initialized here.
@@ -247,12 +242,12 @@ void LanguageModel::initTrainingState() {
     // Allocated in GenerationState by InitInferenceState.cu or ensureKVCacheAllocated().
     // NOT needed by the training state cache rectangle.
     
-    // Capacity comes from HyperparameterGroupings. Per-batch geometry/semantics
-    // come from BatchPayload at upload/forward time, never from this init path.
-    std::cout << "📊 Allocating TrainingState step workspaces for max_tokens=" << training_cache_hp.token_capacity
-              << " (batch=" << training_cache_hp.batch_rows << ", seq_len=" << training_cache_hp.seq_cap << ")" << std::endl;
+    // Capacity is already authored on LanguageModelConfig. Per-batch
+    // geometry/semantics come from BatchPayload at upload/forward time,
+    // never from this init path.
+    std::cout << "📊 Allocating TrainingState step workspaces" << std::endl;
     
-    training_state_.allocateStepDeviceWorkspaces(training_cache_hp, primary_stream);
+    training_state_.allocateStepDeviceWorkspaces(cfg, primary_stream);
     
     // Rule 20: callers must use tensor.data directly
     // Removed raw pointer alias assignments
@@ -263,7 +258,7 @@ void LanguageModel::initTrainingState() {
     // (was ~56MB dead GPU allocation). Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
     // ScratchBlockLayer is durable model topology and is assembled in initGPU().
     // initTrainingState() only verifies startup order and asks TrainingState to allocate
-    // its own reusable runtime cache tensors from the grouped startup HP view.
+    // its own reusable runtime cache tensors from the authored model config.
     
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP FINAL: Confirm initialization complete
@@ -273,10 +268,6 @@ void LanguageModel::initTrainingState() {
     
     training_state_.initialized = true;
     std::cout << "✓ Training state initialized with full gradient buffers" << std::endl;
-    std::cout << "[InitTrainingState] max_cached_batch=" << training_cache_hp.batch_rows
-              << " max_cached_seq_len=" << training_cache_hp.seq_cap
-              << " token_capacity=" << training_cache_hp.token_capacity
-              << " logit_token_capacity=" << training_cache_hp.logit_token_capacity << std::endl;
 }
 
 #endif // USE_CUDA

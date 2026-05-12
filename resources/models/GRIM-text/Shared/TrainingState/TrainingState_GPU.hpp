@@ -25,11 +25,8 @@
 #include "../TeacherLogits/TeacherLogits_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
+#include "../HyperParameters/HyperParameters_GPU.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
-
-namespace GRIM::HyperParameters {
-    struct TrainingStateRuntimeCacheHP;
-}
 
 // Forward declaration for autograd tensor system
 namespace GRIM {
@@ -54,7 +51,7 @@ struct TrainingState {
     TrainingState& operator=(TrainingState&&) = delete;
 
     void allocateStepDeviceWorkspaces(
-        const HyperParameters::TrainingStateRuntimeCacheHP& hp,
+        const HyperParameters::LanguageModelConfig& config,
         cudaStream_t stream);
 
     //======================================================//
@@ -88,7 +85,7 @@ struct TrainingState {
     // Output snapshots written by executeAutogradForward(). They are NOT graph
     // owners; they preserve reduced step outputs for diagnostics/inference after
     // AutogradIntermediates is cleared at the forward/backward boundary.
-    Tensor cached_encoder_output;       // [max_tokens, d_model] LM-head input snapshot for diagnostics/inference selector
+    Tensor cached_encoder_output;       // [max_tokens, d_model] LM-head input snapshot for diagnostics only
     Tensor cached_logits_tensor;        // [max_tokens, vocab_size] logits snapshot for diagnostics/inference return
     
     // Device mirrors of BatchPayload arrays. uploadBatchToDevice() is the only
@@ -119,8 +116,6 @@ struct TrainingState {
     //======================================================//
     std::vector<std::vector<ExecutionRecord>> execution_trace_by_row;
     std::vector<Tensor> trace_state_by_row;
-    
-    int cached_num_layers = 0;
     
     TeacherLogits::Buffer teacher_logits;
     TeacherLogits::Buffer reference_logits;

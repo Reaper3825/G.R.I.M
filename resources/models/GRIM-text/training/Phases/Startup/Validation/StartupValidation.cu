@@ -44,8 +44,6 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(ctx.model != nullptr, "model is null");
     require(ctx.model_allocation.model_max_cached_batch == static_cast<int>(ctx.run_capacity.batch_rows),
             "model allocation batch mirror does not match RunCapacity");
-    require(ctx.model_allocation.model_max_cached_seq_len == ctx.run_capacity.seq_cap,
-            "model allocation seq mirror does not match RunCapacity");
     require(ctx.model_allocation.model_max_tokens_per_batch == static_cast<int>(ctx.run_capacity.max_tokens_per_batch),
             "model allocation token mirror does not match RunCapacity");
 

@@ -4,7 +4,7 @@
 
 ## Preallocated TrainingState Step Workspaces
 
-Allocation owner: `TrainingState::allocateStepDeviceWorkspaces()` in `Shared/TrainingState/TrainingStateGPU.cu`. `InitTrainingState.cu` only passes `HyperParameters::trainingStateRuntimeCacheHP()` plus the primary stream; `InitInferenceState.cu` passes `HyperParameters::trainingStateRuntimeCacheHPFromInferenceCache()` plus the primary stream.
+Allocation owner: `TrainingState::allocateStepDeviceWorkspaces()` in `Shared/TrainingState/TrainingStateGPU.cu`. `InitTrainingState.cu` and `InitInferenceState.cu` pass the authored `LanguageModelConfig` plus the primary stream; no cache-specific grouped HP object is constructed.
 
 All sizes use `max_cached_batch * max_cached_seq_len` = 10 * 1024 = **10,240 tokens**.
 

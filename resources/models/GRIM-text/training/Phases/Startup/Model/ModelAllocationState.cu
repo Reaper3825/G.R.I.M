@@ -39,13 +39,13 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
     logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
 
-    const GRIM::HyperParameters::StartupModelCapacityHP model_capacity{
-        static_cast<int>(run_capacity.batch_rows),
-        static_cast<int>(run_capacity.seq_cap),
-        static_cast<int>(run_capacity.max_tokens_per_batch)
-    };
     GRIM::HyperParameters::LanguageModelConfig model_config =
-        GRIM::HyperParameters::startupLanguageModelConfig(config, vocab_size, model_capacity);
+        GRIM::HyperParameters::startupLanguageModelConfig(
+            config,
+            vocab_size,
+            static_cast<int>(run_capacity.batch_rows),
+            static_cast<int>(run_capacity.seq_cap),
+            static_cast<int>(run_capacity.max_tokens_per_batch));
 
     if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED) {
         logger.log("⚠️  Hardcoded hidden-state diagnostic mode is active; exact config values are listed by ConfigDump.");
@@ -202,18 +202,12 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
 
     ModelAllocationState allocation;
     allocation.model_max_cached_batch = model_cfg.max_cached_batch;
-    allocation.model_max_cached_seq_len = model_cfg.max_cached_seq_len;
     allocation.model_max_tokens_per_batch = model_cfg.max_tokens_per_batch;
 
     if (allocation.model_max_cached_batch != static_cast<int>(cap.batch_rows)) {
         throw std::runtime_error("FATAL: model max_cached_batch does not match RunCapacity (model=" +
                                  std::to_string(allocation.model_max_cached_batch) +
                                  " stem=" + std::to_string(cap.batch_rows) + ")");
-    }
-    if (allocation.model_max_cached_seq_len != cap.seq_cap) {
-        throw std::runtime_error("FATAL: model max_cached_seq_len does not match RunCapacity (model=" +
-                                 std::to_string(allocation.model_max_cached_seq_len) +
-                                 " stem=" + std::to_string(cap.seq_cap) + ")");
     }
     if (allocation.model_max_tokens_per_batch != static_cast<int>(cap.max_tokens_per_batch)) {
         throw std::runtime_error("FATAL: model max_tokens_per_batch does not match RunCapacity (model=" +

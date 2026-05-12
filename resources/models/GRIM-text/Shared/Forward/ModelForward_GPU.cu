@@ -518,12 +518,6 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
 
     result.encoder_output = encoder_output;
 
-    if (ts->cached_encoder_output.data) {
-        cudaMemcpyAsync(ts->cached_encoder_output.data, encoder_output,
-                        static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
-                        cudaMemcpyDeviceToDevice, request.stream);
-    }
-
     if (is_training) {
         const bool lmhead_track_grad = true;
         Tensor encoder_output_tensor = Tensor::from_ptr(
@@ -552,15 +546,21 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         request.stream,
         request.cublas_handle);
 
-    if (cfg->lm_head_center_hidden_states && ts->cached_encoder_output.data && intermediates.centered_encoder_output.data) {
-        cudaMemcpyAsync(ts->cached_encoder_output.data, intermediates.centered_encoder_output.data,
-                       static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
-                       cudaMemcpyDeviceToDevice, request.stream);
+    const float* lm_input_ptr = nullptr;
+    if (intermediates.centered_encoder_output.data) {
+        lm_input_ptr = intermediates.centered_encoder_output.data;
+    } else if (intermediates.encoder_output_tensor.data) {
+        lm_input_ptr = intermediates.encoder_output_tensor.data;
     }
-
-    float* lm_input_ptr = cfg->lm_head_center_hidden_states
-        ? intermediates.centered_encoder_output.data
-        : intermediates.encoder_output_tensor.data;
+    if (!lm_input_ptr) {
+        throw std::runtime_error("ModelForward: LM-head input snapshot is NULL after LMHeadLayer::forward");
+    }
+    if (!ts->cached_encoder_output.data) {
+        throw std::runtime_error("ModelForward: cached_encoder_output buffer is NULL - TrainingState MUST allocate LM-head input snapshot buffer");
+    }
+    cudaMemcpyAsync(ts->cached_encoder_output.data, lm_input_ptr,
+                    static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
+                    cudaMemcpyDeviceToDevice, request.stream);
 
     if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
         constexpr int kSamplePositions = 1024;

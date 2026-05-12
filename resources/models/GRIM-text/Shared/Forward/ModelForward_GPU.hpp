@@ -21,6 +21,7 @@
 
 #include "../Batching/BatchPayload.hpp"
 #include "../Batching/BatchDeviceBindings.hpp"
+#include "../HyperParameters/HyperParameters_GPU.hpp"
 
 namespace GRIM {
 
@@ -31,10 +32,6 @@ class ReasoningHeadLayer;
 class ExecutionBlockLayer;
 class GPUGrimEncoder;
 struct TrainingState;
-
-namespace HyperParameters {
-struct LanguageModelConfig;
-}
 
 namespace Forward {
 

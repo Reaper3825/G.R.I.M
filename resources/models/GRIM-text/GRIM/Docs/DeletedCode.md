@@ -11,6 +11,7 @@
 | `centering_scratch_tensor` | Single buffer (`cached_encoder_output`) is the source of truth |
 | `TrainingState::cached_batch_size`, `cached_seq_len`, `cached_valid_tokens` | Phase1 `BatchPayload` owns per-step geometry; TrainingState must not preserve current-batch shadow metadata |
 | `TrainingState::max_cached_batch`, `max_cached_seq_len`, `max_cached_tokens`, `max_logit_tokens` | `RunCapacity` / `LanguageModelConfig` own authored capacity; Tensor shapes own allocated capacity |
+| `TrainingState::cached_num_layers`, `ModelAllocationState::model_max_cached_seq_len` | Dead shadow mirrors; layer count belongs to `LanguageModelConfig` / model topology, and sequence capacity belongs to `RunCapacity` / payload or generation paths |
 | `TrainingState::kv_cache_len`, `kv_cache_capacity`, `kv_cache_k`, `kv_cache_v`, `kv_cache_softmax_lse`, `decode_q_bf16`, `decode_attn_out_bf16`, `decode_attn_out_fp32` | Moved to `GenerationState`; autoregressive inference state is not training state |
 | `TrainingState::inference_exec_memory`, `has_inference_exec_memory`, `decode_selector_*`, `single_token_*` | Moved to `GenerationState`; persistent generation-session execution memory, selector result, and decode scratch are not training state |
 | `TrainingState::decode_kv_bf16` | Dead decode scratch; K/V are converted directly into per-layer KV cache buffers |

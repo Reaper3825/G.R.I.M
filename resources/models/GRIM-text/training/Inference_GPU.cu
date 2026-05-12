@@ -146,6 +146,7 @@ void updateDecodeSelectorAfterPrefill(LanguageModel& model,
                                       GenerationState& gen,
                                       cudaStream_t stream,
                                       int seq_len,
+                                      const float* d_last_hidden,
                                       const char* caller) {
     if (seq_len <= 0) {
         throw std::runtime_error(std::string(caller) + ": seq_len <= 0 while updating decode selector");
@@ -161,14 +162,10 @@ void updateDecodeSelectorAfterPrefill(LanguageModel& model,
         && model.getScratchBlockLayer()->isEnabled()
         && gen.has_exec_memory;
 
-    const float* last_hidden = ts.cached_encoder_output.data
-        ? ts.cached_encoder_output.data + static_cast<size_t>(seq_len - 1) * cfg.d_model
-        : nullptr;
-
-    if (!last_hidden && cfg.selector_enabled) {
+    if (!d_last_hidden && cfg.selector_enabled) {
         throw std::runtime_error(
-            std::string(caller) + ": selector_enabled but cached_encoder_output is NULL "
-            "after prefill — cannot evaluate decode-time slot selector");
+            std::string(caller) + ": selector_enabled but explicit prefill last-hidden pointer is NULL "
+            "before AutogradIntermediates clear — cannot evaluate decode-time slot selector");
     }
 
     DecodeTimeResolveResult sel = resolveDecodeTimeNumSlotSelectionOrMask(
@@ -178,7 +175,7 @@ void updateDecodeSelectorAfterPrefill(LanguageModel& model,
         selector_can_run,
         gen.has_exec_memory,
         gen.exec_memory,
-        last_hidden,
+        d_last_hidden,
         stream,
         ts.cublas_handle.get());
 
@@ -197,7 +194,9 @@ void updateDecodeSelectorAfterPrefill(LanguageModel& model,
 //  When populate_kv_cache=true, extracts per-layer K,V from autograd
 //  intermediates and converts to BF16 BSHD format in KV cache buffers.
 //======================================================//
-Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cache) {
+Vector LanguageModel::executeInferenceForward_(int seq_len,
+                                               bool populate_kv_cache,
+                                               bool update_decode_selector_after_prefill) {
     if (!training_state_.initialized) {
         throw std::runtime_error("executeInferenceForward_: training state not initialized");
     }
@@ -227,13 +226,15 @@ Vector LanguageModel::executeInferenceForward_(int seq_len, bool populate_kv_cac
         seq_len, config_.vocab_size, static_cast<size_t>(config_.max_cached_seq_len),
         generation_state_.has_exec_memory);
 
-    return executeInferenceForward_(payload, bindings, populate_kv_cache);
+    return executeInferenceForward_(payload, bindings, populate_kv_cache,
+                                    update_decode_selector_after_prefill);
 }
 
 Vector LanguageModel::executeInferenceForward_(
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    bool populate_kv_cache) {
+    bool populate_kv_cache,
+    bool update_decode_selector_after_prefill) {
     if (!training_state_.initialized) {
         throw std::runtime_error("executeInferenceForward_: training state not initialized");
     }
@@ -342,6 +343,24 @@ Vector LanguageModel::executeInferenceForward_(
         }
     }
 
+    if (update_decode_selector_after_prefill) {
+        const float* selector_hidden_base = nullptr;
+        if (training_state_.autograd_intermediates.centered_encoder_output.data) {
+            selector_hidden_base = training_state_.autograd_intermediates.centered_encoder_output.data;
+        } else if (training_state_.autograd_intermediates.encoder_output_tensor.data) {
+            selector_hidden_base = training_state_.autograd_intermediates.encoder_output_tensor.data;
+        }
+
+        const float* d_last_hidden = nullptr;
+        if (selector_hidden_base) {
+            d_last_hidden = selector_hidden_base +
+                static_cast<size_t>(payload.max_seq_len - 1) * config_.d_model;
+        }
+        updateDecodeSelectorAfterPrefill(*this, config_, training_state_, generation_state_,
+                                         stream, payload.max_seq_len, d_last_hidden,
+                                         "executeInferenceForward_(prefill selector)");
+    }
+
     // Free all autograd intermediates — inference never runs backward.
     // Without this, grad_fn chains and cached tensors leak across generation steps.
     training_state_.autograd_intermediates.clear();
@@ -370,7 +389,9 @@ Vector LanguageModel::forwardInit(const Batching::BatchPayload& prompt_payload) 
     // Prefill: populate KV cache from autograd intermediates.
     // Commit kv_cache_len AFTER success — if forward throws, the cache
     // must not claim it holds tokens that never completed the forward path.
-    Vector logits = executeInferenceForward_(prompt_payload, bindings, /*populate_kv_cache=*/true);
+    Vector logits = executeInferenceForward_(prompt_payload, bindings,
+                                             /*populate_kv_cache=*/true,
+                                             /*update_decode_selector_after_prefill=*/true);
     generation_state_.kv_cache_len = seq_len;
 
     cudaStream_t post_stream = training_state_.stream_ctrl.getPrimaryStream();
@@ -386,9 +407,6 @@ Vector LanguageModel::forwardInit(const Batching::BatchPayload& prompt_payload) 
         generation_state_.execution_trace_by_row.resize(1);
         generation_state_.execution_trace_by_row[0].clear();
     }
-
-    updateDecodeSelectorAfterPrefill(*this, config_, training_state_, generation_state_,
-                                     post_stream, seq_len, "forwardInit(BatchPayload)");
 
     return logits;
 }
@@ -467,10 +485,11 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
     // Re-run the full current sequence for these configs. Plain configs keep the
     // fast KV path below.
     if (sequenceCoupledGeometryRequiresFullPrefill(config_)) {
-        Vector logits = executeInferenceForward_(new_seq_len, /*populate_kv_cache=*/false);
+        Vector logits = executeInferenceForward_(
+            new_seq_len,
+            /*populate_kv_cache=*/false,
+            /*update_decode_selector_after_prefill=*/true);
         generation_state_.kv_cache_len = new_seq_len;
-        updateDecodeSelectorAfterPrefill(*this, config_, training_state_, generation_state_,
-                                         stream, new_seq_len, "forwardStep(full-prefill)");
         return logits;
     }
 

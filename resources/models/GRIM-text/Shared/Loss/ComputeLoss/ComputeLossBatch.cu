@@ -205,7 +205,6 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	// view for this step. Batch geometry and valid-token counts stay on the
 	// Phase1-authored BatchPayload; TrainingState must not mirror per-step
 	// semantics as a hidden global mailbox.
-	training_state_.cached_num_layers = cfg.num_layers;
 
 	GRIM::Batching::BatchDeviceBindings bindings;
 	bindings.d_input_ids        = cached_token_ids_ptr;

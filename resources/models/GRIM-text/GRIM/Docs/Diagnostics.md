@@ -6,7 +6,7 @@ $$\text{expected\_output\_rms} = \frac{\text{input\_rms} \cdot \gamma_{\text{rms
 Not just `gamma_rms`. With small Xavier-init embeddings (rms ≈ 0.006), epsilon contributes ~20%.
 
 ## Hidden-state buffer
-Read `cached_encoder_output` (post-centering, overwritten after LM head forward) for hidden-state diagnostics. `centering_scratch_tensor` was deleted — single buffer is the source of truth.
+Read `cached_encoder_output` (the actual LM-head matmul input, written after `LMHeadLayer::forward`) for hidden-state diagnostics. `centering_scratch_tensor` was deleted — single diagnostic snapshot is the source of truth. Runtime inference consumers must not read this global snapshot for decode decisions; the decode-time selector consumes the explicit live prefill hidden pointer before `AutogradIntermediates::clear()`.
 
 ## Logit-scale population
 `LOGIT_SCALE_EQUATION` computes both actual `logit_std` and expected `logit_std` over the same LM-valid target rows: positions where `BatchPayload.target_ids[pos] >= 0`. The required count is `BatchPayload.lm_valid_tokens`; diagnostics must derive concrete row indices from `target_ids` and fail if the counted positions disagree with `lm_valid_tokens`. Do not use a contiguous prefix of the rectangular `[batch_size * max_seq_len]` buffer, and do not include padding/final-position/execution-slot-masked rows. The expected formula uses `h_rms_rms = sqrt(mean_t(rms(h_t)^2))`, not arithmetic `h_rms_mean`, because it is a variance estimate.

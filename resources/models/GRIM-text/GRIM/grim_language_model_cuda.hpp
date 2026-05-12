@@ -386,10 +386,13 @@ private:
     // forwardInit, forwardStep) copy their data to cached tensors then call this.
     // When populate_kv_cache=true, extracts K,V from autograd intermediates
     // into BF16 KV cache buffers before clearing intermediates.
-    Vector executeInferenceForward_(int seq_len, bool populate_kv_cache = false);
+    Vector executeInferenceForward_(int seq_len,
+                                    bool populate_kv_cache = false,
+                                    bool update_decode_selector_after_prefill = false);
     Vector executeInferenceForward_(const GRIM::Batching::BatchPayload& payload,
                                     const GRIM::Batching::BatchDeviceBindings& bindings,
-                                    bool populate_kv_cache = false);
+                                    bool populate_kv_cache = false,
+                                    bool update_decode_selector_after_prefill = false);
 
     // KV-cached decode: processes a single token at position token_pos
     // through all encoder layers using cached K,V from prior tokens.
