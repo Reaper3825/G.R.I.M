@@ -104,11 +104,13 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->initGPU(weight_init_seed);
     logger.log("✓ GPU model layers fully assembled");
 
-    logger.log("Initializing TrainingState (grad buffers, activation caches)...");
+    logger.log("Registering trainable parameter groups...");
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model);
+    logger.log("✓ Trainable parameter groups registered and verified");
+
+    logger.log("Initializing TrainingState runtime workspaces...");
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
-
-    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model);
 
     GRIM::LossContext::LossOptions loss_opts{};
     {

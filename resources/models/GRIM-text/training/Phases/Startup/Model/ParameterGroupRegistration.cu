@@ -29,9 +29,10 @@ using GRIM::ParamGroupType;
 using GRIM::Tensor;
 using GRIM::HyperParameters::ParameterRegistrationHP;
 
-std::string tensorState(const Tensor& tensor) {
+std::string tensorDebugSummary(const Tensor& tensor) {
     std::ostringstream oss;
     oss << "data=" << tensor.data
+        << " grad=" << tensor.grad_data()
         << " has_grad=" << static_cast<int>(tensor.has_grad())
         << " numel=" << tensor.numel();
     return oss.str();
@@ -53,7 +54,7 @@ LayerT& requireLayer(LayerT* layer, const char* layer_name, const char* caller) 
 void throwUntrainableTensor(const std::string& name, const Tensor& tensor, int layer) {
     throw std::runtime_error("[buildParameterGroups] " + name +
                              " is not a trainable parameter group tensor: " +
-                             tensorState(tensor) + " layer=" + std::to_string(layer));
+                             tensorDebugSummary(tensor) + " layer=" + std::to_string(layer));
 }
 
 class Registrar {
@@ -78,7 +79,7 @@ public:
         if (!registered_data_.insert(data_ptr).second) {
             throw std::runtime_error("[buildParameterGroups] duplicate tensor.data registration for " + name +
                                      " would double-step the same memory: " +
-                                     tensorState(tensor) + " layer=" + std::to_string(layer));
+                                     tensorDebugSummary(tensor) + " layer=" + std::to_string(layer));
         }
 
         ParameterGroup group{};
@@ -122,7 +123,7 @@ public:
         if (tensor.data || tensor.has_grad()) {
             throw std::runtime_error("[buildParameterGroups] " + name +
                                      " exists while disabled (" + disabled_reason + "): " +
-                                     tensorState(tensor));
+                                     tensorDebugSummary(tensor));
         }
     }
 
@@ -136,18 +137,18 @@ void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
                                      const ParameterRegistrationHP& hp) {
     if (!embedding_weights.data || !lm_head_weights.data) {
         throw std::runtime_error("[buildParameterGroups] cannot validate embedding/LM-head aliasing with NULL data: embedding=" +
-                                 tensorState(embedding_weights) + " lm_head=" + tensorState(lm_head_weights));
+                                 tensorDebugSummary(embedding_weights) + " lm_head=" + tensorDebugSummary(lm_head_weights));
     }
 
     const bool tied = !hp.register_untied_embedding;
     const bool same_data = embedding_weights.data == lm_head_weights.data;
     if (tied && !same_data) {
         throw std::runtime_error("[buildParameterGroups] tie_embeddings=true but embedding and LM-head data pointers differ: embedding=" +
-                                 tensorState(embedding_weights) + " lm_head=" + tensorState(lm_head_weights));
+                                 tensorDebugSummary(embedding_weights) + " lm_head=" + tensorDebugSummary(lm_head_weights));
     }
     if (!tied && same_data) {
         throw std::runtime_error("[buildParameterGroups] tie_embeddings=false but embedding and LM-head data pointers are identical: embedding=" +
-                                 tensorState(embedding_weights) + " lm_head=" + tensorState(lm_head_weights));
+                                 tensorDebugSummary(embedding_weights) + " lm_head=" + tensorDebugSummary(lm_head_weights));
     }
 }
 
@@ -430,7 +431,7 @@ void registerFinalRmsGamma(LanguageModel& model,
     if (!hp.register_final_rms_gamma) {
         if (final_gamma.has_grad()) {
             throw std::runtime_error("[buildParameterGroups] final_rms_gamma is frozen by config but still has a grad buffer: " +
-                                     tensorState(final_gamma));
+                                     tensorDebugSummary(final_gamma));
         }
         return;
     }

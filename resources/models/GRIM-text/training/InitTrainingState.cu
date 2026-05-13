@@ -160,8 +160,6 @@ void LanguageModel::initTrainingState() {
     }
     std::cout << "✓ Using pre-initialized cuBLAS handle" << std::endl;
     
-    std::cout << "[DEBUG-INIT-1] After cuBLAS, before PBM check" << std::endl << std::flush;
-    
     // ═══════════════════════════════════════════════════════════════════════
     //  STEP 3: Verify PBM (Unified ALiBi+RoPE Hybrid) is initialized
     //  RULE 20: PBM MUST be initialized by initPBM() before this point.
@@ -174,59 +172,12 @@ void LanguageModel::initTrainingState() {
     std::cout << "✓ PBM (Hybrid ALiBi+RoPE) pre-initialized" << std::endl;
 
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
-    
-    std::cout << "[DEBUG-INIT-2] After PBM, checking layer pointers." << std::endl << std::flush;
-    
-    // ═══════════════════════════════════════════════════════════════
-    // PARAMETER TENSORS: Preallocate once, reuse throughout training
-    // ═══════════════════════════════════════════════════════════════
-    // Using GRIM::Tensor with requires_grad=true allocates both data and grad buffers.
-    // Weight tying: When tie_embeddings=true, lm_head_weights.data points to embedding buffer
-    // and lm_head_weights.grad is shared with embedding tokenWeights().grad via share_grad().
-    
-    // All weights are owned by Pattern B layers (EmbeddingLayer, LMHeadLayer, EncodingLayer, ScratchBlockLayer)
-    std::cout << "[DEBUG-INIT-4] checking Pattern B layer pointers..." << std::endl << std::flush;
-    
-    // CRASH DEBUG: Step-by-step pointer access to find exact crash point
-    // ISSUE #59: Use grad_data() accessor
-    // Session 6: Embedding weights now owned by EmbeddingLayer (Pattern B)
-    if (!embedding_layer_) throw std::runtime_error("[InitTrainingState] FATAL: embedding_layer_ is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    std::cout << "[DEBUG-INIT-4a] About to read embedding tokenWeights().data..." << std::endl << std::flush;
-    float* emb_data = embedding_layer_->tokenWeights().data;
-    std::cout << "[DEBUG-INIT-4b] emb_data=" << (void*)emb_data << std::endl << std::flush;
-    
-    std::cout << "[DEBUG-INIT-4c] About to read embedding tokenWeights().grad_data()..." << std::endl << std::flush;
-    float* emb_grad = embedding_layer_->tokenWeights().grad_data();
-    std::cout << "[DEBUG-INIT-4d] emb_grad=" << (void*)emb_grad << std::endl << std::flush;
-    
-    std::cout << "[DEBUG-INIT-4i] About to read lm_head_layer_->weights().data..." << std::endl << std::flush;
-    if (!lm_head_layer_) throw std::runtime_error("[InitTrainingState] FATAL: lm_head_layer_ is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    float* lm_data = lm_head_layer_->weights().data;
-    std::cout << "[DEBUG-INIT-4j] lm_data=" << (void*)lm_data << std::endl << std::flush;
-    
-    std::cout << "[DEBUG-INIT-4k] About to read lm_head_layer_->weights().grad_data()..." << std::endl << std::flush;
-    float* lm_grad = lm_head_layer_->weights().grad_data();
-    std::cout << "[DEBUG-INIT-4l] lm_grad=" << (void*)lm_grad << std::endl << std::flush;
-    
-    std::cout << "✓ Embeddings initialized via EmbeddingLayer (Pattern B ownership)\n";
-    std::cout << "  tokenWeights.data=" << (void*)emb_data
-              << " grad=" << (void*)emb_grad << "\n";
-    std::cout << "  lm_head weights.data=" << (void*)lm_data
-              << " grad=" << (void*)lm_grad << "\n";
-    
-    // Weight tying verification is handled by LMHeadLayer constructor (Pattern B).
-    // LMHeadLayer validates shape match and pointer aliasing at construction time.
-    // lm_head_bias, final_rms_gamma are owned by LMHeadLayer (Pattern B).
-    // Access via lm_head_layer_->bias() / lm_head_layer_->finalRmsGamma().
-    
-    // ═══════════════════════════════════════════════════════════════
-    // AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
-    // ═══════════════════════════════════════════════════════════════
-    // FFN/Attention/RMSNorm gradients flow through encoder's Tensor& accessors:
-    //   - enc->ffnW1().grad_data(), enc->ffnW2().grad_data()
-    //   - enc->attnWqkv().grad_data(), enc->attnWo().grad_data()
-    //   - enc->rms1Gamma().grad_data(), enc->rms2Gamma().grad_data()
-    // Allocated via ensure_grad() in EncodingLayer::allocateWeights().
+
+    // Parameter tensor verification is intentionally owned by
+    // Startup/Model/ParameterGroupRegistration.cu. Registration walks every
+    // configured trainable tensor and fails loud on missing data, missing grad
+    // buffers, empty tensors, disabled-but-present tensors, or duplicate data
+    // aliases. TrainingState owns only reusable runtime workspaces below.
     
     // NOTE: Encoder layer weight initialization is handled by Startup/Model GPU assembly.
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
@@ -264,10 +215,10 @@ void LanguageModel::initTrainingState() {
     //  STEP FINAL: Confirm initialization complete
     // ═══════════════════════════════════════════════════════════════════════════
     
-    std::cout << "✓ Verified: Pattern B layers initialized by initGPU()" << std::endl;
+    std::cout << "✓ TrainingState step workspaces allocated" << std::endl;
     
     training_state_.initialized = true;
-    std::cout << "✓ Training state initialized with full gradient buffers" << std::endl;
+    std::cout << "✓ Training state initialized with runtime workspaces" << std::endl;
 }
 
 #endif // USE_CUDA

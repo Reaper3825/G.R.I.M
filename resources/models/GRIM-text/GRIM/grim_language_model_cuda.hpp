@@ -276,7 +276,7 @@ public:
     
     void initCuBLASHandle();   // Initialize cuBLAS handle only (MUST be called before initGPU)
     void initPBM();            // Initialize PBM (ALiBi+RoPE hybrid) - MUST be called before initGPU
-    void initTrainingState();  // Initialize training state (allocate GPU buffers + gradients)
+    void initTrainingState();  // Initialize training runtime GPU workspaces
     void initInferenceState(); // Initialize inference state (allocate GPU buffers WITHOUT gradients)
     // backward() and zeroGrad() DELETED (Rule 26).
     // Backward: Use autogradTrainingStep() which does forward+loss+backward.

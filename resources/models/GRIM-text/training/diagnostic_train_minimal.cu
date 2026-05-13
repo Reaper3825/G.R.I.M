@@ -546,7 +546,7 @@ int main(int argc, char** argv) {
     model.initGPU(weight_init_seed);
     std::cout << "  ✓ GPU encoder initialized" << std::endl;
     
-    // STEP 5: Initialize TrainingState (grad buffers) - needs GPU embedder from initGPU
+    // STEP 5: Initialize TrainingState runtime workspaces - needs GPU model assembly from initGPU
     model.initTrainingState();
     std::cout << "  ✓ TrainingState initialized" << std::endl;
     
