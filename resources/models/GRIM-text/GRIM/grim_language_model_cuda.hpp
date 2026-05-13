@@ -130,7 +130,7 @@ struct EncoderConstructionBindings {
 };
 #endif
 
-// GrimEmbeddingStack - minimal interface
+// GrimEmbeddingStack
 // NOTE: Durable GPU embedding layers are assembled by the Startup/Model allocation module.
 class GrimEmbeddingStack {
 public:

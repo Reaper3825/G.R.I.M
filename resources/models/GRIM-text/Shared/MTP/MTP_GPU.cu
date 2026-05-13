@@ -128,7 +128,7 @@ void computeMTPAuxiliaryLosses(
         intermediates.mtp_input_tensor = autograd::rms_norm(
             intermediates.encoder_output_tensor,
             ctx.lm_head->finalRmsGamma(),
-            ctx.lm_head->config().rms_epsilon,
+            ctx.lm_head->hp().rms_epsilon,
             ctx.stream
         );
         mtp_input = &intermediates.mtp_input_tensor;
