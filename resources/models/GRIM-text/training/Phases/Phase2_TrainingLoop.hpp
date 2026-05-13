@@ -118,6 +118,10 @@ struct TrainingLoopState {
     float initial_loss = 0.0f;
     float min_observed_loss = std::numeric_limits<float>::infinity();
     int warmup_batches = 0;
+
+    // Durable validated loss grouping for this run. Built once from
+    // TrainingContext.config.hyperparameters by executePhase2.
+    GRIM::HyperParameters::LossConfigHP loss_config;
     
     // Shuffle tracking
     bool shuffle_window_exhausted_notified = false;
@@ -198,7 +202,7 @@ BatchResult processBatch(
  * @param ctx Training context
  * @return ValidationResult Validation metrics
  */
-ValidationResult runValidation(TrainingContext& ctx);
+ValidationResult runValidation(TrainingContext& ctx, TrainingLoopState& state);
 
 //======================================================//
 //  Internal Helper Functions

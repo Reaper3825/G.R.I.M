@@ -877,15 +877,13 @@ For each encoding layer (Layer 0 → Layer 11):
     - `Loss::Term` enum, `Loss::LossContext`, `Loss::LossBreakdown`, `Loss::DeviceBuffers`, `Loss::AuxiliaryBatchViews`
     - `Loss::LossConfig` (composite) and all sub-configs: `LabelSmoothingConfig`, `DistillationConfig`, `PreferenceKLConfig`, `FocalLossConfig`, `MaskConfig`, `GuessFeedbackConfig`, `LimitsConfig`, `EntropyRegConfig`
     - All function declarations: `computeLossTerms`, `applyLabelSmoothing`, `accumulateDistillationKL`, `accumulatePreferenceKL`, `applyFocalLossScaling`, `applyTokenMasking`, `blendGuessFeedback`, `computeInfoNCELoss`, `computeCosineSimilarityLoss`, `validate`
-  - **LossContext.hpp CLEANED:** `TensorViews` struct deleted (duplicated batch metadata from BatchPayload). Only `LossOptions` remains.
-    - Removed `#include "../Loss.hpp"` dependency (LossOptions doesn't need any Loss.hpp types)
-    - Removed `#include "../../LogRecorder/LogRecorder.hpp"` (unused)
+  - **LossContext.hpp DELETED:** final loss-options wrapper moved into `HyperParameters::LossConfigHP` in `HyperparameterGroupings.hpp`; no loss-owned/model-owned config wrapper remains.
   - **CMakeLists.txt UPDATED:** Removed `CrossEntropy_GPU.cu` from `grim_training_kernels` STATIC library
   - **Verification:** `Loss::LossContext` was NEVER constructed in any .cu file. All 5 sub-module functions only had declarations + implementations — zero callers.
   - **Production loss path** (UNCHANGED): `BatchPayload → AutogradContext → computeAutogradLoss() → unified_loss()` via AutogradLoss.cu
   - **Still alive:**
-    - `LossContext::LossOptions` — config flow: Phase1_Startup → model → buildLossConfig() → autograd::LossConfig
-    - `autograd::LossConfig` + `autograd::unified_loss()` — the one true loss path (AutogradLoss.cu/hpp)
+    - `HyperParameters::LossConfigHP` — config flow: `lossConfigHP()` → Phase2 state → autogradTrainingStep/computeLossBatch → unified_loss
+    - `autograd::unified_loss()` — the one true loss path (AutogradLoss.cu/hpp)
     - `NumericLoss/NumericLoss_GPU.cu/hpp` — auxiliary numeric regression head (called from AutogradTraining.cu)
 
 ---
@@ -1295,7 +1293,7 @@ Use this section to track stale code patterns found during audit:
 **Recent Updates**:
 - **Old Loss System DELETED (Rule 26)**: Loss.hpp gutted, LossContext::TensorViews deleted, 10 dead .cu/.hpp files removed, 5 directories purged, CrossEntropy_GPU.cu removed from CMakeLists. BatchPayload confirmed as single source of truth via AutogradContext.
 - ComputeLossBatch.cu gutted (753→391 lines, 362-line deletion documented)
-- AutogradTraining.cu fully refactored (buildLossConfig, computeAutogradLoss, autogradTrainingStep, executeAutogradBackward)
+- AutogradTraining.cu fully refactored (computeAutogradLoss, autogradTrainingStep, executeAutogradBackward)
 - Issue #140 (embedding scale removed), #141 (ScratchBlock gradient tap + positional_encoding config + PCGrad NaN guard), #142 (gradient tap hardening)
 - Issue #139 (per-component gradient clipping: emb/enc/num independent budgets)
 - Issue #137 (numeric loss gradient normalization fixes)

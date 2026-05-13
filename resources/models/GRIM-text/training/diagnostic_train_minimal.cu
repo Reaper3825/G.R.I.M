@@ -39,6 +39,7 @@
 // GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS and transitively includes
 // control/ai_config_paths.hpp in the correct order.
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 // Core model
 #include "../GRIM/grim_language_model_cuda.hpp"
@@ -383,6 +384,8 @@ int main(int argc, char** argv) {
         std::cerr << "  ✗ Failed to load ai_config.json" << std::endl;
         return 1;
     }
+    const auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
+    const auto loss_config = GRIM::HyperParameters::lossConfigHP(startup_config.hyperparameters);
     
     std::cout << "  Config file: " << snapshot->config_path << std::endl;
     
@@ -781,7 +784,7 @@ int main(int argc, char** argv) {
                     // upload host BatchPayload once and reuse the bindings.
                     const auto bindings = model.uploadBatchToDevice(payload);
                     auto loss_result = GRIM::Autograd::autogradTrainingStep(
-                        model, model.getTrainingState(), payload, bindings,
+                        model, model.getTrainingState(), payload, bindings, loss_config,
                         /*accumulate=*/false, /*grad_scale=*/1.0f, manual_optimizer_step.step);
                     if (!loss_result.success) {
                         std::cout << "  → autogradTrainingStep FAILED: " << loss_result.error_message << std::endl;

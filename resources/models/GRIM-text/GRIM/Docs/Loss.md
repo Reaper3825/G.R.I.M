@@ -4,9 +4,9 @@ Public autograd entry point: `resources/models/GRIM-text/Shared/Loss/ComputeLoss
 
 Cross-entropy / NLL implementation: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/CrossEntropyNLL.cu` via `computeCrossEntropyForwardFromLogProbs()` and `computeCrossEntropyBackwardToLogProbs()`.
 
-Primary text CE now enters as `autograd::unified_loss(logits, BatchPayload, BatchDeviceBindings, LossConfig, stream)`. Auxiliary shifted-target heads (MTP) use `autograd::unified_loss_from_target_buffer(...)` so they cannot masquerade as the payload's primary target mirror.
+Primary text CE now enters as `autograd::unified_loss(logits, BatchPayload, BatchDeviceBindings, LossConfigHP, d_class_weights, stream)`. Auxiliary shifted-target heads (MTP) use `autograd::unified_loss_from_target_buffer(...)` so they cannot masquerade as the payload's primary target mirror.
 
-`autograd::unified_loss()` is the **primary text loss path**. `cross_entropy_loss()` is deleted; callers use real model loss config.
+`autograd::unified_loss()` is the **primary text loss path**. `cross_entropy_loss()` and the model-owned loss-options side channel are deleted; callers pass the durable `HyperParameters::LossConfigHP` snapshot built by `lossConfigHP()` in `HyperparameterGroupings.hpp`. Class-balanced device weights are runtime `TrainingState` buffers and are passed separately.
 
 ## Formula
 $$L = \alpha (1 - p_t)^\gamma \cdot \mathrm{CE}_{\text{smooth}} + \lambda \cdot H(p)$$

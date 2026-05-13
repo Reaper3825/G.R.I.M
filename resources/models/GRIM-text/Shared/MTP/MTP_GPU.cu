@@ -198,6 +198,7 @@ void computeMTPAuxiliaryLosses(
             total_tokens,
             vocab_size,
             ctx.loss_config,
+            ctx.d_class_weights,
             ctx.stream
         );
         float h_loss_k = 0.0f;

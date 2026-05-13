@@ -47,6 +47,23 @@ struct GradientClippingHP {
     float effective_per_token_limit = EPSILON_GRADIENT_CLIP;
 };
 
+struct LossConfigHP {
+    bool initialized = false;
+
+    float focal_alpha = 0.0f;
+    float focal_gamma = 0.0f;
+    bool focal_enabled = false;
+
+    float smoothing_epsilon = 0.0f;
+    bool smoothing_enabled = false;
+
+    float entropy_reg_lambda = 0.0f;
+    bool entropy_reg_enabled = false;
+
+    bool class_balanced_enabled = false;
+    float class_balanced_beta = 0.0f;
+};
+
 struct ParameterRegistrationHP {
     int num_layers = 0;
     int num_heads = 0;
@@ -518,6 +535,23 @@ inline GradientClippingHP gradientClippingHP(
     view.enabled = hp.grad_clip_norm > 0.0f;
     view.effective_per_token_limit = std::max(
         hp.grad_clip_norm, EPSILON_GRADIENT_CLIP);
+    return view;
+}
+
+inline LossConfigHP lossConfigHP(
+    const ::GRIM::Config::TrainingHyperparameters& hp)
+{
+    LossConfigHP view;
+    view.initialized = true;
+    view.focal_enabled = hp.loss_focal_enabled;
+    view.focal_alpha = hp.loss_focal_alpha;
+    view.focal_gamma = hp.loss_focal_gamma;
+    view.smoothing_enabled = hp.loss_label_smoothing_enabled;
+    view.smoothing_epsilon = hp.loss_label_smoothing_epsilon;
+    view.entropy_reg_enabled = hp.loss_entropy_reg_enabled;
+    view.entropy_reg_lambda = hp.loss_entropy_reg_lambda;
+    view.class_balanced_enabled = hp.loss_class_balanced_enabled;
+    view.class_balanced_beta = hp.loss_class_balanced_beta;
     return view;
 }
 

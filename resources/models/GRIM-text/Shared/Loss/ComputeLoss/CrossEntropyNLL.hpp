@@ -29,7 +29,8 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     const int* targets,
     int num_tokens,
     int vocab_size,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     cudaStream_t stream
 );
 
@@ -47,7 +48,8 @@ void computeCrossEntropyBackwardToLogProbs(
     int vocab_size,
     int valid_count,
     float weight_sum,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     float grad_output_scale,
     cudaStream_t stream
 );

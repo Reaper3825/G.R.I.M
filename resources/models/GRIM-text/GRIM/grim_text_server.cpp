@@ -85,7 +85,7 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
         config.generation.eos_token_id = g_tokenizer->eosId();
         config.generation.pad_token_id = g_tokenizer->padId();
         
-        g_model = std::make_unique<LanguageModel>(config, startup_config.hyperparameters);
+        g_model = std::make_unique<LanguageModel>(config);
         std::cout << "[GRIM-text] ✓ Model object created\n" << std::flush;
 
         if (!fs::exists(model_path)) {

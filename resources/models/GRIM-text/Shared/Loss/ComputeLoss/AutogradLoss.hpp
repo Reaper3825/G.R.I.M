@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "../../HyperParameters/HyperparameterGroupings.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
 #include "../../Batching/BatchPayload.hpp"
 #include "../../Batching/BatchDeviceBindings.hpp"
@@ -16,36 +17,6 @@
 
 namespace GRIM {
 namespace autograd {
-
-//=============================================================================
-// LOSS CONFIGURATION
-//=============================================================================
-
-struct LossConfig {
-    // Focal Loss: L = α * (1-p_t)^γ * CE
-    // When focal_enabled=false, focal_alpha and focal_gamma are IGNORED.
-    // CE term becomes plain ce_smooth (no scaling by focal_alpha).
-    float focal_alpha = 1.0f;       // Class balance weight (1.0 = none)
-    float focal_gamma = 0.0f;       // Focusing parameter (0 = standard CE, 2 = strong focus)
-    bool  focal_enabled = false;
-    
-    // Label Smoothing: CE_smooth = -(1-ε)*log(p_t) - ε/(V-1)*Σlog(p_i)
-    float smoothing_epsilon = 0.0f; // Target smoothing (0 = hard targets)
-    bool  smoothing_enabled = false;
-    
-    // Entropy Regularization: reg = -λ * H(p) = λ * Σ p*log(p)
-    // Penalizes low entropy (overconfidence), encourages diversity
-    float entropy_reg_lambda = 0.0f;
-    bool  entropy_reg_enabled = false;
-    
-    // Class-balanced loss: per-token weight = 1/freq(target)^β
-    // GPU array [vocab_size], nullptr = disabled (all weights 1.0)
-    const float* d_class_weights = nullptr;
-    bool  class_balanced_enabled = false;
-    
-    // Static factory for plain CE (testing/default)
-    static LossConfig plain_ce() { return LossConfig{}; }
-};
 
 //=============================================================================
 // MAIN API
@@ -73,7 +44,8 @@ struct LossConfig {
  * @param logits      [num_tokens, vocab_size] - raw logits from LM head
  * @param payload     Host-side batch metadata: geometry, vocab, valid-token counts
  * @param bindings    Device-side batch view containing uploaded d_target_ids
- * @param config      Loss configuration (focal, label smoothing, entropy reg)
+ * @param config      Durable loss grouping from HyperparameterGroupings.hpp
+ * @param d_class_weights Optional class-balanced weights owned by TrainingState
  * @param stream      CUDA stream
  * @return Scalar loss tensor with grad_fn attached (if logits.requires_grad)
  */
@@ -81,7 +53,8 @@ Tensor unified_loss(
     Tensor& logits,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     cudaStream_t stream
 );
 
@@ -96,7 +69,8 @@ Tensor unified_loss_from_target_buffer(
     const int* targets,
     int num_tokens,
     int vocab_size,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     cudaStream_t stream
 );
 
@@ -137,7 +111,7 @@ void launchToken277DiagnosticActual(
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
 // Was a thin wrapper calling the loss path with hardcoded plain CE config.
 // Production callers use unified_loss() with BatchPayload + BatchDeviceBindings
-// and real config from the model.
+// and LossConfigHP from HyperparameterGroupings.hpp.
 
 }  // namespace autograd
 }  // namespace GRIM

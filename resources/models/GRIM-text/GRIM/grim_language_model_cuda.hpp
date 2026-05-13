@@ -50,7 +50,6 @@
 #include "../Shared/PBM/PBMStateOwner.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../Shared/InferenceState/GenerationState_GPU.hpp"
-#include "../Shared/Loss/LossContext/LossContext.hpp"
 #endif
 
 namespace GRIM {
@@ -179,11 +178,6 @@ class TextGenerator;
 struct TrainingState;  // Forward declare for methods that return references
 struct OptimizerState;
 
-// Forward declare LossContext namespace and nested struct
-namespace LossContext {
-    struct LossOptions;
-}
-
 //======================================================//
 //  Parameter Group for Training
 //  (Defined in TensorContract_GPU.hpp - included above)
@@ -208,8 +202,6 @@ public:
 
     // Constructor / Destructor
     explicit LanguageModel(const HyperParameters::LanguageModelConfig& config);
-    LanguageModel(const HyperParameters::LanguageModelConfig& config,
-                  const Config::TrainingHyperparameters& training_hyperparameters);
     ~LanguageModel();
     
     // Main inference API: callers must build BatchPayload through Shared/Batching.
@@ -224,18 +216,20 @@ public:
     //
     // Two-step contract (Phase2 sync slice):
     //   1) auto bindings = model.uploadBatchToDevice(payload);
-    //   2) float loss     = model.computeLossBatch(payload, bindings, is_training);
+    //   2) float loss     = model.computeLossBatch(payload, bindings, loss_config, is_training);
     //
     // uploadBatchToDevice() performs the H2D copies into TrainingState's
     // reusable cache buffers and returns a BatchDeviceBindings that names the
     // resulting device pointers. computeLossBatch() never writes through
     // payload (BatchPayload is host-only and immutable); device addresses are
-    // read only via `bindings`.
+    // read only via `bindings`. loss_config is the durable Phase2 snapshot from
+    // HyperparameterGroupings.hpp, not LanguageModel-owned runtime config.
     GRIM::Batching::BatchDeviceBindings uploadBatchToDevice(
         const GRIM::Batching::BatchPayload& payload);
 
     float computeLossBatch(const GRIM::Batching::BatchPayload& payload,
                            const GRIM::Batching::BatchDeviceBindings& bindings,
+                           const HyperParameters::LossConfigHP& loss_config,
                            bool is_training = true);
     
     // =========================================================================
@@ -288,9 +282,6 @@ public:
     // Phase2 calls GradNorm::measureGradientNorms() + launchScaleGradients() directly.
     
 #ifdef USE_CUDA
-    void setLossOptions(const LossContext::LossOptions& opts) { loss_options_ = opts; }
-    const LossContext::LossOptions& getLossOptions() const { return loss_options_; }
-
     // Training state access (for debugging/diagnostics)
     const TrainingState& getTrainingState() const { return training_state_; }
     TrainingState& getTrainingState() { return training_state_; }
@@ -313,11 +304,6 @@ public:
     
     // Config access
     const HyperParameters::LanguageModelConfig& getConfig() const { return config_; }
-    // Non-owning Phase1 snapshot; null for inference/test callers that only
-    // construct from LanguageModelConfig.
-    const Config::TrainingHyperparameters* getTrainingHyperparameters() const { return training_hyperparameters_; }
-    bool hasTrainingHyperparameters() const { return training_hyperparameters_ != nullptr; }
-    const Config::TrainingHyperparameters& requireTrainingHyperparameters(const char* caller) const;
     
     // GPU methods
     void initGPU(uint64_t weight_init_seed);
@@ -377,9 +363,6 @@ public:
                                           HyperParameters::GenerationStreamCallback* stream_callback = nullptr);
     
 private:
-    LanguageModel(const HyperParameters::LanguageModelConfig& config,
-                  const Config::TrainingHyperparameters* training_hyperparameters);
-
     // Core inference forward: assumes data already in cached_* tensors.
     // Runs autograd forward, extracts last-token logits, returns them.
     // All public inference methods (forwardGPU, getNextTokenLogitsGPU,
@@ -400,10 +383,6 @@ private:
     Vector executeDecodeForward_(int token_pos);
 
     HyperParameters::LanguageModelConfig config_;
-    // Phase1 owns the StartupConfig/TrainingHyperparameters for the lifetime of
-    // TrainingContext; LanguageModel only keeps a read-only handle to avoid
-    // re-slicing training-only knobs into LanguageModelConfig.
-    const Config::TrainingHyperparameters* training_hyperparameters_ = nullptr;
     std::unique_ptr<GrimEmbeddingStack> embedder_;
     
 #ifdef USE_CUDA
@@ -417,7 +396,6 @@ private:
     PBM::PBMStateOwner pbm_owner_;                   // Durable model-level ALiBi/RoPE buffers
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
     uint32_t backward_call_count_ = 0;              // Tracks backward() calls for deterministic diagnostics
-    LossContext::LossOptions loss_options_{};
     PBM::PBMSpec pbm_spec_{};                       // Non-owning view into pbm_owner_
     bool pbm_spec_initialized_ = false;
     

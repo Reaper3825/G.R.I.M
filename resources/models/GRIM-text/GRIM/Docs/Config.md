@@ -13,7 +13,9 @@ Startup TrainingState cache capacity is authored on `LanguageModelConfig` as the
 
 `BatchPayload` owns per-batch/per-prompt data and geometry: token IDs, targets, sequence lengths, numeric/text features, atom metadata, slot maps, and current valid-token counts. Config/grouping code owns static and computed startup values only; it must not absorb prompt contents or current batch facts.
 
-Phase/startup code should consume these grouped views instead of hand-copying scattered config fields. If a new startup subsystem needs a repeated slice of config, add that view to `HyperparameterGroupings.hpp`; if it needs a new authored field/default/constant, add that to `HyperParameters_GPU.hpp` first. Do not create a third config owner.
+Phase/startup code should consume these grouped views instead of hand-copying scattered config fields. If a new startup subsystem needs a repeated slice of config, add that view to `HyperparameterGroupings.hpp`; if it needs a new authored field/default/constant, add that to `HyperParameters_GPU.hpp` first. Do not create a third config owner. Loss runtime config follows this rule through `LossConfigHP` / `lossConfigHP()`: Phase 2 builds one durable snapshot from the already-validated `StartupConfig`, passes it explicitly to training/validation loss calls, and `LanguageModel` must not store or mutate loss config.
+
+`LanguageModel` owns only `LanguageModelConfig` plus runtime/model state. It must not retain `TrainingHyperparameters` pointers or expose pass-through accessors for Phase 1 config; startup modules already own `StartupConfig` and should consume `config.hyperparameters` or an explicit grouping view directly.
 
 Grouped construction views also own repeated derived dimensions for their consumers. For encoder construction, `EncoderLayerConstructionHP` carries validated GQA/QKV dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) so layer code does not recompute config geometry locally.
 

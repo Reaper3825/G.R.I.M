@@ -29,9 +29,8 @@
 //    - Loss::LossBreakdown, DeviceBuffers, AuxiliaryBatchViews
 //
 //  Live loss code:
-//    - autograd::LossConfig → AutogradLoss.hpp
 //    - autograd::unified_loss() → AutogradLoss.cu
-//    - LossContext::LossOptions → LossContext/LossContext.hpp
+//    - HyperParameters::LossConfigHP → HyperparameterGroupings.hpp
 //
 //  Sub-module .cu/.hpp files also deleted:
 //    - CrossEntropy/CrossEntropy_GPU.cu/hpp

@@ -51,7 +51,6 @@
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"
 #include "../../Shared/SoftRestart/SoftRestart.hpp"
-#include "../../Shared/Loss/LossContext/LossContext.hpp"
 #include "../../Shared/Telemetry/TelemetryLattice_GPU.hpp"
 #include "../../Shared/Telemetry/TelemetryControl_GPU.hpp"
 #include "../../Shared/Telemetry/TelemetryCsvLogger.hpp"

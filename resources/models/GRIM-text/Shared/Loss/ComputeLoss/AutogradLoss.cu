@@ -536,14 +536,8 @@ struct NLLLossGradFn : public GradFn {
     int vocab_size;
     int valid_count;
     
-    // Loss configuration
-    float focal_alpha;
-    float focal_gamma;
-    bool focal_enabled;
-    float smoothing_epsilon;
-    bool smoothing_enabled;
-    float entropy_reg_lambda;
-    bool entropy_reg_enabled;
+    // Loss configuration (durable grouping snapshot from HyperparameterGroupings.hpp)
+    HyperParameters::LossConfigHP loss_config;
     
     // Class-balanced loss: per-token weight = 1/freq(target)^β
     const float* class_weights;     // NOT OWNED — points to TrainingState::class_weights_tensor.data
@@ -560,9 +554,7 @@ struct NLLLossGradFn : public GradFn {
         float* log_probs,           // Takes ownership of this GPU buffer
         const int* targets_,
         int num_tokens_, int vocab_size_, int valid_count_,
-        float focal_alpha_, float focal_gamma_, bool focal_enabled_,
-        float smoothing_epsilon_, bool smoothing_enabled_,
-        float entropy_reg_lambda_, bool entropy_reg_enabled_,
+        const HyperParameters::LossConfigHP& loss_config_,
         const float* class_weights_, float weight_sum_,
         std::shared_ptr<GradFn> upstream_grad_fn,
         const TensorContract::TensorShape& shape,
@@ -573,9 +565,7 @@ struct NLLLossGradFn : public GradFn {
         , targets(targets_)
         , num_tokens(num_tokens_), vocab_size(vocab_size_)
         , valid_count(valid_count_)
-        , focal_alpha(focal_alpha_), focal_gamma(focal_gamma_), focal_enabled(focal_enabled_)
-        , smoothing_epsilon(smoothing_epsilon_), smoothing_enabled(smoothing_enabled_)
-        , entropy_reg_lambda(entropy_reg_lambda_), entropy_reg_enabled(entropy_reg_enabled_)
+        , loss_config(loss_config_)
         , class_weights(class_weights_), weight_sum(weight_sum_)
         , log_probs_grad_fn(std::move(upstream_grad_fn))
         , grad_shape(shape)
@@ -635,21 +625,12 @@ struct NLLLossGradFn : public GradFn {
         
         // ── Step 1: Compute CE/NLL backward → gradient w.r.t. log_probs ──
         // grad_scale is folded into the mean-reduction denominator in the CE module.
-        LossConfig loss_config;
-        loss_config.focal_alpha = focal_alpha;
-        loss_config.focal_gamma = focal_gamma;
-        loss_config.focal_enabled = focal_enabled;
-        loss_config.smoothing_epsilon = smoothing_epsilon;
-        loss_config.smoothing_enabled = smoothing_enabled;
-        loss_config.entropy_reg_lambda = entropy_reg_lambda;
-        loss_config.entropy_reg_enabled = entropy_reg_enabled;
-        loss_config.d_class_weights = class_weights;
-        loss_config.class_balanced_enabled = (class_weights != nullptr);
         computeCrossEntropyBackwardToLogProbs(
             log_probs_data, targets, grad_log_probs_buffer,
             num_tokens, vocab_size, valid_count,
             weight_sum,
             loss_config,
+            class_weights,
             grad_scale,
             stream
         );
@@ -692,9 +673,10 @@ struct NLLLossGradFn : public GradFn {
             
             // Expected: with plain CE, grad_log_probs[t, target[t]] = -1/N
             // With smoothing: grad_log_probs[t, target[t]] = -(1-epsilon)/N
-            const float expected_target_grad = smoothing_enabled
-                ? (1.0f - smoothing_epsilon) / valid_count
-                : 1.0f / valid_count;
+            float expected_target_grad = 1.0f / valid_count;
+            if (loss_config.smoothing_enabled) {
+                expected_target_grad = (1.0f - loss_config.smoothing_epsilon) / valid_count;
+            }
             
             std::ostringstream eq;
             eq << "[NLL-BWD-OUT] grad_log_probs = dL/d(log_p) [NLL backward, before LogSoftmaxGradFn]\n"
@@ -750,7 +732,8 @@ __host__ Tensor unified_loss(
     Tensor& logits,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     cudaStream_t stream
 ) {
     payload.validate("unified_loss");
@@ -772,6 +755,7 @@ __host__ Tensor unified_loss(
         payload.total_tokens,
         payload.vocab_size,
         config,
+        d_class_weights,
         stream
     );
 }
@@ -781,7 +765,8 @@ __host__ Tensor unified_loss_from_target_buffer(
     const int* targets,
     int num_tokens,
     int vocab_size,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     cudaStream_t stream
 ) {
     // ══════════════════════════════════════════════════════════════════════
@@ -808,6 +793,16 @@ __host__ Tensor unified_loss_from_target_buffer(
     }
     if (vocab_size <= 0) {
         throw std::runtime_error("[unified_loss] vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
+    }
+    if (!config.initialized) {
+        throw std::runtime_error("[unified_loss] LossConfigHP is not initialized — caller MUST pass lossConfigHP(valid_training_hyperparameters)");
+    }
+    if (config.class_balanced_enabled && !d_class_weights) {
+        throw std::runtime_error("[unified_loss] class_balanced_enabled=true but d_class_weights is NULL");
+    }
+    const float* effective_class_weights = nullptr;
+    if (config.class_balanced_enabled) {
+        effective_class_weights = d_class_weights;
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -836,6 +831,7 @@ __host__ Tensor unified_loss_from_target_buffer(
         num_tokens,
         vocab_size,
         config,
+        effective_class_weights,
         stream
     );
     const float mean_loss = ce_result.mean_loss;
@@ -844,7 +840,7 @@ __host__ Tensor unified_loss_from_target_buffer(
     
     AG_TRACE("[unified_loss] valid_count=%d mean_loss=%.6f\n",
              h_valid_count, mean_loss);
-    if (config.d_class_weights) {
+    if (effective_class_weights) {
         AG_TRACE("[unified_loss] class_balanced: weight_sum=%.2f effective_N=%.2f (vs raw N=%d)\n",
                  h_weight_sum, h_weight_sum, h_valid_count);
     }
@@ -871,10 +867,8 @@ __host__ Tensor unified_loss_from_target_buffer(
             log_probs.data,       // Takes ownership of log_probs GPU buffer
             targets,
             num_tokens, vocab_size, h_valid_count,
-            config.focal_alpha, config.focal_gamma, config.focal_enabled,
-            config.smoothing_epsilon, config.smoothing_enabled,
-            config.entropy_reg_lambda, config.entropy_reg_enabled,
-            config.d_class_weights, h_weight_sum,
+            config,
+            effective_class_weights, h_weight_sum,
             log_probs.grad_fn,    // Takes ownership of LogSoftmaxGradFn
             log_probs.shape,
             stream

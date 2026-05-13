@@ -341,7 +341,8 @@ void launchCrossEntropyNLLForward(
     float* weight_sum,
     int num_tokens,
     int vocab_size,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     cudaStream_t stream
 ) {
     cudaMemsetAsync(loss_sum, 0, sizeof(float), stream);
@@ -356,7 +357,7 @@ void launchCrossEntropyNLLForward(
         config.focal_alpha, config.focal_gamma, config.focal_enabled,
         config.smoothing_epsilon, config.smoothing_enabled,
         config.entropy_reg_lambda, config.entropy_reg_enabled,
-        config.d_class_weights
+        d_class_weights
     );
 }
 
@@ -368,7 +369,8 @@ void launchCrossEntropyNLLBackward(
     int vocab_size,
     int valid_count,
     float weight_sum,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     float grad_output_scale,
     cudaStream_t stream
 ) {
@@ -378,7 +380,7 @@ void launchCrossEntropyNLLBackward(
     }
 
     float normalization = static_cast<float>(valid_count);
-    if (config.d_class_weights != nullptr && weight_sum > 0.0f) {
+    if (d_class_weights != nullptr && weight_sum > 0.0f) {
         normalization = weight_sum;
     }
     const float inv_valid_count = grad_output_scale / normalization;
@@ -390,7 +392,7 @@ void launchCrossEntropyNLLBackward(
         config.focal_alpha, config.focal_gamma, config.focal_enabled,
         config.smoothing_epsilon, config.smoothing_enabled,
         config.entropy_reg_lambda, config.entropy_reg_enabled,
-        config.d_class_weights
+        d_class_weights
     );
 }
 
@@ -401,7 +403,8 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     const int* targets,
     int num_tokens,
     int vocab_size,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     cudaStream_t stream
 ) {
     if (!log_probs) {
@@ -431,7 +434,7 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_valid_count), sizeof(int), "cross_entropy_d_valid_count");
     DeviceFreeGuard valid_count_guard(d_valid_count);
 
-    if (config.d_class_weights) {
+    if (d_class_weights) {
         cudaMallocOrThrow(reinterpret_cast<void**>(&d_weight_sum), sizeof(float), "cross_entropy_d_weight_sum");
     }
     DeviceFreeGuard weight_sum_guard(d_weight_sum);
@@ -446,6 +449,7 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
         num_tokens,
         vocab_size,
         config,
+        d_class_weights,
         stream
     );
 
@@ -472,7 +476,7 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     }
 
     float normalization = static_cast<float>(h_valid_count);
-    if (config.d_class_weights && h_weight_sum > 0.0f) {
+    if (d_class_weights && h_weight_sum > 0.0f) {
         normalization = h_weight_sum;
     }
     if (normalization <= 0.0f || !std::isfinite(normalization)) {
@@ -497,7 +501,8 @@ void computeCrossEntropyBackwardToLogProbs(
     int vocab_size,
     int valid_count,
     float weight_sum,
-    const LossConfig& config,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
     float grad_output_scale,
     cudaStream_t stream
 ) {
@@ -526,6 +531,7 @@ void computeCrossEntropyBackwardToLogProbs(
         valid_count,
         weight_sum,
         config,
+        d_class_weights,
         grad_output_scale,
         stream
     );

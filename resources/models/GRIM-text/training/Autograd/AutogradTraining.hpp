@@ -143,10 +143,11 @@ struct AutogradContext {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LOSS CONFIGURATION
-    // Populated by caller from model config (LossOptions → autograd::LossConfig)
-    // Used by computeAutogradLoss() → unified_loss()
+    // Populated by caller from HyperparameterGroupings.hpp. d_class_weights is
+    // runtime TrainingState, kept separate from hyperparameter ownership.
     // ═══════════════════════════════════════════════════════════════════════════
-    autograd::LossConfig loss_config;
+    HyperParameters::LossConfigHP loss_config;
+    const float* d_class_weights = nullptr;
     
 
     
@@ -211,12 +212,6 @@ AutogradContext initAutogradContext(
 ForwardResult executeAutogradForward(AutogradContext& ctx);
 
 /**
- * Build autograd::LossConfig from model LossOptions (single conversion point).
- * Eliminates duplicate LossOptions → LossConfig conversions across callsites.
- */
-autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts, const float* d_class_weights = nullptr);
-
-/**
  * Compute loss with autograd
  * 
  * Single entry point for ALL loss computation. Creates loss Tensor with
@@ -261,10 +256,11 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
  * BatchDeviceBindings as `bindings`. autogradTrainingStep does not write any
  * device pointers back through `payload`.
  *
- * @param model          LanguageModel (provides config, encoder, loss options)
+ * @param model          LanguageModel (provides config, encoder, layers)
  * @param training_state TrainingState (GPU buffers, optimizer state)
  * @param payload        BatchPayload (host-only single source of truth)
  * @param bindings       BatchDeviceBindings produced by uploadBatchToDevice(payload)
+ * @param loss_config    Durable loss grouping from HyperparameterGroupings.hpp
  * @param accumulate     Whether to accumulate gradients (true for accumulation slots > 0)
  * @param grad_scale     Gradient scaling factor
  * @param step           Global training step counter
@@ -276,6 +272,7 @@ LossResult autogradTrainingStep(
     TrainingState& training_state,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
+    const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     float grad_scale,
     uint64_t step

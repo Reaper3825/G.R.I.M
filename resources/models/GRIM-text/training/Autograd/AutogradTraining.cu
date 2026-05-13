@@ -168,24 +168,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     return result;
 }
 //======================================================================
-// Loss Config Builder (single conversion point)
-//======================================================================
-
-autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts, const float* d_class_weights) {
-    autograd::LossConfig lc{};
-    lc.focal_enabled       = opts.focal_enabled;
-    lc.focal_alpha         = opts.focal_enabled ? opts.focal_alpha : 1.0f;
-    lc.focal_gamma         = opts.focal_enabled ? opts.focal_gamma : 0.0f;
-    lc.smoothing_enabled   = opts.label_smoothing_enabled;
-    lc.smoothing_epsilon   = opts.label_smoothing_enabled ? opts.label_smoothing_epsilon : 0.0f;
-    lc.entropy_reg_enabled = opts.entropy_reg_enabled;
-    lc.entropy_reg_lambda  = opts.entropy_reg_enabled ? opts.entropy_reg_lambda : 0.0f;
-    lc.class_balanced_enabled = opts.class_balanced_enabled;
-    lc.d_class_weights     = opts.class_balanced_enabled ? d_class_weights : nullptr;
-    return lc;
-}
-
-//======================================================================
 // Autograd Loss Computation
 //======================================================================
 
@@ -237,6 +219,7 @@ LossResult computeAutogradLoss(
         payload,
         *ctx.device_bindings,
         ctx.loss_config,
+        ctx.d_class_weights,
         ctx.stream
     );
     
@@ -938,7 +921,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             }
         }
     }
-
+    
     // ReasoningHead parameters: executeAutogradForward currently invokes the
     // head for structured diagnostics only. No reasoning loss is assembled into
     // intermediates.loss_tensor, so verifying these params for received gradient
@@ -973,6 +956,7 @@ LossResult autogradTrainingStep(
     TrainingState& training_state,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
+    const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     float grad_scale,
     uint64_t step
@@ -1075,7 +1059,8 @@ LossResult autogradTrainingStep(
         step,
         true
     );
-    ctx.loss_config = buildLossConfig(model.getLossOptions(), training_state.class_weights_tensor.data);
+    ctx.loss_config = loss_config;
+    ctx.d_class_weights = training_state.class_weights_tensor.data;
     ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on non-initial accumulation slots
     ctx.model = &model;  // For MTP head access in computeAutogradLoss
 

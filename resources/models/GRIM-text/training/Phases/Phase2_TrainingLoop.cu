@@ -141,7 +141,7 @@ bool advanceAccumulationOrThrow(
 //  Validation Implementation
 //======================================================//
 
-ValidationResult runValidation(TrainingContext& ctx) {
+ValidationResult runValidation(TrainingContext& ctx, TrainingLoopState& state) {
     ValidationResult result;
     
     ctx.logging.logger->log("Running validation...");
@@ -223,7 +223,11 @@ ValidationResult runValidation(TrainingContext& ctx) {
         {
             GRIM::Autograd::AutogradStepScope val_step_scope(ctx.model->getTrainingState());
             const auto val_bindings = ctx.model->uploadBatchToDevice(val_payload);
-            batch_val_loss = ctx.model->computeLossBatch(val_payload, val_bindings, /*is_training=*/false);
+            batch_val_loss = ctx.model->computeLossBatch(
+                val_payload,
+                val_bindings,
+                state.loss_config,
+                /*is_training=*/false);
         }
         flushDeferredCleanup();
 
@@ -366,6 +370,7 @@ BatchResult processBatch(
         ctx.model->getTrainingState(),
         payload,
         train_bindings,
+        state.loss_config,
         should_accumulate,
         grad_scale,
         static_cast<uint64_t>(ctx.optimizer.optimizer_step.step)
@@ -784,7 +789,7 @@ EpochResult runEpoch(
     }
     
     // Run validation
-    result.validation = runValidation(ctx);
+    result.validation = runValidation(ctx, state);
     finalizeEpochOutcome(ctx, state, result, epoch_idx, epoch_loss, epoch_start);
     
     return result;
@@ -799,6 +804,7 @@ bool executePhase2(TrainingContext& ctx) {
     
     // Initialize loop state
     TrainingLoopState state;
+    state.loss_config = GRIM::HyperParameters::lossConfigHP(hp);
 
     // Construct the validation high-loss policy detector. Train-loss
     // spike/EWMA tracking is owned by TelemetryLattice.

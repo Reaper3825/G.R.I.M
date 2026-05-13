@@ -79,8 +79,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         logger.log("✓ CUDA device initialized: " + std::string(props.name));
     }
 
-    auto model = std::make_unique<GRIM::LanguageModel>(model_config, config.hyperparameters);
-    const auto& hp = model->requireTrainingHyperparameters("initializeModel");
+    auto model = std::make_unique<GRIM::LanguageModel>(model_config);
 
     {
         GRIM::StreamControllerConfig stream_config;
@@ -111,27 +110,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("Initializing TrainingState runtime workspaces...");
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
-
-    GRIM::LossContext::LossOptions loss_opts{};
-    {
-        loss_opts.label_smoothing_enabled    = hp.loss_label_smoothing_enabled;
-        loss_opts.label_smoothing_epsilon    = hp.loss_label_smoothing_epsilon;
-        loss_opts.focal_enabled              = hp.loss_focal_enabled;
-        loss_opts.focal_gamma                = hp.loss_focal_gamma;
-        loss_opts.focal_alpha                = hp.loss_focal_alpha;
-        loss_opts.preference_enabled         = hp.loss_preference_enabled;
-        loss_opts.preference_beta            = hp.loss_preference_beta;
-        loss_opts.distillation_enabled       = hp.loss_distillation_enabled;
-        loss_opts.distillation_temperature   = hp.loss_distillation_temperature;
-        loss_opts.distillation_lambda        = hp.loss_distillation_lambda;
-        loss_opts.masking_enabled            = hp.loss_masking_enabled;
-        loss_opts.masking_tag                = hp.loss_masking_tag;
-        loss_opts.entropy_reg_enabled        = hp.loss_entropy_reg_enabled;
-        loss_opts.entropy_reg_lambda         = hp.loss_entropy_reg_lambda;
-        loss_opts.class_balanced_enabled     = hp.loss_class_balanced_enabled;
-        loss_opts.class_balanced_beta        = hp.loss_class_balanced_beta;
-    }
-    model->setLossOptions(loss_opts);
 
 #ifdef USE_CUDA
     {

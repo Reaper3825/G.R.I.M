@@ -16,7 +16,7 @@
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../UnigramByte/Unigram.hpp"
-// AutogradLoss.hpp, LossContext.hpp, TeacherLogits_GPU.hpp
+// AutogradLoss.hpp and TeacherLogits_GPU.hpp
 // removed — now handled by computeAutogradLoss() in AutogradTraining.hpp
 #include "../../LogRecorder/LogRecorder.hpp"
 #include "../../../training/Autograd/AutogradTraining.hpp"  // Issue #47: Full autograd forward pass
@@ -226,6 +226,7 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 float LanguageModel::computeLossBatch(
 	const GRIM::Batching::BatchPayload& payload,
 	const GRIM::Batching::BatchDeviceBindings& bindings,
+	const GRIM::HyperParameters::LossConfigHP& loss_config,
 	bool is_training)
 {
 	// Keep intermediates for the legacy computeLossBatch() -> backward() flow on success,
@@ -382,8 +383,8 @@ float LanguageModel::computeLossBatch(
 	orderLog("computeLossBatch.forward_done",
 		batch_size, seq_len, total_tokens, payload.lm_valid_tokens);
 
-	// Build loss config via centralized helper (Issue #142: single conversion point)
-	autograd_ctx.loss_config = GRIM::Autograd::buildLossConfig(loss_options_, nullptr);
+	autograd_ctx.loss_config = loss_config;
+	autograd_ctx.d_class_weights = training_state_.class_weights_tensor.data;
 
 	static int loss_call_count = 0;
 	++loss_call_count;
