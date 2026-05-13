@@ -12,6 +12,8 @@ Entry point: `train_gpu.cu` → `executePhase1()` → `executePhase2()` → `exe
 
 Startup model tensor registration lives in `training/Phases/Startup/Model/ParameterGroupRegistration.{hpp,cu}`. `LanguageModel` still owns the durable `parameter_groups_` vector and parameter tensors; the startup module only discovers trainable tensors, records non-owning `ParameterGroup` metadata, and binds optimizer moment tensors owned by `OptimizerState`.
 
+`buildParameterGroups()` is transaction-safe: registration rebuilds a local vector, performs all configured trainable-tensor validation there, and swaps it into `LanguageModel::parameter_groups_` only after success. A thrown registration check must never leave `LanguageModel` with a half-rebuilt parameter inventory.
+
 Startup model allocation lives in `training/Phases/Startup/Model/ModelAllocationState.{hpp,cu}`. It owns the Phase 1 model startup order: CUDA device context, `LanguageModel` construction, stream controller, cuBLAS, PBM, GPU model assembly, parameter registration/verification, `TrainingState` allocation, and checkpoint load/resume.
 
 Durable GPU layer assembly lives in `training/Phases/Startup/Model/ModelGpuAssembly.cu` as `LanguageModel::initGPU(weight_init_seed)`. This Startup/Model source creates the GPU encoder, embedding layer, LM head, ScratchBlock, and optional reasoning/execution/decode-time/MTP heads. It must not allocate `TrainingState` activation caches, optimizer state, parameter groups, checkpoints, forward/backward paths, or Phase 2 loop state.

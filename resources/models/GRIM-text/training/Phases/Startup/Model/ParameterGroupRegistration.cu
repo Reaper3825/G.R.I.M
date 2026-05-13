@@ -510,12 +510,13 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
 } // namespace
 
 void buildParameterGroups(LanguageModel& model) {
-    auto& groups = model.parameterGroups();
-    groups.clear();
+    auto& model_groups = model.parameterGroups();
+    std::vector<ParameterGroup> rebuilt_groups;
+    rebuilt_groups.reserve(model_groups.size());
 
     const ParameterRegistrationHP hp = GRIM::HyperParameters::parameterRegistrationHP(model.getConfig());
 
-    Registrar registrar(groups);
+    Registrar registrar(rebuilt_groups);
     registerTopLevelParameters(model, registrar, hp);
     registerEncoderParameters(model, registrar, hp);
 
@@ -525,10 +526,16 @@ void buildParameterGroups(LanguageModel& model) {
     registerMtpParameters(model, registrar, hp);
     registerFinalRmsGamma(model, registrar, hp);
 
-    clearOptimizerBindings(groups);
+    clearOptimizerBindings(rebuilt_groups);
 
-    emitInfo("[buildParameterGroups] Built " + std::to_string(groups.size()) + " parameter groups");
-    emitGroupSummary(groups);
+    // Transaction boundary: model.parameterGroups() is replaced only after the
+    // complete configured inventory has been discovered and validated. A thrown
+    // registration check must never leave LanguageModel with a half-built group
+    // vector that downstream optimizer/checkpoint code could observe.
+    model_groups.swap(rebuilt_groups);
+
+    emitInfo("[buildParameterGroups] Built " + std::to_string(model_groups.size()) + " parameter groups");
+    emitGroupSummary(model_groups);
 }
 
 void bindOptimizerState(LanguageModel& model,
