@@ -332,7 +332,6 @@ bool testEnabledAllocatesWeights(std::string& message) {
     // Check that weight Tensors have allocated data
     SB_ASSERT_TRUE(layer.atomTypeEmbeddings().data != nullptr, "Atom type embeddings should be allocated");
     SB_ASSERT_TRUE(layer.atomProjection().data != nullptr, "Atom projection should be allocated");
-    // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
     
     return true;
 }
@@ -1140,17 +1139,24 @@ bool testRoundTripEncoding_FULL(std::string& message) {
     using namespace GRIM::Tokenizer;
     
     // Create tokenizer and atom table
-    UniByteConfig tokenizer_config;
-    tokenizer_config.enable_scratch_block_reasoning = true;
-    tokenizer_config.detect_numbers = true;
+    ::GRIM::HyperParameters::TokenizerHP tokenizer_hp;
+    tokenizer_hp.target_vocab_size = 50000;
+    tokenizer_hp.character_coverage = 0.9995f;
+    tokenizer_hp.min_subword_freq = 3;
+    tokenizer_hp.enable_parallel_subword_mining = true;
+    tokenizer_hp.enable_scratch_block_reasoning = true;
+    tokenizer_hp.detect_numbers = true;
+    tokenizer_hp.enable_byte_fallback = true;
+    tokenizer_hp.prefer_gpu = true;
+    tokenizer_hp.vocab_score_multiplier = 1.0f;
     
-    UniByte tokenizer(tokenizer_config);
+    UniByte tokenizer(tokenizer_hp);
     
     // Test text with various atoms
     std::string test_text = "User john@example.com accessed https://api.server.com/data at port 8080 with count 42";
     
     // Encode with metadata
-    auto result = tokenizer.encodeWithMetadata(test_text);
+    auto result = tokenizer.tokenizeWithMetadata(test_text);
     
     SB_ASSERT_TRUE(result.atom_tokens > 0, "Should detect numeric atoms in test text");
     SB_ASSERT_TRUE(result.atoms.size() > 0, "Should have atom metadata");

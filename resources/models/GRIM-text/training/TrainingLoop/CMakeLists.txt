@@ -561,7 +561,9 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/AtomTable.cu
     ../../Shared/UnigramByte/AhoCorasick.cu
     ../../Shared/UnigramByte/TextUtils.cu
-    ../../Shared/UnigramByte/Detectors.cu
+    ../../Shared/UnigramByte/Detectors/DetectorRegistry.cu
+    ../../Shared/UnigramByte/Detectors/NumericDetectors.cu
+    ../../Shared/UnigramByte/Detectors/TextFeatureDetectors.cu
     ../../Shared/UnigramByte/UnigramTrainer.cu
 )
 set_target_properties(grim_unigrambyte_tokenizer PROPERTIES

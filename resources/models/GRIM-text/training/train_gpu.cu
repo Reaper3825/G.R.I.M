@@ -22,10 +22,10 @@
 #include "Phases/Phase1_Startup.hpp"
 #include "Phases/Phase2_TrainingLoop.hpp"
 #include "Phases/Phase3_Cleanup.hpp"
-#include "Subprocess/tokenizer_subprocess.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 
 #include <sstream>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -150,83 +150,21 @@ int main(int argc, char** argv) {
     
     try {
         //==================================================
-        // PRE-PHASE: SUBPROCESS COORDINATOR
-        // Runs configured subprocesses BEFORE Phase 1 so the
-        // training loop never owns long pre-flight steps.
-        // Currently registers exactly one subprocess:
-        //   - train_tokenizer (vocab + GRMT preparation)
-        // The subprocess returns one of three outcomes:
-        //   1. ok_proceed  → continue into Phase 1
-        //   2. ok_one_off  → ai_config.json requested tokenizer-only;
-        //                    exit cleanly without entering training
-        //   3. error       → precise error_message; abort
-        //==================================================
-        {
-            // Mirror Phase1's --config resolution so the subprocess sees the
-            // exact same ai_config.json path.
-            std::string subproc_config_path = "ai_config.json";
-            for (int i = 1; i < argc; ++i) {
-                if (std::string(argv[i]) == "--config" && i + 1 < argc) {
-                    subproc_config_path = argv[i + 1];
-                    break;
-                }
-            }
-
-            GRIMText::Subprocess::tokenizer_subprocess_request tok_req;
-            tok_req.config_path = subproc_config_path;
-            // force_rebuild stays false here; train_tokenizer detects vocab
-            // staleness from its own header check. The training.config
-            // .force_rebuild_vocab flag is read centrally by the subprocess
-            // wrapper via GRIM::Config::loadSubprocessConfig() — never raw-
-            // parsed here or anywhere else.
-
-            const auto tok_result =
-                GRIMText::Subprocess::run_tokenizer_subprocess(tok_req);
-
-            using GRIMText::Subprocess::subprocess_outcome;
-            switch (tok_result.outcome) {
-                case subprocess_outcome::ok_proceed: {
-                    std::ostringstream oss;
-                    oss << "[Subprocess:" << tok_result.subprocess_name
-                        << "] ok_proceed | vocab=" << tok_result.vocab_path
-                        << " | data=" << tok_result.training_data_path
-                        << " | vocab_size=" << tok_result.vocab_size;
-                    EmitModuleInfo(ModuleId::TrainingOrchestrator, oss.str(), 0);
-                    break;
-                }
-                case subprocess_outcome::ok_one_off: {
-                    std::ostringstream oss;
-                    oss << "[Subprocess:" << tok_result.subprocess_name
-                        << "] ok_one_off | vocab=" << tok_result.vocab_path
-                        << " | data=" << tok_result.training_data_path
-                        << " | vocab_size=" << tok_result.vocab_size
-                        << " | ai_config.json subprocess.tokenizer.only_mode=true; "
-                           "skipping Phases 1-3";
-                    EmitModuleInfo(ModuleId::TrainingOrchestrator, oss.str(), 0);
-                    return 0;
-                }
-                case subprocess_outcome::error: {
-                    std::ostringstream oss;
-                    oss << "[Subprocess:" << tok_result.subprocess_name
-                        << "] error: " << tok_result.error_message;
-                    EmitModuleError(ModuleId::TrainingOrchestrator, oss.str(), 0);
-                    fprintf(stderr, "\n[FATAL] %s\n", oss.str().c_str());
-                    fflush(stderr);
-                    return 1;
-                }
-            }
-        }
-
-        //==================================================
         // PHASE 1: STARTUP
         //==================================================
         printPhaseHeader(1, "Startup");
         
-        auto ctx = GRIMText::Training::executePhase1(argc, argv);
+        auto phase1 = GRIMText::Training::executePhase1(argc, argv);
+
+        if (phase1.outcome == GRIMText::Training::Phase1Outcome::tokenizer_only_complete) {
+            return 0;
+        }
+
+        auto ctx = std::move(phase1.context);
         
-        if (!ctx || !ctx->model) {
+        if (!ctx || !ctx->model || !ctx->tokenizer) {
             EmitModuleError(ModuleId::TrainingOrchestrator, 
-                "Phase 1 failed: model not initialized", 0);
+                "Phase 1 failed: model or tokenizer not initialized", 0);
             return 1;
         }
         
@@ -235,7 +173,7 @@ int main(int argc, char** argv) {
             oss << "[Phase 1] ✓ Complete | Model: " << ctx->config.paths.output_model_path
                 << " | Train: " << ctx->data.train_views.size()
                 << " | Val: " << ctx->data.val_views.size()
-                << " | Vocab: " << ctx->tokenizer.vocabSize();
+                << " | Vocab: " << ctx->tokenizer->vocabSize();
             EmitModuleInfo(ModuleId::TrainingOrchestrator, oss.str(), 0);
         }
         

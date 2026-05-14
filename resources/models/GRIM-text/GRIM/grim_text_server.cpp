@@ -65,15 +65,16 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
     std::cout << "[GRIM-text] Model: " << model_path << "\n";
 
     try {
-        g_tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>();
+        const auto tokenizer_hp = HyperParameters::tokenizerHP(startup_config);
+        g_tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
         if (!g_tokenizer->load(vocab_path)) {
             std::cerr << "[GRIM-text] ERROR: Failed to load vocabulary\n";
             return false;
         }
 
         std::cout << "[GRIM-text] Loaded " << g_tokenizer->totalVocabSize() << " tokens\n";
-        std::cout << "[GRIM-text] EOS token ID: " << g_tokenizer->eosId() << "\n";
-        std::cout << "[GRIM-text] PAD token ID: " << g_tokenizer->padId() << "\n";
+        std::cout << "[GRIM-text] EOS token ID: " << GRIM::Tokenizer::EOS_TOKEN_ID << "\n";
+        std::cout << "[GRIM-text] PAD token ID: " << GRIM::Tokenizer::PAD_TOKEN_ID << "\n";
 
         HyperParameters::LanguageModelConfig config =
             HyperParameters::inferenceLanguageModelConfig(
@@ -81,9 +82,8 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
                 static_cast<std::uint32_t>(g_tokenizer->totalVocabSize()),
                 vocab_path);
         
-        // CRITICAL: Set correct EOS/PAD tokens from tokenizer
-        config.generation.eos_token_id = g_tokenizer->eosId();
-        config.generation.pad_token_id = g_tokenizer->padId();
+        config.generation.eos_token_id = GRIM::Tokenizer::EOS_TOKEN_ID;
+        config.generation.pad_token_id = GRIM::Tokenizer::PAD_TOKEN_ID;
         
         g_model = std::make_unique<LanguageModel>(config);
         std::cout << "[GRIM-text] ✓ Model object created\n" << std::flush;
@@ -120,10 +120,9 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
     try {
         std::cout << "[Generate] Encoding prompt (" << prompt.size() << " chars)..." << std::flush;
         auto start_encode = std::chrono::high_resolution_clock::now();
-        auto encoded = g_tokenizer->encodeWithMetadata(prompt);
+        auto encoded = g_tokenizer->tokenizeWithMetadata(prompt);
         auto tokens = std::move(encoded.token_ids);
         auto numeric_values = std::move(encoded.token_numeric_values);
-        auto text_features = std::move(encoded.token_text_features);
         auto atom_mask = std::move(encoded.token_atom_mask);
         auto atom_flags = std::move(encoded.token_atom_flags);
         auto prompt_atom_table = encoded.atom_table;
@@ -132,17 +131,13 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
         auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_encode - start_encode).count();
         std::cout << " " << tokens.size() << " tokens (" << encode_ms << "ms)" << std::endl;
 
-        int eos_id = g_tokenizer->eosId();
+        int eos_id = GRIM::Tokenizer::EOS_TOKEN_ID;
         if (!tokens.empty() && tokens.back() == eos_id) {
             tokens.pop_back();
             if (numeric_values.empty()) {
                 throw std::runtime_error("generateResponse: numeric_values empty while removing EOS");
             }
             numeric_values.pop_back();
-            if (text_features.size() < GRIM::Batching::BatchPayload::kTextFeatureDim) {
-                throw std::runtime_error("generateResponse: text_features too short while removing EOS");
-            }
-            text_features.resize(text_features.size() - GRIM::Batching::BatchPayload::kTextFeatureDim);
             if (atom_mask.empty()) {
                 throw std::runtime_error("generateResponse: atom_mask empty while removing EOS");
             }
@@ -160,9 +155,8 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
 
         GenerationConfig gen_config = gen_config_in;
         
-        // CRITICAL: Set EOS/PAD token IDs from tokenizer (not default 0!)
-        gen_config.eos_token_id = g_tokenizer->eosId();
-        gen_config.pad_token_id = g_tokenizer->padId();
+        gen_config.eos_token_id = GRIM::Tokenizer::EOS_TOKEN_ID;
+        gen_config.pad_token_id = GRIM::Tokenizer::PAD_TOKEN_ID;
         std::cout << "[Generate] EOS token ID: " << gen_config.eos_token_id 
                   << ", PAD token ID: " << gen_config.pad_token_id << std::endl;
         std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
@@ -172,7 +166,6 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
         auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
             tokens,
             numeric_values,
-            text_features,
             atom_mask,
             atom_flags,
             prompt_atom_table,

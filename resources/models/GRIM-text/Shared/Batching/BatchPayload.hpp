@@ -98,12 +98,9 @@ struct BatchPayload {
     // ═══════════════════════════════════════════════════════════════════════════
     // PADDED DATA (flat [batch_size * max_seq_len] layout, computed ONCE)
     // ═══════════════════════════════════════════════════════════════════════════
-    static constexpr int kTextFeatureDim = 16;
-
     std::vector<int> input_ids;              // [total_tokens] padded with Tokenizer::PAD_TOKEN_ID
     std::vector<int> target_ids;             // [total_tokens] padded with -1
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
-    std::vector<uint16_t> text_features;     // [total_tokens * kTextFeatureDim] padded with 0
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = any atom type)
     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
     std::vector<int32_t> token_to_slot_map;   // [total_tokens] padded with -1 (slot_id for execution; -1 = non-state-bearing)
@@ -338,7 +335,7 @@ struct BatchPayload {
                 std::string(caller) + ": BatchPayload.fits_in_cache=false — batch exceeds GPU cache limits");
         }
 
-        // Cross-check: numeric and text feature arrays match total_tokens
+        // Cross-check: per-token atom metadata arrays match total_tokens
         if (ownsHostInputData() && static_cast<int>(numeric_values.size()) != total_tokens) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.numeric_values.size()=" +
@@ -363,14 +360,6 @@ struct BatchPayload {
                 std::to_string(token_to_slot_map.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
-        const int expected_text_feat = total_tokens * kTextFeatureDim;
-        if (ownsHostInputData() && static_cast<int>(text_features.size()) != expected_text_feat) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.text_features.size()=" +
-                std::to_string(text_features.size()) + " != total_tokens*kTextFeatureDim=" +
-                std::to_string(expected_text_feat));
-        }
-
         // Teacher steps validation (when populated for arithmetic batches)
         if (!teacher_steps.empty()) {
             if (static_cast<int>(teacher_steps.size()) != batch_size) {
@@ -457,11 +446,10 @@ struct BatchPayload {
     size_t numericValueBytes() const { return static_cast<size_t>(total_tokens) * sizeof(float); }
     size_t atomMaskBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
     size_t atomFlagBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint32_t); }
-    size_t textFeatureBytes()  const { return static_cast<size_t>(total_tokens) * kTextFeatureDim * sizeof(uint16_t); }
     size_t slotMapBytes()      const { return static_cast<size_t>(total_tokens) * sizeof(int32_t); }
     size_t totalTransferBytes() const {
         return inputIdBytes() + targetIdBytes() + numericValueBytes() +
-               atomMaskBytes() + atomFlagBytes() + textFeatureBytes() + slotMapBytes();
+               atomMaskBytes() + atomFlagBytes() + slotMapBytes();
     }
 };
 
@@ -506,13 +494,12 @@ BatchPayload buildBatchPayload(
 /**
  * Build a validated single-row inference prefill payload from tokenizer-authored
  * metadata. This is the inference data-ingestion boundary: callers provide all
- * per-token side channels explicitly, and downstream CUDA code consumes the
+ * per-token atom side channels explicitly, and downstream CUDA code consumes the
  * resulting BatchPayload + BatchDeviceBindings pair.
  */
 BatchPayload buildInferenceBatchPayload(
     const std::vector<int>& token_ids,
     const std::vector<float>& numeric_values,
-    const std::vector<uint16_t>& text_features,
     const std::vector<uint8_t>& atom_mask,
     const std::vector<uint32_t>& atom_flags,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,

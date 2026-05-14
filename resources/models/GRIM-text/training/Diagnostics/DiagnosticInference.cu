@@ -125,9 +125,10 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
     }
     state.last_sample_step = optimizer_step;
 
-    if (!ctx.model || !ctx.logging.logger) {
+    if (!ctx.model || !ctx.tokenizer || !ctx.logging.logger) {
         return;
     }
+    const auto& tokenizer = *ctx.tokenizer;
 
     // Drain deferred CUDA errors from training before launching inference kernels.
     // Without this, async errors from the optimizer/backward pass manifest as
@@ -153,10 +154,9 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         return;
     }
 
-    auto prompt_result = ctx.tokenizer.encodeWithMetadata(prompt);
+    auto prompt_result = tokenizer.tokenizeWithMetadata(prompt);
     std::vector<int> prompt_tokens = std::move(prompt_result.token_ids);
     std::vector<float> prompt_numeric_values = std::move(prompt_result.token_numeric_values);
-    std::vector<uint16_t> prompt_text_features = std::move(prompt_result.token_text_features);
     std::vector<uint8_t> prompt_atom_mask = std::move(prompt_result.token_atom_mask);
     std::vector<uint32_t> prompt_atom_flags = std::move(prompt_result.token_atom_flags);
     auto prompt_atom_table = prompt_result.atom_table;
@@ -176,12 +176,6 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         }
         prompt_numeric_values.erase(prompt_numeric_values.begin(),
                                      prompt_numeric_values.begin() + drop);
-        const size_t feature_drop = drop * GRIM::Batching::BatchPayload::kTextFeatureDim;
-        if (prompt_text_features.size() < feature_drop) {
-            throw std::runtime_error("DiagnosticInference: prompt_text_features shorter than truncated token span");
-        }
-        prompt_text_features.erase(prompt_text_features.begin(),
-                                   prompt_text_features.begin() + feature_drop);
         if (prompt_atom_mask.size() < drop) {
             throw std::runtime_error("DiagnosticInference: prompt_atom_mask shorter than truncated token span");
         }
@@ -206,8 +200,8 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         cfg.min_new_tokens = std::max(1, max_new_tokens / 4);
     }
     cfg.num_return_sequences = 1;
-    cfg.eos_token_id = ctx.tokenizer.eosId();
-    cfg.pad_token_id = ctx.tokenizer.padId();
+    cfg.eos_token_id = GRIM::Tokenizer::EOS_TOKEN_ID;
+    cfg.pad_token_id = GRIM::Tokenizer::PAD_TOKEN_ID;
     // Seed from optimizer step for reproducible but varied samples per step
     cfg.seed = static_cast<unsigned int>(optimizer_step);
 
@@ -218,7 +212,6 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
             prompt_tokens,
             prompt_numeric_values,
-            prompt_text_features,
             prompt_atom_mask,
             prompt_atom_flags,
             prompt_atom_table,
@@ -254,7 +247,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         // DEBUG: Decode individual token IDs to see what they map to
         if (gen_tokens.size() > prompt_len) {
             int first_gen_token = gen_tokens[prompt_len];
-            std::string first_decoded = ctx.tokenizer.decode({first_gen_token});
+            std::string first_decoded = tokenizer.decode({first_gen_token});
             std::ostringstream tid_decode;
             tid_decode << "[TokenDecode] token_id=" << first_gen_token
                        << " decodes_to=\"" << first_decoded << "\""
@@ -262,7 +255,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
             ctx.logging.logger->log(tid_decode.str());
         }
 
-        std::string decoded = decodeWithAtomSideChannel(ctx.tokenizer,
+        std::string decoded = decodeWithAtomSideChannel(tokenizer,
                                                           outputs.front().token_ids,
                                                           outputs.front().token_numeric_values,
                                                           outputs.front().token_atom_mask,

@@ -10,6 +10,8 @@ Entry point: `train_gpu.cu` → `executePhase1()` → `executePhase2()` → `exe
 
 **Edit the phase file**, never `train_gpu.cu`, when modifying training logic.
 
+Tokenizer artifact preparation is Phase 1 startup work, not a pre-phase owned by `train_gpu.cu`. The order is `LoggingReady()` / `loadStartupConfig()` → `MemorySnapshotReady()` → `HyperparametersReady()` → tokenizer subprocess (`train_tokenizer`, vocab + GRMT preparation) → `CapacityStemReady()` → `DataInfoReady()`. This keeps the tokenizer run behind the same validated `StartupConfig` / `TrainingHyperparameters` path that model startup uses, while still running before `DataInfoReady()` consumes the generated vocab and training-data files. If `subprocess.tokenizer.only_mode=true`, `executePhase1()` returns `Phase1Outcome::tokenizer_only_complete` and the orchestrator exits cleanly without entering Phases 2-3.
+
 Startup model tensor registration lives in `training/Phases/Startup/Model/ParameterGroupRegistration.{hpp,cu}`. `LanguageModel` still owns the durable `parameter_groups_` vector and parameter tensors; the startup module only discovers trainable tensors, records non-owning `ParameterGroup` metadata, and binds optimizer moment tensors owned by `OptimizerState`.
 
 `buildParameterGroups()` is transaction-safe: registration rebuilds a local vector, performs all configured trainable-tensor validation there, and swaps it into `LanguageModel::parameter_groups_` only after success. A thrown registration check must never leave `LanguageModel` with a half-rebuilt parameter inventory.

@@ -186,7 +186,7 @@ Use this checklist to systematically audit each file in the order it's used duri
     - **FINDING 3 — `single_token_{logits,hidden}` dead allocations** ✅ FIXED: Removed from InitTrainingState.cu. Leftover from planned incremental KV cache never implemented.
     - **FINDING 4 — `layer_scale_init` misleading default** ✅ FIXED: Changed default from `0.1f` to `1.0f` in `HyperParameters_GPU.hpp` and the `ai_config.json` parser to match production config (Issue #129).
     - **FINDING 5 — optimizer-state allocation debug fprintf** ✅ FIXED: Removed allocation ENTER/EXIT fprintf lines from the optimizer-state owner implementation.
-    - **FINDING 6 — `batch_prep_*` vectors NOT dead**: ✅ RESOLVED (original claim was WRONG). The 7 `batch_prep_*` vectors (`batch_prep_input_ids`, `batch_prep_target_ids`, `batch_prep_numeric_values`, `batch_prep_numeric_mask`, `batch_prep_text_features`, `batch_prep_text_mask`, `batch_prep_valid_target_counts`) ARE actively used by `ComputeLossBatch.cu::prepareLossBatchInputs()` for assembling padded batch data. `DEBUG_BATCH_PREP_CORRUPTION` flag was already deleted (Phase1 audit). The vectors use lazy allocation (`batch_prep_capacity=0`, `.assign()` on first use) as a workaround for a memory corruption bug where `batch_prep_target_ids.capacity()` contained garbage before `initTrainingState()`. No action required — vectors are production code.
+    - **FINDING 6 — `batch_prep_*` vectors NOT dead**: ✅ RESOLVED (original claim was WRONG). The remaining `batch_prep_*` vectors for input IDs, target IDs, numeric values, numeric mask, and valid-target counts ARE actively used by `ComputeLossBatch.cu::prepareLossBatchInputs()` for assembling padded batch data. `DEBUG_BATCH_PREP_CORRUPTION` flag was already deleted (Phase1 audit). The vectors use lazy allocation (`batch_prep_capacity=0`, `.assign()` on first use) as a workaround for a memory corruption bug where `batch_prep_target_ids.capacity()` contained garbage before `initTrainingState()`. No action required — vectors are production code.
     - **FINDING 7 — `stream ? stream : stream_ctrl.getPrimaryStream()` x3**: Lines 63, 400, 438. Functions accept `stream = nullptr` default and fallback to centralized controller. Rule 22 compliant (fallback IS to centralized controller, which throws if uninitialized). Low priority — pedantic Rule 20 says make parameter required. DEFERRED.
   - **Rule 22**: All GPU resources managed via `TrainingState.stream_ctrl.getPrimaryStream()` (no raw streams).
 
@@ -232,7 +232,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - Coordinates allocation of all GPU resources for training
   - **FIXED**: `num_kv_heads` sourced from compile-time `HyperParameters::DEFAULT_NUM_KV_HEADS` instead of `cfg.num_kv_heads` — latent desync bug from agent corruption. Now reads JSON config like every other callsite.
   - **DELETED**: 10 dead FlashAttention bf16 Tensor fields + 2 size_t fields from TrainingState (~56MB dead GPU). `FlashAttentionLayer::ensureScratch()` self-manages these buffers; autograd `ScaledDotProductAttentionGradFn` self-allocates backward buffers. Same dead code deleted from `InitInferenceState.cu`.
-  - **FIXED**: Hardcoded `kTextFeatureDim = 16` → `Batching::BatchPayload::kTextFeatureDim` (canonical source)
+  - **DELETED**: Per-token text feature side-channel and its dimension constant; atom metadata now uses numeric values, atom mask, atom flags, atom strings, and slot maps only
   - Initialization order verified: StreamController → cuBLAS → PBM → TrainingTensors → activation caches → gradient buffers → loss scratch → ScratchBlock
   - Rule 20 compliant: throws on uninitialized cuBLAS, PBM, TrainingTensors
   - Rule 22 compliant: all streams via `stream_ctrl.getPrimaryStream()`
@@ -390,7 +390,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - `forwardStep()`: Decode phase — appends token, then chooses the valid generation path: KV-cached single-token decode for sequence-local configs, full current-sequence prefill for sequence-coupled geometry (`center_encoder_residuals`, `lm_head_center_hidden_states`, `project_out_pc1`)
   - `forwardWithCache()`: Full sequence forward, returns last-token hidden states (encoder output)
   - **DELETED**: `forwardStepIncremental()` — zero callers, alias to `forwardStep()`, header falsely claimed "O(n)" (Rule 26)
-  - **DELETED**: `forwardWithCache()` dead params `token_text_features` and `token_text_mask` — never passed, never used
+  - **DELETED**: `forwardWithCache()` dead text-feature/text-mask params — never passed, never used
   - **DELETED**: Misleading header comment block claiming incremental O(n) behavior
   - Rule 20 compliant: All error paths throw ✅
   - Correctly sets `is_training=false` in AutogradContext (disables dropout) ✅
@@ -522,7 +522,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   chain writes gradients to GradFn-internal buffers (`DropoutGradFn::input_grad`), NOT to
   `tensor.grad_data()`. Therefore `has_grad()` → **false** → ScratchBlock backward is SKIPPED.
 
-  **Impact:** `atom_projection_`, `atom_type_embeddings_`, and `text_feature_projection_`
+  **Impact:** `atom_projection_` and `atom_type_embeddings_`
   receive ZERO gradients. ScratchBlock parameters are FROZEN for the entire training run.
   The model cannot learn numeric/structural reasoning.
 
@@ -721,7 +721,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   **🔴 RE-AUDIT FINDING 5 (CORRECTNESS): Inference autograd context omitted ScratchBlock side-channel pointers — [FIXED]**
 
   `initAutogradContext(..., batch_size, seq_len, ...)` did not populate
-  `token_numeric_values` / `token_numeric_mask` (or text-feature pointers) from
+  `token_numeric_values` / `token_numeric_mask` from
   `TrainingState` caches. With ScratchBlock enabled this caused:
   `ScratchBlockLayer::forward requires token numeric side-channel` during sampling/inference.
 
@@ -767,7 +767,7 @@ Use this checklist to systematically audit each file in the order it's used duri
     - **Fix**: Added cudaMemcpyAsync after `ctx.scratch_block->forward()` to copy output back to `ctx.embedding_tensor.data`
   - **Issue #141 (BUG A)**: ScratchBlock backward NEVER called (Feb 2026) - FIXED
     - **Root Cause**: Backward guard checked `embedding_tensor.has_grad()` which was ALWAYS false (dropout output is non-leaf, gradients written to internal buffer, not tensor.grad_data())
-    - **Symptom**: `atom_projection_`, `atom_type_embeddings_`, `text_feature_projection_` received ZERO gradients for entire training
+    - **Symptom**: `atom_projection_` and `atom_type_embeddings_` received ZERO gradients for entire training
     - **Fix**: Added `grad_output_tap` field to GradFn base struct, DropoutGradFn copies `grad_output` to tap buffer before applying mask
     - **Implementation**: `scratchblock_grad_tap` buffer allocated in TrainingState (Phase1_Startup.cu), tap set before `loss_tensor.backward()`, ScratchBlock backward uses captured gradient
     - Files modified: TensorContract_GPU.hpp (GradFn tap), TensorContract_GPU.cu (DropoutGradFn tap copy), AutogradTraining.cu (tap setup + ScratchBlock backward), TrainingState_GPU.hpp (tap buffer), Phase1_Startup.cu (allocation)
@@ -1049,7 +1049,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, payload)` — text CE + numeric + learned weighting, returns `LossResult`
   - **PRIMARY TRAINING STEP**: `autogradTrainingStep(model, training_state, payload, ...)` — GPU copies + forward + loss + backward in single call
   - **FIXED (Issue #140)**: Removed √d_model embedding scaling (scale=1.0f) — eliminates 27.7x gradient asymmetry for tied weights
-  - **FIXED (Issue #141)**: ScratchBlock backward now uses gradient tap buffer — `atom_projection_`, `atom_type_embeddings_`, `text_feature_projection_` are trained ✅
+  - **FIXED (Issue #141)**: ScratchBlock backward now uses gradient tap buffer — `atom_projection_` and `atom_type_embeddings_` are trained ✅
   - **FIXED (Issue #141)**: `positional_encoding` config parsed from JSON (was hardcoded to ALIBI_ROPE)
   - **FIXED (Issue #141)**: PCGrad NaN guard changed from `assert` to runtime check (prevents 0/0 in Release builds)
   - **FIXED (Issue #142)**: Gradient tap support added to `AddGradFn` and `EmbeddingGradFn` (not just DropoutGradFn)

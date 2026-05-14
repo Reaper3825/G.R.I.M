@@ -34,7 +34,7 @@ Directory Structure:
         └── verified/             # OUTPUT: Quality-filtered data
 
 
-### merge_checkpoints.exe (Data Merger)
+### grim_data_pipeline.exe (Data Preparation Pipeline)
 Input Files:
   - data/verified/*.flatbuf       # Multiple verified data files
 
@@ -57,8 +57,8 @@ Directory Structure:
 
 ### train_gpu.exe (GPU Training)
 Input Files:
-  - data/training_data.grmt       # Binary training data (from merge_checkpoints)
-  - models/vocab.bin              # Vocabulary file (from merge_checkpoints)
+  - data/training_data.grmt       # Binary training data (from grim_data_pipeline)
+  - models/vocab.bin              # Vocabulary file (from grim_data_pipeline)
 
 Output Files:
   - checkpoints/*.bin             # Model checkpoints during training
@@ -136,7 +136,7 @@ Directory Structure:
      → data/verified/*.flatbuf
 
 3. Data Preparation Phase:
-   merge_checkpoints.exe (data/verified/*.flatbuf) 
+  grim_data_pipeline.exe (data/verified/*.flatbuf) 
      → data/training_data.grmt + models/vocab.bin
 
 4. Training Phase:

@@ -144,16 +144,9 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	const size_t numeric_val_bytes = payload.numericValueBytes();
 	const size_t atom_mask_bytes   = payload.atomMaskBytes();
 	const size_t atom_flag_bytes   = payload.atomFlagBytes();
-
-	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
-	const bool has_text_features = (cached_text_features_ptr != nullptr);
-	if (!has_text_features && !payload.text_features.empty()) {
-		throw std::runtime_error("uploadBatchToDevice: cached_token_text_features.data is NULL but payload.text_features is populated");
-	}
 	if (!training_state_.cached_token_atom_flags.data && !payload.atom_flags.empty()) {
 		throw std::runtime_error("uploadBatchToDevice: cached_token_atom_flags.data is NULL but payload.atom_flags is populated");
 	}
-	const size_t text_feat_bytes = payload.textFeatureBytes();
 	const size_t slot_map_bytes  = payload.slotMapBytes();
 
 	auto copy_start = std::chrono::high_resolution_clock::now();
@@ -177,12 +170,8 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), payload.atom_mask.data(),
 		atom_mask_bytes, cudaMemcpyHostToDevice, stream));
 
-	// Round 3: text_features + atom_flags.
+	// Round 3: atom_flags.
 	CUDA_CHECK(cudaStreamSynchronize(stream));
-	if (has_text_features) {
-		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), payload.text_features.data(),
-			text_feat_bytes, cudaMemcpyHostToDevice, stream));
-	}
 	if (training_state_.cached_token_atom_flags.data) {
 		CUDA_CHECK(cudaMemcpyAsync(
 			reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data), payload.atom_flags.data(),
@@ -211,8 +200,6 @@ GRIM::Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 	bindings.d_target_ids       = cached_targets_ptr;
 	bindings.d_seq_lengths      = cached_seq_lengths_ptr;
 	bindings.d_numeric_values   = cached_numeric_values_ptr;
-	bindings.d_text_features    = has_text_features
-		? reinterpret_cast<uint16_t*>(cached_text_features_ptr) : nullptr;
 	bindings.d_atom_mask        = reinterpret_cast<uint8_t*>(cached_atom_mask_ptr);
 	bindings.d_atom_flags       = training_state_.cached_token_atom_flags.data
 		? reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data)

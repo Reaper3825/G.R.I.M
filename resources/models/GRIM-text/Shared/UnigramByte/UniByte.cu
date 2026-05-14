@@ -2,20 +2,16 @@
 //  UniByte.cu
 //  CUDA implementation of unified tokenizer orchestrator
 //  
-//  STRUCTURAL DETECTION: Uses Aho-Corasick DFA for O(n) 
-//  prefix matching (URLs, emails, hex/binary numbers).
-//  
-//  See AhoCorasick.hpp for DFA implementation.
+//  STRUCTURAL DETECTION: Uses the raw-text detector registry to scan source
+//  byte offsets before tokenization. Detector output never classifies token IDs.
 //======================================================//
 
 #include "UniByte.hpp"
-#include "AhoCorasick.hpp"
 #include "AtomTable.hpp"
-#include "Detectors.hpp"
+#include "Detectors/DetectorRegistry.hpp"
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include <cuda_fp16.h>
 
 #include <algorithm>
 #include <cctype>
@@ -129,25 +125,30 @@ __global__ void kernelMarkStructuralBoundaries(
 }
 
 //======================================================//
-//  Detector State - Aho-Corasick Based (10-100x faster)
+//  Detector State - Raw Text Registry
 //======================================================//
 
     struct UniByte::DetectorState {
-        // All Aho-Corasick automata deleted: url_prefixes, email_indicator
-        // were empty (non-numeric atoms removed per Rule 26), and
-        // number_prefixes (0x/0b) replaced by inline guard in detectStructures.
-        DetectorState() {}
+        Detector::DetectorRegistry registry;
+
+        DetectorState()
+            : registry(Detector::makeDefaultRawTextDetectorRegistry())
+        {
+            if (registry.empty()) {
+                throw std::runtime_error("UniByte::DetectorState registry initialized empty");
+            }
+        }
     };
 
 //======================================================//
 //  UniByte Implementation
 //======================================================//
 
-UniByte::UniByte(const UniByteConfig& config)
-    : config_(config)
+UniByte::UniByte(const ::GRIM::HyperParameters::TokenizerHP& hp)
+    : tokenizer_hp_(hp)
     , detector_(nullptr)
 {
-    unigram_.setByteFallbackEnabled(config_.enable_byte_fallback);
+    unigram_.setByteFallbackEnabled(tokenizer_hp_.enable_byte_fallback);
     detector_ = std::make_unique<DetectorState>();
     initDetector();
 }
@@ -155,7 +156,7 @@ UniByte::UniByte(const UniByteConfig& config)
 UniByte::~UniByte() = default;
 
 UniByte::UniByte(UniByte&& other) noexcept
-    : config_(other.config_)
+    : tokenizer_hp_(std::move(other.tokenizer_hp_))
     , byte_encoder_(std::move(other.byte_encoder_))
     , unigram_(std::move(other.unigram_))
     , gpu_initialized_(other.gpu_initialized_)
@@ -166,7 +167,7 @@ UniByte::UniByte(UniByte&& other) noexcept
 
 UniByte& UniByte::operator=(UniByte&& other) noexcept {
     if (this != &other) {
-        config_ = other.config_;
+        tokenizer_hp_ = std::move(other.tokenizer_hp_);
         byte_encoder_ = std::move(other.byte_encoder_);
         unigram_ = std::move(other.unigram_);
         gpu_initialized_ = other.gpu_initialized_;
@@ -237,7 +238,7 @@ bool UniByte::train(const std::vector<std::string>& texts) {
 
     size_t total_atoms = 0;
     size_t total_skipped_unparseable = 0;
-    const bool detect = config_.enable_scratch_block_reasoning;
+    const bool detect = tokenizer_hp_.enable_scratch_block_reasoning;
     for (const auto& text : texts) {
         std::vector<AtomSpan> spans;
         if (detect) {
@@ -266,13 +267,13 @@ bool UniByte::train(const std::vector<std::string>& texts) {
               << "; scratch_block_reasoning=" << (detect ? "on" : "off") << std::endl;
     
     return unigram_.trainFromCorpus(texts, all_atom_spans,
-                                     config_.target_vocab_size, 
-                                     config_.character_coverage,
-                                     config_.min_subword_freq,
-                                     config_.prune_during_mining,
-                                     config_.enable_parallel_subword_mining,
-                                     config_.subword_mining_workers,
-                                     config_.subword_mining_max_bytes);
+                                     tokenizer_hp_.target_vocab_size, 
+                                     tokenizer_hp_.character_coverage,
+                                     tokenizer_hp_.min_subword_freq,
+                                     tokenizer_hp_.prune_during_mining,
+                                     tokenizer_hp_.enable_parallel_subword_mining,
+                                     tokenizer_hp_.subword_mining_workers,
+                                     tokenizer_hp_.subword_mining_max_bytes);
 }
 
 bool UniByte::initGPU() {
@@ -291,11 +292,25 @@ bool UniByte::initGPU() {
 // Structural Detection
 //--------------------------------------------------//
 
+std::vector<Detector::RawTextDetection> UniByte::detectRawText(const std::string& text) const {
+    if (!detector_) {
+        throw std::runtime_error("UniByte::detectRawText requires initialized detector registry");
+    }
+
+    const Detector::RawTextDetectorOptions options(
+        tokenizer_hp_.detect_numbers,
+        true,
+        true);
+    return detector_->registry.scan(text, options);
+}
+
 std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) const {
     std::vector<StructuralSpan> spans;
     spans.reserve(32);  // Pre-allocate for typical case
     
-    if (!detector_) return spans;
+    if (!detector_) {
+        throw std::runtime_error("UniByte::detectStructures requires initialized detector registry");
+    }
     
     // Lambda to create span with zero-copy buffer reference
     auto makeSpan = [&text](size_t start, size_t end, AtomType type) -> StructuralSpan {
@@ -312,30 +327,12 @@ std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) c
         return span;
     };
     
-    //--------------------------------------------------//
-    // Number detection: single-pass longest-match scan
-    //--------------------------------------------------//
-    
-    if (config_.detect_numbers) {
-        // Single-pass longest-match: float > integer.
-        // Hex/binary atoms removed — those patterns are now tokenized as regular text.
-        for (size_t i = 0; i < text.size(); ) {
-            size_t end;
-            
-            if (Detector::detectFloat(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_FLOAT));
-                i = end;
-                continue;
-            }
-            
-            if (Detector::detectInteger(text, i, end)) {
-                spans.push_back(makeSpan(i, end, AtomType::ATOM_INT));
-                i = end;
-                continue;
-            }
-            
-            ++i;
+    const auto detections = detectRawText(text);
+    for (const auto& detection : detections) {
+        if (!detection.emitsAtom()) {
+            continue;
         }
+        spans.push_back(makeSpan(detection.start, detection.end, detection.atom_type));
     }
     
     // Sort by position and remove overlaps
@@ -362,7 +359,7 @@ std::string UniByte::injectPlaceholders(const std::string& text,
     // Honor scratch_block_reasoning: when disabled, no atoms exist as far as
     // the rest of the pipeline is concerned, so the input must pass through
     // verbatim with no placeholders injected.
-    if (!config_.enable_scratch_block_reasoning) {
+    if (!tokenizer_hp_.enable_scratch_block_reasoning) {
         return text;
     }
 
@@ -418,7 +415,7 @@ std::string UniByte::injectPlaceholders(const std::string& text,
 //--------------------------------------------------//
 
 void UniByte::setScratchBlockReasoning(bool enabled) {
-    config_.enable_scratch_block_reasoning = enabled;
+    tokenizer_hp_.enable_scratch_block_reasoning = enabled;
 }
 
 //--------------------------------------------------//
@@ -427,111 +424,32 @@ void UniByte::setScratchBlockReasoning(bool enabled) {
 
 std::vector<int> UniByte::encode(const std::string& text) const {
     // If scratch block reasoning is disabled, use fast path (normal UnigramByte)
-    if (!config_.enable_scratch_block_reasoning) {
+    if (!tokenizer_hp_.enable_scratch_block_reasoning) {
         // FAST PATH: No structural detection, no AtomTable, just pure tokenization
         return unigram_.encode(text);
     }
     
     // SCRATCH BLOCK REASONING PATH: Use AtomTable for structural reasoning
-    auto result = encodeWithMetadata(text);
+    auto result = tokenizeWithMetadata(text);
     return result.token_ids;
 }
 
-UniByteResult UniByte::encodeWithMetadata(const std::string& text) const {
+UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
     // Honor scratch block reasoning toggle: when disabled, skip atom detection
     // entirely so callers on the metadata path see the same plain unigram
     // tokenization as encode(). Atom side-channels remain zero-filled.
     std::vector<StructuralSpan> structures;
-    if (config_.enable_scratch_block_reasoning) {
+    if (tokenizer_hp_.enable_scratch_block_reasoning) {
         structures = detectStructures(text);
     }
     auto result = encodeInternal(text, structures);
     
     // Pipeline contract: validate all per-token arrays are consistent
     // before this result can enter BatchPayload / GPU tensor pipeline.
-    result.validate("UniByte::encodeWithMetadata");
+    result.validate("UniByte::tokenizeWithMetadata");
     
     return result;
 }
-
-//======================================================//
-//  Text Feature Encoding (16-dim FP16 per atom token)
-//======================================================//
-//
-//  Feature layout (16 dimensions):
-//    [0-3]:   Atom type one-hot (4 bits for type category)
-//    [4-7]:   Atom sub-type encoding (specific type within category)
-//    [8-11]:  Length/magnitude features (log-scaled)
-//    [12-15]: Structure-specific semantic features
-//
-//  Categories:
-//    NUMERIC   = 0: Integer, Float, Hex, Binary
-//    TEMPORAL  = 1: Date, Time
-//    STRUCTURAL= 2: URL, Email, Path, IP
-//    STRING    = 3: StringLiteral, Identifier
-//======================================================//
-
-namespace {
-
-// FP16 conversion helper (C++ side)
-inline uint16_t floatToFp16(float value) {
-    __half h = __float2half(value);
-    return *reinterpret_cast<uint16_t*>(&h);
-}
-
-// Encode text features for an atom token into 16-dim FP16 vector
-void encodeAtomTextFeatures(
-    AtomType atom_type,
-    const std::string_view raw_text,
-    const AtomValue* parsed,
-    uint16_t* out_features  // [kTextFeatureDim]
-) {
-    for (int i = 0; i < kTextFeatureDim; ++i) {
-        out_features[i] = floatToFp16(0.0f);
-    }
-    
-    if (!isNumericAtom(atom_type)) return;
-    
-    // Dim 0: integer indicator
-    out_features[0] = floatToFp16(atom_type == AtomType::ATOM_INT ? 1.0f : 0.0f);
-    // Dim 1: float indicator
-    out_features[1] = floatToFp16(atom_type == AtomType::ATOM_FLOAT ? 1.0f : 0.0f);
-    
-    // Dims [8-11]: Length/magnitude features
-    float len_f = static_cast<float>(raw_text.size());
-    out_features[8] = floatToFp16(std::min(len_f / 100.0f, 1.0f));
-    out_features[9] = floatToFp16(std::log2f(len_f + 1.0f) / 10.0f);
-    
-    if (parsed) {
-        if (auto* int_val = std::get_if<AtomInteger>(parsed)) {
-            float log_mag = std::log2f(std::abs(static_cast<float>(int_val->value)) + 1.0f);
-            out_features[10] = floatToFp16(std::min(log_mag / 32.0f, 1.0f));
-            out_features[11] = floatToFp16(int_val->value < 0 ? 1.0f : 0.0f);
-        } else if (auto* float_val = std::get_if<AtomFloat>(parsed)) {
-            float log_mag = std::log2f(std::abs(static_cast<float>(float_val->value)) + 1.0f);
-            out_features[10] = floatToFp16(std::min(log_mag / 32.0f, 1.0f));
-            out_features[11] = floatToFp16(float_val->has_exponent ? 1.0f : 0.0f);
-        }
-    }
-    
-    // Dims [12-14]: Character composition
-    int digit_count = 0, alpha_count = 0, special_count = 0;
-    for (char c : raw_text) {
-        if (std::isdigit(static_cast<unsigned char>(c))) ++digit_count;
-        else if (std::isalpha(static_cast<unsigned char>(c))) ++alpha_count;
-        else ++special_count;
-    }
-    float total = static_cast<float>(raw_text.size()) + 1e-6f;
-    out_features[12] = floatToFp16(static_cast<float>(digit_count) / total);
-    out_features[13] = floatToFp16(static_cast<float>(alpha_count) / total);
-    out_features[14] = floatToFp16(static_cast<float>(special_count) / total);
-    
-    // Dim 15: has decimal point
-    bool has_dot = raw_text.find('.') != std::string_view::npos;
-    out_features[15] = floatToFp16(has_dot ? 1.0f : 0.0f);
-}
-
-}  // anonymous namespace
 
 UniByteResult UniByte::encodeInternal(const std::string& text,
                                        const std::vector<StructuralSpan>& structures) const {
@@ -552,17 +470,11 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
     result.token_numeric_values.reserve(estimated_tokens);
     result.token_atom_flags.reserve(estimated_tokens);
     result.atom_entry_ids.reserve(estimated_tokens);
-    result.token_text_features.reserve(estimated_tokens * kTextFeatureDim);
     result.token_atom_mask.reserve(estimated_tokens);
     result.atoms.reserve(structures.size());
-    
-    // Pre-computed zero text features (FP16) — avoid recomputing floatToFp16(0.0f) per token
-    static const uint16_t kZeroFp16 = floatToFp16(0.0f);
-    
-    // Helper: append zeros for non-atom tokens (no text features)
-    auto appendZeroSideChannels = [&]() {
-        result.token_text_features.insert(
-            result.token_text_features.end(), kTextFeatureDim, kZeroFp16);
+
+    // Helper: append atom mask for non-atom tokens.
+    auto appendNonAtomSideChannels = [&]() {
         result.token_atom_mask.push_back(0);
     };
     
@@ -575,7 +487,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             return;
         }
         std::string segment = text.substr(start, end - start);
-        // encode() returns token IDs directly — no need for encodeWithPieces
+        // encode() returns token IDs directly; metadata side channels are already assembled above.
         // Note: UnigramLM::encode() normalizes to lowercase internally.
         // Only prepend ▁ when this is genuinely the first emitted token of
         // the sequence: start-of-text AND nothing has been emitted yet (no
@@ -591,7 +503,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             result.token_numeric_values.push_back(0.0f);
             result.token_atom_flags.push_back(0);
             result.atom_entry_ids.push_back(kAtomEntryNone);  // no atom at this position
-            appendZeroSideChannels();  // Non-atom tokens get zero features + mask=0
+            appendNonAtomSideChannels();  // Non-atom tokens get mask=0
             
             if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
                 result.is_byte_fallback.push_back(true);
@@ -610,14 +522,12 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
 
             int atom_token_id = span.placeholder_id;
             float numeric_value = 0.0f;
-            AtomValue parsed_value;
             bool has_parsed = false;
             
-            // Parse atom for both numeric and text features
+            // Parse atom for numeric side channels.
             auto parsed = AtomTable::parseAtom(span.atom_type, std::string(span.contentView()));
             if (parsed.success) {
                 has_parsed = true;
-                parsed_value = parsed.value;
                 
                 if (Tokenizer::isNumericAtom(span.atom_type)) {
                     if (auto* int_val = std::get_if<AtomInteger>(&parsed.value)) {
@@ -666,18 +576,6 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             result.token_numeric_values.push_back(packed_numeric);
             result.token_atom_flags.push_back(packed_flags);
             result.atom_entry_ids.push_back(entry_id);
-            
-            // Encode text features for atom token
-            uint16_t text_features[kTextFeatureDim];
-            encodeAtomTextFeatures(
-                span.atom_type, 
-                span.contentView(), 
-                has_parsed ? &parsed_value : nullptr,
-                text_features
-            );
-            for (int i = 0; i < kTextFeatureDim; ++i) {
-                result.token_text_features.push_back(text_features[i]);
-            }
             result.token_atom_mask.push_back(1);  // Atom tokens: unified mask
             
             result.atoms.push_back(span);
@@ -703,140 +601,77 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
     return result;
 }
 
-std::vector<std::vector<int>> UniByte::encodeBatch(const std::vector<std::string>& texts) const {
-    std::vector<std::vector<int>> results;
-    results.reserve(texts.size());
-    
-    for (const auto& text : texts) {
-        results.push_back(encode(text));
-    }
-    
-    return results;
-}
-
-bool UniByte::encodeGPU(const char* d_text,
-                        size_t length,
-                        int* d_token_ids,
-                        int* d_token_count,
-                        int max_tokens) {
-    // Rule 20: encodeGPU is plain unigram tokenization with no atom
-    // detection, no AtomTable side-channels, and no parse-success fallback.
-    // It CANNOT match the CPU encode() path when scratch block reasoning is
-    // enabled, so callers must opt in to the mismatch by disabling reasoning
-    // first. Silently diverging from encode() would hide tokenization drift.
-    if (config_.enable_scratch_block_reasoning) {
-        throw std::runtime_error(
-            "UniByte::encodeGPU: scratch_block_reasoning is enabled but the "
-            "GPU path performs plain unigram tokenization only (no atom "
-            "detection, no AtomTable, no side-channels). Disable scratch "
-            "block reasoning explicitly via setScratchBlockReasoning(false) "
-            "or use encodeWithMetadata() on the CPU.");
-    }
-    if (!gpu_initialized_) {
-        if (!initGPU()) return false;
-    }
-
-    // Note: Byte fallback flags not needed - fallback tokens are indistinguishable from regular tokens
-    // Position embeddings work identically for all token IDs (byte fallback or unigram)
-    return unigram_.encodeGPU(d_text, length, d_token_ids,
-                              d_token_count, max_tokens, nullptr);
-}
-
 //--------------------------------------------------//
 // Decoding
 //--------------------------------------------------//
 
-std::string UniByte::decode(const std::vector<int>& token_ids) const {
-    return decode(token_ids.data(), token_ids.size());
+namespace {
+
+void appendDecodedLayoutToken(std::string& result, int token_id) {
+    if (token_id == PAD_TOKEN_ID) return;
+    result += specialTokenText(token_id);
 }
 
-std::string UniByte::decode(const int* token_ids, size_t count) const {
-    std::string result;
-    
-    for (size_t i = 0; i < count; ++i) {
-        int tid = token_ids[i];
-        
-        if (tid >= SPECIAL_TOKEN_OFFSET && tid < NUM_SPECIAL_TOKENS) {
-            // Special token
-            if (tid == UNK_TOKEN_ID) result += "<unk>";
-            else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
-            else if (tid == BOS_TOKEN_ID) result += "<s>";
-            else if (tid == EOS_TOKEN_ID) result += "</s>";
-        } else if (isByteToken(tid)) {
-            // Byte token - direct character output
-            result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
-        } else if (isAtomToken(tid)) {
-            // Atom tokens map to AtomTable entries; raw values are resolved separately.
-            continue;
-        } else if (isUnigramToken(tid)) {
-            // Unigram token
-            const UnigramPiece* piece = unigram_.getPiece(tid);
-            if (piece) {
-                result += piece->text;
-            }
-        }
+void appendDecodedByteToken(std::string& result, int token_id) {
+    result.push_back(static_cast<char>(token_id - BYTE_TOKEN_OFFSET));
+}
+
+void appendDecodedUnigramToken(std::string& result, const UnigramLM& unigram, int token_id) {
+    const UnigramPiece* piece = unigram.getPiece(token_id);
+    if (!piece) {
+        throw std::runtime_error("UniByte::decode: unigram token_id=" + std::to_string(token_id) +
+                                 " has no backing UnigramPiece");
     }
-    
-    return UnigramLM::denormalizeFromTokenization(result);
+    result += piece->text;
 }
 
-std::string UniByte::decodeWithAtoms(const std::vector<int>& token_ids,
-                                      const AtomResolver& resolver) const {
-    std::string result;
-    
-    for (int tid : token_ids) {
-        if (isSpecialToken(tid)) {
-            if (tid == UNK_TOKEN_ID) result += "<unk>";
-            else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
-            else if (tid == BOS_TOKEN_ID) result += "<s>";
-            else if (tid == EOS_TOKEN_ID) result += "</s>";
-        } else if (isByteToken(tid)) {
-            result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
-        } else if (isAtomToken(tid)) {
-            AtomType type = tokenIdToAtomType(tid);
-            result += resolver(tid, type);
-        } else if (isUnigramToken(tid)) {
-            const UnigramPiece* piece = unigram_.getPiece(tid);
-            if (piece) {
-                result += piece->text;
-            }
-        }
+void appendDecodedAtomToken(std::string& result, const DecodeRequest& request, size_t index, int token_id) {
+    if (!request.atom_entry_ids || !request.atom_table) {
+        throw std::runtime_error("UniByte::decode: atom token_id=" + std::to_string(token_id) +
+                                 " requires DecodeRequest built from UniByteResult");
     }
-    
-    return UnigramLM::denormalizeFromTokenization(result);
+    if (request.atom_entry_count != request.token_count) {
+        throw std::runtime_error("UniByte::decode: atom_entry_count=" +
+                                 std::to_string(request.atom_entry_count) +
+                                 " != token_count=" + std::to_string(request.token_count));
+    }
+
+    const uint32_t entry_id = request.atom_entry_ids[index];
+    if (entry_id == kAtomEntryNone) {
+        throw std::runtime_error("UniByte::decode: atom token_id=" + std::to_string(token_id) +
+                                 " has kAtomEntryNone at index=" + std::to_string(index));
+    }
+
+    const AtomEntry* entry = request.atom_table->getAtom(entry_id);
+    if (!entry) {
+        throw std::runtime_error("UniByte::decode: atom_entry_id=" + std::to_string(entry_id) +
+                                 " has no backing AtomEntry");
+    }
+    result += request.atom_table->atomToString(*entry);
 }
 
-std::string UniByte::decodeWithAtoms(const std::vector<int>& token_ids,
-                                      const std::vector<uint32_t>& atom_entry_ids,
-                                      const AtomEntryResolver& resolver) const {
-    if (atom_entry_ids.size() != token_ids.size()) {
-        throw std::runtime_error(
-            "UniByte::decodeWithAtoms: atom_entry_ids.size()=" +
-            std::to_string(atom_entry_ids.size()) +
-            " != token_ids.size()=" + std::to_string(token_ids.size()) +
-            " — caller MUST provide a per-token entry array (use "
-            "UniByteResult.atom_entry_ids).");
+} // namespace
+
+std::string UniByte::decode(const DecodeRequest& request) const {
+    if (!request.token_ids && request.token_count != 0) {
+        throw std::runtime_error("UniByte::decode: token_ids is NULL while token_count=" +
+                                 std::to_string(request.token_count));
     }
 
     std::string result;
-    for (size_t i = 0; i < token_ids.size(); ++i) {
-        const int tid = token_ids[i];
-        if (isSpecialToken(tid)) {
-            if (tid == UNK_TOKEN_ID) result += "<unk>";
-            else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
-            else if (tid == BOS_TOKEN_ID) result += "<s>";
-            else if (tid == EOS_TOKEN_ID) result += "</s>";
+    for (size_t i = 0; i < request.token_count; ++i) {
+        const int tid = request.token_ids[i];
+        if (isSpecialTokenId(tid)) {
+            appendDecodedLayoutToken(result, tid);
         } else if (isByteToken(tid)) {
-            result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
+            appendDecodedByteToken(result, tid);
         } else if (isAtomToken(tid)) {
-            const AtomType type = tokenIdToAtomType(tid);
-            const uint32_t entry_id = atom_entry_ids[i];
-            result += resolver(entry_id, type);
+            appendDecodedAtomToken(result, request, i, tid);
         } else if (isUnigramToken(tid)) {
-            const UnigramPiece* piece = unigram_.getPiece(tid);
-            if (piece) {
-                result += piece->text;
-            }
+            appendDecodedUnigramToken(result, unigram_, tid);
+        } else {
+            throw std::runtime_error("UniByte::decode: token_id=" + std::to_string(tid) +
+                                     " is outside all known token ranges");
         }
     }
 
@@ -878,26 +713,6 @@ void UniByte::capVocabSize(int max_vocab) {
     unigram_.capVocabSize(max_vocab);
 }
 
-int UniByte::padId() const {
-    return PAD_TOKEN_ID;  // Absolute ID = 1
-}
-
-int UniByte::unkId() const {
-    return UNK_TOKEN_ID;  // Absolute ID = 0
-}
-
-int UniByte::bosId() const {
-    return BOS_TOKEN_ID;  // Absolute ID = 2
-}
-
-int UniByte::eosId() const {
-    return EOS_TOKEN_ID;  // Absolute ID = 3
-}
-
-bool UniByte::isSpecialToken(int token_id) const {
-    return token_id >= SPECIAL_TOKEN_OFFSET && token_id < NUM_SPECIAL_TOKENS;
-}
-
 bool UniByte::isByteToken(int token_id) const {
     return token_id >= BYTE_TOKEN_OFFSET && token_id < ATOM_TOKEN_OFFSET;
 }
@@ -911,11 +726,7 @@ bool UniByte::isUnigramToken(int token_id) const {
 }
 
 std::string UniByte::tokenToString(int token_id) const {
-    // Handle special tokens explicitly (before byte/atom/unigram checks)
-    if (token_id == UNK_TOKEN_ID) return "<UNK>";
-    if (token_id == PAD_TOKEN_ID) return "<PAD>";
-    if (token_id == BOS_TOKEN_ID) return "<BOS>";
-    if (token_id == EOS_TOKEN_ID) return "<EOS>";
+    if (isSpecialTokenId(token_id)) return specialTokenText(token_id);
 
     if (isByteToken(token_id)) {
         return byte_encoder_.tokenToString(token_id);

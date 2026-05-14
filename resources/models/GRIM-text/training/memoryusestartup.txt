@@ -177,9 +177,8 @@ GQA Configuration: num_heads=12 num_kv_heads=4 (heads_per_kv_group=3)
 ✓ Allocated token IDs cache (Tensor API) [8192]
 ✓ Allocated token numeric values cache (Tensor API)
 ✓ Allocated token atom mask cache (Tensor API)
-✓ Allocated token text features cache (Tensor API)
 ✓ Allocated token atom flags cache (Tensor API)
-✓ Allocated atom mask + text feature + atom flags buffers (0 MB)
+✓ Allocated atom mask + atom flags buffers (0 MB)
 ✓ Allocated grad_logits_tensor [8192 x 2512] LOGITS layout
 📐 Issue #43: Allocated centering scratch tensor (96 MB)
 ✓ Scratch block pool initialized (2 blocks × 262144 bytes (65536 tokens) = 0.50 MB pinned memory)

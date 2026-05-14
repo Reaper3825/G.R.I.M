@@ -5,10 +5,12 @@
 #include "../../Phase1_Startup.hpp"
 
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/UnigramByte/Unigram.hpp"
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -43,27 +45,15 @@ void validatePaths(const PathConfig& paths) {
     fs::create_directories(paths.log_dir);
 }
 
-GRIM::Tokenizer::UniByte initializeTokenizer(
+std::unique_ptr<GRIM::Tokenizer::UniByte> initializeTokenizer(
     const std::string& vocab_path,
-    const GRIM::Config::TokenizerConfig& tok_config,
-    const GRIM::Config::TrainingHyperparameters& hyperparameters,
+    const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
     TrainingLogger& logger)
 {
     logger.log("Loading tokenizer configuration...");
 
-    GRIM::Tokenizer::UniByteConfig cfg;
-    if (tok_config.vocab_size <= 0) {
-        throw std::runtime_error("FATAL: tokenizer.vocab_size not configured in ai_config.json");
-    }
-    cfg.target_vocab_size = tok_config.vocab_size;
-    cfg.character_coverage = GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE;
-    cfg.enable_scratch_block_reasoning = hyperparameters.tokenizer_enable_scratch_block_reasoning;
-    cfg.detect_numbers = hyperparameters.tokenizer_detect_numbers;
-    cfg.enable_byte_fallback = tok_config.enable_byte_fallback;
-    cfg.prefer_gpu = GRIM::HyperParameters::TOKENIZER_PREFER_GPU;
-
-    GRIM::Tokenizer::UniByte tokenizer(cfg);
-    if (!tokenizer.load(vocab_path)) {
+    auto tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
+    if (!tokenizer->load(vocab_path)) {
         throw std::runtime_error("Failed to load vocabulary: " + vocab_path);
     }
 
@@ -90,8 +80,8 @@ SequenceData loadTrainingData(
     data.vocab_size = loader.vocabSize();
     auto all_sequences = loader.getSequences();
 
-    const int bos_id = tokenizer.bosId();
-    const int eos_id = tokenizer.eosId();
+    const int bos_id = GRIM::Tokenizer::BOS_TOKEN_ID;
+    const int eos_id = GRIM::Tokenizer::EOS_TOKEN_ID;
 
     size_t val_size = all_sequences.size() / 10;
     data.train_seqs.assign(all_sequences.begin() + val_size, all_sequences.end());
@@ -176,18 +166,19 @@ void DataInfoReady(TrainingContext& ctx) {
     Internal::validatePaths(ctx.config.paths);
     EmitModuleInfo(ModuleId::Training, "[Phase1] ✓ All paths validated", 0);
 
-    const GRIM::Config::TokenizerConfig& tok_cfg = ctx.config.tokenizer_config;
+    const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
+    const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
     ctx.tokenizer = Internal::initializeTokenizer(
-        ctx.config.paths.vocab_path, tok_cfg, ctx.config.hyperparameters, *ctx.logging.logger);
+        ctx.config.paths.vocab_path, tokenizer_hp, *ctx.logging.logger);
 
     DataLoadInputs data_inputs;
     data_inputs.data_path = ctx.config.paths.data_path;
     data_inputs.vocab_path = ctx.config.paths.vocab_path;
     data_inputs.max_seq_len = ctx.config.max_seq_len;
-    data_inputs.min_seq_valid_tokens = ctx.config.hyperparameters.min_seq_valid_tokens;
-    data_inputs.sliding_window_stride = ctx.config.sliding_window_stride;
-    data_inputs.add_bos = tok_cfg.add_bos;
-    data_inputs.add_eos = tok_cfg.add_eos;
+    data_inputs.min_seq_valid_tokens = data_hp.min_seq_valid_tokens;
+    data_inputs.sliding_window_stride = data_hp.sliding_window_stride;
+    data_inputs.add_bos = tokenizer_hp.add_bos;
+    data_inputs.add_eos = tokenizer_hp.add_eos;
 
     ctx.data = Internal::loadTrainingData(
         data_inputs.data_path,
@@ -196,10 +187,10 @@ void DataInfoReady(TrainingContext& ctx) {
         data_inputs.sliding_window_stride,
         data_inputs.add_bos,
         data_inputs.add_eos,
-        ctx.tokenizer,
+        *ctx.tokenizer,
         *ctx.logging.logger);
 
-    const uint32_t tokenizer_vocab_size = ctx.tokenizer.totalVocabSize();
+    const uint32_t tokenizer_vocab_size = ctx.tokenizer->totalVocabSize();
     ctx.data_info = summarizeDataInfoOrThrow(data_inputs, ctx.data, tokenizer_vocab_size);
     ctx.config.actual_vocab_size = ctx.data_info.actual_vocab_size;
     if (ctx.config.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {

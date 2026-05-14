@@ -259,8 +259,6 @@ bool LanguageModel::save(const std::string& path) {
             request.sources.scratch_block.atom_projection.count = ap.numel();
         }
         
-        // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
-        
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ScratchBlock (atom_emb=" + 
                        std::to_string(request.sources.scratch_block.atom_type_embeddings.count) +
                        ", atom_proj=" + std::to_string(request.sources.scratch_block.atom_projection.count) + ")");
@@ -493,9 +491,6 @@ bool LanguageModel::load(const std::string& path) {
         if (ap.data) {
             assignWrite(request.scratch_block.atom_projection, ap.data, ap.numel());
         }
-        
-        // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
-        // Old checkpoints may contain text_feature_projection — silently ignored on load.
     }
 
     // ReasoningHead weight destinations

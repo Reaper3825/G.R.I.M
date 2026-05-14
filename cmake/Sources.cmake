@@ -84,7 +84,6 @@ file(GLOB_RECURSE DEVICE_COMM_SOURCES "control/devices/*.cpp")
 file(GLOB_RECURSE DEVICE_COMM_HEADERS "control/devices/*.hpp")
 # Exclude standalone entry point files (these have main() functions)
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_data_collection\\.cpp$")
-list(FILTER DataCollection_SOURCES EXCLUDE REGEX "merge_checkpoints\\.cpp$")
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_verifier\\.cpp$")
 # Exclude replaced monolithic files
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "grim_data_pipeline\\.cpp$")

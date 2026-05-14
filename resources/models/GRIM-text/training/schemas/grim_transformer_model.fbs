@@ -105,7 +105,6 @@ table ReasoningHeadWeights {
 table ScratchBlockWeights {
   atom_type_embeddings: [float];
   atom_projection: [float];
-  text_feature_projection: [float];
   num_atom_types: uint32;
   atom_embedding_dim: uint32;
   d_model: uint32;

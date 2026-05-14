@@ -2971,7 +2971,6 @@ void UITrainingPanel::savePathsToConfig() {
         preserveRelative("collected");
         preserveRelative("verified");
         preserveRelative("collector_log");
-        preserveRelative("merge_checkpoints_exe");
         preserveRelative("source_config");
 
         std::ofstream configFileOut("ai_config.json");

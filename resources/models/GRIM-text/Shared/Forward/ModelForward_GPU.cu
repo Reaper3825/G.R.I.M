@@ -212,7 +212,6 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
             *request.scratch_block,
             token_ids,
             bindings->d_numeric_values,
-            bindings->d_text_features,
             bindings->d_atom_mask,
             bindings->d_atom_flags,
             bindings->d_token_to_slot_map,

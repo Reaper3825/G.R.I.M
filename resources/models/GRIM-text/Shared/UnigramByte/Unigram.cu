@@ -275,7 +275,8 @@ __global__ void kernelTrieLookup(
 UnigramLM::UnigramLM() 
     : gpu_(std::make_unique<GPUData>())
 {
-    // Start with empty vocabulary - special tokens added by load() or trainFromCorpus()
+    // Start with an empty learned vocabulary. Layout special tokens are saved
+    // as vocab metadata records, not stored in pieces_ or the trie.
 }
 
 UnigramLM::~UnigramLM() {
@@ -295,10 +296,6 @@ UnigramLM::~UnigramLM() {
 UnigramLM::UnigramLM(UnigramLM&& other) noexcept
     : pieces_(std::move(other.pieces_))
     , piece_to_id_(std::move(other.piece_to_id_))
-    , unk_id_(other.unk_id_)
-    , pad_id_(other.pad_id_)
-    , bos_id_(other.bos_id_)
-    , eos_id_(other.eos_id_)
     , enable_byte_fallback_(other.enable_byte_fallback_)
     , trie_(std::move(other.trie_))
     , gpu_(std::move(other.gpu_))
@@ -309,10 +306,6 @@ UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
     if (this != &other) {
         pieces_ = std::move(other.pieces_);
         piece_to_id_ = std::move(other.piece_to_id_);
-        unk_id_ = other.unk_id_;
-        pad_id_ = other.pad_id_;
-        bos_id_ = other.bos_id_;
-        eos_id_ = other.eos_id_;
         enable_byte_fallback_ = other.enable_byte_fallback_;
         trie_ = std::move(other.trie_);
         gpu_ = std::move(other.gpu_);
@@ -339,7 +332,6 @@ void UnigramLM::addPiece(const std::string& text, float score, bool is_user_defi
     piece.text = text;
     piece.score = score;
     // token_id is NOT stored — it's ALWAYS (UNIGRAM_VOCAB_OFFSET + index).
-    piece.is_special = (!text.empty() && text.front() == '<' && text.back() == '>');
     piece.is_user_defined = is_user_defined;
     
     piece_to_id_[text] = static_cast<int>(pieces_.size());
@@ -347,8 +339,7 @@ void UnigramLM::addPiece(const std::string& text, float score, bool is_user_defi
 }
 
 const UnigramPiece* UnigramLM::getPiece(int token_id) const {
-    // Special tokens are not in pieces_ — they have absolute IDs 0-3
-    // Callers should check isSpecialToken() separately if they need special token info
+    // Layout special tokens are not in pieces_ — use TokenLayout helpers for those IDs.
     int idx = token_id - UNIGRAM_VOCAB_OFFSET;
     if (idx < 0 || idx >= static_cast<int>(pieces_.size())) {
         return nullptr;
@@ -357,15 +348,9 @@ const UnigramPiece* UnigramLM::getPiece(int token_id) const {
 }
 
 int UnigramLM::getPieceId(const std::string& text) const {
-    // Check special tokens by name
-    if (text == "<unk>") return UNK_TOKEN_ID;
-    if (text == "<pad>") return PAD_TOKEN_ID;
-    if (text == "<s>")   return BOS_TOKEN_ID;
-    if (text == "</s>")  return EOS_TOKEN_ID;
-    
     auto it = piece_to_id_.find(text);
     if (it == piece_to_id_.end()) {
-        return unk_id_;  // UNK_TOKEN_ID = 0 (absolute)
+        return UNK_TOKEN_ID;
     }
     return UNIGRAM_VOCAB_OFFSET + it->second;
 }
@@ -390,8 +375,8 @@ bool UnigramLM::load(const std::string& vocab_path) {
     pieces_.clear();
     piece_to_id_.clear();
     
-    // Special tokens are now at absolute IDs 0-3, NOT stored in pieces_.
-    // They are handled by getPieceId() directly.
+    // Layout special tokens are metadata-only records, not learned pieces.
+    // Literal strings such as "<s>" remain normal text when learned.
     
     std::cout << "[UnigramLM] Reading vocab pieces..." << std::endl << std::flush;
     std::string line;
@@ -423,8 +408,11 @@ bool UnigramLM::load(const std::string& vocab_path) {
             
             float score = std::stof(score_str);
             
-            // Skip special tokens from file — they're handled as absolute IDs 0-3
-            if (piece == "<unk>" || piece == "<pad>" || piece == "<s>" || piece == "</s>") {
+            const int metadata_index = line_count - 1;
+            const bool is_layout_special_record =
+                metadata_index >= 0 && metadata_index < NUM_SPECIAL_TOKENS &&
+                piece == SPECIAL_TOKEN_DEFINITIONS[metadata_index].text;
+            if (is_layout_special_record) {
                 continue;
             }
             
@@ -485,7 +473,9 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
     uint32_t checksum;
     bin_file.read(reinterpret_cast<char*>(&checksum), 4);
     
-    // Read config vocab_size (4 bytes) - number of unigram pieces
+    // Read config vocab_size (4 bytes) - number of serialized records.
+    // Current saves include layout special metadata records first, followed by
+    // learned pieces. Older files may contain learned pieces only.
     uint32_t config_vocab_size;
     bin_file.read(reinterpret_cast<char*>(&config_vocab_size), 4);
     
@@ -529,8 +519,13 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
         int token_id;
         bin_file.read(reinterpret_cast<char*>(&token_id), 4);
         
-        // Skip special tokens from binary — they're at absolute IDs 0-3 now
-        if (text == "<unk>" || text == "<pad>" || text == "<s>" || text == "</s>") {
+        if (isSpecialTokenId(token_id)) {
+            if (text != specialTokenText(token_id)) {
+                throw std::runtime_error(
+                    "[UnigramLM] special vocab record mismatch at record " + std::to_string(i) +
+                    ": stored token_id=" + std::to_string(token_id) +
+                    " text='" + text + "' expected='" + specialTokenText(token_id) + "'");
+            }
             continue;
         }
         
@@ -594,8 +589,10 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format, float
     uint32_t checksum = 0;
     bin_file.write(reinterpret_cast<const char*>(&checksum), 4);
     
-    // Config vocab_size (4 bytes) - number of unigram pieces
-    uint32_t config_vocab_size = static_cast<uint32_t>(pieces_.size());
+    // Config vocab_size (4 bytes): number of serialized vocab records.
+    // Layout special records are included first so saved vocabs expose the
+    // reserved IDs without making them learned tokenizer pieces.
+    uint32_t config_vocab_size = static_cast<uint32_t>(NUM_SPECIAL_TOKENS + pieces_.size());
     bin_file.write(reinterpret_cast<const char*>(&config_vocab_size), 4);
     
     // Max length (4 bytes)
@@ -615,17 +612,25 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format, float
         std::cout << "[UnigramLM] Applying vocab_score_multiplier=" << score_multiplier << " to all piece scores on save" << std::endl;
     }
     
-    // Write pieces: length (4 bytes) + text + score (4 bytes float) + token_id (4 bytes)
-    // token_id is position-derived (UNIGRAM_VOCAB_OFFSET + i), written for format compat.
+    auto write_record = [&](const std::string& text, float score, int token_id) {
+        uint32_t len = static_cast<uint32_t>(text.size());
+        bin_file.write(reinterpret_cast<const char*>(&len), 4);
+        bin_file.write(text.data(), len);
+        bin_file.write(reinterpret_cast<const char*>(&score), 4);
+        bin_file.write(reinterpret_cast<const char*>(&token_id), 4);
+    };
+
+    for (const auto& def : SPECIAL_TOKEN_DEFINITIONS) {
+        write_record(def.text, 0.0f, def.id);
+    }
+
+    // Write learned pieces: length (4 bytes) + text + score (4 bytes float) + token_id (4 bytes).
+    // token_id is position-derived (UNIGRAM_VOCAB_OFFSET + i).
     for (size_t i = 0; i < pieces_.size(); ++i) {
         const auto& piece = pieces_[i];
-        uint32_t len = static_cast<uint32_t>(piece.text.size());
-        bin_file.write(reinterpret_cast<const char*>(&len), 4);
-        bin_file.write(piece.text.data(), len);
         float scaled_score = piece.score * score_multiplier;
-        bin_file.write(reinterpret_cast<const char*>(&scaled_score), 4);
         int tid = tokenIdForIndex(static_cast<int>(i));
-        bin_file.write(reinterpret_cast<const char*>(&tid), 4);
+        write_record(piece.text, scaled_score, tid);
     }
     
     bin_file.close();
@@ -640,6 +645,9 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format, float
         std::string txt_path = bin_path.substr(0, bin_path.rfind('.')) + ".txt";
         std::ofstream txt_file(txt_path);
         if (txt_file.is_open()) {
+            for (const auto& def : SPECIAL_TOKEN_DEFINITIONS) {
+                txt_file << def.text << "\t0\n";
+            }
             for (const auto& piece : pieces_) {
                 txt_file << piece.text << "\t" << (piece.score * score_multiplier) << "\n";
             }
@@ -696,7 +704,7 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
     for (size_t i = 1; i <= n; ++i) {
         nodes[i].score = -1e30f;
         nodes[i].prev_pos = -1;
-        nodes[i].token_id = unk_id_;  // Absolute UNK_TOKEN_ID = 0
+        nodes[i].token_id = UNK_TOKEN_ID;
         nodes[i].piece_length = 1;
     }
     
@@ -772,7 +780,7 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
             if (unk_score > nodes[pos + 1].score) {
                 nodes[pos + 1].score = unk_score;
                 nodes[pos + 1].prev_pos = static_cast<int>(pos);
-                nodes[pos + 1].token_id = unk_id_;  // Absolute UNK_TOKEN_ID = 0
+                nodes[pos + 1].token_id = UNK_TOKEN_ID;
                 nodes[pos + 1].piece_length = 1;
             }
         }
@@ -805,59 +813,16 @@ std::vector<int> UnigramLM::encode(const std::string& text, bool prepend_space) 
     return backtrack(nodes, static_cast<int>(normalized.size()));
 }
 
-std::vector<UnigramPiece> UnigramLM::encodeWithPieces(const std::string& text) const {
-    auto token_ids = encode(text);
-    std::vector<UnigramPiece> result;
-    result.reserve(token_ids.size());
-    
-    for (int tid : token_ids) {
-        if (tid >= SPECIAL_TOKEN_OFFSET && tid < NUM_SPECIAL_TOKENS) {
-            // Special token — token_id is NOT stored on UnigramPiece (it's position-derived).
-            // Caller should use the token_ids from encode(), not from pieces.
-            UnigramPiece piece;
-            if (tid == UNK_TOKEN_ID) piece.text = "<unk>";
-            else if (tid == PAD_TOKEN_ID) piece.text = "<pad>";
-            else if (tid == BOS_TOKEN_ID) piece.text = "<s>";
-            else if (tid == EOS_TOKEN_ID) piece.text = "</s>";
-            piece.score = -10.0f;
-            piece.is_special = true;
-            piece.is_user_defined = true;
-            result.push_back(piece);
-        } else if (tid >= BYTE_TOKEN_OFFSET && tid < ATOM_TOKEN_OFFSET) {
-            // Byte token
-            UnigramPiece piece;
-            piece.text = std::string(1, static_cast<char>(tid - BYTE_TOKEN_OFFSET));
-            piece.score = UNKNOWN_SCORE;
-            piece.is_special = false;
-            piece.is_user_defined = false;
-            result.push_back(piece);
-        } else if (tid >= UNIGRAM_VOCAB_OFFSET) {
-            const UnigramPiece* p = getPiece(tid);
-            if (p) {
-                result.push_back(*p);
-            }
-        }
-    }
-    
-    return result;
-}
-
 std::string UnigramLM::decode(const std::vector<int>& token_ids) const {
-    return decode(token_ids.data(), token_ids.size());
-}
-
-std::string UnigramLM::decode(const int* token_ids, size_t count) const {
     std::string result;
     
-    for (size_t i = 0; i < count; ++i) {
-        int tid = token_ids[i];
+    for (int tid : token_ids) {
         
-        if (tid >= SPECIAL_TOKEN_OFFSET && tid < NUM_SPECIAL_TOKENS) {
-            // Special token — decode as their text repr
-            if (tid == UNK_TOKEN_ID) result += "<unk>";
+        if (isSpecialTokenId(tid)) {
+            // Special token display path. Training layout still belongs to sliding-window/batching code.
+            if (tid == UNK_TOKEN_ID) result += specialTokenText(tid);
             else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
-            else if (tid == BOS_TOKEN_ID) result += "<s>";
-            else if (tid == EOS_TOKEN_ID) result += "</s>";
+            else result += specialTokenText(tid);
         } else if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
             // Byte token (subtract BYTE_TOKEN_OFFSET to get raw byte)
             result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
@@ -883,13 +848,13 @@ void UnigramLM::capVocabSize(int max_size) {
         throw std::runtime_error("capVocabSize: max_size must be >= 4 to include minimum vocabulary");
     }
     
-    // Sort pieces by score (descending) to keep most frequent
-    // But always keep user-defined tokens (special tokens) regardless of score
+    // Sort pieces by score (descending) to keep most frequent.
+    // User-defined learned pieces are retained regardless of score.
     std::vector<size_t> indices(pieces_.size());
     std::iota(indices.begin(), indices.end(), 0);
     
     std::stable_sort(indices.begin(), indices.end(), [this](size_t a, size_t b) {
-        // User-defined tokens always come first
+        // User-defined learned pieces always come first.
         if (pieces_[a].is_user_defined != pieces_[b].is_user_defined) {
             return pieces_[a].is_user_defined;  // user-defined = true sorts before false
         }
@@ -1041,118 +1006,6 @@ bool UnigramLM::uploadTrieToGPU() {
     gpu_->initialized = true;
     std::cout << "[UnigramLM] GPU initialized with " << num_nodes << " trie nodes" << std::endl;
     return true;
-}
-
-bool UnigramLM::encodeGPU(const char* d_text,
-                          size_t length,
-                          int* d_token_ids,
-                          int* d_token_count,
-                          int max_tokens,
-                          bool* d_needs_byte_fallback) {
-    if (!gpu_->initialized) {
-        if (!initGPU()) return false;
-    }
-    
-    // Validate length against pre-allocated workspace capacity
-    if (length > gpu_->workspace_max_length) {
-        std::cerr << "[UnigramLM] Input length " << length 
-                  << " exceeds workspace capacity " << gpu_->workspace_max_length << std::endl;
-        return false;
-    }
-    
-    const bool enable_fallback = enable_byte_fallback_ && d_needs_byte_fallback;
-    if (enable_fallback) {
-        // Initialize fallback flags to false
-        // NOTE: Using default stream (nullptr) is intentional here - Unigram operates
-        // in the data loading path which may run on separate thread from training
-        cudaMemsetAsync(d_needs_byte_fallback, 0, length * sizeof(bool), nullptr);
-    }
-    
-    // Forward pass (single-threaded kernel due to Viterbi sequential dependency)
-    bool* fallback_ptr = enable_fallback ? d_needs_byte_fallback : nullptr;
-    // INTENTIONAL: Stream 0 for synchronous Viterbi forward pass (cudaMemcpy follows)
-    // NOTE: Kernel runs single-threaded because Viterbi has O(n) sequential dependency
-    kernelViterbiForward<<<1, 1, 0, 0>>>(
-        d_text, length,
-        gpu_->d_trie_children, gpu_->d_trie_token_ids, gpu_->d_trie_scores,
-        gpu_->num_nodes,
-        gpu_->d_viterbi_scores, gpu_->d_viterbi_prev, gpu_->d_viterbi_tokens,
-        fallback_ptr,
-        unk_id_,  // Absolute UNK_TOKEN_ID = 0
-        UNKNOWN_SCORE,
-        enable_fallback
-    );
-    
-    // INTENTIONAL: Stream 0 for synchronous Viterbi backtrack (result copied back immediately)
-    // Backtrack with max_tokens to prevent buffer overflow
-    kernelViterbiBacktrack<<<1, 1, 0, 0>>>(
-        length,
-        gpu_->d_viterbi_prev, gpu_->d_viterbi_tokens,
-        d_token_ids, d_token_count,
-        max_tokens
-    );
-    
-    return cudaGetLastError() == cudaSuccess;
-}
-
-bool UnigramLM::encodeBatchGPU(const char* const* d_texts,
-                                const size_t* lengths,
-                                int** d_token_ids,
-                                int* d_token_counts,
-                                int max_tokens_per_seq,
-                                size_t batch_size) {
-    if (batch_size == 0) return true;
-    
-    // NOTE: Sequences are processed sequentially because:
-    // 1. Viterbi algorithm has inherent sequential dependency (each position depends on all previous)
-    // 2. The pre-allocated workspace (d_viterbi_scores/prev/tokens) is shared across all sequences
-    // True batch parallelization would require per-sequence workspace allocation, which trades
-    // memory for parallelism. For typical batch sizes (8-32), sequential processing is adequate
-    // since the bottleneck is usually elsewhere (embedding lookup, attention).
-    
-    // Find max length to allocate fallback buffer once (avoid per-iteration malloc!)
-    size_t max_len = 0;
-    for (size_t i = 0; i < batch_size; ++i) {
-        max_len = std::max(max_len, lengths[i]);
-    }
-    
-    // Single allocation for entire batch
-    bool* d_fallback = nullptr;
-    cudaError_t err = cudaMalloc(&d_fallback, max_len > 0 ? max_len * sizeof(bool) : sizeof(bool));
-    if (err != cudaSuccess) {
-        std::cerr << "[UnigramLM] Failed to allocate batch fallback buffer" << std::endl;
-        return false;
-    }
-    
-    // Process each sequence reusing the same buffer
-    bool success = true;
-    for (size_t i = 0; i < batch_size && success; ++i) {
-        success = encodeGPU(d_texts[i], lengths[i], d_token_ids[i], 
-                            &d_token_counts[i], max_tokens_per_seq, d_fallback);
-    }
-    
-    cudaFree(d_fallback);
-    return success;
-}
-
-bool UnigramLM::decodeGPU(const int* d_token_ids,
-                          size_t count,
-                          char* d_output,
-                          size_t* d_output_length,
-                          size_t max_output_length) {
-    if (!gpu_->initialized) {
-        if (!initGPU()) return false;
-    }
-    
-    // INTENTIONAL: Stream 0 for synchronous decode (result copied back immediately)
-    kernelUnigramDecode<<<1, 1, 0, 0>>>(
-        d_token_ids, count,
-        gpu_->d_piece_data, gpu_->d_piece_offsets, gpu_->d_piece_lengths,
-        UNIGRAM_VOCAB_OFFSET, static_cast<int>(pieces_.size()),
-        d_output, d_output_length, max_output_length
-    );
-    
-    return cudaGetLastError() == cudaSuccess;
 }
 
 } // namespace Tokenizer

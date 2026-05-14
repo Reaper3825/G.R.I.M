@@ -13,6 +13,11 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
             "FATAL: PayloadBuildInputsReady requires an allocated model — "
             "call ModelAllocated before this step");
     }
+    if (!ctx.tokenizer) {
+        throw std::runtime_error(
+            "FATAL: PayloadBuildInputsReady requires an initialized tokenizer — "
+            "call DataInfoReady before this step");
+    }
 
     const auto& model_cfg = ctx.model->getConfig();
 
@@ -34,7 +39,7 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
     inputs.actual_vocab_size         = ctx.config.actual_vocab_size;
     inputs.train_mtp_k               = model_cfg.mtp_enabled ? model_cfg.mtp_k : 0;
 
-    const auto layout = ctx.tokenizer.tokenLayout();
+    const auto layout = ctx.tokenizer->tokenLayout();
     inputs.token_layout.num_special = layout.num_special;
     inputs.token_layout.num_bytes   = layout.num_bytes;
     inputs.token_layout.num_atoms   = layout.num_atoms;

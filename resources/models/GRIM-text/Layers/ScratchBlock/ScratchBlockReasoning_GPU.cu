@@ -16,7 +16,6 @@
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include <cuda_runtime.h>
-#include <cuda_fp16.h>
 #include <device_launch_parameters.h>
 #include <cmath>
 #include <algorithm>
@@ -35,7 +34,6 @@ namespace GRIM {
 static constexpr const char* kScratchBlockModule = "ScratchBlock";
 constexpr int ATOM_TOKEN_START = HyperParameters::ATOM_TOKEN_START;
 constexpr int NUM_ATOM_TYPES   = GRIM::Tokenizer::kAtomTypeCount;
-constexpr int kTextFeatureDim  = 16;
 
 namespace {
 
@@ -97,12 +95,10 @@ __global__ void kernelDetectAtomTokens(
     }
 }
 
-// Value-aware atom embedding lookup (sinusoidal+log basis in dims 16-47, type embedding in 0-15 and 48+)
-// UNIFIED: Uses numeric_values + atom_flags + text_features for ALL atom types.
+// Value-aware atom embedding lookup (sinusoidal+log basis in dims 16-47, learned type embedding elsewhere).
+// UNIFIED: Uses numeric_values + atom_flags for atom metadata.
 // numeric_values carries AtomTable packed values; atom_flags carries type-specific metadata;
-// text_features carries 16-dim FP16 raw-text surface analysis (length, char ratios, separators).
-// All three signals are combined into a single atom embedding vector, eliminating the
-// separate text feature injection path (Path B).
+// these signals are combined into a single atom embedding vector.
 __global__ void kernelLookupAtomEmbeddingsWithValue(
     const int* __restrict__ token_ids,
     const int* __restrict__ atom_positions,
@@ -111,7 +107,6 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     const float* __restrict__ atom_type_embeddings,
     const float* __restrict__ token_numeric_values,
     const uint32_t* __restrict__ token_atom_flags,
-    const uint16_t* __restrict__ text_features,
     const uint8_t* __restrict__ atom_mask,
     const int32_t* __restrict__ token_to_slot_map,
     float* __restrict__ atom_embeddings,
@@ -176,20 +171,7 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
         int bit = dim_idx - 40;
         value += ((flags >> bit) & 1u) ? 0.3f : -0.3f;
     }
-    // Dims 48-63: Text features — raw-text surface analysis (absorbed from former Path B)
-    // These carry instance-specific signals: char composition, separator presence.
-    // EXCLUDED: dims 8-9 (text length) — representation artifact, not semantic signal.
-    else if (dim_idx >= 48 && dim_idx < 64 && text_features && atom_mask) {
-        if (atom_mask[token_pos] != 0) {
-            int feat_idx = dim_idx - 48;
-            if (feat_idx != 8 && feat_idx != 9) {  // Skip length dims
-                float feat = __half2float(*reinterpret_cast<const __half*>(
-                    &text_features[token_pos * kTextFeatureDim + feat_idx]));
-                value += feat;  // Additive — learned type embedding in these dims acts as bias
-            }
-        }
-    }
-    // Dims 0-15: pure learned type embedding
+    // Dims outside explicit numeric/flag bands remain pure learned type embedding.
 
     atom_embeddings[atom_idx * atom_embedding_dim + dim_idx] = value;
 }
@@ -421,9 +403,6 @@ void ScratchBlockGradFn::capture_forward(
         // Backward scratch for per-atom gradients
         cudaMallocOrThrow(reinterpret_cast<void**>(&d_grad_atom_embeddings), static_cast<size_t>(max_atoms) * atom_embedding_dim * sizeof(float), "ScratchBlockGradFn_grad_atom_emb");
     }
-    // NOTE: Text features are now merged INTO atom embeddings (dims 48-63)
-    // during forward. cached_atom_embeddings already contains the merged signal.
-    // No separate text feature capture needed.
 }
 
 void ScratchBlockGradFn::capture_weights(
@@ -489,9 +468,6 @@ void ScratchBlockGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     // ═══════════════════════════════════════════════════════════════════════════
     //  Backward Step 2: Chain to input (additive injection → identity gradient)
     // ═══════════════════════════════════════════════════════════════════════════
-    // NOTE: Text feature backward (former Step 2) ELIMINATED — text features are
-    // now absorbed into atom embeddings (dims 48-63). Their gradients flow through
-    // kernelBackwardAtomEmbeddings → atom_projection + atom_type_embeddings.
     if (input_grad_fn) {
         // For additive injection, grad_input = grad_output (no modification needed).
         // Pass grad_output directly to the chain — no copy required.
@@ -526,7 +502,6 @@ Tensor scratch_block_inject(
     ScratchBlockLayer& layer,
     const int* token_ids,
     const float* numeric_values,
-    const uint16_t* text_features,
     const uint8_t* atom_mask,
     const uint32_t* atom_flags,
     const int32_t* token_to_slot_map,
@@ -541,7 +516,6 @@ Tensor scratch_block_inject(
     if (!stream)     throw std::runtime_error("scratch_block_inject: stream is NULL");
     if (!numeric_values) throw std::runtime_error("scratch_block_inject: numeric_values is NULL");
     if (!atom_mask)  throw std::runtime_error("scratch_block_inject: atom_mask is NULL");
-    if (!text_features) throw std::runtime_error("scratch_block_inject: text_features is NULL");
     if (!atom_flags) throw std::runtime_error("scratch_block_inject: atom_flags is NULL");
 
     // Create output tensor (copy of input — injection is additive in-place)
@@ -559,7 +533,7 @@ Tensor scratch_block_inject(
     layer.runForwardKernels(
         output.data, total_tokens,
         token_ids, numeric_values,
-        text_features, atom_mask, atom_flags,
+        atom_mask, atom_flags,
         token_to_slot_map, stream, execution_first_type_only);
 
     // Build GradFn for backward pass
@@ -770,7 +744,7 @@ void ScratchBlockLayer::runForwardKernels(
     float* output, int total_tokens,
     const int* token_ids,
     const float* numeric_values,
-    const uint16_t* text_features, const uint8_t* atom_mask,
+    const uint8_t* atom_mask,
     const uint32_t* atom_flags,
     const int32_t* token_to_slot_map,
     cudaStream_t stream,
@@ -792,14 +766,14 @@ void ScratchBlockLayer::runForwardKernels(
     const int atom_blocks = std::min(config_.max_atoms, total_tokens);
     if (atom_blocks <= 0) return;
 
-    // Step 2: Lookup atom embeddings (unified: numeric_values + atom_flags + text_features)
+    // Step 2: Lookup atom embeddings (unified: numeric_values + atom_flags)
     const int type_only_flag = execution_first_type_only ? 1 : 0;
     kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, config_.atom_embedding_dim, 0, stream>>>(
         token_ids, d_atom_positions_, d_num_atoms_, config_.max_atoms,
         atom_type_embeddings_.data,
         numeric_values,
         atom_flags,
-        text_features, atom_mask,
+        atom_mask,
         token_to_slot_map,
         d_atom_embeddings_, config_.atom_embedding_dim, type_only_flag);
 
@@ -808,8 +782,6 @@ void ScratchBlockLayer::runForwardKernels(
         output, d_atom_positions_, d_num_atoms_, config_.max_atoms,
         d_atom_embeddings_, atom_projection_.data,
         config_.atom_embedding_dim, config_.d_model, config_.atom_scale);
-    // NOTE: Text features are now absorbed into dims 48-63 of atom embeddings above.
-    // The separate text feature injection path (Path B) has been eliminated.
 }
 
 ScratchBlockLayer::RowLocalAtomView ScratchBlockLayer::extractRowLocalAtomView(

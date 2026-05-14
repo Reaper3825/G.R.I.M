@@ -8,7 +8,7 @@
 //
 //  Provenance model:
 //    renderWithSpans() → RenderedLiteralSpan per bootstrap literal
-//    encodeWithMetadata() → StructuralSpan per detected atom
+//    tokenizeWithMetadata() → StructuralSpan per detected atom
 //    compileExecutionPayload() → match by content_offset intersection
 //                                 (not document-order claiming)
 //  Runtime proofs:
@@ -569,7 +569,7 @@ ConceptBuildResult buildConceptSequence(
     }
 
     // 3. Tokenize the canonical text
-    auto encoded = tokenizer.encodeWithMetadata(result.canonical_text);
+    auto encoded = tokenizer.tokenizeWithMetadata(result.canonical_text);
     if (encoded.token_ids.empty()) {
         throw std::runtime_error(
             "buildConceptSequence: tokenization produced zero tokens for concept row");

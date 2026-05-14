@@ -87,8 +87,7 @@ D:\G.R.I.M\
     │       └── Release/
     │           ├── grim_data_pipeline.exe    # ✅ BUILT
     │           ├── collect_data.exe          # Legacy
-    │           ├── verifier.exe              # Legacy
-    │           └── merge_checkpoints.exe     # Legacy
+    │           └── verifier.exe              # Legacy
     │
     └── training/
         ├── schemas/                      # FlatBuffer schemas

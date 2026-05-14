@@ -278,7 +278,7 @@ struct TrainingContext {
 
     // Model and tokenizer
     std::unique_ptr<GRIM::LanguageModel> model;
-    GRIM::Tokenizer::UniByte tokenizer;
+    std::unique_ptr<GRIM::Tokenizer::UniByte> tokenizer;
     
     // Data
     SequenceData data;
@@ -344,14 +344,25 @@ struct TrainingContext {
 //  Phase1 Entry Point
 //======================================================//
 
+enum class Phase1Outcome : int {
+    ready_for_training = 0,
+    tokenizer_only_complete = 1,
+};
+
+struct Phase1Result {
+    Phase1Outcome outcome = Phase1Outcome::ready_for_training;
+    std::unique_ptr<TrainingContext> context;
+};
+
 /**
  * @brief Execute Phase 1 - Startup and initialization
  * 
  * @param argc Command line argument count
  * @param argv Command line arguments
- * @return unique_ptr<TrainingContext> Fully initialized context for Phase 2 (heap-allocated to avoid move)
+ * @return Phase1Result containing either a fully initialized context for Phase 2
+ *         or an explicit tokenizer-only completion outcome.
  * @throws std::runtime_error on any initialization failure
  */
-std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv);
+Phase1Result executePhase1(int argc, char** argv);
 
 } // namespace GRIMText::Training

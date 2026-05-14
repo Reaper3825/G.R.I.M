@@ -14,7 +14,7 @@
 #include "BatchPayload.hpp"
 #include "Batching_GPU.hpp"
 #include "../../training/training_data_loader.hpp"
-#include "../../Shared/UnigramByte/UniByte.hpp"  // TokenLayout
+#include "../../Shared/UnigramByte/TokenLayout.hpp"
 #include "../Execution/ExecutionPayloadValidation.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -114,6 +114,7 @@ BatchPayload buildBatchPayload(
     int execution_num_steps,
     int mtp_k)
 {
+    (void)token_layout;
     BatchPayload payload;
     payload.mode = BatchPayloadMode::Training;
 
@@ -137,7 +138,6 @@ BatchPayload buildBatchPayload(
         const std::vector<int>* token_ids;
         const std::vector<int>* targets;
         const std::vector<float>* numeric_values;
-        const std::vector<uint16_t>* text_features;
         const std::vector<uint8_t>* atom_mask;
         const std::vector<uint32_t>* atom_flags;
         std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
@@ -204,13 +204,6 @@ BatchPayload buildBatchPayload(
                 " atom_mask.size()=" + std::to_string(seq->token_atom_mask.size()) +
                 " != token_ids.size()=" + std::to_string(seq_len));
         }
-        const int expected_text_feat_len = seq_len * BatchPayload::kTextFeatureDim;
-        if (static_cast<int>(seq->token_text_features.size()) != expected_text_feat_len) {
-            throw std::runtime_error(
-                "buildBatchPayload: sequence " + std::to_string(sid) +
-                " text_features.size()=" + std::to_string(seq->token_text_features.size()) +
-                " != token_ids.size()*kTextFeatureDim=" + std::to_string(expected_text_feat_len));
-        }
         if (static_cast<int>(seq->atom_entry_ids.size()) != seq_len) {
             throw std::runtime_error(
                 "buildBatchPayload: sequence " + std::to_string(sid) +
@@ -263,7 +256,6 @@ BatchPayload buildBatchPayload(
             &seq->token_ids,
             &seq->targets,
             &seq->token_numeric_values,
-            &seq->token_text_features,
             &seq->token_atom_mask,
             &seq->token_atom_flags,
             seq->atom_table,
@@ -362,12 +354,10 @@ BatchPayload buildBatchPayload(
     // ═════════════════════════════════════════════════════════════════════════
     const int S = payload.max_seq_len;
     const size_t flat_size = static_cast<size_t>(payload.total_tokens);
-    const size_t text_feat_flat_size = flat_size * BatchPayload::kTextFeatureDim;
 
     payload.input_ids.assign(flat_size, Tokenizer::PAD_TOKEN_ID);  // PAD=1, NOT UNK=0
     payload.target_ids.assign(flat_size, -1);  // padding targets = masked
     payload.numeric_values.assign(flat_size, 0.0f);
-    payload.text_features.assign(text_feat_flat_size, 0);
     payload.atom_mask.assign(flat_size, 0);
     payload.atom_flags.assign(flat_size, 0);
     payload.atom_entry_ids.assign(flat_size, GRIM::Tokenizer::kAtomEntryNone);
@@ -412,14 +402,14 @@ BatchPayload buildBatchPayload(
                     r.targets->data(),
                     seq_len * sizeof(int));
         // Padding positions beyond seq_len already have target=-1 from assign()
-        // Defense-mask non-content tokens and count valid targets — SINGLE PASS
-        // isNonContent() = UNK, PAD, BOS (never valid prediction targets).
+        // Defense-mask layout-only targets and count valid targets — SINGLE PASS.
+        // UNK, PAD, and BOS are never valid prediction targets.
         // EOS IS a valid target — model must learn to predict end-of-sequence.
         // This is a safety net; DataLoader should already mask these.
         int valid_count = 0;
         for (int t = 0; t < seq_len - 1; ++t) {
             const int target = payload.target_ids[row_offset + t];
-            if (target >= 0 && token_layout.isNonContent(target)) {
+            if (target >= 0 && GRIM::Tokenizer::isNeverTargetSpecialTokenId(target)) {
                 // Non-content token leaked through DataLoader — mask it
                 payload.target_ids[row_offset + t] = -1;
             } else if (target >= 0) {
@@ -434,13 +424,6 @@ BatchPayload buildBatchPayload(
         std::memcpy(&payload.numeric_values[row_offset],
                     r.numeric_values->data(),
                     seq_len * sizeof(float));
-
-        // Bulk copy text features (kTextFeatureDim uint16_t values per token)
-        const size_t feat_dst_offset = row_offset * BatchPayload::kTextFeatureDim;
-        const size_t feat_src_bytes  = static_cast<size_t>(seq_len) * BatchPayload::kTextFeatureDim * sizeof(uint16_t);
-        std::memcpy(&payload.text_features[feat_dst_offset],
-                    r.text_features->data(),
-                    feat_src_bytes);
 
         // Bulk copy atom mask
         std::memcpy(&payload.atom_mask[row_offset],
@@ -619,7 +602,6 @@ BatchPayload buildBatchPayload(
 BatchPayload buildInferenceBatchPayload(
     const std::vector<int>& token_ids,
     const std::vector<float>& numeric_values,
-    const std::vector<uint16_t>& text_features,
     const std::vector<uint8_t>& atom_mask,
     const std::vector<uint32_t>& atom_flags,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
@@ -640,14 +622,6 @@ BatchPayload buildInferenceBatchPayload(
             "buildInferenceBatchPayload: numeric_values.size()=" +
             std::to_string(numeric_values.size()) + " != token_ids.size()=" +
             std::to_string(seq_len));
-    }
-    const int expected_text_features = seq_len * BatchPayload::kTextFeatureDim;
-    if (static_cast<int>(text_features.size()) != expected_text_features) {
-        throw std::runtime_error(
-            "buildInferenceBatchPayload: text_features.size()=" +
-            std::to_string(text_features.size()) +
-            " != token_ids.size()*kTextFeatureDim=" +
-            std::to_string(expected_text_features));
     }
     if (static_cast<int>(atom_mask.size()) != seq_len) {
         throw std::runtime_error(
@@ -711,7 +685,6 @@ BatchPayload buildInferenceBatchPayload(
     payload.input_ids = token_ids;
     payload.target_ids.assign(static_cast<size_t>(seq_len), -1);
     payload.numeric_values = numeric_values;
-    payload.text_features = text_features;
     payload.atom_mask = atom_mask;
     payload.atom_flags = atom_flags;
     payload.atom_entry_ids = atom_entry_ids;

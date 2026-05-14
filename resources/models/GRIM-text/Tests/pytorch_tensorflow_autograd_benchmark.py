@@ -89,7 +89,7 @@ class GRMTSequence:
     
     
 def load_grmt_sequences(path: Path, max_sequences: int = 100) -> List[GRMTSequence]:
-    """Load sequences from GRMT binary file (version 4-6)."""
+    """Load sequences from the current GRMT binary file."""
     sequences = []
     
     with open(path, 'rb') as f:
@@ -102,13 +102,11 @@ def load_grmt_sequences(path: Path, max_sequences: int = 100) -> List[GRMTSequen
         # Validate
         if magic != 0x474D5254:  # "GRMT"
             raise ValueError(f"Invalid GRMT magic: {hex(magic)}")
-        if version < 4 or version > 6:
+        if version != 12:
             raise ValueError(f"Unsupported GRMT version: {version}")
             
         print(f"[GRMT] Loading {path.name}")
         print(f"[GRMT] version={version} sequences={num_sequences} vocab_size={vocab_size}")
-        
-        TEXT_FEATURE_DIM = 16
         
         for seq_idx in range(min(num_sequences, max_sequences)):
             # Read sequence length
@@ -119,29 +117,33 @@ def load_grmt_sequences(path: Path, max_sequences: int = 100) -> List[GRMTSequen
             # Read token IDs
             token_ids = np.frombuffer(f.read(seq_len * 4), dtype=np.uint32)
             
-            # Read targets (v5+)
-            if version >= 5:
-                targets = np.frombuffer(f.read(seq_len * 4), dtype=np.int32)
-            else:
-                # For v4, targets are shifted token_ids
-                targets = np.roll(token_ids, -1).astype(np.int32)
-                targets[-1] = -1
+            # Read precomputed targets.
+            targets = np.frombuffer(f.read(seq_len * 4), dtype=np.int32)
             
             # Read numeric values
             numeric_values = np.frombuffer(f.read(seq_len * 4), dtype=np.float32)
             
-            # Read numeric mask
+            # Read atom mask.
             numeric_mask = np.frombuffer(f.read(seq_len), dtype=np.uint8)
             
-            # Skip text features
-            f.read(seq_len * TEXT_FEATURE_DIM * 2)
-            
-            # Skip text mask
-            f.read(seq_len)
-            
-            # v6: skip byte_lengths
-            if version >= 6:
-                f.read(seq_len * 2)  # uint16
+            # Skip atom_flags.
+            f.read(seq_len * 4)
+
+            # Skip per-token atom text strings.
+            for _ in range(seq_len):
+                slen = struct.unpack('<H', f.read(2))[0]
+                if slen > 0:
+                    f.read(slen)
+
+            # Skip compiled structured-execution payload.
+            f.read(1)  # execution_active uint8
+            f.read(seq_len * 4)  # token_exec_slots int32[len]
+            cbb_count = struct.unpack('<I', f.read(4))[0]
+            f.read(cbb_count * 12)
+            ts_count = struct.unpack('<I', f.read(4))[0]
+            f.read(ts_count * 20)
+            sst_count = struct.unpack('<I', f.read(4))[0]
+            f.read(sst_count * 5)
             
             sequences.append(GRMTSequence(
                 token_ids=token_ids.astype(np.int64),

@@ -23,6 +23,20 @@
 using namespace GRIM::Tokenizer;
 using namespace GRIM::Test;
 
+static ::GRIM::HyperParameters::TokenizerHP makeSelfTestTokenizerHP() {
+    ::GRIM::HyperParameters::TokenizerHP hp;
+    hp.target_vocab_size = 50000;
+    hp.character_coverage = 0.9995f;
+    hp.min_subword_freq = 3;
+    hp.enable_parallel_subword_mining = true;
+    hp.enable_scratch_block_reasoning = true;
+    hp.detect_numbers = true;
+    hp.enable_byte_fallback = true;
+    hp.prefer_gpu = true;
+    hp.vocab_score_multiplier = 1.0f;
+    return hp;
+}
+
 // Helper: add minimal ▁-prefixed vocab to a UniByte tokenizer so viterbi() has a valid trie.
 // Without this, viterbi() crashes (Rule 20: trie_ must not be empty).
 static void addMinimalVocab(UniByte& tok) {
@@ -116,57 +130,6 @@ bool testByteUTF8(std::string& message) {
     return true;
 }
 
-bool testByteGPUEncode(std::string& message) {
-    ByteEncoder byte;
-    
-    // Simple GPU test - encode a single string
-    std::string input = "Hello";
-    
-    // Allocate device memory
-    uint8_t* d_input = nullptr;
-    int* d_output = nullptr;
-    
-    cudaError_t err = cudaMalloc(&d_input, input.size());
-    if (err != cudaSuccess) {
-        message = "Failed to allocate device input";
-        return false;
-    }
-    
-    err = cudaMalloc(&d_output, input.size() * sizeof(int));
-    if (err != cudaSuccess) {
-        cudaFree(d_input);
-        message = "Failed to allocate device output";
-        return false;
-    }
-    
-    // Copy input to device
-    cudaMemcpy(d_input, input.data(), input.size(), cudaMemcpyHostToDevice);
-    
-    // Encode on GPU
-    bool success = byte.encodeGPU(d_input, d_output, input.size());
-    
-    if (!success) {
-        cudaFree(d_input);
-        cudaFree(d_output);
-        message = "GPU encode failed";
-        return false;
-    }
-    
-    // Copy output back
-    std::vector<int> tokens(input.size());
-    cudaMemcpy(tokens.data(), d_output, input.size() * sizeof(int), cudaMemcpyDeviceToHost);
-    
-    // Cleanup
-    cudaFree(d_input);
-    cudaFree(d_output);
-    
-    // Verify
-    std::string decoded = byte.decode(tokens);
-    ASSERT_STR_EQ(decoded, input, "GPU encode/decode mismatch");
-    
-    return true;
-}
-
 //======================================================//
 //  Section 2: Unigram LM Tests
 //======================================================//
@@ -190,8 +153,8 @@ bool testUnigramBuildVocab(std::string& message) {
     unigram.addPiece("r", -3.5f, false);
     unigram.addPiece("d", -3.6f, false);
     
-    // 13 manually added pieces + 4 special tokens (<unk>, <pad>, <s>, </s>) = 17 total
-    ASSERT_EQ(unigram.vocabSize(), 17, "Vocab size mismatch");
+        // Only learned pieces are stored in UnigramLM::pieces_; specials are layout metadata.
+        ASSERT_EQ(unigram.vocabSize(), 13, "Vocab size mismatch");
     
     return true;
 }
@@ -253,7 +216,7 @@ bool testUnigramDecode(std::string& message) {
     std::vector<int> tokens = unigram.encode("hello world");
     std::string decoded = unigram.decode(tokens);
     
-    ASSERT_STR_EQ(decoded, "hello world", "Decode mismatch");
+        ASSERT_STR_EQ(decoded, "hello world", "Decode mismatch");
     
     return true;
 }
@@ -270,7 +233,7 @@ bool testUnigramUnknown(std::string& message) {
     // Try to encode something not in vocab
     std::vector<int> tokens = unigram.encode("xyz");
     
-    // Should still produce tokens (using UNK or character fallback)
+        // After ▁ normalization, pieces are ▁-prefixed ("▁gonna") or bare ("gonna")
     // Note: Behavior depends on implementation - may produce empty or UNK
     // For now just verify no crash
     
@@ -543,7 +506,7 @@ bool testAhoCorasickCaseInsensitive(std::string& message) {
 //======================================================//
 
 bool testUniByteBasicEncode(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.enable_byte_fallback = true;
     
@@ -564,7 +527,7 @@ bool testUniByteBasicEncode(std::string& message) {
 }
 
 bool testUniByteStructuralDetection(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.detect_numbers = true;
     
@@ -572,7 +535,7 @@ bool testUniByteStructuralDetection(std::string& message) {
     
     // Test number detection
     std::string input = "The price is 42.99 dollars";
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     bool found_number = false;
     for (const auto& span : result.atoms) {
@@ -588,14 +551,59 @@ bool testUniByteStructuralDetection(std::string& message) {
     return true;
 }
 
+bool testUniByteRawTextDetectorRegistry(std::string& message) {
+    auto config = makeSelfTestTokenizerHP();
+    config.detect_numbers = true;
+    UniByte tokenizer(config);
+
+    const std::string text = "CPU 42\nGPU -3.5x";
+    const auto detections = tokenizer.detectRawText(text);
+
+    ASSERT_EQ(detections.size(), static_cast<size_t>(6), "Raw detector count mismatch");
+
+    auto spanText = [&](size_t idx) {
+        const auto& d = detections[idx];
+        return text.substr(d.start, d.end - d.start);
+    };
+
+    ASSERT_TRUE(detections[0].feature == Detector::RawTextFeature::UPPERCASE_RUN,
+                "First raw detection should be uppercase");
+    ASSERT_FALSE(detections[0].emitsAtom(), "Uppercase detector must not emit atoms");
+    ASSERT_STR_EQ(spanText(0), "CPU", "Uppercase span mismatch");
+
+    ASSERT_TRUE(detections[1].feature == Detector::RawTextFeature::WHITESPACE,
+                "Second raw detection should be whitespace");
+    ASSERT_FALSE(detections[1].emitsAtom(), "Whitespace detector must not emit atoms");
+    ASSERT_STR_EQ(spanText(1), " ", "Whitespace span mismatch");
+
+    ASSERT_TRUE(detections[2].emitsAtom(), "Integer raw detection should emit atom");
+    ASSERT_TRUE(detections[2].atom_type == AtomType::ATOM_INT,
+                "Integer detector emitted wrong atom type");
+    ASSERT_STR_EQ(spanText(2), "42", "Integer span mismatch");
+
+    ASSERT_TRUE(detections[5].emitsAtom(), "Float raw detection should emit atom");
+    ASSERT_TRUE(detections[5].atom_type == AtomType::ATOM_FLOAT,
+                "Float detector emitted wrong atom type");
+    ASSERT_STR_EQ(spanText(5), "-3.5", "Float span mismatch");
+
+    const auto structures = tokenizer.detectStructures(text);
+    ASSERT_EQ(structures.size(), static_cast<size_t>(2), "Only atom detections should become structures");
+    ASSERT_TRUE(structures[0].atom_type == AtomType::ATOM_INT,
+                "First structure should be integer atom");
+    ASSERT_TRUE(structures[1].atom_type == AtomType::ATOM_FLOAT,
+                "Second structure should be float atom");
+
+    return true;
+}
+
 bool testUniByteURLDetection(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     
     UniByte tokenizer(config);
     
     std::string input = "Visit https://example.com/path for more info";
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     ASSERT_EQ(result.atoms.size(), 0, "URLs should pass through without atom detection");
     
@@ -603,13 +611,13 @@ bool testUniByteURLDetection(std::string& message) {
 }
 
 bool testUniByteURLDetectionCaseInsensitive(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
 
     UniByte tokenizer(config);
 
     std::string input = "Visit HTTPS://Example.com/path for more info";
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
 
     ASSERT_EQ(result.atoms.size(), 0, "URLs should pass through without atom detection");
 
@@ -617,13 +625,13 @@ bool testUniByteURLDetectionCaseInsensitive(std::string& message) {
 }
 
 bool testUniByteEmailDetection(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     
     UniByte tokenizer(config);
     
     std::string input = "Contact us at test@example.com";
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     ASSERT_EQ(result.atoms.size(), 0, "Emails should pass through without atom detection");
     
@@ -631,13 +639,13 @@ bool testUniByteEmailDetection(std::string& message) {
 }
 
 bool testUniByteDateDetection(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     
     UniByte tokenizer(config);
     
     std::string input = "The meeting is on 2024-12-25";
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     ASSERT_TRUE(result.atoms.size() >= 1, "Date text should only expose numeric atom spans");
     
@@ -645,14 +653,14 @@ bool testUniByteDateDetection(std::string& message) {
 }
 
 bool testUniBytePlaceholderInjection(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.detect_numbers = true;
     
     UniByte tokenizer(config);
     
     std::string input = "Count: 12345";
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     // Check that placeholder token was injected
     bool found_placeholder = false;
@@ -672,7 +680,7 @@ bool testUniBytePlaceholderInjection(std::string& message) {
 bool testUniByteRoundTrip(std::string& message) {
     std::cout << "\n[RoundTrip] === Starting Round-Trip Test ===\n";
     
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.enable_byte_fallback = true;
     
@@ -688,9 +696,9 @@ bool testUniByteRoundTrip(std::string& message) {
     std::cout << "  '▁the'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
     tokenizer.unigramLM().addPiece("\xe2\x96\x81quick", -1.5f, false);
     std::cout << "  '▁quick' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81brown", -1.6f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81" "brown", -1.6f, false);
     std::cout << "  '▁brown' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81fox", -1.7f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81" "fox", -1.7f, false);
     std::cout << "  '▁fox'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
     
     std::cout << "[RoundTrip] Final vocab size = " << tokenizer.unigramLM().vocabSize() << "\n";
@@ -704,7 +712,6 @@ bool testUniByteRoundTrip(std::string& message) {
             std::cout << "  idx=" << i << " token_id=" << tid 
                       << " text=\"" << piece->text << "\""
                       << " score=" << piece->score
-                      << " special=" << piece->is_special
                       << " user_def=" << piece->is_user_defined << "\n";
         } else {
             std::cout << "  idx=" << i << " token_id=" << tid << " -> nullptr!\n";
@@ -1052,7 +1059,7 @@ bool testAtomTableHashDeduplication(std::string& message) {
 
 bool testFullPipeline(std::string& message) {
     // Create tokenizer with current numeric-only atom detection.
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
@@ -1066,7 +1073,7 @@ bool testFullPipeline(std::string& message) {
     tokenizer.unigramLM().addPiece("\xe2\x96\x81is", -1.1f, false);
     tokenizer.unigramLM().addPiece("\xe2\x96\x81price", -1.5f, false);
     tokenizer.unigramLM().addPiece("\xe2\x96\x81visit", -1.6f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81for", -1.7f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81" "for", -1.7f, false);
     tokenizer.unigramLM().addPiece("\xe2\x96\x81more", -1.8f, false);
     tokenizer.unigramLM().addPiece("\xe2\x96\x81info", -1.9f, false);
     tokenizer.unigramLM().addPiece(".", -0.6f, false);
@@ -1074,13 +1081,13 @@ bool testFullPipeline(std::string& message) {
     // Mixed input: numbers become atoms, URLs remain plain text.
     std::string input = "The price is 42.99. Visit https://shop.com for 3 more info.";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     ASSERT_TRUE(result.token_ids.size() > 0, "Should produce tokens");
     ASSERT_TRUE(result.atoms.size() >= 2, "Should detect numeric structures only");
     
-    // Verify we can decode back
-    std::string decoded = tokenizer.decode(result.token_ids);
+    // Verify we can decode back through the single atom-aware decode entry point.
+    std::string decoded = tokenizer.decode(result);
     
     // Note: With placeholders, decoded may differ from input
     // The key is that we have a valid token sequence
@@ -1089,14 +1096,14 @@ bool testFullPipeline(std::string& message) {
 }
 
 bool testAtomTableIntegration(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.detect_numbers = true;
     
     UniByte tokenizer(config);
     
     std::string input = "Values: 100, 200, 300";
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     // Register detected atoms in AtomTable
     AtomTable table;
@@ -1117,7 +1124,7 @@ bool testAtomTableIntegration(std::string& message) {
 }
 
 bool testBatchProcessing(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.enable_byte_fallback = true;
     
@@ -1152,7 +1159,7 @@ bool testBatchProcessing(std::string& message) {
 //======================================================//
 
 bool testEdgeCaseEmptyString(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
@@ -1168,7 +1175,7 @@ bool testEdgeCaseEmptyString(std::string& message) {
 }
 
 bool testEdgeCaseSingleChar(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
@@ -1184,7 +1191,7 @@ bool testEdgeCaseSingleChar(std::string& message) {
 }
 
 bool testEdgeCaseOnlyWhitespace(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
@@ -1205,7 +1212,7 @@ bool testEdgeCaseOnlyWhitespace(std::string& message) {
 }
 
 bool testEdgeCaseLongSequence(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
@@ -1225,7 +1232,7 @@ bool testEdgeCaseLongSequence(std::string& message) {
 }
 
 bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     // Disable scratch block reasoning to avoid atom detection interfering with special token literals
     config.enable_scratch_block_reasoning = false;
@@ -1235,7 +1242,7 @@ bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
     tokenizer.unigramLM().addPiece("\xe2\x96\x81This", -1.0f, false);
     tokenizer.unigramLM().addPiece("\xe2\x96\x81is", -1.0f, false);
     tokenizer.unigramLM().addPiece("\xe2\x96\x81not", -1.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81a", -1.0f, false);
+    tokenizer.unigramLM().addPiece("\xe2\x96\x81" "a", -1.0f, false);
     tokenizer.unigramLM().addPiece("\xe2\x96\x81special", -1.0f, false);
     tokenizer.unigramLM().addPiece("\xe2\x96\x81token", -1.0f, false);
     // Add the literal special token strings as regular vocab pieces
@@ -1263,7 +1270,7 @@ bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
 //======================================================//
 
 bool testUnicodeEmoji(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
@@ -1279,7 +1286,7 @@ bool testUnicodeEmoji(std::string& message) {
 }
 
 bool testUnicodeMultiLanguage(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
@@ -1295,7 +1302,7 @@ bool testUnicodeMultiLanguage(std::string& message) {
 }
 
 bool testUnicodeWithStructural(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
     config.enable_scratch_block_reasoning = true;  // Enable atom detection
@@ -1303,28 +1310,11 @@ bool testUnicodeWithStructural(std::string& message) {
     
     std::string input = "日本の価格は 42.5 円です";
     
-    // Use encodeWithMetadata to get both tokens and atom information
-    auto result = tokenizer.encodeWithMetadata(input);
+    // Use tokenizeWithMetadata to get both tokens and atom information
+    auto result = tokenizer.tokenizeWithMetadata(input);
     ASSERT_TRUE(result.token_ids.size() > 0, "Unicode with numbers should produce tokens");
     
-    // Build an atom resolver that returns the original text for detected atoms
-    // Store atom original texts by their position in token stream
-    std::unordered_map<int, std::string> atom_texts;
-    for (const auto& span : result.atoms) {
-        // Use contentView() which excludes leading whitespace (already emitted separately)
-        atom_texts[span.placeholder_id] = std::string(span.contentView());
-    }
-    
-    // Decode with atom resolution
-    auto resolver = [&atom_texts](int token_id, AtomType type) -> std::string {
-        auto it = atom_texts.find(token_id);
-        if (it != atom_texts.end()) {
-            return it->second;
-        }
-        return "<UNKNOWN_ATOM>";
-    };
-    
-    std::string decoded = tokenizer.decodeWithAtoms(result.token_ids, resolver);
+    std::string decoded = tokenizer.decode(result);
     ASSERT_STR_EQ(decoded, input, "Unicode+numeric round-trip failed");
     
     return true;
@@ -1335,13 +1325,13 @@ bool testUnicodeWithStructural(std::string& message) {
 //======================================================//
 
 bool testMultipleURLs(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
     std::string input = "Visit https://first.com and https://second.com or http://third.org";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     ASSERT_EQ(result.atoms.size(), 0, "URLs should remain regular text");
     
@@ -1349,13 +1339,13 @@ bool testMultipleURLs(std::string& message) {
 }
 
 bool testMultipleEmails(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
     std::string input = "Contact: alice@example.com, bob@test.org, charlie@domain.net";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     ASSERT_EQ(result.atoms.size(), 0, "Emails should remain regular text");
     
@@ -1363,14 +1353,14 @@ bool testMultipleEmails(std::string& message) {
 }
 
 bool testMixedNumbers(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
     UniByte tokenizer(config);
     
     std::string input = "Int: 42, Float: 3.14, Negative: -17, Scientific: 1.5e10, Hex: 0xFF";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     int number_count = 0;
     for (const auto& span : result.atoms) {
@@ -1386,7 +1376,7 @@ bool testMixedNumbers(std::string& message) {
 }
 
 bool testAdjacentStructural(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
     UniByte tokenizer(config);
@@ -1394,7 +1384,7 @@ bool testAdjacentStructural(std::string& message) {
     // Number immediately followed by letters should still tokenize cleanly.
     std::string input = "Price:$99USD";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     ASSERT_TRUE(result.token_ids.size() > 0, "Adjacent structures should tokenize");
     ASSERT_TRUE(result.atoms.size() >= 1, "Adjacent numeric text should preserve number atoms");
     
@@ -1406,13 +1396,13 @@ bool testAdjacentStructural(std::string& message) {
 //======================================================//
 
 bool testWindowsPath(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
     std::string input = "Open file C:\\Users\\test\\document.txt please";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     ASSERT_EQ(result.atoms.size(), 0, "Paths should remain regular text");
     
@@ -1420,13 +1410,13 @@ bool testWindowsPath(std::string& message) {
 }
 
 bool testUnixPath(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
     std::string input = "Run /usr/local/bin/program with args";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     ASSERT_EQ(result.atoms.size(), 0, "Paths should remain regular text");
     
@@ -1438,14 +1428,14 @@ bool testUnixPath(std::string& message) {
 //======================================================//
 
 bool testScientificNotation(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
     UniByte tokenizer(config);
     
     std::string input = "Values: 1.23e-10, 4.56E+20, 7.89e5";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     int float_count = 0;
     for (const auto& span : result.atoms) {
@@ -1460,7 +1450,7 @@ bool testScientificNotation(std::string& message) {
 }
 
 bool testIPAddressVsDecimal(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
     // Note: IP detection may be part of number detection or separate
@@ -1468,7 +1458,7 @@ bool testIPAddressVsDecimal(std::string& message) {
     
     std::string input = "Server 192.168.1.1 price 1.2.3";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     bool found_ip = false;
     for (const auto& span : result.atoms) {
@@ -1485,14 +1475,14 @@ bool testIPAddressVsDecimal(std::string& message) {
 }
 
 bool testNegativeNumbers(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
     UniByte tokenizer(config);
     
     std::string input = "Temperature: -40 degrees, balance: -$1,234.56";
     
-    auto result = tokenizer.encodeWithMetadata(input);
+    auto result = tokenizer.tokenizeWithMetadata(input);
     
     int number_count = 0;
     for (const auto& span : result.atoms) {
@@ -1509,7 +1499,7 @@ bool testNegativeNumbers(std::string& message) {
 bool testDigitsFollowedByAlpha(std::string& message) {
     // Regression test: digits followed by alphabetic chars (ordinals, units, versions)
     // must still be detected as integer atoms, not leak as raw byte tokens.
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
     UniByte tokenizer(config);
@@ -1531,7 +1521,7 @@ bool testDigitsFollowedByAlpha(std::string& message) {
     };
     
     for (const auto& tc : cases) {
-        auto result = tokenizer.encodeWithMetadata(tc.input);
+        auto result = tokenizer.tokenizeWithMetadata(tc.input);
         
         int int_count = 0;
         for (const auto& span : result.atoms) {
@@ -1569,7 +1559,7 @@ bool testDigitsFollowedByAlpha(std::string& message) {
 //======================================================//
 
 bool testByteFallbackDisabled(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = false;  // Disable byte fallback
     UniByte tokenizer(config);
     
@@ -1585,7 +1575,7 @@ bool testByteFallbackDisabled(std::string& message) {
 }
 
 bool testMixedVocabAndByteFallback(std::string& message) {
-    UniByteConfig config;
+    auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     UniByte tokenizer(config);
     
@@ -1659,7 +1649,7 @@ bool testVocabSaveLoadBinary(std::string& message) {
     bool loaded_ok = loaded.loadBinary(path);
     ASSERT_TRUE(loaded_ok, "Binary load should succeed");
     
-    // Verify vocab size matches (accounting for special tokens)
+    // Verify learned vocab entries survive special-metadata records in the file.
     ASSERT_TRUE(loaded.hasPiece("binary"), "Should have 'binary' piece");
     ASSERT_TRUE(loaded.hasPiece("format"), "Should have 'format' piece");
     
@@ -1682,7 +1672,7 @@ bool testVocabCapSize(std::string& message) {
     int original_size = unigram.vocabSize();
     ASSERT_TRUE(original_size > 50, "Should have many pieces");
     
-    // Cap to smaller size (must be >= NUM_SPECIAL_TOKENS for special tokens)
+    // Cap to smaller learned-vocab size.
     unigram.capVocabSize(260);
     
     int new_size = unigram.vocabSize();
@@ -1692,15 +1682,15 @@ bool testVocabCapSize(std::string& message) {
 }
 
 //======================================================//
-//  Section 14: GPU Decode Tests
+//  Section 14: GPU Upload Tests
 //======================================================//
 
-bool testGPUDecode(std::string& message) {
+bool testGPUUpload(std::string& message) {
     UnigramLM unigram;
     
     // Add vocab — ▁-prefixed for SentencePiece whitespace normalization
     unigram.addPiece("\xe2\x96\x81gpu", -1.0f, false);
-    unigram.addPiece("\xe2\x96\x81decode", -1.5f, false);
+    unigram.addPiece("\xe2\x96\x81" "decode", -1.5f, false);
     unigram.buildTrie();
     
     // Init GPU
@@ -1710,37 +1700,10 @@ bool testGPUDecode(std::string& message) {
         return true;  // Skip test if no GPU
     }
     
-    // Encode on CPU
+    // Encode/decode through the single CPU API after GPU upload.
     std::vector<int> tokens = unigram.encode("gpu decode");
-    
-    // Copy tokens to GPU
-    int* d_tokens;
-    cudaMalloc(&d_tokens, tokens.size() * sizeof(int));
-    cudaMemcpy(d_tokens, tokens.data(), tokens.size() * sizeof(int), cudaMemcpyHostToDevice);
-    
-    // Decode on GPU
-    char* d_output;
-    size_t* d_length;
-    cudaMalloc(&d_output, 256);
-    cudaMalloc(&d_length, sizeof(size_t));
-    
-    bool decode_ok = unigram.decodeGPU(d_tokens, tokens.size(), d_output, d_length, 256);
-    
-    if (decode_ok) {
-        size_t length;
-        cudaMemcpy(&length, d_length, sizeof(size_t), cudaMemcpyDeviceToHost);
-        
-        std::vector<char> output(length + 1);
-        cudaMemcpy(output.data(), d_output, length, cudaMemcpyDeviceToHost);
-        output[length] = '\0';
-        
-        std::string result(output.data());
-        ASSERT_STR_EQ(result, "gpu decode", "GPU decode mismatch");
-    }
-    
-    cudaFree(d_tokens);
-    cudaFree(d_output);
-    cudaFree(d_length);
+    std::string result = unigram.decode(tokens);
+    ASSERT_STR_EQ(result, "gpu decode", "Decode mismatch after GPU upload");
     
     return true;
 }
@@ -1769,7 +1732,6 @@ int main(int argc, char** argv) {
     suite.addTest("Byte.Decode.Basic", testByteDecodeBasic);
     suite.addTest("Byte.RoundTrip", testByteRoundTrip);
     suite.addTest("Byte.UTF8", testByteUTF8);
-    suite.addTest("Byte.GPU.Encode", testByteGPUEncode);
     
     // Section 2: Unigram LM Tests
     suite.addTest("Unigram.BuildVocab", testUnigramBuildVocab);
@@ -1790,6 +1752,7 @@ int main(int argc, char** argv) {
     // Section 4: UniByte Orchestrator Tests
     suite.addTest("UniByte.BasicEncode", testUniByteBasicEncode);
     suite.addTest("UniByte.StructuralDetection", testUniByteStructuralDetection);
+    suite.addTest("UniByte.RawTextDetectorRegistry", testUniByteRawTextDetectorRegistry);
     suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);
     suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);
     suite.addTest("UniByte.EmailPassthrough", testUniByteEmailDetection);
@@ -1858,8 +1821,8 @@ int main(int argc, char** argv) {
     suite.addTest("Vocab.SaveLoadBinary", testVocabSaveLoadBinary);
     suite.addTest("Vocab.CapSize", testVocabCapSize);
     
-    // Section 14: GPU Decode Tests
-    suite.addTest("GPU.Decode", testGPUDecode);
+    // Section 14: GPU Upload Tests
+    suite.addTest("GPU.Upload", testGPUUpload);
     
     // Run all tests
     auto results = suite.runAll();

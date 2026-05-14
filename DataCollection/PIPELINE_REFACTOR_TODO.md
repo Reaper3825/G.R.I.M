@@ -48,7 +48,7 @@ The pipeline now runs 5 steps in correct order:
   - [x] Save state manager for future runs
 
 ### Phase 3: Code Cleanup ✅ COMPLETE
-- [x] `merge_checkpoints.cpp` is legacy - `grim_data_pipeline.cpp` is the active tool
+- [x] `merge_checkpoints.cpp` removed - `grim_data_pipeline.cpp` is the active tool
 - [x] `web_collector.hpp` updated with FetcherType (Phase 1)
 - [x] All paths loaded from `ai_config.json` in `StartDataCollection()`
 

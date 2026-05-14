@@ -39,6 +39,7 @@
 // HyperParameters_GPU.hpp is the single entry point for GRIM::Config structs;
 // it transitively includes control/ai_config_paths.hpp in the correct order.
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../Shared/DataLoader/DataLoader.hpp"
 #include "Subprocess/subprocess_status_io.hpp" // Foundational status-file IPC. The envelope schema lives there; tokenizer-
 
@@ -139,15 +140,21 @@ int main(int argc, char** argv) {
                 "ai_config.json not found at: " + args.config_file);
         }
 
+        const auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
+
         GRIM::Config::GrimTextPaths paths;
-        if (!GRIM::Config::loadGrimTextPaths(paths, args.config_file)) {
-            throw std::runtime_error(
-                "could not load GRIM-text paths from: " + args.config_file);
-        }
+        paths.vocab = startup_config.paths.vocab_path;
+        paths.model = startup_config.paths.output_model_path;
+        paths.training_data = startup_config.paths.data_path;
+        paths.checkpoints = startup_config.paths.checkpoint_dir;
+        paths.logs = startup_config.paths.log_dir;
+        paths.training_status = startup_config.paths.status_path;
         if (!paths.isValid()) {
             throw std::runtime_error(
                 "ai_config.json missing required paths (vocab and/or training_data)");
         }
+
+        const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
 
         paths.printPaths();
 
@@ -163,6 +170,7 @@ int main(int argc, char** argv) {
 
         const bool ok = GRIM::PrepareTrainingDataFromCache(
             paths,
+            tokenizer_hp,
             out_training_data,
             out_vocab,
             args.force);

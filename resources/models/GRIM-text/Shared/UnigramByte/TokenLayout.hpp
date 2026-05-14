@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 
 #include "Byte.hpp"  // For BYTE_TOKEN_OFFSET, BYTE_VOCAB_SIZE, special token IDs
@@ -52,6 +53,70 @@ inline uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
 constexpr uint32_t kAtomEntryNone = UINT32_MAX;
 constexpr int MAX_PIECE_LENGTH = 32;           // Maximum token length in bytes
 constexpr float UNKNOWN_SCORE = -100.0f;       // Score for unknown pieces
+
+//======================================================//
+//  Layout Special Token Metadata
+//======================================================//
+struct SpecialTokenDefinition {
+    int id;
+    const char* text;
+    const char* name;
+};
+
+inline constexpr SpecialTokenDefinition SPECIAL_TOKEN_DEFINITIONS[NUM_SPECIAL_TOKENS] = {
+    {UNK_TOKEN_ID, "<unk>", "UNK"},
+    {PAD_TOKEN_ID, "<pad>", "PAD"},
+    {BOS_TOKEN_ID, "<s>",   "BOS"},
+    {EOS_TOKEN_ID, "</s>",  "EOS"}
+};
+
+inline bool isSpecialTokenId(int token_id) {
+    return token_id >= SPECIAL_TOKEN_OFFSET &&
+           token_id < SPECIAL_TOKEN_OFFSET + NUM_SPECIAL_TOKENS;
+}
+
+inline const char* specialTokenText(int token_id) {
+    for (const auto& def : SPECIAL_TOKEN_DEFINITIONS) {
+        if (def.id == token_id) return def.text;
+    }
+    throw std::runtime_error("specialTokenText: token_id=" + std::to_string(token_id) +
+                             " is not a registered special token");
+}
+
+inline const char* specialTokenName(int token_id) {
+    for (const auto& def : SPECIAL_TOKEN_DEFINITIONS) {
+        if (def.id == token_id) return def.name;
+    }
+    throw std::runtime_error("specialTokenName: token_id=" + std::to_string(token_id) +
+                             " is not a registered special token");
+}
+
+inline bool isNeverTargetSpecialTokenId(int token_id) {
+    return token_id == UNK_TOKEN_ID || token_id == PAD_TOKEN_ID || token_id == BOS_TOKEN_ID;
+}
+
+//======================================================//
+//  TokenLayout — runtime-queried token ID ranges
+//======================================================//
+struct TokenLayout {
+    int num_special  = 0;
+    int num_bytes    = 0;
+    int num_atoms    = 0;
+    int num_unigram  = 0;
+
+    int special_offset() const { return SPECIAL_TOKEN_OFFSET; }
+    int byte_offset()    const { return num_special; }
+    int atom_offset()    const { return num_special + num_bytes; }
+    int unigram_offset() const { return num_special + num_bytes + num_atoms; }
+    int total_vocab()    const { return num_special + num_bytes + num_atoms + num_unigram; }
+
+    bool isSpecial(int id) const { return id >= special_offset() && id < byte_offset(); }
+    bool isByte(int id)    const { return id >= byte_offset()    && id < atom_offset(); }
+    bool isAtom(int id)    const { return id >= atom_offset()    && id < unigram_offset(); }
+    bool isUnigram(int id) const { return id >= unigram_offset() && id < total_vocab(); }
+
+    int firstContentTokenId() const { return num_special; }
+};
 
 //======================================================//
 //  Layout Configuration

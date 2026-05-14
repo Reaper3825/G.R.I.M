@@ -36,9 +36,6 @@ void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
             seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
             seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
             seq.token_atom_flags.insert(seq.token_atom_flags.begin(), 0);
-            for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
-                seq.token_text_features.insert(seq.token_text_features.begin(), 0);
-            }
             seq.targets.insert(seq.targets.begin(), -1);
             if (!seq.token_exec_slots.empty())
                 seq.token_exec_slots.insert(seq.token_exec_slots.begin(), static_cast<int32_t>(-1));
@@ -59,9 +56,6 @@ void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
             seq.token_atom_mask.push_back(0);
             seq.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
             seq.token_atom_flags.push_back(0);
-            for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
-                seq.token_text_features.push_back(0);
-            }
             // Fix shift: the PREVIOUS position's target was -1 (no next token existed
             // when DataLoader ran). Now EOS follows it, so set target = eos_id.
             if (!seq.targets.empty()) {
@@ -160,9 +154,6 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                 window.token_atom_mask.push_back(0);
                 window.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
                 window.token_atom_flags.push_back(0);
-                for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
-                    window.token_text_features.push_back(0);
-                }
                 if (!seq.token_exec_slots.empty())
                     window.token_exec_slots.push_back(static_cast<int32_t>(-1));
                 if (!seq.slot_selection_targets.empty())
@@ -186,10 +177,6 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                 seq.atom_entry_ids.begin() + start, seq.atom_entry_ids.begin() + end);
             window.token_atom_flags.insert(window.token_atom_flags.end(),
                 seq.token_atom_flags.begin() + start, seq.token_atom_flags.begin() + end);
-            // GRMT v4: slice text features (16 values per token)
-            window.token_text_features.insert(window.token_text_features.end(),
-                seq.token_text_features.begin() + start * GRIM::Tokenizer::kTextFeatureDim,
-                seq.token_text_features.begin() + end * GRIM::Tokenizer::kTextFeatureDim);
 
             if (!seq.token_exec_slots.empty()) {
                 window.token_exec_slots.insert(window.token_exec_slots.end(),
@@ -253,11 +240,6 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                 if (!window.slot_selection_targets.empty())
                     window.slot_selection_targets.back() =
                         GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1};
-                // Clear text features for the replaced position
-                const size_t last_tf_start = (window.token_ids.size() - 1) * GRIM::Tokenizer::kTextFeatureDim;
-                for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
-                    window.token_text_features[last_tf_start + i] = 0;
-                }
                 // Second-to-last position learns to predict EOS
                 if (window.targets.size() >= 2) {
                     window.targets[window.targets.size() - 2] = eos_id;

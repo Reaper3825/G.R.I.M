@@ -21,8 +21,6 @@
 #include <utility>
 #include <cuda_runtime.h>
 
-using GRIMText::Training::Internal::formatScalar;
-
 namespace GRIM::Diagnostics {
 
 void computeRhoDiagnostic(
@@ -38,6 +36,10 @@ void computeRhoDiagnostic(
     const int rect_positions = payload.total_tokens;
 
     if (num_layers <= 0 || rect_positions < 2) return;
+    if (!ctx.tokenizer) {
+        throw std::runtime_error("RhoDiagnostic requires initialized ctx.tokenizer");
+    }
+    const auto& tokenizer = *ctx.tokenizer;
 
     // ── Geometry invariant guards ──
     // Hidden-state snapshots are laid out using the Phase1-authored payload rectangle:
@@ -413,7 +415,7 @@ void computeRhoDiagnostic(
         for (size_t i = 0; i < top_n; ++i) {
             const int tid = freq_sorted[i].first;
             const int cnt = freq_sorted[i].second;
-            std::string decoded = ctx.tokenizer.decode({tid});
+            std::string decoded = tokenizer.decode({tid});
             // Escape newlines/tabs for single-line display
             for (auto& c : decoded) {
                 if (c == '\n') c = ' ';

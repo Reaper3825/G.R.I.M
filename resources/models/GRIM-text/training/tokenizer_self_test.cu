@@ -23,6 +23,7 @@
 
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; pulls in control/ai_config_paths.hpp transitively
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 using GrimTokenizer = GRIM::Tokenizer::UniByte;
 
@@ -375,8 +376,8 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         test.name = "Special tokens (BOS/EOS/PAD)";
         test.passed = true;
         std::ostringstream oss;
-        oss << "PAD=" << tokenizer.padId() << " UNK=" << tokenizer.unkId()
-            << " BOS=" << tokenizer.bosId() << " EOS=" << tokenizer.eosId();
+        oss << "PAD=" << GRIM::Tokenizer::PAD_TOKEN_ID << " UNK=" << GRIM::Tokenizer::UNK_TOKEN_ID
+            << " BOS=" << GRIM::Tokenizer::BOS_TOKEN_ID << " EOS=" << GRIM::Tokenizer::EOS_TOKEN_ID;
         test.details = oss.str();
         results.passed++;
         results.tests.push_back(test);
@@ -536,26 +537,19 @@ int main(int argc, char** argv) {
         auto opts = parseOptions(argc, argv);
         
         printHeader("GRIM Tokenizer Self-Test");
+
+        const auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
+        const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
         
         // Load vocab path from ai_config.json if not specified on command line
         if (opts.vocab_path.empty()) {
             std::cout << "\nLoading paths from ai_config.json...\n";
-            GRIM::Config::GrimTextPaths paths;
-            if (GRIM::Config::loadGrimTextPaths(paths, opts.config_path.string())) {
-                if (!paths.vocab.empty()) {
-                    opts.vocab_path = paths.vocab;
-                    std::cout << Color::GREEN << "  ✓ Vocab path from config: " 
-                              << Color::RESET << opts.vocab_path << "\n";
-                } else {
-                    std::cerr << Color::YELLOW << "  WARNING: vocab path empty in config, using fallback\n" 
-                              << Color::RESET;
-                    opts.vocab_path = "models/vocab.bin";
-                }
-            } else {
-                std::cerr << Color::YELLOW << "  WARNING: Could not load ai_config.json, using fallback\n" 
-                          << Color::RESET;
-                opts.vocab_path = "models/vocab.bin";
+            if (startup_config.paths.vocab_path.empty()) {
+                throw std::runtime_error("tokenizer_self_test: vocab path is empty after loadStartupConfig");
             }
+            opts.vocab_path = startup_config.paths.vocab_path;
+            std::cout << Color::GREEN << "  ✓ Vocab path from config: " 
+                      << Color::RESET << opts.vocab_path << "\n";
         }
         
         std::cout << "\nConfiguration:\n";
@@ -569,17 +563,11 @@ int main(int argc, char** argv) {
             fs::create_directories(opts.log_dir);
         }
         
-        // Load tokenizer config from ai_config.json
-        std::cout << "\nLoading tokenizer configuration...\n";
-        GRIM::Config::TokenizerConfig config_tok;
-        if (GRIM::Config::loadTokenizerConfig(config_tok, opts.config_path.string())) {
-            std::cout << Color::GREEN << "  ✓ Loaded tokenizer config" << Color::RESET << "\n";
-        } else {
-            std::cout << Color::YELLOW << "  ⚠ Using default tokenizer config" << Color::RESET << "\n";
-        }
+        std::cout << "\nLoading tokenizer hyperparameter grouping...\n";
+        std::cout << Color::GREEN << "  ✓ Loaded TokenizerHP" << Color::RESET << "\n";
         
         // Load tokenizer
-        GrimTokenizer tokenizer;
+        GrimTokenizer tokenizer(tokenizer_hp);
         if (!tokenizer.load(opts.vocab_path.string())) {
             std::cerr << Color::RED << "\nERROR: Failed to load vocab from " 
                       << opts.vocab_path << Color::RESET << "\n";
@@ -588,10 +576,10 @@ int main(int argc, char** argv) {
         
         std::cout << "\n" << Color::GREEN << "✓ Loaded tokenizer" << Color::RESET << "\n";
         std::cout << "  Vocab size: " << tokenizer.totalVocabSize() << "\n";
-        std::cout << "  Special tokens: PAD=" << tokenizer.padId() 
-                  << " UNK=" << tokenizer.unkId()
-                  << " BOS=" << tokenizer.bosId() 
-                  << " EOS=" << tokenizer.eosId() << "\n";
+        std::cout << "  Special tokens: PAD=" << GRIM::Tokenizer::PAD_TOKEN_ID 
+              << " UNK=" << GRIM::Tokenizer::UNK_TOKEN_ID
+              << " BOS=" << GRIM::Tokenizer::BOS_TOKEN_ID 
+              << " EOS=" << GRIM::Tokenizer::EOS_TOKEN_ID << "\n";
         
         // Run sections
         std::vector<SectionResults> all_results;

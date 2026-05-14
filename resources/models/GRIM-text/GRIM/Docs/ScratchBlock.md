@@ -15,8 +15,8 @@ Static construction values come from `HyperParameters::scratchBlockConstructionH
 The current entry point is `autograd::scratch_block_inject()`. It returns a new `Tensor` with `ScratchBlockGradFn` attached to the tape:
 
 - Forward computes `output = input + atom_scale * project(atom_embedding)` for detected atom positions.
-- Atom embeddings merge type, numeric value, atom flags, slot binding, and text-feature channels.
+- Atom embeddings merge learned atom type vectors with numeric value, atom flags, and slot-binding metadata.
 - `ScratchBlockGradFn` owns saved atom activations and backward scratch inside the autograd boundary.
 - Backward propagates identity gradient to the input chain and accumulates gradients into `atom_projection` and `atom_type_embeddings`.
 
-Do not reintroduce the deleted dropout-gradient tap path or external ScratchBlock pools. Batch upload copies `BatchPayload` host atom/text/numeric metadata into TrainingState device cache tensors; ScratchBlock reads those per-step device bindings during forward.
+Do not reintroduce the deleted dropout-gradient tap path or external ScratchBlock pools. Batch upload copies `BatchPayload` host atom/numeric metadata into TrainingState device cache tensors; ScratchBlock reads those per-step device bindings during forward.

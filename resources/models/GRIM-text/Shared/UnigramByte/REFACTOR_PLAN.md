@@ -14,7 +14,7 @@
 |------|------:|---------|
 | Unigram.cu | 2,620 | Training pipeline (~1,300 lines), inference (Viterbi/trie), GPU upload, vocab I/O, EM algorithm, noise filters, UTF-8 helpers, SentencePiece normalization, character validation — all in one file |
 | AtomTable.cu | 1,745 | 12 atom type parsers (only 1 is active), serialization, GPU upload, string pool, dedup, registration, metadata |
-| UniByte.cu | 1,271 | Orchestration mixed with detector implementations, text feature encoding, GPU kernels, decode logic |
+| UniByte.cu | 1,271 | Orchestration mixed with detector implementations, atom metadata encoding, GPU kernels, decode logic |
 | Unigram.hpp | 329 | Owns `AtomType` enum even though it's consumed by AtomTable and UniByte — wrong home |
 | AtomTable.hpp | 478 | 12 atom value structs for types that are dead code |
 | UniByte.hpp | 402 | Declares `Detector::` namespace functions implemented 1,000 lines away in UniByte.cu |
@@ -55,8 +55,11 @@ UnigramByte/
 ├── TokenLayout.hpp          [NEW]  ~80 lines   — Token ID constants, AtomType enum, layout math
 ├── TextUtils.hpp            [NEW]  ~60 lines   — UTF-8 helpers, SentencePiece normalization decls
 ├── TextUtils.cu             [NEW]  ~200 lines  — normalizeSpaces, denormalizeSpaces, utf8SequenceLength, isValidVocabCharacter, character validators
-├── Detectors.hpp            [NEW]  ~60 lines   — Detector:: namespace declarations (moved from UniByte.hpp)
-├── Detectors.cu             [NEW]  ~300 lines  — detectInteger, detectFloat, detectHex, detectBinary, detectPath, etc. (moved from UniByte.cu)
+├── Detectors/
+│   ├── TokenizerDetector.hpp      [NEW] — RawTextDetector parent class + result types
+│   ├── DetectorRegistry.hpp/.cu   [NEW] — detector registration + longest-match raw-text scan
+│   ├── NumericDetectors.hpp/.cu   [NEW] — integer/float atom detectors
+│   └── TextFeatureDetectors.hpp/.cu [NEW] — whitespace/uppercase raw-text feature detectors
 ├── Byte.hpp                 [KEEP] ~171 lines  — No changes
 ├── Byte.cu                  [KEEP] ~389 lines  — No changes
 ├── AhoCorasick.hpp          [MOD]  ~200 lines  — Remove #include "Unigram.hpp", include "TokenLayout.hpp" instead
@@ -67,7 +70,7 @@ UnigramByte/
 ├── Unigram.cu               [MOD]  ~1100 lines — Inference only: Viterbi, trie, encode/decode, GPU upload, vocab I/O
 ├── UnigramTrainer.hpp       [NEW]  ~40 lines   — trainFromCorpus() declaration, training config struct
 ├── UnigramTrainer.cu         [NEW]  ~1300 lines — trainFromCorpus(), subword mining, EM, noise filters, sentence segmentation
-├── UniByte.hpp              [MOD]  ~340 lines  — Remove Detector:: declarations (moved to Detectors.hpp), include Detectors.hpp
+├── UniByte.hpp              [MOD]  ~340 lines  — public tokenizer API; raw-text detection exposed through registry-backed `detectRawText()`
 ├── UniByte.cu               [MOD]  ~700 lines  — Orchestration only: detectStructures, encode pipeline, decode, GPU kernels
 ```
 
@@ -109,20 +112,15 @@ AhoCorasick.hpp ←── TokenLayout.hpp (instead of including Unigram.hpp)
 
 **Why second:** These are pure utility functions with no state. Currently duplicated or forward-declared across files. Extracting them gives every file a clean import.
 
-### Step 3: Create `Detectors.hpp` / `Detectors.cu`
+### Step 3: Create `Detectors/` raw-text detector subsystem
 
-**Move FROM `UniByte.cu` (bottom ~280 lines):**
-- `Detector::detectInteger()`
-- `Detector::detectFloat()`
-- `Detector::detectHexLiteral()`
-- `Detector::detectBinaryLiteral()`
-- `Detector::detectPath()` (if still active — verify usage)
-- `Detector::detectDate()`, `detectTime()`, `detectIPAddress()`, `detectStringLiteral()`, `detectIdentifier()` — **DELETE if not called** (these were removed from `detectStructures()` pipeline)
+**Current target shape:**
+- `Detectors/TokenizerDetector.hpp` — `RawTextDetector` parent class, raw detection result, detector options.
+- `Detectors/DetectorRegistry.hpp/.cu` — registration, duplicate-name validation, priority ordering, longest-match raw-text scan.
+- `Detectors/NumericDetectors.hpp/.cu` — `IntegerDetector`, `FloatDetector` atom emitters.
+- `Detectors/TextFeatureDetectors.hpp/.cu` — `WhitespaceDetector`, `UppercaseRunDetector` non-atom raw-text feature detectors.
 
-**Move FROM `UniByte.hpp`:**
-- `namespace Detector { ... }` declarations → to `Detectors.hpp`
-
-**Delete dead detectors:** Cross-reference `detectStructures()` in UniByte.cu to confirm which detectors are actually called. Currently only numeric detection (integer, float, hex, binary) appears active. All others are dead code → delete them (Rule 26).
+**Delete dead detectors:** Cross-reference `detectStructures()` in `UniByte.cu` to confirm which detectors emit atoms. Hex/binary/path/date/time/IP/string/identifier detectors are not active and must not be recreated without a direct registry consumer.
 
 ### Step 4: Extract `UnigramTrainer.hpp` / `UnigramTrainer.cu`
 
@@ -174,19 +172,21 @@ Option **(B)** is simpler — just move the method definition to a different `.c
 ### Step 6: Slim `UniByte.cu` — Remove extracted code
 
 After Steps 3-4, update UniByte.cu:
-- Remove detector function implementations (now in `Detectors.cu`)
+- Remove detector function implementations (now in `Detectors/`)
 - Remove any training-related helpers that moved to `UnigramTrainer.cu`
-- Add `#include "Detectors.hpp"` and `#include "TextUtils.hpp"`
+- Add `#include "Detectors/DetectorRegistry.hpp"` where raw-text scanning is needed.
 - **Result:** ~700 lines of pure orchestration
 
 ### Step 7: Update `CMakeLists.txt`
 
 Add new `.cu` files to the build:
 - `TextUtils.cu`
-- `Detectors.cu`
+- `Detectors/DetectorRegistry.cu`
+- `Detectors/NumericDetectors.cu`
+- `Detectors/TextFeatureDetectors.cu`
 - `UnigramTrainer.cu`
 
-New `.hpp` files (`TokenLayout.hpp`, `TextUtils.hpp`, `Detectors.hpp`, `UnigramTrainer.hpp`) are header-only or included by their `.cu` counterparts — verify they're picked up.
+New `.hpp` files (`TokenLayout.hpp`, `TextUtils.hpp`, `Detectors/*.hpp`, `UnigramTrainer.hpp`) are header-only or included by their `.cu` counterparts — verify they're picked up.
 
 ---
 
@@ -200,8 +200,9 @@ TokenLayout.hpp          ←── (standalone: <cstdint>, <string>)
    ├── AhoCorasick.hpp   ←── TokenLayout.hpp
    ├── Unigram.hpp       ←── TokenLayout.hpp
    ├── AtomTable.hpp     ←── TokenLayout.hpp
-   ├── Detectors.hpp     ←── TokenLayout.hpp
-   └── UniByte.hpp       ←── Unigram.hpp, AtomTable.hpp, AhoCorasick.hpp, Byte.hpp, Detectors.hpp
+    ├── Detectors/TokenizerDetector.hpp ←── TokenLayout.hpp
+    ├── Detectors/DetectorRegistry.hpp  ←── Detectors/TokenizerDetector.hpp
+    └── UniByte.hpp       ←── Unigram.hpp, AtomTable.hpp, Byte.hpp, Detectors/TokenizerDetector.hpp
        ↑
        UnigramTrainer.hpp ←── Unigram.hpp, TextUtils.hpp
 ```
@@ -224,11 +225,7 @@ TokenLayout.hpp          ←── (standalone: <cstdint>, <string>)
 | `parseIPAddress()` | AtomTable.cu ~60 lines | `ATOM_IP` detection removed |
 | `parseStringLiteral()` | AtomTable.cu ~80 lines | `ATOM_STRING_LITERAL` detection removed |
 | `parseIdentifier()` | AtomTable.cu ~60 lines | `ATOM_IDENTIFIER` detection removed |
-| `Detector::detectDate()` | UniByte.cu ~40 lines | Not called in `detectStructures()` |
-| `Detector::detectTime()` | UniByte.cu ~30 lines | Not called |
-| `Detector::detectIPAddress()` | UniByte.cu ~30 lines | Not called |
-| `Detector::detectStringLiteral()` | UniByte.cu ~40 lines | Not called |
-| `Detector::detectIdentifier()` | UniByte.cu ~30 lines | Not called |
+| retired date/time/IP/string/identifier raw detectors | legacy detector extraction scope | Not registered in `DetectorRegistry` |
 | `AtomURL`, `AtomEmail`, `AtomPath`, `AtomDate`, `AtomTime`, `AtomIP`, `AtomString`, `AtomIdentifier` structs | AtomTable.hpp | Only used by dead parsers |
 
 **Total dead code: ~750+ lines**
@@ -237,8 +234,8 @@ TokenLayout.hpp          ←── (standalone: <cstdint>, <string>)
 
 | Code | Location | Check |
 |------|----------|-------|
-| `Detector::detectPath()` | UniByte.cu | Grep for `detectPath` calls in `detectStructures()` — may still be active |
-| `ATOM_URL`..`ATOM_IDENTIFIER` enum values | TokenLayout.hpp (after move) | Check if token ID ranges assume these exist. If they're only used as dispatch keys for dead parsers, delete. If they're part of the serialized checkpoint format, keep the enum values but delete the parsers |
+| retired path raw detector | registry setup | Only keep if a direct `DetectorRegistry` consumer is added |
+| retired URL/email/path/date/time/IP/string/identifier atom enum values | TokenLayout.hpp | Check serialized checkpoint/vocab compatibility before deleting token-layout slots |
 
 ---
 
@@ -248,7 +245,7 @@ After each step, verify:
 
 - [ ] `cmake --build build --config Release --target train_gpu` compiles
 - [ ] `cmake --build build --config Release --target grim_text_server` compiles
-- [ ] `cmake --build build --config Release --target unigrambyte_self_test` compiles and passes (37 tests)
+- [ ] `cmake --build build --config Release --target unigrambyte_self_test` compiles and passes
 - [ ] No new compiler warnings
 - [ ] No `#include` cycles (each header compiles standalone with its own includes)
 - [ ] `grep -rn "Unigram.hpp" *.hpp` → only files that genuinely use `UnigramLM` class (not just AtomType/constants)
@@ -273,7 +270,7 @@ After each step, verify:
 ```
 1. TokenLayout.hpp          — foundation, unblocks include fixes
 2. TextUtils.hpp/.cu        — pure utilities, unblocks everything
-3. Detectors.hpp/.cu        — extract from UniByte, delete dead detectors
+3. Detectors/*.hpp/.cu      — raw-text detector parent class, registry, active detectors
 4. UnigramTrainer.hpp/.cu   — extract from Unigram.cu (biggest win)
 5. AtomTable.cu cleanup     — delete dead parsers
 6. UniByte.cu slim           — remove extracted code

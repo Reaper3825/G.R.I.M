@@ -9,7 +9,7 @@ cd resources/models/GRIM-text/training/TrainingLoop
 cmake --build build --config Release --target train_gpu
 cmake --build build --config Release --target grim_text_server
 ```
-
+ vb
 ## Run training
 
 ```powershell
@@ -17,7 +17,7 @@ cd resources/models/GRIM-text/training
 .\TrainingLoop\build\Release\train_gpu.exe
 ```
 
-## Tokenizer self-test (37 tests)
+## Tokenizer self-test
 
 ```powershell
 cd resources/models/GRIM-text/training/build

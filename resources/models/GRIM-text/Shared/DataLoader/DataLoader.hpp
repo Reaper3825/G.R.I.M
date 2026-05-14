@@ -5,6 +5,7 @@
 namespace GRIM {
 
 namespace Config { struct GrimTextPaths; }
+namespace HyperParameters { struct TokenizerHP; }
 
 // Prepares GRIM-text training data from curriculum concept blocks.
 // - Uses `GrimTextPaths` (ai_config.json) for all paths.
@@ -18,6 +19,7 @@ namespace Config { struct GrimTextPaths; }
 // Returns true on success. Throws on fatal errors (missing concept blocks).
 bool PrepareTrainingDataFromCache(
 	const Config::GrimTextPaths& paths,
+	const HyperParameters::TokenizerHP& tokenizer_hp,
 	std::string& out_training_data_path,
 	std::string& out_vocab_path,
 	bool force_rebuild = false);

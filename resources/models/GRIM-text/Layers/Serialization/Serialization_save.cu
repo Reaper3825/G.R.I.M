@@ -296,7 +296,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 builder,
                 builder.CreateVector(sb_atom_emb),
                 builder.CreateVector(sb_atom_proj),
-                0,
                 static_cast<uint32_t>(sb_view.num_atom_types),
                 static_cast<uint32_t>(sb_view.atom_embedding_dim),
                 static_cast<uint32_t>(sb_view.d_model),

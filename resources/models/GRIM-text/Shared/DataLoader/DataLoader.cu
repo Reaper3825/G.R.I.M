@@ -22,6 +22,7 @@
 #include "../../Common/grim_model_serialization_version.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // also pulls in control/ai_config_paths.hpp transitively (correct order)
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../Batching/BatchPayload.hpp"
 #include "ConceptExecutionSequenceBuilder.hpp"
 
@@ -264,6 +265,7 @@ void loadConceptBlocksJson(const fs::path& cache_dir,
 
 bool PrepareTrainingDataFromCache(
 	const GrimTextPaths& paths,
+	const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
 	std::string& out_training_data_path,
 	std::string& out_vocab_path,
 	bool force_rebuild) {
@@ -281,11 +283,6 @@ bool PrepareTrainingDataFromCache(
 		return false;
 	}
 
-	GRIM::Config::TrainingHyperparameters train_config;
-	if (!GRIM::Config::loadTrainingHyperparameters(train_config)) {
-		std::cerr << "[DataLoader] FATAL: Could not load training config for atom layout" << std::endl;
-		throw std::runtime_error("DataLoader: training config missing");
-	}
 	GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
 	std::cout << "[DataLoader] Atom token range fixed at " << GRIM::Tokenizer::ATOM_VOCAB_SIZE
 	          << " type tokens" << std::endl;
@@ -386,12 +383,12 @@ bool PrepareTrainingDataFromCache(
 
 	std::vector<nlohmann::json> concept_json_entries;
 	CurriculumFilter curriculum_filter;
-	loadConceptBlocksJson(cache_dir, concept_json_entries, curriculum_filter, train_config.current_curriculum);
+	loadConceptBlocksJson(cache_dir, concept_json_entries, curriculum_filter, tokenizer_hp.current_curriculum);
 
 	// ── Curriculum startup summary ──
 	std::cout << "[DataLoader] ═══════════ Curriculum Config ═══════════" << std::endl;
-	if (!train_config.current_curriculum.empty()) {
-		std::cout << "[DataLoader]   curriculum        = " << train_config.current_curriculum << std::endl;
+	if (!tokenizer_hp.current_curriculum.empty()) {
+		std::cout << "[DataLoader]   curriculum        = " << tokenizer_hp.current_curriculum << std::endl;
 	} else {
 		std::cout << "[DataLoader]   curriculum        = (NONE — loading ALL blocks unfiltered)" << std::endl;
 	}
@@ -401,8 +398,8 @@ bool PrepareTrainingDataFromCache(
 	std::cout << "[DataLoader]   plaintext_ids     = " << curriculum_filter.plaintext_ids.size() << std::endl;
 	std::cout << "[DataLoader]   loaded blocks     = " << concept_json_entries.size() << std::endl;
 	std::cout << "[DataLoader] ═══════════════════════════════════════" << std::endl;
-	if (!train_config.current_model_training.empty()) {
-		std::cout << "[DataLoader] Training model: " << train_config.current_model_training << std::endl;
+	if (!tokenizer_hp.current_model_training.empty()) {
+		std::cout << "[DataLoader] Training model: " << tokenizer_hp.current_model_training << std::endl;
 	}
 
 	if (concept_json_entries.empty()) {
@@ -417,40 +414,7 @@ bool PrepareTrainingDataFromCache(
 	// No train/val/test split here — Phase1_Startup owns that decision.  
 	// DataLoader writes ALL sequences to a single GRMT file.
 
-	// Load tokenizer config from ai_config.json
-	GRIM::Tokenizer::UniByteConfig tok_config;
-	GRIM::Config::TokenizerConfig config_tok;
-	if (!GRIM::Config::loadTokenizerConfig(config_tok)) {
-		std::cerr << "[DataLoader] FATAL: ai_config.json missing; tokenizer config required" << std::endl;
-		throw std::runtime_error("DataLoader: tokenizer config missing");
-	}
-	if (config_tok.vocab_size <= 0) {
-		std::cerr << "[DataLoader] FATAL: tokenizer vocab_size must be > 0" << std::endl;
-		throw std::runtime_error("DataLoader: invalid tokenizer vocab_size");
-	}
-	int target_vocab_size = config_tok.vocab_size;
-	if (config_tok.max_vocab_size > 0 && target_vocab_size > config_tok.max_vocab_size) {
-		std::cout << "[DataLoader] Clamping tokenizer target vocab_size "
-				  << target_vocab_size << " -> " << config_tok.max_vocab_size
-				  << " (max_vocab_size)" << std::endl;
-		target_vocab_size = config_tok.max_vocab_size;
-	}
-	tok_config.target_vocab_size = target_vocab_size;
-	tok_config.character_coverage = GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE;
-	tok_config.min_subword_freq = config_tok.min_subword_freq;
-	tok_config.prune_during_mining = config_tok.prune_during_mining;
-	tok_config.enable_parallel_subword_mining = config_tok.enable_parallel_subword_mining;
-	tok_config.subword_mining_workers = config_tok.subword_mining_workers;
-	tok_config.subword_mining_max_bytes = config_tok.subword_mining_max_bytes;
-	
-	// Load scratch block reasoning settings from training hyperparameters (single source of truth)
-	tok_config.enable_scratch_block_reasoning = train_config.tokenizer_enable_scratch_block_reasoning;
-	tok_config.detect_numbers = train_config.tokenizer_detect_numbers;
-	
-	tok_config.enable_byte_fallback = config_tok.enable_byte_fallback;
-	tok_config.prefer_gpu = true;
-
-	GRIM::Tokenizer::UniByte tokenizer(tok_config);
+	GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
 
 	// Resolve vocab path from config
 	fs::create_directories(vocab_path.parent_path());
@@ -458,7 +422,7 @@ bool PrepareTrainingDataFromCache(
 	bool save_text_vocab = false;
 	
 	// Check if we should save human-readable text vocab
-	save_text_vocab = config_tok.save_text_vocab;
+	save_text_vocab = tokenizer_hp.save_text_vocab;
 	
 	if (!force_rebuild && !out_vocab_path.empty() && fs::exists(vocab_path)) {
 		if (tokenizer.load(out_vocab_path)) {
@@ -469,7 +433,7 @@ bool PrepareTrainingDataFromCache(
 	}
 	if (!vocab_loaded) {
 		std::cout << "[DataLoader] Training new tokenizer vocab from concept blocks (target: " 
-				  << target_vocab_size << " tokens)..." << std::endl;
+				  << tokenizer_hp.target_vocab_size << " tokens)..." << std::endl;
 		std::vector<std::string> vocab_corpus;
 		vocab_corpus.reserve(concept_json_entries.size());
 		for (const auto& cj : concept_json_entries) {
@@ -485,7 +449,7 @@ bool PrepareTrainingDataFromCache(
 		tokenizer.train(vocab_corpus);
 		if (!out_vocab_path.empty()) {
 			std::cout << "[DataLoader] Saving vocab to " << out_vocab_path << "..." << std::endl << std::flush;
-			if (!tokenizer.save(out_vocab_path, save_text_vocab, config_tok.vocab_score_multiplier)) {
+			if (!tokenizer.save(out_vocab_path, save_text_vocab, tokenizer_hp.vocab_score_multiplier)) {
 				// Vocab is a hard dependency for Phase1; without it the GRMT we
 				// would write next is unusable. Fail immediately rather than
 				// returning true and leaving training data and vocab out of sync.
@@ -505,7 +469,6 @@ bool PrepareTrainingDataFromCache(
 		std::vector<int> targets;  // GRMT v7: pre-computed targets (shifted token_ids with masking)
 		std::vector<float> numeric_values;
 		std::vector<uint32_t> atom_flags;     // Per-token type-specific flags from AtomTable
-		std::vector<uint16_t> text_features;  // [tokens * kTextFeatureDim] FP16
 		std::vector<uint8_t> atom_mask;       // Unified per-token atom mask
 		std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Per-sequence atom registry
 		std::vector<uint32_t> atom_entry_ids;  // Per-token index into atom_table
@@ -522,7 +485,7 @@ bool PrepareTrainingDataFromCache(
 	// insertion (add_bos, add_eos config flags) and target fixup for them.
 
 	auto build_sequence = [&](const std::string& text) -> std::optional<TokenizedSequence> {
-		auto result = tokenizer.encodeWithMetadata(text);
+		auto result = tokenizer.tokenizeWithMetadata(text);
 		if (result.token_ids.empty()) {
 			return std::nullopt;
 		}
@@ -531,13 +494,11 @@ bool PrepareTrainingDataFromCache(
 		seq.token_ids = std::move(result.token_ids);
 		seq.numeric_values = std::move(result.token_numeric_values);
 		seq.atom_flags = std::move(result.token_atom_flags);
-		seq.text_features = std::move(result.token_text_features);
 		seq.atom_mask = std::move(result.token_atom_mask);
 		seq.atom_table = std::move(result.atom_table);
 		seq.atom_entry_ids = std::move(result.atom_entry_ids);
 		if (seq.numeric_values.size() != seq.token_ids.size() ||
 			seq.atom_flags.size() != seq.token_ids.size() ||
-			seq.text_features.size() != seq.token_ids.size() * GRIM::Tokenizer::kTextFeatureDim ||
 			seq.atom_mask.size() != seq.token_ids.size() ||
 			seq.atom_entry_ids.size() != seq.token_ids.size()) {
 			throw std::runtime_error("[DataLoader] Token/side-channel length mismatch");
@@ -562,7 +523,7 @@ bool PrepareTrainingDataFromCache(
 			concept_exec_base_slot = std::stoi(ev);
 		} catch (...) {}
 	}
-	const int expected_exec_steps = train_config.architecture.execution_block_num_steps;
+	const int expected_exec_steps = tokenizer_hp.execution_block_num_steps;
 	size_t plaintext_count = 0;
 	size_t concept_build_failures = 0;
 	size_t selected_entries_skipped = 0;  // short text / encoder returned nullopt
@@ -782,8 +743,6 @@ bool PrepareTrainingDataFromCache(
 					len * sizeof(float));
 			file.write(reinterpret_cast<const char*>(seq.atom_mask.data()),
 					len * sizeof(uint8_t));
-			file.write(reinterpret_cast<const char*>(seq.text_features.data()),
-					len * GRIM::Tokenizer::kTextFeatureDim * sizeof(uint16_t));
 			// GRMT v8: atom_flags (type-specific metadata from AtomTable)
 			file.write(reinterpret_cast<const char*>(seq.atom_flags.data()),
 					len * sizeof(uint32_t));

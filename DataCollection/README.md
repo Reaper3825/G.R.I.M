@@ -260,9 +260,6 @@ cd DataCollection
 
 # Verification only
 ./main_verifier.exe
-
-# Merge checkpoints
-./merge_checkpoints.exe
 ```
 
 ## File Formats

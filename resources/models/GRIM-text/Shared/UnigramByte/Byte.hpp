@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include <cuda_runtime.h>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -50,7 +49,7 @@ struct ByteToken {
 };
 
 //======================================================//
-//  ByteEncoder - CPU/GPU byte-level tokenizer
+//  ByteEncoder - byte-level tokenizer primitive
 //======================================================//
 class ByteEncoder {
 public:
@@ -71,11 +70,9 @@ public:
     
     // Encode raw bytes to token IDs
     std::vector<int> encode(const std::string& text) const;
-    std::vector<int> encode(const uint8_t* data, size_t length) const;
     
     // Decode token IDs back to bytes
     std::string decode(const std::vector<int>& token_ids) const;
-    std::string decode(const int* token_ids, size_t count) const;
     
     // Check if a token ID is a byte token
     bool isByteToken(int token_id) const;
@@ -88,46 +85,6 @@ public:
     
     // Get info about a byte
     ByteToken getByteInfo(uint8_t byte_value) const;
-
-    //--------------------------------------------------//
-    // GPU Interface
-    //--------------------------------------------------//
-    
-    // Encode bytes on GPU (text must already be in device memory)
-    // d_input: input bytes on device
-    // d_output: output token IDs on device (must be pre-allocated)
-    // length: number of bytes
-    // stream: CUDA stream for async execution
-    bool encodeGPU(const uint8_t* d_input, 
-                   int* d_output, 
-                   size_t length,
-                   cudaStream_t stream = nullptr);
-    
-    // Decode tokens on GPU
-    bool decodeGPU(const int* d_input,
-                   uint8_t* d_output,
-                   size_t count,
-                   cudaStream_t stream = nullptr);
-    
-    // Batch encode multiple sequences.
-    //
-    // CONTRACT: `inputs` and `outputs` are HOST arrays of `batch_size` device
-    // pointers (one per sequence). `lengths` is a HOST array of `batch_size`
-    // entries. The arrays themselves are staged H2D internally; the data they
-    // point to must already live on the device.
-    // ENQUEUE-ONLY / LIFETIME: This call is asynchronous. It enqueues
-    // `cudaMemcpyAsync` reads of `inputs`, `lengths`, and `outputs` on
-    // `stream` and returns without synchronizing. The caller MUST keep these
-    // three host arrays alive and unmodified until the staging copies
-    // complete — i.e. until `cudaStreamSynchronize(stream)` (or an equivalent
-    // sync point) returns. Passing temporaries, stack arrays that go out of
-    // scope, or mutating these buffers before sync will read stale memory.
-    // Pinned host memory is recommended for best async behavior.
-    bool encodeBatchGPU(const uint8_t* const* inputs,
-                        const size_t* lengths,
-                        int** outputs,
-                        size_t batch_size,
-                        cudaStream_t stream = nullptr);
 
     //--------------------------------------------------//
     // Vocabulary Info

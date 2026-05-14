@@ -1455,7 +1455,6 @@ struct ScratchBlockWeightsT : public ::flatbuffers::NativeTable {
   typedef ScratchBlockWeights TableType;
   std::vector<float> atom_type_embeddings{};
   std::vector<float> atom_projection{};
-  std::vector<float> text_feature_projection{};
   uint32_t num_atom_types = 0;
   uint32_t atom_embedding_dim = 0;
   uint32_t d_model = 0;
@@ -1469,21 +1468,17 @@ struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ATOM_TYPE_EMBEDDINGS = 4,
     VT_ATOM_PROJECTION = 6,
-    VT_TEXT_FEATURE_PROJECTION = 8,
-    VT_NUM_ATOM_TYPES = 10,
-    VT_ATOM_EMBEDDING_DIM = 12,
-    VT_D_MODEL = 14,
-    VT_ATOM_SCALE = 16,
-    VT_ENABLED = 18
+    VT_NUM_ATOM_TYPES = 8,
+    VT_ATOM_EMBEDDING_DIM = 10,
+    VT_D_MODEL = 12,
+    VT_ATOM_SCALE = 14,
+    VT_ENABLED = 16
   };
   const ::flatbuffers::Vector<float> *atom_type_embeddings() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ATOM_TYPE_EMBEDDINGS);
   }
   const ::flatbuffers::Vector<float> *atom_projection() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ATOM_PROJECTION);
-  }
-  const ::flatbuffers::Vector<float> *text_feature_projection() const {
-    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_TEXT_FEATURE_PROJECTION);
   }
   uint32_t num_atom_types() const {
     return GetField<uint32_t>(VT_NUM_ATOM_TYPES, 0);
@@ -1507,8 +1502,6 @@ struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
            verifier.VerifyVector(atom_type_embeddings()) &&
            VerifyOffset(verifier, VT_ATOM_PROJECTION) &&
            verifier.VerifyVector(atom_projection()) &&
-           VerifyOffset(verifier, VT_TEXT_FEATURE_PROJECTION) &&
-           verifier.VerifyVector(text_feature_projection()) &&
            VerifyField<uint32_t>(verifier, VT_NUM_ATOM_TYPES, 4) &&
            VerifyField<uint32_t>(verifier, VT_ATOM_EMBEDDING_DIM, 4) &&
            VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
@@ -1530,9 +1523,6 @@ struct ScratchBlockWeightsBuilder {
   }
   void add_atom_projection(::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_projection) {
     fbb_.AddOffset(ScratchBlockWeights::VT_ATOM_PROJECTION, atom_projection);
-  }
-  void add_text_feature_projection(::flatbuffers::Offset<::flatbuffers::Vector<float>> text_feature_projection) {
-    fbb_.AddOffset(ScratchBlockWeights::VT_TEXT_FEATURE_PROJECTION, text_feature_projection);
   }
   void add_num_atom_types(uint32_t num_atom_types) {
     fbb_.AddElement<uint32_t>(ScratchBlockWeights::VT_NUM_ATOM_TYPES, num_atom_types, 0);
@@ -1564,7 +1554,6 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_type_embeddings = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_projection = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> text_feature_projection = 0,
     uint32_t num_atom_types = 0,
     uint32_t atom_embedding_dim = 0,
     uint32_t d_model = 0,
@@ -1575,7 +1564,6 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(
   builder_.add_d_model(d_model);
   builder_.add_atom_embedding_dim(atom_embedding_dim);
   builder_.add_num_atom_types(num_atom_types);
-  builder_.add_text_feature_projection(text_feature_projection);
   builder_.add_atom_projection(atom_projection);
   builder_.add_atom_type_embeddings(atom_type_embeddings);
   builder_.add_enabled(enabled);
@@ -1586,7 +1574,6 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeightsDirec
     ::flatbuffers::FlatBufferBuilder &_fbb,
     const std::vector<float> *atom_type_embeddings = nullptr,
     const std::vector<float> *atom_projection = nullptr,
-    const std::vector<float> *text_feature_projection = nullptr,
     uint32_t num_atom_types = 0,
     uint32_t atom_embedding_dim = 0,
     uint32_t d_model = 0,
@@ -1594,12 +1581,10 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeightsDirec
     bool enabled = false) {
   auto atom_type_embeddings__ = atom_type_embeddings ? _fbb.CreateVector<float>(*atom_type_embeddings) : 0;
   auto atom_projection__ = atom_projection ? _fbb.CreateVector<float>(*atom_projection) : 0;
-  auto text_feature_projection__ = text_feature_projection ? _fbb.CreateVector<float>(*text_feature_projection) : 0;
   return GRIMTransformer::CreateScratchBlockWeights(
       _fbb,
       atom_type_embeddings__,
       atom_projection__,
-      text_feature_projection__,
       num_atom_types,
       atom_embedding_dim,
       d_model,
@@ -3442,7 +3427,6 @@ inline void ScratchBlockWeights::UnPackTo(ScratchBlockWeightsT *_o, const ::flat
   (void)_resolver;
   { auto _e = atom_type_embeddings(); if (_e) { _o->atom_type_embeddings.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->atom_type_embeddings[_i] = _e->Get(_i); } } else { _o->atom_type_embeddings.resize(0); } }
   { auto _e = atom_projection(); if (_e) { _o->atom_projection.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->atom_projection[_i] = _e->Get(_i); } } else { _o->atom_projection.resize(0); } }
-  { auto _e = text_feature_projection(); if (_e) { _o->text_feature_projection.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->text_feature_projection[_i] = _e->Get(_i); } } else { _o->text_feature_projection.resize(0); } }
   { auto _e = num_atom_types(); _o->num_atom_types = _e; }
   { auto _e = atom_embedding_dim(); _o->atom_embedding_dim = _e; }
   { auto _e = d_model(); _o->d_model = _e; }
@@ -3460,7 +3444,6 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> ScratchBlockWeights::Pack(::fl
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ScratchBlockWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
   auto _atom_type_embeddings = _o->atom_type_embeddings.size() ? _fbb.CreateVector(_o->atom_type_embeddings) : 0;
   auto _atom_projection = _o->atom_projection.size() ? _fbb.CreateVector(_o->atom_projection) : 0;
-  auto _text_feature_projection = _o->text_feature_projection.size() ? _fbb.CreateVector(_o->text_feature_projection) : 0;
   auto _num_atom_types = _o->num_atom_types;
   auto _atom_embedding_dim = _o->atom_embedding_dim;
   auto _d_model = _o->d_model;
@@ -3470,7 +3453,6 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> ScratchBlockWeights::Pack(::fl
       _fbb,
       _atom_type_embeddings,
       _atom_projection,
-      _text_feature_projection,
       _num_atom_types,
       _atom_embedding_dim,
       _d_model,

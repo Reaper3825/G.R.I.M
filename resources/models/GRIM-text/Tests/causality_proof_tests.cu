@@ -60,8 +60,6 @@ GRIM::Vector runInferencePrefill(GRIM::LanguageModel* model,
     }
 
     const auto& cfg = model->getConfig();
-    std::vector<uint16_t> text_features(
-        tokens.size() * GRIM::Batching::BatchPayload::kTextFeatureDim, 0);
     std::vector<uint32_t> atom_flags(tokens.size(), 0);
     std::vector<uint32_t> atom_entry_ids(tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
     std::vector<int32_t> token_to_slot_map(tokens.size(), -1);
@@ -69,7 +67,6 @@ GRIM::Vector runInferencePrefill(GRIM::LanguageModel* model,
     GRIM::Batching::BatchPayload payload = GRIM::Batching::buildInferenceBatchPayload(
         tokens,
         numeric.values,
-        text_features,
         numeric.mask,
         atom_flags,
         nullptr,
@@ -627,7 +624,7 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
         generated.push_back(next_token);
         
         // Stop on EOS
-        if (next_token == tokenizer->eosId()) break;
+        if (next_token == GRIM::Tokenizer::EOS_TOKEN_ID) break;
     }
     
     // Decode generated sequence

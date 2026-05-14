@@ -390,7 +390,6 @@
             "collector_log": "resources/models/GRIM-text/training/logs/collector.log",
             "directory_collection": "resources/models/GRIM-text/data/collected",
             "logs": "resources/models/GRIM-text/training/logs",
-            "merge_checkpoints_exe": "resources/models/GRIM-text/DataCollection/Release/merge_checkpoints.exe",
             "model": "resources/models/GRIM-text/grim_text.bin",
             "source_config": "DataCollection/source_data.json",
             "training_data": "resources/models/GRIM-text/training/data/training_data.grmt",

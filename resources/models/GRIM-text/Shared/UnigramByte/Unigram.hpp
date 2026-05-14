@@ -47,7 +47,6 @@ struct UnigramPiece {
     float score;           // Log probability
     // token_id is NOT stored — it's ALWAYS (UNIGRAM_VOCAB_OFFSET + index_in_pieces_).
     // Storing it caused 1078 collisions during EM prune/backfill (Issue #148).
-    bool is_special;
     bool is_user_defined;  // High priority, never pruned
 };
 
@@ -138,12 +137,8 @@ public:
     // prepend_space=false: skip prepend (mid-text segment after atom)
     std::vector<int> encode(const std::string& text, bool prepend_space = true) const;
     
-    // Encode with token info
-    std::vector<UnigramPiece> encodeWithPieces(const std::string& text) const;
-    
     // Decode token IDs to text
     std::string decode(const std::vector<int>& token_ids) const;
-    std::string decode(const int* token_ids, size_t count) const;
 
     //--------------------------------------------------//
     // GPU Encoding/Decoding
@@ -151,30 +146,6 @@ public:
     
     // Initialize GPU resources (call before GPU operations)
     bool initGPU();
-    
-    // Encode on GPU using parallel Viterbi
-    // Returns indices where byte fallback is needed
-    bool encodeGPU(const char* d_text,
-                   size_t length,
-                   int* d_token_ids,
-                   int* d_token_count,
-                   int max_tokens,
-                   bool* d_needs_byte_fallback);  // Per-position flags
-    
-    // Batch encode on GPU
-    bool encodeBatchGPU(const char* const* d_texts,
-                        const size_t* lengths,
-                        int** d_token_ids,
-                        int* d_token_counts,
-                        int max_tokens_per_seq,
-                        size_t batch_size);
-    
-    // Decode on GPU
-    bool decodeGPU(const int* d_token_ids,
-                   size_t count,
-                   char* d_output,
-                   size_t* d_output_length,
-                   size_t max_output_length);
 
     //--------------------------------------------------//
     // Vocabulary Info
@@ -182,7 +153,6 @@ public:
     
     int vocabSize() const { return static_cast<int>(pieces_.size()); }
     int totalVocabSize() const { return UNIGRAM_VOCAB_OFFSET + vocabSize(); }
-    int unkId() const { return unk_id_; }
     
     // Cap vocabulary to top-K pieces by score (keeps most frequent)
     void capVocabSize(int max_size);
@@ -191,19 +161,10 @@ public:
     static std::string normalizeForTokenization(const std::string& text);
     static std::string denormalizeFromTokenization(const std::string& text);
     
-    // Special token IDs
-    int padId() const { return pad_id_; }
-    int bosId() const { return bos_id_; }
-    int eosId() const { return eos_id_; }
-
     //--------------------------------------------------//
     // Configuration
     //--------------------------------------------------//
     
-    void setUnkId(int id) { unk_id_ = id; }
-    void setBosId(int id) { bos_id_ = id; }
-    void setEosId(int id) { eos_id_ = id; }
-    void setPadId(int id) { pad_id_ = id; }
     void setByteFallbackEnabled(bool enabled) { enable_byte_fallback_ = enabled; }
     bool byteFallbackEnabled() const { return enable_byte_fallback_; }
     
@@ -215,11 +176,6 @@ private:
     std::vector<UnigramPiece> pieces_;
     std::unordered_map<std::string, int> piece_to_id_;
     
-    // Special token IDs (ABSOLUTE token IDs, not relative to any offset)
-    int unk_id_ = UNK_TOKEN_ID;   // 0
-    int pad_id_ = PAD_TOKEN_ID;   // 1
-    int bos_id_ = BOS_TOKEN_ID;   // 2
-    int eos_id_ = EOS_TOKEN_ID;   // 3
     bool enable_byte_fallback_ = true;
     
     // Trie for fast prefix lookup (GPU-friendly)

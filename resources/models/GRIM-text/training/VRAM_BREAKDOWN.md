@@ -182,7 +182,6 @@ Every GPU allocation site that can run during training, with source and size for
 | | cached_token_ids_tensor | TrainingStateGPU.cu | `1 × max_tokens × 4` (int32) |
 | | cached_token_numeric_values | TrainingStateGPU.cu | `1 × max_tokens × 4` |
 | | cached_token_atom_mask | TrainingStateGPU.cu | `1 × max_tokens × 1` (uint8) |
-| | cached_token_text_features | TrainingStateGPU.cu | `max_tokens × kTextFeatureDim × 2` (uint16) |
 | | cached_token_atom_flags | TrainingStateGPU.cu | `1 × max_tokens × 4` (uint32) |
 | | sequence_weights_tensor | TrainingStateGPU.cu | `max_batch_size × 1 × 4` |
 | **Phase1_Startup** | class_weights_tensor | Phase1_Startup.cu (class_balanced) | `vocab_size × 4` |
@@ -220,7 +219,6 @@ Symbols: **T** = max_tokens (batch × seq_len), **T_logit** = max_logit_tokens, 
 | cached_token_ids_tensor | [1, T] | `T × 4` | 32.8 KiB |
 | cached_token_numeric_values | [1, T] | `T × 4` | 32.8 KiB |
 | cached_token_atom_mask | [1, T] | `T × 1` | 8 KiB |
-| cached_token_text_features | [T, kTextFeatureDim] | `T × kTextFeatureDim × 2` | ~variable |
 | cached_token_atom_flags | [1, T] | `T × 4` | 32.8 KiB |
 | sequence_weights_tensor | [B, 1] | `B × 4` | 32 B |
 | class_weights_tensor | [V] | `V × 4` | 2512×4 = 10 KiB |

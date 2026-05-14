@@ -90,7 +90,6 @@ struct ScratchBlockGradFn : public GradFn {
     void capture_input(Tensor& input);
 
     /// Capture forward activations: atom positions, types, embeddings
-    /// Text features are now merged into atom embeddings (dims 48-63).
     void capture_forward(
         const int* atom_positions, const int* atom_types,
         const float* atom_embeddings, int num_atoms,
@@ -190,13 +189,13 @@ public:
         int row_tokens,
         cudaStream_t stream) const;
 
-    /// Run forward CUDA kernels (atom detect, embed lookup, projection+inject, text inject).
+    /// Run forward CUDA kernels (atom detect, embed lookup, projection+inject).
     /// Modifies output in-place. Returns device-side atom count via numAtomsBuffer().
     void runForwardKernels(
         float* output, int total_tokens,
         const int* token_ids,
         const float* numeric_values,
-        const uint16_t* text_features, const uint8_t* atom_mask,
+        const uint8_t* atom_mask,
         const uint32_t* atom_flags,
         const int32_t* token_to_slot_map,
         cudaStream_t stream,
@@ -236,14 +235,13 @@ namespace autograd {
 /// Returns NEW Tensor with ScratchBlockGradFn attached to autograd graph.
 ///
 /// Forward:  output[t] = input[t] + scale * project(atom_emb[t])
-///   atom_emb includes merged text features in dims 48-63 (length excluded)
+///   atom_emb includes learned type features plus numeric value and atom flags.
 /// Backward: grad_input = grad_output (additive identity), plus parameter gradients
 ///
 /// @param input          Embedding tensor [total_tokens, d_model] with grad_fn chain
 /// @param layer          ScratchBlockLayer (owns weights, provides config)
 /// @param token_ids      Device ptr [total_tokens] — for atom detection
 /// @param numeric_values Device ptr [total_tokens] — per-token numeric values
-/// @param text_features  Device ptr [total_tokens * 16] FP16 — text feature vectors
 /// @param atom_mask      Device ptr [total_tokens] — 1 if token is an atom
 /// @param atom_flags     Device ptr [total_tokens] — AtomTable type-specific metadata
 /// @param total_tokens   Number of tokens in batch
@@ -253,7 +251,6 @@ Tensor scratch_block_inject(
     ScratchBlockLayer& layer,
     const int* token_ids,
     const float* numeric_values,
-    const uint16_t* text_features,
     const uint8_t* atom_mask,
     const uint32_t* atom_flags,
     const int32_t* token_to_slot_map,

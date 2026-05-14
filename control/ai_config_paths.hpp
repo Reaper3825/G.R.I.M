@@ -84,7 +84,6 @@ struct GrimTextPaths {
     std::string verified;
     std::string logs;
     std::string training_status;
-    std::string merge_checkpoints_exe;
     std::string collector_log;
     std::string source_config;  // Path to source_data.json for data collection
     std::string model_store;   // Path to model store directory for per-model configs
@@ -105,7 +104,6 @@ struct GrimTextPaths {
         std::cout << "  verified: " << (verified.empty() ? "(not set)" : verified) << std::endl;
         std::cout << "  logs: " << (logs.empty() ? "(not set)" : logs) << std::endl;
         std::cout << "  training_status: " << (training_status.empty() ? "(not set)" : training_status) << std::endl;
-        std::cout << "  merge_checkpoints_exe: " << (merge_checkpoints_exe.empty() ? "(not set)" : merge_checkpoints_exe) << std::endl;
         std::cout << "  collector_log: " << (collector_log.empty() ? "(not set)" : collector_log) << std::endl;
         std::cout << "  source_config: " << (source_config.empty() ? "(not set)" : source_config) << std::endl;
         std::cout << "  model_store: " << (model_store.empty() ? "(not set)" : model_store) << std::endl;
@@ -324,7 +322,6 @@ inline bool populateGrimTextPathsFromConfig(const nlohmann::json& config, GrimTe
     assignIfPresent("verified", paths.verified);
     assignIfPresent("logs", paths.logs);
     assignIfPresent("training_status", paths.training_status);
-    assignIfPresent("merge_checkpoints_exe", paths.merge_checkpoints_exe);
     assignIfPresent("collector_log", paths.collector_log);
     assignIfPresent("source_config", paths.source_config);
     assignIfPresent("model_store", paths.model_store);
@@ -1440,8 +1437,8 @@ inline bool loadGrimTextPaths(GrimTextPaths& paths, const std::string& configPat
         snapshot->config_path.string() + "|" +
         paths.vocab + "|" + paths.model + "|" + paths.training_data + "|" +
         paths.checkpoints + "|" + paths.collected + "|" + paths.directory_collection + "|" + paths.verified + "|" +
-        paths.logs + "|" + paths.training_status + "|" + paths.merge_checkpoints_exe +
-        "|" + paths.collector_log + "|" + paths.source_config +
+        paths.logs + "|" + paths.training_status + "|" +
+        paths.collector_log + "|" + paths.source_config +
         "|" + paths.model_store;
 
     if (signature != lastPrintedSignature) {

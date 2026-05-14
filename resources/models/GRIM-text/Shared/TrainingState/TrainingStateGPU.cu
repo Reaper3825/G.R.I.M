@@ -6,7 +6,6 @@
 // Include grim_language_model_cuda.hpp for GPUGrimEncoder, FlashAttentionBF16Scratch, etc.
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Embedding/Embedding_GPU.hpp"
-#include "../Batching/BatchPayload.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "TrainingState_GPU.hpp"
 #include "../../training/Autograd/AutogradTraining.hpp"  
@@ -54,7 +53,6 @@ void TrainingState::allocateStepDeviceWorkspaces(
     const auto max_tokens = static_cast<int>(token_capacity);
     const auto logit_token_capacity = max_tokens;
     const auto max_batch_size = config.max_cached_batch;
-    constexpr int kTextFeatureDim = Batching::BatchPayload::kTextFeatureDim;
 
     cached_encoder_output = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_tokens, config.d_model),
@@ -106,13 +104,6 @@ void TrainingState::allocateStepDeviceWorkspaces(
         "cached_token_atom_mask");
     std::cout << "✓ Allocated token atom mask cache (Tensor API)" << std::endl;
 
-    cached_token_text_features = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_tokens, kTextFeatureDim),
-        false,
-        stream,
-        "cached_token_text_features");
-    std::cout << "✓ Allocated token text features cache (Tensor API)" << std::endl;
-
     cached_token_atom_flags = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,
@@ -128,9 +119,8 @@ void TrainingState::allocateStepDeviceWorkspaces(
     std::cout << "✓ Allocated token-to-slot map cache (Tensor API)" << std::endl;
 
     const auto atom_side_channel_mib =
-        token_capacity * (sizeof(float) + sizeof(std::uint8_t) + sizeof(std::uint32_t) +
-                             kTextFeatureDim * sizeof(std::uint16_t)) / 1024 / 1024;
-    std::cout << "✓ Allocated atom mask + text feature + atom flags buffers ("
+        token_capacity * (sizeof(float) + sizeof(std::uint8_t) + sizeof(std::uint32_t)) / 1024 / 1024;
+    std::cout << "✓ Allocated numeric values + atom mask + atom flags buffers ("
               << atom_side_channel_mib << " MB)" << std::endl;
 
     sequence_weights_tensor = Tensor::zeros(

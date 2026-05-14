@@ -58,7 +58,6 @@ struct BatchDeviceBindings {
     int*      d_target_ids      = nullptr;  // [batch_size * max_seq_len]
     int*      d_seq_lengths     = nullptr;  // [batch_size] real token count per padded row
     float*    d_numeric_values  = nullptr;  // [batch_size * max_seq_len]
-    uint16_t* d_text_features   = nullptr;  // [batch_size * max_seq_len * kTextFeatureDim] (nullable)
     uint8_t*  d_atom_mask       = nullptr;  // [batch_size * max_seq_len] (nullable when atom mask not used)
     uint32_t* d_atom_flags      = nullptr;  // [batch_size * max_seq_len] (nullable when not allocated)
     int32_t*  d_token_to_slot_map = nullptr; // [batch_size * max_seq_len]

@@ -18,7 +18,8 @@ namespace GRIM {
 //   v9: Align checkpoint version with GRMT data v9 (single <NUM> atom, current schema)
 //   v10: Current GRIM-text checkpoint contract before per-channel LayerScale
 //   v11: LayerScale weights are per-channel gamma vectors [d_model], not one scalar
-inline constexpr std::uint32_t GRIM_MODEL_VERSION = 11;
+//   v12: Removed ScratchBlock text-feature projection from the checkpoint schema
+inline constexpr std::uint32_t GRIM_MODEL_VERSION = 12;
 
 // GRMT training tensor stream may advance without bumping checkpoint MODEL_VERSION.
 // v10: After per-token atom length-prefixed strings, append int32 token_exec_slots[len]
@@ -32,6 +33,8 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 11;
 //      TeacherStep[count]               (op_id, arg1_slot, arg2_slot, write_slot, expected_value — 20 bytes each)
 //      uint32 slot_selection_target_count
 //      SlotSelectionTarget[count]       (uint8 kind + int32 slot_id — 5 bytes each, serialized field-by-field)
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 11;
+// v12: Removed the per-token text feature side-channel from the GRMT stream. Atom metadata is
+//      token_numeric_values + token_atom_mask + token_atom_flags + atom strings.
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 12;
 
 } // namespace GRIM

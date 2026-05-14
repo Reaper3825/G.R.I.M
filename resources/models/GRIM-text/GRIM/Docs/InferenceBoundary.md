@@ -52,7 +52,7 @@ Move inference/session-owned state from `TrainingState` into `GenerationState` o
 
 - [ ] token id cache
 - [ ] numeric side-channel cache
-- [ ] atom mask / flags / text features
+- [ ] atom mask / flags
 - [ ] token-to-slot map
 - [ ] inference encoder/logit snapshots if only generation consumes them
 - [x] persistent inference execution memory

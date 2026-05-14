@@ -447,7 +447,8 @@ int main(int argc, char** argv) {
     //--------------------------------------------------
     std::cout << "\n[2] Loading tokenizer..." << std::endl;
     
-    GRIM::Tokenizer::UniByte tokenizer;
+    const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
+    GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
     
     if (!tokenizer.load(vocab_path)) {
         std::cerr << "  ✗ Failed to load vocab from: " << vocab_path << std::endl;
@@ -654,14 +655,6 @@ int main(int argc, char** argv) {
                                               seq.token_numeric_values.begin() + context_len);
             std::vector<uint8_t> atom_mask(seq.token_atom_mask.begin(),
                                            seq.token_atom_mask.begin() + context_len);
-            const size_t text_feature_count = static_cast<size_t>(context_len) *
-                GRIM::Batching::BatchPayload::kTextFeatureDim;
-            if (seq.token_text_features.size() < text_feature_count) {
-                throw std::runtime_error("diagnostic_train_minimal: token_text_features shorter than context span");
-            }
-            std::vector<uint16_t> text_features(
-                seq.token_text_features.begin(),
-                seq.token_text_features.begin() + text_feature_count);
             if (seq.token_atom_flags.size() < static_cast<size_t>(context_len)) {
                 throw std::runtime_error("diagnostic_train_minimal: token_atom_flags shorter than context span");
             }
@@ -692,7 +685,6 @@ int main(int argc, char** argv) {
             GRIM::Batching::BatchPayload context_payload = GRIM::Batching::buildInferenceBatchPayload(
                 context_ids,
                 numeric_values,
-                text_features,
                 atom_mask,
                 atom_flags,
                 seq.atom_table,
@@ -776,7 +768,6 @@ int main(int argc, char** argv) {
                     payload.target_ids = train_target_ids;
                     payload.numeric_values = train_numeric_values;
                     payload.atom_mask = train_atom_mask;
-                    payload.text_features.resize(payload.total_tokens * GRIM::Batching::BatchPayload::kTextFeatureDim, 0);
                     payload.token_to_slot_map.assign(payload.total_tokens, -1);
                     payload.fits_in_cache = true;  // Assume fits for diagnostic purposes
                     

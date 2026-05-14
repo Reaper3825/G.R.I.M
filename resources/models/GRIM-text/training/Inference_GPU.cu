@@ -34,8 +34,6 @@ namespace GRIM {
 
 namespace {
 
-constexpr int kScratchTextFeatureDim = 16;
-
 ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
     ScratchBlockLayer& scratch_block,
     const HyperParameters::LanguageModelConfig& cfg,
@@ -53,9 +51,6 @@ ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
     }
     if (!ts.cached_token_numeric_values.data) {
         throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_numeric_values is NULL");
-    }
-    if (!ts.cached_token_text_features.data) {
-        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_text_features is NULL");
     }
     if (!ts.cached_token_atom_mask.data) {
         throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_atom_mask is NULL");
@@ -76,8 +71,6 @@ ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
         1,
         reinterpret_cast<const int*>(ts.cached_token_ids_tensor.data) + token_pos,
         ts.cached_token_numeric_values.data + token_pos,
-        reinterpret_cast<const uint16_t*>(ts.cached_token_text_features.data) +
-            static_cast<size_t>(token_pos) * kScratchTextFeatureDim,
         reinterpret_cast<const uint8_t*>(ts.cached_token_atom_mask.data) + token_pos,
         reinterpret_cast<const uint32_t*>(ts.cached_token_atom_flags.data) + token_pos,
         reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos,
@@ -116,7 +109,6 @@ Batching::BatchDeviceBindings buildInferencePrefillBindings(TrainingState& ts, i
     bindings.d_input_ids = reinterpret_cast<int*>(ts.cached_token_ids_tensor.data);
     bindings.d_seq_lengths = reinterpret_cast<int*>(ts.cached_seq_lengths_tensor.data);
     bindings.d_numeric_values = ts.cached_token_numeric_values.data;
-    bindings.d_text_features = reinterpret_cast<uint16_t*>(ts.cached_token_text_features.data);
     bindings.d_atom_mask = reinterpret_cast<uint8_t*>(ts.cached_token_atom_mask.data);
     bindings.d_atom_flags = reinterpret_cast<uint32_t*>(ts.cached_token_atom_flags.data);
     bindings.d_token_to_slot_map = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
@@ -450,15 +442,6 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
     cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data) + token_pos,
                     &atom_mask, sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
-
-    if (!training_state_.cached_token_text_features.data) {
-        throw std::runtime_error("forwardStep: cached_token_text_features.data is NULL");
-    }
-    cudaMemsetAsync(reinterpret_cast<uint16_t*>(training_state_.cached_token_text_features.data) +
-                    static_cast<size_t>(token_pos) * Batching::BatchPayload::kTextFeatureDim,
-                    0,
-                    static_cast<size_t>(Batching::BatchPayload::kTextFeatureDim) * sizeof(uint16_t),
-                    stream);
 
     if (!training_state_.cached_token_atom_flags.data) {
         throw std::runtime_error("forwardStep: cached_token_atom_flags.data is NULL");

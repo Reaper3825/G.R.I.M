@@ -1,4 +1,5 @@
 #include "../Shared/UnigramByte/UniByte.hpp"
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -42,11 +43,18 @@ int main(int argc, char** argv) {
     std::cout << "Read " << tokens.size() << " tokens from " << input_path << std::endl;
 
     // Create tokenizer and train from corpus (adds tokens to vocab)
-    GRIM::Tokenizer::UniByteConfig config;
-    config.target_vocab_size = tokens.size();
-    config.enable_byte_fallback = true;
+    GRIM::HyperParameters::TokenizerHP tokenizer_hp;
+    tokenizer_hp.target_vocab_size = static_cast<int>(tokens.size());
+    tokenizer_hp.character_coverage = 0.9995f;
+    tokenizer_hp.min_subword_freq = 3;
+    tokenizer_hp.enable_parallel_subword_mining = true;
+    tokenizer_hp.enable_scratch_block_reasoning = true;
+    tokenizer_hp.detect_numbers = true;
+    tokenizer_hp.enable_byte_fallback = true;
+    tokenizer_hp.prefer_gpu = true;
+    tokenizer_hp.vocab_score_multiplier = 1.0f;
 
-    GRIM::Tokenizer::UniByte tokenizer(config);
+    GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
     
     // Train from the token list as a "corpus" (one token per line)
     // This will populate the internal vocabulary
@@ -61,7 +69,7 @@ int main(int argc, char** argv) {
     std::cout << "Successfully saved binary vocabulary to " << output_path << std::endl;
 
     // Verify by loading it back
-    GRIM::Tokenizer::UniByte verify_tokenizer;
+    GRIM::Tokenizer::UniByte verify_tokenizer(tokenizer_hp);
     if (!verify_tokenizer.load(output_path)) {
         std::cerr << "WARNING: Failed to load back the binary vocabulary for verification" << std::endl;
         return 1;

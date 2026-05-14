@@ -1188,8 +1188,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         token_values.reserve(pieces_.size());
 
         for (size_t i = 0; i < pieces_.size(); ++i) {
-            if (pieces_[i].is_user_defined || pieces_[i].is_special) {
-                // Protected tokens get infinite value — never pruned
+            if (pieces_[i].is_user_defined) {
+                // User-defined learned pieces get infinite value — never pruned.
                 token_values.push_back({static_cast<int>(i), std::numeric_limits<double>::max()});
                 continue;
             }

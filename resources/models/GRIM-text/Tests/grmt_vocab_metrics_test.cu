@@ -237,8 +237,6 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
         f.seekg(seq_len * sizeof(float), std::ios::cur);
         // atom_mask (uint8 × seq_len)
         f.seekg(seq_len * sizeof(uint8_t), std::ios::cur);
-        // text_features (uint16 × seq_len × kTextFeatureDim)
-        f.seekg(seq_len * kTextFeatureDim * sizeof(uint16_t), std::ios::cur);
         // atom_flags (uint32 × seq_len)
         f.seekg(seq_len * sizeof(uint32_t), std::ios::cur);
         // Per-token atom text strings: each is uint16 length + text

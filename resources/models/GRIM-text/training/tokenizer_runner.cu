@@ -41,6 +41,7 @@
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Common/grim_model_serialization_version.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; pulls in control/ai_config_paths.hpp transitively
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -190,11 +191,10 @@ static GRMTSample sampleGRMTSequences(const std::string& data_path, int max_samp
 
         // Skip remaining per-sequence fields to maintain file position:
         // targets (int[seq_len]) + numeric_values (float[seq_len]) + atom_mask (uint8[seq_len])
-        // + text_features (uint16[seq_len * 16]) + atom_flags (uint32[seq_len])
+        // + atom_flags (uint32[seq_len])
         size_t skip_bytes = seq_len * sizeof(int)           // targets
                           + seq_len * sizeof(float)         // numeric_values
                           + seq_len * sizeof(uint8_t)       // atom_mask
-                          + seq_len * GRIM::Tokenizer::kTextFeatureDim * sizeof(uint16_t)  // text_features
                           + seq_len * sizeof(uint32_t);     // atom_flags
         file.seekg(static_cast<std::streamoff>(skip_bytes), std::ios::cur);
 
@@ -378,8 +378,8 @@ static std::vector<ValidationResult> runValidationChecks(
         ValidationResult r;
         r.name = "Special token IDs in range";
         int total = tokenizer.totalVocabSize();
-        int pad = tokenizer.padId(), unk = tokenizer.unkId();
-        int bos = tokenizer.bosId(), eos = tokenizer.eosId();
+        int pad = GRIM::Tokenizer::PAD_TOKEN_ID, unk = GRIM::Tokenizer::UNK_TOKEN_ID;
+        int bos = GRIM::Tokenizer::BOS_TOKEN_ID, eos = GRIM::Tokenizer::EOS_TOKEN_ID;
         bool all_valid = (pad >= 0 && pad < total) &&
                          (unk >= 0 && unk < total) &&
                          (bos >= 0 && bos < total) &&
@@ -441,7 +441,7 @@ static std::vector<ValidationResult> runValidationChecks(
             // Filter out special tokens AND atom placeholders
             std::vector<int> content_ids;
             for (int id : seq) {
-                if (tokenizer.isSpecialToken(id)) continue;
+                if (GRIM::Tokenizer::isSpecialTokenId(id)) continue;
                 if (tokenizer.isAtomToken(id)) continue;
                 content_ids.push_back(id);
             }
@@ -508,7 +508,7 @@ static std::vector<ValidationResult> runValidationChecks(
         for (const auto& seq : corpus.sampled_sequences) {
             for (int id : seq) {
                 total_tokens++;
-                if (tokenizer.isSpecialToken(id))       special_count++;
+                if (GRIM::Tokenizer::isSpecialTokenId(id))       special_count++;
                 else if (tokenizer.isByteToken(id))     byte_count++;
                 else if (tokenizer.isAtomToken(id))     atom_count++;
                 else if (tokenizer.isUnigramToken(id))  unigram_count++;
@@ -540,7 +540,7 @@ static std::vector<ValidationResult> runValidationChecks(
         ValidationResult r;
         r.name = "Corpus BOS/EOS framing";
         int tested = 0, correct = 0;
-        int bos = tokenizer.bosId(), eos = tokenizer.eosId();
+        int bos = GRIM::Tokenizer::BOS_TOKEN_ID, eos = GRIM::Tokenizer::EOS_TOKEN_ID;
         for (const auto& seq : corpus.sampled_sequences) {
             if (seq.size() < 2) continue;
             tested++;
@@ -787,28 +787,23 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[tokenizer_runner] Loading configuration...\n");
         }
 
-        // Load paths from ai_config.json if not specified on command line
-        GRIM::Config::GrimTextPaths paths;
-        if (!GRIM::Config::loadGrimTextPaths(paths, opts.config_path)) {
-            std::string err = "Could not load GRIM-text paths from " + opts.config_path;
-            std::cout << makeErrorJson(err, "config").dump() << std::endl;
-            return 1;
-        }
+        auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
+        const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
 
         if (opts.vocab_path.empty()) {
-            if (paths.vocab.empty()) {
+            if (startup_config.paths.vocab_path.empty()) {
                 std::cout << makeErrorJson("No vocab path configured in ai_config.json", "config").dump() << std::endl;
                 return 1;
             }
-            opts.vocab_path = paths.vocab;
+            opts.vocab_path = startup_config.paths.vocab_path;
         }
 
         if (opts.data_path.empty()) {
-            if (paths.training_data.empty()) {
+            if (startup_config.paths.data_path.empty()) {
                 std::cout << makeErrorJson("No training_data path configured in ai_config.json", "config").dump() << std::endl;
                 return 1;
             }
-            opts.data_path = paths.training_data;
+            opts.data_path = startup_config.paths.data_path;
         }
 
         if (opts.verbose) {
@@ -840,17 +835,7 @@ int main(int argc, char** argv) {
 
         auto load_start = std::chrono::steady_clock::now();
 
-        // Load tokenizer config
-        GRIM::Config::TokenizerConfig tok_config;
-        GRIM::Config::loadTokenizerConfig(tok_config, opts.config_path);
-
-        GRIM::Tokenizer::UniByteConfig cfg;
-        if (tok_config.vocab_size > 0) {
-            cfg.target_vocab_size = tok_config.vocab_size;
-        }
-        cfg.enable_byte_fallback = tok_config.enable_byte_fallback;
-
-        GrimTokenizer tokenizer(cfg);
+        GrimTokenizer tokenizer(tokenizer_hp);
         if (!tokenizer.load(opts.vocab_path)) {
             std::string err = "Failed to load vocabulary: " + opts.vocab_path;
             std::cout << makeErrorJson(err, "tokenizer_load").dump() << std::endl;
@@ -987,10 +972,10 @@ int main(int argc, char** argv) {
         payload.byte_vocab_size = 256;
         payload.atom_vocab_size = GRIM::Tokenizer::kAtomTypeCount;
         payload.special_token_count = 4;  // UNK, PAD, BOS, EOS
-        payload.pad_id = tokenizer.padId();
-        payload.unk_id = tokenizer.unkId();
-        payload.bos_id = tokenizer.bosId();
-        payload.eos_id = tokenizer.eosId();
+        payload.pad_id = GRIM::Tokenizer::PAD_TOKEN_ID;
+        payload.unk_id = GRIM::Tokenizer::UNK_TOKEN_ID;
+        payload.bos_id = GRIM::Tokenizer::BOS_TOKEN_ID;
+        payload.eos_id = GRIM::Tokenizer::EOS_TOKEN_ID;
         payload.vocab_path = opts.vocab_path;
         payload.data_path = opts.data_path;
         payload.validation_tests_passed = passed;

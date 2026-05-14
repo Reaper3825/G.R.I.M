@@ -22,21 +22,21 @@
 
 #include "AtomTable.hpp"
 #include "Byte.hpp"
+#include "Detectors/TokenizerDetector.hpp"
+#include "TokenLayout.hpp"
 #include "Unigram.hpp"
+#include "../HyperParameters/HyperparameterGroupings.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <functional>
 
 namespace GRIM {
 namespace Tokenizer {
-
-// Text feature side-channel (FP16, fixed width).
-constexpr int kTextFeatureDim = 16;
 
 //======================================================//
 //  Structural Detection Result
@@ -77,7 +77,6 @@ struct UniByteResult {
     std::vector<bool> is_byte_fallback;         // Per-token: was byte fallback used?
     std::vector<float> token_numeric_values;    // Per-token packed value from AtomTable (all atom types, 0 if none)
     std::vector<uint32_t> token_atom_flags;     // Per-token type-specific flags from AtomTable (0 if not atom)
-    std::vector<uint16_t> token_text_features;  // Per-token text features [tokens * kTextFeatureDim] (FP16)
     std::vector<uint8_t> token_atom_mask;       // Per-token atom mask (1 if token is any atom type)
     std::shared_ptr<AtomTable> atom_table;       // Per-sequence atom registry (shared across windows)
     std::vector<uint32_t> atom_entry_ids;        // Per-token index into atom_table (kAtomEntryNone = no atom)
@@ -109,13 +108,6 @@ struct UniByteResult {
                 std::to_string(token_atom_flags.size()) + " != token_ids.size()=" +
                 std::to_string(n));
         }
-        const size_t expected_feat = n * kTextFeatureDim;
-        if (token_text_features.size() != expected_feat) {
-            throw std::runtime_error(
-                std::string(caller) + ": UniByteResult.token_text_features.size()=" +
-                std::to_string(token_text_features.size()) + " != token_ids.size()*kTextFeatureDim=" +
-                std::to_string(expected_feat));
-        }
         if (token_atom_mask.size() != n) {
             throw std::runtime_error(
                 std::string(caller) + ": UniByteResult.token_atom_mask.size()=" +
@@ -144,80 +136,40 @@ struct UniByteResult {
 };
 
 //======================================================//
-//  UniByte Configuration
+//  Decode Request
 //======================================================//
-struct UniByteConfig {
-    // Vocabulary
-    int target_vocab_size = 50000;
-    float character_coverage = 0.9995f;
-    int min_subword_freq = 3;  // Minimum frequency for subwords to be included
-    bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if you have lots of RAM)
-    bool enable_parallel_subword_mining = true;  // Parallelize subword counting during vocab training
-    int subword_mining_workers = 0;  // 0 = auto, >0 fixed worker count
-    size_t subword_mining_max_bytes = 0;  // 0 = use HyperParameters::UNIGRAM_MAX_SUBWORD_BYTES
-    
-    // Scratch Block Reasoning (AtomTable-based structured reasoning)
-    bool enable_scratch_block_reasoning = true;  // Toggle internal reasoning layer
-    
-    // Structural detection (only used if scratch block reasoning enabled)
-    // Number atoms are the only remaining supported tokenizer-side detection.
-    bool detect_numbers = true;
-    
-    // Byte fallback
-    bool enable_byte_fallback = true;
-    
-    // GPU settings
-    bool prefer_gpu = true;
-    int gpu_batch_size = 32;
+struct DecodeRequest {
+    std::vector<int> owned_token_ids;
+    const int* token_ids = nullptr;
+    size_t token_count = 0;
+    const uint32_t* atom_entry_ids = nullptr;
+    size_t atom_entry_count = 0;
+    const AtomTable* atom_table = nullptr;
+
+    DecodeRequest(const std::vector<int>& ids)
+        : token_ids(ids.data()), token_count(ids.size()) {}
+
+    DecodeRequest(std::initializer_list<int> ids)
+        : owned_token_ids(ids),
+          token_ids(owned_token_ids.data()),
+          token_count(owned_token_ids.size()) {}
+
+    DecodeRequest(const UniByteResult& result)
+        : token_ids(result.token_ids.data()),
+          token_count(result.token_ids.size()),
+          atom_entry_ids(result.atom_entry_ids.data()),
+          atom_entry_count(result.atom_entry_ids.size()),
+          atom_table(result.atom_table.get()) {}
+
+    DecodeRequest(const DecodeRequest&) = delete;
+    DecodeRequest& operator=(const DecodeRequest&) = delete;
 };
 
-//======================================================//
-//  TokenLayout — runtime-queried token ID ranges
-//
-//  Built from live component sizes, NOT hardcoded constants.
-//  If you add a special token, grow AtomType, or change byte
-//  encoding, this struct automatically reflects it.
-//======================================================//
-struct TokenLayout {
-    // Per-region sizes (queried from components, not hardcoded)
-    int num_special  = 0;   // <unk>, <pad>, <s>, </s>, ...
-    int num_bytes    = 0;   // raw byte tokens (0x00-0xFF)
-    int num_atoms    = 0;   // registered atom type slots
-    int num_unigram  = 0;   // learned subword pieces
-
-    // Computed offsets — each region is [offset, offset+count)
-    int special_offset() const { return 0; }
-    int byte_offset()    const { return num_special; }
-    int atom_offset()    const { return num_special + num_bytes; }
-    int unigram_offset() const { return num_special + num_bytes + num_atoms; }
-    int total_vocab()    const { return num_special + num_bytes + num_atoms + num_unigram; }
-
-    // Classification — is this token id in a given region?
-    bool isSpecial(int id) const { return id >= special_offset() && id < byte_offset(); }
-    bool isByte(int id)    const { return id >= byte_offset()    && id < atom_offset(); }
-    bool isAtom(int id)    const { return id >= atom_offset()    && id < unigram_offset(); }
-    bool isUnigram(int id) const { return id >= unigram_offset() && id < total_vocab(); }
-
-    // The masking question: should this token NEVER be a prediction target?
-    // UNK (0): encoding failure, never a valid target
-    // PAD (1): structural batching artifact, never a valid target
-    // BOS (2): always position-0 input, never a mid-sequence target
-    // EOS (3): VALID TARGET — model MUST learn to predict end-of-sequence!
-    bool isNonContent(int id) const {
-        return id == UNK_TOKEN_ID || id == PAD_TOKEN_ID || id == BOS_TOKEN_ID;
-    }
-
-    // First token ID that represents actual content (byte tokens and above)
-    // Note: EOS (3) is below this but IS a valid target — use isNonContent() for masking.
-    int firstContentTokenId() const { return num_special; }
-};
-
-//======================================================//
 //  UniByte - Main Orchestrator
 //======================================================//
 class UniByte {
 public:
-    explicit UniByte(const UniByteConfig& config = UniByteConfig());
+    explicit UniByte(const ::GRIM::HyperParameters::TokenizerHP& hp);
     ~UniByte();
 
     // Disable copy
@@ -243,7 +195,7 @@ public:
     
     // Train with explicit vocab size
     void trainFromCorpus(const std::vector<std::string>& corpus, int target_vocab_size) {
-        config_.target_vocab_size = target_vocab_size;
+        tokenizer_hp_.target_vocab_size = target_vocab_size;
         train(corpus);
     }
     
@@ -258,11 +210,8 @@ public:
     // Uses scratch block reasoning if enabled, otherwise falls back to normal UnigramByte
     std::vector<int> encode(const std::string& text) const;
     
-    // Full encode with metadata (includes atom detection results)
-    UniByteResult encodeWithMetadata(const std::string& text) const;
-    
-    // Batch encode
-    std::vector<std::vector<int>> encodeBatch(const std::vector<std::string>& texts) const;
+    // Full tokenization with metadata (includes atom detection results)
+    UniByteResult tokenizeWithMetadata(const std::string& text) const;
     
     //--------------------------------------------------//
     // Scratch Block Reasoning Control
@@ -270,46 +219,22 @@ public:
     
     // Enable/disable scratch block reasoning at runtime
     void setScratchBlockReasoning(bool enabled);
-    bool isScratchBlockReasoningEnabled() const { return config_.enable_scratch_block_reasoning; }
+    bool isScratchBlockReasoningEnabled() const { return tokenizer_hp_.enable_scratch_block_reasoning; }
     
-    // GPU encode
-    bool encodeGPU(const char* d_text,
-                   size_t length,
-                   int* d_token_ids,
-                   int* d_token_count,
-                   int max_tokens);
-
     //--------------------------------------------------//
     // Decoding
     //--------------------------------------------------//
     
     // Decode token IDs to text
-    std::string decode(const std::vector<int>& token_ids) const;
-    std::string decode(const int* token_ids, size_t count) const;
-    
-    // Decode with atom resolution (needs atom values from ScratchBlock).
-    //
-    // NOTE: this type-only resolver cannot disambiguate repeated atoms of the
-    // same type (e.g. two ATOM_INTs in the same sequence map to identical
-    // token IDs). Prefer the entry-aware overload below when the caller has
-    // access to UniByteResult::atom_entry_ids.
-    using AtomResolver = std::function<std::string(int token_id, AtomType type)>;
-    std::string decodeWithAtoms(const std::vector<int>& token_ids,
-                                 const AtomResolver& resolver) const;
-
-    // Entry-aware decode: resolver receives the per-token atom_entry_id from
-    // UniByteResult::atom_entry_ids, so callers can resolve repeated same-type
-    // atoms without relying on call-order state. atom_entry_ids must have the
-    // same length as token_ids; non-atom positions are ignored by the resolver.
-    using AtomEntryResolver =
-        std::function<std::string(uint32_t entry_id, AtomType type)>;
-    std::string decodeWithAtoms(const std::vector<int>& token_ids,
-                                 const std::vector<uint32_t>& atom_entry_ids,
-                                 const AtomEntryResolver& resolver) const;
+    std::string decode(const DecodeRequest& request) const;
 
     //--------------------------------------------------//
     // Structural Detection
     //--------------------------------------------------//
+
+    // Detect raw-text features before tokenization. This operates on source
+    // byte offsets only; it does not inspect or classify token IDs.
+    std::vector<Detector::RawTextDetection> detectRawText(const std::string& text) const;
     
     // Detect structures in text
     std::vector<StructuralSpan> detectStructures(const std::string& text) const;
@@ -328,17 +253,10 @@ public:
     // Cap vocabulary to top-K most frequent tokens (reduces loss computation time)
     void capVocabSize(int max_vocab);
     
-    // Special token IDs
-    int padId() const;
-    int unkId() const;
-    int bosId() const;
-    int eosId() const;
-    
     // Token layout — runtime-queried from live component sizes
     TokenLayout tokenLayout() const;
 
     // Token type checking
-    bool isSpecialToken(int token_id) const;
     bool isByteToken(int token_id) const;
     bool isAtomToken(int token_id) const;
     bool isUnigramToken(int token_id) const;
@@ -357,7 +275,7 @@ public:
     const UnigramLM& unigramLM() const { return unigram_; }
 
 private:
-    UniByteConfig config_;
+    ::GRIM::HyperParameters::TokenizerHP tokenizer_hp_;
     ByteEncoder byte_encoder_;
     UnigramLM unigram_;
     
@@ -376,5 +294,3 @@ private:
 
 } // namespace Tokenizer
 } // namespace GRIM
-
-#include "Detectors.hpp"

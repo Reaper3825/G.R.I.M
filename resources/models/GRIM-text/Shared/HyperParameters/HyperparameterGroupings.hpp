@@ -33,6 +33,30 @@ struct DataLoadingHP {
     int sliding_window_stride = 0;
 };
 
+struct TokenizerHP {
+    int target_vocab_size = 0;
+    float character_coverage = 0.0f;
+    int min_subword_freq = 0;
+    bool prune_during_mining = false;
+    bool enable_parallel_subword_mining = false;
+    int subword_mining_workers = 0;
+    std::size_t subword_mining_max_bytes = 0;
+
+    bool enable_scratch_block_reasoning = false;
+    bool detect_numbers = false;
+    bool enable_byte_fallback = false;
+    bool prefer_gpu = false;
+
+    bool add_bos = false;
+    bool add_eos = false;
+    bool save_text_vocab = false;
+    float vocab_score_multiplier = 0.0f;
+
+    std::string current_curriculum;
+    std::string current_model_training;
+    int execution_block_num_steps = 0;
+};
+
 struct LearningRateScheduleInputs {
     float learning_rate = 0.0f;
     float cosine_decay_min_lr = 0.0f;
@@ -512,6 +536,54 @@ inline DataLoadingHP dataLoadingHP(const StartupConfig& config) {
     DataLoadingHP view;
     view.min_seq_valid_tokens = config.hyperparameters.min_seq_valid_tokens;
     view.sliding_window_stride = config.sliding_window_stride;
+    return view;
+}
+
+inline TokenizerHP tokenizerHP(const StartupConfig& config) {
+    const auto& tok = config.tokenizer_config;
+    const auto& hp = config.hyperparameters;
+
+    TokenizerHP view;
+    view.target_vocab_size = tok.vocab_size;
+    if (tok.max_vocab_size > 0 && view.target_vocab_size > tok.max_vocab_size) {
+        view.target_vocab_size = tok.max_vocab_size;
+    }
+    view.character_coverage = TOKENIZER_CHARACTER_COVERAGE;
+    view.min_subword_freq = tok.min_subword_freq;
+    view.prune_during_mining = tok.prune_during_mining;
+    view.enable_parallel_subword_mining = tok.enable_parallel_subword_mining;
+    view.subword_mining_workers = tok.subword_mining_workers;
+    view.subword_mining_max_bytes = tok.subword_mining_max_bytes;
+    view.enable_scratch_block_reasoning = hp.tokenizer_enable_scratch_block_reasoning;
+    view.detect_numbers = hp.tokenizer_detect_numbers;
+    view.enable_byte_fallback = tok.enable_byte_fallback;
+    view.prefer_gpu = TOKENIZER_PREFER_GPU;
+    view.add_bos = tok.add_bos;
+    view.add_eos = tok.add_eos;
+    view.save_text_vocab = tok.save_text_vocab;
+    view.vocab_score_multiplier = tok.vocab_score_multiplier;
+    view.current_curriculum = hp.current_curriculum;
+    view.current_model_training = hp.current_model_training;
+    view.execution_block_num_steps = hp.architecture.execution_block_num_steps;
+
+    requirePositiveGroupingValue(view.target_vocab_size, "target_vocab_size", "tokenizerHP");
+    requirePositiveFiniteGroupingValue(view.character_coverage, "character_coverage", "tokenizerHP");
+    if (view.character_coverage > 1.0f) {
+        throw std::runtime_error("tokenizerHP: character_coverage must be <= 1, got " +
+                                 std::to_string(view.character_coverage));
+    }
+    requirePositiveGroupingValue(view.min_subword_freq, "min_subword_freq", "tokenizerHP");
+    if (view.subword_mining_workers < 0) {
+        throw std::runtime_error("tokenizerHP: subword_mining_workers must be >= 0, got " +
+                                 std::to_string(view.subword_mining_workers));
+    }
+    requirePositiveFiniteGroupingValue(view.vocab_score_multiplier,
+                                       "vocab_score_multiplier",
+                                       "tokenizerHP");
+    if (view.execution_block_num_steps < 0) {
+        throw std::runtime_error("tokenizerHP: execution_block_num_steps must be >= 0, got " +
+                                 std::to_string(view.execution_block_num_steps));
+    }
     return view;
 }
 
