@@ -539,7 +539,7 @@ struct LanguageModelConfig : public ModelArchitecture {
     // num_layers, max_seq_len, dropout_rate, attention_dropout, positional_encoding,
     // tie_embeddings) inherited from ModelArchitecture
 
-    int vocab_size = 0;        // MUST come from .grmt training data or tokenizer
+    int vocab_size = 0;        // Training: GRMT header. Inference: loaded tokenizer token-space size.
 
     // Validates architecture and computes derived values (head_dim = d_model / num_heads)
     // MUST be called after populating architecture fields
@@ -569,7 +569,6 @@ struct LanguageModelConfig : public ModelArchitecture {
 
     // use_gpu, use_flash_attention, min_seq_len_for_flash inherited from ModelArchitecture (Phase 3b)
     std::string vocab_path;
-    bool infer_vocab_from_file = false;
 
     // Execution mode - determines memory allocation strategy
     ModelExecutionMode execution_mode = ModelExecutionMode::INFERENCE;

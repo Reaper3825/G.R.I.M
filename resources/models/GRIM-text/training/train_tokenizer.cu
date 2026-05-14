@@ -40,6 +40,7 @@
 // it transitively includes control/ai_config_paths.hpp in the correct order.
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../Shared/GRMT/GrmtFormat.hpp"
 #include "../Shared/DataLoader/DataLoader.hpp"
 #include "Subprocess/subprocess_status_io.hpp" // Foundational status-file IPC. The envelope schema lives there; tokenizer-
 
@@ -96,31 +97,6 @@ void writeStatusSuccess(const std::string& path, std::uint32_t vocab_size) {
     nlohmann::json payload;
     payload["vocab_size"] = vocab_size;
     (void)GRIMText::Subprocess::write_status_success(path, payload);
-}
-
-// Read vocab_size from the GRMT header. Throws if the file is missing or its
-// header magic is wrong (Rule 20: no silent fallback to a guessed size).
-std::uint32_t readGrmtVocabSize(const std::string& grmt_path) {
-    std::ifstream f(grmt_path, std::ios::binary);
-    if (!f.is_open()) {
-        throw std::runtime_error("cannot open GRMT for header read: " + grmt_path);
-    }
-    std::uint32_t magic = 0, version = 0, num_sequences = 0, vocab_size = 0;
-    f.read(reinterpret_cast<char*>(&magic), 4);
-    f.read(reinterpret_cast<char*>(&version), 4);
-    f.read(reinterpret_cast<char*>(&num_sequences), 4);
-    f.read(reinterpret_cast<char*>(&vocab_size), 4);
-    if (!f) {
-        throw std::runtime_error("GRMT header truncated: " + grmt_path);
-    }
-    if (magic != 0x474D5254u) {
-        throw std::runtime_error(
-            "GRMT magic mismatch (expected 'GRMT' / 0x474D5254): " + grmt_path);
-    }
-    if (vocab_size == 0) {
-        throw std::runtime_error("GRMT header reports vocab_size=0: " + grmt_path);
-    }
-    return vocab_size;
 }
 
 } // namespace
@@ -188,7 +164,7 @@ int main(int argc, char** argv) {
                 "PrepareTrainingDataFromCache reported success but GRMT file is missing: " + out_training_data);
         }
 
-        const std::uint32_t vocab_size = readGrmtVocabSize(out_training_data);
+        const std::uint32_t vocab_size = GRIM::GRMT::readHeaderOrThrow(out_training_data).vocab_size;
 
         std::cout << "\n=== Tokenizer Subprocess Complete ===\n"
                   << "Vocab:      " << out_vocab << "\n"

@@ -455,8 +455,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     
-    uint32_t vocab_size = tokenizer.vocabSize();
-    std::cout << "  ✓ Loaded vocab: " << vocab_size << " tokens" << std::endl;
+    const uint32_t tokenizer_token_space_size = tokenizer.vocabSize();
+    std::cout << "  ✓ Loaded tokenizer token-space size: "
+              << tokenizer_token_space_size << " tokens" << std::endl;
     
     //--------------------------------------------------
     // 3. Load Training Data
@@ -472,6 +473,8 @@ int main(int argc, char** argv) {
     
     const auto& sequences = data_loader.getSequences();
     std::cout << "  ✓ Loaded " << sequences.size() << " sequences" << std::endl;
+    const uint32_t vocab_size = data_loader.vocabSize();
+    std::cout << "  ✓ GRMT header vocab: " << vocab_size << " tokens" << std::endl;
     if (sequences.empty()) {
         std::cerr << "  ✗ No sequences loaded - cannot run diagnostic" << std::endl;
         return 1;

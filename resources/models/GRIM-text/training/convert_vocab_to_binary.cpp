@@ -75,8 +75,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (verify_tokenizer.vocabSize() != tokens.size()) {
-        std::cerr << "ERROR: Verification failed - vocab size mismatch" << std::endl;
+    if (static_cast<std::size_t>(verify_tokenizer.tokenLayout().num_unigram) != tokens.size()) {
+        std::cerr << "ERROR: Verification failed - learned piece count mismatch" << std::endl;
         return 1;
     }
 

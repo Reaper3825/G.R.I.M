@@ -39,7 +39,7 @@
 #include <nlohmann/json.hpp>
 
 #include "../Shared/UnigramByte/UniByte.hpp"
-#include "../Common/grim_model_serialization_version.hpp"
+#include "../Shared/GRMT/GrmtFormat.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; pulls in control/ai_config_paths.hpp transitively
 #include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
@@ -72,10 +72,10 @@ struct ValidationResult {
 //  Tokenizer Payload — JSON output on success
 //======================================================//
 struct TokenizerPayload {
-    int total_vocab_size = 0;
-    int unigram_vocab_size = 0;
-    int byte_vocab_size = 0;
-    int atom_vocab_size = 0;
+    int vocab_size = 0;
+    int unigram_piece_count = 0;
+    int byte_token_count = 0;
+    int atom_token_count = 0;
     int special_token_count = 0;
     int pad_id = 0;
     int unk_id = 0;
@@ -91,10 +91,10 @@ struct TokenizerPayload {
     json toJson() const {
         json j;
         j["status"] = "success";
-        j["total_vocab_size"] = total_vocab_size;
-        j["unigram_vocab_size"] = unigram_vocab_size;
-        j["byte_vocab_size"] = byte_vocab_size;
-        j["atom_vocab_size"] = atom_vocab_size;
+        j["vocab_size"] = vocab_size;
+        j["unigram_piece_count"] = unigram_piece_count;
+        j["byte_token_count"] = byte_token_count;
+        j["atom_token_count"] = atom_token_count;
         j["special_token_count"] = special_token_count;
         j["pad_id"] = pad_id;
         j["unk_id"] = unk_id;
@@ -141,24 +141,9 @@ static GRMTSample sampleGRMTSequences(const std::string& data_path, int max_samp
         throw std::runtime_error("Cannot open GRMT file: " + data_path);
     }
 
-    // Read header
-    uint32_t magic = 0, version = 0;
-    file.read(reinterpret_cast<char*>(&magic), 4);
-    file.read(reinterpret_cast<char*>(&version), 4);
-    file.read(reinterpret_cast<char*>(&result.num_sequences), 4);
-    file.read(reinterpret_cast<char*>(&result.grmt_vocab_size), 4);
-
-    if (magic != 0x474D5254) {
-        throw std::runtime_error("Invalid GRMT magic: 0x" +
-            ([&]{ char buf[16]; snprintf(buf, sizeof(buf), "%08X", magic); return std::string(buf); })());
-    }
-    if (version != GRIM::GRMT_FORMAT_VERSION) {
-        throw std::runtime_error("GRMT version mismatch: file=" + std::to_string(version) +
-            " expected=" + std::to_string(GRIM::GRMT_FORMAT_VERSION));
-    }
-    if (result.num_sequences == 0) {
-        throw std::runtime_error("GRMT file has 0 sequences");
-    }
+    const GRIM::GRMT::Header header = GRIM::GRMT::readHeaderOrThrow(file, data_path);
+    result.num_sequences = header.num_sequences;
+    result.grmt_vocab_size = header.vocab_size;
 
     // Compute which sequence indices to sample (evenly spaced)
     int step = std::max(1u, result.num_sequences / static_cast<uint32_t>(max_samples));
@@ -360,7 +345,7 @@ static std::vector<ValidationResult> runValidationChecks(
     {
         ValidationResult r;
         r.name = "GRMT/tokenizer vocab consistency";
-        int tok_vocab = tokenizer.totalVocabSize();
+        int tok_vocab = tokenizer.vocabSize();
         int grmt_vocab = static_cast<int>(corpus.grmt_vocab_size);
         r.passed = (tok_vocab == grmt_vocab);
         if (!r.passed) {
@@ -377,7 +362,7 @@ static std::vector<ValidationResult> runValidationChecks(
     {
         ValidationResult r;
         r.name = "Special token IDs in range";
-        int total = tokenizer.totalVocabSize();
+        int total = tokenizer.vocabSize();
         int pad = GRIM::Tokenizer::PAD_TOKEN_ID, unk = GRIM::Tokenizer::UNK_TOKEN_ID;
         int bos = GRIM::Tokenizer::BOS_TOKEN_ID, eos = GRIM::Tokenizer::EOS_TOKEN_ID;
         bool all_valid = (pad >= 0 && pad < total) &&
@@ -402,7 +387,7 @@ static std::vector<ValidationResult> runValidationChecks(
     {
         ValidationResult r;
         r.name = "Corpus token IDs in range";
-        int total = tokenizer.totalVocabSize();
+        int total = tokenizer.vocabSize();
         size_t total_tokens = 0;
         size_t oob_count = 0;
         int worst_id = 0;
@@ -440,9 +425,10 @@ static std::vector<ValidationResult> runValidationChecks(
             if (seq.empty()) continue;
             // Filter out special tokens AND atom placeholders
             std::vector<int> content_ids;
+            const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
             for (int id : seq) {
                 if (GRIM::Tokenizer::isSpecialTokenId(id)) continue;
-                if (tokenizer.isAtomToken(id)) continue;
+                if (layout.isAtom(id)) continue;
                 content_ids.push_back(id);
             }
             if (content_ids.empty()) continue;
@@ -505,13 +491,14 @@ static std::vector<ValidationResult> runValidationChecks(
         r.name = "Corpus token type distribution";
         size_t byte_count = 0, atom_count = 0, unigram_count = 0, special_count = 0;
         size_t total_tokens = 0;
+        const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
         for (const auto& seq : corpus.sampled_sequences) {
             for (int id : seq) {
                 total_tokens++;
-                if (GRIM::Tokenizer::isSpecialTokenId(id))       special_count++;
-                else if (tokenizer.isByteToken(id))     byte_count++;
-                else if (tokenizer.isAtomToken(id))     atom_count++;
-                else if (tokenizer.isUnigramToken(id))  unigram_count++;
+                if (layout.isSpecial(id))       special_count++;
+                else if (layout.isByte(id))     byte_count++;
+                else if (layout.isAtom(id))     atom_count++;
+                else if (layout.isUnigram(id))  unigram_count++;
             }
         }
         // Unigram tokens must appear — if 0, the vocab is broken or not loaded
@@ -702,7 +689,7 @@ static std::vector<ValidationResult> runValidationChecks(
     {
         ValidationResult r;
         r.name = "Invalid token ID decode safety";
-        std::vector<int> bad_ids = {-1, 999999, tokenizer.totalVocabSize() + 100};
+        std::vector<int> bad_ids = {-1, 999999, tokenizer.vocabSize() + 100};
         std::string decoded = tokenizer.decode(bad_ids);
         r.passed = true;  // If we got here, it didn't crash
         r.details = "decode([-1, 999999, OOB]) handled gracefully";
@@ -847,7 +834,7 @@ int main(int argc, char** argv) {
 
         if (opts.verbose) {
             fprintf(stderr, "[tokenizer_runner] Loaded %d tokens in %.1f ms\n",
-                    tokenizer.totalVocabSize(), load_ms);
+                    tokenizer.vocabSize(), load_ms);
         }
 
         //==============================================================
@@ -892,7 +879,7 @@ int main(int argc, char** argv) {
             result["tokens"] = token_array;
             result["encode_time_ms"] = encode_ms;
             result["load_time_ms"] = load_ms;
-            result["total_vocab_size"] = tokenizer.totalVocabSize();
+            result["vocab_size"] = tokenizer.vocabSize();
 
             if (opts.standalone) {
                 fprintf(stderr, "\n[ENCODE] \"%s\" → %zu tokens (%.1f ms)\n",
@@ -967,10 +954,11 @@ int main(int argc, char** argv) {
         // Phase: Build Payload
         //==============================================================
         TokenizerPayload payload;
-        payload.total_vocab_size = tokenizer.totalVocabSize();
-        payload.unigram_vocab_size = tokenizer.vocabSize();
-        payload.byte_vocab_size = 256;
-        payload.atom_vocab_size = GRIM::Tokenizer::kAtomTypeCount;
+        const auto layout = tokenizer.tokenLayout();
+        payload.vocab_size = tokenizer.vocabSize();
+        payload.unigram_piece_count = layout.num_unigram;
+        payload.byte_token_count = layout.num_bytes;
+        payload.atom_token_count = layout.num_atoms;
         payload.special_token_count = 4;  // UNK, PAD, BOS, EOS
         payload.pad_id = GRIM::Tokenizer::PAD_TOKEN_ID;
         payload.unk_id = GRIM::Tokenizer::UNK_TOKEN_ID;
@@ -985,8 +973,8 @@ int main(int argc, char** argv) {
 
         if (opts.standalone) {
             fprintf(stderr, "\n[SUCCESS] Tokenizer validation passed (%d/%d tests)\n", passed, total);
-            fprintf(stderr, "  Total vocab size: %d\n", payload.total_vocab_size);
-            fprintf(stderr, "  Unigram pieces:   %d\n", payload.unigram_vocab_size);
+            fprintf(stderr, "  Vocab size:       %d\n", payload.vocab_size);
+            fprintf(stderr, "  Unigram pieces:   %d\n", payload.unigram_piece_count);
             fprintf(stderr, "  Load time:        %.1f ms\n", payload.load_time_ms);
             fprintf(stderr, "  Validation time:  %.1f ms\n", payload.validation_time_ms);
         }

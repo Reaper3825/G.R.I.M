@@ -89,86 +89,6 @@ namespace {
 [[maybe_unused]] constexpr float kProbabilityFloor = HyperParameters::PROBABILITY_FLOOR;
 [[maybe_unused]] constexpr float kSoftmaxClipThreshold = HyperParameters::SOFTMAX_CLIP_THRESHOLD;
 [[maybe_unused]] constexpr float kTemperatureEpsilon = HyperParameters::EPSILON_TEMPERATURE;
-constexpr uint32_t kMaxReasonableVocabSize = HyperParameters::MAX_REASONABLE_VOCAB_SIZE;
-
-int detectVocabSizeFromBinary(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        return -1;
-    }
-
-    uint32_t magic = 0;
-    uint16_t version = 0;
-    if (!file.read(reinterpret_cast<char*>(&magic), sizeof(magic))) {
-        return -1;
-    }
-    if (!file.read(reinterpret_cast<char*>(&version), sizeof(version))) {
-        return -1;
-    }
-    // Only accept 'GMTK' magic (serialization format)
-    if (magic != 0x474D544B) { // 'GMTK'
-        fprintf(stderr, "[LanguageModel] Invalid magic 0x%08X, expected 0x474D544B ('GMTK')\n", magic);
-        return -1;
-    }
-
-    if (version < 2) {
-        fprintf(stderr, "[LanguageModel] Unsupported version %d, minimum required is 2\n", version);
-        return -1;
-    }
-
-    uint32_t checksum = 0;
-    if (!file.read(reinterpret_cast<char*>(&checksum), sizeof(checksum))) {
-        return -1;
-    }
-
-    int config_vocab_size = 0;
-    if (!file.read(reinterpret_cast<char*>(&config_vocab_size), sizeof(config_vocab_size))) {
-        return -1;
-    }
-
-    int max_length = 0;
-    if (!file.read(reinterpret_cast<char*>(&max_length), sizeof(max_length))) {
-        return -1;
-    }
-
-    bool nfkc = false;
-    bool lower = false;
-    bool byte_fallback = false;
-    if (!file.read(reinterpret_cast<char*>(&nfkc), sizeof(nfkc))) {
-        return -1;
-    }
-    if (!file.read(reinterpret_cast<char*>(&lower), sizeof(lower))) {
-        return -1;
-    }
-    if (!file.read(reinterpret_cast<char*>(&byte_fallback), sizeof(byte_fallback))) {
-        return -1;
-    }
-    (void)max_length;
-    (void)nfkc;
-    (void)lower;
-    (void)byte_fallback;
-
-    uint32_t vocab_size = 0;
-    if (!file.read(reinterpret_cast<char*>(&vocab_size), sizeof(vocab_size))) {
-        return -1;
-    }
-
-    // Defensive sanity: avoid using absurd header values.
-    if (vocab_size > kMaxReasonableVocabSize) {
-        return -1;
-    }
-
-    if (vocab_size == 0) {
-        // Rule 20: no backward-compat fallback to legacy config_vocab_size.
-        fprintf(stderr,
-                "[LanguageModel] Invalid vocab header in %s: vocab_size=0 (legacy config_vocab_size=%d)\n",
-                path.c_str(),
-                config_vocab_size);
-        return -1;
-    }
-
-    return static_cast<int>(vocab_size);
-}
 
 }  // namespace
 
@@ -264,21 +184,6 @@ const Matrix& GrimEmbeddingStack::getTokenEmbeddings() const {
 LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
     : config_(config)
 {
-    if (config_.infer_vocab_from_file) {
-        if (config_.vocab_path.empty()) {
-            fprintf(stderr, "[LanguageModel] FATAL: infer_vocab_from_file enabled but vocab_path is empty\n");
-            throw std::runtime_error("LanguageModel: vocab_path required when infer_vocab_from_file is true");
-        }
-        int detected_vocab = detectVocabSizeFromBinary(config_.vocab_path);
-        if (detected_vocab > 0) {
-            config_.vocab_size = detected_vocab;
-        } else {
-            fprintf(stderr, "[LanguageModel] FATAL: Failed to detect vocab size from %s\n",
-                    config_.vocab_path.c_str());
-            throw std::runtime_error("LanguageModel: failed to detect vocab size from vocab file");
-        }
-    }
-    
     // 1. Create embedding layer
     embedder_ = std::make_unique<GrimEmbeddingStack>(
         config_.vocab_size,
@@ -438,6 +343,17 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
         throw std::runtime_error("generateSequenceGPU: invalid vocab_size");
     }
     const int vocab_size = config_.vocab_size;
+    const int learned_piece_count = vocab_size - GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
+    if (learned_piece_count < 0) {
+        throw std::runtime_error("generateSequenceGPU: vocab_size=" + std::to_string(vocab_size) +
+                                 " is smaller than fixed tokenizer offset=" +
+                                 std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET));
+    }
+    GRIM::Tokenizer::TokenLayout token_layout;
+    token_layout.num_special = GRIM::Tokenizer::NUM_SPECIAL_TOKENS;
+    token_layout.num_bytes = GRIM::Tokenizer::BYTE_VOCAB_SIZE;
+    token_layout.num_atoms = GRIM::Tokenizer::ATOM_VOCAB_SIZE;
+    token_layout.num_unigram = learned_piece_count;
     if (cfg.strategy == SamplingStrategy::BEAM_SEARCH) {
         throw std::runtime_error("generateSequenceGPU: BEAM_SEARCH is not supported");
     }
@@ -604,7 +520,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
         
         int32_t new_token_slot_id = -1;
 
-        if (scratchblock_active && GRIM::Tokenizer::isAtomToken(sample.token_id)) {
+        if (scratchblock_active && token_layout.isAtom(sample.token_id)) {
             token_atom_mask_val = 1;
             if (GRIM::Tokenizer::isNumericAtom(
                     GRIM::Tokenizer::tokenIdToAtomType(sample.token_id))) {

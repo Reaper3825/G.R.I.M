@@ -72,14 +72,14 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
             return false;
         }
 
-        std::cout << "[GRIM-text] Loaded " << g_tokenizer->totalVocabSize() << " tokens\n";
+        std::cout << "[GRIM-text] Loaded " << g_tokenizer->vocabSize() << " tokens\n";
         std::cout << "[GRIM-text] EOS token ID: " << GRIM::Tokenizer::EOS_TOKEN_ID << "\n";
         std::cout << "[GRIM-text] PAD token ID: " << GRIM::Tokenizer::PAD_TOKEN_ID << "\n";
 
         HyperParameters::LanguageModelConfig config =
             HyperParameters::inferenceLanguageModelConfig(
                 startup_config,
-                static_cast<std::uint32_t>(g_tokenizer->totalVocabSize()),
+                static_cast<std::uint32_t>(g_tokenizer->vocabSize()),
                 vocab_path);
         
         config.generation.eos_token_id = GRIM::Tokenizer::EOS_TOKEN_ID;
@@ -192,15 +192,43 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
         const auto& seq = results[0];
         const GRIM::Tokenizer::AtomTable* atom_tbl = seq.context_atom_table.get();
         std::string output;
+        const GRIM::Tokenizer::TokenLayout layout = g_tokenizer->tokenLayout();
+        auto append_token_text = [&](int tid) {
+            if (layout.isSpecial(tid)) {
+                output += GRIM::Tokenizer::specialTokenText(tid);
+                return;
+            }
+            if (layout.isByte(tid)) {
+                output.push_back(static_cast<char>(g_tokenizer->byteEncoder().tokenToByte(tid)));
+                return;
+            }
+            if (layout.isAtom(tid)) {
+                output += "<";
+                output += GRIM::Tokenizer::atomTypeName(GRIM::Tokenizer::tokenIdToAtomType(tid));
+                output += ">";
+                return;
+            }
+            if (layout.isUnigram(tid)) {
+                const auto* piece = g_tokenizer->unigramLM().getPiece(tid);
+                if (!piece) {
+                    throw std::runtime_error("grim_text_server decode: unigram token_id=" +
+                                             std::to_string(tid) + " has no backing piece");
+                }
+                output += piece->text;
+                return;
+            }
+            throw std::runtime_error("grim_text_server decode: token_id=" + std::to_string(tid) +
+                                     " is outside the GRMT/tokenizer vocab layout");
+        };
         for (size_t i = 0; i < seq.token_ids.size(); ++i) {
             const int tid = seq.token_ids[i];
 
-            if (g_tokenizer->isByteToken(tid)) {
-                output.push_back(static_cast<char>(g_tokenizer->byteEncoder().tokenToByte(tid)));
+            if (layout.isByte(tid)) {
+                append_token_text(tid);
                 continue;
             }
 
-            if (g_tokenizer->isAtomToken(tid)) {
+            if (layout.isAtom(tid)) {
                 // Context atoms: use atom table raw text
                 if (atom_tbl && i < seq.atom_entry_ids.size() &&
                     seq.atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
@@ -218,11 +246,11 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
                     continue;
                 }
 
-                output += g_tokenizer->tokenToString(tid);
+                append_token_text(tid);
                 continue;
             }
 
-            output += g_tokenizer->tokenToString(tid);
+            append_token_text(tid);
         }
 
         auto end_decode = std::chrono::high_resolution_clock::now();

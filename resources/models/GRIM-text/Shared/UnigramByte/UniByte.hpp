@@ -247,22 +247,11 @@ public:
     // Vocabulary Info
     //--------------------------------------------------//
     
+    // Canonical tokenizer vocab size: full token ID space written to GRMT headers.
     int vocabSize() const;
-    int totalVocabSize() const;  // Including bytes and atoms
-    
-    // Cap vocabulary to top-K most frequent tokens (reduces loss computation time)
-    void capVocabSize(int max_vocab);
     
     // Token layout — runtime-queried from live component sizes
     TokenLayout tokenLayout() const;
-
-    // Token type checking
-    bool isByteToken(int token_id) const;
-    bool isAtomToken(int token_id) const;
-    bool isUnigramToken(int token_id) const;
-    
-    // Get token info
-    std::string tokenToString(int token_id) const;
 
     //--------------------------------------------------//
     // Component Access

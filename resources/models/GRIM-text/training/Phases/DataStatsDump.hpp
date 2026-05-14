@@ -1,7 +1,7 @@
 //======================================================//
 //  DataStatsDump.hpp
 //  Visual dump of startup data-side stats: source paths,
-//  tokenizer vocab size, train/val sequence counts, and
+//  GRMT header vocab size, train/val sequence counts, and
 //  startup memory footprint.
 //
 //  Lives separately from ConfigDump (which only knows about
@@ -29,8 +29,7 @@ namespace GRIMText { namespace Training {
 struct DataStatsSnapshot {
     std::string data_path;
     std::string vocab_path;
-    std::uint32_t tokenizer_vocab_size = 0;
-    std::uint32_t actual_vocab_size    = 0;     // From config; matched against tokenizer.
+    std::uint32_t actual_vocab_size    = 0;     // From GRMT header.
     std::size_t   train_sequence_count = 0;
     std::size_t   val_sequence_count   = 0;
 

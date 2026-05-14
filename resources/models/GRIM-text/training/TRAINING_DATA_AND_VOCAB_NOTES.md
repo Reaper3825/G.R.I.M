@@ -35,13 +35,13 @@ So: confirm the actual **Train sequences** and **Created Y dynamic batches** in 
 
 **Where vocab size comes from:**
 
-- **At training time:** Vocab size is **not** read from `ai_config.json` at runtime. It is read from the **.grmt file header** when the training data is loaded (`training_data_loader.hpp`: `vocab_size_` from the GRMT header). So whatever vocab size was used **when the .grmt was encoded** is what you get.
-- When the **DataLoader** (or encode pipeline) builds/encodes data, it uses the **tokenizer’s `totalVocabSize()`** and writes that into the .grmt header (`DataLoader.cu` ~657–663). So:
-  - **Vocab size in training = tokenizer’s totalVocabSize() at the time the .grmt was written.**
+- **At training startup:** Vocab size is **not** read from `ai_config.json`, `vocab.bin`, or tokenizer internals. It is read from the **.grmt file header** when the training data is loaded (`training_data_loader.hpp`: `vocab_size_` from the GRMT header). That GRMT header value becomes `ctx.config.actual_vocab_size` and sizes the model.
+- When the **DataLoader** builds/encodes data, it uses the tokenizer’s single public vocab-size API, **`UniByte::vocabSize()`**, and writes that value into the `.grmt` header. So:
+  - **Vocab size in training = the `.grmt` header written by the tokenizer that encoded the data.**
 
 **Why you might see 2250:**
 
-- **totalVocabSize()** = special tokens (4) + bytes (256) + atoms (2) + **unigram pieces** = **262 + unigram pieces**. So 2250 ⇒ **~1988 unigram pieces**.
+- **`UniByte::vocabSize()`** = special tokens (4) + bytes (256) + active atom placeholders + **learned unigram pieces** = **`UNIGRAM_VOCAB_OFFSET + UnigramLM::pieceCount()`**. So a 2250 header means the tokenizer that encoded the GRMT had roughly `2250 - UNIGRAM_VOCAB_OFFSET` learned pieces.
 - So the **vocab.bin** that was used when encoding your current .grmt only had ~1988 pieces. That can happen if:
   1. **Existing vocab.bin** was built with an older/smaller config (e.g. smaller `vocab_size` or less data), and you never regenerated it.
   2. **Tokenizer training** was run with a small corpus or strict **min_subword_freq** (e.g. 3), so the unigram algorithm never reached 10000 pieces and stopped at ~1988.
@@ -51,8 +51,8 @@ So: confirm the actual **Train sequences** and **Created Y dynamic batches** in 
 1. **Regenerate vocab and .grmt together** so they match and use the desired size:
    - Delete the existing **vocab** and **.grmt** (e.g. `vocab.bin` and `training_data.grmt` in your training data directory).
    - Run the **DataLoader / encode pipeline** again. It will:
-     - Train a new tokenizer with `target_vocab_size` from config (e.g. 10000 in `ai_config.json` → up to 10000 **unigram pieces** → totalVocabSize = 262 + 10000 = 10262), **or** load an existing vocab if you don’t force rebuild.
-     - Encode the training data and write the new **totalVocabSize()** into the .grmt header.
+    - Train a new tokenizer with `target_vocab_size` from config (e.g. 10000 in `ai_config.json` → up to 10000 **learned unigram pieces**), **or** load an existing vocab if you don’t force rebuild.
+    - Encode the training data and write the new **`UniByte::vocabSize()`** into the .grmt header.
    - Then start training again; the trainer will read the new (larger) vocab size from the .grmt.
 
 2. **If after rebuild you still get fewer than 10000 pieces**, the tokenizer is hitting a natural limit (e.g. corpus size or frequency pruning):

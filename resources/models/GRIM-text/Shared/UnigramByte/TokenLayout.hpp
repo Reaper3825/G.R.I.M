@@ -148,10 +148,6 @@ inline AtomType tokenIdToAtomType(int token_id) {
     return static_cast<AtomType>(token_id - ATOM_TOKEN_OFFSET);
 }
 
-inline bool isAtomToken(int token_id) {
-    return token_id >= ATOM_TOKEN_OFFSET && token_id < UNIGRAM_VOCAB_OFFSET;
-}
-
 inline const char* atomTypeName(AtomType type) {
     switch (type) {
         case AtomType::ATOM_NONE:  return "NONE";

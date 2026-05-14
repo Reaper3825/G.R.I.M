@@ -18,7 +18,7 @@
 #include "../Shared/UnigramByte/Byte.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
-#include "../Common/grim_model_serialization_version.hpp"
+#include "../Shared/GRMT/GrmtFormat.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -80,21 +80,22 @@ std::unordered_map<int, std::string> GRIM::Test::loadVocabMap(const std::string&
         throw std::runtime_error("loadVocabMap: unsupported vocab version " + std::to_string(version));
     }
 
-    uint32_t checksum, config_vocab_size, max_length;
+    uint32_t checksum, serialized_record_count, max_length;
     f.read(reinterpret_cast<char*>(&checksum), 4);
-    f.read(reinterpret_cast<char*>(&config_vocab_size), 4);
+    f.read(reinterpret_cast<char*>(&serialized_record_count), 4);
     f.read(reinterpret_cast<char*>(&max_length), 4);
 
     char flags[3];
     f.read(flags, 3);
 
-    uint32_t total_vocab_size;
-    f.read(reinterpret_cast<char*>(&total_vocab_size), 4);
+    uint32_t token_space_size;
+    f.read(reinterpret_cast<char*>(&token_space_size), 4);
+    (void)token_space_size;
 
     std::vector<char> buf;
     buf.reserve(256);
 
-    for (uint32_t i = 0; i < config_vocab_size; ++i) {
+    for (uint32_t i = 0; i < serialized_record_count; ++i) {
         uint32_t len;
         f.read(reinterpret_cast<char*>(&len), 4);
         buf.resize(len);
@@ -136,16 +137,10 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
     }
 
     // ── Header (16 bytes) ──
-    uint32_t magic;
-    f.read(reinterpret_cast<char*>(&magic), 4);
-    if (magic != 0x474D5254) {
-        throw std::runtime_error("scanGRMT: invalid GRMT magic 0x" +
-            ([&]{ char b[16]; snprintf(b, sizeof(b), "%08X", magic); return std::string(b); })());
-    }
-
-    f.read(reinterpret_cast<char*>(&m.grmt_version), 4);
-    f.read(reinterpret_cast<char*>(&m.num_sequences), 4);
-    f.read(reinterpret_cast<char*>(&m.vocab_size), 4);
+    const GRIM::GRMT::Header header = GRIM::GRMT::readHeaderOrThrow(f, grmt_path);
+    m.grmt_version = header.version;
+    m.num_sequences = header.num_sequences;
+    m.vocab_size = header.vocab_size;
 
     // Token ID histogram (sparse — only observed IDs)
     m.token_hist.reserve(m.vocab_size);

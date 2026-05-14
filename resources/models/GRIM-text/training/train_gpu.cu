@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
             oss << "[Phase 1] ✓ Complete | Model: " << ctx->config.paths.output_model_path
                 << " | Train: " << ctx->data.train_views.size()
                 << " | Val: " << ctx->data.val_views.size()
-                << " | Vocab: " << ctx->tokenizer->vocabSize();
+                << " | Vocab: " << ctx->config.actual_vocab_size;
             EmitModuleInfo(ModuleId::TrainingOrchestrator, oss.str(), 0);
         }
         

@@ -1,0 +1,164 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <istream>
+#include <ostream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+
+#include "../../Common/grim_model_serialization_version.hpp"
+
+namespace GRIM::GRMT {
+
+inline constexpr std::uint32_t kMagic = 0x474D5254u; // ASCII bytes: GRMT
+inline constexpr std::size_t kHeaderSizeBytes = sizeof(std::uint32_t) * 4;
+
+struct Header {
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::uint32_t num_sequences = 0;
+    std::uint32_t vocab_size = 0;
+};
+
+static_assert(sizeof(Header) == kHeaderSizeBytes,
+              "GRMT header must remain four contiguous uint32 fields");
+
+struct HeaderValidation {
+    bool require_current_version = true;
+    bool require_nonzero_sequences = true;
+    bool require_nonzero_vocab_size = true;
+};
+
+struct HeaderReadStatus {
+    bool ok = false;
+    Header header{};
+    std::string error;
+};
+
+inline std::string hex32(std::uint32_t value) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex
+        << std::setw(8) << std::setfill('0') << value;
+    return oss.str();
+}
+
+inline Header readRawHeaderOrThrow(std::istream& input, const std::string& source) {
+    Header header{};
+    input.read(reinterpret_cast<char*>(&header), static_cast<std::streamsize>(sizeof(Header)));
+    if (!input) {
+        throw std::runtime_error(
+            "[GRMT] header read failed or truncated: " + source +
+            " (expected " + std::to_string(kHeaderSizeBytes) + " bytes)");
+    }
+    return header;
+}
+
+inline std::string headerValidationError(
+    const Header& header,
+    const std::string& source,
+    const HeaderValidation& validation = HeaderValidation{})
+{
+    if (header.magic != kMagic) {
+        return "[GRMT] invalid magic in " + source + ": actual=" + hex32(header.magic) +
+               " expected='GRMT'/" + hex32(kMagic);
+    }
+    if (validation.require_current_version && header.version != GRIM::GRMT_FORMAT_VERSION) {
+        return "[GRMT] version mismatch in " + source + ": file=" +
+               std::to_string(header.version) + " expected=" +
+               std::to_string(GRIM::GRMT_FORMAT_VERSION);
+    }
+    if (validation.require_nonzero_sequences && header.num_sequences == 0) {
+        return "[GRMT] header reports num_sequences=0: " + source;
+    }
+    if (validation.require_nonzero_vocab_size && header.vocab_size == 0) {
+        return "[GRMT] header reports vocab_size=0: " + source;
+    }
+    return {};
+}
+
+inline void validateHeaderOrThrow(
+    const Header& header,
+    const std::string& source,
+    const HeaderValidation& validation = HeaderValidation{})
+{
+    const std::string error = headerValidationError(header, source, validation);
+    if (!error.empty()) {
+        throw std::runtime_error(error);
+    }
+}
+
+inline HeaderReadStatus readHeaderStatus(
+    const std::string& path,
+    const HeaderValidation& validation = HeaderValidation{})
+{
+    HeaderReadStatus status{};
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        status.error = "[GRMT] cannot open file for header read: " + path;
+        return status;
+    }
+
+    input.read(reinterpret_cast<char*>(&status.header), static_cast<std::streamsize>(sizeof(Header)));
+    if (!input) {
+        status.error = "[GRMT] header read failed or truncated: " + path +
+                       " (expected " + std::to_string(kHeaderSizeBytes) + " bytes)";
+        return status;
+    }
+
+    status.error = headerValidationError(status.header, path, validation);
+    if (!status.error.empty()) {
+        return status;
+    }
+    status.ok = true;
+    return status;
+}
+
+inline Header readHeaderOrThrow(
+    std::istream& input,
+    const std::string& source,
+    const HeaderValidation& validation = HeaderValidation{})
+{
+    Header header = readRawHeaderOrThrow(input, source);
+    validateHeaderOrThrow(header, source, validation);
+    return header;
+}
+
+inline Header readHeaderOrThrow(
+    const std::string& path,
+    const HeaderValidation& validation = HeaderValidation{})
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        throw std::runtime_error("[GRMT] cannot open file for header read: " + path);
+    }
+    return readHeaderOrThrow(input, path, validation);
+}
+
+inline Header makeCurrentHeader(std::uint32_t num_sequences, std::uint32_t vocab_size) {
+    Header header{};
+    header.magic = kMagic;
+    header.version = GRIM::GRMT_FORMAT_VERSION;
+    header.num_sequences = num_sequences;
+    header.vocab_size = vocab_size;
+    validateHeaderOrThrow(header, "new GRMT header");
+    return header;
+}
+
+inline void writeHeaderOrThrow(
+    std::ostream& output,
+    const Header& header,
+    const std::string& sink,
+    const HeaderValidation& validation = HeaderValidation{})
+{
+    validateHeaderOrThrow(header, sink, validation);
+    output.write(reinterpret_cast<const char*>(&header), static_cast<std::streamsize>(sizeof(Header)));
+    if (!output) {
+        throw std::runtime_error("[GRMT] failed to write header: " + sink);
+    }
+}
+
+} // namespace GRIM::GRMT

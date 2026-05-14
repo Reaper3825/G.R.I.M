@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../Shared/GRMT/GrmtFormat.hpp"
 #include "../../Common/grim_model_serialization_version.hpp"
 #include "Serialization_GPU.hpp"
 
@@ -241,8 +242,9 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     if (file_size >= 4) {
         uint32_t first4 = 0;
         std::memcpy(&first4, buffer.data(), 4);
-        if (first4 == 0x474D5254u) {
-            issues.push_back("first 4 bytes = 0x474D5254 (GRMT magic) — looks like training data .grmt, not a checkpoint");
+        if (first4 == GRIM::GRMT::kMagic) {
+            issues.push_back("first 4 bytes = " + GRIM::GRMT::hex32(GRIM::GRMT::kMagic) +
+                             " (GRMT magic) — looks like training data .grmt, not a checkpoint");
         }
         if (first4 >= file_size) {
             issues.push_back("root_offset=" + std::to_string(first4) +

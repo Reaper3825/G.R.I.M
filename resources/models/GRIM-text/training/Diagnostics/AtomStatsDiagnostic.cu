@@ -30,10 +30,11 @@ AtomStats computeAtomStats(const std::vector<std::vector<int>>& batch_inputs,
     }
 
     stats.min_atoms = std::numeric_limits<int>::max();
+    const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
     for (const auto& seq : batch_inputs) {
         int atom_count = 0;
         for (int tid : seq) {
-            if (tokenizer.isAtomToken(tid)) {
+            if (layout.isAtom(tid)) {
                 ++atom_count;
             }
         }

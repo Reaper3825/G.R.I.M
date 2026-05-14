@@ -25,6 +25,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <algorithm>
+#include <stdexcept>
+#include <string>
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -61,6 +63,38 @@ std::string trimSampleText(const std::string& text, std::size_t max_chars) {
     return text.substr(0, max_chars) + "...";
 }
 
+void appendTokenText(std::string& result,
+                     const GRIM::Tokenizer::UniByte& tokenizer,
+                     const GRIM::Tokenizer::TokenLayout& layout,
+                     int tid) {
+    if (layout.isSpecial(tid)) {
+        result += GRIM::Tokenizer::specialTokenText(tid);
+        return;
+    }
+    if (layout.isByte(tid)) {
+        const uint8_t byte_val = tokenizer.byteEncoder().tokenToByte(tid);
+        result.push_back(static_cast<char>(byte_val));
+        return;
+    }
+    if (layout.isAtom(tid)) {
+        result += "<";
+        result += GRIM::Tokenizer::atomTypeName(GRIM::Tokenizer::tokenIdToAtomType(tid));
+        result += ">";
+        return;
+    }
+    if (layout.isUnigram(tid)) {
+        const auto* piece = tokenizer.unigramLM().getPiece(tid);
+        if (!piece) {
+            throw std::runtime_error("DiagnosticInference decode: unigram token_id=" +
+                                     std::to_string(tid) + " has no backing piece");
+        }
+        result += piece->text;
+        return;
+    }
+    throw std::runtime_error("DiagnosticInference decode: token_id=" + std::to_string(tid) +
+                             " is outside the GRMT/tokenizer vocab layout");
+}
+
 std::string decodeWithAtomSideChannel(
         const GRIM::Tokenizer::UniByte& tokenizer,
         const std::vector<int>& token_ids,
@@ -70,17 +104,17 @@ std::string decodeWithAtomSideChannel(
         const GRIM::Tokenizer::AtomTable* atom_table) {
     std::string result;
     const size_t n = token_ids.size();
+    const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
 
     for (size_t i = 0; i < n; ++i) {
         const int tid = token_ids[i];
 
-        if (tokenizer.isByteToken(tid)) {
-            const uint8_t byte_val = tokenizer.byteEncoder().tokenToByte(tid);
-            result.push_back(static_cast<char>(byte_val));
+        if (layout.isByte(tid)) {
+            appendTokenText(result, tokenizer, layout, tid);
             continue;
         }
 
-        if (tokenizer.isAtomToken(tid)) {
+        if (layout.isAtom(tid)) {
             if (atom_table && i < atom_entry_ids.size() &&
                 atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
                 const auto* entry = atom_table->getAtom(atom_entry_ids[i]);
@@ -96,11 +130,11 @@ std::string decodeWithAtomSideChannel(
                 continue;
             }
 
-            result += tokenizer.tokenToString(tid);
+            appendTokenText(result, tokenizer, layout, tid);
             continue;
         }
 
-        result += tokenizer.tokenToString(tid);
+        appendTokenText(result, tokenizer, layout, tid);
     }
 
     return result;

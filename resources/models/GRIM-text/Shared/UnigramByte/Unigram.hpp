@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <cuda_runtime.h>
 #include <algorithm>
 #include <cstdint>
 #include <string>
@@ -59,6 +58,10 @@ struct ViterbiNode {
     int token_id;          // Token ID of piece ending here
     int piece_length;      // Length of piece in bytes
 };
+
+// Durable CUDA buffer owner for UnigramLM. Kept out of this header so
+// tokenizer logic owns vocab/trie semantics while memory files own allocation.
+class UnigramGpuMemory;
 
 //======================================================//
 //  UnigramLM - Unigram Language Model Tokenizer
@@ -151,11 +154,7 @@ public:
     // Vocabulary Info
     //--------------------------------------------------//
     
-    int vocabSize() const { return static_cast<int>(pieces_.size()); }
-    int totalVocabSize() const { return UNIGRAM_VOCAB_OFFSET + vocabSize(); }
-    
-    // Cap vocabulary to top-K pieces by score (keeps most frequent)
-    void capVocabSize(int max_size);
+    int pieceCount() const { return static_cast<int>(pieces_.size()); }
     
     // SentencePiece-style whitespace normalization (▁ ↔ space)
     static std::string normalizeForTokenization(const std::string& text);
@@ -190,28 +189,9 @@ private:
     };
     std::vector<TrieNode> trie_;
     
-    // GPU resources
-    struct GPUData {
-        // Trie on device
-        int* d_trie_children;       // [num_nodes * 256]
-        int* d_trie_token_ids;      // [num_nodes]
-        float* d_trie_scores;       // [num_nodes]
-        int num_nodes;
-        
-        // Piece data for decoding
-        char* d_piece_data;         // Concatenated piece strings
-        int* d_piece_offsets;       // Start offset of each piece
-        int* d_piece_lengths;       // Length of each piece
-        
-        // Viterbi workspace (pre-allocated, fixed capacity)
-        float* d_viterbi_scores;
-        int* d_viterbi_prev;
-        int* d_viterbi_tokens;
-        size_t workspace_max_length;  // Maximum sequence length supported
-        
-        bool initialized = false;
-    };
-    std::unique_ptr<GPUData> gpu_;
+    // GPU resources are owned by UnigramGpuMemory in UnigramGpuMemory.*.
+    // UnigramLM only requests initialization/upload; it does not own raw CUDA lifetime details here.
+    std::unique_ptr<UnigramGpuMemory> gpu_;
     
     // Upload trie to GPU
     bool uploadTrieToGPU();

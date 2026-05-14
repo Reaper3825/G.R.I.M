@@ -73,7 +73,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: Unsupported vocab.bin version now throws (was printing and continuing silently, Rule 20)
   - HTML cleaning pipeline correct: static regex, entity decoding ✅
   - GRMT v6 format with byte_lengths, vocab validation, non-finite sanitization ✅
-  - `totalVocabSize()` correctly used for header (includes byte+atom ranges) ✅
+  - `UniByte::vocabSize()` is the only tokenizer vocab-size API and is written to the GRMT header ✅
 
 ---
 
@@ -261,7 +261,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: Removed debug spew in `sampleFromLogits()` and unreachable code after throws
   - **CLEANED**: `GRIM/grim_language_model_cuda.hpp` CPU fallback class blocks removed (EncoderLayer/GrimEncoder/LMHead/TextGenerator), dead accessors and members deleted
   - **REFACTORED**: `ALiBiPositionalBias` wrapper deleted; PBM access now goes through model-level `PBM::PBMStateOwner` and `LanguageModel::getPBMState()` / `getPBMSpec()`.
-  - **FIXED (Pass 3)**: Removed stale vocab compatibility fallback in `detectVocabSizeFromBinary()` (`vocab_size==0` no longer falls back to legacy `config_vocab_size`; now fails loud).
+  - **FIXED (Vocab authority cleanup)**: Deleted LanguageModel vocab.bin size detection/override; model construction now uses caller-supplied vocab size (GRMT header for training, tokenizer token-space size for inference).
   - **FIXED (Pass 3)**: Constructor now validates `num_heads > 0` and `d_model % num_heads == 0` BEFORE computing `d_head` (prevents divide-by-zero/UB during positional init).
   - **DELETED (Payload Inference Cleanup)**: staged prompt APIs were removed; inference callers now build `BatchPayload` and enter through payload-only logits/generation methods.
   - **FIXED (Pass 3)**: Numeric prediction host copy in generation now checks `cudaMemcpyAsync` + stream sync result and throws on failure (previously ignored sync result).

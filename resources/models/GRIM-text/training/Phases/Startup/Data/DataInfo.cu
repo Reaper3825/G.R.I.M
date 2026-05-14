@@ -129,11 +129,10 @@ std::uint32_t maxSequenceLen(const std::vector<TrainingSequence>& sequences) {
 
 DataInfo summarizeDataInfoOrThrow(
     const DataLoadInputs& inputs,
-    const SequenceData& data,
-    std::uint32_t tokenizer_vocab_size)
+    const SequenceData& data)
 {
     if (data.vocab_size == 0) {
-        throw std::runtime_error("FATAL: training data missing vocab_size; regenerate GRMT with tokenizer.totalVocabSize()");
+        throw std::runtime_error("FATAL: training data missing vocab_size; regenerate GRMT with tokenizer.vocabSize()");
     }
     if (data.train_views.size() != data.train_seqs.size()) {
         throw std::runtime_error("FATAL: train view count does not match train sequence count (views=" +
@@ -149,7 +148,6 @@ DataInfo summarizeDataInfoOrThrow(
     DataInfo info;
     info.data_path = inputs.data_path;
     info.vocab_path = inputs.vocab_path;
-    info.tokenizer_vocab_size = tokenizer_vocab_size;
     info.actual_vocab_size = data.vocab_size;
     info.train_sequence_count = data.train_seqs.size();
     info.val_sequence_count = data.val_seqs.size();
@@ -190,8 +188,7 @@ void DataInfoReady(TrainingContext& ctx) {
         *ctx.tokenizer,
         *ctx.logging.logger);
 
-    const uint32_t tokenizer_vocab_size = ctx.tokenizer->totalVocabSize();
-    ctx.data_info = summarizeDataInfoOrThrow(data_inputs, ctx.data, tokenizer_vocab_size);
+    ctx.data_info = summarizeDataInfoOrThrow(data_inputs, ctx.data);
     ctx.config.actual_vocab_size = ctx.data_info.actual_vocab_size;
     if (ctx.config.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
         throw std::runtime_error("FATAL: training data vocab_size must include special+byte+atom ranges (>= " +
@@ -210,7 +207,6 @@ void DataInfoReady(TrainingContext& ctx) {
     GRIMText::Training::DataStatsSnapshot data_stats;
     data_stats.data_path = ctx.data_info.data_path;
     data_stats.vocab_path = ctx.data_info.vocab_path;
-    data_stats.tokenizer_vocab_size = ctx.data_info.tokenizer_vocab_size;
     data_stats.actual_vocab_size = ctx.data_info.actual_vocab_size;
     data_stats.train_sequence_count = ctx.data_info.train_sequence_count;
     data_stats.val_sequence_count = ctx.data_info.val_sequence_count;

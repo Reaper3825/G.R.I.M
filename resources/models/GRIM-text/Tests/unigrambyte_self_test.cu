@@ -154,7 +154,7 @@ bool testUnigramBuildVocab(std::string& message) {
     unigram.addPiece("d", -3.6f, false);
     
         // Only learned pieces are stored in UnigramLM::pieces_; specials are layout metadata.
-        ASSERT_EQ(unigram.vocabSize(), 13, "Vocab size mismatch");
+        ASSERT_EQ(unigram.pieceCount(), 13, "Learned piece count mismatch");
     
     return true;
 }
@@ -688,24 +688,24 @@ bool testUniByteRoundTrip(std::string& message) {
     
     // Start after pre-existing special tokens
     std::cout << "[RoundTrip] UNIGRAM_VOCAB_OFFSET = " << UNIGRAM_VOCAB_OFFSET << "\n";
-    std::cout << "[RoundTrip] Pre-existing vocab size = " << tokenizer.unigramLM().vocabSize() << "\n";
+    std::cout << "[RoundTrip] Pre-existing learned piece count = " << tokenizer.unigramLM().pieceCount() << "\n";
     
     // Pieces use ▁ (U+2581) prefix — SentencePiece whitespace normalization
     std::cout << "[RoundTrip] Adding pieces:\n";
     tokenizer.unigramLM().addPiece("\xe2\x96\x81the", -1.0f, false);
-    std::cout << "  '▁the'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    std::cout << "  '▁the'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
     tokenizer.unigramLM().addPiece("\xe2\x96\x81quick", -1.5f, false);
-    std::cout << "  '▁quick' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    std::cout << "  '▁quick' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
     tokenizer.unigramLM().addPiece("\xe2\x96\x81" "brown", -1.6f, false);
-    std::cout << "  '▁brown' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    std::cout << "  '▁brown' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
     tokenizer.unigramLM().addPiece("\xe2\x96\x81" "fox", -1.7f, false);
-    std::cout << "  '▁fox'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    std::cout << "  '▁fox'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
     
-    std::cout << "[RoundTrip] Final vocab size = " << tokenizer.unigramLM().vocabSize() << "\n";
+    std::cout << "[RoundTrip] Final learned piece count = " << tokenizer.unigramLM().pieceCount() << "\n";
     
     // Dump ALL pieces in vocabulary to see what's actually stored
     std::cout << "[RoundTrip] === Full Vocabulary Dump ===\n";
-    for (int i = 0; i < tokenizer.unigramLM().vocabSize(); ++i) {
+    for (int i = 0; i < tokenizer.unigramLM().pieceCount(); ++i) {
         int tid = UNIGRAM_VOCAB_OFFSET + i;
         const auto* piece = tokenizer.unigramLM().getPiece(tid);
         if (piece) {
@@ -1659,28 +1659,6 @@ bool testVocabSaveLoadBinary(std::string& message) {
     return true;
 }
 
-bool testVocabCapSize(std::string& message) {
-    UnigramLM unigram;
-    
-    // Add many pieces
-    for (int i = 0; i < 100; ++i) {
-        std::string piece = "piece" + std::to_string(i);
-        float score = -1.0f - (i * 0.01f);  // Decreasing scores
-        unigram.addPiece(piece, score, false);
-    }
-    
-    int original_size = unigram.vocabSize();
-    ASSERT_TRUE(original_size > 50, "Should have many pieces");
-    
-    // Cap to smaller learned-vocab size.
-    unigram.capVocabSize(260);
-    
-    int new_size = unigram.vocabSize();
-    ASSERT_TRUE(new_size <= 260, "Should be capped to 260 or less");
-    
-    return true;
-}
-
 //======================================================//
 //  Section 14: GPU Upload Tests
 //======================================================//
@@ -1819,7 +1797,6 @@ int main(int argc, char** argv) {
     // Section 13: Vocabulary Persistence Tests
     suite.addTest("Vocab.SaveLoadText", testVocabSaveLoadText);
     suite.addTest("Vocab.SaveLoadBinary", testVocabSaveLoadBinary);
-    suite.addTest("Vocab.CapSize", testVocabCapSize);
     
     // Section 14: GPU Upload Tests
     suite.addTest("GPU.Upload", testGPUUpload);

@@ -19,7 +19,7 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
-#include "../../Common/grim_model_serialization_version.hpp"
+#include "../GRMT/GrmtFormat.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // also pulls in control/ai_config_paths.hpp transitively (correct order)
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
@@ -290,82 +290,32 @@ bool PrepareTrainingDataFromCache(
 	const bool training_exists = fs::exists(out_training_data_path);
 	const bool vocab_exists = !out_vocab_path.empty() && fs::exists(out_vocab_path);
 	fs::path vocab_path(out_vocab_path);
-	bool grmt_version_mismatch = false;
+	bool grmt_cache_invalid = false;
 
-	// Check if vocab and training data are in sync (always check, regardless of force_rebuild)
-	bool vocab_mismatch = false;
+	// GRMT header validity is the only cache freshness check here. Phase 1 startup
+	// takes final vocab size from the same header, not from vocab.bin.
 	if (training_exists && vocab_exists) {
-		// Read vocab size from GRMT file
-		std::ifstream grmt_file(out_training_data_path, std::ios::binary);
-		if (grmt_file.is_open()) {
-			uint32_t magic = 0, version = 0, num_sequences = 0, grmt_vocab_size = 0;
-			grmt_file.read(reinterpret_cast<char*>(&magic), 4);
-			grmt_file.read(reinterpret_cast<char*>(&version), 4);
-			grmt_file.read(reinterpret_cast<char*>(&num_sequences), 4);
-			grmt_file.read(reinterpret_cast<char*>(&grmt_vocab_size), 4);
-			grmt_file.close();
-			if (!grmt_file) {
-				// Truncated or corrupted GRMT file — force rebuild
-				std::cerr << "[DataLoader] GRMT header read failed (truncated file?); forcing rebuild." << std::endl;
-				grmt_version_mismatch = true;
-			} else if (magic != 0x474D5254 || version != GRIM::GRMT_FORMAT_VERSION) {
-				grmt_version_mismatch = true;
-			}
-
-			if (magic == 0x474D5254) { // "GRMT" in little-endian
-				// Read vocab size from vocab.bin
-				std::ifstream vocab_file(out_vocab_path, std::ios::binary);
-				if (vocab_file.is_open()) {
-					char vocab_magic[5] = {0};
-					vocab_file.read(vocab_magic, 4);
-					
-						if (std::string(vocab_magic) == "KTMG") {
-							uint16_t vocab_version = 0;
-							vocab_file.read(reinterpret_cast<char*>(&vocab_version), 2);
-							
-							// Version 2+ required (Rule 20: current format only)
-							if (vocab_version >= 2) {
-								// Vocab v2 header layout after magic(4) + version(2):
-								//   checksum(4) + config_vocab_size(4) + max_length(4) + 3 bools(3) + actual_vocab_size(4)
-								constexpr std::streamoff kVocabV2SkipBytes = 4 + 4 + 4 + 3; // 15 bytes to skip
-								vocab_file.seekg(kVocabV2SkipBytes, std::ios::cur);
-								uint32_t vocab_bin_size = 0;
-								vocab_file.read(reinterpret_cast<char*>(&vocab_bin_size), 4);
-								vocab_file.close();
-								if (!vocab_file) {
-									std::cerr << "[DataLoader] vocab.bin header read failed (truncated?); forcing rebuild." << std::endl;
-									vocab_mismatch = true;
-								} else if (grmt_vocab_size != vocab_bin_size) {
-									std::cout << "[DataLoader] Vocab size mismatch detected!\n"
-											  << "  training_data.grmt: " << grmt_vocab_size << " tokens\n"
-											  << "  vocab.bin: " << vocab_bin_size << " tokens\n"
-											  << "  Forcing rebuild to synchronize..." << std::endl;
-									vocab_mismatch = true;
-								}
-							} else {
-								std::cerr << "[DataLoader] vocab.bin has unsupported version " << vocab_version << ", minimum required is 2\n";
-								vocab_mismatch = true; // Force rebuild — stale vocab format
-							}
-						}
-				}
-			}
+		const GRIM::GRMT::HeaderReadStatus status =
+			GRIM::GRMT::readHeaderStatus(out_training_data_path);
+		if (!status.ok) {
+			std::cerr << "[DataLoader] " << status.error
+			          << "; rebuilding GRMT from source corpus." << std::endl;
+			grmt_cache_invalid = true;
 		}
 	}
 
-	// Skip rebuild only if all required artifacts exist, match, and force_rebuild is false
-	if (!force_rebuild && !vocab_mismatch && !grmt_version_mismatch && training_exists && vocab_exists) {
+	// Skip rebuild only if all required artifacts exist, GRMT format is current, and force_rebuild is false.
+	if (!force_rebuild && !grmt_cache_invalid && training_exists && vocab_exists) {
 		std::cout << "[DataLoader] Existing training data + vocab found at '" << out_training_data_path
-			  << "', vocab sizes match, skipping cache rebuild." << std::endl;
+			  << "', GRMT version is current, skipping cache rebuild." << std::endl;
 		return true;
 	}
 
 	// Log reason for rebuild
 	if (force_rebuild) {
 		std::cout << "[DataLoader] force_rebuild=true, rebuilding training data and vocab..." << std::endl;
-	} else if (vocab_mismatch) {
-		std::cout << "[DataLoader] Rebuilding due to vocab size mismatch..." << std::endl;
-	} else if (grmt_version_mismatch) {
-		std::cout << "[DataLoader] Rebuilding due to GRMT version mismatch..." << std::endl;
+	} else if (grmt_cache_invalid) {
+		std::cout << "[DataLoader] Rebuilding due to invalid GRMT cache header..." << std::endl;
 	} else if (training_exists && !vocab_exists) {
 		std::cout << "[DataLoader] Training data present but vocab missing; rebuilding." << std::endl;
 	} else if (!training_exists && vocab_exists) {
@@ -432,8 +382,8 @@ bool PrepareTrainingDataFromCache(
 		}
 	}
 	if (!vocab_loaded) {
-		std::cout << "[DataLoader] Training new tokenizer vocab from concept blocks (target: " 
-				  << tokenizer_hp.target_vocab_size << " tokens)..." << std::endl;
+		std::cout << "[DataLoader] Training new tokenizer pieces from concept blocks (target: " 
+				  << tokenizer_hp.target_vocab_size << " learned pieces)..." << std::endl;
 		std::vector<std::string> vocab_corpus;
 		vocab_corpus.reserve(concept_json_entries.size());
 		for (const auto& cj : concept_json_entries) {
@@ -714,16 +664,11 @@ bool PrepareTrainingDataFromCache(
 			return {false, sequences_with_no_valid_targets};
 		}
 
-		uint32_t magic = 0x474D5254; // "GRMT"
-		uint32_t version = GRIM::GRMT_FORMAT_VERSION;
 		uint32_t num_sequences = static_cast<uint32_t>(valid_seq_count);
-		// CRITICAL: Use totalVocabSize() to include byte (256) + atom (256) + unigram tokens
-		uint32_t vocab_size = static_cast<uint32_t>(tokenizer.totalVocabSize());
-
-		file.write(reinterpret_cast<const char*>(&magic), 4);
-		file.write(reinterpret_cast<const char*>(&version), 4);
-		file.write(reinterpret_cast<const char*>(&num_sequences), 4);
-		file.write(reinterpret_cast<const char*>(&vocab_size), 4);
+		// Canonical tokenizer vocab size: full token ID space written to the GRMT header.
+		uint32_t vocab_size = static_cast<uint32_t>(tokenizer.vocabSize());
+		const GRIM::GRMT::Header header = GRIM::GRMT::makeCurrentHeader(num_sequences, vocab_size);
+		GRIM::GRMT::writeHeaderOrThrow(file, header, path.string());
 
 		for (const auto& seq : data) {
 			// Skip empty and target-less sequences

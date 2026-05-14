@@ -9,8 +9,6 @@
 
 #include "Unigram.hpp"
 #include "TextUtils.hpp"
-#include "Byte.hpp"
-#include "HyperParameters/HyperParameters_GPU.hpp"
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
@@ -272,47 +270,6 @@ __global__ void kernelTrieLookup(
 //  UnigramLM Implementation
 //======================================================//
 
-UnigramLM::UnigramLM() 
-    : gpu_(std::make_unique<GPUData>())
-{
-    // Start with an empty learned vocabulary. Layout special tokens are saved
-    // as vocab metadata records, not stored in pieces_ or the trie.
-}
-
-UnigramLM::~UnigramLM() {
-    if (gpu_ && gpu_->initialized) {
-        cudaFree(gpu_->d_trie_children);
-        cudaFree(gpu_->d_trie_token_ids);
-        cudaFree(gpu_->d_trie_scores);
-        cudaFree(gpu_->d_piece_data);
-        cudaFree(gpu_->d_piece_offsets);
-        cudaFree(gpu_->d_piece_lengths);
-        cudaFree(gpu_->d_viterbi_scores);
-        cudaFree(gpu_->d_viterbi_prev);
-        cudaFree(gpu_->d_viterbi_tokens);
-    }
-}
-
-UnigramLM::UnigramLM(UnigramLM&& other) noexcept
-    : pieces_(std::move(other.pieces_))
-    , piece_to_id_(std::move(other.piece_to_id_))
-    , enable_byte_fallback_(other.enable_byte_fallback_)
-    , trie_(std::move(other.trie_))
-    , gpu_(std::move(other.gpu_))
-{
-}
-
-UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
-    if (this != &other) {
-        pieces_ = std::move(other.pieces_);
-        piece_to_id_ = std::move(other.piece_to_id_);
-        enable_byte_fallback_ = other.enable_byte_fallback_;
-        trie_ = std::move(other.trie_);
-        gpu_ = std::move(other.gpu_);
-    }
-    return *this;
-}
-
 //--------------------------------------------------//
 // Vocabulary Management
 //--------------------------------------------------//
@@ -473,11 +430,11 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
     uint32_t checksum;
     bin_file.read(reinterpret_cast<char*>(&checksum), 4);
     
-    // Read config vocab_size (4 bytes) - number of serialized records.
+    // Read serialized record count (4 bytes). This is NOT tokenizer vocab size.
     // Current saves include layout special metadata records first, followed by
-    // learned pieces. Older files may contain learned pieces only.
-    uint32_t config_vocab_size;
-    bin_file.read(reinterpret_cast<char*>(&config_vocab_size), 4);
+    // learned pieces.
+    uint32_t serialized_record_count;
+    bin_file.read(reinterpret_cast<char*>(&serialized_record_count), 4);
     
     // Skip max_length (4 bytes)
     uint32_t max_length;
@@ -487,20 +444,20 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
     char flags[3];
     bin_file.read(flags, 3);
     
-    // Read total vocab size (4 bytes) - includes bytes + atoms + unigram
-    uint32_t total_vocab_size;
-    bin_file.read(reinterpret_cast<char*>(&total_vocab_size), 4);
+    // Read saved token-space size (4 bytes) for vocab artifact diagnostics only.
+    uint32_t saved_token_space_size;
+    bin_file.read(reinterpret_cast<char*>(&saved_token_space_size), 4);
     
     // Clear existing vocab
     pieces_.clear();
     piece_to_id_.clear();
-    pieces_.reserve(config_vocab_size);
+    pieces_.reserve(serialized_record_count);
     
     // Read pieces: length (4 bytes) + text + score (4 bytes float) + token_id (4 bytes)
     std::vector<char> text_buffer;
     text_buffer.reserve(MAX_PIECE_LENGTH);
     
-    for (uint32_t i = 0; i < config_vocab_size; ++i) {
+    for (uint32_t i = 0; i < serialized_record_count; ++i) {
         uint32_t len;
         bin_file.read(reinterpret_cast<char*>(&len), 4);
         
@@ -548,9 +505,18 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
     }
     
     buildTrie();
+
+    const uint32_t computed_token_space_size = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET + pieces_.size());
+    if (saved_token_space_size != computed_token_space_size) {
+        throw std::runtime_error(
+            "[UnigramLM] vocab.bin token-space size mismatch: header=" +
+            std::to_string(saved_token_space_size) + " computed=" +
+            std::to_string(computed_token_space_size) +
+            " from loaded pieces. Retrain tokenizer; do not patch the header.");
+    }
     
     std::cout << "[UnigramLM] Loaded " << pieces_.size() << " pieces from binary: " << vocab_path << std::endl;
-    std::cout << "[UnigramLM] Embedding vocab size: " << total_vocab_size
+    std::cout << "[UnigramLM] Saved token-space size: " << saved_token_space_size
               << " (" << NUM_SPECIAL_TOKENS << " special + " << BYTE_VOCAB_SIZE << " bytes + "
               << ATOM_VOCAB_SIZE << " atom type placeholders + "
               << pieces_.size() << " unigram pieces)" << std::endl;
@@ -559,7 +525,7 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
 
 bool UnigramLM::save(const std::string& vocab_path, bool save_text_format, float score_multiplier) const {
     // Primary: Save binary format (.bin)
-    // Binary format: KTMG magic + version + checksum + config + vocab_size + pieces
+    // Binary format: KTMG magic + version + checksum + record_count + max_length + flags + token_space_size + records
     std::string bin_path = vocab_path;
     size_t dot_pos = bin_path.rfind('.');
     if (dot_pos != std::string::npos) {
@@ -589,11 +555,12 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format, float
     uint32_t checksum = 0;
     bin_file.write(reinterpret_cast<const char*>(&checksum), 4);
     
-    // Config vocab_size (4 bytes): number of serialized vocab records.
+    // Serialized record count (4 bytes): number of records that follow.
+    // This is NOT tokenizer vocab size.
     // Layout special records are included first so saved vocabs expose the
     // reserved IDs without making them learned tokenizer pieces.
-    uint32_t config_vocab_size = static_cast<uint32_t>(NUM_SPECIAL_TOKENS + pieces_.size());
-    bin_file.write(reinterpret_cast<const char*>(&config_vocab_size), 4);
+    uint32_t serialized_record_count = static_cast<uint32_t>(NUM_SPECIAL_TOKENS + pieces_.size());
+    bin_file.write(reinterpret_cast<const char*>(&serialized_record_count), 4);
     
     // Max length (4 bytes)
     uint32_t max_length = MAX_PIECE_LENGTH;
@@ -603,10 +570,9 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format, float
     char flags[3] = {0, 0, 0};
     bin_file.write(flags, 3);
     
-    // Actual vocab size including special+byte+atom offsets (4 bytes)
-    uint32_t total_vocab_size = static_cast<uint32_t>(
-        NUM_SPECIAL_TOKENS + BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE + pieces_.size());
-    bin_file.write(reinterpret_cast<const char*>(&total_vocab_size), 4);
+    // Token-space size including special+byte+atom offsets (4 bytes).
+    uint32_t token_space_size = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET + pieces_.size());
+    bin_file.write(reinterpret_cast<const char*>(&token_space_size), 4);
     
     if (score_multiplier != 1.0f) {
         std::cout << "[UnigramLM] Applying vocab_score_multiplier=" << score_multiplier << " to all piece scores on save" << std::endl;
@@ -634,8 +600,8 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format, float
     }
     
     bin_file.close();
-    std::cout << "[UnigramLM] Saved binary vocab (" << total_vocab_size
-              << " embedding vocab = " << NUM_SPECIAL_TOKENS << " special + "
+    std::cout << "[UnigramLM] Saved binary vocab (token-space size=" << token_space_size
+              << " = " << NUM_SPECIAL_TOKENS << " special + "
               << BYTE_VOCAB_SIZE << " bytes + " << ATOM_VOCAB_SIZE
               << " atom type placeholders + " << pieces_.size()
               << " unigram pieces) to " << bin_path << std::endl;
@@ -817,195 +783,24 @@ std::string UnigramLM::decode(const std::vector<int>& token_ids) const {
     std::string result;
     
     for (int tid : token_ids) {
-        
-        if (isSpecialTokenId(tid)) {
-            // Special token display path. Training layout still belongs to sliding-window/batching code.
-            if (tid == UNK_TOKEN_ID) result += specialTokenText(tid);
-            else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
-            else result += specialTokenText(tid);
-        } else if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
+        if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
             // Byte token (subtract BYTE_TOKEN_OFFSET to get raw byte)
             result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
         } else if (tid >= UNIGRAM_VOCAB_OFFSET) {
             // Unigram token
             const UnigramPiece* p = getPiece(tid);
-            if (p) {
-                result += p->text;
+            if (!p) {
+                throw std::runtime_error("UnigramLM::decode: unigram token_id=" + std::to_string(tid) +
+                                         " has no backing UnigramPiece");
             }
+            result += p->text;
+        } else {
+            throw std::runtime_error("UnigramLM::decode: token_id=" + std::to_string(tid) +
+                                     " is outside byte/unigram primitive ranges; use UniByte::decode for layout-aware decoding");
         }
-        // Atom tokens are handled by ScratchBlock
     }
     
     return denormalizeSpaces(result);
-}
-
-void UnigramLM::capVocabSize(int max_size) {
-    if (max_size >= static_cast<int>(pieces_.size())) {
-        return;  // Already smaller than cap
-    }
-    
-    if (max_size < 4) {
-        throw std::runtime_error("capVocabSize: max_size must be >= 4 to include minimum vocabulary");
-    }
-    
-    // Sort pieces by score (descending) to keep most frequent.
-    // User-defined learned pieces are retained regardless of score.
-    std::vector<size_t> indices(pieces_.size());
-    std::iota(indices.begin(), indices.end(), 0);
-    
-    std::stable_sort(indices.begin(), indices.end(), [this](size_t a, size_t b) {
-        // User-defined learned pieces always come first.
-        if (pieces_[a].is_user_defined != pieces_[b].is_user_defined) {
-            return pieces_[a].is_user_defined;  // user-defined = true sorts before false
-        }
-        return pieces_[a].score > pieces_[b].score;  // Higher score = more frequent
-    });
-    
-    // Keep top max_size pieces
-    std::vector<UnigramPiece> new_pieces;
-    new_pieces.reserve(max_size);
-    
-    std::unordered_map<std::string, int> new_piece_to_id;
-    
-    for (int i = 0; i < max_size && i < static_cast<int>(indices.size()); ++i) {
-        UnigramPiece piece = pieces_[indices[i]];
-        // Token ID is always UNIGRAM_VOCAB_OFFSET + index — no field to reassign.
-        new_piece_to_id[piece.text] = static_cast<int>(new_pieces.size());
-        new_pieces.push_back(piece);
-    }
-    
-    pieces_ = std::move(new_pieces);
-    piece_to_id_ = std::move(new_piece_to_id);
-    
-    // Rebuild trie for fast encoding (uses new token_ids)
-    buildTrie();
-    
-    std::cout << "[UnigramLM] Capped vocab to " << pieces_.size() << " pieces" << std::endl;
-}
-
-//--------------------------------------------------//
-// GPU Implementation
-//--------------------------------------------------//
-
-bool UnigramLM::initGPU() {
-    if (gpu_->initialized) return true;
-    
-    if (trie_.empty()) {
-        buildTrie();
-    }
-    
-    return uploadTrieToGPU();
-}
-
-bool UnigramLM::uploadTrieToGPU() {
-    cudaError_t err;
-    size_t num_nodes = trie_.size();
-    
-    // Helper lambda for cleanup on failure
-    auto cleanup = [this]() {
-        if (gpu_->d_trie_children) { cudaFree(gpu_->d_trie_children); gpu_->d_trie_children = nullptr; }
-        if (gpu_->d_trie_token_ids) { cudaFree(gpu_->d_trie_token_ids); gpu_->d_trie_token_ids = nullptr; }
-        if (gpu_->d_trie_scores) { cudaFree(gpu_->d_trie_scores); gpu_->d_trie_scores = nullptr; }
-        if (gpu_->d_piece_data) { cudaFree(gpu_->d_piece_data); gpu_->d_piece_data = nullptr; }
-        if (gpu_->d_piece_offsets) { cudaFree(gpu_->d_piece_offsets); gpu_->d_piece_offsets = nullptr; }
-        if (gpu_->d_piece_lengths) { cudaFree(gpu_->d_piece_lengths); gpu_->d_piece_lengths = nullptr; }
-        if (gpu_->d_viterbi_scores) { cudaFree(gpu_->d_viterbi_scores); gpu_->d_viterbi_scores = nullptr; }
-        if (gpu_->d_viterbi_prev) { cudaFree(gpu_->d_viterbi_prev); gpu_->d_viterbi_prev = nullptr; }
-        if (gpu_->d_viterbi_tokens) { cudaFree(gpu_->d_viterbi_tokens); gpu_->d_viterbi_tokens = nullptr; }
-    };
-    
-    // Allocate trie arrays
-    err = cudaMalloc(&gpu_->d_trie_children, num_nodes * 256 * sizeof(int));
-    if (err != cudaSuccess) {
-        std::cerr << "[UnigramLM] Failed to allocate trie_children" << std::endl;
-        return false;
-    }
-    
-    err = cudaMalloc(&gpu_->d_trie_token_ids, num_nodes * sizeof(int));
-    if (err != cudaSuccess) {
-        cleanup();
-        return false;
-    }
-    
-    err = cudaMalloc(&gpu_->d_trie_scores, num_nodes * sizeof(float));
-    if (err != cudaSuccess) {
-        cleanup();
-        return false;
-    }
-    
-    // Flatten and upload trie data
-    std::vector<int> children_flat(num_nodes * 256);
-    std::vector<int> token_ids_flat(num_nodes);
-    std::vector<float> scores_flat(num_nodes);
-    
-    for (size_t i = 0; i < num_nodes; ++i) {
-        for (int c = 0; c < 256; ++c) {
-            children_flat[i * 256 + c] = trie_[i].children[c];
-        }
-        token_ids_flat[i] = trie_[i].token_id;
-        scores_flat[i] = trie_[i].score;
-    }
-    
-    cudaMemcpy(gpu_->d_trie_children, children_flat.data(), 
-               num_nodes * 256 * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(gpu_->d_trie_token_ids, token_ids_flat.data(),
-               num_nodes * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(gpu_->d_trie_scores, scores_flat.data(),
-               num_nodes * sizeof(float), cudaMemcpyHostToDevice);
-    
-    gpu_->num_nodes = static_cast<int>(num_nodes);
-    
-    // Upload piece data for decoding
-    size_t total_piece_length = 0;
-    for (const auto& p : pieces_) {
-        total_piece_length += p.text.size();
-    }
-    
-    std::vector<char> piece_data(total_piece_length);
-    std::vector<int> piece_offsets(pieces_.size());
-    std::vector<int> piece_lengths(pieces_.size());
-    
-    size_t offset = 0;
-    for (size_t i = 0; i < pieces_.size(); ++i) {
-        piece_offsets[i] = static_cast<int>(offset);
-        piece_lengths[i] = static_cast<int>(pieces_[i].text.size());
-        std::copy(pieces_[i].text.begin(), pieces_[i].text.end(), 
-                  piece_data.begin() + offset);
-        offset += pieces_[i].text.size();
-    }
-    
-    err = cudaMalloc(&gpu_->d_piece_data, total_piece_length > 0 ? total_piece_length : 1);
-    if (err != cudaSuccess) { cleanup(); return false; }
-    
-    err = cudaMalloc(&gpu_->d_piece_offsets, pieces_.size() * sizeof(int));
-    if (err != cudaSuccess) { cleanup(); return false; }
-    
-    err = cudaMalloc(&gpu_->d_piece_lengths, pieces_.size() * sizeof(int));
-    if (err != cudaSuccess) { cleanup(); return false; }
-    
-    // Pre-allocate Viterbi workspace with fixed capacity
-    constexpr size_t MAX_SEQUENCE_LENGTH = HyperParameters::UNIGRAM_MAX_SEQUENCE_LENGTH;
-    gpu_->workspace_max_length = MAX_SEQUENCE_LENGTH;
-    
-    err = cudaMalloc(&gpu_->d_viterbi_scores, (MAX_SEQUENCE_LENGTH + 1) * sizeof(float));
-    if (err != cudaSuccess) { cleanup(); return false; }
-    
-    err = cudaMalloc(&gpu_->d_viterbi_prev, (MAX_SEQUENCE_LENGTH + 1) * sizeof(int));
-    if (err != cudaSuccess) { cleanup(); return false; }
-    
-    err = cudaMalloc(&gpu_->d_viterbi_tokens, (MAX_SEQUENCE_LENGTH + 1) * sizeof(int));
-    if (err != cudaSuccess) { cleanup(); return false; }
-    
-    cudaMemcpy(gpu_->d_piece_data, piece_data.data(), 
-               total_piece_length, cudaMemcpyHostToDevice);
-    cudaMemcpy(gpu_->d_piece_offsets, piece_offsets.data(),
-               pieces_.size() * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(gpu_->d_piece_lengths, piece_lengths.data(),
-               pieces_.size() * sizeof(int), cudaMemcpyHostToDevice);
-    
-    gpu_->initialized = true;
-    std::cout << "[UnigramLM] GPU initialized with " << num_nodes << " trie nodes" << std::endl;
-    return true;
 }
 
 } // namespace Tokenizer

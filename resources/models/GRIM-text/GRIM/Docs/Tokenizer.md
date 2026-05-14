@@ -4,6 +4,7 @@ Files: `resources/models/GRIM-text/Shared/UnigramByte/`
 - `GrimTokenizer.hpp` — alias to UniByte
 - `Detectors/` — raw-text detector parent class, registry, numeric detectors, whitespace/uppercase feature detectors
 - `Unigram.cu` — vocab + Viterbi
+- `UnigramGpuMemory.hpp/.cu` — `UnigramLM` CUDA buffer lifetime and GPU upload transactions
 
 ## Token layout
 | Range | Meaning |
@@ -11,9 +12,18 @@ Files: `resources/models/GRIM-text/Shared/UnigramByte/`
 | `[0, 3]` | Reserved layout special tokens (`UNK`, `PAD`, `BOS`, `EOS`) |
 | `[BYTE_TOKEN_OFFSET, BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE)` | Raw bytes (100% UTF-8 coverage) |
 | `[ATOM_TOKEN_OFFSET, UNIGRAM_VOCAB_OFFSET)` | Atom placeholders |
-| `[UNIGRAM_VOCAB_OFFSET, …)` | Unigram vocab |
+| `[UNIGRAM_VOCAB_OFFSET, …)` | Learned unigram pieces |
 
 Use `TokenLayout.hpp` / `Byte.hpp` constants and layout helpers for range checks; do not duplicate numeric offsets in runtime code.
+
+## Vocab-size ownership
+- `UniByte::vocabSize()` is the tokenizer's only public vocab-size API. It means the full token ID space: `UNIGRAM_VOCAB_OFFSET + UnigramLM::pieceCount()`.
+- `UnigramLM::pieceCount()` is a component count for learned subword pieces only; never use it to size model embeddings or GRMT headers.
+- `UnigramLM::save()` stores a `serialized_record_count` in `vocab.bin` so the vocab reader knows how many records to read. That field is not a vocab size.
+- `DataLoader.cu` writes `UniByte::vocabSize()` into the `.grmt` header when it encodes training data.
+- Phase 1 startup reads final training vocab size from the `.grmt` header and passes that value into model allocation. It must not derive training vocab size from `ai_config.json`, `vocab.bin`, or tokenizer internals.
+- `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic, header layout, version validation, and header write helpers. Consumers must call `readHeaderOrThrow()` / `readHeaderStatus()` / `writeHeaderOrThrow()` instead of open-coding magic/version reads.
+- Learned-piece pruning belongs inside tokenizer training before save. Do not add a post-load/post-save cap API; that creates a second vocab-size authority and can desynchronize `.grmt`, `vocab.bin`, tokenizer IDs, and model embeddings.
 
 Special-token ownership is deliberately narrow:
 - `TokenLayout.hpp` owns the reserved IDs and display metadata.
@@ -27,6 +37,15 @@ Special-token ownership is deliberately narrow:
 - `UniByte::tokenizeWithMetadata(text)` is the metadata tokenization path for callers that need atom side channels; it is intentionally not another `encode*` overload.
 - `UniByte::decode(DecodeRequest)` is the single high-level decode wrapper. Plain `decode(ids)` calls still work through `DecodeRequest`; atom-aware decode uses `decode(UniByteResult)` so repeated same-type atoms resolve through `atom_entry_ids` and `AtomTable`.
 - `ByteEncoder` and `UnigramLM` each expose exactly one `encode` and one `decode` primitive. Do not add pointer/vector/GPU overload chains back into these classes.
+- `UnigramLM::decode()` is a primitive for byte fallback + learned unigram tokens only. It must reject any token outside that primitive range; layout-aware decode belongs to `UniByte::decode(DecodeRequest)`.
+- Token type classification belongs to `TokenLayout`. Do not add `UniByte::isByteToken`, `UniByte::isAtomToken`, `UniByte::isUnigramToken`, or `UniByte::tokenToString` wrappers; callers that need diagnostics should use `tokenLayout()` and read pieces directly by token ID.
+
+## Memory / tokenization boundary
+- `Unigram.hpp` must not expose raw CUDA buffer layout. It forward-declares `UnigramGpuMemory` and stores it as an opaque owner.
+- `Unigram.cu` owns learned vocab I/O, trie semantics, CPU Viterbi, encode, decode, and tokenization behavior.
+- `UnigramGpuMemory.hpp/.cu` owns `UnigramLM` durable GPU buffers, `cudaMalloc`/`cudaFree`, host-to-device upload packing, and `UnigramLM::initGPU()` / `uploadTrieToGPU()` implementations.
+- GPU upload is transactional: build a fresh `UnigramGpuMemory` first, then move it into `UnigramLM` only after every allocation and copy succeeds.
+- Do not add raw CUDA pointer members, cleanup lambdas, or `cudaMalloc`/`cudaFree` blocks back into `Unigram.hpp` or `Unigram.cu`; extend `UnigramGpuMemory` instead.
 
 ## Hyperparameter grouping
 Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` directly from `HyperparameterGroupings.hpp`:
@@ -39,6 +58,7 @@ Do not hand-copy `TokenizerConfig` + `TrainingHyperparameters` fields into a tok
 
 ## Trie / detector registry construction
 - Trie is built from learned unigram pieces only. Layout special tokens are not trie entries.
+- Rebuild the trie only after the learned-piece set changes during load/train. Runtime startup must load the saved final vocab as-is, not mutate it to a new cap.
 - `UniByte::DetectorState` owns a `DetectorRegistry` built during construction, **not** lazily.
 - Raw-text detection must go through `DetectorRegistry`; do not call detector implementations directly from tokenizer runtime code.
 - Detectors operate on source byte offsets only. Token-ID checks stay in token-layout helpers such as `isSpecialTokenId`, `TokenLayout::isByte`, `TokenLayout::isAtom`, and `TokenLayout::isUnigram`.

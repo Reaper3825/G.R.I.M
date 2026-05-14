@@ -22,7 +22,6 @@ struct DataLoadInputs {
 struct DataInfo {
     std::string data_path;
     std::string vocab_path;
-    std::uint32_t tokenizer_vocab_size = 0;
     std::uint32_t actual_vocab_size = 0;
     std::size_t train_sequence_count = 0;
     std::size_t val_sequence_count = 0;
@@ -32,8 +31,7 @@ struct DataInfo {
 
 DataInfo summarizeDataInfoOrThrow(
     const DataLoadInputs& inputs,
-    const SequenceData& data,
-    std::uint32_t tokenizer_vocab_size);
+    const SequenceData& data);
 
 void DataInfoReady(TrainingContext& ctx);
 

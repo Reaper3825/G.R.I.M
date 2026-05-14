@@ -90,7 +90,7 @@ public:
     // Vocabulary Info
     //--------------------------------------------------//
     
-    int vocabSize() const { return BYTE_VOCAB_SIZE; }
+    int byteTokenCount() const { return BYTE_VOCAB_SIZE; }
     int tokenOffset() const { return BYTE_TOKEN_OFFSET; }
     
     // Get display string for a byte token (for debugging)

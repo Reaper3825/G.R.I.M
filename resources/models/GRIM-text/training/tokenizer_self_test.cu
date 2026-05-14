@@ -107,6 +107,33 @@ std::string summarizeIds(const std::vector<int>& ids, std::size_t max_preview = 
     return oss.str();
 }
 
+std::string tokenTextForDisplay(const GrimTokenizer& tokenizer, int token_id) {
+    const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
+    if (layout.isSpecial(token_id)) {
+        return GRIM::Tokenizer::specialTokenText(token_id);
+    }
+    if (layout.isByte(token_id)) {
+        const uint8_t byte_value = tokenizer.byteEncoder().tokenToByte(token_id);
+        return std::string(1, static_cast<char>(byte_value));
+    }
+    if (layout.isAtom(token_id)) {
+        std::string label = "<";
+        label += GRIM::Tokenizer::atomTypeName(GRIM::Tokenizer::tokenIdToAtomType(token_id));
+        label += ">";
+        return label;
+    }
+    if (layout.isUnigram(token_id)) {
+        const auto* piece = tokenizer.unigramLM().getPiece(token_id);
+        if (!piece) {
+            throw std::runtime_error("tokenizer_self_test: unigram token_id=" +
+                                     std::to_string(token_id) + " has no backing piece");
+        }
+        return piece->text;
+    }
+    throw std::runtime_error("tokenizer_self_test: token_id=" + std::to_string(token_id) +
+                             " is outside the GRMT/tokenizer vocab layout");
+}
+
 void printHeader(const std::string& title) {
     std::cout << "\n" << Color::BOLD << Color::CYAN;
     std::cout << "╔══════════════════════════════════════════════════════════════╗\n";
@@ -184,7 +211,7 @@ SectionResults runSection1_EncodingDecoding(GrimTokenizer& tokenizer, bool verbo
                       << summarizeIds(ids) << "\n";
             std::cout << "  " << Color::CYAN << "Tokens: " << Color::RESET;
             for (size_t i = 0; i < ids.size() && i < 15; ++i) {
-                std::cout << "[" << ids[i] << ":" << escapeString(tokenizer.tokenToString(ids[i])) << "] ";
+                std::cout << "[" << ids[i] << ":" << escapeString(tokenTextForDisplay(tokenizer, ids[i])) << "] ";
             }
             if (ids.size() > 15) std::cout << "...";
             std::cout << "\n";
@@ -424,7 +451,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         if (verbose) {
             std::cout << "    Number tokens: ";
             for (size_t i = 0; i < ids.size(); ++i) {
-                std::cout << "[" << tokenizer.tokenToString(ids[i]) << "] ";
+                std::cout << "[" << tokenTextForDisplay(tokenizer, ids[i]) << "] ";
             }
             std::cout << "\n";
         }
@@ -440,7 +467,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
     {
         TestResult test;
         test.name = "Invalid token ID handling";
-        std::vector<int> bad_ids = {-1, 999999, tokenizer.totalVocabSize() + 100};
+        std::vector<int> bad_ids = {-1, 999999, tokenizer.vocabSize() + 100};
         test.output = tokenizer.decode(bad_ids);
         test.passed = true;  // Should not crash
         test.details = "Decoded invalid IDs to: \"" + escapeString(test.output) + "\"";
@@ -575,7 +602,7 @@ int main(int argc, char** argv) {
         }
         
         std::cout << "\n" << Color::GREEN << "✓ Loaded tokenizer" << Color::RESET << "\n";
-        std::cout << "  Vocab size: " << tokenizer.totalVocabSize() << "\n";
+        std::cout << "  Vocab size: " << tokenizer.vocabSize() << "\n";
         std::cout << "  Special tokens: PAD=" << GRIM::Tokenizer::PAD_TOKEN_ID 
               << " UNK=" << GRIM::Tokenizer::UNK_TOKEN_ID
               << " BOS=" << GRIM::Tokenizer::BOS_TOKEN_ID 

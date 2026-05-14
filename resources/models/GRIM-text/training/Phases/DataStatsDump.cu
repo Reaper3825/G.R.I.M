@@ -118,10 +118,7 @@ void dumpDataStats(
     rows.reserve(20);
     rows.emplace_back("data_path",            snap.data_path);
     rows.emplace_back("vocab_path",           snap.vocab_path);
-    rows.emplace_back("tokenizer_vocab_size", std::to_string(snap.tokenizer_vocab_size));
     rows.emplace_back("actual_vocab_size",    std::to_string(snap.actual_vocab_size));
-    rows.emplace_back("vocab_match",
-        (snap.tokenizer_vocab_size == snap.actual_vocab_size) ? "OK" : "MISMATCH");
     rows.emplace_back("train_sequence_count", std::to_string(snap.train_sequence_count));
     rows.emplace_back("val_sequence_count",   std::to_string(snap.val_sequence_count));
     appendMemoryStats(snap, rows);

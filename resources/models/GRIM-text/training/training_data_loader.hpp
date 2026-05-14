@@ -9,9 +9,8 @@
 #include <algorithm>
 #include <random>
 #include <filesystem>
-#include <optional>
 #include <unordered_map>
-#include "../Common/grim_model_serialization_version.hpp"
+#include "../Shared/GRMT/GrmtFormat.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"  // Tokenizer metadata and AtomTable
 #include "../Shared/Execution/ExecutionMetadata.hpp"
 
@@ -47,29 +46,6 @@ struct TrainingSequence {
 };
 
 //======================================================//
-//  Sequence accessor by id
-//======================================================//
-struct TrainingSampleView {
-    uint32_t seq_id;
-    const std::vector<int>* tokens;
-    const std::vector<int>* targets;
-    const std::vector<float>* token_numeric_values;
-    const std::vector<uint8_t>* token_atom_mask;
-    const std::vector<uint32_t>* token_atom_flags;
-    std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
-    const std::vector<uint32_t>* atom_entry_ids;
-
-    // Compiled structured-execution payload access.
-    // execution_active is the authoritative activation bit.
-    // Downstream batching/validation consumes these without re-reading the source.
-    bool execution_active = false;
-    const std::vector<int32_t>* token_exec_slots = nullptr;
-    const std::vector<GRIM::Execution::TeacherStep>* teacher_steps = nullptr;
-    const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings = nullptr;
-    const std::vector<GRIM::Execution::SlotSelectionTarget>* slot_selection_targets = nullptr;
-};
-
-//======================================================//
 //  Training Data Loader
 //======================================================//
 
@@ -92,64 +68,6 @@ bool load(const std::string& path) {
     const std::vector<TrainingSequence>& getSequences() const { return sequences_; }
     size_t size() const { return sequences_.size(); }
     uint32_t vocabSize() const { return vocab_size_; } // Vocab size from training data file
-
-    // Validate sequences against current tokenizer vocab size
-    bool validateVocabSize(uint32_t tokenizer_vocab_size, std::ostream& err_stream) const {
-        if (vocab_size_ != tokenizer_vocab_size) {
-            err_stream << "\n========================================\n";
-            err_stream << "FATAL: Vocab size mismatch!\n";
-            err_stream << "  Training data (.grmt): " << vocab_size_ << " tokens\n";
-            err_stream << "  Current tokenizer:     " << tokenizer_vocab_size << " tokens\n";
-            err_stream << "\nThis happens when tokenizer layout or GRMT format changes.\n";
-            err_stream << "The .grmt files contain OLD encoded sequences incompatible with NEW tokenizer.\n";
-            err_stream << "\n✅ SOLUTION: Delete .grmt files to force regeneration:\n";
-            err_stream << "  Remove-Item resources/models/GRIM-text/training/data/*.grmt -Force\n";
-            err_stream << "  Then re-run training - auto-prepare will regenerate with new encoding.\n";
-            err_stream << "========================================\n";
-            return false;
-        }
-        
-        // Validate that all token IDs in sequences are within vocab bounds
-        for (size_t i = 0; i < sequences_.size(); ++i) {
-            for (int token_id : sequences_[i].token_ids) {
-                if (token_id < 0 || static_cast<uint32_t>(token_id) >= vocab_size_) {
-                    err_stream << "FATAL: Sequence " << i << " contains out-of-bounds token ID " 
-                              << token_id << " (vocab_size=" << vocab_size_ << ")\n";
-                    return false;
-                }
-            }
-            // Also validate targets (when not masked)
-            for (size_t j = 0; j < sequences_[i].targets.size(); ++j) {
-                int target_id = sequences_[i].targets[j];
-                if (target_id >= 0 && static_cast<uint32_t>(target_id) >= vocab_size_) {
-                    err_stream << "FATAL: Sequence " << i << " position " << j 
-                              << " contains out-of-bounds target ID " 
-                              << target_id << " (vocab_size=" << vocab_size_ << ")\n";
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-
-    // Direct sample view by seq_id in the current sequence order.
-    std::optional<TrainingSampleView> getSample(uint32_t seq_id) {
-        if (seq_id >= sequences_.size()) return std::nullopt;
-        const auto& seq = sequences_[seq_id];
-        return TrainingSampleView{seq_id,
-                                  &seq.token_ids,
-                                  &seq.targets,
-                                  &seq.token_numeric_values,
-                                  &seq.token_atom_mask,
-                                  &seq.token_atom_flags,
-                                  seq.atom_table,
-                                  &seq.atom_entry_ids,
-                                  seq.execution_active,
-                                  &seq.token_exec_slots,
-                                  &seq.teacher_steps,
-                                  &seq.compiled_bootstrap_bindings,
-                                  &seq.slot_selection_targets};
-    }
     
 private:
     bool loadGRMTFormat(const std::string& path) {
@@ -159,28 +77,12 @@ private:
   return false;
    }
         
-        uint32_t magic;
-   file.read(reinterpret_cast<char*>(&magic), 4);
-        if (magic != 0x474D5254) {
-    std::cerr << "Invalid GRMT file (magic: 0x" << std::hex << magic << std::dec << ")" << std::endl;
-    std::cerr << "If you recently changed tokenizer layout, delete .grmt files and regenerate:" << std::endl;
-    std::cerr << "  Remove-Item resources/models/GRIM-text/training/data/*.grmt" << std::endl;
-    return false;
-        }
-      
-        uint32_t version, num_sequences, vocab_size;
-        file.read(reinterpret_cast<char*>(&version), 4);
-      file.read(reinterpret_cast<char*>(&num_sequences), 4);
-      file.read(reinterpret_cast<char*>(&vocab_size), 4);
+                const GRIM::GRMT::Header header = GRIM::GRMT::readHeaderOrThrow(file, path);
+                const uint32_t version = header.version;
+                const uint32_t num_sequences = header.num_sequences;
+                const uint32_t vocab_size = header.vocab_size;
         
         vocab_size_ = vocab_size; // Store vocab size from file
-        
-        // GRMT format version must match GRMT_FORMAT_VERSION (single source of truth in grim_model_serialization_version.hpp)
-        if (version != GRIM::GRMT_FORMAT_VERSION) {
-            std::cerr << "[DataLoader] FATAL: Unsupported GRMT version " << version
-                      << " (required: " << GRIM::GRMT_FORMAT_VERSION << "). Delete .grmt files and regenerate training data." << std::endl;
-            return false;
-        }
 
         std::cout << "[DataLoader] GRMT version " << version << std::endl;
      std::cout << "[DataLoader] Sequences: " << num_sequences << std::endl;

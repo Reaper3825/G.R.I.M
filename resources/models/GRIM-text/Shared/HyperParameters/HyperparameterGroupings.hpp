@@ -690,7 +690,6 @@ inline LanguageModelConfig startupLanguageModelConfig(
     cfg.max_seq_len = config.max_seq_len;
     cfg.vocab_size = static_cast<int>(vocab_size);
     cfg.vocab_path = config.paths.vocab_path;
-    cfg.infer_vocab_from_file = true;
 
     // GRIM-text training invariants. These are not caller fallbacks; they are
     // the single startup policy for this executable.
@@ -721,7 +720,6 @@ inline LanguageModelConfig inferenceLanguageModelConfig(
     cfg.max_seq_len = config.max_seq_len;
     cfg.vocab_size = static_cast<int>(vocab_size);
     cfg.vocab_path = vocab_path;
-    cfg.infer_vocab_from_file = true;
 
     cfg.execution_mode = ModelExecutionMode::INFERENCE;
     cfg.causal_mask = true;

@@ -659,15 +659,16 @@ std::string UniByte::decode(const DecodeRequest& request) const {
     }
 
     std::string result;
+    const TokenLayout layout = tokenLayout();
     for (size_t i = 0; i < request.token_count; ++i) {
         const int tid = request.token_ids[i];
-        if (isSpecialTokenId(tid)) {
+        if (layout.isSpecial(tid)) {
             appendDecodedLayoutToken(result, tid);
-        } else if (isByteToken(tid)) {
+        } else if (layout.isByte(tid)) {
             appendDecodedByteToken(result, tid);
-        } else if (isAtomToken(tid)) {
+        } else if (layout.isAtom(tid)) {
             appendDecodedAtomToken(result, request, i, tid);
-        } else if (isUnigramToken(tid)) {
+        } else if (layout.isUnigram(tid)) {
             appendDecodedUnigramToken(result, unigram_, tid);
         } else {
             throw std::runtime_error("UniByte::decode: token_id=" + std::to_string(tid) +
@@ -683,11 +684,7 @@ std::string UniByte::decode(const DecodeRequest& request) const {
 //--------------------------------------------------//
 
 int UniByte::vocabSize() const {
-    return unigram_.vocabSize();
-}
-
-int UniByte::totalVocabSize() const {
-    return NUM_SPECIAL_TOKENS + BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE + unigram_.vocabSize();
+    return UNIGRAM_VOCAB_OFFSET + unigram_.pieceCount();
 }
 
 TokenLayout UniByte::tokenLayout() const {
@@ -695,53 +692,8 @@ TokenLayout UniByte::tokenLayout() const {
     layout.num_special = NUM_SPECIAL_TOKENS;          // from Byte.hpp (live constexpr)
     layout.num_bytes   = BYTE_VOCAB_SIZE;             // from Byte.hpp (live constexpr)
     layout.num_atoms   = ATOM_VOCAB_SIZE;             // from Unigram.hpp (inline, set by configureTokenLayout)
-    layout.num_unigram = unigram_.vocabSize();        // from UnigramLM (actual loaded piece count)
+    layout.num_unigram = unigram_.pieceCount();      // learned subword piece count
     return layout;
-}
-
-void UniByte::capVocabSize(int max_vocab) {
-    // max_vocab = max number of UNIGRAM PIECES (same semantics as tokenizer.vocab_size
-    // in ai_config.json).  Specials, bytes, and atoms are always included on top.
-    // The old code subtracted the fixed offset here, but that made max_vocab_size=10000
-    // cap to 9723 pieces when vocab_size=10000 trained exactly 10000 — creating a
-    // mismatch between the GRMT file (encoded with 10000 pieces) and the Phase1
-    // tokenizer (capped to 9723).  Now the semantics match: if you train 10000 pieces
-    // and set max_vocab_size=10000, no capping occurs.
-    if (max_vocab <= 0) {
-        throw std::runtime_error("max_vocab must be > 0");
-    }
-    unigram_.capVocabSize(max_vocab);
-}
-
-bool UniByte::isByteToken(int token_id) const {
-    return token_id >= BYTE_TOKEN_OFFSET && token_id < ATOM_TOKEN_OFFSET;
-}
-
-bool UniByte::isAtomToken(int token_id) const {
-    return token_id >= ATOM_TOKEN_OFFSET && token_id < UNIGRAM_VOCAB_OFFSET;
-}
-
-bool UniByte::isUnigramToken(int token_id) const {
-    return token_id >= UNIGRAM_VOCAB_OFFSET;
-}
-
-std::string UniByte::tokenToString(int token_id) const {
-    if (isSpecialTokenId(token_id)) return specialTokenText(token_id);
-
-    if (isByteToken(token_id)) {
-        return byte_encoder_.tokenToString(token_id);
-    } else if (isAtomToken(token_id)) {
-        AtomType type = tokenIdToAtomType(token_id);
-        if (type == AtomType::ATOM_INT) return "<INT>";
-        if (type == AtomType::ATOM_FLOAT) return "<FLOAT>";
-        return "<ATOM>";
-    } else if (isUnigramToken(token_id)) {
-        const UnigramPiece* piece = unigram_.getPiece(token_id);
-        if (piece) {
-            return piece->text;
-        }
-    }
-    return "<UNK>";
 }
 
 
