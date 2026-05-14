@@ -245,21 +245,6 @@ void computeMTPAuxiliaryLosses(
     diagnostics.valid = !diagnostics.head_loss.empty();
 }
 
-//========================================================================
-// MTP gradient helpers
-//========================================================================
-
-void zeroMTPGradients(LanguageModel& model, cudaStream_t stream) {
-    if (model.getMtpK() <= 0) return;
-    for (int k = 0; k < model.getMtpK(); ++k) {
-        LanguageModel::MTPHead* head = model.getMtpHead(k);
-        if (head) {
-            if (head->weight.data) head->weight.zero_grad(stream);
-            if (head->bias.data) head->bias.zero_grad(stream);
-        }
-    }
-}
-
 bool verifyMTPGradients(const LanguageModel& model) {
     if (model.getMtpK() <= 0) return true;
     bool ok = true;

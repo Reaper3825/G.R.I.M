@@ -274,7 +274,8 @@ public:
     void initInferenceState(); // Initialize inference state (allocate GPU buffers WITHOUT gradients)
     // backward() and zeroGrad() DELETED (Rule 26).
     // Backward: Use autogradTrainingStep() which does forward+loss+backward.
-    // Zeroing: executeAutogradBackward() zeros all gradients when accumulate=false.
+    // Zeroing: executeAutogradBackward() zeros registered ParameterGroup gradients
+    // through TensorContract when accumulate=false.
     // updateWeights(), resetOptimizerMoments(), scaleOptimizerMoments() MOVED to
     // AdamW_Kernal_GPU.{hpp,cu} as free functions: launchAdamWStep(), resetAdamWMoments(),
     // scaleAdamWMoments(). AdamW stepping is training infrastructure, not model logic.

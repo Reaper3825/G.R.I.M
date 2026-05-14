@@ -1055,6 +1055,13 @@ inline float* ParameterGroup::v_state() const   { return v_tensor ? v_tensor->da
 inline size_t ParameterGroup::size()    const   { return tensor->numel(); }
 inline size_t ParameterGroup::size_bytes() const { return size() * sizeof(float); }
 
+/**
+ * Zero every registered trainable parameter gradient in the ParameterGroup
+ * inventory. The registry is the single source of truth for optimizer-visible
+ * parameter gradients; training orchestration must not walk layer internals.
+ */
+void zeroParameterGradients(std::vector<ParameterGroup>& groups, cudaStream_t stream);
+
 }  // namespace GRIM (temporarily close for cuBLAS forward decl)
 
 //======================================================//

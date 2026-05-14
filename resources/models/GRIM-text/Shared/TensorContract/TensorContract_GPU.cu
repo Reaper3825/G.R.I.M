@@ -977,9 +977,65 @@ void Tensor::zero_grad(cudaStream_t exec_stream) {
         return;  // Nothing to zero
     }
     
-    cudaStream_t s = exec_stream ? exec_stream : stream;
+    const char* tensor_name = name;
+    if (tensor_name == nullptr) {
+        tensor_name = "unnamed";
+    }
+    cudaStream_t s = exec_stream;
+    if (s == nullptr) {
+        s = stream;
+    }
+    if (s == nullptr) {
+        throw std::runtime_error(std::string("Tensor::zero_grad: stream is NULL for tensor '") +
+                                 tensor_name +
+                                 "' - caller MUST provide valid CUDA stream");
+    }
     const size_t count = shape.total_elements();
     kernel_zero_autograd<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, count);
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        throw std::runtime_error(std::string("Tensor::zero_grad: kernel launch failed for tensor '") +
+                                 tensor_name +
+                                 "': " + cudaGetErrorString(launch_error));
+    }
+}
+
+void zeroParameterGradients(std::vector<ParameterGroup>& groups, cudaStream_t stream) {
+    if (groups.empty()) {
+        throw std::runtime_error(
+            "[zeroParameterGradients] parameter groups are empty - caller MUST run startup parameter registration first");
+    }
+    if (stream == nullptr) {
+        throw std::runtime_error(
+            "[zeroParameterGradients] stream is NULL - caller MUST provide valid CUDA stream");
+    }
+
+    for (size_t i = 0; i < groups.size(); ++i) {
+        ParameterGroup& group = groups[i];
+        if (!group.tensor) {
+            throw std::runtime_error("[zeroParameterGradients] group '" + group.name +
+                                     "' idx=" + std::to_string(i) +
+                                     " has NULL tensor - registration is corrupt");
+        }
+        Tensor& tensor = *group.tensor;
+        if (!tensor.data) {
+            throw std::runtime_error("[zeroParameterGradients] group '" + group.name +
+                                     "' idx=" + std::to_string(i) +
+                                     " has NULL data - registration is corrupt");
+        }
+        if (tensor.numel() == 0) {
+            throw std::runtime_error("[zeroParameterGradients] group '" + group.name +
+                                     "' idx=" + std::to_string(i) +
+                                     " has zero elements - registration is corrupt");
+        }
+        if (!tensor.has_grad()) {
+            throw std::runtime_error("[zeroParameterGradients] group '" + group.name +
+                                     "' idx=" + std::to_string(i) +
+                                     " has NULL grad buffer - TensorContract gradient lifecycle is broken");
+        }
+
+        tensor.zero_grad(stream);
+    }
 }
 
 void Tensor::accumulate_grad(const float* incoming_grad, size_t count, float scale, cudaStream_t exec_stream) {

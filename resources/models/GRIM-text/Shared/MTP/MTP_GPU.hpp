@@ -70,12 +70,6 @@ void computeMTPAuxiliaryLosses(
 );
 
 /**
- * Zero MTP head weight and bias gradients.
- * Called at the start of executeAutogradBackward.
- */
-void zeroMTPGradients(LanguageModel& model, cudaStream_t stream);
-
-/**
  * Verify that all MTP head gradients are connected (non-NULL .grad).
  * @return true if all gradients are present (or MTP disabled), false if any missing
  */

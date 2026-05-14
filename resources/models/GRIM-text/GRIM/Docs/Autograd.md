@@ -42,6 +42,9 @@ When kernel B reads data written by kernel A via `atomicAdd`, you MUST `cudaStre
 ## Gradient norm sync
 `cudaStreamSynchronize` inside `computeGradNorm` drains the entire backward pipeline. Pass `sync_for_host_read=false` for non-logging steps; only sync when logging gradient components.
 
+## Registered parameter gradient lifecycle
+Parameter gradient zeroing is owned by the TensorContract `ParameterGroup` inventory. `executeAutogradBackward()` calls `zeroParameterGradients(model.parameterGroups(), stream)` only when `accumulate=false`; it must not enumerate embedding, LM-head, encoder, MTP, execution-block, selector, or reasoning-head tensors directly. Adding a trainable tensor means registering it in `Startup/Model/ParameterGroupRegistration.{hpp,cu}` so optimizer stepping, clipping, diagnostics, and zeroing all see the same source of truth.
+
 ## Gradient connectivity verification
 `verifyGradientsAreConnected()` scans each checked gradient tensor in full when computing finite/nonzero/RMS diagnostics. Do not reintroduce prefix sampling caps: a zero prefix (for example the first rows of `attnWqkv.grad`) is not evidence that the full parameter tensor missed gradient signal.
 

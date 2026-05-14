@@ -33,7 +33,7 @@ The `cached_encoder_output`, `cached_logits_tensor`, `cached_targets_tensor`, `c
 |----------|--------|
 | CUDA streams | `training_state.stream_ctrl.getPrimaryStream()` |
 | cuBLAS handle | `training_state.cublas_handle` (`CublasHandleOwner`; create with `outParam()`, borrow as raw `cublasHandle_t` through `.get()`) |
-| Parameter gradients | `Tensor.grad_` via `ctx.model->zeroGradients()` / `ctx.model->backward()` |
+| Parameter gradients | `Tensor.grad_` via registered `ParameterGroup` tensors; zero with `zeroParameterGradients(model.parameterGroups(), stream)` at the accumulation-window boundary |
 | Optimizer states | Not TrainingState-owned; `Training::OptimizerContext::optimizer_state` owns Adam/RAdam moment tensors and `Startup/Model/ParameterGroupRegistration` binds them to `LanguageModel` parameter groups. |
 
 Generation state is a separate owner:

@@ -483,7 +483,6 @@ BackwardResult executeAutogradBackward(
     }
     
     auto* ts = ctx.training_state;
-    const auto* cfg = ctx.config;
     auto& intermediates = ts->autograd_intermediates;
     if (!intermediates.loss_tensor.data) {
         throw std::runtime_error("executeAutogradBackward: Loss tensor not initialized - call computeAutogradLoss() first");
@@ -492,112 +491,17 @@ BackwardResult executeAutogradBackward(
     if (!intermediates.loss_tensor.grad_fn) {
         throw std::runtime_error("executeAutogradBackward: Loss tensor has no grad_fn - autograd chain broken");
     }
+    if (!ctx.model) {
+        throw std::runtime_error("executeAutogradBackward: model is NULL - registered parameter gradient lifecycle requires LanguageModel");
+    }
     
     AG_INFO("Executing backward pass (accumulate=" << accumulate << ", scale=" << grad_scale << ")");
 
-    // Zero gradients if not accumulating
-    // ISSUE #59: Use has_grad() and grad_data() accessors
+    // Parameter gradients are lifecycle-managed through the registered
+    // TensorContract ParameterGroup inventory. AutogradTraining must not walk
+    // layer internals or special-case optional heads here.
     if (!accumulate) {
-        // Top-level parameters (Pattern B: owned by EmbeddingLayer)
-        ctx.embedding_layer->tokenWeights().zero_grad(ctx.stream);
-
-        // LM Head parameters (Pattern B: owned by persistent LMHeadLayer)
-        ctx.lm_head->weights().zero_grad(ctx.stream);
-        ctx.lm_head->bias().zero_grad(ctx.stream);
-        // γ_final may be frozen (lm_head_freeze_final_rms_gamma=true) — in that case
-        // it has no grad tensor and zero_grad would no-op; gate explicitly for clarity.
-        if (ctx.lm_head->finalRmsGamma().requires_grad) {
-            ctx.lm_head->finalRmsGammaMutable_UnfrozenOnly("AutogradTraining::zero_grad")
-                .zero_grad(ctx.stream);
-        }
-
-        // Encoder parameters
-        if (ctx.gpu_encoder) {
-            const int num_layers = ctx.gpu_encoder->getNumLayers();
-            for (int layer = 0; layer < num_layers; ++layer) {
-                auto* enc = ctx.gpu_encoder->getLayer(layer);
-                if (!enc) continue;
-                enc->rms1Gamma().zero_grad(ctx.stream);
-                enc->rms2Gamma().zero_grad(ctx.stream);
-                // Issue #148: Sandwich norm gammas REMOVED
-                enc->attnWqkv().zero_grad(ctx.stream);
-                enc->attnBqkv().zero_grad(ctx.stream);
-                enc->attnWo().zero_grad(ctx.stream);
-                enc->attnBo().zero_grad(ctx.stream);
-                enc->ffnWGate().zero_grad(ctx.stream);
-                enc->ffnW1().zero_grad(ctx.stream);
-                enc->ffnW2().zero_grad(ctx.stream);
-                enc->ffnB2().zero_grad(ctx.stream);
-                enc->layerScale1().zero_grad(ctx.stream);
-                enc->layerScale2().zero_grad(ctx.stream);
-            }
-        }
-
-        // ScratchBlock parameters
-        if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
-            ctx.scratch_block->atomTypeEmbeddings().zero_grad(ctx.stream);
-            ctx.scratch_block->atomProjection().zero_grad(ctx.stream);
-        }
-
-        // Numeric head parameters
-        // MTP head parameters
-        if (ctx.model) {
-            GRIM::MTP::zeroMTPGradients(*ctx.model, ctx.stream);
-        }
-
-        // ExecutionBlock parameters
-        if (ctx.execution_block && cfg->execution_block_enabled) {
-            auto& eb = *ctx.execution_block;
-            eb.w_decode_1().zero_grad(ctx.stream);
-            eb.b_decode_1().zero_grad(ctx.stream);
-            eb.w_decode_2().zero_grad(ctx.stream);
-            eb.w_arg1_select().zero_grad(ctx.stream);
-            eb.w_arg2_select().zero_grad(ctx.stream);
-            eb.W_op_select().zero_grad(ctx.stream);
-            eb.W_key_proj().zero_grad(ctx.stream);
-            eb.W_write_query().zero_grad(ctx.stream);
-            eb.W_write_key().zero_grad(ctx.stream);
-            eb.alpha().zero_grad(ctx.stream);
-            eb.beta().zero_grad(ctx.stream);
-            eb.step_embeddings().zero_grad(ctx.stream);
-            eb.type_num_embed().zero_grad(ctx.stream);
-            eb.W_value_to_emb().zero_grad(ctx.stream);
-            eb.b_value_to_emb().zero_grad(ctx.stream);
-            eb.w_inject_gate().zero_grad(ctx.stream);
-            eb.W_Q_read().zero_grad(ctx.stream);
-            eb.W_K_read().zero_grad(ctx.stream);
-            eb.W_V_read().zero_grad(ctx.stream);
-            eb.W_O_read().zero_grad(ctx.stream);
-            eb.W_gate_read().zero_grad(ctx.stream);
-            eb.tau().zero_grad(ctx.stream);
-            eb.E_slot().zero_grad(ctx.stream);
-            eb.E_op().zero_grad(ctx.stream);
-            eb.W_scal().zero_grad(ctx.stream);
-            eb.b_scal().zero_grad(ctx.stream);
-            eb.W_trace().zero_grad(ctx.stream);
-            eb.b_trace().zero_grad(ctx.stream);
-            eb.W_reason_gate().zero_grad(ctx.stream);
-            eb.W_trace_gate().zero_grad(ctx.stream);
-        }
-
-        // DecodeTimeSlotSelector parameters
-        if (ctx.model && cfg->selector_enabled) {
-            auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
-            if (selector) {
-                selector->W_q_select().zero_grad(ctx.stream);
-                selector->W_k_select().zero_grad(ctx.stream);
-                selector->null_key_select().zero_grad(ctx.stream);
-                selector->null_logit_bias().zero_grad(ctx.stream);
-            }
-        }
-
-        // ReasoningHead parameters
-        if (ctx.reasoning_head) {
-            ctx.reasoning_head->W_op().zero_grad(ctx.stream);
-            ctx.reasoning_head->b_op().zero_grad(ctx.stream);
-            ctx.reasoning_head->w_arg1().zero_grad(ctx.stream);
-            ctx.reasoning_head->w_arg2().zero_grad(ctx.stream);
-        }
+        GRIM::zeroParameterGradients(ctx.model->parameterGroups(), ctx.stream);
     }
     
     // Call backward on the text loss (single loss path)
