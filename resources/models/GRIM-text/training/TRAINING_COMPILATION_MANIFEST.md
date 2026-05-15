@@ -87,12 +87,17 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Shared/UnigramByte/Unigram.cu** ✅ AUDITED
   - Unigram Language Model tokenizer (statistical subword segmentation)
-  - Viterbi decoding for optimal segmentation
+  - Learned vocab semantics, trie construction, and encode/decode wrappers
   - **CRITICAL**: Trie-based prefix matching for fast encoding
   - Pattern to check: Verify `buildTrie()` called in constructor (NOT lazy)
-  - Pattern to check: Search for `addPiece()` with explicit token_id (Rule 20: no auto-ID fallback)
+  - Pattern to check: Search for `writePiece()` paths that bypass `VocabWriteOp.hpp` (Rule 20: no split vocab writes)
+  - **STALE CODE CHECK**: Learned-vocab vector/map writes are centralized in `Shared/UnigramByte/VocabWriteOp.hpp`
+
+- [x] **Shared/UnigramByte/UnigramViterbi.cu** ✅ AUDITED
+  - RAII Viterbi segmentation session for optimal subword path selection
+  - Owns per-run dynamic-programming buffers and backtrack validation
   - Pattern to check: Verify Viterbi kernel runs SEQUENTIALLY (O(n) dependency, NOT parallelized across positions)
-  - **STALE CODE CHECK**: Auto-ID `addPiece()` overload confirmed DELETED (line 463 comment)
+  - Pattern to check: Viterbi reads the built trie but never mutates learned vocab storage
 
 - [x] **Shared/UnigramByte/UniByte.cu** ✅ AUDITED
   - Combined Unigram + Byte fallback (GrimTokenizer alias)

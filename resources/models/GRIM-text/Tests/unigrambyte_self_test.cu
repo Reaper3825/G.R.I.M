@@ -13,6 +13,7 @@
 #include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <iostream>
 #include <set>
 #include <vector>
@@ -20,6 +21,28 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+
+namespace GRIM {
+namespace Tokenizer {
+
+__global__ void kernelViterbiForward(
+    const char* __restrict__ text,
+    size_t length,
+    const int* __restrict__ trie_children,
+    const int* __restrict__ trie_token_ids,
+    const float* __restrict__ trie_scores,
+    int num_trie_nodes,
+    float* __restrict__ viterbi_scores,
+    int* __restrict__ viterbi_prev,
+    int* __restrict__ viterbi_tokens,
+    bool* __restrict__ needs_fallback,
+    int unk_id,
+    float unk_score,
+    bool enable_byte_fallback
+);
+
+} // namespace Tokenizer
+} // namespace GRIM
 
 using namespace GRIM::Tokenizer;
 using namespace GRIM::Test;
@@ -40,21 +63,21 @@ static ::GRIM::HyperParameters::TokenizerHP makeSelfTestTokenizerHP() {
     return hp;
 }
 
-// Helper: add minimal ▁-prefixed vocab to a UniByte tokenizer so viterbi() has a valid trie.
-// Without this, viterbi() crashes (Rule 20: trie_ must not be empty).
+// Helper: add minimal ▁-prefixed vocab to a UniByte tokenizer so UnigramViterbiSession has a valid trie.
+// Without this, Viterbi segmentation crashes (Rule 20: trie_ must not be empty).
 static void addMinimalVocab(UniByte& tok) {
-    tok.unigramLM().addPiece("\xe2\x96\x81" "the",     -1.0f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "is",      -1.1f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "price",   -1.2f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "dollars", -1.3f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "on",      -1.4f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "for",     -1.5f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "more",    -1.6f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "info",    -1.7f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "us",      -1.8f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "at",      -1.9f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "meeting", -2.0f, false);
-    tok.unigramLM().addPiece("\xe2\x96\x81" "Count",   -2.1f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "the",     -1.0f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "is",      -1.1f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "price",   -1.2f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "dollars", -1.3f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "on",      -1.4f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "for",     -1.5f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "more",    -1.6f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "info",    -1.7f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "us",      -1.8f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "at",      -1.9f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "meeting", -2.0f, false);
+    tok.unigramLM().writePiece("\xe2\x96\x81" "Count",   -2.1f, false);
     tok.unigramLM().buildTrie();
 }
 
@@ -140,21 +163,21 @@ bool testByteUTF8(std::string& message) {
 bool testUnigramBuildVocab(std::string& message) {
     UnigramLM unigram;
     
-    // Build a simple vocabulary using addPiece
+    // Build a simple vocabulary using the canonical writePiece entrypoint.
     // Token IDs must start after pre-existing special tokens (unk, pad, bos, eos)
-    unigram.addPiece("hello", -1.0f, false);
-    unigram.addPiece("world", -1.2f, false);
-    unigram.addPiece("he", -2.0f, false);
-    unigram.addPiece("llo", -2.5f, false);
-    unigram.addPiece("wo", -2.3f, false);
-    unigram.addPiece("rld", -2.8f, false);
-    unigram.addPiece("h", -3.0f, false);
-    unigram.addPiece("e", -3.1f, false);
-    unigram.addPiece("l", -3.2f, false);
-    unigram.addPiece("o", -3.3f, false);
-    unigram.addPiece("w", -3.4f, false);
-    unigram.addPiece("r", -3.5f, false);
-    unigram.addPiece("d", -3.6f, false);
+    unigram.writePiece("hello", -1.0f, false);
+    unigram.writePiece("world", -1.2f, false);
+    unigram.writePiece("he", -2.0f, false);
+    unigram.writePiece("llo", -2.5f, false);
+    unigram.writePiece("wo", -2.3f, false);
+    unigram.writePiece("rld", -2.8f, false);
+    unigram.writePiece("h", -3.0f, false);
+    unigram.writePiece("e", -3.1f, false);
+    unigram.writePiece("l", -3.2f, false);
+    unigram.writePiece("o", -3.3f, false);
+    unigram.writePiece("w", -3.4f, false);
+    unigram.writePiece("r", -3.5f, false);
+    unigram.writePiece("d", -3.6f, false);
     
         // Only learned pieces are stored in UnigramLM::pieces_; specials are layout metadata.
         ASSERT_EQ(unigram.pieceCount(), 13, "Learned piece count mismatch");
@@ -167,13 +190,13 @@ bool testUnigramEncode(std::string& message) {
     
     // Build vocabulary with log probabilities
     // Start after pre-existing special tokens
-    unigram.addPiece("hello", -1.0f, false);  // Most likely for "hello"
-    unigram.addPiece("he", -2.0f, false);
-    unigram.addPiece("llo", -2.5f, false);
-    unigram.addPiece("h", -3.0f, false);
-    unigram.addPiece("e", -3.1f, false);
-    unigram.addPiece("l", -3.2f, false);
-    unigram.addPiece("o", -3.3f, false);
+    unigram.writePiece("hello", -1.0f, false);  // Most likely for "hello"
+    unigram.writePiece("he", -2.0f, false);
+    unigram.writePiece("llo", -2.5f, false);
+    unigram.writePiece("h", -3.0f, false);
+    unigram.writePiece("e", -3.1f, false);
+    unigram.writePiece("l", -3.2f, false);
+    unigram.writePiece("o", -3.3f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = unigram.encode("hello");
@@ -189,12 +212,12 @@ bool testUnigramViterbi(std::string& message) {
     
     // Vocabulary where splitting is better than whole word
     // Start after pre-existing special tokens
-    unigram.addPiece("test", -5.0f, false);    // Whole word is worse
-    unigram.addPiece("te", -1.0f, false);      // Better to split
-    unigram.addPiece("st", -1.0f, false);
-    unigram.addPiece("t", -2.0f, false);
-    unigram.addPiece("e", -2.1f, false);
-    unigram.addPiece("s", -2.2f, false);
+    unigram.writePiece("test", -5.0f, false);    // Whole word is worse
+    unigram.writePiece("te", -1.0f, false);      // Better to split
+    unigram.writePiece("st", -1.0f, false);
+    unigram.writePiece("t", -2.0f, false);
+    unigram.writePiece("e", -2.1f, false);
+    unigram.writePiece("s", -2.2f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = unigram.encode("test");
@@ -210,8 +233,8 @@ bool testUnigramDecode(std::string& message) {
     
     // Start after pre-existing special tokens
     // Pieces use \xe2\x96\x81 (U+2581 ▁) prefix — SentencePiece whitespace normalization
-    unigram.addPiece("\xe2\x96\x81hello", -1.0f, false);
-    unigram.addPiece("\xe2\x96\x81world", -1.2f, false);
+    unigram.writePiece("\xe2\x96\x81hello", -1.0f, false);
+    unigram.writePiece("\xe2\x96\x81world", -1.2f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     // encode() normalizes "hello world" → "▁hello▁world", Viterbi matches ▁-prefixed pieces
@@ -229,8 +252,8 @@ bool testUnigramUnknown(std::string& message) {
     
     // Minimal vocab - will need byte fallback for some chars
     // Start after pre-existing special tokens
-    unigram.addPiece("a", -1.0f, false);
-    unigram.addPiece("b", -1.0f, false);
+    unigram.writePiece("a", -1.0f, false);
+    unigram.writePiece("b", -1.0f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     // Try to encode something not in vocab
@@ -518,8 +541,8 @@ bool testUniByteBasicEncode(std::string& message) {
     // Initialize with a simple vocab via unigramLM
     // Start after pre-existing special tokens
     // Pieces use ▁ (U+2581) prefix — SentencePiece whitespace normalization
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81hello", -1.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81world", -1.2f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81hello", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81world", -1.2f, false);
     tokenizer.unigramLM().buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = tokenizer.encode("hello world");
@@ -699,13 +722,13 @@ bool testUniByteRoundTrip(std::string& message) {
     
     // Pieces use ▁ (U+2581) prefix — SentencePiece whitespace normalization
     std::cout << "[RoundTrip] Adding pieces:\n";
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81the", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81the", -1.0f, false);
     std::cout << "  '▁the'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81quick", -1.5f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81quick", -1.5f, false);
     std::cout << "  '▁quick' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81" "brown", -1.6f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81" "brown", -1.6f, false);
     std::cout << "  '▁brown' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81" "fox", -1.7f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81" "fox", -1.7f, false);
     std::cout << "  '▁fox'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
     
     std::cout << "[RoundTrip] Final learned piece count = " << tokenizer.unigramLM().pieceCount() << "\n";
@@ -1076,14 +1099,14 @@ bool testFullPipeline(std::string& message) {
     // Add vocabulary via unigramLM
     // Start after pre-existing special tokens
     // Pieces use \xe2\x96\x81 (U+2581 ▁) prefix — SentencePiece whitespace normalization
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81the", -1.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81is", -1.1f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81price", -1.5f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81visit", -1.6f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81" "for", -1.7f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81more", -1.8f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81info", -1.9f, false);
-    tokenizer.unigramLM().addPiece(".", -0.6f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81the", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81is", -1.1f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81price", -1.5f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81visit", -1.6f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81" "for", -1.7f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81more", -1.8f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81info", -1.9f, false);
+    tokenizer.unigramLM().writePiece(".", -0.6f, false);
     
     // Mixed input: numbers become atoms, URLs remain plain text.
     std::string input = "The price is 42.99. Visit https://shop.com for 3 more info.";
@@ -1204,7 +1227,7 @@ bool testEdgeCaseOnlyWhitespace(std::string& message) {
     
     // After ▁ normalization, spaces become ▁ characters
     // Add ▁ piece to vocab so whitespace-only input has vocab matches
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81", -0.5f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81", -0.5f, false);
     tokenizer.unigramLM().buildTrie();
     
     std::string input = "   ";
@@ -1246,17 +1269,17 @@ bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
     UniByte tokenizer(config);
     
     // Add vocab pieces for common words — ▁-prefixed for SentencePiece normalization
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81This", -1.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81is", -1.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81not", -1.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81" "a", -1.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81special", -1.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81token", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81This", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81is", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81not", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81" "a", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81special", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81token", -1.0f, false);
     // Add the literal special token strings as regular vocab pieces
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81<unk>", -2.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81<s>", -2.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81</s>", -2.0f, false);
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81<pad>", -2.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81<unk>", -2.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81<s>", -2.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81</s>", -2.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81<pad>", -2.0f, false);
     tokenizer.unigramLM().buildTrie();
     
     // Input contains literal special token strings
@@ -1587,7 +1610,7 @@ bool testMixedVocabAndByteFallback(std::string& message) {
     UniByte tokenizer(config);
     
     // Add partial vocab — ▁-prefixed for SentencePiece whitespace normalization
-    tokenizer.unigramLM().addPiece("\xe2\x96\x81hello", -1.0f, false);
+    tokenizer.unigramLM().writePiece("\xe2\x96\x81hello", -1.0f, false);
     tokenizer.unigramLM().buildTrie();
     
     // Input has both vocab word and unknown
@@ -1631,9 +1654,9 @@ bool testVocabTextExportBinaryLoad(std::string& message) {
     
     auto config = makeSelfTestTokenizerHP();
     UniByte original(config);
-    original.unigramLM().addPiece("test", -1.0f, false);
-    original.unigramLM().addPiece("vocab", -1.5f, false);
-    original.unigramLM().addPiece("save", -2.0f, false);
+    original.unigramLM().writePiece("test", -1.0f, false);
+    original.unigramLM().writePiece("vocab", -1.5f, false);
+    original.unigramLM().writePiece("save", -2.0f, false);
     original.unigramLM().buildTrie();
     
     std::string grmt_path = "output/test_vocab_save.grmt";
@@ -1673,9 +1696,9 @@ bool testVocabSaveLoadBinary(std::string& message) {
     
     auto config = makeSelfTestTokenizerHP();
     UniByte original(config);
-    original.unigramLM().addPiece("binary", -1.0f, false);
-    original.unigramLM().addPiece("format", -1.5f, false);
-    original.unigramLM().addPiece("fast", -2.0f, false);
+    original.unigramLM().writePiece("binary", -1.0f, false);
+    original.unigramLM().writePiece("format", -1.5f, false);
+    original.unigramLM().writePiece("fast", -2.0f, false);
     original.unigramLM().buildTrie();
     
     std::string grmt_path = "output/test_vocab_binary.grmt";
@@ -1713,8 +1736,8 @@ bool testGPUUpload(std::string& message) {
     UnigramLM unigram;
     
     // Add vocab — ▁-prefixed for SentencePiece whitespace normalization
-    unigram.addPiece("\xe2\x96\x81gpu", -1.0f, false);
-    unigram.addPiece("\xe2\x96\x81" "decode", -1.5f, false);
+    unigram.writePiece("\xe2\x96\x81gpu", -1.0f, false);
+    unigram.writePiece("\xe2\x96\x81" "decode", -1.5f, false);
     unigram.buildTrie();
     
     // Init GPU
@@ -1729,6 +1752,172 @@ bool testGPUUpload(std::string& message) {
     std::string result = unigram.decode(tokens);
     ASSERT_STR_EQ(result, "gpu decode", "Decode mismatch after GPU upload");
     
+    return true;
+}
+
+static bool assertCudaSuccess(cudaError_t err, std::string& message, const char* label) {
+    if (err != cudaSuccess) {
+        message = std::string(label) + " failed: " + cudaGetErrorString(err);
+        return false;
+    }
+    return true;
+}
+
+static cudaError_t launchTestViterbiForward(
+    char* d_text,
+    size_t length,
+    int* d_trie_children,
+    int* d_trie_token_ids,
+    float* d_trie_scores,
+    int num_nodes,
+    float* d_viterbi_scores,
+    int* d_viterbi_prev,
+    int* d_viterbi_tokens,
+    bool* d_needs_fallback) {
+    int unk_id = UNK_TOKEN_ID;
+    float unk_score = UNKNOWN_SCORE;
+    bool enable_byte_fallback = true;
+    void* args[] = {
+        &d_text,
+        &length,
+        &d_trie_children,
+        &d_trie_token_ids,
+        &d_trie_scores,
+        &num_nodes,
+        &d_viterbi_scores,
+        &d_viterbi_prev,
+        &d_viterbi_tokens,
+        &d_needs_fallback,
+        &unk_id,
+        &unk_score,
+        &enable_byte_fallback
+    };
+    return cudaLaunchKernel(
+        reinterpret_cast<const void*>(&kernelViterbiForward),
+        dim3(1),
+        dim3(1),
+        args,
+        0,
+        nullptr);
+}
+
+bool testCudaViterbiForwardUsesForwardTrie(std::string& message) {
+    int device_count = 0;
+    cudaError_t err = cudaGetDeviceCount(&device_count);
+    if (err != cudaSuccess || device_count == 0) {
+        return true;
+    }
+
+    const int num_nodes = 3;
+    const int token_ab = UNIGRAM_VOCAB_OFFSET + 42;
+    std::vector<int> trie_children(static_cast<size_t>(num_nodes) * 256, -1);
+    std::vector<int> trie_token_ids(num_nodes, -1);
+    std::vector<float> trie_scores(num_nodes, UNKNOWN_SCORE);
+
+    trie_children[static_cast<size_t>(0) * 256 + static_cast<unsigned char>('a')] = 1;
+    trie_children[static_cast<size_t>(1) * 256 + static_cast<unsigned char>('b')] = 2;
+    trie_token_ids[2] = token_ab;
+    trie_scores[2] = -1.0f;
+
+    char* d_text = nullptr;
+    int* d_trie_children = nullptr;
+    int* d_trie_token_ids = nullptr;
+    float* d_trie_scores = nullptr;
+    float* d_viterbi_scores = nullptr;
+    int* d_viterbi_prev = nullptr;
+    int* d_viterbi_tokens = nullptr;
+    bool* d_needs_fallback = nullptr;
+
+    auto cleanup = [&]() {
+        cudaFree(d_text);
+        cudaFree(d_trie_children);
+        cudaFree(d_trie_token_ids);
+        cudaFree(d_trie_scores);
+        cudaFree(d_viterbi_scores);
+        cudaFree(d_viterbi_prev);
+        cudaFree(d_viterbi_tokens);
+        cudaFree(d_needs_fallback);
+    };
+
+    const size_t max_text_len = 2;
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_text), max_text_len), message, "cudaMalloc d_text")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_trie_children), trie_children.size() * sizeof(int)), message, "cudaMalloc d_trie_children")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_trie_token_ids), trie_token_ids.size() * sizeof(int)), message, "cudaMalloc d_trie_token_ids")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_trie_scores), trie_scores.size() * sizeof(float)), message, "cudaMalloc d_trie_scores")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_viterbi_scores), (max_text_len + 1) * sizeof(float)), message, "cudaMalloc d_viterbi_scores")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_viterbi_prev), (max_text_len + 1) * sizeof(int)), message, "cudaMalloc d_viterbi_prev")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_viterbi_tokens), (max_text_len + 1) * sizeof(int)), message, "cudaMalloc d_viterbi_tokens")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_needs_fallback), max_text_len * sizeof(bool)), message, "cudaMalloc d_needs_fallback")) { cleanup(); return false; }
+
+    if (!assertCudaSuccess(cudaMemcpy(d_trie_children, trie_children.data(), trie_children.size() * sizeof(int), cudaMemcpyHostToDevice), message, "cudaMemcpy d_trie_children")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(d_trie_token_ids, trie_token_ids.data(), trie_token_ids.size() * sizeof(int), cudaMemcpyHostToDevice), message, "cudaMemcpy d_trie_token_ids")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(d_trie_scores, trie_scores.data(), trie_scores.size() * sizeof(float), cudaMemcpyHostToDevice), message, "cudaMemcpy d_trie_scores")) { cleanup(); return false; }
+
+    const std::string matched_text = "ab";
+    if (!assertCudaSuccess(cudaMemcpy(d_text, matched_text.data(), matched_text.size(), cudaMemcpyHostToDevice), message, "cudaMemcpy matched text")) { cleanup(); return false; }
+    if (!assertCudaSuccess(launchTestViterbiForward(
+        d_text,
+        matched_text.size(),
+        d_trie_children,
+        d_trie_token_ids,
+        d_trie_scores,
+        num_nodes,
+        d_viterbi_scores,
+        d_viterbi_prev,
+        d_viterbi_tokens,
+        d_needs_fallback), message, "kernelViterbiForward matched launch")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaDeviceSynchronize(), message, "kernelViterbiForward matched sync")) { cleanup(); return false; }
+
+    std::vector<float> host_scores(max_text_len + 1, 0.0f);
+    std::vector<int> host_prev(max_text_len + 1, -1);
+    std::vector<int> host_tokens(max_text_len + 1, -1);
+    if (!assertCudaSuccess(cudaMemcpy(host_scores.data(), d_viterbi_scores, host_scores.size() * sizeof(float), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched scores")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(host_prev.data(), d_viterbi_prev, host_prev.size() * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched prev")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(host_tokens.data(), d_viterbi_tokens, host_tokens.size() * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched tokens")) { cleanup(); return false; }
+
+    if (host_prev[2] != 0 || host_tokens[2] != token_ab) {
+        message = "CUDA Viterbi did not match forward trie token 'ab': prev=" +
+                  std::to_string(host_prev[2]) + ", token=" + std::to_string(host_tokens[2]) +
+                  ", expected_token=" + std::to_string(token_ab);
+        cleanup();
+        return false;
+    }
+    if (std::abs(host_scores[2] - (-1.0f)) > 0.0001f) {
+        message = "CUDA Viterbi score mismatch for 'ab': got " + std::to_string(host_scores[2]);
+        cleanup();
+        return false;
+    }
+
+    const std::string fallback_text = "x";
+    if (!assertCudaSuccess(cudaMemcpy(d_text, fallback_text.data(), fallback_text.size(), cudaMemcpyHostToDevice), message, "cudaMemcpy fallback text")) { cleanup(); return false; }
+    if (!assertCudaSuccess(launchTestViterbiForward(
+        d_text,
+        fallback_text.size(),
+        d_trie_children,
+        d_trie_token_ids,
+        d_trie_scores,
+        num_nodes,
+        d_viterbi_scores,
+        d_viterbi_prev,
+        d_viterbi_tokens,
+        d_needs_fallback), message, "kernelViterbiForward fallback launch")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaDeviceSynchronize(), message, "kernelViterbiForward fallback sync")) { cleanup(); return false; }
+
+    bool host_needs_fallback = false;
+    if (!assertCudaSuccess(cudaMemcpy(host_prev.data(), d_viterbi_prev, 2 * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback prev")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(host_tokens.data(), d_viterbi_tokens, 2 * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback tokens")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(&host_needs_fallback, d_needs_fallback, sizeof(bool), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback marker")) { cleanup(); return false; }
+
+    const int expected_byte_token = BYTE_TOKEN_OFFSET + static_cast<int>(static_cast<unsigned char>('x'));
+    if (host_prev[1] != 0 || host_tokens[1] != expected_byte_token || !host_needs_fallback) {
+        message = "CUDA Viterbi byte fallback mismatch for 'x': prev=" +
+                  std::to_string(host_prev[1]) + ", token=" + std::to_string(host_tokens[1]) +
+                  ", expected_token=" + std::to_string(expected_byte_token);
+        cleanup();
+        return false;
+    }
+
+    cleanup();
     return true;
 }
 
@@ -1845,6 +2034,7 @@ int main(int argc, char** argv) {
     suite.addTest("Vocab.SaveLoadBinary", testVocabSaveLoadBinary);
     
     // Section 14: GPU Upload Tests
+    suite.addTest("GPU.ViterbiForwardTrie", testCudaViterbiForwardUsesForwardTrie);
     suite.addTest("GPU.Upload", testGPUUpload);
     
     // Run all tests

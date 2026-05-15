@@ -557,6 +557,7 @@ target_include_directories(train_gpu PRIVATE
 add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/Byte.cu
     ../../Shared/UnigramByte/Unigram.cu
+    ../../Shared/UnigramByte/UnigramViterbi.cu
     ../../Shared/UnigramByte/UnigramGpuMemory.cu
     ../../Shared/UnigramByte/UniByte.cu
     ../../Shared/UnigramByte/AtomTable.cu

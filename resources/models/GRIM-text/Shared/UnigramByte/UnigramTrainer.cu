@@ -17,7 +17,9 @@
 
 #include "Unigram.hpp"
 #include "TextUtils.hpp"
-#include "HyperParameters/HyperParameters_GPU.hpp"
+#include "UnigramViterbi.hpp"
+#include "VocabWriteOp.hpp"
+#include "HyperParameters/HyperparameterGroupings.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -642,8 +644,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                   return a.first < b.first;
               });
     
-    pieces_.clear();
-    piece_to_id_.clear();
+    clearUnigramVocab(
+        UnigramVocabWriteTarget{pieces_, piece_to_id_},
+        "UnigramLM::trainFromCorpus initial learned-vocab reset");
     
     size_t covered = 0;
     size_t coverage_target = static_cast<size_t>(total_chars * character_coverage);
@@ -1017,7 +1020,16 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     for (const auto& ap : accepted) {
         float score = static_cast<float>(std::log(ap.count / total_accepted_count));
-        addPiece(ap.text, score, false);
+        UnigramPiece piece;
+        piece.text = ap.text;
+        piece.score = score;
+        piece.is_user_defined = false;
+        applyUnigramVocabWriteOp(UnigramVocabWriteRequest{
+            UnigramVocabWriteTarget{pieces_, piece_to_id_},
+            std::move(piece),
+            tokenIdForIndex(static_cast<int>(pieces_.size())),
+            UnigramVocabWriteMode::AppendOnly,
+            "UnigramLM::trainFromCorpus candidate append"});
         added++;
     }
     
@@ -1067,10 +1079,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
             auto processSegment = [&](const std::string& segment) {
                 if (segment.empty()) return;
-                auto nodes = viterbi(segment);
-                log_likelihood += nodes.back().score;
-                auto tokens = backtrack(nodes, static_cast<int>(segment.size()));
-                for (int token_id : tokens) {
+                UnigramViterbiSession session(*this, segment, "UnigramLM::trainFromCorpus E-step");
+                log_likelihood += session.pathScore();
+                for (int token_id : session.tokens()) {
                     token_counts[token_id] += 1.0;
                     total_tokens += 1.0;
                 }
@@ -1148,14 +1159,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         return {std::move(last_counts), iter};
     };
 
-    // Helper: rebuild piece_to_id_ from pieces_ after any mutation
-    auto rebuildPieceIndex = [&]() {
-        piece_to_id_.clear();
-        for (size_t i = 0; i < pieces_.size(); ++i) {
-            piece_to_id_[pieces_[i].text] = static_cast<int>(i);
-        }
-    };
-
     // ---- Phase A: initial EM to convergence on seed vocab ----
     std::cout << "[UnigramLM] Phase-A: EM on seed vocab (" << pieces_.size()
               << " pieces, target=" << target_vocab_size << ")" << std::endl;
@@ -1227,8 +1230,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 surviving.push_back(std::move(pieces_[i]));
             }
         }
-        pieces_ = std::move(surviving);
-        rebuildPieceIndex();
+        rewriteUnigramVocab(
+            UnigramVocabWriteTarget{pieces_, piece_to_id_},
+            std::move(surviving),
+            "UnigramLM::trainFromCorpus shrink compaction");
 
         // Re-converge EM on the smaller vocab
         std::string label = "Shrink-" + std::to_string(shrink_round);
@@ -1266,9 +1271,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                     surviving.push_back(std::move(pieces_[i]));
                 }
             }
-            pieces_ = std::move(surviving);
             pruned = static_cast<int>(dead_indices.size());
-            rebuildPieceIndex();
+            rewriteUnigramVocab(
+                UnigramVocabWriteTarget{pieces_, piece_to_id_},
+                std::move(surviving),
+                "UnigramLM::trainFromCorpus final dead-token cleanup");
         } else {
             std::cout << "[UnigramLM] No dead tokens after shrinking — vocab is clean" << std::endl;
         }

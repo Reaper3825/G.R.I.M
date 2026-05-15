@@ -3,7 +3,8 @@
 Files: `resources/models/GRIM-text/Shared/UnigramByte/`
 - `GrimTokenizer.hpp` — alias to UniByte
 - `Detectors/` — raw-text detector parent class, registry, numeric detectors, whitespace/uppercase feature detectors
-- `Unigram.cu` — vocab + Viterbi
+- `Unigram.cu` — learned vocab, trie build, encode/decode wrappers
+- `UnigramViterbi.hpp/.cu` — RAII Viterbi segmentation session and Viterbi CUDA kernels
 - `UnigramGpuMemory.hpp/.cu` — `UnigramLM` CUDA buffer lifetime and GPU upload transactions
 
 ## Token layout
@@ -19,6 +20,8 @@ Use `TokenLayout.hpp` / `Byte.hpp` constants and layout helpers for range checks
 ## Vocab-size ownership
 - `UniByte::vocabSize()` is the tokenizer's only public vocab-size API. It means the full token ID space: `UNIGRAM_VOCAB_OFFSET + UnigramLM::pieceCount()`.
 - `UnigramLM::pieceCount()` is a component count for learned subword pieces only; never use it to size model embeddings or GRMT headers.
+- `Shared/UnigramByte/VocabWriteOp.hpp` is the single learned-unigram vocab mutation primitive. Any learned-piece append, upsert, or compaction must call it once so `pieces_`, `piece_to_id_`, and the position-derived token ID stay synchronized.
+- Direct writes to `pieces_` or `piece_to_id_` are forbidden outside `VocabWriteOp.hpp`; config-driven learned-vocab limits must be read from `GRIM::HyperParameters::TokenizerHP` in `HyperparameterGroupings.hpp`, not from raw config structs.
 - `TokenizerArtifacts/VocabArtifactIO.*` stores a `serialized_record_count` in `vocab.bin` so the vocab reader knows how many records to read. That field is not a vocab size.
 - `DataLoader.cu` writes `UniByte::vocabSize()` into the `.grmt` header when it encodes training data.
 - Phase 1 startup reads final training vocab size from the `.grmt` header and passes that value into model allocation. It must not derive training vocab size from `ai_config.json`, `vocab.bin`, or tokenizer internals.
@@ -50,7 +53,10 @@ Special-token ownership is deliberately narrow:
 
 ## Memory / tokenization boundary
 - `Unigram.hpp` must not expose raw CUDA buffer layout. It forward-declares `UnigramGpuMemory` and stores it as an opaque owner.
-- `Unigram.cu` owns learned vocab I/O, trie semantics, CPU Viterbi, encode, decode, and tokenization behavior.
+- `Unigram.cu` owns learned vocab I/O, trie construction, encode/decode wrappers, and primitive byte/unigram decode behavior.
+- `UnigramViterbi.hpp/.cu` owns per-segmentation RAII dynamic-programming state, Viterbi backtracking validation, punctuation isolation, and Viterbi CUDA kernels. `UnigramLM::encode()` and tokenizer-training E-steps must instantiate `UnigramViterbiSession` instead of open-coding Viterbi/backtrack loops.
+- CPU and CUDA Viterbi must consume the same forward trie: from each reachable start position, walk `text[pos]`, `text[pos + 1]`, ... through `children[c]`. Do not reverse-scan pieces unless the uploaded trie is explicitly changed to a reverse trie.
+- When byte fallback is enabled, Viterbi fallback emits `BYTE_TOKEN_OFFSET + byte`, never `UNK_TOKEN_ID`. Punctuation isolation also emits standalone byte tokens and must not merge punctuation into adjacent pieces.
 - `UnigramGpuMemory.hpp/.cu` owns `UnigramLM` durable GPU buffers, `cudaMalloc`/`cudaFree`, host-to-device upload packing, and `UnigramLM::initGPU()` / `uploadTrieToGPU()` implementations.
 - GPU upload is transactional: build a fresh `UnigramGpuMemory` first, then move it into `UnigramLM` only after every allocation and copy succeeds.
 - Do not add raw CUDA pointer members, cleanup lambdas, or `cudaMalloc`/`cudaFree` blocks back into `Unigram.hpp` or `Unigram.cu`; extend `UnigramGpuMemory` instead.
@@ -66,6 +72,7 @@ Do not hand-copy `TokenizerConfig` + `TrainingHyperparameters` fields into a tok
 
 ## Trie / detector registry construction
 - Trie is built from learned unigram pieces only. Layout special tokens are not trie entries.
+- Viterbi consumes the built trie as a read-only segmentation index; it does not create learned pieces or mutate vocab storage.
 - Rebuild the trie only after the learned-piece set changes during load/train. Runtime startup must load the saved final vocab as-is, not mutate it to a new cap.
 - `UniByte` owns a `DetectorRegistry` built during construction, **not** lazily.
 - Raw-text detection exists to mark source-byte spans before tokenization. Atom-emitting detectors (currently integer/float) become `StructuralSpan`s and `AtomTable` entries; non-atom detectors (currently whitespace/uppercase runs) are source-text features for diagnostics and future policies, not token IDs.

@@ -49,19 +49,12 @@ struct UnigramPiece {
     bool is_user_defined;  // High priority, never pruned
 };
 
-//======================================================//
-//  Viterbi Node (for decoding/encoding)
-//======================================================//
-struct ViterbiNode {
-    float score;           // Best score to reach this position
-    int prev_pos;          // Previous position in best path
-    int token_id;          // Token ID of piece ending here
-    int piece_length;      // Length of piece in bytes
-};
-
 // Durable CUDA buffer owner for UnigramLM. Kept out of this header so
 // tokenizer logic owns vocab/trie semantics while memory files own allocation.
 class UnigramGpuMemory;
+
+// Per-segmentation RAII owner for Viterbi dynamic-programming state.
+class UnigramViterbiSession;
 
 //======================================================//
 //  UnigramLM - Unigram Language Model Tokenizer
@@ -106,9 +99,9 @@ public:
                            int subword_mining_workers = 0,
                            size_t subword_mining_max_bytes = 0);
     
-    // Add a piece to vocab. Token ID is ALWAYS (UNIGRAM_VOCAB_OFFSET + pieces_.size()).
-    // No token_id parameter — the position IS the ID. This prevents collision bugs.
-    void addPiece(const std::string& text, float score, bool is_user_defined);
+    // Canonical public vocab write entrypoint. The actual storage mutation is
+    // performed by VocabWriteOp.hpp so pieces_ and piece_to_id_ stay synchronized.
+    void writePiece(const std::string& text, float score, bool is_user_defined);
     
     // Compute token_id for piece at given index in pieces_
     static int tokenIdForIndex(int index) { return UNIGRAM_VOCAB_OFFSET + index; }
@@ -162,6 +155,8 @@ public:
     void buildTrie();
 
 private:
+    friend class UnigramViterbiSession;
+
     // Vocabulary storage
     std::vector<UnigramPiece> pieces_;
     std::unordered_map<std::string, int> piece_to_id_;
@@ -186,12 +181,6 @@ private:
     
     // Upload trie to GPU
     bool uploadTrieToGPU();
-    
-    // Viterbi implementation
-    std::vector<ViterbiNode> viterbi(const std::string& text) const;
-    
-    // Backtrack Viterbi path
-    std::vector<int> backtrack(const std::vector<ViterbiNode>& nodes, int end_pos) const;
 };
 
 } // namespace Tokenizer

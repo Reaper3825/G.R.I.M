@@ -35,13 +35,15 @@ The public encode/decode surface is intentionally narrow:
 Read the tokenizer in this order:
 
 1. `UniByte.hpp` / `UniByte.cu` — top-level orchestration and public API
-2. `Unigram.hpp` / `Unigram.cu` — vocab, trie, Viterbi encode/decode, vocab I/O
-3. `UnigramGpuMemory.hpp` / `UnigramGpuMemory.cu` — durable CUDA buffer ownership for `UnigramLM`
-4. `AtomTable.hpp` / `AtomTable.cu` — parsed numeric atom registry
-5. `Detectors/` — `RawTextDetector` parent class, registry, numeric detectors, and text-feature detectors
-6. `Byte.hpp` / `Byte.cu` — byte fallback
-7. `TextUtils.hpp` / `TextUtils.cu` — normalization and UTF-8 helpers
-8. `UnigramTrainer.hpp` / `UnigramTrainer.cu` — training pipeline only
+2. `Unigram.hpp` / `Unigram.cu` — learned vocab, trie construction, encode/decode wrappers
+3. `UnigramViterbi.hpp` / `UnigramViterbi.cu` — RAII Viterbi segmentation session
+4. `VocabWriteOp.hpp` — the only primitive allowed to mutate learned unigram vocab storage/indexes
+5. `UnigramGpuMemory.hpp` / `UnigramGpuMemory.cu` — durable CUDA buffer ownership for `UnigramLM`
+6. `AtomTable.hpp` / `AtomTable.cu` — parsed numeric atom registry
+7. `Detectors/` — `RawTextDetector` parent class, registry, numeric detectors, and text-feature detectors
+8. `Byte.hpp` / `Byte.cu` — byte fallback
+9. `TextUtils.hpp` / `TextUtils.cu` — normalization and UTF-8 helpers
+10. `UnigramTrainer.hpp` / `UnigramTrainer.cu` — training pipeline only
 
 If you read it in a different order, the code starts to feel like a haunted house.
 
@@ -55,6 +57,8 @@ flowchart LR
 shared constants] --> BY[ByteEncoder]
     TL --> AT[AtomTable]
     TL --> UG[UnigramLM]
+   UV[UnigramViterbiSession
+RAII segmentation] --> UG
    UGM[UnigramGpuMemory
 CUDA buffer owner] --> UG
    DT[DetectorRegistry
@@ -64,14 +68,16 @@ orchestrator]
     AT --> UB
     UG --> UB
     TU[TextUtils] --> UG
+   UG --> UV
     UG --> UT[UnigramTrainer]
+   UV --> UT
 ```
 
 ### The mental model
 
 - `TokenLayout.hpp` is the shared foundation.
 - `UniByte` composes the rest; it should not re-implement their logic.
-- `UnigramTrainer.cu` is training-only; inference lives in `Unigram.cu`.
+- `UnigramTrainer.cu` is training-only; inference wrappers live in `Unigram.cu`, while Viterbi segmentation lives in `UnigramViterbi.cu`.
 - `Detectors/TokenizerDetector.hpp` is the parent interface for detectors that operate on raw text byte offsets only.
 - `Detectors/DetectorRegistry.*` owns detector registration, longest-match scanning, and atom `StructuralSpan` extraction; `UniByte.cu` only consumes registry-owned results.
 
@@ -92,6 +98,8 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 
 - `UniByte::vocabSize()` = full tokenizer token-space size (`UNIGRAM_VOCAB_OFFSET + pieceCount`). This is the value saved to the `.grmt` header during data preparation.
 - `UnigramLM::pieceCount()` = learned subword count only. It is allowed for diagnostics/layout summaries, not for model embedding allocation.
+- `VocabWriteOp.hpp` is the sole learned-piece write primitive. Call it for append/upsert/compaction; never push into `pieces_` or rebuild `piece_to_id_` by hand.
+- Config-driven learned-vocab limits come from `GRIM::HyperParameters::TokenizerHP` in `HyperparameterGroupings.hpp`.
 - `vocab.bin` contains a serialized record count for file I/O plus a token-space consistency check. Phase 1 startup does not use `vocab.bin` to choose final model vocab size.
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic/header read, validation, and write helpers. Do not duplicate header structs or magic/version checks in loaders, diagnostics, or subprocess tools.
 - `Shared/TokenizerArtifacts/TokenizerArtifactBundle.*` owns the cache pair (`vocab.bin` + `training_data.grmt`). Data prep must accept or rebuild that pair as a unit; do not reuse a lone vocab with a missing/stale GRMT.
@@ -117,7 +125,7 @@ flowchart LR
     DET --> REG[registerAtom in AtomTable]
     REG --> INJ[inject NUM placeholders]
     INJ --> NORM[normalizeSpaces]
-    NORM --> SEG[UnigramLM Viterbi]
+   NORM --> SEG[UnigramViterbiSession]
     SEG --> FB{piece found?}
     FB -->|yes| TOK[token ids]
     FB -->|no| BY[Byte fallback]
@@ -131,7 +139,7 @@ flowchart LR
 2. Each span is registered in `AtomTable` and gets metadata.
 3. The original text is rewritten with numeric placeholders before unigram segmentation.
 4. Text normalization happens before unigram segmentation.
-5. `UnigramLM` runs Viterbi over the normalized text.
+5. `UnigramLM::encode()` creates a `UnigramViterbiSession` over the normalized text.
 6. Any miss falls back to raw bytes through `ByteEncoder`.
 7. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
 
@@ -192,7 +200,9 @@ Use this table as the “who owns what?” map.
 | `Detectors/TextFeatureDetectors.hpp/.cu` | whitespace and uppercase raw-text feature detection | atom token emission, unigram segmentation |
 | `AhoCorasick.hpp/.cu` | multi-pattern prefix matching DFA | full numeric parsing, tokenizer output assembly |
 | `AtomTable.hpp/.cu` | parsed atom storage, dedup, GPU packing, numeric value access | subword segmentation |
-| `Unigram.hpp/.cu` | learned vocab, trie, Viterbi, unigram GPU encode/decode | artifact file I/O, detection policy, top-level orchestration, training boundary-token injection |
+| `Unigram.hpp/.cu` | learned vocab semantics, trie construction, encode/decode wrappers | raw learned-vocab vector/map mutation, Viterbi DP state, artifact file I/O, detection policy, top-level orchestration, training boundary-token injection |
+| `UnigramViterbi.hpp/.cu` | RAII Viterbi session, per-segmentation DP buffers, backtrack validation, punctuation isolation, Viterbi CUDA kernels | learned-vocab mutation, durable CUDA buffer lifetime, artifact serialization, detector policy |
+| `VocabWriteOp.hpp` | append/upsert/rewrite of learned unigram pieces plus `piece_to_id` synchronization and token-ID validation | training scoring, Viterbi, artifact serialization, model/GRMT vocab-size authority |
 | `UnigramGpuMemory.hpp/.cu` | `UnigramLM` CUDA buffer lifetime, transactional GPU upload, device pointer cleanup | vocab semantics, Viterbi scoring, token assembly, training |
 | `UnigramTrainer.hpp/.cu` | unigram training implementation | runtime encode path |
 | `UniByte.hpp/.cu` | composition layer, public API, metadata assembly | low-level detector implementations, training internals, `BOS`/`EOS`/`PAD` layout policy |
@@ -214,7 +224,8 @@ Use this table as the “who owns what?” map.
 | `AtomType` | `TokenLayout.hpp` | shared atom type enum |
 | `AtomSpan` | `Unigram.hpp` | training-only “skip this byte range” marker |
 | `UnigramPiece` | `Unigram.hpp` | one vocab piece with score |
-| `ViterbiNode` | `Unigram.hpp` | dynamic-programming state during segmentation |
+| `UnigramViterbiSession` | `UnigramViterbi.hpp` | RAII owner for one Viterbi segmentation pass |
+| `UnigramViterbiNode` | `UnigramViterbi.hpp` | dynamic-programming state during segmentation |
 | `UnigramGpuMemory` | `UnigramGpuMemory.hpp` | RAII owner for `UnigramLM` device buffers and upload state |
 | `AtomEntry` | `AtomTable.hpp` | cache-aligned stored atom record |
 | `AtomValue` | `AtomTable.hpp` | parsed value variant for atoms |
@@ -268,8 +279,12 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 
    The trie mirrors the current learned-piece set. Rebuild it after load/train mutations only; do not add post-load vocab capping paths.
 
+   CPU and CUDA Viterbi both walk this trie forward from each reachable start position (`text[pos]`, then `text[pos + 1]`, ...). The GPU upload is not a reverse trie; reverse-scanning candidate pieces breaks normal tokens like `ab`.
+
 3. **Byte fallback is the coverage guarantee.**
    If a piece is not found, tokenization must still succeed.
+
+   With byte fallback enabled, fallback transitions emit the raw byte token (`BYTE_TOKEN_OFFSET + byte`), not `UNK_TOKEN_ID`. Punctuation isolation follows the same standalone byte-token rule and must not merge punctuation into learned pieces.
 
 4. **Atom spans are skipped during training.**
    Training should not learn internal numeric formatting as normal subwords.

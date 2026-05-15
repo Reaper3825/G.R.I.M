@@ -3,6 +3,7 @@
 > **Goal:** Separation of concerns, eliminate overlaps, establish clear data flow.  
 > **Scope:** File-level reorganization only. No algorithm changes, no API changes.  
 > **Rule:** Every file earns its existence by owning exactly one responsibility.
+> **Status note:** Viterbi segmentation now lives in `UnigramViterbi.hpp/.cu` as a per-run RAII session; `Unigram.cu` owns learned-vocab/trie wrappers, not Viterbi DP state.
 
 ---
 
@@ -67,7 +68,8 @@ UnigramByte/
 ├── AtomTable.hpp            [MOD]  ~480 lines  — Remove #include "Unigram.hpp", include "TokenLayout.hpp" instead
 ├── AtomTable.cu             [MOD]  ~1100 lines — Delete dead parsers (~600 lines removed)
 ├── Unigram.hpp              [MOD]  ~250 lines  — Remove AtomType, token layout constants (moved to TokenLayout.hpp), include TokenLayout.hpp
-├── Unigram.cu               [MOD]  ~1100 lines — Inference only: Viterbi, trie, encode/decode, GPU upload, vocab I/O
+├── Unigram.cu               [MOD]  ~1100 lines — Learned vocab, trie, encode/decode wrappers, vocab I/O
+├── UnigramViterbi.hpp/.cu   [NEW]  ~400 lines  — RAII Viterbi session, DP buffers, Viterbi kernels
 ├── UnigramTrainer.hpp       [NEW]  ~40 lines   — trainFromCorpus() declaration, training config struct
 ├── UnigramTrainer.cu         [NEW]  ~1300 lines — trainFromCorpus(), subword mining, EM, noise filters, sentence segmentation
 ├── UniByte.hpp              [MOD]  ~340 lines  — public tokenizer API; no public detector methods; raw-text detection is registry-owned
@@ -107,7 +109,7 @@ AhoCorasick.hpp ←── TokenLayout.hpp (instead of including Unigram.hpp)
 - `normalizeSpaces()` / `denormalizeSpaces()` — SentencePiece ▁ normalization
 - `normalizeWithSpans()` — span-aware normalization (training only, but shares logic)
 - `isValidVocabCharacter()` — character validation for vocab building
-- `isPunctBoundary()` — punctuation isolation guard (used in Viterbi)
+- `isPunctBoundary()` — punctuation isolation guard (kept inside `UnigramViterbi.cu` with the Viterbi implementation)
 - `isValidSubword()` — subword validation
 
 **Why second:** These are pure utility functions with no state. Currently duplicated or forward-declared across files. Extracting them gives every file a clean import.

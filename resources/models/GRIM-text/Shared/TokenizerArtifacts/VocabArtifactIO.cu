@@ -145,7 +145,7 @@ void TokenizerVocabFile::readInto(GRIM::Tokenizer::UnigramLM& unigram) const {
                 ". Retrain tokenizer; do not patch the vocab header.");
         }
 
-        loaded.addPiece(text, score, false);
+        loaded.writePiece(text, score, false);
     }
 
     if (special_records_seen != GRIM::Tokenizer::NUM_SPECIAL_TOKENS) {
