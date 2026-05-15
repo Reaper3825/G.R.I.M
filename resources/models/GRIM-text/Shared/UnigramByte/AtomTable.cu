@@ -31,12 +31,7 @@ namespace {
 const char* atomCategoryName(AtomCategory category) {
     switch (category) {
         case AtomCategory::NUMERIC: return "NUMERIC";
-        case AtomCategory::TEMPORAL: return "TEMPORAL";
-        case AtomCategory::STRUCTURAL: return "STRUCTURAL";
-        case AtomCategory::STRING: return "STRING";
-        case AtomCategory::IDENTIFIER: return "IDENTIFIER";
         case AtomCategory::SYSTEM: return "SYSTEM";
-        case AtomCategory::GENERIC: return "GENERIC";
         default: return "UNKNOWN";
     }
 }
@@ -76,6 +71,40 @@ bool stringRefInBounds(const StringRef& ref, size_t pool_size) {
 
 bool atomTypeIsPersistable(AtomType type) {
     return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT;
+}
+
+bool containsWhitespace(std::string_view text) {
+    for (unsigned char c : text) {
+        if (std::isspace(c)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool atomValueMatchesType(AtomType type, const AtomValue& value) {
+    if (type == AtomType::ATOM_INT) {
+        return std::holds_alternative<AtomInteger>(value);
+    }
+    if (type == AtomType::ATOM_FLOAT) {
+        return std::holds_alternative<AtomFloat>(value);
+    }
+    return false;
+}
+
+bool atomValuesEquivalent(const AtomValue& a, const AtomValue& b) {
+    if (a.index() != b.index()) {
+        return false;
+    }
+    if (const auto* av = std::get_if<AtomInteger>(&a)) {
+        const auto& bv = std::get<AtomInteger>(b);
+        return av->value == bv.value && av->base == bv.base && av->has_sign == bv.has_sign;
+    }
+    if (const auto* av = std::get_if<AtomFloat>(&a)) {
+        const auto& bv = std::get<AtomFloat>(b);
+        return av->value == bv.value && av->has_exponent == bv.has_exponent && av->exponent == bv.exponent;
+    }
+    return false;
 }
 
 } // namespace
@@ -288,9 +317,7 @@ bool AtomTable::saveToTextFile(const std::string& path) const {
          << "category\t"
          << "origin\t"
          << "raw_len\t"
-         << "parsed_len\t"
          << "raw_text\t"
-         << "parsed_text\t"
          << "numeric_value\t"
          << "flags\t"
          << "confidence\t"
@@ -302,7 +329,6 @@ bool AtomTable::saveToTextFile(const std::string& path) const {
 
     for (const auto& entry : entries_) {
         std::string_view raw = getString(entry.raw_text_ref);
-        std::string_view parsed = getString(entry.parsed_ref);
 
         std::ostringstream hash_stream;
         hash_stream << "0x" << std::hex << entry.hash;
@@ -312,9 +338,7 @@ bool AtomTable::saveToTextFile(const std::string& path) const {
              << atomCategoryName(entry.category) << "\t"
              << atomOriginName(entry.origin) << "\t"
              << entry.raw_text_ref.length << "\t"
-             << entry.parsed_ref.length << "\t"
              << escapeForTsv(raw) << "\t"
-             << escapeForTsv(parsed) << "\t"
              << entry.numeric_value << "\t"
              << entry.flags << "\t"
              << entry.confidence << "\t"
@@ -383,8 +407,13 @@ bool AtomTable::loadFromFile(const std::string& path) {
         if (expected_idx != i) {
             return false;
         }
-        if (!stringRefInBounds(entry.raw_text_ref, pool.size()) ||
-            !stringRefInBounds(entry.parsed_ref, pool.size())) {
+        if (!stringRefInBounds(entry.raw_text_ref, pool.size())) {
+            return false;
+        }
+        if (entry.category != AtomCategory::NUMERIC && entry.category != AtomCategory::SYSTEM) {
+            return false;
+        }
+        if (entry.reserved_zero != 0) {
             return false;
         }
     }
@@ -534,25 +563,6 @@ uint32_t AtomTable::findExisting(AtomType type, uint64_t hash, std::string_view 
 // Helper Functions
 //--------------------------------------------------//
 
-namespace {
-std::string_view trimWhitespace(std::string_view text) {
-    size_t start = 0;
-    size_t end = text.size();
-    while (start < end && std::isspace(static_cast<unsigned char>(text[start]))) {
-        ++start;
-    }
-    while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
-        --end;
-    }
-    return text.substr(start, end - start);
-}
-
-bool needsSerialization(AtomType type) {
-    (void)type;
-    return false;
-}
-} // anonymous namespace
-
 //--------------------------------------------------//
 // Registration
 //--------------------------------------------------//
@@ -580,6 +590,16 @@ uint32_t AtomTable::registerAtom(AtomType type,
                                   const AtomValue& parsed_value,
                                   size_t source_start,
                                   size_t source_end) {
+    if (!atomValueMatchesType(type, parsed_value)) {
+        return UINT32_MAX;
+    }
+
+    std::string raw_text_str(raw_text);
+    ParseResult raw_parse = parseAtom(type, raw_text_str);
+    if (!raw_parse.success || !atomValuesEquivalent(parsed_value, raw_parse.value)) {
+        return UINT32_MAX;
+    }
+
     std::lock_guard<std::mutex> lock(mutex_);
     
     // Compute hash for deduplication
@@ -594,7 +614,6 @@ uint32_t AtomTable::registerAtom(AtomType type,
     // New atom - allocate entry
     // Entry IDs start at ATOM_TOKEN_BASE (side-channel index, not model token vocab)
     AtomEntry entry{};
-    entry.parsed_ref = StringRef(0, 0);
     entry.id = ATOM_TOKEN_BASE + next_id_;
     next_id_++;
     
@@ -617,16 +636,6 @@ uint32_t AtomTable::registerAtom(AtomType type,
     int64_t numeric_int_value = 0;
     uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
     packNumericValue(entry, parsed_value, numeric_float_value, numeric_int_value, numeric_kind);
-    
-    // Skip serialization for types where raw_text == parsed representation
-    if (needsSerialization(type)) {
-        // Use stack buffer to avoid heap allocation
-        char buffer[1024];
-        size_t len = atomValueSerialize(type, parsed_value, buffer, sizeof(buffer));
-        if (len > 0 && std::string_view(buffer, len) != raw_text) {
-            entry.parsed_ref = internString(buffer, len);
-        }
-    }
     
     // Index for fast lookup
     uint32_t new_id = entry.id;
@@ -686,7 +695,6 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     }
     
     AtomEntry entry{};
-    entry.parsed_ref = StringRef(0, 0);
     entry.id = ATOM_TOKEN_BASE + next_id_;
     next_id_++;
     entry.type = span.atom_type;
@@ -708,15 +716,6 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     int64_t numeric_int_value = 0;
     uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
     packNumericValue(entry, parsed, numeric_float_value, numeric_int_value, numeric_kind);
-    
-    // Skip serialization for types where raw_text == parsed representation
-    // Only serialize if we need a different string representation
-    if (needsSerialization(span.atom_type)) {
-        std::string serialized = atomValueToString(span.atom_type, parsed);
-        if (!serialized.empty() && serialized != raw_text) {
-            entry.parsed_ref = internString(serialized);
-        }
-    }
     
     // Index for fast lookup
     uint32_t new_id = entry.id;
@@ -812,21 +811,18 @@ bool AtomTable::hasAtom(uint32_t id) const {
 //--------------------------------------------------//
 
 ParseResult AtomTable::parseAtom(AtomType type, const std::string& text) {
-    std::string_view trimmed = trimWhitespace(text);
-    const std::string* parse_text = &text;
-    std::string trimmed_storage;
-    if (trimmed.size() != text.size()) {
-        trimmed_storage.assign(trimmed);
-        parse_text = &trimmed_storage;
-    }
-
     if (type == AtomType::ATOM_INT) {
-        return parseInteger(*parse_text);
+        return parseInteger(text);
     }
     if (type == AtomType::ATOM_FLOAT) {
-        return parseFloat(*parse_text);
+        return parseFloat(text);
     }
-    return ParseResult{true, AtomGeneric{*parse_text}, ""};
+    return ParseResult{
+        false,
+        AtomInteger{},
+        "Unsupported AtomTable atom type " + std::to_string(static_cast<int>(type)) +
+            "; only ATOM_INT and ATOM_FLOAT are supported"
+    };
 }
 
 //--------------------------------------------------//
@@ -839,6 +835,10 @@ ParseResult AtomTable::parseInteger(const std::string& text) {
     
     if (text.empty()) {
         result.error_message = "Empty input";
+        return result;
+    }
+    if (containsWhitespace(text)) {
+        result.error_message = "Whitespace inside numeric atom text";
         return result;
     }
     
@@ -874,6 +874,10 @@ ParseResult AtomTable::parseFloat(const std::string& text) {
     
     if (text.empty()) {
         result.error_message = "Empty input";
+        return result;
+    }
+    if (containsWhitespace(text)) {
+        result.error_message = "Whitespace inside numeric atom text";
         return result;
     }
     
@@ -918,16 +922,14 @@ ParseResult AtomTable::parseFloat(const std::string& text) {
 //--------------------------------------------------//
 
 std::string AtomTable::atomToString(const AtomEntry& entry) const {
-    // Return parsed string if available, otherwise raw text
-    std::string_view parsed_str = getString(entry.parsed_ref);
-    if (!parsed_str.empty()) {
-        return std::string(parsed_str);
-    }
+    // Atom decode is source round-trip only. Canonicalization belongs to data-quality tooling,
+    // not tokenizer storage or decode.
     return std::string(getString(entry.raw_text_ref));
 }
 
 // Serialize atom value directly to buffer (ZERO HEAP ALLOCATION!)
 size_t AtomTable::atomValueSerialize(AtomType type, const AtomValue& value, char* out, size_t max) {
+    (void)type;
     if (!out || max == 0) return 0;
     
     size_t written = 0;
@@ -960,17 +962,13 @@ size_t AtomTable::atomValueSerialize(AtomType type, const AtomValue& value, char
         else if constexpr (std::is_same_v<T, AtomFloat>) {
             written = snprintf(out, max, "%g", arg.value);
         }
-        else if constexpr (std::is_same_v<T, AtomGeneric>) {
-            size_t len = std::min(arg.raw_value.size(), max - 1);
-            memcpy(out, arg.raw_value.data(), len);
-            written = len;
-        }
     }, value);
     
     return (written < max) ? written : 0;  // Return 0 if truncated
 }
 
 std::string AtomTable::atomValueToString(AtomType type, const AtomValue& value) {
+    (void)type;
     std::ostringstream oss;
     
     std::visit([&](auto&& arg) {
@@ -996,20 +994,52 @@ std::string AtomTable::atomValueToString(AtomType type, const AtomValue& value) 
         else if constexpr (std::is_same_v<T, AtomFloat>) {
             oss << arg.value;
         }
-        else if constexpr (std::is_same_v<T, AtomGeneric>) {
-            oss << arg.raw_value;
-        }
     }, value);
     
     return oss.str();
 }
 
-double AtomTable::getNumericValue(const AtomEntry& entry) {
-    // Numeric value is already packed in the entry for GPU
-    if (isNumericAtom(entry.type)) {
-        return static_cast<double>(entry.numeric_value);
+std::optional<NumericPayload> AtomTable::getNumericValue(uint32_t id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (id < ATOM_TOKEN_BASE) {
+        return std::nullopt;
     }
-    return 0.0;
+    const uint32_t idx = id - ATOM_TOKEN_BASE;
+    if (idx >= entries_.size()) {
+        return std::nullopt;
+    }
+    if (idx >= numeric_float_values_.size() ||
+        idx >= numeric_int_values_.size() ||
+        idx >= numeric_kinds_.size()) {
+        throw std::runtime_error("AtomTable::getNumericValue numeric side-channel size mismatch for atom id=" +
+                                 std::to_string(id));
+    }
+
+    const AtomEntry& entry = entries_[idx];
+    if (entry.id != id) {
+        throw std::runtime_error("AtomTable::getNumericValue id/index mismatch for atom id=" +
+                                 std::to_string(id) + ", entry.id=" + std::to_string(entry.id));
+    }
+    if (!isNumericAtom(entry.type)) {
+        return std::nullopt;
+    }
+
+    const NumericPayloadKind kind = static_cast<NumericPayloadKind>(numeric_kinds_[idx]);
+    if (kind == NumericPayloadKind::NONE) {
+        return std::nullopt;
+    }
+    if (kind != NumericPayloadKind::INTEGER && kind != NumericPayloadKind::FLOAT) {
+        throw std::runtime_error("AtomTable::getNumericValue invalid numeric kind=" +
+                                 std::to_string(static_cast<int>(numeric_kinds_[idx])) +
+                                 " for atom id=" + std::to_string(id));
+    }
+
+    NumericPayload payload{};
+    payload.kind = kind;
+    payload.float_value = numeric_float_values_[idx];
+    payload.int_value = numeric_int_values_[idx];
+    return payload;
 }
 
 bool AtomTable::hasNumericValue(AtomType type) {
@@ -1022,7 +1052,9 @@ bool AtomTable::hasNumericValue(AtomType type) {
 
 AtomCategory AtomTable::getCategoryForType(AtomType type) {
     if (isNumericAtom(type)) return AtomCategory::NUMERIC;
-    return AtomCategory::GENERIC;
+    throw std::runtime_error("AtomTable::getCategoryForType unsupported atom type " +
+                             std::to_string(static_cast<int>(type)) +
+                             "; only ATOM_INT and ATOM_FLOAT are supported");
 }
 
 uint64_t AtomTable::computeHash(const AtomEntry& entry) const {
@@ -1119,20 +1151,21 @@ void AtomTable::packNumericValue(AtomEntry& entry,
 // Batch GPU Upload - Only uploads pending atoms
 //--------------------------------------------------//
 
-bool AtomTable::uploadToGPU(AtomTable::GPUAtomData& out_data, cudaStream_t stream) {
+bool AtomTable::uploadToGPU(cudaStream_t stream) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     // Only upload if there are pending changes
     if (!gpu_dirty_ || pending_gpu_upload_.empty()) {
-        out_data.num_atoms = entries_.size();
+        gpu_data_.num_atoms = entries_.size();
         return true;
     }
     
     size_t num_atoms = entries_.size();
     if (num_atoms == 0) {
-        freeGPUData(out_data);
-        out_data.num_atoms = 0;
+        freeGPUData(gpu_data_);
+        gpu_data_.num_atoms = 0;
         gpu_dirty_ = false;
+        pending_gpu_upload_.clear();
         return true;
     }
 
@@ -1221,33 +1254,11 @@ bool AtomTable::uploadToGPU(AtomTable::GPUAtomData& out_data, cudaStream_t strea
     temp.num_atoms = num_atoms;
     
     // Clear pending upload queue and mark clean
-    freeGPUData(out_data);
-    out_data = temp;
+    freeGPUData(gpu_data_);
+    gpu_data_ = temp;
     pending_gpu_upload_.clear();
     gpu_dirty_ = false;
     
-    return true;
-}
-
-// Convenience: Upload to internal GPU buffer
-bool AtomTable::uploadToGPU(cudaStream_t stream) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!gpu_dirty_ || pending_gpu_upload_.empty()) {
-            gpu_data_.num_atoms = entries_.size();
-            return true;
-        }
-    }
-
-    GPUAtomData new_data{};
-    if (!uploadToGPU(new_data, stream)) {
-        freeGPUData(new_data);
-        return false;
-    }
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    freeGPUData(gpu_data_);
-    gpu_data_ = new_data;
     return true;
 }
 

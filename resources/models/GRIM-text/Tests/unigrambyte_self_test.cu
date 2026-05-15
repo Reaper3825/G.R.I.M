@@ -845,9 +845,34 @@ bool testAtomTableRegisterInteger(std::string& message) {
     std::string raw_text(table.getString(entry->raw_text_ref));
     ASSERT_STR_EQ(raw_text, "12345", "Raw text mismatch");
     
-    // Check parsed value
-    double num = AtomTable::getNumericValue(*entry);
-    ASSERT_NEAR(num, 12345.0, 0.01, "Numeric value mismatch");
+    // Check exact parsed value through ID-based side-channel lookup.
+    auto numeric = table.getNumericValue(id);
+    ASSERT_TRUE(numeric, "Numeric payload missing");
+    ASSERT_EQ(static_cast<int>(numeric->kind), static_cast<int>(NumericPayloadKind::INTEGER),
+              "Integer numeric kind mismatch");
+    ASSERT_EQ(numeric->int_value, static_cast<int64_t>(12345), "Exact integer value mismatch");
+    ASSERT_NEAR(numeric->float_value, 12345.0, 0.01, "Integer float side-channel mismatch");
+
+    uint32_t large_id = table.registerAtom(AtomType::ATOM_INT, "9007199254740993", 0, 16);
+    auto large_numeric = table.getNumericValue(large_id);
+    ASSERT_TRUE(large_numeric, "Large integer numeric payload missing");
+    ASSERT_EQ(large_numeric->int_value, static_cast<int64_t>(9007199254740993LL),
+              "Public numeric getter must not round integer atoms through float");
+
+    uint32_t padded_id = table.registerAtom(AtomType::ATOM_INT, "001", 0, 3);
+    auto padded_entry = table.getAtom(padded_id);
+    ASSERT_TRUE(padded_entry, "Failed to retrieve padded integer atom");
+    ASSERT_STR_EQ(table.atomToString(*padded_entry), "001",
+                  "Atom stringification must preserve raw source text");
+    ASSERT_EQ(padded_entry->reserved_zero, static_cast<uint64_t>(0),
+              "AtomTable reserved padding must stay zero, not become canonical parsed text");
+
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, " 42", 0, 3), UINT32_MAX,
+              "Leading whitespace in numeric atom text must be rejected");
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "42 ", 0, 3), UINT32_MAX,
+              "Trailing whitespace in numeric atom text must be rejected");
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "4 2", 0, 3), UINT32_MAX,
+              "Internal whitespace in numeric atom text must be rejected");
     
     return true;
 }
@@ -860,8 +885,18 @@ bool testAtomTableRegisterFloat(std::string& message) {
     auto entry = table.getAtom(id);
     ASSERT_TRUE(entry, "Failed to retrieve atom");
     
-    double num = AtomTable::getNumericValue(*entry);
-    ASSERT_NEAR(num, 3.14159, 0.0001, "Float value mismatch");
+    auto numeric = table.getNumericValue(id);
+    ASSERT_TRUE(numeric, "Numeric payload missing");
+    ASSERT_EQ(static_cast<int>(numeric->kind), static_cast<int>(NumericPayloadKind::FLOAT),
+              "Float numeric kind mismatch");
+    ASSERT_NEAR(numeric->float_value, 3.14159, 0.0001, "Float value mismatch");
+
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_FLOAT, " 3.14159", 0, 8), UINT32_MAX,
+              "Leading whitespace in float atom text must be rejected");
+
+    AtomFloat wrong_float{2.0, false, 0};
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_FLOAT, AtomValue(wrong_float), "3.14159"), UINT32_MAX,
+              "Pre-parsed float payload must match raw atom text");
     
     return true;
 }
@@ -875,8 +910,9 @@ bool testAtomTableRegisterHex(std::string& message) {
     auto entry = table.getAtom(id);
     ASSERT_TRUE(entry, "Failed to retrieve atom");
     
-    double num = AtomTable::getNumericValue(*entry);
-    ASSERT_NEAR(num, 255.0, 0.01, "Integer value mismatch");
+    auto numeric = table.getNumericValue(id);
+    ASSERT_TRUE(numeric, "Numeric payload missing");
+    ASSERT_EQ(numeric->int_value, static_cast<int64_t>(255), "Integer value mismatch");
     
     return true;
 }
@@ -890,8 +926,9 @@ bool testAtomTableRegisterBinary(std::string& message) {
     auto entry = table.getAtom(id);
     ASSERT_TRUE(entry, "Failed to retrieve atom");
     
-    double num = AtomTable::getNumericValue(*entry);
-    ASSERT_NEAR(num, 10.0, 0.01, "Integer value mismatch");
+    auto numeric = table.getNumericValue(id);
+    ASSERT_TRUE(numeric, "Numeric payload missing");
+    ASSERT_EQ(numeric->int_value, static_cast<int64_t>(10), "Integer value mismatch");
     
     return true;
 }
@@ -1011,20 +1048,21 @@ bool testAtomTableGPUUpload(std::string& message) {
     table.registerAtom(AtomType::ATOM_FLOAT, "3.14", 0, 4);
     table.registerAtom(AtomType::ATOM_INT, "9007199254740993", 0, 16);
     
-    AtomTable::GPUAtomData gpu_data;
-    bool success = table.uploadToGPU(gpu_data);
+    bool success = table.uploadToGPU();
+    const AtomTable::GPUAtomData* gpu_data = table.getGPUBuffer();
     
     ASSERT_TRUE(success, "GPU upload failed");
-    ASSERT_EQ(gpu_data.num_atoms, 3, "GPU atom count mismatch");
-    ASSERT_TRUE(gpu_data.d_numeric_values != nullptr, "Numeric values not allocated");
-    ASSERT_TRUE(gpu_data.d_numeric_float_values != nullptr, "Exact float numeric values not allocated");
-    ASSERT_TRUE(gpu_data.d_numeric_int_values != nullptr, "Exact int numeric values not allocated");
-    ASSERT_TRUE(gpu_data.d_numeric_kind != nullptr, "Numeric kind values not allocated");
-    ASSERT_TRUE(gpu_data.d_types != nullptr, "Types not allocated");
+    ASSERT_TRUE(gpu_data != nullptr, "Internal GPU buffer pointer missing");
+    ASSERT_EQ(gpu_data->num_atoms, 3, "GPU atom count mismatch");
+    ASSERT_TRUE(gpu_data->d_numeric_values != nullptr, "Numeric values not allocated");
+    ASSERT_TRUE(gpu_data->d_numeric_float_values != nullptr, "Exact float numeric values not allocated");
+    ASSERT_TRUE(gpu_data->d_numeric_int_values != nullptr, "Exact int numeric values not allocated");
+    ASSERT_TRUE(gpu_data->d_numeric_kind != nullptr, "Numeric kind values not allocated");
+    ASSERT_TRUE(gpu_data->d_types != nullptr, "Types not allocated");
 
     int64_t exact_large_int = 0;
     cudaError_t copy_err = cudaMemcpy(&exact_large_int,
-                                      gpu_data.d_numeric_int_values + 2,
+                                      gpu_data->d_numeric_int_values + 2,
                                       sizeof(int64_t),
                                       cudaMemcpyDeviceToHost);
     ASSERT_TRUE(copy_err == cudaSuccess, "Failed to copy exact integer payload back from GPU");
@@ -1039,9 +1077,6 @@ bool testAtomTableGPUUpload(std::string& message) {
     ASSERT_TRUE(internal_table.uploadToGPU(), "Clean internal GPU upload should succeed");
     ASSERT_TRUE(internal_table.getGPUBuffer()->d_numeric_values == first_internal_numeric,
                 "Clean internal upload must not free valid GPU buffers");
-    
-    // Cleanup
-    AtomTable::freeGPUData(gpu_data);
     
     return true;
 }
@@ -1179,11 +1214,9 @@ bool testAtomTableIntegration(std::string& message) {
     ASSERT_TRUE(table.size() >= 3, "Should register at least 3 number atoms");
     
     // Upload to GPU and verify
-    AtomTable::GPUAtomData gpu_data;
-    bool success = table.uploadToGPU(gpu_data);
+    bool success = table.uploadToGPU();
     ASSERT_TRUE(success, "GPU upload should succeed");
-    
-    AtomTable::freeGPUData(gpu_data);
+    ASSERT_EQ(table.getGPUBuffer()->num_atoms, table.size(), "Internal GPU atom count mismatch");
     
     return true;
 }

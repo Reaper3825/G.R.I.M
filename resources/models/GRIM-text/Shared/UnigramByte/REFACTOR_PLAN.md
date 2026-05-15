@@ -168,7 +168,7 @@ Option **(B)** is simpler — just move the method definition to a different `.c
 
 **Also DELETE from `AtomTable.hpp`:**
 - Unused `AtomValue` struct variants: `AtomURL`, `AtomEmail`, `AtomPath`, `AtomDate`, `AtomTime`, `AtomIP`, `AtomString`, `AtomIdentifier`
-- Keep: `AtomInteger`, `AtomFloat`, `AtomGeneric`
+- Keep: `AtomInteger`, `AtomFloat` only. Do not keep or recreate `AtomGeneric`; unsupported source features stay in detector/data-quality ownership and must not become AtomTable payloads.
 
 **Verify:** Check if `AtomType::ATOM_URL` etc. are referenced anywhere outside the dead parsers before deleting the enum values from `TokenLayout.hpp`. They may still be needed for the token ID range even if unused. If the enum values are only used by dead parser dispatch, delete them too.
 

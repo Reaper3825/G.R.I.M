@@ -688,63 +688,42 @@ bool testAtomTableTypeMapping(std::string& message) {
     // Create an AtomTable and populate with test atoms
     AtomTable atom_table;
     
-    // Integer atoms with different values
+    // Integer and float atoms are the only active AtomTable payloads.
     AtomInteger int1{42, 10, false};
     AtomInteger int2{731, 10, false};
-    AtomInteger int3{0xFF, 16, false};
-    
-    // String literals
-    AtomString str1{"hello", '"', false};
-    AtomString str2{"world", '"', false};
-    AtomString str3{"hello", '"', false};  // Duplicate value
-    
-    // Identifiers
-    AtomIdentifier id1{"userName", AtomIdentifier::CAMEL_CASE};
-    AtomIdentifier id2{"user_name", AtomIdentifier::SNAKE_CASE};
-    AtomIdentifier id3{"userName", AtomIdentifier::CAMEL_CASE};  // Duplicate
-    
-    // URLs
-    AtomURL url1{"https", "example.com", -1, "/api", "", ""};
-    AtomURL url2{"http", "test.org", 8080, "/data", "", ""};
+    AtomInteger int3{255, 10, false};
+    AtomFloat float1{3.5, false, 0};
     
     // Register atoms and verify unique token IDs
     auto tok1 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(int1), "42");
     auto tok2 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(int2), "731");
-    auto tok3 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(int3), "0xFF");
+    auto tok3 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(int3), "255");
+    auto tok_float = atom_table.registerAtom(AtomType::ATOM_FLOAT, AtomValue(float1), "3.5");
+    auto tok1_dup = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(int1), "42");
     
-    auto tok_str1 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(str1), "\"hello\"");
-    auto tok_str2 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(str2), "\"world\"");
-    auto tok_str3 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(str3), "\"hello\"");
-    
-    auto tok_id1 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(id1), "userName");
-    auto tok_id2 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(id2), "user_name");
-    auto tok_id3 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(id3), "userName");
-    
-    auto tok_url1 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(url1), "https://example.com/api");
-    auto tok_url2 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(url2), "http://test.org:8080/data");
-    
-    // Verify all tokens are in atom range [ATOM_TOKEN_OFFSET, ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)
-    SB_ASSERT_TRUE(tok1 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok1 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "Integer token should be in atom range");
-    SB_ASSERT_TRUE(tok2 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok2 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "Integer token should be in atom range");
-    SB_ASSERT_TRUE(tok_str1 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok_str1 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "String token should be in atom range");
-    SB_ASSERT_TRUE(tok_url1 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok_url1 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "URL token should be in atom range");
+    SB_ASSERT_TRUE(tok1 != UINT32_MAX, "Integer atom should register");
+    SB_ASSERT_TRUE(tok2 != UINT32_MAX, "Integer atom should register");
+    SB_ASSERT_TRUE(tok3 != UINT32_MAX, "Integer atom should register");
+    SB_ASSERT_TRUE(tok_float != UINT32_MAX, "Float atom should register");
+    SB_ASSERT_EQ(atom_table.registerAtom(AtomType::ATOM_NONE, "12"), UINT32_MAX,
+                 "Unsupported atom type must not register");
+    SB_ASSERT_EQ(atom_table.registerAtom(AtomType::ATOM_INT, "userName"), UINT32_MAX,
+                 "Identifier text must not leak through as a generic ATOM_INT payload");
     
     // Verify different values get different tokens
     SB_ASSERT_TRUE(tok1 != tok2, "Different integers should have different tokens");
-    SB_ASSERT_TRUE(tok1 != tok3, "Different integer formats should have different tokens");
-    SB_ASSERT_TRUE(tok_str1 != tok_str2, "Different strings should have different tokens");
-    SB_ASSERT_TRUE(tok_id1 != tok_id2, "Different identifiers should have different tokens");
+    SB_ASSERT_TRUE(tok1 != tok3, "Different integers should have different tokens");
+    SB_ASSERT_TRUE(tok1 != tok_float, "Integer and float atoms should have different entries");
     
     // Verify same values get same tokens (deduplication)
-    SB_ASSERT_EQ(tok_str1, tok_str3, "Identical strings should deduplicate to same token");
-    SB_ASSERT_EQ(tok_id1, tok_id3, "Identical identifiers should deduplicate to same token");
+    SB_ASSERT_EQ(tok1, tok1_dup, "Identical integer atoms should deduplicate to same token");
     
     // Verify retrieval
     auto entry1 = atom_table.getAtomEntry(tok1);
     SB_ASSERT_TRUE(entry1.has_value(), "Should retrieve registered atom");
     SB_ASSERT_TRUE(entry1->type == AtomType::ATOM_INT, "Retrieved atom should have correct type");
     
-    logDiagnostic("AtomTable type mapping validated: unique tokens, deduplication works");
+    logDiagnostic("AtomTable type mapping validated: numeric-only atoms, rejection, and deduplication work");
     
     return true;
 }
@@ -875,48 +854,29 @@ bool testIntegerEmbeddingVariance(std::string& message) {
     return true;
 }
 
-bool testIdentifierPreservation(std::string& message) {
-    logTestStart("Contract: Identifier Preservation");
+bool testIdentifierRejection(std::string& message) {
+    logTestStart("Contract: Identifier Rejection");
     
     using namespace GRIM::Tokenizer;
     
     AtomTable atom_table;
     
-    // Register various identifier styles
-    AtomIdentifier id1{"userName", AtomIdentifier::CAMEL_CASE};
-    AtomIdentifier id2{"user_name", AtomIdentifier::SNAKE_CASE};
-    AtomIdentifier id3{"UserName", AtomIdentifier::PASCAL_CASE};
-    AtomIdentifier id4{"USER_NAME", AtomIdentifier::SCREAMING_SNAKE};
+    SB_ASSERT_EQ(atom_table.registerAtom(AtomType::ATOM_INT, "userName"), UINT32_MAX,
+                 "camelCase identifier must not register as an integer atom");
+    SB_ASSERT_EQ(atom_table.registerAtom(AtomType::ATOM_INT, "user_name"), UINT32_MAX,
+                 "snake_case identifier must not register as an integer atom");
+    SB_ASSERT_EQ(atom_table.registerAtom(AtomType::ATOM_INT, "USER_NAME"), UINT32_MAX,
+                 "SCREAMING_SNAKE identifier must not register as an integer atom");
+    SB_ASSERT_EQ(atom_table.size(), static_cast<size_t>(0),
+                 "Rejected identifiers must not mutate AtomTable");
     
-    auto tok1 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(id1), "userName");
-    auto tok2 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(id2), "user_name");
-    auto tok3 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(id3), "UserName");
-    auto tok4 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(id4), "USER_NAME");
-    
-    // Verify all are different tokens (style matters!)
-    std::unordered_set<uint32_t> unique_tokens = {tok1, tok2, tok3, tok4};
-    SB_ASSERT_EQ(unique_tokens.size(), 4ULL, "All identifier styles should get unique tokens");
-    
-    // Verify we can retrieve the original values
-    auto entry1 = atom_table.getAtomEntry(tok1);
-    SB_ASSERT_TRUE(entry1.has_value(), "Should retrieve identifier");
-    
-    // AtomEntry stores compact GPU data, not full AtomValue
-    // Check type and flags which encode the identifier style
-    SB_ASSERT_TRUE(entry1->type == AtomType::ATOM_INT, "Should be identifier type");
-    SB_ASSERT_EQ(entry1->flags, static_cast<uint32_t>(AtomIdentifier::CAMEL_CASE), "Identifier style should be preserved in flags");
-    
-    // Verify raw text is retrievable through string pool
-    std::string_view raw_text = atom_table.getString(entry1->raw_text_ref);
-    SB_ASSERT_TRUE(raw_text == "userName", "Raw text should be preserved in string pool");
-    
-    logDiagnostic("Identifiers preserved: camelCase, snake_case, PascalCase, SCREAMING_SNAKE");
+    logDiagnostic("Identifiers are detector/data-quality features only; AtomTable stayed numeric-only");
     
     return true;
 }
 
-bool testStringConsistentEmbeddings(std::string& message) {
-    logTestStart("Contract: String Consistent Embeddings");
+bool testNumericAtomConsistentEmbeddings(std::string& message) {
+    logTestStart("Contract: Numeric Atom Consistent Embeddings");
     
     using namespace GRIM::Tokenizer;
     
@@ -929,22 +889,22 @@ bool testStringConsistentEmbeddings(std::string& message) {
     
     AtomTable atom_table;
     
-    // Register same string multiple times
-    AtomString str1{"consistent", '"', false};
-    AtomString str2{"consistent", '"', false};
-    AtomString str3{"different", '"', false};
+    // Register same numeric atom multiple times
+    AtomInteger int1{77, 10, false};
+    AtomInteger int2{77, 10, false};
+    AtomInteger int3{88, 10, false};
     
-    auto tok1a = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(str1), "\"consistent\"");
-    auto tok1b = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(str2), "\"consistent\"");
-    auto tok2 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(str3), "\"different\"");
+    auto tok1a = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(int1), "77");
+    auto tok1b = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(int2), "77");
+    auto tok2 = atom_table.registerAtom(AtomType::ATOM_INT, AtomValue(int3), "88");
     
-    // Same string should get same token (deduplication)
-    SB_ASSERT_EQ(tok1a, tok1b, "Identical strings should deduplicate to same token");
-    SB_ASSERT_TRUE(tok1a != tok2, "Different strings should have different tokens");
+    // Same numeric payload should get same token (deduplication)
+    SB_ASSERT_EQ(tok1a, tok1b, "Identical numeric atoms should deduplicate to same token");
+    SB_ASSERT_TRUE(tok1a != tok2, "Different numeric atoms should have different tokens");
     
     atom_table.uploadToGPU();
     
-    // Create two sequences with the same string token appearing multiple times
+    // Create a sequence with the same numeric atom token appearing multiple times
     const int total_tokens = 6;
     const int d_model = config.d_model;
     const int total_elements = total_tokens * d_model;
@@ -977,6 +937,16 @@ bool testStringConsistentEmbeddings(std::string& message) {
         cudaFree(d_tokens);
         return false;
     }
+    std::vector<float> h_numeric_values = {77.0f, 0.0f, 77.0f, 0.0f, 88.0f, 77.0f};
+    std::vector<uint8_t> h_numeric_mask = {1, 0, 1, 0, 1, 1};
+    SB_ASSERT_CUDA_SUCCESS(
+        cudaMemcpy(numeric_buffers.values, h_numeric_values.data(),
+                   total_tokens * sizeof(float), cudaMemcpyHostToDevice),
+        "Failed to copy numeric values");
+    SB_ASSERT_CUDA_SUCCESS(
+        cudaMemcpy(numeric_buffers.mask, h_numeric_mask.data(),
+                   total_tokens * sizeof(uint8_t), cudaMemcpyHostToDevice),
+        "Failed to copy numeric mask");
     args.token_numeric_values = numeric_buffers.values;
     args.token_atom_mask = numeric_buffers.mask;
     
@@ -999,11 +969,11 @@ bool testStringConsistentEmbeddings(std::string& message) {
     
     // All three should be identical (consistent embeddings)
     SB_ASSERT_TRUE(arraysEqual(emb1.data(), emb2.data(), d_model, 1e-6f),
-                   "Same string token should produce identical embeddings");
+                   "Same numeric atom token should produce identical embeddings");
     SB_ASSERT_TRUE(arraysEqual(emb1.data(), emb3.data(), d_model, 1e-6f),
-                   "Same string token should produce identical embeddings");
+                   "Same numeric atom token should produce identical embeddings");
     
-    logDiagnostic("String embeddings are consistent across multiple occurrences");
+    logDiagnostic("Numeric atom embeddings are consistent across multiple occurrences");
     
     return true;
 }
@@ -1317,8 +1287,8 @@ void registerScratchBlockTests(ScratchBlockTestSuite& suite) {
     // Section 7: Tokenizer-ScratchBlock Contract Tests
     suite.addTest("Contract: AtomTable Type Mapping", testAtomTableTypeMapping);
     suite.addTest("Contract: Integer Embeddings Vary", testIntegerEmbeddingVariance);
-    suite.addTest("Contract: Identifier Preservation", testIdentifierPreservation);
-    suite.addTest("Contract: String Consistent Embeddings", testStringConsistentEmbeddings);
+    suite.addTest("Contract: Identifier Rejection", testIdentifierRejection);
+    suite.addTest("Contract: Numeric Atom Consistent Embeddings", testNumericAtomConsistentEmbeddings);
     suite.addTest("Contract: Atom Semantic Reasoning", testAtomSemanticReasoning);
     suite.addTest("Contract: Round-Trip Encoding", testRoundTripEncoding);
     

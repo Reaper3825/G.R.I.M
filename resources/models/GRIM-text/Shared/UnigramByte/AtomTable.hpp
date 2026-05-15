@@ -3,10 +3,9 @@
 //  Atom Registry for GRIM Tokenizer/ScratchBlock Bridge
 //  
 //  The AtomTable stores the actual values of detected
-//  structural atoms. When tokenization detects a URL,
-//  number, etc., the raw value is stored here and a
-//  placeholder token is emitted. ScratchBlock can then
-//  query this table to get the parsed representation.
+//  structural atoms. When tokenization detects a number,
+//  the raw source value is stored here and a placeholder
+//  token is emitted. Round-trip raw text is the source of truth.
 //  
 //  Features:
 //  - Type-safe atom storage and retrieval
@@ -46,37 +45,39 @@ struct StructuralSpan;
 
 // Integer atom: stores signed 64-bit value
 struct AtomInteger {
-    int64_t value;
-    int base;  // 10, 16, 2, 8
-    bool has_sign;
+    int64_t value = 0;
+    int base = 10;  // 10 only in the active tokenizer layout
+    bool has_sign = false;
 };
 
 // Float atom: stores double-precision value
 struct AtomFloat {
-    double value;
-    bool has_exponent;
-    int exponent;
-};
-
-
-// Generic/unknown atom
-struct AtomGeneric {
-    std::string raw_value;
+    double value = 0.0;
+    bool has_exponent = false;
+    int exponent = 0;
 };
 
 //======================================================//
 //  Atom Value Variant
 //======================================================//
+// Current AtomTable payloads are intentionally numeric-only. Raw-text detectors
+// may observe other source features, but only ATOM_INT and ATOM_FLOAT become
+// AtomTable entries.
 using AtomValue = std::variant<
     AtomInteger,
-    AtomFloat,
-    AtomGeneric
+    AtomFloat
 >;
 
 enum class NumericPayloadKind : uint8_t {
     NONE = 0,
     INTEGER = 1,
     FLOAT = 2
+};
+
+struct NumericPayload {
+    NumericPayloadKind kind = NumericPayloadKind::NONE;
+    double float_value = 0.0;
+    int64_t int_value = 0;
 };
 
 //======================================================//
@@ -94,13 +95,8 @@ enum class AtomOrigin : uint8_t {
 //  Atom Category - High-level grouping
 //======================================================//
 enum class AtomCategory : uint8_t {
-    NUMERIC,      // Numbers (integers, floats, hex, binary)
-    TEMPORAL,     // Dates and times
-    STRUCTURAL,   // URLs, emails, paths, IPs (formatted)
-    STRING,       // String literals
-    IDENTIFIER,   // Code identifiers (variable names, etc.)
-    SYSTEM,       // Reserved/special atoms
-    GENERIC       // Unknown/custom types
+    NUMERIC,      // Active AtomTable payloads: integers and floats
+    SYSTEM        // Reserved metadata category for explicitly system-marked numeric atoms
 };
 
 //======================================================//
@@ -139,15 +135,15 @@ struct alignas(64) AtomEntry {
     float numeric_value;      // For numeric types (4 bytes)
     uint32_t flags;           // Type-specific flags (4 bytes)
     
-    StringRef parsed_ref;     // Reference to parsed string data (8 bytes)
+    uint64_t reserved_zero;   // Reserved padding; must remain zero (8 bytes)
     
     // Initialize to safe defaults
     AtomEntry() 
         : hash(0), id(0), type(AtomType::ATOM_NONE), 
-          category(AtomCategory::GENERIC), origin(AtomOrigin::USER_INPUT),
+                    category(AtomCategory::NUMERIC), origin(AtomOrigin::USER_INPUT),
           padding1{0, 0}, raw_text_ref(), confidence(1.0f),
           created_at(0), source_start(0), source_end(0),
-          numeric_value(0.0f), flags(0), parsed_ref() {}
+          numeric_value(0.0f), flags(0), reserved_zero(0) {}
 };
 
 static_assert(sizeof(AtomEntry) == 64, "AtomEntry must be exactly 64 bytes");
@@ -260,8 +256,9 @@ public:
     // String version (allocates - prefer atomValueSerialize for performance)
     static std::string atomValueToString(AtomType type, const AtomValue& value);
     
-    // Get numeric value (for types that have one)
-    static double getNumericValue(const AtomEntry& entry);
+    // Get exact numeric value by atom ID. This reads durable exact side channels,
+    // never AtomEntry::numeric_value (legacy packed float).
+    std::optional<NumericPayload> getNumericValue(uint32_t id) const;
     static bool hasNumericValue(AtomType type);
 
     //--------------------------------------------------//
@@ -307,22 +304,15 @@ public:
             , num_atoms(0) {}
     };
     
-    // Upload current table to GPU (batch mode for performance)
-    bool uploadToGPU(GPUAtomData& out_data, cudaStream_t stream = nullptr);
-    
-    // Convenience: Upload to internal GPU buffer (no-arg version)
+    // Upload current table to the internally-owned GPU buffer.
     bool uploadToGPU(cudaStream_t stream = nullptr);
     
     // Get pointer to internal GPU data (valid after uploadToGPU())
     const GPUAtomData* getGPUBuffer() const { return &gpu_data_; }
-    GPUAtomData* getGPUBuffer() { return &gpu_data_; }
     
     // Check if GPU data needs refresh
     bool isGPUDirty() const { return gpu_dirty_; }
     
-    // Free GPU data
-    static void freeGPUData(GPUAtomData& data);
-
     //--------------------------------------------------//
     // Lifecycle
     //--------------------------------------------------//
@@ -383,6 +373,9 @@ private:
                           double& numeric_float_value,
                           int64_t& numeric_int_value,
                           uint8_t& numeric_kind);
+
+    // Free internally-owned or transactional GPU data.
+    static void freeGPUData(GPUAtomData& data);
 };
 
 //======================================================//

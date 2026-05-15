@@ -88,6 +88,7 @@ Do not hand-copy `TokenizerConfig` + `TrainingHyperparameters` fields into a tok
 - Raw-text detection must go through `DetectorRegistry`; do not call detector implementations directly from tokenizer runtime code.
 - Every concrete raw-text detector must live under `Shared/UnigramByte/Detectors/` and be registered by `makeDefaultRawTextDetectorRegistry()`. Do not add detector-like kernels, local scanner functions, or hard-coded pattern checks in `UniByte.cu`.
 - Detectors operate on source byte offsets only. Token-ID checks stay in token-layout helpers such as `isSpecialTokenId`, `TokenLayout::isByte`, `TokenLayout::isAtom`, and `TokenLayout::isUnigram`.
+- Whitespace boundaries are detector/data-quality ownership. `AtomTable` must not trim, normalize, canonicalize, or repair atom text; a numeric atom containing any whitespace is an upstream detector error and registration must fail.
 
 ## AtomTable indexing
 Token IDs include the atom offset. When indexing `entries_[]`:
@@ -97,12 +98,16 @@ uint32_t idx = id - ATOM_TOKEN_OFFSET;
 
 AtomTable safety contracts:
 - `AtomTable::getAtom()` and `getAtomsByType()` return `AtomEntry` copies. Do not return raw pointers or references into `entries_` after releasing the table mutex.
-- GPU uploads are transactional: allocate/copy into a fresh `GPUAtomData`, synchronize the copy stream, then replace the caller-owned buffer and clear `gpu_dirty_` / `pending_gpu_upload_` only after every CUDA operation succeeds.
-- The internal `uploadToGPU(cudaStream_t)` wrapper must not free existing `gpu_data_` when the table is already clean; a clean repeat upload only refreshes `num_atoms`.
+- GPU uploads are internal-owner only: callers use `uploadToGPU(cudaStream_t)` and inspect the read-only pointer from `getGPUBuffer()`. Do not add a caller-owned `uploadToGPU(GPUAtomData&)` overload.
+- GPU uploads are transactional: allocate/copy into a fresh temporary `GPUAtomData`, synchronize the copy stream, then replace internal `gpu_data_` and clear `gpu_dirty_` / `pending_gpu_upload_` only after every CUDA operation succeeds.
+- `uploadToGPU(cudaStream_t)` must not free existing `gpu_data_` when the table is already clean; a clean repeat upload only refreshes `num_atoms`.
 - Atom dedup uses hash buckets (`hash -> vector<atom_id>`) and compares every candidate by type plus raw text so a hash collision cannot evict an older atom from dedup lookup.
 - Numeric GPU side channels keep exact payload arrays (`double`, `int64_t`, and `NumericPayloadKind`) in addition to the legacy packed float used by older embedding paths. Do not round integer atoms through `float` for GPU numeric reconstruction.
-- Numeric parse failures must not register as `ATOM_INT` / `ATOM_FLOAT`. Reject the registration instead of storing an `AtomGeneric` payload under a numeric atom type.
+- Public numeric lookup is ID-based: use `AtomTable::getNumericValue(atom_id)` and read `NumericPayload`. Do not add `getNumericValue(const AtomEntry&)`; `AtomEntry::numeric_value` is a lossy legacy packed float.
+- AtomTable payloads are numeric-only: `AtomValue` may contain only `AtomInteger` or `AtomFloat`, and `parseAtom()` accepts only `ATOM_INT` / `ATOM_FLOAT`. Do not add `AtomGeneric` or any generic/unknown payload path.
+- Numeric parse failures must not register as `ATOM_INT` / `ATOM_FLOAT`. Reject the registration; there is no generic fallback payload.
 - Binary AtomTable load must validate every `StringRef` against `string_pool_` before exposing entries; corrupt offsets/lengths are a hard load failure.
+- Atom stringification is raw round-trip only: `atomToString()` returns `raw_text_ref`. Do not add parsed/canonical string storage (`parsed_ref`) or route decode/export through canonicalized numeric text.
 
 ## Training data
 - HTML must be stripped before tokenization. `DataLoader.cu` handles `stripHtmlTags()` / `decodeHtmlEntities()` / `normalizeWhitespace()` automatically.
