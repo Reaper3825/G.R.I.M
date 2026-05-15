@@ -1,9 +1,9 @@
 //======================================================//
 //  UnigramViterbi.hpp
-//  RAII Viterbi segmentation session for UnigramLM
+//  CUDA-backed RAII Viterbi segmentation session for UnigramLM
 //
 //  UnigramLM owns learned vocab and trie state. This file owns
-//  per-segmentation dynamic-programming state and path materialization.
+//  per-segmentation launch validation and path materialization.
 //======================================================//
 
 #pragma once
@@ -16,16 +16,6 @@
 
 namespace GRIM {
 namespace Tokenizer {
-
-//======================================================//
-//  Viterbi Node
-//======================================================//
-struct UnigramViterbiNode {
-    float score = 0.0f;     // Best score to reach this position
-    int prev_pos = -1;      // Previous position in best path
-    int token_id = -1;      // Token ID of piece ending here
-    int piece_length = 0;   // Length of piece in bytes
-};
 
 //======================================================//
 //  CUDA Kernel Status Codes
@@ -100,14 +90,15 @@ public:
     float pathScore() const noexcept { return path_score_; }
 
 private:
-    static std::vector<UnigramViterbiNode> runForward(const UnigramLM& model,
-                                                      const std::string& normalized_text,
-                                                      const char* caller);
-    static std::vector<int> runBacktrack(const std::vector<UnigramViterbiNode>& nodes,
-                                         int end_pos,
-                                         const char* caller);
+    struct CudaResult {
+        std::vector<int> tokens;
+        float path_score = 0.0f;
+    };
 
-    std::vector<UnigramViterbiNode> nodes_;
+    static CudaResult runCuda(const UnigramLM& model,
+                              const std::string& normalized_text,
+                              const char* caller);
+
     std::vector<int> tokens_;
     float path_score_ = 0.0f;
 };

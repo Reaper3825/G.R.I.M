@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 namespace GRIM {
 namespace Tokenizer {
@@ -44,11 +45,17 @@ public:
     int* d_piece_lengths = nullptr;       // Length of each piece
 
     // Viterbi workspace (pre-allocated, fixed capacity)
+    char* d_viterbi_text = nullptr;
     float* d_viterbi_scores = nullptr;
     int* d_viterbi_prev = nullptr;
     int* d_viterbi_tokens = nullptr;
+    int* d_viterbi_output_tokens = nullptr;
+    int* d_viterbi_output_count = nullptr;
+    bool* d_viterbi_selected_fallback = nullptr;
+    int* d_viterbi_error_code = nullptr;
     size_t workspace_max_length = 0;      // Maximum sequence length supported
     std::uint64_t uploaded_trie_generation = 0;
+    mutable std::mutex viterbi_workspace_mutex;
 
     bool initialized = false;
 };

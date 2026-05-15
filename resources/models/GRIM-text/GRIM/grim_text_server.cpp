@@ -71,6 +71,9 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
         g_tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
         GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(startup_config.paths);
         (void)artifacts.load(*g_tokenizer);
+        if (!g_tokenizer->initGPU()) {
+            throw std::runtime_error("GRIM-text server tokenizer GPU initialization failed; production prompt tokenization requires uploaded CUDA trie state");
+        }
 
         std::cout << "[GRIM-text] Loaded " << g_tokenizer->vocabSize() << " tokens\n";
         std::cout << "[GRIM-text] EOS token ID: " << GRIM::Tokenizer::EOS_TOKEN_ID << "\n";

@@ -383,6 +383,9 @@ bool PrepareTrainingDataFromCache(
 			vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
 	}
 	tokenizer.train(vocab_corpus);
+	if (!tokenizer.initGPU()) {
+		throw std::runtime_error("[DataLoader] tokenizer GPU initialization failed after training; production tokenization requires uploaded CUDA trie state");
+	}
 
 	using TokenizedSequence = GRIM::TokenizerArtifacts::GrmtSequence;
 

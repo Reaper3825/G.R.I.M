@@ -1,19 +1,20 @@
 //======================================================//
 //  UnigramViterbi.cu
-//  RAII Viterbi segmentation for UnigramLM
+//  CUDA-backed RAII Viterbi segmentation for UnigramLM
 //
-//  Owns per-run dynamic-programming state. Durable device
-//  buffers stay in UnigramGpuMemory; learned vocab/trie state
-//  stays in UnigramLM.
+//  Owns per-run launch validation and path materialization.
+//  Durable device buffers stay in UnigramGpuMemory;
+//  learned vocab/trie state stays in UnigramLM.
 //======================================================//
 
 #include "UnigramViterbi.hpp"
+#include "UnigramGpuMemory.hpp"
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 
-#include <algorithm>
 #include <climits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -44,6 +45,38 @@ __device__ static bool initializeCudaErrorCode(int* error_code) {
 
 __device__ static void setCudaErrorCode(int* error_code, int code) {
     *error_code = code;
+}
+
+static void requireCudaSuccess(cudaError_t err, const char* label, const char* caller) {
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(caller) + ": " + label + " failed: " +
+                                 cudaGetErrorString(err) + " at " + std::string(__FILE__) +
+                                 ":" + std::to_string(__LINE__));
+    }
+}
+
+static void requireCudaWorkspacePointer(const void* ptr, const char* label, const char* caller) {
+    if (ptr == nullptr) {
+        throw std::runtime_error(std::string(caller) + ": CUDA Viterbi workspace pointer " +
+                                 label + " is NULL; caller MUST initialize tokenizer GPU state before encoding at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+}
+
+static void requireCudaKernelOk(UnigramGpuMemory& gpu, const char* label, const char* caller) {
+    int host_error_code = -1;
+    requireCudaSuccess(cudaMemcpy(&host_error_code,
+                                  gpu.d_viterbi_error_code,
+                                  sizeof(int),
+                                  cudaMemcpyDeviceToHost),
+                       label,
+                       caller);
+    if (host_error_code != kUnigramViterbiCudaOk) {
+        throw std::runtime_error(std::string(caller) + ": " + label +
+                                 " reported error_code=" + std::to_string(host_error_code) +
+                                 " (" + unigramViterbiCudaErrorName(host_error_code) + ") at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
 }
 
 } // namespace
@@ -94,8 +127,8 @@ __global__ void kernelViterbiForward(
         }
     }
     
-    // Mirror the CPU Viterbi pass: from each reachable start position, walk
-    // the forward trie over text[pos], text[pos + 1], ... and relax end states.
+    // Viterbi pass: from each reachable start position, walk the uploaded
+    // forward trie over text[pos], text[pos + 1], ... and relax end states.
     for (size_t pos = 0; pos < length; ++pos) {
         if (viterbi_scores[pos] < -1e20f) continue;
         
@@ -263,139 +296,171 @@ UnigramViterbiSession::UnigramViterbiSession(const UnigramLM& model,
                                              const std::string& normalized_text,
                                              const char* caller) {
     requireCallerLabel(caller);
-    nodes_ = runForward(model, normalized_text, caller);
-    if (nodes_.empty()) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": Viterbi forward returned no nodes at " +
-                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    path_score_ = nodes_.back().score;
-    tokens_ = runBacktrack(nodes_, static_cast<int>(normalized_text.size()), caller);
+    CudaResult result = runCuda(model, normalized_text, caller);
+    path_score_ = result.path_score;
+    tokens_ = std::move(result.tokens);
 }
 
-std::vector<UnigramViterbiNode> UnigramViterbiSession::runForward(
+UnigramViterbiSession::CudaResult UnigramViterbiSession::runCuda(
     const UnigramLM& model,
     const std::string& normalized_text,
     const char* caller) {
     requireCallerLabel(caller);
+
+    CudaResult result;
+    const size_t n = normalized_text.size();
+    if (n == 0) {
+        return result;
+    }
+    if (n > static_cast<size_t>(INT_MAX)) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": normalized text length exceeds CUDA Viterbi int backtrack limit: length=" +
+                                 std::to_string(n) + " at " + std::string(__FILE__) + ":" +
+                                 std::to_string(__LINE__));
+    }
     if (model.trie_.empty()) {
         throw std::runtime_error(std::string(caller) +
-                                 ": trie_ is empty; caller MUST call UnigramLM::buildTrie() before Viterbi segmentation at " +
+                                 ": trie_ is empty; caller MUST call UnigramLM::buildTrie() before CUDA Viterbi segmentation at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    if (!model.gpu_) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": UnigramLM.gpu_ is NULL; object was moved from or not constructed at " +
                                  std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
 
-    const size_t n = normalized_text.size();
-    std::vector<UnigramViterbiNode> nodes(n + 1);
-    
-    nodes[0].score = 0.0f;
-    nodes[0].prev_pos = -1;
-    nodes[0].token_id = -1;
-    nodes[0].piece_length = 0;
-    
-    for (size_t i = 1; i <= n; ++i) {
-        nodes[i].score = -1e30f;
-        nodes[i].prev_pos = -1;
-        nodes[i].token_id = UNK_TOKEN_ID;
-        nodes[i].piece_length = 1;
-    }
-    
-    for (size_t pos = 0; pos < n; ++pos) {
-        if (nodes[pos].score < -1e20f) continue;
-        
-        unsigned char cur_byte = static_cast<unsigned char>(normalized_text[pos]);
+    UnigramGpuMemory& gpu = *model.gpu_;
+    std::lock_guard<std::mutex> lock(gpu.viterbi_workspace_mutex);
 
-        int node = 0;
-        for (size_t len = 1; len <= MAX_PIECE_LENGTH && pos + len <= n; ++len) {
-            unsigned char c = static_cast<unsigned char>(normalized_text[pos + len - 1]);
-            
-            if (model.trie_[node].children[c] < 0) break;
-            node = model.trie_[node].children[c];
-            
-            if (model.trie_[node].token_id >= 0) {
-                float score = nodes[pos].score + model.trie_[node].score;
-                
-                if (score > nodes[pos + len].score) {
-                    nodes[pos + len].score = score;
-                    nodes[pos + len].prev_pos = static_cast<int>(pos);
-                    nodes[pos + len].token_id = model.trie_[node].token_id;
-                    nodes[pos + len].piece_length = static_cast<int>(len);
-                }
-            }
-        }
-        
-        float fallback_score = nodes[pos].score + UNKNOWN_SCORE;
-        if (fallback_score > nodes[pos + 1].score) {
-            nodes[pos + 1].score = fallback_score;
-            nodes[pos + 1].prev_pos = static_cast<int>(pos);
-
-            if (model.enable_byte_fallback_) {
-                unsigned char byte_val = static_cast<unsigned char>(normalized_text[pos]);
-                nodes[pos + 1].token_id = static_cast<int>(byte_val) + BYTE_TOKEN_OFFSET;
-                nodes[pos + 1].piece_length = 1;
-            } else {
-                nodes[pos + 1].token_id = UNK_TOKEN_ID;
-                nodes[pos + 1].piece_length = 1;
-            }
-        }
-    }
-    
-    return nodes;
-}
-
-std::vector<int> UnigramViterbiSession::runBacktrack(
-    const std::vector<UnigramViterbiNode>& nodes,
-    int end_pos,
-    const char* caller) {
-    requireCallerLabel(caller);
-    if (nodes.empty()) {
+    if (!gpu.initialized) {
         throw std::runtime_error(std::string(caller) +
-                                 ": cannot backtrack an empty Viterbi node buffer at " +
+                                 ": CUDA Viterbi requested before UnigramLM::initGPU(); production tokenization requires uploaded trie state at " +
                                  std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
-    if (end_pos < 0) {
+    if (gpu.uploaded_trie_generation != model.trie_generation_) {
         throw std::runtime_error(std::string(caller) +
-                                 ": Viterbi end_pos is negative: " + std::to_string(end_pos) +
-                                 " at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+                                 ": CUDA Viterbi trie upload is stale: uploaded_generation=" +
+                                 std::to_string(gpu.uploaded_trie_generation) +
+                                 ", live_generation=" + std::to_string(model.trie_generation_) +
+                                 "; caller MUST call UnigramLM::initGPU() after buildTrie()/score mutation at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
-    if (end_pos >= static_cast<int>(nodes.size())) {
+    if (n > gpu.workspace_max_length) {
         throw std::runtime_error(std::string(caller) +
-                                 ": Viterbi end_pos exceeds node buffer: end_pos=" +
-                                 std::to_string(end_pos) + ", nodes=" + std::to_string(nodes.size()) +
-                                 " at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+                                 ": normalized text length=" + std::to_string(n) +
+                                 " exceeds CUDA Viterbi workspace_max_length=" +
+                                 std::to_string(gpu.workspace_max_length) + " at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
 
-    std::vector<int> tokens;
-    tokens.reserve(static_cast<size_t>(end_pos));
-    int pos = end_pos;
-    int safety_counter = 0;
-    
-    while (pos > 0) {
-        const UnigramViterbiNode& node = nodes[pos];
-        if (node.prev_pos < 0 || node.prev_pos >= pos) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": invalid Viterbi backpointer at pos=" + std::to_string(pos) +
-                                     ", prev_pos=" + std::to_string(node.prev_pos) +
-                                     " at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-        }
-        if (node.token_id < 0) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": invalid negative token_id during Viterbi backtrack at pos=" +
-                                     std::to_string(pos) + " at " + std::string(__FILE__) + ":" +
-                                     std::to_string(__LINE__));
-        }
-
-        tokens.push_back(node.token_id);
-        pos = node.prev_pos;
-        ++safety_counter;
-        if (safety_counter > end_pos) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": Viterbi backtrack exceeded end_pos steps; graph is cyclic or corrupt at " +
-                                     std::string(__FILE__) + ":" + std::to_string(__LINE__));
-        }
+    requireCudaWorkspacePointer(gpu.d_viterbi_text, "d_viterbi_text", caller);
+    requireCudaWorkspacePointer(gpu.d_trie_children, "d_trie_children", caller);
+    requireCudaWorkspacePointer(gpu.d_trie_token_ids, "d_trie_token_ids", caller);
+    requireCudaWorkspacePointer(gpu.d_trie_scores, "d_trie_scores", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_scores, "d_viterbi_scores", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_prev, "d_viterbi_prev", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_tokens, "d_viterbi_tokens", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_output_tokens, "d_viterbi_output_tokens", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_output_count, "d_viterbi_output_count", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_selected_fallback, "d_viterbi_selected_fallback", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_error_code, "d_viterbi_error_code", caller);
+    if (gpu.num_nodes <= 0) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": CUDA Viterbi num_nodes is invalid: " +
+                                 std::to_string(gpu.num_nodes) + " at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
-    
-    std::reverse(tokens.begin(), tokens.end());
-    return tokens;
+
+    requireCudaSuccess(cudaMemcpy(gpu.d_viterbi_text,
+                                  normalized_text.data(),
+                                  n,
+                                  cudaMemcpyHostToDevice),
+                       "cudaMemcpy d_viterbi_text",
+                       caller);
+
+    size_t kernel_length = n;
+    int kernel_unk_id = UNK_TOKEN_ID;
+    bool kernel_enable_byte_fallback = model.enable_byte_fallback_;
+    void* forward_args[] = {
+        &gpu.d_viterbi_text,
+        &kernel_length,
+        &gpu.d_trie_children,
+        &gpu.d_trie_token_ids,
+        &gpu.d_trie_scores,
+        &gpu.num_nodes,
+        &gpu.d_viterbi_scores,
+        &gpu.d_viterbi_prev,
+        &gpu.d_viterbi_tokens,
+        &gpu.d_viterbi_selected_fallback,
+        &kernel_unk_id,
+        &kernel_enable_byte_fallback,
+        &gpu.d_viterbi_error_code
+    };
+    requireCudaSuccess(cudaLaunchKernel(reinterpret_cast<const void*>(&kernelViterbiForward),
+                                        dim3(1),
+                                        dim3(1),
+                                        forward_args,
+                                        0,
+                                        nullptr),
+                       "kernelViterbiForward launch",
+                       caller);
+    requireCudaSuccess(cudaDeviceSynchronize(), "kernelViterbiForward sync", caller);
+    requireCudaKernelOk(gpu, "kernelViterbiForward status", caller);
+
+    requireCudaSuccess(cudaMemcpy(&result.path_score,
+                                  gpu.d_viterbi_scores + n,
+                                  sizeof(float),
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy CUDA Viterbi path score",
+                       caller);
+
+    int max_tokens = static_cast<int>(n);
+    size_t backtrack_length = n;
+    void* backtrack_args[] = {
+        &backtrack_length,
+        &gpu.d_viterbi_prev,
+        &gpu.d_viterbi_tokens,
+        &gpu.d_viterbi_output_tokens,
+        &gpu.d_viterbi_output_count,
+        &max_tokens,
+        &gpu.d_viterbi_selected_fallback,
+        &gpu.d_viterbi_error_code
+    };
+    requireCudaSuccess(cudaLaunchKernel(reinterpret_cast<const void*>(&kernelViterbiBacktrack),
+                                        dim3(1),
+                                        dim3(1),
+                                        backtrack_args,
+                                        0,
+                                        nullptr),
+                       "kernelViterbiBacktrack launch",
+                       caller);
+    requireCudaSuccess(cudaDeviceSynchronize(), "kernelViterbiBacktrack sync", caller);
+    requireCudaKernelOk(gpu, "kernelViterbiBacktrack status", caller);
+
+    int output_count = -1;
+    requireCudaSuccess(cudaMemcpy(&output_count,
+                                  gpu.d_viterbi_output_count,
+                                  sizeof(int),
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy CUDA Viterbi output count",
+                       caller);
+    if (output_count < 0 || output_count > max_tokens) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": CUDA Viterbi output_count=" + std::to_string(output_count) +
+                                 " is outside [0," + std::to_string(max_tokens) + "] at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+
+    result.tokens.resize(static_cast<size_t>(output_count));
+    if (output_count > 0) {
+        requireCudaSuccess(cudaMemcpy(result.tokens.data(),
+                                      gpu.d_viterbi_output_tokens,
+                                      static_cast<size_t>(output_count) * sizeof(int),
+                                      cudaMemcpyDeviceToHost),
+                           "cudaMemcpy CUDA Viterbi output tokens",
+                           caller);
+    }
+    return result;
 }
 
 } // namespace Tokenizer

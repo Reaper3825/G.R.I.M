@@ -781,6 +781,12 @@ int main(int argc, char** argv) {
             std::cout << makeErrorJson(err, "tokenizer_bundle_load").dump() << std::endl;
             return 1;
         }
+        if (!tokenizer.initGPU()) {
+            std::cout << makeErrorJson(
+                "Tokenizer GPU initialization failed; tokenizer_runner requires uploaded CUDA trie state before encode/validation",
+                "tokenizer_gpu_init").dump() << std::endl;
+            return 1;
+        }
 
         auto load_end = std::chrono::steady_clock::now();
         double load_ms = std::chrono::duration<double, std::milli>(load_end - load_start).count();

@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -95,6 +96,7 @@ UnigramGpuMemory::UnigramGpuMemory(UnigramGpuMemory&& other) noexcept {
 
 UnigramGpuMemory& UnigramGpuMemory::operator=(UnigramGpuMemory&& other) noexcept {
     if (this != &other) {
+        std::lock_guard<std::mutex> lock(viterbi_workspace_mutex);
         release();
 
         d_trie_children = std::exchange(other.d_trie_children, nullptr);
@@ -106,9 +108,14 @@ UnigramGpuMemory& UnigramGpuMemory::operator=(UnigramGpuMemory&& other) noexcept
         d_piece_offsets = std::exchange(other.d_piece_offsets, nullptr);
         d_piece_lengths = std::exchange(other.d_piece_lengths, nullptr);
 
+        d_viterbi_text = std::exchange(other.d_viterbi_text, nullptr);
         d_viterbi_scores = std::exchange(other.d_viterbi_scores, nullptr);
         d_viterbi_prev = std::exchange(other.d_viterbi_prev, nullptr);
         d_viterbi_tokens = std::exchange(other.d_viterbi_tokens, nullptr);
+        d_viterbi_output_tokens = std::exchange(other.d_viterbi_output_tokens, nullptr);
+        d_viterbi_output_count = std::exchange(other.d_viterbi_output_count, nullptr);
+        d_viterbi_selected_fallback = std::exchange(other.d_viterbi_selected_fallback, nullptr);
+        d_viterbi_error_code = std::exchange(other.d_viterbi_error_code, nullptr);
         workspace_max_length = std::exchange(other.workspace_max_length, 0);
         uploaded_trie_generation = std::exchange(other.uploaded_trie_generation, 0);
 
@@ -124,9 +131,14 @@ void UnigramGpuMemory::release() noexcept {
     releaseDevicePointer(d_piece_data, "d_piece_data");
     releaseDevicePointer(d_piece_offsets, "d_piece_offsets");
     releaseDevicePointer(d_piece_lengths, "d_piece_lengths");
+    releaseDevicePointer(d_viterbi_text, "d_viterbi_text");
     releaseDevicePointer(d_viterbi_scores, "d_viterbi_scores");
     releaseDevicePointer(d_viterbi_prev, "d_viterbi_prev");
     releaseDevicePointer(d_viterbi_tokens, "d_viterbi_tokens");
+    releaseDevicePointer(d_viterbi_output_tokens, "d_viterbi_output_tokens");
+    releaseDevicePointer(d_viterbi_output_count, "d_viterbi_output_count");
+    releaseDevicePointer(d_viterbi_selected_fallback, "d_viterbi_selected_fallback");
+    releaseDevicePointer(d_viterbi_error_code, "d_viterbi_error_code");
 
     num_nodes = 0;
     workspace_max_length = 0;
@@ -252,9 +264,14 @@ bool UnigramLM::uploadTrieToGPU() {
     constexpr size_t max_sequence_length = HyperParameters::UNIGRAM_MAX_SEQUENCE_LENGTH;
     fresh.workspace_max_length = max_sequence_length;
 
+    if (!allocateDevice(fresh.d_viterbi_text, max_sequence_length, "d_viterbi_text")) return false;
     if (!allocateDevice(fresh.d_viterbi_scores, max_sequence_length + 1, "d_viterbi_scores")) return false;
     if (!allocateDevice(fresh.d_viterbi_prev, max_sequence_length + 1, "d_viterbi_prev")) return false;
     if (!allocateDevice(fresh.d_viterbi_tokens, max_sequence_length + 1, "d_viterbi_tokens")) return false;
+    if (!allocateDevice(fresh.d_viterbi_output_tokens, max_sequence_length, "d_viterbi_output_tokens")) return false;
+    if (!allocateDevice(fresh.d_viterbi_output_count, 1, "d_viterbi_output_count")) return false;
+    if (!allocateDevice(fresh.d_viterbi_selected_fallback, max_sequence_length, "d_viterbi_selected_fallback")) return false;
+    if (!allocateDevice(fresh.d_viterbi_error_code, 1, "d_viterbi_error_code")) return false;
 
     if (!copyToDevice(fresh.d_piece_data, piece_data.data(), piece_data.size(), "d_piece_data")) return false;
     if (!copyToDevice(fresh.d_piece_offsets, piece_offsets.data(), piece_offsets.size(), "d_piece_offsets")) return false;

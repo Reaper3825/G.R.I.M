@@ -1127,6 +1127,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         int iter = 0;
         for (; iter < EM_MAX_ITERATIONS; ++iter) {
             buildTrie();
+            if (!initGPU()) {
+                throw std::runtime_error("UnigramLM::trainFromCorpus: tokenizer GPU initialization failed before CUDA Viterbi E-step");
+            }
             auto [token_counts, total_tokens, log_likelihood] = runEStep();
             int unused = runMStep(token_counts, total_tokens);
 

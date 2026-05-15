@@ -54,16 +54,18 @@ Special-token ownership is deliberately narrow:
 ## Memory / tokenization boundary
 - `Unigram.hpp` must not expose raw CUDA buffer layout. It forward-declares `UnigramGpuMemory` and stores it as an opaque owner.
 - `Unigram.cu` owns learned vocab I/O, trie construction, encode/decode wrappers, and primitive byte/unigram decode behavior.
-- `UnigramViterbi.hpp/.cu` owns per-segmentation RAII dynamic-programming state, Viterbi backtracking validation, SentencePiece-style subword path selection, and Viterbi CUDA kernels. `UnigramLM::encode()` and tokenizer-training E-steps must instantiate `UnigramViterbiSession` instead of open-coding Viterbi/backtrack loops.
-- CPU and CUDA Viterbi must consume the same forward trie: from each reachable start position, walk `text[pos]`, `text[pos + 1]`, ... through `children[c]`. Do not reverse-scan pieces unless the uploaded trie is explicitly changed to a reverse trie.
+- `UnigramViterbi.hpp/.cu` owns the CUDA-backed production Viterbi session, per-segmentation launch/backtrack validation, SentencePiece-style subword path selection, and Viterbi CUDA kernels. `UnigramLM::encode()` and tokenizer-training E-steps must instantiate `UnigramViterbiSession` instead of open-coding Viterbi/backtrack loops.
+- Production Viterbi consumes the uploaded forward trie: from each reachable start position, walk `text[pos]`, `text[pos + 1]`, ... through `children[c]`. Do not reverse-scan pieces unless the uploaded trie is explicitly changed to a reverse trie.
+- `UnigramLM::initGPU()` is required before any non-empty encode/E-step. CUDA Viterbi must fail loudly if the GPU trie is uninitialized or its uploaded generation does not match the live trie generation; call `initGPU()` after `buildTrie()`/score mutation to refresh the upload.
 - Punctuation is data-driven, not a Viterbi boundary. In SentencePiece-style mode, punctuation bytes/chars remain in the normalized stream and may be part of learned unigram pieces (`.`, `...`, `don't`, `▁hello,`) if the trie contains those pieces and their scores win.
 - Byte fallback is a coverage path only. When byte fallback is enabled, fallback transitions emit `BYTE_TOKEN_OFFSET + byte`, never `UNK_TOKEN_ID`, but selected-fallback metadata must be derived during final backtrack rather than from candidate edges created during forward DP.
-- `TokenLayout.hpp::UNKNOWN_SCORE` is the single source for Viterbi fallback transition cost. CPU and CUDA Viterbi must read that constant directly; do not thread caller-provided unknown-score parameters through kernel launches or helper APIs.
+- `TokenLayout.hpp::UNKNOWN_SCORE` is the single source for Viterbi fallback transition cost. CUDA Viterbi must read that constant directly; do not thread caller-provided unknown-score parameters through kernel launches or helper APIs.
 - CUDA Viterbi kernels report logical validation failures through the explicit `error_code` pointer and named `kUnigramViterbiCuda*` status constants. Do not use device `assert()` for correctness checks; callers/tests must synchronize, copy the status word, and fail if it is not `kUnigramViterbiCudaOk`.
 - CUDA backtrack must fail with `kUnigramViterbiCudaOutputBufferTooSmall` when the selected path token count exceeds `max_tokens`; never silently truncate and never rely on build-mode-dependent asserts for this path.
 - Punctuation-heavy structural spans (URLs, paths, numbers, etc.) must be handled by raw-text detectors/training skip spans, not by hard-coded punctuation splitting inside Viterbi.
 - `UnigramGpuMemory.hpp/.cu` owns `UnigramLM` durable GPU buffers, `cudaMalloc`/`cudaFree`, host-to-device upload packing, and `UnigramLM::initGPU()` / `uploadTrieToGPU()` implementations.
 - GPU upload is transactional: build a fresh `UnigramGpuMemory` first, then move it into `UnigramLM` only after every allocation and copy succeeds.
+- `UnigramGpuMemory` owns the reusable CUDA Viterbi workspace and serializes that workspace with its mutex; do not allocate per-call Viterbi CUDA buffers in `Unigram.cu` or callers.
 - Do not add raw CUDA pointer members, cleanup lambdas, or `cudaMalloc`/`cudaFree` blocks back into `Unigram.hpp` or `Unigram.cu`; extend `UnigramGpuMemory` instead.
 
 ## Hyperparameter grouping
