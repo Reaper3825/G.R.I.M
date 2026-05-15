@@ -172,26 +172,6 @@ void LanguageModel::initTrainingState() {
     std::cout << "✓ PBM (Hybrid ALiBi+RoPE) pre-initialized" << std::endl;
 
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
-
-    // Parameter tensor verification is intentionally owned by
-    // Startup/Model/ParameterGroupRegistration.cu. Registration walks every
-    // configured trainable tensor and fails loud on missing data, missing grad
-    // buffers, empty tensors, disabled-but-present tensors, or duplicate data
-    // aliases. TrainingState owns only reusable runtime workspaces below.
-    
-    // NOTE: Encoder layer weight initialization is handled by Startup/Model GPU assembly.
-    // with proper GQA-aware dimensions and GPT-2 residual scaling.
-    // DO NOT duplicate Xavier init here per Rule 20 (single initialization owner).
-    
-    // DELETED: batch_prep_* lazy allocation (Rule 20) — replaced by BatchPayload struct
-    
-    // Generation/KV-cache state is intentionally NOT initialized here.
-    // Training-time sampling must explicitly call ensureKVCacheAllocated(),
-    // which creates GenerationState from the authored config capacity.
-
-    // NOTE: single-token decode scratch is generation-owned.
-    // Allocated in GenerationState by InitInferenceState.cu or ensureKVCacheAllocated().
-    // NOT needed by the training state cache rectangle.
     
     // Capacity is already authored on LanguageModelConfig. Per-batch
     // geometry/semantics come from BatchPayload at upload/forward time,
@@ -199,18 +179,6 @@ void LanguageModel::initTrainingState() {
     std::cout << "📊 Allocating TrainingState step workspaces" << std::endl;
     
     training_state_.allocateStepDeviceWorkspaces(cfg, primary_stream);
-    
-    // Rule 20: callers must use tensor.data directly
-    // Removed raw pointer alias assignments
-    // centering_scratch_tensor DELETED — cached_encoder_output is now overwritten
-    // with centered data after LM head forward (single source of truth)
-
-    // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages
-    // (was ~56MB dead GPU allocation). Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
-    // ScratchBlockLayer is durable model topology and is assembled in initGPU().
-    // initTrainingState() only verifies startup order and asks TrainingState to allocate
-    // its own reusable runtime cache tensors from the authored model config.
-    
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP FINAL: Confirm initialization complete
     // ═══════════════════════════════════════════════════════════════════════════

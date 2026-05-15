@@ -95,6 +95,15 @@ Token IDs include the atom offset. When indexing `entries_[]`:
 uint32_t idx = id - ATOM_TOKEN_OFFSET;
 ```
 
+AtomTable safety contracts:
+- `AtomTable::getAtom()` and `getAtomsByType()` return `AtomEntry` copies. Do not return raw pointers or references into `entries_` after releasing the table mutex.
+- GPU uploads are transactional: allocate/copy into a fresh `GPUAtomData`, synchronize the copy stream, then replace the caller-owned buffer and clear `gpu_dirty_` / `pending_gpu_upload_` only after every CUDA operation succeeds.
+- The internal `uploadToGPU(cudaStream_t)` wrapper must not free existing `gpu_data_` when the table is already clean; a clean repeat upload only refreshes `num_atoms`.
+- Atom dedup uses hash buckets (`hash -> vector<atom_id>`) and compares every candidate by type plus raw text so a hash collision cannot evict an older atom from dedup lookup.
+- Numeric GPU side channels keep exact payload arrays (`double`, `int64_t`, and `NumericPayloadKind`) in addition to the legacy packed float used by older embedding paths. Do not round integer atoms through `float` for GPU numeric reconstruction.
+- Numeric parse failures must not register as `ATOM_INT` / `ATOM_FLOAT`. Reject the registration instead of storing an `AtomGeneric` payload under a numeric atom type.
+- Binary AtomTable load must validate every `StringRef` against `string_pool_` before exposing entries; corrupt offsets/lengths are a hard load failure.
+
 ## Training data
 - HTML must be stripped before tokenization. `DataLoader.cu` handles `stripHtmlTags()` / `decodeHtmlEntities()` / `normalizeWhitespace()` automatically.
 - `DataLoader.cu` tokenizes raw content only. It must not add `BOS`/`EOS`; Phase 1 startup routes sequences through `SlidingWindow.cu` for that layout work.

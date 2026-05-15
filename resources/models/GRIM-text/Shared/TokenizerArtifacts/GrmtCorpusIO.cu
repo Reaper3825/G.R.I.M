@@ -104,7 +104,7 @@ void writeAtomTextForToken(std::ostream& output,
         if (!sequence.atom_table) {
             throw std::runtime_error("[GRMT] atom_entry_id present without AtomTable while writing " + sink);
         }
-        const auto* entry = sequence.atom_table->getAtom(entry_id);
+        const auto entry = sequence.atom_table->getAtom(entry_id);
         if (!entry) {
             throw std::runtime_error("[GRMT] atom_entry_id=" + std::to_string(entry_id) +
                                      " has no AtomEntry while writing " + sink);

@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -71,6 +72,12 @@ using AtomValue = std::variant<
     AtomFloat,
     AtomGeneric
 >;
+
+enum class NumericPayloadKind : uint8_t {
+    NONE = 0,
+    INTEGER = 1,
+    FLOAT = 2
+};
 
 //======================================================//
 //  Atom Origin - Where did this atom come from?
@@ -210,14 +217,15 @@ public:
     // Lookup
     //--------------------------------------------------//
     
-    // Get atom by ID
-    const AtomEntry* getAtom(uint32_t id) const;
+    // Get atom by ID as a copy. Returning pointers into entries_ is forbidden:
+    // callers must not hold storage aliases after the mutex is released.
+    std::optional<AtomEntry> getAtom(uint32_t id) const;
     
     // Alias for getAtom (for API consistency)
-    const AtomEntry* getAtomEntry(uint32_t id) const { return getAtom(id); }
+    std::optional<AtomEntry> getAtomEntry(uint32_t id) const { return getAtom(id); }
     
     // Get all atoms of a specific type
-    std::vector<const AtomEntry*> getAtomsByType(AtomType type) const;
+    std::vector<AtomEntry> getAtomsByType(AtomType type) const;
     
     // Get atom count
     size_t size() const { return entries_.size(); }
@@ -281,13 +289,19 @@ public:
     
     // Pack atoms for GPU transfer (64-byte aligned, no string data)
     struct GPUAtomData {
-        float* d_numeric_values;      // [num_atoms] - numeric values
-        uint32_t* d_flags;            // [num_atoms] - type-specific flags
-        uint32_t* d_types;            // [num_atoms] - atom types
+        float* d_numeric_values;          // [num_atoms] - legacy packed float values for embeddings
+        double* d_numeric_float_values;   // [num_atoms] - exact float/double payloads
+        int64_t* d_numeric_int_values;    // [num_atoms] - exact int64 payloads
+        uint8_t* d_numeric_kind;          // [num_atoms] - NumericPayloadKind
+        uint32_t* d_flags;                // [num_atoms] - type-specific flags
+        uint32_t* d_types;                // [num_atoms] - atom types
         size_t num_atoms;
         
         GPUAtomData() 
             : d_numeric_values(nullptr)
+            , d_numeric_float_values(nullptr)
+            , d_numeric_int_values(nullptr)
+            , d_numeric_kind(nullptr)
             , d_flags(nullptr)
             , d_types(nullptr)
             , num_atoms(0) {}
@@ -335,8 +349,11 @@ public:
 private:
     // --- Core Storage ---
     std::vector<AtomEntry> entries_;              // Cache-aligned atom entries
+    std::vector<double> numeric_float_values_;    // Exact per-entry float/double payloads
+    std::vector<int64_t> numeric_int_values_;     // Exact per-entry integer payloads
+    std::vector<uint8_t> numeric_kinds_;          // NumericPayloadKind per entry
     std::vector<char> string_pool_;               // Append-only string buffer
-    std::unordered_map<uint64_t, uint32_t> hash_to_id_;  // Hash → ID for dedup
+    std::unordered_map<uint64_t, std::vector<uint32_t>> hash_to_ids_;  // Hash → IDs for collision-safe dedup
     std::unordered_map<AtomType, std::vector<uint32_t>> type_index_;  // Type → IDs
     
     uint32_t next_id_ = 0;
@@ -358,10 +375,14 @@ private:
     
     // Deduplication: check if atom already exists
     // Returns existing ID if found, or UINT32_MAX if not
-    uint32_t findExisting(uint64_t hash, std::string_view raw_text);
+    uint32_t findExisting(AtomType type, uint64_t hash, std::string_view raw_text);
     
     // Pack numeric value for GPU (no string copying)
-    void packNumericValue(AtomEntry& entry, const AtomValue& parsed);
+    void packNumericValue(AtomEntry& entry,
+                          const AtomValue& parsed,
+                          double& numeric_float_value,
+                          int64_t& numeric_int_value,
+                          uint8_t& numeric_kind);
 };
 
 //======================================================//

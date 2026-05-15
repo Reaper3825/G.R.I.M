@@ -304,8 +304,8 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             
             // Read back AtomTable's packed values — covers ALL atom types
             // (dates, times, IPs, etc. get meaningful numeric_value and flags
-            // via packNumericValue(), not just INT/FLOAT/HEX/BIN)
-            const auto* entry = result.atom_table->getAtom(entry_id);
+            // via packNumericValue(), not just INT/FLOAT)
+            const auto entry = result.atom_table->getAtom(entry_id);
             float packed_numeric = numeric_value;  // fallback to parser result
             uint32_t packed_flags = 0;
             if (entry) {
@@ -389,7 +389,7 @@ void appendDecodedAtomToken(std::string& result, const DecodeRequest& request, s
                                  " has kAtomEntryNone at index=" + std::to_string(index));
     }
 
-    const AtomEntry* entry = request.atom_table->getAtom(entry_id);
+    const auto entry = request.atom_table->getAtom(entry_id);
     if (!entry) {
         throw std::runtime_error("UniByte::decode: atom_entry_id=" + std::to_string(entry_id) +
                                  " has no backing AtomEntry");

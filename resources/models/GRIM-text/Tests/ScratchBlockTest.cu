@@ -741,7 +741,7 @@ bool testAtomTableTypeMapping(std::string& message) {
     
     // Verify retrieval
     auto entry1 = atom_table.getAtomEntry(tok1);
-    SB_ASSERT_TRUE(entry1 != nullptr, "Should retrieve registered atom");
+    SB_ASSERT_TRUE(entry1.has_value(), "Should retrieve registered atom");
     SB_ASSERT_TRUE(entry1->type == AtomType::ATOM_INT, "Retrieved atom should have correct type");
     
     logDiagnostic("AtomTable type mapping validated: unique tokens, deduplication works");
@@ -899,7 +899,7 @@ bool testIdentifierPreservation(std::string& message) {
     
     // Verify we can retrieve the original values
     auto entry1 = atom_table.getAtomEntry(tok1);
-    SB_ASSERT_TRUE(entry1 != nullptr, "Should retrieve identifier");
+    SB_ASSERT_TRUE(entry1.has_value(), "Should retrieve identifier");
     
     // AtomEntry stores compact GPU data, not full AtomValue
     // Check type and flags which encode the identifier style

@@ -836,8 +836,8 @@ bool testAtomTableRegisterInteger(std::string& message) {
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "12345", 0, 5);
     
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    auto entry = table.getAtom(id);
+    ASSERT_TRUE(entry, "Failed to retrieve atom");
     ASSERT_EQ(static_cast<int>(entry->type), static_cast<int>(AtomType::ATOM_INT), 
               "Type mismatch");
     
@@ -857,8 +857,8 @@ bool testAtomTableRegisterFloat(std::string& message) {
     
     uint32_t id = table.registerAtom(AtomType::ATOM_FLOAT, "3.14159", 0, 7);
     
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    auto entry = table.getAtom(id);
+    ASSERT_TRUE(entry, "Failed to retrieve atom");
     
     double num = AtomTable::getNumericValue(*entry);
     ASSERT_NEAR(num, 3.14159, 0.0001, "Float value mismatch");
@@ -872,8 +872,8 @@ bool testAtomTableRegisterHex(std::string& message) {
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "255", 0, 3);
     
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    auto entry = table.getAtom(id);
+    ASSERT_TRUE(entry, "Failed to retrieve atom");
     
     double num = AtomTable::getNumericValue(*entry);
     ASSERT_NEAR(num, 255.0, 0.01, "Integer value mismatch");
@@ -887,8 +887,8 @@ bool testAtomTableRegisterBinary(std::string& message) {
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "10", 0, 2);
     
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    auto entry = table.getAtom(id);
+    ASSERT_TRUE(entry, "Failed to retrieve atom");
     
     double num = AtomTable::getNumericValue(*entry);
     ASSERT_NEAR(num, 10.0, 0.01, "Integer value mismatch");
@@ -902,16 +902,8 @@ bool testAtomTableRegisterURL(std::string& message) {
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, 
                                       "https://example.com:8080/path?query=1#fragment", 
                                       0, 45);
-    
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
-    ASSERT_EQ(static_cast<int>(entry->type), static_cast<int>(AtomType::ATOM_INT),
-              "Type mismatch");
-    
-    // Verify serialization
-    std::string serialized = table.atomToString(*entry);
-    ASSERT_TRUE(serialized.find("example.com") != std::string::npos, 
-                "Serialized URL should contain domain");
+    ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
+    ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected URL should not mutate table");
     
     return true;
 }
@@ -920,12 +912,8 @@ bool testAtomTableRegisterEmail(std::string& message) {
     AtomTable table;
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "user@domain.com", 0, 15);
-    
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
-    
-    std::string serialized = table.atomToString(*entry);
-    ASSERT_STR_EQ(serialized, "user@domain.com", "Email serialization mismatch");
+    ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
+    ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected email should not mutate table");
     
     return true;
 }
@@ -934,9 +922,8 @@ bool testAtomTableRegisterDate(std::string& message) {
     AtomTable table;
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "2024-12-25", 0, 10);
-    
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
+    ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected date should not mutate table");
     
     return true;
 }
@@ -945,9 +932,8 @@ bool testAtomTableRegisterTime(std::string& message) {
     AtomTable table;
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "14:30:00", 0, 8);
-    
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
+    ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected time should not mutate table");
     
     return true;
 }
@@ -956,12 +942,8 @@ bool testAtomTableRegisterIP(std::string& message) {
     AtomTable table;
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "192.168.1.1", 0, 11);
-    
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
-    
-    std::string serialized = table.atomToString(*entry);
-    ASSERT_STR_EQ(serialized, "192.168.1.1", "IP serialization mismatch");
+    ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
+    ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected IP should not mutate table");
     
     return true;
 }
@@ -970,9 +952,8 @@ bool testAtomTableRegisterPath(std::string& message) {
     AtomTable table;
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "/usr/local/bin/test", 0, 19);
-    
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
+    ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected path should not mutate table");
     
     return true;
 }
@@ -981,9 +962,8 @@ bool testAtomTableRegisterString(std::string& message) {
     AtomTable table;
     
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "\"hello\\nworld\"", 0, 14);
-    
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
+    ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected string should not mutate table");
     
     return true;
 }
@@ -992,14 +972,15 @@ bool testAtomTableRegisterIdentifier(std::string& message) {
     AtomTable table;
     
     // Test various naming conventions
-    table.registerAtom(AtomType::ATOM_INT, "camelCase", 0, 9);
-    table.registerAtom(AtomType::ATOM_INT, "PascalCase", 0, 10);
-    table.registerAtom(AtomType::ATOM_INT, "snake_case", 0, 10);
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "SCREAMING_SNAKE", 0, 15);
-    
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
-    ASSERT_EQ(table.size(), 4, "Should have 4 atoms");
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "camelCase", 0, 9), UINT32_MAX,
+              "Invalid identifier must not register as ATOM_INT");
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "PascalCase", 0, 10), UINT32_MAX,
+              "Invalid identifier must not register as ATOM_INT");
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "snake_case", 0, 10), UINT32_MAX,
+              "Invalid identifier must not register as ATOM_INT");
+    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "SCREAMING_SNAKE", 0, 15), UINT32_MAX,
+              "Invalid identifier must not register as ATOM_INT");
+    ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected identifiers should not mutate table");
     
     return true;
 }
@@ -1028,7 +1009,7 @@ bool testAtomTableGPUUpload(std::string& message) {
     // Register some atoms
     table.registerAtom(AtomType::ATOM_INT, "42", 0, 2);
     table.registerAtom(AtomType::ATOM_FLOAT, "3.14", 0, 4);
-    table.registerAtom(AtomType::ATOM_INT, "https://test.com", 0, 16);
+    table.registerAtom(AtomType::ATOM_INT, "9007199254740993", 0, 16);
     
     AtomTable::GPUAtomData gpu_data;
     bool success = table.uploadToGPU(gpu_data);
@@ -1036,7 +1017,28 @@ bool testAtomTableGPUUpload(std::string& message) {
     ASSERT_TRUE(success, "GPU upload failed");
     ASSERT_EQ(gpu_data.num_atoms, 3, "GPU atom count mismatch");
     ASSERT_TRUE(gpu_data.d_numeric_values != nullptr, "Numeric values not allocated");
+    ASSERT_TRUE(gpu_data.d_numeric_float_values != nullptr, "Exact float numeric values not allocated");
+    ASSERT_TRUE(gpu_data.d_numeric_int_values != nullptr, "Exact int numeric values not allocated");
+    ASSERT_TRUE(gpu_data.d_numeric_kind != nullptr, "Numeric kind values not allocated");
     ASSERT_TRUE(gpu_data.d_types != nullptr, "Types not allocated");
+
+    int64_t exact_large_int = 0;
+    cudaError_t copy_err = cudaMemcpy(&exact_large_int,
+                                      gpu_data.d_numeric_int_values + 2,
+                                      sizeof(int64_t),
+                                      cudaMemcpyDeviceToHost);
+    ASSERT_TRUE(copy_err == cudaSuccess, "Failed to copy exact integer payload back from GPU");
+    ASSERT_EQ(exact_large_int, static_cast<int64_t>(9007199254740993LL),
+              "GPU exact integer payload must not round through float");
+
+    AtomTable internal_table;
+    internal_table.registerAtom(AtomType::ATOM_INT, "7", 0, 1);
+    ASSERT_TRUE(internal_table.uploadToGPU(), "Internal GPU upload failed");
+    float* first_internal_numeric = internal_table.getGPUBuffer()->d_numeric_values;
+    ASSERT_TRUE(first_internal_numeric != nullptr, "Internal upload did not allocate numeric values");
+    ASSERT_TRUE(internal_table.uploadToGPU(), "Clean internal GPU upload should succeed");
+    ASSERT_TRUE(internal_table.getGPUBuffer()->d_numeric_values == first_internal_numeric,
+                "Clean internal upload must not free valid GPU buffers");
     
     // Cleanup
     AtomTable::freeGPUData(gpu_data);
@@ -1066,8 +1068,8 @@ bool testAtomTableMetadata(std::string& message) {
     // Register an atom
     uint32_t id = table.registerAtom(AtomType::ATOM_INT, "42", 0, 2);
     
-    const AtomEntry* entry = table.getAtom(id);
-    ASSERT_TRUE(entry != nullptr, "Failed to retrieve atom");
+    auto entry = table.getAtom(id);
+    ASSERT_TRUE(entry, "Failed to retrieve atom");
     
     // Check default metadata
     ASSERT_EQ(static_cast<int>(entry->origin), static_cast<int>(AtomOrigin::USER_INPUT), 
@@ -1100,16 +1102,17 @@ bool testAtomTableHashDeduplication(std::string& message) {
     uint32_t id1 = table.registerAtom(AtomType::ATOM_INT, "100", 0, 3);
     uint32_t id2 = table.registerAtom(AtomType::ATOM_INT, "100", 0, 3);
     
-    const AtomEntry* entry1 = table.getAtom(id1);
-    const AtomEntry* entry2 = table.getAtom(id2);
+    auto entry1 = table.getAtom(id1);
+    auto entry2 = table.getAtom(id2);
     
-    ASSERT_TRUE(entry1 != nullptr && entry2 != nullptr, "Both atoms should exist");
+    ASSERT_TRUE(entry1 && entry2, "Both atoms should exist");
     ASSERT_EQ(entry1->hash, entry2->hash, "Identical atoms should have same hash");
     
     // Different atom should have different hash
     uint32_t id3 = table.registerAtom(AtomType::ATOM_INT, "200", 0, 3);
-    const AtomEntry* entry3 = table.getAtom(id3);
+    auto entry3 = table.getAtom(id3);
     
+    ASSERT_TRUE(entry3, "Different atom should exist");
     ASSERT_TRUE(entry1->hash != entry3->hash, "Different atoms should have different hashes");
     
     return true;

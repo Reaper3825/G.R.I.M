@@ -66,6 +66,18 @@ std::string escapeForTsv(std::string_view value) {
     return out;
 }
 
+bool stringRefInBounds(const StringRef& ref, size_t pool_size) {
+    if (ref.offset > pool_size) {
+        return false;
+    }
+    const size_t remaining = pool_size - ref.offset;
+    return static_cast<size_t>(ref.length) <= remaining;
+}
+
+bool atomTypeIsPersistable(AtomType type) {
+    return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT;
+}
+
 } // namespace
 
 //======================================================//
@@ -74,7 +86,9 @@ std::string escapeForTsv(std::string_view value) {
 
 // Kernel: Unpack atom numeric values for computation
 __global__ void kernelUnpackAtomNumerics(
-    const float* __restrict__ numeric_values,
+    const double* __restrict__ numeric_float_values,
+    const int64_t* __restrict__ numeric_int_values,
+    const uint8_t* __restrict__ numeric_kind,
     const uint32_t* __restrict__ types,
     size_t num_atoms,
     float* __restrict__ output_floats,
@@ -84,20 +98,18 @@ __global__ void kernelUnpackAtomNumerics(
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_atoms) return;
     
-    uint32_t type = types[idx];
-    float val = numeric_values[idx];
-
-    const AtomType atom_type = static_cast<AtomType>(type);
-    const bool is_int = (atom_type == AtomType::ATOM_INT);
+    (void)types;
+    const uint8_t kind = numeric_kind[idx];
+    const bool is_int = (kind == static_cast<uint8_t>(NumericPayloadKind::INTEGER));
     
     is_integer[idx] = is_int;
-    output_floats[idx] = val;
-    output_ints[idx] = static_cast<int64_t>(val);
+    output_floats[idx] = static_cast<float>(numeric_float_values[idx]);
+    output_ints[idx] = numeric_int_values[idx];
 }
 
 // Kernel: Pack atom data for embedding lookup
 __global__ void kernelPackAtomEmbeddings(
-    const float* __restrict__ numeric_values,
+    const double* __restrict__ numeric_float_values,
     const uint32_t* __restrict__ types,
     const uint32_t* __restrict__ flags,
     size_t num_atoms,
@@ -118,7 +130,7 @@ __global__ void kernelPackAtomEmbeddings(
     }
     // Next dimensions encode numeric value (log-scaled)
     else if (dim_idx < 32) {
-        float num_val = numeric_values[atom_idx];
+        float num_val = static_cast<float>(numeric_float_values[atom_idx]);
         int bit = dim_idx - 16;
         
         if (num_val != 0.0f) {
@@ -148,23 +160,33 @@ __global__ void kernelPackAtomEmbeddings(
 
 AtomTable::AtomTable() {
     entries_.reserve(64);
+    numeric_float_values_.reserve(64);
+    numeric_int_values_.reserve(64);
+    numeric_kinds_.reserve(64);
     string_pool_.reserve(4096);  // Start with 4KB string pool
-    hash_to_id_.reserve(64);
+    hash_to_ids_.reserve(64);
 }
 
-AtomTable::~AtomTable() = default;
+AtomTable::~AtomTable() {
+    freeGPUData(gpu_data_);
+}
 
 AtomTable::AtomTable(AtomTable&& other) noexcept
     : entries_(std::move(other.entries_))
+    , numeric_float_values_(std::move(other.numeric_float_values_))
+    , numeric_int_values_(std::move(other.numeric_int_values_))
+    , numeric_kinds_(std::move(other.numeric_kinds_))
     , string_pool_(std::move(other.string_pool_))
-    , hash_to_id_(std::move(other.hash_to_id_))
+    , hash_to_ids_(std::move(other.hash_to_ids_))
     , type_index_(std::move(other.type_index_))
     , next_id_(other.next_id_)
     , dedup_hits_(other.dedup_hits_)
     , total_queries_(other.total_queries_)
     , pending_gpu_upload_(std::move(other.pending_gpu_upload_))
     , gpu_dirty_(other.gpu_dirty_)
+    , gpu_data_(other.gpu_data_)
 {
+    other.gpu_data_ = GPUAtomData{};
     other.next_id_ = 0;
     other.dedup_hits_ = 0;
     other.total_queries_ = 0;
@@ -173,16 +195,22 @@ AtomTable::AtomTable(AtomTable&& other) noexcept
 
 AtomTable& AtomTable::operator=(AtomTable&& other) noexcept {
     if (this != &other) {
+        freeGPUData(gpu_data_);
         entries_ = std::move(other.entries_);
+        numeric_float_values_ = std::move(other.numeric_float_values_);
+        numeric_int_values_ = std::move(other.numeric_int_values_);
+        numeric_kinds_ = std::move(other.numeric_kinds_);
         string_pool_ = std::move(other.string_pool_);
-        hash_to_id_ = std::move(other.hash_to_id_);
+        hash_to_ids_ = std::move(other.hash_to_ids_);
         type_index_ = std::move(other.type_index_);
         pending_gpu_upload_ = std::move(other.pending_gpu_upload_);
+        gpu_data_ = other.gpu_data_;
         next_id_ = other.next_id_;
         dedup_hits_ = other.dedup_hits_;
         total_queries_ = other.total_queries_;
         gpu_dirty_ = other.gpu_dirty_;
         
+        other.gpu_data_ = GPUAtomData{};
         other.next_id_ = 0;
         other.dedup_hits_ = 0;
         other.total_queries_ = 0;
@@ -193,9 +221,13 @@ AtomTable& AtomTable::operator=(AtomTable&& other) noexcept {
 
 void AtomTable::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    freeGPUData(gpu_data_);
     entries_.clear();
+    numeric_float_values_.clear();
+    numeric_int_values_.clear();
+    numeric_kinds_.clear();
     string_pool_.clear();
-    hash_to_id_.clear();
+    hash_to_ids_.clear();
     type_index_.clear();
     pending_gpu_upload_.clear();
     next_id_ = 0;
@@ -207,7 +239,10 @@ void AtomTable::clear() {
 void AtomTable::reserve(size_t count) {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.reserve(count);
-    hash_to_id_.reserve(count);
+    numeric_float_values_.reserve(count);
+    numeric_int_values_.reserve(count);
+    numeric_kinds_.reserve(count);
+    hash_to_ids_.reserve(count);
 }
 
 bool AtomTable::saveToFile(const std::string& path) const {
@@ -337,14 +372,37 @@ bool AtomTable::loadFromFile(const std::string& path) {
     }
 
     for (uint32_t i = 0; i < entry_count; ++i) {
-        const AtomEntry& entry = entries[i];
+        AtomEntry& entry = entries[i];
         if (entry.id < ATOM_TOKEN_BASE || entry.id >= ATOM_TOKEN_MAX) {
+            return false;
+        }
+        if (!atomTypeIsPersistable(entry.type)) {
             return false;
         }
         const uint32_t expected_idx = entry.id - ATOM_TOKEN_BASE;
         if (expected_idx != i) {
             return false;
         }
+        if (!stringRefInBounds(entry.raw_text_ref, pool.size()) ||
+            !stringRefInBounds(entry.parsed_ref, pool.size())) {
+            return false;
+        }
+    }
+
+    std::vector<double> numeric_float_values(entry_count, 0.0);
+    std::vector<int64_t> numeric_int_values(entry_count, 0);
+    std::vector<uint8_t> numeric_kinds(entry_count, static_cast<uint8_t>(NumericPayloadKind::NONE));
+    for (uint32_t i = 0; i < entry_count; ++i) {
+        AtomEntry& entry = entries[i];
+        std::string raw_text;
+        if (entry.raw_text_ref.length > 0) {
+            raw_text.assign(pool.data() + entry.raw_text_ref.offset, entry.raw_text_ref.length);
+        }
+        ParseResult result = parseAtom(entry.type, raw_text);
+        if (!result.success) {
+            return false;
+        }
+        packNumericValue(entry, result.value, numeric_float_values[i], numeric_int_values[i], numeric_kinds[i]);
     }
 
     {
@@ -352,17 +410,20 @@ bool AtomTable::loadFromFile(const std::string& path) {
         freeGPUData(gpu_data_);
 
         entries_ = std::move(entries);
+        numeric_float_values_ = std::move(numeric_float_values);
+        numeric_int_values_ = std::move(numeric_int_values);
+        numeric_kinds_ = std::move(numeric_kinds);
         string_pool_ = std::move(pool);
-        hash_to_id_.clear();
+        hash_to_ids_.clear();
         type_index_.clear();
         pending_gpu_upload_.clear();
         dedup_hits_ = 0;
         total_queries_ = 0;
 
-        hash_to_id_.reserve(entries_.size());
+        hash_to_ids_.reserve(entries_.size());
         pending_gpu_upload_.reserve(entries_.size());
         for (const auto& entry : entries_) {
-            hash_to_id_[entry.hash] = entry.id;
+            hash_to_ids_[entry.hash].push_back(entry.id);
             type_index_[entry.type].push_back(entry.id);
             pending_gpu_upload_.push_back(entry.id);
         }
@@ -423,6 +484,12 @@ StringRef AtomTable::internString(const char* data, size_t length) {
 
 std::string_view AtomTable::getString(const StringRef& ref) const {
     if (ref.length == 0) return std::string_view();
+    if (!stringRefInBounds(ref, string_pool_.size())) {
+        throw std::runtime_error(
+            "AtomTable::getString StringRef out of bounds: offset=" +
+            std::to_string(ref.offset) + ", length=" + std::to_string(ref.length) +
+            ", pool_size=" + std::to_string(string_pool_.size()));
+    }
     return std::string_view(string_pool_.data() + ref.offset, ref.length);
 }
 
@@ -435,28 +502,29 @@ size_t AtomTable::getDeduplicationHitRate() const {
 // Deduplication
 //--------------------------------------------------//
 
-uint32_t AtomTable::findExisting(uint64_t hash, std::string_view raw_text) {
+uint32_t AtomTable::findExisting(AtomType type, uint64_t hash, std::string_view raw_text) {
     total_queries_++;
     
-    auto it = hash_to_id_.find(hash);
-    if (it == hash_to_id_.end()) {
+    auto it = hash_to_ids_.find(hash);
+    if (it == hash_to_ids_.end()) {
         return UINT32_MAX;  // Not found
     }
-    
-    // The stored value is the token ID (ATOM_TOKEN_BASE+), get index in entries_
-    uint32_t token_id = it->second;
-    uint32_t entry_idx = token_id - ATOM_TOKEN_BASE;
-    
-    if (entry_idx >= entries_.size()) {
-        return UINT32_MAX;
-    }
-    
-    const AtomEntry& existing = entries_[entry_idx];
-    std::string_view existing_text = getString(existing.raw_text_ref);
-    
-    if (existing_text == raw_text) {
-        dedup_hits_++;
-        return token_id;  // Return the token ID (ATOM_TOKEN_BASE+), not the array index
+
+    for (uint32_t token_id : it->second) {
+        if (token_id < ATOM_TOKEN_BASE) {
+            continue;
+        }
+        const uint32_t entry_idx = token_id - ATOM_TOKEN_BASE;
+        if (entry_idx >= entries_.size()) {
+            continue;
+        }
+
+        const AtomEntry& existing = entries_[entry_idx];
+        std::string_view existing_text = getString(existing.raw_text_ref);
+        if (existing.type == type && existing_text == raw_text) {
+            dedup_hits_++;
+            return token_id;  // Return the token ID (ATOM_TOKEN_BASE+), not the array index
+        }
     }
     
     return UINT32_MAX;  // Hash collision but different content
@@ -467,17 +535,6 @@ uint32_t AtomTable::findExisting(uint64_t hash, std::string_view raw_text) {
 //--------------------------------------------------//
 
 namespace {
-// Check if atom type needs separate parsed representation
-// (Most types don't - raw_text is sufficient)
-bool hasEdgeWhitespace(std::string_view text) {
-    if (text.empty()) {
-        return false;
-    }
-    const unsigned char first = static_cast<unsigned char>(text.front());
-    const unsigned char last = static_cast<unsigned char>(text.back());
-    return std::isspace(first) || std::isspace(last);
-}
-
 std::string_view trimWhitespace(std::string_view text) {
     size_t start = 0;
     size_t end = text.size();
@@ -512,8 +569,7 @@ uint32_t AtomTable::registerAtom(AtomType type,
     if (result.success) {
         parsed = result.value;
     } else {
-        // Fallback to generic (convert string_view to string)
-        parsed = AtomGeneric{std::string(raw_text)};
+        return UINT32_MAX;
     }
     
     return registerAtom(type, raw_text, parsed, source_start, source_end);
@@ -530,14 +586,15 @@ uint32_t AtomTable::registerAtom(AtomType type,
     uint64_t hash = computeHash(type, raw_text);
     
     // Check if this atom already exists
-    uint32_t existing_id = findExisting(hash, raw_text);
+    uint32_t existing_id = findExisting(type, hash, raw_text);
     if (existing_id != UINT32_MAX) {
         return existing_id;  // Return existing ID (deduplication hit!)
     }
     
     // New atom - allocate entry
     // Entry IDs start at ATOM_TOKEN_BASE (side-channel index, not model token vocab)
-    AtomEntry entry;
+    AtomEntry entry{};
+    entry.parsed_ref = StringRef(0, 0);
     entry.id = ATOM_TOKEN_BASE + next_id_;
     next_id_++;
     
@@ -556,10 +613,13 @@ uint32_t AtomTable::registerAtom(AtomType type,
     entry.raw_text_ref = internString(raw_text);
     
     // Pack numeric value (no string copying for GPU)
-    packNumericValue(entry, parsed_value);
+    double numeric_float_value = 0.0;
+    int64_t numeric_int_value = 0;
+    uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
+    packNumericValue(entry, parsed_value, numeric_float_value, numeric_int_value, numeric_kind);
     
     // Skip serialization for types where raw_text == parsed representation
-    if (needsSerialization(type) && !hasEdgeWhitespace(raw_text)) {
+    if (needsSerialization(type)) {
         // Use stack buffer to avoid heap allocation
         char buffer[1024];
         size_t len = atomValueSerialize(type, parsed_value, buffer, sizeof(buffer));
@@ -570,14 +630,17 @@ uint32_t AtomTable::registerAtom(AtomType type,
     
     // Index for fast lookup
     uint32_t new_id = entry.id;
-    hash_to_id_[hash] = new_id;
+    entries_.push_back(std::move(entry));
+    numeric_float_values_.push_back(numeric_float_value);
+    numeric_int_values_.push_back(numeric_int_value);
+    numeric_kinds_.push_back(numeric_kind);
+    hash_to_ids_[hash].push_back(new_id);
     type_index_[type].push_back(new_id);
     
     // Mark for GPU upload
     pending_gpu_upload_.push_back(new_id);
     gpu_dirty_ = true;
     
-    entries_.push_back(std::move(entry));
     return new_id;
 }
 
@@ -602,7 +665,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     uint64_t hash = computeHash(span.atom_type, raw_text);
     
     // Check if this atom already exists
-    uint32_t existing_id = findExisting(hash, raw_text);
+    uint32_t existing_id = findExisting(span.atom_type, hash, raw_text);
     if (existing_id != UINT32_MAX) {
         out_id = existing_id;  // Return existing ID (deduplication hit!)
         return true;
@@ -618,10 +681,12 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     if (result.success) {
         parsed = result.value;
     } else {
-        parsed = AtomGeneric{raw_text_str};
+        out_id = UINT32_MAX;
+        return false;
     }
     
-    AtomEntry entry;
+    AtomEntry entry{};
+    entry.parsed_ref = StringRef(0, 0);
     entry.id = ATOM_TOKEN_BASE + next_id_;
     next_id_++;
     entry.type = span.atom_type;
@@ -639,7 +704,10 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     entry.raw_text_ref = internString(span.buffer_ptr + span.content_offset, span.content_length);
     
     // Pack numeric value
-    packNumericValue(entry, parsed);
+    double numeric_float_value = 0.0;
+    int64_t numeric_int_value = 0;
+    uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
+    packNumericValue(entry, parsed, numeric_float_value, numeric_int_value, numeric_kind);
     
     // Skip serialization for types where raw_text == parsed representation
     // Only serialize if we need a different string representation
@@ -652,14 +720,17 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     
     // Index for fast lookup
     uint32_t new_id = entry.id;
-    hash_to_id_[hash] = new_id;
+    entries_.push_back(std::move(entry));
+    numeric_float_values_.push_back(numeric_float_value);
+    numeric_int_values_.push_back(numeric_int_value);
+    numeric_kinds_.push_back(numeric_kind);
+    hash_to_ids_[hash].push_back(new_id);
     type_index_[span.atom_type].push_back(new_id);
     
     // Mark for GPU upload
     pending_gpu_upload_.push_back(new_id);
     gpu_dirty_ = true;
     
-    entries_.push_back(std::move(entry));
     out_id = new_id;
     return true;
 }
@@ -678,38 +749,38 @@ uint32_t AtomTable::registerSpan(const StructuralSpan& span) {
 // Lookup
 //--------------------------------------------------//
 
-const AtomEntry* AtomTable::getAtom(uint32_t id) const {
+std::optional<AtomEntry> AtomTable::getAtom(uint32_t id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     
     // Token IDs are offset by ATOM_TOKEN_BASE, convert to array index
     if (id < ATOM_TOKEN_BASE) {
-        return nullptr;  // Not a valid atom token
+        return std::nullopt;  // Not a valid atom token
     }
     
     uint32_t idx = id - ATOM_TOKEN_BASE;
     if (idx >= entries_.size()) {
-        return nullptr;
+        return std::nullopt;
     }
     
     // Verify the entry actually has this ID (sanity check)
     const AtomEntry& entry = entries_[idx];
     if (entry.id == id) {
-        return &entry;
+        return entry;
     }
     
     // Fallback: Linear search (shouldn't happen with proper indexing)
     for (const auto& e : entries_) {
         if (e.id == id) {
-            return &e;
+            return e;
         }
     }
-    return nullptr;
+    return std::nullopt;
 }
 
-std::vector<const AtomEntry*> AtomTable::getAtomsByType(AtomType type) const {
+std::vector<AtomEntry> AtomTable::getAtomsByType(AtomType type) const {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    std::vector<const AtomEntry*> result;
+    std::vector<AtomEntry> result;
     
     auto it = type_index_.find(type);
     if (it != type_index_.end()) {
@@ -719,7 +790,7 @@ std::vector<const AtomEntry*> AtomTable::getAtomsByType(AtomType type) const {
             if (token_id >= ATOM_TOKEN_BASE) {
                 uint32_t idx = token_id - ATOM_TOKEN_BASE;
                 if (idx < entries_.size()) {
-                    result.push_back(&entries_[idx]);
+                    result.push_back(entries_[idx]);
                 }
             }
         }
@@ -1014,19 +1085,31 @@ void AtomTable::setCategory(uint32_t id, AtomCategory category) {
 // GPU Packing (Numeric Values Only)
 //--------------------------------------------------//
 
-void AtomTable::packNumericValue(AtomEntry& entry, const AtomValue& parsed) {
+void AtomTable::packNumericValue(AtomEntry& entry,
+                                 const AtomValue& parsed,
+                                 double& numeric_float_value,
+                                 int64_t& numeric_int_value,
+                                 uint8_t& numeric_kind) {
     entry.numeric_value = 0.0f;
     entry.flags = 0;
+    numeric_float_value = 0.0;
+    numeric_int_value = 0;
+    numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
     
     std::visit([&](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
         
         if constexpr (std::is_same_v<T, AtomInteger>) {
             entry.numeric_value = static_cast<float>(arg.value);
+            numeric_float_value = static_cast<double>(arg.value);
+            numeric_int_value = arg.value;
+            numeric_kind = static_cast<uint8_t>(NumericPayloadKind::INTEGER);
             entry.flags = (arg.base << 8) | (arg.has_sign ? 1 : 0);
         }
         else if constexpr (std::is_same_v<T, AtomFloat>) {
             entry.numeric_value = static_cast<float>(arg.value);
+            numeric_float_value = arg.value;
+            numeric_kind = static_cast<uint8_t>(NumericPayloadKind::FLOAT);
             entry.flags = (arg.has_exponent ? 1 : 0) | (arg.exponent << 8);
         }
     }, parsed);
@@ -1047,27 +1130,52 @@ bool AtomTable::uploadToGPU(AtomTable::GPUAtomData& out_data, cudaStream_t strea
     
     size_t num_atoms = entries_.size();
     if (num_atoms == 0) {
+        freeGPUData(out_data);
         out_data.num_atoms = 0;
         gpu_dirty_ = false;
         return true;
     }
+
+    if (numeric_float_values_.size() != num_atoms ||
+        numeric_int_values_.size() != num_atoms ||
+        numeric_kinds_.size() != num_atoms) {
+        throw std::runtime_error("AtomTable::uploadToGPU numeric side-channel size mismatch");
+    }
     
     cudaError_t err;
+    GPUAtomData temp{};
     
     // Allocate device memory (numeric values, types, flags only - no aux buffer)
-    err = cudaMalloc(&out_data.d_numeric_values, num_atoms * sizeof(float));
+    err = cudaMalloc(&temp.d_numeric_values, num_atoms * sizeof(float));
     if (err != cudaSuccess) return false;
     
-    err = cudaMalloc(&out_data.d_flags, num_atoms * sizeof(uint32_t));
+    err = cudaMalloc(&temp.d_numeric_float_values, num_atoms * sizeof(double));
     if (err != cudaSuccess) {
-        cudaFree(out_data.d_numeric_values);
+        freeGPUData(temp);
         return false;
     }
     
-    err = cudaMalloc(&out_data.d_types, num_atoms * sizeof(uint32_t));
+    err = cudaMalloc(&temp.d_numeric_int_values, num_atoms * sizeof(int64_t));
     if (err != cudaSuccess) {
-        cudaFree(out_data.d_numeric_values);
-        cudaFree(out_data.d_flags);
+        freeGPUData(temp);
+        return false;
+    }
+
+    err = cudaMalloc(&temp.d_numeric_kind, num_atoms * sizeof(uint8_t));
+    if (err != cudaSuccess) {
+        freeGPUData(temp);
+        return false;
+    }
+
+    err = cudaMalloc(&temp.d_flags, num_atoms * sizeof(uint32_t));
+    if (err != cudaSuccess) {
+        freeGPUData(temp);
+        return false;
+    }
+    
+    err = cudaMalloc(&temp.d_types, num_atoms * sizeof(uint32_t));
+    if (err != cudaSuccess) {
+        freeGPUData(temp);
         return false;
     }
     
@@ -1083,34 +1191,71 @@ bool AtomTable::uploadToGPU(AtomTable::GPUAtomData& out_data, cudaStream_t strea
         h_types[i] = static_cast<uint32_t>(entry.type);
     }
     
-    // Batch upload to GPU (async for performance)
-    cudaMemcpyAsync(out_data.d_numeric_values, h_numeric.data(),
-                    num_atoms * sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(out_data.d_flags, h_flags.data(),
-                    num_atoms * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(out_data.d_types, h_types.data(),
-                    num_atoms * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
+    // Batch upload to GPU. The stream is synchronized before returning because
+    // these host vectors are local transaction buffers.
+    const cudaError_t e1 = cudaMemcpyAsync(temp.d_numeric_values, h_numeric.data(),
+                                           num_atoms * sizeof(float), cudaMemcpyHostToDevice, stream);
+    const cudaError_t e2 = cudaMemcpyAsync(temp.d_numeric_float_values, numeric_float_values_.data(),
+                                           num_atoms * sizeof(double), cudaMemcpyHostToDevice, stream);
+    const cudaError_t e3 = cudaMemcpyAsync(temp.d_numeric_int_values, numeric_int_values_.data(),
+                                           num_atoms * sizeof(int64_t), cudaMemcpyHostToDevice, stream);
+    const cudaError_t e4 = cudaMemcpyAsync(temp.d_numeric_kind, numeric_kinds_.data(),
+                                           num_atoms * sizeof(uint8_t), cudaMemcpyHostToDevice, stream);
+    const cudaError_t e5 = cudaMemcpyAsync(temp.d_flags, h_flags.data(),
+                                           num_atoms * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
+    const cudaError_t e6 = cudaMemcpyAsync(temp.d_types, h_types.data(),
+                                           num_atoms * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
+
+    if (e1 != cudaSuccess || e2 != cudaSuccess || e3 != cudaSuccess ||
+        e4 != cudaSuccess || e5 != cudaSuccess || e6 != cudaSuccess) {
+        freeGPUData(temp);
+        return false;
+    }
+
+    const cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+        freeGPUData(temp);
+        return false;
+    }
     
-    out_data.num_atoms = num_atoms;
+    temp.num_atoms = num_atoms;
     
     // Clear pending upload queue and mark clean
+    freeGPUData(out_data);
+    out_data = temp;
     pending_gpu_upload_.clear();
     gpu_dirty_ = false;
     
-    return cudaGetLastError() == cudaSuccess;
+    return true;
 }
 
 // Convenience: Upload to internal GPU buffer
 bool AtomTable::uploadToGPU(cudaStream_t stream) {
-    // Free existing GPU data if any
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!gpu_dirty_ || pending_gpu_upload_.empty()) {
+            gpu_data_.num_atoms = entries_.size();
+            return true;
+        }
+    }
+
+    GPUAtomData new_data{};
+    if (!uploadToGPU(new_data, stream)) {
+        freeGPUData(new_data);
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
     freeGPUData(gpu_data_);
-    
-    // Upload to internal buffer
-    return uploadToGPU(gpu_data_, stream);
+    gpu_data_ = new_data;
+    return true;
 }
 
 void AtomTable::freeGPUData(AtomTable::GPUAtomData& data) {
     if (data.d_numeric_values) cudaFree(data.d_numeric_values);
+    if (data.d_numeric_float_values) cudaFree(data.d_numeric_float_values);
+    if (data.d_numeric_int_values) cudaFree(data.d_numeric_int_values);
+    if (data.d_numeric_kind) cudaFree(data.d_numeric_kind);
     if (data.d_flags) cudaFree(data.d_flags);
     if (data.d_types) cudaFree(data.d_types);
     

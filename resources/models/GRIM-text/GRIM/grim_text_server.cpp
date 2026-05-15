@@ -235,7 +235,7 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
                 // Context atoms: use atom table raw text
                 if (atom_tbl && i < seq.atom_entry_ids.size() &&
                     seq.atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
-                    const auto* entry = atom_tbl->getAtom(seq.atom_entry_ids[i]);
+                    const auto entry = atom_tbl->getAtom(seq.atom_entry_ids[i]);
                     if (entry) {
                         output += atom_tbl->atomToString(*entry);
                         continue;

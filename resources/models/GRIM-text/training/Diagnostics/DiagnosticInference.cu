@@ -117,7 +117,7 @@ std::string decodeWithAtomSideChannel(
         if (layout.isAtom(tid)) {
             if (atom_table && i < atom_entry_ids.size() &&
                 atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
-                const auto* entry = atom_table->getAtom(atom_entry_ids[i]);
+                const auto entry = atom_table->getAtom(atom_entry_ids[i]);
                 if (entry) {
                     result += atom_table->atomToString(*entry);
                     continue;
