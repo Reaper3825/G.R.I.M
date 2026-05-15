@@ -51,6 +51,7 @@
 
 // Tokenizer  
 #include "../Shared/UnigramByte/UniByte.hpp"
+#include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 
 // Data loading
 #include "training_data_loader.hpp"
@@ -389,19 +390,8 @@ int main(int argc, char** argv) {
     
     std::cout << "  Config file: " << snapshot->config_path << std::endl;
     
-    // Check if paths exists
-    if (!snapshot->document.contains("paths")) {
-        std::cerr << "  ✗ No 'paths' object in ai_config.json" << std::endl;
-        return 1;
-    }
-    if (!snapshot->document["paths"].contains("grim_text")) {
-        std::cerr << "  ✗ No 'paths.grim_text' object in ai_config.json" << std::endl;
-        return 1;
-    }
-    
-    const auto& grim_text = snapshot->document["paths"]["grim_text"];
-    std::string vocab_path = grim_text.value("vocab", "");
-    std::string data_path = grim_text.value("training_data", "");
+    const std::string vocab_path = startup_config.paths.vocab_path;
+    const std::string data_path = startup_config.paths.data_path;
     
     std::cout << "  vocab_path: " << (vocab_path.empty() ? "(empty)" : vocab_path) << std::endl;
     std::cout << "  data_path: " << (data_path.empty() ? "(empty)" : data_path) << std::endl;
@@ -450,8 +440,11 @@ int main(int argc, char** argv) {
     const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
     GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
     
-    if (!tokenizer.load(vocab_path)) {
-        std::cerr << "  ✗ Failed to load vocab from: " << vocab_path << std::endl;
+    try {
+        GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(startup_config.paths);
+        (void)artifacts.load(tokenizer);
+    } catch (const std::exception& e) {
+        std::cerr << "  ✗ Failed to load tokenizer artifact bundle: " << e.what() << std::endl;
         return 1;
     }
     

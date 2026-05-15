@@ -64,6 +64,21 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
 
     const bool effective_force = req.force_rebuild || sub_cfg.tokenizer_force_rebuild_vocab;
 
+    std::string startup_argv0 = "tokenizer_subprocess";
+    std::string startup_config_flag = "--config";
+    std::string startup_config_path = req.config_path;
+    char* startup_argv[] = {
+        startup_argv0.data(),
+        startup_config_flag.data(),
+        startup_config_path.data()
+    };
+    const auto startup_config = GRIM::HyperParameters::loadStartupConfig(3, startup_argv);
+    if (startup_config.paths.vocab_path.empty() || startup_config.paths.data_path.empty()) {
+        throw std::runtime_error(
+            "tokenizer_subprocess: StartupConfig.paths missing vocab_path and/or data_path for: " +
+            req.config_path);
+    }
+
     subprocess_request sreq;
     sreq.name = "train_tokenizer";
     sreq.executable_path = req.executable_path_override.empty()
@@ -100,23 +115,11 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
     // Decode the tokenizer-specific payload field.
     result.vocab_size = extract_vocab_size(env, sreq.status_file_path);
 
-    // Fill paths from the central config layer (single source of truth:
-    // ai_config.json -> GRIM::Config::GrimTextPaths). The child does NOT
-    // echo these over IPC; doing so would let the wire schema drift from
-    // ai_config.json.
-    GRIM::Config::GrimTextPaths paths;
-    if (!GRIM::Config::loadGrimTextPaths(paths, req.config_path)) {
-        throw std::runtime_error(
-            "tokenizer_subprocess: child reported success but "
-            "GRIM::Config::loadGrimTextPaths failed for: " + req.config_path);
-    }
-    if (!paths.isValid()) {
-        throw std::runtime_error(
-            "tokenizer_subprocess: child reported success but ai_config.json "
-            "GrimTextPaths are not valid (vocab and/or training_data missing)");
-    }
-    result.vocab_path = paths.vocab;
-    result.training_data_path = paths.training_data;
+    // Fill paths from the same hyperparameter grouping used by training startup.
+    // The child does NOT echo these over IPC; doing so would let the wire schema
+    // drift from ai_config.json / StartupConfig.paths.
+    result.vocab_path = startup_config.paths.vocab_path;
+    result.training_data_path = startup_config.paths.data_path;
 
     // Rewrite ok_proceed -> ok_one_off when the config requested a one-off.
     if (sub_cfg.tokenizer_only_mode && result.outcome == subprocess_outcome::ok_proceed) {

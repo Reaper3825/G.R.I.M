@@ -96,6 +96,7 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic/header read, validation, and write helpers. Do not duplicate header structs or magic/version checks in loaders, diagnostics, or subprocess tools.
 - `Shared/TokenizerArtifacts/TokenizerArtifactBundle.*` owns the cache pair (`vocab.bin` + `training_data.grmt`). Data prep must accept or rebuild that pair as a unit; do not reuse a lone vocab with a missing/stale GRMT.
 - `Shared/TokenizerArtifacts/GrmtCorpusIO.*` owns GRMT row save/load. Runtime loaders and diagnostics must use its RAII reader/writer instead of open-coded seeks through the row layout.
+- `Shared/TokenizerArtifacts/VocabArtifactIO.*` is the bundle-internal KTMG read/write helper; do not call it as an independent tokenizer artifact path.
 - Text vocab files are human-readable exports only. Binary KTMG is the only vocab load path.
 - Phase 1 startup reads final training vocab size from the validated `.grmt` header and copies it to `ctx.config.actual_vocab_size`.
 
@@ -191,12 +192,13 @@ Use this table as the “who owns what?” map.
 | `Detectors/TextFeatureDetectors.hpp/.cu` | whitespace and uppercase raw-text feature detection | atom token emission, unigram segmentation |
 | `AhoCorasick.hpp/.cu` | multi-pattern prefix matching DFA | full numeric parsing, tokenizer output assembly |
 | `AtomTable.hpp/.cu` | parsed atom storage, dedup, GPU packing, numeric value access | subword segmentation |
-| `Unigram.hpp/.cu` | learned vocab, trie, Viterbi, binary vocab load/save, unigram GPU encode/decode | detection policy, top-level orchestration, training boundary-token injection |
+| `Unigram.hpp/.cu` | learned vocab, trie, Viterbi, unigram GPU encode/decode | artifact file I/O, detection policy, top-level orchestration, training boundary-token injection |
 | `UnigramGpuMemory.hpp/.cu` | `UnigramLM` CUDA buffer lifetime, transactional GPU upload, device pointer cleanup | vocab semantics, Viterbi scoring, token assembly, training |
 | `UnigramTrainer.hpp/.cu` | unigram training implementation | runtime encode path |
 | `UniByte.hpp/.cu` | composition layer, public API, metadata assembly | low-level detector implementations, training internals, `BOS`/`EOS`/`PAD` layout policy |
 | `TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` | bundle-level vocab+GRMT save/load validation | tokenization, vocab training, GRMT row byte layout |
 | `TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` | RAII GRMT row reader/writer, temp-file cleanup, row validation | vocab training/loading, model allocation, train/val splitting |
+| `TokenizerArtifacts/VocabArtifactIO.hpp/.cu` | KTMG vocab read/write used by the bundle | public tokenizer load/save API, GRMT row byte layout |
 
 ---
 

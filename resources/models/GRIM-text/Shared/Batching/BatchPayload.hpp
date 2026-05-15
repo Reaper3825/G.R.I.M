@@ -27,8 +27,8 @@
 
 #include "../Execution/ExecutionMetadata.hpp"
 
-// Forward declarations
-struct TrainingSequence;
+// Forward declaration for GRMT-authored training rows.
+namespace GRIM { namespace TokenizerArtifacts { struct GrmtSequence; } }
 
 // Forward declaration — full definition in UnigramByte/AtomTable.hpp
 namespace GRIM { namespace Tokenizer { class AtomTable; } }
@@ -481,7 +481,7 @@ struct BatchPayload {
  */
 BatchPayload buildBatchPayload(
     const BatchAssignment& assignment,
-    const std::vector<TrainingSequence*>& views,
+    const std::vector<GRIM::TokenizerArtifacts::GrmtSequence*>& views,
     int vocab_size,
     const GRIM::Tokenizer::TokenLayout& token_layout,
     size_t max_cached_batch,

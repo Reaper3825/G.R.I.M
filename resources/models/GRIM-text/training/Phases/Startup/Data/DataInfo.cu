@@ -7,6 +7,7 @@
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/UnigramByte/Unigram.hpp"
+#include "../../../../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -46,16 +47,15 @@ void validatePaths(const PathConfig& paths) {
 }
 
 std::unique_ptr<GRIM::Tokenizer::UniByte> initializeTokenizer(
-    const std::string& vocab_path,
+    const PathConfig& paths,
     const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
     TrainingLogger& logger)
 {
-    logger.log("Loading tokenizer configuration...");
+    logger.log("Loading tokenizer artifact bundle...");
 
     auto tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
-    if (!tokenizer->load(vocab_path)) {
-        throw std::runtime_error("Failed to load vocabulary: " + vocab_path);
-    }
+    GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(paths);
+    (void)artifacts.load(*tokenizer);
 
     return tokenizer;
 }
@@ -167,7 +167,7 @@ void DataInfoReady(TrainingContext& ctx) {
     const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
     const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
     ctx.tokenizer = Internal::initializeTokenizer(
-        ctx.config.paths.vocab_path, tokenizer_hp, *ctx.logging.logger);
+        ctx.config.paths, tokenizer_hp, *ctx.logging.logger);
 
     DataLoadInputs data_inputs;
     data_inputs.data_path = ctx.config.paths.data_path;

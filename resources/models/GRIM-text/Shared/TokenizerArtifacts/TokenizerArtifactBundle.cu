@@ -1,6 +1,8 @@
 #include "TokenizerArtifactBundle.hpp"
 
+#include "VocabArtifactIO.hpp"
 #include "../UnigramByte/UniByte.hpp"
+#include "../HyperParameters/HyperParameters_GPU.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -53,10 +55,28 @@ void TokenizerArtifactPaths::validate() const {
     ensurePathNotEmpty(vocab_path, "vocab_path");
 }
 
+TokenizerArtifactPaths TokenizerArtifactPaths::fromPathConfig(
+    const GRIM::HyperParameters::PathConfig& paths) {
+    TokenizerArtifactPaths artifact_paths{paths.data_path, paths.vocab_path};
+    artifact_paths.validate();
+    return artifact_paths;
+}
+
+TokenizerArtifactPaths TokenizerArtifactPaths::fromStartupConfig(
+    const GRIM::HyperParameters::StartupConfig& config) {
+    return fromPathConfig(config.paths);
+}
+
 TokenizerArtifactBundle::TokenizerArtifactBundle(TokenizerArtifactPaths paths)
     : paths_(std::move(paths)) {
     paths_.validate();
 }
+
+TokenizerArtifactBundle::TokenizerArtifactBundle(const GRIM::HyperParameters::PathConfig& paths)
+    : TokenizerArtifactBundle(TokenizerArtifactPaths::fromPathConfig(paths)) {}
+
+TokenizerArtifactBundle::TokenizerArtifactBundle(const GRIM::HyperParameters::StartupConfig& config)
+    : TokenizerArtifactBundle(TokenizerArtifactPaths::fromStartupConfig(config)) {}
 
 bool TokenizerArtifactBundle::exists() const {
     return fs::exists(paths_.grmt_path) && fs::exists(paths_.vocab_path);
@@ -71,9 +91,7 @@ TokenizerBundleManifest TokenizerArtifactBundle::load(GRIM::Tokenizer::UniByte& 
         throw std::runtime_error("[TokenizerArtifactBundle] GRMT file missing: " + paths_.grmt_path.string());
     }
 
-    if (!tokenizer.load(paths_.vocab_path.string())) {
-        throw std::runtime_error("[TokenizerArtifactBundle] failed to load vocab: " + paths_.vocab_path.string());
-    }
+    TokenizerVocabFile(paths_.vocab_path).readInto(tokenizer.unigramLM());
 
     TokenizerBundleManifest manifest{};
     manifest.grmt_header = loadGrmtHeader(paths_.grmt_path);
@@ -102,9 +120,10 @@ TokenizerBundleSaveReport TokenizerArtifactBundle::save(
         throw std::runtime_error("[TokenizerArtifactBundle] tokenizer vocab size is zero before save");
     }
 
-    if (!tokenizer.save(paths_.vocab_path.string(), options.save_text_vocab, options.vocab_score_multiplier)) {
-        throw std::runtime_error("[TokenizerArtifactBundle] failed to save vocab: " + paths_.vocab_path.string());
-    }
+    TokenizerVocabSaveOptions vocab_options{};
+    vocab_options.export_text = options.save_text_vocab;
+    vocab_options.score_multiplier = options.vocab_score_multiplier;
+    TokenizerVocabFile(paths_.vocab_path).writeFrom(tokenizer.unigramLM(), vocab_options);
 
     TokenizerBundleSaveReport report{};
     report.grmt = saveGrmtCorpus(paths_.grmt_path, sequences, tokenizer_vocab_size, options.grmt);

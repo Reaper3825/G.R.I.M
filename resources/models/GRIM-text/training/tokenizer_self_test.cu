@@ -22,6 +22,7 @@
 #include <nlohmann/json.hpp>
 
 #include "../Shared/UnigramByte/UniByte.hpp"
+#include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; pulls in control/ai_config_paths.hpp transitively
 #include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
@@ -34,6 +35,7 @@ namespace fs = std::filesystem;
 //======================================================//
 struct CliOptions {
     fs::path vocab_path{};  // Empty = load from ai_config.json
+    fs::path data_path{};   // Empty = load from ai_config.json
     fs::path config_path{"ai_config.json"};
     fs::path cases_path{"tokenizer_selftest_cases.json"};
     fs::path log_dir{"selftest_logs"};
@@ -518,6 +520,8 @@ CliOptions parseOptions(int argc, char** argv) {
         const std::string_view arg(argv[i]);
         if (arg == "--vocab" && i + 1 < argc) {
             opts.vocab_path = argv[++i];
+        } else if (arg == "--data" && i + 1 < argc) {
+            opts.data_path = argv[++i];
         } else if (arg == "--config" && i + 1 < argc) {
             opts.config_path = argv[++i];
         } else if (arg == "--cases" && i + 1 < argc) {
@@ -536,6 +540,7 @@ CliOptions parseOptions(int argc, char** argv) {
             std::cout << "Usage: tokenizer_self_test [options]\n\n";
             std::cout << "Options:\n";
             std::cout << "  --vocab PATH       Path to vocab.bin (default: from ai_config.json)\n";
+            std::cout << "  --data PATH        Path to training_data.grmt (default: from ai_config.json)\n";
             std::cout << "  --config PATH      Path to ai_config.json (default: ai_config.json)\n";
             std::cout << "  --cases PATH       Path to test cases JSON\n";
             std::cout << "  --log-dir PATH     Log output directory\n";
@@ -568,19 +573,18 @@ int main(int argc, char** argv) {
         const auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
         const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
         
-        // Load vocab path from ai_config.json if not specified on command line
-        if (opts.vocab_path.empty()) {
-            std::cout << "\nLoading paths from ai_config.json...\n";
-            if (startup_config.paths.vocab_path.empty()) {
-                throw std::runtime_error("tokenizer_self_test: vocab path is empty after loadStartupConfig");
-            }
-            opts.vocab_path = startup_config.paths.vocab_path;
-            std::cout << Color::GREEN << "  ✓ Vocab path from config: " 
-                      << Color::RESET << opts.vocab_path << "\n";
+        if (startup_config.paths.vocab_path.empty()) {
+            throw std::runtime_error("tokenizer_self_test: vocab path is empty after loadStartupConfig");
         }
+        if (startup_config.paths.data_path.empty()) {
+            throw std::runtime_error("tokenizer_self_test: training_data path is empty after loadStartupConfig");
+        }
+        opts.vocab_path = startup_config.paths.vocab_path;
+        opts.data_path = startup_config.paths.data_path;
         
         std::cout << "\nConfiguration:\n";
         std::cout << "  Vocab: " << opts.vocab_path << "\n";
+        std::cout << "  GRMT: " << opts.data_path << "\n";
         std::cout << "  Config: " << opts.config_path << "\n";
         std::cout << "  Verbose: " << (opts.verbose ? "yes" : "no") << "\n";
         std::cout << "  Sections: " << (opts.run_all_sections ? "all" : std::to_string(opts.section)) << "\n";
@@ -595,9 +599,12 @@ int main(int argc, char** argv) {
         
         // Load tokenizer
         GrimTokenizer tokenizer(tokenizer_hp);
-        if (!tokenizer.load(opts.vocab_path.string())) {
-            std::cerr << Color::RED << "\nERROR: Failed to load vocab from " 
-                      << opts.vocab_path << Color::RESET << "\n";
+        try {
+            GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(startup_config.paths);
+            (void)artifacts.load(tokenizer);
+        } catch (const std::exception& e) {
+            std::cerr << Color::RED << "\nERROR: Failed to load tokenizer artifact bundle: "
+                      << e.what() << Color::RESET << "\n";
             return 2;
         }
         

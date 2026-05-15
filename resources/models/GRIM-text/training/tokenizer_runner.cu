@@ -732,21 +732,16 @@ int main(int argc, char** argv) {
         auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
         const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
 
-        if (opts.vocab_path.empty()) {
-            if (startup_config.paths.vocab_path.empty()) {
-                std::cout << makeErrorJson("No vocab path configured in ai_config.json", "config").dump() << std::endl;
-                return 1;
-            }
-            opts.vocab_path = startup_config.paths.vocab_path;
+        if (startup_config.paths.vocab_path.empty()) {
+            std::cout << makeErrorJson("No vocab path configured in StartupConfig.paths", "config").dump() << std::endl;
+            return 1;
         }
-
-        if (opts.data_path.empty()) {
-            if (startup_config.paths.data_path.empty()) {
-                std::cout << makeErrorJson("No training_data path configured in ai_config.json", "config").dump() << std::endl;
-                return 1;
-            }
-            opts.data_path = startup_config.paths.data_path;
+        if (startup_config.paths.data_path.empty()) {
+            std::cout << makeErrorJson("No training_data path configured in StartupConfig.paths", "config").dump() << std::endl;
+            return 1;
         }
+        opts.vocab_path = startup_config.paths.vocab_path;
+        opts.data_path = startup_config.paths.data_path;
 
         if (opts.verbose) {
             fprintf(stderr, "[tokenizer_runner] Vocab: %s\n", opts.vocab_path.c_str());
@@ -778,7 +773,7 @@ int main(int argc, char** argv) {
         auto load_start = std::chrono::steady_clock::now();
 
         GrimTokenizer tokenizer(tokenizer_hp);
-        GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts({opts.data_path, opts.vocab_path});
+        GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(startup_config.paths);
         try {
             (void)artifacts.load(tokenizer);
         } catch (const std::exception& e) {

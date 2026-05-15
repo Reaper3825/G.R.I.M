@@ -152,15 +152,7 @@ public:
     //--------------------------------------------------//
     // Initialization
     //--------------------------------------------------//
-    
-    // Load binary vocab only. Training artifact cache paths must use
-    // TokenizerArtifacts::TokenizerArtifactBundle so vocab and GRMT are validated together.
-    bool load(const std::string& vocab_path);
-    
-    // Save binary vocab plus optional human-readable text export. Training artifact
-    // cache paths must use TokenizerArtifacts::TokenizerArtifactBundle.
-    bool save(const std::string& vocab_path, bool save_text_format = false, float score_multiplier = 1.0f) const;
-    
+
     // Train from corpus
     bool train(const std::vector<std::string>& texts);
     

@@ -19,7 +19,7 @@ Use `TokenLayout.hpp` / `Byte.hpp` constants and layout helpers for range checks
 ## Vocab-size ownership
 - `UniByte::vocabSize()` is the tokenizer's only public vocab-size API. It means the full token ID space: `UNIGRAM_VOCAB_OFFSET + UnigramLM::pieceCount()`.
 - `UnigramLM::pieceCount()` is a component count for learned subword pieces only; never use it to size model embeddings or GRMT headers.
-- `UnigramLM::save()` stores a `serialized_record_count` in `vocab.bin` so the vocab reader knows how many records to read. That field is not a vocab size.
+- `TokenizerArtifacts/VocabArtifactIO.*` stores a `serialized_record_count` in `vocab.bin` so the vocab reader knows how many records to read. That field is not a vocab size.
 - `DataLoader.cu` writes `UniByte::vocabSize()` into the `.grmt` header when it encodes training data.
 - Phase 1 startup reads final training vocab size from the `.grmt` header and passes that value into model allocation. It must not derive training vocab size from `ai_config.json`, `vocab.bin`, or tokenizer internals.
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic, header layout, version validation, and header write helpers. Consumers must call `readHeaderOrThrow()` / `readHeaderStatus()` / `writeHeaderOrThrow()` instead of open-coding magic/version reads.
@@ -28,13 +28,14 @@ Use `TokenLayout.hpp` / `Byte.hpp` constants and layout helpers for range checks
 ## Persistence primitives
 - `Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` is the single bundle primitive for the tokenizer cache pair: binary `vocab.bin` plus `training_data.grmt`. It loads the vocab and validates the `.grmt` header vocab against `UniByte::vocabSize()` before a cache can be accepted.
 - `Shared/TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` is the single GRMT row I/O primitive. It owns RAII file open/close, temp-file cleanup, header writes, row serialization/deserialization, and fail-loud validation for side-channel array alignment.
+- `Shared/TokenizerArtifacts/VocabArtifactIO.hpp/.cu` is an internal read/write helper used only by `TokenizerArtifactBundle`; it is not a standalone tokenizer save/load path.
 - `DataLoader.cu` treats vocab and GRMT as an inseparable cache bundle. If either artifact is missing or the pair fails validation, it retrains the tokenizer and regenerates both artifacts together.
 - `training_data_loader.hpp`, `tokenizer_runner.cu`, and GRMT diagnostics must use `GrmtCorpusReader` / `loadGrmtCorpus()` instead of open-coding row seeks. Header-only checks may still call `GRMT::readHeaderOrThrow()` directly.
-- Text vocab is export-only for human inspection. Runtime loading is binary KTMG through `UniByte::load()` / the artifact bundle; do not re-add text vocab loading.
+- Text vocab is export-only for human inspection. Runtime loading is binary KTMG through `TokenizerArtifactBundle`; do not re-add text vocab loading.
 
 Special-token ownership is deliberately narrow:
 - `TokenLayout.hpp` owns the reserved IDs and display metadata.
-- `UnigramLM::save()` writes special-token records into saved vocab files so the persisted vocab advertises the full layout.
+- `VocabArtifactIO` writes special-token records into saved vocab files so the persisted vocab advertises the full layout.
 - The tokenizer does **not** inject `BOS`/`EOS`, pad batches, decide epoch/window boundaries, or mask training targets.
 - `SlidingWindow.cu` owns `BOS`/`EOS` insertion and window-boundary target fixup.
 - `BatchPayload.cu` owns padding and defense masking of `UNK`/`PAD`/`BOS` targets. `EOS` remains a valid target.

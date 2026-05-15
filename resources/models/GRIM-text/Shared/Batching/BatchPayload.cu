@@ -13,8 +13,8 @@
 
 #include "BatchPayload.hpp"
 #include "Batching_GPU.hpp"
-#include "../../training/training_data_loader.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
+#include "../TokenizerArtifacts/GrmtCorpusIO.hpp"
 #include "../Execution/ExecutionPayloadValidation.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -104,7 +104,7 @@ BatchPayload makeInferenceBasePayload(
 
 BatchPayload buildBatchPayload(
     const BatchAssignment& assignment,
-    const std::vector<TrainingSequence*>& views,
+    const std::vector<GRIM::TokenizerArtifacts::GrmtSequence*>& views,
     int vocab_size,
     const GRIM::Tokenizer::TokenLayout& token_layout,
     size_t max_cached_batch,
@@ -173,7 +173,7 @@ BatchPayload buildBatchPayload(
                 "buildBatchPayload: seq_id=" + std::to_string(sid) +
                 " exceeds views.size()=" + std::to_string(views.size()));
         }
-        const TrainingSequence* seq = views[sid];
+        const GRIM::TokenizerArtifacts::GrmtSequence* seq = views[sid];
         if (!seq) {
             throw std::runtime_error(
                 "buildBatchPayload: views[" + std::to_string(sid) + "] is NULL");

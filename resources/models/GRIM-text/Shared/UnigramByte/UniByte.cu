@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
 #include <iostream>
 #include <utility>
 
@@ -60,39 +59,6 @@ UniByte& UniByte::operator=(UniByte&& other) noexcept {
 //--------------------------------------------------//
 // Initialization
 //--------------------------------------------------//
-
-bool UniByte::load(const std::string& vocab_path) {
-    std::string bin_path = vocab_path;
-    size_t dot_pos = bin_path.rfind('.');
-    if (dot_pos == std::string::npos) {
-        bin_path += ".bin";
-    } else {
-        std::string ext = bin_path.substr(dot_pos);
-        if (ext == ".txt") {
-            throw std::runtime_error(
-                "[UniByte] Text vocab loading is forbidden. Caller must provide a .bin vocab path, got: " +
-                vocab_path);
-        }
-        if (ext != ".bin") {
-            throw std::runtime_error(
-                "[UniByte] Unsupported vocab extension '" + ext +
-                "'. Caller must provide a .bin vocab path: " + vocab_path);
-        }
-    }
-
-    std::ifstream test(bin_path, std::ios::binary);
-    if (!test.good()) {
-        throw std::runtime_error(
-            "[UniByte] Required binary vocab file does not exist or is not readable: " + bin_path);
-    }
-    test.close();
-
-    return unigram_.loadBinary(bin_path);
-}
-
-bool UniByte::save(const std::string& vocab_path, bool save_text_format, float score_multiplier) const {
-    return unigram_.save(vocab_path, save_text_format, score_multiplier);
-}
 
 bool UniByte::train(const std::vector<std::string>& texts) {
     // Detect atom spans in each text BEFORE training.

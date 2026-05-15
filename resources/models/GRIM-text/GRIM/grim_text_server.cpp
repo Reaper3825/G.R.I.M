@@ -22,6 +22,7 @@
 #include "grim_language_model_cuda.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
+#include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include <iostream>
 #include <filesystem>
@@ -57,20 +58,19 @@ GenerationConfig g_generation_defaults = [] {
 //  Initialize Model
 //======================================================//
 bool initializeModel(const HyperParameters::StartupConfig& startup_config,
-                     const std::string& model_path,
-                     const std::string& vocab_path)
+                     const std::string& model_path)
 {
+    const std::string& vocab_path = startup_config.paths.vocab_path;
     std::cout << "[GRIM-text] Initializing model...\n";
     std::cout << "[GRIM-text] Vocab: " << vocab_path << "\n";
+    std::cout << "[GRIM-text] GRMT: " << startup_config.paths.data_path << "\n";
     std::cout << "[GRIM-text] Model: " << model_path << "\n";
 
     try {
         const auto tokenizer_hp = HyperParameters::tokenizerHP(startup_config);
         g_tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
-        if (!g_tokenizer->load(vocab_path)) {
-            std::cerr << "[GRIM-text] ERROR: Failed to load vocabulary\n";
-            return false;
-        }
+        GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(startup_config.paths);
+        (void)artifacts.load(*g_tokenizer);
 
         std::cout << "[GRIM-text] Loaded " << g_tokenizer->vocabSize() << " tokens\n";
         std::cout << "[GRIM-text] EOS token ID: " << GRIM::Tokenizer::EOS_TOKEN_ID << "\n";
@@ -334,23 +334,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::string vocab_path = "models/vocab.txt";
-    std::string model_path = "models/grim_text.bin";
+    std::string model_path = startup_config.paths.output_model_path;
     int port = 11435;
 
     std::cout << "[GRIM-text] Config paths loaded successfully\n";
-    if (!startup_config.paths.vocab_path.empty()) {
-        vocab_path = startup_config.paths.vocab_path;
-        std::cout << "[GRIM-text] Using vocab from config: " << vocab_path << "\n";
-    }
+    std::cout << "[GRIM-text] Using vocab from config: " << startup_config.paths.vocab_path << "\n";
+    std::cout << "[GRIM-text] Using GRMT from config: " << startup_config.paths.data_path << "\n";
     if (!startup_config.paths.output_model_path.empty()) {
         model_path = startup_config.paths.output_model_path;
         std::cout << "[GRIM-text] Using model from config: " << model_path << "\n";
     }
 
-    if (positionals.size() >= 1) vocab_path = positionals[0];
-    if (positionals.size() >= 2) model_path = positionals[1];
-    if (positionals.size() >= 3) port = std::stoi(positionals[2]);
+    if (positionals.size() >= 1) model_path = positionals[0];
+    if (positionals.size() >= 2) port = std::stoi(positionals[1]);
 
     // Create server (NO CUDA YET)
     httplib::Server svr;
@@ -504,7 +500,7 @@ int main(int argc, char** argv)
     //==================================================//
 
     std::cout << "[GRIM-text] Loading model (this may take 30+ seconds)...\n";
-    if (!initializeModel(startup_config, model_path, vocab_path)) {
+    if (!initializeModel(startup_config, model_path)) {
         std::cerr << "[GRIM-text] ERROR: Model initialization failed\n";
         return 1;
     }

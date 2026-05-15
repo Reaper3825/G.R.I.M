@@ -19,8 +19,8 @@
 //   { "outcome": "error", "error_message": "<precise>" }
 //
 // vocab_path / training_data_path are NOT in the IPC payload — they are
-// owned by ai_config.json (GRIM::Config::GrimTextPaths) and the parent
-// resolves them from the central config layer. Echoing them over IPC would
+// owned by StartupConfig.paths and the parent resolves them from the same
+// hyperparameter grouping layer. Echoing them over IPC would
 // create a second source of truth.
 //
 // The parent process refuses to proceed when the status file is missing or
@@ -93,7 +93,7 @@ void writeStatusError(const std::string& path, const std::string& message) {
 void writeStatusSuccess(const std::string& path, std::uint32_t vocab_size) {
     // The IPC envelope is generic; tokenizer-specific fields go inside the
     // success payload. Only `vocab_size` crosses the wire — paths are owned
-    // by ai_config.json and the parent reads them from GrimTextPaths.
+    // by StartupConfig.paths and the parent reads them from the same grouping.
     nlohmann::json payload;
     payload["vocab_size"] = vocab_size;
     (void)GRIMText::Subprocess::write_status_success(path, payload);
@@ -118,24 +118,13 @@ int main(int argc, char** argv) {
 
         const auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
 
-        GRIM::Config::GrimTextPaths paths;
-        paths.vocab = startup_config.paths.vocab_path;
-        paths.model = startup_config.paths.output_model_path;
-        paths.training_data = startup_config.paths.data_path;
-        paths.checkpoints = startup_config.paths.checkpoint_dir;
-        paths.logs = startup_config.paths.log_dir;
-        paths.training_status = startup_config.paths.status_path;
-        if (!paths.isValid()) {
+        if (startup_config.paths.data_path.empty() || startup_config.paths.vocab_path.empty()) {
             throw std::runtime_error(
-                "ai_config.json missing required paths (vocab and/or training_data)");
+                "StartupConfig.paths missing required tokenizer artifact paths (vocab and/or training_data)");
         }
 
-        const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
-
-        paths.printPaths();
-
-        std::string out_training_data = paths.training_data;
-        std::string out_vocab = paths.vocab;
+        std::string out_training_data = startup_config.paths.data_path;
+        std::string out_vocab = startup_config.paths.vocab_path;
 
         std::cout << "=== GRIM Tokenizer Subprocess ===\n"
                   << "Config:      " << args.config_file << "\n"
@@ -145,8 +134,7 @@ int main(int argc, char** argv) {
                   << "GRMT path:   " << out_training_data << "\n" << std::endl;
 
         const bool ok = GRIM::PrepareTrainingDataFromCache(
-            paths,
-            tokenizer_hp,
+            startup_config,
             out_training_data,
             out_vocab,
             args.force);

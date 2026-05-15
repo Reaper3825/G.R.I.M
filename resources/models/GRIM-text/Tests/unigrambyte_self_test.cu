@@ -10,6 +10,7 @@
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
+#include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 
 #include <cuda_runtime.h>
 #include <iostream>
@@ -22,6 +23,8 @@
 
 using namespace GRIM::Tokenizer;
 using namespace GRIM::Test;
+
+namespace TokenizerArtifacts = GRIM::TokenizerArtifacts;
 
 static ::GRIM::HyperParameters::TokenizerHP makeSelfTestTokenizerHP() {
     ::GRIM::HyperParameters::TokenizerHP hp;
@@ -1602,35 +1605,62 @@ bool testMixedVocabAndByteFallback(std::string& message) {
 //  Section 13: Vocabulary Persistence Tests
 //======================================================//
 
+static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
+    TokenizerArtifacts::GrmtSequence sequence;
+    sequence.token_ids = {
+        BYTE_TOKEN_OFFSET + static_cast<int>('o'),
+        BYTE_TOKEN_OFFSET + static_cast<int>('k')
+    };
+    sequence.targets = {
+        BYTE_TOKEN_OFFSET + static_cast<int>('k'),
+        EOS_TOKEN_ID
+    };
+    const std::size_t n = sequence.token_ids.size();
+    sequence.token_numeric_values.assign(n, 0.0f);
+    sequence.token_atom_mask.assign(n, 0);
+    sequence.token_atom_flags.assign(n, 0);
+    sequence.atom_table = std::make_shared<AtomTable>();
+    sequence.atom_entry_ids.assign(n, kAtomEntryNone);
+    sequence.token_exec_slots.assign(n, -1);
+    return sequence;
+}
+
 bool testVocabTextExportBinaryLoad(std::string& message) {
     // Create output directory if it doesn't exist
     std::filesystem::create_directories("output");
     
-    // Create tokenizer with vocab
-    UnigramLM original;
-    original.addPiece("test", -1.0f, false);
-    original.addPiece("vocab", -1.5f, false);
-    original.addPiece("save", -2.0f, false);
+    auto config = makeSelfTestTokenizerHP();
+    UniByte original(config);
+    original.unigramLM().addPiece("test", -1.0f, false);
+    original.unigramLM().addPiece("vocab", -1.5f, false);
+    original.unigramLM().addPiece("save", -2.0f, false);
+    original.unigramLM().buildTrie();
     
-    // Save binary plus optional human-readable text sidecar. Text vocab is
-    // an export only; binary KTMG is the only load path.
+    std::string grmt_path = "output/test_vocab_save.grmt";
     std::string path = "output/test_vocab_save.bin";
     std::string text_path = "output/test_vocab_save.txt";
-    bool saved = original.save(path, true);
-    ASSERT_TRUE(saved, "Save should succeed");
+    TokenizerArtifacts::TokenizerArtifactBundle artifacts(
+        TokenizerArtifacts::TokenizerArtifactPaths{grmt_path, path});
+    TokenizerArtifacts::TokenizerBundleSaveOptions options{};
+    options.save_text_vocab = true;
+    std::vector<TokenizerArtifacts::GrmtSequence> sequences;
+    sequences.push_back(makePersistenceGrmtSequence());
+    auto report = artifacts.save(original, sequences, options);
+    ASSERT_EQ(report.grmt.written_sequences, 1u, "Bundle should write one GRMT sequence");
     ASSERT_TRUE(std::filesystem::exists(text_path), "Text vocab sidecar should be exported");
     
     // Load into new tokenizer
-    UnigramLM loaded;
-    bool loaded_ok = loaded.loadBinary(path);
-    ASSERT_TRUE(loaded_ok, "Binary load should succeed");
+    UniByte loaded(config);
+    auto manifest = artifacts.load(loaded);
+    ASSERT_EQ(manifest.grmt_header.num_sequences, 1u, "Bundle load should validate GRMT header");
     
     // Verify pieces exist
-    ASSERT_TRUE(loaded.hasPiece("test"), "Should have 'test' piece");
-    ASSERT_TRUE(loaded.hasPiece("vocab"), "Should have 'vocab' piece");
-    ASSERT_TRUE(loaded.hasPiece("save"), "Should have 'save' piece");
+    ASSERT_TRUE(loaded.unigramLM().hasPiece("test"), "Should have 'test' piece");
+    ASSERT_TRUE(loaded.unigramLM().hasPiece("vocab"), "Should have 'vocab' piece");
+    ASSERT_TRUE(loaded.unigramLM().hasPiece("save"), "Should have 'save' piece");
     
     // Cleanup
+    std::filesystem::remove(grmt_path);
     std::filesystem::remove(path);
     std::filesystem::remove(text_path);
     
@@ -1641,27 +1671,35 @@ bool testVocabSaveLoadBinary(std::string& message) {
     // Create output directory if it doesn't exist
     std::filesystem::create_directories("output");
     
-    // Create tokenizer with vocab
-    UnigramLM original;
-    original.addPiece("binary", -1.0f, false);
-    original.addPiece("format", -1.5f, false);
-    original.addPiece("fast", -2.0f, false);
+    auto config = makeSelfTestTokenizerHP();
+    UniByte original(config);
+    original.unigramLM().addPiece("binary", -1.0f, false);
+    original.unigramLM().addPiece("format", -1.5f, false);
+    original.unigramLM().addPiece("fast", -2.0f, false);
+    original.unigramLM().buildTrie();
     
-    // Save to binary
+    std::string grmt_path = "output/test_vocab_binary.grmt";
     std::string path = "output/test_vocab_binary.bin";
-    bool saved = original.save(path, false);  // binary format
-    ASSERT_TRUE(saved, "Binary save should succeed");
+    TokenizerArtifacts::TokenizerArtifactBundle artifacts(
+        TokenizerArtifacts::TokenizerArtifactPaths{grmt_path, path});
+    std::vector<TokenizerArtifacts::GrmtSequence> sequences;
+    sequences.push_back(makePersistenceGrmtSequence());
+    auto report = artifacts.save(original, sequences);
+    ASSERT_EQ(report.manifest.tokenizer_vocab_size, static_cast<std::uint32_t>(original.vocabSize()),
+              "Bundle save should report tokenizer vocab size");
     
     // Load into new tokenizer
-    UnigramLM loaded;
-    bool loaded_ok = loaded.loadBinary(path);
-    ASSERT_TRUE(loaded_ok, "Binary load should succeed");
+    UniByte loaded(config);
+    auto manifest = artifacts.load(loaded);
+    ASSERT_EQ(manifest.tokenizer_vocab_size, static_cast<std::uint32_t>(loaded.vocabSize()),
+              "Bundle load should report loaded tokenizer vocab size");
     
     // Verify learned vocab entries survive special-metadata records in the file.
-    ASSERT_TRUE(loaded.hasPiece("binary"), "Should have 'binary' piece");
-    ASSERT_TRUE(loaded.hasPiece("format"), "Should have 'format' piece");
+    ASSERT_TRUE(loaded.unigramLM().hasPiece("binary"), "Should have 'binary' piece");
+    ASSERT_TRUE(loaded.unigramLM().hasPiece("format"), "Should have 'format' piece");
     
     // Cleanup
+    std::filesystem::remove(grmt_path);
     std::filesystem::remove(path);
     
     return true;

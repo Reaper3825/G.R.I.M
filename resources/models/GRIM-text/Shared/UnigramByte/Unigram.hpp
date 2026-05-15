@@ -82,13 +82,7 @@ public:
     //--------------------------------------------------//
     // Vocabulary Management
     //--------------------------------------------------//
-    
-    // Load vocabulary from binary file (KTMG format) - faster
-    bool loadBinary(const std::string& vocab_path);
-    
-    // Save vocabulary to file (binary primary, text optional)
-    bool save(const std::string& vocab_path, bool save_text_format = false, float score_multiplier = 1.0f) const;
-    
+
     // Train vocabulary from corpus
     bool trainFromCorpus(const std::vector<std::string>& texts,
                          int target_vocab_size,

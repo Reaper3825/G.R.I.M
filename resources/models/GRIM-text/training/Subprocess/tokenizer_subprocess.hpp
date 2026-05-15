@@ -7,17 +7,16 @@
 // concrete subprocess wired through subprocess_manager.
 //
 // Behavior:
-//   - Loads paths and the `subprocess.tokenizer.only_mode` flag from
-//     ai_config.json directly (no hidden defaults; missing required fields
-//     throw).
+//   - Loads paths and the `subprocess.tokenizer.only_mode` flag through the
+//     hyperparameter/config grouping layer (no hidden defaults; missing required
+//     fields throw).
 //   - Resolves the train_tokenizer executable as a sibling of the current
 //     process binary.
 //   - Spawns it with `--status-file <path>` and (if requested) `--force`,
 //     waits for completion, and decodes the tokenizer-specific success
 //     payload (vocab_size) into a tokenizer_subprocess_result.
 //   - vocab_path / training_data_path are NOT carried over IPC — they are
-//     resolved from ai_config.json via GRIM::Config::loadGrimTextPaths so
-//     there is exactly one source of truth.
+//     resolved from StartupConfig.paths so there is exactly one source of truth.
 //   - If `subprocess.tokenizer.only_mode` is true AND the tokenizer reports
 //     success, the returned outcome is rewritten to ok_one_off so the caller
 //     stops cleanly instead of proceeding into model training.
@@ -60,8 +59,8 @@ struct tokenizer_subprocess_result {
     subprocess_outcome outcome = subprocess_outcome::error;
     std::string subprocess_name;
 
-    // Populated on ok_proceed / ok_one_off. Paths come from ai_config.json
-    // (GRIM::Config::GrimTextPaths) — the IPC envelope does not carry them.
+    // Populated on ok_proceed / ok_one_off. Paths come from StartupConfig.paths —
+    // the IPC envelope does not carry them.
     // vocab_size comes from the child's success payload (it inspected the
     // GRMT header it just wrote).
     std::string vocab_path;

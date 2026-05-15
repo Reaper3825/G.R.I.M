@@ -31,8 +31,6 @@ namespace fs = std::filesystem;
 
 namespace GRIM {
 
-using GRIM::Config::GrimTextPaths;
-
 // Minimum cleaned text length to include in training data.
 // Shorter texts lack sufficient context for meaningful next-token prediction.
 constexpr size_t kMinCleanedTextLength = 20;
@@ -265,18 +263,19 @@ void loadConceptBlocksJson(const fs::path& cache_dir,
 }  // namespace
 
 bool PrepareTrainingDataFromCache(
-	const GrimTextPaths& paths,
-	const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
+	const GRIM::HyperParameters::StartupConfig& startup_config,
 	std::string& out_training_data_path,
 	std::string& out_vocab_path,
 	bool force_rebuild) {
+	const auto& paths = startup_config.paths;
+	const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
 
 	// Resolve primary paths from config
-	if (!paths.training_data.empty()) {
-		out_training_data_path = paths.training_data;
+	if (!paths.data_path.empty()) {
+		out_training_data_path = paths.data_path;
 	}
-	if (!paths.vocab.empty()) {
-		out_vocab_path = paths.vocab;
+	if (!paths.vocab_path.empty()) {
+		out_vocab_path = paths.vocab_path;
 	}
 
 	if (out_training_data_path.empty()) {
@@ -292,7 +291,7 @@ bool PrepareTrainingDataFromCache(
 	          << " type tokens" << std::endl;
 
 	GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
-	GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts({out_training_data_path, out_vocab_path});
+	GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(paths);
 
 	const bool training_exists = fs::exists(out_training_data_path);
 	const bool vocab_exists = !out_vocab_path.empty() && fs::exists(out_vocab_path);

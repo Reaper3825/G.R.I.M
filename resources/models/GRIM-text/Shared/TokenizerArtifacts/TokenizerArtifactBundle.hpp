@@ -7,6 +7,7 @@
 #include <vector>
 
 namespace GRIM::Tokenizer { class UniByte; }
+namespace GRIM::HyperParameters { struct PathConfig; struct StartupConfig; }
 
 namespace GRIM::TokenizerArtifacts {
 
@@ -15,6 +16,8 @@ struct TokenizerArtifactPaths {
     std::filesystem::path vocab_path;
 
     void validate() const;
+    static TokenizerArtifactPaths fromPathConfig(const GRIM::HyperParameters::PathConfig& paths);
+    static TokenizerArtifactPaths fromStartupConfig(const GRIM::HyperParameters::StartupConfig& config);
 };
 
 struct TokenizerBundleManifest {
@@ -36,6 +39,8 @@ struct TokenizerBundleSaveReport {
 class TokenizerArtifactBundle {
 public:
     explicit TokenizerArtifactBundle(TokenizerArtifactPaths paths);
+    explicit TokenizerArtifactBundle(const GRIM::HyperParameters::PathConfig& paths);
+    explicit TokenizerArtifactBundle(const GRIM::HyperParameters::StartupConfig& config);
 
     const TokenizerArtifactPaths& paths() const { return paths_; }
     bool exists() const;
