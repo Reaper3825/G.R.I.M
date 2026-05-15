@@ -112,7 +112,9 @@ UnigramGpuMemory& UnigramGpuMemory::operator=(UnigramGpuMemory&& other) noexcept
         d_viterbi_scores = std::exchange(other.d_viterbi_scores, nullptr);
         d_viterbi_prev = std::exchange(other.d_viterbi_prev, nullptr);
         d_viterbi_tokens = std::exchange(other.d_viterbi_tokens, nullptr);
+        d_viterbi_prev_is_fallback = std::exchange(other.d_viterbi_prev_is_fallback, nullptr);
         d_viterbi_output_tokens = std::exchange(other.d_viterbi_output_tokens, nullptr);
+        d_viterbi_output_is_fallback = std::exchange(other.d_viterbi_output_is_fallback, nullptr);
         d_viterbi_output_count = std::exchange(other.d_viterbi_output_count, nullptr);
         d_viterbi_selected_fallback = std::exchange(other.d_viterbi_selected_fallback, nullptr);
         d_viterbi_error_code = std::exchange(other.d_viterbi_error_code, nullptr);
@@ -135,7 +137,9 @@ void UnigramGpuMemory::release() noexcept {
     releaseDevicePointer(d_viterbi_scores, "d_viterbi_scores");
     releaseDevicePointer(d_viterbi_prev, "d_viterbi_prev");
     releaseDevicePointer(d_viterbi_tokens, "d_viterbi_tokens");
+    releaseDevicePointer(d_viterbi_prev_is_fallback, "d_viterbi_prev_is_fallback");
     releaseDevicePointer(d_viterbi_output_tokens, "d_viterbi_output_tokens");
+    releaseDevicePointer(d_viterbi_output_is_fallback, "d_viterbi_output_is_fallback");
     releaseDevicePointer(d_viterbi_output_count, "d_viterbi_output_count");
     releaseDevicePointer(d_viterbi_selected_fallback, "d_viterbi_selected_fallback");
     releaseDevicePointer(d_viterbi_error_code, "d_viterbi_error_code");
@@ -268,7 +272,9 @@ bool UnigramLM::uploadTrieToGPU() {
     if (!allocateDevice(fresh.d_viterbi_scores, max_sequence_length + 1, "d_viterbi_scores")) return false;
     if (!allocateDevice(fresh.d_viterbi_prev, max_sequence_length + 1, "d_viterbi_prev")) return false;
     if (!allocateDevice(fresh.d_viterbi_tokens, max_sequence_length + 1, "d_viterbi_tokens")) return false;
+    if (!allocateDevice(fresh.d_viterbi_prev_is_fallback, max_sequence_length + 1, "d_viterbi_prev_is_fallback")) return false;
     if (!allocateDevice(fresh.d_viterbi_output_tokens, max_sequence_length, "d_viterbi_output_tokens")) return false;
+    if (!allocateDevice(fresh.d_viterbi_output_is_fallback, max_sequence_length, "d_viterbi_output_is_fallback")) return false;
     if (!allocateDevice(fresh.d_viterbi_output_count, 1, "d_viterbi_output_count")) return false;
     if (!allocateDevice(fresh.d_viterbi_selected_fallback, max_sequence_length, "d_viterbi_selected_fallback")) return false;
     if (!allocateDevice(fresh.d_viterbi_error_code, 1, "d_viterbi_error_code")) return false;

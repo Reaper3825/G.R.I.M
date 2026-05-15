@@ -23,6 +23,10 @@ namespace Tokenizer {
 
 namespace {
 
+inline constexpr float kViterbiUnreachableScore = -1.0e30f;
+static_assert(sizeof(bool) == 1,
+              "CUDA Viterbi fallback flag bulk copy requires byte-sized bool storage");
+
 static void requireCallerLabel(const char* caller) {
     if (caller == nullptr) {
         throw std::runtime_error("UnigramViterbiSession requires a non-null caller label at " +
@@ -45,6 +49,36 @@ __device__ static bool initializeCudaErrorCode(int* error_code) {
 
 __device__ static void setCudaErrorCode(int* error_code, int code) {
     *error_code = code;
+}
+
+__device__ static bool shouldReplaceViterbiTransition(
+    float candidate_score,
+    int candidate_prev,
+    int candidate_token_id,
+    bool candidate_is_fallback,
+    float current_score,
+    int current_prev,
+    int current_token_id,
+    bool current_is_fallback,
+    int end_pos
+) {
+    if (candidate_score != current_score) {
+        return candidate_score > current_score;
+    }
+    if (current_prev < 0) {
+        return true;
+    }
+    if (candidate_is_fallback != current_is_fallback) {
+        return !candidate_is_fallback;
+    }
+
+    const int candidate_span = end_pos - candidate_prev;
+    const int current_span = end_pos - current_prev;
+    if (candidate_span != current_span) {
+        return candidate_span > current_span;
+    }
+
+    return candidate_token_id < current_token_id;
 }
 
 static void requireCudaSuccess(cudaError_t err, const char* label, const char* caller) {
@@ -95,6 +129,7 @@ __global__ void kernelViterbiForward(
     float* __restrict__ viterbi_scores,       // [length + 1]
     int* __restrict__ viterbi_prev,           // [length + 1]
     int* __restrict__ viterbi_tokens,         // [length + 1]
+    bool* __restrict__ viterbi_prev_is_fallback, // [length + 1], selected incoming edge is fallback
     bool* __restrict__ selected_fallback,     // [length], cleared here; selected path is marked by backtrack
     int unk_id,
     bool enable_byte_fallback,
@@ -110,13 +145,15 @@ __global__ void kernelViterbiForward(
     if (viterbi_scores == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiScores); return; }
     if (viterbi_prev == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiPrev); return; }
     if (viterbi_tokens == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiTokens); return; }
+    if (viterbi_prev_is_fallback == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiPrevIsFallback); return; }
     if (num_trie_nodes <= 0) { setCudaErrorCode(error_code, kUnigramViterbiCudaEmptyTrie); return; }
     
     // Initialize all DP states before forward relaxation.
     for (size_t i = 0; i <= length; ++i) {
-        viterbi_scores[i] = -1e30f;
+        viterbi_scores[i] = kViterbiUnreachableScore;
         viterbi_prev[i] = -1;
         viterbi_tokens[i] = unk_id;
+        viterbi_prev_is_fallback[i] = false;
     }
     viterbi_scores[0] = 0.0f;
     viterbi_tokens[0] = -1;
@@ -130,7 +167,7 @@ __global__ void kernelViterbiForward(
     // Viterbi pass: from each reachable start position, walk the uploaded
     // forward trie over text[pos], text[pos + 1], ... and relax end states.
     for (size_t pos = 0; pos < length; ++pos) {
-        if (viterbi_scores[pos] < -1e20f) continue;
+        if (pos != 0 && viterbi_prev[pos] < 0) continue;
         
         unsigned char cur_byte = static_cast<unsigned char>(text[pos]);
 
@@ -146,25 +183,45 @@ __global__ void kernelViterbiForward(
             int token_id = trie_token_ids[node];
             if (token_id >= 0) {
                 float score = viterbi_scores[pos] + trie_scores[node];
-                
-                if (score > viterbi_scores[pos + len]) {
-                    viterbi_scores[pos + len] = score;
-                    viterbi_prev[pos + len] = static_cast<int>(pos);
-                    viterbi_tokens[pos + len] = token_id;
+
+                const size_t end = pos + len;
+                if (shouldReplaceViterbiTransition(score,
+                                                   static_cast<int>(pos),
+                                                   token_id,
+                                                   false,
+                                                   viterbi_scores[end],
+                                                   viterbi_prev[end],
+                                                   viterbi_tokens[end],
+                                                   viterbi_prev_is_fallback[end],
+                                                   static_cast<int>(end))) {
+                    viterbi_scores[end] = score;
+                    viterbi_prev[end] = static_cast<int>(pos);
+                    viterbi_tokens[end] = token_id;
+                    viterbi_prev_is_fallback[end] = false;
                 }
             }
         }
         
         float fallback_score = viterbi_scores[pos] + UNKNOWN_SCORE;
-        if (fallback_score > viterbi_scores[pos + 1]) {
-            viterbi_scores[pos + 1] = fallback_score;
-            viterbi_prev[pos + 1] = static_cast<int>(pos);
+        const size_t fallback_end = pos + 1;
+        int fallback_token_id = unk_id;
+        if (enable_byte_fallback) {
+            fallback_token_id = static_cast<int>(cur_byte) + BYTE_TOKEN_OFFSET;
+        }
 
-            if (enable_byte_fallback) {
-                viterbi_tokens[pos + 1] = static_cast<int>(cur_byte) + BYTE_TOKEN_OFFSET;
-            } else {
-                viterbi_tokens[pos + 1] = unk_id;
-            }
+        if (shouldReplaceViterbiTransition(fallback_score,
+                                           static_cast<int>(pos),
+                                           fallback_token_id,
+                                           true,
+                                           viterbi_scores[fallback_end],
+                                           viterbi_prev[fallback_end],
+                                           viterbi_tokens[fallback_end],
+                                           viterbi_prev_is_fallback[fallback_end],
+                                           static_cast<int>(fallback_end))) {
+            viterbi_scores[fallback_end] = fallback_score;
+            viterbi_prev[fallback_end] = static_cast<int>(pos);
+            viterbi_tokens[fallback_end] = fallback_token_id;
+            viterbi_prev_is_fallback[fallback_end] = true;
         }
     }
 }
@@ -173,7 +230,9 @@ __global__ void kernelViterbiBacktrack(
     size_t length,
     const int* __restrict__ viterbi_prev,
     const int* __restrict__ viterbi_tokens,
+    const bool* __restrict__ viterbi_prev_is_fallback,
     int* __restrict__ output_tokens,
+    bool* __restrict__ output_is_fallback,
     int* __restrict__ output_count,
     int max_tokens,
     bool* __restrict__ selected_fallback,
@@ -184,7 +243,9 @@ __global__ void kernelViterbiBacktrack(
     if (!initializeCudaErrorCode(error_code)) return;
     if (viterbi_prev == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiPrev); return; }
     if (viterbi_tokens == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiTokens); return; }
+    if (viterbi_prev_is_fallback == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiPrevIsFallback); return; }
     if (output_tokens == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullOutputTokens); return; }
+    if (output_is_fallback == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullOutputIsFallback); return; }
     if (output_count == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullOutputCount); return; }
     if (max_tokens <= 0) { setCudaErrorCode(error_code, kUnigramViterbiCudaInvalidMaxTokens); return; }
     if (length > static_cast<size_t>(INT_MAX)) { setCudaErrorCode(error_code, kUnigramViterbiCudaBacktrackLengthTooLarge); return; }
@@ -221,71 +282,18 @@ __global__ void kernelViterbiBacktrack(
         int prev_pos = viterbi_prev[pos];
         if (prev_pos < 0 || prev_pos >= pos) { setCudaErrorCode(error_code, kUnigramViterbiCudaInvalidBackpointer); return; }
         int token_id = viterbi_tokens[pos];
+        const bool transition_is_fallback = viterbi_prev_is_fallback[pos];
 
-        if (selected_fallback != nullptr &&
-            token_id >= BYTE_TOKEN_OFFSET && token_id < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
+        if (selected_fallback != nullptr && transition_is_fallback) {
             if (prev_pos != pos - 1) { setCudaErrorCode(error_code, kUnigramViterbiCudaByteFallbackSpanInvalid); return; }
             selected_fallback[prev_pos] = true;
         }
 
         output_tokens[write_idx] = token_id;
+        output_is_fallback[write_idx] = transition_is_fallback;
         pos = prev_pos;
         write_idx--;
     }
-}
-
-__global__ void kernelTrieLookup(
-    const char* __restrict__ text,
-    size_t length,
-    size_t start_pos,
-    const int* __restrict__ trie_children,
-    const int* __restrict__ trie_token_ids,
-    const float* __restrict__ trie_scores,
-    int num_trie_nodes,
-    int* __restrict__ match_token,
-    int* __restrict__ match_length,
-    float* __restrict__ match_score,
-    int* __restrict__ error_code
-) {
-    // Single thread traverses trie from start_pos.
-    if (threadIdx.x != 0 || blockIdx.x != 0) return;
-    if (!initializeCudaErrorCode(error_code)) return;
-    if (text == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullText); return; }
-    if (trie_children == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieChildren); return; }
-    if (trie_token_ids == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieTokenIds); return; }
-    if (trie_scores == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieScores); return; }
-    if (match_token == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullMatchToken); return; }
-    if (match_length == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullMatchLength); return; }
-    if (match_score == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullMatchScore); return; }
-    if (num_trie_nodes <= 0) { setCudaErrorCode(error_code, kUnigramViterbiCudaEmptyTrie); return; }
-    
-    int node = 0;
-    int best_token = -1;
-    int best_length = 0;
-    float best_score = -1e30f;
-    
-    for (size_t i = start_pos; i < length && (i - start_pos) < MAX_PIECE_LENGTH; ++i) {
-        unsigned char c = static_cast<unsigned char>(text[i]);
-        int child = trie_children[node * 256 + c];
-        
-        if (child < 0) break;
-        if (child >= num_trie_nodes) { setCudaErrorCode(error_code, kUnigramViterbiCudaTrieChildOutOfRange); return; }
-        node = child;
-        
-        int token_id = trie_token_ids[node];
-        if (token_id >= 0) {
-            float score = trie_scores[node];
-            if (score > best_score) {
-                best_token = token_id;
-                best_length = static_cast<int>(i - start_pos + 1);
-                best_score = score;
-            }
-        }
-    }
-    
-    *match_token = best_token;
-    *match_length = best_length;
-    *match_score = best_score;
 }
 
 //======================================================//
@@ -299,6 +307,7 @@ UnigramViterbiSession::UnigramViterbiSession(const UnigramLM& model,
     CudaResult result = runCuda(model, normalized_text, caller);
     path_score_ = result.path_score;
     tokens_ = std::move(result.tokens);
+    token_is_fallback_ = std::move(result.token_is_fallback);
 }
 
 UnigramViterbiSession::CudaResult UnigramViterbiSession::runCuda(
@@ -310,6 +319,7 @@ UnigramViterbiSession::CudaResult UnigramViterbiSession::runCuda(
     CudaResult result;
     const size_t n = normalized_text.size();
     if (n == 0) {
+        result.path_score = 0.0f;
         return result;
     }
     if (n > static_cast<size_t>(INT_MAX)) {
@@ -360,7 +370,9 @@ UnigramViterbiSession::CudaResult UnigramViterbiSession::runCuda(
     requireCudaWorkspacePointer(gpu.d_viterbi_scores, "d_viterbi_scores", caller);
     requireCudaWorkspacePointer(gpu.d_viterbi_prev, "d_viterbi_prev", caller);
     requireCudaWorkspacePointer(gpu.d_viterbi_tokens, "d_viterbi_tokens", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_prev_is_fallback, "d_viterbi_prev_is_fallback", caller);
     requireCudaWorkspacePointer(gpu.d_viterbi_output_tokens, "d_viterbi_output_tokens", caller);
+    requireCudaWorkspacePointer(gpu.d_viterbi_output_is_fallback, "d_viterbi_output_is_fallback", caller);
     requireCudaWorkspacePointer(gpu.d_viterbi_output_count, "d_viterbi_output_count", caller);
     requireCudaWorkspacePointer(gpu.d_viterbi_selected_fallback, "d_viterbi_selected_fallback", caller);
     requireCudaWorkspacePointer(gpu.d_viterbi_error_code, "d_viterbi_error_code", caller);
@@ -391,6 +403,7 @@ UnigramViterbiSession::CudaResult UnigramViterbiSession::runCuda(
         &gpu.d_viterbi_scores,
         &gpu.d_viterbi_prev,
         &gpu.d_viterbi_tokens,
+        &gpu.d_viterbi_prev_is_fallback,
         &gpu.d_viterbi_selected_fallback,
         &kernel_unk_id,
         &kernel_enable_byte_fallback,
@@ -420,7 +433,9 @@ UnigramViterbiSession::CudaResult UnigramViterbiSession::runCuda(
         &backtrack_length,
         &gpu.d_viterbi_prev,
         &gpu.d_viterbi_tokens,
+        &gpu.d_viterbi_prev_is_fallback,
         &gpu.d_viterbi_output_tokens,
+        &gpu.d_viterbi_output_is_fallback,
         &gpu.d_viterbi_output_count,
         &max_tokens,
         &gpu.d_viterbi_selected_fallback,
@@ -459,6 +474,20 @@ UnigramViterbiSession::CudaResult UnigramViterbiSession::runCuda(
                                       cudaMemcpyDeviceToHost),
                            "cudaMemcpy CUDA Viterbi output tokens",
                            caller);
+
+        std::vector<bool> token_is_fallback;
+        token_is_fallback.reserve(static_cast<size_t>(output_count));
+        std::vector<unsigned char> fallback_flags(static_cast<size_t>(output_count));
+        requireCudaSuccess(cudaMemcpy(fallback_flags.data(),
+                                      gpu.d_viterbi_output_is_fallback,
+                                      static_cast<size_t>(output_count) * sizeof(bool),
+                                      cudaMemcpyDeviceToHost),
+                           "cudaMemcpy CUDA Viterbi output fallback flags",
+                           caller);
+        for (unsigned char flag : fallback_flags) {
+            token_is_fallback.push_back(flag != 0);
+        }
+        result.token_is_fallback = std::move(token_is_fallback);
     }
     return result;
 }

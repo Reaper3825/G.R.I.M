@@ -287,9 +287,13 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 3. **Byte fallback is the coverage guarantee.**
    If a piece is not found, tokenization must still succeed.
 
-   With byte fallback enabled, fallback transitions emit the raw byte token (`BYTE_TOKEN_OFFSET + byte`), not `UNK_TOKEN_ID`. Per-byte fallback metadata must be marked from the final backtracked path only; forward-DP candidate fallback edges are not proof that the final segmentation emitted a byte token.
+   With byte fallback enabled, fallback transitions emit the raw byte token (`BYTE_TOKEN_OFFSET + byte`), not `UNK_TOKEN_ID`. Forward DP stores `d_viterbi_prev_is_fallback[end]` on the selected backpointer, and backtrack marks per-byte fallback metadata from that explicit flag only. Forward-DP candidate fallback edges are not proof that the final segmentation emitted a byte token, and token ID range must not be used as a fallback-selection proxy.
 
-   `UNKNOWN_SCORE` in `TokenLayout.hpp` is the only fallback transition score source. CUDA Viterbi must use it directly; do not add caller-provided unknown-score overrides to kernel signatures, launch helpers, or encode APIs.
+   `UNKNOWN_SCORE` in `TokenLayout.hpp` is the only fallback transition score source. CUDA Viterbi must use it directly; do not add caller-provided unknown-score overrides to kernel signatures, launch helpers, or encode APIs. Scores are initialized with `kViterbiUnreachableScore`, but reachability is not inferred from score values: position `0` is reachable by definition, and every other position is reachable only when `viterbi_prev[pos] >= 0`.
+
+   Exact-score tie-breaking is part of production behavior: learned-piece transition beats fallback transition, longer span beats shorter span, and lower token ID breaks any remaining tie. Keep `shouldReplaceViterbiTransition()` and this invariant in sync.
+
+   Do not reintroduce standalone greedy trie lookup kernels for production segmentation. A local best trie match ignores accumulated path score, fallback cost, and tie policy; Viterbi-compatible behavior requires the forward DP plus backtrack kernels.
 
    CUDA Viterbi kernels use explicit `error_code` status reporting for logical validation failures. Device `assert()` is not a correctness mechanism here because it can disappear by build mode or surface far from the root cause. Backtrack must hard-report `kUnigramViterbiCudaOutputBufferTooSmall` when `count > max_tokens`, keep a safety counter, and leave host callers/tests responsible for sync + status copy + fail-loud handling.
 

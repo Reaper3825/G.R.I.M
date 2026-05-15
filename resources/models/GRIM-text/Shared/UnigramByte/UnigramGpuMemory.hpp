@@ -49,7 +49,9 @@ public:
     float* d_viterbi_scores = nullptr;
     int* d_viterbi_prev = nullptr;
     int* d_viterbi_tokens = nullptr;
+    bool* d_viterbi_prev_is_fallback = nullptr;
     int* d_viterbi_output_tokens = nullptr;
+    bool* d_viterbi_output_is_fallback = nullptr;
     int* d_viterbi_output_count = nullptr;
     bool* d_viterbi_selected_fallback = nullptr;
     int* d_viterbi_error_code = nullptr;

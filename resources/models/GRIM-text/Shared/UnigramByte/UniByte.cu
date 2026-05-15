@@ -9,6 +9,8 @@
 #include "UniByte.hpp"
 #include "AtomTable.hpp"
 #include "Detectors/DetectorRegistry.hpp"
+#include "TextUtils.hpp"
+#include "UnigramViterbi.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -222,16 +224,35 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
         // to be tokenized like "42 apples".
         const bool prepend_word_boundary =
             (start == 0) && result.token_ids.empty();
-        auto segment_ids = unigram_.encode(segment, prepend_word_boundary);
+        const std::string normalized_segment = normalizeSpaces(segment, prepend_word_boundary);
+        UnigramViterbiSession segment_session(unigram_, normalized_segment, "UniByte::encodeInternal");
+        const auto& segment_ids = segment_session.tokens();
+        const auto& segment_fallback_flags = segment_session.fallbackFlags();
+        if (segment_fallback_flags.size() != segment_ids.size()) {
+            throw std::runtime_error("UniByte::encodeInternal: Viterbi fallback flag count=" +
+                                     std::to_string(segment_fallback_flags.size()) +
+                                     " != token count=" + std::to_string(segment_ids.size()));
+        }
                         
-        for (int tid : segment_ids) {
+        for (size_t i = 0; i < segment_ids.size(); ++i) {
+            const int tid = segment_ids[i];
+            const bool fallback_transition = segment_fallback_flags[i];
+            const bool byte_fallback_used = fallback_transition && unigram_.byteFallbackEnabled();
+            const bool token_is_byte_id = tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE;
+            if (token_is_byte_id != byte_fallback_used) {
+                throw std::runtime_error("UniByte::encodeInternal: Viterbi fallback flag/token-id mismatch at segment token index=" +
+                                         std::to_string(i) + ": token_id=" + std::to_string(tid) +
+                                         ", fallback_transition=" + (fallback_transition ? std::string("true") : std::string("false")) +
+                                         ", byte_fallback_enabled=" + (unigram_.byteFallbackEnabled() ? std::string("true") : std::string("false")));
+            }
+
             result.token_ids.push_back(tid);
             result.token_numeric_values.push_back(0.0f);
             result.token_atom_flags.push_back(0);
             result.atom_entry_ids.push_back(kAtomEntryNone);  // no atom at this position
             appendNonAtomSideChannels();  // Non-atom tokens get mask=0
             
-            if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
+            if (byte_fallback_used) {
                 result.is_byte_fallback.push_back(true);
                 result.byte_tokens++;
             } else {

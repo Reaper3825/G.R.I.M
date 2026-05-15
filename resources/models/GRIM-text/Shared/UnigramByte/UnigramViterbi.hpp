@@ -38,9 +38,8 @@ inline constexpr int kUnigramViterbiCudaInvalidBackpointer = 14;
 inline constexpr int kUnigramViterbiCudaOutputBufferTooSmall = 15;
 inline constexpr int kUnigramViterbiCudaByteFallbackSpanInvalid = 16;
 inline constexpr int kUnigramViterbiCudaBacktrackSafetyLimit = 17;
-inline constexpr int kUnigramViterbiCudaNullMatchToken = 18;
-inline constexpr int kUnigramViterbiCudaNullMatchLength = 19;
-inline constexpr int kUnigramViterbiCudaNullMatchScore = 20;
+inline constexpr int kUnigramViterbiCudaNullViterbiPrevIsFallback = 18;
+inline constexpr int kUnigramViterbiCudaNullOutputIsFallback = 19;
 
 inline const char* unigramViterbiCudaErrorName(int code) {
     switch (code) {
@@ -62,9 +61,8 @@ inline const char* unigramViterbiCudaErrorName(int code) {
         case kUnigramViterbiCudaOutputBufferTooSmall: return "OutputBufferTooSmall";
         case kUnigramViterbiCudaByteFallbackSpanInvalid: return "ByteFallbackSpanInvalid";
         case kUnigramViterbiCudaBacktrackSafetyLimit: return "BacktrackSafetyLimit";
-        case kUnigramViterbiCudaNullMatchToken: return "NullMatchToken";
-        case kUnigramViterbiCudaNullMatchLength: return "NullMatchLength";
-        case kUnigramViterbiCudaNullMatchScore: return "NullMatchScore";
+        case kUnigramViterbiCudaNullViterbiPrevIsFallback: return "NullViterbiPrevIsFallback";
+        case kUnigramViterbiCudaNullOutputIsFallback: return "NullOutputIsFallback";
         default: return "UnknownUnigramViterbiCudaError";
     }
 }
@@ -86,12 +84,14 @@ public:
     UnigramViterbiSession& operator=(UnigramViterbiSession&&) noexcept = default;
 
     const std::vector<int>& tokens() const noexcept { return tokens_; }
+    const std::vector<bool>& fallbackFlags() const noexcept { return token_is_fallback_; }
     std::vector<int> takeTokens() { return std::move(tokens_); }
     float pathScore() const noexcept { return path_score_; }
 
 private:
     struct CudaResult {
         std::vector<int> tokens;
+        std::vector<bool> token_is_fallback;
         float path_score = 0.0f;
     };
 
@@ -100,6 +100,7 @@ private:
                               const char* caller);
 
     std::vector<int> tokens_;
+    std::vector<bool> token_is_fallback_;
     float path_score_ = 0.0f;
 };
 
