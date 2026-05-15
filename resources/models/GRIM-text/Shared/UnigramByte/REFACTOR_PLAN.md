@@ -109,8 +109,9 @@ AhoCorasick.hpp ←── TokenLayout.hpp (instead of including Unigram.hpp)
 - `normalizeSpaces()` / `denormalizeSpaces()` — SentencePiece ▁ normalization
 - `normalizeWithSpans()` — span-aware normalization (training only, but shares logic)
 - `isValidVocabCharacter()` — character validation for vocab building
-- `isPunctBoundary()` — punctuation isolation guard (kept inside `UnigramViterbi.cu` with the Viterbi implementation)
 - `isValidSubword()` — subword validation
+
+**Policy note:** Viterbi must not contain hard-coded punctuation isolation. GRIM-text uses SentencePiece-style subword selection: punctuation remains ordinary normalized text and is handled by learned pieces or byte fallback.
 
 **Why second:** These are pure utility functions with no state. Currently duplicated or forward-declared across files. Extracting them gives every file a clean import.
 

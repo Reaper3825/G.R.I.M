@@ -52,7 +52,7 @@ inline uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
 // Sentinel: position has no registered AtomTable entry (0 is a valid AtomTable ID)
 constexpr uint32_t kAtomEntryNone = UINT32_MAX;
 constexpr int MAX_PIECE_LENGTH = 32;           // Maximum token length in bytes
-constexpr float UNKNOWN_SCORE = -100.0f;       // Score for unknown pieces
+constexpr float UNKNOWN_SCORE = -100.0f;       // Unified Viterbi fallback transition score
 
 //======================================================//
 //  Layout Special Token Metadata

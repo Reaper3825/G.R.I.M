@@ -13,7 +13,7 @@
 #include <device_launch_parameters.h>
 
 #include <algorithm>
-#include <cassert>
+#include <climits>
 #include <stdexcept>
 #include <string>
 
@@ -21,16 +21,6 @@ namespace GRIM {
 namespace Tokenizer {
 
 namespace {
-
-// Punctuation isolation guard for Viterbi.
-// Returns true if the character is punctuation that must be emitted as a
-// standalone byte token rather than merged into adjacent letter/digit pieces.
-__host__ __device__ static inline bool isPunctBoundary(unsigned char c) {
-    return (c >= '!' && c <= '/') ||  // !"#$%&'()*+,-./
-           (c >= ':' && c <= '@') ||  // :;<=>?@
-           (c >= '[' && c <= '`') ||  // [\]^_`
-           (c >= '{' && c <= '~');    // {|}~
-}
 
 static void requireCallerLabel(const char* caller) {
     if (caller == nullptr) {
@@ -41,6 +31,19 @@ static void requireCallerLabel(const char* caller) {
         throw std::runtime_error("UnigramViterbiSession requires a non-empty caller label at " +
                                  std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
+}
+
+__device__ static bool initializeCudaErrorCode(int* error_code) {
+    if (error_code == nullptr) {
+        asm("trap;");
+        return false;
+    }
+    *error_code = kUnigramViterbiCudaOk;
+    return true;
+}
+
+__device__ static void setCudaErrorCode(int* error_code, int code) {
+    *error_code = code;
 }
 
 } // namespace
@@ -59,26 +62,23 @@ __global__ void kernelViterbiForward(
     float* __restrict__ viterbi_scores,       // [length + 1]
     int* __restrict__ viterbi_prev,           // [length + 1]
     int* __restrict__ viterbi_tokens,         // [length + 1]
-    bool* __restrict__ needs_fallback,        // [length]
+    bool* __restrict__ selected_fallback,     // [length], cleared here; selected path is marked by backtrack
     int unk_id,
-    float unk_score,
-    bool enable_byte_fallback
+    bool enable_byte_fallback,
+    int* __restrict__ error_code
 ) {
     // Single thread processes positions SEQUENTIALLY to maintain Viterbi invariants.
     if (threadIdx.x != 0 || blockIdx.x != 0) return;
-    assert(text != nullptr && "kernelViterbiForward text is NULL");
-    assert(trie_children != nullptr && "kernelViterbiForward trie_children is NULL");
-    assert(trie_token_ids != nullptr && "kernelViterbiForward trie_token_ids is NULL");
-    assert(trie_scores != nullptr && "kernelViterbiForward trie_scores is NULL");
-    assert(viterbi_scores != nullptr && "kernelViterbiForward viterbi_scores is NULL");
-    assert(viterbi_prev != nullptr && "kernelViterbiForward viterbi_prev is NULL");
-    assert(viterbi_tokens != nullptr && "kernelViterbiForward viterbi_tokens is NULL");
-    assert(num_trie_nodes > 0 && "kernelViterbiForward requires non-empty trie");
+    if (!initializeCudaErrorCode(error_code)) return;
+    if (text == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullText); return; }
+    if (trie_children == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieChildren); return; }
+    if (trie_token_ids == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieTokenIds); return; }
+    if (trie_scores == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieScores); return; }
+    if (viterbi_scores == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiScores); return; }
+    if (viterbi_prev == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiPrev); return; }
+    if (viterbi_tokens == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiTokens); return; }
+    if (num_trie_nodes <= 0) { setCudaErrorCode(error_code, kUnigramViterbiCudaEmptyTrie); return; }
     
-    if (enable_byte_fallback) {
-        assert(needs_fallback != nullptr && "kernelViterbiForward needs_fallback is NULL while byte fallback is enabled");
-    }
-
     // Initialize all DP states before forward relaxation.
     for (size_t i = 0; i <= length; ++i) {
         viterbi_scores[i] = -1e30f;
@@ -88,9 +88,9 @@ __global__ void kernelViterbiForward(
     viterbi_scores[0] = 0.0f;
     viterbi_tokens[0] = -1;
 
-    if (needs_fallback != nullptr) {
+    if (selected_fallback != nullptr) {
         for (size_t i = 0; i < length; ++i) {
-            needs_fallback[i] = false;
+            selected_fallback[i] = false;
         }
     }
     
@@ -100,24 +100,14 @@ __global__ void kernelViterbiForward(
         if (viterbi_scores[pos] < -1e20f) continue;
         
         unsigned char cur_byte = static_cast<unsigned char>(text[pos]);
-        if (isPunctBoundary(cur_byte)) {
-            float byte_score = viterbi_scores[pos] + unk_score;
-            if (byte_score > viterbi_scores[pos + 1]) {
-                viterbi_scores[pos + 1] = byte_score;
-                viterbi_prev[pos + 1] = static_cast<int>(pos);
-                viterbi_tokens[pos + 1] = static_cast<int>(cur_byte) + BYTE_TOKEN_OFFSET;
-            }
-            continue;
-        }
-        
+
         int node = 0;
         for (size_t len = 1; len <= MAX_PIECE_LENGTH && pos + len <= length; ++len) {
             unsigned char c = static_cast<unsigned char>(text[pos + len - 1]);
-            if (isPunctBoundary(c)) break;
             
             int child = trie_children[node * 256 + c];
             if (child < 0) break;
-            assert(child < num_trie_nodes && "kernelViterbiForward trie child index exceeds num_trie_nodes");
+            if (child >= num_trie_nodes) { setCudaErrorCode(error_code, kUnigramViterbiCudaTrieChildOutOfRange); return; }
             node = child;
             
             int token_id = trie_token_ids[node];
@@ -132,14 +122,13 @@ __global__ void kernelViterbiForward(
             }
         }
         
-        float fallback_score = viterbi_scores[pos] + unk_score;
+        float fallback_score = viterbi_scores[pos] + UNKNOWN_SCORE;
         if (fallback_score > viterbi_scores[pos + 1]) {
             viterbi_scores[pos + 1] = fallback_score;
             viterbi_prev[pos + 1] = static_cast<int>(pos);
 
             if (enable_byte_fallback) {
                 viterbi_tokens[pos + 1] = static_cast<int>(cur_byte) + BYTE_TOKEN_OFFSET;
-                needs_fallback[pos] = true;
             } else {
                 viterbi_tokens[pos + 1] = unk_id;
             }
@@ -153,33 +142,61 @@ __global__ void kernelViterbiBacktrack(
     const int* __restrict__ viterbi_tokens,
     int* __restrict__ output_tokens,
     int* __restrict__ output_count,
-    int max_tokens
+    int max_tokens,
+    bool* __restrict__ selected_fallback,
+    int* __restrict__ error_code
 ) {
     // Single thread does backtracking.
     if (threadIdx.x != 0 || blockIdx.x != 0) return;
-    assert(viterbi_prev != nullptr && "kernelViterbiBacktrack viterbi_prev is NULL");
-    assert(viterbi_tokens != nullptr && "kernelViterbiBacktrack viterbi_tokens is NULL");
-    assert(output_tokens != nullptr && "kernelViterbiBacktrack output_tokens is NULL");
-    assert(output_count != nullptr && "kernelViterbiBacktrack output_count is NULL");
-    assert(max_tokens > 0 && "kernelViterbiBacktrack max_tokens must be positive");
+    if (!initializeCudaErrorCode(error_code)) return;
+    if (viterbi_prev == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiPrev); return; }
+    if (viterbi_tokens == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullViterbiTokens); return; }
+    if (output_tokens == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullOutputTokens); return; }
+    if (output_count == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullOutputCount); return; }
+    if (max_tokens <= 0) { setCudaErrorCode(error_code, kUnigramViterbiCudaInvalidMaxTokens); return; }
+    if (length > static_cast<size_t>(INT_MAX)) { setCudaErrorCode(error_code, kUnigramViterbiCudaBacktrackLengthTooLarge); return; }
+
+    *output_count = 0;
+    
+    if (selected_fallback != nullptr) {
+        for (size_t i = 0; i < length; ++i) {
+            selected_fallback[i] = false;
+        }
+    }
     
     int count = 0;
     int pos = static_cast<int>(length);
+    int safety_counter = 0;
     while (pos > 0) {
+        ++safety_counter;
+        if (safety_counter > static_cast<int>(length)) { setCudaErrorCode(error_code, kUnigramViterbiCudaBacktrackSafetyLimit); return; }
+        int prev_pos = viterbi_prev[pos];
+        if (prev_pos < 0 || prev_pos >= pos) { setCudaErrorCode(error_code, kUnigramViterbiCudaInvalidBackpointer); return; }
         count++;
-        pos = viterbi_prev[pos];
-    }
-    
-    if (count > max_tokens) {
-        count = max_tokens;
+        if (count > max_tokens) { setCudaErrorCode(error_code, kUnigramViterbiCudaOutputBufferTooSmall); return; }
+        pos = prev_pos;
     }
     
     *output_count = count;
     pos = static_cast<int>(length);
     int write_idx = count - 1;
-    while (pos > 0 && write_idx >= 0) {
-        output_tokens[write_idx] = viterbi_tokens[pos];
-        pos = viterbi_prev[pos];
+    safety_counter = 0;
+    while (pos > 0) {
+        ++safety_counter;
+        if (safety_counter > static_cast<int>(length)) { setCudaErrorCode(error_code, kUnigramViterbiCudaBacktrackSafetyLimit); return; }
+        if (write_idx < 0) { setCudaErrorCode(error_code, kUnigramViterbiCudaOutputBufferTooSmall); return; }
+        int prev_pos = viterbi_prev[pos];
+        if (prev_pos < 0 || prev_pos >= pos) { setCudaErrorCode(error_code, kUnigramViterbiCudaInvalidBackpointer); return; }
+        int token_id = viterbi_tokens[pos];
+
+        if (selected_fallback != nullptr &&
+            token_id >= BYTE_TOKEN_OFFSET && token_id < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
+            if (prev_pos != pos - 1) { setCudaErrorCode(error_code, kUnigramViterbiCudaByteFallbackSpanInvalid); return; }
+            selected_fallback[prev_pos] = true;
+        }
+
+        output_tokens[write_idx] = token_id;
+        pos = prev_pos;
         write_idx--;
     }
 }
@@ -191,19 +208,23 @@ __global__ void kernelTrieLookup(
     const int* __restrict__ trie_children,
     const int* __restrict__ trie_token_ids,
     const float* __restrict__ trie_scores,
+    int num_trie_nodes,
     int* __restrict__ match_token,
     int* __restrict__ match_length,
-    float* __restrict__ match_score
+    float* __restrict__ match_score,
+    int* __restrict__ error_code
 ) {
     // Single thread traverses trie from start_pos.
     if (threadIdx.x != 0 || blockIdx.x != 0) return;
-    assert(text != nullptr && "kernelTrieLookup text is NULL");
-    assert(trie_children != nullptr && "kernelTrieLookup trie_children is NULL");
-    assert(trie_token_ids != nullptr && "kernelTrieLookup trie_token_ids is NULL");
-    assert(trie_scores != nullptr && "kernelTrieLookup trie_scores is NULL");
-    assert(match_token != nullptr && "kernelTrieLookup match_token is NULL");
-    assert(match_length != nullptr && "kernelTrieLookup match_length is NULL");
-    assert(match_score != nullptr && "kernelTrieLookup match_score is NULL");
+    if (!initializeCudaErrorCode(error_code)) return;
+    if (text == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullText); return; }
+    if (trie_children == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieChildren); return; }
+    if (trie_token_ids == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieTokenIds); return; }
+    if (trie_scores == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullTrieScores); return; }
+    if (match_token == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullMatchToken); return; }
+    if (match_length == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullMatchLength); return; }
+    if (match_score == nullptr) { setCudaErrorCode(error_code, kUnigramViterbiCudaNullMatchScore); return; }
+    if (num_trie_nodes <= 0) { setCudaErrorCode(error_code, kUnigramViterbiCudaEmptyTrie); return; }
     
     int node = 0;
     int best_token = -1;
@@ -215,6 +236,7 @@ __global__ void kernelTrieLookup(
         int child = trie_children[node * 256 + c];
         
         if (child < 0) break;
+        if (child >= num_trie_nodes) { setCudaErrorCode(error_code, kUnigramViterbiCudaTrieChildOutOfRange); return; }
         node = child;
         
         int token_id = trie_token_ids[node];
@@ -281,21 +303,10 @@ std::vector<UnigramViterbiNode> UnigramViterbiSession::runForward(
         if (nodes[pos].score < -1e20f) continue;
         
         unsigned char cur_byte = static_cast<unsigned char>(normalized_text[pos]);
-        if (isPunctBoundary(cur_byte)) {
-            float byte_score = nodes[pos].score + UNKNOWN_SCORE;
-            if (byte_score > nodes[pos + 1].score) {
-                nodes[pos + 1].score = byte_score;
-                nodes[pos + 1].prev_pos = static_cast<int>(pos);
-                nodes[pos + 1].token_id = static_cast<int>(cur_byte) + BYTE_TOKEN_OFFSET;
-                nodes[pos + 1].piece_length = 1;
-            }
-            continue;
-        }
-        
+
         int node = 0;
         for (size_t len = 1; len <= MAX_PIECE_LENGTH && pos + len <= n; ++len) {
             unsigned char c = static_cast<unsigned char>(normalized_text[pos + len - 1]);
-            if (isPunctBoundary(c)) break;
             
             if (model.trie_[node].children[c] < 0) break;
             node = model.trie_[node].children[c];
@@ -312,20 +323,16 @@ std::vector<UnigramViterbiNode> UnigramViterbiSession::runForward(
             }
         }
         
-        if (model.enable_byte_fallback_) {
-            float byte_score = nodes[pos].score + UNKNOWN_SCORE;
-            if (byte_score > nodes[pos + 1].score) {
+        float fallback_score = nodes[pos].score + UNKNOWN_SCORE;
+        if (fallback_score > nodes[pos + 1].score) {
+            nodes[pos + 1].score = fallback_score;
+            nodes[pos + 1].prev_pos = static_cast<int>(pos);
+
+            if (model.enable_byte_fallback_) {
                 unsigned char byte_val = static_cast<unsigned char>(normalized_text[pos]);
-                nodes[pos + 1].score = byte_score;
-                nodes[pos + 1].prev_pos = static_cast<int>(pos);
                 nodes[pos + 1].token_id = static_cast<int>(byte_val) + BYTE_TOKEN_OFFSET;
                 nodes[pos + 1].piece_length = 1;
-            }
-        } else {
-            float unk_score = nodes[pos].score + UNKNOWN_SCORE;
-            if (unk_score > nodes[pos + 1].score) {
-                nodes[pos + 1].score = unk_score;
-                nodes[pos + 1].prev_pos = static_cast<int>(pos);
+            } else {
                 nodes[pos + 1].token_id = UNK_TOKEN_ID;
                 nodes[pos + 1].piece_length = 1;
             }

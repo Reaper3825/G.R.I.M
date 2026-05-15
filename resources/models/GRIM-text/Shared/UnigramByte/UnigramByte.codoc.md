@@ -201,7 +201,7 @@ Use this table as the “who owns what?” map.
 | `AhoCorasick.hpp/.cu` | multi-pattern prefix matching DFA | full numeric parsing, tokenizer output assembly |
 | `AtomTable.hpp/.cu` | parsed atom storage, dedup, GPU packing, numeric value access | subword segmentation |
 | `Unigram.hpp/.cu` | learned vocab semantics, trie construction, encode/decode wrappers | raw learned-vocab vector/map mutation, Viterbi DP state, artifact file I/O, detection policy, top-level orchestration, training boundary-token injection |
-| `UnigramViterbi.hpp/.cu` | RAII Viterbi session, per-segmentation DP buffers, backtrack validation, punctuation isolation, Viterbi CUDA kernels | learned-vocab mutation, durable CUDA buffer lifetime, artifact serialization, detector policy |
+| `UnigramViterbi.hpp/.cu` | RAII Viterbi session, per-segmentation DP buffers, backtrack validation, SentencePiece-style subword path selection, Viterbi CUDA kernels | learned-vocab mutation, durable CUDA buffer lifetime, artifact serialization, detector policy, hard-coded punctuation splitting |
 | `VocabWriteOp.hpp` | append/upsert/rewrite of learned unigram pieces plus `piece_to_id` synchronization and token-ID validation | training scoring, Viterbi, artifact serialization, model/GRMT vocab-size authority |
 | `UnigramGpuMemory.hpp/.cu` | `UnigramLM` CUDA buffer lifetime, transactional GPU upload, device pointer cleanup | vocab semantics, Viterbi scoring, token assembly, training |
 | `UnigramTrainer.hpp/.cu` | unigram training implementation | runtime encode path |
@@ -281,10 +281,18 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 
    CPU and CUDA Viterbi both walk this trie forward from each reachable start position (`text[pos]`, then `text[pos + 1]`, ...). The GPU upload is not a reverse trie; reverse-scanning candidate pieces breaks normal tokens like `ab`.
 
+   Punctuation is ordinary normalized text in this SentencePiece-style tokenizer. Do not add hard Viterbi punctuation boundaries. A punctuation mark may be a learned piece by itself, part of a larger learned piece, or a byte fallback only if no selected learned piece covers it.
+
 3. **Byte fallback is the coverage guarantee.**
    If a piece is not found, tokenization must still succeed.
 
-   With byte fallback enabled, fallback transitions emit the raw byte token (`BYTE_TOKEN_OFFSET + byte`), not `UNK_TOKEN_ID`. Punctuation isolation follows the same standalone byte-token rule and must not merge punctuation into learned pieces.
+   With byte fallback enabled, fallback transitions emit the raw byte token (`BYTE_TOKEN_OFFSET + byte`), not `UNK_TOKEN_ID`. Per-byte fallback metadata must be marked from the final backtracked path only; forward-DP candidate fallback edges are not proof that the final segmentation emitted a byte token.
+
+   `UNKNOWN_SCORE` in `TokenLayout.hpp` is the only fallback transition score source. CPU and CUDA Viterbi must use it directly; do not add caller-provided unknown-score overrides to kernel signatures, launch helpers, or encode APIs.
+
+   CUDA Viterbi kernels use explicit `error_code` status reporting for logical validation failures. Device `assert()` is not a correctness mechanism here because it can disappear by build mode or surface far from the root cause. Backtrack must hard-report `kUnigramViterbiCudaOutputBufferTooSmall` when `count > max_tokens`, keep a safety counter, and leave host callers/tests responsible for sync + status copy + fail-loud handling.
+
+   Punctuation-heavy structures that should not influence subword mining belong in detector/training skip-span policy, not in Viterbi punctuation splitting.
 
 4. **Atom spans are skipped during training.**
    Training should not learn internal numeric formatting as normal subwords.

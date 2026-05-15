@@ -7,12 +7,14 @@
 
 #include "../Shared/UnigramByte/Byte.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
+#include "../Shared/UnigramByte/UnigramViterbi.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
 #include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <set>
@@ -35,10 +37,21 @@ __global__ void kernelViterbiForward(
     float* __restrict__ viterbi_scores,
     int* __restrict__ viterbi_prev,
     int* __restrict__ viterbi_tokens,
-    bool* __restrict__ needs_fallback,
+    bool* __restrict__ selected_fallback,
     int unk_id,
-    float unk_score,
-    bool enable_byte_fallback
+    bool enable_byte_fallback,
+    int* __restrict__ error_code
+);
+
+__global__ void kernelViterbiBacktrack(
+    size_t length,
+    const int* __restrict__ viterbi_prev,
+    const int* __restrict__ viterbi_tokens,
+    int* __restrict__ output_tokens,
+    int* __restrict__ output_count,
+    int max_tokens,
+    bool* __restrict__ selected_fallback,
+    int* __restrict__ error_code
 );
 
 } // namespace Tokenizer
@@ -225,6 +238,26 @@ bool testUnigramViterbi(std::string& message) {
     // Viterbi should find optimal segmentation
     ASSERT_TRUE(tokens.size() >= 1, "Should produce tokens for 'test'");
     
+    return true;
+}
+
+bool testUnigramSentencePiecePunctuationPiece(std::string& message) {
+    UnigramLM unigram;
+
+    // SentencePiece-style policy: punctuation is ordinary normalized text.
+    // If a learned ▁-prefixed piece includes punctuation and wins by score,
+    // Viterbi must select that piece instead of forcing punctuation to byte fallback.
+    const std::string full_piece = "\xe2\x96\x81hello!";
+    unigram.writePiece(full_piece, -1.0f, false);
+    unigram.writePiece("\xe2\x96\x81hello", -10.0f, false);
+    unigram.writePiece("!", -10.0f, false);
+    unigram.buildTrie();
+
+    std::vector<int> tokens = unigram.encode("hello!");
+
+    ASSERT_EQ(tokens.size(), static_cast<size_t>(1), "Punctuation-bearing learned piece should remain selectable");
+    ASSERT_EQ(tokens[0], unigram.getPieceId(full_piece), "Viterbi should select learned punctuation-bearing piece");
+
     return true;
 }
 
@@ -1763,6 +1796,26 @@ static bool assertCudaSuccess(cudaError_t err, std::string& message, const char*
     return true;
 }
 
+static bool readViterbiCudaKernelError(int* d_error_code, int& host_error_code, std::string& message, const char* label) {
+    if (!assertCudaSuccess(cudaMemcpy(&host_error_code, d_error_code, sizeof(int), cudaMemcpyDeviceToHost), message, label)) {
+        return false;
+    }
+    return true;
+}
+
+static bool assertViterbiCudaKernelOk(int* d_error_code, std::string& message, const char* label) {
+    int host_error_code = -1;
+    if (!readViterbiCudaKernelError(d_error_code, host_error_code, message, label)) {
+        return false;
+    }
+    if (host_error_code != kUnigramViterbiCudaOk) {
+        message = std::string(label) + " reported error_code=" + std::to_string(host_error_code) +
+                  " (" + unigramViterbiCudaErrorName(host_error_code) + ")";
+        return false;
+    }
+    return true;
+}
+
 static cudaError_t launchTestViterbiForward(
     char* d_text,
     size_t length,
@@ -1773,9 +1826,9 @@ static cudaError_t launchTestViterbiForward(
     float* d_viterbi_scores,
     int* d_viterbi_prev,
     int* d_viterbi_tokens,
-    bool* d_needs_fallback) {
+    bool* d_selected_fallback,
+    int* d_error_code) {
     int unk_id = UNK_TOKEN_ID;
-    float unk_score = UNKNOWN_SCORE;
     bool enable_byte_fallback = true;
     void* args[] = {
         &d_text,
@@ -1787,13 +1840,41 @@ static cudaError_t launchTestViterbiForward(
         &d_viterbi_scores,
         &d_viterbi_prev,
         &d_viterbi_tokens,
-        &d_needs_fallback,
+        &d_selected_fallback,
         &unk_id,
-        &unk_score,
-        &enable_byte_fallback
+        &enable_byte_fallback,
+        &d_error_code
     };
     return cudaLaunchKernel(
         reinterpret_cast<const void*>(&kernelViterbiForward),
+        dim3(1),
+        dim3(1),
+        args,
+        0,
+        nullptr);
+}
+
+static cudaError_t launchTestViterbiBacktrack(
+    size_t length,
+    int* d_viterbi_prev,
+    int* d_viterbi_tokens,
+    int* d_output_tokens,
+    int* d_output_count,
+    int max_tokens,
+    bool* d_selected_fallback,
+    int* d_error_code) {
+    void* args[] = {
+        &length,
+        &d_viterbi_prev,
+        &d_viterbi_tokens,
+        &d_output_tokens,
+        &d_output_count,
+        &max_tokens,
+        &d_selected_fallback,
+        &d_error_code
+    };
+    return cudaLaunchKernel(
+        reinterpret_cast<const void*>(&kernelViterbiBacktrack),
         dim3(1),
         dim3(1),
         args,
@@ -1808,16 +1889,17 @@ bool testCudaViterbiForwardUsesForwardTrie(std::string& message) {
         return true;
     }
 
-    const int num_nodes = 3;
-    const int token_ab = UNIGRAM_VOCAB_OFFSET + 42;
+    const int num_nodes = 4;
+    const int token_abc = UNIGRAM_VOCAB_OFFSET + 42;
     std::vector<int> trie_children(static_cast<size_t>(num_nodes) * 256, -1);
     std::vector<int> trie_token_ids(num_nodes, -1);
     std::vector<float> trie_scores(num_nodes, UNKNOWN_SCORE);
 
     trie_children[static_cast<size_t>(0) * 256 + static_cast<unsigned char>('a')] = 1;
     trie_children[static_cast<size_t>(1) * 256 + static_cast<unsigned char>('b')] = 2;
-    trie_token_ids[2] = token_ab;
-    trie_scores[2] = -1.0f;
+    trie_children[static_cast<size_t>(2) * 256 + static_cast<unsigned char>('c')] = 3;
+    trie_token_ids[3] = token_abc;
+    trie_scores[3] = -1.0f;
 
     char* d_text = nullptr;
     int* d_trie_children = nullptr;
@@ -1826,7 +1908,10 @@ bool testCudaViterbiForwardUsesForwardTrie(std::string& message) {
     float* d_viterbi_scores = nullptr;
     int* d_viterbi_prev = nullptr;
     int* d_viterbi_tokens = nullptr;
-    bool* d_needs_fallback = nullptr;
+    bool* d_selected_fallback = nullptr;
+    int* d_output_tokens = nullptr;
+    int* d_output_count = nullptr;
+    int* d_error_code = nullptr;
 
     auto cleanup = [&]() {
         cudaFree(d_text);
@@ -1836,10 +1921,13 @@ bool testCudaViterbiForwardUsesForwardTrie(std::string& message) {
         cudaFree(d_viterbi_scores);
         cudaFree(d_viterbi_prev);
         cudaFree(d_viterbi_tokens);
-        cudaFree(d_needs_fallback);
+        cudaFree(d_selected_fallback);
+        cudaFree(d_output_tokens);
+        cudaFree(d_output_count);
+        cudaFree(d_error_code);
     };
 
-    const size_t max_text_len = 2;
+    const size_t max_text_len = 3;
     if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_text), max_text_len), message, "cudaMalloc d_text")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_trie_children), trie_children.size() * sizeof(int)), message, "cudaMalloc d_trie_children")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_trie_token_ids), trie_token_ids.size() * sizeof(int)), message, "cudaMalloc d_trie_token_ids")) { cleanup(); return false; }
@@ -1847,13 +1935,16 @@ bool testCudaViterbiForwardUsesForwardTrie(std::string& message) {
     if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_viterbi_scores), (max_text_len + 1) * sizeof(float)), message, "cudaMalloc d_viterbi_scores")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_viterbi_prev), (max_text_len + 1) * sizeof(int)), message, "cudaMalloc d_viterbi_prev")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_viterbi_tokens), (max_text_len + 1) * sizeof(int)), message, "cudaMalloc d_viterbi_tokens")) { cleanup(); return false; }
-    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_needs_fallback), max_text_len * sizeof(bool)), message, "cudaMalloc d_needs_fallback")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_selected_fallback), max_text_len * sizeof(bool)), message, "cudaMalloc d_selected_fallback")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_output_tokens), max_text_len * sizeof(int)), message, "cudaMalloc d_output_tokens")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_output_count), sizeof(int)), message, "cudaMalloc d_output_count")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMalloc(reinterpret_cast<void**>(&d_error_code), sizeof(int)), message, "cudaMalloc d_error_code")) { cleanup(); return false; }
 
     if (!assertCudaSuccess(cudaMemcpy(d_trie_children, trie_children.data(), trie_children.size() * sizeof(int), cudaMemcpyHostToDevice), message, "cudaMemcpy d_trie_children")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaMemcpy(d_trie_token_ids, trie_token_ids.data(), trie_token_ids.size() * sizeof(int), cudaMemcpyHostToDevice), message, "cudaMemcpy d_trie_token_ids")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaMemcpy(d_trie_scores, trie_scores.data(), trie_scores.size() * sizeof(float), cudaMemcpyHostToDevice), message, "cudaMemcpy d_trie_scores")) { cleanup(); return false; }
 
-    const std::string matched_text = "ab";
+    const std::string matched_text = "abc";
     if (!assertCudaSuccess(cudaMemcpy(d_text, matched_text.data(), matched_text.size(), cudaMemcpyHostToDevice), message, "cudaMemcpy matched text")) { cleanup(); return false; }
     if (!assertCudaSuccess(launchTestViterbiForward(
         d_text,
@@ -1865,25 +1956,66 @@ bool testCudaViterbiForwardUsesForwardTrie(std::string& message) {
         d_viterbi_scores,
         d_viterbi_prev,
         d_viterbi_tokens,
-        d_needs_fallback), message, "kernelViterbiForward matched launch")) { cleanup(); return false; }
+        d_selected_fallback,
+        d_error_code), message, "kernelViterbiForward matched launch")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaDeviceSynchronize(), message, "kernelViterbiForward matched sync")) { cleanup(); return false; }
+    if (!assertViterbiCudaKernelOk(d_error_code, message, "kernelViterbiForward matched status")) { cleanup(); return false; }
 
     std::vector<float> host_scores(max_text_len + 1, 0.0f);
     std::vector<int> host_prev(max_text_len + 1, -1);
     std::vector<int> host_tokens(max_text_len + 1, -1);
+    std::vector<int> host_output_tokens(max_text_len, -1);
+    static_assert(sizeof(bool) == sizeof(unsigned char), "CUDA bool marker copies require byte-sized bool");
+    std::vector<unsigned char> host_selected_fallback(max_text_len, 1);
     if (!assertCudaSuccess(cudaMemcpy(host_scores.data(), d_viterbi_scores, host_scores.size() * sizeof(float), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched scores")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaMemcpy(host_prev.data(), d_viterbi_prev, host_prev.size() * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched prev")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaMemcpy(host_tokens.data(), d_viterbi_tokens, host_tokens.size() * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched tokens")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(host_selected_fallback.data(), d_selected_fallback, host_selected_fallback.size() * sizeof(bool), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched pre-backtrack markers")) { cleanup(); return false; }
 
-    if (host_prev[2] != 0 || host_tokens[2] != token_ab) {
-        message = "CUDA Viterbi did not match forward trie token 'ab': prev=" +
-                  std::to_string(host_prev[2]) + ", token=" + std::to_string(host_tokens[2]) +
-                  ", expected_token=" + std::to_string(token_ab);
+    if (host_prev[3] != 0 || host_tokens[3] != token_abc) {
+        message = "CUDA Viterbi did not match forward trie token 'abc': prev=" +
+                  std::to_string(host_prev[3]) + ", token=" + std::to_string(host_tokens[3]) +
+                  ", expected_token=" + std::to_string(token_abc);
         cleanup();
         return false;
     }
-    if (std::abs(host_scores[2] - (-1.0f)) > 0.0001f) {
-        message = "CUDA Viterbi score mismatch for 'ab': got " + std::to_string(host_scores[2]);
+    if (std::abs(host_scores[3] - (-1.0f)) > 0.0001f) {
+        message = "CUDA Viterbi score mismatch for 'abc': got " + std::to_string(host_scores[3]);
+        cleanup();
+        return false;
+    }
+    if (std::any_of(host_selected_fallback.begin(), host_selected_fallback.end(), [](unsigned char marked) { return marked != 0; })) {
+        message = "CUDA Viterbi forward marked fallback bytes before final-path backtrack";
+        cleanup();
+        return false;
+    }
+
+    if (!assertCudaSuccess(launchTestViterbiBacktrack(
+        matched_text.size(),
+        d_viterbi_prev,
+        d_viterbi_tokens,
+        d_output_tokens,
+        d_output_count,
+        static_cast<int>(max_text_len),
+        d_selected_fallback,
+        d_error_code), message, "kernelViterbiBacktrack matched launch")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaDeviceSynchronize(), message, "kernelViterbiBacktrack matched sync")) { cleanup(); return false; }
+    if (!assertViterbiCudaKernelOk(d_error_code, message, "kernelViterbiBacktrack matched status")) { cleanup(); return false; }
+
+    int host_output_count = -1;
+    if (!assertCudaSuccess(cudaMemcpy(&host_output_count, d_output_count, sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched output count")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(host_output_tokens.data(), d_output_tokens, host_output_tokens.size() * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched output tokens")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(host_selected_fallback.data(), d_selected_fallback, host_selected_fallback.size() * sizeof(bool), cudaMemcpyDeviceToHost), message, "cudaMemcpy matched selected markers")) { cleanup(); return false; }
+
+    if (host_output_count != 1 || host_output_tokens[0] != token_abc) {
+        message = "CUDA Viterbi backtrack did not select full 'abc' token: count=" +
+                  std::to_string(host_output_count) + ", token0=" + std::to_string(host_output_tokens[0]) +
+                  ", expected_token=" + std::to_string(token_abc);
+        cleanup();
+        return false;
+    }
+    if (std::any_of(host_selected_fallback.begin(), host_selected_fallback.end(), [](unsigned char marked) { return marked != 0; })) {
+        message = "CUDA Viterbi backtrack marked fallback bytes for learned full-token path";
         cleanup();
         return false;
     }
@@ -1900,19 +2032,69 @@ bool testCudaViterbiForwardUsesForwardTrie(std::string& message) {
         d_viterbi_scores,
         d_viterbi_prev,
         d_viterbi_tokens,
-        d_needs_fallback), message, "kernelViterbiForward fallback launch")) { cleanup(); return false; }
+        d_selected_fallback,
+        d_error_code), message, "kernelViterbiForward fallback launch")) { cleanup(); return false; }
     if (!assertCudaSuccess(cudaDeviceSynchronize(), message, "kernelViterbiForward fallback sync")) { cleanup(); return false; }
+    if (!assertViterbiCudaKernelOk(d_error_code, message, "kernelViterbiForward fallback status")) { cleanup(); return false; }
 
-    bool host_needs_fallback = false;
-    if (!assertCudaSuccess(cudaMemcpy(host_prev.data(), d_viterbi_prev, 2 * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback prev")) { cleanup(); return false; }
-    if (!assertCudaSuccess(cudaMemcpy(host_tokens.data(), d_viterbi_tokens, 2 * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback tokens")) { cleanup(); return false; }
-    if (!assertCudaSuccess(cudaMemcpy(&host_needs_fallback, d_needs_fallback, sizeof(bool), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback marker")) { cleanup(); return false; }
+    if (!assertCudaSuccess(launchTestViterbiBacktrack(
+        fallback_text.size(),
+        d_viterbi_prev,
+        d_viterbi_tokens,
+        d_output_tokens,
+        d_output_count,
+        static_cast<int>(max_text_len),
+        d_selected_fallback,
+        d_error_code), message, "kernelViterbiBacktrack fallback launch")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaDeviceSynchronize(), message, "kernelViterbiBacktrack fallback sync")) { cleanup(); return false; }
+    if (!assertViterbiCudaKernelOk(d_error_code, message, "kernelViterbiBacktrack fallback status")) { cleanup(); return false; }
+
+    if (!assertCudaSuccess(cudaMemcpy(&host_output_count, d_output_count, sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback output count")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(host_output_tokens.data(), d_output_tokens, host_output_tokens.size() * sizeof(int), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback output tokens")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaMemcpy(host_selected_fallback.data(), d_selected_fallback, host_selected_fallback.size() * sizeof(bool), cudaMemcpyDeviceToHost), message, "cudaMemcpy fallback selected markers")) { cleanup(); return false; }
 
     const int expected_byte_token = BYTE_TOKEN_OFFSET + static_cast<int>(static_cast<unsigned char>('x'));
-    if (host_prev[1] != 0 || host_tokens[1] != expected_byte_token || !host_needs_fallback) {
-        message = "CUDA Viterbi byte fallback mismatch for 'x': prev=" +
-                  std::to_string(host_prev[1]) + ", token=" + std::to_string(host_tokens[1]) +
+    if (host_output_count != 1 || host_output_tokens[0] != expected_byte_token || host_selected_fallback[0] == 0) {
+        message = "CUDA Viterbi byte fallback mismatch for selected 'x' path: count=" +
+                  std::to_string(host_output_count) + ", token0=" + std::to_string(host_output_tokens[0]) +
                   ", expected_token=" + std::to_string(expected_byte_token);
+        cleanup();
+        return false;
+    }
+
+    const std::string overflow_text = "xx";
+    if (!assertCudaSuccess(cudaMemcpy(d_text, overflow_text.data(), overflow_text.size(), cudaMemcpyHostToDevice), message, "cudaMemcpy overflow text")) { cleanup(); return false; }
+    if (!assertCudaSuccess(launchTestViterbiForward(
+        d_text,
+        overflow_text.size(),
+        d_trie_children,
+        d_trie_token_ids,
+        d_trie_scores,
+        num_nodes,
+        d_viterbi_scores,
+        d_viterbi_prev,
+        d_viterbi_tokens,
+        d_selected_fallback,
+        d_error_code), message, "kernelViterbiForward overflow launch")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaDeviceSynchronize(), message, "kernelViterbiForward overflow sync")) { cleanup(); return false; }
+    if (!assertViterbiCudaKernelOk(d_error_code, message, "kernelViterbiForward overflow status")) { cleanup(); return false; }
+
+    if (!assertCudaSuccess(launchTestViterbiBacktrack(
+        overflow_text.size(),
+        d_viterbi_prev,
+        d_viterbi_tokens,
+        d_output_tokens,
+        d_output_count,
+        1,
+        d_selected_fallback,
+        d_error_code), message, "kernelViterbiBacktrack overflow launch")) { cleanup(); return false; }
+    if (!assertCudaSuccess(cudaDeviceSynchronize(), message, "kernelViterbiBacktrack overflow sync")) { cleanup(); return false; }
+
+    int overflow_error_code = -1;
+    if (!readViterbiCudaKernelError(d_error_code, overflow_error_code, message, "kernelViterbiBacktrack overflow status")) { cleanup(); return false; }
+    if (overflow_error_code != kUnigramViterbiCudaOutputBufferTooSmall) {
+        message = "CUDA Viterbi backtrack failed to hard-report count > max_tokens: error_code=" +
+                  std::to_string(overflow_error_code) + " (" + unigramViterbiCudaErrorName(overflow_error_code) + ")";
         cleanup();
         return false;
     }
@@ -1950,6 +2132,7 @@ int main(int argc, char** argv) {
     suite.addTest("Unigram.BuildVocab", testUnigramBuildVocab);
     suite.addTest("Unigram.Encode", testUnigramEncode);
     suite.addTest("Unigram.Viterbi", testUnigramViterbi);
+    suite.addTest("Unigram.SentencePiecePunctuation", testUnigramSentencePiecePunctuationPiece);
     suite.addTest("Unigram.Decode", testUnigramDecode);
     suite.addTest("Unigram.Unknown", testUnigramUnknown);
     suite.addTest("Unigram.Train.FilterRepetitionNoise", testUnigramTrainFiltersRepetitionNoise);
