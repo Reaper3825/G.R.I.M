@@ -85,7 +85,6 @@ list(FILTER ALL_GPU_SOURCES EXCLUDE REGEX "Flash_Attention")
 
 # Remove problematic files that have broken includes or aren't needed for inference
 # Feed_Forward_GPU exclusion removed - implementation now complete with CRTP design
-list(FILTER ALL_GPU_SOURCES EXCLUDE REGEX "ComputeLossBatch")
 list(FILTER ALL_GPU_SOURCES EXCLUDE REGEX "GRIM-TS")
 list(FILTER ALL_GPU_SOURCES EXCLUDE REGEX "LayerNorm_GPU\\.cu")  # Layer class - using RMSNorm instead
 # Keep LayerNorm_Kernal_GPU.cu - launchLayerNorm is still called from grim_language_model_gpu.cu

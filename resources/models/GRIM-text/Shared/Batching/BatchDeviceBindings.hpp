@@ -46,7 +46,7 @@ struct BatchPayload;
 
 // Device pointers for a single batch step. Filled by
 // LanguageModel::uploadBatchToDevice() after H2D copies complete;
-// consumed by computeLossBatch / autogradTrainingStep / executeStep
+// consumed by autogradTrainingStep / executeStep
 // without ever writing back through this struct.
 //
 // Geometry (batch_size, max_seq_len) is duplicated from BatchPayload

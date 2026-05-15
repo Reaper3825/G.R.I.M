@@ -88,10 +88,11 @@ struct TrainingState {
     Tensor cached_encoder_output;       // [max_tokens, d_model] LM-head input snapshot for diagnostics only
     Tensor cached_logits_tensor;        // [max_tokens, vocab_size] logits snapshot for diagnostics/inference return
     
-    // Device mirrors of BatchPayload arrays. uploadBatchToDevice() is the only
-    // writer for training/eval and returns BatchDeviceBindings as the only
-    // forward/loss reader-facing view. Inference writes these as its single-row
-    // decode/prefill cache because there is no host BatchPayload upload step.
+    // Device mirrors of BatchPayload arrays. LanguageModel::uploadBatchToDevice()
+    // (Shared/Batching/BatchDeviceUpload.cu) is the only writer for training/eval
+    // and returns BatchDeviceBindings as the only forward/loss reader-facing
+    // view. Inference writes these as its single-row decode/prefill cache because
+    // there is no host BatchPayload upload step.
     Tensor cached_targets_tensor;       // [max_tokens] int32
     Tensor cached_token_ids_tensor;     // [max_tokens] int32
     Tensor cached_seq_lengths_tensor;   // [max_sequences] int32 real token count per padded row

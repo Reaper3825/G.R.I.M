@@ -108,7 +108,7 @@ Later encoder layers may run **`crossAttentionRead`** from memory starting at **
 - `execution_block_GPU.hpp` / `execution_block_GPU.cu` — register machine and kernels.
 - `AutogradTraining.cu` — when the block runs; bootstrap and `executeStep` invocation.
 - `Shared/Batching/BatchPayload.*` — where `token_to_slot_map` is assembled for training.
-- `ComputeLossBatch.cu` — H2D of `token_to_slot_map` into `cached_token_to_slot_map`.
+- `Shared/Batching/BatchDeviceUpload.cu` — H2D of `token_to_slot_map` into `cached_token_to_slot_map`.
 - `Inference_GPU.cu` / `grim_language_model_gpu.cu` — inference H2D for slot map and `forwardStep` slot argument.
 
 ---

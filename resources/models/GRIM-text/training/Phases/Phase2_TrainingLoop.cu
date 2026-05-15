@@ -138,137 +138,6 @@ bool advanceAccumulationOrThrow(
 } // namespace
 
 //======================================================//
-//  Validation Implementation
-//======================================================//
-
-ValidationResult runValidation(TrainingContext& ctx, TrainingLoopState& state) {
-    ValidationResult result;
-    
-    ctx.logging.logger->log("Running validation...");
-
-    // PRE-VALIDATION SAFETY: drain any deferred CUDA errors. Without this they
-    // manifest as SEH exceptions inside the val loop, bypassing C++ catch.
-    {
-        cudaError_t sync_err = cudaDeviceSynchronize();
-        if (sync_err != cudaSuccess) {
-            ctx.logging.logger->log("[Val] WARNING: cudaDeviceSynchronize before validation returned: " +
-                std::string(cudaGetErrorString(sync_err)));
-        }
-        cudaError_t deferred_err = cudaGetLastError();
-        if (deferred_err != cudaSuccess) {
-            ctx.logging.logger->log("[Val] WARNING: Cleared deferred CUDA error before validation: " +
-                std::string(cudaGetErrorString(deferred_err)));
-        }
-    }
-
-    // Match GPU state to "start of training step". Rule 20: pre-val reset is
-    // one boundary; per-batch RAII handles the rest.
-    {
-        GRIM::Autograd::AutogradStepScope pre_val_scope(ctx.model->getTrainingState());
-    }
-    flushDeferredCleanup();
-    cudaDeviceSynchronize();
-    (void)cudaGetLastError();
-
-    const uint32_t batch_rows = ctx.run_capacity.batch_rows;
-    const uint32_t seq_cap    = ctx.run_capacity.seq_cap;
-    const uint32_t token_budget = ctx.run_capacity.max_tokens_per_batch;
-    if (batch_rows == 0 || seq_cap == 0 || token_budget == 0) {
-        throw std::runtime_error("[Val] FATAL: invalid RunCapacity (batch_rows=" +
-                                 std::to_string(batch_rows) + " seq_cap=" +
-                                 std::to_string(seq_cap) + " token_budget=" +
-                                 std::to_string(token_budget) + ")");
-    }
-
-    ctx.logging.logger->log("[Val] Token budget: " + std::to_string(token_budget) +
-        " (RunCapacity: batch_rows=" + std::to_string(batch_rows) + " x seq_cap=" + std::to_string(seq_cap) + ")");
-
-    // Validation iterates the Phase1-authored ctx.val_payloads in order.
-    // Phase2 MUST NOT call buildBatches / buildValPayload — that work is
-    // owned by PlannedBatchesReady at startup (Rule 20: fixed batch
-    // membership; per-step batch creation is forbidden in the hot loop).
-    const int total_val_batches = static_cast<int>(ctx.val_payloads.size());
-    ctx.logging.logger->log("[Val] Iterating " + std::to_string(total_val_batches) +
-                            " Phase1-authored validation payloads");
-
-    float val_loss = 0.0f;
-    int val_sequences_processed = 0;
-
-    const auto val_start_time = std::chrono::steady_clock::now();
-
-    for (int val_idx = 0; val_idx < total_val_batches; ++val_idx) {
-        const auto& val_payload = ctx.val_payloads[val_idx];
-
-        // Progress logging every 50 batches
-        if (val_idx % 50 == 0) {
-            ctx.logging.logger->log("[Val] Processing batch " + std::to_string(val_idx + 1) +
-                "/" + std::to_string(total_val_batches) +
-                " (processed=" + std::to_string(val_sequences_processed) + ")");
-        }
-
-        if (val_payload.batch_size == 0) {
-            // Rule 20: PlannedBatches.cu validates payloads at startup, so an
-            // empty payload arriving here means startup invariants regressed.
-            throw std::runtime_error(
-                "[Val] empty payload at batch " + std::to_string(val_idx + 1) +
-                "/" + std::to_string(total_val_batches) +
-                " — Phase1 PlannedBatches authored an empty val payload");
-        }
-
-        // Rule 20 single-owner clear: AutogradStepScope covers this batch.
-        // Sync slice: upload the host-only payload to device once per val batch,
-        // then pass the resulting bindings to computeLossBatch. computeLossBatch
-        // never authors device pointers itself.
-        float batch_val_loss = 0.0f;
-        {
-            GRIM::Autograd::AutogradStepScope val_step_scope(ctx.model->getTrainingState());
-            const auto val_bindings = ctx.model->uploadBatchToDevice(val_payload);
-            batch_val_loss = ctx.model->computeLossBatch(
-                val_payload,
-                val_bindings,
-                state.loss_config,
-                /*is_training=*/false);
-        }
-        flushDeferredCleanup();
-
-        cudaError_t batch_err = cudaGetLastError();
-        if (batch_err != cudaSuccess) {
-            throw std::runtime_error(
-                "[Val] CUDA error after batch " + std::to_string(val_idx + 1) +
-                ": " + std::string(cudaGetErrorString(batch_err)));
-        }
-        if (!std::isfinite(batch_val_loss)) {
-            throw std::runtime_error(
-                "[Val] non-finite loss at batch " + std::to_string(val_idx + 1) +
-                " (loss=" + std::to_string(batch_val_loss) + ") — fix the model/data, do not skip");
-        }
-
-        val_loss += batch_val_loss * val_payload.batch_size;
-        val_sequences_processed += val_payload.batch_size;
-    }
-    
-    auto val_duration = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::steady_clock::now() - val_start_time);
-    
-    if (val_sequences_processed > 0) {
-        result.loss = val_loss / val_sequences_processed;
-    } else {
-        // No validation data configured. +inf so best-val tracking ignores it.
-        result.loss = std::numeric_limits<float>::infinity();
-    }
-    result.sequences_processed = val_sequences_processed;
-    result.perplexity = (std::isfinite(result.loss) && result.loss < 50.0f)
-        ? std::exp(result.loss)
-        : std::numeric_limits<float>::infinity();
-    ctx.logging.logger->log("[Val] " + Internal::formatMetric("loss", result.loss) + " " +
-                            Internal::formatMetric("ppl", result.perplexity, 3) +
-                            " seqs=" + std::to_string(val_sequences_processed) +
-                            " time=" + std::to_string(val_duration.count()) + "s");
-    
-    return result;
-}
-
-//======================================================//
 //  Batch Processing Implementation
 //======================================================//
 
@@ -747,6 +616,7 @@ EpochResult runEpoch(
     const int total_batches = static_cast<int>(batch_order.size());
     const auto epoch_start = std::chrono::steady_clock::now();
     float epoch_loss = 0.0f;
+    int epoch_sequences_processed = 0;
 
     // Process batches: ctx.epoch_batch_order[epoch_idx] dictates which
     // Phase1-authored payload is active each step. The hard invariant from
@@ -772,6 +642,7 @@ EpochResult runEpoch(
         }
 
         epoch_loss += batch_result.loss;
+        epoch_sequences_processed += payload.batch_size;
         result.batches_processed++;
         result.best_batch_loss = std::min(result.best_batch_loss, batch_result.loss);
         result.worst_batch_loss = std::max(result.worst_batch_loss, batch_result.loss);
@@ -788,8 +659,15 @@ EpochResult runEpoch(
         throw std::runtime_error("FATAL: epoch completed with 0 processed batches");
     }
     
-    // Run validation
-    result.validation = runValidation(ctx, state);
+    // No second validation/eval loop. The epoch metric is derived from the
+    // training batches already executed by autogradTrainingStep(); every op and
+    // feature is verified in that single path.
+    result.validation.loss = epoch_loss / result.batches_processed;
+    result.validation.sequences_processed = epoch_sequences_processed;
+    result.validation.perplexity =
+        (std::isfinite(result.validation.loss) && result.validation.loss < 50.0f)
+            ? std::exp(result.validation.loss)
+            : std::numeric_limits<float>::infinity();
     finalizeEpochOutcome(ctx, state, result, epoch_idx, epoch_loss, epoch_start);
     
     return result;
@@ -806,8 +684,8 @@ bool executePhase2(TrainingContext& ctx) {
     TrainingLoopState state;
     state.loss_config = GRIM::HyperParameters::lossConfigHP(hp);
 
-    // Construct the validation high-loss policy detector. Train-loss
-    // spike/EWMA tracking is owned by TelemetryLattice.
+    // Construct the epoch high-loss policy detector. Train-loss spike/EWMA
+    // tracking is owned by TelemetryLattice.
     {
         GRIM::Loss::LossSignalConfig sig_cfg{};
         sig_cfg.validation_high_threshold = hp.auto_stop_high_loss_threshold;

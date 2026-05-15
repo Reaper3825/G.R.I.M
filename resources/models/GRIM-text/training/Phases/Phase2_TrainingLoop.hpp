@@ -74,7 +74,10 @@ struct BatchResult {
 };
 
 /**
- * @brief Result of running validation
+ * @brief Epoch metric historically serialized as validation.
+ *
+ * There is no second validation/eval autograd loop. This metric is derived
+ * from the training batches already executed in the epoch.
  */
 struct ValidationResult {
     float loss = 0.0f;
@@ -127,7 +130,7 @@ struct TrainingLoopState {
     bool shuffle_window_exhausted_notified = false;
     
     // Auto-stop tracking. Plateau is local (best-so-far improvement gap);
-    // validation high-loss patience is owned by GRIM::Loss::LossSignalBus.
+    // high-loss patience is owned by GRIM::Loss::LossSignalBus.
     int plateau_epochs_without_improvement = 0;
     
     // Prediction comparison counter
@@ -140,9 +143,9 @@ struct TrainingLoopState {
     // does not interpret or mutate individual diagnostic fields directly.
     DiagnosticsState diagnostics;
 
-    // Validation high-loss patience detector. Train-loss spike/EWMA
-    // measurement is owned by TelemetryLattice. Constructed in executePhase2;
-    // never null after Phase2 enters the loop.
+    // High-loss patience detector. Train-loss spike/EWMA measurement is owned
+    // by TelemetryLattice. Constructed in executePhase2; never null after
+    // Phase2 enters the loop.
     std::unique_ptr<GRIM::Loss::LossSignalBus> loss_signals;
 
     ~TrainingLoopState();
@@ -195,14 +198,6 @@ BatchResult processBatch(
     int batch_idx,
     int epoch_idx,
     int accum_steps);
-
-/**
- * @brief Run validation after an epoch
- * 
- * @param ctx Training context
- * @return ValidationResult Validation metrics
- */
-ValidationResult runValidation(TrainingContext& ctx, TrainingLoopState& state);
 
 //======================================================//
 //  Internal Helper Functions

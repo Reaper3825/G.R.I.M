@@ -288,7 +288,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Forward_GPU.cu
     ../InitTrainingState.cu
     ../Phases/Startup/Model/ModelGpuAssembly.cu
-    ../../Shared/Loss/ComputeLoss/ComputeLossBatch.cu
     ../../Shared/TrainingState/CublasHandleOwner_GPU.cu
     ../../Shared/TrainingState/DeviceAllocation_GPU.cu
     ../../Shared/TrainingState/TrainingStateGPU.cu
@@ -312,6 +311,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Execution/DecodeTimeNumPolicy.cu
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
+    ../../Shared/Batching/BatchDeviceUpload.cu
     ../../Shared/Batching/BatchPayload.cu
     ../../Shared/Batching/EpochBatching.cu
     ../../Shared/Execution/ExecutionPayloadValidation.cu

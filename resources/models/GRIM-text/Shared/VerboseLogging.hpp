@@ -16,7 +16,6 @@ constexpr bool ENABLE_FORWARD_FLASH_ATTN_LOGS = false; ///< "[FORWARD] Flash Att
 constexpr bool ENABLE_FORWARD_CACHE_LOGS = false;      ///< "[FORWARD] Cached attn_bhsd"
 constexpr bool ENABLE_ORDER_LOGS = false;              ///< "[ORDER] ForwardPhase*" orchestration logs
 constexpr bool ENABLE_VOCAB_TIMING_LOGS = false;       ///< "[VOCAB_TIMING]" embedding/LM head timing
-constexpr bool ENABLE_FORWARD_DIAG_LOGS = false;       ///< "[ForwardDiag]" pre-loss logit diagnostics
 constexpr bool ENABLE_GPU_COPY_LOGS = false;           ///< "[GPU_COPY]" H2D copy progress logs
 constexpr bool ENABLE_AUTOGRAD_TRAINING_LOGS = false;   ///< "[AutogradTraining]" forward/backward step info
 
@@ -26,7 +25,6 @@ constexpr bool ENABLE_BACKWARD_GRADIENT_LOGS = false;  ///< "[BACKWARD layer=X] 
 constexpr bool ENABLE_BACKWARD_FLASH_ATTN_LOGS = false;///< "[BACKWARD layer=X] Flash Attention backward complete"
 
 // Loss computation logging - DISABLED FOR PRODUCTION
-constexpr bool ENABLE_LOSS_ORDER_LOGS = false;         ///< "[ORDER] computeLossBatch.*"
 constexpr bool ENABLE_LOSS_BACKWARD_SAMPLING = false;  ///< NLLLossGradFn diagnostic sampling
 
 // Expensive diagnostics (D2H copies for analysis - disable for production training)

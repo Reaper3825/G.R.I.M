@@ -880,8 +880,7 @@ LossResult autogradTrainingStep(
                 "training with plain cross-entropy over text tokens (teacher supervision skipped)");
     }
 
-    // WS8: Structural layer availability — crash loud if config says enabled but layers are missing
-    // (mirrors computeLossBatch; ensures both paths throw on same condition)
+    // WS8: Structural layer availability — crash loud if config says enabled but layers are missing.
     if (cfg.execution_block_enabled) {
         if (!model.getExecutionBlockLayer()) {
             throw std::runtime_error(
@@ -936,7 +935,7 @@ LossResult autogradTrainingStep(
     // ═══════════════════════════════════════════════════════════════════════════
     
     // Write authoritative training step to TrainingState BEFORE building context.
-    // This is the ONLY mutation site — eval paths (computeLossBatch) read but never write.
+    // This is the ONLY mutation site for autograd_step.
     training_state.autograd_step = step;
 
     // Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on non-initial
@@ -1028,7 +1027,7 @@ LossResult autogradTrainingStep(
     
     // Rule 20 ownership taxonomy: AutogradIntermediates::clear() is owned by
     // the caller's AutogradStepScope RAII guard. Do NOT clear here. Post-step
-    // diagnostics (Phase2_TrainingLoop, GuessCache, ComputeLossBatch) read
+    // diagnostics (Phase2_TrainingLoop, GuessCache) read
     // from TrainingState::cached_logits_tensor (Cat 3 step-output snapshot),
     // never from intermediates.logits_tensor (Cat 1, transient).
     

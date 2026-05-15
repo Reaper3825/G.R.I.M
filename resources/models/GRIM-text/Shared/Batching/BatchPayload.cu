@@ -4,7 +4,7 @@
 //
 //  Merges logic from:
 //    - Phase2_TrainingLoop.cu::processBatch() sequence extraction (lines 2700-2730)
-//    - ComputeLossBatch.cu::prepareLossBatchInputs() padding/masking (lines 52-193)
+//    - deleted loss-local prepareLossBatchInputs() padding/masking
 //    - legacy token-stat recomputation for gradient clipping
 //
 //  All metadata computed ONCE here. No downstream recomputation.

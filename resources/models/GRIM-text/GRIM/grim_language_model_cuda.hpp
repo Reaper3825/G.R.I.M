@@ -212,28 +212,18 @@ public:
                                      HyperParameters::GenerationStreamCallback callback,
                                      const HyperParameters::GenerationConfig* gen_config = nullptr);
     
-    // Training / Eval
-    //
-    // Two-step contract (Phase2 sync slice):
-    //   1) auto bindings = model.uploadBatchToDevice(payload);
-    //   2) float loss     = model.computeLossBatch(payload, bindings, loss_config, is_training);
+    // Training/inference payload upload.
     //
     // uploadBatchToDevice() performs the H2D copies into TrainingState's
     // reusable cache buffers and returns a BatchDeviceBindings that names the
-    // resulting device pointers. computeLossBatch() never writes through
-    // payload (BatchPayload is host-only and immutable); device addresses are
-    // read only via `bindings`. loss_config is the durable Phase2 snapshot from
-    // HyperparameterGroupings.hpp, not LanguageModel-owned runtime config.
+    // resulting device pointers. Training consumes those bindings through
+    // GRIM::Autograd::autogradTrainingStep(); inference prefill consumes them
+    // through executeInferenceForward_(). There is no separate eval-loss loop.
     GRIM::Batching::BatchDeviceBindings uploadBatchToDevice(
         const GRIM::Batching::BatchPayload& payload);
-
-    float computeLossBatch(const GRIM::Batching::BatchPayload& payload,
-                           const GRIM::Batching::BatchDeviceBindings& bindings,
-                           const HyperParameters::LossConfigHP& loss_config,
-                           bool is_training = true);
     
     // =========================================================================
-    // AUTOREGRESSIVE GENERATION API
+    //  GENERATION API
     // =========================================================================
     // Use these for token-by-token generation:
     //   1. Build an InferencePrefill BatchPayload and call forwardInit().

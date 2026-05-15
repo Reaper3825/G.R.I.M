@@ -191,7 +191,7 @@ Use this checklist to systematically audit each file in the order it's used duri
     - **FINDING 3 — `single_token_{logits,hidden}` dead allocations** ✅ FIXED: Removed from InitTrainingState.cu. Leftover from planned incremental KV cache never implemented.
     - **FINDING 4 — `layer_scale_init` misleading default** ✅ FIXED: Changed default from `0.1f` to `1.0f` in `HyperParameters_GPU.hpp` and the `ai_config.json` parser to match production config (Issue #129).
     - **FINDING 5 — optimizer-state allocation debug fprintf** ✅ FIXED: Removed allocation ENTER/EXIT fprintf lines from the optimizer-state owner implementation.
-    - **FINDING 6 — `batch_prep_*` vectors NOT dead**: ✅ RESOLVED (original claim was WRONG). The remaining `batch_prep_*` vectors for input IDs, target IDs, numeric values, numeric mask, and valid-target counts ARE actively used by `ComputeLossBatch.cu::prepareLossBatchInputs()` for assembling padded batch data. `DEBUG_BATCH_PREP_CORRUPTION` flag was already deleted (Phase1 audit). The vectors use lazy allocation (`batch_prep_capacity=0`, `.assign()` on first use) as a workaround for a memory corruption bug where `batch_prep_target_ids.capacity()` contained garbage before `initTrainingState()`. No action required — vectors are production code.
+    - **FINDING 6 — `batch_prep_*` vectors**: superseded by Phase1-authored `BatchPayload` construction. Loss-local batch prep was deleted; Phase2 consumes prebuilt payloads only.
     - **FINDING 7 — `stream ? stream : stream_ctrl.getPrimaryStream()` x3**: Lines 63, 400, 438. Functions accept `stream = nullptr` default and fallback to centralized controller. Rule 22 compliant (fallback IS to centralized controller, which throws if uninitialized). Low priority — pedantic Rule 20 says make parameter required. DEFERRED.
   - **Rule 22**: All GPU resources managed via `TrainingState.stream_ctrl.getPrimaryStream()` (no raw streams).
 
@@ -983,7 +983,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 3.3 Loss Batch Computation
 
-- [x] **Shared/Loss/ComputeLoss/ComputeLossBatch.cu** ✅ AUDITED & GUTTED (753→391 lines)
+- [x] **Shared/Loss/ComputeLoss/ComputeLossBatch.cu** ✅ DELETED — duplicate validation/eval autograd loop removed
   - **FULLY REFACTORED**: Inline loss code (~400 lines) DELETED, delegates to `computeAutogradLoss(autograd_ctx, payload)` ✅
   - File now contains ONLY: GPU copies → autograd context setup → forward pass → loss config build → `computeAutogradLoss()` call → return
   - **DELETED (362 lines total)**:
@@ -1008,7 +1008,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 - [x] **Shared/Loss/NumericLoss/NumericLoss_GPU.cu** ✅ AUDITED (integrated into computeAutogradLoss)
   - Huber loss for numeric predictions
-  - **NOW CALLED FROM**: `computeAutogradLoss()` in AutogradTraining.cu (no longer inline in ComputeLossBatch.cu) ✅
+  - **NOW CALLED FROM**: `computeAutogradLoss()` in AutogradTraining.cu ✅
   - **FIXED (Issue #137)**: `scaleNumericGradKernel` uses `1/valid_text_tokens` (same denominator as text CE mean reduction)
   - **FIXED (Issue #137)**: `log_var` gradients normalized by `1/(1 + loss²)` to bound their contribution
   - **FIXED (Issue #137)**: Weight+bias gradients post-scaled by `sqrt(N_atoms / valid_tokens)` to normalize dense accumulation variance
@@ -1036,7 +1036,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - **Verification:** `Loss::LossContext` was NEVER constructed in any .cu file. All 5 sub-module functions only had declarations + implementations — zero callers.
   - **Production loss path** (UNCHANGED): `BatchPayload → AutogradContext → computeAutogradLoss() → unified_loss()` via AutogradLoss.cu
   - **Still alive:**
-    - `HyperParameters::LossConfigHP` — config flow: `lossConfigHP()` → Phase2 state → autogradTrainingStep/computeLossBatch → unified_loss
+    - `HyperParameters::LossConfigHP` — config flow: `lossConfigHP()` → Phase2 state → autogradTrainingStep → unified_loss
     - `autograd::unified_loss()` — the one true loss path (AutogradLoss.cu/hpp)
     - `NumericLoss/NumericLoss_GPU.cu/hpp` — auxiliary numeric regression head (called from AutogradTraining.cu)
 
@@ -1446,7 +1446,7 @@ Use this section to track stale code patterns found during audit:
 **Status**: Loss computation sections (3.1-3.5), backward orchestrator (4.1-4.2), ScratchBlock (2.3), and Phase2 optimization (5.1, 5.7) fully documented with completed refactoring work  
 **Recent Updates**:
 - **Old Loss System DELETED (Rule 26)**: Loss.hpp gutted, LossContext::TensorViews deleted, 10 dead .cu/.hpp files removed, 5 directories purged, CrossEntropy_GPU.cu removed from CMakeLists. BatchPayload confirmed as single source of truth via AutogradContext.
-- ComputeLossBatch.cu gutted (753→391 lines, 362-line deletion documented)
+- ComputeLossBatch.cu deleted; Phase2 no longer runs a second validation/eval autograd loop
 - AutogradTraining.cu fully refactored (computeAutogradLoss, autogradTrainingStep, executeAutogradBackward)
 - Issue #140 (embedding scale removed), #141 (ScratchBlock gradient tap + positional_encoding config + PCGrad NaN guard), #142 (gradient tap hardening)
 - Issue #139 (per-component gradient clipping: emb/enc/num independent budgets)

@@ -123,15 +123,15 @@ struct AutogradContext {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PAYLOAD VIEW
-    // Training/eval only: payload points to the caller-owned BatchPayload
+    // Training only: payload points to the caller-owned BatchPayload
     // (single source of truth for batch geometry and supervision). Inference
     // MUST NOT enter AutogradContext; use Shared/Forward/ModelForward_GPU.hpp
     // with ModelForwardMode::InferencePrefill instead.
-    // payload is NEVER null after the training/eval initAutogradContext overload.
+    // payload is NEVER null after the training initAutogradContext overload.
     //
     // device_bindings carries the device pointers for THIS step (slot map,
     // atom mask, etc.). Replaces the old `mutable d_*` fields on BatchPayload.
-    // - Training/eval path: filled by LanguageModel::uploadBatchToDevice().
+    // - Training path: filled by LanguageModel::uploadBatchToDevice().
     // Always non-null before executeAutogradForward() reads device pointers.
     // ═══════════════════════════════════════════════════════════════════════════
     const Batching::BatchPayload* payload = nullptr;

@@ -728,7 +728,7 @@ int main(int argc, char** argv) {
                     //--------------------------------------------------
                     // 6d. COMPUTE LOSS AND BACKWARD
                     //--------------------------------------------------
-                    // computeLossBatch expects: input[i] predicts target[i]
+                    // autogradTrainingStep expects: input[i] predicts target[i]
                     // So input = context (all tokens), target = context shifted left by 1 + current target
                     // For training on THIS specific position, we use the full context
                     // Input: tokens 0..pos, Target: tokens 1..pos+1 (where pos+1 is target_id)

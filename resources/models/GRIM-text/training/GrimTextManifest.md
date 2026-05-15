@@ -829,7 +829,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 3.3 Loss Batch Computation
 
-- [] **Shared/Loss/ComputeLoss/ComputeLossBatch.cu**  & GUTTED (753→391 lines)
+- [] **Shared/Loss/ComputeLoss/ComputeLossBatch.cu**  & DELETED — separate validation/eval autograd loop removed
   - **FULLY REFACTORED**: Inline loss code (~400 lines) DELETED, delegates to `computeAutogradLoss(autograd_ctx, payload)` ✅
   - File now contains ONLY: GPU copies → autograd context setup → forward pass → loss config build → `computeAutogradLoss()` call → return
   - **DELETED (362 lines total)**:
@@ -854,7 +854,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 - [] **Shared/Loss/NumericLoss/NumericLoss_GPU.cu**  (integrated into computeAutogradLoss)
   - Huber loss for numeric predictions
-  - **NOW CALLED FROM**: `computeAutogradLoss()` in AutogradTraining.cu (no longer inline in ComputeLossBatch.cu) ✅
+  - **NOW CALLED FROM**: `computeAutogradLoss()` in AutogradTraining.cu ✅
   - **FIXED (Issue #137)**: `scaleNumericGradKernel` uses `1/valid_text_tokens` (same denominator as text CE mean reduction)
   - **FIXED (Issue #137)**: `log_var` gradients normalized by `1/(1 + loss²)` to bound their contribution
   - **FIXED (Issue #137)**: Weight+bias gradients post-scaled by `sqrt(N_atoms / valid_tokens)` to normalize dense accumulation variance
@@ -882,7 +882,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - **Verification:** `Loss::LossContext` was NEVER constructed in any .cu file. All 5 sub-module functions only had declarations + implementations — zero callers.
   - **Production loss path** (UNCHANGED): `BatchPayload → AutogradContext → computeAutogradLoss() → unified_loss()` via AutogradLoss.cu
   - **Still alive:**
-    - `HyperParameters::LossConfigHP` — config flow: `lossConfigHP()` → Phase2 state → autogradTrainingStep/computeLossBatch → unified_loss
+    - `HyperParameters::LossConfigHP` — config flow: `lossConfigHP()` → Phase2 state → autogradTrainingStep → unified_loss
     - `autograd::unified_loss()` — the one true loss path (AutogradLoss.cu/hpp)
     - `NumericLoss/NumericLoss_GPU.cu/hpp` — auxiliary numeric regression head (called from AutogradTraining.cu)
 
@@ -1292,7 +1292,7 @@ Use this section to track stale code patterns found during audit:
 **Status**: Loss computation sections (3.1-3.5), backward orchestrator (4.1-4.2), ScratchBlock (2.3), and Phase2 optimization (5.1, 5.7) fully documented with completed refactoring work  
 **Recent Updates**:
 - **Old Loss System DELETED (Rule 26)**: Loss.hpp gutted, LossContext::TensorViews deleted, 10 dead .cu/.hpp files removed, 5 directories purged, CrossEntropy_GPU.cu removed from CMakeLists. BatchPayload confirmed as single source of truth via AutogradContext.
-- ComputeLossBatch.cu gutted (753→391 lines, 362-line deletion documented)
+- ComputeLossBatch.cu deleted; Phase2 no longer runs a second validation/eval autograd loop
 - AutogradTraining.cu fully refactored (computeAutogradLoss, autogradTrainingStep, executeAutogradBackward)
 - Issue #140 (embedding scale removed), #141 (ScratchBlock gradient tap + positional_encoding config + PCGrad NaN guard), #142 (gradient tap hardening)
 - Issue #139 (per-component gradient clipping: emb/enc/num independent budgets)

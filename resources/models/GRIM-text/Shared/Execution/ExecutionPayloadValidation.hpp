@@ -4,8 +4,7 @@
 //
 //  One function validates row-level and batch-level
 //  execution metadata invariants. Called from
-//  buildBatchPayload(), computeLossBatch(), and
-//  autogradTrainingStep() — no other call site is
+//  buildBatchPayload() and autogradTrainingStep() — no other call site is
 //  permitted to perform semantic execution validation.
 //
 //  Rule 20: crash with detailed error on ANY violation.

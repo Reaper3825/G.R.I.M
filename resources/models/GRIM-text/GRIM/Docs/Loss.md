@@ -8,6 +8,8 @@ Primary text CE now enters as `autograd::unified_loss(logits, BatchPayload, Batc
 
 `autograd::unified_loss()` is the **primary text loss path**. `cross_entropy_loss()` and the model-owned loss-options side channel are deleted; callers pass the durable `HyperParameters::LossConfigHP` snapshot built by `lossConfigHP()` in `HyperparameterGroupings.hpp`. Class-balanced device weights are runtime `TrainingState` buffers and are passed separately.
 
+There is no separate validation/eval loss pass. Phase2 derives epoch metrics from the training batches already executed through `autogradTrainingStep()`. Runtime payload upload lives in `Shared/Batching/BatchDeviceUpload.cu`; loss math lives in the autograd loss primitives only.
+
 ## Formula
 $$L = \alpha (1 - p_t)^\gamma \cdot \mathrm{CE}_{\text{smooth}} + \lambda \cdot H(p)$$
 
