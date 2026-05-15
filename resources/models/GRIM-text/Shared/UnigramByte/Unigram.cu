@@ -148,6 +148,8 @@ void UnigramLM::buildTrie() {
         trie_[node].token_id = tokenIdForIndex(static_cast<int>(i));
         trie_[node].score = piece.score;
     }
+
+    ++trie_generation_;
 }
 
 std::vector<int> UnigramLM::encode(const std::string& text, bool prepend_space) const {

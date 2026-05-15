@@ -71,7 +71,6 @@ static ::GRIM::HyperParameters::TokenizerHP makeSelfTestTokenizerHP() {
     hp.enable_scratch_block_reasoning = true;
     hp.detect_numbers = true;
     hp.enable_byte_fallback = true;
-    hp.prefer_gpu = true;
     hp.vocab_score_multiplier = 1.0f;
     return hp;
 }

@@ -11,6 +11,7 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
+#include <cstdint>
 
 namespace GRIM {
 namespace Tokenizer {
@@ -47,6 +48,7 @@ public:
     int* d_viterbi_prev = nullptr;
     int* d_viterbi_tokens = nullptr;
     size_t workspace_max_length = 0;      // Maximum sequence length supported
+    std::uint64_t uploaded_trie_generation = 0;
 
     bool initialized = false;
 };

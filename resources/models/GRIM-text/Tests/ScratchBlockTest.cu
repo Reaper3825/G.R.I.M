@@ -1147,7 +1147,6 @@ bool testRoundTripEncoding_FULL(std::string& message) {
     tokenizer_hp.enable_scratch_block_reasoning = true;
     tokenizer_hp.detect_numbers = true;
     tokenizer_hp.enable_byte_fallback = true;
-    tokenizer_hp.prefer_gpu = true;
     tokenizer_hp.vocab_score_multiplier = 1.0f;
     
     UniByte tokenizer(tokenizer_hp);

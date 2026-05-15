@@ -45,7 +45,6 @@ struct TokenizerHP {
     bool enable_scratch_block_reasoning = false;
     bool detect_numbers = false;
     bool enable_byte_fallback = false;
-    bool prefer_gpu = false;
 
     bool add_bos = false;
     bool add_eos = false;
@@ -557,7 +556,6 @@ inline TokenizerHP tokenizerHP(const StartupConfig& config) {
     view.enable_scratch_block_reasoning = hp.tokenizer_enable_scratch_block_reasoning;
     view.detect_numbers = hp.tokenizer_detect_numbers;
     view.enable_byte_fallback = tok.enable_byte_fallback;
-    view.prefer_gpu = TOKENIZER_PREFER_GPU;
     view.add_bos = tok.add_bos;
     view.add_eos = tok.add_eos;
     view.save_text_vocab = tok.save_text_vocab;

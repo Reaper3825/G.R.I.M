@@ -178,7 +178,6 @@ constexpr uint32_t MAX_REASONABLE_VOCAB_SIZE = 2000000; // Sanity check for voca
 // (Overridable per-run via ai_config.json [tokenizer] section)
 //======================================================//
 constexpr float TOKENIZER_CHARACTER_COVERAGE = 0.9995f;  // Character coverage for SentencePiece-style vocab building
-constexpr bool TOKENIZER_PREFER_GPU = true;              // GPU acceleration for tokenization
 
 // BOS/EOS Token Insertion Control
 // These flags are loaded from ai_config.json [tokenizer] section:

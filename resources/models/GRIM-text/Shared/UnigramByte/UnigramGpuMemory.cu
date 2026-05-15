@@ -110,6 +110,7 @@ UnigramGpuMemory& UnigramGpuMemory::operator=(UnigramGpuMemory&& other) noexcept
         d_viterbi_prev = std::exchange(other.d_viterbi_prev, nullptr);
         d_viterbi_tokens = std::exchange(other.d_viterbi_tokens, nullptr);
         workspace_max_length = std::exchange(other.workspace_max_length, 0);
+        uploaded_trie_generation = std::exchange(other.uploaded_trie_generation, 0);
 
         initialized = std::exchange(other.initialized, false);
     }
@@ -129,6 +130,7 @@ void UnigramGpuMemory::release() noexcept {
 
     num_nodes = 0;
     workspace_max_length = 0;
+    uploaded_trie_generation = 0;
     initialized = false;
 }
 
@@ -151,7 +153,9 @@ UnigramLM::UnigramLM(UnigramLM&& other) noexcept
     , enable_byte_fallback_(other.enable_byte_fallback_)
     , trie_(std::move(other.trie_))
     , gpu_(std::move(other.gpu_))
+    , trie_generation_(other.trie_generation_)
 {
+    other.trie_generation_ = 0;
 }
 
 UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
@@ -161,6 +165,8 @@ UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
         enable_byte_fallback_ = other.enable_byte_fallback_;
         trie_ = std::move(other.trie_);
         gpu_ = std::move(other.gpu_);
+        trie_generation_ = other.trie_generation_;
+        other.trie_generation_ = 0;
     }
     return *this;
 }
@@ -169,7 +175,7 @@ bool UnigramLM::initGPU() {
     if (!gpu_) {
         throw std::runtime_error("UnigramLM::initGPU: gpu_ is NULL - object was moved from or not constructed");
     }
-    if (gpu_->initialized) {
+    if (gpu_->initialized && gpu_->uploaded_trie_generation == trie_generation_) {
         return true;
     }
 
@@ -255,6 +261,7 @@ bool UnigramLM::uploadTrieToGPU() {
     if (!copyToDevice(fresh.d_piece_lengths, piece_lengths.data(), piece_lengths.size(), "d_piece_lengths")) return false;
 
     fresh.initialized = true;
+    fresh.uploaded_trie_generation = trie_generation_;
     *gpu_ = std::move(fresh);
 
     std::cout << "[UnigramLM] GPU initialized with " << num_nodes << " trie nodes" << std::endl;

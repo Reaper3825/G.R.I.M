@@ -178,6 +178,7 @@ private:
     // GPU resources are owned by UnigramGpuMemory in UnigramGpuMemory.*.
     // UnigramLM only requests initialization/upload; it does not own raw CUDA lifetime details here.
     std::unique_ptr<UnigramGpuMemory> gpu_;
+    std::uint64_t trie_generation_ = 0;
     
     // Upload trie to GPU
     bool uploadTrieToGPU();
