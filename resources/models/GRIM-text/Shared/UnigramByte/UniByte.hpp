@@ -22,12 +22,11 @@
 
 #include "AtomTable.hpp"
 #include "Byte.hpp"
-#include "Detectors/TokenizerDetector.hpp"
+#include "Detectors/DetectorRegistry.hpp"
 #include "TokenLayout.hpp"
 #include "Unigram.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 
-#include <cuda_runtime.h>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
@@ -37,36 +36,6 @@
 
 namespace GRIM {
 namespace Tokenizer {
-
-//======================================================//
-//  Structural Detection Result
-//======================================================//
-struct StructuralSpan {
-    size_t start;           // Start position in text (may include leading whitespace)
-    size_t end;             // End position (exclusive)
-    AtomType atom_type;     // Type of structure detected
-    
-    // Zero-copy buffer reference (NO std::string allocation!)
-    const char* buffer_ptr; // Pointer to original text buffer
-    uint32_t offset;        // Offset in buffer
-    uint32_t length;        // Length of span (end - start)
-    
-    // Content bounds (same as offset/length since no widening)
-    uint32_t content_offset; // Offset to atom content
-    uint32_t content_length; // Length of atom content
-    
-    int placeholder_id;     // Token ID of placeholder
-    
-    // Helper: get string_view of full span (may include leading whitespace)
-    std::string_view view() const {
-        return std::string_view(buffer_ptr + offset, length);
-    }
-    
-    // Helper: get string_view of just the atom content (no whitespace)
-    std::string_view contentView() const {
-        return std::string_view(buffer_ptr + content_offset, content_length);
-    }
-};
 
 //======================================================//
 //  Encoded Result with Metadata
@@ -184,10 +153,12 @@ public:
     // Initialization
     //--------------------------------------------------//
     
-    // Load vocabulary from file (tries binary first, then text)
+    // Load binary vocab only. Training artifact cache paths must use
+    // TokenizerArtifacts::TokenizerArtifactBundle so vocab and GRMT are validated together.
     bool load(const std::string& vocab_path);
     
-    // Save vocabulary to file (binary primary, text optional)
+    // Save binary vocab plus optional human-readable text export. Training artifact
+    // cache paths must use TokenizerArtifacts::TokenizerArtifactBundle.
     bool save(const std::string& vocab_path, bool save_text_format = false, float score_multiplier = 1.0f) const;
     
     // Train from corpus
@@ -229,21 +200,6 @@ public:
     std::string decode(const DecodeRequest& request) const;
 
     //--------------------------------------------------//
-    // Structural Detection
-    //--------------------------------------------------//
-
-    // Detect raw-text features before tokenization. This operates on source
-    // byte offsets only; it does not inspect or classify token IDs.
-    std::vector<Detector::RawTextDetection> detectRawText(const std::string& text) const;
-    
-    // Detect structures in text
-    std::vector<StructuralSpan> detectStructures(const std::string& text) const;
-    
-    // Inject placeholders for detected structures
-    std::string injectPlaceholders(const std::string& text,
-                                    std::vector<StructuralSpan>& out_spans) const;
-
-    //--------------------------------------------------//
     // Vocabulary Info
     //--------------------------------------------------//
     
@@ -269,12 +225,7 @@ private:
     UnigramLM unigram_;
     
     bool gpu_initialized_ = false;
-    
-    // Structural detection patterns
-    struct DetectorState;
-    std::unique_ptr<DetectorState> detector_;
-    
-    void initDetector();
+    Detector::DetectorRegistry detector_registry_;
     
     // Internal encoding with structural awareness
     UniByteResult encodeInternal(const std::string& text,

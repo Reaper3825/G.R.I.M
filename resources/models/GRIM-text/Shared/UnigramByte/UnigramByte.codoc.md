@@ -73,7 +73,7 @@ orchestrator]
 - `UniByte` composes the rest; it should not re-implement their logic.
 - `UnigramTrainer.cu` is training-only; inference lives in `Unigram.cu`.
 - `Detectors/TokenizerDetector.hpp` is the parent interface for detectors that operate on raw text byte offsets only.
-- `Detectors/DetectorRegistry.*` owns detector registration and longest-match scanning; `UniByte.cu` calls the registry and only converts atom-emitting raw detections into `StructuralSpan`s.
+- `Detectors/DetectorRegistry.*` owns detector registration, longest-match scanning, and atom `StructuralSpan` extraction; `UniByte.cu` only consumes registry-owned results.
 
 ---
 
@@ -94,6 +94,9 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 - `UnigramLM::pieceCount()` = learned subword count only. It is allowed for diagnostics/layout summaries, not for model embedding allocation.
 - `vocab.bin` contains a serialized record count for file I/O plus a token-space consistency check. Phase 1 startup does not use `vocab.bin` to choose final model vocab size.
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic/header read, validation, and write helpers. Do not duplicate header structs or magic/version checks in loaders, diagnostics, or subprocess tools.
+- `Shared/TokenizerArtifacts/TokenizerArtifactBundle.*` owns the cache pair (`vocab.bin` + `training_data.grmt`). Data prep must accept or rebuild that pair as a unit; do not reuse a lone vocab with a missing/stale GRMT.
+- `Shared/TokenizerArtifacts/GrmtCorpusIO.*` owns GRMT row save/load. Runtime loaders and diagnostics must use its RAII reader/writer instead of open-coded seeks through the row layout.
+- Text vocab files are human-readable exports only. Binary KTMG is the only vocab load path.
 - Phase 1 startup reads final training vocab size from the validated `.grmt` header and copies it to `ctx.config.actual_vocab_size`.
 
 ### Masking rule
@@ -123,7 +126,7 @@ flowchart LR
 
 ### What actually happens
 
-1. `UniByte::detectStructures()` finds numeric spans.
+1. `DetectorRegistry::detectStructures()` finds numeric spans.
 2. Each span is registered in `AtomTable` and gets metadata.
 3. The original text is rewritten with numeric placeholders before unigram segmentation.
 4. Text normalization happens before unigram segmentation.
@@ -188,10 +191,12 @@ Use this table as the “who owns what?” map.
 | `Detectors/TextFeatureDetectors.hpp/.cu` | whitespace and uppercase raw-text feature detection | atom token emission, unigram segmentation |
 | `AhoCorasick.hpp/.cu` | multi-pattern prefix matching DFA | full numeric parsing, tokenizer output assembly |
 | `AtomTable.hpp/.cu` | parsed atom storage, dedup, GPU packing, numeric value access | subword segmentation |
-| `Unigram.hpp/.cu` | learned vocab, trie, Viterbi, vocab load/save, unigram GPU encode/decode | detection policy, top-level orchestration, training boundary-token injection |
+| `Unigram.hpp/.cu` | learned vocab, trie, Viterbi, binary vocab load/save, unigram GPU encode/decode | detection policy, top-level orchestration, training boundary-token injection |
 | `UnigramGpuMemory.hpp/.cu` | `UnigramLM` CUDA buffer lifetime, transactional GPU upload, device pointer cleanup | vocab semantics, Viterbi scoring, token assembly, training |
 | `UnigramTrainer.hpp/.cu` | unigram training implementation | runtime encode path |
 | `UniByte.hpp/.cu` | composition layer, public API, metadata assembly | low-level detector implementations, training internals, `BOS`/`EOS`/`PAD` layout policy |
+| `TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` | bundle-level vocab+GRMT save/load validation | tokenization, vocab training, GRMT row byte layout |
+| `TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` | RAII GRMT row reader/writer, temp-file cleanup, row validation | vocab training/loading, model allocation, train/val splitting |
 
 ---
 
@@ -202,7 +207,7 @@ Use this table as the “who owns what?” map.
 | `UniByte` | `UniByte.hpp` | top-level tokenizer class |
 | `GRIM::HyperParameters::TokenizerHP` | `HyperparameterGroupings.hpp` | runtime tokenizer HP snapshot stored by `UniByte` |
 | `TokenLayout` | `TokenLayout.hpp` | runtime view of token-region boundaries |
-| `StructuralSpan` | `UniByte.hpp` | raw detected structure before or during placeholder injection |
+| `StructuralSpan` | `Detectors/TokenizerDetector.hpp` | registry-owned atom span metadata consumed by tokenization |
 | `UniByteResult` | `UniByte.hpp` | validated encode result passed downstream |
 | `AtomType` | `TokenLayout.hpp` | shared atom type enum |
 | `AtomSpan` | `Unigram.hpp` | training-only “skip this byte range” marker |
@@ -221,8 +226,14 @@ Raw-text detection is registry-driven:
 
 1. `RawTextDetector` is the parent class for detectors that scan source byte offsets.
 2. `DetectorRegistry` owns registered detectors, priority ordering, and longest-match scanning.
-3. `UniByte::detectRawText()` returns raw detections for numbers, whitespace, uppercase runs, and future source-text features.
-4. `UniByte::detectStructures()` filters that raw detection stream down to atom-emitting spans before placeholder/AtomTable work.
+3. `DetectorRegistry::scan()` returns raw detections for numbers, whitespace, uppercase runs, and future source-text features.
+4. `DetectorRegistry::detectStructures()` filters that raw detection stream down to atom-emitting spans before `AtomTable` work.
+
+Detector purpose is split deliberately:
+- atom-emitting detectors identify raw text that should collapse to one atom token plus side-channel metadata;
+- non-atom detectors identify raw source features without creating token IDs.
+
+All concrete detectors must be registered in `makeDefaultRawTextDetectorRegistry()`. `UniByte.cu` must not contain detector-like kernels, local scanner functions, public detector methods, or hard-coded pattern checks.
 
 Current detector surface:
 
@@ -272,7 +283,7 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
    If one per-token field has length `n`, all per-token fields must have length `n`.
 
 8. **The raw-text detector registry is built eagerly.**
-   `DetectorState` owns the `DetectorRegistry` and prepares it up front.
+   `UniByte` owns the `DetectorRegistry` and prepares it up front.
 
 9. **`UniByte` composes; it should not absorb other layers.**
    Keep detector logic in `Detectors/`, training logic in `UnigramTrainer`, and subword logic in `Unigram`.

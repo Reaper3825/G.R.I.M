@@ -46,15 +46,24 @@ inline std::string hex32(std::uint32_t value) {
     return oss.str();
 }
 
-inline Header readRawHeaderOrThrow(std::istream& input, const std::string& source) {
-    Header header{};
-    input.read(reinterpret_cast<char*>(&header), static_cast<std::streamsize>(sizeof(Header)));
+inline HeaderReadStatus readRawHeaderStatus(std::istream& input, const std::string& source) {
+    HeaderReadStatus status{};
+    input.read(reinterpret_cast<char*>(&status.header), static_cast<std::streamsize>(sizeof(Header)));
     if (!input) {
-        throw std::runtime_error(
-            "[GRMT] header read failed or truncated: " + source +
-            " (expected " + std::to_string(kHeaderSizeBytes) + " bytes)");
+        status.error = "[GRMT] header read failed or truncated: " + source +
+                       " (expected " + std::to_string(kHeaderSizeBytes) + " bytes)";
+        return status;
     }
-    return header;
+    status.ok = true;
+    return status;
+}
+
+inline Header readRawHeaderOrThrow(std::istream& input, const std::string& source) {
+    const HeaderReadStatus status = readRawHeaderStatus(input, source);
+    if (!status.ok) {
+        throw std::runtime_error(status.error);
+    }
+    return status.header;
 }
 
 inline std::string headerValidationError(
@@ -102,12 +111,11 @@ inline HeaderReadStatus readHeaderStatus(
         return status;
     }
 
-    input.read(reinterpret_cast<char*>(&status.header), static_cast<std::streamsize>(sizeof(Header)));
-    if (!input) {
-        status.error = "[GRMT] header read failed or truncated: " + path +
-                       " (expected " + std::to_string(kHeaderSizeBytes) + " bytes)";
-        return status;
+    const HeaderReadStatus raw_status = readRawHeaderStatus(input, path);
+    if (!raw_status.ok) {
+        return raw_status;
     }
+    status.header = raw_status.header;
 
     status.error = headerValidationError(status.header, path, validation);
     if (!status.error.empty()) {

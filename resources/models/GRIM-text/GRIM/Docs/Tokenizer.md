@@ -25,6 +25,13 @@ Use `TokenLayout.hpp` / `Byte.hpp` constants and layout helpers for range checks
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic, header layout, version validation, and header write helpers. Consumers must call `readHeaderOrThrow()` / `readHeaderStatus()` / `writeHeaderOrThrow()` instead of open-coding magic/version reads.
 - Learned-piece pruning belongs inside tokenizer training before save. Do not add a post-load/post-save cap API; that creates a second vocab-size authority and can desynchronize `.grmt`, `vocab.bin`, tokenizer IDs, and model embeddings.
 
+## Persistence primitives
+- `Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` is the single bundle primitive for the tokenizer cache pair: binary `vocab.bin` plus `training_data.grmt`. It loads the vocab and validates the `.grmt` header vocab against `UniByte::vocabSize()` before a cache can be accepted.
+- `Shared/TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` is the single GRMT row I/O primitive. It owns RAII file open/close, temp-file cleanup, header writes, row serialization/deserialization, and fail-loud validation for side-channel array alignment.
+- `DataLoader.cu` treats vocab and GRMT as an inseparable cache bundle. If either artifact is missing or the pair fails validation, it retrains the tokenizer and regenerates both artifacts together.
+- `training_data_loader.hpp`, `tokenizer_runner.cu`, and GRMT diagnostics must use `GrmtCorpusReader` / `loadGrmtCorpus()` instead of open-coding row seeks. Header-only checks may still call `GRMT::readHeaderOrThrow()` directly.
+- Text vocab is export-only for human inspection. Runtime loading is binary KTMG through `UniByte::load()` / the artifact bundle; do not re-add text vocab loading.
+
 Special-token ownership is deliberately narrow:
 - `TokenLayout.hpp` owns the reserved IDs and display metadata.
 - `UnigramLM::save()` writes special-token records into saved vocab files so the persisted vocab advertises the full layout.
@@ -59,8 +66,10 @@ Do not hand-copy `TokenizerConfig` + `TrainingHyperparameters` fields into a tok
 ## Trie / detector registry construction
 - Trie is built from learned unigram pieces only. Layout special tokens are not trie entries.
 - Rebuild the trie only after the learned-piece set changes during load/train. Runtime startup must load the saved final vocab as-is, not mutate it to a new cap.
-- `UniByte::DetectorState` owns a `DetectorRegistry` built during construction, **not** lazily.
+- `UniByte` owns a `DetectorRegistry` built during construction, **not** lazily.
+- Raw-text detection exists to mark source-byte spans before tokenization. Atom-emitting detectors (currently integer/float) become `StructuralSpan`s and `AtomTable` entries; non-atom detectors (currently whitespace/uppercase runs) are source-text features for diagnostics and future policies, not token IDs.
 - Raw-text detection must go through `DetectorRegistry`; do not call detector implementations directly from tokenizer runtime code.
+- Every concrete raw-text detector must live under `Shared/UnigramByte/Detectors/` and be registered by `makeDefaultRawTextDetectorRegistry()`. Do not add detector-like kernels, local scanner functions, or hard-coded pattern checks in `UniByte.cu`.
 - Detectors operate on source byte offsets only. Token-ID checks stay in token-layout helpers such as `isSpecialTokenId`, `TokenLayout::isByte`, `TokenLayout::isAtom`, and `TokenLayout::isUnigram`.
 
 ## AtomTable indexing

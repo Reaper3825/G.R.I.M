@@ -83,9 +83,6 @@ public:
     // Vocabulary Management
     //--------------------------------------------------//
     
-    // Load vocabulary from file (text format - tab-separated)
-    bool load(const std::string& vocab_path);
-    
     // Load vocabulary from binary file (KTMG format) - faster
     bool loadBinary(const std::string& vocab_path);
     

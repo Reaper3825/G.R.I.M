@@ -554,10 +554,14 @@ bool testUniByteStructuralDetection(std::string& message) {
 bool testUniByteRawTextDetectorRegistry(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.detect_numbers = true;
-    UniByte tokenizer(config);
+    auto registry = Detector::makeDefaultRawTextDetectorRegistry();
+    const Detector::RawTextDetectorOptions options(
+        config.detect_numbers,
+        true,
+        true);
 
     const std::string text = "CPU 42\nGPU -3.5x";
-    const auto detections = tokenizer.detectRawText(text);
+    const auto detections = registry.scan(text, options);
 
     ASSERT_EQ(detections.size(), static_cast<size_t>(6), "Raw detector count mismatch");
 
@@ -586,7 +590,7 @@ bool testUniByteRawTextDetectorRegistry(std::string& message) {
                 "Float detector emitted wrong atom type");
     ASSERT_STR_EQ(spanText(5), "-3.5", "Float span mismatch");
 
-    const auto structures = tokenizer.detectStructures(text);
+    const auto structures = registry.detectStructures(text, options);
     ASSERT_EQ(structures.size(), static_cast<size_t>(2), "Only atom detections should become structures");
     ASSERT_TRUE(structures[0].atom_type == AtomType::ATOM_INT,
                 "First structure should be integer atom");
@@ -1598,7 +1602,7 @@ bool testMixedVocabAndByteFallback(std::string& message) {
 //  Section 13: Vocabulary Persistence Tests
 //======================================================//
 
-bool testVocabSaveLoadText(std::string& message) {
+bool testVocabTextExportBinaryLoad(std::string& message) {
     // Create output directory if it doesn't exist
     std::filesystem::create_directories("output");
     
@@ -1608,15 +1612,18 @@ bool testVocabSaveLoadText(std::string& message) {
     original.addPiece("vocab", -1.5f, false);
     original.addPiece("save", -2.0f, false);
     
-    // Save to temp file
-    std::string path = "output/test_vocab_save.txt";
-    bool saved = original.save(path, true);  // text format
+    // Save binary plus optional human-readable text sidecar. Text vocab is
+    // an export only; binary KTMG is the only load path.
+    std::string path = "output/test_vocab_save.bin";
+    std::string text_path = "output/test_vocab_save.txt";
+    bool saved = original.save(path, true);
     ASSERT_TRUE(saved, "Save should succeed");
+    ASSERT_TRUE(std::filesystem::exists(text_path), "Text vocab sidecar should be exported");
     
     // Load into new tokenizer
     UnigramLM loaded;
-    bool loaded_ok = loaded.load(path);
-    ASSERT_TRUE(loaded_ok, "Load should succeed");
+    bool loaded_ok = loaded.loadBinary(path);
+    ASSERT_TRUE(loaded_ok, "Binary load should succeed");
     
     // Verify pieces exist
     ASSERT_TRUE(loaded.hasPiece("test"), "Should have 'test' piece");
@@ -1625,6 +1632,7 @@ bool testVocabSaveLoadText(std::string& message) {
     
     // Cleanup
     std::filesystem::remove(path);
+    std::filesystem::remove(text_path);
     
     return true;
 }
@@ -1795,7 +1803,7 @@ int main(int argc, char** argv) {
     suite.addTest("ByteFallback.Mixed", testMixedVocabAndByteFallback);
     
     // Section 13: Vocabulary Persistence Tests
-    suite.addTest("Vocab.SaveLoadText", testVocabSaveLoadText);
+    suite.addTest("Vocab.TextExportBinaryLoad", testVocabTextExportBinaryLoad);
     suite.addTest("Vocab.SaveLoadBinary", testVocabSaveLoadBinary);
     
     // Section 14: GPU Upload Tests

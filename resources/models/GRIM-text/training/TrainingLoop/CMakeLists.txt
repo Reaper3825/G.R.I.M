@@ -566,6 +566,8 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/Detectors/NumericDetectors.cu
     ../../Shared/UnigramByte/Detectors/TextFeatureDetectors.cu
     ../../Shared/UnigramByte/UnigramTrainer.cu
+    ../../Shared/TokenizerArtifacts/GrmtCorpusIO.cu
+    ../../Shared/TokenizerArtifacts/TokenizerArtifactBundle.cu
 )
 set_target_properties(grim_unigrambyte_tokenizer PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON

@@ -1,6 +1,6 @@
 //======================================================//
 //  UniByte.cu
-//  CUDA implementation of unified tokenizer orchestrator
+//  Implementation of unified tokenizer orchestrator
 //  
 //  STRUCTURAL DETECTION: Uses the raw-text detector registry to scan source
 //  byte offsets before tokenization. Detector output never classifies token IDs.
@@ -10,135 +10,14 @@
 #include "AtomTable.hpp"
 #include "Detectors/DetectorRegistry.hpp"
 
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
-
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <iostream>
-#include <sstream>
+#include <utility>
 
 namespace GRIM {
 namespace Tokenizer {
-
-//======================================================//
-//  CUDA Kernels
-//======================================================//
-
-// Kernel: Classify token types in parallel
-__global__ void kernelClassifyTokens(
-    const int* __restrict__ token_ids,
-    size_t count,
-    int* __restrict__ token_types,  // 0=byte, 1=atom, 2=unigram
-    int byte_end,
-    int atom_end
-) {
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        int tid = token_ids[idx];
-        if (tid < byte_end) {
-            token_types[idx] = 0;  // Byte
-        } else if (tid < atom_end) {
-            token_types[idx] = 1;  // Atom
-        } else {
-            token_types[idx] = 2;  // Unigram
-        }
-    }
-}
-
-// Kernel: Detect number patterns (simplified GPU version)
-__global__ void kernelDetectNumbers(
-    const char* __restrict__ text,
-    size_t length,
-    bool* __restrict__ is_number_start,
-    bool* __restrict__ is_number_part
-) {
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= length) return;
-    
-    char c = text[idx];
-    bool is_digit = (c >= '0' && c <= '9');
-    bool is_sign = (c == '+' || c == '-');
-    bool is_dot = (c == '.');
-    bool is_exp = (c == 'e' || c == 'E');
-    bool is_hex_prefix = false;
-    
-    // Check for hex prefix
-    if (idx + 1 < length && c == '0' && (text[idx + 1] == 'x' || text[idx + 1] == 'X')) {
-        is_hex_prefix = true;
-    }
-    
-    // Mark potential number starts
-    is_number_start[idx] = is_digit || 
-                           (is_sign && idx + 1 < length && 
-                            (text[idx + 1] >= '0' && text[idx + 1] <= '9')) ||
-                           is_hex_prefix;
-    
-    // Mark parts of numbers
-    is_number_part[idx] = is_digit || is_dot || is_exp || is_sign ||
-                          (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') ||
-                          c == 'x' || c == 'X';
-}
-
-// Kernel: Mark structural boundaries
-__global__ void kernelMarkStructuralBoundaries(
-    const char* __restrict__ text,
-    size_t length,
-    int* __restrict__ boundary_type  // 0=none, 1=number, 2=url, etc.
-) {
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= length) return;
-    
-    boundary_type[idx] = 0;
-    
-    char c = text[idx];
-    
-    // Simple heuristics for structural boundaries
-    // URL detection: http:// or https://
-    if (idx + 7 < length) {
-        bool is_http = (text[idx] == 'h' && text[idx+1] == 't' && 
-                        text[idx+2] == 't' && text[idx+3] == 'p');
-        if (is_http) {
-            bool is_https = (idx + 8 < length && text[idx+4] == 's');
-            int colon_pos = is_https ? 5 : 4;
-            if (text[idx + colon_pos] == ':' && 
-                text[idx + colon_pos + 1] == '/' && 
-                text[idx + colon_pos + 2] == '/') {
-                boundary_type[idx] = 2;  // URL
-            }
-        }
-    }
-    
-    // Email detection: look for @ preceded by alphanum
-    if (c == '@' && idx > 0) {
-        char prev = text[idx - 1];
-        bool valid_prev = (prev >= 'a' && prev <= 'z') || 
-                         (prev >= 'A' && prev <= 'Z') ||
-                         (prev >= '0' && prev <= '9') ||
-                         prev == '.' || prev == '_' || prev == '-';
-        if (valid_prev) {
-            boundary_type[idx] = 3;  // Email marker (need to find bounds)
-        }
-    }
-}
-
-//======================================================//
-//  Detector State - Raw Text Registry
-//======================================================//
-
-    struct UniByte::DetectorState {
-        Detector::DetectorRegistry registry;
-
-        DetectorState()
-            : registry(Detector::makeDefaultRawTextDetectorRegistry())
-        {
-            if (registry.empty()) {
-                throw std::runtime_error("UniByte::DetectorState registry initialized empty");
-            }
-        }
-    };
 
 //======================================================//
 //  UniByte Implementation
@@ -146,11 +25,12 @@ __global__ void kernelMarkStructuralBoundaries(
 
 UniByte::UniByte(const ::GRIM::HyperParameters::TokenizerHP& hp)
     : tokenizer_hp_(hp)
-    , detector_(nullptr)
+    , detector_registry_(Detector::makeDefaultRawTextDetectorRegistry())
 {
     unigram_.setByteFallbackEnabled(tokenizer_hp_.enable_byte_fallback);
-    detector_ = std::make_unique<DetectorState>();
-    initDetector();
+    if (detector_registry_.empty()) {
+        throw std::runtime_error("UniByte detector registry initialized empty");
+    }
 }
 
 UniByte::~UniByte() = default;
@@ -160,7 +40,7 @@ UniByte::UniByte(UniByte&& other) noexcept
     , byte_encoder_(std::move(other.byte_encoder_))
     , unigram_(std::move(other.unigram_))
     , gpu_initialized_(other.gpu_initialized_)
-    , detector_(std::move(other.detector_))
+    , detector_registry_(std::move(other.detector_registry_))
 {
     other.gpu_initialized_ = false;
 }
@@ -171,16 +51,10 @@ UniByte& UniByte::operator=(UniByte&& other) noexcept {
         byte_encoder_ = std::move(other.byte_encoder_);
         unigram_ = std::move(other.unigram_);
         gpu_initialized_ = other.gpu_initialized_;
-        detector_ = std::move(other.detector_);
+        detector_registry_ = std::move(other.detector_registry_);
         other.gpu_initialized_ = false;
     }
     return *this;
-}
-
-void UniByte::initDetector() {
-    if (!detector_) {
-        detector_ = std::make_unique<DetectorState>();
-    }
 }
 
 //--------------------------------------------------//
@@ -242,7 +116,11 @@ bool UniByte::train(const std::vector<std::string>& texts) {
     for (const auto& text : texts) {
         std::vector<AtomSpan> spans;
         if (detect) {
-            auto structures = detectStructures(text);
+            const Detector::RawTextDetectorOptions detector_options(
+                tokenizer_hp_.detect_numbers,
+                true,
+                true);
+            auto structures = detector_registry_.detectStructures(text, detector_options);
             spans.reserve(structures.size());
             for (const auto& s : structures) {
                 // Mirror encodeInternal()'s fallback: if the parser fails,
@@ -289,128 +167,6 @@ bool UniByte::initGPU() {
 }
 
 //--------------------------------------------------//
-// Structural Detection
-//--------------------------------------------------//
-
-std::vector<Detector::RawTextDetection> UniByte::detectRawText(const std::string& text) const {
-    if (!detector_) {
-        throw std::runtime_error("UniByte::detectRawText requires initialized detector registry");
-    }
-
-    const Detector::RawTextDetectorOptions options(
-        tokenizer_hp_.detect_numbers,
-        true,
-        true);
-    return detector_->registry.scan(text, options);
-}
-
-std::vector<StructuralSpan> UniByte::detectStructures(const std::string& text) const {
-    std::vector<StructuralSpan> spans;
-    spans.reserve(32);  // Pre-allocate for typical case
-    
-    if (!detector_) {
-        throw std::runtime_error("UniByte::detectStructures requires initialized detector registry");
-    }
-    
-    // Lambda to create span with zero-copy buffer reference
-    auto makeSpan = [&text](size_t start, size_t end, AtomType type) -> StructuralSpan {
-        StructuralSpan span;
-        span.start = start;
-        span.end = end;
-        span.atom_type = type;
-        span.buffer_ptr = text.data();
-        span.offset = static_cast<uint32_t>(start);
-        span.length = static_cast<uint32_t>(end - start);
-        span.content_offset = static_cast<uint32_t>(start);
-        span.content_length = static_cast<uint32_t>(end - start);
-        span.placeholder_id = atomTypeToTokenId(type);
-        return span;
-    };
-    
-    const auto detections = detectRawText(text);
-    for (const auto& detection : detections) {
-        if (!detection.emitsAtom()) {
-            continue;
-        }
-        spans.push_back(makeSpan(detection.start, detection.end, detection.atom_type));
-    }
-    
-    // Sort by position and remove overlaps
-    std::sort(spans.begin(), spans.end(), 
-              [](const auto& a, const auto& b) { return a.start < b.start; });
-    
-    // Remove overlapping spans (keep first/longest)
-    std::vector<StructuralSpan> non_overlapping;
-    size_t last_end = 0;
-    for (const auto& span : spans) {
-        if (span.start >= last_end) {
-            non_overlapping.push_back(span);
-            last_end = span.end;
-        }
-    }
-
-    return non_overlapping;
-}
-
-std::string UniByte::injectPlaceholders(const std::string& text,
-                                         std::vector<StructuralSpan>& out_spans) const {
-    out_spans.clear();
-
-    // Honor scratch_block_reasoning: when disabled, no atoms exist as far as
-    // the rest of the pipeline is concerned, so the input must pass through
-    // verbatim with no placeholders injected.
-    if (!tokenizer_hp_.enable_scratch_block_reasoning) {
-        return text;
-    }
-
-    // Apply the SAME parse-success filter that train() and encodeInternal()
-    // use, so an injected placeholder never represents a span that the
-    // encoder would have emitted as raw text instead.
-    auto detected = detectStructures(text);
-    out_spans.reserve(detected.size());
-    for (const auto& s : detected) {
-        auto parsed = AtomTable::parseAtom(
-            s.atom_type, std::string(s.contentView()));
-        if (!parsed.success) {
-            continue;
-        }
-        out_spans.push_back(s);
-    }
-
-    if (out_spans.empty()) {
-        return text;
-    }
-
-    // Build result with placeholders
-    std::string result;
-    result.reserve(text.size());
-
-    size_t pos = 0;
-    for (const auto& span : out_spans) {
-        // Add text before span
-        if (span.start > pos) {
-            result += text.substr(pos, span.start - pos);
-        }
-
-        // Add placeholder character (will be tokenized as atom token)
-        // Use private-use Unicode area: U+E000 + atom_type
-        // For simplicity, we use a control character sequence
-        result += '\x1F';  // Unit separator
-        result += static_cast<char>(static_cast<int>(span.atom_type));
-        result += '\x1F';
-
-        pos = span.end;
-    }
-
-    // Add remaining text
-    if (pos < text.size()) {
-        result += text.substr(pos);
-    }
-
-    return result;
-}
-
-//--------------------------------------------------//
 // Scratch Block Reasoning Control
 //--------------------------------------------------//
 
@@ -440,7 +196,11 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
     // tokenization as encode(). Atom side-channels remain zero-filled.
     std::vector<StructuralSpan> structures;
     if (tokenizer_hp_.enable_scratch_block_reasoning) {
-        structures = detectStructures(text);
+        const Detector::RawTextDetectorOptions detector_options(
+            tokenizer_hp_.detect_numbers,
+            true,
+            true);
+        structures = detector_registry_.detectStructures(text, detector_options);
     }
     auto result = encodeInternal(text, structures);
     

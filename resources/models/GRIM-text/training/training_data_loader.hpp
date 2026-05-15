@@ -13,6 +13,7 @@
 #include "../Shared/GRMT/GrmtFormat.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"  // Tokenizer metadata and AtomTable
 #include "../Shared/Execution/ExecutionMetadata.hpp"
+#include "../Shared/TokenizerArtifacts/GrmtCorpusIO.hpp"
 
 namespace fs = std::filesystem;
 
@@ -20,30 +21,7 @@ namespace fs = std::filesystem;
 //  Training Data Structures
 //======================================================//
 
-struct TrainingSequence {
-    std::vector<int> token_ids;
-    std::vector<int> targets;  // Next-token targets
-    std::vector<float> token_numeric_values;
-    std::vector<uint8_t> token_atom_mask;           // 1 if this position is any atom type
-    std::vector<uint32_t> token_atom_flags;          // GRMT v8: per-token AtomTable flags (type-specific metadata)
-    std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Atom registry (shared across sliding windows)
-    std::vector<uint32_t> atom_entry_ids;                    // Per-token index into atom_table (kAtomEntryNone = no atom)
-    std::vector<int32_t> token_exec_slots;                   // Per-token slot_id for execution: >=0 = valid slot, -1 = non-state-bearing
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // COMPILED STRUCTURED-EXECUTION PAYLOAD
-    // Derived from StructuredExecutionRecord by the canonical builder.
-    // execution_active is the AUTHORITATIVE activation bit.
-    // token_exec_slots (above) is the runtime binding projection.
-    // teacher_steps is the supervision projection.
-    // Both are paired projections of one canonical record.
-    // Runtime D_row is reconstructed from compiled_bootstrap_bindings ∪ teacher_steps.
-    // ═══════════════════════════════════════════════════════════════════════════
-    bool execution_active = false;
-    std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
-    std::vector<GRIM::Execution::TeacherStep> teacher_steps;
-    std::vector<GRIM::Execution::SlotSelectionTarget> slot_selection_targets;
-};
+using TrainingSequence = GRIM::TokenizerArtifacts::GrmtSequence;
 
 //======================================================//
 //  Training Data Loader
@@ -71,13 +49,15 @@ bool load(const std::string& path) {
     
 private:
     bool loadGRMTFormat(const std::string& path) {
-     std::ifstream file(path, std::ios::binary);
-        if (!file) {
-            std::cerr << "Failed to open: " << path << std::endl;
-  return false;
-   }
-        
-                const GRIM::GRMT::Header header = GRIM::GRMT::readHeaderOrThrow(file, path);
+        GRIM::TokenizerArtifacts::GrmtCorpus corpus;
+        try {
+            corpus = GRIM::TokenizerArtifacts::loadGrmtCorpus(path);
+        } catch (const std::exception& e) {
+            std::cerr << "[DataLoader] Failed to load GRMT corpus: " << e.what() << std::endl;
+            return false;
+        }
+
+                const GRIM::GRMT::Header header = corpus.header;
                 const uint32_t version = header.version;
                 const uint32_t num_sequences = header.num_sequences;
                 const uint32_t vocab_size = header.vocab_size;
@@ -88,63 +68,18 @@ private:
      std::cout << "[DataLoader] Sequences: " << num_sequences << std::endl;
         std::cout << "[DataLoader] Vocab size: " << vocab_size << std::endl;
         
-   sequences_.clear();
-      sequences_.reserve(num_sequences);
+        sequences_ = std::move(corpus.sequences);
     size_t nonfinite_total = 0;
     size_t nonfinite_sequences = 0;
-        
-     for (uint32_t i = 0; i < num_sequences; ++i) {
-     uint32_t seq_len;
-        file.read(reinterpret_cast<char*>(&seq_len), 4);
-            
-    TrainingSequence seq;
-            seq.token_ids.resize(seq_len);
-            seq.targets.resize(seq_len);
-            seq.token_numeric_values.resize(seq_len);
-            seq.token_atom_mask.resize(seq_len);
-            seq.token_atom_flags.resize(seq_len);
-            // atom_table and atom_entry_ids are built after reading strings below
-  
-            // Bulk read token_ids (written as int array by DataLoader.cu)
-            file.read(reinterpret_cast<char*>(seq.token_ids.data()),
-                      seq_len * sizeof(int));
-            
-            // Read pre-computed targets immediately after token_ids
-            file.read(reinterpret_cast<char*>(seq.targets.data()),
-                      seq_len * sizeof(int));
-            
-            if (seq_len > 0) {
-                file.read(reinterpret_cast<char*>(seq.token_numeric_values.data()),
-                          seq_len * sizeof(float));
-                file.read(reinterpret_cast<char*>(seq.token_atom_mask.data()),
-                          seq_len * sizeof(uint8_t));
-                // GRMT v8: atom_flags (type-specific metadata from AtomTable)
-                file.read(reinterpret_cast<char*>(seq.token_atom_flags.data()),
-                          seq_len * sizeof(uint32_t));
-                // GRMT v6: read atom text strings, then reconstruct AtomTable
-                std::vector<std::string> temp_atom_text(seq_len);
-                for (uint32_t j = 0; j < seq_len; ++j) {
-                    uint16_t slen = 0;
-                    file.read(reinterpret_cast<char*>(&slen), sizeof(uint16_t));
-                    if (slen > 0) {
-                        temp_atom_text[j].resize(slen);
-                        file.read(temp_atom_text[j].data(), slen);
-                    }
-                }
-                // Reconstruct AtomTable + atom_entry_ids from stored strings + token IDs
-                seq.atom_table = std::make_shared<GRIM::Tokenizer::AtomTable>();
-                seq.atom_entry_ids.assign(seq_len, GRIM::Tokenizer::kAtomEntryNone);
-                for (uint32_t j = 0; j < seq_len; ++j) {
-                    if (!temp_atom_text[j].empty()) {
-                        const int tid = seq.token_ids[j];
-                        if (tid >= GRIM::Tokenizer::ATOM_TOKEN_OFFSET &&
-                            tid < GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) {
-                            const auto type = GRIM::Tokenizer::tokenIdToAtomType(tid);
-                            seq.atom_entry_ids[j] = seq.atom_table->registerAtom(
-                                type, temp_atom_text[j]);
-                        }
-                    }
-                }
+
+        if (sequences_.size() != num_sequences) {
+            std::cerr << "[DataLoader] GRMT loaded sequence count mismatch: loaded="
+                      << sequences_.size() << " header=" << num_sequences << std::endl;
+            return false;
+        }
+
+        for (auto& seq : sequences_) {
+            const uint32_t seq_len = static_cast<uint32_t>(seq.token_ids.size());
                 size_t seq_nonfinite = 0;
                 for (uint32_t j = 0; j < seq_len; ++j) {
                     if (seq.token_atom_mask[j] && !std::isfinite(seq.token_numeric_values[j])) {
@@ -156,58 +91,6 @@ private:
                     nonfinite_total += seq_nonfinite;
                     nonfinite_sequences++;
                 }
-
-                // GRMT v11: compiled structured-execution payload
-                // Order follows plan: exec_active, token_exec_slots, then bindings/steps/targets
-                {
-                    uint8_t exec_active = 0;
-                    file.read(reinterpret_cast<char*>(&exec_active), sizeof(uint8_t));
-                    seq.execution_active = (exec_active != 0);
-
-                    seq.token_exec_slots.resize(seq_len);
-                    file.read(reinterpret_cast<char*>(seq.token_exec_slots.data()),
-                              seq_len * sizeof(int32_t));
-
-                    // Compiled bootstrap bindings
-                    uint32_t cbb_count = 0;
-                    file.read(reinterpret_cast<char*>(&cbb_count), sizeof(uint32_t));
-                    static_assert(sizeof(GRIM::Execution::CompiledBootstrapBinding) == 12,
-                        "CompiledBootstrapBinding must be 12 bytes for bulk GRMT deserialization");
-                    if (cbb_count > 0) {
-                        seq.compiled_bootstrap_bindings.resize(cbb_count);
-                        file.read(reinterpret_cast<char*>(seq.compiled_bootstrap_bindings.data()),
-                                  cbb_count * sizeof(GRIM::Execution::CompiledBootstrapBinding));
-                    }
-
-                    // Teacher steps
-                    uint32_t ts_count = 0;
-                    file.read(reinterpret_cast<char*>(&ts_count), sizeof(uint32_t));
-                    static_assert(sizeof(GRIM::Execution::TeacherStep) == 20,
-                        "TeacherStep must be 20 bytes for bulk GRMT deserialization");
-                    if (ts_count > 0) {
-                        seq.teacher_steps.resize(ts_count);
-                        file.read(reinterpret_cast<char*>(seq.teacher_steps.data()),
-                                  ts_count * sizeof(GRIM::Execution::TeacherStep));
-                    }
-
-                    // Slot selection targets (field-by-field due to struct padding)
-                    uint32_t sst_count = 0;
-                    file.read(reinterpret_cast<char*>(&sst_count), sizeof(uint32_t));
-                    if (sst_count > 0) {
-                        seq.slot_selection_targets.resize(sst_count);
-                        for (uint32_t si = 0; si < sst_count; ++si) {
-                            uint8_t kind = 0;
-                            file.read(reinterpret_cast<char*>(&kind), sizeof(uint8_t));
-                            seq.slot_selection_targets[si].kind =
-                                static_cast<GRIM::Execution::SlotSelectionTargetKind>(kind);
-                            file.read(reinterpret_cast<char*>(&seq.slot_selection_targets[si].slot_id),
-                                      sizeof(int32_t));
-                        }
-                    }
-                }
-            }
-
-            sequences_.push_back(std::move(seq));
 }
         if (nonfinite_total > 0) {
             std::cerr << "[DataLoader] Sanitized " << nonfinite_total

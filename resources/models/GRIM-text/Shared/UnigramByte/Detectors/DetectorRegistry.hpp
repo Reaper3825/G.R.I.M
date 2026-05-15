@@ -29,6 +29,9 @@ public:
     std::vector<RawTextDetection> scan(std::string_view text,
                                        const RawTextDetectorOptions& options) const;
 
+    std::vector<StructuralSpan> detectStructures(std::string_view text,
+                                                 const RawTextDetectorOptions& options) const;
+
     size_t size() const noexcept { return detectors_.size(); }
     bool empty() const noexcept { return detectors_.empty(); }
 

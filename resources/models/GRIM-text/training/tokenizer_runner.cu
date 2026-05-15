@@ -40,6 +40,8 @@
 
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/GRMT/GrmtFormat.hpp"
+#include "../Shared/TokenizerArtifacts/GrmtCorpusIO.hpp"
+#include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; pulls in control/ai_config_paths.hpp transitively
 #include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
@@ -136,12 +138,8 @@ struct GRMTSample {
 static GRMTSample sampleGRMTSequences(const std::string& data_path, int max_samples, bool verbose) {
     GRMTSample result;
 
-    std::ifstream file(data_path, std::ios::binary);
-    if (!file) {
-        throw std::runtime_error("Cannot open GRMT file: " + data_path);
-    }
-
-    const GRIM::GRMT::Header header = GRIM::GRMT::readHeaderOrThrow(file, data_path);
+    GRIM::TokenizerArtifacts::GrmtCorpusReader reader(data_path);
+    const GRIM::GRMT::Header header = reader.header();
     result.num_sequences = header.num_sequences;
     result.grmt_vocab_size = header.vocab_size;
 
@@ -159,58 +157,15 @@ static GRMTSample sampleGRMTSequences(const std::string& data_path, int max_samp
 
     size_t next_sample = 0;
     for (uint32_t i = 0; i < result.num_sequences; ++i) {
-        uint32_t seq_len = 0;
-        file.read(reinterpret_cast<char*>(&seq_len), 4);
-        if (!file) throw std::runtime_error("GRMT read error at sequence " + std::to_string(i));
-
+        GRIM::TokenizerArtifacts::GrmtSequence sequence;
+        if (!reader.readNext(sequence)) {
+            throw std::runtime_error("GRMT ended before header num_sequences at sequence " + std::to_string(i));
+        }
         bool keep = (next_sample < sample_indices.size() && sample_indices[next_sample] == i);
-
-        // Read token_ids
-        std::vector<int> token_ids(seq_len);
-        file.read(reinterpret_cast<char*>(token_ids.data()), seq_len * sizeof(int));
-
         if (keep) {
-            result.sampled_sequences.push_back(std::move(token_ids));
+            result.sampled_sequences.push_back(std::move(sequence.token_ids));
             next_sample++;
         }
-
-        // Skip remaining per-sequence fields to maintain file position:
-        // targets (int[seq_len]) + numeric_values (float[seq_len]) + atom_mask (uint8[seq_len])
-        // + atom_flags (uint32[seq_len])
-        size_t skip_bytes = seq_len * sizeof(int)           // targets
-                          + seq_len * sizeof(float)         // numeric_values
-                          + seq_len * sizeof(uint8_t)       // atom_mask
-                          + seq_len * sizeof(uint32_t);     // atom_flags
-        file.seekg(static_cast<std::streamoff>(skip_bytes), std::ios::cur);
-
-        // Skip variable-length atom text strings
-        for (uint32_t j = 0; j < seq_len; ++j) {
-            uint16_t slen = 0;
-            file.read(reinterpret_cast<char*>(&slen), sizeof(uint16_t));
-            if (slen > 0) file.seekg(slen, std::ios::cur);
-        }
-
-        // Skip v11 execution payload
-        {
-            uint8_t exec_active = 0;
-            file.read(reinterpret_cast<char*>(&exec_active), sizeof(uint8_t));
-            // token_exec_slots
-            file.seekg(static_cast<std::streamoff>(seq_len * sizeof(int32_t)), std::ios::cur);
-            // compiled_bootstrap_bindings
-            uint32_t cbb_count = 0;
-            file.read(reinterpret_cast<char*>(&cbb_count), sizeof(uint32_t));
-            if (cbb_count > 0) file.seekg(static_cast<std::streamoff>(cbb_count * 12), std::ios::cur);
-            // teacher_steps
-            uint32_t ts_count = 0;
-            file.read(reinterpret_cast<char*>(&ts_count), sizeof(uint32_t));
-            if (ts_count > 0) file.seekg(static_cast<std::streamoff>(ts_count * 20), std::ios::cur);
-            // slot_selection_targets (5 bytes each: uint8 kind + int32 slot_id)
-            uint32_t sst_count = 0;
-            file.read(reinterpret_cast<char*>(&sst_count), sizeof(uint32_t));
-            if (sst_count > 0) file.seekg(static_cast<std::streamoff>(sst_count * 5), std::ios::cur);
-        }
-
-        if (!file) throw std::runtime_error("GRMT read/seek error at sequence " + std::to_string(i));
 
         // Early exit once we have all samples
         if (next_sample >= sample_indices.size()) break;
@@ -823,9 +778,12 @@ int main(int argc, char** argv) {
         auto load_start = std::chrono::steady_clock::now();
 
         GrimTokenizer tokenizer(tokenizer_hp);
-        if (!tokenizer.load(opts.vocab_path)) {
-            std::string err = "Failed to load vocabulary: " + opts.vocab_path;
-            std::cout << makeErrorJson(err, "tokenizer_load").dump() << std::endl;
+        GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts({opts.data_path, opts.vocab_path});
+        try {
+            (void)artifacts.load(tokenizer);
+        } catch (const std::exception& e) {
+            std::string err = std::string("Failed to load tokenizer artifact bundle: ") + e.what();
+            std::cout << makeErrorJson(err, "tokenizer_bundle_load").dump() << std::endl;
             return 1;
         }
 

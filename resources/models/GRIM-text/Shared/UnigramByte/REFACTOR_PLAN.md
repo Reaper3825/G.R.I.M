@@ -70,7 +70,7 @@ UnigramByte/
 ├── Unigram.cu               [MOD]  ~1100 lines — Inference only: Viterbi, trie, encode/decode, GPU upload, vocab I/O
 ├── UnigramTrainer.hpp       [NEW]  ~40 lines   — trainFromCorpus() declaration, training config struct
 ├── UnigramTrainer.cu         [NEW]  ~1300 lines — trainFromCorpus(), subword mining, EM, noise filters, sentence segmentation
-├── UniByte.hpp              [MOD]  ~340 lines  — public tokenizer API; raw-text detection exposed through registry-backed `detectRawText()`
+├── UniByte.hpp              [MOD]  ~340 lines  — public tokenizer API; no public detector methods; raw-text detection is registry-owned
 ├── UniByte.cu               [MOD]  ~700 lines  — Orchestration only: detectStructures, encode pipeline, decode, GPU kernels
 ```
 
@@ -120,7 +120,7 @@ AhoCorasick.hpp ←── TokenLayout.hpp (instead of including Unigram.hpp)
 - `Detectors/NumericDetectors.hpp/.cu` — `IntegerDetector`, `FloatDetector` atom emitters.
 - `Detectors/TextFeatureDetectors.hpp/.cu` — `WhitespaceDetector`, `UppercaseRunDetector` non-atom raw-text feature detectors.
 
-**Delete dead detectors:** Cross-reference `detectStructures()` in `UniByte.cu` to confirm which detectors emit atoms. Hex/binary/path/date/time/IP/string/identifier detectors are not active and must not be recreated without a direct registry consumer.
+**Delete dead detectors:** Cross-reference `DetectorRegistry::detectStructures()` to confirm which detectors emit atoms. Hex/binary/path/date/time/IP/string/identifier detectors are not active and must not be recreated without direct registry ownership.
 
 ### Step 4: Extract `UnigramTrainer.hpp` / `UnigramTrainer.cu`
 

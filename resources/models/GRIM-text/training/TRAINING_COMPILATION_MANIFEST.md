@@ -98,7 +98,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - Combined Unigram + Byte fallback (GrimTokenizer alias)
   - Token layout: [0-255] = bytes, [256-511] = atoms, [512+] = unigram vocab
   - Pattern to check: Verify ATOM_TOKEN_BASE = 256 offset applied
-  - Encoding: detectStructures() → segment → Unigram encode per segment → Byte fallback internal to Unigram
+  - Encoding: DetectorRegistry::detectStructures() → segment → Unigram encode per segment → Byte fallback internal to Unigram
 
 - [x] **Shared/UnigramByte/AtomTable.cu** ✅ AUDITED
   - Atom token management (numbers, URLs, emails, paths, dates, code)
@@ -110,7 +110,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - O(n) multi-pattern matching for structural token detection
   - 50-100x faster than std::regex for URL/email/number prefixes
   - Detects: http://, https://, www., ftp://, ws://, wss://, file://, @, 0x, 0b
-  - DFA built eagerly in DetectorState constructor with build() → BFS failure links ✅
+  - DetectorRegistry built eagerly in UniByte constructor; no public UniByte detector API ✅
   - Detection confirmed BEFORE Viterbi encoding (detectStructures → encodeInternal) ✅
 
 ---

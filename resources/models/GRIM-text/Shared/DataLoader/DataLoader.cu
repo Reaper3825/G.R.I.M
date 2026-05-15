@@ -21,6 +21,7 @@
 #include <nlohmann/json.hpp>
 #include "../GRMT/GrmtFormat.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
+#include "../../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // also pulls in control/ai_config_paths.hpp transitively (correct order)
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../Batching/BatchPayload.hpp"
@@ -282,46 +283,50 @@ bool PrepareTrainingDataFromCache(
 		std::cerr << "[DataLoader] No training_data path configured; skipping cache preparation." << std::endl;
 		return false;
 	}
+	if (out_vocab_path.empty()) {
+		throw std::runtime_error("[DataLoader] vocab path is empty; tokenizer artifacts must be saved/loaded as vocab+GRMT pair");
+	}
 
 	GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
 	std::cout << "[DataLoader] Atom token range fixed at " << GRIM::Tokenizer::ATOM_VOCAB_SIZE
 	          << " type tokens" << std::endl;
 
+	GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
+	GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts({out_training_data_path, out_vocab_path});
+
 	const bool training_exists = fs::exists(out_training_data_path);
 	const bool vocab_exists = !out_vocab_path.empty() && fs::exists(out_vocab_path);
-	fs::path vocab_path(out_vocab_path);
-	bool grmt_cache_invalid = false;
+	bool artifact_pair_invalid = false;
 
-	// GRMT header validity is the only cache freshness check here. Phase 1 startup
-	// takes final vocab size from the same header, not from vocab.bin.
-	if (training_exists && vocab_exists) {
-		const GRIM::GRMT::HeaderReadStatus status =
-			GRIM::GRMT::readHeaderStatus(out_training_data_path);
-		if (!status.ok) {
-			std::cerr << "[DataLoader] " << status.error
-			          << "; rebuilding GRMT from source corpus." << std::endl;
-			grmt_cache_invalid = true;
+	// Vocab + GRMT are one artifact pair. A valid cache must load the vocab and
+	// validate the GRMT header vocab against the tokenizer's live token space.
+	if (!force_rebuild && training_exists && vocab_exists) {
+		try {
+			const auto manifest = artifacts.load(tokenizer);
+			std::cout << "[DataLoader] Existing tokenizer artifact bundle is valid; "
+			          << "GRMT sequences=" << manifest.grmt_header.num_sequences
+			          << ", vocab_size=" << manifest.grmt_header.vocab_size
+			          << ". Skipping cache rebuild." << std::endl;
+			return true;
+		} catch (const std::exception& e) {
+			std::cerr << "[DataLoader] Tokenizer artifact bundle invalid: " << e.what()
+			          << "; rebuilding vocab+GRMT together." << std::endl;
+			artifact_pair_invalid = true;
+			tokenizer = GRIM::Tokenizer::UniByte(tokenizer_hp);
 		}
-	}
-
-	// Skip rebuild only if all required artifacts exist, GRMT format is current, and force_rebuild is false.
-	if (!force_rebuild && !grmt_cache_invalid && training_exists && vocab_exists) {
-		std::cout << "[DataLoader] Existing training data + vocab found at '" << out_training_data_path
-			  << "', GRMT version is current, skipping cache rebuild." << std::endl;
-		return true;
 	}
 
 	// Log reason for rebuild
 	if (force_rebuild) {
-		std::cout << "[DataLoader] force_rebuild=true, rebuilding training data and vocab..." << std::endl;
-	} else if (grmt_cache_invalid) {
-		std::cout << "[DataLoader] Rebuilding due to invalid GRMT cache header..." << std::endl;
+		std::cout << "[DataLoader] force_rebuild=true, rebuilding tokenizer artifact bundle..." << std::endl;
+	} else if (artifact_pair_invalid) {
+		std::cout << "[DataLoader] Rebuilding due to invalid tokenizer artifact bundle..." << std::endl;
 	} else if (training_exists && !vocab_exists) {
-		std::cout << "[DataLoader] Training data present but vocab missing; rebuilding." << std::endl;
+		std::cout << "[DataLoader] GRMT present but vocab missing; rebuilding both artifacts." << std::endl;
 	} else if (!training_exists && vocab_exists) {
-		std::cout << "[DataLoader] Vocab present but training data missing; rebuilding." << std::endl;
+		std::cout << "[DataLoader] Vocab present but GRMT missing; rebuilding both artifacts." << std::endl;
 	} else {
-		std::cout << "[DataLoader] Both files missing; building from cache..." << std::endl;
+		std::cout << "[DataLoader] Tokenizer artifact bundle missing; building from cache..." << std::endl;
 	}
 
 	// Derive the data directory from the configured GRMT path.
@@ -364,72 +369,23 @@ bool PrepareTrainingDataFromCache(
 	// No train/val/test split here — Phase1_Startup owns that decision.  
 	// DataLoader writes ALL sequences to a single GRMT file.
 
-	GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
-
-	// Resolve vocab path from config
-	fs::create_directories(vocab_path.parent_path());
-	bool vocab_loaded = false;
-	bool save_text_vocab = false;
-	
-	// Check if we should save human-readable text vocab
-	save_text_vocab = tokenizer_hp.save_text_vocab;
-	
-	if (!force_rebuild && !out_vocab_path.empty() && fs::exists(vocab_path)) {
-		if (tokenizer.load(out_vocab_path)) {
-			std::cout << "[DataLoader] Loaded existing vocab from "
-					  << out_vocab_path << std::endl;
-			vocab_loaded = true;
-		}
+	std::cout << "[DataLoader] Training new tokenizer pieces from concept blocks (target: " 
+			  << tokenizer_hp.target_vocab_size << " learned pieces)..." << std::endl;
+	std::vector<std::string> vocab_corpus;
+	vocab_corpus.reserve(concept_json_entries.size());
+	for (const auto& cj : concept_json_entries) {
+		std::string entry_id = cj.value("id", std::string());
+		bool is_plaintext = !curriculum_filter.format_as_concept ||
+		                    (curriculum_filter.has_filter &&
+		                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
+		if (is_plaintext)
+			vocab_corpus.push_back(GRIM::DataLoader::renderPlainText(cj, false));
+		else
+			vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
 	}
-	if (!vocab_loaded) {
-		std::cout << "[DataLoader] Training new tokenizer pieces from concept blocks (target: " 
-				  << tokenizer_hp.target_vocab_size << " learned pieces)..." << std::endl;
-		std::vector<std::string> vocab_corpus;
-		vocab_corpus.reserve(concept_json_entries.size());
-		for (const auto& cj : concept_json_entries) {
-			std::string entry_id = cj.value("id", std::string());
-			bool is_plaintext = !curriculum_filter.format_as_concept ||
-			                    (curriculum_filter.has_filter &&
-			                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
-			if (is_plaintext)
-				vocab_corpus.push_back(GRIM::DataLoader::renderPlainText(cj, false));
-			else
-				vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
-		}
-		tokenizer.train(vocab_corpus);
-		if (!out_vocab_path.empty()) {
-			std::cout << "[DataLoader] Saving vocab to " << out_vocab_path << "..." << std::endl << std::flush;
-			if (!tokenizer.save(out_vocab_path, save_text_vocab, tokenizer_hp.vocab_score_multiplier)) {
-				// Vocab is a hard dependency for Phase1; without it the GRMT we
-				// would write next is unusable. Fail immediately rather than
-				// returning true and leaving training data and vocab out of sync.
-				std::cerr << "[DataLoader] FATAL: failed to save vocab to "
-						  << out_vocab_path << std::endl;
-				return false;
-			}
-			std::cout << "[DataLoader] Vocab saved successfully" << std::endl << std::flush;
-			if (save_text_vocab) {
-				std::cout << "[DataLoader] Also saved human-readable .txt vocab" << std::endl;
-			}
-		}
-	}
+	tokenizer.train(vocab_corpus);
 
-	struct TokenizedSequence {
-		std::vector<int> token_ids;
-		std::vector<int> targets;  // GRMT v7: pre-computed targets (shifted token_ids with masking)
-		std::vector<float> numeric_values;
-		std::vector<uint32_t> atom_flags;     // Per-token type-specific flags from AtomTable
-		std::vector<uint8_t> atom_mask;       // Unified per-token atom mask
-		std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Per-sequence atom registry
-		std::vector<uint32_t> atom_entry_ids;  // Per-token index into atom_table
-		std::vector<int32_t> token_exec_slots;   // -1 = none; else value-slot id for bootstrap
-
-		// Compiled structured-execution payload (GRMT v11)
-		bool execution_active = false;
-		std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
-		std::vector<GRIM::Execution::TeacherStep> teacher_steps;
-		std::vector<GRIM::Execution::SlotSelectionTarget> slot_selection_targets;
-	};
+	using TokenizedSequence = GRIM::TokenizerArtifacts::GrmtSequence;
 
 	// BOS/EOS are NOT added here — Phase1_Startup owns boundary token
 	// insertion (add_bos, add_eos config flags) and target fixup for them.
@@ -442,14 +398,14 @@ bool PrepareTrainingDataFromCache(
 
 		TokenizedSequence seq;
 		seq.token_ids = std::move(result.token_ids);
-		seq.numeric_values = std::move(result.token_numeric_values);
-		seq.atom_flags = std::move(result.token_atom_flags);
-		seq.atom_mask = std::move(result.token_atom_mask);
+		seq.token_numeric_values = std::move(result.token_numeric_values);
+		seq.token_atom_flags = std::move(result.token_atom_flags);
+		seq.token_atom_mask = std::move(result.token_atom_mask);
 		seq.atom_table = std::move(result.atom_table);
 		seq.atom_entry_ids = std::move(result.atom_entry_ids);
-		if (seq.numeric_values.size() != seq.token_ids.size() ||
-			seq.atom_flags.size() != seq.token_ids.size() ||
-			seq.atom_mask.size() != seq.token_ids.size() ||
+		if (seq.token_numeric_values.size() != seq.token_ids.size() ||
+			seq.token_atom_flags.size() != seq.token_ids.size() ||
+			seq.token_atom_mask.size() != seq.token_ids.size() ||
 			seq.atom_entry_ids.size() != seq.token_ids.size()) {
 			throw std::runtime_error("[DataLoader] Token/side-channel length mismatch");
 		}
@@ -471,7 +427,11 @@ bool PrepareTrainingDataFromCache(
 	if (const char* ev = std::getenv("GRIM_CONCEPT_EXEC_BASE_SLOT")) {
 		try {
 			concept_exec_base_slot = std::stoi(ev);
-		} catch (...) {}
+		} catch (const std::exception& e) {
+			throw std::runtime_error(
+				"[DataLoader] GRIM_CONCEPT_EXEC_BASE_SLOT is not a valid integer: " +
+				std::string(ev) + " (" + e.what() + ")");
+		}
 	}
 	const int expected_exec_steps = tokenizer_hp.execution_block_num_steps;
 	size_t plaintext_count = 0;
@@ -597,7 +557,7 @@ bool PrepareTrainingDataFromCache(
 		total_tokens += seq.token_ids.size();
 		bool seq_has_atoms = false;
 		for (size_t j = 0; j < seq.token_ids.size(); ++j) {
-			if (j < seq.atom_mask.size() && seq.atom_mask[j]) {
+			if (j < seq.token_atom_mask.size() && seq.token_atom_mask[j]) {
 				encode_atom_tokens++;
 				seq_has_atoms = true;
 			}
@@ -621,210 +581,33 @@ bool PrepareTrainingDataFromCache(
 				  << "Check scratch_block_reasoning.enabled in ai_config.json" << std::endl;
 	}
 
-	// Write all sequences to single GRMT file (no chunking — Phase1_Startup
-	// handles sliding windows with stride and BOS prepending for long sequences)
-	//
-	// Returns {ok, dropped_targetless_count}. The drop count lets the caller
-	// re-apply the filtered-curriculum guard against late, writer-internal
-	// drops (e.g. token-length-degenerate rows whose targets all mask to -1).
-	auto save_grmt = [&tokenizer](const fs::path& path,
-		const std::vector<TokenizedSequence>& data) -> std::pair<bool, size_t> {
-		std::ofstream file(path, std::ios::binary);
-		if (!file.is_open()) return {false, 0};
+	GRIM::TokenizerArtifacts::TokenizerBundleSaveOptions save_options;
+	save_options.save_text_vocab = tokenizer_hp.save_text_vocab;
+	save_options.vocab_score_multiplier = tokenizer_hp.vocab_score_multiplier;
+	save_options.grmt.reject_dropped_sequences = curriculum_filter.has_filter;
 
-		// Pre-scan: count valid sequences and warn about degenerate ones.
-		// Skip 0-length sequences entirely — they cause division-by-zero
-		// in loss reduction (valid_count=0).
-		size_t valid_seq_count = 0;
-		size_t sequences_with_no_valid_targets = 0;
-		for (const auto& seq : data) {
-			if (seq.token_ids.empty()) continue; // Will be skipped during write
-			size_t valid = 0;
-			for (int t : seq.targets) { if (t >= 0) valid++; }
-			if (valid == 0) {
-				sequences_with_no_valid_targets++;
-				std::cerr << "[DataLoader] WARNING: Sequence with " << seq.token_ids.size()
-						  << " tokens has 0 valid targets (all masked to -1) — skipping" << std::endl;
-				continue; // Will be skipped during write
-			}
-			valid_seq_count++;
-		}
-		if (sequences_with_no_valid_targets > 0) {
-			std::cerr << "[DataLoader] Dropped " << sequences_with_no_valid_targets
-					  << " sequences with 0 valid targets" << std::endl;
-		}
-
-		// Refuse to write a header with num_sequences=0. Without this, every
-		// sequence being dropped here (e.g. all targets masked) still produces
-		// a header-valid GRMT and a "successful" return.
-		if (valid_seq_count == 0) {
-			std::cerr << "[DataLoader] FATAL: save_grmt would write num_sequences=0 "
-			          << "(all " << data.size() << " candidate sequences were dropped). "
-			          << "Refusing to emit an empty GRMT." << std::endl;
-			return {false, sequences_with_no_valid_targets};
-		}
-
-		uint32_t num_sequences = static_cast<uint32_t>(valid_seq_count);
-		// Canonical tokenizer vocab size: full token ID space written to the GRMT header.
-		uint32_t vocab_size = static_cast<uint32_t>(tokenizer.vocabSize());
-		const GRIM::GRMT::Header header = GRIM::GRMT::makeCurrentHeader(num_sequences, vocab_size);
-		GRIM::GRMT::writeHeaderOrThrow(file, header, path.string());
-
-		for (const auto& seq : data) {
-			// Skip empty and target-less sequences
-			if (seq.token_ids.empty()) continue;
-			{ bool has_valid = false;
-			  for (int t : seq.targets) { if (t >= 0) { has_valid = true; break; } }
-			  if (!has_valid) continue;
-			}
-
-			uint32_t len = static_cast<uint32_t>(seq.token_ids.size());
-			file.write(reinterpret_cast<const char*>(&len), 4);
-			file.write(reinterpret_cast<const char*>(seq.token_ids.data()),
-					len * sizeof(int));
-			file.write(reinterpret_cast<const char*>(seq.targets.data()),
-					len * sizeof(int));
-			file.write(reinterpret_cast<const char*>(seq.numeric_values.data()),
-					len * sizeof(float));
-			file.write(reinterpret_cast<const char*>(seq.atom_mask.data()),
-					len * sizeof(uint8_t));
-			// GRMT v8: atom_flags (type-specific metadata from AtomTable)
-			file.write(reinterpret_cast<const char*>(seq.atom_flags.data()),
-					len * sizeof(uint32_t));
-			// GRMT v6: atom text (length-prefixed strings per token, reconstructed from AtomTable)
-			for (uint32_t j = 0; j < len; ++j) {
-				std::string s;
-				if (seq.atom_table &&
-					seq.atom_entry_ids[j] != GRIM::Tokenizer::kAtomEntryNone) {
-					const auto* entry = seq.atom_table->getAtom(seq.atom_entry_ids[j]);
-					if (entry) { s = seq.atom_table->atomToString(*entry); }
-				}
-				uint16_t slen = static_cast<uint16_t>(std::min<size_t>(s.size(), 65535));
-				file.write(reinterpret_cast<const char*>(&slen), sizeof(uint16_t));
-				if (slen > 0) {
-					file.write(s.data(), slen);
-				}
-			}
-			// GRMT v11: compiled structured-execution payload
-			// Order follows plan: exec_active, token_exec_slots, then bindings/steps/targets
-			uint8_t exec_active = seq.execution_active ? 1 : 0;
-			file.write(reinterpret_cast<const char*>(&exec_active), sizeof(uint8_t));
-
-			std::vector<int32_t> slots = seq.token_exec_slots;
-			if (slots.size() != len) {
-				// Slot map MUST be aligned with the token stream. Silently rewriting
-				// to all -1 while still emitting compiled_bootstrap_bindings and
-				// teacher_steps produces a GRMT whose payload no longer agrees with
-				// itself — downstream validation later flags it as broken with no
-				// pointer to the real cause. Fail at the source instead.
-				throw std::runtime_error(
-					"[DataLoader] save_grmt: token_exec_slots.size()=" +
-					std::to_string(seq.token_exec_slots.size()) +
-					" != token_ids.size()=" + std::to_string(len) +
-					(seq.execution_active
-						? " (execution_active row \u2014 cannot recover)"
-						: " (execution_inactive row \u2014 still a builder bug)"));
-			}
-			file.write(reinterpret_cast<const char*>(slots.data()), len * sizeof(int32_t));
-
-			// Compiled bootstrap bindings
-			uint32_t cbb_count = static_cast<uint32_t>(seq.compiled_bootstrap_bindings.size());
-			file.write(reinterpret_cast<const char*>(&cbb_count), sizeof(uint32_t));
-			static_assert(sizeof(GRIM::Execution::CompiledBootstrapBinding) == 12,
-				"CompiledBootstrapBinding must be 12 bytes for bulk GRMT serialization");
-			if (cbb_count > 0) {
-				file.write(reinterpret_cast<const char*>(seq.compiled_bootstrap_bindings.data()),
-					cbb_count * sizeof(GRIM::Execution::CompiledBootstrapBinding));
-			}
-
-			// Teacher steps
-			uint32_t ts_count = static_cast<uint32_t>(seq.teacher_steps.size());
-			file.write(reinterpret_cast<const char*>(&ts_count), sizeof(uint32_t));
-			static_assert(sizeof(GRIM::Execution::TeacherStep) == 20,
-				"TeacherStep must be 20 bytes for bulk GRMT serialization");
-			if (ts_count > 0) {
-				file.write(reinterpret_cast<const char*>(seq.teacher_steps.data()),
-					ts_count * sizeof(GRIM::Execution::TeacherStep));
-			}
-
-			// Slot selection targets (field-by-field due to struct padding)
-			uint32_t sst_count = static_cast<uint32_t>(seq.slot_selection_targets.size());
-			file.write(reinterpret_cast<const char*>(&sst_count), sizeof(uint32_t));
-			for (uint32_t si = 0; si < sst_count; ++si) {
-				uint8_t kind = static_cast<uint8_t>(seq.slot_selection_targets[si].kind);
-				file.write(reinterpret_cast<const char*>(&kind), sizeof(uint8_t));
-				file.write(reinterpret_cast<const char*>(&seq.slot_selection_targets[si].slot_id),
-					sizeof(int32_t));
-			}
-		}
-		// Surface buffered write errors before declaring success. file.good()
-		// alone does not flush libstdc++'s filebuf; some failures (ENOSPC,
-		// EIO, quota) only set the failbit when the buffer is actually pushed
-		// to the kernel on flush() or close().
-		file.flush();
-		file.close();
-		if (!file.good()) {
-			std::cerr << "[DataLoader] FATAL: GRMT stream entered fail state on "
-			          << "flush/close (path=" << path.string() << "). "
-			          << "Treating write as failed." << std::endl;
-			return {false, sequences_with_no_valid_targets};
-		}
-		return {true, sequences_with_no_valid_targets};
-	};
-
-	// Atomic write: serialize to a sibling temp path, then rename to the final
-	// path only after success. Without this, any mid-write failure (slot-map
-	// throw, disk error, etc.) leaves a header-valid but truncated GRMT at
-	// `train_grmt`, and the freshness check on the next run accepts it.
-	fs::path tmp_grmt = train_grmt;
-	tmp_grmt += ".tmp";
-	std::error_code ec;
-	fs::remove(tmp_grmt, ec);  // best-effort cleanup of any prior crash residue
-
-	bool wrote_ok = false;
-	size_t writer_dropped_targetless = 0;
+	GRIM::TokenizerArtifacts::TokenizerBundleSaveReport save_report;
 	try {
-		auto result = save_grmt(tmp_grmt, all_tokens);
-		wrote_ok = result.first;
-		writer_dropped_targetless = result.second;
+		save_report = artifacts.save(tokenizer, all_tokens, save_options);
 	} catch (const std::exception& e) {
-		std::cerr << "[DataLoader] FATAL: exception while writing GRMT: " << e.what() << std::endl;
-		wrote_ok = false;
-	}
-
-	if (!wrote_ok) {
-		fs::remove(tmp_grmt, ec);  // never leave a partial temp file behind
-		std::cerr << "[DataLoader] Failed to write GRMT file." << std::endl;
+		std::cerr << "[DataLoader] FATAL: failed to save tokenizer artifact bundle: "
+		          << e.what() << std::endl;
 		return false;
 	}
-
-	// Re-apply the filtered-curriculum guard against writer-internal drops.
-	// The pre-writer guard above only sees encode-time skips; save_grmt can
-	// additionally drop token-length-degenerate rows whose targets all mask
-	// to -1. Under a named curriculum those are still selected entries that
-	// silently failed to land in the GRMT — reject the partial output.
-	if (curriculum_filter.has_filter && writer_dropped_targetless > 0) {
-		fs::remove(tmp_grmt, ec);
-		std::cerr << "[DataLoader] FATAL: save_grmt dropped "
-		          << writer_dropped_targetless
-		          << " sequence(s) with 0 valid targets under a filtered "
-		          << "curriculum. Refusing to publish a partial GRMT."
-		          << std::endl;
-		return false;
+	if (save_report.grmt.dropped_targetless_sequences > 0) {
+		std::cerr << "[DataLoader] Dropped "
+		          << save_report.grmt.dropped_targetless_sequences
+		          << " sequences with 0 valid targets" << std::endl;
+	}
+	if (save_options.save_text_vocab) {
+		std::cout << "[DataLoader] Also saved human-readable .txt vocab" << std::endl;
 	}
 
-	// Atomically replace the destination. fs::rename overwrites on POSIX and
-	// is atomic-on-same-filesystem on Windows for files (ReplaceFileW path).
-	fs::rename(tmp_grmt, train_grmt, ec);
-	if (ec) {
-		fs::remove(tmp_grmt, ec);
-		std::cerr << "[DataLoader] Failed to rename temp GRMT into place: "
-		          << ec.message() << std::endl;
-		return false;
-	}
-
-	std::cout << "[DataLoader] Wrote " << all_tokens.size() << " sequences to "
-			  << train_grmt.string() << std::endl;
+	std::cout << "[DataLoader] Saved tokenizer artifact bundle:" << std::endl
+	          << "  Vocab: " << out_vocab_path << std::endl
+	          << "  GRMT:  " << train_grmt.string() << std::endl
+	          << "  Written sequences: " << save_report.grmt.written_sequences << std::endl
+	          << "  Vocab size: " << save_report.manifest.grmt_header.vocab_size << std::endl;
 
 	return true;
 }

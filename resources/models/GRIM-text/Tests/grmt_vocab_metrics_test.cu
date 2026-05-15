@@ -19,6 +19,7 @@
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/GRMT/GrmtFormat.hpp"
+#include "../Shared/TokenizerArtifacts/GrmtCorpusIO.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -131,13 +132,8 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
 {
     GRMTCorpusMetrics m;
 
-    std::ifstream f(grmt_path, std::ios::binary);
-    if (!f.is_open()) {
-        throw std::runtime_error("scanGRMT: cannot open " + grmt_path);
-    }
-
-    // ── Header (16 bytes) ──
-    const GRIM::GRMT::Header header = GRIM::GRMT::readHeaderOrThrow(f, grmt_path);
+    GRIM::TokenizerArtifacts::GrmtCorpusReader reader(grmt_path);
+    const GRIM::GRMT::Header header = reader.header();
     m.grmt_version = header.version;
     m.num_sequences = header.num_sequences;
     m.vocab_size = header.vocab_size;
@@ -152,15 +148,14 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
     uint64_t seq_len_sum = 0;
     double   seq_len_sum_sq = 0.0;   // for stddev
 
-    // Reusable per-sequence buffers
-    std::vector<int32_t> token_ids;
     std::string decoded;
 
     uint32_t s = 0;
     for (; s < m.num_sequences; ++s) {
-        uint32_t seq_len;
-        f.read(reinterpret_cast<char*>(&seq_len), 4);
-        if (!f || seq_len == 0 || seq_len > 1'000'000) break;
+        GRIM::TokenizerArtifacts::GrmtSequence sequence;
+        if (!reader.readNext(sequence)) break;
+        const uint32_t seq_len = static_cast<uint32_t>(sequence.token_ids.size());
+        if (seq_len == 0 || seq_len > 1'000'000) break;
 
         // ── Sequence length stats ──
         m.seq_len_min = std::min(m.seq_len_min, seq_len);
@@ -168,13 +163,9 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
         seq_len_sum += seq_len;
         seq_len_sum_sq += static_cast<double>(seq_len) * seq_len;
 
-        // ── Read token_ids ──
-        token_ids.resize(seq_len);
-        f.read(reinterpret_cast<char*>(token_ids.data()), seq_len * sizeof(int32_t));
-
         // ── Histogram + token class breakdown ──
         for (uint32_t t = 0; t < seq_len; ++t) {
-            uint32_t tid = static_cast<uint32_t>(token_ids[t]);
+            uint32_t tid = static_cast<uint32_t>(sequence.token_ids[t]);
             ++m.token_hist[tid];
 
             // Classify token
@@ -196,7 +187,7 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
         decoded.clear();
         decoded.reserve(seq_len * 4);
         for (uint32_t t = 0; t < seq_len; ++t) {
-            int tid = token_ids[t];
+            int tid = sequence.token_ids[t];
             auto it = vocab.find(tid);
             if (it != vocab.end()) {
                 decoded += it->second;
@@ -225,49 +216,6 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
             in_word = !ws;
         }
 
-        // ── Skip remaining per-sequence fields (GRMT v11 layout) ──
-        // targets (int32 × seq_len)
-        f.seekg(seq_len * sizeof(int32_t), std::ios::cur);
-        // numeric_values (float × seq_len)
-        f.seekg(seq_len * sizeof(float), std::ios::cur);
-        // atom_mask (uint8 × seq_len)
-        f.seekg(seq_len * sizeof(uint8_t), std::ios::cur);
-        // atom_flags (uint32 × seq_len)
-        f.seekg(seq_len * sizeof(uint32_t), std::ios::cur);
-        // Per-token atom text strings: each is uint16 length + text
-        for (uint32_t j = 0; j < seq_len; ++j) {
-            uint16_t slen = 0;
-            f.read(reinterpret_cast<char*>(&slen), sizeof(uint16_t));
-            if (slen > 0) f.seekg(slen, std::ios::cur);
-        }
-        // exec_active (uint8)
-        f.seekg(sizeof(uint8_t), std::ios::cur);
-        // token_exec_slots (int32 × seq_len)
-        f.seekg(seq_len * sizeof(int32_t), std::ios::cur);
-        // compiled_bootstrap_bindings: count(uint32) + entries(12 each)
-        {
-            uint32_t cbb_count = 0;
-            f.read(reinterpret_cast<char*>(&cbb_count), sizeof(uint32_t));
-            if (cbb_count > 0) f.seekg(cbb_count * 12, std::ios::cur);
-        }
-        // teacher_steps: count(uint32) + entries(20 each)
-        {
-            uint32_t ts_count = 0;
-            f.read(reinterpret_cast<char*>(&ts_count), sizeof(uint32_t));
-            if (ts_count > 0) f.seekg(ts_count * 20, std::ios::cur);
-        }
-        // slot_selection_targets: count(uint32) + entries(5 each: uint8 + int32)
-        {
-            uint32_t sst_count = 0;
-            f.read(reinterpret_cast<char*>(&sst_count), sizeof(uint32_t));
-            if (sst_count > 0) f.seekg(sst_count * 5, std::ios::cur);
-        }
-
-        if (!f) {
-            std::cerr << "[grmt-metrics] Read error at sequence " << s << "\n";
-            break;
-        }
-
         if ((s + 1) % 5000 == 0) {
             std::cout << "[grmt-metrics] scanned " << (s + 1) << "/" << m.num_sequences
                       << " sequences (" << m.total_tokens << " tokens)\n";
@@ -277,7 +225,7 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
 
     // ── Derived metrics ──
     m.sequences_scanned = s;
-    m.scan_ok = f.good() || f.eof();
+    m.scan_ok = (s == m.num_sequences);
     m.distinct_ids = static_cast<uint32_t>(m.token_hist.size());
     m.seq_len_mean = m.num_sequences > 0
         ? static_cast<double>(seq_len_sum) / m.num_sequences
