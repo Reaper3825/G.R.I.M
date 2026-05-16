@@ -1293,8 +1293,8 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
  * Creates LogSoftmaxGradFn if input.requires_grad
  * @param save_output_copy When true (default), LogSoftmaxGradFn copies the
  *   log-probs for backward. When false, stores a non-owning pointer — caller
- *   must guarantee the data lives until after backward completes.
- *   OOM FIX: unified_loss() passes false because NLLLossGradFn owns the data.
+ *   must provide an explicit external owner that keeps the data alive until
+ *   after backward completes.
  */
 Tensor log_softmax(const Tensor& x, cudaStream_t stream = nullptr, bool save_output_copy = true);
 

@@ -1329,7 +1329,19 @@ LossResult autogradTrainingStep(
         step,
         true
     );
-    ctx.d_class_weights = training_state.class_weights_tensor.data;
+    if (loss_config.class_balanced_enabled) {
+        if (!training_state.class_weights_tensor.data) {
+            throw std::runtime_error("autogradTrainingStep: class_balanced_enabled=true but class_weights_tensor is NULL");
+        }
+        if (training_state.class_weights_vocab_size != payload.vocab_size) {
+            throw std::runtime_error("autogradTrainingStep: class_weights_vocab_size=" +
+                std::to_string(training_state.class_weights_vocab_size) + " != payload.vocab_size=" +
+                std::to_string(payload.vocab_size));
+        }
+        ctx.d_class_weights = training_state.class_weights_tensor.data;
+    } else {
+        ctx.d_class_weights = nullptr;
+    }
     ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on non-initial accumulation slots
     ctx.model = &model;  // For MTP head access in computeAutogradLoss
 

@@ -9,6 +9,7 @@
 #include "AutogradLoss.hpp"
 #include "CrossEntropyNLL.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
+#include "../../TensorContract/GradFns/LogSoftmaxGradFn.hpp"
 // BatchPayload + BatchDeviceBindings are part of the public unified_loss boundary.
 #include "../../LogRecorder/BatchLogTape.hpp"
 #include "../../VerboseLogging.hpp"  // Compile-time diagnostic guards (Issue #151)
@@ -106,15 +107,19 @@ __host__ const std::vector<int>& hostTargetsForSelection(
  *   3. Composition:  grad_logits[j] = (p_j - q_j) / N  ← standard CE gradient ✓
  *
  * Memory management:
- *   - Takes ownership of log_probs.data through a GradFn-owned RAII guard
- *   - Shares LogSoftmaxGradFn via shared_ptr
+ *   - LogSoftmaxGradFn owns the saved log_probs buffer used by both NLL backward and log_softmax backward
+ *   - Holds LogSoftmaxGradFn alive via shared_ptr and borrows its saved log_probs pointer during apply()
  *   - Allocates grad_log_probs_buffer for backward output and releases it via release_saved()
  */
 struct NLLLossGradFn : public GradFn {
     // Saved forward data
-    std::shared_ptr<float> owned_log_probs_data;        // OWNED GPU buffer: log-probabilities [num_tokens * vocab_size]
+    std::shared_ptr<float> owned_loss_sum_buffer;       // OWNED GPU scalar: forward reduction sum [1]
+    std::shared_ptr<int> owned_valid_count_buffer;      // OWNED GPU scalar: forward valid-token count [1]
+    std::shared_ptr<float> owned_weight_sum_buffer;     // OWNED GPU scalar: forward class-weight sum [1]
     std::shared_ptr<float> owned_grad_log_probs_buffer; // OWNED GPU buffer: backward output [num_tokens * vocab_size]
-    float* log_probs_data;                              // Borrowed from owned_log_probs_data while saved
+    float* loss_sum_buffer;
+    int* valid_count_buffer;
+    float* weight_sum_buffer;
     float* grad_log_probs_buffer;                       // Borrowed from owned_grad_log_probs_buffer while saved
     
     const Batching::BatchPayload* payload;      // NOT OWNED — stable for autograd step lifetime
@@ -128,40 +133,114 @@ struct NLLLossGradFn : public GradFn {
     // Class-balanced loss: per-token weight = 1/freq(target)^β
     const float* class_weights;     // NOT OWNED — points to TrainingState::class_weights_tensor.data
     float weight_sum;               // Sum of per-token class weights for this batch
+    float mean_loss;                // Forward scalar computed during capture_inputs()
     
     // Upstream gradient chain
     std::shared_ptr<GradFn> log_probs_grad_fn;
     TensorContract::TensorShape grad_shape;
     
-    __host__ NLLLossGradFn(
-        float* log_probs,           // Takes ownership of this GPU buffer
+    __host__ NLLLossGradFn()
+        : owned_loss_sum_buffer(nullptr)
+        , owned_valid_count_buffer(nullptr)
+        , owned_weight_sum_buffer(nullptr)
+        , owned_grad_log_probs_buffer(nullptr)
+        , loss_sum_buffer(nullptr)
+        , valid_count_buffer(nullptr)
+        , weight_sum_buffer(nullptr)
+        , grad_log_probs_buffer(nullptr)
+        , payload(nullptr)
+        , bindings{}
+        , target_selection(CrossEntropyTargetSelection::primaryLm())
+        , valid_count(0)
+        , loss_config{}
+        , class_weights(nullptr)
+        , weight_sum(0.0f)
+        , mean_loss(0.0f)
+        , log_probs_grad_fn(nullptr)
+        , grad_shape{}
+    {
+        op_name = "nll_loss";
+    }
+
+    __host__ void capture_inputs(
+        Tensor& log_probs,
         const Batching::BatchPayload& payload_,
         const Batching::BatchDeviceBindings& bindings_,
         const CrossEntropyTargetSelection& target_selection_,
-        int valid_count_,
         const HyperParameters::LossConfigHP& loss_config_,
-        const float* class_weights_, float weight_sum_,
-        std::shared_ptr<GradFn> upstream_grad_fn,
-        const TensorContract::TensorShape& shape,
+        const float* class_weights_,
         cudaStream_t stream_
-    )
-        : owned_log_probs_data(log_probs, [](float* p) { queueForDeferredCleanup(p); })
-        , owned_grad_log_probs_buffer(nullptr)
-        , log_probs_data(owned_log_probs_data.get())
-        , grad_log_probs_buffer(nullptr)
-        , payload(&payload_)
-        , bindings(bindings_)
-        , target_selection(target_selection_)
-        , valid_count(valid_count_)
-        , loss_config(loss_config_)
-        , class_weights(class_weights_), weight_sum(weight_sum_)
-        , log_probs_grad_fn(std::move(upstream_grad_fn))
-        , grad_shape(shape)
-    {
+    ) {
         if (!stream_) {
-            throw std::runtime_error("[NLLLossGradFn::ctor] stream is NULL — loss GradFn requires a valid CUDA stream");
+            throw std::runtime_error("[NLLLossGradFn::capture_inputs] stream is NULL — loss GradFn requires a valid CUDA stream");
         }
-        op_name = "nll_loss";
+        if (!log_probs.data) {
+            throw std::runtime_error("[NLLLossGradFn::capture_inputs] log_probs.data is NULL");
+        }
+
+        payload_.validate("NLLLossGradFn::capture_inputs");
+        payload = &payload_;
+        bindings = bindings_;
+        target_selection = target_selection_;
+        loss_config = loss_config_;
+        class_weights = class_weights_;
+        grad_shape = log_probs.shape;
+        log_probs_grad_fn = log_probs.grad_fn;
+
+        if (log_probs.requires_grad) {
+            if (!log_probs_grad_fn) {
+                throw std::runtime_error("[NLLLossGradFn::capture_inputs] log_probs_grad_fn is NULL — LogSoftmaxGradFn must own saved log_probs");
+            }
+            auto* log_softmax_grad_fn = dynamic_cast<LogSoftmaxGradFn*>(log_probs_grad_fn.get());
+            if (!log_softmax_grad_fn) {
+                throw std::runtime_error("[NLLLossGradFn::capture_inputs] upstream grad_fn is not LogSoftmaxGradFn — NLL loss must follow autograd::log_softmax");
+            }
+            if (!log_softmax_grad_fn->owns_saved_log_softmax || !log_softmax_grad_fn->saved_log_softmax) {
+                throw std::runtime_error("[NLLLossGradFn::capture_inputs] LogSoftmaxGradFn does not own saved log_probs — call log_softmax with save_output_copy=true");
+            }
+        }
+
+        if (!loss_sum_buffer) {
+            float* loss_sum = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&loss_sum), sizeof(float), "NLLLossGradFn_loss_sum");
+            owned_loss_sum_buffer.reset(loss_sum, [](float* p) { queueForDeferredCleanup(p); });
+            loss_sum_buffer = owned_loss_sum_buffer.get();
+        }
+        if (!valid_count_buffer) {
+            int* count = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&count), sizeof(int), "NLLLossGradFn_valid_count");
+            owned_valid_count_buffer.reset(count, [](int* p) { queueForDeferredCleanup(p); });
+            valid_count_buffer = owned_valid_count_buffer.get();
+        }
+        if (!weight_sum_buffer) {
+            float* weight_sum_ptr = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&weight_sum_ptr), sizeof(float), "NLLLossGradFn_weight_sum");
+            owned_weight_sum_buffer.reset(weight_sum_ptr, [](float* p) { queueForDeferredCleanup(p); });
+            weight_sum_buffer = owned_weight_sum_buffer.get();
+        }
+
+        const CrossEntropyForwardResult ce_result = computeCrossEntropyForwardFromLogProbs(
+            log_probs.data,
+            *payload,
+            bindings,
+            target_selection,
+            CrossEntropyForwardWorkspace{
+                loss_sum_buffer,
+                valid_count_buffer,
+                weight_sum_buffer,
+                sizeof(float),
+                sizeof(int),
+                sizeof(float),
+                stream_
+            },
+            loss_config,
+            class_weights,
+            stream_
+        );
+
+        mean_loss = ce_result.mean_loss;
+        valid_count = ce_result.valid_count;
+        weight_sum = ce_result.weight_sum;
     }
     
     __host__ ~NLLLossGradFn() {
@@ -169,6 +248,15 @@ struct NLLLossGradFn : public GradFn {
     }
     
     __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        auto* log_softmax_grad_fn = dynamic_cast<LogSoftmaxGradFn*>(log_probs_grad_fn.get());
+        if (!log_softmax_grad_fn) {
+            throw std::runtime_error("[NLLLossGradFn::apply] upstream grad_fn is not LogSoftmaxGradFn — saved log_probs owner is missing");
+        }
+        const float* log_probs_data = log_softmax_grad_fn->saved_log_softmax;
+        if (!log_probs_data) {
+            throw std::runtime_error("[NLLLossGradFn::apply] LogSoftmaxGradFn.saved_log_softmax is NULL — saved log_probs were released before NLL backward");
+        }
+
         AG_TRACE("[NLLLossGradFn::apply] ENTER: log_probs_data=%p upstream=%p\n",
                  (void*)log_probs_data, (void*)log_probs_grad_fn.get());
 
@@ -210,8 +298,8 @@ struct NLLLossGradFn : public GradFn {
         }
         AG_TRACE("[NLLLossGradFn::apply] upstream_scalar_grad=%.6f\n", upstream_scalar_grad);
         
-        // OOM FIX: Lazy allocation — only allocate grad buffer when actually
-        // needed for backward, not during forward pass. Saves 1.37GB peak memory.
+        // Lazy allocation — only allocate the grad buffer when actually needed
+        // for backward, not during forward pass.
         if (!grad_log_probs_buffer) {
             const size_t grad_bytes = static_cast<size_t>(num_tokens) * vocab_size * sizeof(float);
             float* grad_buffer = nullptr;
@@ -326,10 +414,14 @@ struct NLLLossGradFn : public GradFn {
         // released at the tape boundary, and their deleters queue CUDA cleanup
         // rather than calling cudaFree directly from a GradFn destructor.
         log_probs_grad_fn.reset();
+        owned_loss_sum_buffer.reset();
+        owned_valid_count_buffer.reset();
+        owned_weight_sum_buffer.reset();
         owned_grad_log_probs_buffer.reset();
-        owned_log_probs_data.reset();
+        loss_sum_buffer = nullptr;
+        valid_count_buffer = nullptr;
+        weight_sum_buffer = nullptr;
         grad_log_probs_buffer = nullptr;
-        log_probs_data = nullptr;
         payload = nullptr;
         class_weights = nullptr;
     }
@@ -358,9 +450,23 @@ __host__ Tensor unifiedLossFromTargetSelection(
     // target address from BatchDeviceBindings at the kernel launch boundary.
     // ══════════════════════════════════════════════════════════════════════
     
+    if (!stream) {
+        throw std::runtime_error(std::string("[") + caller + "] stream is NULL — caller MUST provide a valid CUDA stream");
+    }
+    HyperParameters::validateLossConfigHP(config, caller);
+    if (config.entropy_reg_enabled && config.entropy_reg_lambda == 0.0f) {
+        throw std::runtime_error(std::string("[") + caller + "] entropy_reg_enabled=true but entropy_reg_lambda is 0");
+    }
+    if (!config.entropy_reg_enabled && config.entropy_reg_lambda != 0.0f) {
+        throw std::runtime_error(std::string("[") + caller + "] entropy_reg_enabled=false but entropy_reg_lambda=" +
+            std::to_string(config.entropy_reg_lambda) + " — disable by setting lambda to 0");
+    }
     payload.validate(caller);
     if (config.class_balanced_enabled && !d_class_weights) {
         throw std::runtime_error(std::string("[") + caller + "] class_balanced_enabled=true but d_class_weights is NULL");
+    }
+    if (!config.class_balanced_enabled && d_class_weights) {
+        throw std::runtime_error(std::string("[") + caller + "] d_class_weights is non-NULL while class_balanced_enabled=false");
     }
     const float* effective_class_weights = nullptr;
     if (config.class_balanced_enabled) {
@@ -377,18 +483,15 @@ __host__ Tensor unifiedLossFromTargetSelection(
     // ══════════════════════════════════════════════════════════════════════
     
     // ── Step 1: log_softmax(logits) → log_probs ──
-    // Creates LogSoftmaxGradFn if logits.requires_grad
-    // OOM FIX: Pass save_output_copy=false so LogSoftmaxGradFn stores a
-    // non-owning pointer to result.data instead of copying 1.37GB.
-    // This is safe because NLLLossGradFn takes ownership of result.data through
-    // a GradFn-owned RAII guard and keeps it alive through backward. Lifecycle:
-    //   NLLLossGradFn::apply() → calls LogSoftmaxGradFn::apply() (reads shared data) → returns
-    //   Tensor::backward() syncs → NLLLossGradFn::release_saved() releases LogSoftmaxGradFn and queues buffer cleanup
-    Tensor log_probs = autograd::log_softmax(logits, stream, false);
+    // Creates LogSoftmaxGradFn if logits.requires_grad. LogSoftmaxGradFn owns
+    // its saved log_probs copy, and NLLLossGradFn borrows that saved buffer for
+    // NLL backward while holding the upstream GradFn alive.
+    Tensor log_probs = autograd::log_softmax(logits, stream);
     
     // ── Step 2: CE/NLL loss forward on log_probs ──
-    const CrossEntropyForwardResult ce_result = computeCrossEntropyForwardFromLogProbs(
-        log_probs.data,
+    auto grad_fn = std::make_shared<NLLLossGradFn>();
+    grad_fn->capture_inputs(
+        log_probs,
         payload,
         bindings,
         target_selection,
@@ -396,9 +499,9 @@ __host__ Tensor unifiedLossFromTargetSelection(
         effective_class_weights,
         stream
     );
-    const float mean_loss = ce_result.mean_loss;
-    const int h_valid_count = ce_result.valid_count;
-    const float h_weight_sum = ce_result.weight_sum;
+    const float mean_loss = grad_fn->mean_loss;
+    const int h_valid_count = grad_fn->valid_count;
+    const float h_weight_sum = grad_fn->weight_sum;
     
     AG_TRACE("[%s] valid_count=%d mean_loss=%.6f\n",
              caller, h_valid_count, mean_loss);
@@ -413,7 +516,10 @@ __host__ Tensor unifiedLossFromTargetSelection(
     float* d_loss = nullptr;
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_loss), sizeof(float), "unified_loss_d_loss");
     // BUG FIX Issue #61: Use SYNC copy because mean_loss is a local variable!
-    cudaMemcpy(d_loss, &mean_loss, sizeof(float), cudaMemcpyHostToDevice);
+    cudaError_t loss_copy_err = cudaMemcpy(d_loss, &mean_loss, sizeof(float), cudaMemcpyHostToDevice);
+    if (loss_copy_err != cudaSuccess) {
+        throw std::runtime_error(std::string("[") + caller + "] cudaMemcpy(unified_loss_d_loss) failed: " + cudaGetErrorString(loss_copy_err));
+    }
     
     Tensor loss;
     loss.data = d_loss;
@@ -425,26 +531,11 @@ __host__ Tensor unifiedLossFromTargetSelection(
     
     // ── Step 5: Attach NLLLossGradFn ──
     if (logits.requires_grad) {
-        auto grad_fn = std::make_shared<NLLLossGradFn>(
-            log_probs.data,       // Takes ownership of log_probs GPU buffer
-            payload,
-            bindings,
-            target_selection,
-            h_valid_count,
-            config,
-            effective_class_weights, h_weight_sum,
-            log_probs.grad_fn,    // Takes ownership of LogSoftmaxGradFn
-            log_probs.shape,
-            stream
-        );
-        // Transfer data ownership from Tensor to NLLLossGradFn
-        log_probs.owns_data = false;     // NLLLossGradFn now owns log_probs.data
-        
         loss.grad_fn = grad_fn;
     }
     
     return loss;
-    // log_probs goes out of scope: data NOT freed (transferred), grad_fn NOT deleted (transferred)
+    // log_probs result data is local forward output; LogSoftmaxGradFn owns the saved copy needed for backward.
 }
 
 } // namespace

@@ -12,6 +12,7 @@
 #include "../../TensorContract/TensorContract_GPU.hpp"
 #include "../../Batching/BatchPayload.hpp"
 #include "../../Batching/BatchDeviceBindings.hpp"
+#include "CrossEntropyNLL.hpp"
 #include <cuda_runtime.h>
 #include <cstdint>
 
@@ -85,8 +86,8 @@ Tensor unified_loss_for_mtp_head(
 
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
 // Was a thin wrapper calling the loss path with hardcoded plain CE config.
-// Production callers use unified_loss() with BatchPayload + BatchDeviceBindings
-// and LossConfigHP from HyperparameterGroupings.hpp.
+// Production callers use unified_loss() with BatchPayload + BatchDeviceBindings,
+// GradFn-owned CE forward scratch, and LossConfigHP from HyperparameterGroupings.hpp.
 
 }  // namespace autograd
 }  // namespace GRIM

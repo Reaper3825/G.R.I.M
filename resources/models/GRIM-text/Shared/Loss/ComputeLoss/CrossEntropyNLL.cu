@@ -7,33 +7,58 @@
 //======================================================//
 
 #include "CrossEntropyNLL.hpp"
-#include "../../CudaAllocUtils.hpp"
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <stdexcept>
 #include <type_traits>
-
-using GRIM::CudaAlloc::cudaMallocOrThrow;
+#include <vector>
 
 namespace GRIM {
 namespace autograd {
 namespace {
 
-struct DeviceFreeGuard {
-    void* ptr;
-
-    explicit DeviceFreeGuard(void* ptr_) : ptr(ptr_) {}
-    ~DeviceFreeGuard() {
-        if (ptr) cudaFree(ptr);
-    }
-
-    DeviceFreeGuard(const DeviceFreeGuard&) = delete;
-    DeviceFreeGuard& operator=(const DeviceFreeGuard&) = delete;
-};
-
 static_assert(std::is_trivially_copyable<HyperParameters::LossConfigHP>::value,
               "LossConfigHP must remain device-passable by value");
+
+void checkCudaStatus(cudaError_t err, const char* caller, const char* operation) {
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("[") + caller + "] " + operation + " failed: " + cudaGetErrorString(err));
+    }
+}
+
+void checkKernelLaunch(const char* caller, const char* kernel_name) {
+    const std::string operation = std::string(kernel_name) + " launch";
+    checkCudaStatus(cudaGetLastError(), caller, operation.c_str());
+}
+
+void requireValidStream(cudaStream_t stream, const char* caller) {
+    if (!stream) {
+        throw std::runtime_error(std::string("[") + caller + "] stream is NULL — caller MUST provide a valid CUDA stream");
+    }
+}
+
+void validateLossConfigForCompute(
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
+    const char* caller
+) {
+    HyperParameters::validateLossConfigHP(config, caller);
+    if (config.entropy_reg_enabled && config.entropy_reg_lambda == 0.0f) {
+        throw std::runtime_error(std::string("[") + caller + "] entropy_reg_enabled=true but entropy_reg_lambda is 0");
+    }
+    if (!config.entropy_reg_enabled && config.entropy_reg_lambda != 0.0f) {
+        throw std::runtime_error(std::string("[") + caller + "] entropy_reg_enabled=false but entropy_reg_lambda=" +
+            std::to_string(config.entropy_reg_lambda) + " — disable by setting lambda to 0");
+    }
+    if (config.class_balanced_enabled && !d_class_weights) {
+        throw std::runtime_error(std::string("[") + caller + "] class_balanced_enabled=true but d_class_weights is NULL");
+    }
+    if (!config.class_balanced_enabled && d_class_weights) {
+        throw std::runtime_error(std::string("[") + caller + "] d_class_weights is non-NULL while class_balanced_enabled=false");
+    }
+}
 
 void validateBatchDeviceBindingsGeometry(
     const Batching::BatchPayload& payload,
@@ -159,6 +184,104 @@ const int* resolveDeviceTargetsForSelection(
     throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
 }
 
+const std::vector<int>& hostTargetsForSelection(
+    const Batching::BatchPayload& payload,
+    const CrossEntropyTargetSelection& target_selection,
+    const char* caller
+) {
+    switch (target_selection.source) {
+        case CrossEntropyTargetSource::PrimaryLm:
+            if (target_selection.mtp_head_idx.has_value()) {
+                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
+            }
+            return payload.target_ids;
+
+        case CrossEntropyTargetSource::MtpShiftedHead:
+            return payload.mtp_shifted_targets[requireMtpHeadIndex(payload, target_selection, caller)];
+    }
+
+    throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
+}
+
+void validateHostTargetsForSelection(
+    const Batching::BatchPayload& payload,
+    const CrossEntropyTargetSelection& target_selection,
+    int expected_valid_count,
+    const char* caller
+) {
+    const std::vector<int>& targets = hostTargetsForSelection(payload, target_selection, caller);
+    if (static_cast<int>(targets.size()) != payload.total_tokens) {
+        throw std::runtime_error(std::string("[") + caller + "] selected host target count=" +
+            std::to_string(targets.size()) + " != BatchPayload.total_tokens=" + std::to_string(payload.total_tokens));
+    }
+
+    int host_valid_count = 0;
+    for (int t = 0; t < payload.total_tokens; ++t) {
+        const int target = targets[static_cast<std::size_t>(t)];
+        if (target < -1 || target >= payload.vocab_size) {
+            throw std::runtime_error(std::string("[") + caller + "] invalid target at token=" +
+                std::to_string(t) + " target=" + std::to_string(target) +
+                " valid range is -1 or [0," + std::to_string(payload.vocab_size) + ")");
+        }
+        if (target >= 0) {
+            ++host_valid_count;
+        }
+    }
+
+    if (host_valid_count != expected_valid_count) {
+        throw std::runtime_error(std::string("[") + caller + "] host valid target count=" +
+            std::to_string(host_valid_count) + " != BatchPayload-authored expected_valid_count=" +
+            std::to_string(expected_valid_count));
+    }
+}
+
+void validateForwardWorkspace(
+    const CrossEntropyForwardWorkspace& workspace,
+    const HyperParameters::LossConfigHP& config,
+    cudaStream_t stream,
+    const char* caller
+) {
+    if (!workspace.loss_sum) {
+        throw std::runtime_error(std::string("[") + caller + "] workspace.loss_sum is NULL — NLLLossGradFn::capture_inputs MUST provide CE reduction scratch");
+    }
+    if (!workspace.valid_count) {
+        throw std::runtime_error(std::string("[") + caller + "] workspace.valid_count is NULL — NLLLossGradFn::capture_inputs MUST provide CE reduction scratch");
+    }
+    if (!workspace.weight_sum) {
+        throw std::runtime_error(std::string("[") + caller + "] workspace.weight_sum is NULL — NLLLossGradFn::capture_inputs MUST provide CE reduction scratch");
+    }
+    if (workspace.loss_sum_bytes < sizeof(float)) {
+        throw std::runtime_error(std::string("[") + caller + "] workspace.loss_sum_bytes is smaller than sizeof(float)");
+    }
+    if (workspace.valid_count_bytes < sizeof(int)) {
+        throw std::runtime_error(std::string("[") + caller + "] workspace.valid_count_bytes is smaller than sizeof(int)");
+    }
+    if (workspace.weight_sum_bytes < sizeof(float)) {
+        throw std::runtime_error(std::string("[") + caller + "] workspace.weight_sum_bytes is smaller than sizeof(float)");
+    }
+    if (!workspace.owner_stream) {
+        throw std::runtime_error(std::string("[") + caller + "] workspace.owner_stream is NULL");
+    }
+    if (workspace.owner_stream != stream) {
+        throw std::runtime_error(std::string("[") + caller + "] workspace.owner_stream does not match compute stream");
+    }
+
+    const auto loss_addr = reinterpret_cast<std::uintptr_t>(workspace.loss_sum);
+    const auto count_addr = reinterpret_cast<std::uintptr_t>(workspace.valid_count);
+    const auto weight_addr = reinterpret_cast<std::uintptr_t>(workspace.weight_sum);
+    if (loss_addr == count_addr || loss_addr == weight_addr || count_addr == weight_addr) {
+        throw std::runtime_error(std::string("[") + caller + "] CE workspace scalar buffers alias each other");
+    }
+
+    if (config.class_balanced_enabled && !workspace.weight_sum) {
+        throw std::runtime_error(std::string("[") + caller + "] class_balanced_enabled=true but workspace.weight_sum is NULL");
+    }
+}
+
+__device__ __forceinline__ void trapInvalidCrossEntropyInput() {
+    asm volatile("trap;");
+}
+
 //========================================================================
 // CUDA Kernels — NLL Loss on log-probabilities
 // These kernels receive log_probs = log_softmax(logits), NOT raw logits.
@@ -184,7 +307,6 @@ const int* resolveDeviceTargetsForSelection(
 __global__ void kernelCrossEntropyNLLForward(
     const float* __restrict__ log_probs,    // [num_tokens, vocab_size] — log-probabilities
     const int* __restrict__ targets,
-    float* __restrict__ per_token_loss,
     float* __restrict__ loss_sum,
     int* __restrict__ valid_count,
     float* __restrict__ weight_sum,             // Accumulated class weights (nullable if no class_balanced)
@@ -198,9 +320,13 @@ __global__ void kernelCrossEntropyNLLForward(
 
     const int target = targets[token_idx];
 
+    if (target < -1 || target >= vocab_size) {
+        trapInvalidCrossEntropyInput();
+        return;
+    }
+
     // Skip masked/padding positions (target == -1)
     if (target == -1) {
-        per_token_loss[token_idx] = 0.0f;
         return;
     }
 
@@ -260,7 +386,11 @@ __global__ void kernelCrossEntropyNLLForward(
         // Focal loss weight
         float focal_weight = 1.0f;
         if (loss_config.focal_enabled) {
-            focal_weight = powf(fmaxf(1.0f - p_t, 0.0f), loss_config.focal_gamma);
+            if (loss_config.focal_gamma == 0.0f) {
+                focal_weight = 1.0f;
+            } else {
+                focal_weight = powf(fmaxf(1.0f - p_t, 0.0f), loss_config.focal_gamma);
+            }
         }
 
         // When focal is disabled, focal_alpha MUST NOT scale the CE term.
@@ -281,10 +411,13 @@ __global__ void kernelCrossEntropyNLLForward(
         float cw = 1.0f;
         if (class_weights != nullptr) {
             cw = class_weights[target];
+            if (!isfinite(cw) || cw <= 0.0f) {
+                trapInvalidCrossEntropyInput();
+                return;
+            }
         }
         const float weighted_loss = cw * total_loss;
 
-        per_token_loss[token_idx] = weighted_loss;
         atomicAdd(loss_sum, weighted_loss);
         atomicAdd(valid_count, 1);
         if (weight_sum != nullptr) {
@@ -339,6 +472,11 @@ __global__ void kernelCrossEntropyNLLBackward(
     float* grad_row = grad_log_probs + static_cast<size_t>(token_idx) * vocab_size;
     const int target = targets[token_idx];
 
+    if (target < -1 || target >= vocab_size) {
+        trapInvalidCrossEntropyInput();
+        return;
+    }
+
     // Skip masked/padding positions (target == -1)
     if (target == -1) {
         for (int v = threadIdx.x; v < vocab_size; v += blockDim.x)
@@ -360,7 +498,10 @@ __global__ void kernelCrossEntropyNLLBackward(
     float focal_deriv_factor = 0.0f;
     if (loss_config.focal_enabled) {
         const float one_minus_pt = fmaxf(1.0f - p_t, 0.0f);
-        if (one_minus_pt > 0.0f) {
+        if (loss_config.focal_gamma == 0.0f) {
+            focal_weight = 1.0f;
+            focal_deriv_factor = 0.0f;
+        } else if (one_minus_pt > 0.0f) {
             focal_weight = powf(one_minus_pt, loss_config.focal_gamma);
             focal_deriv_factor = loss_config.focal_gamma * powf(one_minus_pt, loss_config.focal_gamma - 1.0f);
         } else {
@@ -368,25 +509,6 @@ __global__ void kernelCrossEntropyNLLBackward(
             focal_deriv_factor = 0.0f;
         }
     }
-
-    // Entropy centering term (Issue #124)
-    // Need neg_entropy = Σ p_v * log_p_v for centering.
-    __shared__ float s_neg_entropy;
-    if (threadIdx.x == 0) s_neg_entropy = 0.0f;
-    __syncthreads();
-
-    float local_ne = 0.0f;
-    if (loss_config.entropy_reg_enabled) {
-        for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
-            const float p_v = expf(row[v]);
-            if (p_v > 0.0f) local_ne += p_v * row[v];
-        }
-        for (int off = warpSize / 2; off > 0; off /= 2)
-            local_ne += __shfl_down_sync(0xffffffff, local_ne, off);
-        if (threadIdx.x % warpSize == 0) atomicAdd(&s_neg_entropy, local_ne);
-    }
-    __syncthreads();
-    const float neg_entropy = s_neg_entropy;
 
     // Precompute sum_log_off if needed for focal derivative with smoothing.
     __shared__ float s_sum_log_off;
@@ -432,10 +554,12 @@ __global__ void kernelCrossEntropyNLLBackward(
         }
 
         // Entropy regularization gradient w.r.t. log_probs.
+        // LogSoftmaxGradFn applies the centering Jacobian, so this is the true
+        // derivative of Σ p_i log(p_i) w.r.t. log_probs_i.
         if (loss_config.entropy_reg_enabled) {
             const float p_v = expf(row[v]);
             if (p_v > 0.0f) {
-                grad_v += loss_config.entropy_reg_lambda * p_v * (row[v] - neg_entropy);
+                grad_v += loss_config.entropy_reg_lambda * p_v * (row[v] + 1.0f);
             }
         }
 
@@ -443,6 +567,10 @@ __global__ void kernelCrossEntropyNLLBackward(
         float cw = 1.0f;
         if (class_weights != nullptr) {
             cw = class_weights[target];
+            if (!isfinite(cw) || cw <= 0.0f) {
+                trapInvalidCrossEntropyInput();
+                return;
+            }
         }
         grad_row[v] = grad_v * cw * inv_valid_count;
     }
@@ -451,7 +579,6 @@ __global__ void kernelCrossEntropyNLLBackward(
 void launchCrossEntropyNLLForward(
     const float* log_probs,
     const int* targets,
-    float* per_token_loss,
     float* loss_sum,
     int* valid_count,
     float* weight_sum,
@@ -460,19 +587,30 @@ void launchCrossEntropyNLLForward(
     const float* d_class_weights,
     cudaStream_t stream
 ) {
-    cudaMemsetAsync(loss_sum, 0, sizeof(float), stream);
-    cudaMemsetAsync(valid_count, 0, sizeof(int), stream);
-    if (weight_sum) cudaMemsetAsync(weight_sum, 0, sizeof(float), stream);
+    const char* caller = "launchCrossEntropyNLLForward";
+    requireValidStream(stream, caller);
+    if (!log_probs) throw std::runtime_error("[launchCrossEntropyNLLForward] log_probs is NULL");
+    if (!targets) throw std::runtime_error("[launchCrossEntropyNLLForward] targets is NULL");
+    if (!loss_sum) throw std::runtime_error("[launchCrossEntropyNLLForward] loss_sum is NULL");
+    if (!valid_count) throw std::runtime_error("[launchCrossEntropyNLLForward] valid_count is NULL");
+    if (config.class_balanced_enabled && !weight_sum) throw std::runtime_error("[launchCrossEntropyNLLForward] class_balanced_enabled=true but weight_sum is NULL");
+    if (config.class_balanced_enabled && !d_class_weights) throw std::runtime_error("[launchCrossEntropyNLLForward] class_balanced_enabled=true but d_class_weights is NULL");
+    if (!config.class_balanced_enabled && d_class_weights) throw std::runtime_error("[launchCrossEntropyNLLForward] d_class_weights is non-NULL while class_balanced_enabled=false");
+
+    checkCudaStatus(cudaMemsetAsync(loss_sum, 0, sizeof(float), stream), caller, "cudaMemsetAsync(loss_sum)");
+    checkCudaStatus(cudaMemsetAsync(valid_count, 0, sizeof(int), stream), caller, "cudaMemsetAsync(valid_count)");
+    if (weight_sum) checkCudaStatus(cudaMemsetAsync(weight_sum, 0, sizeof(float), stream), caller, "cudaMemsetAsync(weight_sum)");
 
     const int block_size = 256;
     kernelCrossEntropyNLLForward<<<payload.total_tokens, block_size, 0, stream>>>(
         log_probs, targets,
-        per_token_loss, loss_sum, valid_count, weight_sum,
+        loss_sum, valid_count, weight_sum,
         payload.total_tokens,
         payload.vocab_size,
         config,
         d_class_weights
     );
+    checkKernelLaunch(caller, "kernelCrossEntropyNLLForward");
 }
 
 void launchCrossEntropyNLLBackward(
@@ -487,13 +625,24 @@ void launchCrossEntropyNLLBackward(
     float grad_output_scale,
     cudaStream_t stream
 ) {
+    const char* caller = "launchCrossEntropyNLLBackward";
+    requireValidStream(stream, caller);
+    if (!log_probs) throw std::runtime_error("[launchCrossEntropyNLLBackward] log_probs is NULL");
+    if (!targets) throw std::runtime_error("[launchCrossEntropyNLLBackward] targets is NULL");
+    if (!grad_log_probs) throw std::runtime_error("[launchCrossEntropyNLLBackward] grad_log_probs is NULL");
+    if (config.class_balanced_enabled && !d_class_weights) throw std::runtime_error("[launchCrossEntropyNLLBackward] class_balanced_enabled=true but d_class_weights is NULL");
+    if (!config.class_balanced_enabled && d_class_weights) throw std::runtime_error("[launchCrossEntropyNLLBackward] d_class_weights is non-NULL while class_balanced_enabled=false");
     if (valid_count <= 0) {
         throw std::runtime_error("[launchCrossEntropyNLLBackward] valid_count=" + std::to_string(valid_count)
             + " — no valid tokens, caller MUST ensure valid_count > 0");
     }
 
     float normalization = static_cast<float>(valid_count);
-    if (d_class_weights != nullptr && weight_sum > 0.0f) {
+    if (config.class_balanced_enabled) {
+        if (weight_sum <= 0.0f || !std::isfinite(weight_sum)) {
+            throw std::runtime_error("[launchCrossEntropyNLLBackward] class_balanced_enabled=true but weight_sum=" +
+                std::to_string(weight_sum));
+        }
         normalization = weight_sum;
     }
     const float inv_valid_count = grad_output_scale / normalization;
@@ -507,6 +656,7 @@ void launchCrossEntropyNLLBackward(
         config,
         d_class_weights
     );
+    checkKernelLaunch(caller, "kernelCrossEntropyNLLBackward");
 }
 
 }  // namespace
@@ -516,41 +666,30 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     const CrossEntropyTargetSelection& target_selection,
+    const CrossEntropyForwardWorkspace& workspace,
     const HyperParameters::LossConfigHP& config,
     const float* d_class_weights,
     cudaStream_t stream
 ) {
+    requireValidStream(stream, "computeCrossEntropyForwardFromLogProbs");
     payload.validate("computeCrossEntropyForwardFromLogProbs");
     const char* target_name = targetSelectionName(target_selection, "computeCrossEntropyForwardFromLogProbs");
     const int expected_valid_count = expectedValidCountForSelection(payload, target_selection, "computeCrossEntropyForwardFromLogProbs");
+    validateLossConfigForCompute(config, d_class_weights, "computeCrossEntropyForwardFromLogProbs");
+    validateHostTargetsForSelection(payload, target_selection, expected_valid_count, "computeCrossEntropyForwardFromLogProbs");
+    validateForwardWorkspace(workspace, config, stream, "computeCrossEntropyForwardFromLogProbs");
 
     if (!log_probs) {
         throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] log_probs pointer is NULL — caller MUST provide log_softmax output");
     }
 
-    float* per_token_loss = nullptr;
-    float* d_loss_sum = nullptr;
-    int* d_valid_count = nullptr;
-    float* d_weight_sum = nullptr;
-
-    cudaMallocOrThrow(reinterpret_cast<void**>(&per_token_loss), payload.total_tokens * sizeof(float), "cross_entropy_per_token_loss");
-    DeviceFreeGuard per_token_loss_guard(per_token_loss);
-
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_loss_sum), sizeof(float), "cross_entropy_d_loss_sum");
-    DeviceFreeGuard loss_sum_guard(d_loss_sum);
-
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_valid_count), sizeof(int), "cross_entropy_d_valid_count");
-    DeviceFreeGuard valid_count_guard(d_valid_count);
-
-    if (d_class_weights) {
-        cudaMallocOrThrow(reinterpret_cast<void**>(&d_weight_sum), sizeof(float), "cross_entropy_d_weight_sum");
-    }
-    DeviceFreeGuard weight_sum_guard(d_weight_sum);
+    float* d_loss_sum = workspace.loss_sum;
+    int* d_valid_count = workspace.valid_count;
+    float* d_weight_sum = config.class_balanced_enabled ? workspace.weight_sum : nullptr;
 
     launchCrossEntropyNLLForward(
         log_probs,
         resolveDeviceTargetsForSelection(payload, bindings, target_selection, "computeCrossEntropyForwardFromLogProbs"),
-        per_token_loss,
         d_loss_sum,
         d_valid_count,
         d_weight_sum,
@@ -563,12 +702,15 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     float h_loss_sum = 0.0f;
     int h_valid_count = 0;
     float h_weight_sum = 0.0f;
-    cudaMemcpyAsync(&h_loss_sum, d_loss_sum, sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaMemcpyAsync(&h_valid_count, d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    checkCudaStatus(cudaMemcpyAsync(&h_loss_sum, d_loss_sum, sizeof(float), cudaMemcpyDeviceToHost, stream),
+        "computeCrossEntropyForwardFromLogProbs", "cudaMemcpyAsync(loss_sum D2H)");
+    checkCudaStatus(cudaMemcpyAsync(&h_valid_count, d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, stream),
+        "computeCrossEntropyForwardFromLogProbs", "cudaMemcpyAsync(valid_count D2H)");
     if (d_weight_sum) {
-        cudaMemcpyAsync(&h_weight_sum, d_weight_sum, sizeof(float), cudaMemcpyDeviceToHost, stream);
+        checkCudaStatus(cudaMemcpyAsync(&h_weight_sum, d_weight_sum, sizeof(float), cudaMemcpyDeviceToHost, stream),
+            "computeCrossEntropyForwardFromLogProbs", "cudaMemcpyAsync(weight_sum D2H)");
     }
-    cudaStreamSynchronize(stream);
+    checkCudaStatus(cudaStreamSynchronize(stream), "computeCrossEntropyForwardFromLogProbs", "cudaStreamSynchronize after CE forward readback");
 
     if (h_valid_count <= 0) {
         throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] valid_count=0 — no valid tokens in batch. "
@@ -589,7 +731,11 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     }
 
     float normalization = static_cast<float>(h_valid_count);
-    if (d_class_weights && h_weight_sum > 0.0f) {
+    if (config.class_balanced_enabled) {
+        if (h_weight_sum <= 0.0f || !std::isfinite(h_weight_sum)) {
+            throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] class_balanced_enabled=true but h_weight_sum=" +
+                std::to_string(h_weight_sum));
+        }
         normalization = h_weight_sum;
     }
     if (normalization <= 0.0f || !std::isfinite(normalization)) {
@@ -619,9 +765,12 @@ void computeCrossEntropyBackwardToLogProbs(
     float grad_output_scale,
     cudaStream_t stream
 ) {
+    requireValidStream(stream, "computeCrossEntropyBackwardToLogProbs");
     payload.validate("computeCrossEntropyBackwardToLogProbs");
     const char* target_name = targetSelectionName(target_selection, "computeCrossEntropyBackwardToLogProbs");
     const int expected_valid_count = expectedValidCountForSelection(payload, target_selection, "computeCrossEntropyBackwardToLogProbs");
+    validateLossConfigForCompute(config, d_class_weights, "computeCrossEntropyBackwardToLogProbs");
+    validateHostTargetsForSelection(payload, target_selection, expected_valid_count, "computeCrossEntropyBackwardToLogProbs");
 
     if (!log_probs) {
         throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] log_probs pointer is NULL — caller MUST provide saved log-probabilities");
@@ -633,6 +782,10 @@ void computeCrossEntropyBackwardToLogProbs(
         throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] saved valid_count=" +
             std::to_string(valid_count) + " != BatchPayload-authored " + target_name +
             ".expected_valid_count=" + std::to_string(expected_valid_count));
+    }
+    if (config.class_balanced_enabled && (weight_sum <= 0.0f || !std::isfinite(weight_sum))) {
+        throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] class_balanced_enabled=true but saved weight_sum=" +
+            std::to_string(weight_sum));
     }
 
     launchCrossEntropyNLLBackward(

@@ -16,6 +16,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #ifdef USE_CUDA
@@ -75,6 +76,10 @@ void computeAndUploadClassBalancedWeights(
         if (target_counts[v] == 0) {
             h_class_weights[v] = max_weight;
         }
+        if (!std::isfinite(h_class_weights[v]) || h_class_weights[v] <= 0.0f) {
+            throw std::runtime_error("[class_balanced] invalid class weight for token " +
+                std::to_string(v) + ": " + std::to_string(h_class_weights[v]));
+        }
     }
 
     if (vocab_size > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
@@ -88,10 +93,16 @@ void computeAndUploadClassBalancedWeights(
         false,
         stream,
         "phase1_class_weights");
-    cudaMemcpyAsync(ts.class_weights_tensor.data, h_class_weights.data(), weights_bytes,
+    cudaError_t copy_err = cudaMemcpyAsync(ts.class_weights_tensor.data, h_class_weights.data(), weights_bytes,
                      cudaMemcpyHostToDevice, stream);
+    if (copy_err != cudaSuccess) {
+        throw std::runtime_error(std::string("[class_balanced] cudaMemcpyAsync(class_weights H2D) failed: ") + cudaGetErrorString(copy_err));
+    }
     ts.class_weights_vocab_size = static_cast<int>(vocab_size);
-    cudaStreamSynchronize(stream);
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(std::string("[class_balanced] cudaStreamSynchronize after class weight upload failed: ") + cudaGetErrorString(sync_err));
+    }
 
     // Log top-10 highest and lowest weight tokens for verification
     std::vector<std::pair<float, std::uint32_t>> weight_pairs;

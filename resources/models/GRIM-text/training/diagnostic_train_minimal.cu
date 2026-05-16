@@ -572,7 +572,7 @@ int main(int argc, char** argv) {
     
     // Get stream from model's stream controller
     cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-    
+
     std::cout << "\n[5] Training state initialized" << std::endl;
     
     //--------------------------------------------------

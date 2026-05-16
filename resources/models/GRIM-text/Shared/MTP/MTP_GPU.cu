@@ -103,6 +103,9 @@ void computeMTPAuxiliaryLosses(
     if (!ctx.device_bindings) {
         throw std::runtime_error("computeMTPAuxiliaryLosses: ctx.device_bindings is NULL — caller MUST upload BatchPayload before MTP loss");
     }
+    if (!ctx.training_state) {
+        throw std::runtime_error("computeMTPAuxiliaryLosses: ctx.training_state is NULL — CE workspace is required for MTP loss");
+    }
     if (!ctx.device_bindings->d_mtp_shifted_targets) {
         throw std::runtime_error("computeMTPAuxiliaryLosses: BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
     }
