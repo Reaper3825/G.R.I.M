@@ -19,6 +19,11 @@ namespace Tokenizer {
 
 //======================================================//
 //  UnigramGpuMemory
+//
+// Tokenizer-runtime state owner: this stores the derived GPU mirror of the
+// host trie/pieces plus reusable Viterbi workspace capacity. The host
+// tokenizer model owns vocab/trie semantics; this object owns raw device
+// buffer lifetime only.
 //======================================================//
 class UnigramGpuMemory final {
 public:
@@ -28,8 +33,8 @@ public:
     UnigramGpuMemory(const UnigramGpuMemory&) = delete;
     UnigramGpuMemory& operator=(const UnigramGpuMemory&) = delete;
 
-    UnigramGpuMemory(UnigramGpuMemory&& other) noexcept;
-    UnigramGpuMemory& operator=(UnigramGpuMemory&& other) noexcept;
+    UnigramGpuMemory(UnigramGpuMemory&&) = delete;
+    UnigramGpuMemory& operator=(UnigramGpuMemory&&) = delete;
 
     void release() noexcept;
 

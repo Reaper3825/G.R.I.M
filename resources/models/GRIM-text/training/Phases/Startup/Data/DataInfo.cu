@@ -47,15 +47,13 @@ void validatePaths(const PathConfig& paths) {
 }
 
 std::unique_ptr<GRIM::Tokenizer::UniByte> initializeTokenizer(
-    const PathConfig& paths,
     const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
     TrainingLogger& logger)
 {
     logger.log("Loading tokenizer artifact bundle...");
 
     auto tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
-    GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(paths);
-    (void)artifacts.load(*tokenizer);
+    (void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, *tokenizer);
 
     return tokenizer;
 }
@@ -167,11 +165,11 @@ void DataInfoReady(TrainingContext& ctx) {
     const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
     const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
     ctx.tokenizer = Internal::initializeTokenizer(
-        ctx.config.paths, tokenizer_hp, *ctx.logging.logger);
+        tokenizer_hp, *ctx.logging.logger);
 
     DataLoadInputs data_inputs;
-    data_inputs.data_path = ctx.config.paths.data_path;
-    data_inputs.vocab_path = ctx.config.paths.vocab_path;
+    data_inputs.data_path = tokenizer_hp.data_path;
+    data_inputs.vocab_path = tokenizer_hp.vocab_path;
     data_inputs.max_seq_len = ctx.config.max_seq_len;
     data_inputs.min_seq_valid_tokens = data_hp.min_seq_valid_tokens;
     data_inputs.sliding_window_stride = data_hp.sliding_window_stride;

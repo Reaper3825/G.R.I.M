@@ -37,12 +37,6 @@ struct GrmtCorpus {
     std::vector<GrmtSequence> sequences;
 };
 
-struct GrmtSaveOptions {
-    // When true, any writer-side drop (empty sequence or no valid targets) is fatal.
-    // Used for named/filtered curricula where every selected row is intentional.
-    bool reject_dropped_sequences = false;
-};
-
 struct GrmtSaveReport {
     std::filesystem::path path;
     std::uint32_t written_sequences = 0;
@@ -106,8 +100,7 @@ GRIM::GRMT::Header loadGrmtHeader(const std::filesystem::path& path);
 GrmtSaveReport saveGrmtCorpus(
     const std::filesystem::path& path,
     const std::vector<GrmtSequence>& sequences,
-    std::uint32_t vocab_size,
-    const GrmtSaveOptions& options = GrmtSaveOptions{});
+    std::uint32_t vocab_size);
 
 GrmtCorpus loadGrmtCorpus(const std::filesystem::path& path);
 

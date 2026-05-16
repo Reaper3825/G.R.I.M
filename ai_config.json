@@ -420,6 +420,7 @@
         "enable_parallel_tokenization": true,
         "max_length": 2048,
         "max_vocab_size": 10000,
+        "min_cleaned_text_length": 20,
         "min_subword_freq": 7,
         "model_type": "unibytes",
         "parallel_threshold": 1000,

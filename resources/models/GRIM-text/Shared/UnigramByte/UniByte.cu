@@ -112,19 +112,22 @@ bool UniByte::train(const std::vector<std::string>& texts) {
               << "unparseable spans treated as text: " << total_skipped_unparseable
               << "; scratch_block_reasoning=" << (detect ? "on" : "off") << std::endl;
     
-    return unigram_.trainFromCorpus(texts, all_atom_spans,
-                                     tokenizer_hp_.target_vocab_size, 
-                                     tokenizer_hp_.character_coverage,
-                                     tokenizer_hp_.min_subword_freq,
-                                     tokenizer_hp_.prune_during_mining,
-                                     tokenizer_hp_.enable_parallel_subword_mining,
-                                     tokenizer_hp_.subword_mining_workers,
-                                     tokenizer_hp_.subword_mining_max_bytes);
+    const bool trained = unigram_.trainFromCorpus(texts, all_atom_spans,
+                                                  tokenizer_hp_.target_vocab_size,
+                                                  tokenizer_hp_.character_coverage,
+                                                  tokenizer_hp_.min_subword_freq,
+                                                  tokenizer_hp_.prune_during_mining,
+                                                  tokenizer_hp_.enable_parallel_subword_mining,
+                                                  tokenizer_hp_.subword_mining_workers,
+                                                  tokenizer_hp_.subword_mining_max_bytes);
+    if (trained) {
+        unigram_.requireRuntimeReadyForLastTraining("UniByte::train");
+        gpu_initialized_ = true;
+    }
+    return trained;
 }
 
 bool UniByte::initGPU() {
-    if (gpu_initialized_) return true;
-    
     if (!unigram_.initGPU()) {
         std::cerr << "[UniByte] Failed to initialize Unigram GPU" << std::endl;
         return false;
@@ -132,6 +135,14 @@ bool UniByte::initGPU() {
     
     gpu_initialized_ = true;
     return true;
+}
+
+const UnigramTrainingRuntimeReport& UniByte::lastTrainingRuntimeReport() const {
+    return unigram_.lastTrainingRuntimeReport();
+}
+
+void UniByte::requireRuntimeReadyForLastTraining(const char* caller) const {
+    unigram_.requireRuntimeReadyForLastTraining(caller);
 }
 
 //--------------------------------------------------//

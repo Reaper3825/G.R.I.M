@@ -24,6 +24,7 @@
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include <iostream>
 #include <filesystem>
 #include <memory>
@@ -60,17 +61,16 @@ GenerationConfig g_generation_defaults = [] {
 bool initializeModel(const HyperParameters::StartupConfig& startup_config,
                      const std::string& model_path)
 {
-    const std::string& vocab_path = startup_config.paths.vocab_path;
+    const auto tokenizer_hp = HyperParameters::tokenizerHP(startup_config);
+    const std::string& vocab_path = tokenizer_hp.vocab_path;
     std::cout << "[GRIM-text] Initializing model...\n";
     std::cout << "[GRIM-text] Vocab: " << vocab_path << "\n";
-    std::cout << "[GRIM-text] GRMT: " << startup_config.paths.data_path << "\n";
+    std::cout << "[GRIM-text] GRMT: " << tokenizer_hp.data_path << "\n";
     std::cout << "[GRIM-text] Model: " << model_path << "\n";
 
     try {
-        const auto tokenizer_hp = HyperParameters::tokenizerHP(startup_config);
         g_tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
-        GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(startup_config.paths);
-        (void)artifacts.load(*g_tokenizer);
+        (void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, *g_tokenizer);
         if (!g_tokenizer->initGPU()) {
             throw std::runtime_error("GRIM-text server tokenizer GPU initialization failed; production prompt tokenization requires uploaded CUDA trie state");
         }

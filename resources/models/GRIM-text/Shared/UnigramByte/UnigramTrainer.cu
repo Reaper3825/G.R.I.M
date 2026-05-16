@@ -565,6 +565,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                  bool enable_parallel_subword_mining,
                                  int subword_mining_workers,
                                  size_t subword_mining_max_bytes) {
+    last_training_runtime_report_ = UnigramTrainingRuntimeReport{};
+
     if (atom_spans.size() != texts.size()) {
         throw std::runtime_error("[UnigramLM] atom_spans.size()=" + std::to_string(atom_spans.size())
                                   + " != texts.size()=" + std::to_string(texts.size()));
@@ -1358,6 +1360,21 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     // Final trie build with converged scores
     buildTrie();
+
+    if (!initGPUForMaxSequenceLength(e_step_workspace_sequence_length)) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: final tokenizer runtime upload failed after final buildTrie()");
+    }
+
+    last_training_runtime_report_.required_viterbi_workspace_length = e_step_workspace_sequence_length;
+    last_training_runtime_report_.finalized_trie_generation = trie_generation_;
+    last_training_runtime_report_.final_piece_count = pieceCount();
+
+    const auto runtime_snapshot = runtimeStateSnapshot();
+    std::cout << "[UnigramLM] Final tokenizer runtime state: required_viterbi_workspace_length="
+              << last_training_runtime_report_.required_viterbi_workspace_length
+              << ", uploaded_workspace_max_length=" << runtime_snapshot.workspace_max_length
+              << ", trie_generation=" << runtime_snapshot.live_trie_generation
+              << std::endl;
     
     std::cout << "[UnigramLM] Training complete. Final vocab size: " << pieces_.size() << std::endl;
     return true;

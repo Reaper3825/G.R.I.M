@@ -178,9 +178,9 @@ void TokenizerVocabFile::readInto(GRIM::Tokenizer::UnigramLM& unigram) const {
 }
 
 void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
-                                   const TokenizerVocabSaveOptions& options) const {
+                                   const GRIM::HyperParameters::TokenizerHP& tokenizer_hp) const {
     const fs::path bin_path = requireBinaryVocabPath(path_);
-    if (!std::isfinite(options.score_multiplier)) {
+    if (!std::isfinite(tokenizer_hp.vocab_score_multiplier)) {
         throw std::runtime_error("[TokenizerVocabFile] score_multiplier is not finite for " + bin_path.string());
     }
 
@@ -216,9 +216,9 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
         static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET + unigram.pieceCount());
     writeScalar(bin_file, token_space_size, sink);
 
-    if (options.score_multiplier != 1.0f) {
+    if (tokenizer_hp.vocab_score_multiplier != 1.0f) {
         std::cout << "[TokenizerVocabFile] Applying vocab_score_multiplier="
-                  << options.score_multiplier << " while writing " << sink << std::endl;
+                  << tokenizer_hp.vocab_score_multiplier << " while writing " << sink << std::endl;
     }
 
     auto write_record = [&](const std::string& text, float score, int token_id) {
@@ -246,7 +246,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
             throw std::runtime_error("[TokenizerVocabFile] missing piece for token_id=" +
                                      std::to_string(token_id) + " while writing " + sink);
         }
-        write_record(piece->text, piece->score * options.score_multiplier, token_id);
+        write_record(piece->text, piece->score * tokenizer_hp.vocab_score_multiplier, token_id);
     }
 
     bin_file.flush();
@@ -261,7 +261,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
               << GRIM::Tokenizer::ATOM_VOCAB_SIZE << " atom type placeholders + "
               << piece_count << " unigram pieces) to " << sink << std::endl;
 
-    if (options.export_text) {
+    if (tokenizer_hp.save_text_vocab) {
         const fs::path text_path = bin_path.parent_path() / (bin_path.stem().string() + ".txt");
         std::ofstream text_file(text_path, std::ios::trunc);
         if (!text_file.is_open()) {
@@ -278,7 +278,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
                 throw std::runtime_error("[TokenizerVocabFile] missing piece for text export token_id=" +
                                          std::to_string(token_id));
             }
-            text_file << piece->text << "\t" << (piece->score * options.score_multiplier) << "\n";
+            text_file << piece->text << "\t" << (piece->score * tokenizer_hp.vocab_score_multiplier) << "\n";
         }
         text_file.flush();
         text_file.close();

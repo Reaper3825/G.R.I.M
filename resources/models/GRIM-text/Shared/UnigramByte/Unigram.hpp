@@ -49,6 +49,25 @@ struct UnigramPiece {
     bool is_user_defined;  // High priority, never pruned
 };
 
+// Durable runtime finalization metadata produced by tokenizer training.
+// This is not vocabulary state: it records the Viterbi workspace capacity
+// required to encode the training corpus envelope after the final trie upload.
+struct UnigramTrainingRuntimeReport {
+    size_t required_viterbi_workspace_length = 0;
+    std::uint64_t finalized_trie_generation = 0;
+    int final_piece_count = 0;
+};
+
+// Snapshot of tokenizer runtime GPU state. Raw device pointers remain hidden
+// in UnigramGpuMemory; callers only see generation/capacity readiness facts.
+struct UnigramRuntimeStateSnapshot {
+    bool initialized = false;
+    bool ready_for_live_trie = false;
+    size_t workspace_max_length = 0;
+    std::uint64_t uploaded_trie_generation = 0;
+    std::uint64_t live_trie_generation = 0;
+};
+
 // Durable CUDA buffer owner for UnigramLM. Kept out of this header so
 // tokenizer logic owns vocab/trie semantics while memory files own allocation.
 class UnigramGpuMemory;
@@ -134,6 +153,12 @@ public:
     // Initialize GPU resources (call before GPU operations)
     bool initGPU();
     bool initGPUForMaxSequenceLength(size_t required_max_sequence_length);
+    bool runtimeReadyForMaxSequenceLength(size_t required_max_sequence_length) const;
+    void requireRuntimeReadyForMaxSequenceLength(size_t required_max_sequence_length,
+                                                const char* caller) const;
+    void requireRuntimeReadyForLastTraining(const char* caller) const;
+    UnigramRuntimeStateSnapshot runtimeStateSnapshot() const;
+    const UnigramTrainingRuntimeReport& lastTrainingRuntimeReport() const;
 
     //--------------------------------------------------//
     // Vocabulary Info
@@ -180,6 +205,7 @@ private:
     // UnigramLM only requests initialization/upload; it does not own raw CUDA lifetime details here.
     std::unique_ptr<UnigramGpuMemory> gpu_;
     std::uint64_t trie_generation_ = 0;
+    UnigramTrainingRuntimeReport last_training_runtime_report_;
     
     // Upload trie to GPU
     bool uploadTrieToGPU(size_t workspace_sequence_length);

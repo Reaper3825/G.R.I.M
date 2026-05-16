@@ -159,11 +159,15 @@ public:
     // Train with explicit vocab size
     void trainFromCorpus(const std::vector<std::string>& corpus, int target_vocab_size) {
         tokenizer_hp_.target_vocab_size = target_vocab_size;
-        train(corpus);
+        if (!train(corpus)) {
+            throw std::runtime_error("UniByte::trainFromCorpus failed to train tokenizer corpus");
+        }
     }
     
     // Initialize GPU resources
     bool initGPU();
+    const UnigramTrainingRuntimeReport& lastTrainingRuntimeReport() const;
+    void requireRuntimeReadyForLastTraining(const char* caller) const;
 
     //--------------------------------------------------//
     // Encoding

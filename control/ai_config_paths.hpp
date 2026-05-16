@@ -133,6 +133,7 @@ struct TokenizerConfig {
     int vocab_size = 50000;  // Target vocab size for training new tokenizer (actual size comes from vocab.bin)
     int max_vocab_size = 0;  // Hard cap on loaded vocab (0 = no cap, >0 = keep top-K most frequent tokens)
     int max_length = 8192;
+    int min_cleaned_text_length = 0;  // Minimum rendered/cleaned text bytes required before GRMT encoding
     int min_subword_freq = 3;  // Minimum frequency for subwords to be included in vocab
     bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if RAM is plentiful)
     bool enable_parallel_subword_mining = true;  // Parallelize subword mining during vocab training
@@ -174,10 +175,6 @@ struct SubprocessConfig {
     // continues on success.
     bool tokenizer_only_mode = false;
 
-    // training.config.force_rebuild_vocab
-    // Mirrored here (and ONLY here, post-refactor) because the train_tokenizer
-    // subprocess wrapper is the sole consumer.
-    bool tokenizer_force_rebuild_vocab = false;
 };
 
 struct AiConfigSnapshot {
@@ -514,7 +511,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
         "batch_strategy", "learning_rate", "weight_decay",
-        "per_token_grad_scale", "warmup_fraction", "max_seq_len", "log_interval",
+        "per_token_grad_scale", "warmup_fraction", "force_rebuild_vocab", "max_seq_len", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
         
@@ -616,6 +613,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.grad_clip_norm, trainConfig, "gradient_clip");
     assignTrainingField(params.grad_clip_norm, trainConfig, "grad_clip_norm");
     assignTrainingField(params.per_token_grad_scale, trainConfig, "per_token_grad_scale");
+    assignTrainingField(params.force_rebuild_vocab, trainConfig, "force_rebuild_vocab");
     assignTrainingField(params.architecture.max_seq_len, trainConfig, "max_seq_len");
     // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
     // architecture.min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
@@ -1262,7 +1260,7 @@ inline bool populateDataCollectionConfigFromConfig(const nlohmann::json& config,
 // flags from different top-level sections so the coordinator (training/Subprocess/)
 // has a single, validated, type-checked view. Throws std::runtime_error on a
 // type mismatch (Rule 20: fail loud — wrong type is NEVER silently coerced).
-// Missing fields default to false. Returns true if either field was found.
+// Missing fields default to false. Returns true if any subprocess field was found.
 inline bool populateSubprocessConfigFromConfig(const nlohmann::json& config, SubprocessConfig& sc) {
     bool found_any = false;
 
@@ -1290,22 +1288,6 @@ inline bool populateSubprocessConfigFromConfig(const nlohmann::json& config, Sub
         }
     }
 
-    // training.config.force_rebuild_vocab
-    if (config.contains("training") && config["training"].is_object()) {
-        const auto& training = config["training"];
-        if (training.contains("config") && training["config"].is_object()) {
-            const auto& tcfg = training["config"];
-            if (tcfg.contains("force_rebuild_vocab")) {
-                if (!tcfg["force_rebuild_vocab"].is_boolean()) {
-                    throw std::runtime_error(
-                        "ai_config.json: 'training.config.force_rebuild_vocab' must be a boolean");
-                }
-                sc.tokenizer_force_rebuild_vocab = tcfg["force_rebuild_vocab"].get<bool>();
-                found_any = true;
-            }
-        }
-    }
-
     return found_any;
 }
 
@@ -1322,6 +1304,7 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
     assignTrainingField(tokenizer_config.vocab_size, tok, "vocab_size");
     assignTrainingField(tokenizer_config.max_vocab_size, tok, "max_vocab_size");
     assignTrainingField(tokenizer_config.max_length, tok, "max_length");
+    assignTrainingField(tokenizer_config.min_cleaned_text_length, tok, "min_cleaned_text_length");
     assignTrainingField(tokenizer_config.min_subword_freq, tok, "min_subword_freq");
     assignTrainingField(tokenizer_config.prune_during_mining, tok, "prune_during_mining");
     assignTrainingField(tokenizer_config.enable_parallel_subword_mining, tok, "enable_parallel_subword_mining");
@@ -1343,8 +1326,7 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
     assignTrainingField(tokenizer_config.save_text_vocab, tok, "save_text_vocab");
     assignTrainingField(tokenizer_config.vocab_score_multiplier, tok, "vocab_score_multiplier");
 
-    // Backward compatibility with configs that only set max_vocab_size:
-    // treat it as the target vocab size when vocab_size is omitted.
+    // If vocab_size is intentionally omitted, max_vocab_size becomes the target size.
     if (!tok.contains("vocab_size") &&
         tok.contains("max_vocab_size") &&
         tokenizer_config.max_vocab_size > 0) {
@@ -1479,6 +1461,7 @@ inline bool loadTokenizerConfig(TokenizerConfig& config, const std::string& conf
     std::cout << "  vocab_size: " << config.vocab_size << std::endl;
     std::cout << "  max_vocab_size: " << config.max_vocab_size << std::endl;
     std::cout << "  max_length: " << config.max_length << std::endl;
+    std::cout << "  min_cleaned_text_length: " << config.min_cleaned_text_length << std::endl;
     std::cout << "  enable_parallel_subword_mining: "
               << (config.enable_parallel_subword_mining ? "true" : "false") << std::endl;
     std::cout << "  subword_mining_workers: " << config.subword_mining_workers << std::endl;
@@ -1514,8 +1497,7 @@ inline bool loadDataCollectionConfig(DataCollectionConfig& config, const std::st
 }
 
 /**
- * @brief Load the SubprocessConfig view (subprocess.tokenizer.* and
- *        training.config.force_rebuild_vocab) from ai_config.json.
+ * @brief Load the SubprocessConfig view (subprocess.tokenizer.*) from ai_config.json.
  *
  * Returns true on success, false if the config file is missing or unreadable.
  * Throws std::runtime_error (via the populator) on a present-but-malformed

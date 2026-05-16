@@ -1,17 +1,13 @@
 #pragma once
 
+#include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../UnigramByte/Unigram.hpp"
 
 #include <filesystem>
 
 namespace GRIM::TokenizerArtifacts {
 
-struct TokenizerVocabSaveOptions {
-    bool export_text = false;
-    float score_multiplier = 1.0f;
-};
-
-// Internal vocab-file primitive used by TokenizerArtifactBundle.
+// Internal vocab-file primitive used by TokenizerArtifactBundle functions.
 // Public tokenizer classes intentionally do not expose vocab-only load/save APIs;
 // bundle loading validates vocab.bin against the paired GRMT header before use.
 class TokenizerVocabFile {
@@ -22,7 +18,7 @@ public:
 
     void readInto(GRIM::Tokenizer::UnigramLM& unigram) const;
     void writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
-                   const TokenizerVocabSaveOptions& options = TokenizerVocabSaveOptions{}) const;
+                   const GRIM::HyperParameters::TokenizerHP& tokenizer_hp) const;
 
 private:
     std::filesystem::path path_;

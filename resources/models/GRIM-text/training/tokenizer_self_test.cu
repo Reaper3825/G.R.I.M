@@ -573,14 +573,14 @@ int main(int argc, char** argv) {
         const auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
         const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
         
-        if (startup_config.paths.vocab_path.empty()) {
-            throw std::runtime_error("tokenizer_self_test: vocab path is empty after loadStartupConfig");
+        if (tokenizer_hp.vocab_path.empty()) {
+            throw std::runtime_error("tokenizer_self_test: vocab path is empty after tokenizerHP");
         }
-        if (startup_config.paths.data_path.empty()) {
-            throw std::runtime_error("tokenizer_self_test: training_data path is empty after loadStartupConfig");
+        if (tokenizer_hp.data_path.empty()) {
+            throw std::runtime_error("tokenizer_self_test: training_data path is empty after tokenizerHP");
         }
-        opts.vocab_path = startup_config.paths.vocab_path;
-        opts.data_path = startup_config.paths.data_path;
+        opts.vocab_path = tokenizer_hp.vocab_path;
+        opts.data_path = tokenizer_hp.data_path;
         
         std::cout << "\nConfiguration:\n";
         std::cout << "  Vocab: " << opts.vocab_path << "\n";
@@ -600,8 +600,7 @@ int main(int argc, char** argv) {
         // Load tokenizer
         GrimTokenizer tokenizer(tokenizer_hp);
         try {
-            GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(startup_config.paths);
-            (void)artifacts.load(tokenizer);
+            (void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, tokenizer);
         } catch (const std::exception& e) {
             std::cerr << Color::RED << "\nERROR: Failed to load tokenizer artifact bundle: "
                       << e.what() << Color::RESET << "\n";

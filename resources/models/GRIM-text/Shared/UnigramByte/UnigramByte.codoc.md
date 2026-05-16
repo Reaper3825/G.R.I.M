@@ -102,7 +102,7 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 - Config-driven learned-vocab limits come from `GRIM::HyperParameters::TokenizerHP` in `HyperparameterGroupings.hpp`.
 - `vocab.bin` contains a serialized record count for file I/O plus a token-space consistency check. Phase 1 startup does not use `vocab.bin` to choose final model vocab size.
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic/header read, validation, and write helpers. Do not duplicate header structs or magic/version checks in loaders, diagnostics, or subprocess tools.
-- `Shared/TokenizerArtifacts/TokenizerArtifactBundle.*` owns the cache pair (`vocab.bin` + `training_data.grmt`). Data prep must accept or rebuild that pair as a unit; do not reuse a lone vocab with a missing/stale GRMT.
+- `Shared/TokenizerArtifacts/TokenizerArtifactBundle.*` owns the cache-pair load/save functions (`vocab.bin` + `training_data.grmt`). Those functions consume `TokenizerHP` directly; data prep must accept or rebuild that pair as a unit and must not reuse a lone vocab with a missing/stale GRMT.
 - `Shared/TokenizerArtifacts/GrmtCorpusIO.*` owns GRMT row save/load. Runtime loaders and diagnostics must use its RAII reader/writer instead of open-coded seeks through the row layout.
 - `Shared/TokenizerArtifacts/VocabArtifactIO.*` is the bundle-internal KTMG read/write helper; do not call it as an independent tokenizer artifact path.
 - Text vocab files are human-readable exports only. Binary KTMG is the only vocab load path.
@@ -206,7 +206,7 @@ Use this table as the “who owns what?” map.
 | `UnigramGpuMemory.hpp/.cu` | `UnigramLM` CUDA buffer lifetime, transactional GPU upload, Viterbi workspace ownership, device pointer cleanup | vocab semantics, Viterbi scoring, token assembly, training |
 | `UnigramTrainer.hpp/.cu` | unigram training implementation | runtime encode path |
 | `UniByte.hpp/.cu` | composition layer, public API, metadata assembly | low-level detector implementations, training internals, `BOS`/`EOS`/`PAD` layout policy |
-| `TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` | bundle-level vocab+GRMT save/load validation | tokenization, vocab training, GRMT row byte layout |
+| `TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` | `TokenizerHP`-driven vocab+GRMT save/load validation functions | tokenization, vocab training, GRMT row byte layout, tokenizer path payload ownership |
 | `TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` | RAII GRMT row reader/writer, temp-file cleanup, row validation | vocab training/loading, model allocation, train/val splitting |
 | `TokenizerArtifacts/VocabArtifactIO.hpp/.cu` | KTMG vocab read/write used by the bundle | public tokenizer load/save API, GRMT row byte layout |
 
@@ -273,15 +273,19 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 1. **Token IDs for unigram pieces are positional.**
    `token_id = UNIGRAM_VOCAB_OFFSET + index_in_pieces_`.
 
-2. **`buildTrie()` and `initGPU()` must happen before non-empty encode.**
-   Load or train vocab first, build the trie, then upload the trie/workspace with `UnigramLM::initGPU()`.
-   Tokenizer training must use `UnigramLM::initGPUForMaxSequenceLength(longest_normalized_e_step_segment)` so normalized corpus spans larger than the default workspace still use the reusable CUDA Viterbi buffers instead of failing at E-step time.
+2. **`buildTrie()` and runtime finalization must happen before non-empty encode.**
+   Load or train vocab first, build the trie, then upload the trie/workspace. `UnigramLM::initGPU()` is only the default-capacity initializer for generic/server use.
+   Tokenizer training must use `UnigramLM::initGPUForMaxSequenceLength(longest_normalized_e_step_segment)` during E-steps and again after the final `buildTrie()` so normalized corpus spans larger than the default workspace still use the reusable CUDA Viterbi buffers instead of failing at encode time.
+
+   Training is the production-runtime finalization owner. `UnigramLM::trainFromCorpus()` returns a populated `UnigramTrainingRuntimeReport` only after the uploaded generation matches the live trie and the workspace is large enough for the training corpus envelope. GRMT/DataLoader paths must assert `UniByte::requireRuntimeReadyForLastTraining()` after training, not repair training with generic `initGPU()`.
 
    The trie mirrors the current learned-piece set. Rebuild it after load/train mutations only; do not add post-load vocab capping paths.
 
    Production CUDA Viterbi walks the uploaded forward trie from each reachable start position (`text[pos]`, then `text[pos + 1]`, ...). The GPU upload is not a reverse trie; reverse-scanning candidate pieces breaks normal tokens like `ab`.
 
-   GPU trie uploads are generation-checked. If `buildTrie()` or score mutation advances the live trie generation, CUDA Viterbi must fail loudly until `initGPU()` refreshes the uploaded generation.
+   GPU trie uploads are generation-checked. If `buildTrie()` or score mutation advances the live trie generation, CUDA Viterbi must fail loudly until the runtime finalization path refreshes the uploaded generation.
+
+   `UnigramGpuMemory` is the tokenizer runtime-state owner, not upload scratch. Runtime upload uses a file-local RAII transaction that owns partial CUDA allocations until commit under the Viterbi workspace mutex. Do not reintroduce `UnigramGpuMemory` move assignment for upload staging.
 
    Punctuation is ordinary normalized text in this SentencePiece-style tokenizer. Do not add hard Viterbi punctuation boundaries. A punctuation mark may be a learned piece by itself, part of a larger learned piece, or a byte fallback only if no selected learned piece covers it.
 

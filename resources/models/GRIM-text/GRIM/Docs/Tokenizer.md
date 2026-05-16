@@ -29,12 +29,12 @@ Use `TokenLayout.hpp` / `Byte.hpp` constants and layout helpers for range checks
 - Learned-piece pruning belongs inside tokenizer training before save. Do not add a post-load/post-save cap API; that creates a second vocab-size authority and can desynchronize `.grmt`, `vocab.bin`, tokenizer IDs, and model embeddings.
 
 ## Persistence primitives
-- `Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` is the single bundle primitive for the tokenizer cache pair: binary `vocab.bin` plus `training_data.grmt`. It loads the vocab and validates the `.grmt` header vocab against `UniByte::vocabSize()` before a cache can be accepted.
+- `Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` is the single function primitive for the tokenizer cache pair: binary `vocab.bin` plus `training_data.grmt`. Its load/save/exists functions consume `TokenizerHP` directly, load the vocab, and validate the `.grmt` header vocab against `UniByte::vocabSize()` before a cache can be accepted.
 - `Shared/TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` is the single GRMT row I/O primitive. It owns RAII file open/close, temp-file cleanup, header writes, row serialization/deserialization, and fail-loud validation for side-channel array alignment.
-- `Shared/TokenizerArtifacts/VocabArtifactIO.hpp/.cu` is an internal read/write helper used only by `TokenizerArtifactBundle`; it is not a standalone tokenizer save/load path.
+- `Shared/TokenizerArtifacts/VocabArtifactIO.hpp/.cu` is an internal read/write helper used only by `TokenizerArtifactBundle` functions; it is not a standalone tokenizer save/load path.
 - `DataLoader.cu` treats vocab and GRMT as an inseparable cache bundle. If either artifact is missing or the pair fails validation, it retrains the tokenizer and regenerates both artifacts together.
 - `training_data_loader.hpp`, `tokenizer_runner.cu`, and GRMT diagnostics must use `GrmtCorpusReader` / `loadGrmtCorpus()` instead of open-coding row seeks. Header-only checks may still call `GRMT::readHeaderOrThrow()` directly.
-- Text vocab is export-only for human inspection. Runtime loading is binary KTMG through `TokenizerArtifactBundle`; do not re-add text vocab loading.
+- Text vocab is export-only for human inspection. Runtime loading is binary KTMG through `TokenizerArtifactBundle` functions; do not re-add text vocab loading.
 
 Special-token ownership is deliberately narrow:
 - `TokenLayout.hpp` owns the reserved IDs and display metadata.
@@ -56,7 +56,8 @@ Special-token ownership is deliberately narrow:
 - `Unigram.cu` owns learned vocab I/O, trie construction, encode/decode wrappers, and primitive byte/unigram decode behavior.
 - `UnigramViterbi.hpp/.cu` owns the CUDA-backed production Viterbi session, per-segmentation launch/backtrack validation, SentencePiece-style subword path selection, and Viterbi CUDA kernels. `UnigramLM::encode()` and tokenizer-training E-steps must instantiate `UnigramViterbiSession` instead of open-coding Viterbi/backtrack loops.
 - Production Viterbi consumes the uploaded forward trie: from each reachable start position, walk `text[pos]`, `text[pos + 1]`, ... through `children[c]`. Do not reverse-scan pieces unless the uploaded trie is explicitly changed to a reverse trie.
-- `UnigramLM::initGPU()` is required before any non-empty encode/E-step. CUDA Viterbi must fail loudly if the GPU trie is uninitialized or its uploaded generation does not match the live trie generation; call `initGPU()` after `buildTrie()`/score mutation to refresh the upload. Tokenizer training must call `initGPUForMaxSequenceLength(longest_normalized_e_step_segment)` so the reusable Viterbi workspace is large enough for the actual normalized corpus segments.
+- `UnigramLM::initGPU()` is the default-capacity runtime initializer for generic/server use. Corpus/tokenizer training paths must not rely on that static default. CUDA Viterbi must fail loudly if the GPU trie is uninitialized or its uploaded generation does not match the live trie generation.
+- Tokenizer training owns the final production-runtime boundary: after the final score mutation and final `buildTrie()`, `UnigramLM::trainFromCorpus()` must call `initGPUForMaxSequenceLength(longest_normalized_e_step_segment)`, populate `UnigramTrainingRuntimeReport`, and return only with the uploaded generation matching the live trie. `DataLoader.cu` consumes this boundary with `UniByte::requireRuntimeReadyForLastTraining()` instead of calling generic `initGPU()` after training.
 - Punctuation is data-driven, not a Viterbi boundary. In SentencePiece-style mode, punctuation bytes/chars remain in the normalized stream and may be part of learned unigram pieces (`.`, `...`, `don't`, `▁hello,`) if the trie contains those pieces and their scores win.
 - Byte fallback is a coverage path only. When byte fallback is enabled, fallback transitions emit `BYTE_TOKEN_OFFSET + byte`, never `UNK_TOKEN_ID`. CUDA Viterbi records `d_viterbi_prev_is_fallback[end]` on the selected backpointer during forward DP, and backtrack reads that flag to mark selected-fallback metadata. Never infer fallback selection from token ID range.
 - `TokenLayout.hpp::UNKNOWN_SCORE` is the single source for Viterbi fallback transition cost. CUDA Viterbi must read that constant directly; do not thread caller-provided unknown-score parameters through kernel launches or helper APIs. Scores are initialized with `kViterbiUnreachableScore`, but forward-DP reachability is owned by backpointers: position `0` is reachable by definition, and every other position is reachable only when `viterbi_prev[pos] >= 0`.
@@ -65,13 +66,13 @@ Special-token ownership is deliberately narrow:
 - CUDA backtrack must fail with `kUnigramViterbiCudaOutputBufferTooSmall` when the selected path token count exceeds `max_tokens`; never silently truncate and never rely on build-mode-dependent asserts for this path.
 - Do not add standalone greedy trie lookup kernels for production segmentation. A best local trie match is not Viterbi-compatible because it ignores prior path score, fallback cost, and tie policy; segmentation must go through `kernelViterbiForward` plus `kernelViterbiBacktrack`.
 - Punctuation-heavy structural spans (URLs, paths, numbers, etc.) must be handled by raw-text detectors/training skip spans, not by hard-coded punctuation splitting inside Viterbi.
-- `UnigramGpuMemory.hpp/.cu` owns `UnigramLM` durable GPU buffers, `cudaMalloc`/`cudaFree`, host-to-device upload packing, and `UnigramLM::initGPU()` / `initGPUForMaxSequenceLength()` / `uploadTrieToGPU()` implementations.
-- GPU upload is transactional: build a fresh `UnigramGpuMemory` first, then move it into `UnigramLM` only after every allocation and copy succeeds.
-- `UnigramGpuMemory` owns the reusable CUDA Viterbi workspace and serializes that workspace with its mutex; do not allocate per-call Viterbi CUDA buffers in `Unigram.cu` or callers.
+- `UnigramGpuMemory.hpp/.cu` owns `UnigramLM` tokenizer runtime state: the derived GPU mirror of the host trie/pieces plus reusable Viterbi workspace capacity. It owns `cudaMalloc`/`cudaFree`, host-to-device upload packing, and `UnigramLM::initGPU()` / `initGPUForMaxSequenceLength()` / `uploadTrieToGPU()` implementations.
+- GPU upload is transactional: a file-local RAII upload transaction owns partial allocations until every allocation/copy succeeds, then commits under `UnigramGpuMemory::viterbi_workspace_mutex`. Do not move-assign `UnigramGpuMemory` itself as scratch upload state.
+- `UnigramGpuMemory` owns the reusable CUDA Viterbi workspace and serializes both Viterbi execution and runtime upload replacement with its mutex; do not allocate per-call Viterbi CUDA buffers in `Unigram.cu` or callers.
 - Do not add raw CUDA pointer members, cleanup lambdas, or `cudaMalloc`/`cudaFree` blocks back into `Unigram.hpp` or `Unigram.cu`; extend `UnigramGpuMemory` instead.
 
 ## Hyperparameter grouping
-Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` directly from `HyperparameterGroupings.hpp`:
+Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` directly from `HyperparameterGroupings.hpp`. `TokenizerHP` carries resolved `data_path`, `vocab_path`, and `force_rebuild_vocab`; tokenizer code must not carry `StartupConfig.paths`, `PathConfig`, or rebuild booleans beside it:
 
 - `train_tokenizer.cu` creates the grouping after `loadStartupConfig()` and passes it into `PrepareTrainingDataFromCache()`.
 - `DataLoader.cu` receives that grouping and constructs `UniByte` from it directly while building vocab + GRMT artifacts.
@@ -113,6 +114,7 @@ AtomTable safety contracts:
 - HTML must be stripped before tokenization. `DataLoader.cu` handles `stripHtmlTags()` / `decodeHtmlEntities()` / `normalizeWhitespace()` automatically.
 - `DataLoader.cu` tokenizes raw content only. It must not add `BOS`/`EOS`; Phase 1 startup routes sequences through `SlidingWindow.cu` for that layout work.
 - `UniByte` intentionally exposes per-text encode paths only. Do not reintroduce `encodeBatch()` / vector-of-vector tokenization; corpus batching, `BOS`/`EOS`, and sequence windows belong to the `DataLoader.cu` → `SlidingWindow.cu` startup path.
+- Minimum text-length gating is config-owned: `tokenizer.min_cleaned_text_length` is parsed into `TokenizerConfig`, sliced through `TokenizerHP`, and consumed by `DataLoader.cu` before GRMT encoding. Do not hard-code this threshold in the loader.
 - Sliding window: `overlap_len = raw_overlap - 1` when `raw_overlap > 0`, to avoid masking the same boundary target in two consecutive windows.
 
 ## Self-test

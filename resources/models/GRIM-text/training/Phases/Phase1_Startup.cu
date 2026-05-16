@@ -37,10 +37,8 @@ Phase1Outcome runTokenizerSubprocessAfterHyperparameters(const TrainingContext& 
 
     GRIMText::Subprocess::tokenizer_subprocess_request tok_req;
     tok_req.config_path = ctx.config.paths.config_path.string();
-    // force_rebuild stays false here; train_tokenizer detects vocab staleness
-    // from its own header check. The training.config.force_rebuild_vocab flag
-    // is read centrally by the subprocess wrapper via
-    // GRIM::Config::loadSubprocessConfig() — never raw-parsed here.
+    // Rebuild policy belongs to TokenizerHP inside train_tokenizer; Phase1
+    // only supplies the config path so there is no second rebuild payload.
 
     EmitModuleInfo(ModuleId::Training,
         "[Phase1] Running tokenizer subprocess after hyperparameter validation...", 0);

@@ -13,6 +13,7 @@
 // would silently bypass type validation, default propagation, and the
 // AiConfigSnapshot contract.
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 #include "subprocess_manager.hpp"
 
@@ -62,8 +63,6 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
             "tokenizer_subprocess: GRIM::Config::loadSubprocessConfig failed for: " + req.config_path);
     }
 
-    const bool effective_force = req.force_rebuild || sub_cfg.tokenizer_force_rebuild_vocab;
-
     std::string startup_argv0 = "tokenizer_subprocess";
     std::string startup_config_flag = "--config";
     std::string startup_config_path = req.config_path;
@@ -73,9 +72,10 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
         startup_config_path.data()
     };
     const auto startup_config = GRIM::HyperParameters::loadStartupConfig(3, startup_argv);
-    if (startup_config.paths.vocab_path.empty() || startup_config.paths.data_path.empty()) {
+    const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
+    if (tokenizer_hp.vocab_path.empty() || tokenizer_hp.data_path.empty()) {
         throw std::runtime_error(
-            "tokenizer_subprocess: StartupConfig.paths missing vocab_path and/or data_path for: " +
+            "tokenizer_subprocess: TokenizerHP missing vocab_path and/or data_path for: " +
             req.config_path);
     }
 
@@ -97,9 +97,6 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
     sreq.arguments.push_back(sreq.status_file_path);
     sreq.arguments.push_back("--config");
     sreq.arguments.push_back(req.config_path);
-    if (effective_force) {
-        sreq.arguments.push_back("--force");
-    }
 
     const subprocess_result env = spawn_and_wait(sreq);
 
@@ -115,11 +112,11 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
     // Decode the tokenizer-specific payload field.
     result.vocab_size = extract_vocab_size(env, sreq.status_file_path);
 
-    // Fill paths from the same hyperparameter grouping used by training startup.
+    // Fill paths from the same tokenizer hyperparameter grouping used by training startup.
     // The child does NOT echo these over IPC; doing so would let the wire schema
-    // drift from ai_config.json / StartupConfig.paths.
-    result.vocab_path = startup_config.paths.vocab_path;
-    result.training_data_path = startup_config.paths.data_path;
+    // drift from ai_config.json / TokenizerHP.
+    result.vocab_path = tokenizer_hp.vocab_path;
+    result.training_data_path = tokenizer_hp.data_path;
 
     // Rewrite ok_proceed -> ok_one_off when the config requested a one-off.
     if (sub_cfg.tokenizer_only_mode && result.outcome == subprocess_outcome::ok_proceed) {

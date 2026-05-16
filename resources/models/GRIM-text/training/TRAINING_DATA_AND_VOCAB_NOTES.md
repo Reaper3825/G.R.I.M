@@ -51,7 +51,7 @@ So: confirm the actual **Train sequences** and **Created Y dynamic batches** in 
 1. **Regenerate vocab and .grmt together** so they match and use the desired size:
    - Delete the existing **vocab** and **.grmt** (e.g. `vocab.bin` and `training_data.grmt` in your training data directory).
    - Run the **DataLoader / encode pipeline** again. It will:
-    - Train a new tokenizer with `target_vocab_size` from config (e.g. 10000 in `ai_config.json` → up to 10000 **learned unigram pieces**), **or** load an existing vocab if you don’t force rebuild.
+   - Train a new tokenizer with `target_vocab_size` from config (e.g. 10000 in `ai_config.json` → up to 10000 **learned unigram pieces**), **or** load an existing vocab when `TokenizerHP::force_rebuild_vocab` is false.
     - Encode the training data and write the new **`UniByte::vocabSize()`** into the .grmt header.
    - Then start training again; the trainer will read the new (larger) vocab size from the .grmt.
 

@@ -31,17 +31,9 @@ namespace fs = std::filesystem;
 
 namespace GRIM {
 
-// Minimum cleaned text length to include in training data.
-// Shorter texts lack sufficient context for meaningful next-token prediction.
-constexpr size_t kMinCleanedTextLength = 20;
-
 // ─── Concept blocks corpus loading ──────────────────────────────────────────
 //
 // Loads concept_blocks.jsonl and returns parsed JSON objects.
-// If curriculum_manifest.json exists alongside the JSONL, only entries
-// whose "id" appears in the manifest's concept_block_ids are kept.
-// When no manifest is present, all entries are loaded (backward compat).
-//
 // The canonical builder (ConceptExecutionSequenceBuilder) handles all
 // structured execution record building, text rendering, and payload
 // compilation — no __SLOTS__ debug path.
@@ -263,26 +255,14 @@ void loadConceptBlocksJson(const fs::path& cache_dir,
 }  // namespace
 
 bool PrepareTrainingDataFromCache(
-	const GRIM::HyperParameters::StartupConfig& startup_config,
-	std::string& out_training_data_path,
-	std::string& out_vocab_path,
-	bool force_rebuild) {
-	const auto& paths = startup_config.paths;
-	const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
+	const GRIM::HyperParameters::TokenizerHP& tokenizer_hp) {
+	const size_t min_cleaned_text_length = static_cast<size_t>(tokenizer_hp.min_cleaned_text_length);
 
-	// Resolve primary paths from config
-	if (!paths.data_path.empty()) {
-		out_training_data_path = paths.data_path;
-	}
-	if (!paths.vocab_path.empty()) {
-		out_vocab_path = paths.vocab_path;
-	}
-
-	if (out_training_data_path.empty()) {
+	if (tokenizer_hp.data_path.empty()) {
 		std::cerr << "[DataLoader] No training_data path configured; skipping cache preparation." << std::endl;
 		return false;
 	}
-	if (out_vocab_path.empty()) {
+	if (tokenizer_hp.vocab_path.empty()) {
 		throw std::runtime_error("[DataLoader] vocab path is empty; tokenizer artifacts must be saved/loaded as vocab+GRMT pair");
 	}
 
@@ -291,17 +271,16 @@ bool PrepareTrainingDataFromCache(
 	          << " type tokens" << std::endl;
 
 	GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
-	GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(paths);
 
-	const bool training_exists = fs::exists(out_training_data_path);
-	const bool vocab_exists = !out_vocab_path.empty() && fs::exists(out_vocab_path);
+	const bool training_exists = fs::exists(tokenizer_hp.data_path);
+	const bool vocab_exists = fs::exists(tokenizer_hp.vocab_path);
 	bool artifact_pair_invalid = false;
 
 	// Vocab + GRMT are one artifact pair. A valid cache must load the vocab and
 	// validate the GRMT header vocab against the tokenizer's live token space.
-	if (!force_rebuild && training_exists && vocab_exists) {
+	if (!tokenizer_hp.force_rebuild_vocab && training_exists && vocab_exists) {
 		try {
-			const auto manifest = artifacts.load(tokenizer);
+			const auto manifest = GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, tokenizer);
 			std::cout << "[DataLoader] Existing tokenizer artifact bundle is valid; "
 			          << "GRMT sequences=" << manifest.grmt_header.num_sequences
 			          << ", vocab_size=" << manifest.grmt_header.vocab_size
@@ -316,8 +295,8 @@ bool PrepareTrainingDataFromCache(
 	}
 
 	// Log reason for rebuild
-	if (force_rebuild) {
-		std::cout << "[DataLoader] force_rebuild=true, rebuilding tokenizer artifact bundle..." << std::endl;
+	if (tokenizer_hp.force_rebuild_vocab) {
+		std::cout << "[DataLoader] force_rebuild_vocab=true, rebuilding tokenizer artifact bundle..." << std::endl;
 	} else if (artifact_pair_invalid) {
 		std::cout << "[DataLoader] Rebuilding due to invalid tokenizer artifact bundle..." << std::endl;
 	} else if (training_exists && !vocab_exists) {
@@ -329,7 +308,7 @@ bool PrepareTrainingDataFromCache(
 	}
 
 	// Derive the data directory from the configured GRMT path.
-	fs::path training_path(out_training_data_path);
+	fs::path training_path(tokenizer_hp.data_path);
 	fs::path cache_dir = training_path.parent_path();
 
 	std::cout << "[DataLoader] Preparing GRMT from concept blocks in: "
@@ -350,6 +329,7 @@ bool PrepareTrainingDataFromCache(
 	std::cout << "[DataLoader]   has_filter        = " << (curriculum_filter.has_filter ? "true" : "false") << std::endl;
 	std::cout << "[DataLoader]   concept_ids       = " << curriculum_filter.concept_ids.size() << std::endl;
 	std::cout << "[DataLoader]   plaintext_ids     = " << curriculum_filter.plaintext_ids.size() << std::endl;
+	std::cout << "[DataLoader]   min_text_length   = " << min_cleaned_text_length << std::endl;
 	std::cout << "[DataLoader]   loaded blocks     = " << concept_json_entries.size() << std::endl;
 	std::cout << "[DataLoader] ═══════════════════════════════════════" << std::endl;
 	if (!tokenizer_hp.current_model_training.empty()) {
@@ -382,10 +362,16 @@ bool PrepareTrainingDataFromCache(
 		else
 			vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
 	}
-	tokenizer.train(vocab_corpus);
-	if (!tokenizer.initGPU()) {
-		throw std::runtime_error("[DataLoader] tokenizer GPU initialization failed after training; production tokenization requires uploaded CUDA trie state");
+	if (!tokenizer.train(vocab_corpus)) {
+		throw std::runtime_error("[DataLoader] tokenizer training returned false; refusing to encode GRMT without a finalized tokenizer runtime state");
 	}
+	tokenizer.requireRuntimeReadyForLastTraining("DataLoader::PrepareTrainingDataFromCache");
+	const auto& tokenizer_runtime_report = tokenizer.lastTrainingRuntimeReport();
+	std::cout << "[DataLoader] Tokenizer runtime finalized for corpus encoding: required_viterbi_workspace_length="
+	          << tokenizer_runtime_report.required_viterbi_workspace_length
+	          << ", final_piece_count=" << tokenizer_runtime_report.final_piece_count
+	          << ", trie_generation=" << tokenizer_runtime_report.finalized_trie_generation
+	          << std::endl;
 
 	using TokenizedSequence = GRIM::TokenizerArtifacts::GrmtSequence;
 
@@ -449,7 +435,7 @@ bool PrepareTrainingDataFromCache(
 			if (is_plaintext) {
 				// ── Pretraining path: plain text, no execution payload ──
 				std::string text = GRIM::DataLoader::renderPlainText(cj, false);
-				if (text.size() < kMinCleanedTextLength) { ++selected_entries_skipped; continue; }
+				if (text.size() < min_cleaned_text_length) { ++selected_entries_skipped; continue; }
 
 				auto seq = build_sequence(text);
 				if (!seq) { ++selected_entries_skipped; continue; }
@@ -461,7 +447,7 @@ bool PrepareTrainingDataFromCache(
 
 			// ── Concept path: canonical formatting + execution payload ──
 			auto built = GRIM::DataLoader::buildConceptSequence(cj, tokenizer, concept_exec_base_slot);
-			if (built.canonical_text.size() < kMinCleanedTextLength) { ++selected_entries_skipped; continue; }
+			if (built.canonical_text.size() < min_cleaned_text_length) { ++selected_entries_skipped; continue; }
 
 			if (built.payload.execution_active) {
 				const int actual_steps = static_cast<int>(built.payload.teacher_steps.size());
@@ -583,14 +569,9 @@ bool PrepareTrainingDataFromCache(
 				  << "Check scratch_block_reasoning.enabled in ai_config.json" << std::endl;
 	}
 
-	GRIM::TokenizerArtifacts::TokenizerBundleSaveOptions save_options;
-	save_options.save_text_vocab = tokenizer_hp.save_text_vocab;
-	save_options.vocab_score_multiplier = tokenizer_hp.vocab_score_multiplier;
-	save_options.grmt.reject_dropped_sequences = curriculum_filter.has_filter;
-
 	GRIM::TokenizerArtifacts::TokenizerBundleSaveReport save_report;
 	try {
-		save_report = artifacts.save(tokenizer, all_tokens, save_options);
+		save_report = GRIM::TokenizerArtifacts::saveTokenizerArtifactBundle(tokenizer_hp, tokenizer, all_tokens);
 	} catch (const std::exception& e) {
 		std::cerr << "[DataLoader] FATAL: failed to save tokenizer artifact bundle: "
 		          << e.what() << std::endl;
@@ -601,12 +582,12 @@ bool PrepareTrainingDataFromCache(
 		          << save_report.grmt.dropped_targetless_sequences
 		          << " sequences with 0 valid targets" << std::endl;
 	}
-	if (save_options.save_text_vocab) {
+	if (tokenizer_hp.save_text_vocab) {
 		std::cout << "[DataLoader] Also saved human-readable .txt vocab" << std::endl;
 	}
 
 	std::cout << "[DataLoader] Saved tokenizer artifact bundle:" << std::endl
-	          << "  Vocab: " << out_vocab_path << std::endl
+	          << "  Vocab: " << tokenizer_hp.vocab_path << std::endl
 	          << "  GRMT:  " << train_grmt.string() << std::endl
 	          << "  Written sequences: " << save_report.grmt.written_sequences << std::endl
 	          << "  Vocab size: " << save_report.manifest.grmt_header.vocab_size << std::endl;

@@ -1730,19 +1730,18 @@ bool testVocabTextExportBinaryLoad(std::string& message) {
     std::string grmt_path = "output/test_vocab_save.grmt";
     std::string path = "output/test_vocab_save.bin";
     std::string text_path = "output/test_vocab_save.txt";
-    TokenizerArtifacts::TokenizerArtifactBundle artifacts(
-        TokenizerArtifacts::TokenizerArtifactPaths{grmt_path, path});
-    TokenizerArtifacts::TokenizerBundleSaveOptions options{};
-    options.save_text_vocab = true;
+    config.data_path = grmt_path;
+    config.vocab_path = path;
+    config.save_text_vocab = true;
     std::vector<TokenizerArtifacts::GrmtSequence> sequences;
     sequences.push_back(makePersistenceGrmtSequence());
-    auto report = artifacts.save(original, sequences, options);
+    auto report = TokenizerArtifacts::saveTokenizerArtifactBundle(config, original, sequences);
     ASSERT_EQ(report.grmt.written_sequences, 1u, "Bundle should write one GRMT sequence");
     ASSERT_TRUE(std::filesystem::exists(text_path), "Text vocab sidecar should be exported");
     
     // Load into new tokenizer
     UniByte loaded(config);
-    auto manifest = artifacts.load(loaded);
+    auto manifest = TokenizerArtifacts::loadTokenizerArtifactBundle(config, loaded);
     ASSERT_EQ(manifest.grmt_header.num_sequences, 1u, "Bundle load should validate GRMT header");
     
     // Verify pieces exist
@@ -1771,17 +1770,17 @@ bool testVocabSaveLoadBinary(std::string& message) {
     
     std::string grmt_path = "output/test_vocab_binary.grmt";
     std::string path = "output/test_vocab_binary.bin";
-    TokenizerArtifacts::TokenizerArtifactBundle artifacts(
-        TokenizerArtifacts::TokenizerArtifactPaths{grmt_path, path});
+    config.data_path = grmt_path;
+    config.vocab_path = path;
     std::vector<TokenizerArtifacts::GrmtSequence> sequences;
     sequences.push_back(makePersistenceGrmtSequence());
-    auto report = artifacts.save(original, sequences);
+    auto report = TokenizerArtifacts::saveTokenizerArtifactBundle(config, original, sequences);
     ASSERT_EQ(report.manifest.tokenizer_vocab_size, static_cast<std::uint32_t>(original.vocabSize()),
               "Bundle save should report tokenizer vocab size");
     
     // Load into new tokenizer
     UniByte loaded(config);
-    auto manifest = artifacts.load(loaded);
+    auto manifest = TokenizerArtifacts::loadTokenizerArtifactBundle(config, loaded);
     ASSERT_EQ(manifest.tokenizer_vocab_size, static_cast<std::uint32_t>(loaded.vocabSize()),
               "Bundle load should report loaded tokenizer vocab size");
     

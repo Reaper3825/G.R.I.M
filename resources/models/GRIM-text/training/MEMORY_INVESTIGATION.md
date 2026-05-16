@@ -35,13 +35,15 @@ For batch=10, seq=1024, heads=16, head_dim=64:
 
 ## Hardcoded / Config-Independent Allocations
 
-### 1. Unigram Tokenizer (UNIGRAM_MAX_SEQUENCE_LENGTH = 8192)
+### 1. Unigram Tokenizer Runtime Workspace
 ```cpp
 // HyperParameters_GPU.hpp
-constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = DEFAULT_MAX_SEQ_LEN * 4;  // 2048*4 = 8192
+constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = DEFAULT_MAX_SEQ_LEN * 4;  // default floor, currently 1024*4 = 4096
 ```
-- `d_viterbi_scores`, `d_viterbi_prev`, `d_viterbi_tokens`: 8193 elements each (~100 KB total)
-- **Not a major factor**, but independent of your max_seq_len=1024.
+- `UNIGRAM_MAX_SEQUENCE_LENGTH` is only the default-capacity floor for generic/server tokenizer runtime init.
+- Corpus training/GRMT generation dynamically finalizes tokenizer runtime state with `longest_normalized_e_step_segment` via `UnigramTrainingRuntimeReport`; long concept rows must not be capped by this static floor.
+- `d_viterbi_scores`, `d_viterbi_prev`, `d_viterbi_tokens`: `workspace_max_length + 1` elements each.
+- **Not a major factor**, but tokenizer workspace capacity is now workload-sized for corpus encoding instead of being silently tied to model `max_seq_len`.
 
 ### 2. Guess Cache (when enabled)
 - Capacity: `kDefaultGuessCacheCapacity` = 16384, or config `guess_cache.initial_capacity`

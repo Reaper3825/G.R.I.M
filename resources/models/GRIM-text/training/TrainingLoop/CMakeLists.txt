@@ -714,7 +714,7 @@ target_include_directories(grmt_vocab_metrics_test PRIVATE
 # Spawned by train_gpu via Subprocess/tokenizer_subprocess.cpp.
 # Runs full tokenizer pipeline on entire corpus: train vocab + encode GRMT.
 # Writes a JSON status file the parent reads.
-# Usage: train_tokenizer --status-file <path> [--config <ai_config.json>] [--force]
+# Usage: train_tokenizer --status-file <path> [--config <ai_config.json>]
 # ============================================================================
 add_executable(train_tokenizer
     ../train_tokenizer.cu

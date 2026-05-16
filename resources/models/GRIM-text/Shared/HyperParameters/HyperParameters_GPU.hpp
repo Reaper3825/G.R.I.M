@@ -764,6 +764,7 @@ struct TrainingHyperparameters {
     bool per_token_grad_scale;
     float warmup_fraction;  // Fraction of total optimizer steps for warmup (e.g. 0.05 = 5%)
     int warmup_steps = 0;   // Derived in Phase2 from warmup_fraction * estimated_total_steps
+    bool force_rebuild_vocab;
     bool cosine_decay_enabled;
     bool cosine_warm_restarts;
     float cosine_decay_min_lr;

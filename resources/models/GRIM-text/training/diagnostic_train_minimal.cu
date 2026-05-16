@@ -441,8 +441,7 @@ int main(int argc, char** argv) {
     GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
     
     try {
-        GRIM::TokenizerArtifacts::TokenizerArtifactBundle artifacts(startup_config.paths);
-        (void)artifacts.load(tokenizer);
+        (void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, tokenizer);
     } catch (const std::exception& e) {
         std::cerr << "  ✗ Failed to load tokenizer artifact bundle: " << e.what() << std::endl;
         return 1;

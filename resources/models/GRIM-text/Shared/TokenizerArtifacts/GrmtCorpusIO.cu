@@ -449,8 +449,7 @@ GRIM::GRMT::Header loadGrmtHeader(const fs::path& path) {
 GrmtSaveReport saveGrmtCorpus(
     const fs::path& path,
     const std::vector<GrmtSequence>& sequences,
-    std::uint32_t vocab_size,
-    const GrmtSaveOptions& options) {
+    std::uint32_t vocab_size) {
     pathString(path);
     if (vocab_size == 0) {
         throw std::runtime_error("[GRMT] saveGrmtCorpus requires vocab_size > 0 for " + path.string());
@@ -477,8 +476,8 @@ GrmtSaveReport saveGrmtCorpus(
                                  ", dropped_empty=" + std::to_string(dropped_empty) +
                                  ", dropped_targetless=" + std::to_string(dropped_targetless) + ")");
     }
-    if (options.reject_dropped_sequences && (dropped_empty > 0 || dropped_targetless > 0)) {
-        throw std::runtime_error("[GRMT] filtered corpus refused writer-side drops for " + path.string() +
+    if (dropped_empty > 0 || dropped_targetless > 0) {
+        throw std::runtime_error("[GRMT] refused writer-side drops for " + path.string() +
                                  " (dropped_empty=" + std::to_string(dropped_empty) +
                                  ", dropped_targetless=" + std::to_string(dropped_targetless) + ")");
     }
