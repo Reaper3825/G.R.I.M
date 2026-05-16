@@ -168,8 +168,8 @@ No step injects `BOS`, appends `EOS`, pads, or mutates targets. Those are downst
 flowchart LR
     CORPUS[Corpus] --> DETECT[detect numeric spans]
     DETECT --> SKIP[skip atom spans during training]
-    SKIP --> SEED[seed vocabulary]
-    SEED --> E[E-step Viterbi]
+   SKIP --> CAND[data-selected candidate vocabulary]
+   CAND --> E[E-step Viterbi]
     E --> M[M-step recount]
     M --> P[prune low-value pieces]
     P -->|repeat| E
@@ -182,6 +182,10 @@ flowchart LR
 - `UnigramLM::trainFromCorpus()` is declared in `Unigram.hpp`.
 - The actual training implementation lives in `UnigramTrainer.cu`.
 - Atom spans are skipped during training so numeric internals do not contaminate vocab statistics.
+- Candidate selection is corpus/data driven: subwords must pass the frequency, validity,
+  repetition-noise, structural-dedup, and prefix-extension filters. `target_vocab_size`
+  is only the final learned-piece cap used by pruning; do not derive a seed-vocab size
+  or candidate-selection cap from it.
 
 ---
 

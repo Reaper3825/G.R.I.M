@@ -214,5 +214,8 @@
   "makefile.makefilePath": "${workspaceFolder}/CMakeLists.txt",
   "python.analysis.autoImportCompletions": true,
   "python.analysis.typeCheckingMode": "standard",
-  "makefile.configureOnOpen": false
+  "makefile.configureOnOpen": false,
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  }
 }

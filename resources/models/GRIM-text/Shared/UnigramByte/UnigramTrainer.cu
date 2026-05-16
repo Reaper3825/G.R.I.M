@@ -977,7 +977,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     
     std::cout << "[UnigramLM] Subword mining complete: " << subword_counts.size() << " unique subwords" << std::endl;
     
-    // Step 4: Add top-K most frequent subwords up to target_vocab_size
+    // Step 4: Select every data-qualified subword candidate.
+    // The target vocab size is the final pruning cap only; it must not cap
+    // initial candidate selection or derive any hidden seed-vocab size.
     std::cout << "[UnigramLM] Preparing sortable candidate list (" << subword_counts.size()
               << " total entries)..." << std::endl;
     const auto sort_start = std::chrono::steady_clock::now();
@@ -1018,12 +1020,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int repetition_filtered = 0;
     int structural_dedup_rejected = 0;
     int prefix_extension_rejected = 0;
-    // Seed with 3x target vocab for iterative shrinking (SentencePiece-style).
-    // Starting oversized then pruning by marginal likelihood contribution ensures
-    // every surviving token genuinely earns its slot → higher entropy, better compression.
-    constexpr int SEED_MULTIPLIER = 3;
-    const int seed_vocab_size = target_vocab_size > 0 ? SEED_MULTIPLIER * target_vocab_size : std::numeric_limits<int>::max();
-    const int max_to_add = seed_vocab_size;
 
     std::unordered_set<std::string> dedup_keys_seen;
     std::unordered_map<std::string, int> dedup_key_to_count;
@@ -1039,12 +1035,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     struct AcceptedPiece { std::string text; int count; };
     std::vector<AcceptedPiece> accepted;
-    accepted.reserve(std::min<size_t>(max_to_add, ranked_subwords.size()));
+    accepted.reserve(ranked_subwords.size());
 
     for (const SubwordEntry* entry : ranked_subwords) {
         const std::string& subword = entry->first;
         const int count = entry->second;
-        if (static_cast<int>(accepted.size()) >= max_to_add) break;
         if (hasPiece(subword)) continue;
         if (char_seeds.count(subword)) continue;
 
@@ -1113,12 +1108,12 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         std::cout << "[UnigramLM] Rejected " << prefix_extension_rejected
                   << " candidates (prefix-extension dedup, same-count near-duplicates)" << std::endl;
     }
-    std::cout << "[UnigramLM] Added " << added << " subwords (min_freq=" << MIN_SUBWORD_FREQ 
-              << ", target=" << target_vocab_size << "), total vocab: " << pieces_.size() << std::endl;
+    std::cout << "[UnigramLM] Added " << added << " data-selected subwords (min_freq=" << MIN_SUBWORD_FREQ
+              << ", final_cap=" << target_vocab_size << "), total candidate vocab: " << pieces_.size() << std::endl;
     
     // Step 5: Iterative EM + Shrinking (SentencePiece-style)
     //
-    // Starting with an oversized seed vocab (3x target), we iteratively:
+    // Starting with the full data-selected candidate vocab, we iteratively:
     //   1. Run EM to convergence (estimate token log-probabilities)
     //   2. Compute each token's marginal log-likelihood contribution
     //   3. Remove the bottom 25% of tokens (lowest contribution)
@@ -1227,9 +1222,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         return {std::move(last_counts), iter};
     };
 
-    // ---- Phase A: initial EM to convergence on seed vocab ----
-    std::cout << "[UnigramLM] Phase-A: EM on seed vocab (" << pieces_.size()
-              << " pieces, target=" << target_vocab_size << ")" << std::endl;
+    // ---- Phase A: initial EM to convergence on full candidate vocab ----
+    std::cout << "[UnigramLM] Phase-A: EM on data-selected candidate vocab (" << pieces_.size()
+              << " pieces, final_cap=" << target_vocab_size << ")" << std::endl;
     auto [phase_a_counts, phase_a_iters] = runEMToConvergence("Phase-A");
 
     // ---- Phase B: iterative shrinking to target vocab size ----
