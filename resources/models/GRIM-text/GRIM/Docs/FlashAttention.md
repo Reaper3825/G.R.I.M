@@ -2,6 +2,16 @@
 
 Implementation: `resources/models/GRIM-text/Layers/Flash_Attention_Kernal.cu`. External library is Dao-AILab FlashAttention v2.
 
+## Pinned Bridges-2 namespace/API contract
+`scripts/run_train_on_bridges2.sh --sync-fas` uses `scripts/bridges2_ensure_flash_attention.sh` to pin `external/flash-attention` to the superproject gitlink and nested Cutlass to `bbe579a9e3beb6ea6626d9227ec32d0dae119a49`.
+
+At that FlashAttention revision, headers respect `FLASH_NAMESPACE`; GRIM defines it as `grim_flash` before including upstream headers. Therefore GRIM's wrapper must dispatch `compute_attn`, `compute_dq_dk_dv`, and `compute_dot_do_o` through `grim_flash`, not `flash`, on Linux and Windows.
+
+Forward `compute_attn` also requires the explicit softcap template parameter:
+`compute_attn<..., Is_even_K, Is_softcap, Return_softmax>(params)`. GRIM disables softcap with `FLASHATTENTION_DISABLE_SOFTCAP`, so wrapper calls must pass `/*Is_softcap=*/false`.
+
+If Bridges-2 reports `namespace "flash" has no member "compute_attn"`, do not edit vendored FlashAttention source. Verify the tracked wrapper namespace/signature contract first, then rerun FAS sync if the remote dependency tree is dirty.
+
 ## Issue #84 — `dot_do_o` preprocessing
 `flash_bwd_dot_do_o_kernel` MUST run **before** `flash_bwd_dq_dk_dv_loop_kernel`. Without it, `dsoftmax_sum` is garbage for most m_blocks → dQ/dK explosion.
 

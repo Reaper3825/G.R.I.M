@@ -53,20 +53,18 @@ inline bool isEquationLoggingEnabled() {
 // (was silently ignored before despite config having attention_dropout parameter)
 
 // ============================================================================
-// IMPORTANT: FlashAttention forward API mismatch across environments.
+// IMPORTANT: FlashAttention pinned API contract.
 //
-// Windows build environment expects a forward signature shaped like:
+// The Bridges-2 sync path pins external/flash-attention to the superproject
+// gitlink and pins nested Cutlass separately. That FlashAttention revision uses
+// namespace FLASH_NAMESPACE and a forward signature shaped like:
 //   compute_attn<..., Is_even_K, Is_softcap, Return_softmax>(params)
 //
-// Linux / Anvil vendored header in THIS repo currently expects:
-//   compute_attn<..., Is_even_K, Return_softmax>(params)
-//
-// In other words: Windows expects the extra Is_softcap template parameter,
-// Linux does not. If `compute_attn` starts failing template substitution again,
-// check API/signature drift FIRST before chasing namespace/type issues.
-//
-// Do not "simplify" this reconciliation unless both environments are moved to
-// the same flash-attention revision.
+// This wrapper defines FLASH_NAMESPACE as grim_flash before including the
+// vendored headers, so upstream compute_* functions and GRIM-owned params must
+// live in grim_flash on both Windows and Linux. If `compute_attn` fails again,
+// verify the Bridges-2 FAS sync path and the pinned header API before editing
+// vendored flash-attention source.
 // ============================================================================
 
 // ATen stub required before flash-attention headers (flash_fwd_kernel.h uses at::cuda::philox::unpack).
@@ -74,14 +72,7 @@ inline bool isEquationLoggingEnabled() {
 
 #define FLASH_NAMESPACE grim_flash
 
-// The namespace the upstream flash-attention headers ACTUALLY place kernel
-// functions in. On Windows (MSVC) they respect FLASH_NAMESPACE; on Linux
-// (GCC) they hardcode namespace flash.
-#ifdef _WIN32
 #define FLASH_UPSTREAM_NS grim_flash
-#else
-#define FLASH_UPSTREAM_NS flash
-#endif
 
 #include "namespace_config.h"
 #include "static_switch.h"
@@ -97,29 +88,14 @@ inline bool isEquationLoggingEnabled() {
 #include "flash_bwd_kernel.h"
 
 // ============================================================================
-// Reconcile flash-attention namespace across platforms:
+// Reconcile flash-attention namespace:
 //
-// Windows (MSVC/nvcc): upstream headers respect FLASH_NAMESPACE macro, so
-//   kernel traits, compute_* functions, and their Params typedefs all resolve
-//   to grim_flash::. We define param structs directly in grim_flash.
-//
-// Linux (GCC/nvcc): upstream headers hardcode namespace flash, ignoring
-//   FLASH_NAMESPACE. Kernel traits define Params = flash::Flash_fwd_params,
-//   so compute_attn's template substitution requires Flash_fwd_params to
-//   exist in namespace flash. We define structs there, then alias into
-//   grim_flash so all downstream code uses grim_flash:: uniformly.
-//
-// FLASH_UPSTREAM_NS (defined above) dispatches the compute_* calls to the
-// correct namespace per platform.
+// The pinned FlashAttention headers respect FLASH_NAMESPACE and therefore emit
+// compute_* functions into grim_flash. Keep GRIM's params in the same namespace
+// so every downstream caller uses grim_flash:: uniformly.
 // ============================================================================
 
-// The namespace where param structs must be defined so that upstream kernel
-// traits (Params typedef) resolve correctly during template substitution.
-#ifdef _WIN32
 #define FLASH_PARAMS_NS grim_flash
-#else
-#define FLASH_PARAMS_NS flash
-#endif
 
 namespace FLASH_PARAMS_NS {
 // Copy of flash.h parameter structs (ATen removed via philox_unpack.cuh stub).
@@ -256,15 +232,6 @@ struct Flash_bwd_params : public Flash_fwd_params {
 };
 }  // namespace FLASH_PARAMS_NS
 
-// On Linux, alias flash:: param types into grim_flash:: so all downstream
-// code can use grim_flash::Flash_fwd_params uniformly.
-#ifndef _WIN32
-namespace grim_flash {
-    using Flash_fwd_params = ::flash::Flash_fwd_params;
-    using Flash_bwd_params = ::flash::Flash_bwd_params;
-}
-#endif
-
 namespace grim_flash {
 namespace detail {
 
@@ -345,7 +312,7 @@ template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local,
 __global__ void flash_fwd_kernel(const FLASH_PARAMS_NS::Flash_fwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     FLASH_UPSTREAM_NS::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi,
-                       Is_even_MN, Is_even_K, Return_softmax>(params);
+                       Is_even_MN, Is_even_K, /*Is_softcap=*/false, Return_softmax>(params);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
