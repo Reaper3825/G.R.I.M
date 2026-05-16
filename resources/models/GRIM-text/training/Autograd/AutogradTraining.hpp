@@ -96,6 +96,9 @@ struct BackwardResult {
  * backward, put it in AutogradIntermediates (owned by TrainingState).
  */
 struct AutogradContext {
+    explicit AutogradContext(const HyperParameters::LossConfigHP& phase1_loss_config)
+        : loss_config(phase1_loss_config) {}
+
     // ═══════════════════════════════════════════════════════════════════════════
     // MODEL REFERENCES (non-owning pointers)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -143,10 +146,11 @@ struct AutogradContext {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LOSS CONFIGURATION
-    // Populated by caller from HyperparameterGroupings.hpp. d_class_weights is
-    // runtime TrainingState, kept separate from hyperparameter ownership.
+    // Borrowed from the Phase1-authored TrainingContext.loss_config grouping.
+    // d_class_weights is runtime TrainingState, kept separate from
+    // hyperparameter ownership.
     // ═══════════════════════════════════════════════════════════════════════════
-    HyperParameters::LossConfigHP loss_config;
+    const HyperParameters::LossConfigHP& loss_config;
     const float* d_class_weights = nullptr;
     
 
@@ -175,6 +179,17 @@ struct AutogradContext {
         if (!device_bindings->d_input_ids || !device_bindings->d_target_ids || !device_bindings->d_token_to_slot_map) {
             throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
         }
+        if (!payload->mtp_shifted_targets.empty()) {
+            if (!device_bindings->d_mtp_shifted_targets) {
+                throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
+            }
+            if (device_bindings->mtp_k != static_cast<int>(payload->mtp_shifted_targets.size())) {
+                throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.mtp_k=" +
+                                         std::to_string(device_bindings->mtp_k) +
+                                         " != payload.mtp_shifted_targets.size()=" +
+                                         std::to_string(payload->mtp_shifted_targets.size()));
+            }
+        }
     }
 };
 
@@ -196,6 +211,7 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
+    const HyperParameters::LossConfigHP& loss_config,
     uint64_t step,
     bool is_training = true
 );

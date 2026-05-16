@@ -100,6 +100,16 @@ void computeMTPAuxiliaryLosses(
         throw std::runtime_error("computeMTPAuxiliaryLosses: payload.mtp_valid_counts.size()=" +
             std::to_string(payload.mtp_valid_counts.size()) + " != mtp_k=" + std::to_string(K));
     }
+    if (!ctx.device_bindings) {
+        throw std::runtime_error("computeMTPAuxiliaryLosses: ctx.device_bindings is NULL — caller MUST upload BatchPayload before MTP loss");
+    }
+    if (!ctx.device_bindings->d_mtp_shifted_targets) {
+        throw std::runtime_error("computeMTPAuxiliaryLosses: BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
+    }
+    if (ctx.device_bindings->mtp_k != K) {
+        throw std::runtime_error("computeMTPAuxiliaryLosses: BatchDeviceBindings.mtp_k=" +
+            std::to_string(ctx.device_bindings->mtp_k) + " != mtp_k=" + std::to_string(K));
+    }
 
     float L0_main = 0.0f;
     cudaMemcpyAsync(&L0_main, intermediates.loss_tensor.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
@@ -136,15 +146,6 @@ void computeMTPAuxiliaryLosses(
         mtp_input = &intermediates.encoder_output_tensor;
     }
 
-    const size_t target_bytes = static_cast<size_t>(total_tokens) * sizeof(int);
-
-    // Each MTP head needs its own GPU target buffer that persists through backward.
-    // NLLLossGradFn stores a raw pointer to targets — if all heads share a single
-    // reusable buffer, backward reads the LAST head's targets for ALL heads.
-    // Allocate per-head and store in intermediates for lifetime.
-    intermediates.mtp_shifted_targets_gpu.clear();
-    intermediates.mtp_shifted_targets_gpu.reserve(K);
-
     for (int k = 0; k < K && scale > 0.0f; ++k) {
         LanguageModel::MTPHead* head = ctx.model->getMtpHead(k);
         if (!head || !head->weight.data || !head->bias.data) continue;
@@ -160,27 +161,8 @@ void computeMTPAuxiliaryLosses(
             continue;
         }
 
-        // Allocate per-head GPU target buffer (owned by Tensor in intermediates)
-        Tensor targets_k;
-        auto target_shape = TensorContract::TensorShape::make_BSM(total_tokens, 1);
-        float* raw_buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&raw_buf), target_bytes, "mtp_targets_k");
-        targets_k.data = raw_buf;
-        targets_k.shape = target_shape;
-        targets_k.owns_data = true;
-        targets_k.requires_grad = false;
-
-        // Upload shifted targets from payload (authoritative, computed by buildBatchPayload)
-        cudaMemcpyAsync(
-            targets_k.data,
-            payload.mtp_shifted_targets[k].data(),
-            target_bytes,
-            cudaMemcpyHostToDevice, ctx.stream);
-
-        const int* d_targets_k = reinterpret_cast<const int*>(targets_k.data);
-
-        // Store in intermediates so buffer lives through backward
-        intermediates.mtp_shifted_targets_gpu.push_back(std::move(targets_k));
+        const int* d_targets_k = ctx.device_bindings->d_mtp_shifted_targets +
+            static_cast<size_t>(k) * total_tokens;
 
         Tensor logits_k = autograd::matmul(
             *mtp_input,
@@ -192,11 +174,11 @@ void computeMTPAuxiliaryLosses(
         );
         logits_k = autograd::broadcast_add(logits_k, head->bias, ctx.stream);
         intermediates.mtp_logits_tensors.push_back(std::move(logits_k));
-        Tensor loss_k = autograd::unified_loss_from_target_buffer(
+        Tensor loss_k = autograd::unified_loss_for_mtp_head(
             intermediates.mtp_logits_tensors.back(),
-            d_targets_k,
-            total_tokens,
-            vocab_size,
+            payload,
+            *ctx.device_bindings,
+            k,
             ctx.loss_config,
             ctx.d_class_weights,
             ctx.stream

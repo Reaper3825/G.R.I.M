@@ -1325,10 +1325,10 @@ LossResult autogradTrainingStep(
         stream,
         payload,
         bindings,
+        loss_config,
         step,
         true
     );
-    ctx.loss_config = loss_config;
     ctx.d_class_weights = training_state.class_weights_tensor.data;
     ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on non-initial accumulation slots
     ctx.model = &model;  // For MTP head access in computeAutogradLoss

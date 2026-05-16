@@ -9,6 +9,10 @@ Phase1/Phase1Startup owns semantic batch construction. By the time Phase2 calls 
 
 Forward runtime handles are sibling payload data, not layer state: `AutogradContext` carries the `cudaStream_t` and `cublasHandle_t` borrowed from `TrainingState`, and `Forward::ModelForwardRequest` passes them through to encoder, FFN, LM head, reasoning head, and selector forwards. Do not patch those handles into layer configs or mutate layers with late setter calls.
 
+Static loss configuration is a Phase1 handoff, not Autograd runtime state. `AutogradContext` borrows `TrainingContext.loss_config` as a required `LossConfigHP&` through `initAutogradContext()`; it must not default-construct, assign, or revalidate loss config after the Phase1 grouping boundary. Runtime loss inputs such as class-balanced device weights remain separate `TrainingState` buffers.
+
+MTP shifted-target device pointers are part of the same prepared payload boundary: `BatchPayload.mtp_shifted_targets` carries the Phase1-authored host semantics, `uploadBatchToDevice()` copies those targets into `TrainingState.cached_mtp_shifted_targets_tensor`, and `BatchDeviceBindings.d_mtp_shifted_targets` is the only loss-facing device view. `computeMTPAuxiliaryLosses()` must not allocate per-head target tensors or perform H2D copies inside loss assembly.
+
 ## Primitive extraction rule
 Do not add new catch-all executors around `AutogradTraining.cu`. Extract narrow primitives first:
 - A primitive has one reason to exist and one mutation target.

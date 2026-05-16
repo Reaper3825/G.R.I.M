@@ -97,6 +97,20 @@ void TrainingState::allocateStepDeviceWorkspaces(
         "cached_token_numeric_values");
     std::cout << "✓ Allocated token numeric values cache (Tensor API)" << std::endl;
 
+    if (config.mtp_enabled) {
+        if (config.mtp_k <= 0) {
+            throw std::runtime_error(
+                "TrainingState::allocateStepDeviceWorkspaces: mtp_enabled=true but mtp_k <= 0");
+        }
+        cached_mtp_shifted_targets_tensor = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(config.mtp_k, max_tokens),
+            false,
+            stream,
+            "cached_mtp_shifted_targets");
+        std::cout << "✓ Allocated MTP shifted target cache [" << config.mtp_k
+                  << " x " << token_capacity << "]" << std::endl;
+    }
+
     cached_token_atom_mask = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,

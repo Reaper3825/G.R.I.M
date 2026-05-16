@@ -87,6 +87,22 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     if (!cached_seq_lengths_ptr) {
         throw std::runtime_error("uploadBatchToDevice: cached_seq_lengths_tensor.data is NULL");
     }
+    int* cached_mtp_shifted_targets_ptr = nullptr;
+    if (!payload.mtp_shifted_targets.empty()) {
+        if (!cfg.mtp_enabled) {
+            throw std::runtime_error("uploadBatchToDevice: payload has MTP shifted targets but model config has mtp_enabled=false");
+        }
+        if (static_cast<int>(payload.mtp_shifted_targets.size()) != cfg.mtp_k) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: payload.mtp_shifted_targets.size()=" +
+                std::to_string(payload.mtp_shifted_targets.size()) +
+                " != config.mtp_k=" + std::to_string(cfg.mtp_k));
+        }
+        cached_mtp_shifted_targets_ptr = reinterpret_cast<int*>(training_state_.cached_mtp_shifted_targets_tensor.data);
+        if (!cached_mtp_shifted_targets_ptr) {
+            throw std::runtime_error("uploadBatchToDevice: cached_mtp_shifted_targets_tensor.data is NULL for MTP payload");
+        }
+    }
     float* cached_numeric_values_ptr = training_state_.cached_token_numeric_values.data;
     if (!cached_numeric_values_ptr) {
         throw std::runtime_error("uploadBatchToDevice: cached_token_numeric_values.data is NULL");
@@ -147,6 +163,22 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
         slot_map_bytes, cudaMemcpyHostToDevice, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
+    // Round 5: MTP shifted targets. These are Phase1-authored payload arrays;
+    // upload owns the H2D copy so MTP loss consumes BatchDeviceBindings instead
+    // of allocating per-head target buffers inside loss assembly.
+    if (cached_mtp_shifted_targets_ptr) {
+        const size_t mtp_head_bytes = static_cast<size_t>(payload.total_tokens) * sizeof(int);
+        for (int k = 0; k < static_cast<int>(payload.mtp_shifted_targets.size()); ++k) {
+            CUDA_CHECK(cudaMemcpyAsync(
+                cached_mtp_shifted_targets_ptr + static_cast<size_t>(k) * payload.total_tokens,
+                payload.mtp_shifted_targets[k].data(),
+                mtp_head_bytes,
+                cudaMemcpyHostToDevice,
+                stream));
+        }
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
+
     auto copy_end = std::chrono::high_resolution_clock::now();
     auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
     if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
@@ -168,6 +200,8 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
         ? reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data)
         : nullptr;
     bindings.d_token_to_slot_map = cached_slot_map_ptr;
+    bindings.d_mtp_shifted_targets = cached_mtp_shifted_targets_ptr;
+    bindings.mtp_k = static_cast<int>(payload.mtp_shifted_targets.size());
     bindings.batch_size  = payload.batch_size;
     bindings.max_seq_len = payload.max_seq_len;
     return bindings;

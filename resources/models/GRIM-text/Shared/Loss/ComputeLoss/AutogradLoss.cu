@@ -474,24 +474,27 @@ __global__ void kernelToken277DiagnosticActual(
 void launchToken277DiagnosticActual(
     const float* log_probs,
     const float* logits,
-    const int* targets,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     const float* grad_log_probs,
-    int num_tokens,
-    int vocab_size,
-    float focal_alpha,
-    float focal_gamma,
-    float smoothing_epsilon,
-    float entropy_reg_lambda,
+    const HyperParameters::LossConfigHP& config,
     int batch_idx,
     int tracked_token,
     cudaStream_t stream
 ) {
     if (tracked_token < 0) return;  // No collapse token detected yet
-    const int num_blocks = (num_tokens + 255) / 256;
+    payload.validate("launchToken277DiagnosticActual");
+    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
+        throw std::runtime_error("launchToken277DiagnosticActual: BatchDeviceBindings geometry does not match BatchPayload");
+    }
+    if (!bindings.d_target_ids) {
+        throw std::runtime_error("launchToken277DiagnosticActual: BatchDeviceBindings.d_target_ids is NULL");
+    }
+    const int num_blocks = (payload.total_tokens + 255) / 256;
     kernelToken277DiagnosticActual<<<num_blocks, 256, 0, stream>>>(
-        log_probs, logits, targets, grad_log_probs,
-        num_tokens, vocab_size,
-        focal_alpha, focal_gamma, smoothing_epsilon, entropy_reg_lambda,
+        log_probs, logits, bindings.d_target_ids, grad_log_probs,
+        payload.total_tokens, payload.vocab_size,
+        config.focal_alpha, config.focal_gamma, config.smoothing_epsilon, config.entropy_reg_lambda,
         batch_idx, tracked_token
     );
 }
@@ -574,9 +577,6 @@ struct NLLLossGradFn : public GradFn {
         op_name = "nll_loss";
         cudaEventCreate(&cleanup_event);
         
-        // OOM FIX: grad_log_probs_buffer allocation DEFERRED to apply().
-        // This saves 1.37GB during forward pass — the buffer is only needed
-        // during backward when NLL gradients are computed.
     }
     
     __host__ ~NLLLossGradFn() {
@@ -728,77 +728,36 @@ struct NLLLossGradFn : public GradFn {
 // Main API Functions (Host-only)
 //========================================================================
 
-__host__ Tensor unified_loss(
-    Tensor& logits,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    const HyperParameters::LossConfigHP& config,
-    const float* d_class_weights,
-    cudaStream_t stream
-) {
-    payload.validate("unified_loss");
-    if (!bindings.d_target_ids) {
-        throw std::runtime_error("[unified_loss] BatchDeviceBindings.d_target_ids is NULL — caller MUST upload BatchPayload before loss");
-    }
-    if (bindings.batch_size != payload.batch_size) {
-        throw std::runtime_error("[unified_loss] bindings.batch_size=" + std::to_string(bindings.batch_size) +
-            " != payload.batch_size=" + std::to_string(payload.batch_size));
-    }
-    if (bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error("[unified_loss] bindings.max_seq_len=" + std::to_string(bindings.max_seq_len) +
-            " != payload.max_seq_len=" + std::to_string(payload.max_seq_len));
-    }
+namespace {
 
-    return unified_loss_from_target_buffer(
-        logits,
-        bindings.d_target_ids,
-        payload.total_tokens,
-        payload.vocab_size,
-        config,
-        d_class_weights,
-        stream
-    );
-}
-
-__host__ Tensor unified_loss_from_target_buffer(
+__host__ Tensor unifiedLossFromTargetBuffer(
     Tensor& logits,
     const int* targets,
     int num_tokens,
     int vocab_size,
     const HyperParameters::LossConfigHP& config,
     const float* d_class_weights,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const char* caller
 ) {
     // ══════════════════════════════════════════════════════════════════════
     // Rule 20: FAIL LOUD on invalid data
-    //
-    // Callers pass explicit (num_tokens, vocab_size) — no BatchPayload coupling.
-    //
-    // Validation CONTRACT (caller MUST ensure):
-    //   - targets[i] ∈ {-1} ∪ [0, vocab_size)  where -1 = masked position
-    //   - Padding handled by target == -1 (no separate valid_mask needed)
-    //
-    // RATIONALE: Full validation would require GPU->CPU memcpy for all tokens
-    // (slow and unnecessary). Data validation belongs in the data loader,
-    // not the loss computation. If caller passes corrupt data, GPU kernel
-    // will exhibit undefined behavior (which is appropriate for a bug in
-    // the upstream data pipeline).
+    // Public callers must enter through a BatchPayload + BatchDeviceBindings
+    // API. This private primitive receives only the target pointer already
+    // selected from that explicit per-step binding view.
     // ══════════════════════════════════════════════════════════════════════
     
     if (!targets) {
-        throw std::runtime_error("[unified_loss] targets pointer is NULL — caller MUST provide valid target token IDs");
+        throw std::runtime_error(std::string("[") + caller + "] targets pointer is NULL — caller MUST provide valid target token IDs");
     }
     if (num_tokens <= 0) {
-        throw std::runtime_error("[unified_loss] num_tokens=" + std::to_string(num_tokens) + " — must be > 0");
+        throw std::runtime_error(std::string("[") + caller + "] num_tokens=" + std::to_string(num_tokens) + " — must be > 0");
     }
     if (vocab_size <= 0) {
-        throw std::runtime_error("[unified_loss] vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
-    }
-    if (!config.initialized) {
-        throw std::runtime_error("[unified_loss] LossConfigHP is not initialized — caller MUST pass the Phase1-authored TrainingContext.loss_config grouping");
+        throw std::runtime_error(std::string("[") + caller + "] vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
     }
     if (config.class_balanced_enabled && !d_class_weights) {
-        throw std::runtime_error("[unified_loss] class_balanced_enabled=true but d_class_weights is NULL");
+        throw std::runtime_error(std::string("[") + caller + "] class_balanced_enabled=true but d_class_weights is NULL");
     }
     const float* effective_class_weights = nullptr;
     if (config.class_balanced_enabled) {
@@ -838,14 +797,14 @@ __host__ Tensor unified_loss_from_target_buffer(
     const int h_valid_count = ce_result.valid_count;
     const float h_weight_sum = ce_result.weight_sum;
     
-    AG_TRACE("[unified_loss] valid_count=%d mean_loss=%.6f\n",
-             h_valid_count, mean_loss);
+    AG_TRACE("[%s] valid_count=%d mean_loss=%.6f\n",
+             caller, h_valid_count, mean_loss);
     if (effective_class_weights) {
-        AG_TRACE("[unified_loss] class_balanced: weight_sum=%.2f effective_N=%.2f (vs raw N=%d)\n",
-                 h_weight_sum, h_weight_sum, h_valid_count);
+        AG_TRACE("[%s] class_balanced: weight_sum=%.2f effective_N=%.2f (vs raw N=%d)\n",
+                 caller, h_weight_sum, h_weight_sum, h_valid_count);
     }
-    AG_TRACE("[unified_loss] config: focal_alpha=%.2f focal_gamma=%.2f smoothing=%.3f entropy_lambda=%.4f\n",
-             config.focal_alpha, config.focal_gamma, config.smoothing_epsilon, config.entropy_reg_lambda);
+    AG_TRACE("[%s] config: focal_alpha=%.2f focal_gamma=%.2f smoothing=%.3f entropy_lambda=%.4f\n",
+             caller, config.focal_alpha, config.focal_gamma, config.smoothing_epsilon, config.entropy_reg_lambda);
     
     // ── Step 4: Create scalar loss tensor ──
     float* d_loss = nullptr;
@@ -881,6 +840,88 @@ __host__ Tensor unified_loss_from_target_buffer(
     
     return loss;
     // log_probs goes out of scope: data NOT freed (transferred), grad_fn NOT deleted (transferred)
+}
+
+} // namespace
+
+__host__ Tensor unified_loss(
+    Tensor& logits,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
+    cudaStream_t stream
+) {
+    payload.validate("unified_loss");
+    if (!bindings.d_target_ids) {
+        throw std::runtime_error("[unified_loss] BatchDeviceBindings.d_target_ids is NULL — caller MUST upload BatchPayload before loss");
+    }
+    if (bindings.batch_size != payload.batch_size) {
+        throw std::runtime_error("[unified_loss] bindings.batch_size=" + std::to_string(bindings.batch_size) +
+            " != payload.batch_size=" + std::to_string(payload.batch_size));
+    }
+    if (bindings.max_seq_len != payload.max_seq_len) {
+        throw std::runtime_error("[unified_loss] bindings.max_seq_len=" + std::to_string(bindings.max_seq_len) +
+            " != payload.max_seq_len=" + std::to_string(payload.max_seq_len));
+    }
+
+    return unifiedLossFromTargetBuffer(
+        logits,
+        bindings.d_target_ids,
+        payload.total_tokens,
+        payload.vocab_size,
+        config,
+        d_class_weights,
+        stream,
+        "unified_loss"
+    );
+}
+
+__host__ Tensor unified_loss_for_mtp_head(
+    Tensor& logits,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int head_idx,
+    const HyperParameters::LossConfigHP& config,
+    const float* d_class_weights,
+    cudaStream_t stream
+) {
+    payload.validate("unified_loss_for_mtp_head");
+    if (head_idx < 0 || head_idx >= static_cast<int>(payload.mtp_shifted_targets.size())) {
+        throw std::runtime_error("[unified_loss_for_mtp_head] head_idx=" + std::to_string(head_idx) +
+            " out of range for payload.mtp_shifted_targets.size()=" +
+            std::to_string(payload.mtp_shifted_targets.size()));
+    }
+    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
+        throw std::runtime_error("[unified_loss_for_mtp_head] BatchDeviceBindings geometry does not match BatchPayload");
+    }
+    if (!bindings.d_mtp_shifted_targets) {
+        throw std::runtime_error("[unified_loss_for_mtp_head] BatchDeviceBindings.d_mtp_shifted_targets is NULL");
+    }
+    if (bindings.mtp_k != static_cast<int>(payload.mtp_shifted_targets.size())) {
+        throw std::runtime_error("[unified_loss_for_mtp_head] bindings.mtp_k=" +
+            std::to_string(bindings.mtp_k) + " != payload.mtp_shifted_targets.size()=" +
+            std::to_string(payload.mtp_shifted_targets.size()));
+    }
+    if (payload.mtp_valid_counts[head_idx] <= 0) {
+        throw std::runtime_error("[unified_loss_for_mtp_head] payload.mtp_valid_counts[" +
+            std::to_string(head_idx) + "]=" + std::to_string(payload.mtp_valid_counts[head_idx]) +
+            " — caller must skip zero-valid MTP heads before loss assembly");
+    }
+
+    const int* targets = bindings.d_mtp_shifted_targets +
+        static_cast<size_t>(head_idx) * payload.total_tokens;
+
+    return unifiedLossFromTargetBuffer(
+        logits,
+        targets,
+        payload.total_tokens,
+        payload.vocab_size,
+        config,
+        d_class_weights,
+        stream,
+        "unified_loss_for_mtp_head"
+    );
 }
 }  // namespace autograd
 }  // namespace GRIM

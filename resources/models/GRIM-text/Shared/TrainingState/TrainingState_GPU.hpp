@@ -97,6 +97,7 @@ struct TrainingState {
     Tensor cached_token_ids_tensor;     // [max_tokens] int32
     Tensor cached_seq_lengths_tensor;   // [max_sequences] int32 real token count per padded row
     Tensor cached_token_numeric_values; // [max_tokens] float
+    Tensor cached_mtp_shifted_targets_tensor; // [mtp_k, max_tokens] int32 head-major MTP targets
     
     // Unified atom side-channel
     Tensor cached_token_atom_mask;      // [max_tokens] uint8 (1 = atom token)

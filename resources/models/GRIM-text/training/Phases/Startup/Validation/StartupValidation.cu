@@ -29,7 +29,6 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
 
     require(ctx.config.hyperparameters.batch_size > 0, "hyperparameters.batch_size <= 0");
     require(ctx.config.max_seq_len > 0, "config.max_seq_len <= 0");
-        require(ctx.loss_config.initialized, "Phase1 loss_config grouping is not initialized");
     require(ctx.run_capacity.batch_rows == static_cast<std::uint32_t>(ctx.config.hyperparameters.batch_size),
             "RunCapacity.batch_rows does not match post-policy hyperparameters.batch_size");
     require(ctx.run_capacity.seq_cap == static_cast<std::uint32_t>(ctx.config.max_seq_len),

@@ -71,8 +71,6 @@ struct GradientClippingHP {
 };
 
 struct LossConfigHP {
-    bool initialized = false;
-
     float focal_alpha = 0.0f;
     float focal_gamma = 0.0f;
     bool focal_enabled = false;
@@ -316,6 +314,32 @@ inline void requireValidGQAGrouping(const LanguageModelConfig& cfg,
                                  std::to_string(cfg.head_dim) +
                                  " does not match d_model/num_heads=" +
                                  std::to_string(computed_head_dim));
+    }
+}
+
+inline void validateLossConfigHP(
+    const LossConfigHP& hp,
+    const char* caller)
+{
+    if (!std::isfinite(hp.focal_alpha) || hp.focal_alpha <= 0.0f) {
+        throw std::runtime_error(std::string(caller) + ": focal_alpha must be a positive finite value, got " +
+                                 std::to_string(hp.focal_alpha));
+    }
+    if (!std::isfinite(hp.focal_gamma) || hp.focal_gamma < 0.0f) {
+        throw std::runtime_error(std::string(caller) + ": focal_gamma must be finite and >= 0, got " +
+                                 std::to_string(hp.focal_gamma));
+    }
+    if (!std::isfinite(hp.smoothing_epsilon) || hp.smoothing_epsilon < 0.0f || hp.smoothing_epsilon >= 1.0f) {
+        throw std::runtime_error(std::string(caller) + ": smoothing_epsilon must be in [0, 1), got " +
+                                 std::to_string(hp.smoothing_epsilon));
+    }
+    if (!std::isfinite(hp.entropy_reg_lambda) || hp.entropy_reg_lambda < 0.0f) {
+        throw std::runtime_error(std::string(caller) + ": entropy_reg_lambda must be finite and >= 0, got " +
+                                 std::to_string(hp.entropy_reg_lambda));
+    }
+    if (!std::isfinite(hp.class_balanced_beta) || hp.class_balanced_beta <= 0.0f) {
+        throw std::runtime_error(std::string(caller) + ": class_balanced_beta must be a positive finite value, got " +
+                                 std::to_string(hp.class_balanced_beta));
     }
 }
 
@@ -612,7 +636,6 @@ inline LossConfigHP lossConfigHP(
     const ::GRIM::Config::TrainingHyperparameters& hp)
 {
     LossConfigHP view;
-    view.initialized = true;
     view.focal_enabled = hp.loss_focal_enabled;
     view.focal_alpha = hp.loss_focal_alpha;
     view.focal_gamma = hp.loss_focal_gamma;
@@ -622,6 +645,7 @@ inline LossConfigHP lossConfigHP(
     view.entropy_reg_lambda = hp.loss_entropy_reg_lambda;
     view.class_balanced_enabled = hp.loss_class_balanced_enabled;
     view.class_balanced_beta = hp.loss_class_balanced_beta;
+    validateLossConfigHP(view, "lossConfigHP");
     return view;
 }
 

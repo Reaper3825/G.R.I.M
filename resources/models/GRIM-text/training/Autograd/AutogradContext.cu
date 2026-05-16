@@ -62,6 +62,19 @@ void validateDeviceBindingsForPayload(
             std::string(caller) + ": BatchDeviceBindings has NULL device pointers - "
             "caller must invoke model.uploadBatchToDevice(payload) before initializing autograd context");
     }
+    if (!payload.mtp_shifted_targets.empty()) {
+        if (!bindings.d_mtp_shifted_targets) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
+        }
+        if (bindings.mtp_k != static_cast<int>(payload.mtp_shifted_targets.size())) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchDeviceBindings.mtp_k=" +
+                std::to_string(bindings.mtp_k) +
+                " != payload.mtp_shifted_targets.size()=" +
+                std::to_string(payload.mtp_shifted_targets.size()));
+        }
+    }
 }
 
 } // namespace
@@ -82,12 +95,13 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
+    const HyperParameters::LossConfigHP& loss_config,
     uint64_t step,
     bool is_training
 ) {
     validateDeviceBindingsForPayload(payload, bindings, "initAutogradContext(payload)");
 
-    AutogradContext ctx{};
+    AutogradContext ctx(loss_config);
     populateCommonContext(
         ctx, config, training_state, gpu_encoder, embedding_layer, lm_head,
         scratch_block, reasoning_head, execution_block, cublas_handle, stream,

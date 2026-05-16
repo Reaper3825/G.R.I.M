@@ -135,6 +135,15 @@ bool advanceAccumulationOrThrow(
     return optimizer.completeAccumulationSlot(accum_steps);
 }
 
+std::unique_ptr<GRIM::Loss::LossSignalBus> makeValidationHighLossSignalBus(
+    const ::GRIM::Config::TrainingHyperparameters& hp)
+{
+    GRIM::Loss::LossSignalConfig sig_cfg{};
+    sig_cfg.validation_high_threshold = hp.auto_stop_high_loss_threshold;
+    sig_cfg.validation_high_patience  = hp.auto_stop_high_loss_patience;
+    return std::make_unique<GRIM::Loss::LossSignalBus>(sig_cfg);
+}
+
 } // namespace
 
 //======================================================//
@@ -685,12 +694,7 @@ bool executePhase2(TrainingContext& ctx) {
 
     // Construct the epoch high-loss policy detector. Train-loss spike/EWMA
     // tracking is owned by TelemetryLattice.
-    {
-        GRIM::Loss::LossSignalConfig sig_cfg{};
-        sig_cfg.validation_high_threshold = hp.auto_stop_high_loss_threshold;
-        sig_cfg.validation_high_patience  = hp.auto_stop_high_loss_patience;
-        state.loss_signals = std::make_unique<GRIM::Loss::LossSignalBus>(sig_cfg);
-    }
+    state.loss_signals = makeValidationHighLossSignalBus(hp);
     
     PHASE2_DEBUG_STDERR("[DEBUG] About to initialize training log...");
  

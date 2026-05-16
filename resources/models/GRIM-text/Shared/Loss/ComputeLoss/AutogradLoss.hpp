@@ -59,24 +59,24 @@ Tensor unified_loss(
 );
 
 /**
- * Compute unified loss from an already-uploaded target buffer.
+ * Compute unified loss for one MTP auxiliary head.
  *
- * This is for auxiliary heads whose targets are derived from BatchPayload but
- * are not the payload's primary d_target_ids buffer, e.g. MTP shifted targets.
+ * The shifted targets are Phase1-authored in BatchPayload and uploaded by
+ * LanguageModel::uploadBatchToDevice() into BatchDeviceBindings. The loss path
+ * must not allocate or upload target buffers during loss assembly.
  */
-Tensor unified_loss_from_target_buffer(
+Tensor unified_loss_for_mtp_head(
     Tensor& logits,
-    const int* targets,
-    int num_tokens,
-    int vocab_size,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int head_idx,
     const HyperParameters::LossConfigHP& config,
     const float* d_class_weights,
     cudaStream_t stream
 );
 
 // Cross-entropy / NLL implementation details live in CrossEntropyNLL.hpp/.cu.
-// AutogradLoss.hpp exposes the payload/bindings unified_loss() entry point and
-// the explicit shifted-target-buffer helper for auxiliary heads.
+// AutogradLoss.hpp exposes payload/bindings entry points for primary CE and MTP.
 
 //=============================================================================
 // TOKEN 277 DIAGNOSTIC LOGGING (Rule 21 Equation-Based)
@@ -90,14 +90,10 @@ Tensor unified_loss_from_target_buffer(
 void launchToken277DiagnosticActual(
     const float* log_probs,
     const float* logits,
-    const int* targets,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     const float* grad_log_probs,
-    int num_tokens,
-    int vocab_size,
-    float focal_alpha,
-    float focal_gamma,
-    float smoothing_epsilon,
-    float entropy_reg_lambda,
+    const HyperParameters::LossConfigHP& config,
     int batch_idx,
     int tracked_token,
     cudaStream_t stream
