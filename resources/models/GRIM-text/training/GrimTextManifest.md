@@ -882,7 +882,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - **Verification:** `Loss::LossContext` was NEVER constructed in any .cu file. All 5 sub-module functions only had declarations + implementations — zero callers.
   - **Production loss path** (UNCHANGED): `BatchPayload → AutogradContext → computeAutogradLoss() → unified_loss()` via AutogradLoss.cu
   - **Still alive:**
-    - `HyperParameters::LossConfigHP` — config flow: `lossConfigHP()` → Phase2 state → autogradTrainingStep → unified_loss
+    - `HyperParameters::LossConfigHP` — config flow: Phase1 `TrainingContext.loss_config` → autogradTrainingStep → unified_loss
     - `autograd::unified_loss()` — the one true loss path (AutogradLoss.cu/hpp)
     - `NumericLoss/NumericLoss_GPU.cu/hpp` — auxiliary numeric regression head (called from AutogradTraining.cu)
 
@@ -1154,7 +1154,7 @@ For each encoding layer (Layer 0 → Layer 11):
 - [] **Phase2_TrainingLoop.cu** (validation section)  & FIXED
   - Periodic validation and checkpoint saving
   - **Issue #85**: Validation token budget exceeds training buffer size (Jan 2026) - FIXED
-    - **Root Cause**: Hardcoded `kDefaultMaxTokensPerBatch = 8192` exceeded training allocation (batch_size × max_seq_len = 7168)
+    - **Root Cause**: Hardcoded Phase2 token budget `8192` exceeded training allocation (batch_size × max_seq_len = 7168)
     - **Symptom**: STATUS_STACK_BUFFER_OVERRUN crash (exit -1073740791) after "Created N validation batches"
     - **Fix**: Changed to use `ctx.model->getConfig().max_tokens_per_batch` instead of hardcoded constant
     - Added logging: `"[Val] Token budget: X (model limit: Y)"`
@@ -1220,7 +1220,7 @@ Use this section to track stale code patterns found during audit:
 - [ ] Old `UnifiedLoss_GPU.cu` - confirm NOT referenced
 - [ ] Old `ComputeLoss_GPU.cu` - confirm NOT referenced
 - [ ] Stale `EmbeddingLayer` class - confirm NOT instantiated
-- [ ] Hardcoded `kDefaultMaxTokensPerBatch` - confirm uses config value
+- [] Hardcoded Phase2 token-budget constant - ✅ DELETED; token budget is Phase1-authored capacity/config
 - [ ] Raw `cudaStream_t` allocations - confirm NOT in layer modules
 - [ ] Raw `cudaMalloc()` outside TrainingState - confirm NOT present in layers
 

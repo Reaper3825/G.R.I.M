@@ -7,7 +7,8 @@
 namespace GRIMText::Training {
 
 void EpochPlanReady(TrainingContext& ctx) {
-    ctx.epoch_plan = finalizeEpochPlanOrThrow(ctx.config, ctx.scheduler_preflight);
+    const int authored_train_batches = static_cast<int>(ctx.train_payloads.size());
+    ctx.epoch_plan = finalizeEpochPlanOrThrow(ctx.config, authored_train_batches);
     ctx.estimated_total_steps = ctx.epoch_plan.estimated_total_steps;
     ctx.lr_schedule.emplace(ctx.epoch_plan.lr_config);
     if (!ctx.lr_schedule) {

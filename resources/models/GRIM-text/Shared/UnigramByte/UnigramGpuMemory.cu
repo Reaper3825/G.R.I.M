@@ -188,10 +188,25 @@ UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
 }
 
 bool UnigramLM::initGPU() {
-    if (!gpu_) {
-        throw std::runtime_error("UnigramLM::initGPU: gpu_ is NULL - object was moved from or not constructed");
+    return initGPUForMaxSequenceLength(HyperParameters::UNIGRAM_MAX_SEQUENCE_LENGTH);
+}
+
+bool UnigramLM::initGPUForMaxSequenceLength(size_t required_max_sequence_length) {
+    if (required_max_sequence_length == 0) {
+        throw std::runtime_error("UnigramLM::initGPUForMaxSequenceLength requires required_max_sequence_length > 0");
     }
-    if (gpu_->initialized && gpu_->uploaded_trie_generation == trie_generation_) {
+    if (!gpu_) {
+        throw std::runtime_error("UnigramLM::initGPUForMaxSequenceLength: gpu_ is NULL - object was moved from or not constructed");
+    }
+
+    size_t workspace_sequence_length = required_max_sequence_length;
+    if (workspace_sequence_length < HyperParameters::UNIGRAM_MAX_SEQUENCE_LENGTH) {
+        workspace_sequence_length = HyperParameters::UNIGRAM_MAX_SEQUENCE_LENGTH;
+    }
+
+    if (gpu_->initialized &&
+        gpu_->uploaded_trie_generation == trie_generation_ &&
+        gpu_->workspace_max_length >= workspace_sequence_length) {
         return true;
     }
 
@@ -199,12 +214,15 @@ bool UnigramLM::initGPU() {
         buildTrie();
     }
 
-    return uploadTrieToGPU();
+    return uploadTrieToGPU(workspace_sequence_length);
 }
 
-bool UnigramLM::uploadTrieToGPU() {
+bool UnigramLM::uploadTrieToGPU(size_t workspace_sequence_length) {
     if (!gpu_) {
         throw std::runtime_error("UnigramLM::uploadTrieToGPU: gpu_ is NULL - object was moved from or not constructed");
+    }
+    if (workspace_sequence_length == 0) {
+        throw std::runtime_error("UnigramLM::uploadTrieToGPU requires workspace_sequence_length > 0");
     }
     if (pieces_.empty()) {
         throw std::runtime_error("UnigramLM::uploadTrieToGPU requires a non-empty learned vocabulary before GPU upload");
@@ -265,18 +283,17 @@ bool UnigramLM::uploadTrieToGPU() {
     if (!allocateDevice(fresh.d_piece_offsets, piece_count, "d_piece_offsets")) return false;
     if (!allocateDevice(fresh.d_piece_lengths, piece_count, "d_piece_lengths")) return false;
 
-    constexpr size_t max_sequence_length = HyperParameters::UNIGRAM_MAX_SEQUENCE_LENGTH;
-    fresh.workspace_max_length = max_sequence_length;
+    fresh.workspace_max_length = workspace_sequence_length;
 
-    if (!allocateDevice(fresh.d_viterbi_text, max_sequence_length, "d_viterbi_text")) return false;
-    if (!allocateDevice(fresh.d_viterbi_scores, max_sequence_length + 1, "d_viterbi_scores")) return false;
-    if (!allocateDevice(fresh.d_viterbi_prev, max_sequence_length + 1, "d_viterbi_prev")) return false;
-    if (!allocateDevice(fresh.d_viterbi_tokens, max_sequence_length + 1, "d_viterbi_tokens")) return false;
-    if (!allocateDevice(fresh.d_viterbi_prev_is_fallback, max_sequence_length + 1, "d_viterbi_prev_is_fallback")) return false;
-    if (!allocateDevice(fresh.d_viterbi_output_tokens, max_sequence_length, "d_viterbi_output_tokens")) return false;
-    if (!allocateDevice(fresh.d_viterbi_output_is_fallback, max_sequence_length, "d_viterbi_output_is_fallback")) return false;
+    if (!allocateDevice(fresh.d_viterbi_text, workspace_sequence_length, "d_viterbi_text")) return false;
+    if (!allocateDevice(fresh.d_viterbi_scores, workspace_sequence_length + 1, "d_viterbi_scores")) return false;
+    if (!allocateDevice(fresh.d_viterbi_prev, workspace_sequence_length + 1, "d_viterbi_prev")) return false;
+    if (!allocateDevice(fresh.d_viterbi_tokens, workspace_sequence_length + 1, "d_viterbi_tokens")) return false;
+    if (!allocateDevice(fresh.d_viterbi_prev_is_fallback, workspace_sequence_length + 1, "d_viterbi_prev_is_fallback")) return false;
+    if (!allocateDevice(fresh.d_viterbi_output_tokens, workspace_sequence_length, "d_viterbi_output_tokens")) return false;
+    if (!allocateDevice(fresh.d_viterbi_output_is_fallback, workspace_sequence_length, "d_viterbi_output_is_fallback")) return false;
     if (!allocateDevice(fresh.d_viterbi_output_count, 1, "d_viterbi_output_count")) return false;
-    if (!allocateDevice(fresh.d_viterbi_selected_fallback, max_sequence_length, "d_viterbi_selected_fallback")) return false;
+    if (!allocateDevice(fresh.d_viterbi_selected_fallback, workspace_sequence_length, "d_viterbi_selected_fallback")) return false;
     if (!allocateDevice(fresh.d_viterbi_error_code, 1, "d_viterbi_error_code")) return false;
 
     if (!copyToDevice(fresh.d_piece_data, piece_data.data(), piece_data.size(), "d_piece_data")) return false;
@@ -287,7 +304,9 @@ bool UnigramLM::uploadTrieToGPU() {
     fresh.uploaded_trie_generation = trie_generation_;
     *gpu_ = std::move(fresh);
 
-    std::cout << "[UnigramLM] GPU initialized with " << num_nodes << " trie nodes" << std::endl;
+    std::cout << "[UnigramLM] GPU initialized with " << num_nodes
+              << " trie nodes, Viterbi workspace_max_length="
+              << workspace_sequence_length << std::endl;
     return true;
 }
 

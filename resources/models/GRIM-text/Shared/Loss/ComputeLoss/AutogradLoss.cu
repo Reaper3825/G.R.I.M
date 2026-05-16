@@ -795,7 +795,7 @@ __host__ Tensor unified_loss_from_target_buffer(
         throw std::runtime_error("[unified_loss] vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
     }
     if (!config.initialized) {
-        throw std::runtime_error("[unified_loss] LossConfigHP is not initialized — caller MUST pass lossConfigHP(valid_training_hyperparameters)");
+        throw std::runtime_error("[unified_loss] LossConfigHP is not initialized — caller MUST pass the Phase1-authored TrainingContext.loss_config grouping");
     }
     if (config.class_balanced_enabled && !d_class_weights) {
         throw std::runtime_error("[unified_loss] class_balanced_enabled=true but d_class_weights is NULL");

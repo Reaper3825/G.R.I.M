@@ -38,20 +38,6 @@
 namespace GRIMText::Training {
 
 //======================================================//
-//  Training Constants
-//======================================================//
-constexpr int kDefaultMaxTokensPerBatch = 8192;
-constexpr int kWarmupTokenCap = 4096;
-// kWarmupTokenSteps / kCurriculumEpochs moved to
-// Shared/Batching/EpochBatching.hpp (GRIM::Batching) along with
-// buildEpochBatches() — they are batching-policy constants, not
-// training-loop orchestration constants.
-constexpr float kTokenAwareGradReference = 1024.0f;
-constexpr float kBoilerplateBaseWeight = 0.7f;
-constexpr float kJunkBaseWeight = 0.5f;
-
-
-//======================================================//
 //  Batch Processing Structures
 //======================================================//
 
@@ -122,10 +108,6 @@ struct TrainingLoopState {
     float min_observed_loss = std::numeric_limits<float>::infinity();
     int warmup_batches = 0;
 
-    // Durable validated loss grouping for this run. Built once from
-    // TrainingContext.config.hyperparameters by executePhase2.
-    GRIM::HyperParameters::LossConfigHP loss_config;
-    
     // Shuffle tracking
     bool shuffle_window_exhausted_notified = false;
     

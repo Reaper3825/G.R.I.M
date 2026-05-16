@@ -29,6 +29,7 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
 
     require(ctx.config.hyperparameters.batch_size > 0, "hyperparameters.batch_size <= 0");
     require(ctx.config.max_seq_len > 0, "config.max_seq_len <= 0");
+        require(ctx.loss_config.initialized, "Phase1 loss_config grouping is not initialized");
     require(ctx.run_capacity.batch_rows == static_cast<std::uint32_t>(ctx.config.hyperparameters.batch_size),
             "RunCapacity.batch_rows does not match post-policy hyperparameters.batch_size");
     require(ctx.run_capacity.seq_cap == static_cast<std::uint32_t>(ctx.config.max_seq_len),
@@ -66,13 +67,15 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(static_cast<std::uint32_t>(ctx.telemetry.control_config.reference_seq_len) == ctx.run_capacity.seq_cap,
             "telemetry reference seq len does not match RunCapacity");
 
-    require(ctx.scheduler_preflight.total_batches > 0, "scheduler preflight total_batches <= 0");
+    require(!ctx.train_payloads.empty(), "train_payloads is empty");
+    require(ctx.fixed_train_schedule.batches.size() == ctx.train_payloads.size(),
+            "fixed_train_schedule batch count does not match train_payloads");
     if (ctx.config.hyperparameters.single_batch_overfit_enabled) {
         require(ctx.epoch_plan.total_batches == ctx.config.hyperparameters.single_batch_overfit_max_steps,
                 "EpochPlan total_batches does not match single_batch_overfit_max_steps");
     } else {
-        require(ctx.epoch_plan.total_batches == ctx.scheduler_preflight.total_batches,
-                "EpochPlan total_batches does not match SchedulerPreflightState");
+        require(ctx.epoch_plan.total_batches == static_cast<int>(ctx.train_payloads.size()),
+                "EpochPlan total_batches does not match authored train payload count");
     }
     require(ctx.epoch_plan.estimated_total_steps == ctx.estimated_total_steps,
             "EpochPlan estimated_total_steps does not match TrainingContext");
@@ -81,7 +84,6 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
 
     require(static_cast<int>(ctx.epoch_batch_order.size()) == ctx.config.hyperparameters.epochs,
             "epoch_batch_order size does not match epochs");
-    require(!ctx.train_payloads.empty(), "train_payloads is empty");
     for (std::size_t epoch = 0; epoch < ctx.epoch_batch_order.size(); ++epoch) {
         const auto& order = ctx.epoch_batch_order[epoch];
         require(static_cast<int>(order.size()) == ctx.epoch_plan.total_batches,

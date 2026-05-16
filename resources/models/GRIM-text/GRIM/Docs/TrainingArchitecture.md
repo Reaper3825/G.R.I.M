@@ -10,7 +10,11 @@ Entry point: `train_gpu.cu` → `executePhase1()` → `executePhase2()` → `exe
 
 **Edit the phase file**, never `train_gpu.cu`, when modifying training logic.
 
+Static hyperparameter groupings are Phase 1 handoff facts, not Phase 2 loop state. For loss, Phase 1 initializes `TrainingContext.loss_config` from `lossConfigHP()` after validating hyperparameters; Phase 2 passes that grouping directly to autograd. Do not add `TrainingLoopState` wrappers that rebuild static hyperparameter groupings during training.
+
 Tokenizer artifact preparation is Phase 1 startup work, not a pre-phase owned by `train_gpu.cu`. The order is `LoggingReady()` / `loadStartupConfig()` → `MemorySnapshotReady()` → `HyperparametersReady()` → tokenizer subprocess (`train_tokenizer`, vocab + GRMT preparation) → `CapacityStemReady()` → `DataInfoReady()`. This keeps the tokenizer run behind the same validated `StartupConfig` / `TrainingHyperparameters` path that model startup uses, while still running before `DataInfoReady()` consumes the generated vocab and training-data files. If `subprocess.tokenizer.only_mode=true`, `executePhase1()` returns `Phase1Outcome::tokenizer_only_complete` and the orchestrator exits cleanly without entering Phases 2-3.
+
+Batch schedule ownership is single-pass: `PlannedBatchesReady()` is the only Phase 1 startup step that calls `buildEpochBatches()` for training. `EpochPlanReady()` must derive `total_batches` from the authored `train_payloads` count, not from a scheduler dry-run/preflight wrapper. This prevents duplicated batch-policy execution and keeps Phase 2 consuming only Phase1-authored payloads/order.
 
 `GRMTDataLoader` owns only raw `.grmt` row deserialization into `TrainingSequence` objects. It must not expose stable `seq_id` sample accessors or long-lived row views, because Phase 1 still has to split train/val data, inject boundaries, apply sliding windows, and filter invalid rows. Training `seq_ids` are authored only after `applySlidingWindows()` when `DataInfo.cu` builds `train_views` / `val_views`; `Batching_GPU.cu` schedules those post-window view indices, and `BatchPayload.cu` consumes them.
 

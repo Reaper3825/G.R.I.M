@@ -133,6 +133,7 @@ public:
     
     // Initialize GPU resources (call before GPU operations)
     bool initGPU();
+    bool initGPUForMaxSequenceLength(size_t required_max_sequence_length);
 
     //--------------------------------------------------//
     // Vocabulary Info
@@ -181,7 +182,7 @@ private:
     std::uint64_t trie_generation_ = 0;
     
     // Upload trie to GPU
-    bool uploadTrieToGPU();
+    bool uploadTrieToGPU(size_t workspace_sequence_length);
 };
 
 } // namespace Tokenizer

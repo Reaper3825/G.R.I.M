@@ -239,7 +239,7 @@ BatchResult processBatch(
         ctx.model->getTrainingState(),
         payload,
         train_bindings,
-        state.loss_config,
+        ctx.loss_config,
         should_accumulate,
         grad_scale,
         static_cast<uint64_t>(ctx.optimizer.optimizer_step.step)
@@ -682,7 +682,6 @@ bool executePhase2(TrainingContext& ctx) {
     
     // Initialize loop state
     TrainingLoopState state;
-    state.loss_config = GRIM::HyperParameters::lossConfigHP(hp);
 
     // Construct the epoch high-loss policy detector. Train-loss spike/EWMA
     // tracking is owned by TelemetryLattice.
@@ -694,7 +693,7 @@ bool executePhase2(TrainingContext& ctx) {
     }
     
     PHASE2_DEBUG_STDERR("[DEBUG] About to initialize training log...");
-
+ 
     // NOTE: per-field hyperparameter logging (warmup_fraction, learning_rate,
     // cosine_decay_*, soft_restart_*, auto_stop_*, embedding_freeze_*) is the
     // exclusive responsibility of dumpAllHyperparameters() — invoked from

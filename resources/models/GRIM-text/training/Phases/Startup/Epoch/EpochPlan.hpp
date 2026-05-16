@@ -1,7 +1,5 @@
 #pragma once
 
-#include "../Scheduling/SchedulerPreflight.hpp"
-
 #include "../../../../Shared/Dynamic_LR/LRSchedule.hpp"
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
@@ -24,7 +22,7 @@ struct EpochPlan {
 
 inline EpochPlan finalizeEpochPlanOrThrow(
     ::GRIM::HyperParameters::StartupConfig& config,
-    const SchedulerPreflightState& preflight)
+    int authored_train_batches)
 {
     const auto& hp = config.hyperparameters;
     if (hp.epochs <= 0) {
@@ -39,8 +37,8 @@ inline EpochPlan finalizeEpochPlanOrThrow(
     const int accum = hp.gradient_accumulation_steps;
 
     EpochPlan plan;
-    if (preflight.total_batches <= 0) {
-        throw std::runtime_error("FATAL: scheduler produced 0 batches during startup epoch-plan finalization");
+    if (authored_train_batches <= 0) {
+        throw std::runtime_error("FATAL: PlannedBatchesReady authored 0 train batches before epoch-plan finalization");
     }
     if (hp.single_batch_overfit_enabled) {
         if (hp.single_batch_overfit_max_steps <= 0) {
@@ -49,7 +47,7 @@ inline EpochPlan finalizeEpochPlanOrThrow(
         }
         plan.total_batches = hp.single_batch_overfit_max_steps;
     } else {
-        plan.total_batches = preflight.total_batches;
+        plan.total_batches = authored_train_batches;
     }
 
     const int64_t total_accumulation_slots =

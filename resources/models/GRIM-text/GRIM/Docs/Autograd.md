@@ -48,6 +48,8 @@ Parameter gradient zeroing is owned by the TensorContract `ParameterGroup` inven
 ## Gradient connectivity verification
 `verifyGradientsAreConnected()` scans each checked gradient tensor in full when computing finite/nonzero/RMS diagnostics. Do not reintroduce prefix sampling caps: a zero prefix (for example the first rows of `attnWqkv.grad`) is not evidence that the full parameter tensor missed gradient signal.
 
+During gradient accumulation, existing parameter grad buffers already contain prior microbatch contributions. A post-backward nonzero/RMS check proves only that the cumulative buffer is nonzero, not that the current backward pass delivered signal. Accumulation-slot verification must snapshot expected signal tensors before `loss_tensor.backward()` and require a finite nonzero pre/post delta after backward.
+
 ## QKV attention boundary
 Autograd attention owns the QKV tape boundary. `autograd::split_and_reshape_qkv()` creates the `SplitAndReshapeQKVGradFn` and delegates only raw layout movement to `TensorConversion::split_qkv_gqa()` / `merge_qkv_grads_gqa()`. Encoder code must not call TensorConversion QKV split/merge directly.
 

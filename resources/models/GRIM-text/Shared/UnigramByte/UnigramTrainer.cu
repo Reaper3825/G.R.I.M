@@ -352,6 +352,65 @@ static size_t resolveSubwordMiningChunkSize(unsigned int workers, size_t sentenc
     return chunk;
 }
 
+static size_t maxViterbiSegmentLengthForTrainingUnits(
+    const std::vector<std::string>& training_units,
+    const std::vector<std::vector<AtomSpan>>& atom_spans) {
+    if (atom_spans.size() != training_units.size()) {
+        throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: atom_spans.size()=" +
+                                 std::to_string(atom_spans.size()) +
+                                 " != training_units.size()=" + std::to_string(training_units.size()));
+    }
+
+    size_t max_segment_length = 0;
+    for (size_t text_idx = 0; text_idx < training_units.size(); ++text_idx) {
+        const auto& text = training_units[text_idx];
+        const auto& spans = atom_spans[text_idx];
+        if (text.empty()) {
+            continue;
+        }
+
+        if (spans.empty()) {
+            max_segment_length = std::max(max_segment_length, text.size());
+            continue;
+        }
+
+        size_t pos = 0;
+        for (size_t span_idx = 0; span_idx < spans.size(); ++span_idx) {
+            const AtomSpan& span = spans[span_idx];
+            if (span.start > span.end) {
+                throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: span.start > span.end at text_idx=" +
+                                         std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
+                                         ", start=" + std::to_string(span.start) +
+                                         ", end=" + std::to_string(span.end));
+            }
+            if (span.end > text.size()) {
+                throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: span.end exceeds normalized text size at text_idx=" +
+                                         std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
+                                         ", end=" + std::to_string(span.end) +
+                                         ", text.size()=" + std::to_string(text.size()));
+            }
+            if (span.start < pos) {
+                throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: atom spans overlap or are unsorted at text_idx=" +
+                                         std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
+                                         ", start=" + std::to_string(span.start) +
+                                         ", previous_end=" + std::to_string(pos));
+            }
+            if (span.start > pos) {
+                max_segment_length = std::max(max_segment_length, span.start - pos);
+            }
+            pos = span.end;
+        }
+        if (pos < text.size()) {
+            max_segment_length = std::max(max_segment_length, text.size() - pos);
+        }
+    }
+
+    if (max_segment_length == 0) {
+        throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: corpus has no non-empty normalized Viterbi segments");
+    }
+    return max_segment_length;
+}
+
 //======================================================//
 //  Subword Mining from Sentences
 //======================================================//
@@ -545,6 +604,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Applied SentencePiece whitespace normalization (space -> ▁)" << std::endl;
 
     const std::vector<std::string>& training_units = norm_texts;
+    const size_t e_step_workspace_sequence_length =
+        maxViterbiSegmentLengthForTrainingUnits(training_units, norm_atom_spans);
+    std::cout << "[UnigramLM] Longest normalized E-step Viterbi segment: "
+              << e_step_workspace_sequence_length << " bytes" << std::endl;
     const int MIN_SUBWORD_FREQ = min_subword_freq;
     
     size_t total_corpus_bytes = 0;
@@ -1127,7 +1190,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         int iter = 0;
         for (; iter < EM_MAX_ITERATIONS; ++iter) {
             buildTrie();
-            if (!initGPU()) {
+            if (!initGPUForMaxSequenceLength(e_step_workspace_sequence_length)) {
                 throw std::runtime_error("UnigramLM::trainFromCorpus: tokenizer GPU initialization failed before CUDA Viterbi E-step");
             }
             auto [token_counts, total_tokens, log_likelihood] = runEStep();

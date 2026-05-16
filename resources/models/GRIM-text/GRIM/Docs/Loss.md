@@ -6,7 +6,7 @@ Cross-entropy / NLL implementation: `resources/models/GRIM-text/Shared/Loss/Comp
 
 Primary text CE now enters as `autograd::unified_loss(logits, BatchPayload, BatchDeviceBindings, LossConfigHP, d_class_weights, stream)`. Auxiliary shifted-target heads (MTP) use `autograd::unified_loss_from_target_buffer(...)` so they cannot masquerade as the payload's primary target mirror.
 
-`autograd::unified_loss()` is the **primary text loss path**. `cross_entropy_loss()` and the model-owned loss-options side channel are deleted; callers pass the durable `HyperParameters::LossConfigHP` snapshot built by `lossConfigHP()` in `HyperparameterGroupings.hpp`. Class-balanced device weights are runtime `TrainingState` buffers and are passed separately.
+`autograd::unified_loss()` is the **primary text loss path**. `cross_entropy_loss()` and the model-owned loss-options side channel are deleted; callers pass the durable `HyperParameters::LossConfigHP` grouping authored by Phase 1 as `TrainingContext.loss_config`. Phase 2 must not rebuild or wrap loss hyperparameters inside `TrainingLoopState`; it passes the Phase1 grouping directly into `autogradTrainingStep()`. Class-balanced device weights are runtime `TrainingState` buffers and are passed separately.
 
 There is no separate validation/eval loss pass. Phase2 derives epoch metrics from the training batches already executed through `autogradTrainingStep()`. Runtime payload upload lives in `Shared/Batching/BatchDeviceUpload.cu`; loss math lives in the autograd loss primitives only.
 

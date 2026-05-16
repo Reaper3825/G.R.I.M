@@ -407,8 +407,6 @@ add_executable(train_gpu
     ../Phases/Startup/Model/ModelAllocationState.hpp
     ../Phases/Startup/Resume/ResumeState.cu
     ../Phases/Startup/Resume/ResumeState.hpp
-    ../Phases/Startup/Scheduling/SchedulerPreflight.cu
-    ../Phases/Startup/Scheduling/SchedulerPreflight.hpp
     ../Phases/Startup/Epoch/EpochPlan.cu
     ../Phases/Startup/Epoch/EpochPlan.hpp
     ../Phases/Startup/Payload/PayloadBuildInputs.cu

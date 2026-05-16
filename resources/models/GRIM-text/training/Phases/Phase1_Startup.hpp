@@ -40,6 +40,7 @@
 // NOTE: ai_config_paths.hpp must NOT be included directly. It is pulled in
 // transitively (and in the correct order) by HyperParameters_GPU.hpp below.
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Shared/Optimizers/OptimizerState_GPU.hpp"
 #include "../../Shared/Optimizers/OptimizerStep.hpp"
@@ -70,7 +71,6 @@
 #include "Startup/Capacity/MemorySnapshot.hpp"
 #include "Startup/Data/DataInfo.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
-#include "Startup/Scheduling/SchedulerPreflight.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
 #include "Startup/Payload/PayloadBuildInputs.hpp"
 #include "Startup/Resume/ResumeState.hpp"
@@ -229,6 +229,9 @@ struct TelemetryContext {
 struct TrainingContext {
     // Configuration
     StartupConfig config;
+    // Phase1-authored static loss grouping. Phase2 consumes this directly;
+    // it must not rebuild loss hyperparameter wrappers inside the training loop.
+    GRIM::HyperParameters::LossConfigHP loss_config;
     // Capacity stem (single author after HP policy)
     RunCapacity run_capacity;
     // Memory snapshot (evidence only; never authors capacity)
@@ -242,8 +245,6 @@ struct TrainingContext {
     GRIMTS::Training::GuessCacheState guess_cache_state;
     // Data summary/reference artifact (SequenceData remains storage owner)
     DataInfo data_info;
-    // Scheduler dry-run/preflight facts used by epoch planning/final validation
-    SchedulerPreflightState scheduler_preflight;
     // Startup-owned epoch plan facts (LR schedule config, total steps, warmup)
     EpochPlan epoch_plan;
     // Phase1-authored snapshot of static inputs to GRIM::Batching::buildBatchPayload.
@@ -307,7 +308,7 @@ struct TrainingContext {
     int estimated_total_steps = 0;
     
     /** Deterministic LR schedule — exposed curve queryable at any step.
-     *  Constructed in Phase1 once SchedulerPreflightReady has produced total_batches. */
+     *  Constructed in Phase1 after PlannedBatchesReady authors the train payload count. */
     std::optional<GRIM::LR::LRSchedule> lr_schedule;
     
     

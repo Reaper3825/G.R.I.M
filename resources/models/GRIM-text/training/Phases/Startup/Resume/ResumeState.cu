@@ -4,7 +4,6 @@
 #include "../Model/ParameterGroupRegistration.hpp"
 #include "../../Phase1_Startup.hpp"
 #include "../../../OptimizerCheckpoint.hpp"
-#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 #include <filesystem>
 #include <stdexcept>
@@ -86,12 +85,11 @@ void ResumeStateReady(TrainingContext& ctx) {
     Internal::initializeOptimizer(ctx);
     ctx.resume_state = captureResumeState(ctx);
 
-    const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config.hyperparameters);
-    if (loss_config.class_balanced_enabled) {
+    if (ctx.loss_config.class_balanced_enabled) {
         computeAndUploadClassBalancedWeights(
             ctx.data.train_seqs,
             ctx.config.actual_vocab_size,
-            loss_config.class_balanced_beta,
+            ctx.loss_config.class_balanced_beta,
             ctx.model->getTrainingState(),
             *ctx.logging.logger);
     }

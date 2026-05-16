@@ -99,6 +99,44 @@ struct GradientSignalProbe {
     size_t checked = 0;
 };
 
+struct GradientDeltaProbe {
+    bool comparable = false;
+    bool finite = true;
+    bool changed = false;
+    float delta_rms = 0.0f;
+    size_t checked = 0;
+    std::string error_message;
+};
+
+struct GradientSignalExpectation {
+    std::string label;
+    bool had_grad_storage = false;
+    const float* grad_ptr = nullptr;
+    size_t count = 0;
+    std::vector<float> before;
+};
+
+struct GradientVerificationActivity {
+    bool text_loss_active = false;
+    bool selector_loss_active = false;
+    bool exec_selection_loss_active = false;
+    bool exec_write_selection_ce_active = false;
+};
+
+struct GradientSignalBaselines {
+    bool require_current_microbatch_delta = false;
+    std::vector<GradientSignalExpectation> expected;
+
+    const GradientSignalExpectation* find(const std::string& label) const {
+        for (const auto& entry : expected) {
+            if (entry.label == label) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+};
+
 GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
     GradientSignalProbe probe{};
     if (!tensor.data || !tensor.has_grad() || !tensor.grad_data()) {
@@ -134,6 +172,188 @@ GradientSignalProbe probeGradientSignal(Tensor& tensor, cudaStream_t stream) {
     }
     return probe;
 }
+
+GradientSignalExpectation captureGradientExpectation(
+    Tensor& tensor,
+    const std::string& label,
+    cudaStream_t stream
+) {
+    GradientSignalExpectation expectation{};
+    expectation.label = label;
+    if (!tensor.data || !tensor.has_grad() || !tensor.grad_data()) {
+        return expectation;
+    }
+
+    expectation.had_grad_storage = true;
+    expectation.grad_ptr = tensor.grad_data();
+    expectation.count = static_cast<size_t>(tensor.numel());
+    if (expectation.count == 0) {
+        return expectation;
+    }
+
+    expectation.before.resize(expectation.count);
+    CUDA_CHECK(cudaMemcpyAsync(expectation.before.data(), tensor.grad_data(),
+                               expectation.count * sizeof(float),
+                               cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    return expectation;
+}
+
+GradientDeltaProbe probeGradientDelta(
+    Tensor& tensor,
+    const GradientSignalExpectation& expectation,
+    cudaStream_t stream
+) {
+    GradientDeltaProbe probe{};
+    if (!tensor.data || !tensor.has_grad() || !tensor.grad_data()) {
+        probe.error_message = ".grad_data is NULL after backward";
+        return probe;
+    }
+
+    const size_t count = static_cast<size_t>(tensor.numel());
+    probe.checked = count;
+    if (count == 0) {
+        probe.error_message = ".grad has zero elements";
+        return probe;
+    }
+
+    std::vector<float> after(count);
+    CUDA_CHECK(cudaMemcpyAsync(after.data(), tensor.grad_data(),
+                               count * sizeof(float),
+                               cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    if (!expectation.had_grad_storage) {
+        probe.comparable = true;
+        double sum_sq = 0.0;
+        for (float v : after) {
+            if (!std::isfinite(v)) {
+                probe.finite = false;
+            }
+            if (v != 0.0f) {
+                probe.changed = true;
+            }
+            sum_sq += static_cast<double>(v) * static_cast<double>(v);
+        }
+        probe.delta_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count)));
+        if (!std::isfinite(probe.delta_rms)) {
+            probe.finite = false;
+        }
+        return probe;
+    }
+
+    if (expectation.grad_ptr != tensor.grad_data()) {
+        probe.error_message = ".grad_data pointer changed during backward";
+        return probe;
+    }
+    if (expectation.count != count || expectation.before.size() != count) {
+        probe.error_message = ".grad shape/size changed during backward";
+        return probe;
+    }
+
+    probe.comparable = true;
+    double sum_sq = 0.0;
+    for (size_t i = 0; i < count; ++i) {
+        const float before = expectation.before[i];
+        const float current = after[i];
+        if (!std::isfinite(before) || !std::isfinite(current)) {
+            probe.finite = false;
+        }
+        const float delta = current - before;
+        if (delta != 0.0f) {
+            probe.changed = true;
+        }
+        sum_sq += static_cast<double>(delta) * static_cast<double>(delta);
+    }
+    probe.delta_rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count)));
+    if (!std::isfinite(probe.delta_rms)) {
+        probe.finite = false;
+    }
+    return probe;
+}
+
+GradientVerificationActivity detectGradientVerificationActivity(AutogradContext& ctx) {
+    GradientVerificationActivity activity{};
+    activity.text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
+    activity.selector_loss_active = ctx.training_state
+        && !ctx.training_state->autograd_intermediates.selector_fwd_results.empty();
+    if (ctx.training_state) {
+        const auto& rows = ctx.training_state->autograd_intermediates.exec_outputs_per_row;
+        for (const auto& row : rows) {
+            for (const auto& step : row.steps) {
+                if (step.has_selection_ce) {
+                    activity.exec_selection_loss_active = true;
+                    activity.exec_write_selection_ce_active = true;
+                }
+                if ((step.transition_loss.data && step.transition_loss.grad_fn)
+                    || (step.arg_reinforce_loss.data && step.arg_reinforce_loss.grad_fn)) {
+                    activity.exec_selection_loss_active = true;
+                }
+            }
+            if (activity.exec_selection_loss_active && activity.exec_write_selection_ce_active) {
+                break;
+            }
+        }
+    }
+    return activity;
+}
+
+GradientSignalBaselines captureGradientVerificationBaselines(
+    AutogradContext& ctx,
+    bool require_current_microbatch_delta
+) {
+    GradientSignalBaselines baselines{};
+    baselines.require_current_microbatch_delta = require_current_microbatch_delta;
+    if (!require_current_microbatch_delta) {
+        return baselines;
+    }
+
+    const GradientVerificationActivity activity = detectGradientVerificationActivity(ctx);
+    auto captureExpected = [&](Tensor& tensor, const std::string& label) {
+        if (tensor.data) {
+            baselines.expected.push_back(captureGradientExpectation(tensor, label, ctx.stream));
+        }
+    };
+
+    if (activity.text_loss_active) {
+        captureExpected(ctx.lm_head->weights(), "lm_head weights");
+        if (ctx.gpu_encoder && ctx.gpu_encoder->getNumLayers() > 0) {
+            auto* enc0 = ctx.gpu_encoder->getLayer(0);
+            if (enc0) {
+                captureExpected(enc0->attnWqkv(), "layer 0 attnWqkv");
+            }
+        }
+    }
+
+    if (ctx.execution_block && ctx.config->execution_block_enabled) {
+        auto& eb = *ctx.execution_block;
+        if (activity.exec_selection_loss_active) {
+            captureExpected(eb.W_op_select(), "exec block W_op_select");
+            captureExpected(eb.w_arg1_select(), "exec block w_arg1_select");
+        }
+        if (activity.exec_write_selection_ce_active) {
+            captureExpected(eb.W_write_query(), "exec block W_write_query");
+        }
+    }
+
+    if (ctx.model && ctx.config->selector_enabled && activity.selector_loss_active) {
+        auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
+        if (selector) {
+            captureExpected(selector->W_q_select(), "selector W_q_select");
+            captureExpected(selector->W_k_select(), "selector W_k_select");
+            captureExpected(selector->null_logit_bias(), "selector null_logit_bias");
+        }
+    }
+
+    AG_INFO("Captured " << baselines.expected.size()
+            << " pre-backward gradient baselines for accumulation-slot verification");
+    return baselines;
+}
+
+bool verifyGradientsAreConnectedImpl(
+    AutogradContext& ctx,
+    const GradientSignalBaselines* baselines
+);
 }  // namespace
 
 ForwardResult executeAutogradForward(AutogradContext& ctx) {
@@ -503,6 +723,14 @@ BackwardResult executeAutogradBackward(
     if (!accumulate) {
         GRIM::zeroParameterGradients(ctx.model->parameterGroups(), ctx.stream);
     }
+
+    // On accumulation slots, existing parameter grad buffers intentionally hold
+    // earlier microbatch contributions. A post-backward nonzero check alone can
+    // therefore pass even if this microbatch delivered no signal. Snapshot only
+    // the tensors that verification expects to receive signal, then require a
+    // nonzero pre/post delta for those tensors after backward.
+    GradientSignalBaselines gradient_signal_baselines =
+        captureGradientVerificationBaselines(ctx, accumulate);
     
     // Call backward on the text loss (single loss path)
     // Starting with grad_scale (usually 1/accumulation_steps)
@@ -563,7 +791,7 @@ BackwardResult executeAutogradBackward(
     
     // Verify gradients are properly connected before optimizer runs
     AG_INFO("Verifying gradients are connected to optimizer...");
-    if (!verifyGradientsAreConnected(ctx)) {
+    if (!verifyGradientsAreConnectedImpl(ctx, &gradient_signal_baselines)) {
         result.error_message = "Gradient connectivity verification failed";
         AG_ERROR("executeAutogradBackward: " << result.error_message);
         return result;
@@ -586,30 +814,14 @@ BackwardResult executeAutogradBackward(
 // Helper Functions
 //======================================================================
 
-bool verifyGradientsAreConnected(AutogradContext& ctx) {
+namespace {
+bool verifyGradientsAreConnectedImpl(
+    AutogradContext& ctx,
+    const GradientSignalBaselines* baselines
+) {
     bool ok = true;
-    const bool text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
-    const bool selector_loss_active = ctx.training_state
-        && !ctx.training_state->autograd_intermediates.selector_fwd_results.empty();
-    bool exec_selection_loss_active = false;
-    bool exec_write_selection_ce_active = false;
+    const GradientVerificationActivity activity = detectGradientVerificationActivity(ctx);
     const bool reasoning_loss_active = false;  // ReasoningHead forward is diagnostic-only until a real reasoning loss path is assembled.
-    if (ctx.training_state) {
-        const auto& rows = ctx.training_state->autograd_intermediates.exec_outputs_per_row;
-        for (const auto& row : rows) {
-            for (const auto& step : row.steps) {
-                if (step.has_selection_ce) {
-                    exec_selection_loss_active = true;
-                    exec_write_selection_ce_active = true;
-                }
-                if ((step.transition_loss.data && step.transition_loss.grad_fn)
-                    || (step.arg_reinforce_loss.data && step.arg_reinforce_loss.grad_fn)) {
-                    exec_selection_loss_active = true;
-                }
-            }
-            if (exec_selection_loss_active && exec_write_selection_ce_active) break;
-        }
-    }
 
     auto requireAllocatedFinite = [&](Tensor& t, const std::string& label) {
         if (!t.data) return;
@@ -638,6 +850,38 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
     auto requireReceivedGradient = [&](Tensor& t, const std::string& label) {
         requireAllocatedFinite(t, label);
         if (!t.data || !t.has_grad() || !t.grad_data()) return;
+
+        if (baselines && baselines->require_current_microbatch_delta) {
+            const GradientSignalExpectation* expectation = baselines->find(label);
+            if (!expectation) {
+                AG_WARN(label << ".grad current-microbatch baseline is missing during accumulation verification");
+                ok = false;
+                return;
+            }
+            GradientDeltaProbe delta_probe = probeGradientDelta(t, *expectation, ctx.stream);
+            if (!delta_probe.comparable) {
+                AG_WARN(label << ".grad could not be compared against its pre-backward accumulation baseline"
+                        << delta_probe.error_message);
+                ok = false;
+                return;
+            }
+            if (!delta_probe.finite) {
+                AG_WARN(label << ".grad current-microbatch delta contains non-finite values (checked="
+                        << delta_probe.checked << ", delta_rms=" << delta_probe.delta_rms << ")");
+                ok = false;
+                return;
+            }
+            if (!delta_probe.changed || delta_probe.delta_rms == 0.0f) {
+                AG_WARN(label << ".grad did not change during this accumulation microbatch "
+                        << "(checked=" << delta_probe.checked << ") — current backward path did not deliver signal");
+                ok = false;
+                return;
+            }
+            AG_INFO(label << ".grad received current-microbatch signal; checked="
+                    << delta_probe.checked << " delta_rms=" << delta_probe.delta_rms);
+            return;
+        }
+
         GradientSignalProbe probe = probeGradientSignal(t, ctx.stream);
         if (!probe.nonzero || probe.rms == 0.0f) {
             AG_WARN(label << ".grad is allocated but full-tensor RMS is zero after this backward "
@@ -676,7 +920,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             } else {
                 AG_INFO("LM head gradients SEPARATE: " << ctx.lm_head->weights().numel() << " elements at " << ctx.lm_head->weights().grad_data());
             }
-            if (text_loss_active) {
+            if (activity.text_loss_active) {
                 requireReceivedGradient(ctx.lm_head->weights(), "lm_head weights");
             } else {
                 requireAllocatedFinite(ctx.lm_head->weights(), "lm_head weights");
@@ -742,7 +986,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             check(enc->layerScale1(), "layerScale1");
             check(enc->layerScale2(), "layerScale2");
         }
-        if (text_loss_active && num_layers > 0) {
+        if (activity.text_loss_active && num_layers > 0) {
             auto* enc0 = ctx.gpu_encoder->getLayer(0);
             if (enc0) {
                 requireReceivedGradient(enc0->attnWqkv(), "layer 0 attnWqkv");
@@ -798,11 +1042,11 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         checkEB(eb.b_trace(), "b_trace");
         checkEB(eb.W_reason_gate(), "W_reason_gate");
         checkEB(eb.W_trace_gate(), "W_trace_gate");
-        if (exec_selection_loss_active) {
+        if (activity.exec_selection_loss_active) {
             requireReceivedGradient(eb.W_op_select(), "exec block W_op_select");
             requireReceivedGradient(eb.w_arg1_select(), "exec block w_arg1_select");
         }
-        if (exec_write_selection_ce_active) {
+        if (activity.exec_write_selection_ce_active) {
             requireReceivedGradient(eb.W_write_query(), "exec block W_write_query");
         }
     }
@@ -818,7 +1062,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             checkSel(selector->W_k_select(), "W_k_select");
             checkSel(selector->null_key_select(), "null_key_select");
             checkSel(selector->null_logit_bias(), "null_logit_bias");
-            if (selector_loss_active) {
+            if (activity.selector_loss_active) {
                 requireReceivedGradient(selector->W_q_select(), "selector W_q_select");
                 requireReceivedGradient(selector->W_k_select(), "selector W_k_select");
                 requireReceivedGradient(selector->null_logit_bias(), "selector null_logit_bias");
@@ -844,6 +1088,11 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
     }
     
     return ok;
+}
+}  // namespace
+
+bool verifyGradientsAreConnected(AutogradContext& ctx) {
+    return verifyGradientsAreConnectedImpl(ctx, nullptr);
 }
 
 // Finding 2 (Rule 26): computeGradientNorm() DELETED — redundant with

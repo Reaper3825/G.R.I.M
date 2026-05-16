@@ -275,6 +275,7 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 
 2. **`buildTrie()` and `initGPU()` must happen before non-empty encode.**
    Load or train vocab first, build the trie, then upload the trie/workspace with `UnigramLM::initGPU()`.
+   Tokenizer training must use `UnigramLM::initGPUForMaxSequenceLength(longest_normalized_e_step_segment)` so normalized corpus spans larger than the default workspace still use the reusable CUDA Viterbi buffers instead of failing at E-step time.
 
    The trie mirrors the current learned-piece set. Rebuild it after load/train mutations only; do not add post-load vocab capping paths.
 

@@ -8,7 +8,6 @@
 #include "Startup/Resume/ResumeState.hpp"
 #include "Startup/GuessCache/GuessCacheInit.hpp"
 #include "Startup/Telemetry/TelemetryInitInputs.hpp"
-#include "Startup/Scheduling/SchedulerPreflight.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
 #include "Startup/Payload/PayloadBuildInputs.hpp"
 #include "Startup/Batching/PlannedBatches.hpp"
@@ -103,10 +102,9 @@ Phase1Result executePhase1(int argc, char** argv) {
     ResumeStateReady(*ctx);
     GuessCacheReady(*ctx);
     TelemetryReady(*ctx);
-    SchedulerPreflightReady(*ctx);
-    EpochPlanReady(*ctx);
     PayloadBuildInputsReady(*ctx);
     PlannedBatchesReady(*ctx);
+    EpochPlanReady(*ctx);
     StartupValidated(*ctx);
     Phase2HandoffReady(*ctx);
 
