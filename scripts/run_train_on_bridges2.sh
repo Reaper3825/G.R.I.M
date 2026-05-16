@@ -10,6 +10,8 @@
 #   - Data: By default does NOT push merged_verified_cache.jsonl, concept_blocks.jsonl, or curriculum_registry.json,
 #     and does NOT run the flash-attention submodule step on --build. Opt in with --sync-all or
 #     --sync-mcs|--sync-cbs|--sync-crs|--sync-fas, or env GRIM_BRIDGES2_SYNC_ALL=1 / GRIM_BRIDGES2_SYNC_MCS|CBS|CRS|FAS=1.
+#   - Large transfers: default auto mode uses rsync --compress when available on both ends, then zstd, then gzip.
+#     Override with GRIM_BRIDGES2_TRANSFER_METHOD=auto|rsync|zstd|gzip|raw. gzip level defaults to 1 via GRIM_BRIDGES2_GZIP_LEVEL.
 #   - Submodules: With --sync-fas / SYNC_FAS, flash-attention is refreshed via bridges2_ensure_flash_attention.sh
 #     (no forced submodule update when the expected commits are already checked out on the remote).
 #   - vcpkg: Script clones to GRIM_BRIDGES2_DIR/vcpkg if missing
@@ -38,6 +40,7 @@
 #                    Pass --force to rebuild even if files exist: --TT --force
 
 set -e
+set -o pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRAINING_DIR="resources/models/GRIM-text/training"
 GRIM_DIR="resources/models/GRIM-text/GRIM"
@@ -177,6 +180,158 @@ fi
 trap 'ssh -S "$BRIDGES2_CTRL" -O exit "$BRIDGES2_SSH" 2>/dev/null; rm -f "$BRIDGES2_CTRL"' EXIT
 BRIDGES2_SSH_OPTS="-S $BRIDGES2_CTRL -o ControlMaster=no"
 
+remote_quote() {
+  printf '%q' "$1"
+}
+
+verify_remote_size() {
+  local label="$1"
+  local remote_path="$2"
+  local expected_bytes="$3"
+  local q_remote_path
+  local actual_bytes
+
+  q_remote_path="$(remote_quote "$remote_path")"
+  actual_bytes=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "stat -c %s $q_remote_path 2>/dev/null || wc -c < $q_remote_path" | tr -d '[:space:]')
+  if [[ "$actual_bytes" != "$expected_bytes" ]]; then
+    echo "ERROR: $label transfer size mismatch: local=$expected_bytes remote=$actual_bytes"
+    exit 1
+  fi
+  echo "  verified: $actual_bytes bytes"
+}
+
+remote_has_command() {
+  local command_name="$1"
+  local q_command_name
+
+  q_command_name="$(remote_quote "$command_name")"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "command -v $q_command_name >/dev/null 2>&1"
+}
+
+stream_file_with_progress() {
+  local local_path="$1"
+  local size_bytes="$2"
+
+  if command -v pv >/dev/null 2>&1; then
+    pv -s "$size_bytes" "$local_path"
+  elif dd if=/dev/null of=/dev/null bs=1 count=0 status=progress >/dev/null 2>&1; then
+    echo "  progress: using dd status=progress (bytes read before compression)" >&2
+    dd if="$local_path" bs=16M status=progress
+  else
+    echo "  progress: install pv for live transfer progress; streaming without progress meter" >&2
+    cat "$local_path"
+  fi
+}
+
+transfer_training_file() {
+  local label="$1"
+  local local_path="$2"
+  local remote_path="$3"
+  local remote_dir
+  local q_remote_dir
+  local q_remote_path
+  local q_tmp_path
+  local size_bytes
+  local method
+  local gzip_level
+  local compressor_name=""
+  local tmp_path
+
+  if [[ ! -f "$local_path" ]]; then
+    echo "ERROR: $label not found at $local_path"
+    exit 1
+  fi
+
+  remote_dir="$(dirname "$remote_path")"
+  q_remote_dir="$(remote_quote "$remote_dir")"
+  q_remote_path="$(remote_quote "$remote_path")"
+  tmp_path="$remote_path.transfer.$$"
+  q_tmp_path="$(remote_quote "$tmp_path")"
+  size_bytes=$(wc -c < "$local_path" | tr -d '[:space:]')
+  method="${GRIM_BRIDGES2_TRANSFER_METHOD:-auto}"
+  gzip_level="${GRIM_BRIDGES2_GZIP_LEVEL:-1}"
+
+  case "$method" in
+    auto|rsync|zstd|gzip|raw) ;;
+    *) echo "ERROR: GRIM_BRIDGES2_TRANSFER_METHOD must be auto, rsync, zstd, gzip, or raw (got: $method)"; exit 1 ;;
+  esac
+  [[ "$gzip_level" =~ ^[1-9]$ ]] || { echo "ERROR: GRIM_BRIDGES2_GZIP_LEVEL must be 1..9 (got: $gzip_level)"; exit 1; }
+
+  echo "Transferring $label ($size_bytes bytes)..."
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $q_remote_dir"
+
+  if [[ "$method" == "auto" || "$method" == "rsync" ]]; then
+    if command -v rsync >/dev/null 2>&1; then
+      if remote_has_command rsync; then
+        echo "  method: rsync --compress --partial --progress"
+        if rsync -a --compress --partial --progress -e "ssh $BRIDGES2_SSH_OPTS" "$local_path" "$BRIDGES2_SSH:$remote_path"; then
+          verify_remote_size "$label" "$remote_path" "$size_bytes"
+          echo "  -> $remote_path"
+          return 0
+        fi
+        if [[ "$method" == "rsync" ]]; then
+          echo "ERROR: rsync transfer failed for $label"
+          exit 1
+        fi
+        echo "  rsync failed; trying gzip stream."
+      elif [[ "$method" == "rsync" ]]; then
+        echo "ERROR: rsync requested but not found on Bridges-2. Set GRIM_BRIDGES2_TRANSFER_METHOD=gzip or install rsync remotely."
+        exit 1
+      else
+        echo "  rsync not found on Bridges-2; trying gzip stream."
+      fi
+    elif [[ "$method" == "rsync" ]]; then
+      echo "ERROR: rsync requested but not found locally. Install rsync or set GRIM_BRIDGES2_TRANSFER_METHOD=gzip."
+      exit 1
+    else
+      echo "  rsync not found locally; trying gzip stream."
+    fi
+  fi
+
+  if [[ "$method" == "auto" || "$method" == "zstd" ]]; then
+    if command -v zstd >/dev/null 2>&1 && remote_has_command zstd; then
+      echo "  method: zstd -1 -T0 | ssh zstd -dc"
+      stream_file_with_progress "$local_path" "$size_bytes" | zstd -1 -T0 -c | ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; zstd -dc > $q_tmp_path; mv -f $q_tmp_path $q_remote_path"
+      verify_remote_size "$label" "$remote_path" "$size_bytes"
+      echo "  -> $remote_path"
+      return 0
+    fi
+
+    if [[ "$method" == "zstd" ]]; then
+      echo "ERROR: zstd requested, but local zstd or remote Bridges-2 zstd is unavailable. Set GRIM_BRIDGES2_TRANSFER_METHOD=gzip."
+      exit 1
+    fi
+    echo "  zstd unavailable on one side; trying gzip stream."
+  fi
+
+  if [[ "$method" == "auto" || "$method" == "gzip" ]]; then
+    if command -v pigz >/dev/null 2>&1; then
+      compressor_name="pigz"
+    elif command -v gzip >/dev/null 2>&1; then
+      compressor_name="gzip"
+    fi
+
+    if [[ -n "$compressor_name" ]] && remote_has_command gzip; then
+      echo "  method: $compressor_name -$gzip_level | ssh gzip -dc"
+      stream_file_with_progress "$local_path" "$size_bytes" | "$compressor_name" -"$gzip_level" -c | ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; gzip -dc > $q_tmp_path; mv -f $q_tmp_path $q_remote_path"
+      verify_remote_size "$label" "$remote_path" "$size_bytes"
+      echo "  -> $remote_path"
+      return 0
+    fi
+
+    if [[ "$method" == "gzip" ]]; then
+      echo "ERROR: gzip transfer requested, but local compressor or remote gzip is unavailable."
+      exit 1
+    fi
+    echo "  gzip stream unavailable; using raw ssh transfer."
+  fi
+
+  echo "  method: raw ssh cat (slow fallback)"
+  stream_file_with_progress "$local_path" "$size_bytes" | ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; cat > $q_tmp_path; mv -f $q_tmp_path $q_remote_path"
+  verify_remote_size "$label" "$remote_path" "$size_bytes"
+  echo "  -> $remote_path"
+}
+
 # Sync repo
 BRIDGES2_SYNCED=false
 if [[ -z "${GRIM_BRIDGES2_SKIP_PULL:-}" ]]; then
@@ -258,23 +413,13 @@ fi
 if [[ "$SKIP_MCS" == "1" ]]; then
   :
 else
-  if [[ ! -f "$CACHE_PATH_EXPANDED" ]]; then
-    echo "ERROR: merged_verified_cache.jsonl not found at $CACHE_PATH_EXPANDED"
-    exit 1
-  fi
-  echo "Transferring merged_verified_cache.jsonl..."
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_DATA"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CACHE" < "$CACHE_PATH_EXPANDED"
-  echo "  -> $REMOTE_CACHE"
+  transfer_training_file "merged_verified_cache.jsonl" "$CACHE_PATH_EXPANDED" "$REMOTE_CACHE"
 fi
 
 if [[ "$SKIP_CBS" == "1" ]]; then
   :
 elif [[ -f "$CONCEPT_BLOCKS_PATH_EXPANDED" ]]; then
-  echo "Transferring concept_blocks.jsonl..."
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_DATA"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CONCEPT_BLOCKS" < "$CONCEPT_BLOCKS_PATH_EXPANDED"
-  echo "  -> $REMOTE_CONCEPT_BLOCKS"
+  transfer_training_file "concept_blocks.jsonl" "$CONCEPT_BLOCKS_PATH_EXPANDED" "$REMOTE_CONCEPT_BLOCKS"
 else
   echo "Skipping concept_blocks.jsonl (not found at $CONCEPT_BLOCKS_PATH_EXPANDED)."
   echo "  DataLoader will use cache-only curriculum; add the file locally to ship UltraChat/stem blocks."
@@ -283,10 +428,7 @@ fi
 if [[ "$SKIP_CRS" == "1" ]]; then
   :
 elif [[ -f "$CURRICULUM_REGISTRY_PATH_EXPANDED" ]]; then
-  echo "Transferring curriculum_registry.json..."
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $REMOTE_DATA"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $REMOTE_CURRICULUM_REGISTRY" < "$CURRICULUM_REGISTRY_PATH_EXPANDED"
-  echo "  -> $REMOTE_CURRICULUM_REGISTRY"
+  transfer_training_file "curriculum_registry.json" "$CURRICULUM_REGISTRY_PATH_EXPANDED" "$REMOTE_CURRICULUM_REGISTRY"
 else
   echo "Skipping curriculum_registry.json (not found at $CURRICULUM_REGISTRY_PATH_EXPANDED)."
 fi

@@ -7,6 +7,7 @@
 
 #include "../Shared/UnigramByte/Byte.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
+#include "../Shared/UnigramByte/Training/UnigramForwardBackward.hpp"
 #include "../Shared/UnigramByte/UnigramViterbi.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
@@ -16,8 +17,11 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <set>
+#include <stdexcept>
 #include <vector>
 #include <string>
 #include <cstring>
@@ -54,6 +58,25 @@ __global__ void kernelViterbiBacktrack(
     int* __restrict__ error_code
 );
 
+} // namespace Tokenizer
+} // namespace GRIM
+
+namespace GRIM {
+namespace Tokenizer {
+void requireUnigramFinalCleanupLeavesLearnedPiece(size_t piece_count,
+                                                  size_t dead_count,
+                                                  const char* caller);
+void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
+    double expected_learned_piece_tokens,
+    double expected_fixed_penalty_byte_fallback_tokens,
+    const char* phase_label,
+    const char* caller);
+double scoreUnigramShrinkCandidateForPosteriorCompression(const std::string& piece_text,
+                                                          double posterior_expected_count,
+                                                          const char* caller);
+uint64_t addUnigramSubwordCountsForTraining(uint64_t current,
+                                            uint64_t delta,
+                                            const char* caller);
 } // namespace Tokenizer
 } // namespace GRIM
 
@@ -162,6 +185,10 @@ bool testByteUTF8(std::string& message) {
     std::string input = "Café";  // é is 2 bytes in UTF-8
     std::vector<int> tokens = byte.encode(input);
     std::string output = byte.decode(tokens);
+
+    ASSERT_EQ(tokens.size(), input.size(), "Byte fallback must emit one token per raw UTF-8 byte");
+    ASSERT_EQ(tokens[3], byte.byteToToken(static_cast<uint8_t>(0xC3)), "First byte of é should be a separate byte token");
+    ASSERT_EQ(tokens[4], byte.byteToToken(static_cast<uint8_t>(0xA9)), "Second byte of é should be a separate byte token");
     
     ASSERT_STR_EQ(output, input, "UTF-8 round-trip failed");
     
@@ -298,6 +325,255 @@ bool testUnigramUnknown(std::string& message) {
     return true;
 }
 
+bool testUnigramForwardBackwardByteFallbackIsFixedPenalty(std::string& message) {
+    std::vector<UnigramPiece> pieces;
+    UnigramPiece piece;
+    piece.text = "a";
+    piece.score = 0.0f;
+    piece.is_user_defined = false;
+    pieces.push_back(piece);
+
+    UnigramForwardBackwardLattice lattice(
+        pieces,
+        true,
+        "testUnigramForwardBackwardByteFallbackIsFixedPenalty lattice");
+    UnigramForwardBackwardStats stats(pieces.size());
+
+    lattice.accumulateSegment(
+        "az",
+        stats,
+        "testUnigramForwardBackwardByteFallbackIsFixedPenalty accumulate");
+
+    ASSERT_NEAR(stats.piece_expected_counts[0], 1.0, 1.0e-9,
+                "Learned piece posterior should be normalized over lattice paths");
+    ASSERT_NEAR(stats.expected_learned_piece_tokens, 1.0, 1.0e-9,
+                "Learned-piece expected token telemetry mismatch");
+    ASSERT_NEAR(stats.expected_fixed_penalty_byte_fallback_tokens, 1.0, 1.0e-9,
+                "Byte fallback telemetry should count fixed-penalty path usage separately");
+    ASSERT_NEAR(stats.log_likelihood, static_cast<double>(UNKNOWN_SCORE), 1.0e-6,
+                "Partition should include the fixed fallback penalty without normalizing it into learned pieces");
+
+    return true;
+}
+
+bool testUnigramForwardBackwardByteFallbackIsByteLevelForUtf8(std::string& message) {
+    std::vector<UnigramPiece> pieces;
+    UnigramPiece piece;
+    piece.text = "a";
+    piece.score = 0.0f;
+    piece.is_user_defined = false;
+    pieces.push_back(piece);
+
+    UnigramForwardBackwardLattice lattice(
+        pieces,
+        true,
+        "testUnigramForwardBackwardByteFallbackIsByteLevelForUtf8 lattice");
+    UnigramForwardBackwardStats stats(pieces.size());
+
+    const std::string e_acute = "\xC3\xA9";
+    ASSERT_EQ(e_acute.size(), static_cast<size_t>(2), "Regression fixture must be a 2-byte UTF-8 character");
+
+    lattice.accumulateSegment(
+        e_acute,
+        stats,
+        "testUnigramForwardBackwardByteFallbackIsByteLevelForUtf8 accumulate");
+
+    ASSERT_NEAR(stats.expected_learned_piece_tokens, 0.0, 1.0e-12,
+                "No learned piece should match the UTF-8 fallback-only fixture");
+    ASSERT_NEAR(stats.expected_fixed_penalty_byte_fallback_tokens, static_cast<double>(e_acute.size()), 1.0e-9,
+                "UTF-8 fallback must count one fixed-penalty transition per raw byte, not per codepoint");
+    ASSERT_NEAR(stats.log_likelihood, static_cast<double>(e_acute.size()) * static_cast<double>(UNKNOWN_SCORE), 1.0e-6,
+                "UTF-8 fallback partition must apply UNKNOWN_SCORE once per raw byte");
+
+    return true;
+}
+
+bool testUnigramTrainFinalCleanupRejectsEmptyLearnedVocab(std::string& message) {
+    bool threw = false;
+    std::string error_text;
+    try {
+        requireUnigramFinalCleanupLeavesLearnedPiece(
+            3,
+            3,
+            "testUnigramTrainFinalCleanupRejectsEmptyLearnedVocab all-dead");
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "Final cleanup must fail before deleting every learned piece");
+    ASSERT_TRUE(error_text.find("delete every learned piece") != std::string::npos,
+                "Final cleanup error should identify the empty learned-vocab root cause");
+    ASSERT_TRUE(error_text.find("Phase-D lattice construction") != std::string::npos,
+                "Final cleanup error should mention that Phase-D must not receive an empty learned vocab");
+
+    try {
+        requireUnigramFinalCleanupLeavesLearnedPiece(
+            3,
+            2,
+            "testUnigramTrainFinalCleanupRejectsEmptyLearnedVocab survivor");
+    } catch (const std::exception& e) {
+        message = std::string("Final cleanup guard should allow at least one learned-piece survivor: ") + e.what();
+        return false;
+    }
+
+    return true;
+}
+
+bool testUnigramTrainRejectsFallbackDominatedPosteriorMass(std::string& message) {
+    bool threw = false;
+    std::string error_text;
+    try {
+        requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
+            0.25,
+            1.0,
+            "test-phase",
+            "testUnigramTrainRejectsFallbackDominatedPosteriorMass dominated");
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "Converged-phase guard must reject byte-fallback-dominated posterior mass");
+    ASSERT_TRUE(error_text.find("byte fallback dominated posterior mass") != std::string::npos,
+                "Converged-phase guard error should identify fallback dominance as the root cause");
+    ASSERT_TRUE(error_text.find("after EM convergence") != std::string::npos,
+                "Guard error should state that fallback dominance is checked after EM convergence");
+
+    try {
+        requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
+            1.0,
+            1.0,
+            "test-phase",
+            "testUnigramTrainRejectsFallbackDominatedPosteriorMass balanced");
+        requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
+            0.0,
+            0.0,
+            "test-phase",
+            "testUnigramTrainRejectsFallbackDominatedPosteriorMass no-fallback");
+    } catch (const std::exception& e) {
+        message = std::string("Converged-phase guard should allow balanced or no-fallback posterior mass: ") + e.what();
+        return false;
+    }
+
+    return true;
+}
+
+bool testUnigramTrainShrinkRankingUsesCompressionGain(std::string& message) {
+    const double frequent_tiny_fragment_score = scoreUnigramShrinkCandidateForPosteriorCompression(
+        "a",
+        10.0,
+        "testUnigramTrainShrinkRankingUsesCompressionGain tiny");
+    const double less_frequent_high_compression_score = scoreUnigramShrinkCandidateForPosteriorCompression(
+        "abcdefghij",
+        9.2,
+        "testUnigramTrainShrinkRankingUsesCompressionGain high-compression");
+
+    ASSERT_TRUE(less_frequent_high_compression_score > frequent_tiny_fragment_score,
+                "Shrink ranking should let compression gain beat a slightly more frequent tiny fragment");
+    ASSERT_NEAR(scoreUnigramShrinkCandidateForPosteriorCompression(
+                    "abcdefghij",
+                    0.0,
+                    "testUnigramTrainShrinkRankingUsesCompressionGain zero-count"),
+                0.0,
+                1.0e-12,
+                "Zero-posterior pieces must not survive only because they are long");
+    ASSERT_NEAR(scoreUnigramShrinkCandidateForPosteriorCompression(
+                    "abcdefghij",
+                    0.01,
+                    "testUnigramTrainShrinkRankingUsesCompressionGain rare-long"),
+                0.10,
+                1.0e-12,
+                "Rare long pieces should receive expected compression gain, not a near-free normalized ratio bonus");
+
+    return true;
+}
+
+bool testUnigramTrainByteFallbackDisabledAddsCharacterSeeds(std::string& message) {
+    UnigramLM unigram;
+    unigram.setByteFallbackEnabled(false);
+
+    std::string repeated;
+    for (int i = 0; i < 32; ++i) {
+        repeated += "a ";
+    }
+    std::vector<std::string> corpus = {repeated};
+
+    const bool trained = unigram.trainFromCorpus(
+        corpus,
+        100,    // target_vocab_size: enough room for required char seeds and mined pieces
+        1.0f,   // character_coverage: byte-fallback-off requires exact char coverage
+        3,      // min_subword_freq
+        false,  // prune_during_mining
+        false,  // enable_parallel_subword_mining
+        1,      // subword_mining_workers
+        0);     // subword_mining_max_bytes
+    ASSERT_TRUE(trained, "trainFromCorpus should succeed when fallback-off char seeds cover the corpus");
+    ASSERT_TRUE(unigram.hasPiece("a"), "Byte-fallback-off training must insert ASCII character seed 'a' as a learned piece");
+    ASSERT_TRUE(unigram.hasPiece("\xe2\x96\x81"), "Byte-fallback-off training must insert SentencePiece underline as a learned piece");
+
+    return true;
+}
+
+bool testUnigramTrainByteFallbackDisabledFailsOnUncoveredCharacterSeed(std::string& message) {
+    UnigramLM unigram;
+    unigram.setByteFallbackEnabled(false);
+
+    std::vector<std::string> corpus = {"aaaaaaaaaaaaaaaa uncommon_z"};
+    bool threw = false;
+    std::string error_text;
+    try {
+        unigram.trainFromCorpus(
+            corpus,
+            100,
+            1.0f,
+            3,
+            false,
+            false,
+            1,
+            0);
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "Byte-fallback-off training must fail immediately when character seeds cannot cover the corpus");
+    ASSERT_TRUE(error_text.find("byte fallback is disabled") != std::string::npos,
+                "Coverage failure should identify that byte fallback is disabled");
+    ASSERT_TRUE(error_text.find("Step-2 character seeds do not cover") != std::string::npos,
+                "Coverage failure should identify uncovered character seeds before EM");
+
+    return true;
+}
+
+bool testUnigramTrainSubwordCountsUseUint64(std::string& message) {
+    const uint64_t above_signed_int = static_cast<uint64_t>(std::numeric_limits<int>::max()) + 1ULL;
+    ASSERT_EQ(addUnigramSubwordCountsForTraining(
+                  above_signed_int - 1ULL,
+                  1ULL,
+                  "testUnigramTrainSubwordCountsUseUint64 above-int"),
+              above_signed_int,
+              "Subword counts must support values above signed int range");
+
+    bool threw = false;
+    std::string error_text;
+    try {
+        addUnigramSubwordCountsForTraining(
+            std::numeric_limits<uint64_t>::max() - 1ULL,
+            2ULL,
+            "testUnigramTrainSubwordCountsUseUint64 overflow");
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "Subword count addition must fail loudly on uint64 overflow");
+    ASSERT_TRUE(error_text.find("subword candidate count overflow") != std::string::npos,
+                "Overflow error should identify subword candidate count overflow");
+
+    return true;
+}
+
 bool testUnigramTrainFiltersRepetitionNoise(std::string& message) {
     UnigramLM unigram;
 
@@ -351,6 +627,143 @@ bool testUnigramTrainDedupsRepeatedVariants(std::string& message) {
     const bool has_sooo = unigram.hasPiece("sooo") || unigram.hasPiece("\xe2\x96\x81sooo");
     ASSERT_TRUE(has_soo || has_sooo, "Expected at least one repeated-char variant to survive");
     ASSERT_FALSE(has_soo && has_sooo, "Repeated-char variants should deduplicate to one form");
+
+    return true;
+}
+
+bool testUnigramTrainPreservesSpieceUnderlineDedupBoundary(std::string& message) {
+    UnigramLM unigram;
+
+    std::vector<std::string> corpus = {
+        "word sword word sword word sword word sword",
+        "word sword word sword word sword word sword",
+        "word sword word sword word sword word sword"
+    };
+
+    const bool trained = unigram.trainFromCorpus(
+        corpus,
+        5000,   // target_vocab_size; keep candidate vocab above this tiny fixture size
+        1.0f,   // character_coverage
+        3,      // min_subword_freq
+        false,  // prune_during_mining
+        false,  // enable_parallel_subword_mining
+        1,      // subword_mining_workers
+        0);     // subword_mining_max_bytes
+    ASSERT_TRUE(trained, "trainFromCorpus should succeed");
+
+    ASSERT_TRUE(unigram.hasPiece("\xe2\x96\x81word"),
+                "Structural dedup must preserve word-initial ▁word as its own candidate");
+    ASSERT_TRUE(unigram.hasPiece("word"),
+                "Structural dedup must not collapse bare word into ▁word or vice versa");
+
+    return true;
+}
+
+bool testUnigramTrainStridedMiningKeepsLateDocumentPatterns(std::string& message) {
+    UnigramLM unigram;
+
+    std::string long_document;
+    for (int i = 0; i < 40; ++i) {
+        long_document += "alpha beta gamma delta ";
+    }
+    for (int i = 0; i < 8; ++i) {
+        long_document += "tailquark ";
+    }
+
+    std::vector<std::string> corpus = {long_document};
+
+    const bool trained = unigram.trainFromCorpus(
+        corpus,
+        5000,   // target_vocab_size; avoid pruning this small candidate set
+        1.0f,   // character_coverage
+        3,      // min_subword_freq
+        false,  // prune_during_mining
+        false,  // enable_parallel_subword_mining
+        1,      // subword_mining_workers
+        128);   // subword_mining_max_bytes; forces sampling below full document size
+    ASSERT_TRUE(trained, "trainFromCorpus should succeed with strided mining enabled");
+
+    ASSERT_TRUE(unigram.hasPiece("tailquark") || unigram.hasPiece("\xe2\x96\x81tailquark"),
+                "Strided subword mining must sample late-document patterns, not only prefixes");
+
+    return true;
+}
+
+bool testUnigramTrainStridedMiningOverlapsBoundaryCandidates(std::string& message) {
+    UnigramLM unigram;
+    unigram.setByteFallbackEnabled(false);
+
+    // With subword_mining_max_bytes=160 across ten identical 47-byte normalized
+    // documents, each document receives a 16-byte intended sampled span centered
+    // at byte 15..31. "overlapquark" starts at normalized byte 27 and ends at
+    // byte 39, so it can only be mined if the sampled span has right context
+    // overlap while still counting only starts inside 15..31.
+    const std::string boundary_crossing_document =
+        "abcdefghijklmnopqrstuvwx"
+        "overlapquark"
+        "yzabcdef";
+    std::vector<std::string> corpus(10, boundary_crossing_document);
+
+    const bool trained = unigram.trainFromCorpus(
+        corpus,
+        5000,   // target_vocab_size; keep candidate vocab above this fixture size
+        1.0f,   // character_coverage; no-byte-fallback path requires exact char coverage
+        3,      // min_subword_freq
+        false,  // prune_during_mining
+        false,  // enable_parallel_subword_mining
+        1,      // subword_mining_workers
+        160);   // 16 intended sampled bytes per document, plus overlap context
+    ASSERT_TRUE(trained, "trainFromCorpus should succeed with overlapped strided mining enabled");
+
+    ASSERT_TRUE(unigram.hasPiece("overlapquark"),
+                "Sampled span overlap must mine pieces that start inside the intended span and end just outside it");
+
+    return true;
+}
+
+bool testUnigramTrainEnforcesBytePieceLimit(std::string& message) {
+    UnigramLM unigram;
+
+    const std::string thirty_three_byte_piece =
+        "\xF0\x9F\x99\x82"  // 🙂 4 bytes
+        "\xF0\x9F\x9A\x80"  // 🚀 4 bytes
+        "\xF0\x9F\x8C\x9F"  // 🌟 4 bytes
+        "\xE6\xBC\xA2"      // 漢 3 bytes
+        "\xE5\xAD\x97"      // 字 3 bytes
+        "\xE4\xBB\xAE"      // 仮 3 bytes
+        "\xE5\x90\x8D"      // 名 3 bytes
+        "\xE4\xBA\xA4"      // 交 3 bytes
+        "\xE3\x81\x98"      // じ 3 bytes
+        "\xE3\x82\x8A";     // り 3 bytes
+    ASSERT_EQ(thirty_three_byte_piece.size(), static_cast<size_t>(MAX_PIECE_LENGTH + 1),
+              "Regression fixture must remain exactly one byte over MAX_PIECE_LENGTH");
+
+    std::vector<std::string> corpus = {
+        thirty_three_byte_piece + " alpha " + thirty_three_byte_piece,
+        thirty_three_byte_piece + " beta " + thirty_three_byte_piece,
+        thirty_three_byte_piece + " gamma " + thirty_three_byte_piece
+    };
+
+    const bool trained = unigram.trainFromCorpus(
+        corpus,
+        300,    // target_vocab_size
+        1.0f,   // character_coverage
+        3,      // min_subword_freq
+        false,  // prune_during_mining
+        false,  // enable_parallel_subword_mining
+        1,      // subword_mining_workers
+        0);     // subword_mining_max_bytes
+    ASSERT_TRUE(trained, "trainFromCorpus should not append >32-byte learned pieces");
+
+    ASSERT_FALSE(unigram.hasPiece(thirty_three_byte_piece),
+                 "A 33-byte candidate must stay on the byte-fallback path, not become a learned piece");
+    for (int token_idx = 0; token_idx < unigram.pieceCount(); ++token_idx) {
+        const int token_id = UnigramLM::tokenIdForIndex(token_idx);
+        const UnigramPiece* piece = unigram.getPiece(token_id);
+        ASSERT_TRUE(piece != nullptr, "Every learned-piece token id must resolve to a piece");
+        ASSERT_TRUE(piece->text.size() <= static_cast<size_t>(MAX_PIECE_LENGTH),
+                    "Tokenizer training produced an oversized learned piece");
+    }
 
     return true;
 }
@@ -2169,8 +2582,20 @@ int main(int argc, char** argv) {
     suite.addTest("Unigram.SentencePiecePunctuation", testUnigramSentencePiecePunctuationPiece);
     suite.addTest("Unigram.Decode", testUnigramDecode);
     suite.addTest("Unigram.Unknown", testUnigramUnknown);
+    suite.addTest("Unigram.ForwardBackward.ByteFallbackFixedPenalty", testUnigramForwardBackwardByteFallbackIsFixedPenalty);
+    suite.addTest("Unigram.ForwardBackward.ByteFallbackUtf8IsByteLevel", testUnigramForwardBackwardByteFallbackIsByteLevelForUtf8);
+    suite.addTest("Unigram.Train.FinalCleanupRejectsEmptyLearnedVocab", testUnigramTrainFinalCleanupRejectsEmptyLearnedVocab);
+    suite.addTest("Unigram.Train.RejectFallbackDominatedPosteriorMass", testUnigramTrainRejectsFallbackDominatedPosteriorMass);
+    suite.addTest("Unigram.Train.ShrinkRankingUsesCompressionGain", testUnigramTrainShrinkRankingUsesCompressionGain);
+    suite.addTest("Unigram.Train.ByteFallbackOffAddsCharSeeds", testUnigramTrainByteFallbackDisabledAddsCharacterSeeds);
+    suite.addTest("Unigram.Train.ByteFallbackOffFailsUncoveredChars", testUnigramTrainByteFallbackDisabledFailsOnUncoveredCharacterSeed);
+    suite.addTest("Unigram.Train.SubwordCountsUseUint64", testUnigramTrainSubwordCountsUseUint64);
     suite.addTest("Unigram.Train.FilterRepetitionNoise", testUnigramTrainFiltersRepetitionNoise);
     suite.addTest("Unigram.Train.DedupRepeatedVariants", testUnigramTrainDedupsRepeatedVariants);
+    suite.addTest("Unigram.Train.PreserveSpieceUnderlineDedupBoundary", testUnigramTrainPreservesSpieceUnderlineDedupBoundary);
+    suite.addTest("Unigram.Train.StridedMiningLatePatterns", testUnigramTrainStridedMiningKeepsLateDocumentPatterns);
+    suite.addTest("Unigram.Train.StridedMiningBoundaryOverlap", testUnigramTrainStridedMiningOverlapsBoundaryCandidates);
+    suite.addTest("Unigram.Train.BytePieceLimit", testUnigramTrainEnforcesBytePieceLimit);
     
     // Section 3: Aho-Corasick Tests
     suite.addTest("AhoCorasick.BasicMatches", testAhoCorasickBasicMatches);

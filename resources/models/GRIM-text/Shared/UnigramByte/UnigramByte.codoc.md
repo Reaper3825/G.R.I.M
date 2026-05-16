@@ -44,6 +44,7 @@ Read the tokenizer in this order:
 8. `Byte.hpp` / `Byte.cu` — byte fallback
 9. `TextUtils.hpp` / `TextUtils.cu` — normalization and UTF-8 helpers
 10. `UnigramTrainer.hpp` / `UnigramTrainer.cu` — training pipeline only
+11. `Training/UnigramForwardBackward.hpp` / `Training/UnigramForwardBackward.cu` — training-only true Unigram forward-backward expected-count estimator
 
 If you read it in a different order, the code starts to feel like a haunted house.
 
@@ -77,7 +78,7 @@ orchestrator]
 
 - `TokenLayout.hpp` is the shared foundation.
 - `UniByte` composes the rest; it should not re-implement their logic.
-- `UnigramTrainer.cu` is training-only; inference wrappers live in `Unigram.cu`, while Viterbi segmentation lives in `UnigramViterbi.cu`.
+- `UnigramTrainer.cu` is training-only; inference wrappers live in `Unigram.cu`, Viterbi segmentation lives in `UnigramViterbi.cu`, and soft EM expected-count math lives in `Training/UnigramForwardBackward.*`.
 - `Detectors/TokenizerDetector.hpp` is the parent interface for detectors that operate on raw text byte offsets only.
 - `Detectors/DetectorRegistry.*` owns detector registration, longest-match scanning, and atom `StructuralSpan` extraction; `UniByte.cu` only consumes registry-owned results.
 
@@ -169,7 +170,7 @@ flowchart LR
     CORPUS[Corpus] --> DETECT[detect numeric spans]
     DETECT --> SKIP[skip atom spans during training]
    SKIP --> CAND[data-selected candidate vocabulary]
-   CAND --> E[E-step Viterbi]
+   CAND --> E[forward-backward E-step]
     E --> M[M-step recount]
     M --> P[prune low-value pieces]
     P -->|repeat| E
@@ -180,12 +181,71 @@ flowchart LR
 
 - `UniByte::train()` orchestrates the training workflow.
 - `UnigramLM::trainFromCorpus()` is declared in `Unigram.hpp`.
-- The actual training implementation lives in `UnigramTrainer.cu`.
+- The actual training orchestration lives in `UnigramTrainer.cu`.
+- True Unigram soft-EM math lives in `Training/UnigramForwardBackward.hpp/.cu`; training must use posterior expected counts from forward-backward, not Viterbi hard-EM counts.
+- `UnigramLM::trainFromCorpus()` fails at entry for invalid `target_vocab_size`,
+   `character_coverage`, `min_subword_freq`, or `subword_mining_workers`; do not rely on
+   later shrink/EM code to discover malformed hyperparameters.
+- Original atom spans are validated before logging byte totals or calling
+   `normalizeWithSpans()`. Span size mismatches, reversed spans, out-of-bounds spans, and
+   overlapping/unsorted spans must fail before any normalization can rewrite offsets.
 - Atom spans are skipped during training so numeric internals do not contaminate vocab statistics.
+- Forward-backward stats separate learned-piece posterior mass from fixed-penalty
+   byte-fallback path usage. The M-step normalizes learned piece probabilities using only
+   learned-piece mass plus learned-piece smoothing. Byte fallback is excluded from that
+   normalizer because `UNKNOWN_SCORE` is an unnormalized per-byte coverage penalty; if byte
+   fallback ever becomes trainable probability mass or UTF-8-character fallback, update the
+   forward/backward lattice, M-step normalizer, production Viterbi scoring/output, token
+   layout, and this doc together.
+- Training enforces byte-fallback dominance only after Phase-A EM convergence and after
+   later shrink/cleanup reconvergence phases. Do not run the guard inside early E-step
+   iterations: sparse initial candidates must get M-step recovery time before fallback
+   dominance is considered diagnostic.
+- When byte fallback is disabled, training must insert the Step-2 character seeds as learned
+   pieces or fail immediately before EM. The no-fallback path also fails if those seeds do
+   not cover every trainable normalized character, or if `target_vocab_size` cannot retain
+   the required character seeds.
+- Vocab-character validation must use `utf8DecodeAt()` for the single-codepoint decode.
+   Do not hand-decode multi-byte candidates; continuation-byte checks, overlong rejection,
+   surrogate rejection, truncation checks, and max-codepoint validation belong to `TextUtils`.
 - Candidate selection is corpus/data driven: subwords must pass the frequency, validity,
-  repetition-noise, structural-dedup, and prefix-extension filters. `target_vocab_size`
+   repetition-noise, and structural-dedup filters. `target_vocab_size`
   is only the final learned-piece cap used by pruning; do not derive a seed-vocab size
   or candidate-selection cap from it.
+- Do not reject prefix-extension candidates before EM. Equal corpus counts do not prove
+   redundancy; longer pieces may still earn their slot through better likelihood/compression.
+   Let forward-backward EM and posterior-mass pruning decide.
+- Shrink pruning ranks pieces by posterior expected mass plus expected compression gain from
+   the converged E-step: `posterior_count + posterior_count * max(piece_bytes - 1, 0)`.
+   Do not normalize the compression gain by expected byte span, because that gives rare long
+   pieces an almost free ratio bonus. Do not use `count * abs(score)` as a marginal-value
+   proxy; it can overprotect rare low-probability pieces that soft segmentation barely uses.
+- User-defined learned pieces are protected explicitly: insert all user-defined indices
+   into the shrink keep set first, then fill remaining slots by posterior mass. Never rely
+   on a max-value sort sentinel, because more protected pieces than `keep_count` must still
+   all survive.
+- Final dead-token cleanup must fail before compaction if the dead set would delete every
+   learned piece. Do not rewrite `pieces_` to empty and let Phase-D fail later during
+   forward-backward lattice construction; the root cause is byte fallback owning all
+   posterior mass.
+- Subword mining counts must be `uint64_t`/overflow-checked and exact after global merge.
+   Large corpora can exceed signed `int`; never store candidate counts in signed 32-bit
+   containers.
+- Structural dedup keys are comparison-only. They may trim structural edge whitespace/format
+   codepoints, but must never trim SentencePiece `▁` (U+2581): `▁word` and `word` are
+   distinct because word-initial position is semantic. Accepted candidates must store the
+   original mined subword text, not the edge-trimmed dedup key, so learned pieces keep their
+   exact boundary markers and bytes.
+- Subword mining byte caps must use deterministic byte-proportional spans distributed across
+   each full normalized document. Do not sample only prefixes: EM trains on full documents,
+   so prefix-only candidate mining starves late-document patterns and creates a false
+   candidate/EM mismatch. Sampled spans carry `MAX_PIECE_LENGTH - 1` bytes of UTF-8-snapped
+   context overlap around the intended span, and miners must only count candidate starts
+   inside the intended span so boundary-crossing pieces can be discovered without inflating
+   sampled-start coverage.
+- Subword mining must preserve exact global counts. `tokenizer.prune_during_mining`
+   is a no-op compatibility flag: do not prune worker-local maps or any pre-merge counts,
+   because candidates that are individually rare per worker can be globally valid after merge.
 
 ---
 
@@ -206,6 +266,7 @@ Use this table as the “who owns what?” map.
 | `AtomTable.hpp/.cu` | parsed atom storage, dedup, GPU packing, numeric value access | subword segmentation |
 | `Unigram.hpp/.cu` | learned vocab semantics, trie construction, encode/decode wrappers | raw learned-vocab vector/map mutation, Viterbi DP state, artifact file I/O, detection policy, top-level orchestration, training boundary-token injection |
 | `UnigramViterbi.hpp/.cu` | CUDA-backed production Viterbi session, per-segmentation launch/backtrack validation, SentencePiece-style subword path selection, Viterbi CUDA kernels | learned-vocab mutation, durable CUDA buffer lifetime, artifact serialization, detector policy, hard-coded punctuation splitting |
+| `Training/UnigramForwardBackward.hpp/.cu` | training-only log-space forward-backward lattice and posterior expected-count accumulation for true Unigram EM | production encode path, CUDA Viterbi workspace ownership, learned-vocab mutation |
 | `VocabWriteOp.hpp` | append/upsert/rewrite of learned unigram pieces plus `piece_to_id` synchronization and token-ID validation | training scoring, Viterbi, artifact serialization, model/GRMT vocab-size authority |
 | `UnigramGpuMemory.hpp/.cu` | `UnigramLM` CUDA buffer lifetime, transactional GPU upload, Viterbi workspace ownership, device pointer cleanup | vocab semantics, Viterbi scoring, token assembly, training |
 | `UnigramTrainer.hpp/.cu` | unigram training implementation | runtime encode path |
@@ -279,7 +340,7 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 
 2. **`buildTrie()` and runtime finalization must happen before non-empty encode.**
    Load or train vocab first, build the trie, then upload the trie/workspace. `UnigramLM::initGPU()` is only the default-capacity initializer for generic/server use.
-   Tokenizer training must use `UnigramLM::initGPUForMaxSequenceLength(longest_normalized_e_step_segment)` during E-steps and again after the final `buildTrie()` so normalized corpus spans larger than the default workspace still use the reusable CUDA Viterbi buffers instead of failing at encode time.
+   Tokenizer training uses CPU log-space forward-backward for EM and must call `UnigramLM::initGPUForMaxSequenceLength(longest_normalized_training_segment)` after the final `buildTrie()` so normalized corpus spans larger than the default workspace still use the reusable CUDA Viterbi buffers at runtime instead of failing at encode time.
 
    Training is the production-runtime finalization owner. `UnigramLM::trainFromCorpus()` returns a populated `UnigramTrainingRuntimeReport` only after the uploaded generation matches the live trie and the workspace is large enough for the training corpus envelope. GRMT/DataLoader paths must assert `UniByte::requireRuntimeReadyForLastTraining()` after training, not repair training with generic `initGPU()`.
 
@@ -294,11 +355,13 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
    Punctuation is ordinary normalized text in this SentencePiece-style tokenizer. Do not add hard Viterbi punctuation boundaries. A punctuation mark may be a learned piece by itself, part of a larger learned piece, or a byte fallback only if no selected learned piece covers it.
 
 3. **Byte fallback is the coverage guarantee.**
+
+   Byte fallback is deliberately raw byte-level fallback with an unnormalized fixed per-byte penalty, not UTF-8-character fallback and not part of the learned-piece probability distribution.
    If a piece is not found, tokenization must still succeed.
 
-   With byte fallback enabled, fallback transitions emit the raw byte token (`BYTE_TOKEN_OFFSET + byte`), not `UNK_TOKEN_ID`. Forward DP stores `d_viterbi_prev_is_fallback[end]` on the selected backpointer, and backtrack marks per-byte fallback metadata from that explicit flag only. Forward-DP candidate fallback edges are not proof that the final segmentation emitted a byte token, and token ID range must not be used as a fallback-selection proxy.
+   With byte fallback enabled, each fallback transition advances exactly one raw byte and emits the raw byte token (`BYTE_TOKEN_OFFSET + byte`), not `UNK_TOKEN_ID`. A multibyte UTF-8 codepoint therefore produces one fallback transition/token per byte if no learned piece covers it. Forward DP stores `d_viterbi_prev_is_fallback[end]` on the selected backpointer, and backtrack marks per-byte fallback metadata from that explicit flag only. Forward-DP candidate fallback edges are not proof that the final segmentation emitted a byte token, and token ID range must not be used as a fallback-selection proxy.
 
-   `UNKNOWN_SCORE` in `TokenLayout.hpp` is the only fallback transition score source. CUDA Viterbi must use it directly; do not add caller-provided unknown-score overrides to kernel signatures, launch helpers, or encode APIs. Scores are initialized with `kViterbiUnreachableScore`, but reachability is not inferred from score values: position `0` is reachable by definition, and every other position is reachable only when `viterbi_prev[pos] >= 0`.
+   `UNKNOWN_SCORE` in `TokenLayout.hpp` is the only unnormalized per-byte fallback penalty source. CUDA Viterbi and tokenizer-training forward/backward must use it directly and apply it once per raw fallback byte; do not add caller-provided unknown-score overrides to kernel signatures, launch helpers, or encode APIs. Scores are initialized with `kViterbiUnreachableScore`, but reachability is not inferred from score values: position `0` is reachable by definition, and every other position is reachable only when `viterbi_prev[pos] >= 0`.
 
    Exact-score tie-breaking is part of production behavior: learned-piece transition beats fallback transition, longer span beats shorter span, and lower token ID breaks any remaining tie. Keep `shouldReplaceViterbiTransition()` and this invariant in sync.
 

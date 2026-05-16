@@ -24,6 +24,7 @@ namespace Tokenizer {
 namespace {
 
 inline constexpr float kViterbiUnreachableScore = -1.0e30f;
+inline constexpr size_t kByteFallbackSpanBytes = 1;
 static_assert(sizeof(bool) == 1,
               "CUDA Viterbi fallback flag bulk copy requires byte-sized bool storage");
 
@@ -202,8 +203,10 @@ __global__ void kernelViterbiForward(
             }
         }
         
+        // Byte fallback is raw-byte fallback: one transition emits exactly one
+        // BYTE_TOKEN_OFFSET + byte token. It is not UTF-8-character fallback.
         float fallback_score = viterbi_scores[pos] + UNKNOWN_SCORE;
-        const size_t fallback_end = pos + 1;
+        const size_t fallback_end = pos + kByteFallbackSpanBytes;
         int fallback_token_id = unk_id;
         if (enable_byte_fallback) {
             fallback_token_id = static_cast<int>(cur_byte) + BYTE_TOKEN_OFFSET;
@@ -285,7 +288,7 @@ __global__ void kernelViterbiBacktrack(
         const bool transition_is_fallback = viterbi_prev_is_fallback[pos];
 
         if (selected_fallback != nullptr && transition_is_fallback) {
-            if (prev_pos != pos - 1) { setCudaErrorCode(error_code, kUnigramViterbiCudaByteFallbackSpanInvalid); return; }
+            if (prev_pos != pos - static_cast<int>(kByteFallbackSpanBytes)) { setCudaErrorCode(error_code, kUnigramViterbiCudaByteFallbackSpanInvalid); return; }
             selected_fallback[prev_pos] = true;
         }
 

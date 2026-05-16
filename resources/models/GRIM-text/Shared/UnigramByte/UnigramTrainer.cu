@@ -17,13 +17,14 @@
 
 #include "Unigram.hpp"
 #include "TextUtils.hpp"
-#include "UnigramViterbi.hpp"
+#include "Training/UnigramForwardBackward.hpp"
 #include "VocabWriteOp.hpp"
 #include "HyperParameters/HyperparameterGroupings.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <exception>
 #include <fstream>
@@ -39,6 +40,9 @@
 namespace GRIM {
 namespace Tokenizer {
 
+using UnigramSubwordCount = uint64_t;
+using UnigramSubwordCountMap = std::unordered_map<std::string, UnigramSubwordCount>;
+
 //======================================================//
 //  Character-Level Validator
 //  Rejects garbage characters BEFORE they enter the vocab.
@@ -48,33 +52,15 @@ namespace Tokenizer {
 static bool isValidVocabCharacter(const std::string& ch) {
     if (ch.empty()) return false;
 
-    // Single-byte ASCII path
-    if (ch.size() == 1) {
-        unsigned char c = static_cast<unsigned char>(ch[0]);
-        if (c >= 0x20 && c <= 0x7E) return true;
-        if (c == 0x09 || c == 0x0A || c == 0x0D) return true;
-        return false;
-    }
-
-    // Multi-byte UTF-8 path: decode codepoint and check against known garbage ranges
-    unsigned char b0 = static_cast<unsigned char>(ch[0]);
     uint32_t codepoint = 0;
-
-    if (ch.size() == 2 && (b0 & 0xE0) == 0xC0) {
-        unsigned char b1 = static_cast<unsigned char>(ch[1]);
-        codepoint = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
-    } else if (ch.size() == 3 && (b0 & 0xF0) == 0xE0) {
-        unsigned char b1 = static_cast<unsigned char>(ch[1]);
-        unsigned char b2 = static_cast<unsigned char>(ch[2]);
-        codepoint = ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
-    } else if (ch.size() == 4 && (b0 & 0xF8) == 0xF0) {
-        unsigned char b1 = static_cast<unsigned char>(ch[1]);
-        unsigned char b2 = static_cast<unsigned char>(ch[2]);
-        unsigned char b3 = static_cast<unsigned char>(ch[3]);
-        codepoint = ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
-    } else {
+    size_t codepoint_len = 0;
+    if (!utf8DecodeAt(ch, 0, &codepoint, &codepoint_len) || codepoint_len != ch.size()) {
         return false;
     }
+
+    if (codepoint >= 0x20 && codepoint <= 0x7E) return true;
+    if (codepoint == 0x09 || codepoint == 0x0A || codepoint == 0x0D) return true;
+    if (codepoint < 0x80) return false;
 
     if (codepoint >= 0x0080 && codepoint <= 0x009F) return false;
     if (codepoint == 0x00A0) return false;
@@ -98,7 +84,15 @@ static bool isValidVocabCharacter(const std::string& ch) {
 //  Structural Dedup Key
 //  Canonical form for vocab candidate selection — strips
 //  leading/trailing UTF-8 whitespace/boundary format chars.
+//  SentencePiece ▁ is semantic word-initial state and must never be stripped.
 //======================================================//
+
+static constexpr uint32_t kSpieceUnderlineCodepoint = 0x2581u;
+
+static bool isStructuralDedupTrimCodepoint(uint32_t cp) {
+    if (cp == kSpieceUnderlineCodepoint) return false;
+    return isStructuralEdgeWhitespace(cp);
+}
 
 static std::string structuralDedupKeyForCandidate(const std::string& s) {
     size_t start = 0;
@@ -106,7 +100,7 @@ static std::string structuralDedupKeyForCandidate(const std::string& s) {
     while (start < end) {
         uint32_t cp = 0;
         size_t len = 0;
-        if (utf8DecodeAt(s, start, &cp, &len) && isStructuralEdgeWhitespace(cp)) {
+        if (utf8DecodeAt(s, start, &cp, &len) && isStructuralDedupTrimCodepoint(cp)) {
             start += len;
             continue;
         }
@@ -129,7 +123,7 @@ static std::string structuralDedupKeyForCandidate(const std::string& s) {
         size_t len = 0;
         if (!utf8DecodeAt(s, ch_start, &cp, &len) || ch_start + len != end)
             break;
-        if (!isStructuralEdgeWhitespace(cp)) break;
+        if (!isStructuralDedupTrimCodepoint(cp)) break;
         end = ch_start;
     }
     if (start >= end) return "";
@@ -247,42 +241,6 @@ static bool isRepetitionNoise(const std::string& s) {
 }
 
 //======================================================//
-//  Prefix Extension Dedup
-//  Rejects candidates that are 1-3 UTF-8 char extensions of
-//  an already-accepted piece with the same corpus count.
-//  e.g., "an▁also" is rejected if "an▁als" was already
-//  accepted with the same count — they co-occur identically.
-//======================================================//
-
-static bool isPrefixExtensionDuplicate(
-    const std::string& dedup_key,
-    int count,
-    const std::unordered_set<std::string>& seen_keys,
-    const std::unordered_map<std::string, int>& key_to_count)
-{
-    // Try truncating 1, 2, 3 UTF-8 characters from the end.
-    // Walk backwards over continuation bytes to find char boundaries.
-    size_t end = dedup_key.size();
-    for (int trim = 0; trim < 3 && end > 0; ++trim) {
-        // Step back one UTF-8 character
-        --end;
-        while (end > 0 && (static_cast<unsigned char>(dedup_key[end]) & 0xC0) == 0x80) {
-            --end;
-        }
-        if (end == 0) break;  // Don't dedup against empty prefix
-
-        std::string prefix = dedup_key.substr(0, end);
-        if (seen_keys.count(prefix)) {
-            auto it = key_to_count.find(prefix);
-            if (it != key_to_count.end() && it->second == count) {
-                return true;  // Prefix with same count exists — this is a redundant extension
-            }
-        }
-    }
-    return false;
-}
-
-//======================================================//
 //  Subword Validity Gate
 //======================================================//
 
@@ -352,11 +310,208 @@ static size_t resolveSubwordMiningChunkSize(unsigned int workers, size_t sentenc
     return chunk;
 }
 
-static size_t maxViterbiSegmentLengthForTrainingUnits(
+static void validateTrainFromCorpusParameters(const std::vector<std::string>& texts,
+                                              int target_vocab_size,
+                                              float character_coverage,
+                                              int min_subword_freq,
+                                              int subword_mining_workers) {
+    if (texts.empty()) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: texts is empty - caller MUST provide at least one training text");
+    }
+    if (target_vocab_size <= 0) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: target_vocab_size must be > 0, got " +
+                                 std::to_string(target_vocab_size));
+    }
+    if (!std::isfinite(static_cast<double>(character_coverage)) ||
+        character_coverage <= 0.0f || character_coverage > 1.0f) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: character_coverage must be finite and in (0, 1], got " +
+                                 std::to_string(character_coverage));
+    }
+    if (min_subword_freq <= 0) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: min_subword_freq must be > 0, got " +
+                                 std::to_string(min_subword_freq));
+    }
+    if (subword_mining_workers < 0) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: subword_mining_workers must be >= 0, got " +
+                                 std::to_string(subword_mining_workers));
+    }
+}
+
+void requireUnigramFinalCleanupLeavesLearnedPiece(size_t piece_count,
+                                                  size_t dead_count,
+                                                  const char* caller) {
+    if (caller == nullptr || caller[0] == '\0') {
+        throw std::runtime_error("requireUnigramFinalCleanupLeavesLearnedPiece: caller label is empty at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    if (piece_count == 0) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": learned vocab is already empty before final cleanup; caller MUST preserve at least one learned piece");
+    }
+    if (dead_count > piece_count) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": dead token count exceeds learned piece count, dead_count=" +
+                                 std::to_string(dead_count) + ", piece_count=" + std::to_string(piece_count));
+    }
+    if (dead_count == piece_count) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": final dead-token cleanup would delete every learned piece (piece_count=" +
+                                 std::to_string(piece_count) +
+                                 "); byte fallback dominated all posterior mass, so training MUST fail before Phase-D lattice construction");
+    }
+}
+
+void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
+    double expected_learned_piece_tokens,
+    double expected_fixed_penalty_byte_fallback_tokens,
+    const char* phase_label,
+    const char* caller) {
+    constexpr double kMinimumLearnedToByteFallbackPosteriorRatio = 1.0;
+
+    if (phase_label == nullptr || phase_label[0] == '\0') {
+        throw std::runtime_error("requireUnigramLearnedPosteriorMassNotByteFallbackDominated: phase label is empty at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    if (caller == nullptr || caller[0] == '\0') {
+        throw std::runtime_error("requireUnigramLearnedPosteriorMassNotByteFallbackDominated: caller label is empty at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    if (!std::isfinite(expected_learned_piece_tokens) || expected_learned_piece_tokens < 0.0) {
+        throw std::runtime_error(std::string(caller) + ": " + phase_label +
+                                 " produced invalid expected_learned_piece_tokens=" +
+                                 std::to_string(expected_learned_piece_tokens));
+    }
+    if (!std::isfinite(expected_fixed_penalty_byte_fallback_tokens) ||
+        expected_fixed_penalty_byte_fallback_tokens < 0.0) {
+        throw std::runtime_error(std::string(caller) + ": " + phase_label +
+                                 " produced invalid expected_fixed_penalty_byte_fallback_tokens=" +
+                                 std::to_string(expected_fixed_penalty_byte_fallback_tokens));
+    }
+    if (expected_fixed_penalty_byte_fallback_tokens == 0.0) {
+        return;
+    }
+
+    const double learned_to_fallback_ratio =
+        expected_learned_piece_tokens / expected_fixed_penalty_byte_fallback_tokens;
+    if (learned_to_fallback_ratio < kMinimumLearnedToByteFallbackPosteriorRatio) {
+        throw std::runtime_error(std::string(caller) + ": " + phase_label +
+                                 " byte fallback dominated posterior mass after EM convergence; "
+                                 "expected_learned_piece_tokens=" +
+                                 std::to_string(expected_learned_piece_tokens) +
+                                 ", expected_fixed_penalty_byte_fallback_tokens=" +
+                                 std::to_string(expected_fixed_penalty_byte_fallback_tokens) +
+                                 ", learned_to_fallback_ratio=" +
+                                 std::to_string(learned_to_fallback_ratio) +
+                                 ", required_ratio>=1.0. Training MUST fail instead of treating fallback-dominated evidence as a learned-piece distribution");
+    }
+}
+
+double scoreUnigramShrinkCandidateForPosteriorCompression(const std::string& piece_text,
+                                                          double posterior_expected_count,
+                                                          const char* caller) {
+    if (caller == nullptr || caller[0] == '\0') {
+        throw std::runtime_error("scoreUnigramShrinkCandidateForPosteriorCompression: caller label is empty at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    if (piece_text.empty()) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": shrink candidate piece text is empty - learned pieces MUST contain at least one byte");
+    }
+    if (!std::isfinite(posterior_expected_count) || posterior_expected_count < 0.0) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": posterior_expected_count must be finite and non-negative, got " +
+                                 std::to_string(posterior_expected_count));
+    }
+
+    const double byte_span = static_cast<double>(piece_text.size());
+    const double compression_gain_per_use = std::max(0.0, byte_span - 1.0);
+    const double expected_compression_gain = posterior_expected_count * compression_gain_per_use;
+
+    return posterior_expected_count + expected_compression_gain;
+}
+
+UnigramSubwordCount addUnigramSubwordCountsForTraining(UnigramSubwordCount current,
+                                                       UnigramSubwordCount delta,
+                                                       const char* caller) {
+    if (caller == nullptr || caller[0] == '\0') {
+        throw std::runtime_error("addUnigramSubwordCountsForTraining: caller label is empty at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    const UnigramSubwordCount max_count = std::numeric_limits<UnigramSubwordCount>::max();
+    if (max_count - current < delta) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": subword candidate count overflow, current=" +
+                                 std::to_string(current) + ", delta=" + std::to_string(delta) +
+                                 ", max=" + std::to_string(max_count));
+    }
+    return current + delta;
+}
+
+static void incrementUnigramSubwordCountForTraining(UnigramSubwordCountMap& subword_counts,
+                                                    const std::string& subword,
+                                                    const char* caller) {
+    auto [it, inserted] = subword_counts.try_emplace(subword, static_cast<UnigramSubwordCount>(1));
+    if (!inserted) {
+        it->second = addUnigramSubwordCountsForTraining(
+            it->second,
+            static_cast<UnigramSubwordCount>(1),
+            caller);
+    }
+}
+
+struct AtomSpanValidationTotals {
+    size_t span_count = 0;
+    size_t byte_count = 0;
+};
+
+static AtomSpanValidationTotals validateOriginalAtomSpansBeforeNormalization(
+    const std::vector<std::string>& texts,
+    const std::vector<std::vector<AtomSpan>>& atom_spans) {
+    if (atom_spans.size() != texts.size()) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: atom_spans.size()=" +
+                                 std::to_string(atom_spans.size()) +
+                                 " != texts.size()=" + std::to_string(texts.size()));
+    }
+
+    AtomSpanValidationTotals totals;
+    for (size_t text_idx = 0; text_idx < texts.size(); ++text_idx) {
+        const auto& text = texts[text_idx];
+        const auto& spans = atom_spans[text_idx];
+        size_t previous_end = 0;
+        totals.span_count += spans.size();
+
+        for (size_t span_idx = 0; span_idx < spans.size(); ++span_idx) {
+            const AtomSpan& span = spans[span_idx];
+            if (span.start > span.end) {
+                throw std::runtime_error("UnigramLM::trainFromCorpus: atom span start > end before normalization at text_idx=" +
+                                         std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
+                                         ", start=" + std::to_string(span.start) +
+                                         ", end=" + std::to_string(span.end));
+            }
+            if (span.end > text.size()) {
+                throw std::runtime_error("UnigramLM::trainFromCorpus: atom span end exceeds original text size before normalization at text_idx=" +
+                                         std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
+                                         ", end=" + std::to_string(span.end) +
+                                         ", text.size()=" + std::to_string(text.size()));
+            }
+            if (span.start < previous_end) {
+                throw std::runtime_error("UnigramLM::trainFromCorpus: atom spans overlap or are unsorted before normalization at text_idx=" +
+                                         std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
+                                         ", start=" + std::to_string(span.start) +
+                                         ", previous_end=" + std::to_string(previous_end));
+            }
+            totals.byte_count += span.end - span.start;
+            previous_end = span.end;
+        }
+    }
+    return totals;
+}
+
+static size_t maxTrainingSegmentLengthForTrainingUnits(
     const std::vector<std::string>& training_units,
     const std::vector<std::vector<AtomSpan>>& atom_spans) {
     if (atom_spans.size() != training_units.size()) {
-        throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: atom_spans.size()=" +
+        throw std::runtime_error("maxTrainingSegmentLengthForTrainingUnits: atom_spans.size()=" +
                                  std::to_string(atom_spans.size()) +
                                  " != training_units.size()=" + std::to_string(training_units.size()));
     }
@@ -378,19 +533,19 @@ static size_t maxViterbiSegmentLengthForTrainingUnits(
         for (size_t span_idx = 0; span_idx < spans.size(); ++span_idx) {
             const AtomSpan& span = spans[span_idx];
             if (span.start > span.end) {
-                throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: span.start > span.end at text_idx=" +
+                throw std::runtime_error("maxTrainingSegmentLengthForTrainingUnits: span.start > span.end at text_idx=" +
                                          std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
                                          ", start=" + std::to_string(span.start) +
                                          ", end=" + std::to_string(span.end));
             }
             if (span.end > text.size()) {
-                throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: span.end exceeds normalized text size at text_idx=" +
+                throw std::runtime_error("maxTrainingSegmentLengthForTrainingUnits: span.end exceeds normalized text size at text_idx=" +
                                          std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
                                          ", end=" + std::to_string(span.end) +
                                          ", text.size()=" + std::to_string(text.size()));
             }
             if (span.start < pos) {
-                throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: atom spans overlap or are unsorted at text_idx=" +
+                throw std::runtime_error("maxTrainingSegmentLengthForTrainingUnits: atom spans overlap or are unsorted at text_idx=" +
                                          std::to_string(text_idx) + ", span_idx=" + std::to_string(span_idx) +
                                          ", start=" + std::to_string(span.start) +
                                          ", previous_end=" + std::to_string(pos));
@@ -406,36 +561,293 @@ static size_t maxViterbiSegmentLengthForTrainingUnits(
     }
 
     if (max_segment_length == 0) {
-        throw std::runtime_error("maxViterbiSegmentLengthForTrainingUnits: corpus has no non-empty normalized Viterbi segments");
+        throw std::runtime_error("maxTrainingSegmentLengthForTrainingUnits: corpus has no non-empty normalized training segments");
     }
     return max_segment_length;
+}
+
+//======================================================//
+//  Deterministic Subword Mining Sample Plan
+//  Corpus byte caps must not turn into prefix-only mining: EM trains on
+//  full documents, so candidate mining has to sample across full documents.
+//======================================================//
+
+struct SubwordMiningSpan {
+    size_t start = 0;
+    size_t end = 0;
+    size_t context_start = 0;
+    size_t context_end = 0;
+};
+
+struct SubwordMiningPlan {
+    std::vector<std::vector<SubwordMiningSpan>> spans_by_text;
+    size_t sampled_bytes = 0;
+    size_t context_bytes = 0;
+    size_t sampled_spans = 0;
+    double sampling_ratio = 1.0;
+};
+
+static bool isUtf8ContinuationByte(unsigned char c) {
+    return (c & 0xC0) == 0x80;
+}
+
+static size_t snapBackwardToUtf8Boundary(const std::string& text, size_t pos) {
+    if (pos > text.size()) {
+        throw std::runtime_error("snapBackwardToUtf8Boundary: pos exceeds text.size(), pos=" +
+                                 std::to_string(pos) + ", text.size()=" + std::to_string(text.size()));
+    }
+    if (pos == text.size()) return pos;
+    while (pos > 0 && isUtf8ContinuationByte(static_cast<unsigned char>(text[pos]))) {
+        --pos;
+    }
+    return pos;
+}
+
+static size_t snapForwardToUtf8Boundary(const std::string& text, size_t pos) {
+    if (pos > text.size()) {
+        throw std::runtime_error("snapForwardToUtf8Boundary: pos exceeds text.size(), pos=" +
+                                 std::to_string(pos) + ", text.size()=" + std::to_string(text.size()));
+    }
+    while (pos < text.size() && isUtf8ContinuationByte(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+    return pos;
+}
+
+static void appendMergedSubwordMiningSpan(std::vector<SubwordMiningSpan>& spans,
+                                          size_t start,
+                                          size_t end,
+                                          size_t context_start,
+                                          size_t context_end,
+                                          const std::string& context) {
+    if (start > end) {
+        throw std::runtime_error(context + ": mining span start > end, start=" +
+                                 std::to_string(start) + ", end=" + std::to_string(end));
+    }
+    if (context_start > context_end) {
+        throw std::runtime_error(context + ": mining context start > end, context_start=" +
+                                 std::to_string(context_start) + ", context_end=" + std::to_string(context_end));
+    }
+    if (context_start > start || end > context_end) {
+        throw std::runtime_error(context + ": mining context does not contain intended sampled span, context_start=" +
+                                 std::to_string(context_start) + ", start=" + std::to_string(start) +
+                                 ", end=" + std::to_string(end) + ", context_end=" + std::to_string(context_end));
+    }
+    if (start == end) return;
+
+    if (!spans.empty() && start <= spans.back().end) {
+        if (end > spans.back().end) {
+            spans.back().end = end;
+        }
+        spans.back().context_start = std::min(spans.back().context_start, context_start);
+        spans.back().context_end = std::max(spans.back().context_end, context_end);
+        return;
+    }
+
+    spans.push_back(SubwordMiningSpan{start, end, context_start, context_end});
+}
+
+static SubwordMiningPlan buildSubwordMiningPlan(
+    const std::vector<std::string>& training_units,
+    size_t total_sentence_bytes,
+    size_t max_subword_mining_bytes,
+    bool use_sampling) {
+    if (total_sentence_bytes == 0) {
+        throw std::runtime_error("buildSubwordMiningPlan: total_sentence_bytes is zero - caller MUST provide non-empty normalized training text");
+    }
+    if (max_subword_mining_bytes == 0) {
+        throw std::runtime_error("buildSubwordMiningPlan: max_subword_mining_bytes is zero - caller MUST provide a positive byte cap");
+    }
+
+    SubwordMiningPlan plan;
+    plan.spans_by_text.resize(training_units.size());
+
+    if (use_sampling) {
+        plan.sampling_ratio = static_cast<double>(max_subword_mining_bytes) /
+                              static_cast<double>(total_sentence_bytes);
+    }
+
+    constexpr size_t kTargetSpanBytes = 8192;
+    const size_t two_span_budget = static_cast<size_t>(MAX_PIECE_LENGTH) * 2;
+    const size_t sampled_span_context_overlap = static_cast<size_t>(MAX_PIECE_LENGTH) > 0
+        ? static_cast<size_t>(MAX_PIECE_LENGTH) - 1
+        : 0;
+
+    for (size_t text_idx = 0; text_idx < training_units.size(); ++text_idx) {
+        const std::string& text = training_units[text_idx];
+        if (text.empty()) continue;
+
+        std::vector<SubwordMiningSpan>& spans = plan.spans_by_text[text_idx];
+        if (!use_sampling) {
+            spans.push_back(SubwordMiningSpan{0, text.size(), 0, text.size()});
+        } else {
+            size_t target_bytes = static_cast<size_t>(std::ceil(text.size() * plan.sampling_ratio));
+            target_bytes = std::max<size_t>(1, target_bytes);
+            target_bytes = std::min(target_bytes, text.size());
+
+            if (target_bytes == text.size()) {
+                spans.push_back(SubwordMiningSpan{0, text.size(), 0, text.size()});
+            } else {
+                size_t span_count = (target_bytes + kTargetSpanBytes - 1) / kTargetSpanBytes;
+                span_count = std::max<size_t>(1, span_count);
+                if (target_bytes >= two_span_budget) {
+                    span_count = std::max<size_t>(2, span_count);
+                }
+                span_count = std::min(span_count, target_bytes);
+
+                const size_t span_bytes = (target_bytes + span_count - 1) / span_count;
+                if (span_bytes == 0) {
+                    throw std::runtime_error("buildSubwordMiningPlan: computed zero-length span for text_idx=" +
+                                             std::to_string(text_idx));
+                }
+                if (span_bytes > text.size()) {
+                    throw std::runtime_error("buildSubwordMiningPlan: span_bytes exceeds text.size() for text_idx=" +
+                                             std::to_string(text_idx) + ", span_bytes=" + std::to_string(span_bytes) +
+                                             ", text.size()=" + std::to_string(text.size()));
+                }
+
+                const size_t max_start = text.size() - span_bytes;
+                for (size_t span_idx = 0; span_idx < span_count; ++span_idx) {
+                    size_t raw_start = 0;
+                    if (span_count == 1) {
+                        raw_start = max_start / 2;
+                    } else if (span_idx + 1 == span_count) {
+                        raw_start = max_start;
+                    } else {
+                        raw_start = (span_idx * max_start + ((span_count - 1) / 2)) / (span_count - 1);
+                    }
+
+                    const size_t start = snapBackwardToUtf8Boundary(text, raw_start);
+                    size_t raw_end = start + span_bytes;
+                    raw_end = std::min(raw_end, text.size());
+                    const size_t end = snapForwardToUtf8Boundary(text, raw_end);
+
+                    const size_t raw_context_start = start > sampled_span_context_overlap
+                        ? start - sampled_span_context_overlap
+                        : 0;
+                    const size_t context_start = snapBackwardToUtf8Boundary(text, raw_context_start);
+                    const size_t raw_context_end = std::min(
+                        text.size(),
+                        end + sampled_span_context_overlap);
+                    const size_t context_end = snapForwardToUtf8Boundary(text, raw_context_end);
+                    appendMergedSubwordMiningSpan(
+                        spans,
+                        start,
+                        end,
+                        context_start,
+                        context_end,
+                        "buildSubwordMiningPlan text_idx=" + std::to_string(text_idx));
+                }
+            }
+        }
+
+        for (const SubwordMiningSpan& span : spans) {
+            if (span.end > text.size()) {
+                throw std::runtime_error("buildSubwordMiningPlan: span end exceeds text size at text_idx=" +
+                                         std::to_string(text_idx) + ", end=" + std::to_string(span.end) +
+                                         ", text.size()=" + std::to_string(text.size()));
+            }
+            if (span.context_end > text.size()) {
+                throw std::runtime_error("buildSubwordMiningPlan: span context end exceeds text size at text_idx=" +
+                                         std::to_string(text_idx) + ", context_end=" + std::to_string(span.context_end) +
+                                         ", text.size()=" + std::to_string(text.size()));
+            }
+            if (span.context_start > span.start || span.end > span.context_end) {
+                throw std::runtime_error("buildSubwordMiningPlan: span context does not contain intended sampled span at text_idx=" +
+                                         std::to_string(text_idx));
+            }
+            plan.sampled_bytes += span.end - span.start;
+            plan.context_bytes += span.context_end - span.context_start;
+            ++plan.sampled_spans;
+        }
+    }
+
+    return plan;
 }
 
 //======================================================//
 //  Subword Mining from Sentences
 //======================================================//
 
+static void validateSubwordMiningRange(const std::string& text,
+                                       size_t byte_start,
+                                       size_t byte_end,
+                                       const char* context) {
+    if (byte_start > byte_end) {
+        throw std::runtime_error(std::string(context) + ": byte_start > byte_end, byte_start=" +
+                                 std::to_string(byte_start) + ", byte_end=" + std::to_string(byte_end));
+    }
+    if (byte_end > text.size()) {
+        throw std::runtime_error(std::string(context) + ": byte_end exceeds text.size(), byte_end=" +
+                                 std::to_string(byte_end) + ", text.size()=" + std::to_string(text.size()));
+    }
+    if (byte_start < text.size() && isUtf8ContinuationByte(static_cast<unsigned char>(text[byte_start]))) {
+        throw std::runtime_error(std::string(context) + ": byte_start is inside a UTF-8 sequence, byte_start=" +
+                                 std::to_string(byte_start));
+    }
+    if (byte_end < text.size() && isUtf8ContinuationByte(static_cast<unsigned char>(text[byte_end]))) {
+        throw std::runtime_error(std::string(context) + ": byte_end is inside a UTF-8 sequence, byte_end=" +
+                                 std::to_string(byte_end));
+    }
+}
+
+static void validateSubwordMiningCountingRange(const std::string& text,
+                                               size_t context_start,
+                                               size_t context_end,
+                                               size_t count_start,
+                                               size_t count_end,
+                                               const char* context) {
+    validateSubwordMiningRange(text, context_start, context_end, context);
+    if (count_start > count_end) {
+        throw std::runtime_error(std::string(context) + ": count_start > count_end, count_start=" +
+                                 std::to_string(count_start) + ", count_end=" + std::to_string(count_end));
+    }
+    if (context_start > count_start || count_end > context_end) {
+        throw std::runtime_error(std::string(context) + ": intended sampled start range is outside mining context, context_start=" +
+                                 std::to_string(context_start) + ", count_start=" + std::to_string(count_start) +
+                                 ", count_end=" + std::to_string(count_end) + ", context_end=" + std::to_string(context_end));
+    }
+    if (count_start < text.size() && isUtf8ContinuationByte(static_cast<unsigned char>(text[count_start]))) {
+        throw std::runtime_error(std::string(context) + ": count_start is inside a UTF-8 sequence, count_start=" +
+                                 std::to_string(count_start));
+    }
+    if (count_end < text.size() && isUtf8ContinuationByte(static_cast<unsigned char>(text[count_end]))) {
+        throw std::runtime_error(std::string(context) + ": count_end is inside a UTF-8 sequence, count_end=" +
+                                 std::to_string(count_end));
+    }
+}
+
 static void mineSubwordsFromSentence(const std::string& text,
                                      size_t max_len,
-                                     std::unordered_map<std::string, int>& subword_counts,
-                                     size_t byte_limit = std::string::npos) {
-    const size_t effective_len = std::min(text.size(), byte_limit);
-    if (effective_len == 0) return;
+                                     UnigramSubwordCountMap& subword_counts,
+                                     size_t context_start,
+                                     size_t context_end,
+                                     size_t count_start,
+                                     size_t count_end) {
+    validateSubwordMiningCountingRange(text, context_start, context_end, count_start, count_end,
+                                       "mineSubwordsFromSentence");
+    if (context_start == context_end || count_start == count_end) return;
 
     std::vector<size_t> char_positions;
-    char_positions.reserve(effective_len + 1);
-    for (size_t i = 0; i < effective_len; ) {
+    char_positions.reserve((context_end - context_start) + 1);
+    for (size_t i = context_start; i < context_end; ) {
         char_positions.push_back(i);
-        i += utf8SequenceLength(static_cast<unsigned char>(text[i]));
+        const size_t seq_len = utf8SequenceLength(static_cast<unsigned char>(text[i]));
+        if (i + seq_len > context_end) {
+            throw std::runtime_error("mineSubwordsFromSentence: UTF-8 sequence crosses mining span end at byte=" +
+                                     std::to_string(i) + ", context_end=" + std::to_string(context_end));
+        }
+        i += seq_len;
     }
-    char_positions.push_back(effective_len);
+    char_positions.push_back(context_end);
 
     const size_t num_chars = char_positions.size() - 1;
     for (size_t ci = 0; ci < num_chars; ++ci) {
         const size_t byte_start = char_positions[ci];
+        if (byte_start < count_start || byte_start >= count_end) continue;
         for (size_t char_count = 2; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
             const size_t byte_end = char_positions[ci + char_count];
-            if (byte_end - byte_start > 64) continue;
+            if (byte_end - byte_start > max_len) break;
 
             std::string subword = text.substr(byte_start, byte_end - byte_start);
             if (!isValidSubword(subword)) continue;
@@ -455,31 +867,51 @@ static void mineSubwordsFromSentence(const std::string& text,
                 }
             }
 
-            subword_counts[subword]++;
+            incrementUnigramSubwordCountForTraining(
+                subword_counts,
+                subword,
+                "mineSubwordsFromSentence subword count increment");
         }
     }
+}
+
+static void mineSubwordsFromSentence(const std::string& text,
+                                     size_t max_len,
+                                     UnigramSubwordCountMap& subword_counts,
+                                     size_t byte_start,
+                                     size_t byte_end) {
+    mineSubwordsFromSentence(text, max_len, subword_counts, byte_start, byte_end, byte_start, byte_end);
 }
 
 // Atom-aware overload: skip subwords that START inside an atom span.
 static void mineSubwordsFromSentence(const std::string& text,
                                      size_t max_len,
                                      const std::vector<AtomSpan>& atom_spans,
-                                     std::unordered_map<std::string, int>& subword_counts,
-                                     size_t byte_limit = std::string::npos) {
-    const size_t effective_len = std::min(text.size(), byte_limit);
-    if (effective_len == 0) return;
+                                     UnigramSubwordCountMap& subword_counts,
+                                     size_t context_start,
+                                     size_t context_end,
+                                     size_t count_start,
+                                     size_t count_end) {
+    validateSubwordMiningCountingRange(text, context_start, context_end, count_start, count_end,
+                                       "mineSubwordsFromSentence atom-aware");
+    if (context_start == context_end || count_start == count_end) return;
     if (atom_spans.empty()) {
-        mineSubwordsFromSentence(text, max_len, subword_counts, byte_limit);
+        mineSubwordsFromSentence(text, max_len, subword_counts, context_start, context_end, count_start, count_end);
         return;
     }
 
     std::vector<size_t> char_positions;
-    char_positions.reserve(effective_len + 1);
-    for (size_t i = 0; i < effective_len; ) {
+    char_positions.reserve((context_end - context_start) + 1);
+    for (size_t i = context_start; i < context_end; ) {
         char_positions.push_back(i);
-        i += utf8SequenceLength(static_cast<unsigned char>(text[i]));
+        const size_t seq_len = utf8SequenceLength(static_cast<unsigned char>(text[i]));
+        if (i + seq_len > context_end) {
+            throw std::runtime_error("mineSubwordsFromSentence atom-aware: UTF-8 sequence crosses mining span end at byte=" +
+                                     std::to_string(i) + ", context_end=" + std::to_string(context_end));
+        }
+        i += seq_len;
     }
-    char_positions.push_back(effective_len);
+    char_positions.push_back(context_end);
 
     std::vector<bool> char_in_atom(char_positions.size() - 1, false);
     size_t span_idx = 0;
@@ -500,6 +932,7 @@ static void mineSubwordsFromSentence(const std::string& text,
         if (char_in_atom[ci]) continue;
 
         const size_t byte_start = char_positions[ci];
+        if (byte_start < count_start || byte_start >= count_end) continue;
         for (size_t char_count = 2; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
             bool crosses_atom = false;
             for (size_t k = ci + 1; k < ci + char_count; ++k) {
@@ -508,7 +941,7 @@ static void mineSubwordsFromSentence(const std::string& text,
             if (crosses_atom) break;
 
             const size_t byte_end = char_positions[ci + char_count];
-            if (byte_end - byte_start > 64) continue;
+            if (byte_end - byte_start > max_len) break;
 
             std::string subword = text.substr(byte_start, byte_end - byte_start);
             if (!isValidSubword(subword)) continue;
@@ -528,9 +961,21 @@ static void mineSubwordsFromSentence(const std::string& text,
                 }
             }
 
-            subword_counts[subword]++;
+            incrementUnigramSubwordCountForTraining(
+                subword_counts,
+                subword,
+                "mineSubwordsFromSentence atom-aware subword count increment");
         }
     }
+}
+
+static void mineSubwordsFromSentence(const std::string& text,
+                                     size_t max_len,
+                                     const std::vector<AtomSpan>& atom_spans,
+                                     UnigramSubwordCountMap& subword_counts,
+                                     size_t byte_start,
+                                     size_t byte_end) {
+    mineSubwordsFromSentence(text, max_len, atom_spans, subword_counts, byte_start, byte_end, byte_start, byte_end);
 }
 
 //======================================================//
@@ -565,12 +1010,12 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                  bool enable_parallel_subword_mining,
                                  int subword_mining_workers,
                                  size_t subword_mining_max_bytes) {
-    last_training_runtime_report_ = UnigramTrainingRuntimeReport{};
+    validateTrainFromCorpusParameters(texts, target_vocab_size, character_coverage,
+                                      min_subword_freq, subword_mining_workers);
+    const AtomSpanValidationTotals original_atom_totals =
+        validateOriginalAtomSpansBeforeNormalization(texts, atom_spans);
 
-    if (atom_spans.size() != texts.size()) {
-        throw std::runtime_error("[UnigramLM] atom_spans.size()=" + std::to_string(atom_spans.size())
-                                  + " != texts.size()=" + std::to_string(texts.size()));
-    }
+    last_training_runtime_report_ = UnigramTrainingRuntimeReport{};
 
     std::cout << "[UnigramLM] Training vocabulary from " << texts.size() 
               << " texts (target_vocab_size=" << target_vocab_size << ")" << std::endl;
@@ -579,18 +1024,14 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
               << ", parallel_subword_mining=" << (enable_parallel_subword_mining ? "true" : "false")
               << ", subword_mining_workers=" << subword_mining_workers << std::endl;
 
-    // Count total atoms for logging
-    size_t total_atom_spans = 0;
-    size_t total_atom_bytes = 0;
-    for (const auto& spans : atom_spans) {
-        total_atom_spans += spans.size();
-        for (const auto& s : spans) {
-            total_atom_bytes += (s.end - s.start);
-        }
+    if (prune_during_mining) {
+        std::cout << "[UnigramLM] prune_during_mining=true requested; exact global subword counting is enforced, so mining-time pruning is disabled"
+                  << std::endl;
     }
-    if (total_atom_spans > 0) {
-        std::cout << "[UnigramLM] Atom-aware training: " << total_atom_spans
-                  << " atom spans (" << (total_atom_bytes / 1024) << " KB) will be skipped" << std::endl;
+
+    if (original_atom_totals.span_count > 0) {
+        std::cout << "[UnigramLM] Atom-aware training: " << original_atom_totals.span_count
+                  << " atom spans (" << (original_atom_totals.byte_count / 1024) << " KB) will be skipped" << std::endl;
     }
     
     // SentencePiece-style whitespace normalization
@@ -606,11 +1047,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Applied SentencePiece whitespace normalization (space -> ▁)" << std::endl;
 
     const std::vector<std::string>& training_units = norm_texts;
-    const size_t e_step_workspace_sequence_length =
-        maxViterbiSegmentLengthForTrainingUnits(training_units, norm_atom_spans);
-    std::cout << "[UnigramLM] Longest normalized E-step Viterbi segment: "
-              << e_step_workspace_sequence_length << " bytes" << std::endl;
-    const int MIN_SUBWORD_FREQ = min_subword_freq;
+    const size_t training_segment_max_length =
+        maxTrainingSegmentLengthForTrainingUnits(training_units, norm_atom_spans);
+    std::cout << "[UnigramLM] Longest normalized training segment: "
+              << training_segment_max_length << " bytes" << std::endl;
+    const UnigramSubwordCount MIN_SUBWORD_FREQ = static_cast<UnigramSubwordCount>(min_subword_freq);
     
     size_t total_corpus_bytes = 0;
     for (const auto& text : texts) {
@@ -623,45 +1064,28 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         total_sentence_bytes += sent.size();
     }
     
-    const size_t max_subword_mining_bytes =
-        (subword_mining_max_bytes > 0)
-            ? subword_mining_max_bytes
-            : static_cast<size_t>(HyperParameters::UNIGRAM_MAX_SUBWORD_BYTES);
+    size_t max_subword_mining_bytes = static_cast<size_t>(HyperParameters::UNIGRAM_MAX_SUBWORD_BYTES);
+    if (subword_mining_max_bytes > 0) {
+        max_subword_mining_bytes = subword_mining_max_bytes;
+    }
     const bool use_sampling = total_sentence_bytes > max_subword_mining_bytes;
 
     std::cout << "[UnigramLM] Subword mining byte cap: "
               << (max_subword_mining_bytes / (1024 * 1024)) << " MB" << std::endl;
 
-    // Byte-proportional prefix limits: when the corpus exceeds the mining byte
-    // budget, every document still contributes candidates — but each is truncated
-    // to a prefix proportional to its share of total corpus bytes.
-    //
-    // This eliminates three problems with the old document-uniform sampling:
-    //   1. No document is excluded → EM can't be starved of candidates
-    //   2. Large docs contribute more bytes → byte-weighted, not doc-weighted
-    //   3. Deterministic — no RNG dependence on document order
-    std::vector<size_t> prefix_limits;
+    // Byte-proportional deterministic strided sampling: when the corpus exceeds
+    // the mining byte budget, every non-empty document still contributes bytes,
+    // but those bytes are distributed as spans across the full document rather
+    // than taking only prefixes. EM still trains on full documents, so mining
+    // must not starve late-document candidate patterns.
+    const SubwordMiningPlan mining_plan = buildSubwordMiningPlan(
+        training_units, total_sentence_bytes, max_subword_mining_bytes, use_sampling);
     if (use_sampling) {
-        const double sampling_ratio = static_cast<double>(max_subword_mining_bytes)
-                                    / static_cast<double>(total_sentence_bytes);
-        prefix_limits.resize(training_units.size());
-        size_t actual_sampled_bytes = 0;
-        for (size_t i = 0; i < training_units.size(); ++i) {
-            const auto& text = training_units[i];
-            if (text.empty()) { prefix_limits[i] = 0; continue; }
-            size_t target = static_cast<size_t>(std::ceil(text.size() * sampling_ratio));
-            target = std::max<size_t>(1, target);  // every non-empty doc contributes >= 1 byte
-            target = std::min(target, text.size());
-            // Snap forward to UTF-8 char boundary (don't truncate mid-character)
-            while (target < text.size() && (static_cast<unsigned char>(text[target]) & 0xC0) == 0x80) {
-                ++target;
-            }
-            prefix_limits[i] = target;
-            actual_sampled_bytes += target;
-        }
-        std::cout << "[UnigramLM] Byte-proportional prefix mining: ratio="
-                  << std::fixed << std::setprecision(3) << sampling_ratio
-                  << ", actual=" << (actual_sampled_bytes / (1024*1024)) << " MB from all "
+        std::cout << "[UnigramLM] Byte-proportional strided mining: ratio="
+                  << std::fixed << std::setprecision(3) << mining_plan.sampling_ratio
+                  << ", spans=" << mining_plan.sampled_spans
+                  << ", sampled_starts=" << (mining_plan.sampled_bytes / (1024*1024)) << " MB"
+                  << ", context=" << (mining_plan.context_bytes / (1024*1024)) << " MB from all "
                   << training_units.size() << " documents" << std::defaultfloat << std::endl;
     }
     
@@ -699,6 +1123,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     if (atom_chars_skipped > 0) {
         std::cout << "[UnigramLM] Char counting: skipped " << atom_chars_skipped
                   << " characters inside atom spans" << std::endl;
+    }
+    if (total_chars == 0) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: corpus has zero trainable non-atom characters after normalization");
     }
     
     // Step 2: Build initial vocabulary (all characters meeting coverage)
@@ -738,8 +1165,44 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         covered += count;
     }
     
+    if (!enable_byte_fallback_) {
+        std::vector<std::string> uncovered_chars;
+        uncovered_chars.reserve(char_counts.size());
+        for (const auto& [ch, _] : sorted_chars) {
+            if (!char_seeds.count(ch)) {
+                uncovered_chars.push_back(ch);
+            }
+        }
+        if (!uncovered_chars.empty()) {
+            std::stringstream ss;
+            ss << "UnigramLM::trainFromCorpus: byte fallback is disabled but Step-2 character seeds do not cover "
+               << uncovered_chars.size() << " trainable normalized characters. Set character_coverage=1.0, lower the hard minimum character frequency by changing tokenizer training code, remove invalid characters, or re-enable byte fallback. Missing bytes:";
+            const size_t preview_count = std::min<size_t>(uncovered_chars.size(), 8);
+            for (size_t preview_idx = 0; preview_idx < preview_count; ++preview_idx) {
+                ss << " [";
+                const std::string& ch = uncovered_chars[preview_idx];
+                for (size_t byte_idx = 0; byte_idx < ch.size(); ++byte_idx) {
+                    if (byte_idx > 0) ss << ' ';
+                    ss << "0x" << std::hex << std::setw(2) << std::setfill('0')
+                       << static_cast<int>(static_cast<unsigned char>(ch[byte_idx]))
+                       << std::dec << std::setfill(' ');
+                }
+                ss << "]";
+            }
+            throw std::runtime_error(ss.str());
+        }
+        if (static_cast<int>(char_seeds.size()) > target_vocab_size) {
+            throw std::runtime_error("UnigramLM::trainFromCorpus: byte fallback is disabled but target_vocab_size=" +
+                                     std::to_string(target_vocab_size) +
+                                     " is smaller than the required character seed count=" +
+                                     std::to_string(char_seeds.size()) +
+                                     "; caller MUST allocate enough learned vocab slots for exact character coverage");
+        }
+    }
+
     std::cout << "[UnigramLM] Initial char coverage: " << char_seeds.size()
-              << " characters (byte-layer covered), coverage: "
+              << (enable_byte_fallback_ ? " characters (byte-layer covered), coverage: "
+                                        : " characters (learned-piece covered; byte fallback disabled), coverage: ")
               << (100.0f * covered / total_chars) << "%";
     if (chars_rejected > 0 || chars_too_rare > 0) {
         std::cout << " (rejected " << chars_rejected << " garbage";
@@ -750,8 +1213,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     }
     std::cout << std::endl;
     
-    // Diagnostic: show byte-covered chars
-    std::cout << "[UnigramLM] Byte-covered chars (NOT in unigram vocab, handled by byte layer):" << std::endl;
+    // Diagnostic: show coverage-critical chars
+    std::cout << (enable_byte_fallback_
+                  ? "[UnigramLM] Byte-covered chars (NOT in unigram vocab, handled by byte layer):"
+                  : "[UnigramLM] Learned character seed pieces (byte fallback disabled):") << std::endl;
     for (const auto& [ch, count] : sorted_chars) {
         if (!char_seeds.count(ch)) continue;
         std::string display_text;
@@ -773,30 +1238,20 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             hex_bytes << std::setw(2) << std::setfill('0') << (int)(unsigned char)ch[i];
         }
         int byte_id = (int)(unsigned char)ch[0] + BYTE_TOKEN_OFFSET;
-        std::cout << "  [byte:" << byte_id << "] \"" << display_text
+        std::cout << (enable_byte_fallback_ ? "  [byte:" : "  [char-seed-byte:") << byte_id << "] \"" << display_text
                   << "\" (0x" << hex_bytes.str() << ") count=" << std::dec << count << std::endl;
     }
     
     // Step 3: Generate candidate subwords from SENTENCES
-    std::unordered_map<std::string, int> subword_counts;
+    UnigramSubwordCountMap subword_counts;
     subword_counts.reserve(1000000);
 
     const size_t num_texts_to_process = training_units.size();
     const size_t progress_interval = std::max<size_t>(1, num_texts_to_process / 20);
     const size_t max_len = static_cast<size_t>(MAX_PIECE_LENGTH);
 
-    // Per-document byte limit: full document when not sampling, prefix when sampling.
-    auto byteLimitForIndex = [&](size_t idx) -> size_t {
-        return use_sampling ? prefix_limits[idx] : std::string::npos;
-    };
-
     unsigned int mining_workers = resolveSubwordMiningWorkerCount(
         enable_parallel_subword_mining, subword_mining_workers, num_texts_to_process);
-    if (prune_during_mining && mining_workers > 1) {
-        std::cout << "[UnigramLM] prune_during_mining=true; using single-thread mining to preserve pruning semantics"
-                  << std::endl;
-        mining_workers = 1;
-    }
 
     std::cout << "[UnigramLM] Mining subwords from " << num_texts_to_process
               << " documents (workers=" << mining_workers
@@ -813,18 +1268,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                           << subword_counts.size() << " unique subwords" << std::endl;
             }
 
-            mineSubwordsFromSentence(text, max_len, norm_atom_spans[ti], subword_counts, byteLimitForIndex(ti));
-
-            if (prune_during_mining && subword_counts.size() > 50000000) {
-                std::cout << "[UnigramLM] Pruning low-frequency subwords to control memory..." << std::endl;
-                for (auto it = subword_counts.begin(); it != subword_counts.end(); ) {
-                    if (it->second < 3) {
-                        it = subword_counts.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                std::cout << "[UnigramLM] After pruning: " << subword_counts.size() << " subwords" << std::endl;
+            for (const SubwordMiningSpan& span : mining_plan.spans_by_text[ti]) {
+                mineSubwordsFromSentence(text, max_len, norm_atom_spans[ti], subword_counts,
+                                         span.context_start, span.context_end, span.start, span.end);
             }
         }
         const auto mining_elapsed = std::chrono::duration<double>(
@@ -836,13 +1282,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         std::cout << "[UnigramLM] Parallel subword mining: workers=" << mining_workers
                   << ", chunk_size=" << chunk_size << std::endl;
 
-        std::vector<std::unordered_map<std::string, int>> local_counts(mining_workers);
+        std::vector<UnigramSubwordCountMap> local_counts(mining_workers);
         constexpr size_t kReservePerWorker = 6000000;
         for (auto& map : local_counts) {
             map.reserve(kReservePerWorker);
         }
-        constexpr size_t kLocalPruneHighWater = 5000000;
-        constexpr int    kLocalPruneMinFreq   = 2;
 
         std::atomic<size_t> next_index{0};
         std::atomic<size_t> processed_texts{0};
@@ -862,14 +1306,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 try {
                     for (size_t ti = begin; ti < end; ++ti) {
                         if (abort.load(std::memory_order_relaxed)) return;
-                        mineSubwordsFromSentence(training_units[ti], max_len, norm_atom_spans[ti], local, byteLimitForIndex(ti));
-                    }
-                    if (local.size() > kLocalPruneHighWater) {
-                        for (auto it = local.begin(); it != local.end(); ) {
-                            if (it->second < kLocalPruneMinFreq)
-                                it = local.erase(it);
-                            else
-                                ++it;
+                        const std::string& text = training_units[ti];
+                        for (const SubwordMiningSpan& span : mining_plan.spans_by_text[ti]) {
+                            mineSubwordsFromSentence(text, max_len, norm_atom_spans[ti], local,
+                                                     span.context_start, span.context_end, span.start, span.end);
                         }
                     }
 
@@ -928,12 +1368,17 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         std::cout << "[UnigramLM] Merging " << local_counts.size()
                   << " maps via parallel tree-reduction..." << std::endl;
 
-        auto mergeInto = [](std::unordered_map<std::string, int>& dst,
-                            std::unordered_map<std::string, int>& src) {
+        auto mergeInto = [](UnigramSubwordCountMap& dst,
+                            UnigramSubwordCountMap& src) {
             dst.reserve(dst.size() + src.size());
             for (auto& [k, v] : src) {
                 auto [it, inserted] = dst.try_emplace(k, v);
-                if (!inserted) it->second += v;
+                if (!inserted) {
+                    it->second = addUnigramSubwordCountsForTraining(
+                        it->second,
+                        v,
+                        "UnigramLM::trainFromCorpus parallel subword count merge");
+                }
             }
             src.clear();
             src.rehash(0);
@@ -951,7 +1396,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             }
             for (auto& t : merge_threads) t.join();
 
-            std::vector<std::unordered_map<std::string, int>> next_round;
+            std::vector<UnigramSubwordCountMap> next_round;
             next_round.reserve((n + 1) / 2);
             for (size_t i = 0; i < n; i += 2) {
                 next_round.push_back(std::move(local_counts[i]));
@@ -993,7 +1438,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Frequency filter (min_freq=" << MIN_SUBWORD_FREQ
               << ") keeps " << eligible_candidates << " candidates" << std::endl;
 
-    using SubwordEntry = std::pair<const std::string, int>;
+    using SubwordEntry = std::pair<const std::string, UnigramSubwordCount>;
     std::vector<const SubwordEntry*> ranked_subwords;
     ranked_subwords.reserve(eligible_candidates);
     for (const auto& entry : subword_counts) {
@@ -1019,27 +1464,36 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int filtered = 0;
     int repetition_filtered = 0;
     int structural_dedup_rejected = 0;
-    int prefix_extension_rejected = 0;
 
     std::unordered_set<std::string> dedup_keys_seen;
-    std::unordered_map<std::string, int> dedup_key_to_count;
     for (const auto& ch : char_seeds) {
         std::string key = structuralDedupKeyForCandidate(ch);
         if (!key.empty()) {
             dedup_keys_seen.insert(key);
-            dedup_key_to_count[key] = 0;  // char seeds have no meaningful count
         }
     }
     std::cout << "[UnigramLM] Pre-seeded " << dedup_keys_seen.size()
               << " structural dedup keys from byte-layer chars" << std::endl;
 
-    struct AcceptedPiece { std::string text; int count; };
+    struct AcceptedPiece { std::string text; UnigramSubwordCount count; };
     std::vector<AcceptedPiece> accepted;
-    accepted.reserve(ranked_subwords.size());
+    accepted.reserve(ranked_subwords.size() + (enable_byte_fallback_ ? 0 : char_seeds.size()));
+
+    std::unordered_set<std::string> no_byte_fallback_required_char_seed_pieces;
+    if (!enable_byte_fallback_) {
+        no_byte_fallback_required_char_seed_pieces.reserve(char_seeds.size());
+        for (const auto& [ch, count] : sorted_chars) {
+            if (!char_seeds.count(ch)) continue;
+            accepted.push_back({ch, static_cast<UnigramSubwordCount>(count)});
+            no_byte_fallback_required_char_seed_pieces.insert(ch);
+        }
+        std::cout << "[UnigramLM] Added " << no_byte_fallback_required_char_seed_pieces.size()
+                  << " required learned character seed candidates because byte fallback is disabled" << std::endl;
+    }
 
     for (const SubwordEntry* entry : ranked_subwords) {
         const std::string& subword = entry->first;
-        const int count = entry->second;
+        const UnigramSubwordCount count = entry->second;
         if (hasPiece(subword)) continue;
         if (char_seeds.count(subword)) continue;
 
@@ -1061,17 +1515,12 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             structural_dedup_rejected++;
             continue;
         }
-        // Reject candidates that are 1-3 char extensions of an already-accepted
-        // piece with the same corpus count (e.g., "an▁also" when "an▁als" exists
-        // at the same frequency — they co-occur in identical contexts).
-        if (isPrefixExtensionDuplicate(dedup_key, count, dedup_keys_seen, dedup_key_to_count)) {
-            prefix_extension_rejected++;
-            continue;
-        }
         dedup_keys_seen.insert(dedup_key);
-        dedup_key_to_count[dedup_key] = count;
 
-        accepted.push_back({dedup_key, count});
+        // The structural key is comparison-only. The learned piece must retain
+        // the exact mined subword text so boundary markers/edge bytes are not
+        // silently stripped from the tokenizer vocabulary.
+        accepted.push_back({subword, count});
     }
 
     double total_accepted_count = 0.0;
@@ -1102,21 +1551,20 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     }
     if (structural_dedup_rejected > 0) {
         std::cout << "[UnigramLM] Rejected " << structural_dedup_rejected
-                  << " candidates (structural edge-trim dedup only)" << std::endl;
-    }
-    if (prefix_extension_rejected > 0) {
-        std::cout << "[UnigramLM] Rejected " << prefix_extension_rejected
-                  << " candidates (prefix-extension dedup, same-count near-duplicates)" << std::endl;
+                  << " candidates (structural edge-trim dedup only; ▁ preserved)" << std::endl;
     }
     std::cout << "[UnigramLM] Added " << added << " data-selected subwords (min_freq=" << MIN_SUBWORD_FREQ
               << ", final_cap=" << target_vocab_size << "), total candidate vocab: " << pieces_.size() << std::endl;
+    if (pieces_.empty()) {
+        throw std::runtime_error("UnigramLM::trainFromCorpus: no learned subword candidates survived frequency/validity filters; lower min_subword_freq or provide more corpus text");
+    }
     
-    // Step 5: Iterative EM + Shrinking (SentencePiece-style)
+    // Step 5: Iterative soft EM + Shrinking (SentencePiece-style)
     //
     // Starting with the full data-selected candidate vocab, we iteratively:
-    //   1. Run EM to convergence (estimate token log-probabilities)
-    //   2. Compute each token's marginal log-likelihood contribution
-    //   3. Remove the bottom 25% of tokens (lowest contribution)
+    //   1. Run true Unigram forward-backward EM to convergence
+    //   2. Rank tokens by posterior expected mass plus expected compression gain
+    //   3. Remove the bottom 25% of tokens (lowest posterior mass)
     //   4. Repeat until vocab <= target size
     //
     // This ensures every surviving token genuinely earns its slot by
@@ -1127,10 +1575,18 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     constexpr double SMOOTHING             = 0.1;
     constexpr float  SHRINK_KEEP_RATIO     = 0.75f;  // Keep 75% each round
 
-    auto runEStep = [&]() -> std::tuple<std::unordered_map<int, double>, double, double> {
-        std::unordered_map<int, double> token_counts;
-        double total_tokens = 0.0;
+    struct EStepResult {
+        std::unordered_map<int, double> learned_token_counts;
+        double expected_learned_piece_tokens = 0.0;
+        double expected_fixed_penalty_byte_fallback_tokens = 0.0;
         double log_likelihood = 0.0;
+    };
+
+    auto runEStep = [&]() -> EStepResult {
+        UnigramForwardBackwardLattice lattice(
+            pieces_, enable_byte_fallback_, "UnigramLM::trainFromCorpus forward-backward E-step");
+        UnigramForwardBackwardStats stats(pieces_.size());
+        std::unordered_map<int, double> token_counts;
 
         for (size_t text_idx = 0; text_idx < norm_texts.size(); ++text_idx) {
             const auto& text = norm_texts[text_idx];
@@ -1139,12 +1595,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
             auto processSegment = [&](const std::string& segment) {
                 if (segment.empty()) return;
-                UnigramViterbiSession session(*this, segment, "UnigramLM::trainFromCorpus E-step");
-                log_likelihood += session.pathScore();
-                for (int token_id : session.tokens()) {
-                    token_counts[token_id] += 1.0;
-                    total_tokens += 1.0;
-                }
+                lattice.accumulateSegment(
+                    segment, stats, "UnigramLM::trainFromCorpus forward-backward E-step");
             };
 
             if (spans.empty()) {
@@ -1162,51 +1614,86 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 }
             }
         }
-        return {std::move(token_counts), total_tokens, log_likelihood};
+
+        token_counts.reserve(stats.piece_expected_counts.size());
+        for (size_t i = 0; i < stats.piece_expected_counts.size(); ++i) {
+            const double expected_count = stats.piece_expected_counts[i];
+            if (expected_count == 0.0) continue;
+            token_counts[tokenIdForIndex(static_cast<int>(i))] = expected_count;
+        }
+        return EStepResult{std::move(token_counts),
+                           stats.expected_learned_piece_tokens,
+                           stats.expected_fixed_penalty_byte_fallback_tokens,
+                           stats.log_likelihood};
     };
 
-    auto runMStep = [&](const std::unordered_map<int, double>& token_counts, double total_tokens) -> int {
-        double smoothed_total = total_tokens + SMOOTHING * static_cast<double>(pieces_.size());
+    auto runMStep = [&](const std::unordered_map<int, double>& token_counts, double learned_total_tokens) -> int {
+        // Byte fallback remains outside the normalized learned-piece distribution.
+        // Its UNKNOWN_SCORE path is a fixed unnormalized per-byte coverage penalty, so the
+        // M-step normalizer is learned-piece posterior mass + learned-piece smoothing only.
+        double smoothed_total = learned_total_tokens + SMOOTHING * static_cast<double>(pieces_.size());
         int zero_count = 0;
         for (size_t i = 0; i < pieces_.size(); ++i) {
             auto& piece = pieces_[i];
             if (piece.is_user_defined) continue;
             int tid = tokenIdForIndex(static_cast<int>(i));
-            double count = (token_counts.count(tid) ? token_counts.at(tid) : 0.0) + SMOOTHING;
+            double expected_count = 0.0;
+            auto count_it = token_counts.find(tid);
+            if (count_it != token_counts.end()) {
+                expected_count = count_it->second;
+            }
+            double count = expected_count + SMOOTHING;
             piece.score = static_cast<float>(std::log(count / smoothed_total));
-            if (!token_counts.count(tid) || token_counts.at(tid) == 0.0) {
+            if (expected_count == 0.0) {
                 zero_count++;
             }
         }
         return zero_count;
     };
 
-    auto runEMToConvergence = [&](const char* phase_label) -> std::pair<std::unordered_map<int, double>, int> {
+    struct EMConvergenceResult {
+        std::unordered_map<int, double> learned_token_counts;
+        int iterations = 0;
+        double expected_learned_piece_tokens = 0.0;
+        double expected_fixed_penalty_byte_fallback_tokens = 0.0;
+        double log_likelihood = 0.0;
+    };
+
+    auto requireConvergedPhaseNotFallbackDominated = [](const EMConvergenceResult& result,
+                                                        const char* phase_label) {
+        requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
+            result.expected_learned_piece_tokens,
+            result.expected_fixed_penalty_byte_fallback_tokens,
+            phase_label,
+            "UnigramLM::trainFromCorpus converged forward-backward phase");
+    };
+
+    auto runEMToConvergence = [&](const char* phase_label) -> EMConvergenceResult {
         double prev_ll = -1e30;
-        std::unordered_map<int, double> last_counts;
+        EStepResult last_e_step;
         int iter = 0;
         for (; iter < EM_MAX_ITERATIONS; ++iter) {
-            buildTrie();
-            if (!initGPUForMaxSequenceLength(e_step_workspace_sequence_length)) {
-                throw std::runtime_error("UnigramLM::trainFromCorpus: tokenizer GPU initialization failed before CUDA Viterbi E-step");
-            }
-            auto [token_counts, total_tokens, log_likelihood] = runEStep();
-            int unused = runMStep(token_counts, total_tokens);
+            EStepResult e_step = runEStep();
+            int unused = runMStep(e_step.learned_token_counts, e_step.expected_learned_piece_tokens);
 
-            double relative_change = (prev_ll < -1e20)
-                ? 1.0
-                : std::abs((log_likelihood - prev_ll) / std::min(std::abs(prev_ll), std::abs(log_likelihood)));
+            double relative_change = 1.0;
+            if (prev_ll >= -1e20) {
+                relative_change = std::abs(
+                    (e_step.log_likelihood - prev_ll) /
+                    std::min(std::abs(prev_ll), std::abs(e_step.log_likelihood)));
+            }
 
             std::cout << "[UnigramLM] " << phase_label << " iter " << (iter + 1)
-                      << ": LL=" << std::fixed << std::setprecision(2) << log_likelihood
-                      << ", tokens=" << static_cast<int64_t>(total_tokens)
+                      << ": LL=" << std::fixed << std::setprecision(2) << e_step.log_likelihood
+                      << ", expected_learned_piece_tokens=" << e_step.expected_learned_piece_tokens
+                      << ", expected_fixed_penalty_byte_fallback_tokens=" << e_step.expected_fixed_penalty_byte_fallback_tokens
                       << ", unused=" << unused
                       << ", delta=" << std::scientific << std::setprecision(4) << relative_change
                       << std::defaultfloat << std::endl;
 
-            last_counts = std::move(token_counts);
+            last_e_step = std::move(e_step);
             bool converged = (iter > 0 && relative_change < EM_CONVERGENCE_THRESH);
-            prev_ll = log_likelihood;
+            prev_ll = last_e_step.log_likelihood;
             if (converged) {
                 std::cout << "[UnigramLM] " << phase_label << " converged after " << (iter + 1)
                           << " iterations (delta=" << std::scientific << std::setprecision(4)
@@ -1219,71 +1706,114 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             std::cout << "[UnigramLM] " << phase_label << " hit max iterations ("
                       << EM_MAX_ITERATIONS << ") without full convergence" << std::endl;
         }
-        return {std::move(last_counts), iter};
+        return EMConvergenceResult{std::move(last_e_step.learned_token_counts),
+                                   iter,
+                                   last_e_step.expected_learned_piece_tokens,
+                                   last_e_step.expected_fixed_penalty_byte_fallback_tokens,
+                                   last_e_step.log_likelihood};
     };
 
     // ---- Phase A: initial EM to convergence on full candidate vocab ----
-    std::cout << "[UnigramLM] Phase-A: EM on data-selected candidate vocab (" << pieces_.size()
+    std::cout << "[UnigramLM] Phase-A: forward-backward EM on data-selected candidate vocab (" << pieces_.size()
               << " pieces, final_cap=" << target_vocab_size << ")" << std::endl;
-    auto [phase_a_counts, phase_a_iters] = runEMToConvergence("Phase-A");
+    EMConvergenceResult phase_a_result = runEMToConvergence("Phase-A");
+    requireConvergedPhaseNotFallbackDominated(phase_a_result, "Phase-A");
+    std::unordered_map<int, double> phase_a_counts = std::move(phase_a_result.learned_token_counts);
+
 
     // ---- Phase B: iterative shrinking to target vocab size ----
-    // Each round removes the bottom 25% of tokens by marginal log-likelihood
-    // contribution: loss_i = count_i * score_i (always <= 0, closest to 0 = least useful).
-    // Tokens that are never or rarely selected by Viterbi, or have very low scores,
-    // contribute almost nothing to overall compression and are pruned first.
+    // Each round removes the bottom 25% of tokens by posterior expected mass
+    // plus expected compression gain. This keeps the actual soft
+    // E-step occupancy evidence, while preventing frequent tiny fragments from
+    // automatically outranking less frequent pieces that save more bytes.
+    // Do not multiply by |score| here: that overprotects rare low-probability
+    // pieces even when the forward-backward posterior says they are barely used.
     int shrink_round = 0;
     while (static_cast<int>(pieces_.size()) > target_vocab_size) {
         shrink_round++;
 
-        // How many to keep this round (at least target_vocab_size)
+        // How many to keep this round (at least target_vocab_size, and never
+        // below the number of user-defined pieces because those are protected).
         int current_size = static_cast<int>(pieces_.size());
+        int user_defined_count = 0;
+        for (const auto& piece : pieces_) {
+            if (piece.is_user_defined) {
+                ++user_defined_count;
+            }
+        }
         int keep_count = std::max(
-            target_vocab_size,
+            std::max(target_vocab_size, user_defined_count),
             static_cast<int>(current_size * SHRINK_KEEP_RATIO)
         );
 
-        // Compute marginal log-likelihood contribution for each token
-        // loss_i = count_i * score_i (both <= 0 terms, so product >= 0 inverted)
-        // We use |count * score| so higher = more valuable
+        // Rank by posterior expected mass plus expected compression gain.
+        // Higher value means the current soft segmentation either
+        // relies on the piece more often or the piece earns its slot by saving bytes.
         struct TokenValue {
             int index;
-            double value;  // |count * score| — higher means more valuable
+            double value;
         };
         std::vector<TokenValue> token_values;
         token_values.reserve(pieces_.size());
+        std::unordered_set<int> keep_indices;
+        keep_indices.reserve(static_cast<size_t>(keep_count));
 
         for (size_t i = 0; i < pieces_.size(); ++i) {
             if (pieces_[i].is_user_defined) {
-                // User-defined learned pieces get infinite value — never pruned.
-                token_values.push_back({static_cast<int>(i), std::numeric_limits<double>::max()});
+                // User-defined learned pieces are inserted into the protected
+                // keep set before posterior-ranked fill slots are considered.
+                keep_indices.insert(static_cast<int>(i));
+                continue;
+            }
+            if (!enable_byte_fallback_ && no_byte_fallback_required_char_seed_pieces.count(pieces_[i].text)) {
+                keep_indices.insert(static_cast<int>(i));
                 continue;
             }
             int tid = tokenIdForIndex(static_cast<int>(i));
-            double count = phase_a_counts.count(tid) ? phase_a_counts.at(tid) : 0.0;
-            double score = static_cast<double>(pieces_[i].score);
-            // Marginal LL contribution = count * score (score is negative log-prob)
-            // Tokens with count=0 or tiny count*|score| contribute least
-            double marginal_ll = count * std::abs(score);
-            token_values.push_back({static_cast<int>(i), marginal_ll});
+            double count = 0.0;
+            auto count_it = phase_a_counts.find(tid);
+            if (count_it != phase_a_counts.end()) {
+                count = count_it->second;
+            }
+            const double value = scoreUnigramShrinkCandidateForPosteriorCompression(
+                pieces_[i].text,
+                count,
+                "UnigramLM::trainFromCorpus shrink ranking");
+            token_values.push_back({static_cast<int>(i), value});
         }
 
         // Sort by value descending — most valuable first
         std::sort(token_values.begin(), token_values.end(),
                   [](const TokenValue& a, const TokenValue& b) {
-                      return a.value > b.value;
+                      if (a.value != b.value) return a.value > b.value;
+                      return a.index < b.index;
                   });
 
-        // Keep the top keep_count tokens
-        std::unordered_set<int> keep_indices;
-        for (int k = 0; k < keep_count && k < static_cast<int>(token_values.size()); ++k) {
+        // Fill remaining slots with the top non-user-defined pieces by posterior
+        // mass plus expected compression gain.
+        const int fill_slots = std::max(0, keep_count - static_cast<int>(keep_indices.size()));
+        for (int k = 0; k < fill_slots && k < static_cast<int>(token_values.size()); ++k) {
             keep_indices.insert(token_values[k].index);
         }
 
         int removed = current_size - static_cast<int>(keep_indices.size());
+        if (removed == 0 && current_size > target_vocab_size) {
+            if (token_values.empty()) {
+                std::cout << "[UnigramLM] Shrink stopped at " << current_size
+                          << " pieces: target_vocab_size=" << target_vocab_size
+                          << " cannot be reached without pruning " << user_defined_count
+                          << " protected user-defined pieces" << std::endl;
+                break;
+            }
+            throw std::runtime_error("UnigramLM::trainFromCorpus shrink made no progress despite " +
+                                     std::to_string(token_values.size()) +
+                                     " prunable pieces; keep_count=" + std::to_string(keep_count) +
+                                     ", current_size=" + std::to_string(current_size));
+        }
         std::cout << "[UnigramLM] Shrink round " << shrink_round
                   << ": " << current_size << " -> " << keep_indices.size()
-                  << " tokens (removed " << removed << ")" << std::endl;
+                  << " tokens (removed " << removed
+                  << ", protected_user_defined=" << user_defined_count << ")" << std::endl;
 
         // Compact pieces_ to survivors only
         std::vector<UnigramPiece> surviving;
@@ -1300,8 +1830,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
         // Re-converge EM on the smaller vocab
         std::string label = "Shrink-" + std::to_string(shrink_round);
-        auto [shrink_counts, shrink_iters] = runEMToConvergence(label.c_str());
-        phase_a_counts = std::move(shrink_counts);
+        EMConvergenceResult shrink_result = runEMToConvergence(label.c_str());
+        requireConvergedPhaseNotFallbackDominated(shrink_result, label.c_str());
+        phase_a_counts = std::move(shrink_result.learned_token_counts);
     }
 
     if (shrink_round > 0) {
@@ -1310,22 +1841,32 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     }
 
     // ---- Phase C: final dead-token cleanup ----
-    // Remove any tokens that still have zero Viterbi count after convergence
+    // Remove any tokens that still have zero posterior expected count after convergence
     int pruned = 0;
     {
         std::unordered_set<int> dead_indices;
         for (size_t i = 0; i < pieces_.size(); ++i) {
             if (pieces_[i].is_user_defined) continue;
+            if (!enable_byte_fallback_ && no_byte_fallback_required_char_seed_pieces.count(pieces_[i].text)) continue;
             int tid = tokenIdForIndex(static_cast<int>(i));
-            const double count = phase_a_counts.count(tid) ? phase_a_counts.at(tid) : 0.0;
-            if (count < 1.0) {
+            double count = 0.0;
+            auto count_it = phase_a_counts.find(tid);
+            if (count_it != phase_a_counts.end()) {
+                count = count_it->second;
+            }
+            if (count == 0.0) {
                 dead_indices.insert(static_cast<int>(i));
             }
         }
 
         if (!dead_indices.empty()) {
+            requireUnigramFinalCleanupLeavesLearnedPiece(
+                pieces_.size(),
+                dead_indices.size(),
+                "UnigramLM::trainFromCorpus final dead-token cleanup");
+
             std::cout << "[UnigramLM] Final cleanup: pruning " << dead_indices.size()
-                      << " dead tokens (Viterbi count < 1)" << std::endl;
+                      << " dead tokens (posterior expected count == 0)" << std::endl;
 
             std::vector<UnigramPiece> surviving;
             surviving.reserve(pieces_.size() - dead_indices.size());
@@ -1348,19 +1889,18 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     if (pruned > 0) {
         std::cout << "[UnigramLM] Reconverging after pruning " << pruned
                   << " dead tokens (vocab now " << pieces_.size() << ")" << std::endl;
-        auto [phase_d_counts, phase_d_iters] = runEMToConvergence("Phase-D");
-        (void)phase_d_counts;
-        (void)phase_d_iters;
+        EMConvergenceResult phase_d_result = runEMToConvergence("Phase-D");
+        requireConvergedPhaseNotFallbackDominated(phase_d_result, "Phase-D");
     }
 
     // Final trie build with converged scores
     buildTrie();
 
-    if (!initGPUForMaxSequenceLength(e_step_workspace_sequence_length)) {
+    if (!initGPUForMaxSequenceLength(training_segment_max_length)) {
         throw std::runtime_error("UnigramLM::trainFromCorpus: final tokenizer runtime upload failed after final buildTrie()");
     }
 
-    last_training_runtime_report_.required_viterbi_workspace_length = e_step_workspace_sequence_length;
+    last_training_runtime_report_.required_viterbi_workspace_length = training_segment_max_length;
     last_training_runtime_report_.finalized_trie_generation = trie_generation_;
     last_training_runtime_report_.final_piece_count = pieceCount();
 
