@@ -119,7 +119,8 @@ struct GradientSignalExpectation {
 struct GradientVerificationActivity {
     bool text_loss_active = false;
     bool selector_loss_active = false;
-    bool exec_selection_loss_active = false;
+    bool exec_op_loss_active = false;
+    bool exec_arg_loss_active = false;
     bool exec_write_selection_ce_active = false;
 };
 
@@ -278,22 +279,17 @@ GradientVerificationActivity detectGradientVerificationActivity(AutogradContext&
     activity.selector_loss_active = ctx.training_state
         && !ctx.training_state->autograd_intermediates.selector_fwd_results.empty();
     if (ctx.training_state) {
-        const auto& rows = ctx.training_state->autograd_intermediates.exec_outputs_per_row;
-        for (const auto& row : rows) {
-            for (const auto& step : row.steps) {
-                if (step.has_selection_ce) {
-                    activity.exec_selection_loss_active = true;
-                    activity.exec_write_selection_ce_active = true;
-                }
-                if ((step.transition_loss.data && step.transition_loss.grad_fn)
-                    || (step.arg_reinforce_loss.data && step.arg_reinforce_loss.grad_fn)) {
-                    activity.exec_selection_loss_active = true;
-                }
-            }
-            if (activity.exec_selection_loss_active && activity.exec_write_selection_ce_active) {
-                break;
-            }
-        }
+        const auto& intermediates = ctx.training_state->autograd_intermediates;
+        // These flags are set only by computeAutogradLoss() when an execution
+        // loss term passes execution_active / teacher_step_mask filtering and is
+        // actually added into the normalized execution auxiliary objective.
+        // Do not infer activity from exec_outputs_per_row: that includes padded
+        // or inactive diagnostics that may never reach loss_tensor.
+        activity.exec_op_loss_active = intermediates.exec_op_ce_added
+            || intermediates.exec_transition_added;
+        activity.exec_arg_loss_active = intermediates.exec_arg_ce_added
+            || intermediates.exec_transition_added;
+        activity.exec_write_selection_ce_active = intermediates.exec_write_ce_added;
     }
     return activity;
 }
@@ -327,9 +323,12 @@ GradientSignalBaselines captureGradientVerificationBaselines(
 
     if (ctx.execution_block && ctx.config->execution_block_enabled) {
         auto& eb = *ctx.execution_block;
-        if (activity.exec_selection_loss_active) {
+        if (activity.exec_op_loss_active) {
             captureExpected(eb.W_op_select(), "exec block W_op_select");
+        }
+        if (activity.exec_arg_loss_active) {
             captureExpected(eb.w_arg1_select(), "exec block w_arg1_select");
+            captureExpected(eb.w_arg2_select(), "exec block w_arg2_select");
         }
         if (activity.exec_write_selection_ce_active) {
             captureExpected(eb.W_write_query(), "exec block W_write_query");
@@ -496,6 +495,10 @@ LossResult computeAutogradLoss(
     //   2. selection CE — logits-space CE on op/arg1/arg2/write selections
     //      (computed inside executeStep via autograd::cross_entropy_logits)
     //
+    // The execution auxiliary objective is averaged over active scalar loss
+    // terms before it is added to loss_tensor. This keeps effective execution
+    // weight invariant to teacher-step count / batch composition.
+    //
     // Monitoring-only (host scalars, no gradients):
     //   - exec_entropy_monitor — distribution collapse detection
     //   - exec_structured_ce — scalar readback of device CE for logging parity
@@ -506,12 +509,84 @@ LossResult computeAutogradLoss(
     if (cfg->execution_block_enabled && ctx.execution_block
         && !intermediates.exec_outputs_per_row.empty()) {
 
+        if (static_cast<int>(intermediates.exec_outputs_per_row.size()) != payload.batch_size) {
+            throw std::runtime_error(
+                "computeAutogradLoss: exec_outputs_per_row size="
+                + std::to_string(intermediates.exec_outputs_per_row.size())
+                + " does not match payload.batch_size=" + std::to_string(payload.batch_size)
+                + " — execution forward must produce exactly one row output per payload row");
+        }
+        if (!ctx.payload->execution_active.empty()
+            && static_cast<int>(ctx.payload->execution_active.size()) != payload.batch_size) {
+            throw std::runtime_error(
+                "computeAutogradLoss: execution_active size="
+                + std::to_string(ctx.payload->execution_active.size())
+                + " does not match payload.batch_size=" + std::to_string(payload.batch_size)
+                + " — Phase1 payload row masks must align with execution outputs");
+        }
+
+        intermediates.exec_op_ce_added = false;
+        intermediates.exec_arg_ce_added = false;
+        intermediates.exec_write_ce_added = false;
+        intermediates.exec_transition_added = false;
+
         const bool have_step_mask = (ctx.payload && !ctx.payload->teacher_step_mask.empty());
         const float ce_weight = cfg->structured_ce_weight;
 
-        // Accumulate autograd losses: transition_loss + selection CE tensors
+        // Accumulate autograd losses locally, then normalize once before adding
+        // to the main loss. Adding raw per-step sums makes rows with more
+        // teacher steps exert larger pressure than rows with fewer steps.
+        Tensor exec_loss_sum;
+        bool have_exec_loss_sum = false;
+        int exec_active_step_count = 0;
+        int exec_loss_term_count = 0;
         int ce_tensor_count = 0;
         float ce_scalar_sum = 0.0f;
+
+        enum class ExecLossFlag {
+            Op,
+            Arg,
+            Write,
+            Transition
+        };
+
+        auto addExecLossTerm = [&](Tensor&& contribution, const char* name, int b, int k, ExecLossFlag flag) {
+            if (!contribution.data || !contribution.grad_fn) {
+                throw std::runtime_error(
+                    std::string("AutogradTraining: execution loss tensor '") + name
+                    + "' has no data/grad_fn at row=" + std::to_string(b)
+                    + " step=" + std::to_string(k)
+                    + " — execution auxiliary loss must remain autograd-connected");
+            }
+            if (contribution.numel() != 1) {
+                throw std::runtime_error(
+                    std::string("AutogradTraining: execution loss tensor '") + name
+                    + "' is not scalar at row=" + std::to_string(b)
+                    + " step=" + std::to_string(k)
+                    + " numel=" + std::to_string(contribution.numel()));
+            }
+            if (!have_exec_loss_sum) {
+                exec_loss_sum = std::move(contribution);
+                have_exec_loss_sum = true;
+            } else {
+                exec_loss_sum = autograd::add(exec_loss_sum, contribution, ctx.stream);
+            }
+            switch (flag) {
+                case ExecLossFlag::Op:
+                    intermediates.exec_op_ce_added = true;
+                    break;
+                case ExecLossFlag::Arg:
+                    intermediates.exec_arg_ce_added = true;
+                    break;
+                case ExecLossFlag::Write:
+                    intermediates.exec_write_ce_added = true;
+                    break;
+                case ExecLossFlag::Transition:
+                    intermediates.exec_transition_added = true;
+                    break;
+            }
+            exec_loss_term_count++;
+        };
 
         for (int b = 0; b < payload.batch_size; ++b) {
             if (!ctx.payload->execution_active.empty()
@@ -527,6 +602,8 @@ LossResult computeAutogradLoss(
                     && ctx.payload->teacher_step_mask[b][k] == 0)
                     continue;
 
+                exec_active_step_count++;
+
                 const auto& sout = row_steps[k];
 
                 // transition_loss → autograd graph (L1 value supervision)
@@ -535,37 +612,45 @@ LossResult computeAutogradLoss(
                         sout.transition_loss,
                         cfg->execution_block_causal_w1_transition,
                         ctx.stream);
-                    intermediates.loss_tensor = autograd::add(
-                        intermediates.loss_tensor, scaled, ctx.stream);
+                    addExecLossTerm(std::move(scaled), "transition_loss", b, k, ExecLossFlag::Transition);
                 }
 
                 // Fix #6: div_invalid_penalty → autograd graph
                 // Penalizes p_op[3] when division was clamped (|v2| < eps).
                 // Gradient flows: penalty → p_op → softmax → op_logits → W_op_select.
                 if (sout.div_invalid_penalty.data && sout.div_invalid_penalty.grad_fn) {
-                    intermediates.loss_tensor = autograd::add(
-                        intermediates.loss_tensor, sout.div_invalid_penalty, ctx.stream);
+                    auto scaled = autograd::scale_scalar(
+                        sout.div_invalid_penalty,
+                        1.0f,
+                        ctx.stream);
+                    addExecLossTerm(std::move(scaled), "div_invalid_penalty", b, k, ExecLossFlag::Op);
                 }
 
                 // Fix #8: div_magnitude_penalty → autograd graph
                 // Penalizes large |v_out| after clamped division.
                 // Gradient flows: penalty → v_out → FourOpMixGradFn → v1, v2.
                 if (sout.div_magnitude_penalty.data && sout.div_magnitude_penalty.grad_fn) {
-                    intermediates.loss_tensor = autograd::add(
-                        intermediates.loss_tensor, sout.div_magnitude_penalty, ctx.stream);
+                    auto scaled = autograd::scale_scalar(
+                        sout.div_magnitude_penalty,
+                        1.0f,
+                        ctx.stream);
+                    addExecLossTerm(std::move(scaled), "div_magnitude_penalty", b, k, ExecLossFlag::Transition);
                 }
 
                 // Fix #7: arg_reinforce_loss → autograd graph
                 // REINFORCE: λ * detached(|v_out-target|) * (-log p_arg[k])
                 // Gradient flows ONLY to arg logits. No soft weighting of values.
                 if (sout.arg_reinforce_loss.data && sout.arg_reinforce_loss.grad_fn) {
-                    intermediates.loss_tensor = autograd::add(
-                        intermediates.loss_tensor, sout.arg_reinforce_loss, ctx.stream);
+                    auto scaled = autograd::scale_scalar(
+                        sout.arg_reinforce_loss,
+                        1.0f,
+                        ctx.stream);
+                    addExecLossTerm(std::move(scaled), "arg_reinforce_loss", b, k, ExecLossFlag::Arg);
                 }
 
                 // selection CE → autograd graph (direct per-decision supervision)
                 if (cfg->structured_ce_enabled && sout.has_selection_ce) {
-                    auto accumulate_ce = [&](const Tensor& ce_tensor, const char* name) {
+                    auto accumulate_ce = [&](const Tensor& ce_tensor, const char* name, ExecLossFlag flag) {
                         if (!ce_tensor.data || !ce_tensor.grad_fn)
                             throw std::runtime_error(
                                 std::string("AutogradTraining: selection CE tensor '")
@@ -573,14 +658,13 @@ LossResult computeAutogradLoss(
                                 + " step=" + std::to_string(k)
                                 + " — CrossEntropyLogitsGradFn was not attached");
                         auto scaled = autograd::scale_scalar(ce_tensor, ce_weight, ctx.stream);
-                        intermediates.loss_tensor = autograd::add(
-                            intermediates.loss_tensor, scaled, ctx.stream);
+                        addExecLossTerm(std::move(scaled), name, b, k, flag);
                     };
 
-                    accumulate_ce(sout.selection_ce_op,    "selection_ce_op");
-                    accumulate_ce(sout.selection_ce_arg1,  "selection_ce_arg1");
-                    accumulate_ce(sout.selection_ce_arg2,  "selection_ce_arg2");
-                    accumulate_ce(sout.selection_ce_write, "selection_ce_write");
+                    accumulate_ce(sout.selection_ce_op,    "selection_ce_op",    ExecLossFlag::Op);
+                    accumulate_ce(sout.selection_ce_arg1,  "selection_ce_arg1",  ExecLossFlag::Arg);
+                    accumulate_ce(sout.selection_ce_arg2,  "selection_ce_arg2",  ExecLossFlag::Arg);
+                    accumulate_ce(sout.selection_ce_write, "selection_ce_write", ExecLossFlag::Write);
 
                     // Scalar readback for logging parity (one sync per step is acceptable
                     // since we're already doing cudaMemcpy for expected_value upload)
@@ -600,9 +684,31 @@ LossResult computeAutogradLoss(
             exec_structured_ce = ce_scalar_sum / static_cast<float>(ce_tensor_count);
         }
 
+        if (have_exec_loss_sum) {
+            if (exec_loss_term_count <= 0) {
+                throw std::runtime_error(
+                    "AutogradTraining: have_exec_loss_sum=true but exec_loss_term_count<=0 — execution loss normalization invariant broken");
+            }
+            const float exec_loss_norm = 1.0f / static_cast<float>(exec_loss_term_count);
+            Tensor normalized_exec_loss = autograd::scale_scalar(
+                exec_loss_sum,
+                exec_loss_norm,
+                ctx.stream);
+            intermediates.loss_tensor = autograd::add(
+                intermediates.loss_tensor, normalized_exec_loss, ctx.stream);
+            AG_INFO("Execution auxiliary loss normalized over " << exec_loss_term_count
+                    << " scalar loss terms across " << exec_active_step_count
+                    << " active execution steps");
+        }
+
         // Optional entropy monitor (non-differentiable; not added to loss_tensor)
         if (cfg->entropy_aux_weight > 0.0f) {
+            int monitored_entropy_rows = 0;
             for (int b = 0; b < payload.batch_size; ++b) {
+                if (!ctx.payload->execution_active.empty()
+                    && !ctx.payload->execution_active[b])
+                    continue;
+
                 const auto& all_steps = intermediates.exec_outputs_per_row[b].steps;
                 std::vector<const ExecutionBlockStepOutput*> real_steps;
                 if (have_step_mask
@@ -618,17 +724,26 @@ LossResult computeAutogradLoss(
                     for (const auto& s : all_steps)
                         real_steps.push_back(&s);
                 }
+                if (real_steps.empty()) {
+                    continue;
+                }
                 Tensor ent = ctx.execution_block->computeEntropyLoss(
                     real_steps,
                     cfg->entropy_aux_weight,
                     ctx.stream);
+                if (!ent.data) {
+                    throw std::runtime_error(
+                        "computeAutogradLoss: execution entropy monitor returned NULL tensor data for row="
+                        + std::to_string(b) + " with real_steps=" + std::to_string(real_steps.size()));
+                }
                 float h_ent = 0.0f;
                 cudaStreamSynchronize(ctx.stream);
                 cudaMemcpy(&h_ent, ent.data, sizeof(float), cudaMemcpyDeviceToHost);
                 exec_entropy_monitor += h_ent;
+                monitored_entropy_rows++;
             }
-            if (payload.batch_size > 0)
-                exec_entropy_monitor /= static_cast<float>(payload.batch_size);
+            if (monitored_entropy_rows > 0)
+                exec_entropy_monitor /= static_cast<float>(monitored_entropy_rows);
         }
     }
     result.entropy_monitor = exec_entropy_monitor;
@@ -792,9 +907,8 @@ BackwardResult executeAutogradBackward(
     // Verify gradients are properly connected before optimizer runs
     AG_INFO("Verifying gradients are connected to optimizer...");
     if (!verifyGradientsAreConnectedImpl(ctx, &gradient_signal_baselines)) {
-        result.error_message = "Gradient connectivity verification failed";
-        AG_ERROR("executeAutogradBackward: " << result.error_message);
-        return result;
+        throw std::runtime_error(
+            "executeAutogradBackward: Gradient connectivity verification failed after backward mutated parameter gradients");
     }
     AG_INFO("Gradient connectivity verified");
     
@@ -1042,9 +1156,12 @@ bool verifyGradientsAreConnectedImpl(
         checkEB(eb.b_trace(), "b_trace");
         checkEB(eb.W_reason_gate(), "W_reason_gate");
         checkEB(eb.W_trace_gate(), "W_trace_gate");
-        if (activity.exec_selection_loss_active) {
+        if (activity.exec_op_loss_active) {
             requireReceivedGradient(eb.W_op_select(), "exec block W_op_select");
+        }
+        if (activity.exec_arg_loss_active) {
             requireReceivedGradient(eb.w_arg1_select(), "exec block w_arg1_select");
+            requireReceivedGradient(eb.w_arg2_select(), "exec block w_arg2_select");
         }
         if (activity.exec_write_selection_ce_active) {
             requireReceivedGradient(eb.W_write_query(), "exec block W_write_query");

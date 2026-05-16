@@ -68,6 +68,10 @@ struct AutogradIntermediates {
     std::vector<ExecutionMemory> exec_memories;               // [batch_size] per-row isolation
     std::vector<ExecutionBlockOutput> exec_outputs_per_row;   // [batch_size][K steps]
     std::vector<Tensor> exec_expected_target_tensors;         // owned [1,1] teacher scalar tensors used while building ExecutionBlock grad nodes
+    bool exec_op_ce_added = false;                            // true iff an active op-path execution loss was added to loss_tensor
+    bool exec_arg_ce_added = false;                           // true iff an active arg-path execution loss was added to loss_tensor
+    bool exec_write_ce_added = false;                         // true iff active write selection CE was added to loss_tensor
+    bool exec_transition_added = false;                       // true iff active transition/value execution loss was added to loss_tensor
 
     // Selector supervision — SelectorForwardResult owns intermediate Tensors
     // (q, slot_keys) whose .data is cached by MatMulGradFn nodes. MUST stay
@@ -106,6 +110,10 @@ struct AutogradIntermediates {
         exec_memories.clear();
         exec_outputs_per_row.clear();
         exec_expected_target_tensors.clear();
+        exec_op_ce_added = false;
+        exec_arg_ce_added = false;
+        exec_write_ce_added = false;
+        exec_transition_added = false;
         selector_h_t_inputs.clear();
         selector_slot_feature_inputs.clear();
         selector_fwd_results.clear();

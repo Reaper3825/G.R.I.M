@@ -50,6 +50,12 @@ Parameter gradient zeroing is owned by the TensorContract `ParameterGroup` inven
 
 During gradient accumulation, existing parameter grad buffers already contain prior microbatch contributions. A post-backward nonzero/RMS check proves only that the cumulative buffer is nonzero, not that the current backward pass delivered signal. Accumulation-slot verification must snapshot expected signal tensors before `loss_tensor.backward()` and require a finite nonzero pre/post delta after backward.
 
+If gradient connectivity verification fails after `loss_tensor.backward()` returns, `executeAutogradBackward()` must throw immediately. It must not return a recoverable-looking `success=false` result because Category 2 parameter gradient buffers have already been mutated by backward; continuing or retrying inside the same training process would risk carrying contaminated gradients.
+
+ExecutionBlock gradient verification must be driven by `AutogradIntermediates` loss-added flags (`exec_op_ce_added`, `exec_arg_ce_added`, `exec_write_ce_added`, `exec_transition_added`) set by `computeAutogradLoss()`. Do not infer active execution supervision by scanning `exec_outputs_per_row`: that vector contains diagnostics for inactive rows and masked/padded teacher steps that may never be added to `loss_tensor`.
+
+Execution loss assembly indexes execution diagnostics by payload row. When execution outputs exist, `AutogradIntermediates::exec_outputs_per_row.size()` must exactly match `BatchPayload::batch_size`, and a non-empty `BatchPayload::execution_active` mask must have the same length. Mismatches must throw before any row-indexed access; never rely on `!exec_outputs_per_row.empty()` as a geometry guard.
+
 ## QKV attention boundary
 Autograd attention owns the QKV tape boundary. `autograd::split_and_reshape_qkv()` creates the `SplitAndReshapeQKVGradFn` and delegates only raw layout movement to `TensorConversion::split_qkv_gqa()` / `merge_qkv_grads_gqa()`. Encoder code must not call TensorConversion QKV split/merge directly.
 
