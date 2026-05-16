@@ -183,12 +183,6 @@ struct AutogradContext {
             if (!device_bindings->d_mtp_shifted_targets) {
                 throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
             }
-            if (device_bindings->mtp_k != static_cast<int>(payload->mtp_shifted_targets.size())) {
-                throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.mtp_k=" +
-                                         std::to_string(device_bindings->mtp_k) +
-                                         " != payload.mtp_shifted_targets.size()=" +
-                                         std::to_string(payload->mtp_shifted_targets.size()));
-            }
         }
     }
 };

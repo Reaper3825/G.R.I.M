@@ -67,13 +67,6 @@ void validateDeviceBindingsForPayload(
             throw std::runtime_error(
                 std::string(caller) + ": BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
         }
-        if (bindings.mtp_k != static_cast<int>(payload.mtp_shifted_targets.size())) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchDeviceBindings.mtp_k=" +
-                std::to_string(bindings.mtp_k) +
-                " != payload.mtp_shifted_targets.size()=" +
-                std::to_string(payload.mtp_shifted_targets.size()));
-        }
     }
 }
 

@@ -61,8 +61,7 @@ struct BatchDeviceBindings {
     uint8_t*  d_atom_mask       = nullptr;  // [batch_size * max_seq_len] (nullable when atom mask not used)
     uint32_t* d_atom_flags      = nullptr;  // [batch_size * max_seq_len] (nullable when not allocated)
     int32_t*  d_token_to_slot_map = nullptr; // [batch_size * max_seq_len]
-    int*      d_mtp_shifted_targets = nullptr; // [mtp_k * batch_size * max_seq_len], head-major; nullable when MTP disabled
-    int       mtp_k = 0;
+    int*      d_mtp_shifted_targets = nullptr; // [payload.mtp_shifted_targets.size() * batch_size * max_seq_len], head-major; nullable when MTP disabled
 
     int batch_size  = 0;
     int max_seq_len = 0;

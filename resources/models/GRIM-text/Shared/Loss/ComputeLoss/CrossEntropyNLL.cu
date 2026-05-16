@@ -12,6 +12,7 @@
 #include <cmath>
 #include <string>
 #include <stdexcept>
+#include <type_traits>
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
@@ -30,6 +31,133 @@ struct DeviceFreeGuard {
     DeviceFreeGuard(const DeviceFreeGuard&) = delete;
     DeviceFreeGuard& operator=(const DeviceFreeGuard&) = delete;
 };
+
+static_assert(std::is_trivially_copyable<HyperParameters::LossConfigHP>::value,
+              "LossConfigHP must remain device-passable by value");
+
+void validateBatchDeviceBindingsGeometry(
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const char* caller
+) {
+    if (payload.total_tokens <= 0) {
+        throw std::runtime_error(std::string("[") + caller + "] BatchPayload.total_tokens=" +
+            std::to_string(payload.total_tokens) + " — must be > 0");
+    }
+    if (payload.vocab_size <= 0) {
+        throw std::runtime_error(std::string("[") + caller + "] BatchPayload.vocab_size=" +
+            std::to_string(payload.vocab_size) + " — must be > 0");
+    }
+    if (bindings.batch_size != payload.batch_size) {
+        throw std::runtime_error(std::string("[") + caller + "] BatchDeviceBindings.batch_size=" +
+            std::to_string(bindings.batch_size) + " != BatchPayload.batch_size=" +
+            std::to_string(payload.batch_size));
+    }
+    if (bindings.max_seq_len != payload.max_seq_len) {
+        throw std::runtime_error(std::string("[") + caller + "] BatchDeviceBindings.max_seq_len=" +
+            std::to_string(bindings.max_seq_len) + " != BatchPayload.max_seq_len=" +
+            std::to_string(payload.max_seq_len));
+    }
+}
+
+int requireMtpHeadIndex(
+    const Batching::BatchPayload& payload,
+    const CrossEntropyTargetSelection& target_selection,
+    const char* caller
+) {
+    if (!target_selection.mtp_head_idx.has_value()) {
+        throw std::runtime_error(std::string("[") + caller + "] MTP shifted-target selection is missing mtp_head_idx");
+    }
+
+    const int mtp_head_idx = *target_selection.mtp_head_idx;
+    if (mtp_head_idx < 0 ||
+        mtp_head_idx >= static_cast<int>(payload.mtp_shifted_targets.size())) {
+        throw std::runtime_error(std::string("[") + caller + "] mtp_head_idx=" +
+            std::to_string(mtp_head_idx) +
+            " out of range for BatchPayload.mtp_shifted_targets.size()=" +
+            std::to_string(payload.mtp_shifted_targets.size()));
+    }
+    return mtp_head_idx;
+}
+
+const char* targetSelectionName(
+    const CrossEntropyTargetSelection& target_selection,
+    const char* caller
+) {
+    switch (target_selection.source) {
+        case CrossEntropyTargetSource::PrimaryLm:
+            if (target_selection.mtp_head_idx.has_value()) {
+                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
+            }
+            return "primary_lm_targets";
+
+        case CrossEntropyTargetSource::MtpShiftedHead:
+            return "mtp_shifted_targets";
+    }
+
+    throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
+}
+
+int expectedValidCountForSelection(
+    const Batching::BatchPayload& payload,
+    const CrossEntropyTargetSelection& target_selection,
+    const char* caller
+) {
+    switch (target_selection.source) {
+        case CrossEntropyTargetSource::PrimaryLm:
+            if (target_selection.mtp_head_idx.has_value()) {
+                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
+            }
+            if (payload.lm_valid_tokens <= 0) {
+                throw std::runtime_error(std::string("[") + caller + "] BatchPayload.lm_valid_tokens=" +
+                    std::to_string(payload.lm_valid_tokens) + " — primary loss requires a positive BatchPayload-authored valid count");
+            }
+            return payload.lm_valid_tokens;
+
+        case CrossEntropyTargetSource::MtpShiftedHead: {
+            const int mtp_head_idx = requireMtpHeadIndex(payload, target_selection, caller);
+            if (payload.mtp_valid_counts[mtp_head_idx] <= 0) {
+                throw std::runtime_error(std::string("[") + caller + "] BatchPayload.mtp_valid_counts[" +
+                    std::to_string(mtp_head_idx) + "]=" +
+                    std::to_string(payload.mtp_valid_counts[mtp_head_idx]) +
+                    " — caller must skip zero-valid MTP heads before loss assembly");
+            }
+            return payload.mtp_valid_counts[mtp_head_idx];
+        }
+    }
+
+    throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
+}
+
+const int* resolveDeviceTargetsForSelection(
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const CrossEntropyTargetSelection& target_selection,
+    const char* caller
+) {
+    validateBatchDeviceBindingsGeometry(payload, bindings, caller);
+
+    switch (target_selection.source) {
+        case CrossEntropyTargetSource::PrimaryLm:
+            if (target_selection.mtp_head_idx.has_value()) {
+                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
+            }
+            if (!bindings.d_target_ids) {
+                throw std::runtime_error(std::string("[") + caller + "] BatchDeviceBindings.d_target_ids is NULL — caller MUST upload BatchPayload before primary loss");
+            }
+            return bindings.d_target_ids;
+
+        case CrossEntropyTargetSource::MtpShiftedHead: {
+            const int mtp_head_idx = requireMtpHeadIndex(payload, target_selection, caller);
+            if (!bindings.d_mtp_shifted_targets) {
+                throw std::runtime_error(std::string("[") + caller + "] BatchDeviceBindings.d_mtp_shifted_targets is NULL — caller MUST upload BatchPayload before MTP loss");
+            }
+            return bindings.d_mtp_shifted_targets + static_cast<size_t>(mtp_head_idx) * payload.total_tokens;
+        }
+    }
+
+    throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
+}
 
 //========================================================================
 // CUDA Kernels — NLL Loss on log-probabilities
@@ -60,19 +188,13 @@ __global__ void kernelCrossEntropyNLLForward(
     float* __restrict__ loss_sum,
     int* __restrict__ valid_count,
     float* __restrict__ weight_sum,             // Accumulated class weights (nullable if no class_balanced)
-    int num_tokens,
+    int total_tokens,
     int vocab_size,
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    bool smoothing_enabled,
-    float entropy_reg_lambda,
-    bool entropy_reg_enabled,
+    HyperParameters::LossConfigHP loss_config,
     const float* __restrict__ class_weights     // [vocab_size] per-class weights (nullable = all 1.0)
 ) {
     const int token_idx = blockIdx.x;
-    if (token_idx >= num_tokens) return;
+    if (token_idx >= total_tokens) return;
 
     const int target = targets[token_idx];
 
@@ -101,13 +223,13 @@ __global__ void kernelCrossEntropyNLLForward(
     float local_sum_log_off = 0.0f;
 
     for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
-        if (entropy_reg_enabled) {
+        if (loss_config.entropy_reg_enabled) {
             const float p_v = expf(row[v]);
             if (p_v > 0.0f) {
                 local_neg_entropy += p_v * row[v];  // p * log(p)
             }
         }
-        if (smoothing_enabled && v != target) {
+        if (loss_config.smoothing_enabled && v != target) {
             local_sum_log_off += row[v];  // log(p_v) — already in log space!
         }
     }
@@ -127,9 +249,9 @@ __global__ void kernelCrossEntropyNLLForward(
     if (threadIdx.x == 0) {
         // Label-smoothed cross entropy
         float ce_smooth;
-        if (smoothing_enabled && vocab_size > 1) {
-            const float q_on  = 1.0f - smoothing_epsilon;
-            const float q_off = smoothing_epsilon / static_cast<float>(vocab_size - 1);
+        if (loss_config.smoothing_enabled && vocab_size > 1) {
+            const float q_on  = 1.0f - loss_config.smoothing_epsilon;
+            const float q_off = loss_config.smoothing_epsilon / static_cast<float>(vocab_size - 1);
             ce_smooth = -q_on * log_p_t - q_off * s_sum_log_off;
         } else {
             ce_smooth = -log_p_t;  // Standard CE: -log(p_target)
@@ -137,20 +259,20 @@ __global__ void kernelCrossEntropyNLLForward(
 
         // Focal loss weight
         float focal_weight = 1.0f;
-        if (focal_enabled) {
-            focal_weight = powf(fmaxf(1.0f - p_t, 0.0f), focal_gamma);
+        if (loss_config.focal_enabled) {
+            focal_weight = powf(fmaxf(1.0f - p_t, 0.0f), loss_config.focal_gamma);
         }
 
         // When focal is disabled, focal_alpha MUST NOT scale the CE term.
         // Otherwise flipping focal_enabled=false silently changes the CE:entropy
         // ratio via a parameter whose name says "focal" — a quality footgun.
         float ce_loss = ce_smooth;
-        if (focal_enabled) {
-            ce_loss = focal_alpha * focal_weight * ce_smooth;
+        if (loss_config.focal_enabled) {
+            ce_loss = loss_config.focal_alpha * focal_weight * ce_smooth;
         }
         float entropy_loss = 0.0f;
-        if (entropy_reg_enabled) {
-            entropy_loss = entropy_reg_lambda * s_neg_entropy;
+        if (loss_config.entropy_reg_enabled) {
+            entropy_loss = loss_config.entropy_reg_lambda * s_neg_entropy;
         }
         const float total_loss = ce_loss + entropy_loss;
 
@@ -204,20 +326,14 @@ __global__ void kernelCrossEntropyNLLBackward(
     const float* __restrict__ log_probs,    // [num_tokens, vocab_size]
     const int* __restrict__ targets,
     float* __restrict__ grad_log_probs,     // [num_tokens, vocab_size] — OUTPUT
-    int num_tokens,
+    int total_tokens,
     int vocab_size,
     float inv_valid_count,  // 1/N or 1/W (weight_sum) when class_balanced
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    bool smoothing_enabled,
-    float entropy_reg_lambda,
-    bool entropy_reg_enabled,
+    HyperParameters::LossConfigHP loss_config,
     const float* __restrict__ class_weights     // [vocab_size] per-class weights (nullable = all 1.0)
 ) {
     const int token_idx = blockIdx.x;
-    if (token_idx >= num_tokens) return;
+    if (token_idx >= total_tokens) return;
 
     const float* row = log_probs + static_cast<size_t>(token_idx) * vocab_size;
     float* grad_row = grad_log_probs + static_cast<size_t>(token_idx) * vocab_size;
@@ -233,20 +349,20 @@ __global__ void kernelCrossEntropyNLLBackward(
     // Label smoothing targets
     float q_on = 1.0f;
     float q_off = 0.0f;
-    if (smoothing_enabled && vocab_size > 1) {
-        q_on = 1.0f - smoothing_epsilon;
-        q_off = smoothing_epsilon / static_cast<float>(vocab_size - 1);
+    if (loss_config.smoothing_enabled && vocab_size > 1) {
+        q_on = 1.0f - loss_config.smoothing_epsilon;
+        q_off = loss_config.smoothing_epsilon / static_cast<float>(vocab_size - 1);
     }
 
     // Focal precomputation
     const float p_t = expf(row[target]);
     float focal_weight = 1.0f;
     float focal_deriv_factor = 0.0f;
-    if (focal_enabled) {
+    if (loss_config.focal_enabled) {
         const float one_minus_pt = fmaxf(1.0f - p_t, 0.0f);
         if (one_minus_pt > 0.0f) {
-            focal_weight = powf(one_minus_pt, focal_gamma);
-            focal_deriv_factor = focal_gamma * powf(one_minus_pt, focal_gamma - 1.0f);
+            focal_weight = powf(one_minus_pt, loss_config.focal_gamma);
+            focal_deriv_factor = loss_config.focal_gamma * powf(one_minus_pt, loss_config.focal_gamma - 1.0f);
         } else {
             focal_weight = 0.0f;
             focal_deriv_factor = 0.0f;
@@ -260,7 +376,7 @@ __global__ void kernelCrossEntropyNLLBackward(
     __syncthreads();
 
     float local_ne = 0.0f;
-    if (entropy_reg_enabled) {
+    if (loss_config.entropy_reg_enabled) {
         for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
             const float p_v = expf(row[v]);
             if (p_v > 0.0f) local_ne += p_v * row[v];
@@ -277,7 +393,7 @@ __global__ void kernelCrossEntropyNLLBackward(
     if (threadIdx.x == 0) s_sum_log_off = 0.0f;
     __syncthreads();
 
-    if (focal_enabled && smoothing_enabled) {
+    if (loss_config.focal_enabled && loss_config.smoothing_enabled) {
         float local_sum_log_off = 0.0f;
         for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
             if (v != target) {
@@ -300,26 +416,26 @@ __global__ void kernelCrossEntropyNLLBackward(
         // Base: -q_v (plain NLL loss gradient w.r.t. log_probs)
         // When focal is disabled, focal_alpha MUST NOT scale the gradient.
         float grad_v = -q_v;
-        if (focal_enabled) {
-            grad_v = focal_alpha * focal_weight * (-q_v);
+        if (loss_config.focal_enabled) {
+            grad_v = loss_config.focal_alpha * focal_weight * (-q_v);
         }
 
         // Focal derivative: only affects gradient through p_t = exp(log_p_t)
-        if (focal_enabled) {
+        if (loss_config.focal_enabled) {
             float ce_smooth = -row[target];
-            if (smoothing_enabled) {
+            if (loss_config.smoothing_enabled) {
                 ce_smooth = -(q_on * row[target] + q_off * sum_log_off);
             }
             if (v == target) {
-                grad_v += focal_alpha * (-focal_deriv_factor) * p_t * ce_smooth;
+                grad_v += loss_config.focal_alpha * (-focal_deriv_factor) * p_t * ce_smooth;
             }
         }
 
         // Entropy regularization gradient w.r.t. log_probs.
-        if (entropy_reg_enabled) {
+        if (loss_config.entropy_reg_enabled) {
             const float p_v = expf(row[v]);
             if (p_v > 0.0f) {
-                grad_v += entropy_reg_lambda * p_v * (row[v] - neg_entropy);
+                grad_v += loss_config.entropy_reg_lambda * p_v * (row[v] - neg_entropy);
             }
         }
 
@@ -339,8 +455,7 @@ void launchCrossEntropyNLLForward(
     float* loss_sum,
     int* valid_count,
     float* weight_sum,
-    int num_tokens,
-    int vocab_size,
+    const Batching::BatchPayload& payload,
     const HyperParameters::LossConfigHP& config,
     const float* d_class_weights,
     cudaStream_t stream
@@ -350,13 +465,12 @@ void launchCrossEntropyNLLForward(
     if (weight_sum) cudaMemsetAsync(weight_sum, 0, sizeof(float), stream);
 
     const int block_size = 256;
-    kernelCrossEntropyNLLForward<<<num_tokens, block_size, 0, stream>>>(
+    kernelCrossEntropyNLLForward<<<payload.total_tokens, block_size, 0, stream>>>(
         log_probs, targets,
         per_token_loss, loss_sum, valid_count, weight_sum,
-        num_tokens, vocab_size,
-        config.focal_alpha, config.focal_gamma, config.focal_enabled,
-        config.smoothing_epsilon, config.smoothing_enabled,
-        config.entropy_reg_lambda, config.entropy_reg_enabled,
+        payload.total_tokens,
+        payload.vocab_size,
+        config,
         d_class_weights
     );
 }
@@ -365,8 +479,7 @@ void launchCrossEntropyNLLBackward(
     const float* log_probs,
     const int* targets,
     float* grad_log_probs,
-    int num_tokens,
-    int vocab_size,
+    const Batching::BatchPayload& payload,
     int valid_count,
     float weight_sum,
     const HyperParameters::LossConfigHP& config,
@@ -386,12 +499,12 @@ void launchCrossEntropyNLLBackward(
     const float inv_valid_count = grad_output_scale / normalization;
 
     const int block_size = 256;
-    kernelCrossEntropyNLLBackward<<<num_tokens, block_size, 0, stream>>>(
+    kernelCrossEntropyNLLBackward<<<payload.total_tokens, block_size, 0, stream>>>(
         log_probs, targets, grad_log_probs,
-        num_tokens, vocab_size, inv_valid_count,
-        config.focal_alpha, config.focal_gamma, config.focal_enabled,
-        config.smoothing_epsilon, config.smoothing_enabled,
-        config.entropy_reg_lambda, config.entropy_reg_enabled,
+        payload.total_tokens,
+        payload.vocab_size,
+        inv_valid_count,
+        config,
         d_class_weights
     );
 }
@@ -400,24 +513,19 @@ void launchCrossEntropyNLLBackward(
 
 CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     const float* log_probs,
-    const int* targets,
-    int num_tokens,
-    int vocab_size,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const CrossEntropyTargetSelection& target_selection,
     const HyperParameters::LossConfigHP& config,
     const float* d_class_weights,
     cudaStream_t stream
 ) {
+    payload.validate("computeCrossEntropyForwardFromLogProbs");
+    const char* target_name = targetSelectionName(target_selection, "computeCrossEntropyForwardFromLogProbs");
+    const int expected_valid_count = expectedValidCountForSelection(payload, target_selection, "computeCrossEntropyForwardFromLogProbs");
+
     if (!log_probs) {
         throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] log_probs pointer is NULL — caller MUST provide log_softmax output");
-    }
-    if (!targets) {
-        throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] targets pointer is NULL — caller MUST provide valid target token IDs");
-    }
-    if (num_tokens <= 0) {
-        throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] num_tokens=" + std::to_string(num_tokens) + " — must be > 0");
-    }
-    if (vocab_size <= 0) {
-        throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
     }
 
     float* per_token_loss = nullptr;
@@ -425,7 +533,7 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     int* d_valid_count = nullptr;
     float* d_weight_sum = nullptr;
 
-    cudaMallocOrThrow(reinterpret_cast<void**>(&per_token_loss), num_tokens * sizeof(float), "cross_entropy_per_token_loss");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&per_token_loss), payload.total_tokens * sizeof(float), "cross_entropy_per_token_loss");
     DeviceFreeGuard per_token_loss_guard(per_token_loss);
 
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_loss_sum), sizeof(float), "cross_entropy_d_loss_sum");
@@ -441,13 +549,12 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
 
     launchCrossEntropyNLLForward(
         log_probs,
-        targets,
+        resolveDeviceTargetsForSelection(payload, bindings, target_selection, "computeCrossEntropyForwardFromLogProbs"),
         per_token_loss,
         d_loss_sum,
         d_valid_count,
         d_weight_sum,
-        num_tokens,
-        vocab_size,
+        payload,
         config,
         d_class_weights,
         stream
@@ -466,6 +573,12 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     if (h_valid_count <= 0) {
         throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] valid_count=0 — no valid tokens in batch. "
             "Check targets for corruption: all targets are -1.");
+    }
+
+    if (h_valid_count != expected_valid_count) {
+        throw std::runtime_error("[computeCrossEntropyForwardFromLogProbs] kernel valid_count=" +
+            std::to_string(h_valid_count) + " != BatchPayload-authored " + target_name +
+            ".expected_valid_count=" + std::to_string(expected_valid_count));
     }
 
     if (!std::isfinite(h_loss_sum)) {
@@ -495,10 +608,10 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
 
 void computeCrossEntropyBackwardToLogProbs(
     const float* log_probs,
-    const int* targets,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const CrossEntropyTargetSelection& target_selection,
     float* grad_log_probs,
-    int num_tokens,
-    int vocab_size,
     int valid_count,
     float weight_sum,
     const HyperParameters::LossConfigHP& config,
@@ -506,28 +619,27 @@ void computeCrossEntropyBackwardToLogProbs(
     float grad_output_scale,
     cudaStream_t stream
 ) {
+    payload.validate("computeCrossEntropyBackwardToLogProbs");
+    const char* target_name = targetSelectionName(target_selection, "computeCrossEntropyBackwardToLogProbs");
+    const int expected_valid_count = expectedValidCountForSelection(payload, target_selection, "computeCrossEntropyBackwardToLogProbs");
+
     if (!log_probs) {
         throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] log_probs pointer is NULL — caller MUST provide saved log-probabilities");
-    }
-    if (!targets) {
-        throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] targets pointer is NULL — caller MUST provide valid target token IDs");
     }
     if (!grad_log_probs) {
         throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] grad_log_probs pointer is NULL — caller MUST provide output buffer");
     }
-    if (num_tokens <= 0) {
-        throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] num_tokens=" + std::to_string(num_tokens) + " — must be > 0");
-    }
-    if (vocab_size <= 0) {
-        throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
+    if (valid_count != expected_valid_count) {
+        throw std::runtime_error("[computeCrossEntropyBackwardToLogProbs] saved valid_count=" +
+            std::to_string(valid_count) + " != BatchPayload-authored " + target_name +
+            ".expected_valid_count=" + std::to_string(expected_valid_count));
     }
 
     launchCrossEntropyNLLBackward(
         log_probs,
-        targets,
+        resolveDeviceTargetsForSelection(payload, bindings, target_selection, "computeCrossEntropyBackwardToLogProbs"),
         grad_log_probs,
-        num_tokens,
-        vocab_size,
+        payload,
         valid_count,
         weight_sum,
         config,

@@ -201,7 +201,6 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
         : nullptr;
     bindings.d_token_to_slot_map = cached_slot_map_ptr;
     bindings.d_mtp_shifted_targets = cached_mtp_shifted_targets_ptr;
-    bindings.mtp_k = static_cast<int>(payload.mtp_shifted_targets.size());
     bindings.batch_size  = payload.batch_size;
     bindings.max_seq_len = payload.max_seq_len;
     return bindings;

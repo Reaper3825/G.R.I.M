@@ -106,10 +106,6 @@ void computeMTPAuxiliaryLosses(
     if (!ctx.device_bindings->d_mtp_shifted_targets) {
         throw std::runtime_error("computeMTPAuxiliaryLosses: BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
     }
-    if (ctx.device_bindings->mtp_k != K) {
-        throw std::runtime_error("computeMTPAuxiliaryLosses: BatchDeviceBindings.mtp_k=" +
-            std::to_string(ctx.device_bindings->mtp_k) + " != mtp_k=" + std::to_string(K));
-    }
 
     float L0_main = 0.0f;
     cudaMemcpyAsync(&L0_main, intermediates.loss_tensor.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);

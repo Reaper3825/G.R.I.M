@@ -78,27 +78,6 @@ Tensor unified_loss_for_mtp_head(
 // Cross-entropy / NLL implementation details live in CrossEntropyNLL.hpp/.cu.
 // AutogradLoss.hpp exposes payload/bindings entry points for primary CE and MTP.
 
-//=============================================================================
-// TOKEN 277 DIAGNOSTIC LOGGING (Rule 21 Equation-Based)
-//=============================================================================
-
-/**
- * Launch collapse token diagnostic with ACTUAL loss computation.
- * Computes real loss (focal + smoothing + entropy) per-token to identify
- * mode collapse and gradient issues for the tracked token.
- */
-void launchToken277DiagnosticActual(
-    const float* log_probs,
-    const float* logits,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    const float* grad_log_probs,
-    const HyperParameters::LossConfigHP& config,
-    int batch_idx,
-    int tracked_token,
-    cudaStream_t stream
-);
-
 /**
  * MTP kernels moved to Shared/MTP/MTP_GPU.hpp
  * (launchMTPAccuracyKernel, computeMTPAuxiliaryLosses)

@@ -5,11 +5,32 @@
 
 #pragma once
 
-#include "AutogradLoss.hpp"
+#include "../../Batching/BatchDeviceBindings.hpp"
+#include "../../Batching/BatchPayload.hpp"
+#include "../../HyperParameters/HyperparameterGroupings.hpp"
 #include <cuda_runtime.h>
+#include <optional>
 
 namespace GRIM {
 namespace autograd {
+
+enum class CrossEntropyTargetSource {
+    PrimaryLm,
+    MtpShiftedHead
+};
+
+struct CrossEntropyTargetSelection {
+    CrossEntropyTargetSource source;
+    std::optional<int> mtp_head_idx;
+
+    static CrossEntropyTargetSelection primaryLm() {
+        return CrossEntropyTargetSelection{CrossEntropyTargetSource::PrimaryLm, std::nullopt};
+    }
+
+    static CrossEntropyTargetSelection mtpShiftedHead(int head_idx) {
+        return CrossEntropyTargetSelection{CrossEntropyTargetSource::MtpShiftedHead, head_idx};
+    }
+};
 
 struct CrossEntropyForwardResult {
     float mean_loss;
@@ -26,9 +47,9 @@ struct CrossEntropyForwardResult {
  */
 CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
     const float* log_probs,
-    const int* targets,
-    int num_tokens,
-    int vocab_size,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const CrossEntropyTargetSelection& target_selection,
     const HyperParameters::LossConfigHP& config,
     const float* d_class_weights,
     cudaStream_t stream
@@ -42,10 +63,10 @@ CrossEntropyForwardResult computeCrossEntropyForwardFromLogProbs(
  */
 void computeCrossEntropyBackwardToLogProbs(
     const float* log_probs,
-    const int* targets,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const CrossEntropyTargetSelection& target_selection,
     float* grad_log_probs,
-    int num_tokens,
-    int vocab_size,
     int valid_count,
     float weight_sum,
     const HyperParameters::LossConfigHP& config,

@@ -16,22 +16,10 @@
 #include <cuda_runtime.h>
 #include <cassert>
 #include <sstream>
-#include <cfloat>
 #include <cmath>
 #include <memory>
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
-
-// ========================================================================
-// Finite Difference Gradient Verification (Issue Investigation)
-// ========================================================================
-// Define GRIM_FD_GRAD_VERIFY to enable finite difference gradient verification.
-// This adds significant overhead (2 full loss computations per sample) so should
-// only be enabled for debugging gradient sign errors.
-//
-// Usage: Uncomment the line below to enable FD verification:
-// #define GRIM_FD_GRAD_VERIFY  // DISABLED for production - significant overhead
-// ========================================================================
 
 // Access the global autograd verbose flag
 extern bool g_autograd_verbose;
@@ -46,458 +34,51 @@ namespace autograd {
 // computeCrossEntropyForwardFromLogProbs() / computeCrossEntropyBackwardToLogProbs().
 //========================================================================
 
-//========================================================================
-// [FD_GRAD_VERIFY_EQUATION] Finite Difference Gradient Verification Kernel
-// PURPOSE: Compare sign(analytical gradient) vs sign(finite difference gradient)
-// EQUATION: FD_grad = (L(z_v + ε) - L(z_v - ε)) / (2ε)
-//           If sign(FD_grad) != sign(analytical_grad), we have a sign error!
-// This is RULE 21 diagnostic logging - mathematical proof of gradient correctness
-//========================================================================
+namespace {
 
-__global__ void kernelFiniteDiffGradVerify(
-    const float* __restrict__ logits,       // [num_tokens, vocab_size]
-    const int* __restrict__ targets,        // [num_tokens]
-    const float* __restrict__ grad_logits,  // [num_tokens, vocab_size] - analytical gradient
-    int num_tokens,
-    int vocab_size,
-    float inv_valid_count,                  // 1/N for mean reduction
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_epsilon,
-    float entropy_reg_lambda,
-    int sample_token_idx,                   // Which token position to verify
-    int sample_vocab_idx                    // Which vocab position to verify
-) {
-    // Only thread 0 of block 0 runs this diagnostic
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
-    
-    // Bounds check
-    if (sample_token_idx >= num_tokens || sample_vocab_idx >= vocab_size) {
-        printf("[FD_GRAD_VERIFY_EQUATION] ERROR: sample indices out of bounds (tok=%d/%d, vocab=%d/%d)\n",
-               sample_token_idx, num_tokens, sample_vocab_idx, vocab_size);
-        return;
-    }
-    
-    const int target = targets[sample_token_idx];
-    if (target < 0 || target >= vocab_size) {
-        printf("[FD_GRAD_VERIFY_EQUATION] SKIP: invalid target %d for token %d\n", target, sample_token_idx);
-        return;
-    }
-    
-    const float* row = logits + static_cast<size_t>(sample_token_idx) * vocab_size;
-    const float analytical_grad = grad_logits[static_cast<size_t>(sample_token_idx) * vocab_size + sample_vocab_idx];
-    
-    // Epsilon for finite difference (should be small but not too small to avoid FP errors)
-    const float epsilon = 1e-4f;
-    const float kEpsilon_local = 1e-10f;  // For numerical stability in log
-    
-    //========================================================================
-    // Compute L(z_v + ε) - perturbed loss with logit[v] increased by epsilon
-    //========================================================================
-    
-    // Step 1: Find max logit for numerical stability (with perturbation at sample_vocab_idx)
-    float max_val_plus = -1e30f;
-    for (int v = 0; v < vocab_size; v++) {
-        float logit_v = row[v];
-        if (v == sample_vocab_idx) logit_v += epsilon;  // Perturbation
-        if (logit_v > max_val_plus) max_val_plus = logit_v;
-    }
-    
-    // Step 2: Compute softmax denominator, neg_entropy, and sum_log_off with perturbation
-    float sum_exp_plus = 0.0f;
-    float neg_entropy_plus = 0.0f;
-    float sum_log_off_plus = 0.0f;
-    
-    for (int v = 0; v < vocab_size; v++) {
-        float logit_v = row[v];
-        if (v == sample_vocab_idx) logit_v += epsilon;  // Perturbation
-        
-        float exp_v = expf(logit_v - max_val_plus);
-        sum_exp_plus += exp_v;
-    }
-    
-    const float log_sum_exp_plus = logf(sum_exp_plus) + max_val_plus;
-    
-    for (int v = 0; v < vocab_size; v++) {
-        float logit_v = row[v];
-        if (v == sample_vocab_idx) logit_v += epsilon;  // Perturbation
-        
-        float log_p_v = logit_v - log_sum_exp_plus;
-        float p_v = expf(log_p_v);
-        
-        // Entropy term: p_v * log(p_v)
-        if (p_v > kEpsilon_local) {
-            neg_entropy_plus += p_v * log_p_v;
-        }
-        
-        // Label smoothing sum (for non-target)
-        if (v != target) {
-            sum_log_off_plus += log_p_v;
-        }
-    }
-    
-    // Step 3: Compute loss L(z + ε)
-    float log_p_target_plus = row[target] + (target == sample_vocab_idx ? epsilon : 0.0f) - log_sum_exp_plus;
-    float p_target_plus = expf(log_p_target_plus);
-    
-    float ce_smooth_plus;
-    if (smoothing_epsilon > 0.0f) {
-        const float q_on = 1.0f - smoothing_epsilon;
-        const float q_off = smoothing_epsilon / (vocab_size - 1);
-        ce_smooth_plus = -q_on * log_p_target_plus - q_off * sum_log_off_plus;
-    } else {
-        ce_smooth_plus = -log_p_target_plus;
-    }
-    
-    float focal_weight_plus = 1.0f;
-    if (focal_enabled && focal_gamma > 0.0f) {
-        focal_weight_plus = powf(1.0f - p_target_plus + kEpsilon_local, focal_gamma);
-    }
-    
-    float loss_plus = focal_enabled
-        ? (focal_alpha * focal_weight_plus * ce_smooth_plus + entropy_reg_lambda * neg_entropy_plus)
-        : (ce_smooth_plus + entropy_reg_lambda * neg_entropy_plus);
-    
-    //========================================================================
-    // Compute L(z_v - ε) - perturbed loss with logit[v] decreased by epsilon
-    //========================================================================
-    
-    // Step 1: Find max logit with minus perturbation
-    float max_val_minus = -1e30f;
-    for (int v = 0; v < vocab_size; v++) {
-        float logit_v = row[v];
-        if (v == sample_vocab_idx) logit_v -= epsilon;  // Perturbation
-        if (logit_v > max_val_minus) max_val_minus = logit_v;
-    }
-    
-    // Step 2: Compute softmax components with minus perturbation
-    float sum_exp_minus = 0.0f;
-    float neg_entropy_minus = 0.0f;
-    float sum_log_off_minus = 0.0f;
-    
-    for (int v = 0; v < vocab_size; v++) {
-        float logit_v = row[v];
-        if (v == sample_vocab_idx) logit_v -= epsilon;  // Perturbation
-        
-        float exp_v = expf(logit_v - max_val_minus);
-        sum_exp_minus += exp_v;
-    }
-    
-    const float log_sum_exp_minus = logf(sum_exp_minus) + max_val_minus;
-    
-    for (int v = 0; v < vocab_size; v++) {
-        float logit_v = row[v];
-        if (v == sample_vocab_idx) logit_v -= epsilon;  // Perturbation
-        
-        float log_p_v = logit_v - log_sum_exp_minus;
-        float p_v = expf(log_p_v);
-        
-        if (p_v > kEpsilon_local) {
-            neg_entropy_minus += p_v * log_p_v;
-        }
-        
-        if (v != target) {
-            sum_log_off_minus += log_p_v;
-        }
-    }
-    
-    // Step 3: Compute loss L(z - ε)
-    float log_p_target_minus = row[target] + (target == sample_vocab_idx ? -epsilon : 0.0f) - log_sum_exp_minus;
-    float p_target_minus = expf(log_p_target_minus);
-    
-    float ce_smooth_minus;
-    if (smoothing_epsilon > 0.0f) {
-        const float q_on = 1.0f - smoothing_epsilon;
-        const float q_off = smoothing_epsilon / (vocab_size - 1);
-        ce_smooth_minus = -q_on * log_p_target_minus - q_off * sum_log_off_minus;
-    } else {
-        ce_smooth_minus = -log_p_target_minus;
-    }
-    
-    float focal_weight_minus = 1.0f;
-    if (focal_enabled && focal_gamma > 0.0f) {
-        focal_weight_minus = powf(1.0f - p_target_minus + kEpsilon_local, focal_gamma);
-    }
-    
-    float loss_minus = focal_enabled
-        ? (focal_alpha * focal_weight_minus * ce_smooth_minus + entropy_reg_lambda * neg_entropy_minus)
-        : (ce_smooth_minus + entropy_reg_lambda * neg_entropy_minus);
-    
-    //========================================================================
-    // Finite Difference Gradient Computation
-    // FD_grad = (L(z+ε) - L(z-ε)) / (2ε) ... this is PER-TOKEN loss gradient
-    // Then apply inv_valid_count to match mean-reduced gradient
-    //========================================================================
-    
-    float fd_grad_per_token = (loss_plus - loss_minus) / (2.0f * epsilon);
-    float fd_grad = fd_grad_per_token * inv_valid_count;  // Apply mean reduction scaling
-    
-    // Determine signs
-    int sign_fd = (fd_grad > 1e-10f) ? 1 : ((fd_grad < -1e-10f) ? -1 : 0);
-    int sign_analytical = (analytical_grad > 1e-10f) ? 1 : ((analytical_grad < -1e-10f) ? -1 : 0);
-    bool sign_match = (sign_fd == sign_analytical);
-    
-    // Compute relative error
-    float abs_fd = fabsf(fd_grad);
-    float abs_anal = fabsf(analytical_grad);
-    float rel_error = (abs_fd > 1e-10f || abs_anal > 1e-10f) 
-        ? fabsf(fd_grad - analytical_grad) / fmaxf(abs_fd, abs_anal)
-        : 0.0f;
-    
-    //========================================================================
-    // [FD_GRAD_VERIFY_EQUATION] RULE 21 Logging
-    //========================================================================
-    const char* match_str = sign_match ? "MATCH" : "MISMATCH";
-    const bool is_target_pos = (sample_vocab_idx == target);
-    
-    printf("[FD_GRAD_VERIFY_EQUATION] token=%d vocab=%d (is_target=%s) target=%d\n",
-           sample_token_idx, sample_vocab_idx, is_target_pos ? "YES" : "NO", target);
-    printf("  INPUTS: L_plus=%.10f L_minus=%.10f epsilon=%.6f inv_valid=%e\n",
-           loss_plus, loss_minus, epsilon, inv_valid_count);
-    printf("  FD_grad_per_token = (L+ - L-) / (2ε) = (%.10f - %.10f) / %.6f = %.10e\n",
-           loss_plus, loss_minus, 2.0f * epsilon, fd_grad_per_token);
-    printf("  FD_grad (mean-reduced) = FD_per_token × inv_valid = %.10e × %e = %.10e\n",
-           fd_grad_per_token, inv_valid_count, fd_grad);
-    printf("  ANALYTICAL_grad = %.10e\n", analytical_grad);
-    printf("  SIGN CHECK: sign(FD)=%d sign(anal)=%d => %s\n", sign_fd, sign_analytical, match_str);
-    printf("  RELATIVE ERROR: |FD - anal| / max(|FD|,|anal|) = %.6f%%\n", rel_error * 100.0f);
-    
-    // Issue #124b FIX: Distinguish TRUE sign mismatch from PRECISION-LIMITED cases
-    // When FD=0 because L_plus≈L_minus (float32 precision limit), this is NOT an anomaly
-    // Only flag ANOMALY when FD and analytical have genuinely OPPOSITE non-zero signs
-    const bool fd_is_zero = (sign_fd == 0);
-    const bool loss_identical = (fabsf(loss_plus - loss_minus) < 1e-10f);
-    const bool analytical_small = (abs_anal < 1e-6f);  // Gradient too small for FD detection
-    
-    if (!sign_match) {
-        if (fd_is_zero && loss_identical && analytical_small) {
-            // FD=0 due to precision limit, NOT a gradient bug
-            printf("  [PRECISION LIMITED] FD=0 because L_plus==L_minus to float32 precision\n");
-            printf("  [PRECISION LIMITED] Analytical grad %.2e is below FD detection threshold (~1e-6)\n", abs_anal);
-            printf("  [PRECISION LIMITED] This is EXPECTED for non-target tokens with tiny gradients - NOT A BUG\n");
-        } else if (fd_is_zero && !loss_identical) {
-            // FD numerically zero but loss values differ - suspicious
-            printf("  [WARNING] FD≈0 but L_plus≠L_minus (diff=%.2e), numerical instability?\n", 
-                   fabsf(loss_plus - loss_minus));
-        } else {
-            // TRUE sign mismatch: FD>0 but anal<0, or FD<0 but anal>0
-            printf("  [ANOMALY] GRADIENT SIGN MISMATCH! Your gradient has OPPOSITE sign from finite difference!\n");
-            printf("  [ANOMALY] FD=%+.6e, Analytical=%+.6e (genuinely opposite non-zero signs)\n", fd_grad, analytical_grad);
-            printf("  [ANOMALY] This means either: (1) logging negative gradient, or (2) update uses wrong sign\n");
-        }
-    }
-    
-    if (rel_error > 0.01f && sign_match) {  // >1% error but same sign
-        printf("  [WARNING] Magnitude differs >1%% (could be expected for focal/entropy terms)\n");
-    }
-}
-
-//========================================================================
-// Launch function for finite difference gradient verification
-//========================================================================
-
-/**
- * DIAGNOSTIC: Launches finite difference gradient verification
- * This should be called after computeCrossEntropyBackwardToLogProbs() to verify the gradients
- * 
- * @param logits          Input logits [num_tokens, vocab_size]
- * @param targets         Target token IDs [num_tokens]
- * @param grad_logits     The computed gradients to verify
- * @param num_tokens      Number of tokens
- * @param vocab_size      Vocabulary size
- * @param valid_count     Number of valid (non-masked) tokens
- * @param focal_alpha     Focal loss alpha
- * @param focal_gamma     Focal loss gamma
- * @param smoothing_eps   Label smoothing epsilon
- * @param entropy_lambda  Entropy regularization lambda
- * @param sample_token_idx Token index to verify (should be non-masked)
- * @param sample_vocab_idx Vocab index to verify (e.g., 277 for SPACE)
- * @param stream          CUDA stream
- */
-void launchFiniteDiffGradVerify(
-    const float* logits,  
-    const int* targets,
-    const float* grad_logits,
-    int num_tokens,
-    int vocab_size,
-    int valid_count,
-    float focal_alpha,
-    float focal_gamma,
-    bool focal_enabled,
-    float smoothing_eps,
-    float entropy_lambda,
-    int sample_token_idx,
-    int sample_vocab_idx,
-    cudaStream_t stream
-) {
-    // Validate inputs
-    if (!logits || !targets || !grad_logits) {
-        throw std::runtime_error("[launchFiniteDiffGradVerify] null input pointer: logits=" 
-                                 + std::string(logits ? "OK" : "NULL") + " targets=" 
-                                 + std::string(targets ? "OK" : "NULL") + " grad_logits=" 
-                                 + std::string(grad_logits ? "OK" : "NULL"));
-    }
-    
-    if (sample_token_idx < 0 || sample_token_idx >= num_tokens) {
-        throw std::runtime_error("[launchFiniteDiffGradVerify] sample_token_idx=" 
-                                 + std::to_string(sample_token_idx) + " out of range [0," 
-                                 + std::to_string(num_tokens) + ")");
-    }
-    
-    if (sample_vocab_idx < 0 || sample_vocab_idx >= vocab_size) {
-        throw std::runtime_error("[launchFiniteDiffGradVerify] sample_vocab_idx=" 
-                                 + std::to_string(sample_vocab_idx) + " out of range [0," 
-                                 + std::to_string(vocab_size) + ")");
-    }
-    
-    if (valid_count <= 0) {
-        throw std::runtime_error("[launchFiniteDiffGradVerify] valid_count=" + std::to_string(valid_count) + " - must be > 0");
-    }
-    const float inv_valid_count = 1.0f / static_cast<float>(valid_count);
-    
-    // Launch single-thread diagnostic kernel
-    kernelFiniteDiffGradVerify<<<1, 1, 0, stream>>>(
-        logits,
-        targets,
-        grad_logits,
-        num_tokens,
-        vocab_size,
-        inv_valid_count,
-        focal_alpha,
-        focal_gamma,
-        focal_enabled,
-        smoothing_eps,
-        entropy_lambda,
-        sample_token_idx,
-        sample_vocab_idx
-    );
-    
-    // Sync to ensure printf output is flushed
-    cudaStreamSynchronize(stream);
-}
-
-
-//========================================================================
-// [TOKEN277_DIAGNOSTIC_ACTUAL] Lightweight diagnostic using REAL loss computation
-// Computes actual loss for Token 277 (SPACE) with focal/smoothing/entropy applied
-// Logs via printf to avoid stack overflow from EquationLogging
-//========================================================================
-
-__global__ void kernelToken277DiagnosticActual(
-    const float* __restrict__ log_probs,       // [num_tokens, vocab_size] from log_softmax
-    const float* __restrict__ logits,          // [num_tokens, vocab_size] for reference
-    const int* __restrict__ targets,           // [num_tokens]
-    const float* __restrict__ grad_log_probs,  // [num_tokens, vocab_size] gradients
-    int num_tokens,
-    int vocab_size,
-    float focal_alpha,
-    float focal_gamma,
-    float smoothing_epsilon,
-    float entropy_reg_lambda,
-    int batch_idx,
-    int tracked_token  // Dynamically detected collapse token
-) {
-    const int token_idx = blockIdx.x;
-    if (token_idx >= num_tokens) return;
-    if (token_idx % 50 != 0) return;  // Sample every 50th token to avoid spam
-    if (threadIdx.x != 0) return;     // Only thread 0 logs
-    
-    const int target = targets[token_idx];
-    if (target < 0 || target >= vocab_size) return;
-    if (tracked_token < 0 || tracked_token >= vocab_size) return;
-    
-    const float* log_row = log_probs + static_cast<size_t>(token_idx) * vocab_size;
-    const float* grad_row = grad_log_probs + static_cast<size_t>(token_idx) * vocab_size;
-    
-    // Compute softmax probabilities from log_probs for the tracked token
-    const float log_p_tracked = log_row[tracked_token];
-    const float p_tracked = expf(log_p_tracked);
-    
-    // Compute entropy for entropy regularization term
-    float neg_entropy = 0.0f;
-    if (entropy_reg_lambda > 0.0f) {
-        for (int v = 0; v < vocab_size; v++) {
-            const float p_v = expf(log_row[v]);
-            if (p_v > 0.0f) neg_entropy += p_v * log_row[v];
-        }
-    }
-    
-    // Compute ACTUAL loss for tracked token target position
-    float ce_loss = -log_p_tracked;  // Base CE
-    
-    // Label smoothing if enabled
-    if (smoothing_epsilon > 0.0f && vocab_size > 1) {
-        const float q_on = 1.0f - smoothing_epsilon;
-        const float q_off = smoothing_epsilon / (vocab_size - 1.0f);
-        float sum_log_off = 0.0f;
-        for (int v = 0; v < vocab_size; v++) {
-            if (v != tracked_token) sum_log_off += log_row[v];
-        }
-        ce_loss = -(q_on * log_p_tracked + q_off * sum_log_off);
-    }
-    
-    // Focal loss if enabled
-    float focal_weight = 1.0f;
-    if (focal_gamma > 0.0f) {
-        const float one_minus_pt = fmaxf(1.0f - p_tracked, 0.0f);
-        if (one_minus_pt > 0.0f) {
-            focal_weight = powf(one_minus_pt, focal_gamma);
-        }
-    }
-    
-    float total_loss = focal_alpha * focal_weight * ce_loss;
-    
-    // Entropy regularization (for this token)
-    if (entropy_reg_lambda > 0.0f) {
-        total_loss += entropy_reg_lambda * neg_entropy;
-    }
-    
-    // Gradient info
-    const float grad_tracked = grad_row[tracked_token];
-    const bool is_tracked_target = (target == tracked_token);
-    
-    // Log in simple format (no stack overflow)
-    printf("[CollapseTokenDiagnostic] batch=%d token_idx=%d target=%d "
-           "tracked=%d is_tracked_target=%d log_p=%.6f p=%.6f loss=%.6f "
-           "focal_w=%.4f entropy=%.4f grad=%.8f\n",
-           batch_idx, token_idx, target, tracked_token,
-           is_tracked_target, log_p_tracked, p_tracked, total_loss,
-           focal_weight, neg_entropy, grad_tracked);
-}
-
-/**
- * Launch collapse token diagnostic with ACTUAL loss computation
- * This computes the real loss (focal + smoothing + entropy) per-token
- * to help identify mode collapse and gradient issues for the tracked token
- */
-void launchToken277DiagnosticActual(
-    const float* log_probs,
-    const float* logits,
+__host__ const std::vector<int>& hostTargetsForSelection(
     const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    const float* grad_log_probs,
-    const HyperParameters::LossConfigHP& config,
-    int batch_idx,
-    int tracked_token,
-    cudaStream_t stream
+    const CrossEntropyTargetSelection& target_selection,
+    const char* caller
 ) {
-    if (tracked_token < 0) return;  // No collapse token detected yet
-    payload.validate("launchToken277DiagnosticActual");
-    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error("launchToken277DiagnosticActual: BatchDeviceBindings geometry does not match BatchPayload");
+    switch (target_selection.source) {
+        case CrossEntropyTargetSource::PrimaryLm:
+            if (target_selection.mtp_head_idx.has_value()) {
+                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
+            }
+            if (static_cast<int>(payload.target_ids.size()) != payload.total_tokens) {
+                throw std::runtime_error(std::string("[") + caller + "] BatchPayload.target_ids.size()=" +
+                    std::to_string(payload.target_ids.size()) + " != total_tokens=" +
+                    std::to_string(payload.total_tokens));
+            }
+            return payload.target_ids;
+
+        case CrossEntropyTargetSource::MtpShiftedHead: {
+            if (!target_selection.mtp_head_idx.has_value()) {
+                throw std::runtime_error(std::string("[") + caller + "] MTP shifted-target selection is missing mtp_head_idx");
+            }
+            const int mtp_head_idx = *target_selection.mtp_head_idx;
+            if (mtp_head_idx < 0 ||
+                mtp_head_idx >= static_cast<int>(payload.mtp_shifted_targets.size())) {
+                throw std::runtime_error(std::string("[") + caller + "] mtp_head_idx=" +
+                    std::to_string(mtp_head_idx) +
+                    " out of range for BatchPayload.mtp_shifted_targets.size()=" +
+                    std::to_string(payload.mtp_shifted_targets.size()));
+            }
+            if (static_cast<int>(payload.mtp_shifted_targets[mtp_head_idx].size()) != payload.total_tokens) {
+                throw std::runtime_error(std::string("[") + caller + "] BatchPayload.mtp_shifted_targets[" +
+                    std::to_string(mtp_head_idx) + "].size()=" +
+                    std::to_string(payload.mtp_shifted_targets[mtp_head_idx].size()) +
+                    " != total_tokens=" + std::to_string(payload.total_tokens));
+            }
+            return payload.mtp_shifted_targets[mtp_head_idx];
+                }
     }
-    if (!bindings.d_target_ids) {
-        throw std::runtime_error("launchToken277DiagnosticActual: BatchDeviceBindings.d_target_ids is NULL");
-    }
-    const int num_blocks = (payload.total_tokens + 255) / 256;
-    kernelToken277DiagnosticActual<<<num_blocks, 256, 0, stream>>>(
-        log_probs, logits, bindings.d_target_ids, grad_log_probs,
-        payload.total_tokens, payload.vocab_size,
-        config.focal_alpha, config.focal_gamma, config.smoothing_epsilon, config.entropy_reg_lambda,
-        batch_idx, tracked_token
-    );
+
+    throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
 }
+
+} // namespace
 
 
 //========================================================================
@@ -525,18 +106,20 @@ void launchToken277DiagnosticActual(
  *   3. Composition:  grad_logits[j] = (p_j - q_j) / N  ← standard CE gradient ✓
  *
  * Memory management:
- *   - Takes ownership of log_probs.data (no copy — old Tensor gives up owns_data)
+ *   - Takes ownership of log_probs.data through a GradFn-owned RAII guard
  *   - Shares LogSoftmaxGradFn via shared_ptr
- *   - Allocates grad_log_probs_buffer for backward output
+ *   - Allocates grad_log_probs_buffer for backward output and releases it via release_saved()
  */
 struct NLLLossGradFn : public GradFn {
     // Saved forward data
-    float* log_probs_data;          // OWNED GPU buffer: log-probabilities [num_tokens * vocab_size]
-    float* grad_log_probs_buffer;   // OWNED GPU buffer: backward output [num_tokens * vocab_size]
+    std::shared_ptr<float> owned_log_probs_data;        // OWNED GPU buffer: log-probabilities [num_tokens * vocab_size]
+    std::shared_ptr<float> owned_grad_log_probs_buffer; // OWNED GPU buffer: backward output [num_tokens * vocab_size]
+    float* log_probs_data;                              // Borrowed from owned_log_probs_data while saved
+    float* grad_log_probs_buffer;                       // Borrowed from owned_grad_log_probs_buffer while saved
     
-    const int* targets;             // NOT OWNED — stable for batch lifetime
-    int num_tokens;
-    int vocab_size;
+    const Batching::BatchPayload* payload;      // NOT OWNED — stable for autograd step lifetime
+    Batching::BatchDeviceBindings bindings;     // View snapshot — device memory owned by TrainingState
+    CrossEntropyTargetSelection target_selection;
     int valid_count;
     
     // Loss configuration (durable grouping snapshot from HyperparameterGroupings.hpp)
@@ -550,88 +133,106 @@ struct NLLLossGradFn : public GradFn {
     std::shared_ptr<GradFn> log_probs_grad_fn;
     TensorContract::TensorShape grad_shape;
     
-    cudaStream_t async_stream;
-    cudaEvent_t cleanup_event;
-    
     __host__ NLLLossGradFn(
         float* log_probs,           // Takes ownership of this GPU buffer
-        const int* targets_,
-        int num_tokens_, int vocab_size_, int valid_count_,
+        const Batching::BatchPayload& payload_,
+        const Batching::BatchDeviceBindings& bindings_,
+        const CrossEntropyTargetSelection& target_selection_,
+        int valid_count_,
         const HyperParameters::LossConfigHP& loss_config_,
         const float* class_weights_, float weight_sum_,
         std::shared_ptr<GradFn> upstream_grad_fn,
         const TensorContract::TensorShape& shape,
         cudaStream_t stream_
     )
-        : log_probs_data(log_probs)
+        : owned_log_probs_data(log_probs, [](float* p) { queueForDeferredCleanup(p); })
+        , owned_grad_log_probs_buffer(nullptr)
+        , log_probs_data(owned_log_probs_data.get())
         , grad_log_probs_buffer(nullptr)
-        , targets(targets_)
-        , num_tokens(num_tokens_), vocab_size(vocab_size_)
+        , payload(&payload_)
+        , bindings(bindings_)
+        , target_selection(target_selection_)
         , valid_count(valid_count_)
         , loss_config(loss_config_)
         , class_weights(class_weights_), weight_sum(weight_sum_)
         , log_probs_grad_fn(std::move(upstream_grad_fn))
         , grad_shape(shape)
-        , async_stream(stream_), cleanup_event(nullptr)
     {
+        if (!stream_) {
+            throw std::runtime_error("[NLLLossGradFn::ctor] stream is NULL — loss GradFn requires a valid CUDA stream");
+        }
         op_name = "nll_loss";
-        cudaEventCreate(&cleanup_event);
-        
     }
     
     __host__ ~NLLLossGradFn() {
-        log_probs_grad_fn.reset();  // Release shared_ptr to upstream LogSoftmaxGradFn
-        
-        if (cleanup_event) {
-            cudaEventSynchronize(cleanup_event);
-            cudaEventDestroy(cleanup_event);
-        }
-        if (log_probs_data) { cudaFree(log_probs_data); log_probs_data = nullptr; }
-        if (grad_log_probs_buffer) { cudaFree(grad_log_probs_buffer); grad_log_probs_buffer = nullptr; }
+        release_saved();
     }
     
     __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
         AG_TRACE("[NLLLossGradFn::apply] ENTER: log_probs_data=%p upstream=%p\n",
                  (void*)log_probs_data, (void*)log_probs_grad_fn.get());
+
+        if (!payload) {
+            throw std::runtime_error("[NLLLossGradFn::apply] payload pointer is NULL — BatchPayload is required for loss backward geometry");
+        }
+        payload->validate("NLLLossGradFn::apply");
+        const int num_tokens = payload->total_tokens;
+        const int vocab_size = payload->vocab_size;
         
         // ── Read upstream scalar gradient for chain rule ──
-        // Loss is scalar, so grad_output is a single float. When this loss
-        // is the terminal objective seeded with 1.0, grad_scale == 1.0.
-        // When composed with other losses or rescaled, grad_scale carries
-        // the upstream derivative so magnitude accounting stays correct.
+        // Loss is scalar, so grad_output is a single float. Tensor::backward()
+        // seeds terminal scalar objectives with the caller-provided scale
+        // (typically 1.0 for a root loss, or 1.0/accumulation_steps). When this
+        // loss is composed with other losses, grad_output carries that upstream
+        // derivative so magnitude accounting stays correct.
         //
         // CRITICAL: Must use the SAME stream for the D2H copy!
         // Tensor::backward() writes grad_output via cudaMemcpyAsync on the
         // training stream, which uses cudaStreamNonBlocking. Plain cudaMemcpy
         // (NULL stream) does NOT synchronize with non-blocking streams,
         // causing a data race that reads uninitialized GPU memory.
-        float grad_scale = 1.0f;
-        if (grad_output.data) {
-            cudaMemcpyAsync(&grad_scale, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            if (!std::isfinite(grad_scale)) {
-                throw std::runtime_error("[NLLLossGradFn::apply] grad_output is non-finite ("
-                    + std::to_string(grad_scale) + ") — upstream gradient is corrupt");
-            }
+        if (!grad_output.data) {
+            throw std::runtime_error("[NLLLossGradFn::apply] grad_output.data is NULL — upstream scalar gradient is required");
         }
-        AG_TRACE("[NLLLossGradFn::apply] grad_output_scale=%.6f\n", grad_scale);
+
+        float upstream_scalar_grad;
+        cudaError_t copy_err = cudaMemcpyAsync(&upstream_scalar_grad, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost, stream);
+        if (copy_err != cudaSuccess) {
+            throw std::runtime_error(std::string("[NLLLossGradFn::apply] failed to copy upstream scalar gradient: ") + cudaGetErrorString(copy_err));
+        }
+        cudaError_t sync_err = cudaStreamSynchronize(stream);
+        if (sync_err != cudaSuccess) {
+            throw std::runtime_error(std::string("[NLLLossGradFn::apply] failed to synchronize upstream scalar gradient copy: ") + cudaGetErrorString(sync_err));
+        }
+        if (!std::isfinite(upstream_scalar_grad)) {
+            throw std::runtime_error("[NLLLossGradFn::apply] upstream scalar gradient is non-finite ("
+                + std::to_string(upstream_scalar_grad) + ") — upstream gradient is corrupt");
+        }
+        AG_TRACE("[NLLLossGradFn::apply] upstream_scalar_grad=%.6f\n", upstream_scalar_grad);
         
         // OOM FIX: Lazy allocation — only allocate grad buffer when actually
         // needed for backward, not during forward pass. Saves 1.37GB peak memory.
         if (!grad_log_probs_buffer) {
             const size_t grad_bytes = static_cast<size_t>(num_tokens) * vocab_size * sizeof(float);
-            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_log_probs_buffer), grad_bytes, "NLLLossGradFn_grad_log_probs");
+            float* grad_buffer = nullptr;
+            cudaMallocOrThrow(reinterpret_cast<void**>(&grad_buffer), grad_bytes, "NLLLossGradFn_grad_log_probs");
+            owned_grad_log_probs_buffer.reset(grad_buffer, [](float* p) { queueForDeferredCleanup(p); });
+            grad_log_probs_buffer = owned_grad_log_probs_buffer.get();
         }
         
         // ── Step 1: Compute CE/NLL backward → gradient w.r.t. log_probs ──
-        // grad_scale is folded into the mean-reduction denominator in the CE module.
+        // upstream_scalar_grad is folded into the mean-reduction denominator in the CE module.
         computeCrossEntropyBackwardToLogProbs(
-            log_probs_data, targets, grad_log_probs_buffer,
-            num_tokens, vocab_size, valid_count,
+            log_probs_data,
+            *payload,
+            bindings,
+            target_selection,
+            grad_log_probs_buffer,
+            valid_count,
             weight_sum,
             loss_config,
             class_weights,
-            grad_scale,
+            upstream_scalar_grad,
             stream
         );
         
@@ -651,10 +252,11 @@ struct NLLLossGradFn : public GradFn {
         // block mostly reads the 50,375 zero entries. Now we read the TARGET column of
         // each sampled valid token, which is where the actual gradient lives.
         if constexpr (GRIM::VerboseLogging::ENABLE_LOSS_BACKWARD_SAMPLING) {
-            // Copy targets to host to find valid positions
+            // Read BatchPayload-authored host targets to find valid positions.
+            // The CE kernels resolve device targets locally from BatchDeviceBindings;
+            // diagnostics do not need to cache or copy a raw target pointer.
             const int sample_max = std::min(200, num_tokens);
-            std::vector<int> h_targets(sample_max);
-            cudaMemcpy(h_targets.data(), targets, sample_max * sizeof(int), cudaMemcpyDeviceToHost);
+            const std::vector<int>& h_targets = hostTargetsForSelection(*payload, target_selection, "NLLLossGradFn::apply");
             
             float mx = 0.0f; double sq = 0.0; int valid_sampled = 0;
             for (int t = 0; t < sample_max; ++t) {
@@ -717,10 +319,19 @@ struct NLLLossGradFn : public GradFn {
     }
     
     __host__ void release_saved() override {
-        if (cleanup_event && async_stream) {
-            cudaEventRecord(cleanup_event, async_stream);
-        }
+        if (released_) return;
         GradFn::release_saved();
+
+        // Match TensorContract GradFn lifecycle: graph-owned GPU buffers are
+        // released at the tape boundary, and their deleters queue CUDA cleanup
+        // rather than calling cudaFree directly from a GradFn destructor.
+        log_probs_grad_fn.reset();
+        owned_grad_log_probs_buffer.reset();
+        owned_log_probs_data.reset();
+        grad_log_probs_buffer = nullptr;
+        log_probs_data = nullptr;
+        payload = nullptr;
+        class_weights = nullptr;
     }
 };
 
@@ -730,11 +341,11 @@ struct NLLLossGradFn : public GradFn {
 
 namespace {
 
-__host__ Tensor unifiedLossFromTargetBuffer(
+__host__ Tensor unifiedLossFromTargetSelection(
     Tensor& logits,
-    const int* targets,
-    int num_tokens,
-    int vocab_size,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const CrossEntropyTargetSelection& target_selection,
     const HyperParameters::LossConfigHP& config,
     const float* d_class_weights,
     cudaStream_t stream,
@@ -742,20 +353,12 @@ __host__ Tensor unifiedLossFromTargetBuffer(
 ) {
     // ══════════════════════════════════════════════════════════════════════
     // Rule 20: FAIL LOUD on invalid data
-    // Public callers must enter through a BatchPayload + BatchDeviceBindings
-    // API. This private primitive receives only the target pointer already
-    // selected from that explicit per-step binding view.
+    // Public callers enter through BatchPayload + BatchDeviceBindings. Target
+    // selection is a source descriptor only; CrossEntropyNLL resolves the device
+    // target address from BatchDeviceBindings at the kernel launch boundary.
     // ══════════════════════════════════════════════════════════════════════
     
-    if (!targets) {
-        throw std::runtime_error(std::string("[") + caller + "] targets pointer is NULL — caller MUST provide valid target token IDs");
-    }
-    if (num_tokens <= 0) {
-        throw std::runtime_error(std::string("[") + caller + "] num_tokens=" + std::to_string(num_tokens) + " — must be > 0");
-    }
-    if (vocab_size <= 0) {
-        throw std::runtime_error(std::string("[") + caller + "] vocab_size=" + std::to_string(vocab_size) + " — must be > 0");
-    }
+    payload.validate(caller);
     if (config.class_balanced_enabled && !d_class_weights) {
         throw std::runtime_error(std::string("[") + caller + "] class_balanced_enabled=true but d_class_weights is NULL");
     }
@@ -777,18 +380,18 @@ __host__ Tensor unifiedLossFromTargetBuffer(
     // Creates LogSoftmaxGradFn if logits.requires_grad
     // OOM FIX: Pass save_output_copy=false so LogSoftmaxGradFn stores a
     // non-owning pointer to result.data instead of copying 1.37GB.
-    // This is safe because NLLLossGradFn takes ownership of result.data
-    // and keeps it alive through backward. Lifecycle:
+    // This is safe because NLLLossGradFn takes ownership of result.data through
+    // a GradFn-owned RAII guard and keeps it alive through backward. Lifecycle:
     //   NLLLossGradFn::apply() → calls LogSoftmaxGradFn::apply() (reads shared data) → returns
-    //   NLLLossGradFn::~DTOR() → deletes LogSoftmaxGradFn (doesn't free shared data) → frees log_probs_data
+    //   Tensor::backward() syncs → NLLLossGradFn::release_saved() releases LogSoftmaxGradFn and queues buffer cleanup
     Tensor log_probs = autograd::log_softmax(logits, stream, false);
     
     // ── Step 2: CE/NLL loss forward on log_probs ──
     const CrossEntropyForwardResult ce_result = computeCrossEntropyForwardFromLogProbs(
         log_probs.data,
-        targets,
-        num_tokens,
-        vocab_size,
+        payload,
+        bindings,
+        target_selection,
         config,
         effective_class_weights,
         stream
@@ -824,8 +427,10 @@ __host__ Tensor unifiedLossFromTargetBuffer(
     if (logits.requires_grad) {
         auto grad_fn = std::make_shared<NLLLossGradFn>(
             log_probs.data,       // Takes ownership of log_probs GPU buffer
-            targets,
-            num_tokens, vocab_size, h_valid_count,
+            payload,
+            bindings,
+            target_selection,
+            h_valid_count,
             config,
             effective_class_weights, h_weight_sum,
             log_probs.grad_fn,    // Takes ownership of LogSoftmaxGradFn
@@ -865,11 +470,11 @@ __host__ Tensor unified_loss(
             " != payload.max_seq_len=" + std::to_string(payload.max_seq_len));
     }
 
-    return unifiedLossFromTargetBuffer(
+    return unifiedLossFromTargetSelection(
         logits,
-        bindings.d_target_ids,
-        payload.total_tokens,
-        payload.vocab_size,
+        payload,
+        bindings,
+        CrossEntropyTargetSelection::primaryLm(),
         config,
         d_class_weights,
         stream,
@@ -898,25 +503,17 @@ __host__ Tensor unified_loss_for_mtp_head(
     if (!bindings.d_mtp_shifted_targets) {
         throw std::runtime_error("[unified_loss_for_mtp_head] BatchDeviceBindings.d_mtp_shifted_targets is NULL");
     }
-    if (bindings.mtp_k != static_cast<int>(payload.mtp_shifted_targets.size())) {
-        throw std::runtime_error("[unified_loss_for_mtp_head] bindings.mtp_k=" +
-            std::to_string(bindings.mtp_k) + " != payload.mtp_shifted_targets.size()=" +
-            std::to_string(payload.mtp_shifted_targets.size()));
-    }
     if (payload.mtp_valid_counts[head_idx] <= 0) {
         throw std::runtime_error("[unified_loss_for_mtp_head] payload.mtp_valid_counts[" +
             std::to_string(head_idx) + "]=" + std::to_string(payload.mtp_valid_counts[head_idx]) +
             " — caller must skip zero-valid MTP heads before loss assembly");
     }
 
-    const int* targets = bindings.d_mtp_shifted_targets +
-        static_cast<size_t>(head_idx) * payload.total_tokens;
-
-    return unifiedLossFromTargetBuffer(
+    return unifiedLossFromTargetSelection(
         logits,
-        targets,
-        payload.total_tokens,
-        payload.vocab_size,
+        payload,
+        bindings,
+        CrossEntropyTargetSelection::mtpShiftedHead(head_idx),
         config,
         d_class_weights,
         stream,
