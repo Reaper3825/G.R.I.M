@@ -11,6 +11,7 @@
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/UnigramByte/UniByte.hpp"
 
 #include <vector>
 #include <sstream>
@@ -22,6 +23,29 @@
 #include <cuda_runtime.h>
 
 namespace GRIM::Diagnostics {
+
+namespace {
+
+std::string decodeAggregateTokenForDisplay(const GRIM::Tokenizer::UniByte& tokenizer, int token_id) {
+    const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
+    if (layout.isAtom(token_id)) {
+        return std::string("<") +
+               GRIM::Tokenizer::atomTypeName(GRIM::Tokenizer::tokenIdToAtomType(token_id)) +
+               ">";
+    }
+    return tokenizer.decode({token_id});
+}
+
+void sanitizeSingleLineTokenDisplay(std::string& decoded) {
+    for (auto& c : decoded) {
+        if (c == '\n') c = ' ';
+        else if (c == '\t') c = ' ';
+        else if (c == '\r') c = ' ';
+    }
+    if (decoded.size() > 20) decoded = decoded.substr(0, 20) + "…";
+}
+
+} // namespace
 
 void computeRhoDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
@@ -415,14 +439,8 @@ void computeRhoDiagnostic(
         for (size_t i = 0; i < top_n; ++i) {
             const int tid = freq_sorted[i].first;
             const int cnt = freq_sorted[i].second;
-            std::string decoded = tokenizer.decode({tid});
-            // Escape newlines/tabs for single-line display
-            for (auto& c : decoded) {
-                if (c == '\n') c = ' ';
-                else if (c == '\t') c = ' ';
-                else if (c == '\r') c = ' ';
-            }
-            if (decoded.size() > 20) decoded = decoded.substr(0, 20) + "…";
+            std::string decoded = decodeAggregateTokenForDisplay(tokenizer, tid);
+            sanitizeSingleLineTokenDisplay(decoded);
             rho_eq << " [" << tid << " \"" << decoded << "\" ×" << cnt << "]";
         }
         rho_eq << "\n";

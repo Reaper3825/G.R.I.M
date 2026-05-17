@@ -42,6 +42,9 @@ Hierarchical streaming statistics: 8 levels. Stream 38 (`rho_raw_rms_spread`) is
 
 Train-loss spike / EWMA detection is owned by TelemetryLattice. Do not add separate per-batch scalar spike detectors or diagnostic subscribers; they drift from telemetry-owned stream statistics. `Shared/Loss/LossSignals` owns only validation high-loss patience (`validation_high`) for auto-stop; it must not compute spike or delta signals.
 
+## Atom-token display
+Diagnostics that summarize arbitrary token IDs without per-token side channels must not call `UniByte::decode({tid})` on atom IDs. Atom tokens are type placeholders (`<INT>`, `<FLOAT>`) and require `atom_entry_ids` plus an `AtomTable` to reconstruct original text. Aggregate displays such as Rho top-token logs should render atom IDs by type; full sample reconstruction must use the atom-aware side-channel decode path.
+
 ## Accumulation-window logging
 `ctx.optimizer.optimizer_step.step` is the zero-based optimizer step index supplied to AdamW/RAdamW and LR scheduling. `OptimizerContext` owns the private in-progress accumulation-slot cursor exposed by `accumulationSlot()`; one slot is exactly one `BatchPayload` upload → forward → loss → backward pass. There is no separate secondary counter/lifecycle. Diagnostics that fire at the optimizer boundary must consume only the single configured accumulation window size and format it as `accum_window=N`; do not pass separate completed/required log values or derive a parallel step path. Telemetry must receive the same zero-based `optimizer_step` used by the optimizer kernel, even though `completeOptimizerStepAfterFullAccumulationWindow()` increments the stored step before telemetry is emitted.
 

@@ -281,7 +281,13 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         // DEBUG: Decode individual token IDs to see what they map to
         if (gen_tokens.size() > prompt_len) {
             int first_gen_token = gen_tokens[prompt_len];
-            std::string first_decoded = tokenizer.decode({first_gen_token});
+            const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
+            std::string first_decoded;
+            if (layout.isAtom(first_gen_token)) {
+                appendTokenText(first_decoded, tokenizer, layout, first_gen_token);
+            } else {
+                first_decoded = tokenizer.decode({first_gen_token});
+            }
             std::ostringstream tid_decode;
             tid_decode << "[TokenDecode] token_id=" << first_gen_token
                        << " decodes_to=\"" << first_decoded << "\""
