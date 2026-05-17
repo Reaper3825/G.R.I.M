@@ -229,24 +229,15 @@ int qkvDebugLevel() {
     return level;
 }
 
-int gradFlowDebugLevel() {
-    static int level = []() {
-        const char* raw = std::getenv("GRIM_DEBUG_GRADFLOW");
-        if (!raw || !*raw) {
-            return 0;
-        }
-        return std::atoi(raw);
-    }();
-    return level;
-}
-
 void logGradFlowTensorStats(const char* tag,
                             const float* data,
                             std::size_t count,
                             cudaStream_t stream,
                             bool force) {
-    const int level = gradFlowDebugLevel();
-    if (level <= 0 && !force) {
+    auto* tape = GRIM::Logging::getGlobalTape();
+    const bool debug_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
+    const bool trace_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Trace);
+    if (!debug_enabled && !force) {
         return;
     }
     const char* checked_tag = requireTag(tag, "logGradFlowTensorStats");
@@ -328,7 +319,7 @@ void logGradFlowTensorStats(const char* tag,
         }
     }
     const bool anomalous = nan_count > 0 || inf_count > 0 || max_abs >= threshold || rms >= threshold;
-    if (!force && level < 2 && !anomalous) {
+    if (!force && !trace_enabled && !anomalous) {
         return;
     }
 

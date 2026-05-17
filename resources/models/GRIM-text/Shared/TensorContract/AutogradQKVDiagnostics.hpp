@@ -23,8 +23,6 @@ void checkQKVTensorFinite(const char* tag,
                           const Tensor& tensor,
                           cudaStream_t stream);
 
-int gradFlowDebugLevel();
-
 void logGradFlowTensorStats(const char* tag,
                             const float* data,
                             std::size_t count,
