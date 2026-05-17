@@ -549,7 +549,7 @@
                 }
             },
             "logging": {
-                "default_level": "Info",
+                "default_level": "Debug",
                 "equation_csv_enabled": true,
                 "group_overrides": {},
                 "initial_capacity": 2048,

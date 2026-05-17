@@ -5,6 +5,7 @@
 //            SplitAndReshapeQKV, RoPE rotation
 //======================================================//
 #include "TensorContract_GPU.hpp"
+#include "AutogradQKVDiagnostics.hpp"
 #include "../Batching/BatchPayload.hpp"
 #include "../VerboseLogging.hpp"
 #include "../CudaAllocUtils.hpp"
@@ -863,6 +864,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         const int kv_blocks = static_cast<int>((kv_elems + block_size - 1) / block_size);
         
         // Convert grad_output (FP32 BHSD) to BF16 BSHD
+        logGradFlowTensorStats("SDPA.apply grad_output(BHSD)", grad_output.data, grad_output.numel(), stream);
         TensorConversion::convert_BHSD_to_BSHD_bf16(
             grad_output.data, dout_bf16, batch_size, num_heads, seq_len, head_dim, stream);
         
@@ -916,9 +918,11 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             
             TensorConversion::convert_BSHD_bf16_to_BHSD(
                 dq_bf16, grad_q_fp32, batch_size, seq_len, num_heads, head_dim, stream);
+            logGradFlowTensorStats("SDPA.apply grad_q_fp32", grad_q_fp32, q_elems, stream);
             
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
             accumulate_grad(q_grad, grad_q_fp32, q_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply q_grad");
+            logGradFlowTensorStats("SDPA.apply q_grad_accum", q_grad, q_elems, stream);
             cudaFreeAsync(grad_q_fp32, stream);
         }
         
@@ -930,8 +934,10 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             // dk_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
                 dk_bf16, grad_k_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
+            logGradFlowTensorStats("SDPA.apply grad_k_fp32", grad_k_fp32, kv_elems, stream);
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
             accumulate_grad(k_grad, grad_k_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply k_grad");
+            logGradFlowTensorStats("SDPA.apply k_grad_accum", k_grad, kv_elems, stream);
             cudaFreeAsync(grad_k_fp32, stream);
         }
         
@@ -943,8 +949,10 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             // dv_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
                 dv_bf16, grad_v_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
+            logGradFlowTensorStats("SDPA.apply grad_v_fp32", grad_v_fp32, kv_elems, stream);
             // Scale = 1.0 (no normalization needed)
             accumulate_grad(v_grad, grad_v_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply v_grad");
+            logGradFlowTensorStats("SDPA.apply v_grad_accum", v_grad, kv_elems, stream);
             cudaFreeAsync(grad_v_fp32, stream);
         }
         
@@ -1486,6 +1494,23 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
                         std::string(cudaGetErrorString(err)));
                 }
             }
+
+            logGradFlowTensorStats("SplitQKV.merge grad_Q_bhsd",
+                                   state.grad_Q_bhsd,
+                                   static_cast<std::size_t>(state.batch) * state.num_heads * state.seq * state.head_dim,
+                                   stream);
+            logGradFlowTensorStats("SplitQKV.merge grad_K_bhsd",
+                                   state.grad_K_bhsd,
+                                   static_cast<std::size_t>(state.batch) * state.num_kv_heads * state.seq * state.head_dim,
+                                   stream);
+            logGradFlowTensorStats("SplitQKV.merge grad_V_bhsd",
+                                   state.grad_V_bhsd,
+                                   static_cast<std::size_t>(state.batch) * state.num_kv_heads * state.seq * state.head_dim,
+                                   stream);
+            logGradFlowTensorStats("SplitQKV.merge merged_qkv_grad",
+                                   state.merged_qkv_grad,
+                                   state.qkv_numel,
+                                   stream);
 
             if (state.qkv_input_is_leaf) {
                 if (!state.qkv_leaf_grad) {

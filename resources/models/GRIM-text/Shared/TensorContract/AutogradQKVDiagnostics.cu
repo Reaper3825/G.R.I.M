@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -50,6 +51,13 @@ struct NonFiniteStats {
     float first_inf_val;
 };
 
+struct GradFlowBlockStats {
+    float sum_sq;
+    float max_abs;
+    int nan_count;
+    int inf_count;
+};
+
 __global__ void scanNonFiniteKernel(const float* data, int count, NonFiniteStats* stats) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= count) {
@@ -68,6 +76,57 @@ __global__ void scanNonFiniteKernel(const float* data, int count, NonFiniteStats
         if (old == -1) {
             stats->first_inf_val = v;
         }
+    }
+}
+
+__global__ void gradFlowStatsKernel(const float* data,
+                                    std::size_t count,
+                                    GradFlowBlockStats* partials) {
+    __shared__ float s_sum_sq[256];
+    __shared__ float s_max_abs[256];
+    __shared__ int s_nan[256];
+    __shared__ int s_inf[256];
+
+    const int tid = threadIdx.x;
+    const std::size_t start = static_cast<std::size_t>(blockIdx.x) * blockDim.x + tid;
+    const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+
+    float local_sum_sq = 0.0f;
+    float local_max_abs = 0.0f;
+    int local_nan = 0;
+    int local_inf = 0;
+
+    for (std::size_t i = start; i < count; i += stride) {
+        const float v = data[i];
+        if (isnan(v)) {
+            ++local_nan;
+        } else if (isinf(v)) {
+            ++local_inf;
+        } else {
+            const float av = fabsf(v);
+            local_sum_sq += v * v;
+            local_max_abs = fmaxf(local_max_abs, av);
+        }
+    }
+
+    s_sum_sq[tid] = local_sum_sq;
+    s_max_abs[tid] = local_max_abs;
+    s_nan[tid] = local_nan;
+    s_inf[tid] = local_inf;
+    __syncthreads();
+
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (tid < offset) {
+            s_sum_sq[tid] += s_sum_sq[tid + offset];
+            s_max_abs[tid] = fmaxf(s_max_abs[tid], s_max_abs[tid + offset]);
+            s_nan[tid] += s_nan[tid + offset];
+            s_inf[tid] += s_inf[tid + offset];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        partials[blockIdx.x] = {s_sum_sq[0], s_max_abs[0], s_nan[0], s_inf[0]};
     }
 }
 
@@ -168,6 +227,125 @@ int qkvDebugLevel() {
         return std::atoi(raw);
     }();
     return level;
+}
+
+int gradFlowDebugLevel() {
+    static int level = []() {
+        const char* raw = std::getenv("GRIM_DEBUG_GRADFLOW");
+        if (!raw || !*raw) {
+            return 0;
+        }
+        return std::atoi(raw);
+    }();
+    return level;
+}
+
+void logGradFlowTensorStats(const char* tag,
+                            const float* data,
+                            std::size_t count,
+                            cudaStream_t stream,
+                            bool force) {
+    const int level = gradFlowDebugLevel();
+    if (level <= 0 && !force) {
+        return;
+    }
+    const char* checked_tag = requireTag(tag, "logGradFlowTensorStats");
+    if (!stream) {
+        throw std::runtime_error("logGradFlowTensorStats: stream is NULL");
+    }
+    if (!data) {
+        throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag + " data is NULL");
+    }
+    if (count == 0) {
+        throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag + " count is zero");
+    }
+
+    constexpr int kThreads = 256;
+    constexpr int kMaxBlocks = 4096;
+    const int blocks_needed = static_cast<int>((count + kThreads - 1) / kThreads);
+    const int blocks = std::max(1, std::min(kMaxBlocks, blocks_needed));
+
+    GradFlowBlockStats* d_partials = nullptr;
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_partials),
+                      static_cast<std::size_t>(blocks) * sizeof(GradFlowBlockStats),
+                      "GradFlowStats_partials");
+
+    gradFlowStatsKernel<<<blocks, kThreads, 0, stream>>>(data, count, d_partials);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        cudaFree(d_partials);
+        throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag +
+                                 " gradFlowStatsKernel launch failed: " + cudaGetErrorString(err));
+    }
+
+    std::vector<GradFlowBlockStats> h_partials(static_cast<std::size_t>(blocks));
+    err = cudaMemcpyAsync(h_partials.data(), d_partials,
+                          static_cast<std::size_t>(blocks) * sizeof(GradFlowBlockStats),
+                          cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        cudaFree(d_partials);
+        throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag +
+                                 " cudaMemcpyAsync D2H failed: " + cudaGetErrorString(err));
+    }
+
+    float first_values[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const std::size_t first_count = std::min<std::size_t>(count, 4);
+    err = cudaMemcpyAsync(first_values, data, first_count * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        cudaFree(d_partials);
+        throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag +
+                                 " first-value copy failed: " + cudaGetErrorString(err));
+    }
+
+    err = cudaStreamSynchronize(stream);
+    cudaFree(d_partials);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("logGradFlowTensorStats: ") + checked_tag +
+                                 " stream synchronization failed: " + cudaGetErrorString(err));
+    }
+
+    double sum_sq = 0.0;
+    float max_abs = 0.0f;
+    int nan_count = 0;
+    int inf_count = 0;
+    for (const auto& p : h_partials) {
+        sum_sq += static_cast<double>(p.sum_sq);
+        max_abs = std::max(max_abs, p.max_abs);
+        nan_count += p.nan_count;
+        inf_count += p.inf_count;
+    }
+
+    const std::size_t finite_count = count - static_cast<std::size_t>(nan_count + inf_count);
+    const float rms = finite_count > 0
+        ? static_cast<float>(std::sqrt(sum_sq / static_cast<double>(finite_count)))
+        : std::numeric_limits<float>::quiet_NaN();
+
+    float threshold = 1000.0f;
+    if (const char* raw = std::getenv("GRIM_GRADFLOW_THRESHOLD")) {
+        const float parsed = std::atof(raw);
+        if (std::isfinite(parsed) && parsed > 0.0f) {
+            threshold = parsed;
+        }
+    }
+    const bool anomalous = nan_count > 0 || inf_count > 0 || max_abs >= threshold || rms >= threshold;
+    if (!force && level < 2 && !anomalous) {
+        return;
+    }
+
+    std::fprintf(stderr,
+                 "[GRADFLOW] %s count=%zu finite=%zu rms=%.10e max_abs=%.10e nan=%d inf=%d first=[%.10e,%.10e,%.10e,%.10e]\n",
+                 checked_tag,
+                 count,
+                 finite_count,
+                 rms,
+                 max_abs,
+                 nan_count,
+                 inf_count,
+                 first_values[0],
+                 first_values[1],
+                 first_values[2],
+                 first_values[3]);
+    std::fflush(stderr);
 }
 
 void checkQKVTensorFinite(const char* tag,
@@ -372,17 +550,17 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
         fprintf(stderr, "  b_qkv: [nullptr]\n");
     }
     fprintf(stderr, "  EXPECTED qkv_elem_rms = ln1_row_rms * wq_row_rms * sqrt(d_model)\n");
-    fprintf(stderr, "                        = %.4f * %.4f * sqrt(%d) = %.4f\n",
+    fprintf(stderr, "                        = %.8f * %.8f * sqrt(%d) = %.8f\n",
             ln1_row_rms_mean, wq_row_rms_mean, d_model_local, expected_q_elem_rms);
     fprintf(stderr, "  ACTUAL qkv_out (Q portion): min=%.10f max=%.10f rms=%.10f\n",
             qkv_min, qkv_max, qkv_rms);
-    fprintf(stderr, "  EXPECTED Q row_rms (full/head): %.4f / %.4f\n",
+    fprintf(stderr, "  EXPECTED Q row_rms (full/head): %.8f / %.8f\n",
             expected_q_full_row_rms, expected_q_head_row_rms);
-    fprintf(stderr, "  ACTUAL   Q row_rms (full/head): %.4f / %.4f\n",
+    fprintf(stderr, "  ACTUAL   Q row_rms (full/head): %.8f / %.8f\n",
             actual_q_full_row_rms, actual_q_head_row_rms);
-    fprintf(stderr, "  TARGET   Q row_rms (full/head): %.4f / %.4f (healthy attention: elem_rms≈1.0)\n",
+    fprintf(stderr, "  TARGET   Q row_rms (full/head): %.8f / %.8f (healthy attention: elem_rms≈1.0)\n",
             target_q_full_row_rms, target_q_head_row_rms);
-    fprintf(stderr, "  INFLATION(full/head): %.4fx / %.4fx\n",
+    fprintf(stderr, "  INFLATION(full/head): %.8fx / %.8fx\n",
             actual_q_full_row_rms / target_q_full_row_rms,
             actual_q_head_row_rms / target_q_head_row_rms);
 

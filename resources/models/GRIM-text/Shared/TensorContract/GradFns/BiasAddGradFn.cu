@@ -17,6 +17,7 @@
 //======================================================//
 
 #include "BiasAddGradFn.hpp"
+#include "../AutogradQKVDiagnostics.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
 #include "../HyperParameters/HyperParameters_GPU.hpp"
@@ -178,16 +179,19 @@ void BiasAddGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     }
 
     const size_t count = grad_output.numel();
+    logGradFlowTensorStats("BiasAdd.apply grad_output", grad_output.data, count, stream);
 
     // Backward for input: grad_input = grad_output (pass-through, no shape change)
     if (input_requires_grad && grad_input) {
         accumulate_grad(grad_input, grad_output.data, count, 1.0f, stream, "BiasAddGradFn::apply grad_input");
+        logGradFlowTensorStats("BiasAdd.apply grad_input_accum", grad_input, count, stream);
     }
 
     // Backward for bias: grad_bias[j] += sum_i(grad_output[i,j])
     if (bias_requires_grad && grad_bias) {
         launchBiasBackward(grad_output.data, grad_bias,
                            static_cast<int>(total_tokens), static_cast<int>(features), stream);
+        logGradFlowTensorStats("BiasAdd.apply grad_bias_accum", grad_bias, features, stream);
     }
 
     // CONTINUE AUTOGRAD CHAIN for input
