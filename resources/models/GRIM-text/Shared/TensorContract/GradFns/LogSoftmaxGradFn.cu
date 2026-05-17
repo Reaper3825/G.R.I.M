@@ -21,6 +21,12 @@ namespace {
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
 
+inline void throwIfCudaFailed(cudaError_t err, const char* context) {
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(context) + ": " + cudaGetErrorString(err));
+    }
+}
+
 __global__ void kernel_log_softmax_forward(
     const float* __restrict__ input,
     float* __restrict__ output,
@@ -146,7 +152,7 @@ LogSoftmaxGradFn::~LogSoftmaxGradFn() {
     release_saved();
 }
 
-void LogSoftmaxGradFn::capture_input(Tensor& x) {
+void LogSoftmaxGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
     input_shape = x.shape;
     input_grad_fn = x.grad_fn;
@@ -159,7 +165,9 @@ void LogSoftmaxGradFn::capture_input(Tensor& x) {
         } else {
             const size_t bytes = x.shape.total_elements() * sizeof(float);
             cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), bytes, "LogSoftmaxGradFn_input_grad");
-            cudaMemset(input_grad, 0, bytes);
+            throwIfCudaFailed(
+                cudaMemsetAsync(input_grad, 0, bytes, stream),
+                "LogSoftmaxGradFn::capture_input: cudaMemsetAsync(input_grad) failed");
             owns_input_grad = true;
         }
     }
@@ -171,7 +179,9 @@ void LogSoftmaxGradFn::save(const float* log_softmax_output, int tokens, int d, 
     if (copy) {
         const size_t bytes = static_cast<size_t>(tokens) * d * sizeof(float);
         cudaMallocOrThrow(reinterpret_cast<void**>(&saved_log_softmax), bytes, "LogSoftmaxGradFn_saved");
-        cudaMemcpyAsync(saved_log_softmax, log_softmax_output, bytes, cudaMemcpyDeviceToDevice, stream);
+        throwIfCudaFailed(
+            cudaMemcpyAsync(saved_log_softmax, log_softmax_output, bytes, cudaMemcpyDeviceToDevice, stream),
+            "LogSoftmaxGradFn::save: cudaMemcpyAsync(saved_log_softmax) failed");
         owns_saved_log_softmax = true;
     } else {
         saved_log_softmax = const_cast<float*>(log_softmax_output);
@@ -196,6 +206,7 @@ void LogSoftmaxGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     kernel_log_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         grad_output.data, saved_log_softmax, input_grad, num_tokens, dim);
     trackKernelLaunch("kernel_log_softmax_backward", stream);
+    throwIfCudaFailed(cudaGetLastError(), "LogSoftmaxGradFn::apply: kernel_log_softmax_backward launch failed");
 
     if (input_grad_fn) {
         Tensor view;
@@ -240,11 +251,12 @@ Tensor log_softmax(const Tensor& x, cudaStream_t stream, bool save_output_copy) 
     kernel_log_softmax_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         x.data, result.data, num_tokens, dim);
     trackKernelLaunch("kernel_log_softmax_forward", stream);
+    throwIfCudaFailed(cudaGetLastError(), "autograd::log_softmax: kernel_log_softmax_forward launch failed");
 
     if (x.requires_grad) {
         result.is_leaf = false;
         auto grad_fn = std::make_shared<LogSoftmaxGradFn>();
-        grad_fn->capture_input(const_cast<Tensor&>(x));
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
         grad_fn->save(result.data, num_tokens, dim, stream, save_output_copy);
         result.grad_fn = grad_fn;
     }
