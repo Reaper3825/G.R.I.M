@@ -641,7 +641,7 @@
                 },
                 "logging": {
                     "fail_loud_on_accumulation_bug": true,
-                    "verbose": false
+                    "verbose": true
                 },
                 "plateau_noise": {
                     "enabled": true

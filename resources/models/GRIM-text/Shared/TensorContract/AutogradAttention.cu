@@ -860,6 +860,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         
         const size_t q_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;
         const size_t kv_elems = static_cast<size_t>(batch_size) * seq_len * num_kv_heads * head_dim;
+        const size_t dk_dv_alloc_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;
         const int block_size = 256;
         const int kv_blocks = static_cast<int>((kv_elems + block_size - 1) / block_size);
         
@@ -867,6 +868,18 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         logGradFlowTensorStats("SDPA.apply grad_output(BHSD)", grad_output.data, grad_output.numel(), stream);
         TensorConversion::convert_BHSD_to_BSHD_bf16(
             grad_output.data, dout_bf16, batch_size, num_heads, seq_len, head_dim, stream);
+        logGradFlowBf16TensorStats("SDPA.apply dout_bf16(BSHD)", dout_bf16, q_elems, stream);
+
+        // These buffers are backward outputs, not forward state. Keep their hygiene
+        // inside apply() so stale or stray writes between forward and backward cannot
+        // be mistaken for FlashAttention gradients.
+        throwIfCudaFailed(cudaMemsetAsync(dq_bf16, 0, q_elems * sizeof(__nv_bfloat16), stream),
+                          "ScaledDotProductAttentionGradFn::apply: cudaMemsetAsync(dq_bf16) failed");
+        throwIfCudaFailed(cudaMemsetAsync(dk_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16), stream),
+                          "ScaledDotProductAttentionGradFn::apply: cudaMemsetAsync(dk_bf16) failed");
+        throwIfCudaFailed(cudaMemsetAsync(dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16), stream),
+                          "ScaledDotProductAttentionGradFn::apply: cudaMemsetAsync(dv_bf16) failed");
+        logGradFlowBf16TensorStats("SDPA.apply dv_bf16_pre_bwd", dv_bf16, dk_dv_alloc_elems, stream);
         
         // Call FlashAttention backward
         flash_attn_bwd_ex(
@@ -893,6 +906,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             dropout_seed,         // Same seed as forward (reproduces identical mask)
             stream
         );
+        logGradFlowBf16TensorStats("SDPA.apply dq_bf16_post_bwd", dq_bf16, q_elems, stream);
+        logGradFlowBf16TensorStats("SDPA.apply dk_bf16_post_bwd", dk_bf16, dk_dv_alloc_elems, stream);
+        logGradFlowBf16TensorStats("SDPA.apply dv_bf16_post_bwd", dv_bf16, dk_dv_alloc_elems, stream);
         
         // =========================================================================
         // ISSUE #83 REMOVAL: Issue #84 (missing preprocessing kernel)

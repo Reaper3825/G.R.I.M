@@ -12,6 +12,7 @@
 #include "TensorContract_GPU.hpp"
 #include "../Batching/BatchPayload.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
+#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <cstddef>
 
@@ -28,6 +29,12 @@ void logGradFlowTensorStats(const char* tag,
                             std::size_t count,
                             cudaStream_t stream,
                             bool force = false);
+
+void logGradFlowBf16TensorStats(const char* tag,
+                                const __nv_bfloat16* data,
+                                std::size_t count,
+                                cudaStream_t stream,
+                                bool force = false);
 
 void logQKVProjectionEquation(const Tensor& ln1_out,
                               const Tensor& W_qkv,
