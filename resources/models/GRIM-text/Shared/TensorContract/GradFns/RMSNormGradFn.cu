@@ -81,7 +81,7 @@ __global__ void kernel_rmsnorm_backward(
     const float* grad_output,
     const float* input,
     const float* gamma,
-    float* grad_input,
+    float* grad_input,   // optional: nullptr when only gamma trains (e.g. frozen input / embeddings)
     float* grad_gamma,
     int tokens,
     int d_model,
@@ -95,7 +95,8 @@ __global__ void kernel_rmsnorm_backward(
 
     const float* x = input + static_cast<size_t>(token_idx) * d_model;
     const float* dy = grad_output + static_cast<size_t>(token_idx) * d_model;
-    float* dx = grad_input + static_cast<size_t>(token_idx) * d_model;
+    float* const dx =
+        grad_input ? grad_input + static_cast<size_t>(token_idx) * d_model : nullptr;
 
     const int num_warps = blockDim.x / 32;
 
@@ -154,7 +155,9 @@ __global__ void kernel_rmsnorm_backward(
     const float dgamma_x_sum = s_dgamma_x;
     const float scale = dgamma_x_sum / (d_model * rms_sq);
     for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        dx[i] += (dy[i] * gamma[i] - x[i] * scale) * inv_rms;
+        if (grad_input) {
+            dx[i] += (dy[i] * gamma[i] - x[i] * scale) * inv_rms;
+        }
 
         if (grad_gamma) {
             atomicAdd(&grad_gamma[i], dy[i] * x[i] * inv_rms);
@@ -194,7 +197,14 @@ void RMSNormGradFn::capture_inputs(Tensor& x, Tensor& gamma_tensor, cudaStream_t
             const size_t grad_size = x.shape.total_elements();
             float* buf = nullptr;
             cudaMallocOrThrow(reinterpret_cast<void**>(&buf), grad_size * sizeof(float), "RMSNormGradFn_input_grad");
-            cudaMemsetAsync(buf, 0, grad_size * sizeof(float), stream);
+            {
+                const cudaError_t ms_err =
+                    cudaMemsetAsync(buf, 0, grad_size * sizeof(float), stream);
+                if (ms_err != cudaSuccess) {
+                    throw std::runtime_error(std::string("RMSNormGradFn::capture_inputs: cudaMemsetAsync(input_grad) failed: ") +
+                                             cudaGetErrorString(ms_err));
+                }
+            }
             owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
             input_grad = owned_input_grad.get();
         }
@@ -249,19 +259,26 @@ void RMSNormGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     const int tokens = static_cast<int>(cached_size / d_model);
     const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32) * sizeof(float);
 
-    if (input_requires_grad && input_grad) {
-        kernel_rmsnorm_backward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
-            grad_output.data, cached_input, gamma_data,
-            input_grad, gamma_grad_ptr,
-            tokens, d_model, eps);
-        trackKernelLaunch("kernel_rmsnorm_backward", stream);
+    const bool need_dx = input_requires_grad && input_grad != nullptr;
+    const bool need_dgamma = gamma_requires_grad && gamma_grad_ptr != nullptr;
+    if (!need_dx && !need_dgamma) {
+        return;
+    }
 
-        if (input_grad_fn && input_grad_fn->op_name) {
-            Tensor view;
-            view.data = input_grad; view.shape = input_shape;
-            view.owns_data = false; view.stream = stream;
-            input_grad_fn->apply(view, stream);
-        }
+    kernel_rmsnorm_backward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
+        grad_output.data, cached_input, gamma_data,
+        need_dx ? input_grad : nullptr,
+        need_dgamma ? gamma_grad_ptr : nullptr,
+        tokens, d_model, eps);
+    trackKernelLaunch("kernel_rmsnorm_backward", stream);
+
+    if (need_dx && input_grad_fn && input_grad_fn->op_name) {
+        Tensor view;
+        view.data = input_grad;
+        view.shape = input_shape;
+        view.owns_data = false;
+        view.stream = stream;
+        input_grad_fn->apply(view, stream);
     }
 }
 

@@ -159,6 +159,30 @@ float computeScratchBlockTelemetryRms(const GRIM::GradNorm::GradMetrics& gm) {
     return static_cast<float>(std::sqrt(gm.scratchblock_sum_sq / static_cast<double>(gm.scratchblock_count)));
 }
 
+std::string formatTopGradientGroups(
+    const GRIM::GradClip::ClipResult& clip,
+    const std::vector<GRIM::ParameterGroup>& groups)
+{
+    std::ostringstream oss;
+    oss << "[GradTrace] TOP-GRAD-GROUPS";
+    for (const auto& top : clip.top_groups) {
+        if (!top.valid) {
+            continue;
+        }
+        const std::string group_name = top.index < groups.size()
+            ? groups[top.index].name
+            : std::string("<out-of-range>");
+        oss << " #" << top.index
+            << "(" << group_name
+            << ",type=" << top.type
+            << ",layer=" << top.layer_index
+            << ",rms=" << formatScalar(top.rms, 6)
+            << ",count=" << top.count
+            << ")";
+    }
+    return oss.str();
+}
+
 } // namespace
 
 void runGradientNormClipDiagnostic(
@@ -169,9 +193,6 @@ void runGradientNormClipDiagnostic(
     int batch_idx)
 {
     const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
-    if (!sync_diag) {
-        return;
-    }
 
     const auto& gm = clip.metrics;
 
@@ -187,6 +208,7 @@ void runGradientNormClipDiagnostic(
     const float emb_rms_pre = computeEmbeddingDiagnosticRmsOrThrow(gm, tied, batch_idx);
     const float enc_rms_pre = computeEncoderTelemetryRms(gm, batch_idx);
     const float sb_rms_pre = computeScratchBlockTelemetryRms(gm);
+    const auto& groups = ctx.model->parameterGroups();
 
     ctx.logging.logger->log("[GradTrace] POST-CLIP-MEASURE preclip_registered_global=" +
                             formatScalar(preclip_grad_rms, 6) +
@@ -195,6 +217,7 @@ void runGradientNormClipDiagnostic(
                             " emb_rms_pre=" + formatScalar(emb_rms_pre, 6) +
                             " enc_rms_pre=" + formatScalar(enc_rms_pre, 6) +
                             " sb_rms_pre=" + formatScalar(sb_rms_pre, 6));
+    ctx.logging.logger->log(formatTopGradientGroups(clip, groups));
 
     // ========================================================================
     // DIAGNOSTIC: [EMB_GRAD_EQUATION] Embedding gradient spike analysis (Issue #141)
@@ -206,7 +229,7 @@ void runGradientNormClipDiagnostic(
     // atomicAdd scatter density correlates with spike magnitude.
     // ========================================================================
     {
-        const bool kEmbGradDiagEnabled = ctx.logging.tape &&
+        const bool kEmbGradDiagEnabled = sync_diag && ctx.logging.tape &&
             ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug);
 
         if (kEmbGradDiagEnabled) {

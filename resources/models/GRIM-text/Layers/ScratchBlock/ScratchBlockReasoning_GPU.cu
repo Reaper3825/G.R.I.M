@@ -22,6 +22,7 @@
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
+#include <string>
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
@@ -360,7 +361,7 @@ ScratchBlockGradFn::~ScratchBlockGradFn() {
     if (owns_input_grad && input_grad) cudaFree(input_grad);
 }
 
-void ScratchBlockGradFn::capture_input(Tensor& x) {
+void ScratchBlockGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_shape = x.shape;
     input_grad_fn = x.grad_fn;
 
@@ -369,7 +370,11 @@ void ScratchBlockGradFn::capture_input(Tensor& x) {
     if (x.requires_grad) {
         const size_t grad_size = x.numel();
         cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "ScratchBlockGradFn_input_grad");
-        cudaMemset(input_grad, 0, grad_size * sizeof(float));
+        const cudaError_t err = cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("ScratchBlockGradFn::capture_input: cudaMemsetAsync(input_grad) failed: ") +
+                                     cudaGetErrorString(err));
+        }
         owns_input_grad = true;
     }
 }
@@ -545,7 +550,7 @@ Tensor scratch_block_inject(
         grad_fn->atom_scale = cfg.atom_scale;
 
         // Capture input chain
-        grad_fn->capture_input(input);
+        grad_fn->capture_input(input, stream);
 
         // Capture weight gradient pointers (layer outlives GradFn)
         grad_fn->capture_weights(

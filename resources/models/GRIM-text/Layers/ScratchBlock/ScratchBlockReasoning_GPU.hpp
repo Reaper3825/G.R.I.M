@@ -87,7 +87,7 @@ struct ScratchBlockGradFn : public GradFn {
     ~ScratchBlockGradFn() override;
 
     /// Capture input tensor state for backward chain (Issue #48: stable data, not Tensor*)
-    void capture_input(Tensor& input);
+    void capture_input(Tensor& input, cudaStream_t stream);
 
     /// Capture forward activations: atom positions, types, embeddings
     void capture_forward(

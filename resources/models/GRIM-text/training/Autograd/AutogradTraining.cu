@@ -894,7 +894,7 @@ BackwardResult executeAutogradBackward(
 
         fprintf(stderr,
             "[GRAD_DIAG] POST-BACKWARD accumulate=%d grad_scale=%.4f "
-            "lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e rms_gamma_grad[0]=%.10e "
+            "lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e enc0_rms1_gamma_grad[0]=%.10e "
             "lm_ptr=%p\n",
             static_cast<int>(accumulate), grad_scale,
             lm_sample, enc_sample, rms_sample,

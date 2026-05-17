@@ -40,6 +40,12 @@ namespace autograd {
 
 using Batching::BatchPayload;
 
+inline void throwIfCudaFailed(cudaError_t err, const char* context) {
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(context) + ": " + cudaGetErrorString(err));
+    }
+}
+
 static void requireEncoderAttentionHP(const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
                                       const char* caller) {
     GRIM::HyperParameters::validateEncoderSelfAttentionHP(hp, caller);
@@ -815,9 +821,15 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         cudaMallocOrThrow(reinterpret_cast<void**>(&dk_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_dk_bf16");  // ISSUE #72: Sized for num_heads
         cudaMallocOrThrow(reinterpret_cast<void**>(&dv_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_dv_bf16");  // ISSUE #72: Sized for num_heads
         cudaMallocOrThrow(reinterpret_cast<void**>(&dout_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_dout_bf16");
-        cudaMemset(dq_bf16, 0, q_elems * sizeof(__nv_bfloat16));
-        cudaMemset(dk_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
-        cudaMemset(dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
+        throwIfCudaFailed(
+            cudaMemsetAsync(dq_bf16, 0, q_elems * sizeof(__nv_bfloat16), stream),
+            "ScaledDotProductAttentionGradFn::save: cudaMemsetAsync(dq_bf16) failed");
+        throwIfCudaFailed(
+            cudaMemsetAsync(dk_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16), stream),
+            "ScaledDotProductAttentionGradFn::save: cudaMemsetAsync(dk_bf16) failed");
+        throwIfCudaFailed(
+            cudaMemsetAsync(dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16), stream),
+            "ScaledDotProductAttentionGradFn::save: cudaMemsetAsync(dv_bf16) failed");
         
         // Convert FP32 BHSD inputs to BF16 BSHD for FlashAttention
         // Q: [B, H, S, D] FP32 -> [B, S, H, D] BF16
@@ -1125,9 +1137,15 @@ Tensor scaled_dot_product_attention(
         cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dk_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dk_bf16");  // ISSUE #72: Sized for num_heads
         cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dv_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dv_bf16");  // ISSUE #72: Sized for num_heads
         cudaMallocOrThrow(reinterpret_cast<void**>(&grad_fn->dout_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_gradfn_dout_bf16");
-        cudaMemset(grad_fn->dq_bf16, 0, q_elems * sizeof(__nv_bfloat16));
-        cudaMemset(grad_fn->dk_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
-        cudaMemset(grad_fn->dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
+        throwIfCudaFailed(
+            cudaMemsetAsync(grad_fn->dq_bf16, 0, q_elems * sizeof(__nv_bfloat16), stream),
+            "scaled_dot_product_attention: cudaMemsetAsync(grad_fn->dq_bf16) failed");
+        throwIfCudaFailed(
+            cudaMemsetAsync(grad_fn->dk_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16), stream),
+            "scaled_dot_product_attention: cudaMemsetAsync(grad_fn->dk_bf16) failed");
+        throwIfCudaFailed(
+            cudaMemsetAsync(grad_fn->dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16), stream),
+            "scaled_dot_product_attention: cudaMemsetAsync(grad_fn->dv_bf16) failed");
         
         result.grad_fn = grad_fn;
         
