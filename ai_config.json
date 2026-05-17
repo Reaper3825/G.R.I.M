@@ -515,9 +515,9 @@
                 "freeze_final_rms_gamma": false,
                 "project_out_pc1": false
             },
-            "log_interval": 25,
+            "log_interval": 1,
             "log_recorder": {
-                "default_level": "Info",
+                "default_level": "Trace",
                 "enabled": true,
                 "layers": {
                     "attention": true,
@@ -549,7 +549,7 @@
                 }
             },
             "logging": {
-                "default_level": "Trace",
+                "default_level": "Debug",
                 "equation_csv_enabled": true,
                 "group_overrides": {},
                 "initial_capacity": 2048,

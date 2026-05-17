@@ -71,12 +71,14 @@ struct ForwardIntermediates {
     
     // Output projection
     Tensor proj_out;         // W_o projection output [tokens, d_model]
+    Tensor scaled_proj;      // LayerScale(proj_out) when layer scale is enabled
     
     // Residual connection outputs
     Tensor residual1;        // input + proj_out
     
     // FFN outputs
     Tensor ffn_out;          // FFN layer output [tokens, d_model]
+    Tensor scaled_ffn;       // LayerScale(ffn_out) when layer scale is enabled
     
     // Final output (also stored in layer_outputs in AutogradContext)
     // This is the only tensor that would have survived the old approach
@@ -122,8 +124,10 @@ struct ForwardIntermediates {
         attn_out_bhsd = Tensor();
         attn_out = Tensor();
         proj_out = Tensor();
+        scaled_proj = Tensor();
         residual1 = Tensor();
         ffn_out = Tensor();
+        scaled_ffn = Tensor();
         output = Tensor();
         ffn_gate_out = Tensor();
         ffn_silu_out = Tensor();
@@ -149,8 +153,10 @@ struct ForwardIntermediates {
         if (attn_out_bhsd.grad_fn) count++;
         if (attn_out.grad_fn) count++;
         if (proj_out.grad_fn) count++;
+        if (scaled_proj.grad_fn) count++;
         if (residual1.grad_fn) count++;
         if (ffn_out.grad_fn) count++;
+        if (scaled_ffn.grad_fn) count++;
         if (output.grad_fn) count++;
         if (ffn_gate_out.grad_fn) count++;
         if (ffn_silu_out.grad_fn) count++;

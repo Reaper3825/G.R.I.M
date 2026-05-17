@@ -27,6 +27,7 @@
 #include <algorithm>  // Rule 21 diagnostic: std::min_element, std::max_element
 #include <cfloat>     // FLT_MAX
 #include <cstdio>     // fprintf, snprintf
+#include <atomic>
 
 
 namespace {
@@ -62,6 +63,45 @@ static_assert(GRIM::HyperParameters::SOFTMAX_TEMPERATURE == 1.0f,
         throw std::runtime_error(msg); \
     } \
 } while(0)
+
+#define CUBLAS_CHECK(call) do { \
+    cublasStatus_t status = (call); \
+    if (status != CUBLAS_STATUS_SUCCESS) { \
+        char msg[512]; \
+        snprintf(msg, sizeof(msg), "cuBLAS ERROR at %s:%d - %s: status=%d", \
+                 __FILE__, __LINE__, #call, static_cast<int>(status)); \
+        throw std::runtime_error(msg); \
+    } \
+} while(0)
+
+namespace {
+
+std::atomic<uint64_t> g_encoder_forward_counter{0};
+
+uint64_t mixEncoderForwardSeed(uint64_t training_step, uint64_t forward_nonce) {
+    uint64_t x = (training_step + 1ULL) * 0x9E3779B97F4A7C15ULL;
+    x ^= forward_nonce + 0xBF58476D1CE4E5B9ULL + (x << 6) + (x >> 2);
+    return x;
+}
+
+void validateLayerScaleGamma(const Tensor& gamma, const char* name, int d_model, const char* context) {
+    if (!gamma.data) {
+        throw std::runtime_error(std::string(context) + ": " + name + " is NULL while LayerScale is enabled");
+    }
+    const std::string shape_context = std::string(context) + " " + name;
+    gamma.shape.require(shape_context.c_str());
+    if (!gamma.shape.is_2d_layout()) {
+        throw std::runtime_error(std::string(context) + ": " + name + " must be a 2D [1,d_model] gamma vector");
+    }
+    const auto dims = gamma.shape.as_2d();
+    if (dims.rows != 1 || dims.cols != d_model) {
+        throw std::runtime_error(std::string(context) + ": " + name + " must have shape [1,d_model]. expected=[1," +
+                                 std::to_string(d_model) + "] got=[" + std::to_string(dims.rows) + "," +
+                                 std::to_string(dims.cols) + "]");
+    }
+}
+
+}  // anonymous namespace
 
 
 
@@ -134,11 +174,7 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
         const int threads = 256;
         const int blocks = (count + threads - 1) / threads;
         kernel_encoding_fill_ones<<<blocks, threads, 0, stream>>>(t.data, count);
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            throw std::runtime_error("EncodingLayer::allocateWeights fillOnes: CUDA error: "
-                                     + std::string(cudaGetErrorString(err)));
-        }
+        CUDA_CHECK(cudaPeekAtLastError());
     };
 
     auto fillValue = [stream](Tensor& t, float value, const char* context) {
@@ -146,11 +182,8 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
         const int threads = 256;
         const int blocks = (count + threads - 1) / threads;
         kernel_encoding_fill_value<<<blocks, threads, 0, stream>>>(t.data, count, value);
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            throw std::runtime_error(std::string(context) + ": CUDA error: "
-                                     + std::string(cudaGetErrorString(err)));
-        }
+        (void)context;
+        CUDA_CHECK(cudaPeekAtLastError());
     };
     
     //==================================================//
@@ -212,16 +245,17 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     //  LayerScale (Issue #109) — learnable per-channel gamma vectors [1, d_model]
     //==================================================//
     if (hp.use_layer_scale) {
-        layer_scale1_ = Tensor::zeros({d_model}, stream, "enc_layer_scale1_own");
+        layer_scale1_ = Tensor::zeros({1, d_model}, stream, "enc_layer_scale1_own");
         layer_scale1_.requires_grad_();
         layer_scale1_.ensure_grad();
         fillValue(layer_scale1_, hp.layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale1");
         
-        layer_scale2_ = Tensor::zeros({d_model}, stream, "enc_layer_scale2_own");
+        layer_scale2_ = Tensor::zeros({1, d_model}, stream, "enc_layer_scale2_own");
         layer_scale2_.requires_grad_();
         layer_scale2_.ensure_grad();
         fillValue(layer_scale2_, hp.layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale2");
     }
+    CUDA_CHECK(cudaStreamSynchronize(stream));
     
     weights_ready_ = true;
     
@@ -336,6 +370,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if (!cublas_handle) {
         throw std::runtime_error("EncodingLayer::forward: cublas_handle is NULL");
     }
+    CUBLAS_CHECK(cublasSetStream(cublas_handle, stream));
     input.shape.require("EncodingLayer::forward input");
     if (!input.shape.is_2d_layout()) {
         throw std::runtime_error("EncodingLayer::forward: input must be a 2D [total_tokens,d_model] tensor");
@@ -385,6 +420,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         fprintf(stderr, "[EncoderFwd] validated: batch=%d heads=%d kv_heads=%d head_dim=%d\n", 
                 payload.batch_size, hp.num_heads, hp.num_kv_heads, hp.head_dim);
     }
+    const uint64_t forward_nonce = g_encoder_forward_counter.fetch_add(1, std::memory_order_relaxed) + 1ULL;
+    const uint64_t dropout_step_seed = mixEncoderForwardSeed(training_step, forward_nonce);
     
     //--------------------------------------------------
     // 1. RMSNorm1: input -> ln1_out
@@ -419,7 +456,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         *pos_encoding_,
         stream,
         cublas_handle,
-        training_step,
+        dropout_step_seed,
         dropout_enabled,
         layer_idx
     };
@@ -436,7 +473,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //     Dropout applied BEFORE LayerScale and residual add.
     //--------------------------------------------------
     if (hp.dropout_rate > 0.0f && dropout_enabled) {
-        const uint64_t attn_proj_dropout_seed = training_step * 2654435761ULL + 100 + layer_idx;
+        const uint64_t attn_proj_dropout_seed = dropout_step_seed * 2654435761ULL + 100 + layer_idx;
         const uint64_t attn_proj_dropout_mask_stream = 0x0001000000000000ULL + static_cast<uint64_t>(layer_idx);
         intermediates.proj_out = autograd::dropout(intermediates.proj_out, hp.dropout_rate,
                                                    attn_proj_dropout_seed, true, stream,
@@ -452,24 +489,11 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1...\n");
     
     // Issue #109: LayerScale gating for attention sublayer
-    Tensor scaled_proj;
     const Tensor* proj_for_residual = &intermediates.proj_out;
     if (hp.use_layer_scale) {
-        if (!layer_scale1_.data) {
-            throw std::runtime_error("EncodingLayer::forward: use_layer_scale=true but layer_scale1_ is NULL");
-        }
-        layer_scale1_.shape.require("EncodingLayer::forward layer_scale1_");
-        if (!layer_scale1_.shape.is_2d_layout()) {
-            throw std::runtime_error("EncodingLayer::forward: layer_scale1_ must be a 2D [1,d_model] gamma vector");
-        }
-        const auto ls1_dims = layer_scale1_.shape.as_2d();
-        if (ls1_dims.rows != 1 || ls1_dims.cols != hp.d_model) {
-            throw std::runtime_error("EncodingLayer::forward: layer_scale1_ must have shape [1,d_model]. expected=[1," +
-                                     std::to_string(hp.d_model) + "] got=[" + std::to_string(ls1_dims.rows) + "," +
-                                     std::to_string(ls1_dims.cols) + "]");
-        }
-        scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream);
-        proj_for_residual = &scaled_proj;
+        validateLayerScaleGamma(layer_scale1_, "layer_scale1_", hp.d_model, "EncodingLayer::forward");
+        intermediates.scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream);
+        proj_for_residual = &intermediates.scaled_proj;
     }
     
     // ========================================================================
@@ -534,7 +558,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
     intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates,
                                           stream, cublas_handle,
-                                          training_step, dropout_enabled, layer_idx);
+                                          dropout_step_seed, dropout_enabled, layer_idx);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
     //--------------------------------------------------
@@ -543,7 +567,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //     Dropout applied BEFORE LayerScale and residual add.
     //--------------------------------------------------
     if (hp.dropout_rate > 0.0f && dropout_enabled) {
-        const uint64_t ffn_dropout_seed = training_step * 2654435761ULL + 200 + layer_idx;
+        const uint64_t ffn_dropout_seed = dropout_step_seed * 2654435761ULL + 200 + layer_idx;
         const uint64_t ffn_dropout_mask_stream = 0x0002000000000000ULL + static_cast<uint64_t>(layer_idx);
         intermediates.ffn_out = autograd::dropout(intermediates.ffn_out, hp.dropout_rate,
                                                   ffn_dropout_seed, true, stream,
@@ -560,24 +584,11 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2...\n");
     
     // Issue #109: LayerScale gating for FFN sublayer
-    Tensor scaled_ffn;
     const Tensor* ffn_for_residual = &intermediates.ffn_out;
     if (hp.use_layer_scale) {
-        if (!layer_scale2_.data) {
-            throw std::runtime_error("EncodingLayer::forward: use_layer_scale=true but layer_scale2_ is NULL");
-        }
-        layer_scale2_.shape.require("EncodingLayer::forward layer_scale2_");
-        if (!layer_scale2_.shape.is_2d_layout()) {
-            throw std::runtime_error("EncodingLayer::forward: layer_scale2_ must be a 2D [1,d_model] gamma vector");
-        }
-        const auto ls2_dims = layer_scale2_.shape.as_2d();
-        if (ls2_dims.rows != 1 || ls2_dims.cols != hp.d_model) {
-            throw std::runtime_error("EncodingLayer::forward: layer_scale2_ must have shape [1,d_model]. expected=[1," +
-                                     std::to_string(hp.d_model) + "] got=[" + std::to_string(ls2_dims.rows) + "," +
-                                     std::to_string(ls2_dims.cols) + "]");
-        }
-        scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream);
-        ffn_for_residual = &scaled_ffn;
+        validateLayerScaleGamma(layer_scale2_, "layer_scale2_", hp.d_model, "EncodingLayer::forward");
+        intermediates.scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream);
+        ffn_for_residual = &intermediates.scaled_ffn;
     }
     
     // ========================================================================
@@ -613,12 +624,13 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // in AutogradTraining.cu hasn't run yet. Logged ρ values will be slightly higher than
     // what the NEXT layer actually receives as input.
     if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
-        cudaStreamSynchronize(stream);  // Ensure data is ready
+        CUDA_CHECK(cudaStreamSynchronize(stream));  // Ensure data is ready
         
         // Copy layer output to host for analysis
         const int output_size = payload.total_tokens * hp.d_model;
         std::vector<float> h_output(output_size);
-        cudaMemcpy(h_output.data(), intermediates.output.data, output_size * sizeof(float), cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(h_output.data(), intermediates.output.data,
+                              output_size * sizeof(float), cudaMemcpyDeviceToHost));
         
         // Compute row RMS
         std::vector<float> row_rms(payload.total_tokens);
@@ -660,22 +672,10 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
             float rms = 0.0f;
         };
         auto layerScaleStats = [&hp](Tensor& gamma, const char* name) -> LayerScaleDiagStats {
-            if (!gamma.data) {
-                throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " is NULL while LayerScale is enabled");
-            }
-            const std::string shape_context = std::string("EncodingLayer::forward diagnostics ") + name;
-            gamma.shape.require(shape_context.c_str());
-            if (!gamma.shape.is_2d_layout()) {
-                throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " must be a 2D [1,d_model] gamma vector");
-            }
-            const auto gamma_dims = gamma.shape.as_2d();
-            if (gamma_dims.rows != 1 || gamma_dims.cols != hp.d_model) {
-                throw std::runtime_error(std::string("EncodingLayer::forward diagnostics: ") + name + " must have shape [1,d_model]. expected=[1," +
-                                         std::to_string(hp.d_model) + "] got=[" + std::to_string(gamma_dims.rows) + "," +
-                                         std::to_string(gamma_dims.cols) + "]");
-            }
+            validateLayerScaleGamma(gamma, name, hp.d_model, "EncodingLayer::forward diagnostics");
             std::vector<float> h_gamma(static_cast<size_t>(hp.d_model));
-            cudaMemcpy(h_gamma.data(), gamma.data, h_gamma.size() * sizeof(float), cudaMemcpyDeviceToHost);
+            CUDA_CHECK(cudaMemcpy(h_gamma.data(), gamma.data,
+                                  h_gamma.size() * sizeof(float), cudaMemcpyDeviceToHost));
             LayerScaleDiagStats stats{};
             stats.min = FLT_MAX;
             stats.max = -FLT_MAX;
@@ -723,6 +723,9 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     
     // Return a non-owning view of the output
     // The actual Tensor lives in intermediates and stays alive until backward completes
+    if (!intermediates.output.data || !intermediates.output.grad_fn) {
+        throw std::runtime_error("EncodingLayer::forward: intermediates.output must own data and grad_fn before returning view");
+    }
     Tensor result = Tensor::from_ptr(
         intermediates.output.data,
         intermediates.output.shape,

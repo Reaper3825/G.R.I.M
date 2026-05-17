@@ -200,7 +200,7 @@ private:
     // Attention weights (Tensor with requires_grad=true)
     // W_qkv layout: [W_q: d_model x d_model][W_k: kv_dim x d_model][W_v: kv_dim x d_model]
     Tensor W_qkv_;         // [(d_model + 2*kv_dim), d_model]
-    Tensor b_qkv_;         // [d_model + 2*kv_dim]
+    Tensor b_qkv_;         // [qkv_dim] = [d_model + 2*kv_dim]
     Tensor W_o_;           // [d_model, d_model]
     Tensor b_o_;           // [d_model]
     
