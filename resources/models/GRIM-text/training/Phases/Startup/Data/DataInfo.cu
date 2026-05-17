@@ -54,6 +54,10 @@ std::unique_ptr<GRIM::Tokenizer::UniByte> initializeTokenizer(
 
     auto tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
     (void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, *tokenizer);
+    logger.log("Initializing tokenizer CUDA Viterbi runtime...");
+    if (!tokenizer->initGPU()) {
+        throw std::runtime_error("initializeTokenizer: UniByte::initGPU() returned false after artifact load");
+    }
 
     return tokenizer;
 }

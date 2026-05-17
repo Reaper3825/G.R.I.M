@@ -104,6 +104,7 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 - `vocab.bin` contains a serialized record count for file I/O plus a token-space consistency check. Phase 1 startup does not use `vocab.bin` to choose final model vocab size.
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic/header read, validation, and write helpers. Do not duplicate header structs or magic/version checks in loaders, diagnostics, or subprocess tools.
 - `Shared/TokenizerArtifacts/TokenizerArtifactBundle.*` owns the cache-pair load/save functions (`vocab.bin` + `training_data.grmt`). Those functions consume `TokenizerHP` directly; data prep must accept or rebuild that pair as a unit and must not reuse a lone vocab with a missing/stale GRMT.
+- Phase 1 startup loads the tokenizer artifact bundle and then immediately calls `UniByte::initGPU()` before Phase 2. Training data rows are already tokenized, but sample inference and diagnostics may tokenize fresh text; they must not be the first code path to discover that the loaded trie was never uploaded.
 - `Shared/TokenizerArtifacts/GrmtCorpusIO.*` owns GRMT row save/load. Runtime loaders and diagnostics must use its RAII reader/writer instead of open-coded seeks through the row layout.
 - `Shared/TokenizerArtifacts/VocabArtifactIO.*` is the bundle-internal KTMG read/write helper; do not call it as an independent tokenizer artifact path.
 - Text vocab files are human-readable exports only. Binary KTMG is the only vocab load path.

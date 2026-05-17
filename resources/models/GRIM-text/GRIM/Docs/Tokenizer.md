@@ -26,6 +26,7 @@ Use `TokenLayout.hpp` / `Byte.hpp` constants and layout helpers for range checks
 - `TokenizerArtifacts/VocabArtifactIO.*` stores a `serialized_record_count` in `vocab.bin` so the vocab reader knows how many records to read. That field is not a vocab size.
 - `DataLoader.cu` writes `UniByte::vocabSize()` into the `.grmt` header when it encodes training data.
 - Phase 1 startup reads final training vocab size from the `.grmt` header and passes that value into model allocation. It must not derive training vocab size from `ai_config.json`, `vocab.bin`, or tokenizer internals.
+- Phase 1 startup must call `UniByte::initGPU()` immediately after loading the tokenizer artifact bundle. Training batches consume pre-tokenized GRMT rows, but diagnostics and sample inference can still tokenize fresh prompts; those runtime paths require the loaded trie to be uploaded before Phase 2 begins.
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic, header layout, version validation, and header write helpers. Consumers must call `readHeaderOrThrow()` / `readHeaderStatus()` / `writeHeaderOrThrow()` instead of open-coding magic/version reads.
 - Learned-piece pruning belongs inside tokenizer training before save. Do not add a post-load/post-save cap API; that creates a second vocab-size authority and can desynchronize `.grmt`, `vocab.bin`, tokenizer IDs, and model embeddings.
 
