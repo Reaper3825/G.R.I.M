@@ -14,7 +14,7 @@
 #include <utility>
 
 namespace {
-    constexpr bool kEnableAttentionStepLogs = false;
+    constexpr bool kEnableAttentionStepLogs = true;
 
     void validateWeights(const GRIM::Attention::EncoderSelfAttentionWeights& weights,
                          const GRIM::HyperParameters::EncoderSelfAttentionHP& hp) {

@@ -495,7 +495,7 @@
                 "typical_p": 0.9
             },
             "gradient_accumulation_steps": 2,
-            "gradient_clip": 0.001,
+            "gradient_clip": 1.00,
             "guess_aux": {
                 "enabled": false
             },
