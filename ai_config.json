@@ -556,7 +556,7 @@
                 "stderr_enabled": true
             },
             "logit_update_trace": {
-                "enabled": true
+                "enabled": false
             },
             "loss": {
                 "class_balanced": {

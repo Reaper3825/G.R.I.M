@@ -25,6 +25,8 @@ Do **not** route GRIM training through the direct `compute_dq_dk_dv` launch shap
 
 and it propagated downstream into `grad_v_fp32`, `SplitQKV.merge grad_V_bhsd`, then `BiasAdd.apply grad_bias_accum` / qkv bias groups.
 
+Validation signal after switching GRIM to the seqK-parallel contract: Bridges-2 session `1779067735859356347` (`w008.ib.bridges2.psc.edu`, `2026-05-17 21:28 EDT`) no longer showed the explosion. In `train_latest.err`, representative registered gradient checks stayed around `preclip_registered_global≈4.9e-5..7.0e-5`, `enc_rms_pre≈4.9e-5..7.0e-5`, `clipped=NO`, with top groups at ordinary `~1e-4..6e-4` RMS instead of qkv bias at `5.0966443327488e13` RMS. In the matching `latest_run.log`, 312 FlashAttention backward samples showed `dK`/`dV` at ordinary `~1e-7` RMS and the old `SDPA.apply dv_bf16_post_bwd≈1e10` / qkv-bias `5.0966443327488e13` signatures were absent.
+
 ## Issue #84 — `dot_do_o` preprocessing
 `flash_bwd_dot_do_o_kernel` MUST run **before** the seqK-parallel main backward kernel. Without it, `dsoftmax_sum` is garbage for most m_blocks → dQ/dK explosion.
 
