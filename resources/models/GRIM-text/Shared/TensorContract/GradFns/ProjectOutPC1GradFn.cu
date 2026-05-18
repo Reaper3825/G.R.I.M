@@ -186,7 +186,7 @@ void ProjectOutPC1GradFn::capture_input(Tensor& input, int rows, int cols,
     }
 }
 
-void ProjectOutPC1GradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ProjectOutPC1GradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     if (applied) return;
     if (!input_requires_grad) return;
     if (!g_saved) throw std::runtime_error("ProjectOutPC1GradFn::apply: g_saved is NULL - g direction was freed before backward");

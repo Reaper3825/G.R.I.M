@@ -69,6 +69,20 @@ struct LearningRateScheduleInputs {
     bool cosine_warm_restarts = false;
 };
 
+enum class OptimizerKind {
+    ADAMW,
+    RADAMW
+};
+
+struct OptimizerUpdateHP {
+    OptimizerKind kind = OptimizerKind::ADAMW;
+    float weight_decay = 0.0f;
+    float beta1 = 0.0f;
+    float beta2 = 0.0f;
+    float epsilon = 0.0f;
+    int embedding_freeze_after_step = -1;
+};
+
 struct GradientClippingHP {
     bool enabled = false;
     float configured_clip_norm = 0.0f;
@@ -649,6 +663,49 @@ inline LearningRateScheduleInputs learningRateScheduleInputs(
     inputs.cosine_decay_enabled = hp.cosine_decay_enabled;
     inputs.cosine_warm_restarts = hp.cosine_warm_restarts;
     return inputs;
+}
+
+inline OptimizerUpdateHP optimizerUpdateHP(
+    const ::GRIM::Config::TrainingHyperparameters& hp)
+{
+    OptimizerUpdateHP view;
+    if (hp.optimizer_kind == "adamw") {
+        view.kind = OptimizerKind::ADAMW;
+    } else if (hp.optimizer_kind == "radamw") {
+        view.kind = OptimizerKind::RADAMW;
+    } else {
+        throw std::runtime_error("optimizerUpdateHP: optimizer_kind must be 'adamw' or 'radamw', got '" +
+                                 hp.optimizer_kind + "'");
+    }
+
+    if (!std::isfinite(hp.weight_decay) || hp.weight_decay < 0.0f) {
+        throw std::runtime_error("optimizerUpdateHP: weight_decay must be finite and >= 0, got " +
+                                 std::to_string(hp.weight_decay));
+    }
+    if (!(hp.optimizer_beta1 > 0.0f && hp.optimizer_beta1 < 1.0f)) {
+        throw std::runtime_error("optimizerUpdateHP: optimizer_beta1 must be in (0,1), got " +
+                                 std::to_string(hp.optimizer_beta1));
+    }
+    if (!(hp.optimizer_beta2 > 0.0f && hp.optimizer_beta2 < 1.0f)) {
+        throw std::runtime_error("optimizerUpdateHP: optimizer_beta2 must be in (0,1), got " +
+                                 std::to_string(hp.optimizer_beta2));
+    }
+    requirePositiveFiniteGroupingValue(hp.optimizer_epsilon,
+                                       "optimizer_epsilon",
+                                       "optimizerUpdateHP");
+    if (hp.embedding_freeze_enabled && hp.embedding_freeze_after_step < 0) {
+        throw std::runtime_error("optimizerUpdateHP: embedding_freeze_enabled=true but embedding_freeze_after_step=" +
+                                 std::to_string(hp.embedding_freeze_after_step));
+    }
+
+    view.weight_decay = hp.weight_decay;
+    view.beta1 = hp.optimizer_beta1;
+    view.beta2 = hp.optimizer_beta2;
+    view.epsilon = hp.optimizer_epsilon;
+    view.embedding_freeze_after_step = hp.embedding_freeze_enabled
+        ? hp.embedding_freeze_after_step
+        : -1;
+    return view;
 }
 
 inline GradientClippingHP gradientClippingHP(

@@ -102,7 +102,7 @@ void ConcatGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
     }
 }
 
-void ConcatGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ConcatGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("concat", this);
     if (applied) return;
     applied = true;

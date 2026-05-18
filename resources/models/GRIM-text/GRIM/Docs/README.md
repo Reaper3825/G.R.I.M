@@ -8,6 +8,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 |-----|-------|
 | [Build.md](Build.md) | Build commands, CMake cache traps |
 | [TrainingArchitecture.md](TrainingArchitecture.md) | Three-phase training entry/orchestration |
+| [Optimizer.md](Optimizer.md) | Optimizer Window boundary and dispatch ownership |
 | [TrainingState.md](TrainingState.md) | Centralized GPU resource ownership |
 | [InferenceBoundary.md](InferenceBoundary.md) | Inference/training forward split TODO |
 | [Autograd.md](Autograd.md) | TensorContract, GradFn, intermediates lifetime |

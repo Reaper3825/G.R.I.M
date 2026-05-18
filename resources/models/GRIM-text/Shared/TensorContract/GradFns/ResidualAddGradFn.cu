@@ -72,7 +72,7 @@ void ResidualAddGradFn::capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream
     }
 }
 
-void ResidualAddGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ResidualAddGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("residual_add", this);
 
     if (applied) {

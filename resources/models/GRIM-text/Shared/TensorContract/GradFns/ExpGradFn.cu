@@ -124,7 +124,7 @@ void ExpGradFn::save_output(const float* output_data, size_t size) {
     cached_size = size;
 }
 
-void ExpGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ExpGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("exp", this);
     if (applied) return;
     applied = true;

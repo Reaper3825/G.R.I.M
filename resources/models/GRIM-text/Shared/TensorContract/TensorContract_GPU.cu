@@ -10,6 +10,7 @@
 #include "../CudaAllocUtils.hpp"
 #include "../TensorConversion/TensorConversion.hpp"  // Layout conversions - single source of truth
 #include "../LogRecorder/LogRecorder.hpp"
+#include "../LogRecorder/BatchLogTape.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
 #include <cuda_runtime.h>
@@ -24,6 +25,8 @@
 #include <cstdint>
 #include <cassert>
 #include <algorithm>
+#include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <vector>
 #include <atomic>
@@ -126,6 +129,186 @@ std::string getCurrentGradFnContext() {
 // DEBUG FLAG: Set to true to sync after EVERY kernel to find which one crashes
 // WARNING: This is VERY slow (~10-50x) — only enable for debugging elusive CUDA errors
 static bool g_debug_sync_after_every_kernel = false;
+
+struct TensorContractGradFlowBlockStats {
+    float sum_sq;
+    float max_abs;
+    int nan_count;
+    int inf_count;
+};
+
+__global__ void tensorContractApplyGradFlowStatsKernel(
+    const float* data,
+    std::size_t count,
+    TensorContractGradFlowBlockStats* partials
+) {
+    __shared__ float s_sum_sq[256];
+    __shared__ float s_max_abs[256];
+    __shared__ int s_nan[256];
+    __shared__ int s_inf[256];
+
+    const int tid = threadIdx.x;
+    const std::size_t start = static_cast<std::size_t>(blockIdx.x) * blockDim.x + tid;
+    const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+
+    float local_sum_sq = 0.0f;
+    float local_max_abs = 0.0f;
+    int local_nan = 0;
+    int local_inf = 0;
+
+    for (std::size_t i = start; i < count; i += stride) {
+        const float v = data[i];
+        if (isnan(v)) {
+            ++local_nan;
+        } else if (isinf(v)) {
+            ++local_inf;
+        } else {
+            const float av = fabsf(v);
+            local_sum_sq += v * v;
+            local_max_abs = fmaxf(local_max_abs, av);
+        }
+    }
+
+    s_sum_sq[tid] = local_sum_sq;
+    s_max_abs[tid] = local_max_abs;
+    s_nan[tid] = local_nan;
+    s_inf[tid] = local_inf;
+    __syncthreads();
+
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (tid < offset) {
+            s_sum_sq[tid] += s_sum_sq[tid + offset];
+            s_max_abs[tid] = fmaxf(s_max_abs[tid], s_max_abs[tid + offset]);
+            s_nan[tid] += s_nan[tid + offset];
+            s_inf[tid] += s_inf[tid + offset];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        partials[blockIdx.x] = {s_sum_sq[0], s_max_abs[0], s_nan[0], s_inf[0]};
+    }
+}
+
+float tensorContractGradFlowThreshold() {
+    float threshold = 1000.0f;
+    if (const char* raw = std::getenv("GRIM_GRADFLOW_THRESHOLD")) {
+        const float parsed = std::atof(raw);
+        if (std::isfinite(parsed) && parsed > 0.0f) {
+            threshold = parsed;
+        }
+    }
+    return threshold;
+}
+
+void logTensorContractApplyGradOutputStats(const GRIM::GradFn& grad_fn,
+                                           const GRIM::Tensor& grad_output,
+                                           cudaStream_t stream) {
+    auto* tape = GRIM::Logging::getGlobalTape();
+    const bool debug_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
+    const bool trace_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Trace);
+    if (!debug_enabled) {
+        return;
+    }
+    const char* op_name = grad_fn.op_name;
+    if (!op_name || !*op_name) {
+        throw std::runtime_error("TensorContract GradFn::apply gradflow: op_name is NULL or empty");
+    }
+    if (!stream) {
+        throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: stream is NULL for op=") + op_name);
+    }
+    if (!grad_output.data) {
+        throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: grad_output.data is NULL for op=") + op_name);
+    }
+    const std::size_t count = grad_output.numel();
+    if (count == 0) {
+        throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: grad_output count is zero for op=") + op_name);
+    }
+
+    constexpr int kThreads = 256;
+    constexpr int kMaxBlocks = 4096;
+    const int blocks_needed = static_cast<int>((count + kThreads - 1) / kThreads);
+    const int blocks = std::max(1, std::min(kMaxBlocks, blocks_needed));
+
+    TensorContractGradFlowBlockStats* d_partials = nullptr;
+    GRIM::CudaAlloc::cudaMallocOrThrow(
+        reinterpret_cast<void**>(&d_partials),
+        static_cast<std::size_t>(blocks) * sizeof(TensorContractGradFlowBlockStats),
+        "TensorContract_apply_gradflow_partials");
+
+    tensorContractApplyGradFlowStatsKernel<<<blocks, kThreads, 0, stream>>>(
+        grad_output.data, count, d_partials);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        cudaFree(d_partials);
+        throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: stats kernel failed for op=") +
+                                 op_name + ": " + cudaGetErrorString(err));
+    }
+
+    std::vector<TensorContractGradFlowBlockStats> h_partials(static_cast<std::size_t>(blocks));
+    err = cudaMemcpyAsync(h_partials.data(), d_partials,
+                          static_cast<std::size_t>(blocks) * sizeof(TensorContractGradFlowBlockStats),
+                          cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        cudaFree(d_partials);
+        throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: partial copy failed for op=") +
+                                 op_name + ": " + cudaGetErrorString(err));
+    }
+
+    float first_values[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const std::size_t first_count = std::min<std::size_t>(count, 4);
+    err = cudaMemcpyAsync(first_values, grad_output.data, first_count * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        cudaFree(d_partials);
+        throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: first-value copy failed for op=") +
+                                 op_name + ": " + cudaGetErrorString(err));
+    }
+
+    err = cudaStreamSynchronize(stream);
+    cudaFree(d_partials);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("TensorContract GradFn::apply gradflow: stream synchronization failed for op=") +
+                                 op_name + ": " + cudaGetErrorString(err));
+    }
+
+    double sum_sq = 0.0;
+    float max_abs = 0.0f;
+    int nan_count = 0;
+    int inf_count = 0;
+    for (const auto& partial : h_partials) {
+        sum_sq += static_cast<double>(partial.sum_sq);
+        max_abs = std::max(max_abs, partial.max_abs);
+        nan_count += partial.nan_count;
+        inf_count += partial.inf_count;
+    }
+
+    const std::size_t finite_count = count - static_cast<std::size_t>(nan_count + inf_count);
+    const float rms = finite_count > 0
+        ? static_cast<float>(std::sqrt(sum_sq / static_cast<double>(finite_count)))
+        : std::numeric_limits<float>::quiet_NaN();
+
+    const float threshold = tensorContractGradFlowThreshold();
+    const bool anomalous = nan_count > 0 || inf_count > 0 || max_abs >= threshold || rms >= threshold;
+    if (!trace_enabled && !anomalous) {
+        return;
+    }
+
+    std::fprintf(stderr,
+                 "[GRADFLOW] TensorContract.apply op=%s gradfn=%p count=%zu finite=%zu rms=%.10e max_abs=%.10e nan=%d inf=%d first=[%.10e,%.10e,%.10e,%.10e]\n",
+                 op_name,
+                 static_cast<const void*>(&grad_fn),
+                 count,
+                 finite_count,
+                 rms,
+                 max_abs,
+                 nan_count,
+                 inf_count,
+                 first_values[0],
+                 first_values[1],
+                 first_values[2],
+                 first_values[3]);
+    std::fflush(stderr);
+}
 
 void trackKernelLaunch(const char* kernel_name, cudaStream_t stream) {
     ++g_kernel_launch_count;
@@ -562,6 +745,11 @@ bool debug_check_finite(const TensorView& tensor, cudaStream_t stream) {
 //======================================================//
 
 namespace GRIM {
+
+void GradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+    logTensorContractApplyGradOutputStats(*this, grad_output, stream);
+    apply_impl(grad_output, stream);
+}
 
 //======================================================//
 //  CUDA Kernels for Tensor Operations

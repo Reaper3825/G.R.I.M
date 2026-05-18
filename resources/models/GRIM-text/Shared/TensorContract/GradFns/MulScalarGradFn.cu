@@ -117,7 +117,7 @@ void MulScalarGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     }
 }
 
-void MulScalarGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void MulScalarGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("mul_scalar", this);
     if (applied) return;
     applied = true;

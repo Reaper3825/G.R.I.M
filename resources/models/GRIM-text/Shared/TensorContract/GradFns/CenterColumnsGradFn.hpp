@@ -36,7 +36,7 @@ struct CenterColumnsGradFn : public GradFn {
     void capture_input(Tensor& input, int cols, int rows, int group_rows,
                        const int* d_sequence_lengths, int groups,
                        cudaStream_t stream);
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

@@ -193,7 +193,7 @@ void LayerScaleGradFn::capture_inputs(Tensor& input, Tensor& scale_param, cudaSt
     }
 }
 
-void LayerScaleGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void LayerScaleGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("layer_scale", this);
     if (applied) {
         AG_TRACE("[LayerScaleGradFn] apply() SKIPPED (already applied)\n");

@@ -251,6 +251,7 @@ target_link_libraries(grim_flash_attention PUBLIC
 add_library(grim_cuda_kernels OBJECT
     # QKV projector wrappers deleted; autograd attention calls TensorConversion directly.
     # Old Embedding_GPU.cu (dead code) removed. New Embedding_GPU.cu in grim_training_kernels (Pattern B layer).
+    ../../Shared/Optimizers/OptimizerUpdate_GPU.cu
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
     ../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.cu
     ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)

@@ -29,7 +29,7 @@ struct ScaleScalarGradFn : public GradFn {
     ScaleScalarGradFn();
     ~ScaleScalarGradFn() override = default;
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
 };
 
 }  // namespace autograd

@@ -104,7 +104,7 @@ void CenterRowsGradFn::capture_input(Tensor& input, int dim, int rows, cudaStrea
              element_count, (void*)input_grad, (int)input_is_leaf);
 }
 
-void CenterRowsGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void CenterRowsGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     if (applied) return;
     if (!input_requires_grad) return;
     if (!input_grad) throw std::runtime_error("CenterRowsGradFn::apply: input_grad is NULL - capture_input() must be called first");

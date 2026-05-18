@@ -270,7 +270,7 @@ void CenterColumnsGradFn::capture_input(Tensor& input, int cols, int rows, int g
              element_count, (void*)input_grad);
 }
 
-void CenterColumnsGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void CenterColumnsGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     if (applied) return;
     if (!input_requires_grad) return;
     if (!input_grad) throw std::runtime_error("CenterColumnsGradFn::apply: input_grad is NULL - capture_input() must be called first");

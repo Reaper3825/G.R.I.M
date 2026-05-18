@@ -730,12 +730,16 @@ struct GradFn {
     virtual ~GradFn() = default;
     
     /**
-     * @brief Execute the backward pass for this node
-     * 
+     * @brief Execute the backward pass for this node.
+     *
+     * This non-virtual wrapper is the single TensorContract boundary for
+     * per-GradFn gradient-flow diagnostics. Concrete GradFns implement
+     * apply_impl() with the operator-specific backward equation.
+     *
      * @param grad_output Gradient of loss with respect to this operation's output
      * @param stream CUDA stream for async execution
      */
-    virtual void apply(const Tensor& grad_output, cudaStream_t stream) = 0;
+    void apply(const Tensor& grad_output, cudaStream_t stream);
     
     /**
      * @brief Release saved tensors (called after backward to free memory)
@@ -746,6 +750,9 @@ struct GradFn {
         saved_tensors.clear();
         saved_views.clear();
     }
+
+protected:
+    virtual void apply_impl(const Tensor& grad_output, cudaStream_t stream) = 0;
 };
 
 //======================================================//

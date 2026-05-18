@@ -169,7 +169,7 @@ void GeluGradFn::set_cache_copy(const float* external_cache, size_t size, cudaSt
     AG_TRACE("[GeluGradFn] Copied cache: %zu floats to %p\n", size, (void*)cached_input);
 }
 
-void GeluGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void GeluGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("gelu", this);
 
     if (applied) return;

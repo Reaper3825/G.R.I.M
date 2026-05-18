@@ -189,7 +189,7 @@ void LogSoftmaxGradFn::save(const float* log_softmax_output, int tokens, int d, 
     }
 }
 
-void LogSoftmaxGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void LogSoftmaxGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("log_softmax", this);
 
     if (applied) return;

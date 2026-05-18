@@ -17,8 +17,7 @@
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
-#include "../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"  // launchAdamWStep, resetAdamWMoments, scaleAdamWMoments
-#include "../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.hpp"  // launchRAdamWStep — selectable via training.config.optimizer.kind
+#include "../../Shared/Optimizers/OptimizerUpdate_GPU.hpp"  // launchOptimizerUpdate
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; transitively pulls in control/ai_config_paths.hpp (resolveGrimRoot, etc.)
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // CoreRunHP / LearningRateScheduleInputs — single source of truth for grouped HP reads
 #include <iostream>
@@ -347,6 +346,7 @@ BatchResult processBatch(
     // should_step block). Clipping ONCE on the averaged gradients matches
     // PyTorch; the old per-slot clipping crushed text gradients M×.
     const auto clipping_hp = ::GRIM::HyperParameters::gradientClippingHP(hp);
+    const auto optimizer_update_hp = ::GRIM::HyperParameters::optimizerUpdateHP(hp);
     const float effective_per_token_limit = clipping_hp.effective_per_token_limit;
     const bool clipping_enabled = clipping_hp.enabled;
 
@@ -432,41 +432,14 @@ BatchResult processBatch(
         // ════════════════════════════════════════════════════════════════════
         GRIM::Diagnostics::runTieVerifyDiagnostic(ctx, batch_idx);
 
-        const int emb_freeze_step = ctx.config.hyperparameters.embedding_freeze_enabled
-            ? ctx.config.hyperparameters.embedding_freeze_after_step : -1;
-
-        if (emb_freeze_step > 0 && ctx.optimizer.optimizer_step.step == emb_freeze_step) {
-            if (ctx.config.hyperparameters.architecture.tie_embeddings) {
-                ctx.logging.logger->log("[EmbeddingFreeze] WARNING: embedding and LM head share weights. "
-                    "Exact config values are listed by ConfigDump. Freeze has no effect on tied weights.");
-            } else {
-                ctx.logging.logger->log("[EmbeddingFreeze] Embedding weights FROZEN at step "
-                    + std::to_string(emb_freeze_step) + " — no further embedding updates");
-            }
-        }
-
-        // Optimizer dispatch — single source of truth: ctx.config.hyperparameters
-        // (loaded from training.config.optimizer in ai_config.json). Rule 20:
-        // kind already validated at config load ("adamw" | "radamw" only).
-        const auto& opt_hp = ctx.config.hyperparameters;
-        if (opt_hp.optimizer_kind == "radamw") {
-            GRIM::launchRAdamWStep(ctx.model->parameterGroups(),
-                                   result.learning_rate,
-                                   opt_hp.weight_decay,
-                                   ctx.optimizer.optimizer_step.step,
-                                   opt_hp.optimizer_beta1,
-                                   opt_hp.optimizer_beta2,
-                                   opt_hp.optimizer_epsilon,
-                                   ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
-                                   emb_freeze_step);
-        } else {
-            GRIM::launchAdamWStep(ctx.model->parameterGroups(),
-                                  result.learning_rate,
-                                  opt_hp.weight_decay,
-                                  ctx.optimizer.optimizer_step.step,
-                                  ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
-                                  emb_freeze_step);
-        }
+        // Optimizer Window: Phase2 owns the accumulation-complete boundary;
+        // Shared/Optimizers owns configured optimizer dispatch. Phase2 only
+        // provides filled-window grads, LR, step, stream, and grouped HP.
+        GRIM::launchOptimizerUpdate(ctx.model->parameterGroups(),
+                                    optimizer_update_hp,
+                                    result.learning_rate,
+                                    ctx.optimizer.optimizer_step.step,
+                                    ctx.model->getTrainingState().stream_ctrl.getPrimaryStream());
 
         // Rule 20: post-optimizer weight NaN spot check. Stream ownership stays
         // in Phase2; the guard only inspects optimizer parameter groups.

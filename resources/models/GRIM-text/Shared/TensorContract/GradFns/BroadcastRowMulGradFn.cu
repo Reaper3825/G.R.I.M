@@ -129,7 +129,7 @@ void BroadcastRowMulGradFn::set_cache_refs(const float* scale_data, const float*
     cols = c;
 }
 
-void BroadcastRowMulGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void BroadcastRowMulGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("broadcast_row_mul", this);
     if (applied) return;
     applied = true;

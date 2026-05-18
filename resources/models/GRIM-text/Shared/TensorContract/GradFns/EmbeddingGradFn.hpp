@@ -62,7 +62,7 @@ struct EmbeddingGradFn : public GradFn {
     void save(const int* ids, int tokens, int d, bool copy_ids, cudaStream_t stream);
 
     /// Backward: scatter-add grad_output rows into weight_grad rows by token_id.
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
 
     /// Release saved device memory (token IDs if owned) and drop chain refs.
     void release_saved() override;

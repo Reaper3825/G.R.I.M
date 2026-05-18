@@ -527,7 +527,7 @@ void ReasoningHeadGradFn::capture_positions(const int* d_positions, int n_atoms,
     }
 }
 
-void ReasoningHeadGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ReasoningHeadGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("reasoning_head", this);
 
     if (applied) return;

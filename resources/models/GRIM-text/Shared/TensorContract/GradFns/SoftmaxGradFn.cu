@@ -168,7 +168,7 @@ void SoftmaxGradFn::save(const float* softmax_output, int tokens_, int dim_, flo
     cudaMemcpyAsync(saved_softmax, softmax_output, bytes, cudaMemcpyDeviceToDevice, stream);
 }
 
-void SoftmaxGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void SoftmaxGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("softmax", this);
     if (applied) return;
     applied = true;

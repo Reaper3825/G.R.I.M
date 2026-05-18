@@ -235,7 +235,7 @@ void RMSNormGradFn::set_cache_copy(const float* external_cache, size_t size, int
     AG_TRACE("[RMSNormGradFn] Copied cache: %zu floats to %p\n", size, (void*)cached_input);
 }
 
-void RMSNormGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void RMSNormGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("rms_norm", this);
 
     if (applied) {

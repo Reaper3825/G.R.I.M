@@ -844,7 +844,7 @@ struct FourOpMixGradFn : public GradFn {
         alloc_grad(p_op_t, grad_p_op, owned_grad_p_op, num_ops);
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
 
@@ -950,7 +950,7 @@ struct DivInvalidPenaltyGradFn : public GradFn {
         grad_p_op = owned_grad_p_op.get();
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
 
@@ -1054,7 +1054,7 @@ struct DivMagnitudePenaltyGradFn : public GradFn {
         }
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
         if (!v_out_requires_grad || !grad_v_out) return;
@@ -1246,7 +1246,7 @@ struct ArgReinforceLossGradFn : public GradFn {
         alloc_grad(p_arg2_t, grad_p_arg2, owned_grad_p_arg2, N);
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
 
@@ -1367,7 +1367,7 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         }
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
 
@@ -1484,7 +1484,7 @@ struct ReduceMeanGradFn : public GradFn {
         }
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
         if (!H_requires_grad) return;
@@ -1570,7 +1570,7 @@ struct RecordEncodeGradFn : public GradFn {
         b_scal_grad_ = b_scal.grad_data();
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
         int total = N_ * d_model_;
@@ -1642,7 +1642,7 @@ struct L1ScalarLossGradFn : public GradFn {
         }
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
         if (!a_requires_grad_ || !grad_a_) return;
@@ -1743,7 +1743,7 @@ struct GatedTraceUpdateGradFn : public GradFn {
         alloc_grad(gate_logits_t, grad_gate_logits, owned_grad_gate_logits, dm);
     }
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (applied) return;
         applied = true;
 

@@ -159,7 +159,7 @@ struct UpdateTraceMetrics {
 };
 
 /// Compute per-component update_rms by sampling Adam moment buffers.
-/// Call AFTER launchAdamWStep() on diagnostic-sync batches.
+/// Call AFTER launchOptimizerUpdate() on diagnostic-sync batches.
 /// Requires cudaStreamSynchronize() internally for small D2H copies.
 UpdateTraceMetrics computePerComponentUpdateTrace(
     const std::vector<GRIM::ParameterGroup>& groups,

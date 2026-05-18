@@ -7,6 +7,7 @@
 #include "../CudaAllocUtils.hpp"
 #include "../LogRecorder/BatchLogTape.hpp"
 #include "../LogRecorder/LogRecorder.hpp"
+#include "../VerboseLogging.hpp"
 
 #include <algorithm>
 #include <cfloat>
@@ -524,6 +525,9 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
                               const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
                               cudaStream_t stream,
                               int layer_idx) {
+    if (!GRIM::VerboseLogging::ENABLE_QKV_PROJECTION_EQUATION_LOGS) {
+        return;
+    }
     auto* tape = GRIM::Logging::getGlobalTape();
     if (!(tape && tape->accepts(GRIM::Logging::LogLevel::Debug)) || tape->skipThisPass()) {
         return;

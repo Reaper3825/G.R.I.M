@@ -30,7 +30,7 @@ struct ConcatGradFn : public GradFn {
     ConcatGradFn();
 
     void capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream);
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

@@ -46,7 +46,7 @@ struct BroadcastRowMulGradFn : public GradFn {
     void capture_inputs(Tensor& s, Tensor& x, cudaStream_t stream);
     void set_cache_refs(const float* scale_data, const float* x_data, int r, int c);
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

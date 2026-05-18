@@ -36,7 +36,7 @@ struct SiluGradFn : public GradFn {
 
     void capture_input(Tensor& x, cudaStream_t stream);
     void set_cache_ref(const float* data, std::size_t size);
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override ;
     void release_saved() override;
 };
 

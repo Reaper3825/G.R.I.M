@@ -38,7 +38,7 @@ struct ZeroPadGradFn : public GradFn {
     ~ZeroPadGradFn() override;
 
     void capture_input(Tensor& x, cudaStream_t stream, std::size_t offset_elems);
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

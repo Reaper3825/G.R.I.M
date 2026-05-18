@@ -28,7 +28,7 @@ struct LogSoftmaxGradFn : public GradFn {
 
     void capture_input(Tensor& x, cudaStream_t stream);
     void save(const float* log_softmax_output, int tokens, int d, cudaStream_t stream, bool copy = true);
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

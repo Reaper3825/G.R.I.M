@@ -168,7 +168,7 @@ void DropoutGradFn::save(const std::uint8_t* mask, float dropout_prob, size_t n,
     cudaMemcpyAsync(saved_mask, mask, n * sizeof(std::uint8_t), cudaMemcpyDeviceToDevice, stream);
 }
 
-void DropoutGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void DropoutGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("dropout", this);
 
     if (applied) {

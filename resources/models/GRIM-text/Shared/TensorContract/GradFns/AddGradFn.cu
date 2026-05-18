@@ -107,7 +107,7 @@ void AddGradFn::capture_single_input(Tensor& a, cudaStream_t stream) {
     }
 }
 
-void AddGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void AddGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("add", this);
 
     // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops

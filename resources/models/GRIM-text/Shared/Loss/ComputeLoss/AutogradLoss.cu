@@ -247,7 +247,7 @@ struct NLLLossGradFn : public GradFn {
         release_saved();
     }
     
-    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    __host__ void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         auto* log_softmax_grad_fn = dynamic_cast<LogSoftmaxGradFn*>(log_probs_grad_fn.get());
         if (!log_softmax_grad_fn) {
             throw std::runtime_error("[NLLLossGradFn::apply] upstream grad_fn is not LogSoftmaxGradFn — saved log_probs owner is missing");

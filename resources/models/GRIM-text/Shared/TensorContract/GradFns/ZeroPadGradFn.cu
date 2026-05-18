@@ -53,7 +53,7 @@ void ZeroPadGradFn::capture_input(Tensor& x, cudaStream_t stream, size_t offset_
     }
 }
 
-void ZeroPadGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ZeroPadGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("zero_pad", this);
     if (applied) return;
     applied = true;

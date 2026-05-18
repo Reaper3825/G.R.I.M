@@ -90,7 +90,7 @@ void CrossEntropyLogitsGradFn::capture_input(Tensor& logits, cudaStream_t stream
     }
 }
 
-void CrossEntropyLogitsGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void CrossEntropyLogitsGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     if (applied) return;
     applied = true;
 

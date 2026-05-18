@@ -166,7 +166,7 @@ void BiasAddGradFn::capture_inputs(Tensor& input, Tensor& bias,
     }
 }
 
-void BiasAddGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void BiasAddGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("bias_add", this);
 
     if (applied) {

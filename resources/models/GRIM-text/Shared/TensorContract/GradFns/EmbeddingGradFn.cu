@@ -150,7 +150,7 @@ void EmbeddingGradFn::save(const int* ids, int tokens, int d, bool copy_ids, cud
     }
 }
 
-void EmbeddingGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     // RULE 20: Track current operation for error context
     setCurrentGradFnOp("embedding", this);
 

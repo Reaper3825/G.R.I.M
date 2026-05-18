@@ -77,7 +77,7 @@ struct ReasoningHeadGradFn : public GradFn {
     void capture_atom_emb(Tensor& atom_embeddings, cudaStream_t stream);
     void capture_positions(const int* d_positions, int n_atoms, cudaStream_t stream);
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

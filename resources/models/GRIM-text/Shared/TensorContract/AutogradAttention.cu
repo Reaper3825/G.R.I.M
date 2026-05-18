@@ -227,7 +227,7 @@ struct MatMulGradFn : public GradFn {
         }
     }
     
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("matmul", this);
         
@@ -843,7 +843,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         TensorConversion::convert_BHSD_to_BSHD_bf16(out.data, saved_out_bf16, b, nh, s, hd, stream);
     }
     
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("scaled_dot_product_attention", this);
         
@@ -1264,7 +1264,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         }
     }
     
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         setCurrentGradFnOp("reshape_bhsd_to_flat", this);
         
         if (applied) return;
@@ -1448,7 +1448,7 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
     
     SplitAndReshapeQKVGradFn() { op_name = "split_and_reshape_qkv"; }
     
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         const char* type_str = (output_type == OutputType::Q) ? "Q" : 
                                (output_type == OutputType::K) ? "K" : "V";
         
@@ -1753,7 +1753,7 @@ struct RoPEGradFn : public GradFn {
     // SplitAndReshapeQKVGradFn from reading a dangling pointer.
     std::shared_ptr<float> owned_grad_buf;
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (!shared) {
             throw std::runtime_error("RoPEGradFn::apply: shared state is NULL - RoPE forward must initialize shared state");
         }

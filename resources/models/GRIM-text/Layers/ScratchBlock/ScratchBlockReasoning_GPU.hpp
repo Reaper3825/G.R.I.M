@@ -98,7 +98,7 @@ struct ScratchBlockGradFn : public GradFn {
     /// Capture references to layer weight gradient buffers
     void capture_weights(Tensor& atom_proj, Tensor& atom_type_emb);
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
 
     void release_saved() override;
 };

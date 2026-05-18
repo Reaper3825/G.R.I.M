@@ -36,7 +36,7 @@ struct ExpGradFn : public GradFn {
 
     void capture_input(Tensor& x, cudaStream_t stream);
     void save_output(const float* output_data, std::size_t size);
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

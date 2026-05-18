@@ -48,7 +48,7 @@ struct BiasAddGradFn : public GradFn {
                         int num_tokens, int num_features,
                         cudaStream_t stream);
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

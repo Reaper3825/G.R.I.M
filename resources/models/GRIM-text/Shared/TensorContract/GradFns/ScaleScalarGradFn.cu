@@ -24,7 +24,7 @@ ScaleScalarGradFn::ScaleScalarGradFn() {
     op_name = "scale_scalar";
 }
 
-void ScaleScalarGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ScaleScalarGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     if (applied) return;
     applied = true;
     if (!input_grad_fn || !input_grad_fn->op_name) return;

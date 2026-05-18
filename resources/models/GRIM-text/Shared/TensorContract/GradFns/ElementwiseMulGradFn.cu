@@ -143,7 +143,7 @@ void ElementwiseMulGradFn::set_cache_refs(const float* a_data, const float* b_da
     if (b_requires_grad && a_data) cached_a = a_data;
 }
 
-void ElementwiseMulGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ElementwiseMulGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("elementwise_mul", this);
     if (applied) return;
     applied = true;

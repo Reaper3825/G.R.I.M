@@ -425,7 +425,7 @@ void ScratchBlockGradFn::capture_weights(
     if (!atom_type_embeddings_grad)    throw std::runtime_error("ScratchBlockGradFn::capture_weights: atom_type_embeddings.grad is NULL");
 }
 
-void ScratchBlockGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ScratchBlockGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     using namespace GRIM::Logging;
     setCurrentGradFnOp("scratch_block", this);
 

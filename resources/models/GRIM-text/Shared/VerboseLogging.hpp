@@ -39,5 +39,9 @@ constexpr bool ENABLE_GPU_ALLOCATION_LOGS = false;     ///< [GPU_ALLOC] allocati
 // during Issue #76/#84 debugging but are catastrophic for training throughput.
 constexpr bool ENABLE_FA_EQUATION_DIAGNOSTICS = false;  ///< [FA-FWD-*], [ATTN_SCORE_EQUATION]
 
+// QKV projection equation diagnostics — extremely spammy per-layer/per-batch tape entries.
+// Keep off unless actively debugging the QKV projection path.
+constexpr bool ENABLE_QKV_PROJECTION_EQUATION_LOGS = false;  ///< [QKV_PROJECTION_EQUATION]
+
 } // namespace VerboseLogging
 } // namespace GRIM

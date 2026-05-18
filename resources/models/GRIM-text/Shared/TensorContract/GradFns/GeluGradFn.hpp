@@ -40,7 +40,7 @@ struct GeluGradFn : public GradFn {
     /// Copy external_cache (size floats) into an owned device buffer for backward.
     void set_cache_copy(const float* external_cache, std::size_t size, cudaStream_t stream);
 
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

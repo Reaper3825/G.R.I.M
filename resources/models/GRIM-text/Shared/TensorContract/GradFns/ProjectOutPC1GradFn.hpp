@@ -30,7 +30,7 @@ struct ProjectOutPC1GradFn : public GradFn {
     ProjectOutPC1GradFn();
 
     void capture_input(Tensor& input, int rows, int cols, float* g_device, cudaStream_t stream);
-    void apply(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };
 

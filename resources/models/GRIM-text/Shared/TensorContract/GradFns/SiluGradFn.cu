@@ -129,7 +129,7 @@ void SiluGradFn::set_cache_ref(const float* data, size_t size) {
     cached_size = size;
 }
 
-void SiluGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void SiluGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("silu", this);
     if (applied) return;
     applied = true;

@@ -104,7 +104,7 @@ void AddScalarGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     }
 }
 
-void AddScalarGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void AddScalarGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("add_scalar", this);
     if (applied) return;
     applied = true;

@@ -125,7 +125,7 @@ void ReciprocalGradFn::save_output(const float* output_data, size_t size) {
     cached_size = size;
 }
 
-void ReciprocalGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void ReciprocalGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     setCurrentGradFnOp("reciprocal", this);
     if (applied) return;
     applied = true;
