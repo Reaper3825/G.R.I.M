@@ -320,10 +320,23 @@ __global__ void flash_fwd_kernel(const FLASH_PARAMS_NS::Flash_fwd_params params)
 #endif
 }
 
-template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Is_even_M, bool Is_even_K>
-__global__ void flash_bwd_dq_dk_dv_loop_kernel(const FLASH_PARAMS_NS::Flash_bwd_params params) {
+template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi,
+         bool Is_even_MN, bool Is_even_K, bool Is_softcap>
+__global__ void flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel(const FLASH_PARAMS_NS::Flash_bwd_params params) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    FLASH_UPSTREAM_NS::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K>(params);
+    FLASH_UPSTREAM_NS::compute_dq_dk_dv_seqk_parallel<Kernel_traits, Is_dropout, Is_causal, Is_local,
+                                                      Has_alibi, Is_even_MN, Is_even_K, Is_softcap>(params);
+#else
+    if (threadIdx.x == 0) {
+        printf("FATAL: FlashAttention requires SM80+.\n");
+    }
+#endif
+}
+
+template<typename Kernel_traits>
+__global__ void flash_bwd_convert_dq_kernel(const FLASH_PARAMS_NS::Flash_bwd_params params, const int nsplits) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    FLASH_UPSTREAM_NS::convert_dQ<Kernel_traits>(params, nsplits);
 #else
     if (threadIdx.x == 0) {
         printf("FATAL: FlashAttention requires SM80+.\n");
@@ -338,10 +351,8 @@ __global__ void flash_bwd_dq_dk_dv_loop_kernel(const FLASH_PARAMS_NS::Flash_bwd_
 // main backward kernel runs. Without this, the dsoftmax_sum buffer contains
 // garbage for most positions, causing dQ/dK gradient explosion.
 //
-// The main backward kernel (flash_bwd_dq_dk_dv_loop_kernel) uses the Is_first
-// template parameter to conditionally call dot_do_o() - but Is_first is only
-// true for the FIRST column block. The loop then reads from gdPsum for ALL
-// m_blocks, expecting valid pre-computed dP_sum values.
+// The main backward kernel reads gdPsum for ALL m_blocks, expecting valid
+// pre-computed dP_sum values from this preprocessing pass.
 //
 // ROOT CAUSE: GRIM was missing this preprocessing kernel, so gdPsum contained
 // uninitialized memory (cudaMalloc doesn't zero). This caused:
@@ -401,16 +412,26 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
 template<typename Kernel_traits, bool Is_causal>
 void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
     constexpr size_t smem_size = Kernel_traits::kSmemSize1colblock;
+    if (params.deterministic) {
+        throw std::runtime_error("run_flash_bwd: deterministic=true requires split workspace and nsplits-aware dQ conversion; GRIM only supports deterministic=false here");
+    }
     
     // ===========================================================================
-    // ISSUE #84 FIX: Grid dimensions for preprocessing vs main kernel
+    // FlashAttention backward launch contract
     // ===========================================================================
-    // Preprocessing kernel: one block per query tile (num_m_block, batch, heads)
-    // Main kernel: one block per (batch, heads) - loops over all m_blocks internally
+    // Preprocessing kernel: one block per query tile (num_m_block, batch, heads).
+    // Main kernel: pinned Dao launcher uses seqK-parallel grid
+    // (num_n_block, batch, heads), then converts accumulated dQ from fp32 workspace.
+    //
+    // The direct compute_dq_dk_dv launch (grid=(batch, heads, 1)) is not the
+    // active upstream path for this pinned revision and produced corrupt dK/dV under
+    // GQA+dropout while dQ looked sane. Keep this wrapper aligned with the vendored
+    // launcher instead of maintaining a second launch contract.
     // ===========================================================================
     const int num_m_block = (params.seqlen_q + Kernel_traits::kBlockM - 1) / Kernel_traits::kBlockM;
     dim3 grid_preprocess(num_m_block, params.b, params.h);  // For preprocessing
-    dim3 grid(params.b, params.h, 1);  // For main backward kernel
+    const int num_n_block = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
+    dim3 grid_n(num_n_block, params.b, params.h);  // For seqK-parallel main kernel
     
     const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
                             (params.seqlen_q % Kernel_traits::kBlockM == 0) &&
@@ -439,24 +460,36 @@ void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
                 // Attention dropout: switch template based on p_dropout
                 const bool use_dropout = params.p_dropout < 1.0f;
                 BOOL_SWITCH(use_dropout, IsDropout, [&] {
-                auto kernel = &flash_bwd_dq_dk_dv_loop_kernel<Kernel_traits,
-                                                              IsDropout,
-                                                              Is_causal,
-                                                              HasAlibi,
-                                                              IsEvenMNConst,
-                                                              IsEvenKConst>;
+                auto kernel = &flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<Kernel_traits,
+                                                                            IsDropout,
+                                                                            Is_causal,
+                                                                            /*Is_local=*/false,
+                                                                            HasAlibi,
+                                                                            IsEvenMNConst && IsEvenKConst && !HasAlibi,
+                                                                            IsEvenKConst && !HasAlibi,
+                                                                            /*Is_softcap=*/false>;
                 if (smem_size >= 48 * 1024) {
                     check_cuda(cudaFuncSetAttribute(kernel,
                                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
                                                     smem_size),
-                               "cudaFuncSetAttribute(bwd)");
+                               "cudaFuncSetAttribute(bwd seqk)");
                 }
-                kernel<<<grid, Kernel_traits::kNThreads, smem_size, stream>>>(params);
-                check_cuda(cudaGetLastError(), "flash_bwd_kernel launch");
+                kernel<<<grid_n, Kernel_traits::kNThreads, smem_size, stream>>>(params);
+                check_cuda(cudaGetLastError(), "flash_bwd_seqk_kernel launch");
                 });
             });
         });
     });
+
+    auto kernel_dq = &flash_bwd_convert_dq_kernel<Kernel_traits>;
+    if (Kernel_traits::kSmemdQSize >= 48 * 1024) {
+        check_cuda(cudaFuncSetAttribute(kernel_dq,
+                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        Kernel_traits::kSmemdQSize),
+                   "cudaFuncSetAttribute(bwd convert_dq)");
+    }
+    kernel_dq<<<grid_preprocess, Kernel_traits::kNThreads, Kernel_traits::kSmemdQSize, stream>>>(params, 1);
+    check_cuda(cudaGetLastError(), "flash_bwd_convert_dq_kernel launch");
 }
 
 template<typename T, bool Is_causal>
