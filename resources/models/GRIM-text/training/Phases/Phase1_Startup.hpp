@@ -229,6 +229,10 @@ struct TelemetryContext {
 struct TrainingContext {
     // Configuration
     StartupConfig config;
+    // Phase1-authored static model config. This is the single model-config set
+    // handed to Phase2; training code must not rebuild or route alternate static
+    // model wrappers around it.
+    GRIM::HyperParameters::LanguageModelConfig model_config;
     // Phase1-authored static loss grouping. Phase2 consumes this directly;
     // it must not rebuild loss hyperparameter wrappers inside the training loop.
     GRIM::HyperParameters::LossConfigHP loss_config;

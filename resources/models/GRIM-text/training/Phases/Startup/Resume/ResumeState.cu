@@ -4,8 +4,8 @@
 #include "../Model/ParameterGroupRegistration.hpp"
 #include "../../Phase1_Startup.hpp"
 #include "../../../OptimizerCheckpoint.hpp"
-#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -36,9 +36,7 @@ void initializeOptimizer(TrainingContext& ctx) {
     opt.resetAccumulationWindow();
 
     auto* gpu_encoder = &model.getGpuEncoder();
-    const auto model_arch_hp =
-        GRIM::HyperParameters::modelArchitectureHP(ctx.config.hyperparameters.architecture);
-    for (int layer = 0; layer < model_arch_hp.num_layers; ++layer) {
+    for (int layer = 0; layer < ctx.model_config.num_layers; ++layer) {
         if (!gpu_encoder->getLayer(layer)) {
             throw std::runtime_error("Encoder layer " + std::to_string(layer) + " not initialized - "
                                      "ensure model.initGPU(weight_init_seed) completes all layers before training");
@@ -91,7 +89,7 @@ void ResumeStateReady(TrainingContext& ctx) {
     if (ctx.loss_config.class_balanced_enabled) {
         computeAndUploadClassBalancedWeights(
             ctx.data.train_seqs,
-            ctx.config.actual_vocab_size,
+            ctx.data_info.actual_vocab_size,
             ctx.loss_config.class_balanced_beta,
             ctx.model->getTrainingState(),
             *ctx.logging.logger);

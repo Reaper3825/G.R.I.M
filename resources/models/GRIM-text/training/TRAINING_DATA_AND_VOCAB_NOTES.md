@@ -35,7 +35,7 @@ So: confirm the actual **Train sequences** and **Created Y dynamic batches** in 
 
 **Where vocab size comes from:**
 
-- **At training startup:** Vocab size is **not** read from `ai_config.json`, `vocab.bin`, or tokenizer internals. It is read from the **.grmt file header** when the training data is loaded (`training_data_loader.hpp`: `vocab_size_` from the GRMT header). That GRMT header value becomes `ctx.config.actual_vocab_size` and sizes the model.
+- **At training startup:** Vocab size is **not** read from `ai_config.json`, `vocab.bin`, or tokenizer internals. It is read from the **.grmt file header** when the training data is loaded (`training_data_loader.hpp`: `vocab_size_` from the GRMT header). Phase1 records that header fact as `ctx.data_info.actual_vocab_size`; Phase2/diagnostics consume `ctx.data_info.actual_vocab_size`. `LanguageModelConfig::vocab_size` is only the model-allocation copy of that GRMT fact, never the author.
 - When the **DataLoader** builds/encodes data, it uses the tokenizer’s single public vocab-size API, **`UniByte::vocabSize()`**, and writes that value into the `.grmt` header. So:
   - **Vocab size in training = the `.grmt` header written by the tokenizer that encoded the data.**
 

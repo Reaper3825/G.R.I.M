@@ -203,9 +203,7 @@ void runGradientNormClipDiagnostic(
 
     validateMeasuredMetricsOrThrow(gm, clip.measured_group_count, batch_idx);
 
-    const auto lm_head_hp =
-        GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config.hyperparameters.architecture);
-    const bool tied = lm_head_hp.tie_embeddings;
+    const bool tied = ctx.model_config.tie_embeddings;
     const float preclip_grad_rms = clip.global_rms_pre;
     const float emb_rms_pre = computeEmbeddingDiagnosticRmsOrThrow(gm, tied, batch_idx);
     const float enc_rms_pre = computeEncoderTelemetryRms(gm, batch_idx);
@@ -236,8 +234,6 @@ void runGradientNormClipDiagnostic(
 
         if (kEmbGradDiagEnabled) {
             const auto& ts = ctx.model->getTrainingState();
-            const auto model_arch_hp =
-                GRIM::HyperParameters::modelArchitectureHP(ctx.config.hyperparameters.architecture);
             cudaStream_t emb_stream = ts.stream_ctrl.getPrimaryStream();
 
             const int total_tokens_diag = payload.total_tokens;
@@ -249,7 +245,7 @@ void runGradientNormClipDiagnostic(
                     : emb_rms_pre;
                 GRIM::Diagnostics::EmbGradEquationDiag emb_diag = GRIM::Diagnostics::computeEmbGradEquation(
                     ctx.model->getEmbeddingLayer(), d_tok_ids, total_tokens_diag,
-                    model_arch_hp.d_model, static_cast<int>(ctx.config.actual_vocab_size),
+                    ctx.model_config.d_model, static_cast<int>(ctx.data_info.actual_vocab_size),
                     prev_emb_rms, emb_rms_pre,
                     emb_stream);
 

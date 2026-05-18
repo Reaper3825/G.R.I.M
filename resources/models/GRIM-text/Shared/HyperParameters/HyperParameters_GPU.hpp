@@ -185,7 +185,7 @@ constexpr float TOKENIZER_CHARACTER_COVERAGE = 0.9995f;  // Character coverage f
 // These flags are loaded from ai_config.json [tokenizer] section:
 //   add_bos: true/false - Controls whether to prepend BOS token to sequences
 //   add_eos: true/false - Controls whether to append EOS token to sequences
-// Used in Phase1_Startup.cu::loadTrainingData() to conditionally add boundary tokens
+// Used by Startup/SlidingWindow after LoadTrainingData reads GRMT rows.
 // See: ai_config.json [tokenizer] { "add_bos": true, "add_eos": true }
 
 //======================================================//
@@ -1340,9 +1340,6 @@ struct StartupConfig {
     // Derived values (populated by loadStartupConfig)
     int max_seq_len = 0;
     int sliding_window_stride = 0;
-
-    // Set later by training data loader (kept here for ctx.config.* ergonomics)
-    uint32_t actual_vocab_size = 0;
 
     // CLI flags
     bool save_test_mode = false;

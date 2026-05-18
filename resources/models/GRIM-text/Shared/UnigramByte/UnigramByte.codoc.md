@@ -108,7 +108,7 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 - `Shared/TokenizerArtifacts/GrmtCorpusIO.*` owns GRMT row save/load. Runtime loaders and diagnostics must use its RAII reader/writer instead of open-coded seeks through the row layout.
 - `Shared/TokenizerArtifacts/VocabArtifactIO.*` is the bundle-internal KTMG read/write helper; do not call it as an independent tokenizer artifact path.
 - Text vocab files are human-readable exports only. Binary KTMG is the only vocab load path.
-- Phase 1 startup reads final training vocab size from the validated `.grmt` header and copies it to `ctx.config.actual_vocab_size`.
+- Phase 1 startup reads final training vocab size from the validated `.grmt` header and records it as `ctx.data_info.actual_vocab_size`.
 
 ### Masking rule
 

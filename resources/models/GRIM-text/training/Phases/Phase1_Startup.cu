@@ -3,7 +3,7 @@
 #include "Startup/Logging.hpp"
 #include "Startup/Capacity/MemorySnapshot.hpp"
 #include "Startup/Capacity/CapacityStem.hpp"
-#include "Startup/Data/DataInfo.hpp"
+#include "Startup/Data/TrainingData.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
 #include "Startup/Resume/ResumeState.hpp"
 #include "Startup/GuessCache/GuessCacheInit.hpp"
@@ -95,7 +95,7 @@ Phase1Result executePhase1(int argc, char** argv) {
     }
 
     CapacityStemReady(*ctx);
-    DataInfoReady(*ctx);
+    LoadTrainingData(*ctx);
     ModelAllocated(*ctx);
     ResumeStateReady(*ctx);
     GuessCacheReady(*ctx);

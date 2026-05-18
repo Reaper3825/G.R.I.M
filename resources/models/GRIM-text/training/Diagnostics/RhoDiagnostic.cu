@@ -55,9 +55,7 @@ void computeRhoDiagnostic(
     const auto& ts = ctx.model->getTrainingState();
     const auto& ai = ts.autograd_intermediates;
     const int num_layers = static_cast<int>(ai.encoder_layer_outputs.size());
-    const auto model_arch_hp =
-        GRIM::HyperParameters::modelArchitectureHP(ctx.config.hyperparameters.architecture);
-    const int d_model = model_arch_hp.d_model;
+    const int d_model = ctx.model_config.d_model;
     const int max_seq_len = payload.max_seq_len;
     const int rect_positions = payload.total_tokens;
 

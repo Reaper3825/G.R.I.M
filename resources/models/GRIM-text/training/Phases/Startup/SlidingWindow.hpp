@@ -3,7 +3,7 @@
 //  Startup/SlidingWindow.hpp
 //
 //  Sliding-window expansion for long training sequences.
-//  Extracted from Phase1_Startup::loadTrainingData.
+//  Called after LoadTrainingData reads raw GRMT rows.
 //
 //  Padding ownership: BatchPayload is the SINGLE owner of padded
 //  [batch_size * max_seq_len] layout. This pass produces variable-length
@@ -35,15 +35,11 @@ namespace GRIMText::Training {
 //   sequences      - in/out: sequences to bracket
 //   add_bos_token  - if true, prepend BOS when missing
 //   add_eos_token  - if true, append EOS when missing
-//   bos_id         - BOS token id (negative => skip BOS)
-//   eos_id         - EOS token id (negative => skip EOS)
 //   added_bos_out  - out: number of sequences that received a BOS
 //   added_eos_out  - out: number of sequences that received an EOS
 void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
                           bool add_bos_token,
                           bool add_eos_token,
-                          int bos_id,
-                          int eos_id,
                           size_t& added_bos_out,
                           size_t& added_eos_out);
 
@@ -86,8 +82,6 @@ void filterShortSequences(std::vector<TrainingSequence>& sequences,
 //                          (<= 0 disables the short-sequence filter)
 //   add_bos_token        - if true, prepend BOS (boundary + non-first windows)
 //   add_eos_token        - if true, append EOS at sequence end
-//   bos_id               - BOS token id (negative => disabled)
-//   eos_id               - EOS token id (negative => skip non-final EOS injection)
 //   logger               - emits per-split summary lines
 void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                          const std::string& split_name,
@@ -96,8 +90,6 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                          int min_seq_valid_tokens,
                          bool add_bos_token,
                          bool add_eos_token,
-                         int bos_id,
-                         int eos_id,
                          TrainingLogger& logger);
 
 } // namespace GRIMText::Training

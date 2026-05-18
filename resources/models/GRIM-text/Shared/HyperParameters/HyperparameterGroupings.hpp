@@ -104,36 +104,6 @@ struct LossConfigHP {
     float class_balanced_beta = 0.0f;
 };
 
-struct ModelArchitectureHP {
-    int d_model = 0;
-    int num_layers = 0;
-    int num_heads = 0;
-    int num_kv_heads = 0;
-    int head_dim = 0;
-    int max_seq_len = 0;
-};
-
-struct ParameterRegistrationHP {
-    int num_layers = 0;
-    int num_heads = 0;
-    int num_kv_heads = 0;
-    int head_dim = 0;
-    int d_model = 0;
-    int vocab_size = 0;
-
-    bool register_untied_embedding = false;
-    bool register_lm_head_bias = false;
-    bool register_encoder_biases = false;
-    bool register_layer_scale = false;
-    bool register_scratch_block = false;
-    bool register_reasoning_head = false;
-    bool register_execution_block = false;
-    bool register_slot_selector = false;
-    bool register_mtp = false;
-    int mtp_k = 0;
-    bool register_final_rms_gamma = false;
-};
-
 struct GpuModelInitializationHP {
     bool use_gpu = false;
     int num_layers = 0;
@@ -736,23 +706,6 @@ inline LossConfigHP lossConfigHP(
     return view;
 }
 
-inline ModelArchitectureHP modelArchitectureHP(
-    const LanguageModelConfig& cfg)
-{
-    requireValidGQAGrouping(cfg, "modelArchitectureHP");
-    requirePositiveGroupingValue(cfg.num_layers, "num_layers", "modelArchitectureHP");
-    requirePositiveGroupingValue(cfg.max_seq_len, "max_seq_len", "modelArchitectureHP");
-
-    ModelArchitectureHP view;
-    view.d_model = cfg.d_model;
-    view.num_layers = cfg.num_layers;
-    view.num_heads = cfg.num_heads;
-    view.num_kv_heads = cfg.num_kv_heads;
-    view.head_dim = cfg.head_dim;
-    view.max_seq_len = cfg.max_seq_len;
-    return view;
-}
-
 inline void validateLanguageModelCacheCapacity(
     const LanguageModelConfig& cfg,
     const char* caller = "validateLanguageModelCacheCapacity")
@@ -861,34 +814,6 @@ inline LanguageModelConfig inferenceLanguageModelConfig(
     cfg.computeDerivedValues();
     validateInferenceLanguageModelConfig(cfg);
     return cfg;
-}
-
-inline ParameterRegistrationHP parameterRegistrationHP(
-    const LanguageModelConfig& cfg)
-{
-    requireValidGQAGrouping(cfg, "parameterRegistrationHP");
-    requirePositiveGroupingValue(cfg.num_layers, "num_layers", "parameterRegistrationHP");
-    requirePositiveGroupingValue(cfg.vocab_size, "vocab_size", "parameterRegistrationHP");
-
-    ParameterRegistrationHP view;
-    view.num_layers = cfg.num_layers;
-    view.num_heads = cfg.num_heads;
-    view.num_kv_heads = cfg.num_kv_heads;
-    view.head_dim = cfg.head_dim;
-    view.d_model = cfg.d_model;
-    view.vocab_size = cfg.vocab_size;
-    view.register_untied_embedding = !cfg.tie_embeddings;
-    view.register_lm_head_bias = cfg.use_bias;
-    view.register_encoder_biases = cfg.use_bias;
-    view.register_layer_scale = cfg.use_layer_scale;
-    view.register_scratch_block = cfg.use_scratch_block;
-    view.register_reasoning_head = cfg.reasoning_head_enabled;
-    view.register_execution_block = cfg.execution_block_enabled;
-    view.register_slot_selector = cfg.selector_enabled;
-    view.register_mtp = cfg.mtp_enabled;
-    view.mtp_k = cfg.mtp_k;
-    view.register_final_rms_gamma = !cfg.lm_head_freeze_final_rms_gamma;
-    return view;
 }
 
 inline GpuModelInitializationHP gpuModelInitializationHP(

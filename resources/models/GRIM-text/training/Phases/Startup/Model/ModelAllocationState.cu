@@ -29,8 +29,7 @@ namespace Internal {
 
 std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const StartupConfig& config,
-    const RunCapacity& run_capacity,
-    uint32_t vocab_size,
+    const GRIM::HyperParameters::LanguageModelConfig& model_config,
     uint64_t weight_init_seed,
     TrainingLogger& logger,
     std::string& loaded_checkpoint_path)
@@ -38,18 +37,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     loaded_checkpoint_path.clear();
 
     logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
-
-    GRIM::HyperParameters::LanguageModelConfig model_config =
-        GRIM::HyperParameters::startupLanguageModelConfig(
-            config,
-            vocab_size,
-            static_cast<int>(run_capacity.batch_rows),
-            static_cast<int>(run_capacity.seq_cap),
-            static_cast<int>(run_capacity.max_tokens_per_batch));
-    const auto parameter_registration_hp =
-        GRIM::HyperParameters::parameterRegistrationHP(model_config);
-    const auto model_arch_hp =
-        GRIM::HyperParameters::modelArchitectureHP(model_config);
 
     if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED) {
         logger.log("⚠️  Hardcoded hidden-state diagnostic mode is active; exact config values are listed by ConfigDump.");
@@ -108,9 +95,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Registering trainable parameter groups...");
-    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(
-        *model,
-        parameter_registration_hp);
+    model->buildParameterGroups();
     logger.log("✓ Trainable parameter groups registered and verified");
 
     logger.log("Initializing TrainingState runtime workspaces...");
@@ -120,7 +105,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 #ifdef USE_CUDA
     {
         auto* gpu_encoder = &model->getGpuEncoder();
-        for (int layer = 0; layer < model_arch_hp.num_layers; ++layer) {
+        for (int layer = 0; layer < model_config.num_layers; ++layer) {
             auto* enc = gpu_encoder->getLayer(layer);
             if (!enc) {
                 throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after GPU model layer assembly");
@@ -227,12 +212,17 @@ void ModelAllocated(TrainingContext& ctx) {
     using GRIM::Logging::ModuleId;
 
     ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
+    ctx.model_config = GRIM::HyperParameters::startupLanguageModelConfig(
+        ctx.config,
+        ctx.data_info.actual_vocab_size,
+        static_cast<int>(ctx.run_capacity.batch_rows),
+        static_cast<int>(ctx.run_capacity.seq_cap),
+        static_cast<int>(ctx.run_capacity.max_tokens_per_batch));
 
     try {
         ctx.model = Internal::initializeModel(
             ctx.config,
-            ctx.run_capacity,
-            ctx.config.actual_vocab_size,
+            ctx.model_config,
             ctx.rng.init_seed,
             *ctx.logging.logger,
             ctx.loaded_checkpoint_path);

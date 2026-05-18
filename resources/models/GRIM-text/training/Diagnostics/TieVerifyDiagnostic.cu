@@ -25,9 +25,7 @@ void runTieVerifyDiagnostic(
     const float* emb_g = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
     const float* lm_w  = ctx.model->getLmHeadLayer()->weights().data;
     const float* lm_g  = ctx.model->getLmHeadLayer()->weights().grad_data();
-    const auto lm_head_hp =
-        GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config.hyperparameters.architecture);
-    const bool cfg_tied = lm_head_hp.tie_embeddings;
+    const bool cfg_tied = ctx.model_config.tie_embeddings;
     const bool w_same = (emb_w == lm_w);
     const bool g_same = (emb_g == lm_g);
 

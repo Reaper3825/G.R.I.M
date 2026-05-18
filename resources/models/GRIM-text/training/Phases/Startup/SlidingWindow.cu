@@ -19,8 +19,6 @@ namespace GRIMText::Training {
 void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
                           bool add_bos_token,
                           bool add_eos_token,
-                          int bos_id,
-                          int eos_id,
                           size_t& added_bos_out,
                           size_t& added_eos_out) {
     added_bos_out = 0;
@@ -30,8 +28,8 @@ void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
         if (seq.token_ids.empty()) continue;
 
         // Add BOS if missing at start (controlled by config flag add_bos_token)
-        if (add_bos_token && bos_id >= 0 && seq.token_ids.front() != bos_id) {
-            seq.token_ids.insert(seq.token_ids.begin(), bos_id);
+        if (add_bos_token && seq.token_ids.front() != GRIM::Tokenizer::BOS_TOKEN_ID) {
+            seq.token_ids.insert(seq.token_ids.begin(), GRIM::Tokenizer::BOS_TOKEN_ID);
             seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
             seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
             seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
@@ -50,16 +48,16 @@ void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
         }
 
         // Add EOS if missing at end (controlled by config flag add_eos_token)
-        if (add_eos_token && eos_id >= 0 && seq.token_ids.back() != eos_id) {
-            seq.token_ids.push_back(eos_id);
+        if (add_eos_token && seq.token_ids.back() != GRIM::Tokenizer::EOS_TOKEN_ID) {
+            seq.token_ids.push_back(GRIM::Tokenizer::EOS_TOKEN_ID);
             seq.token_numeric_values.push_back(0.0f);
             seq.token_atom_mask.push_back(0);
             seq.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
             seq.token_atom_flags.push_back(0);
             // Fix shift: the PREVIOUS position's target was -1 (no next token existed
-            // when DataLoader ran). Now EOS follows it, so set target = eos_id.
+            // when DataLoader ran). Now EOS follows it, so set target = EOS.
             if (!seq.targets.empty()) {
-                seq.targets.back() = eos_id;  // position before EOS → predict EOS
+                seq.targets.back() = GRIM::Tokenizer::EOS_TOKEN_ID;  // position before EOS → predict EOS
             }
             seq.targets.push_back(-1);  // EOS position itself: nothing follows
             if (!seq.token_exec_slots.empty())
@@ -79,16 +77,13 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                          int min_seq_valid_tokens,
                          bool add_bos_token,
                          bool add_eos_token,
-                         int bos_id,
-                         int eos_id,
                          TrainingLogger& logger) {
     // Bracket sequences with BOS/EOS before windowing so window math sees
     // fully-bracketed input. Per-split summary is emitted here so each
     // train/val pass reports its own boundary-injection count.
     size_t added_bos = 0;
     size_t added_eos = 0;
-    injectBoundaryTokens(sequences, add_bos_token, add_eos_token,
-                         bos_id, eos_id, added_bos, added_eos);
+    injectBoundaryTokens(sequences, add_bos_token, add_eos_token, added_bos, added_eos);
     if (added_bos > 0 || added_eos > 0) {
         logger.log("[Data] Boundary tokens (" + split_name + "): added_bos=" +
                    std::to_string(added_bos) + " added_eos=" + std::to_string(added_eos));
@@ -138,7 +133,7 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
 
         while (start < seq_len) {
             // Reserve 1 token for BOS if this is not the first window and BOS is enabled
-            const bool prepend_bos = !is_first_window && add_bos_token && bos_id >= 0;
+            const bool prepend_bos = !is_first_window && add_bos_token;
             const size_t effective_max = (is_first_window || !prepend_bos)
                 ? static_cast<size_t>(max_seq_len)
                 : static_cast<size_t>(max_seq_len - 1);
@@ -148,7 +143,7 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
 
             // For non-first windows, prepend BOS token (gated on add_bos_token config)
             if (prepend_bos) {
-                window.token_ids.push_back(bos_id);
+                window.token_ids.push_back(GRIM::Tokenizer::BOS_TOKEN_ID);
                 window.targets.push_back(-1);  // BOS position masked
                 window.token_numeric_values.push_back(0.0f);
                 window.token_atom_mask.push_back(0);
@@ -231,8 +226,8 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
             // its token_id with EOS costs nothing — the model sees EOS as
             // input and the second-to-last position learns to predict EOS.
             const bool is_final_window = (end == seq_len);
-            if (!is_final_window && eos_id >= 0 && !window.token_ids.empty()) {
-                window.token_ids.back() = eos_id;
+            if (!is_final_window && !window.token_ids.empty()) {
+                window.token_ids.back() = GRIM::Tokenizer::EOS_TOKEN_ID;
                 window.token_numeric_values.back() = 0.0f;
                 window.token_atom_mask.back() = 0;
                 if (!window.token_exec_slots.empty())
@@ -242,7 +237,7 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                         GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1};
                 // Second-to-last position learns to predict EOS
                 if (window.targets.size() >= 2) {
-                    window.targets[window.targets.size() - 2] = eos_id;
+                    window.targets[window.targets.size() - 2] = GRIM::Tokenizer::EOS_TOKEN_ID;
                 }
             }
 

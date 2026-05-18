@@ -2,8 +2,6 @@
 
 #include "../../Phase1_Startup.hpp"
 
-#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
-
 #include <stdexcept>
 #include <string>
 
@@ -18,13 +16,8 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
     if (!ctx.tokenizer) {
         throw std::runtime_error(
             "FATAL: PayloadBuildInputsReady requires an initialized tokenizer — "
-            "call DataInfoReady before this step");
+            "call LoadTrainingData before this step");
     }
-
-    const auto execution_hp =
-        GRIM::HyperParameters::executionBlockConstructionHP(ctx.config.hyperparameters.architecture);
-    const auto mtp_hp =
-        GRIM::HyperParameters::mtpFeatureHP(ctx.config.hyperparameters.architecture);
 
     // Rule 20: TrainingState allocation consumes batch/token capacity only.
     // Sequence capacity remains owned by RunCapacity and the BatchPayload path.
@@ -38,11 +31,11 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
     PayloadBuildInputs inputs;
     inputs.max_cached_batch          = static_cast<std::size_t>(ctx.run_capacity.batch_rows);
     inputs.max_cached_seq            = static_cast<std::size_t>(ctx.run_capacity.seq_cap);
-    inputs.execution_block_num_slots = execution_hp.num_slots;
-    inputs.execution_block_num_ops   = execution_hp.num_ops;
-    inputs.execution_block_num_steps = execution_hp.num_exec_steps;
-    inputs.actual_vocab_size         = ctx.config.actual_vocab_size;
-    inputs.train_mtp_k               = mtp_hp.enabled ? mtp_hp.k : 0;
+    inputs.execution_block_num_slots = ctx.model_config.execution_block_num_slots;
+    inputs.execution_block_num_ops   = ctx.model_config.execution_block_num_ops;
+    inputs.execution_block_num_steps = ctx.model_config.execution_block_num_steps;
+    inputs.actual_vocab_size         = ctx.data_info.actual_vocab_size;
+    inputs.train_mtp_k               = ctx.model_config.mtp_enabled ? ctx.model_config.mtp_k : 0;
 
     const auto layout = ctx.tokenizer->tokenLayout();
     inputs.token_layout.num_special = layout.num_special;

@@ -92,7 +92,7 @@ Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` direc
 
 - `train_tokenizer.cu` creates the grouping after `loadStartupConfig()` and passes it into `PrepareTrainingDataFromCache()`.
 - `DataLoader.cu` receives that grouping and constructs `UniByte` from it directly while building vocab + GRMT artifacts.
-- `DataInfoReady()`, `tokenizer_runner.cu`, and `tokenizer_self_test.cu` construct `UniByte` from the same grouping for runtime validation/loading.
+- `LoadTrainingData()`, `tokenizer_runner.cu`, and `tokenizer_self_test.cu` construct `UniByte` from the same grouping for runtime validation/loading.
 
 Do not hand-copy `TokenizerConfig` + `TrainingHyperparameters` fields into a tokenizer wrapper. `UniByte` stores `TokenizerHP` directly; isolated tokenizer tests use explicit `TokenizerHP` fixtures when they need non-config startup values.
 

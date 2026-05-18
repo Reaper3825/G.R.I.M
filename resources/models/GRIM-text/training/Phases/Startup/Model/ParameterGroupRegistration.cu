@@ -27,7 +27,7 @@ using GRIM::ParameterGroup;
 using GRIM::ParamStatsBucket;
 using GRIM::ParamGroupType;
 using GRIM::Tensor;
-using GRIM::HyperParameters::ParameterRegistrationHP;
+using GRIM::HyperParameters::LanguageModelConfig;
 
 std::string tensorDebugSummary(const Tensor& tensor) {
     std::ostringstream oss;
@@ -134,13 +134,13 @@ private:
 
 void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
                                      const Tensor& lm_head_weights,
-                                     const ParameterRegistrationHP& hp) {
+                                     const LanguageModelConfig& config) {
     if (!embedding_weights.data || !lm_head_weights.data) {
         throw std::runtime_error("[buildParameterGroups] cannot validate embedding/LM-head aliasing with NULL data: embedding=" +
                                  tensorDebugSummary(embedding_weights) + " lm_head=" + tensorDebugSummary(lm_head_weights));
     }
 
-    const bool tied = !hp.register_untied_embedding;
+    const bool tied = config.tie_embeddings;
     const bool same_data = embedding_weights.data == lm_head_weights.data;
     if (tied && !same_data) {
         throw std::runtime_error("[buildParameterGroups] tie_embeddings=true but embedding and LM-head data pointers differ: embedding=" +
@@ -154,12 +154,12 @@ void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
 
 void registerTopLevelParameters(LanguageModel& model,
                                 Registrar& registrar,
-                                const ParameterRegistrationHP& hp) {
+                                const LanguageModelConfig& config) {
     auto& embedding = requireLayer(model.getEmbeddingLayer(), "EmbeddingLayer", "registerTopLevelParameters");
     auto& lm_head = requireLayer(model.getLmHeadLayer(), "LMHeadLayer", "registerTopLevelParameters");
-    validateEmbeddingLmHeadAliasing(embedding.tokenWeights(), lm_head.weights(), hp);
+    validateEmbeddingLmHeadAliasing(embedding.tokenWeights(), lm_head.weights(), config);
 
-    if (hp.register_untied_embedding) {
+    if (!config.tie_embeddings) {
         registrar.addTensor("embedding",
                             embedding.tokenWeights(),
                             ParamGroupType::EMBEDDING,
@@ -180,16 +180,16 @@ void registerTopLevelParameters(LanguageModel& model,
                                            ParamGroupType::LM_HEAD,
                                            ParamStatsBucket::LM_HEAD,
                                            -1,
-                                           hp.register_lm_head_bias,
+                                           config.use_bias,
                                            "config.use_bias=false");
 }
 
 void registerEncoderParameters(LanguageModel& model,
                                Registrar& registrar,
-                               const ParameterRegistrationHP& hp) {
+                               const LanguageModelConfig& config) {
     GRIM::GPUGrimEncoder& gpu_encoder = model.getGpuEncoder();
 
-    for (int layer = 0; layer < hp.num_layers; ++layer) {
+    for (int layer = 0; layer < config.num_layers; ++layer) {
         GRIM::GPUEncoderLayer* enc = gpu_encoder.getLayer(layer);
         if (!enc) {
             throw std::runtime_error("[buildParameterGroups] Encoder layer " + std::to_string(layer) +
@@ -208,7 +208,7 @@ void registerEncoderParameters(LanguageModel& model,
                                                ParamGroupType::ATTENTION,
                                ParamStatsBucket::ENCODER,
                                                layer,
-                                               hp.register_encoder_biases,
+                                               config.use_bias,
                                                "config.use_bias=false");
         registrar.addTensor(prefix + "_wo_weight",
                     enc->attnWo(),
@@ -220,7 +220,7 @@ void registerEncoderParameters(LanguageModel& model,
                                                ParamGroupType::ATTENTION,
                                ParamStatsBucket::ENCODER,
                                                layer,
-                                               hp.register_encoder_biases,
+                                               config.use_bias,
                                                "config.use_bias=false");
 
         registrar.addTensor(prefix + "_ffn_w_gate",
@@ -243,7 +243,7 @@ void registerEncoderParameters(LanguageModel& model,
                                                ParamGroupType::FFN,
                                ParamStatsBucket::ENCODER,
                                                layer,
-                                               hp.register_encoder_biases,
+                                               config.use_bias,
                                                "config.use_bias=false");
 
         registrar.addNonDecayTensor(prefix + "_rms1_gamma",
@@ -262,24 +262,24 @@ void registerEncoderParameters(LanguageModel& model,
                                                ParamGroupType::RMSNORM,
                                ParamStatsBucket::ENCODER,
                                                layer,
-                                               hp.register_layer_scale,
+                                               config.use_layer_scale,
                                                "config.use_layer_scale=false");
         registrar.addConfigGatedNonDecayTensor(prefix + "_layer_scale2",
                                                enc->layerScale2(),
                                                ParamGroupType::RMSNORM,
                                ParamStatsBucket::ENCODER,
                                                layer,
-                                               hp.register_layer_scale,
+                                               config.use_layer_scale,
                                                "config.use_layer_scale=false");
     }
 }
 
 void registerScratchBlockParameters(LanguageModel& model,
                                     Registrar& registrar,
-                                    const ParameterRegistrationHP& hp) {
+                                    const LanguageModelConfig& config) {
     auto* scratch_block = model.getScratchBlockLayer();
 
-    if (!hp.register_scratch_block) {
+    if (!config.use_scratch_block) {
         if (scratch_block && scratch_block->isEnabled()) {
             throw std::runtime_error("[buildParameterGroups] ScratchBlock layer exists and is enabled while config.use_scratch_block=false");
         }
@@ -308,10 +308,10 @@ void registerScratchBlockParameters(LanguageModel& model,
 
 void registerReasoningHeadParameters(LanguageModel& model,
                                      Registrar& registrar,
-                                     const ParameterRegistrationHP& hp) {
+                                     const LanguageModelConfig& config) {
     auto* reasoning_head = model.getReasoningHeadLayer();
 
-    if (!hp.register_reasoning_head) {
+    if (!config.reasoning_head_enabled) {
         if (reasoning_head) {
             throw std::runtime_error("[buildParameterGroups] ReasoningHead layer exists while config.reasoning_head_enabled=false");
         }
@@ -327,15 +327,15 @@ void registerReasoningHeadParameters(LanguageModel& model,
 
 void registerExecutionBlockParameters(LanguageModel& model,
                                       Registrar& registrar,
-                                      const ParameterRegistrationHP& hp) {
+                                      const LanguageModelConfig& config) {
     auto* execution_block = model.getExecutionBlockLayer();
     auto* slot_selector = model.getDecodeTimeSlotSelectorLayer();
 
-    if (!hp.register_execution_block) {
+    if (!config.execution_block_enabled) {
         if (execution_block) {
             throw std::runtime_error("[buildParameterGroups] ExecutionBlock layer exists while config.execution_block_enabled=false");
         }
-        if (hp.register_slot_selector || slot_selector) {
+        if (config.selector_enabled || slot_selector) {
             throw std::runtime_error("[buildParameterGroups] Slot selector requires config.execution_block_enabled=true");
         }
         return;
@@ -373,7 +373,7 @@ void registerExecutionBlockParameters(LanguageModel& model,
     registrar.addTensor("exec_block_W_reason_gate", block.W_reason_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
     registrar.addTensor("exec_block_W_trace_gate", block.W_trace_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
 
-    if (!hp.register_slot_selector) {
+    if (!config.selector_enabled) {
         if (slot_selector) {
             throw std::runtime_error("[buildParameterGroups] DecodeTimeSlotSelector exists while config.selector_enabled=false");
         }
@@ -389,23 +389,23 @@ void registerExecutionBlockParameters(LanguageModel& model,
 
 void registerMtpParameters(LanguageModel& model,
                            Registrar& registrar,
-                           const ParameterRegistrationHP& hp) {
-    if (!hp.register_mtp) {
+                           const LanguageModelConfig& config) {
+    if (!config.mtp_enabled) {
         if (model.getMtpHead(0)) {
             throw std::runtime_error("[buildParameterGroups] MTP heads exist while config.mtp_enabled=false");
         }
         return;
     }
 
-    if (hp.mtp_k <= 0) {
+    if (config.mtp_k <= 0) {
         throw std::runtime_error("[buildParameterGroups] config.mtp_enabled=true but config.mtp_k <= 0");
     }
 
-    for (int k = 0; k < hp.mtp_k; ++k) {
+    for (int k = 0; k < config.mtp_k; ++k) {
         auto* head = model.getMtpHead(k);
         if (!head) {
             throw std::runtime_error("[buildParameterGroups] Missing MTP head " + std::to_string(k) +
-                                     " for configured mtp_k=" + std::to_string(hp.mtp_k));
+                                     " for configured mtp_k=" + std::to_string(config.mtp_k));
         }
         registrar.addTensor("mtp_head_" + std::to_string(k) + "_weight",
                             head->weight,
@@ -417,18 +417,18 @@ void registerMtpParameters(LanguageModel& model,
                         ParamStatsBucket::ENCODER);
     }
 
-    if (model.getMtpHead(hp.mtp_k)) {
+    if (model.getMtpHead(config.mtp_k)) {
         throw std::runtime_error("[buildParameterGroups] MTP head vector contains more entries than config.mtp_k");
     }
 }
 
 void registerFinalRmsGamma(LanguageModel& model,
                            Registrar& registrar,
-                           const ParameterRegistrationHP& hp) {
+                           const LanguageModelConfig& config) {
     auto& lm_head = requireLayer(model.getLmHeadLayer(), "LMHeadLayer", "registerFinalRmsGamma");
     const Tensor& final_gamma = lm_head.finalRmsGamma();
 
-    if (!hp.register_final_rms_gamma) {
+    if (config.lm_head_freeze_final_rms_gamma) {
         if (final_gamma.has_grad()) {
             throw std::runtime_error("[buildParameterGroups] final_rms_gamma is frozen by config but still has a grad buffer: " +
                                      tensorDebugSummary(final_gamma));
@@ -507,22 +507,31 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
              " other=" + std::to_string(other_count));
 }
 
+void validateParameterRegistrationConfig(const LanguageModelConfig& config) {
+    GRIM::HyperParameters::requireValidGQAGrouping(config, "buildParameterGroups");
+    GRIM::HyperParameters::requirePositiveGroupingValue(config.num_layers, "num_layers", "buildParameterGroups");
+    GRIM::HyperParameters::requirePositiveGroupingValue(config.vocab_size, "vocab_size", "buildParameterGroups");
+}
+
 } // namespace
 
-void buildParameterGroups(LanguageModel& model, const ParameterRegistrationHP& hp) {
+void buildParameterGroups(LanguageModel& model) {
+    const LanguageModelConfig& config = model.getConfig();
+    validateParameterRegistrationConfig(config);
+
     auto& model_groups = model.parameterGroups();
     std::vector<ParameterGroup> rebuilt_groups;
     rebuilt_groups.reserve(model_groups.size());
 
     Registrar registrar(rebuilt_groups);
-    registerTopLevelParameters(model, registrar, hp);
-    registerEncoderParameters(model, registrar, hp);
+    registerTopLevelParameters(model, registrar, config);
+    registerEncoderParameters(model, registrar, config);
 
-    registerScratchBlockParameters(model, registrar, hp);
-    registerReasoningHeadParameters(model, registrar, hp);
-    registerExecutionBlockParameters(model, registrar, hp);
-    registerMtpParameters(model, registrar, hp);
-    registerFinalRmsGamma(model, registrar, hp);
+    registerScratchBlockParameters(model, registrar, config);
+    registerReasoningHeadParameters(model, registrar, config);
+    registerExecutionBlockParameters(model, registrar, config);
+    registerMtpParameters(model, registrar, config);
+    registerFinalRmsGamma(model, registrar, config);
 
     clearOptimizerBindings(rebuilt_groups);
 
@@ -534,10 +543,6 @@ void buildParameterGroups(LanguageModel& model, const ParameterRegistrationHP& h
 
     emitInfo("[buildParameterGroups] Built " + std::to_string(model_groups.size()) + " parameter groups");
     emitGroupSummary(model_groups);
-}
-
-void buildParameterGroups(LanguageModel& model) {
-    model.buildParameterGroups();
 }
 
 void bindOptimizerState(LanguageModel& model,
@@ -578,8 +583,7 @@ namespace GRIM {
 #ifdef USE_CUDA
 
 void LanguageModel::buildParameterGroups() {
-    const auto hp = GRIM::HyperParameters::parameterRegistrationHP(config_);
-    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*this, hp);
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*this);
 }
 
 void LanguageModel::bindOptimizerState(OptimizerState& optimizer_state, cudaStream_t stream) {

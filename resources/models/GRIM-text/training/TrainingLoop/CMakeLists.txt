@@ -402,8 +402,9 @@ add_executable(train_gpu
     ../Phases/Startup/Capacity/RunCapacity.hpp
     ../Phases/Startup/Capacity/MemorySnapshot.cu
     ../Phases/Startup/Capacity/MemorySnapshot.hpp
-    ../Phases/Startup/Data/DataInfo.cu
     ../Phases/Startup/Data/DataInfo.hpp
+    ../Phases/Startup/Data/TrainingData.cu
+    ../Phases/Startup/Data/TrainingData.hpp
     ../Phases/Startup/Model/ModelAllocationState.cu
     ../Phases/Startup/Model/ModelAllocationState.hpp
     ../Phases/Startup/Resume/ResumeState.cu

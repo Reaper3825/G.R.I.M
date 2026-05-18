@@ -1,15 +1,17 @@
-#include "DataInfo.hpp"
+#include "TrainingData.hpp"
 
+#include "DataInfo.hpp"
 #include "../SlidingWindow.hpp"
 #include "../../ConfigDump.hpp"
 #include "../../Phase1_Startup.hpp"
 
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
-#include "../../../../Shared/UnigramByte/Unigram.hpp"
+#include "../../../../Shared/UnigramByte/UniByte.hpp"
 #include "../../../../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 
-#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
@@ -21,12 +23,15 @@ namespace GRIMText::Training {
 
 namespace Internal {
 
-void validatePaths(const PathConfig& paths) {
-    if (!fs::exists(paths.vocab_path)) {
-        throw std::runtime_error("Vocabulary file does not exist: " + paths.vocab_path);
+void validateStartupPaths(
+    const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
+    const PathConfig& paths)
+{
+    if (!fs::exists(tokenizer_hp.vocab_path)) {
+        throw std::runtime_error("Vocabulary file does not exist: " + tokenizer_hp.vocab_path);
     }
-    if (!fs::exists(paths.data_path)) {
-        throw std::runtime_error("Training data file does not exist: " + paths.data_path);
+    if (!fs::exists(tokenizer_hp.data_path)) {
+        throw std::runtime_error("Training data file does not exist: " + tokenizer_hp.data_path);
     }
     if (paths.output_model_path.empty()) {
         throw std::runtime_error("Output model path not configured");
@@ -62,43 +67,36 @@ std::unique_ptr<GRIM::Tokenizer::UniByte> initializeTokenizer(
     return tokenizer;
 }
 
-SequenceData loadTrainingData(
-    const std::string& data_path,
-    int max_seq_len,
-    int min_seq_valid_tokens,
-    int sliding_window_stride,
-    bool add_bos_token,
-    bool add_eos_token,
-    const GRIM::Tokenizer::UniByte& tokenizer,
+SequenceData buildPhase1SequenceData(
+    const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
+    const GRIM::HyperParameters::DataLoadingHP& data_hp,
+    const GRIM::HyperParameters::CapacityHP& capacity_hp,
     TrainingLogger& logger)
 {
     SequenceData data;
 
     GRMTDataLoader loader;
-    if (!loader.load(data_path)) {
+    if (!loader.load(tokenizer_hp.data_path)) {
         throw std::runtime_error("Failed to load training data");
     }
 
     data.vocab_size = loader.vocabSize();
-    auto all_sequences = loader.getSequences();
+    const auto& all_sequences = loader.getSequences();
 
-    const int bos_id = GRIM::Tokenizer::BOS_TOKEN_ID;
-    const int eos_id = GRIM::Tokenizer::EOS_TOKEN_ID;
-
-    size_t val_size = all_sequences.size() / 10;
+    std::size_t val_size = all_sequences.size() / 10;
     data.train_seqs.assign(all_sequences.begin() + val_size, all_sequences.end());
     data.val_seqs.assign(all_sequences.begin(), all_sequences.begin() + val_size);
 
     applySlidingWindows(data.train_seqs, "train",
-                        max_seq_len, sliding_window_stride, min_seq_valid_tokens,
-                        add_bos_token, add_eos_token, bos_id, eos_id, logger);
+                        capacity_hp.max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
+                        tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
     applySlidingWindows(data.val_seqs, "val",
-                        max_seq_len, sliding_window_stride, min_seq_valid_tokens,
-                        add_bos_token, add_eos_token, bos_id, eos_id, logger);
+                        capacity_hp.max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
+                        tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 
     data.train_views.reserve(data.train_seqs.size());
     data.train_seq_lengths.reserve(data.train_seqs.size());
-    for (uint32_t i = 0; i < data.train_seqs.size(); ++i) {
+    for (std::size_t i = 0; i < data.train_seqs.size(); ++i) {
         data.train_views.push_back(&data.train_seqs[i]);
         const uint32_t len = static_cast<uint32_t>(data.train_seqs[i].token_ids.size());
         data.train_seq_lengths.push_back(len);
@@ -106,7 +104,7 @@ SequenceData loadTrainingData(
 
     data.val_views.reserve(data.val_seqs.size());
     data.val_seq_lengths.reserve(data.val_seqs.size());
-    for (uint32_t i = 0; i < data.val_seqs.size(); ++i) {
+    for (std::size_t i = 0; i < data.val_seqs.size(); ++i) {
         data.val_views.push_back(&data.val_seqs[i]);
         const uint32_t len = static_cast<uint32_t>(data.val_seqs[i].token_ids.size());
         data.val_seq_lengths.push_back(len);
@@ -119,19 +117,7 @@ SequenceData loadTrainingData(
 
 namespace {
 
-std::uint32_t maxSequenceLen(const std::vector<TrainingSequence>& sequences) {
-    std::uint32_t max_len = 0;
-    for (const auto& seq : sequences) {
-        max_len = std::max(max_len, static_cast<std::uint32_t>(seq.token_ids.size()));
-    }
-    return max_len;
-}
-
-} // namespace
-
-DataInfo summarizeDataInfoOrThrow(
-    const DataLoadInputs& inputs,
-    const SequenceData& data)
+DataInfo summarizeDataInfoOrThrow(const SequenceData& data)
 {
     if (data.vocab_size == 0) {
         throw std::runtime_error("FATAL: training data missing vocab_size; regenerate GRMT with tokenizer.vocabSize()");
@@ -148,51 +134,37 @@ DataInfo summarizeDataInfoOrThrow(
     }
 
     DataInfo info;
-    info.data_path = inputs.data_path;
-    info.vocab_path = inputs.vocab_path;
     info.actual_vocab_size = data.vocab_size;
     info.train_sequence_count = data.train_seqs.size();
     info.val_sequence_count = data.val_seqs.size();
-    info.max_train_seq_len = maxSequenceLen(data.train_seqs);
-    info.max_val_seq_len = maxSequenceLen(data.val_seqs);
     return info;
 }
 
-void DataInfoReady(TrainingContext& ctx) {
+} // namespace
+
+void LoadTrainingData(TrainingContext& ctx) {
     using GRIM::Logging::EmitModuleInfo;
     using GRIM::Logging::ModuleId;
 
-    EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
-    Internal::validatePaths(ctx.config.paths);
-    EmitModuleInfo(ModuleId::Training, "[Phase1] ✓ All paths validated", 0);
-
     const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
     const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
+    const auto capacity_hp = GRIM::HyperParameters::capacityHP(ctx.config);
+
+    EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
+    Internal::validateStartupPaths(tokenizer_hp, ctx.config.paths);
+    EmitModuleInfo(ModuleId::Training, "[Phase1] ✓ All paths validated", 0);
+
     ctx.tokenizer = Internal::initializeTokenizer(
         tokenizer_hp, *ctx.logging.logger);
 
-    DataLoadInputs data_inputs;
-    data_inputs.data_path = tokenizer_hp.data_path;
-    data_inputs.vocab_path = tokenizer_hp.vocab_path;
-    data_inputs.max_seq_len = ctx.config.max_seq_len;
-    data_inputs.min_seq_valid_tokens = data_hp.min_seq_valid_tokens;
-    data_inputs.sliding_window_stride = data_hp.sliding_window_stride;
-    data_inputs.add_bos = tokenizer_hp.add_bos;
-    data_inputs.add_eos = tokenizer_hp.add_eos;
-
-    ctx.data = Internal::loadTrainingData(
-        data_inputs.data_path,
-        data_inputs.max_seq_len,
-        data_inputs.min_seq_valid_tokens,
-        data_inputs.sliding_window_stride,
-        data_inputs.add_bos,
-        data_inputs.add_eos,
-        *ctx.tokenizer,
+    ctx.data = Internal::buildPhase1SequenceData(
+        tokenizer_hp,
+        data_hp,
+        capacity_hp,
         *ctx.logging.logger);
 
-    ctx.data_info = summarizeDataInfoOrThrow(data_inputs, ctx.data);
-    ctx.config.actual_vocab_size = ctx.data_info.actual_vocab_size;
-    if (ctx.config.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
+    ctx.data_info = summarizeDataInfoOrThrow(ctx.data);
+    if (ctx.data_info.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
         throw std::runtime_error("FATAL: training data vocab_size must include special+byte+atom ranges (>= " +
             std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + ")");
     }
@@ -207,8 +179,8 @@ void DataInfoReady(TrainingContext& ctx) {
         ctx.config.hyperparameters, ctx.derived_schedule, hp_ctx, hp_logger);
 
     GRIMText::Training::DataStatsSnapshot data_stats;
-    data_stats.data_path = ctx.data_info.data_path;
-    data_stats.vocab_path = ctx.data_info.vocab_path;
+    data_stats.data_path = tokenizer_hp.data_path;
+    data_stats.vocab_path = tokenizer_hp.vocab_path;
     data_stats.actual_vocab_size = ctx.data_info.actual_vocab_size;
     data_stats.train_sequence_count = ctx.data_info.train_sequence_count;
     data_stats.val_sequence_count = ctx.data_info.val_sequence_count;
@@ -225,4 +197,3 @@ void DataInfoReady(TrainingContext& ctx) {
 }
 
 } // namespace GRIMText::Training
-

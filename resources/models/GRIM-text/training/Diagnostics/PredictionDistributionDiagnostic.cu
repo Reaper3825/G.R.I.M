@@ -90,7 +90,7 @@ void runPredictionDistributionAndLogitTrace(
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
         if (ts.cached_logits_tensor.data && payload.batch_size > 0 && payload.max_seq_len > 0) {
             const int total_tokens = payload.total_tokens;
-            const int vocab_size = ctx.config.actual_vocab_size;
+            const int vocab_size = static_cast<int>(ctx.data_info.actual_vocab_size);
             const int sample_positions = total_tokens;
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(sample_positions * vocab_size);

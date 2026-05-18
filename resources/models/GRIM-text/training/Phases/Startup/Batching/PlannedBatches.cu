@@ -123,7 +123,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     }
     if (ctx.data.train_views.empty()) {
         throw std::runtime_error(
-            "FATAL: PlannedBatchesReady requires DataInfoReady to have loaded "
+            "FATAL: PlannedBatchesReady requires LoadTrainingData to have loaded "
             "ctx.data.train_views");
     }
 

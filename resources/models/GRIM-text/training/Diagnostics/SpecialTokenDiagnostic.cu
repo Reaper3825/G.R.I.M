@@ -32,8 +32,7 @@ void runSpecialTokenDiagnostic(
     namespace Internal = ::GRIMText::Training::Internal;
     (void)payload;  // payload not consumed in this block — kept in signature for symmetry
     if (shouldSyncDiagnostics(ctx, batch_idx) && ctx.logging.tape && ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
-        const auto model_arch_hp =
-            GRIM::HyperParameters::modelArchitectureHP(ctx.config.hyperparameters.architecture);
+        const int d_model = ctx.model_config.d_model;
         const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
         // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
         // Read gradients from the SAME layer as weights (LM head) so rms(W) and
@@ -56,7 +55,7 @@ void runSpecialTokenDiagnostic(
                 constexpr const char* SPECIAL_NAMES[] = {"UNK", "PAD", "BOS", "EOS"};
                 constexpr int NUM_SPECIALS = 4;
 
-                std::vector<float> row_buf(model_arch_hp.d_model);
+                std::vector<float> row_buf(d_model);
                 std::ostringstream diag;
                 diag << std::fixed << std::setprecision(8);
                 diag << "[SPECIAL_TOKEN_EQUATION] batch=" << (batch_idx + 1)
@@ -67,13 +66,13 @@ void runSpecialTokenDiagnostic(
                 int content_norm_count = 0;
                 constexpr int CONTENT_SAMPLE_IDS[] = {512, 1000, 5000, 10000, 25000, 40000};
                 for (int cid : CONTENT_SAMPLE_IDS) {
-                    if (cid >= static_cast<int>(ctx.config.actual_vocab_size)) continue;
-                    const size_t off = static_cast<size_t>(cid) * model_arch_hp.d_model;
+                    if (cid >= static_cast<int>(ctx.data_info.actual_vocab_size)) continue;
+                    const size_t off = static_cast<size_t>(cid) * d_model;
                     cudaMemcpy(row_buf.data(), weights_ptr + off,
-                               model_arch_hp.d_model * sizeof(float), cudaMemcpyDeviceToHost);
+                               d_model * sizeof(float), cudaMemcpyDeviceToHost);
                     double sq = 0.0;
-                    for (int d = 0; d < model_arch_hp.d_model; ++d) sq += static_cast<double>(row_buf[d]) * row_buf[d];
-                    content_norm_sum += std::sqrt(sq / model_arch_hp.d_model);
+                    for (int d = 0; d < d_model; ++d) sq += static_cast<double>(row_buf[d]) * row_buf[d];
+                    content_norm_sum += std::sqrt(sq / d_model);
                     content_norm_count++;
                 }
                 const double content_norm_mean = (content_norm_count > 0)
@@ -81,33 +80,33 @@ void runSpecialTokenDiagnostic(
 
                 for (int s = 0; s < NUM_SPECIALS; ++s) {
                     const int tok_id = SPECIAL_IDS[s];
-                    const size_t row_offset = static_cast<size_t>(tok_id) * model_arch_hp.d_model;
+                    const size_t row_offset = static_cast<size_t>(tok_id) * d_model;
 
                     // Weight row
                     cudaMemcpy(row_buf.data(), weights_ptr + row_offset,
-                               model_arch_hp.d_model * sizeof(float), cudaMemcpyDeviceToHost);
+                               d_model * sizeof(float), cudaMemcpyDeviceToHost);
                     double w_sq = 0.0, w_sum = 0.0;
-                    for (int d = 0; d < model_arch_hp.d_model; ++d) {
+                    for (int d = 0; d < d_model; ++d) {
                         w_sq += static_cast<double>(row_buf[d]) * row_buf[d];
                         w_sum += row_buf[d];
                     }
-                    const float w_rms = static_cast<float>(std::sqrt(w_sq / model_arch_hp.d_model));
-                    const float w_mean = static_cast<float>(w_sum / model_arch_hp.d_model);
+                    const float w_rms = static_cast<float>(std::sqrt(w_sq / d_model));
+                    const float w_mean = static_cast<float>(w_sum / d_model);
 
                     // Gradient row (may be null if not yet computed)
                     float g_rms = 0.0f, g_sum = 0.0f;
                     bool has_grad = false;
                     if (grads_ptr) {
                         cudaMemcpy(row_buf.data(), grads_ptr + row_offset,
-                                   model_arch_hp.d_model * sizeof(float), cudaMemcpyDeviceToHost);
+                                   d_model * sizeof(float), cudaMemcpyDeviceToHost);
                         double g_sq = 0.0, gs = 0.0;
                         bool any_nonzero = false;
-                        for (int d = 0; d < model_arch_hp.d_model; ++d) {
+                        for (int d = 0; d < d_model; ++d) {
                             g_sq += static_cast<double>(row_buf[d]) * row_buf[d];
                             gs += row_buf[d];
                             if (row_buf[d] != 0.0f) any_nonzero = true;
                         }
-                        g_rms = static_cast<float>(std::sqrt(g_sq / model_arch_hp.d_model));
+                        g_rms = static_cast<float>(std::sqrt(g_sq / d_model));
                         g_sum = static_cast<float>(gs);
                         has_grad = any_nonzero;
                     }

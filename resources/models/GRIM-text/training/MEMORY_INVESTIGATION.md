@@ -61,7 +61,7 @@ constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = DEFAULT_MAX_SEQ_LEN * 4;  // defa
 `cached_logits` and `grad_logits` are `[max_tokens, vocab_size]`.
 If vocab from tokenizer/GRMT is 20k-50k, this becomes 800 MB-2 GB for those two buffers.
 
-**Check:** Log `ctx.config.actual_vocab_size` at startup.
+**Check:** Log the GRMT header fact `ctx.data_info.actual_vocab_size` after `LoadTrainingData` / `ModelAllocated`; `ctx.model_config.vocab_size` is only the model-allocation copy.
 
 ### 2. **d_ff mismatch**
 Config shows `d_ff: 1024` (same as d_model). Typical is `4 x d_model`.

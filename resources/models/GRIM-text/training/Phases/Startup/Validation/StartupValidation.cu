@@ -34,8 +34,8 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(ctx.run_capacity.seq_cap == static_cast<std::uint32_t>(ctx.config.max_seq_len),
             "RunCapacity.seq_cap does not match config.max_seq_len");
 
-    require(ctx.data_info.actual_vocab_size == ctx.config.actual_vocab_size,
-            "DataInfo.actual_vocab_size does not match StartupConfig.actual_vocab_size");
+    require(ctx.data_info.actual_vocab_size >= static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET),
+            "DataInfo.actual_vocab_size does not include special+byte+atom token ranges");
     require(ctx.data_info.train_sequence_count == ctx.data.train_seqs.size(),
             "DataInfo train sequence count does not match SequenceData");
     require(ctx.data_info.val_sequence_count == ctx.data.val_seqs.size(),

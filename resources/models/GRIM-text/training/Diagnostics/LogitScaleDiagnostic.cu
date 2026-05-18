@@ -132,18 +132,16 @@ void runLogitScaleDiagnostic(
         if (ts.cached_logits_tensor.data && payload.batch_size > 0 && payload.max_seq_len > 0) {
             const int total_tokens = payload.total_tokens;
             const int vocab_size = payload.vocab_size;
-            const auto model_arch_hp =
-                GRIM::HyperParameters::modelArchitectureHP(ctx.config.hyperparameters.architecture);
-            const int d_model = model_arch_hp.d_model;
+            const int d_model = ctx.model_config.d_model;
             const std::vector<int> lm_valid_positions =
                 buildLmValidPositionsOrThrow(payload, "runLogitScaleDiagnostic");
             const int sample_positions = static_cast<int>(lm_valid_positions.size());
 
-            if (vocab_size != ctx.config.actual_vocab_size) {
+                    if (vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
                 throw std::runtime_error(
                     "runLogitScaleDiagnostic: payload.vocab_size (" + std::to_string(vocab_size) +
-                    ") != ctx.config.actual_vocab_size (" +
-                    std::to_string(ctx.config.actual_vocab_size) + ") at " + __FILE__ + ":" +
+                        ") != ctx.data_info.actual_vocab_size (" +
+                        std::to_string(ctx.data_info.actual_vocab_size) + ") at " + __FILE__ + ":" +
                     std::to_string(__LINE__));
             }
 
@@ -420,9 +418,7 @@ void runLogitScaleDiagnostic(
                 if (!embedding_weights) {
                     throw std::runtime_error("runLogitScaleDiagnostic: embedding weights are NULL");
                 }
-                const auto lm_head_hp =
-                    GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config.hyperparameters.architecture);
-                if (lm_head_hp.tie_embeddings) {
+                if (ctx.model_config.tie_embeddings) {
                     if (lm_head_weights != embedding_weights) {
                         throw std::runtime_error("Tied embeddings: lm_head_weights and embedding_weights must alias the same buffer.");
                     }

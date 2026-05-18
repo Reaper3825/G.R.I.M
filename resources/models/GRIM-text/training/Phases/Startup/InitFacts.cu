@@ -8,7 +8,6 @@
 #include "InitFacts.hpp"
 
 #include "../../../Shared/Telemetry/TelemetryLattice_GPU.hpp"  // MetricStream
-#include "../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../Shared/LogRecorder/LogRecorder.hpp"
 
 #include <cstdint>
@@ -112,9 +111,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     const float* lm_w_ptr  = model->getLmHeadLayer()->weights().data;
     const float* emb_g_ptr = model->getEmbeddingLayer()->tokenWeights().grad_data();
     const float* lm_g_ptr  = model->getLmHeadLayer()->weights().grad_data();
-    const auto lm_head_hp =
-        GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config.hyperparameters.architecture);
-    const bool cfg_tied  = lm_head_hp.tie_embeddings;
+    const bool cfg_tied  = ctx.model_config.tie_embeddings;
     const bool lm_owns   = model->getLmHeadLayer()->ownsWeights();
     const bool ptrs_same  = (emb_w_ptr == lm_w_ptr);
     const bool grads_same = (emb_g_ptr == lm_g_ptr);
@@ -186,7 +183,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("loaded_checkpoint_path", ctx.loaded_checkpoint_path);
 
     emitInitFactLine("[INIT_FACTS] --- Effective architecture -----------------------------------------------");
-    const auto& arch = ctx.config.hyperparameters.architecture;
+    const auto& arch = ctx.model_config;
     emitInitFactKeyValue("architecture.d_model", fmtInt(arch.d_model));
     emitInitFactKeyValue("architecture.num_layers", fmtInt(arch.num_layers));
     emitInitFactKeyValue("architecture.num_heads", fmtInt(arch.num_heads));
@@ -194,8 +191,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("architecture.head_dim", fmtInt(arch.head_dim));
     emitInitFactKeyValue("architecture.d_ff", fmtInt(arch.d_ff));
     emitInitFactKeyValue("architecture.max_seq_len", fmtInt(arch.max_seq_len));
-    emitInitFactKeyValue("architecture.vocab_size", fmtInt(arch.vocab_size));
-    emitInitFactKeyValue("actual_vocab_size", fmtUInt64(ctx.config.actual_vocab_size));
+    emitInitFactKeyValue("data_info.actual_vocab_size", fmtUInt64(ctx.data_info.actual_vocab_size));
     emitInitFactKeyValue("architecture.tie_embeddings", boolText(arch.tie_embeddings));
     emitInitFactKeyValue("architecture.use_bias", boolText(arch.use_bias));
     emitInitFactKeyValue("architecture.use_scratch_block", boolText(arch.use_scratch_block));
