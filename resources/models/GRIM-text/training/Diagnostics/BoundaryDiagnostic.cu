@@ -29,9 +29,10 @@ void runBoundaryDiagnostic(
         const size_t total_tokens = static_cast<size_t>(payload.actual_tokens);
 
         
-        const auto& model_cfg_bd = ctx.model->getConfig();
+        const auto model_arch_hp =
+            GRIM::HyperParameters::modelArchitectureHP(ctx.config.hyperparameters.architecture);
         static bool logged_max_seq = false;
-        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(model_cfg_bd.max_seq_len) && !logged_max_seq);
+        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(model_arch_hp.max_seq_len) && !logged_max_seq);
 
         
         if (is_boundary_max_seq) {
@@ -40,25 +41,25 @@ void runBoundaryDiagnostic(
             diag << "[BOUNDARY_DIAGNOSTIC] Batch " << (batch_idx + 1) << " CROSSING BOUNDARY\n";
             
             // Identify which boundary was crossed
-            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << model_cfg_bd.max_seq_len << " ***\n";
+            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << model_arch_hp.max_seq_len << " ***\n";
 
             diag << "[BOUNDARY_DIAGNOSTIC] max_seq_len=" << max_seq_len 
                  << " total_tokens=" << total_tokens 
                  << " batch_size=" << payload.batch_size << "\n";
             
             diag << "[BOUNDARY_DIAGNOSTIC] MODEL CONFIG:\n";
-            diag << "  d_model=" << model_cfg_bd.d_model << "\n";
-            diag << "  max_seq_len=" << model_cfg_bd.max_seq_len << "\n";
-            diag << "  num_heads=" << model_cfg_bd.num_heads << "\n";
-            diag << "  num_layers=" << model_cfg_bd.num_layers << "\n";
-            diag << "  vocab_size=" << model_cfg_bd.vocab_size << "\n";
+            diag << "  d_model=" << model_arch_hp.d_model << "\n";
+            diag << "  max_seq_len=" << model_arch_hp.max_seq_len << "\n";
+            diag << "  num_heads=" << model_arch_hp.num_heads << "\n";
+            diag << "  num_layers=" << model_arch_hp.num_layers << "\n";
+            diag << "  vocab_size=" << ctx.config.actual_vocab_size << "\n";
             
             // Position embedding checks (this IS a valid concern)
             diag << "[BOUNDARY_DIAGNOSTIC] POSITION EMBEDDING CHECKS:\n";
             diag << "  Current max_seq_len in batch: " << max_seq_len << "\n";
-            diag << "  Model max_seq_len: " << model_cfg_bd.max_seq_len << "\n";
+            diag << "  Model max_seq_len: " << model_arch_hp.max_seq_len << "\n";
             diag << "  Position index range needed: [0, " << (max_seq_len - 1) << "]\n";
-            if (max_seq_len > static_cast<size_t>(model_cfg_bd.max_seq_len)) {
+            if (max_seq_len > static_cast<size_t>(model_arch_hp.max_seq_len)) {
                 diag << "  *** ERROR: Sequence exceeds model max_seq_len! Position embeddings will OOB! ***\n";
             }
             
@@ -69,9 +70,9 @@ void runBoundaryDiagnostic(
                 diag << "  seq[" << s << "]: len=" << seq_len;
                 
                 // Check for position IDs that would overflow
-                if (seq_len > model_cfg_bd.max_seq_len) {
+                if (seq_len > model_arch_hp.max_seq_len) {
                     diag << " *** OVERFLOW pos=" << seq_len 
-                         << " > max=" << model_cfg_bd.max_seq_len << " ***";
+                         << " > max=" << model_arch_hp.max_seq_len << " ***";
                 }
                 
                 // Sample first and last tokens from flat payload
@@ -100,9 +101,9 @@ void runBoundaryDiagnostic(
             const size_t token_capacity = static_cast<size_t>(token_shape.as_2d().cols);
             const size_t logit_token_capacity = static_cast<size_t>(logits_shape.as_2d().rows);
             diag << "[BOUNDARY_DIAGNOSTIC] AUTHORED CAPACITY:\n";
-            diag << "  model.max_cached_batch=" << model_cfg_bd.max_cached_batch << "\n";
-            diag << "  model.max_cached_seq_len=" << model_cfg_bd.max_cached_seq_len << "\n";
-            diag << "  model.max_tokens_per_batch=" << model_cfg_bd.max_tokens_per_batch << "\n";
+            diag << "  model.max_cached_batch=" << ctx.run_capacity.batch_rows << "\n";
+            diag << "  model.max_cached_seq_len=" << ctx.run_capacity.seq_cap << "\n";
+            diag << "  model.max_tokens_per_batch=" << ctx.run_capacity.max_tokens_per_batch << "\n";
             diag << "[BOUNDARY_DIAGNOSTIC] ALLOCATED CACHE CAPACITY:\n";
             diag << "  cached_token_ids_tensor.cols=" << token_capacity << "\n";
             diag << "  cached_logits_tensor.rows=" << logit_token_capacity << "\n";
@@ -113,9 +114,9 @@ void runBoundaryDiagnostic(
                 diag << "  *** WARNING: Batch exceeds training cache capacity! ***\n";
                 diag << "  *** Need " << payload.total_tokens << " but have " << token_capacity << " ***\n";
             }
-            if (max_seq_len > static_cast<size_t>(model_cfg_bd.max_cached_seq_len)) {
+            if (max_seq_len > static_cast<size_t>(ctx.run_capacity.seq_cap)) {
                 diag << "  *** WARNING: Sequence exceeds max_cached_seq_len! ***\n";
-                diag << "  *** max_seq_len=" << max_seq_len << " > max_cached=" << model_cfg_bd.max_cached_seq_len << " ***\n";
+                diag << "  *** max_seq_len=" << max_seq_len << " > max_cached=" << ctx.run_capacity.seq_cap << " ***\n";
             }
             
             // NOTE: FlashAttention v2 uses O(N) tiled attention, NOT O(N²) buffers.
@@ -136,8 +137,8 @@ void runBoundaryDiagnostic(
                 }
             }
             diag << "  Token ID range: [" << min_token_id << ", " << max_token_id << "]\n";
-            diag << "  Vocab size: " << model_cfg_bd.vocab_size << "\n";
-            if (max_token_id >= static_cast<int>(model_cfg_bd.vocab_size)) {
+            diag << "  Vocab size: " << ctx.config.actual_vocab_size << "\n";
+            if (max_token_id >= static_cast<int>(ctx.config.actual_vocab_size)) {
                 diag << "  *** ERROR: Token ID exceeds vocab size! ***\n";
             }
     

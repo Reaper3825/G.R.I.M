@@ -879,7 +879,7 @@ void LanguageModel::ensureKVCacheAllocated() {
         return;
     }
 
-    const auto& cfg = getConfig();
+    const auto& cfg = config_;
     if (cfg.num_kv_heads <= 0) {
         throw std::runtime_error("ensureKVCacheAllocated: cfg.num_kv_heads must be > 0");
     }

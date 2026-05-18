@@ -509,12 +509,10 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
 
 } // namespace
 
-void buildParameterGroups(LanguageModel& model) {
+void buildParameterGroups(LanguageModel& model, const ParameterRegistrationHP& hp) {
     auto& model_groups = model.parameterGroups();
     std::vector<ParameterGroup> rebuilt_groups;
     rebuilt_groups.reserve(model_groups.size());
-
-    const ParameterRegistrationHP hp = GRIM::HyperParameters::parameterRegistrationHP(model.getConfig());
 
     Registrar registrar(rebuilt_groups);
     registerTopLevelParameters(model, registrar, hp);
@@ -536,6 +534,10 @@ void buildParameterGroups(LanguageModel& model) {
 
     emitInfo("[buildParameterGroups] Built " + std::to_string(model_groups.size()) + " parameter groups");
     emitGroupSummary(model_groups);
+}
+
+void buildParameterGroups(LanguageModel& model) {
+    model.buildParameterGroups();
 }
 
 void bindOptimizerState(LanguageModel& model,
@@ -576,7 +578,8 @@ namespace GRIM {
 #ifdef USE_CUDA
 
 void LanguageModel::buildParameterGroups() {
-    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*this);
+    const auto hp = GRIM::HyperParameters::parameterRegistrationHP(config_);
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*this, hp);
 }
 
 void LanguageModel::bindOptimizerState(OptimizerState& optimizer_state, cudaStream_t stream) {

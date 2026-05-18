@@ -10,7 +10,7 @@
 //  The fields that buildBatchPayload(...) needs from "the run" — model cache
 //  geometry, execution-block sizes, vocab size, token layout, MTP head count —
 //  are all run-invariant. Phase2 used to re-read them per batch from
-//  ctx.model->getConfig() and ctx.run_capacity, AND re-check the invariant
+//  the LanguageModel config accessor and ctx.run_capacity, AND re-check the invariant
 //  that the model and the capacity stem agreed on cache dimensions. Both the
 //  reads and the contract check are properly Phase1's job:
 //

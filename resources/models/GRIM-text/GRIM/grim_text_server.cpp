@@ -45,6 +45,15 @@ using GRIM::HyperParameters::SamplingStrategy;
 std::unique_ptr<LanguageModel> g_model;
 std::unique_ptr<GRIM::Tokenizer::UniByte> g_tokenizer;
 
+struct InferencePayloadDefaults {
+    int vocab_size = 0;
+    size_t max_cached_batch = 0;
+    size_t max_cached_seq_len = 0;
+    int execution_block_num_slots = 0;
+};
+
+InferencePayloadDefaults g_payload_defaults;
+
 GenerationConfig g_generation_defaults = [] {
     GenerationConfig cfg;
     cfg.strategy = SamplingStrategy::TOP_P;
@@ -87,6 +96,11 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
         
         config.generation.eos_token_id = GRIM::Tokenizer::EOS_TOKEN_ID;
         config.generation.pad_token_id = GRIM::Tokenizer::PAD_TOKEN_ID;
+        const auto execution_hp = HyperParameters::executionBlockConstructionHP(config);
+        g_payload_defaults.vocab_size = config.vocab_size;
+        g_payload_defaults.max_cached_batch = static_cast<size_t>(config.max_cached_batch);
+        g_payload_defaults.max_cached_seq_len = static_cast<size_t>(config.max_cached_seq_len);
+        g_payload_defaults.execution_block_num_slots = execution_hp.num_slots;
         
         g_model = std::make_unique<LanguageModel>(config);
         std::cout << "[GRIM-text] ✓ Model object created\n" << std::flush;
@@ -164,7 +178,11 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
                   << ", PAD token ID: " << gen_config.pad_token_id << std::endl;
         std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
         auto start_gen = std::chrono::high_resolution_clock::now();
-        const auto& model_cfg = g_model->getConfig();
+        if (g_payload_defaults.vocab_size <= 0 ||
+            g_payload_defaults.max_cached_batch == 0 ||
+            g_payload_defaults.max_cached_seq_len == 0) {
+            throw std::runtime_error("generateResponse: inference payload defaults were not initialized");
+        }
         const std::vector<int32_t> prompt_token_to_slot_map;
         auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
             tokens,
@@ -174,10 +192,10 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
             prompt_atom_table,
             atom_entry_ids,
             prompt_token_to_slot_map,
-            model_cfg.vocab_size,
-            static_cast<size_t>(model_cfg.max_cached_batch),
-            static_cast<size_t>(model_cfg.max_cached_seq_len),
-            model_cfg.execution_block_num_slots);
+            g_payload_defaults.vocab_size,
+            g_payload_defaults.max_cached_batch,
+            g_payload_defaults.max_cached_seq_len,
+            g_payload_defaults.execution_block_num_slots);
         auto results = g_model->generate(prompt_payload, &gen_config);
         auto end_gen = std::chrono::high_resolution_clock::now();
         auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();

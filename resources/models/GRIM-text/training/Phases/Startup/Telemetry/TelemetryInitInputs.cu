@@ -41,9 +41,9 @@ void TelemetryReady(TrainingContext& ctx) {
         throw std::runtime_error("FATAL: RunCapacity is invalid (token_budget=" +
                                  std::to_string(token_budget) + " seq_cap=" + std::to_string(seq_cap) + ")");
     }
-    if (static_cast<uint32_t>(ctx.model->getConfig().max_tokens_per_batch) != token_budget) {
+    if (static_cast<uint32_t>(ctx.model_allocation.model_max_tokens_per_batch) != token_budget) {
         throw std::runtime_error("FATAL: model max_tokens_per_batch does not match RunCapacity (model=" +
-                                 std::to_string(ctx.model->getConfig().max_tokens_per_batch) +
+                                 std::to_string(ctx.model_allocation.model_max_tokens_per_batch) +
                                  " stem=" + std::to_string(token_budget) + ")");
     }
     ctx.telemetry.control_config = GRIM::Telemetry::makeControlConfigFromHyperparameters(

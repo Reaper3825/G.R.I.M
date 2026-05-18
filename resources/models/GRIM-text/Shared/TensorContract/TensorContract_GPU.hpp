@@ -37,6 +37,7 @@ extern bool g_autograd_verbose;
 //  2D LAYOUTS (flat tensors):
 //    BSM       = [tokens, d_model]         - Collapsed activation format
 //    QKV_FUSED = [tokens, total_qkv_dim]   - Fused QKV projection output
+//    LOGITS    = [tokens, vocab_size]      - Language model logits
 //
 //  4D LAYOUTS (attention tensors):
 //    BHSD = [batch, heads, seq, head_dim]  - Standard attention format
@@ -71,7 +72,6 @@ extern bool g_autograd_verbose;
 #include <string>
 #include <vector>
 #include <functional>
-#include <string>
 #include <algorithm>  // for std::max in merge_qkv_grads_gqa
 #include <memory>     // for std::shared_ptr (ISSUE #59: grad as Tensor)
 #include <tuple>      // for std::tuple (ISSUE #61: split_and_reshape_qkv return type)
@@ -179,7 +179,7 @@ constexpr bool is_4d_layout(Layout l) {
 //======================================================//
 
 /**
- * Shape2D - For flat/collapsed tensors (BSM, QKV_FUSED)
+ * Shape2D - For flat/collapsed tensors (BSM, QKV_FUSED, LOGITS)
  * 
  * These are TRUE 2D tensors, not 4D tensors pretending to have seq=1.
  */
@@ -202,7 +202,7 @@ struct Shape2D {
 };
 
 /**
- * Shape4D - For multi-head attention tensors (BHSD, BHDS, BSHD)
+ * Shape4D - For multi-head attention tensors (BHSD, BSHD)
  */
 struct Shape4D {
     int batch = 0;
@@ -243,8 +243,8 @@ struct TensorShape {
     Layout layout = Layout::UNKNOWN;
     
     union {
-        Shape2D flat;   // For BSM, QKV_FUSED
-        Shape4D multi;  // For BHSD, BHDS, BSHD
+        Shape2D flat;   // For BSM, QKV_FUSED, LOGITS
+        Shape4D multi;  // For BHSD, BSHD
     };
     
     // Default constructor
@@ -691,9 +691,6 @@ struct ParameterGroup {
 //  GradFn - Backward Function Node (Computation Graph)
 //======================================================//
 
-// Forward declaration
-struct Tensor;
-
 /**
  * @brief Base class for backward computation nodes
  * 
@@ -707,7 +704,7 @@ struct Tensor;
  *   grad_B = A^T @ grad_output
  * 
  * OWNERSHIP: GradFn owns saved tensor data (copies are made during forward).
- * The tensor's grad_fn pointer is a raw pointer; the Tensor owns the GradFn.
+ * Tensor holds GradFn via std::shared_ptr, which manages node lifetime.
  */
 struct GradFn {
     //--------------------------------------------------//
@@ -1062,7 +1059,7 @@ inline size_t ParameterGroup::size_bytes() const { return size() * sizeof(float)
  */
 void zeroParameterGradients(std::vector<ParameterGroup>& groups, cudaStream_t stream);
 
-}  // namespace GRIM (temporarily close for cuBLAS forward decl)
+}  // namespace GRIM
 
 //======================================================//
 //  Autograd Operations (create computation graph nodes)
@@ -1083,10 +1080,6 @@ namespace autograd {
  */
 void set_autograd_cublas_handle(cublasHandle_t handle);
 cublasHandle_t get_autograd_cublas_handle();
-
-// Issue #142: set_lm_head_grad_correction() DELETED.
-// Centering backward is now handled by CenterRowsGradFn/CenterColumnsGradFn
-// inside the autograd graph (Issues #125/#132).
 
 /**
  * Matrix multiplication: C = A @ B  (or C = A @ B^T if transpose_b=true)
@@ -1115,8 +1108,6 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
  * Backward: gradient passed to input is scale * grad_output.
  */
 Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream = nullptr);
-
-// autograd::scale() DELETED — dead code from reverted Issue #98 (Rule 20)
 
 /**
  * LayerScale: Scale tensor by a learned per-channel gamma vector [1, D]

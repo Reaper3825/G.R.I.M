@@ -134,7 +134,7 @@ void LanguageModel::initTrainingState() {
             "This is a call-order bug.");
     }
     
-    const auto& cfg = getConfig();
+    const auto& cfg = config_;
     
     // ═══════════════════════════════════════════════════════════════════════
     //  STEP 1: Verify StreamController is initialized

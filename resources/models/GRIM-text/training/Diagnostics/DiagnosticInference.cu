@@ -241,7 +241,8 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
 
     try {
         const auto start = std::chrono::steady_clock::now();
-        const auto& model_cfg = ctx.model->getConfig();
+        const auto execution_hp =
+            GRIM::HyperParameters::executionBlockConstructionHP(ctx.config.hyperparameters.architecture);
         const std::vector<int32_t> prompt_token_to_slot_map;
         auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
             prompt_tokens,
@@ -251,10 +252,10 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
             prompt_atom_table,
             prompt_atom_entry_ids,
             prompt_token_to_slot_map,
-            model_cfg.vocab_size,
-            static_cast<size_t>(model_cfg.max_cached_batch),
-            static_cast<size_t>(model_cfg.max_cached_seq_len),
-            model_cfg.execution_block_num_slots);
+            static_cast<int>(ctx.config.actual_vocab_size),
+            static_cast<size_t>(ctx.run_capacity.batch_rows),
+            static_cast<size_t>(ctx.run_capacity.seq_cap),
+            execution_hp.num_slots);
         std::vector<GRIM::GeneratedSequence> outputs = ctx.model->generate(
             prompt_payload,
             &cfg);

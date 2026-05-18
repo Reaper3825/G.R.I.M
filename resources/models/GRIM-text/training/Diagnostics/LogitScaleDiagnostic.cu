@@ -132,7 +132,9 @@ void runLogitScaleDiagnostic(
         if (ts.cached_logits_tensor.data && payload.batch_size > 0 && payload.max_seq_len > 0) {
             const int total_tokens = payload.total_tokens;
             const int vocab_size = payload.vocab_size;
-            const int d_model = ctx.model->getConfig().d_model;
+            const auto model_arch_hp =
+                GRIM::HyperParameters::modelArchitectureHP(ctx.config.hyperparameters.architecture);
+            const int d_model = model_arch_hp.d_model;
             const std::vector<int> lm_valid_positions =
                 buildLmValidPositionsOrThrow(payload, "runLogitScaleDiagnostic");
             const int sample_positions = static_cast<int>(lm_valid_positions.size());
@@ -418,7 +420,9 @@ void runLogitScaleDiagnostic(
                 if (!embedding_weights) {
                     throw std::runtime_error("runLogitScaleDiagnostic: embedding weights are NULL");
                 }
-                if (ctx.model->getConfig().tie_embeddings) {
+                const auto lm_head_hp =
+                    GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config.hyperparameters.architecture);
+                if (lm_head_hp.tie_embeddings) {
                     if (lm_head_weights != embedding_weights) {
                         throw std::runtime_error("Tied embeddings: lm_head_weights and embedding_weights must alias the same buffer.");
                     }
@@ -440,7 +444,7 @@ void runLogitScaleDiagnostic(
                         GRIM::Diagnostics::computeLMHeadWeightStats(
                             lm_head_weights,
                             payload.vocab_size,
-                            ctx.model->getConfig().d_model,
+                            d_model,
                             diag_stream);
                     w_rms_mean    = stats.w_rms_mean;
                     w_rms_sq_mean = stats.w_rms_quadmean * stats.w_rms_quadmean;

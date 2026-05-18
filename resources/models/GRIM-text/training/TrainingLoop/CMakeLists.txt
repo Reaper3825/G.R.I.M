@@ -881,61 +881,10 @@ target_include_directories(execution_block_test PRIVATE
 )
 
 # ============================================================================
-# DIAGNOSTIC MINIMAL TRAINING LOOP
-# Barebones training loop for isolating plateau bug
-# No telemetry, no dynamic LR, no clipping, no restarts - just forward/backward/AdamW
-# ============================================================================
-add_executable(diagnostic_train_minimal
-    ../diagnostic_train_minimal.cu
-    ../../Shared/DataLoader/DataLoader.cu
-)
-
-set_target_properties(diagnostic_train_minimal PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
-    CUDA_RUNTIME_LIBRARY Shared
-)
-
-target_compile_definitions(diagnostic_train_minimal PRIVATE USE_CUDA)
-
-target_compile_options(diagnostic_train_minimal PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
-)
-
-# Force exclusion of static CUDA runtime to prevent LNK2005 conflicts
-target_link_options(diagnostic_train_minimal PRIVATE 
-    /NODEFAULTLIB:cudart_static.lib
-)
-
-target_link_libraries(diagnostic_train_minimal PRIVATE
-    flatbuffers::flatbuffers
-    nlohmann_json::nlohmann_json
-    CUDA::cudart
-    CUDA::cublas
-    grim_flash_attention
-    grim_training_kernels
-    grim_cuda_kernels
-    grim_language_model_gpu_impl
-    grim_unigrambyte_tokenizer
-    grim_log_recorder
-)
-
-target_include_directories(diagnostic_train_minimal PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control
-)
-
-# ============================================================================
 # EMBEDDING AUTOGRAD TEST SUITE
 # Autograd-enabled embedding tests using TensorContract system
 message(STATUS "TrainingLoop configured:")
 message(STATUS "  - train_gpu: GPU-accelerated training with comprehensive logging")
-message(STATUS "  - diagnostic_train_minimal: Barebones training for plateau debugging")
 message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suite (BPE)")
 message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
 message(STATUS "  - grmt_vocab_metrics_test: GRMT corpus + vocabulary metrics diagnostics")

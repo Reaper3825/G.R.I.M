@@ -64,8 +64,10 @@ void runPostOptimizerWeightTrace(
             ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()
         );
         if (update_trace.valid) {
+            const auto lm_head_hp =
+                GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config.hyperparameters.architecture);
             const std::string trace_str = formatUpdateTrace(
-                update_trace, batch_idx + 1, ctx.model->getConfig().tie_embeddings);
+                update_trace, batch_idx + 1, lm_head_hp.tie_embeddings);
             ctx.logging.logger->log(trace_str);
         }
     }

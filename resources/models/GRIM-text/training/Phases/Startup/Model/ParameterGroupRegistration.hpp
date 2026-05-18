@@ -12,6 +12,10 @@ class LanguageModel;
 struct OptimizerState;
 }
 
+namespace GRIM::HyperParameters {
+struct ParameterRegistrationHP;
+}
+
 namespace GRIMText::Training::Startup::ModelRegistration {
 
 #ifdef USE_CUDA
@@ -24,6 +28,8 @@ namespace GRIMText::Training::Startup::ModelRegistration {
 //   metadata, and binds externally owned optimizer moment tensors.
 // - OptimizerState owns Adam/RAdam moment tensor storage; ParameterGroup entries
 //   only borrow those tensors after bindOptimizerState().
+void buildParameterGroups(GRIM::LanguageModel& model,
+                          const GRIM::HyperParameters::ParameterRegistrationHP& hp);
 void buildParameterGroups(GRIM::LanguageModel& model);
 void bindOptimizerState(GRIM::LanguageModel& model,
                         GRIM::OptimizerState& optimizer_state,

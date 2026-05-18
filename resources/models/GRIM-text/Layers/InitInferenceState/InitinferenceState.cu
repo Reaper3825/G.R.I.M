@@ -47,7 +47,7 @@ void LanguageModel::initInferenceState() {
             "This is a call-order bug.");
     }
     
-    const auto& model_cfg = getConfig();
+    const auto& model_cfg = config_;
     std::cout << "[InitInferenceState] Initializing INFERENCE-ONLY state..." << std::endl;
     std::cout << "  → Skipping gradient buffers" << std::endl;
     std::cout << "  → Skipping optimizer state" << std::endl;

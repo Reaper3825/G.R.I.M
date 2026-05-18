@@ -243,11 +243,18 @@ BatchResult processBatch(
     // returned BatchDeviceBindings inside autogradTrainingStep — payload itself
     // is host-only/immutable and never carries device pointers.
     const auto train_bindings = ctx.model->uploadBatchToDevice(payload);
+    const auto model_config = GRIM::HyperParameters::startupLanguageModelConfig(
+        ctx.config,
+        ctx.config.actual_vocab_size,
+        static_cast<int>(ctx.run_capacity.batch_rows),
+        static_cast<int>(ctx.run_capacity.seq_cap),
+        static_cast<int>(ctx.run_capacity.max_tokens_per_batch));
     auto loss_result = GRIM::Autograd::autogradTrainingStep(
         *ctx.model,
         ctx.model->getTrainingState(),
         payload,
         train_bindings,
+        model_config,
         ctx.loss_config,
         should_accumulate,
         grad_scale,
@@ -517,6 +524,8 @@ BatchResult processBatch(
     // Phase2 does not launch diagnostic grad-norm measurement or manufacture
     // placeholder gradient values for telemetry.
     if (has_clip_metrics) {
+        const auto model_arch_hp =
+            GRIM::HyperParameters::modelArchitectureHP(ctx.config.hyperparameters.architecture);
         GRIM::Telemetry::TelemetryBatchInput tel_input;
         tel_input.loss              = result.loss;
         tel_input.preclip_grad_rms  = clip_metrics.global_rms_pre;
@@ -531,7 +540,7 @@ BatchResult processBatch(
         tel_input.batch_idx         = batch_idx;
         tel_input.global_step       = ctx.global_step;
         tel_input.actual_vocab_size = ctx.config.actual_vocab_size;
-        tel_input.d_model           = ctx.model->getConfig().d_model;
+        tel_input.d_model           = model_arch_hp.d_model;
 
         GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, clip_metrics.metrics, &payload);
     }

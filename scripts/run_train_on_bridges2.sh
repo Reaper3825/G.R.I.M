@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run GRIM-text training on PSC Bridges-2 via SSH.
-# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--config CONFIG] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas]
+# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--config CONFIG] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas] [--pull-vocab] [--pull-logs]
 #
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
@@ -23,6 +23,8 @@
 # Options:
 #   --build          Build train_gpu before running.
 #   --config X       Config (default: ai_config.json).
+#   --pull-vocab     Download Bridges-2 training/data/vocab.bin, vocab.txt, and training_data.grmt into the local training data dir, then exit.
+#   --pull-logs      Download the latest Bridges-2 training log and telemetry_<session>.csv from training/logs into the local logs dir, then exit.
 #   --sbatch         Submit batch job (scripts/train_bridges2.sbatch).
 #   --partition P    GPU-shared (default) or GPU.
 #   --gpu-type T     h100-80 (default), v100-32, v100-16, or l40s-48.
@@ -48,9 +50,13 @@ BUILD_DIR="$TRAINING_DIR/TrainingLoop/build"
 EXE="$BUILD_DIR/train_gpu"
 CONFIG="${CONFIG:-../../../../ai_config.json}"
 TRAINING_DATA_DIR="$REPO_ROOT/resources/models/GRIM-text/training/data"
+TRAINING_LOGS_DIR="$REPO_ROOT/resources/models/GRIM-text/training/logs"
 CACHE_PATH="$TRAINING_DATA_DIR/merged_verified_cache.jsonl"
 CONCEPT_BLOCKS_PATH="$TRAINING_DATA_DIR/concept_blocks.jsonl"
 CURRICULUM_REGISTRY_PATH="$TRAINING_DATA_DIR/curriculum_registry.json"
+LOCAL_VOCAB_PATH="$TRAINING_DATA_DIR/vocab.bin"
+LOCAL_VOCAB_TXT_PATH="$TRAINING_DATA_DIR/vocab.txt"
+LOCAL_GRMT_PATH="$TRAINING_DATA_DIR/training_data.grmt"
 
 # Bridges-2 path: /ocean/projects/<alloc_id>/<username>/G.R.I.M (override with GRIM_BRIDGES2_DIR)
 BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
@@ -70,6 +76,8 @@ FLAG_SYNC_CRS=false
 DO_TD=false
 DO_UT=false
 DO_TT=false
+DO_PULL_VOCAB=false
+DO_PULL_LOGS=false
 TT_FORCE=false
 
 while [[ $# -gt 0 ]]; do
@@ -78,6 +86,8 @@ while [[ $# -gt 0 ]]; do
     --incremental)    DO_INCREMENTAL=true; shift ;;
     --clean)          DO_CLEAN_BUILD=true; shift ;;
     --config)         CONFIG="$2"; shift 2 ;;
+    --pull-vocab)     DO_PULL_VOCAB=true; shift ;;
+    --pull-logs)      DO_PULL_LOGS=true; shift ;;
     --sbatch)         USE_SBATCH=true; shift ;;
     --partition)      PARTITION="$2"; shift 2 ;;
     --gpu-type)       GPU_TYPE="$2"; shift 2 ;;
@@ -153,12 +163,20 @@ fi
 REMOTE_TRAINING="$BRIDGES2_DIR/$TRAINING_DIR"
 REMOTE_EXE="$BRIDGES2_DIR/$EXE"
 REMOTE_DATA="$REMOTE_TRAINING/data"
+REMOTE_TRAINING_LOGS="$REMOTE_TRAINING/logs"
 REMOTE_CACHE="$REMOTE_DATA/merged_verified_cache.jsonl"
 REMOTE_CONCEPT_BLOCKS="$REMOTE_DATA/concept_blocks.jsonl"
 REMOTE_CURRICULUM_REGISTRY="$REMOTE_DATA/curriculum_registry.json"
+REMOTE_VOCAB="$REMOTE_DATA/vocab.bin"
+REMOTE_VOCAB_TXT="$REMOTE_DATA/vocab.txt"
+REMOTE_GRMT="$REMOTE_DATA/training_data.grmt"
 CACHE_PATH_EXPANDED="${CACHE_PATH/#\~/$HOME}"
 CONCEPT_BLOCKS_PATH_EXPANDED="${CONCEPT_BLOCKS_PATH/#\~/$HOME}"
 CURRICULUM_REGISTRY_PATH_EXPANDED="${CURRICULUM_REGISTRY_PATH/#\~/$HOME}"
+LOCAL_VOCAB_PATH_EXPANDED="${LOCAL_VOCAB_PATH/#\~/$HOME}"
+LOCAL_VOCAB_TXT_PATH_EXPANDED="${LOCAL_VOCAB_TXT_PATH/#\~/$HOME}"
+LOCAL_GRMT_PATH_EXPANDED="${LOCAL_GRMT_PATH/#\~/$HOME}"
+TRAINING_LOGS_DIR_EXPANDED="${TRAINING_LOGS_DIR/#\~/$HOME}"
 
 # SSH target: bridges2 or bridges2.psc.edu
 BRIDGES2_SSH="${GRIM_BRIDGES2_SSH:-bridges2}"
@@ -177,11 +195,28 @@ if ! ssh -f -N -M -S "$BRIDGES2_CTRL" -o ConnectTimeout=10 -o StrictHostKeyCheck
   echo "SSH to Bridges-2 failed. Try: ssh bridges2"
   exit 1
 fi
-trap 'ssh -S "$BRIDGES2_CTRL" -O exit "$BRIDGES2_SSH" 2>/dev/null; rm -f "$BRIDGES2_CTRL"' EXIT
+REMOTE_SNAPSHOT_PATHS=()
+trap 'cleanup_bridges2_session' EXIT
 BRIDGES2_SSH_OPTS="-S $BRIDGES2_CTRL -o ControlMaster=no"
 
 remote_quote() {
   printf '%q' "$1"
+}
+
+cleanup_bridges2_session() {
+  local snapshot_path
+  local q_snapshot_path
+
+  for snapshot_path in "${REMOTE_SNAPSHOT_PATHS[@]}"; do
+    [[ -n "$snapshot_path" ]] || continue
+    q_snapshot_path="$(remote_quote "$snapshot_path")"
+    if ! ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "rm -f $q_snapshot_path" 2>/dev/null; then
+      echo "ERROR: failed to remove remote snapshot: $snapshot_path" >&2
+    fi
+  done
+
+  ssh -S "$BRIDGES2_CTRL" -O exit "$BRIDGES2_SSH" 2>/dev/null
+  rm -f "$BRIDGES2_CTRL"
 }
 
 verify_remote_size() {
@@ -200,12 +235,102 @@ verify_remote_size() {
   echo "  verified: $actual_bytes bytes"
 }
 
+verify_local_size() {
+  local label="$1"
+  local local_path="$2"
+  local expected_bytes="$3"
+  local actual_bytes
+
+  actual_bytes=$(wc -c < "$local_path" | tr -d '[:space:]')
+  if [[ "$actual_bytes" != "$expected_bytes" ]]; then
+    echo "ERROR: $label transfer size mismatch: remote=$expected_bytes local=$actual_bytes"
+    exit 1
+  fi
+  echo "  verified: $actual_bytes bytes"
+}
+
+remote_file_size() {
+  local remote_path="$1"
+  local q_remote_path
+
+  q_remote_path="$(remote_quote "$remote_path")"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "stat -c %s $q_remote_path 2>/dev/null || wc -c < $q_remote_path" | tr -d '[:space:]'
+}
+
 remote_has_command() {
   local command_name="$1"
   local q_command_name
 
   q_command_name="$(remote_quote "$command_name")"
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "command -v $q_command_name >/dev/null 2>&1"
+}
+
+remote_latest_training_log() {
+  local remote_dir="$1"
+  local q_remote_dir
+  local latest
+
+  q_remote_dir="$(remote_quote "$remote_dir")"
+  latest=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; if [ ! -d $q_remote_dir ]; then echo 'ERROR: remote training log directory not found: $remote_dir' >&2; exit 1; fi; find $q_remote_dir -maxdepth 1 -type f \( -name 'training_*.log' -o -name 'training_run.log' -o -name '*telemetry*.log' \) -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-")
+  if [[ -z "$latest" ]]; then
+    echo "ERROR: no telemetry/training .log files found in $remote_dir" >&2
+    exit 1
+  fi
+  printf '%s\n' "$latest"
+}
+
+remote_latest_telemetry_csv() {
+  local remote_dir="$1"
+  local q_remote_dir
+  local latest
+
+  q_remote_dir="$(remote_quote "$remote_dir")"
+  latest=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; if [ ! -d $q_remote_dir ]; then echo 'ERROR: remote training log directory not found: $remote_dir' >&2; exit 1; fi; find $q_remote_dir -maxdepth 1 -type f -name 'telemetry_*.csv' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-")
+  if [[ -z "$latest" ]]; then
+    echo "ERROR: no telemetry_*.csv files found in $remote_dir" >&2
+    exit 1
+  fi
+  printf '%s\n' "$latest"
+}
+
+remote_snapshot_file() {
+  local label="$1"
+  local remote_path="$2"
+  local remote_dir
+  local snapshot_path
+  local q_remote_path
+  local q_snapshot_path
+  local size_bytes
+
+  remote_dir="$(dirname "$remote_path")"
+  snapshot_path="$remote_dir/.grim_pull_snapshot_$(basename "$remote_path").$$"
+  q_remote_path="$(remote_quote "$remote_path")"
+  q_snapshot_path="$(remote_quote "$snapshot_path")"
+
+  echo "Snapshotting $label on Bridges-2 so active writes cannot change the transfer size..." >&2
+  size_bytes=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; if [ ! -f $q_remote_path ]; then echo 'ERROR: remote file not found: $remote_path' >&2; exit 1; fi; initial_size=\$(stat -c %s $q_remote_path); rm -f $q_snapshot_path; head -c \"\$initial_size\" $q_remote_path > $q_snapshot_path; actual_size=\$(stat -c %s $q_snapshot_path); if [ \"\$actual_size\" != \"\$initial_size\" ]; then echo \"ERROR: snapshot size mismatch for $remote_path: source_at_start=\$initial_size snapshot=\$actual_size\" >&2; rm -f $q_snapshot_path; exit 1; fi; printf '%s\n' \"\$actual_size\"")
+  echo "  snapshot: $snapshot_path ($size_bytes bytes)" >&2
+  printf '%s\n' "$snapshot_path"
+}
+
+remove_remote_file() {
+  local remote_path="$1"
+  local q_remote_path
+
+  q_remote_path="$(remote_quote "$remote_path")"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "rm -f $q_remote_path"
+}
+
+download_remote_snapshot_file() {
+  local label="$1"
+  local remote_path="$2"
+  local local_path="$3"
+  local snapshot_path
+
+  snapshot_path="$(remote_snapshot_file "$label" "$remote_path")"
+  REMOTE_SNAPSHOT_PATHS+=("$snapshot_path")
+  download_training_file "$label" "$snapshot_path" "$local_path"
+  remove_remote_file "$snapshot_path"
 }
 
 stream_file_with_progress() {
@@ -331,6 +456,130 @@ transfer_training_file() {
   verify_remote_size "$label" "$remote_path" "$size_bytes"
   echo "  -> $remote_path"
 }
+
+download_training_file() {
+  local label="$1"
+  local remote_path="$2"
+  local local_path="$3"
+  local local_dir
+  local q_remote_path
+  local size_bytes
+  local method
+  local gzip_level
+  local decompressor_name=""
+  local tmp_path
+
+  local_dir="$(dirname "$local_path")"
+  q_remote_path="$(remote_quote "$remote_path")"
+  size_bytes="$(remote_file_size "$remote_path")"
+  method="${GRIM_BRIDGES2_TRANSFER_METHOD:-auto}"
+  gzip_level="${GRIM_BRIDGES2_GZIP_LEVEL:-1}"
+  tmp_path="$local_path.transfer.$$"
+
+  case "$method" in
+    auto|rsync|zstd|gzip|raw) ;;
+    *) echo "ERROR: GRIM_BRIDGES2_TRANSFER_METHOD must be auto, rsync, zstd, gzip, or raw (got: $method)"; exit 1 ;;
+  esac
+  [[ "$gzip_level" =~ ^[1-9]$ ]] || { echo "ERROR: GRIM_BRIDGES2_GZIP_LEVEL must be 1..9 (got: $gzip_level)"; exit 1; }
+
+  mkdir -p "$local_dir"
+  rm -f "$tmp_path"
+
+  echo "Downloading $label ($size_bytes bytes)..."
+
+  if [[ "$method" == "auto" || "$method" == "rsync" ]]; then
+    if command -v rsync >/dev/null 2>&1; then
+      if remote_has_command rsync; then
+        echo "  method: rsync --compress --partial --progress"
+        if rsync -a --compress --partial --progress -e "ssh $BRIDGES2_SSH_OPTS" "$BRIDGES2_SSH:$remote_path" "$local_path"; then
+          verify_local_size "$label" "$local_path" "$size_bytes"
+          echo "  -> $local_path"
+          return 0
+        fi
+        if [[ "$method" == "rsync" ]]; then
+          echo "ERROR: rsync transfer failed for $label"
+          exit 1
+        fi
+        echo "  rsync failed; trying gzip stream."
+      elif [[ "$method" == "rsync" ]]; then
+        echo "ERROR: rsync requested but not found on Bridges-2. Set GRIM_BRIDGES2_TRANSFER_METHOD=gzip or install rsync remotely."
+        exit 1
+      else
+        echo "  rsync not found on Bridges-2; trying gzip stream."
+      fi
+    elif [[ "$method" == "rsync" ]]; then
+      echo "ERROR: rsync requested but not found locally. Install rsync or set GRIM_BRIDGES2_TRANSFER_METHOD=gzip."
+      exit 1
+    else
+      echo "  rsync not found locally; trying gzip stream."
+    fi
+  fi
+
+  if [[ "$method" == "auto" || "$method" == "zstd" ]]; then
+    if command -v zstd >/dev/null 2>&1 && remote_has_command zstd; then
+      echo "  method: ssh zstd -1 -T0 -c | local zstd -dc"
+      ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; zstd -1 -T0 -c $q_remote_path" | zstd -dc > "$tmp_path"
+      verify_local_size "$label" "$tmp_path" "$size_bytes"
+      mv -f "$tmp_path" "$local_path"
+      echo "  -> $local_path"
+      return 0
+    fi
+
+    if [[ "$method" == "zstd" ]]; then
+      echo "ERROR: zstd requested, but local zstd or remote Bridges-2 zstd is unavailable. Set GRIM_BRIDGES2_TRANSFER_METHOD=gzip."
+      exit 1
+    fi
+    echo "  zstd unavailable on one side; trying gzip stream."
+  fi
+
+  if [[ "$method" == "auto" || "$method" == "gzip" ]]; then
+    if command -v pigz >/dev/null 2>&1; then
+      decompressor_name="pigz"
+    elif command -v gzip >/dev/null 2>&1; then
+      decompressor_name="gzip"
+    fi
+
+    if [[ -n "$decompressor_name" ]] && remote_has_command gzip; then
+      echo "  method: ssh gzip -$gzip_level -c | local $decompressor_name -dc"
+      ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; gzip -$gzip_level -c $q_remote_path" | "$decompressor_name" -dc > "$tmp_path"
+      verify_local_size "$label" "$tmp_path" "$size_bytes"
+      mv -f "$tmp_path" "$local_path"
+      echo "  -> $local_path"
+      return 0
+    fi
+
+    if [[ "$method" == "gzip" ]]; then
+      echo "ERROR: gzip transfer requested, but local decompressor or remote gzip is unavailable."
+      exit 1
+    fi
+    echo "  gzip stream unavailable; using raw ssh transfer."
+  fi
+
+  echo "  method: raw ssh cat (slow fallback)"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; cat $q_remote_path" > "$tmp_path"
+  verify_local_size "$label" "$tmp_path" "$size_bytes"
+  mv -f "$tmp_path" "$local_path"
+  echo "  -> $local_path"
+}
+
+if [[ "$DO_PULL_VOCAB" == true ]]; then
+  download_training_file "vocab.bin" "$REMOTE_VOCAB" "$LOCAL_VOCAB_PATH_EXPANDED"
+  download_training_file "vocab.txt" "$REMOTE_VOCAB_TXT" "$LOCAL_VOCAB_TXT_PATH_EXPANDED"
+  download_training_file "training_data.grmt" "$REMOTE_GRMT" "$LOCAL_GRMT_PATH_EXPANDED"
+  exit 0
+fi
+
+if [[ "$DO_PULL_LOGS" == true ]]; then
+  latest_log="$(remote_latest_training_log "$REMOTE_TRAINING_LOGS")"
+  latest_telemetry_csv="$(remote_latest_telemetry_csv "$REMOTE_TRAINING_LOGS")"
+  local_log_path="$TRAINING_LOGS_DIR_EXPANDED/$(basename "$latest_log")"
+  local_telemetry_csv_path="$TRAINING_LOGS_DIR_EXPANDED/$(basename "$latest_telemetry_csv")"
+  echo "Latest Bridges-2 training log: $latest_log"
+  download_remote_snapshot_file "$(basename "$latest_log")" "$latest_log" "$local_log_path"
+  echo "Latest Bridges-2 telemetry CSV: $latest_telemetry_csv"
+  download_remote_snapshot_file "$(basename "$latest_telemetry_csv")" "$latest_telemetry_csv" "$local_telemetry_csv_path"
+  exit 0
+fi
 
 # Sync repo
 BRIDGES2_SYNCED=false
@@ -493,8 +742,6 @@ elif [[ "$DO_TT" == true ]]; then
 elif [[ "$DO_TD" == true ]]; then
   # --TD: run grmt_vocab_metrics_test on RM-shared (no GPU needed)
   REMOTE_TD_EXE="$BRIDGES2_DIR/$BUILD_DIR/grmt_vocab_metrics_test"
-  REMOTE_VOCAB="$BRIDGES2_DIR/resources/models/GRIM-text/training/data/vocab.bin"
-  REMOTE_GRMT="$BRIDGES2_DIR/resources/models/GRIM-text/training/data/training_data.grmt"
   TD_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; exec \"$REMOTE_TD_EXE\" --vocab \"$REMOTE_VOCAB\" --grmt \"$REMOTE_GRMT\"'"
   echo "Running grmt_vocab_metrics_test on Bridges-2 (partition=RM-shared, no GPU)..."
   TD_SRUN_ARGS="-p RM-shared $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=4 --mem-per-cpu=2000M -t 0:30:00 --pty"

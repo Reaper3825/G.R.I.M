@@ -90,6 +90,15 @@ struct LossConfigHP {
     float class_balanced_beta = 0.0f;
 };
 
+struct ModelArchitectureHP {
+    int d_model = 0;
+    int num_layers = 0;
+    int num_heads = 0;
+    int num_kv_heads = 0;
+    int head_dim = 0;
+    int max_seq_len = 0;
+};
+
 struct ParameterRegistrationHP {
     int num_layers = 0;
     int num_heads = 0;
@@ -263,6 +272,11 @@ struct MTPConstructionHP {
     int d_model = 0;
     float alpha = 0.0f;
     int alpha_warmup_steps = 0;
+};
+
+struct MTPFeatureHP {
+    bool enabled = false;
+    int k = 0;
 };
 
 inline void requirePositiveGroupingValue(int value,
@@ -662,6 +676,23 @@ inline LossConfigHP lossConfigHP(
     view.class_balanced_enabled = hp.loss_class_balanced_enabled;
     view.class_balanced_beta = hp.loss_class_balanced_beta;
     validateLossConfigHP(view, "lossConfigHP");
+    return view;
+}
+
+inline ModelArchitectureHP modelArchitectureHP(
+    const LanguageModelConfig& cfg)
+{
+    requireValidGQAGrouping(cfg, "modelArchitectureHP");
+    requirePositiveGroupingValue(cfg.num_layers, "num_layers", "modelArchitectureHP");
+    requirePositiveGroupingValue(cfg.max_seq_len, "max_seq_len", "modelArchitectureHP");
+
+    ModelArchitectureHP view;
+    view.d_model = cfg.d_model;
+    view.num_layers = cfg.num_layers;
+    view.num_heads = cfg.num_heads;
+    view.num_kv_heads = cfg.num_kv_heads;
+    view.head_dim = cfg.head_dim;
+    view.max_seq_len = cfg.max_seq_len;
     return view;
 }
 
@@ -1129,6 +1160,17 @@ inline MTPConstructionHP mtpConstructionHP(const LanguageModelConfig& cfg)
             throw std::runtime_error("mtpConstructionHP: mtp_alpha must be > 0, got " +
                                      std::to_string(view.alpha));
         }
+    }
+    return view;
+}
+
+inline MTPFeatureHP mtpFeatureHP(const LanguageModelConfig& cfg)
+{
+    MTPFeatureHP view;
+    view.enabled = cfg.mtp_enabled;
+    view.k = cfg.mtp_k;
+    if (view.enabled) {
+        requirePositiveGroupingValue(view.k, "mtp_k", "mtpFeatureHP");
     }
     return view;
 }

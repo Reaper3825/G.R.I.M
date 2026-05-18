@@ -8,6 +8,7 @@
 #include "InitFacts.hpp"
 
 #include "../../../Shared/Telemetry/TelemetryLattice_GPU.hpp"  // MetricStream
+#include "../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -49,7 +50,9 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     const float* lm_w_ptr  = model->getLmHeadLayer()->weights().data;
     const float* emb_g_ptr = model->getEmbeddingLayer()->tokenWeights().grad_data();
     const float* lm_g_ptr  = model->getLmHeadLayer()->weights().grad_data();
-    const bool cfg_tied  = model->getConfig().tie_embeddings;
+    const auto lm_head_hp =
+        GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config.hyperparameters.architecture);
+    const bool cfg_tied  = lm_head_hp.tie_embeddings;
     const bool lm_owns   = model->getLmHeadLayer()->ownsWeights();
     const bool ptrs_same  = (emb_w_ptr == lm_w_ptr);
     const bool grads_same = (emb_g_ptr == lm_g_ptr);

@@ -46,6 +46,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             static_cast<int>(run_capacity.batch_rows),
             static_cast<int>(run_capacity.seq_cap),
             static_cast<int>(run_capacity.max_tokens_per_batch));
+    const auto parameter_registration_hp =
+        GRIM::HyperParameters::parameterRegistrationHP(model_config);
+    const auto model_arch_hp =
+        GRIM::HyperParameters::modelArchitectureHP(model_config);
 
     if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED) {
         logger.log("⚠️  Hardcoded hidden-state diagnostic mode is active; exact config values are listed by ConfigDump.");
@@ -104,7 +108,9 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Registering trainable parameter groups...");
-    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model);
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(
+        *model,
+        parameter_registration_hp);
     logger.log("✓ Trainable parameter groups registered and verified");
 
     logger.log("Initializing TrainingState runtime workspaces...");
@@ -114,8 +120,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 #ifdef USE_CUDA
     {
         auto* gpu_encoder = &model->getGpuEncoder();
-        const auto& cfg = model->getConfig();
-        for (int layer = 0; layer < cfg.num_layers; ++layer) {
+        for (int layer = 0; layer < model_arch_hp.num_layers; ++layer) {
             auto* enc = gpu_encoder->getLayer(layer);
             if (!enc) {
                 throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after GPU model layer assembly");
@@ -176,13 +181,12 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
         throw std::runtime_error("FATAL: ModelAllocated validation called before model exists");
     }
 
-    const auto& model_cfg = ctx.model->getConfig();
     const auto& state = ctx.model->getTrainingState();
     const auto& cap = ctx.run_capacity;
 
     ModelAllocationState allocation;
-    allocation.model_max_cached_batch = model_cfg.max_cached_batch;
-    allocation.model_max_tokens_per_batch = model_cfg.max_tokens_per_batch;
+    allocation.model_max_cached_batch = static_cast<int>(cap.batch_rows);
+    allocation.model_max_tokens_per_batch = static_cast<int>(cap.max_tokens_per_batch);
 
     if (allocation.model_max_cached_batch != static_cast<int>(cap.batch_rows)) {
         throw std::runtime_error("FATAL: model max_cached_batch does not match RunCapacity (model=" +

@@ -46,7 +46,7 @@ namespace GRIM {
 //======================================================//
 
 void LanguageModel::initGPU(uint64_t weight_init_seed) {
-    const auto& model_cfg = getConfig();
+    const auto& model_cfg = config_;
     const auto init_hp = HyperParameters::gpuModelInitializationHP(model_cfg);
 
     std::cout << "[initGPU] Verifying grouped GPU initialization config..." << std::endl;

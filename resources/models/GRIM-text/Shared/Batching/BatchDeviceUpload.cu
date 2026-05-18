@@ -40,7 +40,7 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
             " payload has no host input arrays to upload");
     }
 
-    const auto& cfg = getConfig();
+    const auto& cfg = config_;
     if (payload.isTraining() && cfg.execution_mode == HyperParameters::ModelExecutionMode::INFERENCE) {
         throw std::runtime_error(
             "uploadBatchToDevice: training BatchPayload cannot be uploaded by an inference-mode LanguageModel");
@@ -89,14 +89,15 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     }
     int* cached_mtp_shifted_targets_ptr = nullptr;
     if (!payload.mtp_shifted_targets.empty()) {
-        if (!cfg.mtp_enabled) {
+        const auto mtp_hp = HyperParameters::mtpFeatureHP(cfg);
+        if (!mtp_hp.enabled) {
             throw std::runtime_error("uploadBatchToDevice: payload has MTP shifted targets but model config has mtp_enabled=false");
         }
-        if (static_cast<int>(payload.mtp_shifted_targets.size()) != cfg.mtp_k) {
+        if (static_cast<int>(payload.mtp_shifted_targets.size()) != mtp_hp.k) {
             throw std::runtime_error(
                 "uploadBatchToDevice: payload.mtp_shifted_targets.size()=" +
                 std::to_string(payload.mtp_shifted_targets.size()) +
-                " != config.mtp_k=" + std::to_string(cfg.mtp_k));
+                " != config.mtp_k=" + std::to_string(mtp_hp.k));
         }
         cached_mtp_shifted_targets_ptr = reinterpret_cast<int*>(training_state_.cached_mtp_shifted_targets_tensor.data);
         if (!cached_mtp_shifted_targets_ptr) {

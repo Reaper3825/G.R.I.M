@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """
-Decode token IDs from training_data.grmt using vocab.bin.
+Decode token IDs from training_data.grmt using the current KTMG vocab.bin.
 
 Token ID Layout (GrimTokenizer):
   [0-3]       = Special tokens: <unk>=0, <pad>=1, <s>=2, </s>=3
   [4-259]     = Byte fallback (byte value = token_id - 4)
-  [260-276]   = Atom placeholders (17 atom types)
-  [277+]      = Unigram vocabulary pieces (from vocab.bin)
+    [260-262]   = Atom placeholders: <ATOM_NONE>, <INT>, <FLOAT>
+    [263+]      = Unigram vocabulary pieces (from vocab.bin)
+
+Current vocab.bin format is KTMG v4. The saved record count is the number of
+serialized records (4 special-token metadata records + learned unigram pieces),
+not the full token-space size. The token-space size is stored separately in the
+header and must equal special + bytes + atoms + learned pieces.
+
+Current training_data.grmt format is GRMT v12. Rows include atom side-channel
+text and execution metadata after the token arrays, so this script reads/skips
+the full row to keep the stream synchronized.
 
 Usage:
     python decode_token_ids.py
@@ -23,10 +32,11 @@ import sys
 from pathlib import Path
 from collections import Counter
 
-# ── Paths (from ai_config.json) ──────────────────────────────────────────────
+# ── Paths (repo-relative defaults) ───────────────────────────────────────────
 
-VOCAB_BIN  = Path(r"D:/G.R.I.M/resources/models/GRIM-text/training/data/vocab.bin")
-GRMT_FILE  = Path(r"D:/G.R.I.M/resources/models/GRIM-text/training/data/training_data.grmt")
+REPO_ROOT = Path(__file__).resolve().parent
+VOCAB_BIN = REPO_ROOT / "resources/models/GRIM-text/training/data/vocab.bin"
+GRMT_FILE = REPO_ROOT / "resources/models/GRIM-text/training/data/training_data.grmt"
 
 # ── Token layout constants ────────────────────────────────────────────────────
 
@@ -39,32 +49,62 @@ SPECIAL_NAMES = {0: "<unk>", 1: "<pad>", 2: "<s>", 3: "</s>"}
 
 ATOM_TYPE_LABELS = {
     0:  "<ATOM_NONE>",
-    1:  "<ATOM_END>",
-    2:  "<INT>",
-    3:  "<FLOAT>",
-    4:  "<HEX>",
-    5:  "<BIN>",
-    6:  "<ID>",
-    7:  "<STR>",
-    8:  "<REGEX>",
-    9:  "<URL>",
-    10: "<EMAIL>",
-    11: "<PATH>",
-    12: "<DATE>",
-    13: "<TIME>",
-    14: "<IP>",
-    15: "<EQUATION>",
-    16: "<EXPR>",
+    1:  "<INT>",
+    2:  "<FLOAT>",
 }
-NUM_ATOM_TYPES = 17  # ATOM_ACTIVE_COUNT
+NUM_ATOM_TYPES = 3  # AtomType::ATOM_ACTIVE_COUNT: NONE, INT, FLOAT
 
-ATOM_TOKEN_END        = ATOM_TOKEN_START + NUM_ATOM_TYPES  # 277
-UNIGRAM_TOKEN_START   = ATOM_TOKEN_END                     # 277
+ATOM_TOKEN_END        = ATOM_TOKEN_START + NUM_ATOM_TYPES  # 263
+UNIGRAM_TOKEN_START   = ATOM_TOKEN_END                     # 263
+KTMG_VOCAB_VERSION    = 4
+KTMG_MAX_PIECE_LENGTH = 32
+GRMT_MAGIC            = 0x474D5254
+GRMT_FORMAT_VERSION   = 12
 
 
-# ── vocab.bin loader (KTMG format) ───────────────────────────────────────────
+# ── Binary helpers ───────────────────────────────────────────────────────────
+
+def read_exact(f, size: int, source: str) -> bytes:
+    data = f.read(size)
+    if len(data) != size:
+        raise EOFError(f"truncated read from {source}: expected {size} bytes, got {len(data)}")
+    return data
+
+
+def read_u8(f, source: str) -> int:
+    return struct.unpack("<B", read_exact(f, 1, source))[0]
+
+
+def read_u16(f, source: str) -> int:
+    return struct.unpack("<H", read_exact(f, 2, source))[0]
+
+
+def read_u32(f, source: str) -> int:
+    return struct.unpack("<I", read_exact(f, 4, source))[0]
+
+
+def read_i32(f, source: str) -> int:
+    return struct.unpack("<i", read_exact(f, 4, source))[0]
+
+
+def read_f32(f, source: str) -> float:
+    return struct.unpack("<f", read_exact(f, 4, source))[0]
+
+
+def read_i32_array(f, count: int, source: str) -> list:
+    if count == 0:
+        return []
+    return list(struct.unpack(f"<{count}i", read_exact(f, 4 * count, source)))
+
+
+def skip_exact(f, size: int, source: str):
+    read_exact(f, size, source)
+
+
+# ── vocab.bin loader (KTMG v4 format) ────────────────────────────────────────
 
 def load_vocab_bin(path: Path) -> dict:
+    # sourcery skip: extract-method
     """
     Load vocab.bin and build a complete token_id -> text mapping.
 
@@ -73,11 +113,7 @@ def load_vocab_bin(path: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"vocab.bin not found: {path}")
 
-    id_to_text = {}
-
-    # 1) Special tokens
-    for tid, name in SPECIAL_NAMES.items():
-        id_to_text[tid] = name
+    id_to_text = dict(SPECIAL_NAMES)
 
     # 2) Byte fallback tokens — emit the raw byte (matching C++ decode behavior).
     #    The C++ tokenizer does: result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET))
@@ -91,45 +127,84 @@ def load_vocab_bin(path: Path) -> dict:
         tid = ATOM_TOKEN_START + i
         id_to_text[tid] = ATOM_TYPE_LABELS.get(i, f"<ATOM{i}>")
 
-    # 4) Unigram pieces from vocab.bin
+    # 4) Special-token metadata + unigram pieces from vocab.bin.
+    #    KTMG v4 persists special-token records plus learned pieces. It does
+    #    NOT persist byte/atom records; those remain fixed by TokenLayout.hpp.
     with open(path, "rb") as f:
-        magic = f.read(4)
-        if magic not in (b"KTMG", b"GMTK", b"GRIM"):
-            raise ValueError(f"Bad vocab.bin magic: {magic!r}")
+        source = str(path)
+        magic = read_exact(f, 4, source)
+        if magic != b"KTMG":
+            raise ValueError(f"Bad vocab.bin magic: {magic!r}; expected KTMG")
 
-        if magic in (b"KTMG", b"GMTK"):
-            # Binary format: uint16 version, then header fields, then pieces
-            version = struct.unpack("<H", f.read(2))[0]
-            checksum      = struct.unpack("<I", f.read(4))[0]
-            unigram_count = struct.unpack("<I", f.read(4))[0]  # config_vocab_size
-            max_length    = struct.unpack("<I", f.read(4))[0]
-            flags         = f.read(3)
-            total_vocab   = struct.unpack("<I", f.read(4))[0]
+        version = read_u16(f, source)
+        if version != KTMG_VOCAB_VERSION:
+            raise ValueError(
+                f"Unsupported vocab.bin version {version}; expected KTMG v{KTMG_VOCAB_VERSION}. "
+                f"Retrain/pull the current tokenizer artifact."
+            )
 
-            for i in range(unigram_count):
-                piece_len = struct.unpack("<I", f.read(4))[0]
-                text = f.read(piece_len).decode("utf-8", errors="replace")
-                score = struct.unpack("<f", f.read(4))[0]
+        _checksum = read_u32(f, source)
+        serialized_record_count = read_u32(f, source)
+        max_length = read_u32(f, source)
+        _flags = read_exact(f, 3, source)
+        token_space_size = read_u32(f, source)
 
-                if version >= 3:
-                    _stored_id = struct.unpack("<I", f.read(4))[0]  # Read but IGNORE
+        if max_length != KTMG_MAX_PIECE_LENGTH:
+            raise ValueError(f"Unexpected KTMG max_piece_length={max_length}; expected {KTMG_MAX_PIECE_LENGTH}")
+        if serialized_record_count < NUM_SPECIAL_TOKENS:
+            raise ValueError(
+                f"KTMG serialized_record_count={serialized_record_count} is smaller than "
+                f"NUM_SPECIAL_TOKENS={NUM_SPECIAL_TOKENS}"
+            )
 
-                # C++ runtime (getPieceId/getPiece) uses sequential piece index,
-                # NOT the stored token_id (which has gaps from duplicate-text
-                # collisions in addPiece). Use the same sequential mapping.
-                token_id = UNIGRAM_TOKEN_START + i
+        seen_special_ids = set()
+        learned_piece_count = 0
+        for record_idx in range(serialized_record_count):
+            piece_len = read_u32(f, source)
+            if piece_len > max_length:
+                raise ValueError(
+                    f"KTMG record {record_idx} has piece_len={piece_len}, max_length={max_length}"
+                )
+            text = read_exact(f, piece_len, source).decode("utf-8", errors="strict")
+            _score = read_f32(f, source)
+            token_id = read_i32(f, source)
 
-                id_to_text[token_id] = text
+            if token_id in SPECIAL_NAMES:
+                expected_text = SPECIAL_NAMES[token_id]
+                if text != expected_text:
+                    raise ValueError(
+                        f"KTMG special record mismatch at record {record_idx}: "
+                        f"token_id={token_id} text={text!r} expected={expected_text!r}"
+                    )
+                if token_id in seen_special_ids:
+                    raise ValueError(f"KTMG duplicate special token record for token_id={token_id}")
+                seen_special_ids.add(token_id)
+                continue
 
-        elif magic == b"GRIM":
-            # Older format: uint32 version, uint32 vocab_size, then tokens
-            version    = struct.unpack("<I", f.read(4))[0]
-            vocab_size = struct.unpack("<I", f.read(4))[0]
+            expected_id = UNIGRAM_TOKEN_START + learned_piece_count
+            if token_id != expected_id:
+                raise ValueError(
+                    f"KTMG learned-piece token_id mismatch at record {record_idx}: "
+                    f"stored={token_id} expected={expected_id}. Do not patch the vocab header; retrain/pull it."
+                )
 
-            for i in range(vocab_size):
-                token_len = struct.unpack("<I", f.read(4))[0]
-                text = f.read(token_len).decode("utf-8", errors="replace")
-                id_to_text[i] = text
+            id_to_text[token_id] = text
+            learned_piece_count += 1
+
+        if seen_special_ids != set(SPECIAL_NAMES):
+            raise ValueError(
+                f"KTMG special metadata set mismatch: seen={sorted(seen_special_ids)} "
+                f"expected={sorted(SPECIAL_NAMES)}"
+            )
+
+        expected_token_space_size = UNIGRAM_TOKEN_START + learned_piece_count
+        if token_space_size != expected_token_space_size:
+            raise ValueError(
+                f"KTMG token-space size mismatch: header={token_space_size} "
+                f"computed={expected_token_space_size} "
+                f"({NUM_SPECIAL_TOKENS} special + {BYTE_VOCAB_SIZE} bytes + "
+                f"{NUM_ATOM_TYPES} atoms + {learned_piece_count} unigrams)"
+            )
 
     return id_to_text
 
@@ -137,9 +212,19 @@ def load_vocab_bin(path: Path) -> dict:
 # ── training_data.grmt loader ────────────────────────────────────────────────
 
 def read_grmt_header(path: Path) -> dict:
-    """Read the 16-byte GRMT header."""
+    """Read and validate the 16-byte current GRMT header."""
     with open(path, "rb") as f:
-        magic, version, num_sequences, vocab_size = struct.unpack("<IIII", f.read(16))
+        magic, version, num_sequences, vocab_size = struct.unpack("<IIII", read_exact(f, 16, str(path)))
+
+    if magic != GRMT_MAGIC:
+        raise ValueError(f"Bad GRMT magic in {path}: actual=0x{magic:08X} expected=0x{GRMT_MAGIC:08X}")
+    if version != GRMT_FORMAT_VERSION:
+        raise ValueError(f"Unsupported GRMT version {version}; expected {GRMT_FORMAT_VERSION}")
+    if num_sequences == 0:
+        raise ValueError(f"GRMT header reports num_sequences=0: {path}")
+    if vocab_size == 0:
+        raise ValueError(f"GRMT header reports vocab_size=0: {path}")
+
     return {
         "magic": magic,
         "magic_hex": hex(magic),
@@ -149,56 +234,85 @@ def read_grmt_header(path: Path) -> dict:
     }
 
 
-TEXT_FEATURE_DIM = 16  # kTextFeatureDim in C++ code
-
-
 def iter_grmt_sequences(path: Path):
-    """Yield (index, token_id_list) for each sequence in the GRMT file.
-    
-    GRMT v5 per-sequence layout (must read ALL fields to stay in sync):
+    """Yield (index, token_id_list, atom_text_list) for each sequence in the GRMT file.
+
+    GRMT v12 per-sequence layout (must read ALL fields to stay in sync):
       uint32         seq_len
       int32[seq_len] token_ids
       int32[seq_len] targets
       float[seq_len] numeric_values
-      uint8[seq_len] numeric_mask
-      uint16[seq_len * TEXT_FEATURE_DIM] text_features
-      uint8[seq_len] text_feature_mask
+      uint8[seq_len] atom_mask
+      uint32[seq_len] atom_flags
+      repeated seq_len times: uint16 atom_text_len + atom_text bytes
+      uint8 execution_active
+      int32[seq_len] token_exec_slots
+      uint32 compiled_bootstrap_binding_count, then 12 bytes each
+      uint32 teacher_step_count, then 20 bytes each
+      uint32 slot_selection_target_count, then {uint8 kind, int32 slot_id} each
     """
     with open(path, "rb") as f:
-        _magic, _version, num_sequences, _vocab_size = struct.unpack("<IIII", f.read(16))
+        source = str(path)
+        header = read_grmt_header(path)
+        f.seek(16)
+        num_sequences = header["num_sequences"]
 
         for idx in range(num_sequences):
-            raw = f.read(4)
-            if not raw or len(raw) < 4:
-                break
-            seq_len = struct.unpack("<I", raw)[0]
-            
-            # Read token_ids (the field we care about)
-            token_bytes = f.read(4 * seq_len)
-            if len(token_bytes) < 4 * seq_len:
-                break
-            tokens = list(struct.unpack(f"<{seq_len}I", token_bytes))
-            
-            # Skip remaining per-sequence fields to keep file position in sync
-            f.read(4 * seq_len)                          # targets (int32)
-            f.read(4 * seq_len)                          # numeric_values (float32)
-            f.read(1 * seq_len)                          # numeric_mask (uint8)
-            f.read(2 * seq_len * TEXT_FEATURE_DIM)       # text_features (uint16)
-            f.read(1 * seq_len)                          # text_feature_mask (uint8)
-            
-            yield idx, tokens
+            row_source = f"{source}#seq{idx}"
+            seq_len = read_u32(f, row_source)
+            if seq_len == 0:
+                raise ValueError(f"GRMT sequence length is zero in {row_source}")
+            if seq_len > 1_000_000:
+                raise ValueError(f"GRMT sequence length is suspiciously large in {row_source}: {seq_len}")
+
+            tokens = read_i32_array(f, seq_len, row_source)
+
+            skip_exact(f, 4 * seq_len, row_source)       # targets (int32)
+            skip_exact(f, 4 * seq_len, row_source)       # token_numeric_values (float32)
+            skip_exact(f, 1 * seq_len, row_source)       # token_atom_mask (uint8)
+            skip_exact(f, 4 * seq_len, row_source)       # token_atom_flags (uint32)
+
+            atom_texts = []
+            for token_index in range(seq_len):
+                atom_text_len = read_u16(f, row_source)
+                if atom_text_len > 0:
+                    atom_text = read_exact(f, atom_text_len, row_source).decode("utf-8", errors="strict")
+                else:
+                    atom_text = ""
+                atom_texts.append(atom_text)
+
+                token_id = tokens[token_index]
+                if atom_text and not (ATOM_TOKEN_START <= token_id < ATOM_TOKEN_END):
+                    raise ValueError(
+                        f"GRMT atom text exists for non-atom token in {row_source} "
+                        f"index={token_index} token_id={token_id}"
+                    )
+
+            _execution_active = read_u8(f, row_source)
+            skip_exact(f, 4 * seq_len, row_source)       # token_exec_slots (int32)
+
+            cbb_count = read_u32(f, row_source)
+            skip_exact(f, 12 * cbb_count, row_source)    # CompiledBootstrapBinding
+
+            teacher_step_count = read_u32(f, row_source)
+            skip_exact(f, 20 * teacher_step_count, row_source)  # TeacherStep
+
+            slot_selection_target_count = read_u32(f, row_source)
+            for _ in range(slot_selection_target_count):
+                skip_exact(f, 1, row_source)             # SlotSelectionTargetKind uint8
+                skip_exact(f, 4, row_source)             # slot_id int32
+
+            yield idx, tokens, atom_texts
 
 
 # ── Decode helpers ────────────────────────────────────────────────────────────
 
 def decode_token(tid: int, vocab: dict) -> str:
     """Decode a single token ID to its text representation."""
-    if tid in vocab:
-        return vocab[tid]
-    return f"<UNK:{tid}>"
+    return vocab.get(tid, f"<UNK:{tid}>")
 
 
-def decode_sequence(tokens: list, vocab: dict) -> str:
+def decode_sequence(tokens: list, vocab: dict, atom_texts: list | None = None) -> str:
     """Decode a full sequence of token IDs to readable text.
     
     Merges consecutive byte-fallback tokens into actual UTF-8 characters
@@ -215,7 +329,7 @@ def decode_sequence(tokens: list, vocab: dict) -> str:
             output_parts.append(byte_buffer.decode("utf-8", errors="replace"))
             byte_buffer = bytearray()
     
-    for tid in tokens:
+    for token_index, tid in enumerate(tokens):
         # Check if this is a byte-fallback token (IDs 4-259)
         if BYTE_TOKEN_OFFSET <= tid < ATOM_TOKEN_START:
             byte_val = tid - BYTE_TOKEN_OFFSET
@@ -228,6 +342,13 @@ def decode_sequence(tokens: list, vocab: dict) -> str:
                 continue
         
         flush_bytes()
+        if ATOM_TOKEN_START <= tid < ATOM_TOKEN_END:
+            atom_text = ""
+            if atom_texts is not None and token_index < len(atom_texts):
+                atom_text = atom_texts[token_index]
+            output_parts.append(atom_text or vocab[tid])
+            continue
+
         if tid in vocab:
             output_parts.append(vocab[tid])
         else:
@@ -243,11 +364,21 @@ def token_type_label(tid: int) -> str:
     """Return which region a token ID belongs to."""
     if tid < NUM_SPECIAL_TOKENS:
         return "SPECIAL"
-    if BYTE_TOKEN_OFFSET <= tid < ATOM_TOKEN_START:
+    elif BYTE_TOKEN_OFFSET <= tid < ATOM_TOKEN_START:
         return "BYTE"
-    if ATOM_TOKEN_START <= tid < ATOM_TOKEN_END:
+    elif ATOM_TOKEN_START <= tid < ATOM_TOKEN_END:
         return "ATOM"
     return "UNIGRAM"
+
+
+def validate_grmt_vocab_pair(header: dict, vocab: dict, grmt: Path):
+    """Fail loudly if the GRMT header and loaded vocab disagree on token-space size."""
+    if header["vocab_size"] != len(vocab):
+        raise ValueError(
+            f"GRMT/vocab token-space mismatch for {grmt}: "
+            f"grmt_header={header['vocab_size']} loaded_vocab={len(vocab)}. "
+            f"Pull/rebuild vocab.bin and training_data.grmt as one artifact pair."
+        )
 
 
 # ── CLI actions ───────────────────────────────────────────────────────────────
@@ -276,7 +407,7 @@ def wrap_text(text: str, width: int = 100) -> str:
                 lines.append(current_line)
                 current_line = word
             elif current_line:
-                current_line += " " + word
+                current_line += f" {word}"
             else:
                 current_line = word
         if current_line:
@@ -291,6 +422,7 @@ def cmd_decode_sequences(args, vocab):
         raise FileNotFoundError(f"GRMT file not found: {grmt}")
 
     header = read_grmt_header(grmt)
+    validate_grmt_vocab_pair(header, vocab, grmt)
     total = header["num_sequences"]
     start = args.seq[0] if args.seq else 0
     end   = args.seq[1] if args.seq and len(args.seq) > 1 else start + 10
@@ -302,32 +434,33 @@ def cmd_decode_sequences(args, vocab):
     print(f"GRMT: {total} sequences, vocab_size={header['vocab_size']}")
     print(f"Showing sequences [{start}, {end}):\n")
 
-    for idx, tokens in iter_grmt_sequences(grmt):
+    for idx, tokens, atom_texts in iter_grmt_sequences(grmt):
         if idx < start:
             continue
         if idx >= end:
             break
 
-        text = decode_sequence(tokens, vocab)
+        text = decode_sequence(tokens, vocab, atom_texts)
 
         print(f"{'═' * 80}")
         print(f"  Sequence {idx}  |  {len(tokens)} tokens  |  {len(text)} chars")
         print(f"{'═' * 80}")
         if args.raw:
             for i, tid in enumerate(tokens):
-                piece = decode_token(tid, vocab)
+                piece = atom_texts[i] if ATOM_TOKEN_START <= tid < ATOM_TOKEN_END and atom_texts[i] else decode_token(tid, vocab)
                 region = token_type_label(tid)
                 print(f"  [{i:>4d}] {tid:>6d} {region:>7s}  {piece!r}")
             print()
 
         display = text
         truncated = False
-        if max_chars and len(text) > max_chars:
+        if max_chars is not None and len(text) > max_chars:
             display = text[:max_chars]
             truncated = True
 
         print(wrap_text(display.strip()))
         if truncated:
+            assert max_chars is not None
             print(f"\n  ... [{len(text) - max_chars} more chars, use --full to see all]")
         print()
 
@@ -338,12 +471,15 @@ def cmd_search(args, vocab):
     if not grmt.exists():
         raise FileNotFoundError(f"GRMT file not found: {grmt}")
 
+    header = read_grmt_header(grmt)
+    validate_grmt_vocab_pair(header, vocab, grmt)
+
     query = args.search.lower()
     found = 0
     limit = args.limit
 
-    for idx, tokens in iter_grmt_sequences(grmt):
-        text = decode_sequence(tokens, vocab)
+    for idx, tokens, atom_texts in iter_grmt_sequences(grmt):
+        text = decode_sequence(tokens, vocab, atom_texts)
         if query in text.lower():
             print(f"{'═' * 80}")
             print(f"  Sequence {idx}  |  {len(tokens)} tokens  |  {len(text)} chars")
@@ -368,12 +504,13 @@ def cmd_stats(args, vocab):
         raise FileNotFoundError(f"GRMT file not found: {grmt}")
 
     header = read_grmt_header(grmt)
+    validate_grmt_vocab_pair(header, vocab, grmt)
 
     print("═══ Vocabulary ═══")
-    n_special = sum(1 for t in vocab if t < NUM_SPECIAL_TOKENS)
-    n_byte    = sum(1 for t in vocab if BYTE_TOKEN_OFFSET <= t < ATOM_TOKEN_START)
-    n_atom    = sum(1 for t in vocab if ATOM_TOKEN_START <= t < ATOM_TOKEN_END)
-    n_unigram = sum(1 for t in vocab if t >= UNIGRAM_TOKEN_START)
+    n_special = NUM_SPECIAL_TOKENS
+    n_byte    = BYTE_VOCAB_SIZE
+    n_atom    = NUM_ATOM_TYPES
+    n_unigram = len(vocab) - UNIGRAM_TOKEN_START
     print(f"  Total entries : {len(vocab)}")
     print(f"  Special       : {n_special}  (IDs 0-{NUM_SPECIAL_TOKENS-1})")
     print(f"  Byte fallback : {n_byte}  (IDs {BYTE_TOKEN_OFFSET}-{ATOM_TOKEN_START-1})")
@@ -394,7 +531,7 @@ def cmd_stats(args, vocab):
     seq_lengths = []
     unknown_ids = set()
 
-    for idx, tokens in iter_grmt_sequences(grmt):
+    for idx, tokens, _atom_texts in iter_grmt_sequences(grmt):
         seq_lengths.append(len(tokens))
         total_tokens += len(tokens)
         for tid in tokens:
@@ -414,7 +551,7 @@ def cmd_stats(args, vocab):
     if unknown_ids:
         print(f"  ⚠ Unknown token IDs ({len(unknown_ids)}): {sorted(unknown_ids)[:20]}")
     else:
-        print(f"  ✓ All token IDs map to known vocab entries")
+        print("  ✓ All token IDs map to known vocab entries")
     print()
 
     # Top 20 tokens

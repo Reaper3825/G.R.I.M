@@ -270,6 +270,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
  * @param training_state TrainingState (GPU buffers, optimizer state)
  * @param payload        BatchPayload (host-only single source of truth)
  * @param bindings       BatchDeviceBindings produced by uploadBatchToDevice(payload)
+ * @param model_config   Grouped startup model config produced by HyperparameterGroupings.hpp
  * @param loss_config    Durable loss grouping from HyperparameterGroupings.hpp
  * @param accumulate     Whether to accumulate gradients (true for accumulation slots > 0)
  * @param grad_scale     Gradient scaling factor
@@ -282,6 +283,7 @@ LossResult autogradTrainingStep(
     TrainingState& training_state,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
+    const HyperParameters::LanguageModelConfig& model_config,
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     float grad_scale,

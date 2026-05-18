@@ -160,7 +160,7 @@ Use this checklist to systematically audit each file in the order it's used duri
     - Rule 20: `initialize()` now throws on double-init (was silent no-op). `getPrimaryStream()` throws if not initialized or null (was returning nullptr).
     - Rule 20: Fixed 4 ternary fallback patterns in TrainingStateGPU.cu (`stream ? stream : ...getPrimaryStream() : nullptr` → direct `getPrimaryStream()` call).
     - Rule 20: Fixed 2 ternary+nullptr-guard patterns in Phase2_TrainingLoop.cu (lines ~1393, ~2592).
-    - Simplified StreamControllerConfig: removed transfer/auxiliary config fields. Updated 4 callers (Phase1_Startup.cu, InitTrainingState.cu, diagnostic_train_minimal.cu, InitinferenceState.cu).
+    - Simplified StreamControllerConfig: removed transfer/auxiliary config fields. Updated 3 callers (Phase1_Startup.cu, InitTrainingState.cu, InitinferenceState.cu).
     - **Noted but not fixed**: `g_cleanup_stream` in TensorContract_GPU.cu (raw cudaStreamCreate for cudaFreeAsync cleanup — valid use case). `log_stream_` in EquationLogging.hpp (separate logging infrastructure).
 
 ---
@@ -1310,7 +1310,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - **Issue #85**: Validation token budget exceeds training buffer size (Jan 2026) - FIXED
     - **Root Cause**: Hardcoded Phase2 token budget `8192` exceeded training allocation (batch_size × max_seq_len = 7168)
     - **Symptom**: STATUS_STACK_BUFFER_OVERRUN crash (exit -1073740791) after "Created N validation batches"
-    - **Fix**: Changed to use `ctx.model->getConfig().max_tokens_per_batch` instead of hardcoded constant
+    - **Fix**: Changed to use Phase1-authored token budget instead of hardcoded constant
     - Added logging: `"[Val] Token budget: X (model limit: Y)"`
   - **Issue #115**: Diagnostic buffer mismatch (Feb 2026) - FIXED
     - **Root Cause**: Diagnostics read `cached_encoder_output` (pre-centering) instead of `centering_scratch_tensor` (post-centering)

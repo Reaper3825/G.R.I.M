@@ -1226,6 +1226,7 @@ LossResult autogradTrainingStep(
     TrainingState& training_state,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
+    const HyperParameters::LanguageModelConfig& model_config,
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     float grad_scale,
@@ -1233,7 +1234,7 @@ LossResult autogradTrainingStep(
 ) {
     payload.validate("autogradTrainingStep");
 
-    const auto& cfg = model.getConfig();
+    const auto& cfg = model_config;
 
     // Execution payload validation (WS4: single shared validator)
     GRIM::Execution::validateExecutionPayload(
