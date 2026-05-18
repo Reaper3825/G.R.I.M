@@ -214,10 +214,10 @@ enum class MetricStream : int {
     // Init-time structural invariants — published once by Phase1 (after
     // buildParameterGroups) and held constant for the whole run. Phase2's
     // per-step lattice update keeps re-pushing them, so mu == value and
-    // sigma == 0 across every level. These are the *machine-readable* twin
-    // of the init_facts_<session>.csv written by Phases/Startup/InitFacts.cu.
-    // Pointer values themselves cannot fit in a float stream and are only
-    // emitted to that CSV; the streams here cover bools and counts.
+    // sigma == 0 across every level. Full pointer/config/parameter-group
+    // init facts are dumped to LogRecorder (`training_<session>_tape.log`).
+    // Pointer values do not fit in float streams; invariant failures include
+    // them in the thrown error text.
     INIT_TIE_CFG          = 48,  // 1.0 if config.tie_embeddings, else 0.0
     INIT_TIE_PTRS_SAME    = 49,  // 1.0 if emb_weight_ptr == lm_weight_ptr
     INIT_TIE_GRADS_SAME   = 50,  // 1.0 if emb_grad_ptr  == lm_grad_ptr

@@ -256,7 +256,7 @@ void EmitModuleLog(const std::string& module_name,
                    ModuleLogLevel level,
                    std::string_view message,
                    std::uint64_t global_step,
-                   bool /*force_sync*/) {
+                   bool force_sync) {
     const LogLevel log_level = moduleLogLevelToLogLevel(static_cast<int>(level));
     
     auto* tape = getGlobalTape();
@@ -298,7 +298,12 @@ void EmitModuleLog(const std::string& module_name,
         entry.setMessage("%.*s", static_cast<int>(std::min(message.size(), size_t(511))), message.data());
         entry.primary = __builtin_nanf("");
         entry.secondary = __builtin_nanf("");
-        tape->record(entry);
+        if (force_sync) {
+            tape->emitImmediate(entry);
+            tape->flushSinks();
+        } else {
+            tape->recordLifecycle(entry);
+        }
     } else {
         // Pre-tape initialization: write to stderr so messages aren't lost
         const char* lvl_str = "INFO";

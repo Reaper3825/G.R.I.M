@@ -9,11 +9,14 @@
 
 #include "../../../Shared/Telemetry/TelemetryLattice_GPU.hpp"  // MetricStream
 #include "../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../../Shared/LogRecorder/LogRecorder.hpp"
 
-#include <fstream>
+#include <cstdint>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace GRIMText::Training {
 
@@ -27,13 +30,72 @@ constexpr int kInitOptGroupsTotal  = static_cast<int>(GRIM::Telemetry::MetricStr
 constexpr int kInitOptGroupsEmb    = static_cast<int>(GRIM::Telemetry::MetricStream::INIT_OPT_GROUPS_EMB);
 constexpr int kInitOptGroupsLm     = static_cast<int>(GRIM::Telemetry::MetricStream::INIT_OPT_GROUPS_LM);
 
-// Format a raw pointer as 0x-prefixed hex for the CSV. Pointer values
-// are not useful as floats, but they're useful when correlating across
-// memory dumps or comparing two runs of the same config.
+const char* boolText(bool value) {
+    if (value) {
+        return "true";
+    }
+    return "false";
+}
+
+// Format a raw pointer for fail-loud invariant messages. Pointer values do
+// not fit in float telemetry streams, so they are only emitted on failure.
 std::string fmtPtr(const void* p) {
     std::ostringstream os;
     os << p;
     return os.str();
+}
+
+std::string fmtInt(int value) {
+    return std::to_string(value);
+}
+
+std::string fmtUInt64(std::uint64_t value) {
+    return std::to_string(value);
+}
+
+std::string fmtSize(std::size_t value) {
+    return std::to_string(value);
+}
+
+std::string fmtFloat(float value) {
+    std::ostringstream os;
+    os << value;
+    return os.str();
+}
+
+const char* paramGroupTypeName(GRIM::ParamGroupType type) {
+    switch (type) {
+        case GRIM::ParamGroupType::EMBEDDING: return "EMBEDDING";
+        case GRIM::ParamGroupType::LM_HEAD: return "LM_HEAD";
+        case GRIM::ParamGroupType::ATTENTION: return "ATTENTION";
+        case GRIM::ParamGroupType::FFN: return "FFN";
+        case GRIM::ParamGroupType::RMSNORM: return "RMSNORM";
+        case GRIM::ParamGroupType::SCRATCHBLOCK: return "SCRATCHBLOCK";
+        case GRIM::ParamGroupType::MTP: return "MTP";
+        case GRIM::ParamGroupType::REASONING_HEAD: return "REASONING_HEAD";
+        case GRIM::ParamGroupType::EXECUTION_BLOCK: return "EXECUTION_BLOCK";
+        case GRIM::ParamGroupType::SLOT_SELECTOR: return "SLOT_SELECTOR";
+        case GRIM::ParamGroupType::COUNT: break;
+    }
+    throw std::runtime_error("paramGroupTypeName: invalid ParamGroupType::COUNT");
+}
+
+const char* paramStatsBucketName(GRIM::ParamStatsBucket bucket) {
+    switch (bucket) {
+        case GRIM::ParamStatsBucket::EMBEDDING: return "EMBEDDING";
+        case GRIM::ParamStatsBucket::ENCODER: return "ENCODER";
+        case GRIM::ParamStatsBucket::LM_HEAD: return "LM_HEAD";
+        case GRIM::ParamStatsBucket::COUNT: break;
+    }
+    throw std::runtime_error("paramStatsBucketName: invalid ParamStatsBucket::COUNT");
+}
+
+void emitInitFactLine(const std::string& line) {
+    GRIM::Logging::EmitModuleInfo("Training", line, 0, true);
+}
+
+void emitInitFactKeyValue(const std::string& key, const std::string& value) {
+    emitInitFactLine("[INIT_FACTS] " + key + " = " + value);
 }
 
 } // namespace
@@ -60,14 +122,17 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     int emb_groups = 0;
     int lm_groups  = 0;
     for (const auto& g : model->parameterGroups()) {
-        if (g.tensor && g.tensor->data == emb_w_ptr) ++emb_groups;
-        if (g.tensor && g.tensor->data == lm_w_ptr)  ++lm_groups;
+        if (!g.tensor) {
+            throw std::runtime_error("verifyAndDumpInitFacts: parameter group '" + g.name + "' has NULL tensor");
+        }
+        if (g.tensor->data == emb_w_ptr) ++emb_groups;
+        if (g.tensor->data == lm_w_ptr)  ++lm_groups;
     }
     const int total_groups = static_cast<int>(model->parameterGroups().size());
 
     // ── Assertions: fail loud on tying-contract violations ──────────
-    // (Rule 20: structural invariants throw; success path is silent
-    //  in the human log and structured in the two CSV channels.)
+    // (Rule 20: structural invariants throw; success path is a single
+    //  human log line plus structured telemetry slots.)
     if (cfg_tied && !ptrs_same) {
         throw std::runtime_error(
             "tie_embeddings=true but embedding/lm-head WEIGHT pointers differ "
@@ -94,7 +159,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
             std::to_string(lm_groups) + " lm-head group(s) — tied buffer would be double-stepped");
     }
 
-    // ── Channel 1: telemetry stream slots (constant for run) ─────────
+    // ── Telemetry stream slots (constant for run) ────────────────────
     ctx.telemetry.last_obs[kInitTieCfg]         = cfg_tied   ? 1.0f : 0.0f;
     ctx.telemetry.last_obs[kInitTiePtrsSame]    = ptrs_same  ? 1.0f : 0.0f;
     ctx.telemetry.last_obs[kInitTieGradsSame]   = grads_same ? 1.0f : 0.0f;
@@ -103,34 +168,97 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     ctx.telemetry.last_obs[kInitOptGroupsEmb]   = static_cast<float>(emb_groups);
     ctx.telemetry.last_obs[kInitOptGroupsLm]    = static_cast<float>(lm_groups);
 
-    // ── Channel 2: init_facts_<session>.csv (key,value) ──────────────
-    // Same naming scheme as training_<session>.log and telemetry_<session>.csv,
-    // so all three live side-by-side in <log_dir>.
-    const std::string csv_path =
-        ctx.config.paths.log_dir + "/init_facts_" + ctx.logging.session_id + ".csv";
-    std::ofstream out(csv_path, std::ios::trunc);
-    if (!out.is_open()) {
-        throw std::runtime_error(
-            "verifyAndDumpInitFacts: failed to open " + csv_path + " for writing");
-    }
-    out << "key,value\n"
-        << "config.tie_embeddings,"      << (cfg_tied   ? "true" : "false") << "\n"
-        << "lm_owns_weights,"            << (lm_owns    ? "true" : "false") << "\n"
-        << "emb_weight_ptr,"             << fmtPtr(emb_w_ptr) << "\n"
-        << "lm_weight_ptr,"              << fmtPtr(lm_w_ptr)  << "\n"
-        << "weight_ptrs_same,"           << (ptrs_same  ? "1" : "0") << "\n"
-        << "emb_grad_ptr,"               << fmtPtr(emb_g_ptr) << "\n"
-        << "lm_grad_ptr,"                << fmtPtr(lm_g_ptr)  << "\n"
-        << "grad_ptrs_same,"             << (grads_same ? "1" : "0") << "\n"
-        << "optimizer_groups.total,"     << total_groups  << "\n"
-        << "optimizer_groups.emb_buffer," << emb_groups   << "\n"
-        << "optimizer_groups.lm_buffer," << lm_groups     << "\n";
-    out.flush();
+    // Success path: full human-readable dump through the LogRecorder tape.
+    // The text sink is training_<session>_tape.log. Each value gets its own
+    // line to avoid the fixed LogEntry message buffer truncating the payload.
+    emitInitFactLine("[INIT_FACTS] ========================================================================");
+    emitInitFactLine("[INIT_FACTS] Init structural facts: effective configuration and live model state");
+    emitInitFactLine("[INIT_FACTS] ========================================================================");
 
-    // Success path: one human-readable confirmation line. The structured
-    // payload lives in the CSV + telemetry slots; readers go there.
+    emitInitFactLine("[INIT_FACTS] --- Run identity ---------------------------------------------------------");
+    emitInitFactKeyValue("session_id", ctx.logging.session_id);
+    emitInitFactKeyValue("config_path", ctx.config.paths.config_path.string());
+    emitInitFactKeyValue("log_dir", ctx.config.paths.log_dir);
+    emitInitFactKeyValue("training_data", ctx.config.paths.data_path);
+    emitInitFactKeyValue("vocab_path", ctx.config.paths.vocab_path);
+    emitInitFactKeyValue("checkpoint_dir", ctx.config.paths.checkpoint_dir);
+    emitInitFactKeyValue("output_model_path", ctx.config.paths.output_model_path);
+    emitInitFactKeyValue("loaded_checkpoint_path", ctx.loaded_checkpoint_path);
+
+    emitInitFactLine("[INIT_FACTS] --- Effective architecture -----------------------------------------------");
+    const auto& arch = ctx.config.hyperparameters.architecture;
+    emitInitFactKeyValue("architecture.d_model", fmtInt(arch.d_model));
+    emitInitFactKeyValue("architecture.num_layers", fmtInt(arch.num_layers));
+    emitInitFactKeyValue("architecture.num_heads", fmtInt(arch.num_heads));
+    emitInitFactKeyValue("architecture.num_kv_heads", fmtInt(arch.num_kv_heads));
+    emitInitFactKeyValue("architecture.head_dim", fmtInt(arch.head_dim));
+    emitInitFactKeyValue("architecture.d_ff", fmtInt(arch.d_ff));
+    emitInitFactKeyValue("architecture.max_seq_len", fmtInt(arch.max_seq_len));
+    emitInitFactKeyValue("architecture.vocab_size", fmtInt(arch.vocab_size));
+    emitInitFactKeyValue("actual_vocab_size", fmtUInt64(ctx.config.actual_vocab_size));
+    emitInitFactKeyValue("architecture.tie_embeddings", boolText(arch.tie_embeddings));
+    emitInitFactKeyValue("architecture.use_bias", boolText(arch.use_bias));
+    emitInitFactKeyValue("architecture.use_scratch_block", boolText(arch.use_scratch_block));
+    emitInitFactKeyValue("architecture.execution_block_enabled", boolText(arch.execution_block_enabled));
+    emitInitFactKeyValue("architecture.mtp_enabled", boolText(arch.mtp_enabled));
+
+    emitInitFactLine("[INIT_FACTS] --- Run capacity ---------------------------------------------------------");
+    emitInitFactKeyValue("run_capacity.batch_rows", fmtSize(ctx.run_capacity.batch_rows));
+    emitInitFactKeyValue("run_capacity.seq_cap", fmtSize(ctx.run_capacity.seq_cap));
+    emitInitFactKeyValue("run_capacity.max_tokens_per_batch", fmtSize(ctx.run_capacity.max_tokens_per_batch));
+    emitInitFactKeyValue("startup.max_seq_len", fmtInt(ctx.config.max_seq_len));
+    emitInitFactKeyValue("startup.sliding_window_stride", fmtInt(ctx.config.sliding_window_stride));
+
+    emitInitFactLine("[INIT_FACTS] --- Tied embedding / LM-head contract -----------------------------------");
+    emitInitFactKeyValue("config.tie_embeddings", boolText(cfg_tied));
+    emitInitFactKeyValue("lm_head.owns_weights", boolText(lm_owns));
+    emitInitFactKeyValue("embedding.weight_ptr", fmtPtr(emb_w_ptr));
+    emitInitFactKeyValue("lm_head.weight_ptr", fmtPtr(lm_w_ptr));
+    emitInitFactKeyValue("weight_ptrs_same", boolText(ptrs_same));
+    emitInitFactKeyValue("embedding.grad_ptr", fmtPtr(emb_g_ptr));
+    emitInitFactKeyValue("lm_head.grad_ptr", fmtPtr(lm_g_ptr));
+    emitInitFactKeyValue("grad_ptrs_same", boolText(grads_same));
+    emitInitFactKeyValue("optimizer_groups.total", fmtInt(total_groups));
+    emitInitFactKeyValue("optimizer_groups.embedding_buffer", fmtInt(emb_groups));
+    emitInitFactKeyValue("optimizer_groups.lm_head_buffer", fmtInt(lm_groups));
+
+    emitInitFactLine("[INIT_FACTS] --- Telemetry stream mirror ---------------------------------------------");
+    emitInitFactKeyValue("telemetry[48].init_tie_cfg", fmtFloat(ctx.telemetry.last_obs[kInitTieCfg]));
+    emitInitFactKeyValue("telemetry[49].init_tie_ptrs_same", fmtFloat(ctx.telemetry.last_obs[kInitTiePtrsSame]));
+    emitInitFactKeyValue("telemetry[50].init_tie_grads_same", fmtFloat(ctx.telemetry.last_obs[kInitTieGradsSame]));
+    emitInitFactKeyValue("telemetry[51].init_lm_owns_weights", fmtFloat(ctx.telemetry.last_obs[kInitLmOwnsWeights]));
+    emitInitFactKeyValue("telemetry[52].init_opt_groups_total", fmtFloat(ctx.telemetry.last_obs[kInitOptGroupsTotal]));
+    emitInitFactKeyValue("telemetry[53].init_opt_groups_emb", fmtFloat(ctx.telemetry.last_obs[kInitOptGroupsEmb]));
+    emitInitFactKeyValue("telemetry[54].init_opt_groups_lm", fmtFloat(ctx.telemetry.last_obs[kInitOptGroupsLm]));
+
+    emitInitFactLine("[INIT_FACTS] --- Parameter groups -----------------------------------------------------");
+    const auto& groups = model->parameterGroups();
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+        const auto& g = groups[i];
+        if (!g.tensor) {
+            throw std::runtime_error("verifyAndDumpInitFacts: parameter group index " + fmtSize(i) + " has NULL tensor");
+        }
+        std::ostringstream line;
+        line << "[INIT_FACTS] parameter_groups[" << i << "]"
+             << " name=" << g.name
+             << " type=" << paramGroupTypeName(g.type)
+             << " bucket=" << paramStatsBucketName(g.stats_bucket)
+             << " layer=" << g.layer_index
+             << " numel=" << g.tensor->numel()
+             << " data=" << fmtPtr(g.tensor->data)
+             << " grad=" << fmtPtr(g.tensor->grad_data())
+             << " m_state=" << fmtPtr(g.m_state())
+             << " v_state=" << fmtPtr(g.v_state())
+             << " wd_mult=" << g.weight_decay_multiplier
+             << " lr_mult=" << g.lr_multiplier
+             << " upsilon=" << g.upsilon;
+        emitInitFactLine(line.str());
+    }
+
+    emitInitFactLine("[INIT_FACTS] ========================================================================");
+
     if (ctx.logging.logger) {
-        ctx.logging.logger->log("✓ Init facts verified and written: " + csv_path);
+        ctx.logging.logger->log("✓ Init facts verified and dumped to LogRecorder tape");
     }
 }
 
