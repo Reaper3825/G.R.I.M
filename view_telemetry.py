@@ -77,6 +77,9 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
     52: "init_opt_groups_total",
     53: "init_opt_groups_emb",
     54: "init_opt_groups_lm",
+    55: "rho_raw_avg_signed_dot",
+    56: "rho_centered_avg_abs_dot",
+    57: "rho_mean_vector_rms",
 }
 
 
@@ -910,6 +913,9 @@ def main():
     rho_raw_hmin = streams.get("rho_raw_h_rms_min")
     rho_raw_hmax = streams.get("rho_raw_h_rms_max")
     rho_raw_spread = streams.get("rho_raw_rms_spread")
+    rho_raw_signed = streams.get("rho_raw_avg_signed_dot")
+    rho_centered_abs = streams.get("rho_centered_avg_abs_dot")
+    rho_mean_vector_rms = streams.get("rho_mean_vector_rms")
 
     has_rho_raw = any(s is not None for s in [rho_raw_dot, rho_raw_norm, rho_raw_hmin, rho_raw_hmax, rho_raw_spread])
     if has_rho_raw:
@@ -1007,6 +1013,77 @@ def main():
         print(f"Saved: {os.path.splitext(path)[0]}_rho_raw.png")
     else:
         print("Rho raw decomposition figure skipped: no rho raw streams in CSV")
+
+    # --- Figure 9b: Rho Centering & Signed-Dot Diagnostics ---
+    # Streams 55-57 separate coherent mean-vector drift from pairwise collapse:
+    #   avg_signed_dot = avg_{i<j}(h_i · h_j)
+    #   centered_avg_abs_dot = avg_{i<j}|((h_i-μ) · (h_j-μ))|
+    #   mean_vector_rms = sqrt(mean_d(μ_d^2))
+    has_rho_centering = any(s is not None for s in [rho_raw_signed, rho_centered_abs, rho_mean_vector_rms])
+    if has_rho_centering:
+        fig9b = plt.figure(figsize=(16, 12), constrained_layout=True)
+        fig9b.suptitle("GRIM-text Telemetry — Rho Centering & Signed Dot", fontsize=14, fontweight="bold")
+        gs9b = GridSpec(2, 2, figure=fig9b)
+
+        # 9b-1a) Signed raw pairwise dot: detects coherent same-direction drift.
+        ax = fig9b.add_subplot(gs9b[0, 0])
+        if rho_raw_signed is not None:
+            ax.plot(rho_raw_signed.index, rho_raw_signed["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:purple")
+            ax.plot(rho_raw_signed.index, smooth(rho_raw_signed["raw_observation"]),
+                    linewidth=1.5, color="tab:purple", label="avg signed dot")
+        ax.axhline(0, color="gray", linewidth=0.8, linestyle="--", alpha=0.7)
+        ax.set_ylabel("avg signed dot")
+        ax.set_title("Raw Signed Pairwise Dot: avg₍ᵢ<ⱼ₎(hᵢ·hⱼ)")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 9b-1b) Centered absolute pairwise dot: subtracts the layer mean first.
+        ax = fig9b.add_subplot(gs9b[0, 1])
+        if rho_centered_abs is not None:
+            ax.plot(rho_centered_abs.index, rho_centered_abs["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:green")
+            ax.plot(rho_centered_abs.index, smooth(rho_centered_abs["raw_observation"]),
+                    linewidth=1.5, color="tab:green", label="centered avg |dot|")
+        if rho_raw_dot is not None:
+            ax.plot(rho_raw_dot.index, smooth(rho_raw_dot["raw_observation"]),
+                    linewidth=1.1, linestyle="--", color="tab:blue", alpha=0.7,
+                    label="raw avg |dot|")
+        ax.set_ylabel("avg absolute dot")
+        ax.set_title("Centered Pairwise Dot After h̃ᵢ = hᵢ − μ")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 9b-2a) Mean hidden vector RMS: direct DC/mean-vector magnitude.
+        ax = fig9b.add_subplot(gs9b[1, 0])
+        if rho_mean_vector_rms is not None:
+            ax.plot(rho_mean_vector_rms.index, rho_mean_vector_rms["raw_observation"],
+                    alpha=0.3, linewidth=0.5, color="tab:red")
+            ax.plot(rho_mean_vector_rms.index, smooth(rho_mean_vector_rms["raw_observation"]),
+                    linewidth=1.5, color="tab:red", label="mean vector RMS")
+        ax.set_ylabel("sqrt(mean_d(μ_d²))")
+        ax.set_title("Mean Hidden Vector RMS")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        # 9b-2b) Signed vs centered comparison: separates mean drift from residual alignment.
+        ax = fig9b.add_subplot(gs9b[1, 1])
+        if rho_raw_signed is not None:
+            ax.plot(rho_raw_signed.index, smooth(rho_raw_signed["raw_observation"]),
+                    linewidth=1.5, color="tab:purple", label="avg signed dot")
+        if rho_centered_abs is not None:
+            ax.plot(rho_centered_abs.index, smooth(rho_centered_abs["raw_observation"]),
+                    linewidth=1.5, color="tab:green", label="centered avg |dot|")
+        ax.axhline(0, color="gray", linewidth=0.8, linestyle="--", alpha=0.7)
+        ax.set_ylabel("dot diagnostic")
+        ax.set_title("Mean-Drift vs Residual Pairwise Alignment")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        fig9b.savefig(os.path.splitext(path)[0] + "_rho_centering.png", dpi=150)
+        print(f"Saved: {os.path.splitext(path)[0]}_rho_centering.png")
+    else:
+        print("Rho centering figure skipped: no rho signed/centered streams in CSV")
 
     # --- Figure 10: RMSNorm Gamma Tracking ---
     gamma_pre_attn = streams.get("rms_gamma_pre_attn_rms")
