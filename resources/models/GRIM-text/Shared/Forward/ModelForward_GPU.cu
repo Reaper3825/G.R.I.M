@@ -172,7 +172,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
 
     intermediates.embedding_tensor = std::move(emb_output);
     if (cfg->dropout_rate > 0.0f) {
-        const uint64_t emb_dropout_seed = request.step * 2654435761ULL + 500;
+        const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;
         constexpr uint64_t kEmbeddingDropoutMaskStream = 0x0005000000000001ULL;
         intermediates.embedding_tensor = autograd::dropout(
             intermediates.embedding_tensor,
@@ -182,7 +182,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
             request.stream,
             kEmbeddingDropoutMaskStream);
         MFWD_INFO("Step 1c: Embedding dropout " << (is_training ? "applied" : "skipped (eval mode)")
-                  << " (p=" << cfg->dropout_rate << ", step=" << request.step << ")");
+                  << " (p=" << cfg->dropout_rate << ", batch_idx=" << request.batch_idx << ")");
     }
 
     MFWD_INFO("Step 1: Embedding complete, shape=[" << total_tokens << ", " << cfg->d_model << "]");
@@ -272,7 +272,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
             Tensor layer_output_view = enc_layer->forward(
                 layer_input, payload, bindings->d_seq_lengths, request.stream, request.cublas_handle, *layer_storage,
-                request.step, false, layer_idx);
+                request.batch_idx, false, layer_idx);
 
             Tensor owned = Tensor::empty(layer_output_view.shape, false, request.stream, "no_grad_layer_output");
             const size_t bytes = static_cast<size_t>(layer_output_view.shape.total_elements()) * sizeof(float);
@@ -334,7 +334,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
 
             Tensor layer_output = enc_layer->forward(
                 layer_input, payload, bindings->d_seq_lengths, request.stream, request.cublas_handle, layer_storage,
-                request.step, is_training, layer_idx);
+                request.batch_idx, is_training, layer_idx);
 
             if (layer_idx == exec_layer && request.execution_block) {
                 const int ae = cfg->scratch_block_atom_embedding_dim;

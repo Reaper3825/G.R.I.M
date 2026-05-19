@@ -25,7 +25,7 @@ void populateCommonContext(
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
-    uint64_t step,
+    uint64_t batch_idx,
     bool is_training)
 {
     ctx.config = config;
@@ -38,7 +38,7 @@ void populateCommonContext(
     ctx.execution_block = execution_block;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
-    ctx.step = step;
+    ctx.batch_idx = batch_idx;
     ctx.is_training = is_training;
 }
 
@@ -89,7 +89,7 @@ AutogradContext initAutogradContext(
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     const HyperParameters::LossConfigHP& loss_config,
-    uint64_t step,
+    uint64_t batch_idx,
     bool is_training
 ) {
     validateDeviceBindingsForPayload(payload, bindings, "initAutogradContext(payload)");
@@ -98,7 +98,7 @@ AutogradContext initAutogradContext(
     populateCommonContext(
         ctx, config, training_state, gpu_encoder, embedding_layer, lm_head,
         scratch_block, reasoning_head, execution_block, cublas_handle, stream,
-        step, is_training);
+        batch_idx, is_training);
 
     ctx.payload = &payload;
     ctx.device_bindings = &bindings;

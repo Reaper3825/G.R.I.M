@@ -385,7 +385,7 @@ BatchResult processBatch(
         ctx.loss_config,
         plan.should_accumulate,
         plan.grad_scale,
-        static_cast<uint64_t>(plan.optimizer_step)
+        plan.batch_idx
     );
     result.loss = loss_result.loss_value;
     result.aux_loss = loss_result.aux_loss;
@@ -623,7 +623,9 @@ EpochResult runEpoch(
         BatchAutogradPlan autograd_plan;
         autograd_plan.should_accumulate = shouldAccumulateGradients(ctx.optimizer);
         autograd_plan.grad_scale = 1.0f / static_cast<float>(accum_steps);
-        autograd_plan.optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
+        autograd_plan.batch_idx = static_cast<uint64_t>(batch_idx);
+
+        const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
 
         BatchResult batch_result = processBatch(
             ctx, state, payload, batch_idx, epoch_idx, autograd_plan);
@@ -632,7 +634,7 @@ EpochResult runEpoch(
         // BatchPayload pass; using it advances warmup/decay accum_steps times
         // too fast.
         batch_result.learning_rate = scheduledLearningRateForOptimizerStep(
-            ctx, autograd_plan.optimizer_step);
+            ctx, optimizer_step);
 
         const bool should_step = advanceAccumulationOrThrow(ctx.optimizer, accum_steps);
         if (should_step) {
@@ -643,7 +645,7 @@ EpochResult runEpoch(
                 batch_result,
                 batch_idx,
                 accum_steps,
-                autograd_plan.optimizer_step);
+                optimizer_step);
         }
 
         // Flush device logs on the diagnostic sync interval after the optional

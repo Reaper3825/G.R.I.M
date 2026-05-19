@@ -139,7 +139,7 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* device_bindings = nullptr;
-    uint64_t step = 0;
+    uint64_t batch_idx = 0;
     bool is_training = true;
     /** When true, skip duplicate equation logging on non-initial accumulation slots. */
     bool skip_equation_logging = false;
@@ -206,7 +206,7 @@ AutogradContext initAutogradContext(
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     const HyperParameters::LossConfigHP& loss_config,
-    uint64_t step,
+    uint64_t batch_idx,
     bool is_training = true
 );
 
@@ -274,7 +274,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
  * @param loss_config    Durable loss grouping from HyperparameterGroupings.hpp
  * @param accumulate     Whether to accumulate gradients (true for accumulation slots > 0)
  * @param grad_scale     Gradient scaling factor
- * @param step           Global training step counter
+ * @param batch_idx      Batch index used by forward-time stochastic kernels/logs
  * @return LossResult with decomposed loss components and success/error status.
  *         If loss is non-finite, backward is SKIPPED and success=false.
  */
@@ -287,7 +287,7 @@ LossResult autogradTrainingStep(
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     float grad_scale,
-    uint64_t step
+    uint64_t batch_idx
 );
 
 /**

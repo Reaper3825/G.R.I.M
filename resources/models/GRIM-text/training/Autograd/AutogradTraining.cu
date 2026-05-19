@@ -371,7 +371,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     request.execution_block = ctx.execution_block;
     request.payload = ctx.payload;
     request.bindings = ctx.device_bindings;
-    request.step = ctx.step;
+    request.batch_idx = ctx.batch_idx;
     request.mode = ctx.is_training
         ? Forward::ModelForwardMode::TrainingGraph
         : Forward::ModelForwardMode::EvalNoGrad;
@@ -1230,7 +1230,7 @@ LossResult autogradTrainingStep(
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     float grad_scale,
-    uint64_t step
+    uint64_t batch_idx
 ) {
     payload.validate("autogradTrainingStep");
 
@@ -1301,9 +1301,9 @@ LossResult autogradTrainingStep(
     // AUTOGRAD CONTEXT
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // Write authoritative training step to TrainingState BEFORE building context.
+    // Write authoritative autograd batch index to TrainingState BEFORE building context.
     // This is the ONLY mutation site for autograd_step.
-    training_state.autograd_step = step;
+    training_state.autograd_step = batch_idx;
 
     // Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on non-initial
     // accumulation slots across the ENTIRE step (forward + loss + backward). Sealing
@@ -1327,7 +1327,7 @@ LossResult autogradTrainingStep(
         payload,
         bindings,
         loss_config,
-        step,
+        batch_idx,
         true
     );
     if (loss_config.class_balanced_enabled) {

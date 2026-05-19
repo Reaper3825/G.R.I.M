@@ -64,7 +64,7 @@ struct ModelForwardRequest {
 
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* bindings = nullptr;
-    uint64_t step = 0;
+    uint64_t batch_idx = 0;
     ModelForwardMode mode = ModelForwardMode::TrainingGraph;
 
     bool trainingGraph() const { return mode == ModelForwardMode::TrainingGraph; }
