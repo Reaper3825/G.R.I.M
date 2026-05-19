@@ -234,19 +234,29 @@ void logLmHeadGemmForwardEquation(const Tensor& lm_input,
     eq.precision(8);
     eq << "[LM_HEAD_GEMM_EQUATION] logits = lm_input @ W_eff^T\n";
     eq << "  ORDER: lm_input=" << lm_input_expr << "; W_eff=" << w_eff_expr << "\n";
-    eq << "  INPUT (lm_input sample): shape=[" << hidden_rows << "," << d_model << "]"
+    eq << "  GEOMETRY: lm_input_actual_shape=[" << total_tokens << "," << d_model << "]"
+       << " W_eff_actual_shape=[" << vocab_size << "," << d_model << "]"
+       << " logits_actual_shape=[" << total_tokens << "," << vocab_size << "]"
+       << " lm_input_sample_shape=[" << hidden_rows << "," << d_model << "]"
+       << " W_eff_sample_shape=[" << weight_rows << "," << d_model << "]"
+       << " logits_sample_shape=[" << logit_rows << "," << logit_cols << "]"
+       << " lm_input_rows_clamped=" << boolText(hidden_rows != total_tokens)
+       << " W_eff_rows_clamped=" << boolText(weight_rows != vocab_size)
+       << " logits_rows_clamped=" << boolText(logit_rows != total_tokens)
+       << " logits_cols_clamped=" << boolText(logit_cols != vocab_size) << "\n";
+    eq << "  INPUT (lm_input sample): sample_shape=[" << hidden_rows << "," << d_model << "]"
        << " min=" << hidden_stats.min_val << " max=" << hidden_stats.max_val
        << " rms=" << hidden_stats.rms
        << " row_mean_abs_max=" << hidden_stats.row_mean_abs_max
        << " nan=" << hidden_stats.nan_count << " inf=" << hidden_stats.inf_count << "\n";
-    eq << "  WEIGHT (W_eff sample): shape=[" << weight_rows << "," << d_model << "]"
+    eq << "  WEIGHT (W_eff sample): sample_shape=[" << weight_rows << "," << d_model << "]"
        << " min=" << weight_stats.min_val << " max=" << weight_stats.max_val
        << " rms=" << weight_stats.rms
        << " row_mean_abs_max=" << weight_stats.row_mean_abs_max
        << " nan=" << weight_stats.nan_count << " inf=" << weight_stats.inf_count << "\n";
     eq << "  EXPECTED sample_logit_rms ≈ sqrt(d_model) * rms(lm_input) * rms(W_eff) = "
        << expected_logit_rms << "\n";
-    eq << "  ACTUAL (logits prefix sample): shape=[" << logit_rows << "," << logit_cols << "]"
+    eq << "  ACTUAL (logits prefix sample): sample_shape=[" << logit_rows << "," << logit_cols << "]"
        << " min=" << logit_stats.min_val << " max=" << logit_stats.max_val
        << " rms=" << logit_stats.rms << " ratio=" << ratio
        << " nan=" << logit_stats.nan_count << " inf=" << logit_stats.inf_count << "\n";
