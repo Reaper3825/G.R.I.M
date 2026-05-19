@@ -419,6 +419,12 @@ void registerScratchBlockParameters(LanguageModel& model,
                         atom_projection,
                         ParamGroupType::SCRATCHBLOCK,
                         ParamStatsBucket::ENCODER);
+
+    auto& structured_gate_weight = scratch_block->structuredGateWeight();
+    registrar.addTensor("scratch_block_structured_gate_weight",
+                        structured_gate_weight,
+                        ParamGroupType::SCRATCHBLOCK,
+                        ParamStatsBucket::ENCODER);
 }
 
 void registerReasoningHeadParameters(LanguageModel& model,

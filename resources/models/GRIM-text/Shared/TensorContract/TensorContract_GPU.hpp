@@ -1283,6 +1283,16 @@ Tensor silu(const Tensor& x, cudaStream_t stream = nullptr,
             const float* input_cache = nullptr);
 
 /**
+ * Elementwise sigmoid: y = 1 / (1 + exp(-x)).
+ *
+ * Used by learned vector gates. TAPE-BASED: Uses external cache pointer
+ * for backward pass. If input_cache is nullptr, uses tensor data directly
+ * (caller must keep that tensor alive until backward completes).
+ */
+Tensor sigmoid(const Tensor& x, cudaStream_t stream = nullptr,
+               const float* input_cache = nullptr);
+
+/**
  * Element-wise (Hadamard) product: y = a ⊙ b
  *
  * Used for the gating operation in SwiGLU: SiLU(gate) ⊙ up

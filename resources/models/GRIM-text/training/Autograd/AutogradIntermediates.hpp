@@ -45,6 +45,11 @@ struct AutogradIntermediates {
     // These preserve the autograd graph so backward() propagates through all ops
     // ═══════════════════════════════════════════════════════════════════════════
     Tensor embedding_tensor;           // [total_tokens, d_model] - embedding output
+    Tensor embedding_structured_state; // [total_tokens, d_model] - all-token z for learned vector gate
+    Tensor embedding_gate_concat;      // [total_tokens, 2*d_model] - [e; z]
+    Tensor embedding_gate_logits;      // [total_tokens, d_model] - [e; z] @ Wg
+    Tensor embedding_gate_values;      // [total_tokens, d_model] - sigmoid(logits)
+    Tensor embedding_gate_delta;       // [total_tokens, d_model] - gate ⊙ z
     std::vector<Tensor> encoder_layer_outputs;  // One per encoder layer
     Tensor encoder_output_tensor;      // [total_tokens, d_model] - after final RMSNorm
     Tensor centered_encoder_output;    // [total_tokens, d_model] - Issue #127
@@ -96,6 +101,11 @@ struct AutogradIntermediates {
     void clear() {
         layer_intermediates.clear();
         embedding_tensor = Tensor();
+        embedding_structured_state = Tensor();
+        embedding_gate_concat = Tensor();
+        embedding_gate_logits = Tensor();
+        embedding_gate_values = Tensor();
+        embedding_gate_delta = Tensor();
         encoder_layer_outputs.clear();
         encoder_output_tensor = Tensor();
         centered_encoder_output = Tensor();

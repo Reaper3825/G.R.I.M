@@ -554,6 +554,40 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         && !gen.trace_state_by_row.empty()
         && !gen.execution_trace_by_row.empty();
 
+    if (scratch_block && scratch_block->isEnabled()) {
+        if (!ts.cached_token_numeric_values.data) {
+            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires cached_token_numeric_values");
+        }
+        if (!ts.cached_token_atom_mask.data) {
+            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires cached_token_atom_mask");
+        }
+        if (!ts.cached_token_atom_flags.data) {
+            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires cached_token_atom_flags");
+        }
+        if (!ts.cached_token_to_slot_map.data) {
+            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires cached_token_to_slot_map");
+        }
+
+        const bool exec_first_type_only = cfg.execution_block_enabled && cfg.scratch_block_execution_first_type_only;
+        Tensor structured_state = ag::scratch_block_project_all_tokens(
+            *scratch_block,
+            token_id_ptr,
+            ts.cached_token_numeric_values.data + token_pos,
+            reinterpret_cast<const uint8_t*>(ts.cached_token_atom_mask.data) + token_pos,
+            reinterpret_cast<const uint32_t*>(ts.cached_token_atom_flags.data) + token_pos,
+            reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos,
+            1,
+            stream,
+            exec_first_type_only,
+            false);
+        Tensor gate_concat = ag::concat(hidden, structured_state, stream);
+        Tensor gate_weight_view = scratch_block->structuredGateWeight().detach(stream);
+        Tensor gate_logits = ag::matmul(gate_concat, gate_weight_view, stream, nullptr, nullptr);
+        Tensor gate_values = ag::sigmoid(gate_logits, stream, nullptr);
+        Tensor gate_delta = ag::elementwise_mul(gate_values, structured_state, stream);
+        hidden = ag::add(hidden, gate_delta, stream);
+    }
+
     int exec_layer = -1;
     int exec_K = 0;
     if (exec_block_active) {

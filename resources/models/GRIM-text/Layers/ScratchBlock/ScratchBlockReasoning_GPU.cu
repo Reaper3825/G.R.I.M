@@ -208,6 +208,39 @@ __global__ void kernelInjectAtomEmbeddings(
     hidden_states[token_pos * d_model + d_idx] += scale * sum;
 }
 
+// Project atom embeddings into a full-token z tensor. z is pre-zeroed; only
+// structured/atom rows are written. This makes all-token gating shape-stable
+// while preserving exact no-op behavior for ordinary tokens.
+__global__ void kernelProjectAtomEmbeddingsAllTokens(
+    float* __restrict__ structured_state,
+    const int* __restrict__ atom_positions,
+    const int* __restrict__ num_atoms,
+    int max_atoms,
+    const float* __restrict__ atom_embeddings,
+    const float* __restrict__ projection,
+    int atom_embedding_dim,
+    int d_model,
+    float scale
+) {
+    const int atom_idx = blockIdx.x;
+    const int d_idx = threadIdx.x;
+    __shared__ int s_num_atoms;
+    if (threadIdx.x == 0) {
+        s_num_atoms = ClampNumAtoms(num_atoms, max_atoms);
+    }
+    __syncthreads();
+
+    if (atom_idx >= s_num_atoms || d_idx >= d_model) return;
+
+    const int token_pos = atom_positions[atom_idx];
+    float sum = 0.0f;
+    for (int k = 0; k < atom_embedding_dim; ++k) {
+        sum += atom_embeddings[atom_idx * atom_embedding_dim + k] *
+               projection[k * d_model + d_idx];
+    }
+    structured_state[token_pos * d_model + d_idx] = scale * sum;
+}
+
 //======================================================//
 //  CUDA Kernels — Backward
 //======================================================//
@@ -360,6 +393,108 @@ ScratchBlockGradFn::~ScratchBlockGradFn() {
     if (d_grad_atom_embeddings)   cudaFree(d_grad_atom_embeddings);
     if (owns_input_grad && input_grad) cudaFree(input_grad);
 }
+
+struct ScratchBlockProjectionGradFn : public GradFn {
+    float* cached_atom_embeddings = nullptr;
+    int* cached_atom_positions = nullptr;
+    int* cached_atom_types = nullptr;
+    int num_atoms_captured = 0;
+    int atom_embedding_dim = 0;
+    int d_model = 0;
+    int max_atoms = 0;
+    float atom_scale = 1.0f;
+
+    float* atom_projection_data = nullptr;
+    float* atom_projection_grad = nullptr;
+    float* atom_type_embeddings_grad = nullptr;
+    float* d_grad_atom_embeddings = nullptr;
+
+    ScratchBlockProjectionGradFn() { op_name = "scratch_block_project_all_tokens"; }
+    ~ScratchBlockProjectionGradFn() override { release_saved(); }
+
+    void capture_weights(Tensor& atom_proj, Tensor& atom_type_emb) {
+        atom_proj.ensure_grad();
+        atom_type_emb.ensure_grad();
+        atom_projection_data = atom_proj.data;
+        atom_projection_grad = atom_proj.grad_data();
+        atom_type_embeddings_grad = atom_type_emb.grad_data();
+        if (!atom_projection_data) throw std::runtime_error("ScratchBlockProjectionGradFn::capture_weights: atom_projection.data is NULL");
+        if (!atom_projection_grad) throw std::runtime_error("ScratchBlockProjectionGradFn::capture_weights: atom_projection.grad is NULL");
+        if (!atom_type_embeddings_grad) throw std::runtime_error("ScratchBlockProjectionGradFn::capture_weights: atom_type_embeddings.grad is NULL");
+    }
+
+    void capture_forward(const int* atom_positions_src,
+                         const int* atom_types_src,
+                         const float* atom_embeddings_src,
+                         int num_atoms,
+                         cudaStream_t stream) {
+        num_atoms_captured = num_atoms;
+        if (num_atoms <= 0) return;
+
+        const size_t pos_bytes = static_cast<size_t>(num_atoms) * sizeof(int);
+        const size_t emb_bytes = static_cast<size_t>(num_atoms) * atom_embedding_dim * sizeof(float);
+
+        cudaMallocOrThrow(reinterpret_cast<void**>(&cached_atom_positions), pos_bytes, "ScratchBlockProjectionGradFn_atom_positions");
+        cudaMemcpyAsync(cached_atom_positions, atom_positions_src, pos_bytes, cudaMemcpyDeviceToDevice, stream);
+
+        cudaMallocOrThrow(reinterpret_cast<void**>(&cached_atom_types), pos_bytes, "ScratchBlockProjectionGradFn_atom_types");
+        cudaMemcpyAsync(cached_atom_types, atom_types_src, pos_bytes, cudaMemcpyDeviceToDevice, stream);
+
+        cudaMallocOrThrow(reinterpret_cast<void**>(&cached_atom_embeddings), emb_bytes, "ScratchBlockProjectionGradFn_atom_embeddings");
+        cudaMemcpyAsync(cached_atom_embeddings, atom_embeddings_src, emb_bytes, cudaMemcpyDeviceToDevice, stream);
+
+        cudaMallocOrThrow(reinterpret_cast<void**>(&d_grad_atom_embeddings),
+                          static_cast<size_t>(max_atoms) * atom_embedding_dim * sizeof(float),
+                          "ScratchBlockProjectionGradFn_grad_atom_embeddings");
+    }
+
+    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("scratch_block_project_all_tokens", this);
+        if (applied) return;
+        applied = true;
+        if (!grad_output.data) {
+            throw std::runtime_error("ScratchBlockProjectionGradFn::apply: grad_output.data is NULL");
+        }
+        if (num_atoms_captured <= 0) return;
+        if (!cached_atom_embeddings || !cached_atom_positions || !cached_atom_types) {
+            throw std::runtime_error("ScratchBlockProjectionGradFn::apply: cached atom buffers are NULL");
+        }
+
+        const size_t scratch_bytes = static_cast<size_t>(num_atoms_captured) * atom_embedding_dim * sizeof(float);
+        cudaMemsetAsync(d_grad_atom_embeddings, 0, scratch_bytes, stream);
+
+        const int block_size = std::min(atom_embedding_dim, 1024);
+        kernelBackwardAtomEmbeddings<<<num_atoms_captured, block_size, 0, stream>>>(
+            grad_output.data,
+            cached_atom_positions,
+            num_atoms_captured,
+            cached_atom_embeddings,
+            atom_projection_data,
+            atom_projection_grad,
+            d_grad_atom_embeddings,
+            atom_embedding_dim,
+            d_model,
+            atom_scale);
+
+        kernelAccumulateAtomTypeGradients<<<num_atoms_captured, block_size, 0, stream>>>(
+            d_grad_atom_embeddings,
+            cached_atom_types,
+            num_atoms_captured,
+            atom_type_embeddings_grad,
+            atom_embedding_dim);
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        if (cached_atom_embeddings) { cudaFree(cached_atom_embeddings); cached_atom_embeddings = nullptr; }
+        if (cached_atom_positions) { cudaFree(cached_atom_positions); cached_atom_positions = nullptr; }
+        if (cached_atom_types) { cudaFree(cached_atom_types); cached_atom_types = nullptr; }
+        if (d_grad_atom_embeddings) { cudaFree(d_grad_atom_embeddings); d_grad_atom_embeddings = nullptr; }
+        atom_projection_data = nullptr;
+        atom_projection_grad = nullptr;
+        atom_type_embeddings_grad = nullptr;
+    }
+};
 
 void ScratchBlockGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_shape = x.shape;
@@ -599,6 +734,117 @@ Tensor scratch_block_inject(
     return output;
 }
 
+Tensor scratch_block_project_all_tokens(
+    ScratchBlockLayer& layer,
+    const int* token_ids,
+    const float* numeric_values,
+    const uint8_t* atom_mask,
+    const uint32_t* atom_flags,
+    const int32_t* token_to_slot_map,
+    int total_tokens,
+    cudaStream_t stream,
+    bool execution_first_type_only,
+    bool track_grad)
+{
+    const auto& cfg = layer.config();
+    if (!token_ids) throw std::runtime_error("scratch_block_project_all_tokens: token_ids is NULL");
+    if (!numeric_values) throw std::runtime_error("scratch_block_project_all_tokens: numeric_values is NULL");
+    if (!atom_mask) throw std::runtime_error("scratch_block_project_all_tokens: atom_mask is NULL");
+    if (!atom_flags) throw std::runtime_error("scratch_block_project_all_tokens: atom_flags is NULL");
+    if (!stream) throw std::runtime_error("scratch_block_project_all_tokens: stream is NULL");
+    if (total_tokens <= 0) throw std::runtime_error("scratch_block_project_all_tokens: total_tokens must be positive");
+    if (!layer.atomProjection().data || !layer.atomTypeEmbeddings().data) {
+        throw std::runtime_error("scratch_block_project_all_tokens: ScratchBlock weights are not allocated");
+    }
+
+    Tensor structured_state = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(total_tokens, cfg.d_model),
+        track_grad,
+        stream,
+        "scratch_structured_state_z");
+
+    cudaMemsetAsync(layer.numAtomsBuffer(), 0, sizeof(int), stream);
+
+    const int detect_block = 256;
+    const int detect_grid = (total_tokens + detect_block - 1) / detect_block;
+    kernelDetectAtomTokens<<<detect_grid, detect_block, 0, stream>>>(
+        token_ids, total_tokens,
+        layer.atomPositionsBuffer(), layer.numAtomsBuffer(),
+        cfg.max_atoms,
+        cfg.atom_token_start, cfg.atom_token_end);
+
+    const int atom_blocks = std::min(cfg.max_atoms, total_tokens);
+    if (atom_blocks > 0) {
+        const int type_only_flag = execution_first_type_only ? 1 : 0;
+        kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, cfg.atom_embedding_dim, 0, stream>>>(
+            token_ids,
+            layer.atomPositionsBuffer(),
+            layer.numAtomsBuffer(),
+            cfg.max_atoms,
+            layer.atomTypeEmbeddings().data,
+            numeric_values,
+            atom_flags,
+            atom_mask,
+            token_to_slot_map,
+            layer.atomEmbeddingsBuffer(),
+            cfg.atom_embedding_dim,
+            type_only_flag);
+
+        kernelProjectAtomEmbeddingsAllTokens<<<atom_blocks, cfg.d_model, 0, stream>>>(
+            structured_state.data,
+            layer.atomPositionsBuffer(),
+            layer.numAtomsBuffer(),
+            cfg.max_atoms,
+            layer.atomEmbeddingsBuffer(),
+            layer.atomProjection().data,
+            cfg.atom_embedding_dim,
+            cfg.d_model,
+            cfg.atom_scale);
+    }
+
+    if (track_grad && (layer.atomProjection().requires_grad || layer.atomTypeEmbeddings().requires_grad)) {
+        auto grad_fn = std::make_shared<ScratchBlockProjectionGradFn>();
+        grad_fn->atom_embedding_dim = cfg.atom_embedding_dim;
+        grad_fn->d_model = cfg.d_model;
+        grad_fn->max_atoms = cfg.max_atoms;
+        grad_fn->atom_scale = cfg.atom_scale;
+        grad_fn->capture_weights(layer.atomProjection(), layer.atomTypeEmbeddings());
+
+        int num_atoms_host = 0;
+        cudaMemcpyAsync(&num_atoms_host, layer.numAtomsBuffer(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        num_atoms_host = std::min(num_atoms_host, cfg.max_atoms);
+
+        int* d_atom_types_temp = nullptr;
+        if (num_atoms_host > 0) {
+            cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_types_temp), static_cast<size_t>(num_atoms_host) * sizeof(int), "scratch_block_project_atom_types_temp");
+            const int blk = 256;
+            const int grd = (num_atoms_host + blk - 1) / blk;
+            kernelExtractAtomTypes<<<grd, blk, 0, stream>>>(
+                token_ids,
+                layer.atomPositionsBuffer(),
+                num_atoms_host,
+                d_atom_types_temp);
+        }
+
+        grad_fn->capture_forward(
+            layer.atomPositionsBuffer(),
+            d_atom_types_temp,
+            layer.atomEmbeddingsBuffer(),
+            num_atoms_host,
+            stream);
+
+        if (d_atom_types_temp) cudaFree(d_atom_types_temp);
+        structured_state.is_leaf = false;
+        structured_state.grad_fn = std::move(grad_fn);
+        layer.recordForwardCall(num_atoms_host);
+    } else {
+        layer.recordForwardCall(0);
+    }
+
+    return structured_state;
+}
+
 }  // namespace autograd
 
 //======================================================//
@@ -634,6 +880,7 @@ ScratchBlockLayer::ScratchBlockLayer(ScratchBlockLayer&& other) noexcept
     , stats_(other.stats_)
     , atom_type_embeddings_(std::move(other.atom_type_embeddings_))
     , atom_projection_(std::move(other.atom_projection_))
+    , structured_gate_weight_(std::move(other.structured_gate_weight_))
     , d_atom_positions_(other.d_atom_positions_)
     , d_num_atoms_(other.d_num_atoms_)
     , d_atom_embeddings_(other.d_atom_embeddings_)
@@ -653,6 +900,7 @@ ScratchBlockLayer& ScratchBlockLayer::operator=(ScratchBlockLayer&& other) noexc
         stats_ = other.stats_;
         atom_type_embeddings_ = std::move(other.atom_type_embeddings_);
         atom_projection_ = std::move(other.atom_projection_);
+        structured_gate_weight_ = std::move(other.structured_gate_weight_);
         d_atom_positions_ = other.d_atom_positions_;
         d_num_atoms_ = other.d_num_atoms_;
         d_atom_embeddings_ = other.d_atom_embeddings_;
@@ -690,14 +938,18 @@ void ScratchBlockLayer::allocateWeights() {
 
     TensorContract::Shape2D atom_emb_2d{NUM_ATOM_TYPES, config_.atom_embedding_dim};
     TensorContract::Shape2D proj_2d{config_.atom_embedding_dim, config_.d_model};
+    TensorContract::Shape2D gate_2d{2 * config_.d_model, config_.d_model};
 
     TensorContract::TensorShape atom_emb_shape(TensorContract::Layout::BSM, atom_emb_2d);
     TensorContract::TensorShape proj_shape(TensorContract::Layout::BSM, proj_2d);
+    TensorContract::TensorShape gate_shape(TensorContract::Layout::BSM, gate_2d);
 
     atom_type_embeddings_ = Tensor::zeros(atom_emb_shape, true, config_.stream, "atom_type_embeddings");
     atom_type_embeddings_.ensure_grad();
     atom_projection_ = Tensor::zeros(proj_shape, true, config_.stream, "atom_projection");
     atom_projection_.ensure_grad();
+    structured_gate_weight_ = Tensor::zeros(gate_shape, true, config_.stream, "scratch_structured_gate_weight");
+    structured_gate_weight_.ensure_grad();
 
     // Temporary buffers for forward (reused across calls, NOT cached for backward — GradFn owns that)
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_positions_), config_.max_atoms * sizeof(int), "ScratchBlockLayer_atom_positions");
@@ -710,6 +962,7 @@ void ScratchBlockLayer::allocateWeights() {
 void ScratchBlockLayer::freeWeights() {
     atom_type_embeddings_ = Tensor();
     atom_projection_ = Tensor();
+    structured_gate_weight_ = Tensor();
 
     if (d_atom_positions_)  cudaFree(d_atom_positions_);
     if (d_num_atoms_)       cudaFree(d_num_atoms_);
@@ -741,6 +994,13 @@ void ScratchBlockLayer::initializeWeights() {
     grid_size = (proj_size + block_size - 1) / block_size;
     kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
         atom_projection_.data, proj_size, proj_stddev, 123);
+
+    // Xavier init for learned all-token vector gate Wg: [e; z] @ Wg
+    const int gate_size = 2 * config_.d_model * config_.d_model;
+    const float gate_stddev = std::sqrt(2.0f / (3.0f * config_.d_model));
+    grid_size = (gate_size + block_size - 1) / block_size;
+    kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
+        structured_gate_weight_.data, gate_size, gate_stddev, 321);
 
     logWeightInit();
 }
@@ -879,13 +1139,14 @@ void ScratchBlockLayer::logWeightInit() {
 
     const int atom_emb_size = NUM_ATOM_TYPES * config_.atom_embedding_dim;
     const int proj_size = config_.atom_embedding_dim * config_.d_model;
-    const size_t total_bytes = (atom_emb_size + proj_size) * sizeof(float) * 2;
+    const int gate_size = 2 * config_.d_model * config_.d_model;
+    const size_t total_bytes = (atom_emb_size + proj_size + gate_size) * sizeof(float) * 2;
 
     std::ostringstream oss;
     oss << "weights_init: atom_types=" << NUM_ATOM_TYPES
         << " atom_emb_dim=" << config_.atom_embedding_dim
         << " d_model=" << config_.d_model
-        << " total_params=" << (atom_emb_size + proj_size)
+        << " total_params=" << (atom_emb_size + proj_size + gate_size)
         << " memory_mb=" << std::fixed << std::setprecision(2) << (total_bytes / (1024.0 * 1024.0));
     Logging::EmitModuleInfo(kScratchBlockModule, oss.str(), global_step_);
 }

@@ -171,24 +171,10 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
               << " inside attention)");
 
     intermediates.embedding_tensor = std::move(emb_output);
-    if (cfg->dropout_rate > 0.0f) {
-        const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;
-        constexpr uint64_t kEmbeddingDropoutMaskStream = 0x0005000000000001ULL;
-        intermediates.embedding_tensor = autograd::dropout(
-            intermediates.embedding_tensor,
-            cfg->dropout_rate,
-            emb_dropout_seed,
-            is_training,
-            request.stream,
-            kEmbeddingDropoutMaskStream);
-        MFWD_INFO("Step 1c: Embedding dropout " << (is_training ? "applied" : "skipped (eval mode)")
-                  << " (p=" << cfg->dropout_rate << ", batch_idx=" << request.batch_idx << ")");
-    }
-
-    MFWD_INFO("Step 1: Embedding complete, shape=[" << total_tokens << ", " << cfg->d_model << "]");
+    MFWD_INFO("Step 1: Token embedding complete, shape=[" << total_tokens << ", " << cfg->d_model << "]");
 
     if (request.scratch_block && request.scratch_block->isEnabled()) {
-        MFWD_INFO("Step 1.5: Running ScratchBlock injection...");
+        MFWD_INFO("Step 1.5: Running all-token ScratchBlock vector gate...");
         (void)cudaGetLastError();
 
         if (!bindings->d_numeric_values) {
@@ -207,8 +193,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                 "into hidden states on arithmetic batches");
         }
 
-        intermediates.embedding_tensor = autograd::scratch_block_inject(
-            intermediates.embedding_tensor,
+            intermediates.embedding_structured_state = autograd::scratch_block_project_all_tokens(
             *request.scratch_block,
             token_ids,
             bindings->d_numeric_values,
@@ -217,15 +202,67 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
             bindings->d_token_to_slot_map,
             total_tokens,
             request.stream,
-            exec_first_type_only);
+            exec_first_type_only,
+            is_training);
+
+        intermediates.embedding_gate_concat = autograd::concat(
+            intermediates.embedding_tensor,
+            intermediates.embedding_structured_state,
+            request.stream);
+
+        if (is_training) {
+            intermediates.embedding_gate_logits = autograd::matmul(
+                intermediates.embedding_gate_concat,
+                request.scratch_block->structuredGateWeight(),
+                request.stream,
+                intermediates.embedding_gate_concat.data,
+                nullptr);
+        } else {
+            Tensor gate_weight_view = request.scratch_block->structuredGateWeight().detach(request.stream);
+            intermediates.embedding_gate_logits = autograd::matmul(
+                intermediates.embedding_gate_concat,
+                gate_weight_view,
+                request.stream,
+                nullptr,
+                nullptr);
+        }
+
+        intermediates.embedding_gate_values = autograd::sigmoid(
+            intermediates.embedding_gate_logits,
+            request.stream,
+            intermediates.embedding_gate_logits.data);
+
+        intermediates.embedding_gate_delta = autograd::elementwise_mul(
+            intermediates.embedding_gate_values,
+            intermediates.embedding_structured_state,
+            request.stream);
+
+        intermediates.embedding_tensor = autograd::add(
+            intermediates.embedding_tensor,
+            intermediates.embedding_gate_delta,
+            request.stream);
 
         cudaError_t cuda_err = cudaGetLastError();
         if (cuda_err != cudaSuccess) {
-            throw std::runtime_error("ModelForward: ScratchBlock CUDA error: " +
+            throw std::runtime_error("ModelForward: ScratchBlock vector gate CUDA error: " +
                                      std::string(cudaGetErrorString(cuda_err)));
         }
 
-        MFWD_INFO("Step 1.5: ScratchBlock complete");
+        MFWD_INFO("Step 1.5: ScratchBlock vector gate complete");
+    }
+
+    if (cfg->dropout_rate > 0.0f) {
+        const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;
+        constexpr uint64_t kEmbeddingDropoutMaskStream = 0x0005000000000001ULL;
+        intermediates.embedding_tensor = autograd::dropout(
+            intermediates.embedding_tensor,
+            cfg->dropout_rate,
+            emb_dropout_seed,
+            is_training,
+            request.stream,
+            kEmbeddingDropoutMaskStream);
+        MFWD_INFO("Step 1c: Embedding-fusion dropout " << (is_training ? "applied" : "skipped (eval mode)")
+                  << " (p=" << cfg->dropout_rate << ", batch_idx=" << request.batch_idx << ")");
     }
 
     if (!request.gpu_encoder) {

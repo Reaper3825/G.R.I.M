@@ -143,6 +143,7 @@ public:
 
     Tensor& atomTypeEmbeddings()      { return atom_type_embeddings_; }
     Tensor& atomProjection()          { return atom_projection_; }
+    Tensor& structuredGateWeight()    { return structured_gate_weight_; }
 
     //--------------------------------------------------//
     // Statistics
@@ -208,6 +209,7 @@ private:    void allocateWeights();
     // GPU weights (Tensor-managed — RAII, gradient via ensure_grad)
     Tensor atom_type_embeddings_;       // [num_atom_types, atom_embedding_dim]
     Tensor atom_projection_;            // [atom_embedding_dim, d_model]
+    Tensor structured_gate_weight_;      // [2 * d_model, d_model], g = sigmoid([e; z] @ Wg)
 
     // Temporary buffers for forward pass (reused across calls)
     int*   d_atom_positions_  = nullptr;  // [max_atoms]
@@ -254,6 +256,23 @@ Tensor scratch_block_inject(
     int total_tokens,
     cudaStream_t stream,
     bool execution_first_type_only = false);
+
+/// Build a full-token structured state tensor z [total_tokens, d_model].
+/// Non-atom/non-structured rows are exactly zero. Atom rows contain
+/// atom_scale * project(atom_embedding). The returned Tensor owns a GradFn
+/// that accumulates into atom_projection and atom_type_embeddings when
+/// track_grad=true.
+Tensor scratch_block_project_all_tokens(
+    ScratchBlockLayer& layer,
+    const int* token_ids,
+    const float* numeric_values,
+    const uint8_t* atom_mask,
+    const uint32_t* atom_flags,
+    const int32_t* token_to_slot_map,
+    int total_tokens,
+    cudaStream_t stream,
+    bool execution_first_type_only = false,
+    bool track_grad = true);
 
 }  // namespace autograd
 
